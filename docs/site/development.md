@@ -282,20 +282,19 @@ the table after any accepted re-pin.
 
 ## Re-pinning
 
-A profile records the measured build's wire constants: its version and build tag, its two CLI user agents, its Axios
-user agent and the `claude-code/<version>` agent of its profile and roles reads, its Stainless headers, its three beta
-lists (one per credential mode), the control-plane URLs, client id and login scopes, and the TLS curves, cipher list and
-signature algorithms, each a field of the `Profile` value in `crates/profile/src/lib.rs`, with the fixtures under
-`crates/profile/fixtures/` as its record. The router's own calls send part of it: the control-plane calls go to the
-profile's URLs, the token call with its Axios user agent, the profile and roles reads with its `claude-code/2.1.310`
-agent and the usage call with its CLI user agent, the token exchange and the refresh carry its client id in their
-bodies as the authorize URL does in its query, and the connections toward the upstream offer its curves and signature
-algorithms, with its cipher list on the control plane.
-The Stainless headers and the beta lists are what the fixture suites compare against, and the relay emits none of
-them: headers travel as the client sends them, and the beta edits and the restored fields are the relay's fixed rules
-([The betas](relay.md#the-betas) and [The restoration](relay.md#the-restoration)), which do not follow a newer build.
-A request the profile cannot reproduce is refused until the router runs a build re-pinned to the client. To re-pin the
-profile against a new build:
+A profile records the measured build's wire constants: its CLI user agent, its Axios user agent and the
+`claude-code/<version>` agent of its profile and roles reads, the control-plane URLs, client id and login scopes, and
+the TLS curves, cipher list and signature algorithms, each a field of the `Profile` value in
+`crates/profile/src/lib.rs`, with the fixtures under `crates/profile/fixtures/` as its record. The router's own calls
+send them: the control-plane calls go to the profile's URLs, the token call with its Axios user agent, the profile and
+roles reads with its `claude-code/2.1.310` agent and the usage call with its CLI user agent, the token exchange and the
+refresh carry its client id in their bodies as the authorize URL does in its query, and the connections toward the
+upstream offer its curves and signature algorithms, with its cipher list on the control plane.
+The client's Stainless headers and beta lists are recorded in the fixtures alone, which the fixture suites compare
+against, and the relay emits none of them: headers travel as the client sends them, and the beta edits and the restored
+fields are the relay's fixed rules ([The betas](relay.md#the-betas) and [The restoration](relay.md#the-restoration)),
+which do not follow a newer build. A request the profile cannot reproduce is refused until the router runs a build
+re-pinned to the client. To re-pin the profile against a new build:
 
 1. With the build installed under `~/.local/share/claude/versions/<version>`, run
    `scripts/capture-baseline.sh <path-to-claude-binary> <output-dir>`. It refuses to start with a real
@@ -320,8 +319,8 @@ profile against a new build:
    `python3 -I scripts/build-fixtures.py --control <variant-dir> <baseline-dir>` writes the inference and control
    fixtures from the variant that recorded the usage read, and
    `python3 -I scripts/build-fixtures.py --count <count-dir>` writes the count fixtures. A new `Profile` value in
-   `crates/profile/src/lib.rs` carries the new constants, and `by_name` learns its name. The fixture manifest is the
-   table under [The fixture manifest](#the-fixture-manifest), which the profile crate's test
+   `crates/profile/src/lib.rs` carries the new constants. The fixture manifest is the table under
+   [The fixture manifest](#the-fixture-manifest), which the profile crate's test
    `every_fixture_matches_the_development_page_manifest` reads, so the re-pin regenerates it with the command shown
    there. The tests in the profile, relay and router crates grade the relay against the new fixtures. Until that change
    lands, the router is measured against the one profile this build carries.

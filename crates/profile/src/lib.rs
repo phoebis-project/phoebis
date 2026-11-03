@@ -4,33 +4,10 @@
 pub mod catalog;
 pub mod fixtures;
 
-/// The measured client's own SDK headers. The relay emits none of them: a caller's headers travel as it sent
-/// them, so these are the record of the capture the fixture suites are compared against.
-pub struct Stainless {
-    pub arch: &'static str,
-    pub lang: &'static str,
-    pub os: &'static str,
-    pub package_version: &'static str,
-    pub runtime: &'static str,
-    pub runtime_version: &'static str,
-    pub timeout: &'static str,
-}
-/// The beta lists the measured client sends in each of its three shapes. The relay drops three betas where the
-/// request calls for it (`DANGEROUS_TOOL_USE_BETA` under an off auto-mode setting, `EXTENDED_TTL_BETA` for a
-/// five-minute body, `OAUTH_BETA` on an API-key account), injects three (`CACHE_DIAGNOSIS_BETA` under the pool's
-/// cache diagnostics switch, `EXTENDED_TTL_BETA` for a one-hour body, `OAUTH_BETA` on an OAuth account), and passes
-/// every other beta the client sends through: the pass-through set is whatever the client sends less the dropped
-/// ones, and it changes with the client's version.
-pub struct Betas {
-    pub oauth_non_first_party: &'static str,
-    pub oauth_first_party: &'static str,
-    pub api_key_non_first_party: &'static str,
-}
 pub struct Control {
     pub authorize_claude_ai: &'static str,
     pub authorize_console: &'static str,
     pub client_id: &'static str,
-    pub manual_redirect: &'static str,
     pub profile_url: &'static str,
     pub roles_url: &'static str,
     pub token_url: &'static str,
@@ -51,33 +28,18 @@ pub struct TlsProfiles {
 
 pub struct Profile {
     pub name: &'static str,
-    pub cli_version: &'static str,
-    pub build_tag: &'static str,
-    pub user_agent_sdk_cli: &'static str,
     pub user_agent_cli: &'static str,
-    pub stainless: Stainless,
-    pub betas: Betas,
     pub control: Control,
     pub tls: TlsProfiles,
 }
 
 static PROFILE_2_1_310: Profile = Profile {
     name: "claude-code-2.1.310-linux-x64",
-    cli_version: "2.1.310",
-    build_tag: "2.1.310.077",
-    user_agent_sdk_cli: "claude-cli/2.1.310 (external, sdk-cli)",
     user_agent_cli: "claude-cli/2.1.310 (external, cli)",
-    stainless: Stainless { arch: "x64", lang: "js", os: "Linux", package_version: "0.128.0", runtime: "node", runtime_version: "v26.3.0", timeout: "600" },
-    betas: Betas {
-        oauth_non_first_party: "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,advanced-tool-use-2025-11-20,extended-cache-ttl-2025-04-11",
-        oauth_first_party: "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advanced-tool-use-2025-11-20,thinking-binding-controls-2026-08-01,extended-cache-ttl-2025-04-11,cache-diagnosis-2026-04-07",
-        api_key_non_first_party: "claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,advanced-tool-use-2025-11-20",
-    },
     control: Control {
         authorize_claude_ai: "https://claude.com/cai/oauth/authorize",
         authorize_console: "https://platform.claude.com/oauth/authorize",
         client_id: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
-        manual_redirect: "https://platform.claude.com/oauth/code/callback",
         profile_url: "https://api.anthropic.com/api/oauth/profile",
         roles_url: "https://api.anthropic.com/api/oauth/claude_cli/roles",
         token_url: "https://platform.claude.com/v1/oauth/token",
@@ -97,10 +59,6 @@ static PROFILE_2_1_310: Profile = Profile {
 /// The one profile this build carries: every reader takes it from here, and a re-pin changes it with the rebuild.
 pub fn claude_code_2_1_310_linux_x64() -> &'static Profile {
     &PROFILE_2_1_310
-}
-
-pub fn by_name(name: &str) -> Option<&'static Profile> {
-    [&PROFILE_2_1_310].into_iter().find(|p| p.name == name)
 }
 
 #[cfg(test)]
