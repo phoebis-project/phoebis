@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { fmtPct } from '@/lib/format';
 
 export interface DonutSlice {
   color: string;
@@ -23,7 +24,7 @@ export function Donut({ slices, total, centerLabel, centerValue, size = 148, onH
   let offset = 0;
   const sum = slices.reduce((s, x) => s + x.value, 0);
   const spent = Math.max(0, total - sum);
-  const all: DonutSlice[] = [...slices, { id: '__spent', label: 'Spent', value: spent, color: 'var(--series-muted)', title: `Spent: ${Math.round((total > 0 ? spent / total : 0) * 100)}% of pooled capacity` }];
+  const all: DonutSlice[] = [...slices, { id: '__spent', label: 'Spent', value: spent, color: 'var(--series-muted)', title: `Spent: ${fmtPct(total > 0 ? spent / total : 0)} of pooled capacity` }];
   return (
     <svg className="donut" width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label={`${centerLabel}: ${centerValue}`}>
       <g transform={`rotate(-90 ${size / 2} ${size / 2})`}>
@@ -53,7 +54,7 @@ export function Donut({ slices, total, centerLabel, centerValue, size = 148, onH
                 onHover?.(null);
               }}
             >
-              <title>{s.title ?? `${s.label}: ${Math.round(share * 100)}%`}</title>
+              <title>{s.title ?? `${s.label}: ${fmtPct(share)}`}</title>
             </circle>
           );
           offset += share * c;

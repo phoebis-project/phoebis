@@ -3,7 +3,7 @@ import type { SubscriptionCosts } from '@/api/types';
 import { useFormatVersion } from '@/app/settings';
 import { Card } from '@/components/ui/primitives';
 import { bandCaption, bandNow, bandSentence, bandWeek, hhmm, nextLocalChange, regimeNames, regimeWord, zoneCity } from '@/lib/costs';
-import { fmtShortTime, getTimeFormat, viewingZone } from '@/lib/format';
+import { fmtPct, fmtShortTime, getTimeFormat, viewingZone } from '@/lib/format';
 
 const pad = (n: number) => String(n).padStart(2, '0');
 
@@ -33,8 +33,7 @@ export const nowLine = (costs: SubscriptionCosts, now: number): string => {
 
 /** "1.43x": what a share costs at a capacity factor. */
 const shareCost = (factor: number) => `${Number((1 / factor).toPrecision(3))}x`;
-const holds = (factor: number) => `${Math.round(factor * 100)}%`;
-const factorText = (factor: number) => (factor === 1 ? `no band, holds ${holds(factor)}` : `holds ${holds(factor)}, a share costs ${shareCost(factor)}`);
+const factorText = (factor: number) => (factor === 1 ? `no band, holds ${fmtPct(factor)}` : `holds ${fmtPct(factor)}, a share costs ${shareCost(factor)}`);
 
 const FACTOR_WINDOWS: { key: 'fiveHour' | 'sevenDay'; label: string }[] = [
   { key: 'fiveHour', label: '5-hour window' },
@@ -131,7 +130,7 @@ export function PeakBand({ costs, now }: { costs: SubscriptionCosts; now: number
               <Fragment key={label}>
                 <span>{label}</span>
                 <span className="cost-ref__track">
-                  <span className={`cost-ref__factor-bar${factor === 1 ? '' : ' cost-ref__factor-bar--band'}`} style={{ width: holds(factor) }} />
+                  <span className={`cost-ref__factor-bar${factor === 1 ? '' : ' cost-ref__factor-bar--band'}`} style={{ width: fmtPct(factor) }} />
                 </span>
                 <span className="cost-ref__val">{factorText(factor)}</span>
               </Fragment>
