@@ -86,7 +86,7 @@ fn rename(
 }
 
 #[test]
-fn a_version_one_registry_opens_at_three_with_the_new_columns_at_their_defaults_and_no_all_time_counters(
+fn a_version_one_registry_opens_at_four_with_the_new_columns_at_their_defaults_and_no_all_time_counters(
 ) {
     let dir = tempfile::tempdir().unwrap();
     let key = StorageKey::generate();
