@@ -19,7 +19,7 @@ import { GroupBy as GroupByControl, GroupsButton } from '@/components/GroupBy';
 import { SectionBar } from '@/components/SectionBar';
 import { accountHref, addressWindow, ANALYTICS_CODEC, type AnalyticsAddress } from '@/lib/address';
 import { ALLOWANCE_WEEKS, allowanceColumnWord, allowanceRows, allowanceSpan, fleetFigures, resetInstant, weeklyKeys, weeklyResetsKey, type AllowanceFigure } from '@/lib/allowance';
-import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, failureHead, foldBurn, heldBars, heldHover, heldSpan, hintPlan, isolatedSlots, keptWarmNote, keptWarmTokens, moveLabel, nativeCellOf, nativeFiguresOf, netSaving, niceAxisTop, oneAccountGroupOf, peakLines, placementCells, placementRungLabel, readBurn, sampledWindows, shareHint, sidesLine, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, failureHead, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, moveLabel, nativeCellOf, nativeFiguresOf, netSaving, niceAxisTop, oneAccountGroupOf, ownShareHint, peakLines, placementCells, placementRungLabel, readBurn, sampledWindows, sidesLine, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
@@ -535,12 +535,7 @@ export function AnalyticsPage() {
   // the probe, saving, net and cache figures carry none. The registry names the plan and the tier, so a figure carries
   // no hint while it is out.
   const namedAccount = filters.accountId.length === 1 ? filters.accountId[0] : null;
-  const hintOf = (id: string, shares: Record<string, number | null> | null): string | null => {
-    const account = registry.data?.find((x) => x.id === id);
-    const tier = account?.subscription?.rateLimitTier ?? null;
-    const plan = account === undefined ? null : hintPlan(account, tier);
-    return plan === null ? null : shareHint(plan, shares, tier, null);
-  };
+  const hintOf = (id: string, shares: Record<string, number | null> | null): string | null => ownShareHint(registry.data?.find((x) => x.id === id), shares);
   const rowHint = (g: AnalyticsGroup): string | null => (groupBy === 'account' ? hintOf(g.key, g.costShares) : namedAccount === null ? null : hintOf(namedAccount, g.costShares));
   const oneGroup = useMemo(() => (namedAccount === null ? null : oneAccountGroupOf(costTotals, costGroups)), [costGroups, costTotals, namedAccount]);
   const tileHint = namedAccount === null || oneGroup === null ? null : hintOf(namedAccount, oneGroup.costShares);
@@ -2309,10 +2304,7 @@ function BurnCharts({
     const here = pointsAt.get(`${at}|${l.key}`) ?? [];
     if (owner === undefined || here.length !== 1) return null;
     const [p] = here;
-    const tier = owner.subscription?.rateLimitTier ?? null;
-    const plan = hintPlan(owner, tier);
-    const shares: Record<string, number | null> = { five_hour: p.fiveHourShare, seven_day: p.sevenDayShare, ...(weekKey === undefined ? {} : { [weekKey]: p.modelWeekShare }) };
-    return plan === null ? null : shareHint(plan, shares, tier, null);
+    return ownShareHint(owner, { five_hour: p.fiveHourShare, seven_day: p.sevenDayShare, ...(weekKey === undefined ? {} : { [weekKey]: p.modelWeekShare }) });
   };
   const subtitle = (
     <>

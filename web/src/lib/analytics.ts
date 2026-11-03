@@ -232,6 +232,12 @@ export function shareHint(plan: string, shares: Record<string, number | null> | 
 }
 /** The hint's plan label: the account's display name where the surface holds its profile, else the tier's label. */
 export const hintPlan = (account: Pick<Account, 'subscription'> | undefined, tier: string | null): string | null => account?.subscription?.planDisplayName ?? (tier === null ? null : planLabel(tier));
+/** An account's share hint at its own current tier, null for an account or a plan the console does not know. */
+export const ownShareHint = (account: Pick<Account, 'subscription'> | undefined, shares: Record<string, number | null> | null): string | null => {
+  const tier = account?.subscription?.rateLimitTier ?? null;
+  const plan = hintPlan(account, tier);
+  return plan === null ? null : shareHint(plan, shares, tier, null);
+};
 
 /**
  * One named account's shares over the groups the route answered them on, the Accounts filter naming that account:
