@@ -290,8 +290,8 @@ const daysBetween = (from: string, to: string): number => Math.round((dayStart(t
 const weekdayOf = (date: string): string => WEEKDAYS[(new Date(dayStart(date)).getUTCDay() + 6) % 7];
 const dayLabel = (date: string): string => {
   const noon = `${date}T12:00:00Z`;
-  const part = (key: string, o: Intl.DateTimeFormatOptions) => formatIn(key, { ...o, timeZone: 'UTC' }, noon);
-  return `${part('weekday', { weekday: 'short' })} ${part('dayOfMonth', { day: 'numeric' })} ${part('month', { month: 'short' })}`;
+  const part = (o: Intl.DateTimeFormatOptions) => formatIn({ ...o, timeZone: 'UTC' }, noon);
+  return `${part({ weekday: 'short' })} ${part({ day: 'numeric' })} ${part({ month: 'short' })}`;
 };
 export const hhmm = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
 

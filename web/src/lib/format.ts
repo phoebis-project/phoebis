@@ -168,16 +168,17 @@ export const upperFirst = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 // A formatter costs far more to build than to use, and the polled logs format a few instants per row on every render.
 const dateTimeFormats = new Map<string, Intl.DateTimeFormat>();
 /**
- * `at` through the formatter of one shape, built once. `key` names the shape's fields, and the cache key adds the hour
- * cycle and the zone the options carry, since the time format switches at run time and a chart names its own zone. A
- * formatter without a zone keeps the one it resolved when built, so the instant's offset joins the key too, and a tab
- * whose machine moves to a zone with another offset reads the new zone.
+ * `at` through the formatter of one set of options, built once. The cache key spells every option, the hour cycle and
+ * the zone among them, since the time format switches at run time and a chart names its own zone. A formatter without
+ * a zone keeps the one it resolved when built, so the instant's offset joins the key too, and a tab whose machine moves
+ * to a zone with another offset reads the new zone.
  */
-export function formatIn(key: string, options: Intl.DateTimeFormatOptions, at: number | string): string {
+export function formatIn(options: Intl.DateTimeFormatOptions, at: number | string): string {
   const d = new Date(at);
   // `format` throws on an invalid instant, where the `toLocale*String` methods read "Invalid Date".
   if (Number.isNaN(d.getTime())) return 'Invalid Date';
-  const cached = `${key} ${options.hourCycle ?? ''} ${options.timeZone ?? ''} ${d.getTimezoneOffset()}`;
+  // The sorted array replacer fixes the order the keys print in, whatever order a literal lists them.
+  const cached = `${JSON.stringify(options, Object.keys(options).sort())} ${d.getTimezoneOffset()}`;
   let f = dateTimeFormats.get(cached);
   if (f === undefined) {
     f = new Intl.DateTimeFormat('en-US', options);
@@ -188,26 +189,26 @@ export function formatIn(key: string, options: Intl.DateTimeFormatOptions, at: n
 
 export function fmtAbsolute(at: number | string | null): string {
   if (at === null || at === '') return '-';
-  return formatIn('absolute', { day: '2-digit', hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit', month: 'short', second: '2-digit', year: 'numeric' }, at);
+  return formatIn({ day: '2-digit', hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit', month: 'short', second: '2-digit', year: 'numeric' }, at);
 }
 
 /** `fmtAbsolute` to the minute: "Sep 14, 2026, 09:31" under the 24-hour format, "09:31 AM" under the 12-hour one. */
 export function fmtMinute(at: number | string | null): string {
   if (at === null || at === '') return '-';
-  return formatIn('minute', { day: '2-digit', hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit', month: 'short', year: 'numeric' }, at);
+  return formatIn({ day: '2-digit', hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit', month: 'short', year: 'numeric' }, at);
 }
 
 /** A budget period ends on a UTC day boundary, so its end drops the seconds and the year `fmtAbsolute` prints. */
 export function fmtPeriodEnd(isoTime: string): string {
-  return formatIn('periodEnd', { day: '2-digit', hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit', month: 'short' }, isoTime);
+  return formatIn({ day: '2-digit', hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit', month: 'short' }, isoTime);
 }
 
 export function fmtTime(at: number | string): string {
-  return formatIn('time', { hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit', second: '2-digit' }, at);
+  return formatIn({ hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit', second: '2-digit' }, at);
 }
 
 export function fmtShortTime(at: number | string): string {
-  return formatIn('shortTime', { hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit' }, at);
+  return formatIn({ hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit' }, at);
 }
 
 /** The hour alone in the viewer's cycle for a short timeline cell: "06" under 24h, "6 AM" or "12 PM" under 12h. */
@@ -250,7 +251,7 @@ export function instant(ms: number, now: number): string {
 }
 
 /** The day and the month of an instant, "Sep 12". */
-export const fmtDayMonth = (at: number | string): string => formatIn('dayMonth', { day: 'numeric', month: 'short' }, at);
+export const fmtDayMonth = (at: number | string): string => formatIn({ day: 'numeric', month: 'short' }, at);
 
 /**
  * An instant with its date always written ("Sep 16 13:11"): the Meter's window ends are read against each other across
@@ -279,12 +280,12 @@ export function spanText(fromMs: number, toMs: number): string {
 }
 
 export function fmtDate(isoTime: string): string {
-  return formatIn('date', { day: '2-digit', month: 'short', year: 'numeric' }, isoTime);
+  return formatIn({ day: '2-digit', month: 'short', year: 'numeric' }, isoTime);
 }
 
 /** The day in `timeZone`, or in the browser's zone when none is named. */
 export function fmtDayShort(ms: number, timeZone?: string): string {
-  return formatIn('dayShort', { day: '2-digit', month: 'short', timeZone }, ms);
+  return formatIn({ day: '2-digit', month: 'short', timeZone }, ms);
 }
 
 /**
@@ -294,8 +295,8 @@ export function fmtDayShort(ms: number, timeZone?: string): string {
 export function fmtDayTick(ms: number, timeZone?: string): string {
   const day = fmtDayShort(ms, timeZone);
   // Midnight is read on the 24-hour clock whatever the time format, so it compares as one string.
-  const clock = formatIn('shortTime', { hour: '2-digit', hourCycle: 'h23', minute: '2-digit', timeZone }, ms);
-  return clock === '00:00' ? day : `${day} ${formatIn('shortTime', { hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit', timeZone }, ms)}`;
+  const clock = formatIn({ hour: '2-digit', hourCycle: 'h23', minute: '2-digit', timeZone }, ms);
+  return clock === '00:00' ? day : `${day} ${formatIn({ hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit', timeZone }, ms)}`;
 }
 
 export const fmtHourTick = (ms: number): string => fmtShortTime(ms);
