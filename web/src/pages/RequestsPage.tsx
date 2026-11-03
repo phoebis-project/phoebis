@@ -32,7 +32,7 @@ import { guardrailLabel, guardrailOptions } from '@/lib/guardrails';
 import { useAsync, useNow, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';
 import { compareRequests, costCellOf, costHeaderTitle, type CostUnit, costUnitOf, FREE_SHARE_TITLE, FUNDING_WORD, heldWords, NO_SHARE_TITLE, requestHintArgs, revisionsTitle } from '@/lib/requests';
 import { requestsWiden } from '@/lib/requestsLink';
-import { type Chip, logHref, requestLink } from '@/lib/routingLog';
+import { type Chip, logHref, requestLink, words } from '@/lib/routingLog';
 import { plainOutputOf } from '@/lib/tokenBar';
 import type { UnitPosition, WeekPosition } from '@/lib/unit';
 import { StatusBadge } from './DashboardPage';
@@ -491,7 +491,7 @@ export function RequestsPage() {
                             )}
                           </td>
                         )}
-                        {shown.has('kind') && <td className="col-fit">{r.kind.replace('_', ' ')}</td>}
+                        {shown.has('kind') && <td className="col-fit">{words(r.kind)}</td>}
                         {shown.has('transport') && (
                           <td className="col-fit">
                             <Badge tone={r.transport === 'sse' ? 'accent' : 'neutral'}>{r.transport === 'sse' ? 'SSE' : 'JSON'}</Badge>
@@ -767,7 +767,7 @@ function RequestDrawer({ context, guardrails, request, requestId, now, onClose, 
                 { label: 'User agent', value: r.userAgent ? shortAgent(r.userAgent) : '-', mono: true, title: r.userAgent ?? undefined },
                 { label: 'Key', value: r.keyId ?? '-', mono: true },
                 { label: 'Pool', value: r.poolId ?? '-', mono: true },
-                { label: 'Kind', value: `${r.kind.replace('_', ' ')}, ${r.transport === 'sse' ? 'SSE' : 'JSON'}` },
+                { label: 'Kind', value: `${words(r.kind)}, ${r.transport === 'sse' ? 'SSE' : 'JSON'}` },
                 ...r.attempts.flatMap((a) => {
                   const ids = upstreamIdChips(a);
                   return ids.length ? [{ label: `Attempt ${a.index + 1}`, value: <Chips chips={ids} /> }] : [];

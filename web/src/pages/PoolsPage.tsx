@@ -32,7 +32,7 @@ import { refreshAttention, useAsync, useAttention, useLatest, useNow } from '@/l
 import { POOL_RAIL } from '@/lib/poolRail';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, slowDownPreview, slowDownPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
 import { minuteSpan, windowOf } from '@/lib/quota';
-import { aroundSubject, logHref } from '@/lib/routingLog';
+import { aroundSubject, logHref, words } from '@/lib/routingLog';
 import { scrollToElement } from '@/lib/scroll';
 import { GROUP_LABEL, INELIGIBLE_LABEL, LAST_RESORT_LABEL, RULE_NOTE, STRATEGY_LABEL, cooldownBadge, kindOrdered, memberSpeed, overageBadge, poolStatusSentence, selectionOrder, type Placement, type StandingBadge, windingDownBadge } from '@/lib/selection';
 import { dollarsUnder, GuardrailList, KeyDialog, nativeSidesOf, sumTileOf, type FundedSum } from './KeysPage';
@@ -982,7 +982,7 @@ function Eligibility({ verdict, account, now, periodEnd }: { account: Account | 
   if (verdict === 'eligible') return <Badge tone="good">eligible</Badge>;
   if (verdict === 'budget') return <AtBudget periodEnd={periodEnd} />;
   if (verdict === 'overage') return <WordedBadge tone="serious" badge={overageBadge(account?.overage?.reset ?? null, now)} />;
-  if (verdict === 'unavailable') return <Badge tone="critical" title={account ? account.status.replace(/_/g, ' ') : 'not a known account'}>unavailable</Badge>;
+  if (verdict === 'unavailable') return <Badge tone="critical" title={account ? words(account.status) : 'not a known account'}>unavailable</Badge>;
   return <WordedBadge tone="warning" badge={cooldownBadge(account?.cooldowns.find((c) => c.scope === 'account')?.until, now)} />;
 }
 

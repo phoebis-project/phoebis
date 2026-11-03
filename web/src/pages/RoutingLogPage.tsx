@@ -19,7 +19,7 @@ import { chipText, notLoadedReason, ROUTING_LOG_DIMENSIONS } from '@/lib/filterB
 import { effectiveInterval, FOLLOW_OVERRUN, type Paging, pagingFor, readEnd, spanEnded } from '@/lib/follow';
 import { fmtAbsolute, fmtDatedTime, fmtInt, fmtTime, upperFirst } from '@/lib/format';
 import { useAsync, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';
-import { ALL_KINDS, byOf, catalogModel, compareRows, DECISION_KIND_LABEL, DECISION_KIND_TONE, entityHref, EVENT_KIND_LABEL, eventTone, factsOf, identityOf, KIND_PRESETS, type LogLink, logHref, movedFrom, registryTarget } from '@/lib/routingLog';
+import { ALL_KINDS, byOf, catalogModel, compareRows, DECISION_KIND_LABEL, DECISION_KIND_TONE, entityHref, EVENT_KIND_LABEL, eventTone, factsOf, identityOf, KIND_PRESETS, type LogLink, logHref, movedFrom, registryTarget, words } from '@/lib/routingLog';
 
 const PAGE_SIZE = 25;
 
@@ -331,7 +331,7 @@ function LogRow({ isNew, now, onToggle, open, row, rows }: { isNew: boolean; now
         )}
       </td>
       <td className="routing-log__kind">
-        {row.type === 'decision' ? <Badge tone={DECISION_KIND_TONE[row.kind]}>{DECISION_KIND_LABEL[row.kind]}</Badge> : <span className={`badge badge--${eventTone(row.kind)} routing-log__outline`}>{EVENT_KIND_LABEL[row.kind] ?? row.kind.replace(/_/g, ' ')}</span>}
+        {row.type === 'decision' ? <Badge tone={DECISION_KIND_TONE[row.kind]}>{DECISION_KIND_LABEL[row.kind]}</Badge> : <span className={`badge badge--${eventTone(row.kind)} routing-log__outline`}>{EVENT_KIND_LABEL[row.kind] ?? words(row.kind)}</span>}
         {/* An exhaustion after a failed attempt counts one past the request's attempts, so it draws no marker. */}
         {row.type === 'decision' && row.attempt > 1 && (row.attemptCount === null || row.attempt <= row.attemptCount) && <span className="sub">{row.attemptCount === null ? `attempt ${row.attempt}` : `attempt ${row.attempt}/${row.attemptCount}`}</span>}
       </td>
