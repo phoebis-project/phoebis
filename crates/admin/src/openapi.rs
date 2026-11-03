@@ -606,9 +606,9 @@ pub(crate) struct BreakdownRow {
     /// the model's own week staying.
     pub cost_shares: Option<BTreeMap<String, f64>>,
     /// The plan-funded requests the shares and the equivalent were summed over, under every grouping.
-    pub plan_requests: Option<u64>,
+    pub plan_requests: u64,
     /// The plan-funded output tokens the shares and the equivalent were summed over, under every grouping.
-    pub plan_output_tokens: Option<u64>,
+    pub plan_output_tokens: u64,
     /// The plan-funded rows as the Pro-week figure, whatever tier served them, summed under every grouping, the probe
     /// rows joining under the `include_probes` rule: null where a plan-funded row with tokens priced nothing, a model
     /// without a weight, and 0 for a group with no plan-funded row.

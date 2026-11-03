@@ -1906,8 +1906,8 @@ pub struct GroupRow {
     pub cost_shares: Option<IndexMap<&'static str, f64>>,
     /// The plan-funded requests and output tokens the shares and the equivalent are summed over, the denominators
     /// of a figure per request and per 1k output tokens. Answered under every grouping.
-    pub plan_requests: Option<u64>,
-    pub plan_output_tokens: Option<u64>,
+    pub plan_requests: u64,
+    pub plan_output_tokens: u64,
     /// The plan rows as the Pro-week figure, under every grouping: `None` where a plan row with tokens priced
     /// nothing, a model without a weight, and 0 for a group with no plan row.
     pub cost_equivalent: Option<f64>,
@@ -2357,8 +2357,8 @@ fn group_row(key: &str, group: GroupSum, label: String) -> GroupRow {
         wasted_probe_usd: dollars.wasted_usd,
         wasted_probe_reasons: probes.wasted_probe_reasons,
         cost_shares,
-        plan_requests: Some(plan.requests),
-        plan_output_tokens: Some(plan.output_tokens),
+        plan_requests: plan.requests,
+        plan_output_tokens: plan.output_tokens,
         cost_equivalent: equivalent.cost,
         cache_equivalent: equivalent.cache,
         probe_equivalent: equivalent.probe,

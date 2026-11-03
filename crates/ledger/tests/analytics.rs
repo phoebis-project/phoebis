@@ -2128,7 +2128,7 @@ async fn a_breakdown_row_under_the_account_grouping_sums_its_plan_rows_shares() 
     }
     assert_eq!(
         (a.plan_requests, a.plan_output_tokens),
-        (Some(2), Some(150)),
+        (2, 150),
         "the two plan rows and their output tokens: {a:?}"
     );
 }
@@ -2768,11 +2768,7 @@ async fn a_genuinely_unpriced_fable_row_nulls_the_week() {
         a.cost_equivalent.is_none() && a.equivalent_split.is_none(),
         "and the figure latches as the shares do rather than reading the priced row alone: {a:?}"
     );
-    assert_eq!(
-        a.plan_requests,
-        Some(2),
-        "both plan rows were summed over: {a:?}"
-    );
+    assert_eq!(a.plan_requests, 2, "both plan rows were summed over: {a:?}");
 }
 
 #[tokio::test]
@@ -2820,12 +2816,12 @@ async fn the_probe_inclusion_rule_governs_the_request_shares() {
     };
     let (cost, requests) = read(RollupFilter::default()).await;
     assert!(
-        close(cost.as_ref(), inference_share) && requests == Some(1),
+        close(cost.as_ref(), inference_share) && requests == 1,
         "with probes left out the request shares read the inference row alone: {cost:?}, {requests:?}"
     );
     let (cost, requests) = read(with_probes()).await;
     assert!(
-        close(cost.as_ref(), inference_share + probe_share) && requests == Some(2),
+        close(cost.as_ref(), inference_share + probe_share) && requests == 2,
         "with probes counted the probe row joins the request shares: {cost:?}, {requests:?}"
     );
     let (cost, requests) = read(RollupFilter {
@@ -2834,7 +2830,7 @@ async fn the_probe_inclusion_rule_governs_the_request_shares() {
     })
     .await;
     assert!(
-        close(cost.as_ref(), probe_share) && requests == Some(1),
+        close(cost.as_ref(), probe_share) && requests == 1,
         "under a probe kind filter the request shares read the probe row: {cost:?}, {requests:?}"
     );
 }
@@ -2874,7 +2870,7 @@ async fn an_overage_row_and_an_api_key_group_add_to_no_share() {
     let plan = fable_shares(&tables, usage(1_000, 100))[FIVE_HOUR].unwrap();
     assert!(
         close(a.cost_shares.as_ref().and_then(|m| m.get(FIVE_HOUR)), plan)
-            && (a.plan_requests, a.plan_output_tokens) == (Some(1), Some(100)),
+            && (a.plan_requests, a.plan_output_tokens) == (1, 100),
         "the overage row's tokens are absent from the sums and from the counts: {a:?} vs {plan}"
     );
     let k = group(&groups, "k");
@@ -2884,7 +2880,7 @@ async fn an_overage_row_and_an_api_key_group_add_to_no_share() {
     );
     assert_eq!(
         (k.plan_requests, k.plan_output_tokens),
-        (Some(0), Some(0)),
+        (0, 0),
         "and counts no plan-funded request, the counts answering under every group: {k:?}"
     );
 }
@@ -3414,7 +3410,7 @@ async fn a_group_whose_rows_recorded_no_tier_answers_no_share_and_a_dropped_acco
     );
     assert_eq!(
         (t.plan_requests, t.plan_output_tokens),
-        (Some(1), Some(100)),
+        (1, 100),
         "and still counts the plan row its figure is summed over: {t:?}"
     );
     let equivalent = equivalent_of(
@@ -3517,7 +3513,7 @@ async fn the_equivalent_under_the_model_grouping_adds_two_accounts_of_two_tiers_
     );
     assert_eq!(
         (fable.plan_requests, fable.plan_output_tokens),
-        (Some(2), Some(150)),
+        (2, 150),
         "the counts answer under every grouping: {fable:?}"
     );
 }
