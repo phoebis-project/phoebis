@@ -201,6 +201,15 @@ export function Meter({ value, tone, label, mark, thin = false, title }: { label
   );
 }
 
+/** A meter for a window that holds no share: the whole track in the absent ink, with nothing for a reader to announce. */
+export function MeterAbsent({ thin = false }: { thin?: boolean }) {
+  return (
+    <div className={thin ? 'meter meter--thin meter--absent' : 'meter meter--absent'} role="presentation">
+      <div className="meter__fill" style={{ width: '100%' }} />
+    </div>
+  );
+}
+
 export function Skeleton({ width = '100%', height = 12, className = '' }: { className?: string; height?: number; width?: number | string }) {
   return <span className={`skeleton ${className}`} style={{ width, height }} aria-hidden />;
 }

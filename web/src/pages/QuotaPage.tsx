@@ -8,7 +8,7 @@ import { useChartInk } from '@/components/charts/useChartInk';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { IconChevronLeft, IconChevronRight, IconRefresh, IconUser } from '@/components/ui/icons';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
-import { Badge, ErrorState, Meter, Pill, Segmented, Select, Skeleton } from '@/components/ui/primitives';
+import { Badge, ErrorState, Meter, MeterAbsent, Pill, Segmented, Select, Skeleton } from '@/components/ui/primitives';
 import { CELL_MIN_PX, cellsFit, fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinor, fmtMinute, fmtPct, fmtRelative, fmtShortHour, fmtShortTime, getTimeFormat, noun, plural, upperFirst } from '@/lib/format';
 import { useAsync, useHashSection, useNow, useResizeObserver } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, burnWords, endOf, extraUsageState, hasSpendReading, isExpired, isQuotaListed, meterTone, onTimeline, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, slowedOf, soonestReset, soonestResetAt, sortByPace, spendLeftOf, spendResetTitle, timelineLanes, windowOf, type ExtraUsageState } from '@/lib/quota';
@@ -319,9 +319,7 @@ function QuotaWindow({ absent, end, name, window: w, now, slowDown = null, soon 
       {live ? (
         <Meter value={remainingOf(live)} tone={meterTone(remainingOf(live))} thin label={reading} title={reading} mark={remainingTimeShare(live) ?? undefined} />
       ) : (
-        <div className="meter meter--thin meter--absent" role="presentation">
-          <div className="meter__fill" style={{ width: '100%' }} />
-        </div>
+        <MeterAbsent thin />
       )}
       {live ? (
         <span className={`qwin__reset ${projection ? 'qwin__reset--split' : ''} ${soon ? 'is-soon' : ''}`} title={`${fmtAbsolute(live.resetsAt)}${soon ? ', the first of this account to recover' : ''}${burn ? `, ${burn}` : ''}`}>
@@ -381,9 +379,7 @@ function SpendWindow({ spend, now, soon }: { now: number; soon: boolean; spend: 
         // An empty cell keeps the reset in its column of the card's grid.
         <span aria-hidden="true" />
       ) : (
-        <div className="meter meter--thin meter--absent" role="presentation">
-          <div className="meter__fill" style={{ width: '100%' }} />
-        </div>
+        <MeterAbsent thin />
       )}
       {/* The estimate's word is a part of its own, so a column too narrow for the line breaks before it, as a live
           window's label breaks before its projection. */}

@@ -3,7 +3,7 @@ import { fmtAbsolute, fmtMinor, fmtPct, fmtRelative } from '@/lib/format';
 import { hasSpendReading, isExpired, isSubscription, meterTone, planEndedSentence, projectionParts, remainingOf, slowedOf, spendResetTitle, windowOf } from '@/lib/quota';
 import { speedHover } from '@/lib/selection';
 import { WINDOW_LABEL, WINDOW_ORDER } from '@/lib/windows';
-import { Meter } from './primitives';
+import { Meter, MeterAbsent } from './primitives';
 import { SpeedChip } from './SpeedChip';
 
 /**
@@ -91,9 +91,7 @@ export function WindowBarAbsent({ compact = false, label, words }: { compact?: b
         <span className="wbar__label">{label}</span>
         <span className="wbar__pct muted">{compact ? COMPACT_ABSENT : words}</span>
       </div>
-      <div className="meter meter--thin meter--absent" role="presentation">
-        <div className="meter__fill" style={{ width: '100%' }} />
-      </div>
+      <MeterAbsent thin />
       <div className="wbar__reset muted">not reported</div>
     </div>
   );
