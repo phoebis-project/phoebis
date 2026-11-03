@@ -2364,7 +2364,7 @@ function synthesizeMissReasons(hm: Rng, ok: number, asksForDiagnostics: boolean)
   return { cacheMissReasons, expiredBetweenTurns: Math.min(cacheMissReasons.none, hm.chance(0.35) ? hm.int(1, 2) : 0) };
 }
 
-// The smoke run reads the holder's day through this module.
+// The smoke run reads the holder's day and the mock consistency tests read the cap raise through this module.
 export { DELETED_HOLDER_DAY, NIGHTLY_CAP_RAISED } from './time';
 
 function historicalRollups(): HourlyRollup[] {
