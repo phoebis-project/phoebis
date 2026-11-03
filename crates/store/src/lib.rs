@@ -739,7 +739,7 @@ const HOLD_POISONED: &str = "a test hold's mutex poisoned by a prior panic";
 fn arm(slot: &Mutex<Option<Arc<HoldGate>>>) -> Hold {
     let gate = Arc::new(HoldGate::default());
     *slot.lock().expect(HOLD_POISONED) = Some(gate.clone());
-    Hold(gate)
+    Hold::new(gate)
 }
 
 /// Waits on the hold armed in `slot`, if any, until the test releases it; the hold is taken, so it parks one call.
@@ -780,6 +780,12 @@ pub type RegistryLoadHold = Hold;
 
 #[cfg(any(test, feature = "debug-hooks"))]
 impl Hold {
+    /// The hold over `gate`, for a seam outside the store that parks on it, such as the ledger's writer-read hold.
+    #[doc(hidden)]
+    pub fn new(gate: Arc<HoldGate>) -> Hold {
+        Hold(gate)
+    }
+
     /// Whether the held call waits on the hold, which a test polls before it queues what should land behind.
     pub fn is_parked(&self) -> bool {
         self.0.is_parked()
