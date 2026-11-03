@@ -1050,12 +1050,15 @@ export const tierOf = (value: unknown): number[] | null => {
 /** The kind tier's word: an API key, overage, or the plan's own quota. */
 const tierWord = (tier: readonly number[], kind: RecordCandidate['kind'] | null, plan: string) => (kind === 'api_key' || tier[0] === 2 ? 'keys' : tier[0] === 1 || tier[2] === 1 ? 'overage' : plan);
 
+/** A lane's speed, thinking and effort chips, an effort of `-` read as none. */
+const laneChipsOf = ({ effort, speed, thinking }: { effort: string; speed: string; thinking: string }): Chip[] => [plain(speed, 'speed'), plain(thinking, 'thinking'), plain(effort === '-' ? 'none' : effort, 'effort')];
+
 /** A pin's lane is `model|speed|thinking|effort`. The model is the request's own, so the chips name the other three. */
 export function laneChips(lane: string): Chip[] {
   const parts = lane.split('|');
   if (parts.length !== 4) return [plain(lane, 'lane')];
   const [, speed, thinking, effort] = parts;
-  return [plain(speed, 'speed'), plain(thinking, 'thinking'), plain(effort === '-' ? 'none' : effort, 'effort')];
+  return laneChipsOf({ effort, speed, thinking });
 }
 
 /**
@@ -2296,7 +2299,7 @@ export function requestRows(record: DecisionRecord, row: DecisionSummary): CardR
     { chips: [plain(r.requestClass ?? words(r.clientClass))], label: 'Class' },
     { chips: [modelChip(r.canonicalModel)], label: 'Model resolved' },
     ...(upstream !== null && upstream !== r.canonicalModel ? [{ chips: [modelChip(upstream)], label: 'Upstream model' }] : []),
-    { chips: [plain(r.lane.speed, 'speed'), plain(r.lane.thinking, 'thinking'), plain(r.lane.effort === '-' ? 'none' : r.lane.effort, 'effort')], label: 'Lane' },
+    { chips: laneChipsOf(r.lane), label: 'Lane' },
     { chips: flags.length > 0 ? flags : [plain('none')], label: 'Flags' },
     ...(r.attempted.length > 0 ? [{ chips: r.attempted.map((id) => accountChip(id)), label: 'Attempted' }] : []),
   ];
