@@ -53,6 +53,17 @@ pub struct PinRef {
     pub effort: Option<String>,
 }
 
+impl PinRef {
+    pub fn key(&self) -> PinKey {
+        PinKey {
+            key_id: self.key_id.clone(),
+            session_id: self.session_id.clone(),
+            agent_id: self.agent_id.clone(),
+            model: self.model.clone(),
+        }
+    }
+}
+
 /// The pin's entrypoint as the pricers take it: `None` for a pin that carries none.
 pub fn entrypoint_of(pin: &PinRow) -> Option<&str> {
     Some(pin.entrypoint.as_str()).filter(|entrypoint| !entrypoint.is_empty())
@@ -3435,15 +3446,11 @@ impl RoutingState {
     /// A late failure from account A must not remove a newer pin on account B, so both have to match. Answers the row
     /// the invalidation took, whose figures the failover's landing reads, `None` when nothing matched.
     pub fn invalidate_pin(&mut self, pin: &PinRef, account_id: &str) -> Option<PinRow> {
-        let key = PinKey {
-            key_id: pin.key_id.clone(),
-            session_id: pin.session_id.clone(),
-            agent_id: pin.agent_id.clone(),
-            model: self.canonical(&pin.model).to_string(),
-        };
+        let key = pin.key();
+        let key = self.canonical_key(&key);
         let matches = self
             .pins
-            .get(&key)
+            .get(&*key)
             .is_some_and(|p| p.epoch == pin.epoch && p.account_id == account_id);
         if matches {
             self.take_pin(&key)

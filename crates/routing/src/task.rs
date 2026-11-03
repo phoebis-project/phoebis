@@ -3601,12 +3601,7 @@ impl Task {
                 }
                 if let Some(mut pin) = pin {
                     pin.model = self.state.canonical(&pin.model).to_string();
-                    let key = PinKey {
-                        key_id: pin.key_id.clone(),
-                        session_id: pin.session_id.clone(),
-                        agent_id: pin.agent_id.clone(),
-                        model: pin.model.clone(),
-                    };
+                    let key = pin.key();
                     // A fast-lane row refuses the fast lane alone: once a later turn moved the pin to another
                     // lane, the session no longer asks for what the row refuses, so a late refusal leaves it.
                     let left_lane = fast_lane
@@ -3823,12 +3818,7 @@ impl Task {
                     return;
                 }
                 pin.model = self.state.canonical(&pin.model).to_string();
-                let key = PinKey {
-                    key_id: pin.key_id.clone(),
-                    session_id: pin.session_id.clone(),
-                    agent_id: pin.agent_id.clone(),
-                    model: pin.model.clone(),
-                };
+                let key = pin.key();
                 if let Some(row) = self.state.invalidate_pin(&pin, &account_id) {
                     let now = (self.clock)();
                     if let Some(event) = released_mark(&row, now) {
@@ -3859,12 +3849,7 @@ impl Task {
                 credential_generation,
             } => {
                 pin.model = self.state.canonical(&pin.model).to_string();
-                let key = PinKey {
-                    key_id: pin.key_id.clone(),
-                    session_id: pin.session_id.clone(),
-                    agent_id: pin.agent_id.clone(),
-                    model: pin.model.clone(),
-                };
+                let key = pin.key();
                 // The request that created the pin has ended, so a mark its landing set waits for nothing: the
                 // backstop for a `Head` the closed mailbox refused.
                 if self
@@ -3927,12 +3912,7 @@ impl Task {
                 turn,
             } => {
                 pin.model = self.state.canonical(&pin.model).to_string();
-                let key = PinKey {
-                    key_id: pin.key_id.clone(),
-                    session_id: pin.session_id.clone(),
-                    agent_id: pin.agent_id.clone(),
-                    model: pin.model.clone(),
-                };
+                let key = pin.key();
                 if let Some(current) = self.state.pin(&key).cloned() {
                     // A request of the standing row reached its stream's end: a mark is set at a placement and a
                     // placement takes a new epoch, so a renewal of the same epoch belongs to the marked row, and
