@@ -699,7 +699,7 @@ impl UsageService {
         Some(Duration::from_millis((not_before - now) as u64))
     }
 
-    /// The last snapshot held for the account's row, clean or carrying its last attempt's error, with no fetch;
+    /// The last snapshot held for the account's row, clean or carrying its last attempt's error, with no fetch.
     /// `None` for an entry another holder of the id left behind (a re-pairing or a delete and a new account
     /// under the id that no route invalidated), so no caller shows the old holder's windows as the new one's. The
     /// holder is the row the caller holds, so the answer is for the account its response shows.
@@ -906,8 +906,8 @@ impl Inner {
 
     /// The attempt's instant with its result: the send's, read once the credential and the concurrency permit
     /// are held, since a request that completes during those waits is already in what the endpoint answers and
-    /// the router drops a charge only up to the reading's instant; the failure's own when no request went out. A 401
-    /// is fenced on `lineage`, the account's at the fetch's start, and the acquired token's generation.
+    /// the router drops a charge only up to the reading's instant, and the failure's own when no request went out. A
+    /// 401 is fenced on `lineage`, the account's at the fetch's start, and the acquired token's generation.
     async fn fetch(
         &self,
         account_id: &str,
