@@ -107,10 +107,15 @@ impl BodyFacts {
             m.iter()
                 .find(|msg| msg.get("role").and_then(Value::as_str) == Some("user"))
         });
-        let resumed =
-            first_user.is_some_and(|message| texts(message).next() == Some(RESUME_PLACEHOLDER));
+        let resumed = first_user.is_some_and(|message| {
+            phoebis_guardrails::texts(message).next() == Some(RESUME_PLACEHOLDER)
+        });
         let mut prompt_units = first_user
-            .map(|message| texts(message).map(prompt_units_of).collect::<Vec<_>>())
+            .map(|message| {
+                phoebis_guardrails::texts(message)
+                    .map(prompt_units_of)
+                    .collect::<Vec<_>>()
+            })
             .filter(|candidates| !candidates.is_empty())
             .unwrap_or_else(|| vec![[b'0' as u16; 3]]);
         // The client stamps a resumed request over a first user message that holds tool results alone and writes
@@ -335,20 +340,6 @@ pub(crate) fn note_entrypoint_disagreement(
                 "the billing line names another entrypoint than the user agent, which prices"
             );
         }
-    }
-}
-
-/// The `text` blocks of a message in order: a string content is one text, an array yields each `text` block.
-fn texts(message: &Value) -> Box<dyn Iterator<Item = &str> + '_> {
-    match message.get("content") {
-        Some(Value::String(s)) => Box::new(std::iter::once(s.as_str())),
-        Some(Value::Array(blocks)) => Box::new(
-            blocks
-                .iter()
-                .filter(|b| b.get("type").and_then(Value::as_str) == Some("text"))
-                .filter_map(|b| b.get("text").and_then(Value::as_str)),
-        ),
-        _ => Box::new(std::iter::empty()),
     }
 }
 
@@ -927,25 +918,5 @@ mod tests {
         let (facts, tree) = BodyFacts::read_with_tree(b"not json");
         assert_eq!(tree, None);
         assert!(facts.chains.is_none());
-    }
-
-    /// The guardrails crate carries its own copy of `texts`, and a message condition has to read the text blocks
-    /// the version suffix reads.
-    #[test]
-    fn the_relays_texts_and_the_crates_agree_on_both_fixtures() {
-        for fixture in [
-            include_str!("../../guardrails/tests/fixtures/subagent_summary_fork.json"),
-            include_str!("../../guardrails/tests/fixtures/auto_mode_classifier.json"),
-        ] {
-            let root: Value = serde_json::from_str(fixture).unwrap();
-            let messages = root["messages"].as_array().unwrap();
-            assert!(!messages.is_empty());
-            for message in messages {
-                assert_eq!(
-                    texts(message).collect::<Vec<_>>(),
-                    phoebis_guardrails::texts(message).collect::<Vec<_>>()
-                );
-            }
-        }
     }
 }
