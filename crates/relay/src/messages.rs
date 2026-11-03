@@ -1338,106 +1338,109 @@ impl Relay {
             ),
             Kind::CountTokens | Kind::Probe => None,
         };
-        let Some(coding) = request_coding(&parts.headers) else {
-            return self
-                .refused_before_body(
-                    &trace,
-                    Some(&key),
-                    &parts.headers,
-                    capture_hours,
-                    retired,
-                    relay_failure(&RelayError::UnsupportedEncoding),
-                    client_version.as_deref(),
-                )
-                .await;
-        };
-        let client_gzip = coding == Encoding::Gzip;
-        // The bodies arriving on a key and the bytes of them the process holds are bounded before the read, so a
-        // flood of slow or large bodies is refused rather than buffered. A probe's body is the router's own and
-        // already in memory, so it takes neither and has no deadline to keep.
-        let (read_permit, mut reservation) = match trace.kind {
-            Kind::Probe => (None, None),
-            Kind::CountTokens | Kind::Inference => {
-                let Some(read_permit) = self
-                    .body_reads
-                    .try_acquire(&key.id, self.limits.key_body_reads)
-                else {
-                    return self
-                        .refused_before_body(
-                            &trace,
-                            Some(&key),
-                            &parts.headers,
-                            capture_hours,
-                            retired,
-                            key_body_reads(),
-                            client_version.as_deref(),
-                        )
-                        .await;
-                };
-                let declared = content_length(&parts.headers);
-                if declared.is_some_and(|n| n > self.limits.max_request_bytes) {
-                    return self
-                        .refused_before_body(
-                            &trace,
-                            Some(&key),
-                            &parts.headers,
-                            capture_hours,
-                            retired,
-                            relay_failure(&RelayError::BodyTooLarge),
-                            client_version.as_deref(),
-                        )
-                        .await;
+        // Declared ahead of the read, so a refusal inside it releases the permit and the reservation where the
+        // read leaves them: the permit once the read ends, the reservation with the request.
+        let mut read_permit = None;
+        let mut reservation = None;
+        let body_read = 'read: {
+            let Some(coding) = request_coding(&parts.headers) else {
+                break 'read Err(relay_failure(&RelayError::UnsupportedEncoding));
+            };
+            let client_gzip = coding == Encoding::Gzip;
+            // The bodies arriving on a key and the bytes of them the process holds are bounded before the read, so
+            // a flood of slow or large bodies is refused rather than buffered. A probe's body is the router's own
+            // and already in memory, so it takes neither and has no deadline to keep.
+            match trace.kind {
+                Kind::Probe => {}
+                Kind::CountTokens | Kind::Inference => {
+                    let Some(permit) = self
+                        .body_reads
+                        .try_acquire(&key.id, self.limits.key_body_reads)
+                    else {
+                        break 'read Err(key_body_reads());
+                    };
+                    read_permit = Some(permit);
+                    let declared = content_length(&parts.headers);
+                    if declared.is_some_and(|n| n > self.limits.max_request_bytes) {
+                        break 'read Err(relay_failure(&RelayError::BodyTooLarge));
+                    }
+                    // A chunked body may run to the per-body bound, so it holds that much until it has been read.
+                    let Some(reserved) = self
+                        .body_budget
+                        .try_reserve(declared.unwrap_or(self.limits.max_request_bytes) as u64)
+                    else {
+                        break 'read Err(body_budget_exhausted());
+                    };
+                    reservation = Some(reserved);
                 }
-                // A chunked body may run to the per-body bound, so it holds that much until it has been read.
-                let Some(reservation) = self
-                    .body_budget
-                    .try_reserve(declared.unwrap_or(self.limits.max_request_bytes) as u64)
-                else {
-                    return self
-                        .refused_before_body(
-                            &trace,
-                            Some(&key),
-                            &parts.headers,
-                            capture_hours,
-                            retired,
-                            body_budget_exhausted(),
-                            client_version.as_deref(),
-                        )
-                        .await;
-                };
-                (Some(read_permit), Some(reservation))
             }
-        };
-        // A caller that stops sending holds a task and a buffer for nothing; the read has its own deadline, under
-        // the stream's idle bound.
-        let read = axum::body::to_bytes(body, self.limits.max_request_bytes);
-        let read = match trace.kind {
-            Kind::Probe => Ok(read.await),
-            Kind::CountTokens | Kind::Inference => {
-                tokio::time::timeout(self.limits.body_read_timeout, read).await
+            // A caller that stops sending holds a task and a buffer for nothing, so the read has its own deadline,
+            // under the stream's idle bound.
+            let read = axum::body::to_bytes(body, self.limits.max_request_bytes);
+            let read = match trace.kind {
+                Kind::Probe => Ok(read.await),
+                Kind::CountTokens | Kind::Inference => {
+                    tokio::time::timeout(self.limits.body_read_timeout, read).await
+                }
+            };
+            drop(read_permit.take());
+            let body_read = match read {
+                Ok(Ok(raw)) => Ok(raw),
+                Err(_) => Err(RelayError::BodyTimeout),
+                Ok(Err(error)) => {
+                    // axum wraps the limit and the body's own failure in one type. Only the limit is the caller's
+                    // request being too large, and the rest is the caller leaving before its body was complete.
+                    let too_large = error
+                        .into_inner()
+                        .downcast::<http_body_util::LengthLimitError>()
+                        .is_ok();
+                    Err(if too_large {
+                        RelayError::BodyTooLarge
+                    } else {
+                        RelayError::BodyIncomplete
+                    })
+                }
+            };
+            let raw = match body_read {
+                Ok(raw) => raw,
+                Err(error) => break 'read Err(relay_failure(&error)),
+            };
+            if let Some(reservation) = &mut reservation {
+                // The declared length frames the body and the per-body bound caps a chunked one, so the read never
+                // holds more than was reserved: this only shrinks, and a shrink never fails.
+                let shrunk = reservation.resize(raw.len() as u64);
+                debug_assert!(shrunk.is_ok(), "the read outgrew its reservation");
             }
-        };
-        drop(read_permit);
-        let body_read = match read {
-            Ok(Ok(raw)) => Ok(raw),
-            Err(_) => Err(RelayError::BodyTimeout),
-            Ok(Err(error)) => {
-                // axum wraps the limit and the body's own failure in one type; only the limit is the caller's
-                // request being too large, the rest is the caller leaving before its body was complete.
-                let too_large = error
-                    .into_inner()
-                    .downcast::<http_body_util::LengthLimitError>()
-                    .is_ok();
-                Err(if too_large {
-                    RelayError::BodyTooLarge
-                } else {
-                    RelayError::BodyIncomplete
-                })
+            if !client_gzip {
+                break 'read Ok((raw, client_gzip));
             }
+            // Every read below, the edits and the stamp included, sees the plaintext with the client's tail after
+            // the JSON in place, as an identity body is seen.
+            let bound = self.limits.max_request_bytes;
+            if let Some(reservation) = &mut reservation {
+                // The inflated worst case is reserved before a byte is inflated: a budget that cannot grant it
+                // refuses here, never after the decoder has already allocated it.
+                if reservation.resize(bound as u64).is_err() {
+                    break 'read Err(body_budget_exhausted());
+                }
+            }
+            let plain = match inflate_request(&raw, bound) {
+                Ok(plain) => plain,
+                Err(error) => break 'read Err(relay_failure(&error)),
+            };
+            // Once the shrink below counts the inflated bytes alone, the compressed copy kept to the end of the
+            // request would hold up to the per-body bound the budget no longer sees.
+            drop(raw);
+            if let Some(reservation) = &mut reservation {
+                // The inflated bytes are what the bound and the budget measure from here, and a shrink never fails.
+                let shrunk = reservation.resize(plain.len() as u64);
+                debug_assert!(shrunk.is_ok(), "the inflated body outgrew its reservation");
+            }
+            Ok((Bytes::from(plain), client_gzip))
         };
-        let raw = match body_read {
-            Ok(raw) => raw,
-            Err(error) => {
+        let (raw, client_gzip) = match body_read {
+            Ok(read) => read,
+            Err(failure) => {
                 return self
                     .refused_before_body(
                         &trace,
@@ -1445,66 +1448,11 @@ impl Relay {
                         &parts.headers,
                         capture_hours,
                         retired,
-                        relay_failure(&error),
+                        failure,
                         client_version.as_deref(),
                     )
                     .await;
             }
-        };
-        if let Some(reservation) = &mut reservation {
-            // The declared length frames the body and the per-body bound caps a chunked one, so the read never
-            // holds more than was reserved: this only shrinks, and a shrink never fails.
-            let shrunk = reservation.resize(raw.len() as u64);
-            debug_assert!(shrunk.is_ok(), "the read outgrew its reservation");
-        }
-        // Every read below, the edits and the stamp included, sees the plaintext with the client's tail after the
-        // JSON in place, as an identity body is seen.
-        let raw = if client_gzip {
-            let bound = self.limits.max_request_bytes;
-            if let Some(reservation) = &mut reservation {
-                // The inflated worst case is reserved before a byte is inflated: a budget that cannot grant it
-                // refuses here, never after the decoder has already allocated it.
-                if reservation.resize(bound as u64).is_err() {
-                    return self
-                        .refused_before_body(
-                            &trace,
-                            Some(&key),
-                            &parts.headers,
-                            capture_hours,
-                            retired,
-                            body_budget_exhausted(),
-                            client_version.as_deref(),
-                        )
-                        .await;
-                }
-            }
-            let plain = match inflate_request(&raw, bound) {
-                Ok(plain) => plain,
-                Err(error) => {
-                    return self
-                        .refused_before_body(
-                            &trace,
-                            Some(&key),
-                            &parts.headers,
-                            capture_hours,
-                            retired,
-                            relay_failure(&error),
-                            client_version.as_deref(),
-                        )
-                        .await;
-                }
-            };
-            // Once the shrink below counts the inflated bytes alone, the compressed copy kept to the end of the
-            // request would hold up to the per-body bound the budget no longer sees.
-            drop(raw);
-            if let Some(reservation) = &mut reservation {
-                // The inflated bytes are what the bound and the budget measure from here; a shrink never fails.
-                let shrunk = reservation.resize(plain.len() as u64);
-                debug_assert!(shrunk.is_ok(), "the inflated body outgrew its reservation");
-            }
-            Bytes::from(plain)
-        } else {
-            raw
         };
         // The tree lives to the guardrail step and no further: the body budget does not count it, and it is
         // dropped before the observation waits on the bus.
