@@ -82,10 +82,7 @@ pub fn identify(headers: &HeaderMap, body: &[u8]) -> Result<RequestIdentity, Rel
     }
     // The header is the client's own statement of the session, and the climb starts from it.
     let session_id = header_id(headers, "x-claude-code-session-id");
-    let entrypoint = user_agent_of(headers)
-        .filter(|agent| agent.starts_with(CLAUDE_CLI_PREFIX))
-        .map(|agent| entrypoint_of(agent).to_string());
-    let client = client_class(headers);
+    let client = client_of(headers);
     Ok(RequestIdentity {
         session_id,
         agent_id: header_id(headers, "x-claude-code-agent-id")
@@ -95,9 +92,9 @@ pub fn identify(headers: &HeaderMap, body: &[u8]) -> Result<RequestIdentity, Rel
         model,
         canonical_model: folded_model.clone(),
         folded_model,
-        entrypoint,
-        class: ClientClass::of_label(&client),
-        client,
+        entrypoint: client.entrypoint,
+        class: client.class,
+        client: client.label,
         forked_from: None,
         fork_depth: None,
         has_user_id: crate::body::account_uuid_value_span(body).is_some(),
@@ -293,15 +290,32 @@ pub(crate) fn restores_prev_req(request_class: Option<&str>, headers: &HeaderMap
     }
 }
 
-/// `claude-code/<entrypoint>` for a `claude-cli/` user agent (the token `entrypoint_of` reads, `cli` when it
-/// reads none), `other` for anything else. The entrypoint is bounded by `entrypoint_of`, so the class is safe
-/// for a log line and a ledger key.
-pub fn client_class(headers: &HeaderMap) -> String {
-    let user_agent = user_agent_of(headers).unwrap_or_default();
-    if user_agent.starts_with(CLAUDE_CLI_PREFIX) {
-        return format!("claude-code/{}", entrypoint_of(user_agent));
+/// The client a request's user agent names, read off the agent's prefix once.
+pub(crate) struct Client {
+    pub class: ClientClass,
+    /// The token `entrypoint_of` reads (`cli` when it reads none) for a `claude-cli/` agent, `None` for any other.
+    pub entrypoint: Option<String>,
+    /// `claude-code/<entrypoint>` for a `claude-cli/` agent, `other` for anything else. The entrypoint is bounded by
+    /// `entrypoint_of`, so the label is safe for a log line and a ledger key.
+    pub label: String,
+}
+
+pub(crate) fn client_of(headers: &HeaderMap) -> Client {
+    match user_agent_of(headers).filter(|agent| agent.starts_with(CLAUDE_CLI_PREFIX)) {
+        Some(agent) => {
+            let entrypoint = entrypoint_of(agent);
+            Client {
+                class: ClientClass::ClaudeCode,
+                entrypoint: Some(entrypoint.to_string()),
+                label: format!("claude-code/{entrypoint}"),
+            }
+        }
+        None => Client {
+            class: ClientClass::Other,
+            entrypoint: None,
+            label: OTHER_CLIENT.to_string(),
+        },
     }
-    OTHER_CLIENT.to_string()
 }
 
 /// What a Claude Code user agent starts with, ahead of the client's version.

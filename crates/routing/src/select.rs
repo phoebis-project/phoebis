@@ -46,14 +46,6 @@ impl ClientClass {
             ClientClass::Other => "other",
         }
     }
-
-    pub fn of_label(label: &str) -> ClientClass {
-        if label.starts_with("claude-code/") {
-            ClientClass::ClaudeCode
-        } else {
-            ClientClass::Other
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

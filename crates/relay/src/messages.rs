@@ -70,7 +70,7 @@ use crate::facts::{BodyFacts, ClientHints};
 use crate::headers::{outbound_headers, CredentialKind};
 use crate::hold::{hold, Commit, Held, Inspect, INSPECT_BUFFER};
 use crate::identity::{
-    client_class, climb, contract_gap, identify, restores_prev_req, waits_on, PendingReports,
+    client_of, climb, contract_gap, identify, restores_prev_req, waits_on, PendingReports,
     RequestIdentity, PENDING_REPORT_WAIT,
 };
 use crate::memory::{
@@ -916,15 +916,21 @@ fn client_facts(
     facts: Option<&BodyFacts>,
 ) -> ClientFacts {
     let hints = ClientHints::read(headers);
-    let class = identity.map_or_else(|| client_class(headers), |i| i.client.clone());
+    let (class, label) = match identity {
+        Some(identity) => (identity.class, identity.client.clone()),
+        None => {
+            let client = client_of(headers);
+            (client.class, client.label)
+        }
+    };
     // The pair marks under the Claude Code class alone: another client carrying it would hide its share from
     // the prediction and the shedding, where the contract binds Claude Code alone.
-    let classifier = (ClientClass::of_label(&class) == ClientClass::ClaudeCode
+    let classifier = (class == ClientClass::ClaudeCode
         && hints.request_class.as_deref() == Some("auxiliary")
         && hints.classifier_beta)
         .then_some(Classifier::Client);
     ClientFacts {
-        class,
+        class: label,
         agent_type: hints.agent_type,
         classifier,
         compaction: hints.compaction,
@@ -1351,7 +1357,7 @@ impl Relay {
         let client_version = crate::drift::client_version(&parts.headers);
         // The class is read off the user agent alone, with no body read yet to justify: the router admits Claude
         // Code and refuses any other client before the bytes it would never use are even taken off the wire.
-        if ClientClass::of_label(&client_class(&parts.headers)) != ClientClass::ClaudeCode {
+        if client_of(&parts.headers).class != ClientClass::ClaudeCode {
             self.ledger_standing(&trace, false);
             trace
                 .observed(
