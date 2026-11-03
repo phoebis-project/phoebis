@@ -95,7 +95,7 @@ pub use registry::{
     MemberWrite, ModelRule, OveragePolicy, PoolMember, PoolRow, PresetStamp, RegistryChange,
     RegistryLoad, RetiredSecret, ReturnToPlan, RulesMode, SessionPlacement, Shedding, SlowDown,
     Strategy, SubagentPlacement, SubjectKind, SubscriptionTerm, WarmSessions, GUARDRAIL_BOUND,
-    KEY_SECRET_PREFIX, ROTATION_GRACE_MS,
+    KEY_SECRET_PREFIX, LONG_CONTEXT_SUFFIX, ROTATION_GRACE_MS,
 };
 pub use routing::{
     AffinityChain, AffinityRow, CooldownRow, CooldownScope, CreditsRow, FirstSeenRow, OverageRow,

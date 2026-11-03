@@ -56,7 +56,7 @@ pub fn snapshot_date(id: &str) -> Option<u32> {
 /// Input tokens above which a model gets a `[1m]` twin: Claude Code sizes its window at 200K unless the id ends
 /// in the suffix, so the twin is what lets it use the window the catalog reports.
 pub const LONG_CONTEXT_ABOVE: u64 = 200_000;
-pub const LONG_CONTEXT_SUFFIX: &str = "[1m]";
+pub use phoebis_store::LONG_CONTEXT_SUFFIX;
 
 /// The listing for one key: the members' rows in the order given (priority order; a member whose fetch failed
 /// hands in an empty list), each row's folded id judged by `processed`, one row per id from the first member

@@ -630,11 +630,17 @@ pub struct AccountUpdate<'a> {
     pub cancellation: Option<Cancellation>,
 }
 
+/// The suffix that names a model's long-context twin, which the routing key folds away.
+pub const LONG_CONTEXT_SUFFIX: &str = "[1m]";
+
 /// The routing key of a served model: lowercase with one trailing `[1m]` removed, the same fold the relay applies
 /// to a request's `model`.
 pub fn canonical_id(upstream_id: &str) -> String {
     let lowered = upstream_id.to_ascii_lowercase();
-    lowered.strip_suffix("[1m]").unwrap_or(&lowered).to_string()
+    lowered
+        .strip_suffix(LONG_CONTEXT_SUFFIX)
+        .unwrap_or(&lowered)
+        .to_string()
 }
 
 /// What every secret the router issues for its own API keys starts with.
