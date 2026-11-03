@@ -786,25 +786,7 @@ pub(crate) fn insert_request_in(
     bodies: Option<&BodyRecord>,
     now: i64,
 ) -> Result<Option<(RequestRecord, Vec<AttemptRecord>)>, LedgerError> {
-    let previous = tx
-        .query_row(
-            &format!("{REQUEST_SELECT} WHERE id = ?1"),
-            params![request.id],
-            row_to_request,
-        )
-        .optional()?;
-    let previous = match previous {
-        None => None,
-        Some(row) => {
-            let mut stmt = tx.prepare(&format!(
-                "{ATTEMPT_SELECT} WHERE request_id = ?1 ORDER BY attempt"
-            ))?;
-            let old = stmt
-                .query_map(params![request.id], row_to_attempt)?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            Some((row, old))
-        }
-    };
+    let previous = request_by_id(tx, &request.id)?;
     // A kept-warm credit is recorded at completion while the writer batches, so the mark can be in the table
     // before the request's own row lands here.
     let marked: bool = tx
