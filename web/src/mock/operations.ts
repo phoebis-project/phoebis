@@ -25,6 +25,23 @@ interface WrittenFigures {
   lastRefreshMinutes: number;
 }
 
+/**
+ * The five subagents the written session holds beyond its drawn pair, written so the session holds an agent in each
+ * lifecycle word, three of them released, one by the session's end, which the view keeps listed, and an id of the
+ * length Claude Code gives a subagent. The list's order (a released row first, the parked row before the idle one, and
+ * the idle row's last request newer than the drawn busy row's) differs from the lifecycle order main, busy, idle,
+ * parked, so lines drawn in the list's order read differently from lines sorted into it. Each released row's last probe
+ * dates its release inside the pool's cache TTL, since the router lists a released record for one TTL after the
+ * release and then not at all.
+ */
+const WRITTEN_SUBAGENTS: Partial<KeepaliveRecipe>[] = [
+  { agentId: 'e7c1', agentState: 'released', cause: 'agent_released', deadline: null, lastProbeAt: ago(4 * MINUTE), lastRequestAt: ago(9 * MINUTE), nextProbeAt: null, parkKind: null, state: 'ended', wakeAt: null },
+  { agentId: '4f0c2a9e7b61d3c58', agentState: 'parked', cause: 'scheduled', deadline: ahead(41 * MINUTE), lastProbeAt: ago(2 * MINUTE), lastRequestAt: ago(6 * MINUTE), nextProbeAt: ahead(150_000), parkKind: 'background', state: 'retained', wakeAt: null },
+  { agentId: 'b2d8', agentState: 'idle', cause: 'scheduled', deadline: null, lastProbeAt: ago(MINUTE), lastRequestAt: ago(30_000), nextProbeAt: ahead(200_000), parkKind: null, state: 'retained', wakeAt: null },
+  { agentId: '91aa', agentState: 'released', cause: 'agent_released', deadline: null, lastProbeAt: ago(7 * MINUTE), lastRequestAt: ago(12 * MINUTE), nextProbeAt: null, parkKind: null, state: 'ended', wakeAt: null },
+  { agentId: 'c3a9', agentState: 'released', cause: 'session_ended', deadline: null, lastProbeAt: ago(6 * MINUTE), lastRequestAt: ago(11 * MINUTE), nextProbeAt: null, parkKind: null, state: 'ended', wakeAt: null },
+];
+
 // `state: null` marks a session with no cache-warming recipe: the `ci` key opts
 // out and `jobs` keeps no caches warm.
 // `companion` is independent of that: it says whether the keepalive mod ever
@@ -45,6 +62,13 @@ interface WrittenFigures {
 const sessionSpec: ({
   accountId: string;
   agents: number;
+  /**
+   * Why main's probe is held or its recipe ended. Without one, its next probe is scheduled, or in flight on a busy
+   * session.
+   */
+  cause?: RecipeCause;
+  /** The subagent whose compaction completed, by its place among the row's agents. */
+  compactedAgent?: number;
   companion: CompanionState;
   /**
    * The row is finished: the builder writes main's cause `session_ended` and every subagent `agent_released` in
@@ -60,7 +84,11 @@ const sessionSpec: ({
   released?: true;
   sessionId?: string;
   state: Session['keepalive']['state'];
+  /** A held or paused subagent under a main agent that keeps probing, which is the case the state hints describe. */
+  subagentHold?: RecipeCause;
   subagents?: { accountId?: string; model: string };
+  /** The subagents the row holds beyond its drawn pair, written rather than rolled. */
+  writtenSubagents?: Partial<KeepaliveRecipe>[];
 } & (
   | { figures?: undefined; fixed?: undefined }
   | {
@@ -71,19 +99,24 @@ const sessionSpec: ({
       sessionId: string;
     }
 ))[] = [
-  { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'busy', agents: 3, companion: 'reporting', lastUseFromRows: true, subagents: { model: 'claude-sonnet-5', accountId: 'nightly' } },
-  { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'idle', agents: 1, companion: 'reporting' },
+  // Its second subagent compacted, while its first stays paused on its cold probes.
+  { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'busy', agents: 3, companion: 'reporting', lastUseFromRows: true, subagents: { model: 'claude-sonnet-5', accountId: 'nightly' }, cause: 'awaiting_cache_evidence', compactedAgent: 2, subagentHold: 'repeated_cold_probe' },
+  { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'idle', agents: 1, companion: 'reporting', cause: 'expired' },
   { keyId: 'desktop', accountId: 'nightly', model: 'claude-sonnet-4-5', state: 'idle', agents: 2, companion: 'silent' },
-  { keyId: 'desktop', accountId: 'primary', model: 'claude-opus-5', state: 'parked', agents: 1, companion: 'reporting' },
-  { keyId: 'desktop', accountId: 'nightly', model: 'claude-fable-5-1', state: 'idle', agents: 2, companion: 'reporting', subagents: { model: 'claude-sonnet-5' } },
+  // A parked main agent on a wakeup further away than the pool's horizon, held with its prompt kept. The other parked
+  // session's agent stays retained, parked on a background command with its deadline.
+  { keyId: 'desktop', accountId: 'primary', model: 'claude-opus-5', state: 'parked', agents: 1, companion: 'reporting', cause: 'horizon' },
+  // A subagent whose park ran past the pool's parked ceiling.
+  { keyId: 'desktop', accountId: 'nightly', model: 'claude-fable-5-1', state: 'idle', agents: 2, companion: 'reporting', subagents: { model: 'claude-sonnet-5' }, cause: 'overage', subagentHold: 'parked_limit' },
   { keyId: 'desktop', accountId: 'primary', model: 'claude-sonnet-5', state: 'busy', agents: 1, companion: 'reporting' },
   // Idle for longer than the pool's one-hour max idle, so its recipe is held and its retained prompt is gone.
-  { keyId: 'laptop', accountId: 'nightly', model: 'claude-sonnet-4-5', state: 'idle', agents: 1, companion: 'silent', idleMinutes: 95 },
+  { keyId: 'laptop', accountId: 'nightly', model: 'claude-sonnet-4-5', state: 'idle', agents: 1, companion: 'silent', idleMinutes: 95, cause: 'idle_limit' },
   // The laptop key allows Haiku 4.5 and Sonnet 4.5 only, so its subagents stay inside that list.
-  { keyId: 'laptop', accountId: 'primary', model: 'claude-sonnet-4-5', state: 'busy', agents: 2, companion: 'reporting', subagents: { model: 'claude-haiku-4-5-20251001' } },
+  { keyId: 'laptop', accountId: 'primary', model: 'claude-sonnet-4-5', state: 'busy', agents: 2, companion: 'reporting', subagents: { model: 'claude-haiku-4-5-20251001' }, cause: 'unsupported_shape', subagentHold: 'affinity_too_short' },
   { keyId: 'laptop', accountId: 'nightly', model: 'claude-haiku-4-5-20251001', state: 'parked', agents: 1, companion: 'reporting', noEffort: true },
-  // Five of its agents are written below, so it holds an agent in each lifecycle word, three of them released.
-  { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'idle', agents: 7, companion: 'reporting' },
+  // Five of its agents are written, so it holds an agent in each lifecycle word, three of them released. Holding its
+  // first subagent moves no value a reader sees: the agents drawn after it take their fields from the written rows.
+  { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'idle', agents: 7, companion: 'reporting', subagentHold: 'probe_pool_exhausted', writtenSubagents: WRITTEN_SUBAGENTS },
   { keyId: 'ci', accountId: 'research', model: 'claude-haiku-4-5-20251001', state: null, agents: 1, companion: 'none', lastUseFromRows: true },
   { keyId: 'ci', accountId: 'research', model: 'claude-haiku-4-5-20251001', state: null, agents: 2, companion: 'none', lastUseFromRows: true },
   { keyId: 'laptop', accountId: 'secondary', model: 'claude-sonnet-4-5', state: null, agents: 1, companion: 'none' },
@@ -129,6 +162,9 @@ const sessionSpec: ({
     state: 'idle',
     agents: 1,
     companion: 'none',
+    // Idle for two hours, past all's one-hour max idle as the 95-minute laptop row is, so its recipe ends, and the
+    // engine's figures keep it while the route's list leaves the row out.
+    cause: 'idle_limit',
     fixed: true,
     idleMinutes: 120,
     sessionId: 'e5a17c3d-8f20-4b6e-9d41-2c7b0a9f6e58',
@@ -406,53 +442,6 @@ SESSIONS.push({
   sessionId: '0f1d7c64-3b2a-4f58-9c7e-1a5b0e8d2f43',
 });
 
-// One recipe per agent on a pinned session, indexed by session. The cause
-// explains why the main agent's probe is held or its recipe ended, and `null` means
-// the next probe is scheduled.
-const RECIPE_CAUSES: (RecipeCause | null)[] = [
-  'awaiting_cache_evidence',
-  'expired',
-  null,
-  null,
-  'overage',
-  null,
-  'idle_limit',
-  'unsupported_shape',
-  null,
-  null,
-  null,
-  null,
-  null,
-  null,
-  null,
-  // One row for each session past the story's ids, so the modulo wraps none of them onto the first causes. The
-  // finished row's main is written over its own, the row idle for two hours ran past the `all` pool's one-hour max
-  // idle as the 95-minute `laptop` row did and keeps its recipe in the engine's figures while the route's list leaves
-  // the row out under the non-companion timeout, the pin on the work pool's former member waits for its next probe,
-  // and the released row's main is written over its own.
-  null,
-  null,
-  null,
-  'idle_limit',
-  null,
-  null,
-];
-
-// A held or paused subagent under a main agent that keeps probing, which is the
-// case the state hints describe.
-const SUBAGENT_HOLDS = new Map<number, RecipeCause>([
-  [0, 'repeated_cold_probe'],
-  // A subagent whose park ran past the pool's parked ceiling.
-  [4, 'parked_limit'],
-  [7, 'affinity_too_short'],
-  // Holding it moves no value a reader sees: the agents drawn after it take their fields from the written rows.
-  [9, 'probe_pool_exhausted'],
-]);
-
-// A parked main agent on a wakeup further away than the pool's horizon, held with its prompt kept. The other parked
-// session's agent stays retained, parked on a background command with its deadline.
-const PARKED_HOLDS = new Map<number, RecipeCause>([[3, 'horizon']]);
-
 /** How long ago a probe still in flight went out. */
 const PROBE_IN_FLIGHT_MS = 20_000;
 
@@ -478,26 +467,6 @@ const STATE_OF: Partial<Record<RecipeCause, RecipeState>> = {
 // keep their rolls.
 const LADDER_NEXT_PROBE: Partial<Record<RecipeCause, string>> = { probe_pool_exhausted: ahead(3 * MINUTE) };
 
-/**
- * The index in `sessionSpec` of the session whose rows past the drawn pair are written, not rolled.
- */
-const WRITTEN_SESSION = 9;
-/**
- * The five subagents the written session holds beyond its drawn pair, written so the session holds an agent in each
- * lifecycle word, three of them released, one by the session's end, which the view keeps listed, and an id of the
- * length Claude Code gives a subagent. The list's order (a released row first, the parked row before the idle one, and
- * the idle row's last request newer than the drawn busy row's) differs from the lifecycle order main, busy, idle,
- * parked, so lines drawn in the list's order read differently from lines sorted into it. Each released row's last probe
- * dates its release inside the pool's cache TTL, since the router lists a released record for one TTL after the
- * release and then not at all.
- */
-const WRITTEN_SUBAGENTS: Partial<KeepaliveRecipe>[] = [
-  { agentId: 'e7c1', agentState: 'released', cause: 'agent_released', deadline: null, lastProbeAt: ago(4 * MINUTE), lastRequestAt: ago(9 * MINUTE), nextProbeAt: null, parkKind: null, state: 'ended', wakeAt: null },
-  { agentId: '4f0c2a9e7b61d3c58', agentState: 'parked', cause: 'scheduled', deadline: ahead(41 * MINUTE), lastProbeAt: ago(2 * MINUTE), lastRequestAt: ago(6 * MINUTE), nextProbeAt: ahead(150_000), parkKind: 'background', state: 'retained', wakeAt: null },
-  { agentId: 'b2d8', agentState: 'idle', cause: 'scheduled', deadline: null, lastProbeAt: ago(MINUTE), lastRequestAt: ago(30_000), nextProbeAt: ahead(200_000), parkKind: null, state: 'retained', wakeAt: null },
-  { agentId: '91aa', agentState: 'released', cause: 'agent_released', deadline: null, lastProbeAt: ago(7 * MINUTE), lastRequestAt: ago(12 * MINUTE), nextProbeAt: null, parkKind: null, state: 'ended', wakeAt: null },
-  { agentId: 'c3a9', agentState: 'released', cause: 'session_ended', deadline: null, lastProbeAt: ago(6 * MINUTE), lastRequestAt: ago(11 * MINUTE), nextProbeAt: null, parkKind: null, state: 'ended', wakeAt: null },
-];
 
 /**
  * What every line of a session the mod released whole reads, written over the drawn row. The row keeps its last request
@@ -511,8 +480,6 @@ const RELEASED_BY_THE_MOD: Partial<KeepaliveRecipe> = { agentState: 'released', 
  * rolls.
  */
 const COMPACTED: Partial<KeepaliveRecipe> = { cause: 'compacted', lastGuard: 'compaction', nextProbeAt: null, state: 'ended' };
-/** The first session's second subagent compacted, while its first stays paused on its cold probes. */
-const COMPACTED_LINE = { agent: 2, session: 0 };
 /**
  * What main reads on a session the mod ended, written over the drawn row. Its lifecycle word stays its session's, as
  * an ended main's does, and its subagents read as the mod released them.
@@ -529,7 +496,7 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
   const agents = fixedAgents ? fixedAgents.map((a) => a.agentId) : Array.from({ length: pin.agents }, (_, j) => (j === 0 ? 'main' : rng.uuid().slice(0, 4)));
   return agents.map((agentId, j) => {
     // A parked agent is probed like a busy one until one of the park's ceilings stops it.
-    const held = mainState === 'parked' ? (j === 0 ? PARKED_HOLDS.get(i) ?? null : null) : j === 0 ? RECIPE_CAUSES[i % RECIPE_CAUSES.length] : j === 1 ? SUBAGENT_HOLDS.get(i) ?? null : null;
+    const held = j === 0 ? (spec.cause ?? null) : j === 1 ? (spec.subagentHold ?? null) : null;
     // A busy main has its probe in flight, and every other agent nothing holds waits for its scheduled one.
     const cause: RecipeCause = held ?? (mainState === 'busy' && j === 0 ? 'probing' : 'scheduled');
     const state = STATE_OF[cause] ?? 'retained';
@@ -561,9 +528,9 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
         ? j === 0
           ? ENDED_WITH_THE_SESSION
           : RELEASED_BY_THE_MOD
-        : i === WRITTEN_SESSION && j >= 2
-          ? WRITTEN_SUBAGENTS[j - 2]
-          : i === COMPACTED_LINE.session && j === COMPACTED_LINE.agent
+        : spec.writtenSubagents && j >= 2
+          ? spec.writtenSubagents[j - 2]
+          : spec.compactedAgent === j
             ? COMPACTED
             : undefined;
     return {
