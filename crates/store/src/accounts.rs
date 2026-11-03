@@ -176,7 +176,6 @@ fn row_to_account(row: &Row<'_>) -> rusqlite::Result<AccountRow> {
     })
 }
 
-/// Shared by `Store::account` and the account edit, which reads the row it changes inside its own transaction.
 pub(crate) fn identity_json(row: &AccountRow) -> Result<Option<String>, StoreError> {
     Ok(row
         .identity
@@ -215,6 +214,7 @@ const ACCOUNT_SELECT: &str =
     "SELECT id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, \
      revision, state, state_cause FROM accounts";
 
+/// Shared by `Store::account` and the account edit, which reads the row it changes inside its own transaction.
 pub(crate) fn account_in(
     conn: &rusqlite::Connection,
     id: &str,
@@ -706,7 +706,6 @@ pub(crate) fn next_incarnation(conn: &rusqlite::Connection, id: &str) -> Result<
     next_incarnation_in(conn, "account_tombstones", id)
 }
 
-/// The incarnation a fresh row under `id` takes in the `tombstones` table: one past what held the id before, 1 when new.
 /// Leaves the id's incarnation behind in `tombstones`, never lowering one a later holder left, so the next holder's
 /// incarnation from `next_incarnation_in` goes past every earlier one.
 pub(crate) fn bury_in(
@@ -725,6 +724,8 @@ pub(crate) fn bury_in(
     Ok(())
 }
 
+/// The incarnation a fresh row under `id` takes in the `tombstones` table: one past what held the id before,
+/// 1 when new.
 pub(crate) fn next_incarnation_in(
     conn: &rusqlite::Connection,
     tombstones: &str,
