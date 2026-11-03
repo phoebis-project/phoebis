@@ -3486,28 +3486,7 @@ impl RoutingState {
         dated_id: &str,
         at: i64,
     ) -> (RekeyWrite, Vec<PinRow>) {
-        let mut merged_away = Vec::new();
-        if let Some(current) = self.resolutions.get(spelling) {
-            // A caller whose own bookkeeping of the last move it saw was lost (its future dropped between
-            // this state moving and its own record of the move landing) can resubmit a snapshot older than
-            // what already stands; walking pins and cooldowns back to it would be a real regression, so the
-            // move is ignored and the mapping is reasserted as it already stands.
-            if snapshot_date(dated_id) <= snapshot_date(current) {
-                let write = RekeyWrite {
-                    resolution: ResolutionRow {
-                        spelling: spelling.to_string(),
-                        dated_id: current.clone(),
-                        resolved_at: at,
-                    },
-                    delete_pins: Vec::new(),
-                    upsert_pins: Vec::new(),
-                    delete_cooldowns: Vec::new(),
-                    upsert_cooldowns: Vec::new(),
-                };
-                return (write, merged_away);
-            }
-        }
-        let mut rekey = RekeyWrite {
+        let empty = |dated_id: &str| RekeyWrite {
             resolution: ResolutionRow {
                 spelling: spelling.to_string(),
                 dated_id: dated_id.to_string(),
@@ -3518,6 +3497,17 @@ impl RoutingState {
             delete_cooldowns: Vec::new(),
             upsert_cooldowns: Vec::new(),
         };
+        let mut merged_away = Vec::new();
+        if let Some(current) = self.resolutions.get(spelling) {
+            // A caller whose own bookkeeping of the last move it saw was lost (its future dropped between
+            // this state moving and its own record of the move landing) can resubmit a snapshot older than
+            // what already stands; walking pins and cooldowns back to it would be a real regression, so the
+            // move is ignored and the mapping is reasserted as it already stands.
+            if snapshot_date(dated_id) <= snapshot_date(current) {
+                return (empty(current), merged_away);
+            }
+        }
+        let mut rekey = empty(dated_id);
         self.resolutions
             .insert(spelling.to_string(), dated_id.to_string());
         self.affinity
