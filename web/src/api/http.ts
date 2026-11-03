@@ -179,8 +179,10 @@ const qs = (params: Record<string, string | number | boolean | string[] | undefi
   return s ? `?${s}` : '';
 };
 const range = (from: string, to: string) => `${Date.parse(from)},${Date.parse(to)}`;
-// `qs` joins a list with commas, which a pattern may hold; every pattern list travels joined by newline instead.
-const analytics = (q: AnalyticsQuery) => qs({ accounts: q.accountIds, clients: q.clients?.join('\n'), funding: q.funding, group_by: q.groupBy, include_probes: q.includeProbes, keys: q.keyIds, kinds: q.kinds, models: q.models, pools: q.poolIds, range: range(q.from, q.to), user_agent_groups: q.userAgentGroups?.join('\n'), user_agents: q.userAgents?.join('\n') });
+// `qs` joins a list with commas, which a pattern may hold, so a pattern list travels joined by newline, and an empty
+// one is left out as `qs` leaves out an empty list.
+const lines = (v?: string[]) => (v?.length ? v.join('\n') : undefined);
+const analytics = (q: AnalyticsQuery) => qs({ accounts: q.accountIds, clients: lines(q.clients), funding: q.funding, group_by: q.groupBy, include_probes: q.includeProbes, keys: q.keyIds, kinds: q.kinds, models: q.models, pools: q.poolIds, range: range(q.from, q.to), user_agent_groups: lines(q.userAgentGroups), user_agents: lines(q.userAgents) });
 
 /** Each model once, the first catalog naming an id answering for it, in id order; a fetch that failed adds nothing. */
 export const catalogUnion = (catalogs: (AccountCatalog | null)[]): CatalogModel[] => {
@@ -224,7 +226,7 @@ export class HttpApi implements Api {
   getAccountCatalog = async (accountId: string, refresh?: boolean) => d.decodeAccountCatalog(await call('GET', `/admin/accounts/${enc(accountId)}/catalog${qs({ refresh: refresh ? 1 : undefined })}`));
   getAnalyticsBreakdown = async (q: AnalyticsQuery): Promise<AnalyticsGroup[]> => (await call<{ rows: unknown[] }>('GET', `/admin/analytics/breakdown${analytics(q)}`)).rows.map(d.decodeAnalyticsGroup);
   getAnalyticsBurn = async (r: Pick<AnalyticsQuery, 'from' | 'to'>, groupBy: BurnGroup, filters: Pick<AnalyticsQuery, 'accountIds' | 'userAgentGroups'> = {}) =>
-    d.decodeBurn(await call('GET', `/admin/analytics/burn${qs({ accounts: filters.accountIds, group_by: groupBy, range: range(r.from, r.to), user_agent_groups: filters.userAgentGroups?.join('\n') })}`));
+    d.decodeBurn(await call('GET', `/admin/analytics/burn${qs({ accounts: filters.accountIds, group_by: groupBy, range: range(r.from, r.to), user_agent_groups: lines(filters.userAgentGroups) })}`));
   getAnalyticsGuardrails = async (r: GuardrailRange) => d.decodeGuardrailCounts(await call('GET', `/admin/analytics/guardrails${qs({ range: r === '24h' ? r : range(r.from, r.to) })}`));
   getAnalyticsReconciliations = async (filters: Pick<AnalyticsQuery, 'accountIds'> = {}) => d.decodeReconciliations(await call('GET', `/admin/analytics/reconciliations${qs({ accounts: filters.accountIds })}`));
   getAnalyticsRefusalCategories = async (query: AnalyticsQuery) => d.decodeRefusalCategories(await call('GET', `/admin/analytics/refusal_categories${analytics(query)}`));

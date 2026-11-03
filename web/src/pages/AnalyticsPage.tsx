@@ -327,14 +327,14 @@ export function AnalyticsPage() {
 
   const agentGroups = useMemo(() => (groupBy === 'user_agent' && clientGroups.trim() ? clientGroups.split('\n').map((s) => s.trim()).filter(Boolean) : undefined), [clientGroups, groupBy]);
   const query = useMemo<AnalyticsQuery>(
-    () => ({ accountIds: filters.accountId, clients: patterns.clients.length ? patterns.clients : undefined, from: fromIso, groupBy, includeProbes, keyIds: filters.keyId, models: filters.model, poolIds: filters.poolId, to: toIso, userAgentGroups: agentGroups, userAgents: patterns.userAgents.length ? patterns.userAgents : undefined }),
+    () => ({ accountIds: filters.accountId, clients: patterns.clients, from: fromIso, groupBy, includeProbes, keyIds: filters.keyId, models: filters.model, poolIds: filters.poolId, to: toIso, userAgentGroups: agentGroups, userAgents: patterns.userAgents }),
     [agentGroups, patterns, filters, fromIso, groupBy, includeProbes, toIso],
   );
   // The route narrows the rows a session view folds by one client pattern at most, and the fold applies both pattern
   // lists over what it holds: several client patterns narrow here alone, a cursor page that crossed a filter change
   // may be wider than the patterns, and the user agent matches its folded token, as the unscoped page's rollups do,
   // where the route matches the raw header.
-  const foldOptions = useMemo(() => ({ agentGroups, agentPatterns: patterns.userAgents.length ? patterns.userAgents : undefined, clientPatterns: patterns.clients.length ? patterns.clients : undefined }), [agentGroups, patterns]);
+  const foldOptions = useMemo(() => ({ agentGroups, agentPatterns: patterns.userAgents, clientPatterns: patterns.clients }), [agentGroups, patterns]);
   // A custom span holds its end, so no dependency moves at the interval: its window's reads poll at it instead, and the
   // figures stay drawn until the new answer lands, where a request that finished late shows, in the session log when it
   // falls on the first page. A preset's end moves to now at a boundary, and that change reads again.
