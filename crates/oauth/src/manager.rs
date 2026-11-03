@@ -330,12 +330,7 @@ impl CredentialManager {
         expected_generation: Option<u64>,
         read: Read,
     ) -> Result<AccessToken, AcquireError> {
-        match account.state {
-            AccountState::Disconnected => return Err(AcquireError::Disconnected),
-            AccountState::ReauthRequired => return Err(AcquireError::ReauthRequired(None)),
-            AccountState::Unpaired => return Err(AcquireError::Unpaired),
-            _ => {}
-        }
+        refuse_unusable(account)?;
         let bundle = self
             .inner
             .bundle(account, expected_generation, read)
@@ -386,9 +381,7 @@ impl CredentialManager {
     /// `acquire_for` over the row read from the store, for a caller that holds an id alone (the usage service).
     /// Its reads run inline on the caller's task, for the reason `Read::Inline` gives.
     pub async fn acquire(&self, account_id: &str) -> Result<AccessToken, AcquireError> {
-        let account = self.inner.store.account(account_id)?.ok_or_else(|| {
-            AcquireError::Store(StoreError::AccountNotFound(account_id.to_string()))
-        })?;
+        let account = self.inner.stored_account(account_id)?;
         self.acquire_with(&account, None, Read::Inline).await
     }
 
@@ -791,20 +784,19 @@ impl Inner {
         }
     }
 
+    fn stored_account(&self, account_id: &str) -> Result<AccountRow, AcquireError> {
+        self.store
+            .account(account_id)?
+            .ok_or_else(|| AcquireError::Store(StoreError::AccountNotFound(account_id.to_string())))
+    }
+
     /// Loads an account that is allowed to hand out a credential, with its current bundle.
     fn ready_account(
         &self,
         account_id: &str,
     ) -> Result<(AccountRow, CredentialBundle), AcquireError> {
-        let account = self.store.account(account_id)?.ok_or_else(|| {
-            AcquireError::Store(StoreError::AccountNotFound(account_id.to_string()))
-        })?;
-        match account.state {
-            AccountState::Disconnected => return Err(AcquireError::Disconnected),
-            AccountState::ReauthRequired => return Err(AcquireError::ReauthRequired(None)),
-            AccountState::Unpaired => return Err(AcquireError::Unpaired),
-            _ => {}
-        }
+        let account = self.stored_account(account_id)?;
+        refuse_unusable(&account)?;
         let bundle = self
             .store
             .credentials(account_id)?
@@ -1222,6 +1214,17 @@ fn store_failure(error: StoreError) -> RefreshFailure {
     match error {
         StoreError::Stale | StoreError::Disconnected => RefreshFailure::Disconnected,
         other => RefreshFailure::Unavailable(format!("store: {other}")),
+    }
+}
+
+/// The states that hand out no credential, refused before any bundle is read. A refresh answers its own failure
+/// class for them and lets an unpaired row through to the credential read, so it keeps its own match.
+fn refuse_unusable(account: &AccountRow) -> Result<(), AcquireError> {
+    match account.state {
+        AccountState::Disconnected => Err(AcquireError::Disconnected),
+        AccountState::ReauthRequired => Err(AcquireError::ReauthRequired(None)),
+        AccountState::Unpaired => Err(AcquireError::Unpaired),
+        _ => Ok(()),
     }
 }
 
