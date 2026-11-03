@@ -1355,6 +1355,7 @@ impl Relay {
             .body_capture_hours(&key)
             .min(self.limits.body_capture_max_hours);
         let client_version = crate::drift::client_version(&parts.headers);
+        let retired = presented == Presented::Retired;
         // The class is read off the user agent alone, with no body read yet to justify: the router admits Claude
         // Code and refuses any other client before the bytes it would never use are even taken off the wire.
         if client_of(&parts.headers).class != ClientClass::ClaudeCode {
@@ -1373,7 +1374,7 @@ impl Relay {
                     Vec::new(),
                     client_facts(&parts.headers, None, None),
                     None,
-                    presented == Presented::Retired,
+                    retired,
                     key.rotated_at,
                     None,
                     Vec::new(),
@@ -1395,7 +1396,6 @@ impl Relay {
                 )
                 .await;
         }
-        let retired = presented == Presented::Retired;
         let pool = snapshot.pool(&key.pool_id);
         let failover = pool.map(|p| p.failover).unwrap_or_default();
         // One permit for the whole request, held across every attempt, retry in place and hold until the
@@ -1655,7 +1655,7 @@ impl Relay {
                         Vec::new(),
                         client_facts(&parts.headers, None, Some(&facts)),
                         auto_mode,
-                        presented == Presented::Retired,
+                        retired,
                         key.rotated_at,
                         None,
                         Vec::new(),
@@ -1771,7 +1771,7 @@ impl Relay {
                     .unwrap_or_default(),
                 client,
                 auto_mode,
-                presented == Presented::Retired,
+                retired,
                 key.rotated_at,
                 guardrail_id.clone(),
                 guardrails,
