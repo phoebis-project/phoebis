@@ -5,7 +5,7 @@
 //! listed cells sits inside it too: a probe that consumed quota must never read as free, and a reader filling the
 //! dollars in after the call would be the recomputation this function exists to prevent.
 
-use phoebis_routing::PinUsage;
+use phoebis_routing::{PinUsage, SEVEN_DAY};
 
 use crate::plan::{
     free_equivalent, free_shares, price_equivalent, price_shares, Funding, PlanTables, WindowShares,
@@ -109,10 +109,18 @@ pub fn price_row(
                 band_at,
             )
         });
-    Priced {
-        usd,
-        shares,
-        equivalent: price_equivalent(
+    // On the unit's own tier under one revision at `at` and `now`, the 7-day share divides the same units by the same
+    // anchor row in the figure's order, so it is the figure to the bit.
+    let in_force = costs.revisions.in_force(key.at);
+    let unit_week = shares
+        .as_ref()
+        .filter(|_| {
+            key.tier == Some(in_force.unit.tier.as_str())
+                && std::ptr::eq(in_force, costs.revisions.in_force(key.now))
+        })
+        .and_then(|shares| shares.get(SEVEN_DAY).copied());
+    let equivalent = unit_week.unwrap_or_else(|| {
+        price_equivalent(
             costs,
             key.entrypoint,
             key.model,
@@ -120,7 +128,12 @@ pub fn price_row(
             key.at,
             band_at,
             key.now,
-        ),
+        )
+    });
+    Priced {
+        usd,
+        shares,
+        equivalent,
         share_reason: None,
     }
 }
