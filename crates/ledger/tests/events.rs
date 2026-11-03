@@ -365,7 +365,8 @@ async fn a_refresh_row_names_the_failure_s_class_and_text_or_the_committed_token
 }
 
 /// The failed and the uncertain texts lead with words other than their class, so a row that read the class out of the
-/// text would name another. The disconnect is the store's own statement settling an open attempt.
+/// text would name another. The supersession and the disconnect are the store's own statements settling an open
+/// attempt. The supersession runs before `b`'s uncertain attempt opens, since a commit settles that one too.
 #[tokio::test]
 async fn a_refresh_row_names_the_class_its_settlement_recorded_rather_than_one_read_from_its_text()
 {
@@ -377,6 +378,24 @@ async fn a_refresh_row_names_the_class_its_settlement_recorded_rather_than_one_r
         polled_every_50_ms(),
     )
     .await;
+    h.store.open_refresh_attempt("b", 1, 1, 1).unwrap();
+    h.store
+        .commit_credentials(
+            "b",
+            1,
+            1,
+            Some(1),
+            None,
+            &phoebis_store::NewBundle {
+                access_token: phoebis_store::Secret::new("re-paired"),
+                refresh_token: Some(phoebis_store::Secret::new("re-paired-refresh")),
+                issued_at: NOW,
+                expires_at: NOW + 3_600_000,
+                refresh_expires_at: None,
+                scopes: "user:inference".into(),
+            },
+        )
+        .unwrap();
     let failed = h.store.open_refresh_attempt("a", 1, 1, 1).unwrap();
     h.store
         .resolve_refresh_attempt(
@@ -416,7 +435,7 @@ async fn a_refresh_row_names_the_class_its_settlement_recorded_rather_than_one_r
                 })
                 .collect();
         rows.sort();
-        (rows.len() == 3).then_some(rows)
+        (rows.len() == 4).then_some(rows)
     })
     .await;
     let row = |kind: &str, cause: &str, error: &str| {
@@ -435,6 +454,7 @@ async fn a_refresh_row_names_the_class_its_settlement_recorded_rather_than_one_r
                 "invalid_grant",
                 "the grant was refused: invalid_grant"
             ),
+            row("refresh_failed", "superseded", "superseded"),
             row(
                 "refresh_uncertain",
                 "refresh_response_lost",

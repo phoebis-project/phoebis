@@ -474,6 +474,13 @@ fn a_missing_key_file_is_generated_at_0600_and_the_recovery_discards_every_seale
         assert!(attempt.resolved_at.is_some(), "{id}");
         assert_eq!(attempt.outcome.as_deref(), Some("failed"), "{id}");
         assert_eq!(attempt.detail.as_deref(), Some("disconnected"), "{id}");
+        assert_eq!(
+            store.newest_resolved_refresh_attempts(id, 1, 1).unwrap()[0]
+                .cause
+                .as_deref(),
+            Some("disconnected"),
+            "{id}"
+        );
     }
     assert!(store.api_key_secret("console").unwrap().is_none());
     let (sessions, agents, _) = store.load_keepalive().unwrap();
