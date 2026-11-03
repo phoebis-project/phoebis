@@ -18,12 +18,12 @@ import { accountStatusOf, planWordLabel } from '@/lib/quota';
 import { WINDOW_HOURS, WINDOW_LABEL, WINDOW_ORDER, hoursOfKey, windowKeyId, windowRank } from '@/lib/windows';
 
 type Rec = Record<string, unknown>;
-const rec = (v: unknown): Rec => (v && typeof v === 'object' ? (v as Rec) : {});
-const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+export const rec = (v: unknown): Rec => (v && typeof v === 'object' ? (v as Rec) : {});
+export const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 const str = (v: unknown, fallback = ''): string => (typeof v === 'string' ? v : fallback);
-const strOrNull = (v: unknown): string | null => (typeof v === 'string' ? v : null);
-const num = (v: unknown, fallback = 0): number => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
-const numOrNull = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+export const strOrNull = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+export const num = (v: unknown, fallback = 0): number => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
+export const numOrNull = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const bool = (v: unknown, fallback = false): boolean => (typeof v === 'boolean' ? v : fallback);
 const strings = (v: unknown): string[] => list(v).filter((x): x is string => typeof x === 'string');
 /** A map the route keys by data (a move reason, a model id), with every entry that is not a number dropped. */

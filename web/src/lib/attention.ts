@@ -1,4 +1,4 @@
-import { isoOrNull } from '@/api/decode';
+import { isoOrNull, list, num, numOrNull, rec } from '@/api/decode';
 import type { AttentionItem, AttentionKind } from '@/api/types';
 import { METER_CODEC } from './address';
 import { lookup } from './counts';
@@ -116,7 +116,6 @@ export function anchorOf(hash: string): string | null {
 }
 
 const text = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null);
-const count = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
 /** The listener a certificate item's subject names: `proxy.tls` is the proxy listener's pair. */
 const listenerOf = ({ subject }: AttentionItem): string => subject.id.replace(/\.tls$/, '');
 
@@ -141,20 +140,20 @@ export function attentionDetail(item: AttentionItem, now: number): string {
       return 'serves nothing until its organization is funded again';
     case 'refresh_failed': {
       const error = text(d.last_error);
-      return `${count(d.failures)} refreshes failed in a row${error ? `: ${error}` : ''}`;
+      return `${num(d.failures)} refreshes failed in a row${error ? `: ${error}` : ''}`;
     }
     case 'ledger_record_parked': {
-      const n = count(d.count);
+      const n = num(d.count);
       const accounts = Array.isArray(d.accounts) ? d.accounts.filter((a): a is string => typeof a === 'string') : [];
       return `${plural(n, 'priced record')} parked, landing at the next start or on the dashboard's Replay${accounts.length ? ` (${accounts.join(', ')})` : ''}`;
     }
     case 'poll_backoff': {
-      const n = count(d.rate_limited_in_a_row);
+      const n = num(d.rate_limited_in_a_row);
       const next = isoOrNull(d.next_attempt_at);
       return `${plural(n, 'rate-limited answer')} in a row${next ? `, next attempt ${fmtRelative(next, now)}` : ''}`;
     }
     case 'certificate_expiring': {
-      const left = count(d.days_left);
+      const left = num(d.days_left);
       const file = text(d.cert_file);
       // The route floors the days left, so a leaf at 0 ends within a day and one at -1 ended within the last day.
       const end = left === 0 ? 'expires today' : left === -1 ? 'expired today' : left < 0 ? `expired ${plural(-left, 'day')} ago` : `expires in ${plural(left, 'day')}`;
@@ -163,7 +162,7 @@ export function attentionDetail(item: AttentionItem, now: number): string {
     case 'certificate_reload_failed':
       return `The ${listenerOf(item)} listener's pair did not load: ${text(d.error) ?? ''}. The router keeps serving the pair it loaded at ${fmtAbsolute(isoOrNull(d.serving_since))}.`;
     case 'model_unpriced': {
-      const n = count(d.requests);
+      const n = num(d.requests);
       return `${text(d.model) ?? item.subject.id} has no weight in the cost model, so its ${plural(n, 'plan-funded request')} since ${fmtAbsolute(item.since)} priced no window share.`;
     }
     case 'wall_reached':
@@ -179,7 +178,7 @@ export function attentionDetail(item: AttentionItem, now: number): string {
   }
 }
 
-const names = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+const names = (v: unknown): string[] => list(v).filter((x): x is string => typeof x === 'string');
 /** The spent windows as the record names them, `5h`, `7d` or `Fable`, a key the console does not know as sent. */
 const windowsOf = (v: unknown): string => {
   const list = names(v);
@@ -192,7 +191,7 @@ const windowsOf = (v: unknown): string => {
  */
 function conditionWords(item: AttentionItem, now: number): string {
   const d = item.detail;
-  const settingValues = d.setting_values !== null && typeof d.setting_values === 'object' ? (d.setting_values as Record<string, unknown>) : {};
+  const settingValues = rec(d.setting_values);
   const settings = listWords(
     names(d.setting).map((name) => {
       const value = settingValues[name];
@@ -202,17 +201,19 @@ function conditionWords(item: AttentionItem, now: number): string {
   const what = (() => {
     switch (item.kind) {
       case 'shed_no_runway':
-        return `${plural(count(d.rounds), 'round', 'rounds')} marked nothing, no destination had runway`;
+        return `${plural(num(d.rounds), 'round', 'rounds')} marked nothing, no destination had runway`;
       case 'destination_spent': {
         const spent = windowsOf(d.windows);
-        return `${plural(count(d.moves), 'move', 'moves')} landed${spent ? ` and${spent} ${names(d.windows).length === 1 ? 'was' : 'were'} spent` : ''} within the hour`;
+        return `${plural(num(d.moves), 'move', 'moves')} landed${spent ? ` and${spent} ${names(d.windows).length === 1 ? 'was' : 'were'} spent` : ''} within the hour`;
       }
       default: {
-        const error = typeof d.projection_error === 'number' && Number.isFinite(d.projection_error) ? `, the last round projected ${percentText(1 - d.projection_error)}` : '';
+        const projectionError = numOrNull(d.projection_error);
+        const error = projectionError === null ? '' : `, the last round projected ${percentText(1 - projectionError)}`;
         // A slow-down round paces the window to its reset, so its wall reads how early it came instead.
-        const early = typeof d.early_ms === 'number' && Number.isFinite(d.early_ms) ? (d.early_ms > 0 ? `, the wall came ${formatFact(d.early_ms, 'ms', now)} before the reset` : ', the wall came at the reset') : null;
+        const earlyMs = numOrNull(d.early_ms);
+        const early = earlyMs === null ? null : earlyMs > 0 ? `, the wall came ${formatFact(earlyMs, 'ms', now)} before the reset` : ', the wall came at the reset';
         const on = windowsOf(d.windows);
-        return `${plural(count(d.walls), 'wall', 'walls')} reached${on ? ` on${on}` : ''}${early ?? error}`;
+        return `${plural(num(d.walls), 'wall', 'walls')} reached${on ? ` on${on}` : ''}${early ?? error}`;
       }
     }
   })();
@@ -226,16 +227,18 @@ function conditionWords(item: AttentionItem, now: number): string {
  */
 function slowedWords(item: AttentionItem, now: number): string {
   const d = item.detail;
-  const settingValues = d.setting_values !== null && typeof d.setting_values === 'object' ? (d.setting_values as Record<string, unknown>) : {};
+  const settingValues = rec(d.setting_values);
   const settings = listWords(
     names(d.setting).map((name) => {
       const value = settingValues[name];
       return typeof value === 'number' ? `${name} ${Math.round(value)}` : name;
     }),
   );
-  const bar = typeof d.bar_ms === 'number' && Number.isFinite(d.bar_ms) ? [`over ${formatFact(d.bar_ms, 'ms', now)}`] : [];
-  const slowest = typeof d.factor_min === 'number' && Number.isFinite(d.factor_min) ? [`slowest ${speedWord(d.factor_min)}`] : [];
-  return [`slowed ${formatFact(count(d.slowed_ms), 'ms', now)} of the last 24 h`, ...bar, ...slowest, ...(settings ? [settings] : []), `since ${clockInstant(Date.parse(item.since), now)}`].join(', ');
+  const barMs = numOrNull(d.bar_ms);
+  const bar = barMs === null ? [] : [`over ${formatFact(barMs, 'ms', now)}`];
+  const factorMin = numOrNull(d.factor_min);
+  const slowest = factorMin === null ? [] : [`slowest ${speedWord(factorMin)}`];
+  return [`slowed ${formatFact(num(d.slowed_ms), 'ms', now)} of the last 24 h`, ...bar, ...slowest, ...(settings ? [settings] : []), `since ${clockInstant(Date.parse(item.since), now)}`].join(', ');
 }
 
 /** A ratio as the meter drift words print it: two decimals, one trailing zero dropped (`2.0`, `1.25`, `0.8`). */
@@ -249,10 +252,10 @@ const ratioWord = (ratio: number): string => {
  * subject. The first window carries the verb, the later ones their word and ratio alone, so the line stays short.
  */
 function driftWords(item: AttentionItem, now: number): string {
-  const windows = (Array.isArray(item.detail.windows) ? item.detail.windows : []).map((w: unknown) => (w !== null && typeof w === 'object' ? (w as Record<string, unknown>) : {}));
+  const windows = (Array.isArray(item.detail.windows) ? item.detail.windows : []).map(rec);
   const ratios = windows.map((w, i) => {
     const word = text(w.window) ?? '';
-    const ratio = `${ratioWord(count(w.ratio))}x`;
+    const ratio = `${ratioWord(num(w.ratio))}x`;
     return i === 0 ? `${lookup(WINDOW_WORD, word) ?? word} charged ${ratio} the table` : `${lookup(WINDOW_WORD, word) ?? word} ${ratio}`;
   });
   return [...ratios, `since ${clockInstant(Date.parse(item.since), now)}`].join(', ');

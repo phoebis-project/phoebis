@@ -1,4 +1,4 @@
-import { iso, PIN_RELEASE_REASON_VALUES } from '@/api/decode';
+import { iso, list, numOrNull as num, PIN_RELEASE_REASON_VALUES, strOrNull as str } from '@/api/decode';
 import type { CohortHold, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, ModelTiers, PinReason, PinReleaseReason, Placement, PrefixEntry, RecordCandidate, RecordOutcome, RecordSettings, RoutingEvent, RoutingLogRow, WalkFact, WalkStep } from '@/api/types';
 import { ROUTING_LOG_CODEC, type RangeValue } from './address';
 import { FAILOVER_MOVE_REASONS, moveLabel, RULE_MOVE_REASONS, type WeekReading } from './analytics';
@@ -397,9 +397,6 @@ function decisionBy(row: DecisionSummary): Chip {
   }
 }
 
-const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);
-const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
-const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 const rec = (v: unknown): Record<string, unknown> => (v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
 
 /** The account a moved pin left, null on any row but a pin's move. */
