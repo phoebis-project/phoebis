@@ -12,6 +12,7 @@ import type {
 import type { Guardrail, GuardrailAttachment, GuardrailCounts, GuardrailRef, GuardrailTestResult } from '@/api/types';
 import { type Clock, wallClock } from '@/lib/clock';
 import { foldClassifier, foldEffort, foldRequestClass, foldSpeed, servedMissReason, servingResponse } from '@/lib/dimensions';
+import { tokensTotal } from '@/lib/format';
 import { modelRulesRefusal, poolWarnings, type NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
 import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
@@ -30,7 +31,7 @@ import { createRng } from './rng';
 import { ROUTING_LOG_KINDS, WEEKLY_RESETS, getDecision, listRoutingLog } from './routingLog';
 import { ROUTING_EVENTS } from './routingLog';
 import { ACCOUNT_SAMPLE, KEY_SAMPLE, PAIRING_SAMPLE, POOL_SAMPLE } from './samples';
-import { DAY, HOUR, MINUTE, NOW, ago, ahead, iso } from './time';
+import { DAY, HOUR, MINUTE, NOW, ago, ahead, iso, startOfHour } from './time';
 
 // Fixed, so a pass over the mock reads the same secrets every run.
 const MOCK_SEED = 4_211;
@@ -1136,9 +1137,9 @@ export class MockApi implements Api {
     const last24h = ledger().dayRows;
     const hourlyMap = new Map<string, Overview['hourly'][number]>();
     for (let i = 23; i >= 0; i -= 1) {
-      const startMs = Math.floor((NOW - i * 3_600_000) / 3_600_000) * 3_600_000;
+      const startMs = startOfHour(NOW - i * HOUR);
       const at = iso(startMs);
-      const { billedUsd, equivalent } = requestSidesOf(last24h.filter((r) => Date.parse(r.at) >= startMs && Date.parse(r.at) < startMs + 3_600_000));
+      const { billedUsd, equivalent } = requestSidesOf(last24h.filter((r) => Date.parse(r.at) >= startMs && Date.parse(r.at) < startMs + HOUR));
       hourlyMap.set(at, { at, billed: billedUsd, cost: 0, equivalent, errors: 0, refused: 0, requests: 0, tokens: 0 });
     }
     let tokens = 0;
@@ -1148,7 +1149,7 @@ export class MockApi implements Api {
     const refusalCodes = new Map<string, number>();
     const rated = last24h.filter((r) => !r.refused);
     for (const r of last24h) {
-      const at = iso(Math.floor(Date.parse(r.at) / 3_600_000) * 3_600_000);
+      const at = iso(startOfHour(Date.parse(r.at)));
       const bucket = hourlyMap.get(at);
       // The ledger's fold books a refused request under its refusals map and nothing else.
       if (r.refused) {
@@ -1156,7 +1157,7 @@ export class MockApi implements Api {
         if (bucket) bucket.refused += 1;
         continue;
       }
-      const total = r.usage.input + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h + r.usage.output;
+      const total = tokensTotal(r.usage);
       tokens += total;
       cached += r.usage.cacheRead;
       cost += r.costUsd;
@@ -1215,7 +1216,7 @@ export class MockApi implements Api {
 
   listAccountRollups(from: string, to: string) {
     // As the route reads a range: from the hour holding the start up to the hour ceiling of the end, exclusive.
-    const fromHour = Math.floor(Date.parse(from) / HOUR) * HOUR;
+    const fromHour = startOfHour(Date.parse(from));
     const toCeiling = Math.ceil(Date.parse(to) / HOUR) * HOUR;
     return latency(ledger().accountRollups.filter((r) => Date.parse(r.hour) >= fromHour && Date.parse(r.hour) < toCeiling));
   }
