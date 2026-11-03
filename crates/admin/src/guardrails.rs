@@ -306,7 +306,8 @@ pub(crate) struct GuardrailTestResult {
 /// One registry load's guardrails and attachments indexed by subject and by guardrail, with the pools' and keys'
 /// labels, so one answer reads the registry once however many rows it renders.
 pub(crate) struct AttachmentIndex {
-    guardrails: HashMap<String, GuardrailRow>,
+    /// Each guardrail's name, mode and enabled flag, the members a subject's list renders.
+    guardrails: HashMap<String, (String, GuardrailMode, bool)>,
     /// Each subject's guardrail ids with their positions, in position order.
     by_subject: HashMap<AttachmentSubject, Vec<(String, u32)>>,
     /// Each guardrail's subjects with its positions on them.
@@ -345,7 +346,7 @@ impl AttachmentIndex {
             guardrails: load
                 .guardrails
                 .iter()
-                .map(|row| (row.id.clone(), row.clone()))
+                .map(|row| (row.id.clone(), (row.name.clone(), row.mode, row.enabled)))
                 .collect(),
             by_subject,
             by_guardrail,
@@ -360,13 +361,15 @@ impl AttachmentIndex {
             .into_iter()
             .flatten()
             .filter_map(|(id, position)| {
-                self.guardrails.get(id).map(|row| GuardrailRef {
-                    id: row.id.clone(),
-                    name: row.name.clone(),
-                    mode: row.mode.as_str().to_string(),
-                    enabled: row.enabled,
-                    position: *position,
-                })
+                self.guardrails
+                    .get(id)
+                    .map(|(name, mode, enabled)| GuardrailRef {
+                        id: id.clone(),
+                        name: name.clone(),
+                        mode: mode.as_str().to_string(),
+                        enabled: *enabled,
+                        position: *position,
+                    })
             })
             .collect()
     }
