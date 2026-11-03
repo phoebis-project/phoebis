@@ -2376,6 +2376,9 @@ textarea.input {
 /* The ellipsis draws on the values span, never on the inline-flex body. */
 .chip--filter .chip__values {
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* The pill clips at its round end, so the x stands as far in from it as the body's text stands from the start. */
