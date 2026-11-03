@@ -19,7 +19,7 @@ import { GroupBy as GroupByControl, GroupsButton } from '@/components/GroupBy';
 import { SectionBar } from '@/components/SectionBar';
 import { accountHref, addressWindow, ANALYTICS_CODEC, type AnalyticsAddress } from '@/lib/address';
 import { ALLOWANCE_WEEKS, allowanceColumnWord, allowanceRows, allowanceSpan, fleetFigures, resetInstant, weeklyKeys, type AllowanceFigure } from '@/lib/allowance';
-import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, failureHead, foldBurn, heldBars, heldHover, heldSpan, hintPlan, isolatedSlots, keptWarmNote, keptWarmTokens, moveLabel, nativeCellOf, netSaving, niceAxisTop, oneAccountGroupOf, peakLines, placementCells, placementRungLabel, readBurn, sampledWindows, shareHint, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, failureHead, foldBurn, heldBars, heldHover, heldSpan, hintPlan, isolatedSlots, keptWarmNote, keptWarmTokens, moveLabel, nativeCellOf, nativeFiguresOf, netSaving, niceAxisTop, oneAccountGroupOf, peakLines, placementCells, placementRungLabel, readBurn, sampledWindows, shareHint, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
@@ -1197,11 +1197,6 @@ function probeSidesOf(whole: AnalyticsGroup, billed: AnalyticsGroup | null | und
   if (planProbes <= 0 && billedProbes <= 0) return { billed: dollars, equivalent: priced ?? 0 };
   return { billed: billedProbes > 0 ? dollars : undefined, equivalent: planProbes > 0 ? priced : undefined };
 }
-const probeFiguresOf = (sides: ReturnType<typeof probeSidesOf>, week: WeekPosition, weekFactor: number): CostFigure[] => [
-  ...(sides.equivalent === undefined ? [] : [{ text: equivalentOrDash(sides.equivalent, week, weekFactor), word: 'subscription' }]),
-  ...(sides.billed === undefined ? [] : [{ text: fmtUsd(sides.billed), word: 'billed' }]),
-];
-
 /**
  * The saving's two sides under native, told apart by their kept-warm credits, the plan side's the whole read's less the
  * billed read's: the plan credits' Pro-week saving off the whole read and the billed credits' dollars off `billed`.
@@ -1238,7 +1233,7 @@ function probeTileOf(unit: UnitPosition, totals: AnalyticsGroup, billed: Analyti
   if (unmeasured) return { note: UNAVAILABLE_NOTE, value: loading ? null : '-' };
   if (unit === 'native') {
     const sides = probeSidesOf(totals, billed, 'cost');
-    return { note: `${fmtInt(probesOf(totals))} probes, ${NATIVE_SUBSET}`, value: loading || reading.scale === null ? null : figuresValue(probeFiguresOf(sides, reading.week, reading.scale)) };
+    return { note: `${fmtInt(probesOf(totals))} probes, ${NATIVE_SUBSET}`, value: loading || reading.scale === null ? null : figuresValue(nativeFiguresOf(sides, reading.week, reading.scale).figures) };
   }
   return { note: `${fmtInt(probesOf(totals))} probes, ${UNIT_SPLIT[dollarsOf(unit)]}`, value: loading ? null : fmtUsd(totals.probeCostUsd) };
 }
@@ -1255,7 +1250,7 @@ function savingTileOf(unit: UnitPosition, totals: AnalyticsGroup, billed: Analyt
   if (session || totals.fromRequests === true) return { note: UNAVAILABLE_NOTE, value: loading ? null : '-' };
   if (unit === 'native') {
     const sides = savingSidesOf(totals, billed, 'gross');
-    return { note: `${keptWarmRequests(totals)}, ${NATIVE_SUBSET}`, value: loading || reading.scale === null ? null : figuresValue(probeFiguresOf(sides, reading.week, reading.scale)) };
+    return { note: `${keptWarmRequests(totals)}, ${NATIVE_SUBSET}`, value: loading || reading.scale === null ? null : figuresValue(nativeFiguresOf(sides, reading.week, reading.scale).figures) };
   }
   return { note: `${keptWarmRequests(totals)}, ${UNIT_SPLIT[dollarsOf(unit)]}`, value: loading ? null : fmtUsd(totals.savingUsd) };
 }
@@ -1271,7 +1266,7 @@ function netTileOf(unit: UnitPosition, totals: AnalyticsGroup, billed: Analytics
   if (unit === 'native') {
     const sides = savingSidesOf(totals, billed, 'net');
     const shown = !loading && reading.scale !== null;
-    return { critical: shown && typeof sides.equivalent === 'number' && sides.equivalent < 0, note: less(NATIVE_SUBSET), value: shown && reading.scale !== null ? figuresValue(probeFiguresOf(sides, reading.week, reading.scale)) : null };
+    return { critical: shown && typeof sides.equivalent === 'number' && sides.equivalent < 0, note: less(NATIVE_SUBSET), value: shown && reading.scale !== null ? figuresValue(nativeFiguresOf(sides, reading.week, reading.scale).figures) : null };
   }
   const net = netSaving(totals.savingUsd, totals.probeCostUsd);
   return { critical: !loading && net < 0, note: less(UNIT_SPLIT[dollarsOf(unit)]), value: loading ? null : fmtUsd(net) };
@@ -1541,9 +1536,9 @@ function wastedTilesOf(unit: UnitPosition, group: AnalyticsGroup, billed: Analyt
     const cost = probeSidesOf(group, billed, 'cost');
     const ratio = (w: number | null | undefined, c: number | null | undefined) => (w === null || w === undefined || c === null || c === undefined ? null : c ? w / c : 0);
     const share = cost.equivalent === undefined ? ratio(wasted.billed, cost.billed) : ratio(wasted.equivalent, cost.equivalent);
-    const of = probeFiguresOf(cost, week, weekFactor).map((f) => f.text);
+    const of = nativeFiguresOf(cost, week, weekFactor).figures.map((f) => f.text);
     return {
-      cost: { note: NATIVE_SUBSET, value: figuresValue(probeFiguresOf(wasted, week, weekFactor)) },
+      cost: { note: NATIVE_SUBSET, value: figuresValue(nativeFiguresOf(wasted, week, weekFactor).figures) },
       share: { note: `of ${of.join(' and ')} on probes`, value: share === null ? '-' : fmtPct(share, 1) },
     };
   }
