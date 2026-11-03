@@ -58,7 +58,8 @@ export function CatalogDialog({ accountId, label, now, onClose, open }: { accoun
     };
   }, [open, read]);
 
-  const models = catalog ? [...catalog.models].sort((a, b) => a.id.localeCompare(b.id)) : [];
+  // Built while open alone: the account detail renders the closed dialog on its clock, and each row formats a date.
+  const models = open && catalog ? [...catalog.models].sort((a, b) => a.id.localeCompare(b.id)) : [];
   return (
     <Dialog
       open={open}
@@ -71,53 +72,57 @@ export function CatalogDialog({ accountId, label, now, onClose, open }: { accoun
         </Button>
       }
     >
-      <div className="row">
-        <span className="muted" title={catalog ? fmtAbsolute(catalog.fetchedAt) : undefined}>
-          {catalog ? `As of ${fmtRelative(catalog.fetchedAt, now)}` : 'Reading the catalog…'}
-        </span>
-        <Button size="sm" icon={<IconRefresh size={13} />} disabled={loading} onClick={() => read(true)}>
-          Refresh
-        </Button>
-      </div>
-      {failure ? (
-        <Failure message={failure} />
-      ) : catalog === null ? (
-        <Skeleton height={120} />
-      ) : catalog.error ? (
-        <Failure message={catalog.error} />
-      ) : models.length === 0 ? (
-        <p className="muted">The upstream lists no models.</p>
-      ) : (
-        <div className="table-wrap">
-          <table className="table">
-            <thead>
-              <tr>
-                <th className="col-fill">Model</th>
-                <th className="col-fill">Name</th>
-                <th className="col-fit">Released</th>
-                <th className="right col-fit">Input tokens</th>
-                <th className="right col-fit">Output tokens</th>
-                <th className="col-fit">Effort levels</th>
-              </tr>
-            </thead>
-            <tbody>
-              {models.map((m) => (
-                <tr key={m.id}>
-                  <td className="col-fill" title={m.id}>
-                    <div className="catalog__model">
-                      <span className="mono catalog__id">{m.id}</span>
-                    </div>
-                  </td>
-                  <td className="col-fill" title={m.displayName || undefined}>{m.displayName || '-'}</td>
-                  <td className="num col-fit">{released(m.createdAt)}</td>
-                  <td className="right num col-fit">{tokens(m.maxInputTokens)}</td>
-                  <td className="right num col-fit">{tokens(m.maxTokens)}</td>
-                  <td className="col-fit">{m.effortLevels.length ? m.effortLevels.join(', ') : '-'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      {open && (
+        <>
+          <div className="row">
+            <span className="muted" title={catalog ? fmtAbsolute(catalog.fetchedAt) : undefined}>
+              {catalog ? `As of ${fmtRelative(catalog.fetchedAt, now)}` : 'Reading the catalog…'}
+            </span>
+            <Button size="sm" icon={<IconRefresh size={13} />} disabled={loading} onClick={() => read(true)}>
+              Refresh
+            </Button>
+          </div>
+          {failure ? (
+            <Failure message={failure} />
+          ) : catalog === null ? (
+            <Skeleton height={120} />
+          ) : catalog.error ? (
+            <Failure message={catalog.error} />
+          ) : models.length === 0 ? (
+            <p className="muted">The upstream lists no models.</p>
+          ) : (
+            <div className="table-wrap">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th className="col-fill">Model</th>
+                    <th className="col-fill">Name</th>
+                    <th className="col-fit">Released</th>
+                    <th className="right col-fit">Input tokens</th>
+                    <th className="right col-fit">Output tokens</th>
+                    <th className="col-fit">Effort levels</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {models.map((m) => (
+                    <tr key={m.id}>
+                      <td className="col-fill" title={m.id}>
+                        <div className="catalog__model">
+                          <span className="mono catalog__id">{m.id}</span>
+                        </div>
+                      </td>
+                      <td className="col-fill" title={m.displayName || undefined}>{m.displayName || '-'}</td>
+                      <td className="num col-fit">{released(m.createdAt)}</td>
+                      <td className="right num col-fit">{tokens(m.maxInputTokens)}</td>
+                      <td className="right num col-fit">{tokens(m.maxTokens)}</td>
+                      <td className="col-fit">{m.effortLevels.length ? m.effortLevels.join(', ') : '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
       )}
     </Dialog>
   );
