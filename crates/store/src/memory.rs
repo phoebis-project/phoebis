@@ -70,7 +70,7 @@ impl MemoryStore for Store {
             params![key.key_id, key.key_generation, key.session_id, key.agent_id],
             |r| {
                 Ok(MemoryRecord {
-                    record_version: r.get::<_, i64>(0)? as u32,
+                    record_version: r.get(0)?,
                     payload: r.get(1)?,
                     last_seen: r.get(2)?,
                 })

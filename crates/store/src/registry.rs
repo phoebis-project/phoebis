@@ -677,7 +677,7 @@ impl Store {
                     Ok(PoolMember {
                         pool_id: r.get(0)?,
                         account_id: r.get(1)?,
-                        priority: r.get::<_, i64>(2)? as u32,
+                        priority: r.get(2)?,
                         budget_daily_usd: r.get(3)?,
                         budget_monthly_usd: r.get(4)?,
                     })
@@ -793,7 +793,7 @@ impl Store {
                 row.window_ceiling,
                 serde_json::to_string(&row.model_rules)?,
                 row.keepalive_json,
-                row.body_capture_hours as i64,
+                row.body_capture_hours,
                 row.prefer_subscription,
                 row.shedding.shed_cap,
                 row.shedding.burn_average_seconds as i64,
@@ -802,9 +802,9 @@ impl Store {
                 row.shedding.migrate_when_spent,
                 row.shedding.warm_sessions,
                 row.failover.retry_in_place_seconds as i64,
-                row.failover.in_flight_cap as i64,
-                row.failover.overage_move_grace_minutes as i64,
-                row.failover.wind_down_minutes as i64,
+                row.failover.in_flight_cap,
+                row.failover.overage_move_grace_minutes,
+                row.failover.wind_down_minutes,
                 row.cache_ttl_json,
                 row.cache_diagnostics,
                 row.affinity.mode,
@@ -813,10 +813,10 @@ impl Store {
                 row.affinity.min_shared_prefix_tokens as i64,
                 row.auto_mode_server,
                 row.slow_down.slow_down,
-                row.slow_down.slow_down_stretch_seconds as i64,
-                row.slow_down.slow_down_hold_seconds as i64,
+                row.slow_down.slow_down_stretch_seconds,
+                row.slow_down.slow_down_hold_seconds,
                 row.failover.return_to_plan,
-                row.failover.return_to_plan_dwell_seconds as i64,
+                row.failover.return_to_plan_dwell_seconds,
                 now,
                 incarnation as i64
             ],
@@ -932,7 +932,7 @@ impl Store {
                 row.window_ceiling,
                 serde_json::to_string(&row.model_rules)?,
                 row.keepalive_json,
-                row.body_capture_hours as i64,
+                row.body_capture_hours,
                 row.prefer_subscription,
                 row.shedding.shed_cap,
                 row.shedding.burn_average_seconds as i64,
@@ -941,9 +941,9 @@ impl Store {
                 row.shedding.migrate_when_spent,
                 row.shedding.warm_sessions,
                 row.failover.retry_in_place_seconds as i64,
-                row.failover.in_flight_cap as i64,
-                row.failover.overage_move_grace_minutes as i64,
-                row.failover.wind_down_minutes as i64,
+                row.failover.in_flight_cap,
+                row.failover.overage_move_grace_minutes,
+                row.failover.wind_down_minutes,
                 row.cache_ttl_json,
                 row.cache_diagnostics,
                 row.affinity.mode,
@@ -952,10 +952,10 @@ impl Store {
                 row.affinity.min_shared_prefix_tokens as i64,
                 row.auto_mode_server,
                 row.slow_down.slow_down,
-                row.slow_down.slow_down_stretch_seconds as i64,
-                row.slow_down.slow_down_hold_seconds as i64,
+                row.slow_down.slow_down_stretch_seconds,
+                row.slow_down.slow_down_hold_seconds,
                 row.failover.return_to_plan,
-                row.failover.return_to_plan_dwell_seconds as i64,
+                row.failover.return_to_plan_dwell_seconds,
                 at,
                 expected_updated_at,
                 row.incarnation as i64
@@ -1022,7 +1022,7 @@ impl Store {
             Ok(PoolMember {
                 pool_id: r.get(0)?,
                 account_id: r.get(1)?,
-                priority: r.get::<_, i64>(2)? as u32,
+                priority: r.get(2)?,
                 budget_daily_usd: r.get(3)?,
                 budget_monthly_usd: r.get(4)?,
             })
@@ -1116,7 +1116,7 @@ impl Store {
                 row.model_rules_mode,
                 row.long_context_twins,
                 row.keepalive_opt_out,
-                row.body_capture_hours.map(|h| h as i64),
+                row.body_capture_hours,
                 row.secret_digest,
                 row.prefix,
                 row.auto_mode_server,
@@ -1193,7 +1193,7 @@ impl Store {
                 row.model_rules_mode,
                 row.long_context_twins,
                 row.keepalive_opt_out,
-                row.body_capture_hours.map(|h| h as i64),
+                row.body_capture_hours,
                 row.auto_mode_server,
                 at,
                 expected_updated_at,
@@ -1991,7 +1991,7 @@ fn stored_members(tx: &Transaction<'_>, pool_id: &str) -> Result<Vec<MemberWrite
     let rows = stmt.query_map(params![pool_id], |r| {
         Ok(MemberWrite {
             account_id: r.get(0)?,
-            priority: r.get::<_, i64>(1)? as u32,
+            priority: r.get(1)?,
             budget_daily_usd: r.get(2)?,
             budget_monthly_usd: r.get(3)?,
         })
@@ -2057,7 +2057,7 @@ fn set_pool_members_in(
     for member in members {
         tx.execute(
             "INSERT INTO pool_members (pool_id, account_id, priority, budget_daily_usd, budget_monthly_usd) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![pool_id, member.account_id, member.priority as i64, member.budget_daily_usd, member.budget_monthly_usd],
+            params![pool_id, member.account_id, member.priority, member.budget_daily_usd, member.budget_monthly_usd],
         )?;
     }
     let diff = serde_json::json!({ "members": members.iter().map(|m| serde_json::json!({
@@ -2104,7 +2104,7 @@ fn all_guardrail_attachments(
         Ok(GuardrailAttachment {
             guardrail_id: r.get(0)?,
             subject,
-            position: r.get::<_, i64>(3)? as u32,
+            position: r.get(3)?,
         })
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -2129,7 +2129,7 @@ fn row_to_pool(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolRow> {
         window_ceiling: r.get(6)?,
         model_rules: json_column(r, 7)?,
         keepalive_json: r.get(8)?,
-        body_capture_hours: r.get::<_, i64>(9)? as u32,
+        body_capture_hours: r.get(9)?,
         created_at: r.get(10)?,
         updated_at: r.get(11)?,
         prefer_subscription: r.get(12)?,
@@ -2143,16 +2143,16 @@ fn row_to_pool(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolRow> {
         },
         failover: Failover {
             retry_in_place_seconds: r.get::<_, i64>(19)? as u64,
-            in_flight_cap: r.get::<_, i64>(20)? as u32,
-            overage_move_grace_minutes: r.get::<_, i64>(21)? as u32,
-            wind_down_minutes: r.get::<_, i64>(22)? as u32,
+            in_flight_cap: r.get(20)?,
+            overage_move_grace_minutes: r.get(21)?,
+            wind_down_minutes: r.get(22)?,
             return_to_plan: r.get(34)?,
-            return_to_plan_dwell_seconds: r.get::<_, i64>(35)? as u32,
+            return_to_plan_dwell_seconds: r.get(35)?,
         },
         slow_down: SlowDown {
             slow_down: r.get(31)?,
-            slow_down_stretch_seconds: r.get::<_, i64>(32)? as u32,
-            slow_down_hold_seconds: r.get::<_, i64>(33)? as u32,
+            slow_down_stretch_seconds: r.get(32)?,
+            slow_down_hold_seconds: r.get(33)?,
         },
         cache_ttl_json: r.get(23)?,
         cache_diagnostics: r.get::<_, bool>(24)?,
@@ -2180,7 +2180,7 @@ fn row_to_key(r: &rusqlite::Row<'_>) -> rusqlite::Result<ApiKeyRow> {
         model_rules_mode: r.get(16)?,
         long_context_twins: r.get(17)?,
         keepalive_opt_out: r.get(7)?,
-        body_capture_hours: r.get::<_, Option<i64>>(8)?.map(|h| h as u32),
+        body_capture_hours: r.get::<_, Option<u32>>(8)?,
         secret_digest: r.get(9)?,
         prefix: r.get(10)?,
         incarnation: r.get::<_, i64>(20)? as u64,
