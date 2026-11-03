@@ -35,21 +35,19 @@ const Ctx = createContext<AppSettings | null>(null);
 
 const NO_TIERS: ModelTiers = { modelTier: {}, tierOrder: [] };
 
+const themeOf = (raw: string | null): ThemeChoice => (raw === 'dark' || raw === 'light' ? raw : 'system');
+const timeFormatOf = (raw: string | null): TimeFormat => (raw === '12h' ? raw : '24h');
+const expertOf = (raw: string | null): ExpertChoice => (raw === 'on' ? raw : 'off');
+
 export function AppSettingsProvider({ children }: { children: ReactNode }) {
-  const [theme, setTheme] = useLocalStorage<ThemeChoice>('phoebis.theme', 'system');
-  const [storedFormat, storeFormat] = useLocalStorage<TimeFormat>('phoebis.timeFormat', '24h');
-  const [storedExpert, storeExpert] = useLocalStorage<ExpertChoice>('phoebis.expertView', 'off');
-  // Read by equality: the hook hands back whatever string the browser holds under the key.
+  const [theme, setTheme] = useLocalStorage('phoebis.theme', themeOf);
+  const [storedFormat, storeFormat] = useLocalStorage('phoebis.timeFormat', timeFormatOf);
+  const [storedExpert, storeExpert] = useLocalStorage('phoebis.expertView', expertOf);
   const expertView = storedExpert === 'on';
   // The setters keep their identity across renders, so the context value changes with the settings alone.
   const setExpertView = useCallback((on: boolean) => storeExpert(on ? 'on' : 'off'), [storeExpert]);
-  const [storedUnit, storeUnit] = useLocalStorage<string>('phoebis.unit', 'native');
-  // Read through the positions: the hook hands back whatever string the browser holds under the key.
-  const unit = positionOf(storedUnit);
-  const setUnit = useCallback((u: UnitPosition) => storeUnit(u), [storeUnit]);
-  const [storedWeek, storeWeek] = useLocalStorage<string>('phoebis.week', 'ultra');
-  const week = weekOf(storedWeek);
-  const setWeek = useCallback((w: WeekPosition) => storeWeek(w), [storeWeek]);
+  const [unit, setUnit] = useLocalStorage('phoebis.unit', positionOf);
+  const [week, setWeek] = useLocalStorage('phoebis.week', weekOf);
   const [modelTiers, storeModelTiers] = useState<ModelTiers>(NO_TIERS);
   // The routing log's comparator reads the module's pair, so it holds the new order before the context change
   // re-renders the lists that sort through it.

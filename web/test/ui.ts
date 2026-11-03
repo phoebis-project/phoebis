@@ -27,7 +27,7 @@ export { Popover, PopoverHost } from '@/components/ui/Popover';
 export { UnitLegend } from '@/components/ui/UnitControls';
 export { Button, ConfirmDialog, CopyButton, Descriptions, Dialog, Menu, PageLoadFailed } from '@/components/ui/primitives';
 export { installClock } from '@/lib/clock';
-export { spanText } from '@/lib/format';
+export { getTimeFormat, setTimeFormat, spanText } from '@/lib/format';
 export { useAsync, useCommittedText, useNow, useRangeTakenAt } from '@/lib/hooks';
 export { GuardrailDialog, GuardrailsPage } from '@/pages/GuardrailsPage';
 export { KeyDialog, keyRankOf } from '@/pages/KeysPage';

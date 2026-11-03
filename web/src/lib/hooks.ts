@@ -342,12 +342,13 @@ export function useDocumentHidden(): boolean {
   return useSyncExternalStore(onVisibility, () => document.hidden);
 }
 
-export function useLocalStorage<T extends string>(key: string, fallback: T): [T, (v: T) => void] {
+/** A setting kept in this browser under `key`, which `read` turns from the stored string, or null, into the value. */
+export function useLocalStorage<T extends string>(key: string, read: (raw: string | null) => T): [T, (v: T) => void] {
   const [value, setValue] = useState<T>(() => {
     try {
-      return (localStorage.getItem(key) as T | null) ?? fallback;
+      return read(localStorage.getItem(key));
     } catch {
-      return fallback;
+      return read(null);
     }
   });
   const set = useCallback(
