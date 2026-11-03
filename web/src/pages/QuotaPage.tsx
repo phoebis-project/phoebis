@@ -10,7 +10,7 @@ import { IconChevronLeft, IconChevronRight, IconRefresh, IconUser } from '@/comp
 import { Badge, ErrorState, Meter, Pill, Segmented, Select, Skeleton } from '@/components/ui/primitives';
 import { CELL_MIN_PX, cellsFit, fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinor, fmtMinute, fmtPct, fmtRelative, fmtShortHour, fmtShortTime, getTimeFormat, upperFirst } from '@/lib/format';
 import { useAsync, useHashSection, useNow, useResizeObserver } from '@/lib/hooks';
-import { STATUS_LABEL, STATUS_TONE, burnWords, endOf, extraUsageState, hasSpendReading, isExpired, isQuotaListed, meterTone, onTimeline, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, slowedOf, soonestReset, soonestResetAt, sortByPace, spendResetTitle, timelineLanes, windowOf, type ExtraUsageState } from '@/lib/quota';
+import { STATUS_LABEL, STATUS_TONE, burnWords, endOf, extraUsageState, hasSpendReading, isExpired, isQuotaListed, meterTone, onTimeline, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, slowedOf, soonestReset, soonestResetAt, sortByPace, spendLeftOf, spendResetTitle, timelineLanes, windowOf, type ExtraUsageState } from '@/lib/quota';
 import { speedHover } from '@/lib/selection';
 import { DAY, HOUR } from '@/lib/time';
 
@@ -363,9 +363,9 @@ function QuotaWindow({ absent, end, name, window: w, now, slowDown = null, soon 
  * draws.
  */
 function SpendWindow({ spend, now, soon }: { now: number; soon: boolean; spend: Spend }) {
-  const { amounts, utilization } = spend;
+  const { amounts } = spend;
   const unlimited = amounts !== null && amounts.limitMinor === null;
-  const left = utilization === null || unlimited ? null : Math.max(0, Math.min(1, 1 - utilization));
+  const left = spendLeftOf(spend);
   const figures =
     amounts === null
       ? null
@@ -451,8 +451,8 @@ function LaneChip({ label, window: w, now }: { label: string; now: number; windo
  * set, toned by the share left as a window's chip is, with the reset and the estimate's word on hover.
  */
 function SpendChip({ spend }: { spend: Spend }) {
-  const { amounts, utilization } = spend;
-  const left = utilization === null || amounts?.limitMinor === null ? null : Math.max(0, Math.min(1, 1 - utilization));
+  const { amounts } = spend;
+  const left = spendLeftOf(spend);
   const figure =
     amounts === null
       ? left === null
@@ -489,7 +489,8 @@ function SpendLane({ account, cells, color, now, nowPct, span, spend, stamp, ste
   const width = span.endMs - span.startMs;
   const reset = spend.resetsAt === null ? Number.NaN : Date.parse(spend.resetsAt);
   const unlimited = spend.amounts !== null && spend.amounts.limitMinor === null;
-  const share = spend.utilization === null || unlimited ? null : `${fmtPct(Math.max(0, Math.min(1, 1 - spend.utilization)))} left`;
+  const left = spendLeftOf(spend);
+  const share = left === null ? null : `${fmtPct(left)} left`;
   // The reading's own window ends at its reset. Its share says nothing of any other, so only that one is filled.
   const bars: { current: boolean; end: number; start: number; state: 'live' | 'next' | 'past' }[] = [];
   if (Number.isFinite(reset)) {
