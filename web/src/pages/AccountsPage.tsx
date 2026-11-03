@@ -817,20 +817,25 @@ const DRIFT_SUBTITLE = "The latest completed window of each kind, the upstream's
  * window's ratio, its end and the windows off the band over the trailing 30 days. `answer` is null while the read runs.
  */
 function DriftCard({ accountId, answer, error, onRetry }: { accountId: string; answer: ReconciliationsAnswer | null; error: string | null; onRetry: () => void }) {
-  const rows = answer === null ? null : answer.reconciliations.filter((r) => r.accountId === accountId);
-  const groups = rows === null ? [] : Object.values(meterGroups(rows)).flat();
+  // The answer lands once per account and on Refresh, and the grouping sorts by parsed instants, so the list's poll and
+  // the clock re-render the card from the same derivation.
+  const drift = useMemo(() => {
+    if (answer === null) return null;
+    const rows = answer.reconciliations.filter((r) => r.accountId === accountId);
+    return { groups: Object.values(meterGroups(rows)).flat(), latest: latestPerWindow(rows), rows };
+  }, [accountId, answer]);
   return (
     <Card title="Meter drift" subtitle={DRIFT_SUBTITLE} actions={<Link to={accountMeterHref(accountId)}>Meter</Link>}>
       {error !== null ? (
         <ErrorState title="Could not load the meter reconciliation" body={error} retry={onRetry} />
-      ) : rows === null ? (
+      ) : drift === null ? (
         <Skeleton height={60} />
-      ) : rows.length === 0 ? (
+      ) : drift.rows.length === 0 ? (
         <p className="muted">No completed window yet</p>
       ) : (
         <KeyValue
-          rows={latestPerWindow(rows).map((latest) => {
-            const group = groups.find((g) => g.window === latest.window);
+          rows={drift.latest.map((latest) => {
+            const group = drift.groups.find((g) => g.window === latest.window);
             const off = group?.off ?? 0;
             const windows = group?.rows.length ?? 1;
             return {
