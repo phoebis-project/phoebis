@@ -4,7 +4,7 @@
 //! `RequestRecord::guardrails` is the one member no column holds: its rows live in the child table
 //! `request_guardrails`.
 
-use phoebis_routing::{CacheMapEntry, DecisionRecord, DecisionSummary};
+use phoebis_routing::{CacheMapEntry, DecisionRecord, DecisionSummary, PinUsage};
 use phoebis_store::AccountKind;
 
 use crate::LedgerError;
@@ -187,6 +187,17 @@ impl AttemptRecord {
             || self.cache_read_tokens.is_some()
             || self.cache_write_5m_tokens.is_some()
             || self.cache_write_1h_tokens.is_some()
+    }
+
+    /// The five priced counts as the usage the pricing reads take, an absent count read as 0.
+    pub fn usage(&self) -> PinUsage {
+        PinUsage {
+            input: self.input_tokens.unwrap_or(0),
+            cache_read: self.cache_read_tokens.unwrap_or(0),
+            write_5m: self.cache_write_5m_tokens.unwrap_or(0),
+            write_1h: self.cache_write_1h_tokens.unwrap_or(0),
+            output: self.output_tokens.unwrap_or(0),
+        }
     }
 }
 

@@ -17,7 +17,7 @@ use crate::db::LedgerDb;
 use crate::histogram::bucket_index;
 use crate::histogram::Histogram;
 use crate::plan::{funding_of, PlanTables};
-use crate::pricing::{prompt_tokens, Band, PriceRevisions, Speed};
+use crate::pricing::{Band, PriceRevisions, Speed};
 use crate::reconcile::{newest_rows, ReconciliationRow};
 use crate::record::{AttemptRecord, EventRecord, KeepaliveDelta, RequestRecord};
 use crate::LedgerError;
@@ -569,19 +569,7 @@ pub fn deltas_of(
             .rollup_word()
         })
     };
-    let band_of = |a: &AttemptRecord| {
-        table
-            .band_of(
-                model,
-                prompt_tokens(
-                    a.input_tokens.unwrap_or(0),
-                    a.cache_read_tokens.unwrap_or(0),
-                    a.cache_write_5m_tokens.unwrap_or(0),
-                    a.cache_write_1h_tokens.unwrap_or(0),
-                ),
-            )
-            .as_str()
-    };
+    let band_of = |a: &AttemptRecord| table.band_of(model, a.usage().prompt_tokens()).as_str();
     let base = RollupRow::key(
         hour_of(request.received_at),
         request.key_id.as_deref().unwrap_or(UNATTRIBUTED),

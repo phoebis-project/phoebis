@@ -15,7 +15,7 @@ use phoebis_ledger::{
     LiveKeys, PlanTables, PriceRevisions, RequestFilter, RequestRecord, Speed, WindowShares,
     SHARE_REASON_CLIENT_CLASSIFIER,
 };
-use phoebis_routing::{PinUsage, UtilizationSample};
+use phoebis_routing::UtilizationSample;
 use serde_json::Value;
 use utoipa::ToSchema;
 
@@ -645,13 +645,7 @@ fn plan_figures(
     {
         return None;
     }
-    let usage = PinUsage {
-        input: a.input_tokens.unwrap_or(0),
-        cache_read: a.cache_read_tokens.unwrap_or(0),
-        write_5m: a.cache_write_5m_tokens.unwrap_or(0),
-        write_1h: a.cache_write_1h_tokens.unwrap_or(0),
-        output: a.output_tokens.unwrap_or(0),
-    };
+    let usage = a.usage();
     let band_at = a.finished_at.or(r.finished_at).unwrap_or(a.started_at);
     let entrypoint = r.client.as_deref().and_then(entrypoint_of_client);
     if r.classifier.as_deref() == Some(Classifier::Client.as_str()) {
@@ -741,16 +735,17 @@ fn attempt_usd(a: &AttemptRecord, r: &RequestRecord, prices: &PriceRevisions) ->
     if !a.has_usage() {
         return None;
     }
+    let usage = a.usage();
     prices
         .in_force(r.received_at)
         .estimate(
             &r.canonical_model,
             Speed::of(a.speed.as_deref()),
-            a.input_tokens.unwrap_or(0),
-            a.cache_read_tokens.unwrap_or(0),
-            a.cache_write_5m_tokens.unwrap_or(0),
-            a.cache_write_1h_tokens.unwrap_or(0),
-            a.output_tokens.unwrap_or(0),
+            usage.input,
+            usage.cache_read,
+            usage.write_5m,
+            usage.write_1h,
+            usage.output,
         )
         .map(|(usd, _)| usd)
 }
@@ -1184,6 +1179,7 @@ pub(crate) async fn bodies(
 mod tests {
     use super::*;
     use phoebis_ledger::{CostRevisions, PlanTables, RequestRecord};
+    use phoebis_routing::PinUsage;
     use serde_json::json;
 
     /// Monday 2026-09-21 at 20:00 UTC, past the peak band on a weekday.
