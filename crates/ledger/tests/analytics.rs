@@ -2285,8 +2285,10 @@ async fn a_dollar_read_and_a_shares_read_of_the_same_rows_answer_one_set_of_doll
     // 50, and $0.00015, its two cells' sum one bit above. Account b's 20 input tokens of Opus 5.5 are billed, $0.0002,
     // and its figure reads the zero of a group with no plan row. Account c's Opus 5 row carries tokens and no weight,
     // so c's figure and the day's read none beside their dollars, $0.00005 for c and $0.0004 for the day, one bit
-    // above.
+    // above. The pool's bucket adds the three as its grouped sum orders them, c's model first and the billed row
+    // before the plan row, which lands on $0.0004 itself.
     let all = (0.0004000000000000001, 0.0002, None);
+    let pool = (0.0004, 0.0002, None);
     let a = (0.00015000000000000001, 0.0, Some(0.8));
     let b = (0.0002, 0.0002, Some(0.0));
     let c = (0.00005, 0.0, None);
@@ -2294,7 +2296,7 @@ async fn a_dollar_read_and_a_shares_read_of_the_same_rows_answer_one_set_of_doll
         figures,
         [
             ("the day", all),
-            ("the pool's bucket", all),
+            ("the pool's bucket", pool),
             ("every row without the shares", all),
             ("a with the shares", a),
             ("b with the shares", b),
@@ -7958,6 +7960,114 @@ async fn the_pool_traffic_and_the_key_totals_count_the_asked_requests_alone() {
         .read_blocking(|c| key_request_totals(c, hour, hour + 3_600, &live, &PRICES, &COSTS, NOW))
         .unwrap();
     assert_eq!(totals["desktop"].requests, 3, "the three asked requests");
+}
+
+/// A pool's traffic over four hours of plan, overage, billed and cached rows beside a probe row sums, bucket by
+/// bucket, to the pool's grouped totals over the same hours: the same requests and tokens, and dollars and a Pro-week
+/// figure within one cent, whichever of the two pool readers buckets them.
+#[tokio::test]
+async fn the_pool_traffic_buckets_sum_to_the_pools_grouped_totals_within_one_cent() {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let prices = phoebis_ledger::test_tables::api_prices();
+    let costs = phoebis_ledger::test_tables::subscription_costs();
+    let at = phoebis_ledger::test_tables::JANUARY_2026;
+    const HOUR_MS: i64 = 3_600_000;
+    let cached = PinUsage {
+        input: 20,
+        cache_read: 300,
+        write_5m: 40,
+        output: 5,
+        ..PinUsage::default()
+    };
+    for row in [
+        ShareRow {
+            id: "r-plan",
+            model: "claude-opus-5-5",
+            at,
+            usage: usage(10, 1),
+            ..ShareRow::default()
+        },
+        ShareRow {
+            id: "r-cached",
+            model: "claude-opus-5-5",
+            at: at + HOUR_MS,
+            usage: cached,
+            ..ShareRow::default()
+        },
+        ShareRow {
+            id: "r-billed",
+            account: "b",
+            account_kind: AccountKind::ApiKey,
+            model: "claude-opus-5-5",
+            at: at + HOUR_MS,
+            usage: usage(20, 2),
+            ..ShareRow::default()
+        },
+        ShareRow {
+            id: "r-overage",
+            model: "claude-opus-5-5",
+            at: at + 2 * HOUR_MS,
+            usage: usage(7, 3),
+            overage: Some(true),
+            ..ShareRow::default()
+        },
+        ShareRow {
+            id: "r-probe",
+            kind: "probe",
+            model: "claude-opus-5-5",
+            at: at + 2 * HOUR_MS,
+            usage: PinUsage {
+                cache_read: 50,
+                ..PinUsage::default()
+            },
+            ..ShareRow::default()
+        },
+        ShareRow {
+            id: "r-later",
+            account: "c",
+            model: "claude-opus-5-5",
+            at: at + 3 * HOUR_MS,
+            usage: usage(5, 4),
+            ..ShareRow::default()
+        },
+    ] {
+        plant_share(&db, row);
+    }
+    let (from, to) = (hour_of(at), hour_of(at) + 4 * 3_600);
+    let traffic = pool_traffic(&db, "p", from, to, 3_600, &prices, &costs, NOW)
+        .await
+        .unwrap();
+    let pools = db
+        .read_blocking(|c| {
+            pools_traffic(c, &["p".to_string()], from, to, 3_600, &prices, &costs, NOW)
+        })
+        .unwrap();
+    let totals = db
+        .read_blocking(|c| request_totals(c, TotalsBy::Pool, from, to, &prices, &costs, NOW))
+        .unwrap();
+    let total = &totals["p"];
+    let total_equivalent = total.equivalent.expect("every plan row prices");
+    for (reader, buckets) in [("pool_traffic", &traffic), ("pools_traffic", &pools["p"])] {
+        let requests: u64 = buckets.iter().map(|b| b.requests).sum();
+        let tokens: u64 = buckets.iter().map(|b| b.tokens).sum();
+        let cost: f64 = buckets.iter().map(|b| b.cost_usd).sum();
+        let billed: f64 = buckets.iter().map(|b| b.billed_usd).sum();
+        let equivalent: f64 = buckets
+            .iter()
+            .map(|b| b.equivalent.expect("every plan row prices"))
+            .sum();
+        assert_eq!(
+            (requests, tokens),
+            (total.requests, total.tokens),
+            "{reader}: the buckets count every grouped request and token"
+        );
+        assert!(
+            (cost - total.cost_usd).abs() < 0.01
+                && (billed - total.billed_usd).abs() < 0.01
+                && (equivalent - total_equivalent).abs() < 0.01,
+            "{reader}: {cost}, {billed} and {equivalent} against {total:?}"
+        );
+    }
 }
 
 #[tokio::test]

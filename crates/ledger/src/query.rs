@@ -4033,9 +4033,8 @@ impl Default for TrafficBucket {
     }
 }
 
-/// Every bucket in the range from the rollups of one pool, probes left out, read through `read_rollups_paged` with
-/// the pool bound in SQL, each row's dollars and Pro-week figure priced from its counts, the figure against the anchor
-/// row in force at `now`.
+/// Every bucket in the range from the rollups of one pool, probes left out, read as `pools_traffic` reads it for the
+/// pool alone.
 #[allow(clippy::too_many_arguments)]
 pub async fn pool_traffic(
     db: &Arc<LedgerDb>,
@@ -4047,21 +4046,30 @@ pub async fn pool_traffic(
     costs: &PlanTables,
     now: i64,
 ) -> Result<Vec<TrafficBucket>, LedgerError> {
-    let fold = TrafficFold::new(from_hour, to_hour, bucket_seconds, prices, costs, now)?;
-    let mut out = fold.zero.clone();
-    let select = RollupSelect {
-        pools: vec![pool_id.to_string()],
-        ..RollupSelect::default()
-    };
-    read_rollups_paged(db, &select, from_hour, to_hour, |r| fold.add(&mut out, r)).await?;
-    Ok(out)
+    let pool_ids = vec![pool_id.to_string()];
+    let (prices, costs) = (prices.clone(), costs.clone());
+    let mut traffic = db
+        .read(move |c| {
+            pools_traffic(
+                c,
+                &pool_ids,
+                from_hour,
+                to_hour,
+                bucket_seconds,
+                &prices,
+                &costs,
+                now,
+            )
+        })
+        .await?;
+    Ok(traffic.remove(pool_id).unwrap_or_default())
 }
 
-/// Every bucket in the range per pool of `pool_ids`, probes left out, from one pass over the pools' rollups on `conn`
-/// folded as the statement steps, so a long range holds one row in memory and several pools read the table once.
-/// Each row's dollars and Pro-week figure are priced from its counts, the figure against the anchor row in force at
-/// `now`. A pool without a row answers its zero buckets, and an empty `pool_ids` answers an empty map and runs no
-/// statement.
+/// Every bucket in the range per pool of `pool_ids`, probes left out, from one statement on `conn` that sums each
+/// pool's rows by the price columns and the hour, so several pools read the table once and no row is decoded. Each
+/// group's dollars and Pro-week figure are priced from its summed counts through `price_group`, the figure against the
+/// anchor row in force at `now`. A pool without a row answers its zero buckets, and an empty `pool_ids` answers an
+/// empty map and runs no statement.
 #[allow(clippy::too_many_arguments)]
 pub fn pools_traffic(
     conn: &Connection,
@@ -4081,21 +4089,35 @@ pub fn pools_traffic(
         .iter()
         .map(|pool_id| (pool_id.clone(), fold.zero.clone()))
         .collect();
-    let select = RollupSelect {
-        pools: pool_ids.to_vec(),
-        ..RollupSelect::default()
-    };
-    visit_rollups(conn, from_hour, to_hour, &select, |r| {
-        if let Some(buckets) = out.get_mut(&r.pool_id) {
-            fold.add(buckets, &r);
-        }
+    let mut args: Vec<rusqlite::types::Value> = vec![from_hour.into(), to_hour.into()];
+    let mut clauses = vec!["kind != 'probe' AND hour >= ?1 AND hour < ?2".to_string()];
+    pool_term(pool_ids, &[], &mut args, &mut clauses);
+    let mut stmt = conn.prepare(&format!(
+        "SELECT pool_id, SUM(MAX(requests - succeeded, 0)), {PRICE_GROUP_COLUMNS}, {PRICE_GROUP_SUMS} \
+         FROM rollups_hourly WHERE {} GROUP BY pool_id, {PRICE_GROUP_COLUMNS}",
+        clauses.join(" AND ")
+    ))?;
+    let groups = stmt.query_map(params_from_iter(args), |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            // The hour, the last of the price columns.
+            r.get::<_, i64>(8)?,
+            r.get::<_, i64>(1)?.max(0) as u64,
+            price_group(r, 2, prices, costs, now)?,
+        ))
     })?;
+    for group in groups {
+        let (pool_id, hour, failed, totals) = group?;
+        if let Some(buckets) = out.get_mut(&pool_id) {
+            fold.add_sums(buckets, hour, failed, &totals);
+        }
+    }
     Ok(out)
 }
 
-/// The zero buckets of a traffic range and the fold that adds one rollup row to its bucket, probes and rows before
-/// the first bucket left out. `pool_traffic` and `pools_traffic` both fold through it, so one pool reads the same
-/// buckets through either.
+/// The zero buckets of a traffic range and the fold that adds figures to the bucket of their hour, nothing before the
+/// first bucket or past the last. The pool readers add each priced group of their sum, and the dashboard's day each
+/// rollup row with the probes left out.
 struct TrafficFold<'a> {
     first: i64,
     bucket_seconds: i64,
@@ -4135,14 +4157,25 @@ impl<'a> TrafficFold<'a> {
         if r.kind == Kind::Probe.as_str() {
             return;
         }
-        if let Some(bucket) = bucket_slot(out, self.first, self.bucket_seconds, r.hour) {
-            bucket.requests += r.requests;
-            bucket.failed += r.requests.saturating_sub(r.succeeded);
-            bucket.tokens += tokens_of(r.usage());
-            let (usd, billed, equivalent) = shared_figures(r, self.prices, self.costs, self.now);
-            bucket.cost_usd += usd;
-            bucket.billed_usd += billed;
-            bucket.equivalent = add_figures(bucket.equivalent, equivalent);
+        let (usd, billed, equivalent) = shared_figures(r, self.prices, self.costs, self.now);
+        let totals = Totals {
+            cost_usd: usd,
+            requests: r.requests,
+            tokens: tokens_of(r.usage()),
+            billed_usd: billed,
+            equivalent,
+        };
+        self.add_sums(out, r.hour, r.requests.saturating_sub(r.succeeded), &totals);
+    }
+
+    fn add_sums(&self, out: &mut [TrafficBucket], hour: i64, failed: u64, totals: &Totals) {
+        if let Some(bucket) = bucket_slot(out, self.first, self.bucket_seconds, hour) {
+            bucket.requests += totals.requests;
+            bucket.failed += failed;
+            bucket.tokens += totals.tokens;
+            bucket.cost_usd += totals.cost_usd;
+            bucket.billed_usd += totals.billed_usd;
+            bucket.equivalent = add_figures(bucket.equivalent, totals.equivalent);
         }
     }
 }

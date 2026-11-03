@@ -11037,7 +11037,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "requests": 8,
           "failed": 1,
           "tokens": 16200,
-          "cost_usd": 0.03195,
+          "cost_usd": 0.031950000000000006,
           "billed_usd": 0.01065,
           "equivalent": 0.0001175
         },
@@ -11425,7 +11425,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "requests": 8,
               "failed": 1,
               "tokens": 16200,
-              "cost_usd": 0.03195,
+              "cost_usd": 0.031950000000000006,
               "billed_usd": 0.01065,
               "equivalent": 0.0001175
             },
