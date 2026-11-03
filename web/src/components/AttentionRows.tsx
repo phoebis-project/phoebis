@@ -6,8 +6,8 @@ import { fmtRelative } from '@/lib/format';
 
 /**
  * A pool card's conditions in the route's order, which is the ranking. A subject links to where it is fixed, and a
- * row pointing at the pool's own card stays put, since the card it sits on is that place. The pool's exhaustion and
- * its rounds without a destination are the exceptions: each opens the routing log, as the dashboard's item does.
+ * row pointing at the pool's own card stays put, since the card it sits on is that place. A row whose item opens the
+ * routing log is the exception and links there, as the dashboard's item does.
  */
 export function AttentionRows({ items, now }: { items: AttentionItem[]; now: number }) {
   if (items.length === 0) return null;
@@ -15,9 +15,9 @@ export function AttentionRows({ items, now }: { items: AttentionItem[]; now: num
     <ul className="attention">
       {items.map((item) => {
         const { subject } = item;
-        const to = item.link?.page === 'pools' && item.kind !== 'pool_exhausted' && item.kind !== 'shed_no_runway' ? null : attentionHref(item, now);
-        const detail = attentionDetail(item, now);
         const log = attentionLogLine(item, now);
+        const to = item.link?.page === 'pools' && log === null ? null : attentionHref(item, now);
+        const detail = attentionDetail(item, now);
         return (
           <li key={attentionKey(item)} className="attention__row" title={`${detail} (${fmtRelative(item.since, now)})${log === null ? '' : `\n${log}`}`}>
             <Badge tone={ATTENTION_TONE[item.kind]}>{ATTENTION_LABEL[item.kind]}</Badge>
