@@ -41,25 +41,6 @@ pub struct Purged {
     pub rollups: usize,
 }
 
-impl Purged {
-    fn add(&mut self, slice: &Purged) {
-        self.attempts += slice.attempts;
-        self.bodies += slice.bodies;
-        self.decisions += slice.decisions;
-        self.events += slice.events;
-        self.extra_usage_samples += slice.extra_usage_samples;
-        self.quota_samples += slice.quota_samples;
-        self.requests += slice.requests;
-        self.rollups += slice.rollups;
-    }
-}
-
-/// A slice's answer: the counts, and whether the family has more rows to purge in this pass.
-pub(crate) struct Slice {
-    pub purged: Purged,
-    pub more: bool,
-}
-
 /// The families the purge walks, in the order a pass cuts them.
 #[derive(Clone, Copy)]
 enum Family {
@@ -86,20 +67,6 @@ impl Family {
         Family::Rollups,
         Family::AccountRollups,
     ];
-
-    /// The rows a slice of this family selected, out of the counts it answered; a full slice means another may
-    /// follow.
-    fn selected(self, slice: &Purged) -> usize {
-        match self {
-            Family::Bodies => slice.bodies,
-            Family::Requests | Family::KeptWarmMarks => slice.requests,
-            Family::Events => slice.events,
-            Family::Decisions => slice.decisions,
-            Family::QuotaSamples => slice.quota_samples,
-            Family::ExtraUsageSamples => slice.extra_usage_samples,
-            Family::Rollups | Family::AccountRollups => slice.rollups,
-        }
-    }
 }
 
 /// Every family's cutoff, computed once per pass. Zero is "keep forever": the cutoff is `None` and the purge of
@@ -157,13 +124,7 @@ pub fn run_retention_blocking(
     let cutoffs = Cutoffs::of(config, now);
     let mut purged = Purged::default();
     for family in Family::ALL {
-        loop {
-            let slice = purge_slice(db, family, &cutoffs, budgeted, now)?;
-            purged.add(&slice.purged);
-            if !slice.more {
-                break;
-            }
-        }
+        while purge_slice(db, family, &cutoffs, budgeted, now, &mut purged)? {}
     }
     Ok(purged)
 }
@@ -233,13 +194,16 @@ pub(crate) const PURGE_DECISIONS: &str = "DELETE FROM decisions WHERE rowid IN (
 /// One transaction under the purger over at most `PURGE_SLICE` rows of one family, selected by rowid, a bodies slice
 /// freeing about `PURGE_SLICE_BYTES` with the stored response counted at its length, a body above it alone in its
 /// slice, so the writer waits behind one slice at most and the slice holds the lock for a fraction of the busy timeout.
+/// Adds what it deleted to `purged` and answers whether the family has more rows to purge in this pass: a full slice
+/// means another may follow.
 fn purge_slice(
     db: &LedgerDb,
     family: Family,
     cutoffs: &Cutoffs,
     budgeted: &[BudgetedMember],
     now: i64,
-) -> Result<Slice, LedgerError> {
+    purged: &mut Purged,
+) -> Result<bool, LedgerError> {
     db.purge(|conn| {
         let tx = begin_write(conn)?;
         let slice = PURGE_SLICE as i64;
@@ -252,80 +216,82 @@ fn purge_slice(
         // A bodies slice that stopped at the byte budget left rows it read, so its family repeats short of a full
         // slice.
         let mut over_budget = false;
-        let deleted = match family {
+        // Each arm adds to its family's counters and yields the count of the statement its slice bounds.
+        let selected = match family {
             Family::Bodies => {
                 let (within, left_outside) = bodies_within_budget(&tx, now)?;
                 over_budget = left_outside;
-                Purged {
-                    bodies: tx.execute(PURGE_BODIES, params![now, within as i64])?,
-                    ..Purged::default()
-                }
+                let bodies = tx.execute(PURGE_BODIES, params![now, within as i64])?;
+                purged.bodies += bodies;
+                bodies
             }
             Family::Requests => match cutoffs.request {
-                None => Purged::default(),
+                None => 0,
                 Some(at) => {
                     tx.execute(PURGE_REQUEST_GUARDRAILS, params![at, slice])?;
                     let attempts = tx.execute(PURGE_ATTEMPTS, params![at, slice])?;
                     let requests = tx.execute(PURGE_REQUESTS, params![at, slice])?;
-                    Purged {
-                        attempts,
-                        requests,
-                        ..Purged::default()
-                    }
+                    purged.attempts += attempts;
+                    purged.requests += requests;
+                    requests
                 }
             },
             // No index leads with the marks' or the samples' cutoff column, so their slices take the first
             // matches the table yields: an `ORDER BY` would read and sort every match under the write lock, once
             // per slice. The rollup tables' primary keys lead with the hour, so theirs come oldest first anyway.
-            Family::KeptWarmMarks => Purged {
-                requests: cut(
+            Family::KeptWarmMarks => {
+                let marks = cut(
                     "DELETE FROM kept_warm_marks WHERE rowid IN (SELECT rowid FROM kept_warm_marks WHERE marked_at < ?1 LIMIT ?2)",
                     cutoffs.request,
-                )?,
-                ..Purged::default()
-            },
-            Family::Events => Purged {
-                events: cut(
+                )?;
+                purged.requests += marks;
+                marks
+            }
+            Family::Events => {
+                let events = cut(
                     "DELETE FROM events WHERE rowid IN (SELECT rowid FROM events WHERE at < ?1 ORDER BY at, rowid LIMIT ?2)",
                     cutoffs.request,
-                )?,
-                ..Purged::default()
-            },
-            Family::Decisions => Purged {
-                decisions: cut(PURGE_DECISIONS, cutoffs.request)?,
-                ..Purged::default()
-            },
-            Family::QuotaSamples => Purged {
-                quota_samples: cut(
+                )?;
+                purged.events += events;
+                events
+            }
+            Family::Decisions => {
+                let decisions = cut(PURGE_DECISIONS, cutoffs.request)?;
+                purged.decisions += decisions;
+                decisions
+            }
+            Family::QuotaSamples => {
+                let samples = cut(
                     "DELETE FROM quota_samples WHERE rowid IN (SELECT rowid FROM quota_samples WHERE bucket < ?1 LIMIT ?2)",
                     cutoffs.sample,
-                )?,
-                ..Purged::default()
-            },
-            Family::ExtraUsageSamples => Purged {
-                extra_usage_samples: cut(
+                )?;
+                purged.quota_samples += samples;
+                samples
+            }
+            Family::ExtraUsageSamples => {
+                let samples = cut(
                     "DELETE FROM extra_usage_samples WHERE rowid IN (SELECT rowid FROM extra_usage_samples WHERE bucket < ?1 LIMIT ?2)",
                     cutoffs.sample,
-                )?,
-                ..Purged::default()
-            },
-            Family::Rollups => Purged {
-                rollups: purge_hourly_rollups(&tx, cutoffs.rollup, budgeted, now)?,
-                ..Purged::default()
-            },
-            Family::AccountRollups => Purged {
-                rollups: cut(
+                )?;
+                purged.extra_usage_samples += samples;
+                samples
+            }
+            Family::Rollups => {
+                let rollups = purge_hourly_rollups(&tx, cutoffs.rollup, budgeted, now)?;
+                purged.rollups += rollups;
+                rollups
+            }
+            Family::AccountRollups => {
+                let rollups = cut(
                     "DELETE FROM account_rollups_hourly WHERE rowid IN (SELECT rowid FROM account_rollups_hourly WHERE hour < ?1 LIMIT ?2)",
                     cutoffs.rollup,
-                )?,
-                ..Purged::default()
-            },
+                )?;
+                purged.rollups += rollups;
+                rollups
+            }
         };
         tx.commit()?;
-        Ok(Slice {
-            more: over_budget || family.selected(&deleted) >= PURGE_SLICE,
-            purged: deleted,
-        })
+        Ok(over_budget || selected >= PURGE_SLICE)
     })
 }
 
@@ -478,18 +444,19 @@ mod tests {
     fn take(db: &LedgerDb) -> (Vec<String>, bool) {
         let before = stored(db);
         let cutoffs = Cutoffs::of(&LedgerConfig::default(), NOW);
-        let slice = purge_slice(db, Family::Bodies, &cutoffs, &[], NOW).unwrap();
+        let mut purged = Purged::default();
+        let more = purge_slice(db, Family::Bodies, &cutoffs, &[], NOW, &mut purged).unwrap();
         let after = stored(db);
         let taken: Vec<String> = before
             .into_iter()
             .filter(|id| !after.contains(id))
             .collect();
         assert_eq!(
-            slice.purged.bodies,
+            purged.bodies,
             taken.len(),
             "the count is the bodies it took"
         );
-        (taken, slice.more)
+        (taken, more)
     }
 
     fn owned(ids: &[&str]) -> Vec<String> {
