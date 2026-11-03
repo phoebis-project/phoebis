@@ -162,6 +162,23 @@ pub(crate) fn credential_aad(account_id: &str, generation: i64) -> String {
     format!("{account_id}:{generation}")
 }
 
+/// The token bundle sealed for the holder's `generation`, its plaintext zeroized once parsed.
+fn open_tokens(
+    key: &StorageKey,
+    account_id: &str,
+    generation: i64,
+    nonce: &[u8],
+    sealed: &[u8],
+) -> Result<SealedTokens, StoreError> {
+    let plaintext = Zeroizing::new(crypto::open(
+        key,
+        &credential_aad(account_id, generation),
+        nonce,
+        sealed,
+    )?);
+    Ok(serde_json::from_slice(&plaintext)?)
+}
+
 pub(crate) fn api_key_aad(account_id: &str) -> String {
     format!("{account_id}:api_key")
 }
@@ -237,13 +254,7 @@ impl Store {
             return Ok(None);
         };
 
-        let plaintext = Zeroizing::new(crypto::open(
-            &self.key,
-            &credential_aad(account_id, generation),
-            &nonce,
-            &sealed,
-        )?);
-        let tokens: SealedTokens = serde_json::from_slice(&plaintext)?;
+        let tokens = open_tokens(&self.key, account_id, generation, &nonce, &sealed)?;
 
         Ok(Some(CredentialBundle {
             access_token: Secret::new(&tokens.access_token),
@@ -443,14 +454,9 @@ impl Store {
             // decrypt the row being replaced to carry its refresh token forward.
             None => match &existing {
                 Some((generation, sealed, nonce)) => {
-                    let plaintext = Zeroizing::new(crypto::open(
-                        &self.key,
-                        &credential_aad(account_id, *generation),
-                        nonce,
-                        sealed,
-                    )?);
-                    let mut previous: SealedTokens = serde_json::from_slice(&plaintext)?;
-                    previous.refresh_token.take()
+                    open_tokens(&self.key, account_id, *generation, nonce, sealed)?
+                        .refresh_token
+                        .take()
                 }
                 None => None,
             },
