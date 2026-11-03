@@ -347,22 +347,63 @@ export function useCommittedText(value: string, onCommit: (next: string) => void
   };
 }
 
+/** A field value of an address: a string, a flag, a list of strings or a range's three strings. */
+const sameField = (a: unknown, b: unknown): boolean => {
+  if (Object.is(a, b)) return true;
+  if (Array.isArray(a) && Array.isArray(b)) return sameDeps(a, b);
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null || Array.isArray(a) || Array.isArray(b)) return false;
+  const was = a as Record<string, unknown>;
+  const now = b as Record<string, unknown>;
+  return Object.keys(was).length === Object.keys(now).length && Object.keys(was).every((k) => Object.is(was[k], now[k]));
+};
+
+/** `next` with each field that reads as `held`'s carrying `held`'s value, and `held` itself where every field does. */
+function keptFields<F>(held: F, next: F): F {
+  const was = held as Record<string, unknown>;
+  const now = next as Record<string, unknown>;
+  const fields = Object.keys(now);
+  if (fields.length === Object.keys(was).length && fields.every((k) => sameField(was[k], now[k]))) return held;
+  return Object.fromEntries(fields.map((k) => [k, sameField(was[k], now[k]) ? was[k] : now[k]])) as F;
+}
+
 /** A view's filters in the URL's query string: read on every address, written whole with `replace`, so a link sets
  * them, a reload keeps them and Back returns to the view before. A filter change makes a new address, which a caller
- * keys its cursor on. The hash stays on every write, since a tab, a section or an anchor lives there. */
-export function useQueryFilters<F>(codec: Codec<F>): { address: string; filters: F; update(patch: Partial<F>): void; replace(filters: F): void } {
+ * keys its cursor on. The hash stays on every write, since a tab, a section or an anchor lives there. A field whose
+ * value an address change leaves as it was keeps its identity, so a memo keyed on it reads nothing again. `keep` names
+ * parameters outside the codec, such as a dialog's one-shot ones, that `replace` and `update` carry over from the
+ * address they replace. */
+export function useQueryFilters<F>(codec: Codec<F>, options: { keep?: readonly string[] } = {}): { address: string; filters: F; replace(filters: F): void; replaceLater(filters: F): void; update(patch: Partial<F>): void } {
+  const { keep = [] } = options;
   const [searchParams] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();
   // Callers pass a module-level codec, so only a new address reads the filters again.
-  const filters = useMemo(() => codec.fromParams(searchParams), [codec, searchParams]);
+  const parsed = useMemo(() => codec.fromParams(searchParams), [codec, searchParams]);
+  // The last answer, in state since the hooks lint forbids a ref write in render.
+  const [held, setHeld] = useState(parsed);
+  const filters = keptFields(held, parsed);
+  if (filters !== held) setHeld(filters);
   // Written at once rather than in the router's transition: a click that follows typing blurs a field first, and its
   // own write or navigation would otherwise build on the address from before the blur's commit and drop it.
   const replace = (next: F) => {
-    const search = codec.toParams(next).toString();
+    const params = codec.toParams(next);
+    for (const name of keep) {
+      const value = searchParams.get(name);
+      if (value !== null) params.set(name, value);
+    }
+    const search = params.toString();
     navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { flushSync: true, replace: true });
   };
-  return { address: searchParams.toString(), filters, replace, update: (patch) => replace({ ...filters, ...patch }) };
+  // An effect's write: `replace` flushes at once, which React cannot do inside an effect. It writes the codec's keys
+  // alone, since a kept parameter could restore the one-shot parameter an effect drops in the same commit.
+  const replaceLater = useCallback(
+    (next: F) => {
+      const search = codec.toParams(next).toString();
+      navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
+    },
+    [codec, location.hash, location.pathname, navigate],
+  );
+  return { address: searchParams.toString(), filters, replace, replaceLater, update: (patch) => replace({ ...filters, ...patch }) };
 }
 
 /**

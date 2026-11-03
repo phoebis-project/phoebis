@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useLocation } from 'react-router-dom';
 import { api, ApiError } from '@/api';
 import { slug } from '@/api/http';
 import type { ApiKey, CreatedApiKey, Guardrail, GuardrailRef, KeyModels, KeyStatus, ModelRule, ModelRulesMode, Pool } from '@/api/types';
@@ -14,7 +14,7 @@ import { Popover } from '@/components/ui/Popover';
 import { sumTileOf, Tile } from '@/components/ui/Tile';
 import { IconChevron, IconInfo, IconPlus, IconWarning, IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, ErrorState, Expert, Field, GroupedDialog, Input, Menu, PageLink, Refusal, Segmented, Select, Skeleton, Toggle, type DialogGroup } from '@/components/ui/primitives';
-import { KEYS_CODEC, type KeysAddress } from '@/lib/address';
+import { KEYS_CODEC } from '@/lib/address';
 import { dollarsUnder, nativeSidesOf, sidesLine, sumFunded, UNPRICED_TITLE, type FundedSum, type WeekReading } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
 import { effectiveCaptureHours } from '@/lib/capture';
@@ -97,32 +97,12 @@ export function KeysPage() {
   const now = useNow();
   const ink = useChartInk();
   const location = useLocation();
-  const navigate = useNavigate();
   const pageRef = useRef<HTMLDivElement>(null);
   const landed = useRef<string | null>(null);
-  const { address, filters } = useQueryFilters(KEYS_CODEC);
-  const status = filters.status;
   // The dialog's one-shot `edit` and `group` wait in the address until the key list loads, so a filter written before
-  // then carries them through. Written at once, as the hook writes.
-  const update = (patch: Partial<KeysAddress>) => {
-    const params = KEYS_CODEC.toParams({ ...filters, ...patch });
-    const current = new URLSearchParams(location.search);
-    for (const name of ['edit', 'group']) {
-      const value = current.get(name);
-      if (value !== null) params.set(name, value);
-    }
-    const next = params.toString();
-    navigate({ hash: location.hash, pathname: location.pathname, search: next ? `?${next}` : '' }, { flushSync: true, replace: true });
-  };
-  // An effect's write: `update` flushes at once, which React cannot do inside an effect, so these replace the address
-  // the router's usual way.
-  const replaceFromEffect = useCallback(
-    (patch: Partial<KeysAddress>) => {
-      const next = KEYS_CODEC.toParams({ ...filters, ...patch }).toString();
-      navigate({ hash: location.hash, pathname: location.pathname, search: next ? `?${next}` : '' }, { replace: true });
-    },
-    [filters, location.hash, location.pathname, navigate],
-  );
+  // then carries them through.
+  const { address, filters, replaceLater, update } = useQueryFilters(KEYS_CODEC, { keep: ['edit', 'group'] });
+  const status = filters.status;
   const [dialog, setDialog] = useState<{ initialGroup: KeyGroup | null; key: ApiKey | null } | null>(null);
   // Held only while the dialog that shows it is open, because the router keeps no copy of a secret.
   const [created, setCreated] = useState<{ key: CreatedApiKey; title: string } | null>(null);
@@ -152,8 +132,8 @@ export function KeysPage() {
   useEffect(() => {
     if (!pools.data || poolIds.length === filters.pools.length) return;
     if (new URLSearchParams(location.search).has('edit')) return;
-    replaceFromEffect({ pools: poolIds });
-  }, [filters.pools, location.search, poolIds, pools.data, replaceFromEffect]);
+    replaceLater({ ...filters, pools: poolIds });
+  }, [filters, location.search, poolIds, pools.data, replaceLater]);
   const rows = useMemo(
     () =>
       (keys.data ?? []).filter((k) => {
@@ -178,7 +158,7 @@ export function KeysPage() {
     }
     if (!keys.data?.some((k) => k.id === id)) return;
     if (!rows.some((k) => k.id === id)) {
-      replaceFromEffect({ pools: [], search: '', status: 'all' });
+      replaceLater({ ...filters, pools: [], search: '', status: 'all' });
       return;
     }
     const row = [...(pageRef.current?.querySelectorAll<HTMLElement>('tbody tr') ?? [])].find((el) => el.id === id);
@@ -186,7 +166,7 @@ export function KeysPage() {
     landed.current = location.hash;
     scrollToElement(row);
     row.focus({ preventScroll: true });
-  }, [keys.data, location.hash, replaceFromEffect, rows]);
+  }, [filters, keys.data, location.hash, replaceLater, rows]);
 
   const totals = keys.data
     ? {

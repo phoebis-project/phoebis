@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { flushSync } from 'react-dom';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Dot, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { api } from '@/api';
 import { foldGroups, foldRequests, keptRows, latestGenerations, loadSessionRequests, sumGroups, type SessionRequests } from '@/api/fold';
 import { useAppSettings } from '@/app/settings';
@@ -230,7 +230,7 @@ export function AnalyticsPage() {
   // stands still.
   const [generation, setGeneration] = useState(0);
   // Every filter lives in the address, so a link or a reload lands on the same view.
-  const { address, filters: a, update: rawUpdate } = useQueryFilters(ANALYTICS_CODEC);
+  const { address, filters: a, replaceLater, update: rawUpdate } = useQueryFilters(ANALYTICS_CODEC);
   // Every section but the Burn reads the default grouping under the Burn's own session grouping.
   const pageBy = a.by;
   const groupBy: GroupBy = pageBy === 'session' ? 'key' : pageBy;
@@ -245,8 +245,6 @@ export function AnalyticsPage() {
   const pauseCause = costOpen ? 'dialog' : barOpen ? 'menu' : null;
   const paused = pauseCause !== null;
   const rangeTakenAt = useRangeTakenAt(a.range);
-  const location = useLocation();
-  const navigate = useNavigate();
   const [tab, chooseTab] = useHashSection(SECTIONS, 'traffic');
   // A session id is one session per key lifetime, so a drill-down from a session row names the lifetime too. A session
   // without one reads unscoped.
@@ -255,32 +253,16 @@ export function AnalyticsPage() {
   const dollars = dollarsOf(unit);
   const funding = UNIT_FUNDING[unit];
   // A shared link lands on its position, then the choice persists like any other: the parameter is read into the
-  // setting and dropped, so the address stays clean and one control owns the unit. The drop replaces the entry the
-  // router's usual way, since `update` flushes at once, which React cannot do inside an effect.
+  // setting and dropped, so the address stays clean and one control owns the unit.
   useEffect(() => {
     if (a.unit === '') return;
     const known = UNIT_POSITIONS.find((p) => p === a.unit);
     if (known !== undefined) setUnit(known);
-    const search = ANALYTICS_CODEC.toParams({ ...a, unit: '' }).toString();
-    navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
-  }, [a, location.hash, location.pathname, navigate, setUnit]);
-  // Keyed on the values: every address change reads new lists, and a unit change must not re-issue the reads the
-  // filters key. A list value holds no comma, since the address splits on them.
-  const accountList = a.accounts.join(',');
-  const keyList = a.keys.join(',');
-  const modelList = a.models.join(',');
-  const poolList = a.pools.join(',');
-  const filters = useMemo<Record<Dim, string[]>>(() => {
-    const split = (joined: string) => (joined ? joined.split(',') : []);
-    return { accountId: split(accountList), keyId: split(keyList), model: split(modelList), poolId: split(poolList), sessionId: a.session ? [a.session] : [] };
-  }, [accountList, keyList, modelList, poolList, a.session]);
-  // A pattern may hold a comma, so the two pattern lists key on a newline, as the address joins them.
-  const clientList = a.clients.join('\n');
-  const userAgentList = a.userAgents.join('\n');
-  const patterns = useMemo<Record<PatternDim, string[]>>(() => {
-    const split = (joined: string) => (joined ? joined.split('\n') : []);
-    return { clients: split(clientList), userAgents: split(userAgentList) };
-  }, [clientList, userAgentList]);
+    replaceLater({ ...a, unit: '' });
+  }, [a, replaceLater, setUnit]);
+  // The hook keeps a list's identity while its value stands, so a unit change re-issues none of the reads they key.
+  const filters = useMemo<Record<Dim, string[]>>(() => ({ accountId: a.accounts, keyId: a.keys, model: a.models, poolId: a.pools, sessionId: a.session ? [a.session] : [] }), [a.accounts, a.keys, a.models, a.pools, a.session]);
+  const patterns = useMemo<Record<PatternDim, string[]>>(() => ({ clients: a.clients, userAgents: a.userAgents }), [a.clients, a.userAgents]);
   // The request log reads one client pattern, so a session view's log read carries the one where exactly one stands.
   const logClient = patterns.clients.length === 1 ? patterns.clients[0] : undefined;
   const ink = useChartInk();

@@ -30,7 +30,7 @@ export { UnitLegend } from '@/components/ui/UnitControls';
 export { Button, ConfirmDialog, CopyButton, Descriptions, Dialog, Menu, PageLoadFailed } from '@/components/ui/primitives';
 export { installClock } from '@/lib/clock';
 export { getTimeFormat, setTimeFormat, spanText } from '@/lib/format';
-export { useAsync, useCommittedText, useNow, useRangeTakenAt } from '@/lib/hooks';
+export { useAsync, useCommittedText, useNow, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';
 export { AccountsPage } from '@/pages/AccountsPage';
 export { GuardrailDialog, GuardrailsPage } from '@/pages/GuardrailsPage';
 export { KeyDialog, keyRankOf } from '@/pages/KeysPage';
