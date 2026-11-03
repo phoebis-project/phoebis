@@ -2028,14 +2028,6 @@ mod tests {
     }
 
     #[test]
-    fn schema_version_is_one_with_no_migration_and_the_last_entry_otherwise() {
-        assert_eq!(
-            schema::SCHEMA_VERSION,
-            schema::MIGRATIONS.last().map_or(1, |(version, _)| *version)
-        );
-    }
-
-    #[test]
     fn the_schema_refusal_names_the_version_this_build_opens_and_the_init_cure() {
         assert_eq!(
             StoreError::SchemaTooNew {

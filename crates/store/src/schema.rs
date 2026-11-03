@@ -296,4 +296,7 @@ pub const MIGRATIONS: &[(u32, &str)] = &[(2, V2), (3, V3)];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = match MIGRATIONS.last() {
+    Some((version, _)) => *version,
+    None => 1,
+};
