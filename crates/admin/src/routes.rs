@@ -2769,7 +2769,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         enabled: row.enabled,
         canceled: term.canceled,
         plan_ended_at: term.plan_ended_at,
-        state: state_name(row.state).to_string(),
+        state: row.state.as_str().to_string(),
         funding_retry_at,
         identity: row.identity.as_ref().map(|identity| AccountIdentity {
             email: identity.email.clone(),
@@ -3100,16 +3100,6 @@ fn usage_json(
         poll,
         raw_keys: snapshot.raw_keys.clone(),
         windows: snapshot.windows.iter().map(window).collect(),
-    }
-}
-
-fn state_name(state: AccountState) -> &'static str {
-    match state {
-        AccountState::Disconnected => "disconnected",
-        AccountState::FundingRequired => "funding_required",
-        AccountState::ReauthRequired => "reauth_required",
-        AccountState::Ready => "ready",
-        AccountState::Unpaired => "unpaired",
     }
 }
 

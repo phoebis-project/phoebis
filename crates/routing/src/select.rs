@@ -664,19 +664,24 @@ enum Obstacle {
     Credits {
         reason: String,
     },
+    /// The registry no longer holds the account.
+    Deleted,
     /// Canceled and past the saved end.
     Ended,
-    Operator,
     /// The account is in overage until `until`, which the pool's `never` policy refuses.
     Overage {
         until: i64,
     },
+    /// The operator paused the account.
+    Paused,
     /// The account has no allowance left in `window` until `until`: the seat's spend cap under `spend`, or the
     /// model's own week where the model-window partition passes the account over.
     Spent {
         until: i64,
         window: String,
     },
+    /// The account's state is not `ready`, as `unready` reads it.
+    Unready,
 }
 
 /// The step-2 name `release_reasons` and the trace report for an obstacle: `attempted`, `budget`,
@@ -688,8 +693,8 @@ fn obstacle_name(obstacle: &Obstacle) -> &'static str {
         Obstacle::BudgetUnknown => "budget_unknown",
         Obstacle::Cooldown { .. } => "cooldown",
         Obstacle::Credits { .. } => "credits",
+        Obstacle::Deleted | Obstacle::Paused | Obstacle::Unready => "operator",
         Obstacle::Ended => "subscription_ended",
-        Obstacle::Operator => "operator",
         Obstacle::Overage { .. } => "overage",
         Obstacle::Spent { .. } => "spent",
     }
@@ -1045,14 +1050,13 @@ pub(crate) fn affinity_ttl_ms(pool: &PoolRow) -> i64 {
     seconds_ms(pool.affinity_ttl_seconds)
 }
 
-fn state_name(state: AccountState) -> Option<&'static str> {
-    match state {
-        AccountState::Ready => None,
-        AccountState::Disconnected => Some("disconnected"),
-        AccountState::FundingRequired => Some("funding_required"),
-        AccountState::ReauthRequired => Some("reauth_required"),
-        AccountState::Unpaired => Some("unpaired"),
-    }
+/// The state that keeps `account` out of the set, `None` for a ready account. A funding mark is tried again on its own
+/// clock, one request at a time, since an API-key balance has no signal the poll could read, so a mark whose retry
+/// the selection admits stands against nothing.
+fn unready(state: &RoutingState, account: &AccountRow, now: i64) -> Option<&'static str> {
+    let retry_admitted = account.state == AccountState::FundingRequired
+        && state.funding_retry_admits(&account.id, now);
+    (account.state != AccountState::Ready && !retry_admitted).then(|| account.state.as_str())
 }
 
 /// The facts a selection finds against a pinned account, in the order it evaluates them, for the event that
@@ -1094,10 +1098,7 @@ pub fn release_reasons(
             if !account.enabled {
                 reasons.push("paused");
             }
-            // A funding mark whose retry the selection would admit stands against nothing, as `obstacle` reads it.
-            let retry_admitted = account.state == AccountState::FundingRequired
-                && state.funding_retry_admits(&pin.account_id, request.now);
-            if let Some(name) = state_name(account.state).filter(|_| !retry_admitted) {
+            if let Some(name) = unready(state, account, request.now) {
                 reasons.push(name);
             }
         }
@@ -1655,26 +1656,17 @@ fn run(
                 // A member this probe tried whose state moved since, as when the attempt's own mark reached the
                 // snapshot before this selection, is still the member the probe tried: with a sibling free, a
                 // placement there would move the pin all the same.
-                Some(Obstacle::Operator)
-                    if tried
-                        && !eligible.is_empty()
-                        && snapshot
-                            .account(&current.account_id)
-                            .is_some_and(|a| a.enabled) =>
-                {
+                Some(Obstacle::Unready) if tried && !eligible.is_empty() => {
                     let exhaustion = Exhaustion::Pinned {
                         obstacle: obstacle_name(&Obstacle::Attempted),
                     };
                     return (answered(rec, facts, exhaustion), writes);
                 }
-                // `Operator` also covers a deleted account and a state other than ready; those keep the answer
-                // they get under their own reason, and only the operator's pause holds the pin.
-                Some(Obstacle::Operator)
-                    if snapshot
-                        .account(&current.account_id)
-                        .is_none_or(|a| a.enabled) => {}
+                // A deleted account and a state other than ready keep the answer they get under their own reason.
+                // Of the operator's obstacles only the pause holds the pin.
+                Some(Obstacle::Deleted | Obstacle::Unready) => {}
                 // No wait clears these, so they answer untimed; the next real request moves the pin if it must.
-                Some(o @ (Obstacle::Attempted | Obstacle::Ended | Obstacle::Operator)) => {
+                Some(o @ (Obstacle::Attempted | Obstacle::Ended | Obstacle::Paused)) => {
                     let exhaustion = Exhaustion::Pinned {
                         obstacle: obstacle_name(o),
                     };
@@ -5259,19 +5251,13 @@ fn obstacle(
     // A candidate the registry no longer holds was deleted after admission; it is nobody's to select, and a
     // cooldown row it left behind must not date an exhaustion no wait can clear.
     let Some(account) = snapshot.account(account_id) else {
-        return Some(Obstacle::Operator);
+        return Some(Obstacle::Deleted);
     };
     if !account.enabled {
-        return Some(Obstacle::Operator);
+        return Some(Obstacle::Paused);
     }
-    // A funding mark is tried again on its own clock, one request at a time, since an API-key balance has no signal
-    // the poll could read.
-    if account.state == AccountState::FundingRequired {
-        if !state.funding_retry_admits(account_id, now) {
-            return Some(Obstacle::Operator);
-        }
-    } else if account.state != AccountState::Ready {
-        return Some(Obstacle::Operator);
+    if unready(state, account, now).is_some() {
+        return Some(Obstacle::Unready);
     }
     if snapshot
         .term(account_id)
@@ -6670,9 +6656,12 @@ fn obstacle_facts(obstacle: &Obstacle) -> ObstacleFacts {
             Some(window.clone()),
             Some(*until),
         ),
-        Obstacle::Attempted | Obstacle::BudgetUnknown | Obstacle::Ended | Obstacle::Operator => {
-            (None, None, None)
-        }
+        Obstacle::Attempted
+        | Obstacle::BudgetUnknown
+        | Obstacle::Deleted
+        | Obstacle::Ended
+        | Obstacle::Paused
+        | Obstacle::Unready => (None, None, None),
     };
     ObstacleFacts {
         name: obstacle_name(obstacle),
@@ -6841,7 +6830,7 @@ fn candidate_facts(
         kind: kind_name(kind),
         plan_tier: snapshot.plan(id).map(String::from),
         enabled: account.is_some_and(|a| a.enabled),
-        state: account.map_or("deleted", |a| state_name(a.state).unwrap_or("ready")),
+        state: account.map_or("deleted", |a| a.state.as_str()),
         priority: candidate.priority,
         tier: tier_of(
             state,
