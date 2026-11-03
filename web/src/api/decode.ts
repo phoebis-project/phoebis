@@ -1,6 +1,6 @@
 import type {
-  Account, AccountCatalog, AccountRollup, AllowanceReset, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
-  CohortHold, CostRevision, CostSplit, DecisionKind, DecisionRecord, DecisionSummary, FastLaneReading, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, KeyModels, MemberBudget, ModelPrice, ModelRule,
+  Account, AccountCatalog, AccountKind, AccountRollup, AllowanceReset, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
+  CohortHold, CostRevision, CostSplit, DecisionKind, DecisionRecord, DecisionSummary, FastLaneReading, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, KeyModels, MemberBudget, ModelPrice, ModelRule, ModelRulesMode,
   MoveCause, Overview, PairingConfirmed, PairingSession, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, PriceCells, PriceRevision, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, Reconciliation, ReconciliationsAnswer, RecordCandidate, RecordHold, RecordOutcome, RecordSettings, RefusalCategoriesAnswer, ReplayOutcome, RequestEvent, RequestLog, RequestPage, RequestPhases, RequestShape, RewritesAnswer,
   RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, Settings, Spend, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, UnusedAllowanceAnswer, WindowId, WindowSample,
 } from './types';
@@ -26,6 +26,10 @@ export const num = (v: unknown, fallback = 0): number => (typeof v === 'number' 
 export const numOrNull = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const bool = (v: unknown, fallback = false): boolean => (typeof v === 'boolean' ? v : fallback);
 const strings = (v: unknown): string[] => list(v).filter((x): x is string => typeof x === 'string');
+const oneOf = <T extends string>(values: readonly T[], v: unknown): T | undefined => values.find((x) => x === v);
+const accountKind = (v: unknown): AccountKind => oneOf(ACCOUNT_KIND_VALUES, v) ?? 'oauth';
+const budgetPeriod = (v: unknown): BudgetPeriod => oneOf(BUDGET_PERIOD_VALUES, v) ?? 'month';
+const rulesMode = (v: unknown): ModelRulesMode => oneOf(MODEL_RULES_MODE_VALUES, v) ?? 'extend';
 /** A map the route keys by data (a move reason, a model id), with every entry that is not a number dropped. */
 const numberMap = (v: unknown): Record<string, number> => Object.fromEntries(Object.entries(rec(v)).filter((e): e is [string, number] => numOrNull(e[1]) !== null));
 /** A map the route keys by data whose value may be null (a window the cost model could not price), each value read
@@ -107,7 +111,7 @@ export function decodeKeyModels(v: unknown): KeyModels {
   return {
     keyId: str(k.key_id),
     longContextTwins: bool(k.long_context_twins, true),
-    modelRulesMode: MODEL_RULES_MODE_VALUES.find((x) => x === str(k.model_rules_mode)) ?? 'extend',
+    modelRulesMode: rulesMode(k.model_rules_mode),
     poolId: str(k.pool_id),
     rules: list(k.rules).map(rec).map((r) => ({ cooldowns: list(r.cooldowns).map(decodeRuleCooldown), level: str(r.level) === 'pool' ? 'pool' : 'key', not: bool(r.not), pattern: str(r.pattern) })),
   };
@@ -192,7 +196,7 @@ export function decodeAccount(v: unknown): Account {
     fableWindow: windows.find((w) => w.id === '7d_fable') ?? null,
     fastLane: fastLane ? { input: fastLaneReading(fastLane.input), output: fastLaneReading(fastLane.output) } : null,
     id: str(a.id),
-    kind: ACCOUNT_KIND_VALUES.find((k) => k === str(a.kind)) ?? 'oauth',
+    kind: accountKind(a.kind),
     label: str(a.label),
     overage: overage ? { inUse: bool(overage.in_use), observedAt: isoOr(overage.observed_at, epoch), reset: isoOrNull(overage.reset), since: isoOrNull(overage.since) } : null,
     plan: planName(subscription),
@@ -274,7 +278,7 @@ function decodePoll(v: unknown): QuotaPoll | null {
     lastCleanAt: isoOrNull(p.last_clean_at),
     lastError: strOrNull(p.last_error),
     // An outcome this build does not know reads as a failure rather than as a clean answer.
-    lastOutcome: POLL_OUTCOME_VALUES.find((o) => o === str(p.last_outcome)) ?? 'failed',
+    lastOutcome: oneOf(POLL_OUTCOME_VALUES, p.last_outcome) ?? 'failed',
     nextAttemptAt: isoOrNull(p.next_attempt_at),
     rateLimitedInARow: num(p.rate_limited_in_a_row),
   };
@@ -292,9 +296,9 @@ export function decodeAttention(v: unknown): AttentionItem {
   const subject = rec(a.subject);
   const link = a.link ? rec(a.link) : null;
   // A page this build does not know has no place to open the subject on, so the item draws no link.
-  const page = link ? ATTENTION_PAGE_VALUES.find((p) => p === str(link.page)) : undefined;
+  const page = link ? oneOf(ATTENTION_PAGE_VALUES, link.page) : undefined;
   const raw = str(a.kind);
-  const kind = ATTENTION_KIND_VALUES.find((k) => k === raw);
+  const kind = oneOf(ATTENTION_KIND_VALUES, raw);
   return {
     detail: rec(a.detail),
     kind: kind ?? 'unknown',
@@ -303,7 +307,7 @@ export function decodeAttention(v: unknown): AttentionItem {
     pools: strings(a.pools),
     rawKind: kind === undefined ? raw : null,
     since: isoOr(a.since, epoch),
-    subject: { id: str(subject.id), label: str(subject.label), type: ATTENTION_SUBJECT_VALUES.find((t) => t === str(subject.type)) ?? 'pool' },
+    subject: { id: str(subject.id), label: str(subject.label), type: oneOf(ATTENTION_SUBJECT_VALUES, subject.type) ?? 'pool' },
   };
 }
 
@@ -331,7 +335,7 @@ export function decodeKey(v: unknown): ApiKey {
     lifetime: { billedUsd: num(rec(k.lifetime).billed_usd), cost: num(rec(k.lifetime).cost_usd), equivalent: numOrNull(rec(k.lifetime).equivalent), requests: num(rec(k.lifetime).requests) },
     longContextTwins: bool(k.long_context_twins, true),
     modelRules: list(k.model_rules).map(decodeModelRule),
-    modelRulesMode: MODEL_RULES_MODE_VALUES.find((x) => x === str(k.model_rules_mode)) ?? 'extend',
+    modelRulesMode: rulesMode(k.model_rules_mode),
     name: str(k.label),
     notes: strOrNull(k.notes),
     poolGuardrails: guardrailRefs(k.pool_guardrails),
@@ -400,7 +404,7 @@ export function decodePool(v: unknown): Pool {
   const k = rec(p.keepalive);
   return {
     activePins: num(p.active_pins),
-    affinityMode: AFFINITY_MODE_VALUES.find((x) => x === str(p.affinity_mode)) ?? POOL_AFFINITY_DEFAULTS.affinityMode,
+    affinityMode: oneOf(AFFINITY_MODE_VALUES, p.affinity_mode) ?? POOL_AFFINITY_DEFAULTS.affinityMode,
     affinityTtlSeconds: num(p.affinity_ttl_seconds),
     autoModeServer: bool(p.auto_mode_server, true),
     billed24h: num(p.billed_24h),
@@ -428,13 +432,13 @@ export function decodePool(v: unknown): Pool {
       budgetUntil: isoOrNull(m.budget_until),
       burn: numOrNull(m.burn),
       // A row from before the router reported eligibility reads as not servable rather than as servable.
-      eligible: ELIGIBILITY_VALUES.find((e) => e === str(m.eligible)) ?? 'unavailable',
+      eligible: oneOf(ELIGIBILITY_VALUES, m.eligible) ?? 'unavailable',
       // The route answers null for an account it cannot find, which is no API-key account either.
-      kind: ACCOUNT_KIND_VALUES.find((x) => x === str(m.kind)) ?? 'oauth',
+      kind: accountKind(m.kind),
       paceScore: numOrNull(m.pace_score),
       priority: num(m.priority),
       speed: numOrNull(m.speed),
-      spends: list(m.spends).map(rec).map((s) => ({ period: BUDGET_PERIOD_VALUES.find((x) => x === str(s.period)) ?? 'month', periodEnd: isoOrNull(s.period_end), spentUsd: num(s.spent_usd) })),
+      spends: list(m.spends).map(rec).map((s) => ({ period: budgetPeriod(s.period), periodEnd: isoOrNull(s.period_end), spentUsd: num(s.spent_usd) })),
     })),
     migrateWhenSpent: bool(p.migrate_when_spent, POOL_ENGINE_DEFAULTS.migrateWhenSpent),
     minSharedPrefixTokens: num(p.min_shared_prefix_tokens, POOL_AFFINITY_DEFAULTS.minSharedPrefixTokens),
@@ -442,28 +446,28 @@ export function decodePool(v: unknown): Pool {
     movesPerHour: Object.fromEntries(Object.entries(rec(p.moves_per_hour)).filter((e): e is [string, number] => numOrNull(e[1]) !== null)),
     name: str(p.label),
     overageMoveGraceMinutes: num(p.overage_move_grace_minutes, POOL_ENGINE_DEFAULTS.overageMoveGraceMinutes),
-    overagePolicy: OVERAGE_POLICY_VALUES.find((x) => x === str(p.overage_policy)) ?? 'prefer_plan',
+    overagePolicy: oneOf(OVERAGE_POLICY_VALUES, p.overage_policy) ?? 'prefer_plan',
     preferSubscription: bool(p.prefer_subscription),
     requests24h: num(p.requests_24h),
     retryInPlaceSeconds: num(p.retry_in_place_seconds, POOL_ENGINE_DEFAULTS.retryInPlaceSeconds),
     // A mode this build does not know reads as the default, which returns a session as the router did before the field.
-    returnToPlan: RETURN_TO_PLAN_VALUES.find((x) => x === str(p.return_to_plan)) ?? POOL_ENGINE_DEFAULTS.returnToPlan,
+    returnToPlan: oneOf(RETURN_TO_PLAN_VALUES, p.return_to_plan) ?? POOL_ENGINE_DEFAULTS.returnToPlan,
     returnToPlanDwellSeconds: num(p.return_to_plan_dwell_seconds, POOL_ENGINE_DEFAULTS.returnToPlanDwellSeconds),
     // A row whose answer carried none reads 0, which the route refuses as stale, so the editor offers Reload rather
     // than landing over a row it could not vouch for.
     revision: num(p.revision),
-    sessionPlacement: SESSION_PLACEMENT_VALUES.find((x) => x === str(p.session_placement)) ?? POOL_AFFINITY_DEFAULTS.sessionPlacement,
+    sessionPlacement: oneOf(SESSION_PLACEMENT_VALUES, p.session_placement) ?? POOL_AFFINITY_DEFAULTS.sessionPlacement,
     shedCap: num(p.shed_cap, POOL_ENGINE_DEFAULTS.shedCap),
     shedDwellSeconds: num(p.shed_dwell_seconds, POOL_ENGINE_DEFAULTS.shedDwellSeconds),
     slowDown: bool(p.slow_down, POOL_ENGINE_DEFAULTS.slowDown),
     slowDownHoldSeconds: num(p.slow_down_hold_seconds, POOL_ENGINE_DEFAULTS.slowDownHoldSeconds),
     slowDownStretchSeconds: num(p.slow_down_stretch_seconds, POOL_ENGINE_DEFAULTS.slowDownStretchSeconds),
-    status: POOL_STATUS_VALUES.find((x) => x === str(p.status)) ?? 'active',
-    strategy: POOL_STRATEGY_VALUES.find((x) => x === str(p.strategy)) ?? 'pace',
-    subagentPlacement: SUBAGENT_PLACEMENT_VALUES.find((x) => x === str(p.subagent_placement)) ?? POOL_AFFINITY_DEFAULTS.subagentPlacement,
+    status: oneOf(POOL_STATUS_VALUES, p.status) ?? 'active',
+    strategy: oneOf(POOL_STRATEGY_VALUES, p.strategy) ?? 'pace',
+    subagentPlacement: oneOf(SUBAGENT_PLACEMENT_VALUES, p.subagent_placement) ?? POOL_AFFINITY_DEFAULTS.subagentPlacement,
     traffic24h: list(p.traffic_24h).map(rec).map((b) => ({ at: isoOr(b.at, epoch), billedUsd: num(b.billed_usd), costUsd: num(b.cost_usd), equivalent: numOrNull(b.equivalent), failed: num(b.failed), requests: num(b.requests), tokens: num(b.tokens) })),
     updatedAt: isoOr(p.updated_at, epoch),
-    warmSessions: WARM_SESSIONS_VALUES.find((x) => x === str(p.warm_sessions)) ?? POOL_ENGINE_DEFAULTS.warmSessions,
+    warmSessions: oneOf(WARM_SESSIONS_VALUES, p.warm_sessions) ?? POOL_ENGINE_DEFAULTS.warmSessions,
     // An entry that is no object says nothing the dialog can draw, so it is left out rather than drawn blank.
     warnings: list(p.warnings).filter((w) => w !== null && typeof w === 'object').map(rec).map((w) => ({ code: str(w.code), fields: strings(w.fields), text: str(w.text) })),
     windDownMinutes: num(p.wind_down_minutes, POOL_ENGINE_DEFAULTS.windDownMinutes),
@@ -471,7 +475,7 @@ export function decodePool(v: unknown): Pool {
   };
 }
 
-const outcomeOf = (v: unknown): AttemptOutcome => ATTEMPT_OUTCOME_VALUES.find((o) => o === str(v)) ?? 'upstream_error';
+const outcomeOf = (v: unknown): AttemptOutcome => oneOf(ATTEMPT_OUTCOME_VALUES, v) ?? 'upstream_error';
 const missReason = (v: unknown): CacheMissReason | null => strOrNull(v);
 const attemptWindows = (v: unknown) => list(v).map(rec).flatMap((w) => { const id = windowId(str(w.id)); return id === null ? [] : [{ id, resetsAt: isoOrNull(w.resets_at), utilization: numOrNull(w.utilization) }]; });
 const usageOf = (v: unknown) => { const u = rec(v); return { cacheRead: num(u.cache_read), cacheWrite1h: num(u.cache_write_1h), cacheWrite5m: num(u.cache_write_5m), input: num(u.input), output: num(u.output), thinking: num(u.thinking), webFetch: num(u.web_fetch), webSearch: num(u.web_search) }; };
@@ -493,7 +497,7 @@ const tierOf = (v: unknown): SelectionTrace['tier'] => {
 const placementOf = (v: unknown): Placement | null => {
   if (v === null || typeof v !== 'object') return null;
   const p = rec(v);
-  const rung = PLACEMENT_RUNG_VALUES.find((r) => r === str(p.rung));
+  const rung = oneOf(PLACEMENT_RUNG_VALUES, p.rung);
   return rung === undefined ? null : { depth: num(p.depth), prefixTokens: num(p.prefix_tokens), rung };
 };
 /** A row from before the waits were recorded reads none, so its hold says it waited and not for what. */
@@ -514,19 +518,19 @@ export function decodeRequest(v: unknown): RequestLog {
   const r = rec(v);
   return {
     accountId: strOrNull(r.account_id), agentId: strOrNull(r.agent_id), agentType: strOrNull(r.agent_type), at: isoOr(r.at, epoch),
-    attempts: list(r.attempts).map(rec).map((a) => ({ accountId: str(a.account_id), accountKind: ACCOUNT_KIND_VALUES.find((k) => k === str(a.account_kind)) ?? 'oauth', cacheMissReason: missReason(a.cache_miss_reason), cooldownSet: a.cooldown_set ? { reason: str(rec(a.cooldown_set).reason), until: isoOr(rec(a.cooldown_set).until, epoch) } : null, durationMs: numOrNull(a.duration_ms), index: num(a.index) - 1, outcome: outcomeOf(a.outcome), overageInUse: typeof a.overage_in_use === 'boolean' ? a.overage_in_use : null, response: responseOf(a.response), selection: decodeSelection(a.selection), serviceTier: strOrNull(a.service_tier), startedAt: isoOr(a.started_at, epoch), tier: strOrNull(a.tier), upstreamMessageId: strOrNull(a.upstream_message_id), upstreamRequestId: strOrNull(a.upstream_request_id), upstreamStatus: numOrNull(a.upstream_status), usageBased: bool(a.usage_based), windows: attemptWindows(a.windows) })),
-    autoMode: AUTO_MODE_VALUES.find((m) => m === str(r.auto_mode)) ?? null,
+    attempts: list(r.attempts).map(rec).map((a) => ({ accountId: str(a.account_id), accountKind: accountKind(a.account_kind), cacheMissReason: missReason(a.cache_miss_reason), cooldownSet: a.cooldown_set ? { reason: str(rec(a.cooldown_set).reason), until: isoOr(rec(a.cooldown_set).until, epoch) } : null, durationMs: numOrNull(a.duration_ms), index: num(a.index) - 1, outcome: outcomeOf(a.outcome), overageInUse: typeof a.overage_in_use === 'boolean' ? a.overage_in_use : null, response: responseOf(a.response), selection: decodeSelection(a.selection), serviceTier: strOrNull(a.service_tier), startedAt: isoOr(a.started_at, epoch), tier: strOrNull(a.tier), upstreamMessageId: strOrNull(a.upstream_message_id), upstreamRequestId: strOrNull(a.upstream_request_id), upstreamStatus: numOrNull(a.upstream_status), usageBased: bool(a.usage_based), windows: attemptWindows(a.windows) })),
+    autoMode: oneOf(AUTO_MODE_VALUES, r.auto_mode) ?? null,
     canonicalModel: str(r.canonical_model), capturedBodies: bool(r.captured_bodies), classifier: r.classifier === 'client' ? 'client' : null, client: strOrNull(r.client), clientContract: strOrNull(r.client_contract), clientDrift: strOrNull(r.client_drift), compaction: strOrNull(r.compaction), contextCompacted: strOrNull(r.context_compacted),
     costEquivalent: numOrNull(r.cost_equivalent),
     costShares: r.cost_shares === null || r.cost_shares === undefined ? null : nullableNumberMap(r.cost_shares), costUsd: num(r.cost_usd),
-    diagnosticsSource: DIAGNOSTICS_SOURCE_VALUES.find((s) => s === str(r.diagnostics_source)) ?? null,
+    diagnosticsSource: oneOf(DIAGNOSTICS_SOURCE_VALUES, r.diagnostics_source) ?? null,
     durationMs: numOrNull(r.duration_ms), errorCode: strOrNull(r.error_code),
     forkDepth: numOrNull(r.fork_depth), forkedFrom: strOrNull(r.forked_from),
     guardrailId: strOrNull(r.guardrail_id), guardrails: list(r.guardrails).map(decodeGuardrailMatch),
     held: cohortHoldOf(r.held), id: str(r.id),
     keyGeneration: num(r.key_generation), keyId: strOrNull(r.key_id),
-    kind: REQUEST_KIND_VALUES.find((k) => k === str(r.kind)) ?? 'inference', model: str(r.model),
-    outcome: REQUEST_OUTCOME_VALUES.find((o) => o === str(r.outcome)) ?? 'failed',
+    kind: oneOf(REQUEST_KIND_VALUES, r.kind) ?? 'inference', model: str(r.model),
+    outcome: oneOf(REQUEST_OUTCOME_VALUES, r.outcome) ?? 'failed',
     phases: phasesOf(r.phases, isoOr(r.at, epoch)),
     poolId: strOrNull(r.pool_id), prevToolMs: numOrNull(r.prev_tool_ms), refused: r.refused === true, requestClass: strOrNull(r.request_class), responseTruncated: bool(r.response_truncated), sessionId: strOrNull(r.session_id), shape: shapeOf(r.shape), shareReason: r.share_reason === 'client_classifier' ? 'client_classifier' : null,
     status: numOrNull(r.status), tier: strOrNull(r.tier), transport: str(r.transport) === 'sse' ? 'sse' : 'json', ttfbMs: numOrNull(r.ttfb_ms), ttftMs: numOrNull(r.ttft_ms), turnOrigin: strOrNull(r.turn_origin), usage: usageOf(r.usage), userAgent: strOrNull(r.user_agent),
@@ -544,7 +548,7 @@ export function decodeStreamCut(raw: unknown): StreamCut | null {
   return { at: isoOr(c.at, epoch), attempt: num(c.attempt), bytesRelayed: num(c.bytes_relayed), code: str(c.code), text: str(c.text), upstreamRequestId: strOrNull(c.upstream_request_id) };
 }
 
-const decisionKindOf = (v: unknown): DecisionKind | undefined => DECISION_KIND_VALUES.find((k) => k === str(v));
+const decisionKindOf = (v: unknown): DecisionKind | undefined => oneOf(DECISION_KIND_VALUES, v);
 const orNull = <T,>(v: unknown, read: (r: Rec) => T): T | null => (v === null || typeof v !== 'object' ? null : read(rec(v)));
 const scoreOf = (v: unknown): Score | null => orNull(v, (s) => ({ accountId: str(s.account_id), score: num(s.score), unit: str(s.unit) }));
 /** A hold with no reason is a version 1 record's, which held for a slot alone. */
@@ -562,10 +566,10 @@ const factOf = (v: unknown): SummaryFact[] => {
   const f = rec(v);
   if (typeof f.value !== 'number' && typeof f.value !== 'string') return [];
   const entity = orNull(f.entity, (e) => {
-    const kind = FACT_ENTITY_VALUES.find((k) => k === str(e.kind));
+    const kind = oneOf(FACT_ENTITY_VALUES, e.kind);
     return kind === undefined ? null : { id: str(e.id), kind };
   });
-  return [{ entity, key: str(f.key), unit: FACT_UNIT_VALUES.find((u) => u === str(f.unit)) ?? null, value: f.value }];
+  return [{ entity, key: str(f.key), unit: oneOf(FACT_UNIT_VALUES, f.unit) ?? null, value: f.value }];
 };
 
 export function decodeDecisionSummary(v: unknown): DecisionSummary {
@@ -574,7 +578,7 @@ export function decodeDecisionSummary(v: unknown): DecisionSummary {
   return {
     type: 'decision',
     accountId: strOrNull(r.account_id), agentId: strOrNull(r.agent_id), at: isoOr(r.at, epoch), attempt: num(r.attempt, 1), attemptCount: numOrNull(r.attempt_count),
-    by: { kind: BY_KIND_VALUES.find((k) => k === str(by.kind)) ?? 'none', tier: tierOf(by.tier), value: str(by.value) },
+    by: { kind: oneOf(BY_KIND_VALUES, by.kind) ?? 'none', tier: tierOf(by.tier), value: str(by.value) },
     cache: orNull(r.cache, (c) => ({ hit: bool(c.hit), inputTokens: num(c.input_tokens), promisedTokens: numOrNull(c.promised_tokens), readTokens: num(c.read_tokens) })),
     exhaustion: exhaustionOf(r.exhaustion), fact: list(r.fact).flatMap(factOf), fast: bool(r.fast), fromAccountId: strOrNull(r.from_account_id), hold: holdOf(r.hold), keyId: strOrNull(r.key_id),
     kind: decisionKindOf(r.kind) ?? 'placed', model: strOrNull(r.model), poolId: strOrNull(r.pool_id), probe: bool(r.probe), refusal: refusalOf(r.refusal), requestId: str(r.request_id), rule: strOrNull(r.rule), rung: placementOf(r.rung),
@@ -623,7 +627,7 @@ function decodeRecordCandidate(v: unknown): RecordCandidate {
     burn: numberMap(c.burn),
     cooldowns: list(c.cooldowns).map(rec).map((x) => ({ blocking: bool(x.blocking), reason: str(x.reason), scope: str(x.scope), until: isoOr(x.until, epoch), window: str(x.window) })),
     credits: orNull(c.credits, (x) => ({ blocked: strOrNull(x.blocked), disabledReason: strOrNull(x.disabled_reason), enabled: bool(x.enabled), observedAt: isoOr(x.observed_at, epoch), utilization: numOrNull(x.utilization) })),
-    enabled: bool(c.enabled), factor: numOrNull(c.factor), fit: strOrNull(c.fit), inFlight: num(c.in_flight), inFlightCap: num(c.in_flight_cap), inOverage: bool(c.in_overage), incarnation: num(c.incarnation), kind: str(c.kind) === 'api_key' ? 'api_key' : 'oauth',
+    enabled: bool(c.enabled), factor: numOrNull(c.factor), fit: strOrNull(c.fit), inFlight: num(c.in_flight), inFlightCap: num(c.in_flight_cap), inOverage: bool(c.in_overage), incarnation: num(c.incarnation), kind: accountKind(c.kind),
     obstacle: orNull(c.obstacle, (o) => ({ name: str(o.name), reason: strOrNull(o.reason), until: isoOrNull(o.until), window: strOrNull(o.window) })),
     overage: orNull(c.overage, (o) => ({ observedAt: isoOr(o.observed_at, epoch), reset: isoOrNull(o.reset), since: isoOr(o.since, epoch), source: str(o.source) })),
     pace: orNull(c.pace, (p) => ({ burn: numOrNull(p.burn), deadline: isoOrNull(p.deadline), end: isoOrNull(p.end), hours: numOrNull(p.hours), remaining: num(p.remaining), reset: isoOrNull(p.reset), score: num(p.score), window: strOrNull(p.window) })),
@@ -701,7 +705,7 @@ export function decodeDecisionRecord(v: unknown): DecisionRecord {
       shed: orNull(p.shed, (x) => ({ at: isoOr(x.at, epoch), from: str(x.from), reason: str(x.reason, 'round') })), slowDownUntil: isoOrNull(p.slow_down_until), warmth: strOrNull(p.warmth), warmthCause: strOrNull(p.warmth_cause),
     })),
     // A word this build does not know reads as none, as a poll outcome does. The raw answer still carries it.
-    pinReason: PIN_REASON_VALUES.find((x) => x === r.pin_reason) ?? null,
+    pinReason: oneOf(PIN_REASON_VALUES, r.pin_reason) ?? null,
     raw: v,
     request: {
       agentId: str(q.agent_id), at: isoOr(q.at, epoch), attempt: num(q.attempt, 1), attempted: strings(q.attempted), bodyTokens: numOrNull(q.body_tokens), canonicalModel: str(q.canonical_model),
@@ -821,8 +825,8 @@ export function decodePlacementRow(v: unknown): PlacementRow {
 export function decodeMemberBudget(v: unknown): MemberBudget {
   const m = rec(v);
   return {
-    accountId: str(m.account_id), budgetPeriod: BUDGET_PERIOD_VALUES.find((x) => x === str(m.budget_period)) ?? 'month', budgetUsd: num(m.budget_usd),
-    kind: ACCOUNT_KIND_VALUES.find((x) => x === str(m.kind)) ?? 'oauth', periodEnd: isoOrNull(m.period_end), poolId: str(m.pool_id),
+    accountId: str(m.account_id), budgetPeriod: budgetPeriod(m.budget_period), budgetUsd: num(m.budget_usd),
+    kind: accountKind(m.kind), periodEnd: isoOrNull(m.period_end), poolId: str(m.pool_id),
     spentUsd: numOrNull(m.spent_usd),
   };
 }
@@ -887,10 +891,10 @@ export function decodeDashboard(v: unknown): Overview {
 }
 
 const companion = (v: unknown): Session['companion'] => (str(v) === 'reporting' ? 'reporting' : str(v) === 'silent' ? 'silent' : 'none');
-const agentState = (v: unknown): KeepaliveState | null => AGENT_STATE_VALUES.find((s) => s === str(v)) ?? null;
-const guardVerdict = (v: unknown): GuardVerdict | null => GUARD_VERDICT_VALUES.find((x) => x === str(v)) ?? null;
+const agentState = (v: unknown): KeepaliveState | null => oneOf(AGENT_STATE_VALUES, v) ?? null;
+const guardVerdict = (v: unknown): GuardVerdict | null => oneOf(GUARD_VERDICT_VALUES, v) ?? null;
 
-const burnUnit = (v: unknown): BurnUnit | null => BURN_UNIT_VALUES.find((u) => u === str(v)) ?? null;
+const burnUnit = (v: unknown): BurnUnit | null => oneOf(BURN_UNIT_VALUES, v) ?? null;
 
 function decodeAgentContext(v: unknown): AgentContext {
   const c = rec(v);
@@ -903,7 +907,7 @@ export function decodeSession(v: unknown): Session {
   return { accountId: strOrNull(s.account_id), agentContexts: list(s.agent_contexts).map(decodeAgentContext), agentId: strOrNull(s.agent_id), agents: num(s.agents), burn: numOrNull(s.burn), burnAt: isoOrNull(s.burn_at), burnEquivalent: numOrNull(s.burn_equivalent), burnUnit: burnUnit(s.burn_unit), burnWindow: strOrNull(s.burn_window), cacheTtlMs: numOrNull(s.cache_ttl_ms), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), cycleMs: numOrNull(s.cycle_ms), effort: strOrNull(s.effort), epoch: numOrNull(s.epoch), forkDepth: numOrNull(s.fork_depth), forkedFrom: strOrNull(s.forked_from), historical: bool(s.historical), keepalive: { cause: recipeCause(k.cause), lastGuard: guardVerdict(k.last_guard), nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastInputTokens: numOrNull(s.last_input_tokens), lastRefreshAt: isoOrNull(s.last_refresh_at), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), model: strOrNull(s.model), pinned: bool(s.pinned), presenceAgeSeconds: numOrNull(s.presence_age_seconds), requests: num(s.requests), runwayBounded: typeof s.runway_bounded === 'boolean' ? s.runway_bounded : null, runwayMs: numOrNull(s.runway_ms), sessionId: str(s.session_id), shedFrom: strOrNull(s.shed_from), shedReason: strOrNull(s.shed_reason), speed: numOrNull(s.speed) };
 }
 
-const recipeCause = (v: unknown): RecipeCause | null => RECIPE_CAUSE_VALUES.find((x) => x === str(v)) ?? null;
+const recipeCause = (v: unknown): RecipeCause | null => oneOf(RECIPE_CAUSE_VALUES, v) ?? null;
 export function decodeRecipe(v: unknown): KeepaliveRecipe {
   const r = rec(v);
   return {
@@ -919,11 +923,11 @@ export function decodeRecipe(v: unknown): KeepaliveRecipe {
     lastRequestAt: isoOrNull(r.last_request_at),
     model: str(r.model),
     nextProbeAt: isoOrNull(r.next_probe_at),
-    parkKind: PARK_KIND_VALUES.find((x) => x === str(r.park_kind)) ?? null,
+    parkKind: oneOf(PARK_KIND_VALUES, r.park_kind) ?? null,
     poolId: str(r.pool_id),
     probesToday: num(r.probes_today),
     sessionId: str(r.session_id),
-    state: RECIPE_STATE_VALUES.find((x) => x === str(r.state)) ?? 'retained',
+    state: oneOf(RECIPE_STATE_VALUES, r.state) ?? 'retained',
     ttlSeconds: num(r.ttl_seconds),
     wakeAt: isoOrNull(r.wake_at),
   };
@@ -1154,7 +1158,7 @@ export const encodePool = (i: PoolInput) => ({
 
 
 // `observe` is the route's own default for a guardrail created without a mode.
-const guardrailMode = (v: unknown): GuardrailMode => GUARDRAIL_MODE_VALUES.find((m) => m === str(v)) ?? 'observe';
+const guardrailMode = (v: unknown): GuardrailMode => oneOf(GUARDRAIL_MODE_VALUES, v) ?? 'observe';
 const byPosition = <T extends { position: number }>(rows: T[]): T[] => [...rows].sort((a, b) => a.position - b.position);
 /** A member the route leaves out where the condition takes none, never null. */
 const optional = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
@@ -1165,10 +1169,10 @@ export function decodeCondition(v: unknown): Condition {
   const selector = optional(c.selector);
   return {
     name: optional(c.name),
-    operator: CONDITION_OPERATOR_VALUES.find((o) => o === str(c.operator)) ?? CONDITION_OPERATOR_VALUES[0],
+    operator: oneOf(CONDITION_OPERATOR_VALUES, c.operator) ?? CONDITION_OPERATOR_VALUES[0],
     path: optional(c.path),
-    selector: selector === undefined ? undefined : (MESSAGE_SELECTOR_VALUES.find((s) => s === selector) ?? MESSAGE_SELECTOR_VALUES[0]),
-    subject: CONDITION_SUBJECT_VALUES.find((s) => s === str(c.subject)) ?? CONDITION_SUBJECT_VALUES[0],
+    selector: selector === undefined ? undefined : (oneOf(MESSAGE_SELECTOR_VALUES, selector) ?? MESSAGE_SELECTOR_VALUES[0]),
+    subject: oneOf(CONDITION_SUBJECT_VALUES, c.subject) ?? CONDITION_SUBJECT_VALUES[0],
     value: optional(c.value),
   };
 }
@@ -1235,7 +1239,7 @@ export function decodeGuardrailTest(v: unknown): GuardrailTestResult {
     requests: list(t.requests)
       .map(rec)
       // A verdict this build does not know claims neither a match nor a miss.
-      .map((r) => ({ condition: numOrNull(r.condition), id: str(r.id), receivedAt: isoOr(r.received_at, epoch), verdict: TEST_VERDICT_VALUES.find((x) => x === str(r.verdict)) ?? 'indeterminate' })),
+      .map((r) => ({ condition: numOrNull(r.condition), id: str(r.id), receivedAt: isoOr(r.received_at, epoch), verdict: oneOf(TEST_VERDICT_VALUES, r.verdict) ?? 'indeterminate' })),
     // The route writes the side it sampled and leaves the other out.
     sample: { keyId: strOrNull(sample.key_id), limit: num(sample.limit), poolId: strOrNull(sample.pool_id), windowHours: num(sample.window_hours) },
     totals: { indeterminate: num(totals.indeterminate), matched: num(totals.matched), sampled: num(totals.sampled), unmatched: num(totals.unmatched) },
