@@ -41,7 +41,6 @@ impl Pool {
     pub async fn checkout(
         &self,
         key: PoolKey,
-        host: &str,
         addr: SocketAddr,
     ) -> Result<(Conn, bool), TransportError> {
         let reused = {
@@ -58,7 +57,7 @@ impl Pool {
         if let Some(c) = reused {
             return Ok((c, true));
         }
-        connect_tls(&self.connector, host, addr)
+        connect_tls(&self.connector, &key.host, addr)
             .await
             .map(|c| (c, false))
     }

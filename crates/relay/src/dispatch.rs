@@ -65,7 +65,6 @@ pub(crate) async fn attempt(
     relay: &Relay,
     request: &RawRequest,
     key: &PoolKey,
-    host: &str,
     addr: SocketAddr,
     fresh: bool,
     cancel: &CancellationToken,
@@ -77,11 +76,11 @@ pub(crate) async fn attempt(
     let once = async {
         let checkout = async {
             let (conn, reused) = if fresh {
-                (checkout_fresh(&relay.pool, key, host, addr).await?, false)
+                (checkout_fresh(&relay.pool, key, addr).await?, false)
             } else {
                 relay
                     .pool
-                    .checkout(key.clone(), host, addr)
+                    .checkout(key.clone(), addr)
                     .await
                     .map_err(unsent)?
             };
@@ -170,14 +169,10 @@ async fn send_and_read<C: AsyncRead + AsyncWrite + Unpin>(
 async fn checkout_fresh(
     pool: &Pool,
     key: &PoolKey,
-    host: &str,
     addr: SocketAddr,
 ) -> Result<Conn, AttemptFailure> {
     loop {
-        let (conn, reused) = pool
-            .checkout(key.clone(), host, addr)
-            .await
-            .map_err(unsent)?;
+        let (conn, reused) = pool.checkout(key.clone(), addr).await.map_err(unsent)?;
         if !reused {
             return Ok(conn);
         }

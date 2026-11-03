@@ -3036,9 +3036,7 @@ impl Relay {
                 body: Bytes::from(wire_body),
             };
             let dispatched =
-                match dispatch::attempt(self, &request, &pool_key, authority, addr, fresh, cancel)
-                    .await
-                {
+                match dispatch::attempt(self, &request, &pool_key, addr, fresh, cancel).await {
                     Err(failure) => Err(failure),
                     Ok(sent) => Ok(self
                         .respond(
