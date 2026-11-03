@@ -117,39 +117,24 @@ impl Usage {
     /// shape, and a delta repeats that total for an answer whose start already gave the split, so the split
     /// stands or a 1-hour write would be counted a second time as a 5-minute one.
     pub fn merge(&mut self, later: &Usage) {
-        if later.input_tokens.is_some() {
-            self.input_tokens = later.input_tokens;
-        }
-        if later.output_tokens.is_some() {
-            self.output_tokens = later.output_tokens;
-        }
-        if later.cache_read_tokens.is_some() {
-            self.cache_read_tokens = later.cache_read_tokens;
-        }
+        overlay(&mut self.input_tokens, &later.input_tokens);
+        overlay(&mut self.output_tokens, &later.output_tokens);
+        overlay(&mut self.cache_read_tokens, &later.cache_read_tokens);
         let bare_total = later.cache_write_1h_tokens.is_none();
         if later.cache_write_5m_tokens.is_some()
             && !(bare_total && self.cache_write_1h_tokens.is_some())
         {
             self.cache_write_5m_tokens = later.cache_write_5m_tokens;
         }
-        if later.cache_write_1h_tokens.is_some() {
-            self.cache_write_1h_tokens = later.cache_write_1h_tokens;
-        }
-        if later.thinking_tokens.is_some() {
-            self.thinking_tokens = later.thinking_tokens;
-        }
-        if later.web_search_requests.is_some() {
-            self.web_search_requests = later.web_search_requests;
-        }
-        if later.web_fetch_requests.is_some() {
-            self.web_fetch_requests = later.web_fetch_requests;
-        }
-        if later.service_tier.is_some() {
-            self.service_tier = later.service_tier.clone();
-        }
-        if later.cache_miss_reason.is_some() {
-            self.cache_miss_reason = later.cache_miss_reason.clone();
-        }
+        overlay(
+            &mut self.cache_write_1h_tokens,
+            &later.cache_write_1h_tokens,
+        );
+        overlay(&mut self.thinking_tokens, &later.thinking_tokens);
+        overlay(&mut self.web_search_requests, &later.web_search_requests);
+        overlay(&mut self.web_fetch_requests, &later.web_fetch_requests);
+        overlay(&mut self.service_tier, &later.service_tier);
+        overlay(&mut self.cache_miss_reason, &later.cache_miss_reason);
     }
 
     pub fn is_empty(&self) -> bool {
@@ -178,34 +163,29 @@ impl ResponseFacts {
     /// A later read replaces an earlier one member by member, as `Usage::merge` does: `message_delta` names the
     /// stop that `message_start` could not, and neither unsays what the other already told.
     pub fn merge(&mut self, later: &ResponseFacts) {
-        if later.stop_reason.is_some() {
-            self.stop_reason = later.stop_reason.clone();
-        }
-        if later.stop_sequence.is_some() {
-            self.stop_sequence = later.stop_sequence.clone();
-        }
-        if later.model.is_some() {
-            self.model = later.model.clone();
-        }
-        if later.speed.is_some() {
-            self.speed = later.speed.clone();
-        }
-        if later.inference_geo.is_some() {
-            self.inference_geo = later.inference_geo.clone();
-        }
-        if later.cleared_input_tokens.is_some() {
-            self.cleared_input_tokens = later.cleared_input_tokens;
-        }
-        if later.refusal_category.is_some() {
-            self.refusal_category = later.refusal_category.clone();
-        }
-        if later.refusal_recommended_model.is_some() {
-            self.refusal_recommended_model = later.refusal_recommended_model.clone();
-        }
+        overlay(&mut self.stop_reason, &later.stop_reason);
+        overlay(&mut self.stop_sequence, &later.stop_sequence);
+        overlay(&mut self.model, &later.model);
+        overlay(&mut self.speed, &later.speed);
+        overlay(&mut self.inference_geo, &later.inference_geo);
+        overlay(&mut self.cleared_input_tokens, &later.cleared_input_tokens);
+        overlay(&mut self.refusal_category, &later.refusal_category);
+        overlay(
+            &mut self.refusal_recommended_model,
+            &later.refusal_recommended_model,
+        );
     }
 
     pub fn is_empty(&self) -> bool {
         *self == ResponseFacts::default()
+    }
+}
+
+/// The later-wins rule both merges apply member by member: a later value replaces the earlier one, and a member the
+/// later read left out keeps what the earlier one said.
+fn overlay<T: Clone>(earlier: &mut Option<T>, later: &Option<T>) {
+    if later.is_some() {
+        earlier.clone_from(later);
     }
 }
 
