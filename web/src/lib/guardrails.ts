@@ -11,15 +11,25 @@ const PATH_MAX_SEGMENTS = 32;
 /** The ids of the routes beside `GET /admin/guardrails/{id}`, which no guardrail can take. */
 const RESERVED_IDS: readonly string[] = ['presets', 'test'];
 
+/** The two words a `kind` condition compares against, as the route spells them. */
+export const KIND_VALUES: { label: string; value: string }[] = [
+  { label: 'Count tokens', value: 'count_tokens' },
+  { label: 'Inference', value: 'inference' },
+];
+
 /**
  * A subject's words: the extra cell it takes (a header name, a body path, a message selector or none) and the operators
- * it offers in the route's order, the first of which a subject change resets the row to.
+ * it offers in the route's order, the first of which a subject change resets the row to. A subject that compares
+ * against a closed set of words names them in `values`, which the row draws as a select, and the word a row moved to
+ * it starts on in `defaultValue`.
  */
 export interface SubjectWords {
   cell: 'header' | 'none' | 'path' | 'selector';
+  defaultValue?: string;
   label: string;
   operators: ConditionOperator[];
   value: ConditionSubject;
+  values?: { label: string; value: string }[];
 }
 
 export const SUBJECTS: SubjectWords[] = [
@@ -27,7 +37,7 @@ export const SUBJECTS: SubjectWords[] = [
   { cell: 'path', label: 'Body', operators: ['absent', 'equals', 'gt', 'lt', 'matches', 'present'], value: 'body' },
   { cell: 'none', label: 'Client', operators: ['equals', 'matches'], value: 'client' },
   { cell: 'header', label: 'Header', operators: ['absent', 'equals', 'matches', 'present'], value: 'header' },
-  { cell: 'none', label: 'Kind', operators: ['equals'], value: 'kind' },
+  { cell: 'none', defaultValue: 'inference', label: 'Kind', operators: ['equals'], value: 'kind', values: KIND_VALUES },
   // The regex runs over the selected entries' text blocks, and no other test reads a message.
   { cell: 'selector', label: 'Message', operators: ['matches'], value: 'message' },
   { cell: 'none', label: 'Model', operators: ['equals', 'matches'], value: 'model' },
@@ -55,12 +65,6 @@ export const SELECTOR_LABEL: Record<MessageSelector, string> = {
   last_assistant: 'last assistant message',
   last_user: 'last user message',
 };
-
-/** The two words a `kind` condition compares against, as the route spells them. */
-export const KIND_VALUES: { label: string; value: string }[] = [
-  { label: 'Count tokens', value: 'count_tokens' },
-  { label: 'Inference', value: 'inference' },
-];
 
 /** Whether the operator compares against a value, so the row draws the value cell. */
 export const takesValue = (operator: ConditionOperator): boolean => operator !== 'absent' && operator !== 'present';

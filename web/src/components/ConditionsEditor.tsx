@@ -2,20 +2,19 @@ import { useId } from 'react';
 import type { Condition, ConditionSubject, MessageSelector } from '@/api/types';
 import { IconPlus } from '@/components/ui/icons';
 import { Button, Input, RowActions, Select } from '@/components/ui/primitives';
-import { KIND_VALUES, MAX_CONDITIONS, OPERATOR_LABEL, SELECTOR_LABEL, SUBJECTS, subjectOf, takesValue } from '@/lib/guardrails';
+import { MAX_CONDITIONS, OPERATOR_LABEL, SELECTOR_LABEL, SUBJECTS, subjectOf, takesValue } from '@/lib/guardrails';
 import { useKeyedRows } from '@/lib/hooks';
 
 const SELECTORS = Object.keys(SELECTOR_LABEL) as MessageSelector[];
-const KIND_WORDS = KIND_VALUES.map((k) => k.value);
 
 /**
  * A row moved to `subject`: the operator back to the subject's first, and every cell the subject or that operator does
- * not take cleared. A `kind` row compares against one of its two words, so it starts on Inference.
+ * not take cleared. A subject with a closed set of words keeps a value among them and starts any other on its default.
  */
 function withSubject(c: Condition, subject: ConditionSubject): Condition {
   const words = subjectOf(subject);
   const operator = words.operators[0];
-  const value = !takesValue(operator) ? undefined : subject === 'kind' ? (KIND_WORDS.includes(c.value ?? '') ? c.value : 'inference') : c.value;
+  const value = !takesValue(operator) ? undefined : words.values === undefined || words.values.some((v) => v.value === c.value) ? c.value : words.defaultValue;
   return {
     name: words.cell === 'header' ? c.name : undefined,
     operator,
@@ -87,9 +86,9 @@ export function ConditionsEditor({ onChange, refusals, value }: { onChange: (c: 
                     ))}
                   </Select>
                   {takesValue(c.operator) &&
-                    (c.subject === 'kind' ? (
+                    (words.values ? (
                       <Select aria-label={`Condition ${n} value`} value={c.value ?? ''} onChange={(e) => update(i, { ...c, value: e.target.value })}>
-                        {KIND_VALUES.map((k) => (
+                        {words.values.map((k) => (
                           <option key={k.value} value={k.value}>
                             {k.label}
                           </option>
