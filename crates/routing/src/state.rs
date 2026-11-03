@@ -792,14 +792,14 @@ impl RateTable {
     /// Each count times its rate at the set `prompt_tokens` select, summed; `None` when a type with a count has no
     /// rate.
     pub fn price(&self, canonical_model: &str, usage: PinUsage, prompt_tokens: u64) -> Option<f64> {
-        let rates = self.rates_for(canonical_model, prompt_tokens);
-        Some(
-            priced(usage.input as f64, rates.input)?
-                + priced(usage.cache_read as f64, rates.cache_read)?
-                + priced(usage.write_5m as f64, rates.write_5m)?
-                + priced(usage.write_1h as f64, rates.write_1h)?
-                + priced(usage.output as f64, rates.output)?,
-        )
+        let burn = PinBurn {
+            input: usage.input as f64,
+            cache_read: usage.cache_read as f64,
+            write_5m: usage.write_5m as f64,
+            write_1h: usage.write_1h as f64,
+            output: usage.output as f64,
+        };
+        self.price_burn(canonical_model, &burn, prompt_tokens)
     }
 }
 
