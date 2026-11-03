@@ -193,8 +193,6 @@ mod tests {
         );
     }
 
-    /// A pattern of many stars against a value that cannot match is where a split-per-star matcher goes
-    /// exponential; the two-cursor walk answers in `pattern * value` steps at most.
     #[test]
     fn a_multi_byte_character_is_one_character_under_a_mark_a_star_and_a_quote() {
         assert!(
@@ -208,6 +206,8 @@ mod tests {
         assert!(matches("\\é?", "éx"), "a quoted two-byte character is one");
     }
 
+    /// A pattern of many stars against a value that cannot match is where a split-per-star matcher goes
+    /// exponential; the two-cursor walk answers in `pattern * value` steps at most.
     #[test]
     fn a_failing_pattern_of_many_stars_answers_in_bounded_steps() {
         let pattern = "*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*b";
