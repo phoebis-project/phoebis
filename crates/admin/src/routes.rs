@@ -1450,12 +1450,10 @@ async fn pairing_confirm(
                         &state,
                         "that upstream account is already paired to another slot",
                     ),
-                    // The start's read found no row and a create landed since, so a row standing under the id
+                    // The start's read found no row and a create landed since, so the row standing under the id
                     // belongs to that create, untouched and without a credential.
-                    other => match state.store.account(&row.id) {
-                        Ok(Some(_)) => conflict(&state, accounts::DUPLICATE_ID),
-                        _ => unstored(&state, other),
-                    },
+                    StoreError::IdTaken(_) => conflict(&state, accounts::DUPLICATE_ID),
+                    other => unstored(&state, other),
                 };
             }
             (row, true)

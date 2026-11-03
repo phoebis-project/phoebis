@@ -187,17 +187,15 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
             return refusal;
         }
     }
-    if let Err(error) = state
+    match state
         .store
         .create_account(&row, secret.as_ref(), now, ACTOR)
     {
+        Ok(()) => {}
         // The check above is a read, and discovery runs between it and this insert, so a creation that lost a
-        // race for the id arrives here as the store's unique constraint. The insert is one transaction, so a
-        // row standing under that id now belongs to the winner rather than to a half-written attempt.
-        return match state.store.account(&row.id) {
-            Ok(Some(_)) => failure(StatusCode::CONFLICT, DUPLICATE_ID),
-            _ => store_failure(error),
-        };
+        // race for the id arrives here.
+        Err(StoreError::IdTaken(_)) => return failure(StatusCode::CONFLICT, DUPLICATE_ID),
+        Err(error) => return store_failure(error),
     }
     state.catalog.evict(&row.id);
     // The row exists from here on, so every answer, a refusal included, names it to the mutation log.

@@ -175,7 +175,9 @@ interactive reference page on the admin listener ([API reference](api-reference.
 `has_extra_usage_enabled` reads the stored profile's `organization` member, as its rate-limit tier does ([API
 reference](api-reference.md)). The account create and edit refuse a body that is not a JSON object with
 `body must be a JSON object`, and the pool members route answers `body must carry a members list` to an object without
-one ([API reference](api-reference.md)). The Dashboard, Guardrails, Pools and Settings views fit a 360 px window with no
+one ([API reference](api-reference.md)). A key or pool create that loses the race for its id to another create answers
+the route's 409 for a taken id, as the account create and the pairing confirm do ([API reference](api-reference.md)).
+The Dashboard, Guardrails, Pools and Settings views fit a 360 px window with no
 horizontal scroll ([Dashboard](console.md#dashboard), [Guardrails](console.md#guardrails), [Pools](console.md#pools),
 [Settings](console.md#settings)). The Dashboard's account cards and the Accounts list read
 `No window since the plan ended {ago}` on an account whose plan ended ([Dashboard](console.md#dashboard),

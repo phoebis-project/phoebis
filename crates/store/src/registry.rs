@@ -587,6 +587,37 @@ pub(crate) fn record_change(
     Ok(())
 }
 
+fn row_exists(conn: &rusqlite::Connection, table: &str, id: &str) -> Result<bool, StoreError> {
+    Ok(conn.query_row(
+        &format!("SELECT COUNT(*) FROM {table} WHERE id = ?1"),
+        params![id],
+        |r| r.get::<_, i64>(0),
+    )? > 0)
+}
+
+fn is_constraint(error: &rusqlite::Error) -> bool {
+    matches!(error, rusqlite::Error::SqliteFailure(failure, _)
+        if failure.code == rusqlite::ErrorCode::ConstraintViolation)
+}
+
+/// A create's refused insert as its caller reads it: `IdTaken` when a constraint refused the row and a row stands
+/// under its id, since the route's own check reads outside the transaction and another create can land between.
+fn create_failure(
+    tx: &Transaction<'_>,
+    table: &str,
+    id: &str,
+    error: rusqlite::Error,
+) -> StoreError {
+    if !is_constraint(&error) {
+        return error.into();
+    }
+    match row_exists(tx, table, id) {
+        Ok(true) => StoreError::IdTaken(id.to_string()),
+        Ok(false) => error.into(),
+        Err(probe) => probe,
+    }
+}
+
 /// The stamp a fenced row takes on its next write: one past `previous` when the clock has not moved, so a write
 /// inside the millisecond of the stamp it fenced on still moves it, and an edit read before it cannot pass.
 fn stamp_past(now: i64, previous: i64) -> i64 {
@@ -786,7 +817,8 @@ impl Store {
                 now,
                 incarnation as i64
             ],
-        )?;
+        )
+        .map_err(|error| create_failure(&tx, "pools", &row.id, error))?;
         record_change(&tx, now, actor, "pool_created", &row.id, &pool_diff(row))?;
         if let Some(members) = members {
             set_pool_members_in(&tx, &row.id, members, now, actor)?;
@@ -1087,7 +1119,8 @@ impl Store {
                 now,
                 incarnation as i64
             ],
-        )?;
+        )
+        .map_err(|error| create_failure(&tx, "api_keys", &row.id, error))?;
         record_change(&tx, now, actor, "key_created", &row.id, &key_diff(row))?;
         let written = tx.query_row(
             &format!("{KEY_SELECT} WHERE id = ?1"),
@@ -1335,7 +1368,8 @@ impl Store {
                 crate::accounts::next_incarnation(&tx, &row.id)? as i64,
                 row.state_cause,
             ],
-        )?;
+        )
+        .map_err(|error| create_failure(&tx, "accounts", &row.id, error))?;
         if let Some(secret) = secret {
             store_api_key_secret(&tx, &self.key, &row.id, secret)?;
         }
@@ -1358,8 +1392,7 @@ impl Store {
     /// A row born paired: the account with its identity, state and profile, the credential bundle at its first
     /// generation, the pairing's resolved attempt and the change record, in one transaction, so a confirm that
     /// cannot write the row leaves no credential and one that cannot write the credential leaves no row. A
-    /// constraint violation on the row is `IdentityTaken` when no row holds `row.id`. The caller re-reads the id
-    /// to tell a taken id apart, as `create` does.
+    /// constraint violation on the row is `IdTaken` when a row holds `row.id`, and `IdentityTaken` when none does.
     pub fn create_paired_account(
         &self,
         row: &AccountRow,
@@ -1401,23 +1434,13 @@ impl Store {
                 at,
             ],
         );
-        if let Err(rusqlite::Error::SqliteFailure(failure, _)) = &inserted {
-            // The primary key or the identity index: the caller tells a taken id apart by reading the row, so only
-            // the identity's violation is named here.
-            if failure.code == rusqlite::ErrorCode::ConstraintViolation {
-                let held: Option<i64> = tx
-                    .query_row(
-                        "SELECT 1 FROM accounts WHERE id = ?1",
-                        params![row.id],
-                        |r| r.get(0),
-                    )
-                    .optional()?;
-                if held.is_none() {
-                    return Err(StoreError::IdentityTaken);
-                }
-            }
+        if let Err(error) = inserted {
+            return Err(match create_failure(&tx, "accounts", &row.id, error) {
+                // The primary key or the identity index, and with no row under the id it is the identity's.
+                StoreError::Sqlite(error) if is_constraint(&error) => StoreError::IdentityTaken,
+                other => other,
+            });
         }
-        inserted?;
         let generation = self.commit_credentials_in(
             &tx,
             &row.id,

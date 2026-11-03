@@ -768,6 +768,10 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
                 &format!("account {account_id} is a member of pool {pool_id}"),
             )
         }
+        // The check above reads outside the insert, so a create that lost the race for the id arrives here.
+        Err(StoreError::IdTaken(_)) => {
+            return failure(StatusCode::CONFLICT, "a pool with this id exists")
+        }
         Err(error) => return store_failure(error),
     }
     // The row exists from here on, so every answer, a refusal included, names it to the mutation log.

@@ -177,6 +177,9 @@ pub enum StoreError {
     GuardrailNotFound(String),
     #[error("another account already holds this identity")]
     IdentityTaken,
+    /// A create's insert met a row already standing under its id: another create won the race for it.
+    #[error("{0} is already taken")]
+    IdTaken(String),
     #[error("storage key file must hold exactly 32 raw bytes or 64 hex characters, with at most one trailing newline")]
     InvalidKey,
     #[error(transparent)]

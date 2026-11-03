@@ -1010,6 +1010,49 @@ fn two_slots_cannot_bind_one_upstream_account() {
 }
 
 #[test]
+fn an_account_created_under_a_held_id_answers_id_taken() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let row = account("a", AccountKind::Oauth);
+    store.create_account(&row, None, 1, "admin").unwrap();
+    let error = store.create_account(&row, None, 2, "admin").unwrap_err();
+    assert!(
+        matches!(&error, StoreError::IdTaken(id) if id == "a"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_key_created_under_a_held_id_answers_id_taken() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.insert_pool(&pool("main"), "test").unwrap();
+    store
+        .insert_api_key(&key(&store, "k", "main", "phoebis-first"), "test")
+        .unwrap();
+    let error = store
+        .insert_api_key(&key(&store, "k", "main", "phoebis-second"), "test")
+        .unwrap_err();
+    assert!(
+        matches!(&error, StoreError::IdTaken(id) if id == "k"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_pool_created_under_a_held_id_answers_id_taken() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store
+        .insert_pool_with_members(&pool("main"), None, "test")
+        .unwrap();
+    let error = store
+        .insert_pool_with_members(&pool("main"), None, "test")
+        .unwrap_err();
+    assert!(
+        matches!(&error, StoreError::IdTaken(id) if id == "main"),
+        "{error:?}"
+    );
+}
+
+#[test]
 fn pools_members_and_keys_round_trip_and_a_pool_with_keys_cannot_be_deleted() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     store
@@ -2583,8 +2626,8 @@ fn a_paired_account_is_born_ready_with_its_credential_attempt_and_change_in_one_
         "admin",
     );
     assert!(
-        matches!(same_id, Err(StoreError::Sqlite(_))),
-        "a taken id answers the constraint itself: {same_id:?}"
+        matches!(&same_id, Err(StoreError::IdTaken(id)) if id == "fresh"),
+        "a taken id answers as one: {same_id:?}"
     );
     let same_identity = store.create_paired_account(
         &paired_row("second", "00000000-0000-4000-8000-000000000001"),
