@@ -16,8 +16,8 @@ use phoebis_guardrails::{
 };
 use phoebis_ledger::{guardrail_sample_page, request_body, SampleSubject};
 use phoebis_store::{
-    stamp_token, AttachmentSubject, GuardrailRow, RegistryLoad, StoreError, SubjectKind,
-    GUARDRAIL_BOUND,
+    stamp_token, AttachmentSubject, GuardrailRow, PresetStamp, RegistryLoad, StoreError,
+    SubjectKind, GUARDRAIL_BOUND,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -407,9 +407,8 @@ pub(crate) fn guardrail_json(row: &GuardrailRow, index: &AttachmentIndex) -> Gua
 
 /// `customized` is the stored conditions against `Preset::at(id, version)`'s, `current_version` the table's highest.
 fn preset_state(row: &GuardrailRow) -> Option<GuardrailPresetState> {
-    let (Some(id), Some(version)) = (&row.preset_id, row.preset_version) else {
-        return None;
-    };
+    let PresetStamp { id, version } = row.preset.as_ref()?;
+    let version = *version;
     let (current_version, customized) = match Preset::current(id) {
         Some(current) => (
             current.version,
@@ -682,8 +681,10 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         mode: preset.map_or(GuardrailMode::Observe, |preset| preset.suggested_mode),
         action: GuardrailAction::Block,
         conditions: Vec::new(),
-        preset_id: preset.map(|preset| preset.id.to_string()),
-        preset_version: preset.map(|preset| preset.version),
+        preset: preset.map(|preset| PresetStamp {
+            id: preset.id.to_string(),
+            version: preset.version,
+        }),
         incarnation: 1,
         created_at: now,
         updated_at: now,
@@ -1042,16 +1043,16 @@ pub(crate) async fn patch(
         return failure(StatusCode::BAD_REQUEST, "preset applies on create");
     }
     if let Some(version) = input.preset_version {
-        let Some(preset_id) = &row.preset_id else {
+        let Some(stamp) = row.preset.as_mut() else {
             return failure(StatusCode::BAD_REQUEST, "guardrail has no preset");
         };
-        if Preset::at(preset_id, version).is_none() {
+        if Preset::at(&stamp.id, version).is_none() {
             return failure(
                 StatusCode::BAD_REQUEST,
-                &format!("preset_version is not a shipped version of {preset_id}"),
+                &format!("preset_version is not a shipped version of {}", stamp.id),
             );
         }
-        row.preset_version = Some(version);
+        stamp.version = version;
     }
     if let Err(refusal) = apply(&mut row, &input) {
         return refusal;

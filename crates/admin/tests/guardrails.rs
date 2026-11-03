@@ -12,7 +12,7 @@ use axum::Router;
 use common::{admin_parts_full, delete, get, json, login, patch, post, Captured, Full};
 use phoebis_guardrails::{Condition, GuardrailAction, GuardrailMode, Preset};
 use phoebis_ledger::{BodyRecord, RequestRecord};
-use phoebis_store::GuardrailRow;
+use phoebis_store::{GuardrailRow, PresetStamp};
 use serde_json::{json as j, Value};
 
 const STALE_EDIT: &str = "the guardrail changed while it was being edited, so reload and try again";
@@ -61,8 +61,10 @@ fn stamped_row(id: &str, preset: &str, version: u32) -> GuardrailRow {
         mode: GuardrailMode::Observe,
         action: GuardrailAction::Block,
         conditions: summary().conditions.clone(),
-        preset_id: Some(preset.into()),
-        preset_version: Some(version),
+        preset: Some(PresetStamp {
+            id: preset.into(),
+            version,
+        }),
         incarnation: 1,
         created_at: common::NOW,
         updated_at: common::NOW,

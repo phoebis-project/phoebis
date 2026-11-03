@@ -4,8 +4,9 @@ use phoebis_store::{
     Affinity, AffinityChain, AffinityMode, ApiKeyRow, AttachmentSubject, BudgetPeriod, CanaryRead,
     Failover, GuardrailAttachment, GuardrailRow, Identity, MemberWrite, MemoryKey, MemoryRecord,
     MemoryStore, ModelRule, NewBundle, OveragePolicy, PinBurn, PinMark, PinRow, PoolRow,
-    ReturnToPlan, RulesMode, Secret, SessionPlacement, SlowDown, StateCause, StorageKey, Store,
-    StoreError, Strategy, SubagentPlacement, SubscriptionRow, WarmSessions, WindowRow,
+    PresetStamp, ReturnToPlan, RulesMode, Secret, SessionPlacement, SlowDown, StateCause,
+    StorageKey, Store, StoreError, Strategy, SubagentPlacement, SubscriptionRow, WarmSessions,
+    WindowRow,
 };
 
 fn account(id: &str, kind: AccountKind) -> AccountRow {
@@ -3558,8 +3559,7 @@ fn guardrail(id: &str, conditions: Option<Vec<Condition>>) -> GuardrailRow {
                 selector: None,
             }]
         }),
-        preset_id: None,
-        preset_version: None,
+        preset: None,
         incarnation: 1,
         created_at: 0,
         updated_at: 0,
@@ -3619,8 +3619,10 @@ fn a_guardrail_round_trips_with_its_conditions_mode_and_preset_stamp() {
     let row = GuardrailRow {
         description: "the summary fork".into(),
         mode: GuardrailMode::Enforce,
-        preset_id: Some("subagent-status-summary".into()),
-        preset_version: Some(1),
+        preset: Some(PresetStamp {
+            id: "subagent-status-summary".into(),
+            version: 1,
+        }),
         ..guardrail(
             "g1",
             Some(vec![

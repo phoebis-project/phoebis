@@ -355,14 +355,20 @@ pub struct GuardrailRow {
     pub conditions: Vec<Condition>,
     /// The preset the row was created from with its version, so the console can tell an older copy from the
     /// version the binary ships.
-    pub preset_id: Option<String>,
-    pub preset_version: Option<u32>,
+    pub preset: Option<PresetStamp>,
     /// How many times this id has held a guardrail. A deletion leaves the count behind in a tombstone and a
     /// guardrail created again under the id starts one above it, so an edit read from the deleted row cannot land
     /// on its replacement.
     pub incarnation: u64,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+/// The preset a guardrail was created from and the preset's version its conditions were copied at, set together.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PresetStamp {
+    pub id: String,
+    pub version: u32,
 }
 
 /// What a guardrail is attached to. One table holds both kinds under a kind word, since a pool's list and a key's
@@ -1533,8 +1539,8 @@ impl Store {
                 row.mode.as_str(),
                 row.action.as_str(),
                 serde_json::to_string(&row.conditions)?,
-                row.preset_id,
-                row.preset_version,
+                row.preset.as_ref().map(|preset| preset.id.as_str()),
+                row.preset.as_ref().map(|preset| preset.version),
                 incarnation as i64,
                 now
             ],
@@ -1595,8 +1601,8 @@ impl Store {
                 row.mode.as_str(),
                 row.action.as_str(),
                 serde_json::to_string(&row.conditions)?,
-                row.preset_id,
-                row.preset_version,
+                row.preset.as_ref().map(|preset| preset.id.as_str()),
+                row.preset.as_ref().map(|preset| preset.version),
                 at,
                 expected_updated_at,
                 row.incarnation as i64
@@ -2102,8 +2108,10 @@ fn row_to_guardrail(r: &rusqlite::Row<'_>) -> rusqlite::Result<GuardrailRow> {
         mode: GuardrailMode::parse(&mode).ok_or_else(|| unknown_word(4, &mode))?,
         action: GuardrailAction::parse(&action).ok_or_else(|| unknown_word(5, &action))?,
         conditions: json_column(r, 6)?,
-        preset_id: r.get(7)?,
-        preset_version: r.get(8)?,
+        preset: r
+            .get::<_, Option<String>>(7)?
+            .zip(r.get::<_, Option<u32>>(8)?)
+            .map(|(id, version)| PresetStamp { id, version }),
         incarnation: r.get::<_, i64>(9)? as u64,
         created_at: r.get(10)?,
         updated_at: r.get(11)?,
@@ -2280,8 +2288,8 @@ fn guardrail_fields(row: &GuardrailRow, pools: &[String], keys: &[String]) -> se
         "mode": row.mode.as_str(),
         "action": row.action.as_str(),
         "conditions": row.conditions,
-        "preset_id": row.preset_id,
-        "preset_version": row.preset_version,
+        "preset_id": row.preset.as_ref().map(|preset| &preset.id),
+        "preset_version": row.preset.as_ref().map(|preset| preset.version),
         "pools": pools,
         "keys": keys,
     })
