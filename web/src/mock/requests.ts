@@ -19,7 +19,7 @@ import { leadOf } from './lead';
 import { keyById, poolById, type PoolSeed } from './pools';
 import { createRng, type Rng } from './rng';
 import { ACCOUNT_ROLLUP_SAMPLE, REQUEST_SAMPLE, TABLES } from './samples';
-import { DAY, DELETED_HOLDER_END, HOUR, MINUTE, NOW, daysAgo, iso, startOfHour } from './time';
+import { DAY, DELETED_HOLDER_END, HOUR, MINUTE, NOW, clock, daysAgo, iso, startOfHour } from './time';
 
 const rng = createRng(7_331);
 // The upstream's own ids draw from a stream of their own, so they move no draw of the rows.
@@ -280,12 +280,6 @@ function sourceOf(attempts: Attempt[], keyId: string): DiagnosticsSource | null 
   if (reason === null || reason === 'not_requested') return null;
   return keyId === 'laptop' ? 'router' : 'client';
 }
-
-/**
- * The story's wall-clock time on its pinned day, 2026-09-16 at 14:30 UTC, as an offset from the instant the mock loads
- * at, so every story fact holds at whichever clock the mock is loaded at.
- */
-export const clock = (h: number, m: number, s = 0): number => NOW - ((14 - h) * HOUR + (30 - m) * MINUTE - s * 1_000);
 
 /**
  * The story's own readings of a window where the walk back's even climb would not tell it, per account and window.

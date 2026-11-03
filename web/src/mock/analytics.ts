@@ -13,11 +13,10 @@ import { matchesPattern } from '@/lib/pattern';
 import { endOf } from '@/lib/quota';
 import { ACCOUNTS, sharedWindowsOf } from './accounts';
 import { keyById } from './pools';
-import { clock } from './requests';
 import { createRng } from './rng';
 import type { EventSeed } from './routingLog';
 import { TABLES } from './samples';
-import { DAY, HOUR, MINUTE, NOW, iso } from './time';
+import { DAY, HOUR, MINUTE, NOW, clock, iso } from './time';
 
 /**
  * One hour of one lane of the fixture ledger. The admin routes answer buckets and groups rather than rows,

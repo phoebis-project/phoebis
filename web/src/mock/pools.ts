@@ -3,7 +3,7 @@ import type { AccountKind, ApiKey, BudgetPeriod, CacheTtl, Pool, PoolCacheTtl, P
 import { endOf } from '@/lib/quota';
 import { accountById } from './accounts';
 import { KEY_SAMPLE, POOL_SAMPLE } from './samples';
-import { DAY, DELETED_HOLDER_END, HOUR, MINUTE, NOW, ago, ahead, daysAgo, iso } from './time';
+import { DAY, DELETED_HOLDER_END, HOUR, MINUTE, NOW, ago, ahead, clock, daysAgo, iso } from './time';
 
 /**
  * A member as the story seeds it. The mock reads its kind, its eligibility, its burn, its Pace score and its speed off
@@ -50,7 +50,7 @@ function periodEndAfter(period: BudgetPeriod, now: number): string {
 }
 
 /** The instant the ci key was revoked, on the story's pinned day at 14:17:30. */
-export const KEY_REVOKED_AT = NOW - (12 * MINUTE + 30_000);
+export const KEY_REVOKED_AT = clock(14, 17, 30);
 
 type Resolved = NonNullable<Pool['keepaliveResolved']>;
 
@@ -199,7 +199,7 @@ const POOL_ROWS: PoolSeed[] = [
     ],
     ...UNTIL_DRAWN,
     // The 09:05:12 edit of its shared prefix floor and its slow-down hold, the registry change the routing log records.
-    updatedAt: iso(NOW - (5 * HOUR + 24 * MINUTE + 48_000)),
+    updatedAt: iso(clock(9, 5, 12)),
     // The sample's failover settings are the store's defaults, so this pool reads balanced on both groups. The last
     // hour's moves are the routing log's story: three failovers, a fast lane's and two by the spent rule.
     movesPerHour: { cooldown: 3, fast_lane: 1, spent: 2 },

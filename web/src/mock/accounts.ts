@@ -5,7 +5,7 @@ import { WINDOW_HOURS, WINDOW_LABEL, hoursOfKey } from '@/lib/windows';
 import { leadOf } from './lead';
 import { createRng } from './rng';
 import { ACCOUNT_SAMPLE, QUOTA_SNAPSHOT_SAMPLE } from './samples';
-import { DAY, HOUR, MINUTE, NOW, ago, ahead, iso } from './time';
+import { DAY, HOUR, MINUTE, NOW, ago, ahead, clock, iso } from './time';
 
 /** The windows the router projects, the 5-hour, the 7-day and the 7-day Fable window, as the route serves them. */
 const PROJECTED: readonly string[] = ['5h', '7d', '7d_fable'];
@@ -190,7 +190,7 @@ const SEEDS = [
     fastLane: null,
     // In plan overage from the first head after its spend cap was raised at 11:30:12, which `requests.ts` dates once
     // the day's requests are drawn. The raise stands in until then.
-    overage: { inUse: true, observedAt: ago(40_000), reset: ahead(1 * DAY + 18 * HOUR + 12 * MINUTE), since: ago(2 * HOUR + 59 * MINUTE + 48_000) },
+    overage: { inUse: true, observedAt: ago(40_000), reset: ahead(1 * DAY + 18 * HOUR + 12 * MINUTE), since: iso(clock(11, 30, 12)) },
     credential: {
       accessTokenExpiresAt: ahead(5 * HOUR + 50 * MINUTE),
       lastError: null,
@@ -229,7 +229,7 @@ const SEEDS = [
     subscription: { billingType: 'monthly', organizationType: 'claude_max', planDisplayName: null, rateLimitTier: 'default_claude_max_5x', since: ago(16 * DAY), trialEndsAt: null, endsAt: null },
     requests: { last24h: 0, last7d: 0, lifetime: 48 },
     cooldowns: [],
-    slowDown: { factor: 0.5, holdMs: 120_000, since: ago(42 * MINUTE), speed: 0.5, stretchMs: 2_520_000, thresholdMs: 1_800_000 },
+    slowDown: { factor: 0.5, holdMs: 120_000, since: iso(clock(13, 48)), speed: 0.5, stretchMs: 2_520_000, thresholdMs: 1_800_000 },
   },
   // The work pool's API-key member, which takes the sessions a round moves off studio.
   {
