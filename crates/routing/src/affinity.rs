@@ -124,23 +124,19 @@ pub struct ConversationQuery<'a> {
     pub key_id: &'a str,
     pub key_generation: i64,
     pub message_boundaries: &'a [String],
-    /// The current incarnation of an account id, `None` for one the registry no longer holds; the handle
-    /// passes the snapshot's reading, a test a stub. An entry under another incarnation is stepped over.
-    pub incarnation_of: &'a dyn Fn(&str) -> Option<u64>,
 }
 
 /// What the relay asks for the diagnostics member's value once the account is selected: the answer the request
 /// continues, on that account alone.
 pub struct PredecessorQuery<'a> {
     pub canonical_model: &'a str,
-    /// The selected account, under its current incarnation as `incarnation_of` reads it.
+    /// The selected account, under the current incarnation the lookup reads.
     pub account_id: &'a str,
     pub key_id: &'a str,
     pub key_generation: i64,
     /// The roots an entry may carry: the request's own root and, for a fork, the conversation it forked from.
     pub roots: &'a [&'a str],
     pub message_boundaries: &'a [String],
-    pub incarnation_of: &'a dyn Fn(&str) -> Option<u64>,
 }
 
 /// The deepest own-key match of a request's message boundaries: the matched conversation's root and the depth.
@@ -151,8 +147,8 @@ pub struct ConversationMatch {
 }
 
 /// What the relay asks of the map: its conversation climb asks `conversation`, and the leg's body build asks
-/// `predecessor` for the answer the request continues on the selected account. Implemented by the map and by the
-/// handle.
+/// `predecessor` for the answer the request continues on the selected account. Implemented by the handle, which
+/// reads each account's incarnation off its snapshot.
 pub trait ConversationLookup {
     fn conversation(&self, query: &ConversationQuery<'_>) -> Option<ConversationMatch>;
     /// The id of the deepest boundary of `query` that holds an answer on the selected account, under the
@@ -539,14 +535,20 @@ fn ordinal(index: usize) -> u32 {
     u32::try_from(index + 1).unwrap_or(u32::MAX)
 }
 
-impl ConversationLookup for AffinityMap {
+impl AffinityMap {
     /// The deepest own-key match of the request's message boundaries, which the relay's fork detection reads: the
-    /// deepest message boundary the key and generation own. Warmth plays no part.
-    fn conversation(&self, query: &ConversationQuery<'_>) -> Option<ConversationMatch> {
+    /// deepest message boundary the key and generation own. Warmth plays no part. `incarnation_of` reads an account
+    /// id's current incarnation, `None` for one the registry no longer holds, and an entry under another
+    /// incarnation is stepped over.
+    pub fn conversation(
+        &self,
+        query: &ConversationQuery<'_>,
+        incarnation_of: impl Fn(&str) -> Option<u64>,
+    ) -> Option<ConversationMatch> {
         let owns = |entry: &AffinityEntry| -> bool {
             entry.key_id == query.key_id
                 && entry.key_generation == query.key_generation
-                && (query.incarnation_of)(&entry.account_id) == Some(entry.incarnation)
+                && incarnation_of(&entry.account_id) == Some(entry.incarnation)
         };
         let (depth, entry) = self.deepest(query.canonical_model, query.message_boundaries, owns)?;
         Some(ConversationMatch {
@@ -555,14 +557,19 @@ impl ConversationLookup for AffinityMap {
         })
     }
 
-    /// The deepest boundary that holds an answer on the selected account, under the request's key and generation
-    /// and one of its roots. An entry that fails a test is stepped over, as `conversation` steps over one the key
-    /// does not own. Warmth plays no part: an expired entry still names the answer the request continues.
-    fn predecessor(&self, query: &PredecessorQuery<'_>) -> Option<String> {
+    /// The deepest boundary that holds an answer on the selected account under its current incarnation, as
+    /// `incarnation_of` reads it, under the request's key and generation and one of its roots. An entry that fails a
+    /// test is stepped over, as `conversation` steps over one the key does not own. Warmth plays no part: an expired
+    /// entry still names the answer the request continues.
+    pub fn predecessor(
+        &self,
+        query: &PredecessorQuery<'_>,
+        incarnation_of: impl Fn(&str) -> Option<u64>,
+    ) -> Option<String> {
         let names_an_answer = |entry: &AffinityEntry| -> bool {
             entry.message_id.is_some()
                 && entry.account_id == query.account_id
-                && (query.incarnation_of)(&entry.account_id) == Some(entry.incarnation)
+                && incarnation_of(&entry.account_id) == Some(entry.incarnation)
                 && entry.key_id == query.key_id
                 && entry.key_generation == query.key_generation
                 && query.roots.contains(&entry.root.as_str())
@@ -654,9 +661,8 @@ mod tests {
             key_id: "someone_else",
             key_generation: 0,
             message_boundaries: &boundaries,
-            incarnation_of: &incarnation_of,
         };
-        assert_eq!(map.conversation(&query), None);
+        assert_eq!(map.conversation(&query, incarnation_of), None);
     }
 
     #[test]
@@ -789,10 +795,9 @@ mod tests {
             key_id: "k",
             key_generation: 0,
             message_boundaries: &boundaries,
-            incarnation_of: &incarnation_of,
         };
         let found = map
-            .conversation(&query)
+            .conversation(&query, incarnation_of)
             .expect("b1's shallower entry is still owned");
         assert_eq!(found.depth, 1);
     }

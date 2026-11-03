@@ -2549,7 +2549,6 @@ impl Relay {
                 .session_id
                 .as_deref()
                 .expect("the contract admits no request without a session id");
-            let no_incarnation = |_: &str| None;
             let predecessor_under = |root: &str| {
                 self.router.predecessor(&PredecessorQuery {
                     canonical_model: &admitted.identity.canonical_model,
@@ -2561,7 +2560,6 @@ impl Relay {
                         .chains
                         .map(|c| &c.message_boundaries[..])
                         .unwrap_or(&[]),
-                    incarnation_of: &no_incarnation,
                 })
             };
             // The first request a session sends to an account other than the one its previous request landed on

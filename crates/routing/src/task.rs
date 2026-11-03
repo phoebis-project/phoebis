@@ -1727,36 +1727,22 @@ impl ConversationLookup for RouterHandle {
     /// The snapshot's own incarnation reading, so a stale conversation never outlives the account it named.
     fn conversation(&self, query: &ConversationQuery<'_>) -> Option<ConversationMatch> {
         let snapshot = self.snapshot();
-        let incarnation_of = |account_id: &str| snapshot.account(account_id).map(|a| a.incarnation);
-        let query = ConversationQuery {
-            canonical_model: query.canonical_model,
-            key_id: query.key_id,
-            key_generation: query.key_generation,
-            message_boundaries: query.message_boundaries,
-            incarnation_of: &incarnation_of,
-        };
         self.affinity
             .read()
             .expect("affinity lock poisoned")
-            .conversation(&query)
+            .conversation(query, |account_id| {
+                snapshot.account(account_id).map(|a| a.incarnation)
+            })
     }
 
     fn predecessor(&self, query: &PredecessorQuery<'_>) -> Option<String> {
         let snapshot = self.snapshot();
-        let incarnation_of = |account_id: &str| snapshot.account(account_id).map(|a| a.incarnation);
-        let query = PredecessorQuery {
-            canonical_model: query.canonical_model,
-            account_id: query.account_id,
-            key_id: query.key_id,
-            key_generation: query.key_generation,
-            roots: query.roots,
-            message_boundaries: query.message_boundaries,
-            incarnation_of: &incarnation_of,
-        };
         self.affinity
             .read()
             .expect("affinity lock poisoned")
-            .predecessor(&query)
+            .predecessor(query, |account_id| {
+                snapshot.account(account_id).map(|a| a.incarnation)
+            })
     }
 }
 

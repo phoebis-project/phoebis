@@ -8157,9 +8157,6 @@ async fn the_handles_predecessor_reads_the_snapshots_incarnation() {
             .await
     );
     let key_generation = handle.snapshot().key("k").unwrap().created_at;
-    // The caller's reading answers an incarnation the snapshot never held, so only the handle's own reading of
-    // the snapshot decides which entries the walk accepts.
-    let stale = |_: &str| Some(2_u64);
     let query = |hash: &str| {
         let message_boundaries = [hash.to_string()];
         handle.predecessor(&PredecessorQuery {
@@ -8169,7 +8166,6 @@ async fn the_handles_predecessor_reads_the_snapshots_incarnation() {
             key_generation,
             roots: &[hash],
             message_boundaries: &message_boundaries,
-            incarnation_of: &stale,
         })
     };
     assert_eq!(

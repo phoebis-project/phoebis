@@ -5,8 +5,8 @@
 use std::sync::Arc;
 
 use phoebis_routing::{
-    lane_key, AffinityChain, AffinityMap, AffinityReport, AffinityRow, ConversationLookup,
-    ConversationMatch, ConversationQuery, PredecessorQuery, PurgedEntry,
+    lane_key, AffinityChain, AffinityMap, AffinityReport, AffinityRow, ConversationMatch,
+    ConversationQuery, PredecessorQuery, PurgedEntry,
 };
 
 fn boundaries(hashes: &[&str]) -> Vec<String> {
@@ -82,7 +82,6 @@ fn predecessor_query<'a>(message_boundaries: &'a [String]) -> PredecessorQuery<'
         key_generation: 0,
         roots: &["s1"],
         message_boundaries,
-        incarnation_of: &incarnation_of,
     }
 }
 
@@ -92,7 +91,6 @@ fn query<'a>(key_id: &'a str, message_boundaries: &'a [String]) -> ConversationQ
         key_id,
         key_generation: 0,
         message_boundaries,
-        incarnation_of: &incarnation_of,
     }
 }
 
@@ -107,7 +105,7 @@ fn a_fork_matches_at_the_last_shared_boundary() {
     let mut map = AffinityMap::default();
     map.record(&report("k", "a", "b1", &["b1", "b2", "b3", "bA4"], 1_000));
     let q = boundaries(&["b1", "b2", "b3", "bB4"]);
-    match_at(map.conversation(&query("k", &q)), "b1", 3);
+    match_at(map.conversation(&query("k", &q), incarnation_of), "b1", 3);
 }
 
 #[test]
@@ -121,7 +119,7 @@ fn the_lookup_follows_the_message_chain_across_a_tools_change() {
         ..report("k", "a", "b1", &["b1", "b2", "b3"], 1_000)
     });
     let q = boundaries(&["b1", "b2", "b3", "b4"]);
-    match_at(map.conversation(&query("k", &q)), "b1", 3);
+    match_at(map.conversation(&query("k", &q), incarnation_of), "b1", 3);
     let s2 = boundaries(&["s2"]);
     assert_eq!(map.deepest("claude-sonnet-5", &s2, |_| true), None);
 }
@@ -131,10 +129,17 @@ fn a_compacted_body_names_no_conversation_and_its_continuation_matches_the_compa
     let mut map = AffinityMap::default();
     map.record(&report("k", "a", "b1", &["b1", "b2", "b3", "b4"], 1_000));
     let compacted = boundaries(&["c1"]);
-    assert_eq!(map.conversation(&query("k", &compacted)), None);
+    assert_eq!(
+        map.conversation(&query("k", &compacted), incarnation_of),
+        None
+    );
     map.record(&report("k", "a", "c1", &["c1"], 2_000));
     let continuation = boundaries(&["c1", "c2"]);
-    match_at(map.conversation(&query("k", &continuation)), "c1", 1);
+    match_at(
+        map.conversation(&query("k", &continuation), incarnation_of),
+        "c1",
+        1,
+    );
 }
 
 #[test]
@@ -148,7 +153,7 @@ fn a_subagents_first_request_matches_its_cohorts_static_prefix_and_no_message_bo
         ..report("k", "a", "s1", &["x1"], 1_000)
     });
     let q = boundaries(&["y1"]);
-    assert_eq!(map.conversation(&query("k", &q)), None);
+    assert_eq!(map.conversation(&query("k", &q), incarnation_of), None);
     let statics = boundaries(&["t1", "t2"]);
     let (depth, _) = map
         .deepest("claude-sonnet-5", &statics, |_| true)
@@ -256,7 +261,7 @@ fn the_conversation_lookup_finds_a_root_across_lanes() {
     // A speed switch hashes the same message bytes, so the identity must find the conversation whatever lane
     // its entries were written under; the lane only filters where the cache is warm.
     let q = boundaries(&["b1", "b2", "b3", "b4"]);
-    match_at(map.conversation(&query("k", &q)), "b1", 3);
+    match_at(map.conversation(&query("k", &q), incarnation_of), "b1", 3);
 }
 
 #[test]
@@ -437,23 +442,29 @@ fn the_predecessor_is_the_deepest_boundary_the_selected_account_holds_for_the_re
     map.record(&report_with("k", "a", "s1", &["b1", "b2"], 2_000, "msg_02"));
     let continuation = boundaries(&["b1", "b2", "b3"]);
     assert_eq!(
-        map.predecessor(&predecessor_query(&continuation)),
+        map.predecessor(&predecessor_query(&continuation), incarnation_of),
         Some("msg_02".to_string()),
         "a continuation names the answer at the previous tail"
     );
     let rewind = boundaries(&["b1", "b9"]);
     assert_eq!(
-        map.predecessor(&predecessor_query(&rewind)),
+        map.predecessor(&predecessor_query(&rewind), incarnation_of),
         Some("msg_01".to_string()),
         "a rewind names the answer at the deepest boundary it still shares"
     );
     let unknown = boundaries(&["b7"]);
-    assert_eq!(map.predecessor(&predecessor_query(&unknown)), None);
     assert_eq!(
-        map.predecessor(&PredecessorQuery {
-            roots: &["s9", "s1"],
-            ..predecessor_query(&continuation)
-        }),
+        map.predecessor(&predecessor_query(&unknown), incarnation_of),
+        None
+    );
+    assert_eq!(
+        map.predecessor(
+            &PredecessorQuery {
+                roots: &["s9", "s1"],
+                ..predecessor_query(&continuation)
+            },
+            incarnation_of
+        ),
         Some("msg_02".to_string()),
         "a fork under its own root names its parent's answer at the fork point"
     );
@@ -474,48 +485,57 @@ fn the_predecessor_steps_over_an_entry_without_an_id_another_account_another_key
     }
     let all = boundaries(&["b1", "b2", "b3"]);
     assert_eq!(
-        map.predecessor(&predecessor_query(&all)),
+        map.predecessor(&predecessor_query(&all), incarnation_of),
         Some("msg_02".to_string()),
         "a tail that names no answer is stepped over for the deepest one that does"
     );
     assert_eq!(
-        map.predecessor(&PredecessorQuery {
-            account_id: "b",
-            ..predecessor_query(&all)
-        }),
+        map.predecessor(
+            &PredecessorQuery {
+                account_id: "b",
+                ..predecessor_query(&all)
+            },
+            incarnation_of
+        ),
         None,
         "another account holds no answer of this conversation"
     );
     assert_eq!(
-        map.predecessor(&PredecessorQuery {
-            key_id: "other",
-            ..predecessor_query(&all)
-        }),
+        map.predecessor(
+            &PredecessorQuery {
+                key_id: "other",
+                ..predecessor_query(&all)
+            },
+            incarnation_of
+        ),
         None,
         "another key never reads this key's answers"
     );
     assert_eq!(
-        map.predecessor(&PredecessorQuery {
-            key_generation: 1,
-            ..predecessor_query(&all)
-        }),
+        map.predecessor(
+            &PredecessorQuery {
+                key_generation: 1,
+                ..predecessor_query(&all)
+            },
+            incarnation_of
+        ),
         None,
         "a later lifetime of the key never reads an earlier lifetime's answers"
     );
     assert_eq!(
-        map.predecessor(&PredecessorQuery {
-            roots: &["s2"],
-            ..predecessor_query(&all)
-        }),
+        map.predecessor(
+            &PredecessorQuery {
+                roots: &["s2"],
+                ..predecessor_query(&all)
+            },
+            incarnation_of
+        ),
         None,
         "another conversation's identical list names none of this conversation's answers"
     );
     let moved_on = |_: &str| Some(2);
     assert_eq!(
-        map.predecessor(&PredecessorQuery {
-            incarnation_of: &moved_on,
-            ..predecessor_query(&all)
-        }),
+        map.predecessor(&predecessor_query(&all), moved_on),
         None,
         "an answer of the account's earlier incarnation is no answer of its current holder"
     );

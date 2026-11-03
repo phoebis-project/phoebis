@@ -121,9 +121,6 @@ pub fn climb(
     lookup: &dyn ConversationLookup,
 ) {
     let canonical_model = identity.canonical_model.clone();
-    // The relay has no incarnation reading of its own; the `RouterHandle` implementation substitutes the
-    // snapshot's, so a raw lookup only sees this when it is not that handle.
-    let no_incarnation = |_: &str| None;
     let ask = |boundaries: &[String]| {
         // A boundary-less call would answer nothing anyway, so the lookup is never asked over an empty slice.
         if boundaries.is_empty() {
@@ -134,7 +131,6 @@ pub fn climb(
             key_id: &key.id,
             key_generation: key.created_at,
             message_boundaries: boundaries,
-            incarnation_of: &no_incarnation,
         })
     };
 
