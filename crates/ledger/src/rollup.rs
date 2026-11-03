@@ -1690,7 +1690,8 @@ fn account_row(
 
 fn write_account(tx: &Transaction<'_>, row: &AccountRollupRow) -> Result<(), LedgerError> {
     tx.prepare_cached(
-        "INSERT OR REPLACE INTO account_rollups_hourly (hour, account_id, utilization_5h_max, utilization_7d_max, utilization_7d_oi_max, overage_seconds, cooldown_seconds, pins_created, pins_migrated_in, pins_migrated_out, rewrite_tokens, migrations_json, wall_early_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        "INSERT INTO account_rollups_hourly (hour, account_id, utilization_5h_max, utilization_7d_max, utilization_7d_oi_max, overage_seconds, cooldown_seconds, pins_created, pins_migrated_in, pins_migrated_out, rewrite_tokens, migrations_json, wall_early_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13) \
+         ON CONFLICT (hour, account_id) DO UPDATE SET utilization_5h_max = excluded.utilization_5h_max, utilization_7d_max = excluded.utilization_7d_max, utilization_7d_oi_max = excluded.utilization_7d_oi_max, overage_seconds = excluded.overage_seconds, cooldown_seconds = excluded.cooldown_seconds, pins_created = excluded.pins_created, pins_migrated_in = excluded.pins_migrated_in, pins_migrated_out = excluded.pins_migrated_out, rewrite_tokens = excluded.rewrite_tokens, migrations_json = excluded.migrations_json, wall_early_ms = excluded.wall_early_ms",
     )?
     .execute(params![
             row.hour, row.account_id, row.utilization_5h_max, row.utilization_7d_max, row.utilization_7d_oi_max,
@@ -1856,8 +1857,17 @@ pub(crate) fn delete_rollup(conn: &Connection, key: &RollupRow) -> Result<(), Le
 }
 
 pub(crate) fn write_rollup(conn: &Connection, r: &RollupRow) -> Result<(), LedgerError> {
+    // An upsert on the sixteen-column key updates a folded row in place where a replace deletes and inserts it again,
+    // rewriting both indexes' entries and the rowid the startup stamp pages by.
     static STATEMENT: LazyLock<String> = LazyLock::new(|| {
-        format!("INSERT OR REPLACE INTO rollups_hourly ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52, ?53, ?54, ?55, ?56, ?57, ?58)")
+        let key = "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier, classifier";
+        let set = COLUMNS
+            .split(", ")
+            .filter(|column| !key.split(", ").any(|k| k == *column))
+            .map(|column| format!("{column} = excluded.{column}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("INSERT INTO rollups_hourly ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52, ?53, ?54, ?55, ?56, ?57, ?58) ON CONFLICT ({key}) DO UPDATE SET {set}")
     });
     conn.prepare_cached(&STATEMENT)?.execute(params![
         r.hour,
