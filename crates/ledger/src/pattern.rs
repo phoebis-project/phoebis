@@ -64,33 +64,36 @@ pub fn matches(pattern: &str, value: &str) -> bool {
 /// `pattern * value` at worst rather than one path per way of splitting the value among the stars. ASCII case
 /// folds, as SQLite's `LIKE` folds it on the SQL side.
 fn matches_counted(pattern: &str, value: &str) -> (bool, usize) {
-    let p: Vec<char> = pattern.chars().collect();
-    let v: Vec<char> = value.chars().collect();
+    let first = |s: &str, at: usize| s[at..].chars().next();
     let (mut pi, mut vi, mut steps) = (0, 0, 0);
-    // The pattern position after the last star seen and the value position that star currently covers up to.
+    // The pattern offset after the last star seen and the value offset that star currently covers up to, both in
+    // bytes, each moved a whole character at a time.
     let mut star: Option<(usize, usize)> = None;
-    while vi < v.len() {
+    while let Some(c) = first(value, vi) {
         steps += 1;
-        let literal = match p.get(pi) {
+        // How many pattern bytes the next token takes when it fits `c`.
+        let fit = match first(pattern, pi) {
             Some('*') => {
                 star = Some((pi + 1, vi));
                 pi += 1;
                 continue;
             }
-            Some('?') => Some(('?', 1)),
-            Some('\\') => p.get(pi + 1).map(|quoted| (*quoted, 2)),
-            Some(c) => Some((*c, 1)),
-            None => None,
+            Some('?') => Some(1),
+            Some('\\') => first(pattern, pi + 1)
+                .filter(|quoted| quoted.eq_ignore_ascii_case(&c))
+                .map(|quoted| 1 + quoted.len_utf8()),
+            Some(literal) if literal.eq_ignore_ascii_case(&c) => Some(literal.len_utf8()),
+            _ => None,
         };
-        match literal {
-            Some((c, width)) if (c == '?' && width == 1) || c.eq_ignore_ascii_case(&v[vi]) => {
+        match fit {
+            Some(width) => {
                 pi += width;
-                vi += 1;
+                vi += c.len_utf8();
             }
-            _ => match star {
+            None => match star {
                 Some((after_star, covered)) => {
                     pi = after_star;
-                    vi = covered + 1;
+                    vi = covered + first(value, covered).map_or(0, char::len_utf8);
                     star = Some((after_star, vi));
                 }
                 None => return (false, steps),
@@ -98,11 +101,12 @@ fn matches_counted(pattern: &str, value: &str) -> (bool, usize) {
         }
     }
     // The value is spent; what is left of the pattern must match nothing: stars, or a trailing backslash,
-    // which quotes nothing.
+    // which quotes nothing. Both are one byte, and no byte of a wider character equals either.
+    let p = pattern.as_bytes();
     while pi < p.len() {
         match p[pi] {
-            '*' => pi += 1,
-            '\\' if pi + 1 == p.len() => pi += 1,
+            b'*' => pi += 1,
+            b'\\' if pi + 1 == p.len() => pi += 1,
             _ => return (false, steps),
         }
     }
@@ -149,6 +153,19 @@ mod tests {
 
     /// A pattern of many stars against a value that cannot match is where a split-per-star matcher goes
     /// exponential; the two-cursor walk answers in `pattern * value` steps at most.
+    #[test]
+    fn a_multi_byte_character_is_one_character_under_a_mark_a_star_and_a_quote() {
+        assert!(
+            matches("caf?", "café"),
+            "a mark takes a two-byte character whole"
+        );
+        assert!(
+            matches("*é!", "éé!"),
+            "a star resumes past a two-byte character"
+        );
+        assert!(matches("\\é?", "éx"), "a quoted two-byte character is one");
+    }
+
     #[test]
     fn a_failing_pattern_of_many_stars_answers_in_bounded_steps() {
         let pattern = "*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*b";
