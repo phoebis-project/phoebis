@@ -19,7 +19,7 @@ pub const JSON_WS: &[u8] = b" \t\r\n";
 /// Opening quote and prefix of the billing block as it appears in `system[0].text`.
 pub const BILLING_BLOCK: &[u8] = br#""x-anthropic-billing-header:"#;
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum CchError {
     #[error("body is not valid JSON at byte {0}")]
     Json(usize),
@@ -203,47 +203,265 @@ fn scan_object(s: &mut Scanner<'_>, mut matches: impl FnMut(&[u8]) -> bool) -> O
     }
 }
 
-/// Hands `visit` each top-level member's key in body order, decoded, until `visit` answers true. Keys are
-/// decoded before they are compared, so an escaped spelling of a name counts as that name: a parser upstream
-/// would read it that way, and the span helpers above match raw bytes on purpose (they edit what they find and
-/// never a decoded copy). Values are skipped by the scanner the span helpers walk, so a body a strict decoder
-/// refuses as a whole (a lone surrogate escape in a string value) is still read to its end.
-fn visit_top_level_keys(body: &[u8], mut visit: impl FnMut(&str) -> bool) -> Result<(), CchError> {
-    let mut s = Scanner::new(body);
-    s.ws();
-    if !s.eat(b'{') {
-        return Err(CchError::Json(s.pos));
-    }
-    s.inside(|s| loop {
+/// Each top-level member of a body in body order, read in one walk, so the lookups admission makes share one pass
+/// over a body of up to the request limit. A member is recorded once its key is read, its value's start once its
+/// colon is, and the walk ends where the object closes or at the error that stopped it. Each lookup reads the table
+/// under its own rule. The decoded lookups compare keys decoded, so an escaped spelling of a name counts as that name,
+/// as a parser upstream would read it. The raw lookups match a key's own bytes and stop at the first match, as the
+/// span helpers do on purpose (they edit what they find and never a decoded copy), and read the matched value with
+/// the reader the span helper of that name uses. Values are skipped by the scanner the span helpers walk, so a body a
+/// strict decoder refuses as a whole (a lone surrogate escape in a string value) is still read to its end.
+pub struct TopLevelMembers<'a> {
+    body: &'a [u8],
+    members: Vec<TopLevelMember<'a>>,
+    end: TopLevelEnd,
+}
+
+struct TopLevelMember<'a> {
+    /// The key's span, quotes included.
+    key: (usize, usize),
+    /// The key's decoded text, `None` where a decoder refuses the key.
+    decoded: Option<Cow<'a, str>>,
+    /// Where the value starts, `None` where the walk stopped ahead of the member's colon.
+    value_start: Option<usize>,
+}
+
+/// Where the walk of the top-level object ended.
+enum TopLevelEnd {
+    /// At the object's closing brace.
+    Closed,
+    /// At a closing brace right after a comma, at this offset. The decoded count and the repeat check read it as the
+    /// object's end, and the lookups that walk into a member's value refuse it there, as their member walk refuses it
+    /// inside any object.
+    ClosedAfterAComma(usize),
+    /// At the error that stopped the walk, its kind kept, since admission refuses a body nested deeper than the
+    /// scanner reads apart from one that is no JSON.
+    Stopped(CchError),
+}
+
+impl<'a> TopLevelMembers<'a> {
+    pub fn read(body: &'a [u8]) -> Self {
+        let mut s = Scanner::new(body);
+        let mut members = Vec::new();
         s.ws();
-        if s.eat(b'}') {
-            return Ok(());
-        }
-        let (ks, ke) = s.string()?;
-        let raw = &body[ks + 1..ke - 1];
-        // A key with no escape and no control byte is its own decoded text, so it is read in place. Every other key
-        // goes through serde, which refuses a raw control byte and invalid UTF-8 as the walk must.
-        let key: Cow<'_, str> = match std::str::from_utf8(raw) {
-            Ok(key) if !raw.iter().any(|&b| b == b'\\' || b < 0x20) => Cow::Borrowed(key),
-            _ => Cow::Owned(serde_json::from_slice(&body[ks..ke]).map_err(|_| CchError::Json(ks))?),
+        let end = if s.eat(b'{') {
+            s.inside(|s| top_level_walk(s, &mut members))
+        } else {
+            TopLevelEnd::Stopped(CchError::Json(s.pos))
         };
-        if visit(&key) {
-            return Ok(());
+        TopLevelMembers { body, members, end }
+    }
+
+    pub fn body(&self) -> &'a [u8] {
+        self.body
+    }
+
+    /// How many top-level members carry `name` once their keys are decoded.
+    pub fn top_level_member_count(&self, name: &str) -> Result<usize, CchError> {
+        let mut count = 0;
+        for key in self.decoded_keys() {
+            count += usize::from(key? == name);
         }
+        self.decoded_end()?;
+        Ok(count)
+    }
+
+    /// The first of `names` whose decoded key appears more than once among the top-level members. A repeat read
+    /// ahead of the error that stopped the walk is the answer, so such a body is refused for its repeat.
+    pub fn repeated_top_level_member(
+        &self,
+        names: &[&'static str],
+    ) -> Result<Option<&'static str>, CchError> {
+        let mut seen: Vec<&'static str> = Vec::new();
+        for key in self.decoded_keys() {
+            let key = key?;
+            let Some(name) = names.iter().copied().find(|n| *n == key) else {
+                continue;
+            };
+            if seen.contains(&name) {
+                return Ok(Some(name));
+            }
+            seen.push(name);
+        }
+        self.decoded_end()?;
+        Ok(None)
+    }
+
+    /// How many members of the first `system` block carry `name` once their keys are decoded, the first block of
+    /// every top-level spelling of `system` walked. An error means the walk stopped before the body's end, so a
+    /// caller refusing on the count does not admit a body on what was read ahead of the stop.
+    pub fn first_system_block_member_count(&self, name: &str) -> Result<usize, CchError> {
+        self.strict_end()?;
+        let mut count = 0;
+        for mut s in self.values_named("system") {
+            each_first_block_member(&mut s, |s, key| {
+                count += usize::from(key == name.as_bytes());
+                s.value(false)
+            })?;
+        }
+        Ok(count)
+    }
+
+    /// The first of `names` whose decoded key appears more than once among the members of the top-level object
+    /// `parent`, answered as the bare key, `Ok(None)` when `parent` is absent or not an object. Only the parent's own
+    /// members are compared: a repeat deeper in the body, a tool input's included, is the client's data.
+    pub fn repeated_member_within(
+        &self,
+        parent: &str,
+        names: &[&'static str],
+    ) -> Result<Option<&'static str>, CchError> {
+        self.strict_end()?;
+        let mut repeated = None;
+        for mut s in self.values_named(parent) {
+            if s.body.get(s.pos) != Some(&b'{') {
+                continue;
+            }
+            let mut seen: Vec<&'static str> = Vec::new();
+            each_member(&mut s, Keys::Decoded, |s, key| {
+                if let Some(name) = names.iter().copied().find(|n| n.as_bytes() == key) {
+                    if seen.contains(&name) {
+                        repeated.get_or_insert(name);
+                    } else {
+                        seen.push(name);
+                    }
+                }
+                s.value(false)
+            })?;
+        }
+        Ok(repeated)
+    }
+
+    /// `string_member_span` off the table, the path's first segment naming a top-level member.
+    pub fn string_member_span(&self, path: &[&str]) -> Option<(usize, usize)> {
+        let (name, rest) = path.split_first()?;
+        let (_, mut s) = self.raw_value(name)?;
+        if !rest.is_empty() {
+            walk_to_last_segment(&mut s, rest)?;
+        }
+        string_at(s)
+    }
+
+    /// `bool_member_span` off the table for the top-level member `name`.
+    pub fn bool_member_span(&self, name: &str) -> Option<(usize, usize)> {
+        bool_at(&self.raw_value(name)?.1)
+    }
+
+    /// `object_member_span` off the table for the top-level member `name`.
+    pub fn object_member_span(&self, name: &str) -> Option<(usize, usize)> {
+        let (member_start, s) = self.raw_value(name)?;
+        member_span(s, member_start)
+    }
+
+    /// The decoded keys in body order, a key that does not decode answered as the error a decoder gives at it.
+    fn decoded_keys(&self) -> impl Iterator<Item = Result<&str, CchError>> + '_ {
+        self.members.iter().map(|member| {
+            member
+                .decoded
+                .as_deref()
+                .ok_or(CchError::Json(member.key.0))
+        })
+    }
+
+    /// The end as the decoded count and the repeat check read it.
+    fn decoded_end(&self) -> Result<(), CchError> {
+        match &self.end {
+            TopLevelEnd::Stopped(error) => Err(error.clone()),
+            TopLevelEnd::Closed | TopLevelEnd::ClosedAfterAComma(_) => Ok(()),
+        }
+    }
+
+    /// The end as a walk that reads into a member's value reads it.
+    fn strict_end(&self) -> Result<(), CchError> {
+        match &self.end {
+            TopLevelEnd::Closed => Ok(()),
+            TopLevelEnd::ClosedAfterAComma(at) => Err(CchError::Json(*at)),
+            TopLevelEnd::Stopped(error) => Err(error.clone()),
+        }
+    }
+
+    /// A scanner at the value of each top-level member whose decoded key is `name`. A key that does not decode
+    /// names no member here, as `key_name` reads it.
+    fn values_named<'s>(&'s self, name: &'s str) -> impl Iterator<Item = Scanner<'a>> + 's {
+        self.members
+            .iter()
+            .filter(move |member| member.decoded.as_deref() == Some(name))
+            .filter_map(|member| member.value_start)
+            .map(|pos| self.value_at(pos))
+    }
+
+    /// The key's opening quote and a scanner at the value of the first top-level member whose key's own bytes are
+    /// `name`, `None` where the walk met no such member or stopped ahead of its colon.
+    fn raw_value(&self, name: &str) -> Option<(usize, Scanner<'a>)> {
+        let member = self
+            .members
+            .iter()
+            .find(|member| self.body[member.key.0 + 1..member.key.1 - 1] == *name.as_bytes())?;
+        Some((member.key.0, self.value_at(member.value_start?)))
+    }
+
+    /// A scanner at a top-level member's value, one level down, as a walk stands inside the top-level object.
+    fn value_at(&self, pos: usize) -> Scanner<'a> {
+        Scanner {
+            pos,
+            depth: 1,
+            ..Scanner::new(self.body)
+        }
+    }
+}
+
+/// The walk `TopLevelMembers::read` makes inside the top-level object, its `{` eaten.
+fn top_level_walk<'a>(s: &mut Scanner<'a>, members: &mut Vec<TopLevelMember<'a>>) -> TopLevelEnd {
+    s.ws();
+    if s.eat(b'}') {
+        return TopLevelEnd::Closed;
+    }
+    loop {
         s.ws();
-        if !s.eat(b':') {
-            return Err(CchError::Json(s.pos));
+        let (ks, ke) = match s.string() {
+            Ok(key) => key,
+            Err(error) => return TopLevelEnd::Stopped(error),
+        };
+        let decoded = decoded_key(s.body, ks, ke);
+        s.ws();
+        let value_start = s.eat(b':').then(|| {
+            s.ws();
+            s.pos
+        });
+        members.push(TopLevelMember {
+            key: (ks, ke),
+            decoded,
+            value_start,
+        });
+        if value_start.is_none() {
+            return TopLevelEnd::Stopped(CchError::Json(s.pos));
         }
-        s.value(false)?;
+        if let Err(error) = s.value(false) {
+            return TopLevelEnd::Stopped(error);
+        }
         s.ws();
         if s.eat(b',') {
+            s.ws();
+            if s.body.get(s.pos) == Some(&b'}') {
+                return TopLevelEnd::ClosedAfterAComma(s.pos);
+            }
             continue;
         }
         if s.eat(b'}') {
-            return Ok(());
+            return TopLevelEnd::Closed;
         }
-        return Err(CchError::Json(s.pos));
-    })
+        return TopLevelEnd::Stopped(CchError::Json(s.pos));
+    }
+}
+
+/// A key's decoded text, `None` where a decoder refuses it. A key with no escape and no control byte is its own
+/// decoded text, so it is read in place. Every other key goes through serde, which refuses a raw control byte,
+/// invalid UTF-8 and a lone surrogate escape.
+fn decoded_key(body: &[u8], ks: usize, ke: usize) -> Option<Cow<'_, str>> {
+    let raw = &body[ks + 1..ke - 1];
+    match std::str::from_utf8(raw) {
+        Ok(key) if !raw.iter().any(|&b| b == b'\\' || b < 0x20) => Some(Cow::Borrowed(key)),
+        _ => serde_json::from_slice(&body[ks..ke]).ok().map(Cow::Owned),
+    }
 }
 
 /// The first of `names` whose decoded key appears more than once among the top-level object's members.
@@ -251,66 +469,32 @@ pub fn repeated_top_level_member(
     body: &[u8],
     names: &[&'static str],
 ) -> Result<Option<&'static str>, CchError> {
-    let mut seen: Vec<&'static str> = Vec::new();
-    let mut repeated = None;
-    visit_top_level_keys(body, |key| {
-        let Some(name) = names.iter().copied().find(|n| *n == key) else {
-            return false;
-        };
-        if seen.contains(&name) {
-            repeated = Some(name);
-            return true;
-        }
-        seen.push(name);
-        false
-    })?;
-    Ok(repeated)
+    TopLevelMembers::read(body).repeated_top_level_member(names)
 }
 
 /// The first of `names` whose decoded key appears more than once among the members of the top-level object
-/// `parent`, answered as the bare key; `Ok(None)` when `parent` is absent or not an object. Only the parent's own
-/// members are compared: a repeat deeper in the body, a tool input's included, is the client's data.
+/// `parent`, as `TopLevelMembers::repeated_member_within` reads it.
 pub fn repeated_member_within(
     body: &[u8],
     parent: &str,
     names: &[&'static str],
 ) -> Result<Option<&'static str>, CchError> {
-    let mut s = Scanner::new(body);
-    let mut repeated = None;
-    s.ws();
-    each_member(&mut s, Keys::Decoded, |s, key| {
-        if key != parent.as_bytes() || s.body.get(s.pos) != Some(&b'{') {
-            return s.value(false);
-        }
-        let mut seen: Vec<&'static str> = Vec::new();
-        each_member(s, Keys::Decoded, |s, key| {
-            if let Some(name) = names.iter().copied().find(|n| n.as_bytes() == key) {
-                if seen.contains(&name) {
-                    repeated.get_or_insert(name);
-                } else {
-                    seen.push(name);
-                }
-            }
-            s.value(false)
-        })
-    })?;
-    Ok(repeated)
+    TopLevelMembers::read(body).repeated_member_within(parent, names)
 }
 
 /// How many of the top-level object's members carry `name` once their keys are decoded.
 pub fn top_level_member_count(body: &[u8], name: &str) -> Result<usize, CchError> {
-    let mut count = 0;
-    visit_top_level_keys(body, |key| {
-        count += usize::from(key == name);
-        false
-    })?;
-    Ok(count)
+    TopLevelMembers::read(body).top_level_member_count(name)
 }
 
 /// Raw span, quotes included, of the string value at `path` from the top-level object. Array indexes are decimal
 /// strings. The relay uses this for its body edits so only one JSON scanner exists in the workspace.
 pub fn string_member_span(body: &[u8], path: &[&str]) -> Option<(usize, usize)> {
-    let mut s = Scanner::at_path(body, path)?;
+    string_at(Scanner::at_path(body, path)?)
+}
+
+/// The span of the string value at `s`, quotes included.
+fn string_at(mut s: Scanner<'_>) -> Option<(usize, usize)> {
     if s.body.get(s.pos) != Some(&b'"') {
         return None;
     }
@@ -321,7 +505,11 @@ pub fn string_member_span(body: &[u8], path: &[&str]) -> Option<(usize, usize)> 
 /// `string_member_span` does: a member of the same name inside a nested value is skipped with that value, so a
 /// tool schema cannot stand in for the request's own flag.
 pub fn bool_member_span(body: &[u8], path: &[&str]) -> Option<(usize, usize)> {
-    let s = Scanner::at_path(body, path)?;
+    bool_at(&Scanner::at_path(body, path)?)
+}
+
+/// The span of the `true` or `false` literal at `s`, a literal running into anything but a separator no boolean.
+fn bool_at(s: &Scanner<'_>) -> Option<(usize, usize)> {
     let start = s.pos;
     for literal in [&b"true"[..], &b"false"[..]] {
         if s.body[start..].starts_with(literal) {
@@ -383,6 +571,11 @@ pub fn object_member_span(body: &[u8], path: &[&str]) -> Option<(usize, usize)> 
     let key = path.last()?;
     walk_to_last_segment(&mut s, &path[..path.len() - 1])?;
     let member_start = scan_object(&mut s, |member| member == key.as_bytes())?;
+    member_span(s, member_start)
+}
+
+/// The member whose key's opening quote is `member_start` through the end of its value at `s`.
+fn member_span(mut s: Scanner<'_>, member_start: usize) -> Option<(usize, usize)> {
     s.value(false).ok()?;
     Some((member_start, s.pos))
 }
@@ -593,23 +786,10 @@ pub fn decoded_stamp_count(body: &[u8]) -> usize {
     count
 }
 
-/// How many members of the first `system` block carry `name` once their keys are decoded, the first block of every
-/// top-level spelling of `system` walked. An error means the scan stopped before the body's end, so a caller
-/// refusing on the count does not admit a body on what was read ahead of the stop.
+/// How many members of the first `system` block carry `name` once their keys are decoded, as
+/// `TopLevelMembers::first_system_block_member_count` reads it.
 pub fn first_system_block_member_count(body: &[u8], name: &str) -> Result<usize, CchError> {
-    let mut s = Scanner::new(body);
-    let mut count = 0;
-    s.ws();
-    each_member(&mut s, Keys::Decoded, |s, key| {
-        if key != b"system" {
-            return s.value(false);
-        }
-        each_first_block_member(s, |s, key| {
-            count += usize::from(key == name.as_bytes());
-            s.value(false)
-        })
-    })?;
-    Ok(count)
+    TopLevelMembers::read(body).first_system_block_member_count(name)
 }
 
 /// Walks the object at `s` (its `{` not yet eaten), handing `member` each member's key as `keys` reads it with `s` at
