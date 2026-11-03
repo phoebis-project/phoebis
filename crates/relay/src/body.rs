@@ -405,7 +405,7 @@ fn add_top_level_cache_control(body: &mut Vec<u8>, ttl: CacheTtl) {
             let empty = body[..end]
                 .iter()
                 .rev()
-                .find(|b| !matches!(b, b' ' | b'\t' | b'\r' | b'\n'))
+                .find(|b| !phoebis_cch::JSON_WS.contains(b))
                 == Some(&b'{');
             body.splice(
                 end..end,
@@ -505,7 +505,7 @@ fn insert_diagnostics(body: &mut Vec<u8>, previous: Option<&str>) -> bool {
             let empty = body[..end]
                 .iter()
                 .rev()
-                .find(|b| !matches!(b, b' ' | b'\t' | b'\r' | b'\n'))
+                .find(|b| !phoebis_cch::JSON_WS.contains(b))
                 == Some(&b'{');
             body.splice(
                 end..end,
@@ -598,9 +598,7 @@ pub(crate) fn carries_a_stamp(body: &[u8]) -> Result<bool, RelayError> {
 }
 
 fn starts_with_object(body: &[u8]) -> bool {
-    body.iter()
-        .find(|b| !matches!(b, b' ' | b'\t' | b'\r' | b'\n'))
-        == Some(&b'{')
+    body.iter().find(|b| !phoebis_cch::JSON_WS.contains(b)) == Some(&b'{')
 }
 
 /// The span of the `account_uuid` value inside the escaped `metadata.user_id` string, `None` where the body

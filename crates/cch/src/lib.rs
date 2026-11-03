@@ -13,6 +13,9 @@ const LEN: usize = 5;
 /// counts it, so admission refuses what the guardrails' `parse_body` cannot read.
 const MAX_DEPTH: usize = 128;
 
+/// The four bytes RFC 8259 allows as whitespace between tokens, for every walk that skips it.
+pub const JSON_WS: &[u8] = b" \t\r\n";
+
 #[derive(Debug, thiserror::Error)]
 pub enum CchError {
     #[error("body is not valid JSON at byte {0}")]
@@ -275,7 +278,7 @@ pub fn bool_member_span(body: &[u8], path: &[&str]) -> Option<(usize, usize)> {
             let terminated = s
                 .body
                 .get(end)
-                .is_none_or(|c| matches!(c, b',' | b'}' | b']' | b' ' | b'\t' | b'\r' | b'\n'));
+                .is_none_or(|c| matches!(c, b',' | b'}' | b']') || JSON_WS.contains(c));
             return terminated.then_some((start, end));
         }
     }
@@ -339,7 +342,7 @@ pub fn object_member_span(body: &[u8], path: &[&str]) -> Option<(usize, usize)> 
 /// escaped spelling is not found and a second spelling survives the cut: the caller decides both.
 pub fn remove_top_level_member(body: &mut Vec<u8>, key: &str) -> Option<(usize, usize)> {
     let (start, end) = object_member_span(body, &[key])?;
-    let ws = |b: &u8| matches!(b, b' ' | b'\t' | b'\r' | b'\n');
+    let ws = |b: &u8| JSON_WS.contains(b);
     let after = body[end..].iter().position(|b| !ws(b)).map(|i| end + i);
     let (cut_start, cut_end) = match after {
         Some(i) if body[i] == b',' => (start, i + 1),
@@ -776,10 +779,7 @@ fn each_string_token(
         Some(b'[') => b']',
         _ => return s.value(false),
     };
-    if s.depth + 1 >= MAX_DEPTH {
-        return Err(CchError::TooDeep(s.pos));
-    }
-    s.depth += 1;
+    s.enter()?;
     s.pos += 1;
     s.ws();
     if !s.eat(close) {
@@ -804,7 +804,7 @@ fn each_string_token(
             break;
         }
     }
-    s.depth -= 1;
+    s.leave();
     Ok(())
 }
 
@@ -923,9 +923,7 @@ impl<'a> Scanner<'a> {
         walk_to_last_segment(&mut s, path)?.then_some(s)
     }
     fn ws(&mut self) {
-        while self.pos < self.body.len()
-            && matches!(self.body[self.pos], b' ' | b'\t' | b'\r' | b'\n')
-        {
+        while self.body.get(self.pos).is_some_and(|b| JSON_WS.contains(b)) {
             self.pos += 1;
         }
     }
@@ -965,26 +963,22 @@ impl<'a> Scanner<'a> {
             // The container counts for as long as the scanner stands inside it, arrays and objects alike, which
             // bounds the recursion for the collecting and the non-collecting walk.
             Some(b'{') | Some(b'[') => {
-                if self.depth + 1 >= MAX_DEPTH {
-                    return Err(CchError::TooDeep(self.pos));
-                }
-                self.depth += 1;
+                self.enter()?;
                 let scanned = if self.body[self.pos] == b'{' {
                     self.object(collect)
                 } else {
                     self.array(collect)
                 };
-                self.depth -= 1;
+                self.leave();
                 scanned
             }
             Some(b'"') => self.string().map(|_| ()),
             Some(_) => {
                 let start = self.pos;
-                while self.pos < self.body.len()
-                    && !matches!(
-                        self.body[self.pos],
-                        b',' | b'}' | b']' | b' ' | b'\t' | b'\r' | b'\n'
-                    )
+                while self
+                    .body
+                    .get(self.pos)
+                    .is_some_and(|c| !(matches!(c, b',' | b'}' | b']') || JSON_WS.contains(c)))
                 {
                     self.pos += 1;
                 }
