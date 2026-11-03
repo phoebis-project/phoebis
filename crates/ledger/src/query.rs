@@ -7,7 +7,7 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use phoebis_bus::{Classifier, Kind};
 use phoebis_routing::{
-    window_for, MemberSpend, PinUsage, FIVE_HOUR, REFRESHING_CLASSES, SEVEN_DAY,
+    window_for, MemberSpend, PinUsage, DAY_MS, FIVE_HOUR, REFRESHING_CLASSES, SEVEN_DAY,
 };
 use phoebis_store::BudgetPeriod;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, ToSql};
@@ -36,7 +36,6 @@ use crate::rollup::{
 use crate::LedgerError;
 
 const HOUR_MS: i64 = 3_600_000;
-const DAY_MS: i64 = 86_400_000;
 
 pub fn parse_range(range: Option<&str>, now: i64) -> Result<(i64, i64), String> {
     match range.unwrap_or("24h") {

@@ -5,6 +5,7 @@
 //! `body_budget_exhausted`, `key_body_reads`, `ledger_behind` and `router_unavailable`, since the router's own standing
 //! caused them, and `accounts_exhausted`, `model_rejected` and every upstream code, since an account was asked.
 
+use phoebis_routing::DAY_MS;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
@@ -18,7 +19,6 @@ use crate::rollup::{
 };
 use crate::LedgerError;
 
-const DAY_MS: i64 = 86_400_000;
 const DAY_S: i64 = 86_400;
 const HOUR_S: i64 = 3_600;
 

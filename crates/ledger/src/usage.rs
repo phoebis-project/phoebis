@@ -16,15 +16,13 @@ use phoebis_oauth::Clock;
 use phoebis_relay::{
     anthropic_error, auth_error_response, key_refusal_response, new_request_id, presented_key,
 };
-use phoebis_routing::RouterHandle;
+use phoebis_routing::{RouterHandle, DAY_MS};
 use rusqlite::Connection;
 use serde::Serialize;
 
 use crate::query::{hour_ceil, priced, PROBE_KIND};
 use crate::rollup::{hour_of, read_rollups_for_key, RollupRow};
 use crate::{LedgerDb, LedgerError, PlanTables, PriceRevisions, Pricing};
-
-const DAY_MS: i64 = 86_400_000;
 
 pub const USAGE_PATH: &str = "/v1/usage";
 

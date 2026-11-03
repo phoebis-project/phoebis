@@ -19,6 +19,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use indexmap::IndexMap;
+use phoebis_routing::DAY_MS;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 
@@ -33,7 +34,6 @@ use crate::record::{AttemptRecord, RequestRecord};
 use crate::rollup::{deltas_of, empty_row, read_rollup, unfold, write_rollup, RollupRow};
 use crate::LedgerError;
 
-const DAY_MS: i64 = 86_400_000;
 const DAY_S: i64 = 86_400;
 const HOUR_S: i64 = 3_600;
 

@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use phoebis_routing::DAY_MS;
 use rusqlite::{params, params_from_iter, ToSql, Transaction};
 
 use crate::db::begin_write;
@@ -26,7 +27,6 @@ pub const PURGE_SLICE: usize = 1_000;
 /// well under the busy timeout.
 pub const PURGE_SLICE_BYTES: usize = 32 << 20;
 
-const DAY_MS: i64 = 86_400_000;
 const DAY_S: i64 = 86_400;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
