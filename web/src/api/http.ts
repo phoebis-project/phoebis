@@ -268,19 +268,21 @@ export class HttpApi implements Api {
     );
   getSession = async (): Promise<SessionInfo | null> => {
     // Read straight through: a missing session is the normal first load, not a lost one for the hook to report.
-    let answer: { body: { persistent?: boolean; session_id: string } | null; status: number };
+    let answer: { status: number; text: string | null };
     try {
       answer = await withinDeadline(async (signal) => {
         const response = await fetch('/admin/session', { credentials: 'same-origin', signal });
-        return { body: response.ok ? ((await response.json()) as { persistent?: boolean; session_id: string }) : null, status: response.status };
+        return { status: response.status, text: response.ok ? await response.text() : null };
       });
     } catch (e) {
       // Raised as `call` raises it, so the login screen can tell a router that never answered from "no session".
       throw new ApiError(0, messageOf(e), null);
     }
     if (answer.status === 401) return null;
-    if (answer.body === null) throw new ApiError(answer.status, `GET /admin/session answered ${answer.status}`, null);
-    return { persistent: answer.body.persistent === true, sessionId: answer.body.session_id };
+    if (answer.text === null) throw new ApiError(answer.status, `GET /admin/session answered ${answer.status}`, null);
+    // Parsed after the catch, as `call` parses, so a body that is not a session raises its own error, never no answer.
+    const r = JSON.parse(answer.text) as { persistent?: boolean; session_id: string };
+    return { persistent: r.persistent === true, sessionId: r.session_id };
   };
   getSettings = async () => d.decodeSettings(await call('GET', '/admin/settings'));
   listAccountRollups = async (from: string, to: string) => d.decodeAccountRollups(await call('GET', `/admin/analytics/accounts?range=${range(from, to)}`));

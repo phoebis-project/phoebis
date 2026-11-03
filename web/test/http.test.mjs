@@ -459,10 +459,10 @@ test('a session read with no answer within the deadline fails as a read that nev
     // the clock is past the deadline, so a read that took no signal fails the case rather than hanging it.
     globalThis.fetch = async (_url, init = {}) => {
       const body = new Promise((resolve, reject) => {
-        time.setTimeout(() => resolve({ session_id: 's' }), 60_001);
+        time.setTimeout(() => resolve(JSON.stringify({ session_id: 's' })), 60_001);
         init.signal?.addEventListener('abort', () => reject(new DOMException('This operation was aborted', 'AbortError')));
       });
-      return { headers: { get: () => null }, json: () => body, ok: true, status: 200 };
+      return { headers: { get: () => null }, ok: true, status: 200, text: () => body };
     };
     const read = new HttpApi().getSession();
     time.tick(60_001);
