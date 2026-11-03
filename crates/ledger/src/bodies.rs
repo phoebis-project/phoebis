@@ -309,7 +309,7 @@ fn purge_slice(
                 ..Purged::default()
             },
             Family::Rollups => Purged {
-                rollups: purge_hourly_rollups(&tx, cutoffs.rollup, budgeted, now, PURGE_SLICE)?,
+                rollups: purge_hourly_rollups(&tx, cutoffs.rollup, budgeted, now)?,
                 ..Purged::default()
             },
             Family::AccountRollups => Purged {
@@ -331,14 +331,13 @@ fn purge_slice(
 /// A budget sums its member's hourly rows over the whole active period, so a retention shorter than the period
 /// would reopen an exhausted member before the period ends: a budgeted member's rows from its period's start on
 /// stay, and the first purge past the period's end takes them; a member with both budgets keeps its rows from the
-/// earlier start. Deletes at most `slice` rows, the clause inside the slice's selection so no slice takes a kept
-/// row.
+/// earlier start. Deletes at most `PURGE_SLICE` rows, the clause inside the slice's selection so no slice takes a
+/// kept row.
 fn purge_hourly_rollups(
     tx: &Transaction<'_>,
     cutoff: Option<i64>,
     budgeted: &[BudgetedMember],
     now: i64,
-    slice: usize,
 ) -> Result<usize, LedgerError> {
     let Some(cutoff) = cutoff else {
         return Ok(0);
@@ -346,10 +345,10 @@ fn purge_hourly_rollups(
     if budgeted.is_empty() {
         return Ok(tx.execute(
             "DELETE FROM rollups_hourly WHERE rowid IN (SELECT rowid FROM rollups_hourly WHERE hour < ?1 LIMIT ?2)",
-            params![cutoff, slice as i64],
+            params![cutoff, PURGE_SLICE as i64],
         )?);
     }
-    let mut args: Vec<Box<dyn ToSql>> = vec![Box::new(cutoff), Box::new(slice as i64)];
+    let mut args: Vec<Box<dyn ToSql>> = vec![Box::new(cutoff), Box::new(PURGE_SLICE as i64)];
     let values: Vec<String> = budgeted
         .iter()
         .map(|m| {
