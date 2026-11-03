@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { ModelPrice, SubscriptionCosts } from '@/api/types';
-import { Segmented } from '@/components/ui/primitives';
+import { Input, Segmented } from '@/components/ui/primitives';
 import { anchorTier, bandNow, MODEL_WEEK_TIERS, modelWeeks, regimeNames, regimeTitle, regimeWord, shareIn, tierCapacity, tierGroups, unreachableBand, weightedWindows, weightOf, withRegime, type CostWindow, type TokenType, type Usage } from '@/lib/costs';
 import { lookup } from '@/lib/counts';
 import { fmtShare, undatedModel, upperFirst } from '@/lib/format';
@@ -196,9 +196,8 @@ export function PlanRates({ costs, now, olderOpen, onToggleOlder, prices }: { co
         <span className="cost-ref__tokens">
           <label>
             Tokens{' '}
-            <input
+            <Input
               type="number"
-              className="input"
               min="0.1"
               step="0.1"
               value={typed}

@@ -142,7 +142,7 @@ export function AddFilter({ buttonRef, dimensions, disabled = {}, edit, filters,
   const headed = new Set(dimensions.map((d) => d.group)).size > 1;
   const list = (
     <div ref={bodyRef} className="add-filter" onKeyDown={(e) => walkRows(e, e.currentTarget)}>
-      <input className="input add-filter__search" aria-label="Filter by" placeholder="Filter by" value={query} onChange={(e) => setQuery(e.target.value)} />
+      <Input className="add-filter__search" aria-label="Filter by" placeholder="Filter by" value={query} onChange={(e) => setQuery(e.target.value)} />
       <div role="listbox" aria-label="Filters">
         {matching.length === 0 && <div className="mselect__empty">No matches</div>}
         {matching.map((d, i) => {
