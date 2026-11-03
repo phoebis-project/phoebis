@@ -178,36 +178,31 @@ export const bandFactor = (costs: SubscriptionCosts, window: string, at: number)
   return inside === null ? null : factorOf(costs, window, inside);
 };
 
-/** Per million tokens of each type at `weight`, the share of the account tier's window out of band, null for an
- *  unpriced window or account tier. */
-const ratesAt = (costs: SubscriptionCosts, window: string, tier: string, model: string, weight: number | null): Record<TokenType, number> | null => {
+/** Per million tokens of each type, the share of the tier's window out of band; null for an unpriced model or tier. */
+export const ratesOf = (costs: SubscriptionCosts, window: string, tier: string, model: string): Record<TokenType, number> | null => {
   const w = pricedWindow(costs, window);
   const capacity = w === null ? null : tierCapacity(costs, tier, w.priced);
+  const weight = weightOf(costs, model, window);
   if (w === null || weight === null || capacity === null) return null;
   const m = multipliersOf(costs, model);
   const per = (k: TokenType) => (weight * m[k] * 1_000_000) / capacity / w.divisor;
   return { cacheRead: per('cacheRead'), cacheWrite1h: per('cacheWrite1h'), cacheWrite5m: per('cacheWrite5m'), input: per('input'), output: per('output') };
 };
 
-/** Per million tokens of each type, the share of the tier's window out of band; null for an unpriced model or tier. */
-export const ratesOf = (costs: SubscriptionCosts, window: string, tier: string, model: string): Record<TokenType, number> | null => ratesAt(costs, window, tier, model, weightOf(costs, model, window));
-
-const shareAt = (costs: SubscriptionCosts, window: string, tier: string, model: string, usage: Usage, inside: boolean, weight: number | null): number | null => {
-  const rates = ratesAt(costs, window, tier, model, weight);
+/** The share of the tier's own window `usage` spends for a request completing inside the band or outside it; null
+ *  where unpriced. */
+export const shareIn = (costs: SubscriptionCosts, window: string, tier: string, model: string, usage: Usage, inside: boolean): number | null => {
+  const rates = ratesOf(costs, window, tier, model);
   if (rates === null) return null;
   const units = TOKEN_TYPES.reduce((s, k) => s + (usage[k] * rates[k]) / 1_000_000, 0);
   return units * factorOf(costs, window, inside);
 };
 
-/** The share of the tier's own window `usage` spends for a request completing inside the band or outside it; null
- *  where unpriced. */
-export const shareIn = (costs: SubscriptionCosts, window: string, tier: string, model: string, usage: Usage, inside: boolean): number | null => shareAt(costs, window, tier, model, usage, inside, weightOf(costs, model, window));
-
 /** The share `usage` spends for a request completing at `at`; null where unpriced, and where the band's state at `at`
  *  cannot be read, since a share on an assumed state could read half what the ledger charges. */
 export const shareOf = (costs: SubscriptionCosts, window: string, tier: string, model: string, usage: Usage, at: number): number | null => {
   const inside = inBand(costs, at);
-  return inside === null ? null : shareAt(costs, window, tier, model, usage, inside, weightOf(costs, model, window));
+  return inside === null ? null : shareIn(costs, window, tier, model, usage, inside);
 };
 
 /** The Pro-week figure: the share of the anchor tier's 7-day window, so the figure adds across accounts. Null where
