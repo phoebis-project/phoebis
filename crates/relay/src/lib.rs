@@ -36,15 +36,13 @@ pub use body::{
     edit_body, BodyEdits, BodyMember, Markerless, NativeEdit, SafeguardsEdit, CACHE_DIAGNOSIS_BETA,
     CLASSIFIER_BETA, DANGEROUS_TOOL_USE_BETA, EXTENDED_TTL_BETA,
 };
-pub use cache_ttl::{
-    CacheTtl, CacheTtlError, CacheTtlPolicy, ModelTtl, PartialTtlRules, TtlBranch, TtlRules,
-};
+pub use cache_ttl::{CacheTtl, CacheTtlError, CacheTtlPolicy, ModelTtl, TtlBranch, TtlRules};
 pub use casing::{head_queue, HeadQueue, HeadRecorder, OriginalHead};
 pub use catalog::{
     Catalog, CatalogChange, CatalogHook, CatalogRow, CatalogService, DiscoveryError, Prefetched,
     Warmth, EFFORT_LEVELS, ERROR_HOLD, MAX_BODY, REFRESH_TICK,
 };
-pub use chains::{canonical, Chains};
+pub use chains::Chains;
 pub use classify::{
     classify, next_month_start, Cooldown, HeadContext, Scope, Verdict, SPEND_CAP_REASON,
 };
@@ -52,10 +50,9 @@ pub use errors::{
     anthropic_error, auth_error_response, key_refusal_response, no_store, ERROR_CODE_HEADER,
     LEDGER_BEHIND,
 };
-pub use exhaustion::exhaustion_response;
 pub use headers::{outbound_headers, CredentialKind};
-pub use hold::{hold, Commit, Held, HeldRead, Inspect, INSPECT_BUFFER};
-pub use identity::{identifier_byte, identify, RequestIdentity};
+pub use hold::INSPECT_BUFFER;
+pub use identity::identifier_byte;
 pub use memory::{MemoryKey, Previous, MEMORY_CAP, MEMORY_IDLE_MS};
 pub use messages::{
     new_request_id, router, Accounting, AccountingSource, Limits, Probe, ReadinessSource, Relay,
