@@ -13,9 +13,8 @@ use phoebis_ledger::{
     BudgetedMember, CostRevisions, EventRecord, FundingFilter, GroupBy, GroupRow, Histogram,
     KeepaliveDelta, LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow, Patterns, PlanTables,
     PriceRevisions, PriceTable, RequestFilter, RequestRecord, RollupFilter, RollupRow,
-    RollupSelect, SeriesFilter, SharePricing, Speed, TotalsBy, WindowShares, BILLED_FUNDING,
-    FAST_FUNDING, NO_CLASS, OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED,
-    USAGE_BASED_FUNDING,
+    RollupSelect, SeriesFilter, Speed, TotalsBy, WindowShares, BILLED_FUNDING, FAST_FUNDING,
+    NO_CLASS, OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED, USAGE_BASED_FUNDING,
 };
 use phoebis_routing::{
     PinUsage, RegistrySnapshot, RoutingState, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
@@ -441,7 +440,6 @@ fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation()
         true,
         &live,
         &[],
-        None,
         &PRICES,
         &COSTS,
         NOW,
@@ -481,7 +479,6 @@ fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation()
         true,
         &live,
         &[],
-        None,
         &PRICES,
         &COSTS,
         NOW,
@@ -501,7 +498,6 @@ fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation()
         true,
         &live,
         &[],
-        None,
         &PRICES,
         &COSTS,
         NOW,
@@ -616,7 +612,6 @@ fn the_model_grouping_labels_its_empty_key_no_model_on_the_breakdown_and_the_ser
         true,
         &live,
         &[],
-        None,
         &PRICES,
         &COSTS,
         NOW,
@@ -635,7 +630,6 @@ fn the_model_grouping_labels_its_empty_key_no_model_on_the_breakdown_and_the_ser
         true,
         &live,
         &[],
-        None,
         &PRICES,
         &COSTS,
         NOW,
@@ -652,7 +646,6 @@ fn the_model_grouping_labels_its_empty_key_no_model_on_the_breakdown_and_the_ser
         true,
         &live,
         &[],
-        None,
         &PRICES,
         &COSTS,
         NOW,
@@ -707,7 +700,6 @@ fn the_classifier_grouping_labels_its_reserved_id_none_on_the_breakdown_and_the_
             true,
             &live,
             &[],
-            None,
             &PRICES,
             &COSTS,
             NOW,
@@ -731,7 +723,6 @@ fn the_classifier_grouping_labels_its_reserved_id_none_on_the_breakdown_and_the_
         true,
         &live,
         &[],
-        None,
         &PRICES,
         &COSTS,
         NOW,
@@ -845,14 +836,13 @@ async fn a_four_hundred_day_range_read_in_pages_answers_the_unpaged_series_and_b
                 filter.probes_counted(),
                 &live,
                 &filter.user_agent_groups,
-                None,
                 &PRICES,
                 &COSTS,
                 NOW,
             )
             .unwrap();
             let paged = series_paged(
-                &db, &filter, &live, from, to, bucket, group_by, None, &PRICES, &COSTS, NOW,
+                &db, &filter, &live, from, to, bucket, group_by, &PRICES, &COSTS, NOW,
             )
             .await
             .unwrap();
@@ -867,13 +857,12 @@ async fn a_four_hundred_day_range_read_in_pages_answers_the_unpaged_series_and_b
                 filter.probes_counted(),
                 &live,
                 &filter.user_agent_groups,
-                None,
                 &PRICES,
                 &COSTS,
                 NOW,
             );
             let paged = breakdown_paged(
-                &db, &filter, &live, from, to, group_by, None, &PRICES, &COSTS, NOW,
+                &db, &filter, &live, from, to, group_by, &PRICES, &COSTS, NOW,
             )
             .await
             .unwrap();
@@ -917,7 +906,6 @@ fn a_group_of_probes_alone_stays_out_of_the_default_breakdown() {
         false,
         &live,
         &[],
-        None,
         &PRICES,
         &COSTS,
         NOW,
@@ -932,7 +920,6 @@ fn a_group_of_probes_alone_stays_out_of_the_default_breakdown() {
         true,
         &live,
         &[],
-        None,
         &PRICES,
         &COSTS,
         NOW,
@@ -980,7 +967,6 @@ fn a_group_of_keepalive_credits_alone_stays_in_the_default_breakdown() {
         false,
         &live,
         &[],
-        None,
         &PRICES,
         &COSTS,
         NOW,
@@ -1060,7 +1046,6 @@ fn the_saving_prices_each_kept_warm_count_at_its_ttls_write_rate_less_the_read()
             false,
             &LiveKeys::default(),
             &[],
-            None,
             &prices,
             &COSTS,
             NOW,
@@ -1780,7 +1765,6 @@ fn a_breakdown_by_request_class_splits_conversation_from_overhead() {
         false,
         &live,
         &[],
-        None,
         &PRICES,
         &COSTS,
         NOW,
@@ -1854,7 +1838,6 @@ fn group_by_speed_splits_the_rows_by_served_speed() {
         false,
         &live,
         &[],
-        None,
         &PRICES,
         &COSTS,
         NOW,
@@ -2035,13 +2018,13 @@ fn hour_range(at: i64) -> (i64, i64) {
     (from, from + 3_600_000)
 }
 
-/// The account-grouped breakdown of `[from, to)` under `filter`, priced where `pricing` is given.
+/// The account-grouped breakdown of `[from, to)` under `filter`, its shares and figures priced on `tables`.
 async fn account_groups(
     db: &std::sync::Arc<LedgerDb>,
     filter: &RollupFilter,
     from: i64,
     to: i64,
-    pricing: Option<SharePricing<'_>>,
+    tables: &PlanTables,
 ) -> Vec<GroupRow> {
     breakdown_paged(
         db,
@@ -2050,9 +2033,8 @@ async fn account_groups(
         from,
         to,
         GroupBy::Account,
-        pricing,
         &PRICES,
-        &COSTS,
+        tables,
         NOW,
     )
     .await
@@ -2124,9 +2106,8 @@ async fn a_breakdown_row_under_the_account_grouping_sums_its_plan_rows_shares() 
         },
     );
     let tables = share_tables();
-    let pricing = SharePricing { tables: &tables };
     let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
-    let groups = account_groups(&db, &RollupFilter::default(), from, to, Some(pricing)).await;
+    let groups = account_groups(&db, &RollupFilter::default(), from, to, &tables).await;
     let a = group(&groups, "a");
     let cost = a
         .cost_shares
@@ -2164,9 +2145,8 @@ async fn an_unpriced_row_nulls_the_window_it_could_not_price_and_leaves_the_othe
         },
     );
     let tables = share_tables();
-    let pricing = SharePricing { tables: &tables };
     let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
-    let groups = account_groups(&db, &RollupFilter::default(), from, to, Some(pricing)).await;
+    let groups = account_groups(&db, &RollupFilter::default(), from, to, &tables).await;
     let cost = group(&groups, "a")
         .cost_shares
         .as_ref()
@@ -2190,9 +2170,10 @@ async fn an_unpriced_row_nulls_the_window_it_could_not_price_and_leaves_the_othe
 }
 
 /// A weighted plan row of an account whose tier the test cost model sizes, an unweighted plan row of a second account
-/// and a billed row of a third: the day, the pool's traffic and the account breakdown answer the same dollars and
-/// Pro-week figure whether or not the read answers the shares, each figure the test tables' own to the bit, and the
-/// read that answers the shares answers them.
+/// and a billed row of a third: the day, the pool's traffic and the breakdown answer the same dollars and Pro-week
+/// figure whether or not the read answers the shares, each figure the test tables' own to the bit. The breakdown of
+/// every row as one group answers no shares, and the account breakdown, whose groups each hold one account's rows,
+/// answers them.
 #[tokio::test]
 async fn a_dollar_read_and_a_shares_read_of_the_same_rows_answer_one_set_of_dollars_and_figures() {
     let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
@@ -2255,8 +2236,7 @@ async fn a_dollar_read_and_a_shares_read_of_the_same_rows_answer_one_set_of_doll
         &LiveKeys::default(),
         from,
         to,
-        GroupBy::Account,
-        None,
+        GroupBy::All,
         &prices,
         &costs,
         NOW,
@@ -2270,7 +2250,6 @@ async fn a_dollar_read_and_a_shares_read_of_the_same_rows_answer_one_set_of_doll
         from,
         to,
         GroupBy::Account,
-        Some(SharePricing { tables: &costs }),
         &prices,
         &costs,
         NOW,
@@ -2294,11 +2273,12 @@ async fn a_dollar_read_and_a_shares_read_of_the_same_rows_answer_one_set_of_doll
                 traffic[0].equivalent,
             ),
         ),
-        ("a without the shares", of_group(&dollar_read, "a")),
+        (
+            "every row without the shares",
+            of_group(&dollar_read, "all"),
+        ),
         ("a with the shares", of_group(&shares_read, "a")),
-        ("b without the shares", of_group(&dollar_read, "b")),
         ("b with the shares", of_group(&shares_read, "b")),
-        ("c without the shares", of_group(&dollar_read, "c")),
         ("c with the shares", of_group(&shares_read, "c")),
     ];
     // Account a's Opus 5.5 row weighs 40 units, 10 input tokens and 1 output token at weight 2, 0.8 of the Pro week's
@@ -2315,15 +2295,13 @@ async fn a_dollar_read_and_a_shares_read_of_the_same_rows_answer_one_set_of_doll
         [
             ("the day", all),
             ("the pool's bucket", all),
-            ("a without the shares", a),
+            ("every row without the shares", all),
             ("a with the shares", a),
-            ("b without the shares", b),
             ("b with the shares", b),
-            ("c without the shares", c),
             ("c with the shares", c),
         ]
     );
-    assert_eq!(group(&dollar_read, "a").cost_shares, None);
+    assert_eq!(group(&dollar_read, "all").cost_shares, None);
     let shares = |key: &str| -> Vec<(&str, f64)> {
         group(&shares_read, key)
             .cost_shares
@@ -2364,7 +2342,6 @@ fn test_cost_groups(db: &LedgerDb, group_by: GroupBy, probes_counted: bool) -> V
         probes_counted,
         &LiveKeys::default(),
         &[],
-        None,
         &PRICES,
         &test_costs(),
         NOW,
@@ -2711,7 +2688,6 @@ fn a_haiku_row_adds_nothing_to_the_fable_week_and_never_nulls_it() {
         },
     );
     let tables = share_tables();
-    let pricing = SharePricing { tables: &tables };
     let (from, _) = hour_range(WEEKDAY_OFF_PEAK);
     let mut rows = db
         .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
@@ -2734,9 +2710,8 @@ fn a_haiku_row_adds_nothing_to_the_fable_week_and_never_nulls_it() {
             false,
             &LiveKeys::default(),
             &[],
-            Some(pricing),
             &PRICES,
-            &COSTS,
+            &tables,
             NOW,
         );
         let cost = group(&groups, "a")
@@ -2782,9 +2757,8 @@ async fn a_genuinely_unpriced_fable_row_nulls_the_week() {
         },
     );
     let tables = share_tables();
-    let pricing = SharePricing { tables: &tables };
     let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
-    let groups = account_groups(&db, &RollupFilter::default(), from, to, Some(pricing)).await;
+    let groups = account_groups(&db, &RollupFilter::default(), from, to, &tables).await;
     let a = group(&groups, "a");
     assert!(
         a.cost_shares.as_ref().is_some_and(|m| m.is_empty()),
@@ -2827,14 +2801,13 @@ async fn the_probe_inclusion_rule_governs_the_request_shares() {
         },
     );
     let tables = share_tables();
-    let pricing = SharePricing { tables: &tables };
     let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
     let inference_share = fable_shares(&tables, inference)[FIVE_HOUR].unwrap();
     let probe_share = fable_shares(&tables, probe)[FIVE_HOUR].unwrap();
     let read = |filter: RollupFilter| {
-        let db = db.clone();
+        let (db, tables) = (db.clone(), &tables);
         async move {
-            let groups = account_groups(&db, &filter, from, to, Some(pricing)).await;
+            let groups = account_groups(&db, &filter, from, to, tables).await;
             let a = group(&groups, "a");
             (
                 a.cost_shares
@@ -2895,9 +2868,8 @@ async fn an_overage_row_and_an_api_key_group_add_to_no_share() {
         },
     );
     let tables = share_tables();
-    let pricing = SharePricing { tables: &tables };
     let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
-    let groups = account_groups(&db, &RollupFilter::default(), from, to, Some(pricing)).await;
+    let groups = account_groups(&db, &RollupFilter::default(), from, to, &tables).await;
     let a = group(&groups, "a");
     let plan = fable_shares(&tables, usage(1_000, 100))[FIVE_HOUR].unwrap();
     assert!(
@@ -2954,10 +2926,9 @@ async fn a_series_bucket_prices_as_the_breakdown_does() {
         },
     );
     let tables = share_tables();
-    let pricing = SharePricing { tables: &tables };
     let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
     let filter = RollupFilter::default();
-    let breakdown = account_groups(&db, &filter, from, to, Some(pricing)).await;
+    let breakdown = account_groups(&db, &filter, from, to, &tables).await;
     let points = series_paged(
         &db,
         &filter,
@@ -2966,9 +2937,8 @@ async fn a_series_bucket_prices_as_the_breakdown_does() {
         to,
         3_600,
         GroupBy::Account,
-        Some(pricing),
         &PRICES,
-        &COSTS,
+        &tables,
         NOW,
     )
     .await
@@ -3041,7 +3011,7 @@ async fn the_funding_filter_partitions_the_rows() {
                 funding,
                 ..RollupFilter::default()
             };
-            account_groups(&db, &filter, from, to, None)
+            account_groups(&db, &filter, from, to, &COSTS)
                 .await
                 .iter()
                 .map(|g| (g.key.clone(), g.requests))
@@ -3112,7 +3082,7 @@ async fn a_usage_based_seats_row_files_under_usage_based_stays_billed_and_counts
                 funding: Some(funding),
                 ..RollupFilter::default()
             };
-            account_groups(&db, &filter, from, to, None)
+            account_groups(&db, &filter, from, to, &COSTS)
                 .await
                 .iter()
                 .map(|g| (g.key.clone(), g.requests))
@@ -3177,14 +3147,13 @@ async fn an_api_key_account_s_rows_stay_billed_and_tierless_when_its_id_comes_ba
     );
     let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
     let tables = share_tables();
-    let pricing = SharePricing { tables: &tables };
     let read = |funding: FundingFilter| {
         let filter = RollupFilter {
             funding: Some(funding),
             ..RollupFilter::default()
         };
-        let db = db.clone();
-        async move { account_groups(&db, &filter, from, to, Some(pricing)).await }
+        let (db, tables) = (db.clone(), &tables);
+        async move { account_groups(&db, &filter, from, to, tables).await }
     };
     let billed = read(FundingFilter::Billed).await;
     let plan = read(FundingFilter::Plan).await;
@@ -3238,16 +3207,15 @@ async fn an_oauth_account_s_plan_row_stays_plan_under_its_tier_when_its_id_comes
         },
     );
     let tables = share_tables();
-    let pricing = SharePricing { tables: &tables };
     let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
     let read = |funding: FundingFilter| {
-        let db = db.clone();
+        let (db, tables) = (db.clone(), &tables);
         async move {
             let filter = RollupFilter {
                 funding: Some(funding),
                 ..RollupFilter::default()
             };
-            account_groups(&db, &filter, from, to, Some(pricing)).await
+            account_groups(&db, &filter, from, to, tables).await
         }
     };
     let plan = read(FundingFilter::Plan).await;
@@ -3338,7 +3306,7 @@ async fn an_overage_probe_s_cost_files_under_billed_and_its_settlement_rides_und
                 funding: Some(funding),
                 ..with_probes()
             };
-            let groups = account_groups(&db, &filter, from, to, None).await;
+            let groups = account_groups(&db, &filter, from, to, &COSTS).await;
             let a = group(&groups, "a");
             (a.cost_usd, a.probe_cost_usd, a.wasted_probe_usd)
         }
@@ -3437,9 +3405,8 @@ async fn a_group_whose_rows_recorded_no_tier_answers_no_share_and_a_dropped_acco
         },
     );
     let tables = share_tables();
-    let pricing = SharePricing { tables: &tables };
     let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
-    let groups = account_groups(&db, &RollupFilter::default(), from, to, Some(pricing)).await;
+    let groups = account_groups(&db, &RollupFilter::default(), from, to, &tables).await;
     let t = group(&groups, "t");
     assert!(
         t.cost_shares.is_none(),
@@ -3450,7 +3417,12 @@ async fn a_group_whose_rows_recorded_no_tier_answers_no_share_and_a_dropped_acco
         (Some(1), Some(100)),
         "and still counts the plan row its figure is summed over: {t:?}"
     );
-    let equivalent = equivalent_of("claude-fable-5-1", usage(1_000, 100), WEEKDAY_OFF_PEAK);
+    let equivalent = equivalent_of(
+        &tables,
+        "claude-fable-5-1",
+        usage(1_000, 100),
+        WEEKDAY_OFF_PEAK,
+    );
     assert!(
         close(t.cost_equivalent.as_ref(), equivalent),
         "the figure reads no account tier, so the tierless row prices: {t:?}"
@@ -3463,7 +3435,8 @@ async fn a_group_whose_rows_recorded_no_tier_answers_no_share_and_a_dropped_acco
     );
 }
 
-/// The groups of `[from, to)` under `group_by` and `filter`, the shares priced on `tables` where the read allows.
+/// The groups of `[from, to)` under `group_by` and `filter`, the shares, where the read allows, and the figures priced
+/// on `tables`.
 async fn groups_by(
     db: &std::sync::Arc<LedgerDb>,
     filter: &RollupFilter,
@@ -3478,20 +3451,19 @@ async fn groups_by(
         from,
         to,
         group_by,
-        Some(SharePricing { tables }),
         &PRICES,
-        &COSTS,
+        tables,
         NOW,
     )
     .await
     .unwrap()
 }
 
-/// The Pro-week figure `usage` of `model` reads in the hour of `at`, from the shipped cost model the readers price at.
-fn equivalent_of(model: &str, usage: PinUsage, at: i64) -> f64 {
+/// The Pro-week figure `usage` of `model` reads in the hour of `at` on `tables`, the cost model the read priced at.
+fn equivalent_of(tables: &PlanTables, model: &str, usage: PinUsage, at: i64) -> f64 {
     let hour = hour_of(at) * 1_000;
-    price_equivalent(&COSTS, None, model, usage, hour, hour, NOW)
-        .expect("the shipped cost model weighs the model")
+    price_equivalent(tables, None, model, usage, hour, hour, NOW)
+        .expect("the cost model weighs the model")
 }
 
 /// The owner's reading: one request of a Pro account sits next to one of an Ultra account in the one unit, so the
@@ -3531,8 +3503,8 @@ async fn the_equivalent_under_the_model_grouping_adds_two_accounts_of_two_tiers_
     .await;
     let fable = group(&groups, "claude-fable-5-1");
     let (pro, max) = (
-        equivalent_of("claude-fable-5-1", pro, WEEKDAY_OFF_PEAK),
-        equivalent_of("claude-fable-5-1", max, WEEKDAY_OFF_PEAK),
+        equivalent_of(&tables, "claude-fable-5-1", pro, WEEKDAY_OFF_PEAK),
+        equivalent_of(&tables, "claude-fable-5-1", max, WEEKDAY_OFF_PEAK),
     );
     let want = pro + max;
     assert!(
@@ -3613,7 +3585,7 @@ async fn the_billed_dollars_and_the_plan_rows_dollars_add_to_the_group_s_cost() 
             < 1e-12,
         "the billed split sums to the billed dollars: {all:?}"
     );
-    let want = equivalent_of("claude-fable-5-1", plan, WEEKDAY_OFF_PEAK);
+    let want = equivalent_of(&share_tables(), "claude-fable-5-1", plan, WEEKDAY_OFF_PEAK);
     assert!(
         close(all.cost_equivalent.as_ref(), want),
         "the plan row alone reads in the figure: {all:?} vs {want}"
@@ -3662,7 +3634,9 @@ async fn the_equivalent_split_s_four_kinds_sum_to_the_figure_and_the_cache_halve
             && (split.values().sum::<f64>() - figure).abs() < 1e-12,
         "the four kinds sum to the figure: {fable:?}"
     );
-    let half = |usage: PinUsage| equivalent_of("claude-fable-5-1", usage, WEEKDAY_OFF_PEAK);
+    let half = |usage: PinUsage| {
+        equivalent_of(&share_tables(), "claude-fable-5-1", usage, WEEKDAY_OFF_PEAK)
+    };
     let read = PinUsage {
         cache_read: 2_000,
         ..PinUsage::default()
@@ -3738,8 +3712,8 @@ async fn the_probe_equivalent_prices_the_probe_rows_and_the_wasted_counts() {
     )
     .await;
     let fable = group(&groups, "claude-fable-5-1");
-    let cost = equivalent_of("claude-fable-5-1", probe, WEEKDAY_OFF_PEAK);
-    let waste = equivalent_of("claude-fable-5-1", wasted, next_hour);
+    let cost = equivalent_of(&share_tables(), "claude-fable-5-1", probe, WEEKDAY_OFF_PEAK);
+    let waste = equivalent_of(&share_tables(), "claude-fable-5-1", wasted, next_hour);
     assert!(
         waste > 0.0
             && fable.probe_equivalent.as_ref().is_some_and(|p| {
@@ -6343,7 +6317,6 @@ async fn every_series_reader_refuses_a_range_whose_trailing_partial_bucket_is_on
                     false,
                     &live,
                     &[],
-                    None,
                     &PRICES,
                     &COSTS,
                     NOW,
@@ -6362,7 +6335,6 @@ async fn every_series_reader_refuses_a_range_whose_trailing_partial_bucket_is_on
                     filter.to,
                     BUCKET,
                     GroupBy::All,
-                    None,
                     &PRICES,
                     &COSTS,
                     NOW,
@@ -7819,7 +7791,7 @@ async fn the_dashboard_the_traffic_and_the_totals_split_the_billed_dollars_from_
         Speed::Standard,
         usage(3_000, 0),
     );
-    let figure = equivalent_of("claude-opus-5-5", plan, WEEKDAY_OFF_PEAK);
+    let figure = equivalent_of(&COSTS, "claude-opus-5-5", plan, WEEKDAY_OFF_PEAK);
     let read = |got_billed: f64, got: Option<f64>, what: &str| {
         assert!(
             (got_billed - billed).abs() < 1e-12
@@ -8123,7 +8095,6 @@ fn the_breakdown_answers_refused_and_refusals_per_group() {
         false,
         &live,
         &[],
-        None,
         &PRICES,
         &COSTS,
         NOW,
@@ -8214,7 +8185,6 @@ fn a_probe_row_on_a_model_the_revision_lacks_prices_at_the_dearest_listed_cells(
         true,
         &LiveKeys::default(),
         &[],
-        None,
         &prices,
         &COSTS,
         NOW,

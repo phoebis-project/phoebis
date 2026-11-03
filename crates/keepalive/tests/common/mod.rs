@@ -896,7 +896,6 @@ pub fn read_dollars(r: &Rig, rows: &[phoebis_ledger::RollupRow]) -> (f64, f64) {
         true,
         &phoebis_ledger::LiveKeys::default(),
         &[],
-        None,
         &r.pricing,
         &r.tables,
         r.now(),

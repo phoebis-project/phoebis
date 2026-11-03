@@ -12,7 +12,7 @@ use phoebis_ledger::{
     hour_of, hourly_window_samples, lead_over_pace, moves_by_reason_and_fit, names_one_account,
     parse_range, read_account_rollups, read_reconciliations, rewrite_series, series_paged,
     session_burn_series, AccountRollupRow, FundingFilter, GroupBy, GroupRow, HourlyWindowSample,
-    LedgerError, LiveKeys, Patterns, RequestFilter, RollupFilter, SeriesFilter, SharePricing,
+    LedgerError, LiveKeys, Patterns, RequestFilter, RollupFilter, SeriesFilter,
 };
 use phoebis_routing::{term, UtilizationSample, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
 use phoebis_store::{AccountKind, SubscriptionTerm};
@@ -309,10 +309,6 @@ pub(crate) async fn series(
         Err(r) => return r,
     };
     let bucket = bucket_seconds(from, to);
-    // The ledger answers the shares where each group holds one account's rows.
-    let pricing = Some(SharePricing {
-        tables: &state.tables,
-    });
     let mut points = match series_paged(
         state.ledger.db(),
         &filter,
@@ -321,7 +317,6 @@ pub(crate) async fn series(
         to,
         bucket,
         group_by,
-        pricing,
         &state.pricing.revisions(),
         &state.tables,
         now,
@@ -382,10 +377,6 @@ pub(crate) async fn breakdown(
         Ok(x) => x,
         Err(r) => return r,
     };
-    // The ledger answers the shares where each group holds one account's rows.
-    let pricing = Some(SharePricing {
-        tables: &state.tables,
-    });
     let mut rows = match breakdown_paged(
         state.ledger.db(),
         &filter,
@@ -393,7 +384,6 @@ pub(crate) async fn breakdown(
         from,
         to,
         group_by,
-        pricing,
         &state.pricing.revisions(),
         &state.tables,
         now,

@@ -2404,7 +2404,6 @@ async fn a_fast_recipe_served_standard_settles_its_waste_as_plan_at_the_standard
         true,
         &phoebis_ledger::LiveKeys::default(),
         &[],
-        Some(phoebis_ledger::SharePricing { tables: &r.tables }),
         &r.pricing,
         &r.tables,
         r.now(),

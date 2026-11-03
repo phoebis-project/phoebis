@@ -1708,16 +1708,9 @@ pub struct ProbeCounts {
     pub skipped: u64,
 }
 
-/// The cost model a group's shares price on. A read answers the shares only where each group holds one account's
-/// rows (`holds_one_account`), since shares of different accounts' windows do not add, and each row's own account
-/// tier prices it.
-#[derive(Clone, Copy)]
-pub struct SharePricing<'a> {
-    pub tables: &'a PlanTables,
-}
-
 /// Whether every group of a read holds one account's rows, the one place the own-window shares add: the account
-/// grouping, or a filter naming exactly one account under any grouping.
+/// grouping, or a filter naming exactly one account under any grouping. A read answers the shares only there, since
+/// shares of different accounts' windows do not add, and each row's own account tier prices it.
 fn holds_one_account(by: GroupBy, accounts: &[String]) -> bool {
     by == GroupBy::Account || names_one_account(accounts)
 }
@@ -2193,8 +2186,8 @@ pub(crate) fn row_key(row: &RollupRow, now: i64) -> RowKey<'_> {
 /// One rollup row priced through `price_row` at its own key with no tier, a plain call that fills nothing in after it:
 /// a probe row on a model the revision lacks takes its dearest-cell dollars inside `price_row`. Its reader,
 /// `shared_figures`, reads its `usd` and `equivalent` and not its `shares`, since the shares a route answers come from
-/// `ShareSums::add` under the caller's `pricing`. So the key carries no tier, as `price_group`'s does, and `price_row`
-/// prices no share window.
+/// `ShareSums::add` where the read's groups each hold one account's rows. So the key carries no tier, as
+/// `price_group`'s does, and `price_row` prices no share window.
 pub(crate) fn priced(
     row: &RollupRow,
     prices: &PriceRevisions,
@@ -2671,15 +2664,16 @@ struct GroupSum {
     plan: PlanSums,
 }
 
-/// What one read folds every row under: the grouping, whether probes count as requests, the share pricing and the
-/// tables and instant every row prices at. Built once per read.
+/// What one read folds every row under: the grouping, whether probes count as requests, whether the groups answer
+/// their shares and the tables and instant every row prices at. Built once per read.
 struct GroupRead<'a> {
     costs: &'a PlanTables,
     grouping: Grouping<'a>,
     now: i64,
     prices: &'a PriceRevisions,
-    pricing: Option<SharePricing<'a>>,
     probes_counted: bool,
+    /// Whether each group holds one account's rows, the one place a read answers the shares.
+    shares: bool,
 }
 
 #[derive(Default)]
@@ -2692,8 +2686,8 @@ impl GroupSums {
             grouping,
             now,
             prices,
-            pricing,
             probes_counted,
+            shares,
         } = *read;
         let key = grouping.group_of(row);
         let entry = self.0.entry(key).or_insert_with(|| GroupSum {
@@ -2753,18 +2747,17 @@ impl GroupSums {
                 .plan
                 .add(row, &own_key, row_priced, costs, counted, now);
         }
-        // The caller passes `pricing` only where each group holds one account's rows, and each row prices under the
-        // account tier it recorded. A tier of `UNATTRIBUTED` (a profile not yet read, a row folded before the tier was
-        // recorded, an api_key account's row) answers no share.
-        let Some(pricing) = pricing else {
+        // Each row prices under the account tier it recorded. A tier of `UNATTRIBUTED` (a profile not yet read, a row
+        // folded before the tier was recorded, an api_key account's row) answers no share.
+        if !shares {
             return;
-        };
+        }
         let Some(tier) = own_key.tier else {
             return;
         };
-        let shares = entry.shares.get_or_insert_with(ShareSums::default);
+        let sums = entry.shares.get_or_insert_with(ShareSums::default);
         if plan {
-            shares.add(row, &own_key, tier, pricing.tables, counted);
+            sums.add(row, &own_key, tier, costs, counted);
         }
     }
 
@@ -2809,7 +2802,6 @@ pub fn series(
     probes_counted: bool,
     live: &LiveKeys,
     agent_groups: &[String],
-    pricing: Option<SharePricing<'_>>,
     prices: &PriceRevisions,
     costs: &PlanTables,
     now: i64,
@@ -2823,9 +2815,9 @@ pub fn series(
         },
         now,
         prices,
-        // The rows come with no filter, so only the account grouping holds one account's rows per group.
-        pricing: pricing.filter(|_| holds_one_account(group_by, &[])),
         probes_counted,
+        // The rows come with no filter, so only the account grouping holds one account's rows per group.
+        shares: holds_one_account(group_by, &[]),
     };
     let last = hour_ceil(to);
     let first = first_edge(from / 1_000, last, bucket_seconds)?;
@@ -2853,7 +2845,6 @@ pub fn breakdown(
     probes_counted: bool,
     live: &LiveKeys,
     agent_groups: &[String],
-    pricing: Option<SharePricing<'_>>,
     prices: &PriceRevisions,
     costs: &PlanTables,
     now: i64,
@@ -2867,16 +2858,16 @@ pub fn breakdown(
         },
         now,
         prices,
-        // The rows come with no filter, so only the account grouping holds one account's rows per group.
-        pricing: pricing.filter(|_| holds_one_account(group_by, &[])),
         probes_counted,
+        // The rows come with no filter, so only the account grouping holds one account's rows per group.
+        shares: holds_one_account(group_by, &[]),
     };
     sum_groups(&rows.iter().collect::<Vec<_>>(), &read)
 }
 
 /// `series` over `[from, to)` (milliseconds) under `filter`, read through `read_rollups_paged` and folded into each
-/// bucket's group sums as the pages arrive, so a long range holds one page of rows at a time. `pricing` prices the
-/// groups' shares where each group holds one account's rows, and every row's dollars and Pro-week figure price from
+/// bucket's group sums as the pages arrive, so a long range holds one page of rows at a time. The groups' shares are
+/// answered where each group holds one account's rows, and every row's shares, dollars and Pro-week figure price from
 /// its counts on `prices` and `costs`, the figure against the anchor row in force at `now`, the read's instant.
 #[allow(clippy::too_many_arguments)]
 pub async fn series_paged(
@@ -2887,7 +2878,6 @@ pub async fn series_paged(
     to: i64,
     bucket_seconds: i64,
     group_by: GroupBy,
-    pricing: Option<SharePricing<'_>>,
     prices: &PriceRevisions,
     costs: &PlanTables,
     now: i64,
@@ -2905,8 +2895,8 @@ pub async fn series_paged(
         },
         now,
         prices,
-        pricing: pricing.filter(|_| holds_one_account(group_by, &filter.accounts)),
         probes_counted: filter.probes_counted(),
+        shares: holds_one_account(group_by, &filter.accounts),
     };
     if let Some(select) = filter.rollup_select(live) {
         read_rollups_paged(db, &select, hour_of(from), last, |row| {
@@ -2930,9 +2920,9 @@ pub async fn series_paged(
 }
 
 /// `breakdown` over `[from, to)` (milliseconds) under `filter`, read through `read_rollups_paged` and folded into the
-/// group sums as the pages arrive. `pricing` prices the groups' shares where each group holds one account's rows, and
-/// every row's dollars and Pro-week figure price from its counts on `prices` and `costs`, the figure against the anchor
-/// row in force at `now`, the read's instant.
+/// group sums as the pages arrive. The groups' shares are answered where each group holds one account's rows, and
+/// every row's shares, dollars and Pro-week figure price from its counts on `prices` and `costs`, the figure against
+/// the anchor row in force at `now`, the read's instant.
 #[allow(clippy::too_many_arguments)]
 pub async fn breakdown_paged(
     db: &Arc<LedgerDb>,
@@ -2941,7 +2931,6 @@ pub async fn breakdown_paged(
     from: i64,
     to: i64,
     group_by: GroupBy,
-    pricing: Option<SharePricing<'_>>,
     prices: &PriceRevisions,
     costs: &PlanTables,
     now: i64,
@@ -2956,8 +2945,8 @@ pub async fn breakdown_paged(
         },
         now,
         prices,
-        pricing: pricing.filter(|_| holds_one_account(group_by, &filter.accounts)),
         probes_counted: filter.probes_counted(),
+        shares: holds_one_account(group_by, &filter.accounts),
     };
     if let Some(select) = filter.rollup_select(live) {
         read_rollups_paged(db, &select, hour_of(from), hour_ceil(to), |row| {
@@ -5322,9 +5311,9 @@ mod tests {
         );
     }
 
-    /// No reader of a priced row reads its shares, since the shares a route answers come from the share fold under
-    /// the caller's pricing, so `priced` prices no share window of a plan row whose account tier the cost model sizes,
-    /// while the same row at its own key prices them.
+    /// No reader of a priced row reads its shares, since the shares a route answers come from the share fold, so
+    /// `priced` prices no share window of a plan row whose account tier the cost model sizes, while the same row at its
+    /// own key prices them.
     #[test]
     fn priced_prices_no_share_window_of_a_plan_row_on_a_sized_tier() {
         let prices = crate::test_tables::api_prices();
@@ -5546,7 +5535,6 @@ mod tests {
             false,
             &LiveKeys::default(),
             &[],
-            None,
             &crate::test_tables::api_prices(),
             &crate::test_tables::subscription_costs(),
             HOUR * 1_000,
