@@ -5,7 +5,7 @@ export { createRoot } from 'react-dom/client';
 export { createMemoryRouter, MemoryRouter, Outlet, RouterProvider } from 'react-router-dom';
 export { api } from '@/api';
 export { ApiError, call, setHooks } from '@/api/http';
-export { queueToast } from '@/app/session';
+export { queueToast, SessionProvider } from '@/app/session';
 export { AppSettingsProvider } from '@/app/settings';
 export { useFollow } from '@/app/useFollow';
 export { AddFilter, PATTERN_GRAMMAR } from '@/components/AddFilter';
@@ -30,6 +30,7 @@ export { Button, ConfirmDialog, CopyButton, Descriptions, Dialog, Menu, PageLoad
 export { installClock } from '@/lib/clock';
 export { getTimeFormat, setTimeFormat, spanText } from '@/lib/format';
 export { useAsync, useCommittedText, useNow, useRangeTakenAt } from '@/lib/hooks';
+export { AccountsPage } from '@/pages/AccountsPage';
 export { GuardrailDialog, GuardrailsPage } from '@/pages/GuardrailsPage';
 export { KeyDialog, keyRankOf } from '@/pages/KeysPage';
 export { MeterPage } from '@/pages/MeterPage';

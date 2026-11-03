@@ -410,7 +410,8 @@ as it draws a session's or a request's link, so a decision's Request facts read 
 Session row's ([Routing log](console.md#routing-log)). A dialog draws its fields afresh at each opening, so a picker's
 search text starts empty ([The shell](console.md#the-shell)). The login screen's session read fails after a minute with
 no answer, as a view's read does, so a router that never answers it brings the card that says the router did not answer
-([The shell](console.md#the-shell)).
+([The shell](console.md#the-shell)). The Accounts view reads the settings once per visit, whichever account opens, and
+the allowance card's Try again reads them again ([Accounts](console.md#accounts)).
 
 Every finished request lands in the ledger as one row for the client request, one per attempt and one per routing
 decision, folded into the hourly rollup the analytics read ([Statistics](statistics.md#the-ledger)). Each attempt

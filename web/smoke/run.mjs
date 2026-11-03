@@ -4966,8 +4966,8 @@ m.unmount();
   failed.unmount();
 
   // Every figure prices through the cost model, so with every settings read failing the block draws the error state
-  // in its figures' place. The detail mounts once the list answers, after the shell's own read, so every read fails,
-  // not the next.
+  // in its figures' place. The page reads them as it mounts, beside the shell's own read, so every read fails, not the
+  // next.
   const outage = failCalls({ getSettings: '/admin/settings' }, 'the configuration store is unavailable');
   const unmodeled = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
   const bare = blockOf(unmodeled);

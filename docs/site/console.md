@@ -357,13 +357,14 @@ figure. Each week prices at the tier the account ran under at that reset, so a w
 at the earlier tier's capacity, and a reset the router recorded no tier for at the account's current one, a dash where
 the cost model holds no capacity for the tier a week prices at (a Free plan among them, the card then noting it), and
 the total a dash where one of its weeks reads one. Each week's hover adds the reset's own share of the account's window
-under the account's plan, such as `Ultra: 39% of the 7-day window left`. The block waits on the cost model, so it draws
-its placeholder until the settings answer and the read's error where they fail. A week the account's term ended inside
-counts as a reset with the badge "term ended", a clock-walk reset reads the last reading before it as the event carries
-it, and the card reads "No weekly reset recorded yet. The first shows once this account's week ends." before the first.
-The card reads its weeks once per account, again on the bar's Refresh, once a weekly window resets and once the
-account's term end moves (its cancellation flag, saved end or plan-ended flag), and a failed read draws its error with
-Try again.
+under the account's plan, such as `Ultra: 39% of the 7-day window left`. The block waits on the cost model, which the
+page reads from the settings once per visit whichever account opens, so it draws its placeholder until the settings
+answer and the read's error where they fail. A week the account's term ended inside counts as a reset with the badge
+"term ended", a clock-walk reset reads the last reading before it as the event carries it, and the card reads "No weekly
+reset recorded yet. The first shows once this account's week ends." before the first. The card reads its weeks once per
+account, again on the bar's Refresh, once a weekly window resets and once the account's term end moves (its
+cancellation flag, saved end or plan-ended flag), and a failed read draws its error with Try again, which reads the
+weeks and the settings again.
 
 "Meter drift" draws, beside it, one line per window kind the account's completed windows hold: the newest completed
 window's ratio of the upstream's rise over the router's priced share (a warning badge where the rise and the priced

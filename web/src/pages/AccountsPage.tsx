@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError } from '@/api';
-import type { Account, AllowanceAccount, AllowanceReset, AllowanceWindow, PairingConfirmed, PairingPreview, PairingSession, QuotaHistory, ReconciliationsAnswer, SubscriptionCosts } from '@/api/types';
+import type { Account, AllowanceAccount, AllowanceReset, AllowanceWindow, PairingConfirmed, PairingPreview, PairingSession, QuotaHistory, ReconciliationsAnswer, Settings, SubscriptionCosts } from '@/api/types';
 import { useSession } from '@/app/session';
 import { useAppSettings } from '@/app/settings';
 import { CatalogDialog } from '@/components/CatalogDialog';
@@ -24,7 +24,7 @@ import { clock } from '@/lib/clock';
 import { ACCOUNTS_DIMENSIONS } from '@/lib/filterBar';
 import { fmtAbsolute, fmtCredits, fmtDate, fmtDated, fmtDayShort, fmtDuration, fmtEndsIn, fmtInt, fmtRelative, messageOf, pct, plural, upperFirst } from '@/lib/format';
 import { accountPatchOf, advancesOwnToken, derivedId, endZoneLabel, subscriptionEndFormOf, subscriptionEndRefusal, tickCanceled, type SubscriptionEndForm } from '@/lib/forms';
-import { useAsync, useLatest, useNow, useQueryFilters } from '@/lib/hooks';
+import { useAsync, useLatest, useNow, useQueryFilters, type Loaded } from '@/lib/hooks';
 import { latestPerWindow, meterGroups } from '@/lib/meter';
 import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, accountCooldown, planEndedSentence, planWordLabel, readWindows, slowedOf } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
@@ -58,6 +58,9 @@ export function AccountsPage() {
   // A save in flight or an editor open in the detail holds the list as a dialog does.
   const dialogOpen = addOpen || pairing !== null || detailBusy;
   const accounts = useAsync(() => api.listAccounts(), [], { paused: dialogOpen || barOpen, refreshMs: intervalMs });
+  // The cost model the allowance block's figures price through, read once per visit: nothing in it depends on the
+  // account a detail opens, and the block's Try again reads it again.
+  const settings = useAsync(() => api.getSettings(), []);
   const now = useNow();
   const { notify } = useSession();
   const refresh = () => {
@@ -189,7 +192,7 @@ export function AccountsPage() {
           <Descriptions>
             {/* Keyed by the account, so a save still running when the operator moves on answers into its own
                 unmounted detail and never moves the token of an editor another account opened. */}
-            <AccountDetail key={selected.id} account={selected} awaitingReading={awaiting === selected.id} generation={generation} now={now} onBusyChange={setDetailBusy} onToast={notify} onPair={(repair) => setPairing({ start: { accountId: selected.id }, label: selected.label, repair })} onChanged={accounts.reload} />
+            <AccountDetail key={selected.id} account={selected} awaitingReading={awaiting === selected.id} generation={generation} now={now} onBusyChange={setDetailBusy} onToast={notify} onPair={(repair) => setPairing({ start: { accountId: selected.id }, label: selected.label, repair })} onChanged={accounts.reload} settings={settings} />
           </Descriptions>
         ) : accounts.data === null ? (
           <Skeleton height={400} />
@@ -262,11 +265,9 @@ function AccountRow({ account, active, now }: { account: Account; active: boolea
   );
 }
 
-function AccountDetail({ account, awaitingReading, generation, now, onBusyChange, onToast, onPair, onChanged }: { account: Account; awaitingReading: boolean; generation: number; now: number; onBusyChange: (busy: boolean) => void; onChanged: () => void; onPair: (repair: boolean) => void; onToast: (m: string) => void }) {
+function AccountDetail({ account, awaitingReading, generation, now, onBusyChange, onToast, onPair, onChanged, settings }: { account: Account; awaitingReading: boolean; generation: number; now: number; onBusyChange: (busy: boolean) => void; onChanged: () => void; onPair: (repair: boolean) => void; onToast: (m: string) => void; settings: Loaded<Settings> }) {
   const navigate = useNavigate();
   const history = useAsync(() => api.getQuotaHistory(account.id), [account.id]);
-  // The cost model the allowance block's figures price through.
-  const settings = useAsync(() => api.getSettings(), []);
   const { week } = useAppSettings();
   // An API-key account and a usage-based seat report no weekly window, so neither draws the block nor reads its route.
   const allowanceShown = account.kind === 'oauth' && !account.usageBased;
