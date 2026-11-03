@@ -5420,7 +5420,7 @@ async fn a_session_row_prices_the_burn_at_the_set_the_pins_last_prompt_selects()
             input,
             ..phoebis_routing::PinUsage::default()
         }),
-        origin: "client",
+        keepalive: false,
         cache_ttl_ms: 300_000,
         fast,
         classifier: false,
@@ -5482,7 +5482,7 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
                 input: 1_000_000,
                 ..phoebis_routing::PinUsage::default()
             }),
-            origin: "client",
+            keepalive: false,
             cache_ttl_ms: 300_000,
             fast: false,
             classifier: false,

@@ -905,7 +905,7 @@ async fn every_report_kind_is_named_in_the_drop_counters_list_in_its_order() {
             lifecycle_generation: 1,
             credential_generation: 1,
         },
-        renewal(pin, 1_000, PinUsage::default(), "client", 0),
+        renewal(pin, 1_000, PinUsage::default(), false, 0),
         observed("a", sample(1_000)),
         Report::SpendHead {
             account_id: "a".into(),
@@ -1486,7 +1486,7 @@ async fn a_full_writer_channel_defers_its_writes_and_lands_them_once_a_slot_free
                 pin.clone(),
                 1_001 + i,
                 PinUsage::default(),
-                "client",
+                false,
                 0,
             ))
             .await;
@@ -6851,7 +6851,7 @@ async fn a_probe_after_a_compacted_request_refreshes_warmth() {
             pin: selection.pin.expect("the probe held the pin"),
             now: 3_500,
             usage: None,
-            origin: "keepalive",
+            keepalive: true,
             cache_ttl_ms: 300_000,
             fast: false,
             classifier: false,
@@ -6887,18 +6887,12 @@ fn flat_rates(rate: f64) -> RateTable {
     table
 }
 
-fn renewal(
-    pin: PinRef,
-    now: i64,
-    usage: PinUsage,
-    origin: &'static str,
-    cache_ttl_ms: i64,
-) -> Report {
+fn renewal(pin: PinRef, now: i64, usage: PinUsage, keepalive: bool, cache_ttl_ms: i64) -> Report {
     Report::PinRenewed {
         pin,
         now,
         usage: Some(usage),
-        origin,
+        keepalive,
         cache_ttl_ms,
         fast: false,
         classifier: false,
@@ -6942,13 +6936,7 @@ async fn a_probe_renewal_from_the_lane_the_session_left_leaves_the_switched_pins
     // The session switches to fast mode while the probe is in flight: the pin reads cold on its new lane.
     selected_pin(handle.select(turn(&handle, true, 3_000)).await.unwrap());
     handle
-        .report(renewal(
-            probe,
-            4_000,
-            PinUsage::default(),
-            "keepalive",
-            300_000,
-        ))
+        .report(renewal(probe, 4_000, PinUsage::default(), true, 300_000))
         .await;
     let pins = handle.pins().await.unwrap();
     assert_eq!(
@@ -7042,20 +7030,20 @@ async fn a_renewal_with_usage_folds_the_typed_rates_and_the_banded_copy_and_a_pr
         ..PinUsage::default()
     };
     handle
-        .report(renewal(client.clone(), 2_000, first, "client", 300_000))
+        .report(renewal(client.clone(), 2_000, first, false, 300_000))
         .await;
     handle
-        .report(renewal(client, 62_000, second, "client", 300_000))
+        .report(renewal(client, 62_000, second, false, 300_000))
         .await;
     handle
-        .report(renewal(probe, 2_000, first, "keepalive", 300_000))
+        .report(renewal(probe, 2_000, first, true, 300_000))
         .await;
     handle
         .report(Report::PinRenewed {
             pin: unmetered,
             now: 2_000,
             usage: None,
-            origin: "client",
+            keepalive: false,
             cache_ttl_ms: 3_600_000,
             fast: false,
             classifier: false,
@@ -7154,14 +7142,14 @@ async fn a_fast_renewal_lands_in_the_pins_fast_usage_and_lets_both_copies_of_its
         ..PinUsage::default()
     };
     handle
-        .report(renewal(fast.clone(), 2_000, input(600), "client", 300_000))
+        .report(renewal(fast.clone(), 2_000, input(600), false, 300_000))
         .await;
     handle
         .report(Report::PinRenewed {
             pin: fast,
             now: 62_000,
             usage: Some(input(1_000)),
-            origin: "client",
+            keepalive: false,
             cache_ttl_ms: 300_000,
             fast: true,
             classifier: false,
@@ -7169,7 +7157,7 @@ async fn a_fast_renewal_lands_in_the_pins_fast_usage_and_lets_both_copies_of_its
         })
         .await;
     handle
-        .report(renewal(standard, 62_000, input(1_000), "client", 300_000))
+        .report(renewal(standard, 62_000, input(1_000), false, 300_000))
         .await;
     let pins = handle.pins().await.unwrap();
     let fast_burns = handle.fast_burns().await.unwrap();
@@ -7458,7 +7446,7 @@ fn classifier_renewal(pin: PinRef, now: i64, input: u64) -> Report {
             input,
             ..PinUsage::default()
         }),
-        origin: "client",
+        keepalive: false,
         cache_ttl_ms: 300_000,
         fast: false,
         classifier: true,
@@ -7569,7 +7557,7 @@ fn speed_renewal(pin: PinRef, now: i64, fast: bool, input: u64) -> Report {
             input,
             ..PinUsage::default()
         }),
-        origin: "client",
+        keepalive: false,
         cache_ttl_ms: 300_000,
         fast,
         classifier: false,
@@ -7729,7 +7717,7 @@ async fn the_burn_lands_in_the_store_with_the_input_size_and_the_ttl() {
         output: 12,
     };
     handle
-        .report(renewal(pin, 2_000, usage, "client", 3_600_000))
+        .report(renewal(pin, 2_000, usage, false, 3_600_000))
         .await;
     let row = wait_for(WRITTEN, || {
         store
@@ -7805,10 +7793,10 @@ async fn a_renewal_inside_the_band_folds_a_heavier_banded_copy_and_the_same_plai
         ..PinUsage::default()
     };
     handle
-        .report(renewal(afternoon, inside, usage, "client", 300_000))
+        .report(renewal(afternoon, inside, usage, false, 300_000))
         .await;
     handle
-        .report(renewal(evening, outside, usage, "client", 300_000))
+        .report(renewal(evening, outside, usage, false, 300_000))
         .await;
     let pins = handle.pins().await.unwrap();
     let pin = |session: &str| pins.iter().find(|p| p.session_id == session).unwrap();
@@ -8402,7 +8390,7 @@ async fn a_shedding_round_emits_its_pins_and_marks_once() {
                     input,
                     ..PinUsage::default()
                 },
-                "client",
+                false,
                 300_000,
             ))
             .await;
@@ -14637,14 +14625,14 @@ async fn a_client_renewal_writes_the_effort_its_pin_names_to_the_row_and_a_probe
             .await
             .unwrap(),
     );
-    let renewed = |effort: Option<&str>, origin: &'static str, at: i64| Report::PinRenewed {
+    let renewed = |effort: Option<&str>, keepalive: bool, at: i64| Report::PinRenewed {
         pin: PinRef {
             effort: effort.map(String::from),
             ..placed.clone()
         },
         now: at,
         usage: None,
-        origin,
+        keepalive,
         cache_ttl_ms: 300_000,
         fast: false,
         classifier: false,
@@ -14652,21 +14640,19 @@ async fn a_client_renewal_writes_the_effort_its_pin_names_to_the_row_and_a_probe
     };
     let stored = || async { handle.pins().await.unwrap().remove(0).effort };
     assert_eq!(stored().await, "high", "the placement stamped the word");
-    handle.report(renewed(Some("low"), "client", 2_000)).await;
+    handle.report(renewed(Some("low"), false, 2_000)).await;
     assert_eq!(
         stored().await,
         "low",
         "a client's renewal writes the word its pin names"
     );
-    handle
-        .report(renewed(Some("max"), "keepalive", 3_000))
-        .await;
+    handle.report(renewed(Some("max"), true, 3_000)).await;
     assert_eq!(
         stored().await,
         "low",
         "a probe replays another request's body, so its renewal keeps the stored word"
     );
-    handle.report(renewed(None, "client", 4_000)).await;
+    handle.report(renewed(None, false, 4_000)).await;
     assert_eq!(
         stored().await,
         "",
@@ -15046,7 +15032,7 @@ async fn a_classifier_call_follows_the_turn_that_ended_last_rather_than_the_requ
         output: 5,
     };
     handle
-        .report(renewal(selected_pin(x), 3_000, usage, "client", 300_000))
+        .report(renewal(selected_pin(x), 3_000, usage, false, 300_000))
         .await;
     let y = handle
         .select(agent_turn(
@@ -15133,14 +15119,14 @@ async fn an_auxiliary_calls_end_on_another_agents_turn_pin_does_not_redirect_the
     };
     // x's turn ends on b, then y's summary fork, an auxiliary call on y's own turn pin, ends on c.
     handle
-        .report(renewal(selected_pin(x), 3_000, usage(), "client", 300_000))
+        .report(renewal(selected_pin(x), 3_000, usage(), false, 300_000))
         .await;
     handle
         .report(Report::PinRenewed {
             pin: selected_pin(y),
             now: 3_010,
             usage: Some(usage()),
-            origin: "client",
+            keepalive: false,
             cache_ttl_ms: 300_000,
             fast: false,
             classifier: false,
@@ -15213,14 +15199,14 @@ async fn a_probes_renewal_of_another_agents_turn_pin_does_not_redirect_the_class
     };
     // x's turn ends on b, then a keepalive probe, which replays y's turn and its class, renews y's idle pin on c.
     handle
-        .report(renewal(selected_pin(x), 3_000, usage(), "client", 300_000))
+        .report(renewal(selected_pin(x), 3_000, usage(), false, 300_000))
         .await;
     handle
         .report(Report::PinRenewed {
             pin: selected_pin(y),
             now: 3_010,
             usage: Some(usage()),
-            origin: "keepalive",
+            keepalive: true,
             cache_ttl_ms: 300_000,
             fast: false,
             classifier: false,

@@ -183,8 +183,8 @@ pub(crate) struct Publish {
 pub(crate) struct Renewal {
     pub router: RouterHandle,
     pub pin: PinRef,
-    /// `client` or `keepalive`.
-    pub origin: &'static str,
+    /// Whether a keepalive probe sent the request, rather than the client.
+    pub keepalive: bool,
     pub cache_ttl_ms: i64,
     /// Whether this request created the pin rather than renewing one that already served.
     pub fresh: bool,
@@ -240,7 +240,7 @@ impl Renewal {
                 pin: self.pin,
                 now,
                 usage: usage.filter(|u| !u.is_empty()).map(pin_usage),
-                origin: self.origin,
+                keepalive: self.keepalive,
                 cache_ttl_ms: self.cache_ttl_ms,
                 fast,
                 classifier: self.classifier,

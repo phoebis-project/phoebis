@@ -1444,7 +1444,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                     input: prompt,
                     ..phoebis_routing::PinUsage::default()
                 }),
-                origin: "client",
+                keepalive: false,
                 cache_ttl_ms: 300_000,
                 fast: false,
                 classifier: false,
@@ -1505,7 +1505,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             pin: selection.pin.expect("a session's selection holds a pin"),
             now,
             usage: None,
-            origin: "client",
+            keepalive: false,
             cache_ttl_ms: 300_000,
             fast: false,
             classifier: false,

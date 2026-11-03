@@ -613,8 +613,8 @@ pub enum Report {
         now: i64,
         /// The attempt's usage, `None` for an attempt that answered none; never folded for a probe.
         usage: Option<PinUsage>,
-        /// `client` or `keepalive`.
-        origin: &'static str,
+        /// Whether a keepalive probe renewed the pin, rather than the client's own request.
+        keepalive: bool,
         /// The cache TTL the relay resolved for the attempt: the policy's rewrite, else the client's marker.
         cache_ttl_ms: i64,
         /// The answer reported `usage.speed` `fast`.
@@ -624,7 +624,7 @@ pub enum Report {
         classifier: bool,
         /// The request's class is a turn's, `main` or `subagent`: its stream's end is the end of the agent's turn,
         /// which `latest_turn_pin` answers. False for a compaction and every auxiliary call, the classifier's among
-        /// them. A probe that replays such a request carries it too, so the task reads it beside `origin`.
+        /// them. A probe that replays such a request carries it too, so the task reads it beside `keepalive`.
         turn: bool,
     },
     Sample {
@@ -3866,7 +3866,7 @@ impl Task {
                 mut pin,
                 now,
                 usage,
-                origin,
+                keepalive,
                 cache_ttl_ms,
                 fast,
                 classifier,
@@ -3879,8 +3879,8 @@ impl Task {
                     // A probe's renewal is the refresh of the cache it read, which is another cache once the session
                     // changed lanes while it was in flight. A client's renewal folds its own burn whatever lane
                     // the pin moved to since, so it is not held to the lane.
-                    let left_lane = origin == "keepalive"
-                        && current.lane != self.state.canonical_lane(&pin.lane);
+                    let left_lane =
+                        keepalive && current.lane != self.state.canonical_lane(&pin.lane);
                     if left_lane {
                         tracing::debug!(
                             key_id = %key.key_id,
@@ -3897,16 +3897,16 @@ impl Task {
                     // its funding selects on the account the pin sits on when it reads, so leaving overage or moving
                     // between tiers needs no reset.
                     let fold = usage
-                        .filter(|_| same_epoch && !left_lane && origin != "keepalive")
+                        .filter(|_| same_epoch && !left_lane && !keepalive)
                         .map(|usage| {
                             let window_ms = self.burn_window_ms(&pin.key_id);
                             // The meter charges a request inside the peak band more, by its own regime's factor, so
                             // the banded copy weighs it by the band of the row's regime at the renewal, the row's
                             // entrypoint as the renewal leaves it. Dollars cost the same at every hour.
-                            let entrypoint = if origin == "client" {
-                                &pin.entrypoint
-                            } else {
+                            let entrypoint = if keepalive {
                                 &current.entrypoint
+                            } else {
+                                &pin.entrypoint
                             };
                             let band = self.config.band.at(
                                 FIVE_HOUR,
@@ -3930,7 +3930,7 @@ impl Task {
                         renewed.cache_ttl_ms = cache_ttl_ms;
                         // A probe replays another request's headers and body, so the row keeps its entrypoint and its
                         // effort as it keeps its lane.
-                        if origin == "client" {
+                        if !keepalive {
                             renewed.entrypoint = pin.entrypoint.clone();
                             renewed.effort = pin.effort.clone().unwrap_or_default();
                         }
@@ -3938,8 +3938,8 @@ impl Task {
                         // `latest_turn_pin` reads it ahead of the pins' stamps. A probe (which replays a turn's class),
                         // an auxiliary call on the agent's turn pin (the subagent summary fork among them), a
                         // compaction and an answer without usage end no turn.
-                        let turn_ended = origin == "client" && turn && usage.is_some();
-                        if origin == "keepalive" {
+                        let turn_ended = !keepalive && turn && usage.is_some();
+                        if keepalive {
                             // A probe's selection judged nothing, since it replays another request's facts; the
                             // renewal is the refresh it wrote. Its usage is the keepalive's cost, never the
                             // session's burn.

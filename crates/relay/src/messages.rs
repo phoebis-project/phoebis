@@ -3644,7 +3644,7 @@ impl Relay {
         ctx.pin.map(|pin| Renewal {
             router: self.router.clone(),
             pin: pin.clone(),
-            origin: ctx.admitted.trace.origin.as_str(),
+            keepalive: ctx.admitted.trace.origin == Origin::Keepalive,
             cache_ttl_ms: ctx
                 .cache_ttl_ms
                 .or(ctx.admitted.markers_ttl_ms)
