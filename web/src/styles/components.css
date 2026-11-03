@@ -541,6 +541,7 @@
   overflow: visible;
 }
 
+.cost-ref__band-now,
 .meter__mark {
   position: absolute;
   top: -3px;
