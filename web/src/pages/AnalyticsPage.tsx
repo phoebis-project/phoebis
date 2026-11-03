@@ -26,7 +26,7 @@ import { clock } from '@/lib/clock';
 import { failed, weekReadingOf, weekScale } from '@/lib/costs';
 import { ANALYTICS_DIMENSIONS, chipText, escapePattern } from '@/lib/filterBar';
 import { effectiveInterval, readEnd, spanEnded } from '@/lib/follow';
-import { fmtAbsolute, fmtBytes, fmtCompact, fmtDayTick, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtShortTime, fmtUsd, fmtUsdTick, fmtWeek, pct, shortId, upperFirst, usdTickDigits, weekShort } from '@/lib/format';
+import { fmtAbsolute, fmtBytes, fmtCompact, fmtDayTick, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtShortTime, fmtUsd, fmtUsdTick, fmtWeek, keyLifetime, pct, shortId, upperFirst, usdTickDigits, weekShort } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
 import { useAsync, useQueryFilters, useRangeTakenAt, type Loaded } from '@/lib/hooks';
 import { REFUSED_TITLE } from '@/lib/requests';
@@ -360,7 +360,7 @@ export function AnalyticsPage() {
           api
             .listRequests({ accountIds: filters.accountId, client: logClient, cursor, from: fromIso, includeProbes, keyIds: sessionKey && filters.keyId.length === 0 ? [sessionKey] : filters.keyId, limit: SESSION_PAGE_SIZE, models: filters.model, poolIds: filters.poolId, session: sessionId, to: toIso })
             // The route reads one key list, so a lifetime beside a key filter is applied here as well.
-            .then((page) => ({ ...page, requests: page.requests.filter((r) => sessionKey === null || `${r.keyId}@${r.keyGeneration}` === sessionKey) })),
+            .then((page) => ({ ...page, requests: page.requests.filter((r) => sessionKey === null || (r.keyId !== null && keyLifetime(r.keyId, r.keyGeneration) === sessionKey)) })),
         SESSION_PAGE_LIMIT,
         held,
       ).then((answer) => {

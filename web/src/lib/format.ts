@@ -1,4 +1,4 @@
-import type { Placement } from '@/api/types';
+import type { ApiKey, Placement } from '@/api/types';
 import { lookup } from '@/lib/counts';
 import { DAY, HOUR, MINUTE } from '@/lib/time';
 import { WEEK_LABEL, type WeekPosition } from '@/lib/unit';
@@ -311,6 +311,17 @@ export const earlierHolderLabel = (id: string, generation: number): string => {
   if (generation === 0 || Number.isNaN(created.getTime())) return `${id} (deleted)`;
   return `${id} (deleted, created ${fmtMinute(generation)})`;
 };
+
+/** A key's lifetime as the `keys=` selectors and the analytics key grouping name it, since a key id created again is
+ *  another holder: the id and the generation, the key's creation in Unix milliseconds. */
+export const keyLifetime = (id: string, generation: number): string => `${id}@${generation}`;
+/** The lifetime a token names, or null where its generation is no whole number, which no key was created at. */
+export const parseKeyLifetime = (token: string): { generation: number; id: string } | null => {
+  const m = /^(.+)@(\d+)$/.exec(token);
+  return m === null ? null : { generation: Number(m[2]), id: m[1] };
+};
+/** The generation of the lifetime a live key holds. */
+export const keyGenerationOf = (key: Pick<ApiKey, 'createdAt'>): number => Date.parse(key.createdAt);
 
 /** A client names itself in full, which is wider than any table cell affords; the whole string rides the title. */
 export const shortAgent = (ua: string) => shortId(ua, 28);

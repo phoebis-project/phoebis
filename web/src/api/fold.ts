@@ -2,7 +2,7 @@ import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, m
 import { fundingOf } from '@/lib/costs';
 import { countOf, emptyCounts } from '@/lib/counts';
 import { foldClassifier, foldEffort, foldRequestClass, foldSpeed, servedMissReason, servingAttempt } from '@/lib/dimensions';
-import { earlierHolderLabel } from '@/lib/format';
+import { earlierHolderLabel, keyLifetime } from '@/lib/format';
 import { emptyHistogram, histogramOf, mergeHistograms, percentileFromHistogram } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
 import type { AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, FundingFilter, RequestLog, RequestPage } from './types';
@@ -98,7 +98,7 @@ const keyOf = (r: RequestLog, by: AnalyticsGroupBy, agentGroups: string[]): stri
   // Requests filters match.
   if (by === 'effort') return foldEffort(r.shape.effort);
   // A key id created again is another holder, so the group is the lifetime, which a `keys=` selector names too.
-  if (by === 'key') return `${r.keyId ?? '-'}@${r.keyGeneration}`;
+  if (by === 'key') return keyLifetime(r.keyId ?? '-', r.keyGeneration);
   if (by === 'kind') return r.kind;
   // The canonical id, as the rollups file a request and the Models filter matches it, so a `[1m]` spelling or an
   // alias joins the group of the model it resolved to.

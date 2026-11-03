@@ -2,7 +2,7 @@ import type { Api } from '@/api/client';
 import type { Account, AccountRollup, AnalyticsGroup, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, HeldPoint, PinMigrationReason, Placement, PlacementRow, Reconciliation, RewritesAnswer, SubscriptionCosts, WindowSample } from '@/api/types';
 import { MODEL_WEEK_TIERS, tierCapacity, type CostWindow } from '@/lib/costs';
 import { has, lookup } from '@/lib/counts';
-import { earlierHolderLabel, fmtCompact, fmtInt, fmtPct, fmtShare, fmtUsd, fmtWeek, weekShort } from '@/lib/format';
+import { earlierHolderLabel, fmtCompact, fmtInt, fmtPct, fmtShare, fmtUsd, fmtWeek, parseKeyLifetime, weekShort } from '@/lib/format';
 import { planLabel, pricedTier } from '@/lib/quota';
 import { ageWord, HOUR } from '@/lib/time';
 import type { UnitPosition, WeekPosition } from '@/lib/unit';
@@ -171,8 +171,6 @@ export async function readBurn(
   return { accounts, answer };
 }
 
-/** An earlier holder of a key id groups under `<id>@<generation>`, which the breakdown labels by its creation. */
-const EARLIER_HOLDER = /^(.+)@(\d+)$/;
 /**
  * A burn group's label. A burn point carries no label of its own, so the words are the breakdown's: an earlier key
  * holder's, `no model` for the model grouping's empty key, and for the reserved id `none` under the classifier
@@ -181,8 +179,8 @@ const EARLIER_HOLDER = /^(.+)@(\d+)$/;
 function burnLabelOf(groupBy: BurnGroup, key: string): string {
   if (key === '-') return groupBy === 'classifier' ? 'none' : 'unattributed';
   if (groupBy === 'model' && key === '') return 'no model';
-  const holder = groupBy === 'key' ? EARLIER_HOLDER.exec(key) : null;
-  return holder === null ? key : earlierHolderLabel(holder[1], Number(holder[2]));
+  const holder = groupBy === 'key' ? parseKeyLifetime(key) : null;
+  return holder === null ? key : earlierHolderLabel(holder.id, holder.generation);
 }
 
 /**

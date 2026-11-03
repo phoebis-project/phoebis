@@ -27,7 +27,7 @@ import { weekReadingOf } from '@/lib/costs';
 import { EFFORT_LEVELS, foldRequestClass, NO_CLASS, NO_EFFORT, OTHER_DIMENSION, servedMissReason, servingAttempt, servingResponse } from '@/lib/dimensions';
 import { notLoadedReason, REQUESTS_DIMENSIONS } from '@/lib/filterBar';
 import { effectiveInterval, FOLLOW_OVERRUN, type Paging, pagingFor, pollQuery, readEnd, spanEnded } from '@/lib/follow';
-import { bytesDropped, earlierHolderLabel, fmtAbsolute, fmtCompact, fmtDatedTime, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, fmtWeek, forkLabel, shortAgent, shortId, shortModel, tokensTotal } from '@/lib/format';
+import { bytesDropped, earlierHolderLabel, fmtAbsolute, fmtCompact, fmtDatedTime, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, fmtWeek, forkLabel, keyGenerationOf, parseKeyLifetime, shortAgent, shortId, shortModel, tokensTotal } from '@/lib/format';
 import { guardrailLabel, guardrailOptions } from '@/lib/guardrails';
 import { useAsync, useNow, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';
 import { compareRequests, costCellOf, costHeaderTitle, type CostUnit, costUnitOf, FREE_SHARE_TITLE, FUNDING_WORD, heldWords, NO_SHARE_TITLE, requestHintArgs, revisionsTitle } from '@/lib/requests';
@@ -266,13 +266,11 @@ function CostRows({ context, request: r, settings, unit }: { context: CostContex
  */
 function keyOptions(keys: ApiKey[] | null, selected: string[]): Option[] {
   if (keys === null) return [];
-  const live = new Map(keys.map((k) => [k.id, Date.parse(k.createdAt)]));
+  const live = new Map(keys.map((k) => [k.id, keyGenerationOf(k)]));
   const earlier = selected.flatMap((value) => {
-    const at = value.lastIndexOf('@');
-    if (at < 0) return [];
-    const id = value.slice(0, at);
-    const generation = Number(value.slice(at + 1));
-    return live.get(id) === generation ? [] : [{ label: earlierHolderLabel(id, generation), value }];
+    const lifetime = parseKeyLifetime(value);
+    if (lifetime === null || live.get(lifetime.id) === lifetime.generation) return [];
+    return [{ label: earlierHolderLabel(lifetime.id, lifetime.generation), value }];
   });
   return [...keys.map((k) => ({ label: k.name, value: k.id })), ...earlier];
 }
