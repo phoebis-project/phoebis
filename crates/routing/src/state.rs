@@ -2228,13 +2228,14 @@ impl RoutingState {
     /// whatever the snapshot reads, since that load read the registry before the mark's write landed.
     pub fn reconcile_funding_retries(&mut self, snapshot: &RegistrySnapshot) {
         self.funding_retries.retain(|account_id, retry| {
-            snapshot.account(account_id).is_some_and(|account| {
-                account.incarnation == retry.incarnation
-                    && (account.state == AccountState::FundingRequired
+            snapshot
+                .holder(account_id, retry.incarnation)
+                .is_some_and(|account| {
+                    account.state == AccountState::FundingRequired
                         || retry
                             .mark_revision
-                            .is_none_or(|written| account.revision < written))
-            })
+                            .is_none_or(|written| account.revision < written)
+                })
         });
     }
 
@@ -3752,11 +3753,8 @@ impl RoutingState {
     /// the snapshot's holder carries the incarnation it names. A pin names its key's creation time too, and one
     /// whose key or account was replaced reads `deleted`: its holder is gone, whatever took the id.
     pub fn purge(&mut self, snapshot: &RegistrySnapshot, now: i64) -> Purged {
-        let gone = |account_id: &str, incarnation: u64| {
-            snapshot
-                .account(account_id)
-                .is_none_or(|a| a.incarnation != incarnation)
-        };
+        let gone =
+            |account_id: &str, incarnation: u64| snapshot.holder(account_id, incarnation).is_none();
         let ttl_of =
             |key_id: &str| -> Option<i64> { snapshot.key_pool(key_id).map(affinity_ttl_ms) };
         let cooldowns: Vec<_> = self
@@ -3838,9 +3836,7 @@ impl RoutingState {
             .affinity
             .write()
             .expect("affinity lock poisoned")
-            .purge(now, ttl_of, |account_id| {
-                snapshot.account(account_id).map(|a| a.incarnation)
-            });
+            .purge(now, ttl_of, |account_id| snapshot.incarnation(account_id));
         let affinity = affinity_entries
             .iter()
             .map(|purged| (purged.model.clone(), purged.hash.clone()))

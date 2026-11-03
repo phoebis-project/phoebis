@@ -204,6 +204,16 @@ impl RegistrySnapshot {
     pub fn account(&self, id: &str) -> Option<&AccountRow> {
         self.accounts.get(id)
     }
+    /// The account under the id while it is still the holder of `incarnation`, `None` once the id is gone or was
+    /// deleted and created again.
+    pub fn holder(&self, id: &str, incarnation: u64) -> Option<&AccountRow> {
+        self.account(id)
+            .filter(|account| account.incarnation == incarnation)
+    }
+    /// The incarnation of the id's current holder, `None` for an id the snapshot no longer holds.
+    pub fn incarnation(&self, id: &str) -> Option<u64> {
+        self.account(id).map(|account| account.incarnation)
+    }
     /// The credential generation this snapshot was loaded with, `None` for an account holding none.
     pub fn credential_generation(&self, account_id: &str) -> Option<u64> {
         self.credential_generations.get(account_id).copied()

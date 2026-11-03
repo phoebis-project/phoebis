@@ -1723,9 +1723,7 @@ impl ConversationLookup for RouterHandle {
         self.affinity
             .read()
             .expect("affinity lock poisoned")
-            .conversation(query, |account_id| {
-                snapshot.account(account_id).map(|a| a.incarnation)
-            })
+            .conversation(query, |account_id| snapshot.incarnation(account_id))
     }
 
     fn predecessor(&self, query: &PredecessorQuery<'_>) -> Option<String> {
@@ -1733,9 +1731,7 @@ impl ConversationLookup for RouterHandle {
         self.affinity
             .read()
             .expect("affinity lock poisoned")
-            .predecessor(query, |account_id| {
-                snapshot.account(account_id).map(|a| a.incarnation)
-            })
+            .predecessor(query, |account_id| snapshot.incarnation(account_id))
     }
 }
 
@@ -2555,7 +2551,7 @@ fn projections(
         .map(|(account_id, priority)| {
             let candidate = Candidate {
                 account_id: account_id.to_string(),
-                incarnation: snapshot.account(account_id).map_or(0, |a| a.incarnation),
+                incarnation: snapshot.incarnation(account_id).unwrap_or(0),
                 priority,
                 upstream_model: String::new(),
             };
@@ -4407,9 +4403,7 @@ impl Task {
         // and so do those of a holder deleted and created again under its id since the previous snapshot.
         // Samples and charges are keyed by id alone, so a moved holder's go here, before the purge.
         for account in previous.accounts() {
-            let moved = next
-                .account(&account.id)
-                .is_none_or(|a| a.incarnation != account.incarnation);
+            let moved = next.holder(&account.id, account.incarnation).is_none();
             let present = !moved
                 && next.account(&account.id).is_some_and(|a| {
                     !matches!(a.state, AccountState::Disconnected | AccountState::Unpaired)
@@ -5300,9 +5294,7 @@ fn holder<'a>(
     account_id: &str,
     incarnation: u64,
 ) -> Option<&'a phoebis_store::AccountRow> {
-    let account = snapshot
-        .account(account_id)
-        .filter(|account| account.incarnation == incarnation);
+    let account = snapshot.holder(account_id, incarnation);
     if account.is_none() {
         tracing::debug!(account = %account_id, "a report named a holder the id has moved past");
     }
