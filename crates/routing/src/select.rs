@@ -5337,7 +5337,7 @@ fn renew(
         Warmth::Untouched => {}
     }
     if verdict != Warmth::Untouched {
-        renewed.lane = request.lane.clone();
+        renewed.lane.clone_from(&request.lane);
         if chained {
             stamp_hashes(&mut renewed, request);
         }

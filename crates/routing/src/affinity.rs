@@ -477,7 +477,7 @@ impl AffinityMap {
                 entry.incarnation = report.incarnation;
                 // One entry holds one lane: a conversation that switched lanes forgets the earlier lane's cache here,
                 // which a lane change reads as cold anyway.
-                entry.lane = report.lane.clone();
+                entry.lane.clone_from(&report.lane);
                 self.dirty.insert((model.to_string(), hash.to_string()));
                 return None;
             }
