@@ -2599,23 +2599,34 @@ struct GroupSum {
     plan: PlanSums,
 }
 
+/// What one read folds every row under: the grouping, whether probes count as requests, the share pricing and the
+/// tables and instant every row prices at. Built once per read.
+struct GroupRead<'a> {
+    agent_groups: &'a [String],
+    costs: &'a PlanTables,
+    group_by: &'a str,
+    live: &'a LiveKeys,
+    now: i64,
+    prices: &'a PriceRevisions,
+    pricing: Option<SharePricing<'a>>,
+    probes_counted: bool,
+}
+
 #[derive(Default)]
 struct GroupSums(BTreeMap<String, GroupSum>);
 
 impl GroupSums {
-    #[allow(clippy::too_many_arguments)]
-    fn add(
-        &mut self,
-        row: &RollupRow,
-        group_by: &str,
-        probes_counted: bool,
-        live: &LiveKeys,
-        agent_groups: &[String],
-        pricing: Option<SharePricing<'_>>,
-        prices: &PriceRevisions,
-        costs: &PlanTables,
-        now: i64,
-    ) {
+    fn add(&mut self, read: &GroupRead<'_>, row: &RollupRow) {
+        let GroupRead {
+            agent_groups,
+            costs,
+            group_by,
+            live,
+            now,
+            prices,
+            pricing,
+            probes_counted,
+        } = *read;
         let key = group_of(row, group_by, live, agent_groups);
         let entry = self.0.entry(key.clone()).or_insert_with(|| GroupSum {
             sum: RollupRow::default(),
@@ -2689,7 +2700,13 @@ impl GroupSums {
         }
     }
 
-    fn finish(mut self, group_by: &str, probes_counted: bool, live: &LiveKeys) -> Vec<GroupRow> {
+    fn finish(mut self, read: &GroupRead<'_>) -> Vec<GroupRow> {
+        let GroupRead {
+            group_by,
+            live,
+            probes_counted,
+            ..
+        } = *read;
         // A group whose rows in the range are all probes never joins the request side under the default filter;
         // without this it would report zero requests rather than staying out of a breakdown that does not count
         // probes as requests. A group with any non-probe row, a keepalive credit included, stays.
@@ -2717,33 +2734,12 @@ impl GroupSums {
 }
 
 #[cfg(any(test, feature = "test-support"))]
-#[allow(clippy::too_many_arguments)]
-fn sum_groups(
-    rows: &[&RollupRow],
-    group_by: &str,
-    probes_counted: bool,
-    live: &LiveKeys,
-    agent_groups: &[String],
-    pricing: Option<SharePricing<'_>>,
-    prices: &PriceRevisions,
-    costs: &PlanTables,
-    now: i64,
-) -> Vec<GroupRow> {
+fn sum_groups(rows: &[&RollupRow], read: &GroupRead<'_>) -> Vec<GroupRow> {
     let mut sums = GroupSums::default();
     for row in rows {
-        sums.add(
-            row,
-            group_by,
-            probes_counted,
-            live,
-            agent_groups,
-            pricing,
-            prices,
-            costs,
-            now,
-        );
+        sums.add(read, row);
     }
-    sums.finish(group_by, probes_counted, live)
+    sums.finish(read)
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -2762,8 +2758,17 @@ pub fn series(
     costs: &PlanTables,
     now: i64,
 ) -> Result<Vec<SeriesPoint>, LedgerError> {
-    // The rows come with no filter, so only the account grouping holds one account's rows per group.
-    let pricing = pricing.filter(|_| holds_one_account(group_by, &[]));
+    let read = GroupRead {
+        agent_groups,
+        costs,
+        group_by,
+        live,
+        now,
+        prices,
+        // The rows come with no filter, so only the account grouping holds one account's rows per group.
+        pricing: pricing.filter(|_| holds_one_account(group_by, &[])),
+        probes_counted,
+    };
     let last = hour_ceil(to);
     let first = first_edge(from / 1_000, last, bucket_seconds)?;
     let mut points = Vec::new();
@@ -2775,17 +2780,7 @@ pub fn series(
             .collect();
         points.push(SeriesPoint {
             at: at * 1_000,
-            groups: sum_groups(
-                &in_bucket,
-                group_by,
-                probes_counted,
-                live,
-                agent_groups,
-                pricing,
-                prices,
-                costs,
-                now,
-            ),
+            groups: sum_groups(&in_bucket, &read),
         });
         at += bucket_seconds;
     }
@@ -2805,18 +2800,18 @@ pub fn breakdown(
     costs: &PlanTables,
     now: i64,
 ) -> Vec<GroupRow> {
-    sum_groups(
-        &rows.iter().collect::<Vec<_>>(),
-        group_by,
-        probes_counted,
-        live,
+    let read = GroupRead {
         agent_groups,
-        // The rows come with no filter, so only the account grouping holds one account's rows per group.
-        pricing.filter(|_| holds_one_account(group_by, &[])),
-        prices,
         costs,
+        group_by,
+        live,
         now,
-    )
+        prices,
+        // The rows come with no filter, so only the account grouping holds one account's rows per group.
+        pricing: pricing.filter(|_| holds_one_account(group_by, &[])),
+        probes_counted,
+    };
+    sum_groups(&rows.iter().collect::<Vec<_>>(), &read)
 }
 
 /// `series` over `[from, to)` (milliseconds) under `filter`, read through `read_rollups_paged` and folded into each
@@ -2841,25 +2836,23 @@ pub async fn series_paged(
     let first = first_edge(from / 1_000, last, bucket_seconds)?;
     let starts: Vec<i64> = bucket_starts(first, last, bucket_seconds).collect();
     let mut buckets: Vec<GroupSums> = starts.iter().map(|_| GroupSums::default()).collect();
-    let probes_counted = filter.probes_counted();
-    let pricing = pricing.filter(|_| holds_one_account(group_by, &filter.accounts));
+    let read = GroupRead {
+        agent_groups: &filter.user_agent_groups,
+        costs,
+        group_by,
+        live,
+        now,
+        prices,
+        pricing: pricing.filter(|_| holds_one_account(group_by, &filter.accounts)),
+        probes_counted: filter.probes_counted(),
+    };
     if let Some(select) = filter.rollup_select(live) {
         read_rollups_paged(db, &select, hour_of(from), last, |row| {
             if !passes_patterns(row, filter) || !passes_funding(row, filter) {
                 return;
             }
             if let Some(sums) = bucket_slot(&mut buckets, first, bucket_seconds, row.hour) {
-                sums.add(
-                    row,
-                    group_by,
-                    probes_counted,
-                    live,
-                    &filter.user_agent_groups,
-                    pricing,
-                    prices,
-                    costs,
-                    now,
-                );
+                sums.add(&read, row);
             }
         })
         .await?;
@@ -2869,7 +2862,7 @@ pub async fn series_paged(
         .zip(buckets)
         .map(|(at, sums)| SeriesPoint {
             at: at * 1_000,
-            groups: sums.finish(group_by, probes_counted, live),
+            groups: sums.finish(&read),
         })
         .collect())
 }
@@ -2892,27 +2885,25 @@ pub async fn breakdown_paged(
     now: i64,
 ) -> Result<Vec<GroupRow>, LedgerError> {
     let mut sums = GroupSums::default();
-    let probes_counted = filter.probes_counted();
-    let pricing = pricing.filter(|_| holds_one_account(group_by, &filter.accounts));
+    let read = GroupRead {
+        agent_groups: &filter.user_agent_groups,
+        costs,
+        group_by,
+        live,
+        now,
+        prices,
+        pricing: pricing.filter(|_| holds_one_account(group_by, &filter.accounts)),
+        probes_counted: filter.probes_counted(),
+    };
     if let Some(select) = filter.rollup_select(live) {
         read_rollups_paged(db, &select, hour_of(from), hour_ceil(to), |row| {
             if passes_patterns(row, filter) && passes_funding(row, filter) {
-                sums.add(
-                    row,
-                    group_by,
-                    probes_counted,
-                    live,
-                    &filter.user_agent_groups,
-                    pricing,
-                    prices,
-                    costs,
-                    now,
-                );
+                sums.add(&read, row);
             }
         })
         .await?;
     }
-    Ok(sums.finish(group_by, probes_counted, live))
+    Ok(sums.finish(&read))
 }
 
 #[derive(Clone, Debug, Serialize)]
