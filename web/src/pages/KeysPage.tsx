@@ -452,31 +452,40 @@ export function KeysPage() {
           keys.reload();
         }}
       />
-      <Dialog
-        open={created !== null}
-        onClose={() => setCreated(null)}
-        title={created?.title ?? 'Key created'}
-        subtitle="Copy the secret now. The router stores only a hash, so it cannot be shown again."
-        footer={
-          <Button variant="primary" onClick={() => setCreated(null)}>
-            Done
-          </Button>
-        }
-      >
-        {created && (
-          <>
-            <div className="secret">
-              <code>{created.key.secret}</code>
-              <CopyButton text={created.key.secret} size="md" />
-            </div>
-            <p className="secondary">
-              Set it as <code>CLAUDE_CODE_OAUTH_TOKEN</code> on the client. The Settings page has the full snippet.
-            </p>
-          </>
-        )}
-      </Dialog>
+      <SecretDialog secret={created?.key.secret ?? null} title={created?.title ?? 'Key created'} onClose={() => setCreated(null)}>
+        <p className="secondary">
+          Set it as <code>CLAUDE_CODE_OAUTH_TOKEN</code> on the client. The Settings page has the full snippet.
+        </p>
+      </SecretDialog>
       <ConfirmDialog open={confirm !== null} onClose={() => setConfirm(null)} title={confirm?.title ?? ''} body={confirm?.body ?? ''} confirmLabel={confirm?.label} danger={confirm?.danger} onConfirm={() => confirm?.onConfirm()} />
     </div>
+  );
+}
+
+/** A new or rotated key's secret, shown this once, since the router stores only its hash. */
+export function SecretDialog({ children, onClose, secret, title }: { children?: ReactNode; onClose: () => void; secret: string | null; title: string }) {
+  return (
+    <Dialog
+      open={secret !== null}
+      onClose={onClose}
+      title={title}
+      subtitle="Copy the secret now. The router stores only a hash, so it cannot be shown again."
+      footer={
+        <Button variant="primary" onClick={onClose}>
+          Done
+        </Button>
+      }
+    >
+      {secret !== null && (
+        <>
+          <div className="secret">
+            <code>{secret}</code>
+            <CopyButton text={secret} size="md" />
+          </div>
+          {children}
+        </>
+      )}
+    </Dialog>
   );
 }
 

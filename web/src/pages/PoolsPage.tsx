@@ -22,7 +22,7 @@ import { SpeedChip } from '@/components/ui/SpeedChip';
 import { sumTileOf, Tile } from '@/components/ui/Tile';
 import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
-import { Badge, BadgeLink, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, PageLink, Refusal, Select, Skeleton, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
+import { Badge, BadgeLink, Button, Card, ConfirmDialog, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, PageLink, Refusal, Select, Skeleton, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { accountHref, KEYS_CODEC } from '@/lib/address';
 import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, dollarsUnder, moveLabel, nativeSidesOf, sidesLine, sumFunded, type FundedSum, type WeekReading } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
@@ -36,7 +36,7 @@ import { minuteSpan, windowOf } from '@/lib/quota';
 import { aroundSubject, logHref, words } from '@/lib/routingLog';
 import { scrollToElement } from '@/lib/scroll';
 import { GROUP_LABEL, INELIGIBLE_LABEL, LAST_RESORT_LABEL, RULE_NOTE, STRATEGY_LABEL, cooldownBadge, kindOrdered, memberSpeed, overageBadge, poolStatusSentence, selectionOrder, type Placement, type StandingBadge, windingDownBadge } from '@/lib/selection';
-import { GuardrailList, KEY_STATUS_TONE, KeyDialog } from './KeysPage';
+import { GuardrailList, KEY_STATUS_TONE, KeyDialog, SecretDialog } from './KeysPage';
 
 const POOL_STATUS_TONE = { active: 'good', degraded: 'warning', disabled: 'neutral', exhausted: 'critical' } as const;
 // What a first pool needs, said on the create dialog's rail. The words stay while the refusal dots come and go.
@@ -2463,24 +2463,7 @@ export function PoolDialog({
           if (revoking) void revokeKey(revoking);
         }}
       />
-      <Dialog
-        open={created !== null}
-        onClose={() => setCreated(null)}
-        title="Key created"
-        subtitle="Copy the secret now. The router stores only a hash, so it cannot be shown again."
-        footer={
-          <Button variant="primary" onClick={() => setCreated(null)}>
-            Done
-          </Button>
-        }
-      >
-        {created && (
-          <div className="secret">
-            <code>{created.secret}</code>
-            <CopyButton text={created.secret} size="md" />
-          </div>
-        )}
-      </Dialog>
+      <SecretDialog secret={created?.secret ?? null} title="Key created" onClose={() => setCreated(null)} />
     </>
   );
 }
