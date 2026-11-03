@@ -18,12 +18,12 @@ import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor
 import { AttentionLine } from '@/components/ui/AttentionLine';
 import { CostReferenceLink } from '@/components/ui/CostReference';
 import { SpeedChip } from '@/components/ui/SpeedChip';
-import { Tile } from '@/components/ui/Tile';
+import { sumTileOf, Tile } from '@/components/ui/Tile';
 import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, BadgeLink, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, PageLink, Refusal, Select, Skeleton, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { accountHref, KEYS_CODEC } from '@/lib/address';
-import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, UNPRICED_TITLE, equivalentOrDash, moveLabel, nativeFiguresOf, type WeekReading } from '@/lib/analytics';
+import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, UNPRICED_TITLE, dollarsUnder, equivalentOrDash, moveLabel, nativeFiguresOf, nativeSidesOf, type FundedSum, type WeekReading } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
 import { weekReadingOf } from '@/lib/costs';
 import { fmtCompact, fmtDuration, fmtHourTick, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtUsd, messageOf, shortModel } from '@/lib/format';
@@ -35,7 +35,7 @@ import { minuteSpan, windowOf } from '@/lib/quota';
 import { aroundSubject, logHref, words } from '@/lib/routingLog';
 import { scrollToElement } from '@/lib/scroll';
 import { GROUP_LABEL, INELIGIBLE_LABEL, LAST_RESORT_LABEL, RULE_NOTE, STRATEGY_LABEL, cooldownBadge, kindOrdered, memberSpeed, overageBadge, poolStatusSentence, selectionOrder, type Placement, type StandingBadge, windingDownBadge } from '@/lib/selection';
-import { dollarsUnder, GuardrailList, KEY_STATUS_TONE, KeyDialog, nativeSidesOf, sumTileOf, type FundedSum } from './KeysPage';
+import { GuardrailList, KEY_STATUS_TONE, KeyDialog } from './KeysPage';
 
 const POOL_STATUS_TONE = { active: 'good', degraded: 'warning', disabled: 'neutral', exhausted: 'critical' } as const;
 // What a first pool needs, said on the create dialog's rail. The words stay while the refusal dots come and go.

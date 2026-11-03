@@ -15,7 +15,7 @@ import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { figuresValue } from '@/components/ui/Tile';
 import { accountHref, requestHref } from '@/lib/address';
-import { equivalentOrDash, nativeFiguresOf, shareHint, UNPRICED_TITLE, type WeekReading } from '@/lib/analytics';
+import { dollarsUnder, equivalentOrDash, nativeFiguresOf, nativeSidesOf, shareHint, UNPRICED_TITLE, type FundedSum, type WeekReading } from '@/lib/analytics';
 import { weekReadingOf } from '@/lib/costs';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortModel, tokensTotal } from '@/lib/format';
 import { refreshAttention, useAsync, useAttention, useNow, type Loaded } from '@/lib/hooks';
@@ -63,19 +63,25 @@ interface CostTile {
  */
 function costTileOf(unit: UnitPosition, o: Overview, reading: WeekReading): CostTile {
   const { failure, scale, week } = reading;
-  if (unit === 'all') return { note: `${fmtUsd(o.cost24h / 24)} per hour`, spark: o.hourly.map((h) => h.cost), value: fmtUsd(o.cost24h) };
-  if (unit === 'usd') return { note: `${fmtUsd(o.billed24h / 24)} per hour`, spark: o.hourly.map((h) => h.billed), value: fmtUsd(o.billed24h) };
-  if (unit === 'equivalent') return { note: 'at the API price list, the subscription requests', spark: o.hourly.map((h) => h.cost - h.billed), value: fmtUsd(o.cost24h - o.billed24h) };
-  const day = o.equivalent24h;
-  const plan = day === null || day > 0;
-  const billed = o.billed24h > 0;
+  const day: FundedSum = { billedUsd: o.billed24h, cost: o.cost24h, equivalent: o.equivalent24h };
+  if (unit !== 'native') {
+    const dollars = dollarsUnder(unit, day);
+    return {
+      note: unit === 'equivalent' ? 'at the API price list, the subscription requests' : `${fmtUsd(dollars / 24)} per hour`,
+      spark: o.hourly.map((h) => dollarsUnder(unit, { billedUsd: h.billed, cost: h.cost, equivalent: h.equivalent })),
+      value: fmtUsd(dollars),
+    };
+  }
+  const sides = nativeSidesOf(day);
+  const plan = sides.equivalent !== undefined;
+  const billed = sides.billed !== undefined;
   // In percent: the spark's scale floors at one, a dollar an hour on the dollar positions, and a floor of a whole
   // week an hour would flatten the day. An unpriced hour is no idle one, so it draws as a gap.
   const spark = (factor: number) => (plan || !billed ? o.hourly.map((h) => (h.equivalent === null ? null : h.equivalent * factor * 100)) : o.hourly.map((h) => h.billed));
   if (scale === null) return failure === null ? { note: null, spark: spark(1), value: null } : { note: failure.unpriced ? 'unpriced' : 'could not load', spark: spark(1), title: failure.text, value: '-' };
-  const { figures, unpriced } = nativeFiguresOf({ billed: billed ? o.billed24h : undefined, equivalent: plan ? day : undefined }, week, scale);
+  const { figures, unpriced } = nativeFiguresOf(sides, week, scale);
   return {
-    note: billed || !plan ? `${fmtUsd(o.billed24h / 24)} billed per hour` : `${equivalentOrDash(day === null ? null : day / 24, week, scale)} per hour`,
+    note: billed || !plan ? `${fmtUsd(o.billed24h / 24)} billed per hour` : `${equivalentOrDash(o.equivalent24h === null ? null : o.equivalent24h / 24, week, scale)} per hour`,
     spark: spark(scale),
     title: unpriced ? UNPRICED_TITLE : undefined,
     value: figuresValue(figures),

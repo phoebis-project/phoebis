@@ -10,11 +10,11 @@ import { FilterBar } from '@/components/FilterBar';
 import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor';
 import { OptionList } from '@/components/ui/OptionList';
 import { Popover } from '@/components/ui/Popover';
-import { figuresValue, Tile } from '@/components/ui/Tile';
+import { sumTileOf, Tile } from '@/components/ui/Tile';
 import { IconChevron, IconInfo, IconPlus, IconWarning, IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, ErrorState, Expert, Field, GroupedDialog, Input, Menu, PageLink, Refusal, Segmented, Select, Skeleton, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { KEYS_CODEC, type KeysAddress } from '@/lib/address';
-import { nativeFiguresOf, UNPRICED_TITLE, type DollarPosition, type WeekReading } from '@/lib/analytics';
+import { dollarsUnder, nativeFiguresOf, nativeSidesOf, UNPRICED_TITLE, type FundedSum, type WeekReading } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
 import { effectiveCaptureHours } from '@/lib/capture';
 import { clock } from '@/lib/clock';
@@ -51,36 +51,6 @@ const STATUS_OPTIONS = {
   ],
 };
 
-/** A sum over both fundings, as a key's lifetime and week and a pool's day carry it. */
-export interface FundedSum {
-  /** The rows no subscription window paid, in dollars. */
-  billedUsd: number;
-  cost: number;
-  /** The plan rows as the Pro-week figure, null where a plan row priced nothing. */
-  equivalent: number | null;
-}
-/** A dollar position's dollars of a sum: every row's, the billed rows', or the plan rows' at the API price list. */
-export const dollarsUnder = (unit: DollarPosition, s: FundedSum): number => (unit === 'all' ? s.cost : unit === 'usd' ? s.billedUsd : s.cost - s.billedUsd);
-/**
- * A sum's two sides, each undefined where it has no rows, so a sum of one funding shows one figure and no "0%" side.
- * A null figure is a plan row priced nothing, a side with rows whatever the other rows priced, and a zero reads as no
- * plan rows.
- */
-export const nativeSidesOf = (s: FundedSum): { billed: number | undefined; equivalent: number | null | undefined } => ({
-  billed: s.billedUsd > 0 ? s.billedUsd : undefined,
-  equivalent: s.equivalent === null || s.equivalent > 0 ? s.equivalent : undefined,
-});
-/**
- * A tile over a sum under a position. Native stacks the two sides with their words in the chosen week, the
- * subscription side a dash under `UNPRICED_TITLE` where a plan row priced nothing, and an empty sum reads its zero in
- * each unit rather than nothing. A null value is the skeleton native draws while the scale is out.
- */
-export function sumTileOf(unit: UnitPosition, s: FundedSum, reading: WeekReading): { title?: string; value: ReactNode | null } {
-  if (unit !== 'native') return { value: fmtUsd(dollarsUnder(unit, s)) };
-  if (reading.scale === null) return { value: null };
-  const native = nativeFiguresOf(nativeSidesOf(s), reading.week, reading.scale);
-  return { title: native.unpriced ? UNPRICED_TITLE : undefined, value: figuresValue(native.figures) };
-}
 /**
  * A key's figure as a label or a line reads it: native's two sides on one line in the chosen week, a side with no rows
  * left out and a dash titled `empty` where neither has any, and a dollar position's dollars. A key spans its pool's

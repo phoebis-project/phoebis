@@ -383,6 +383,25 @@ export function nativeFiguresOf(sides: { billed: number | undefined; equivalent:
     unpriced,
   };
 }
+/** A sum over both fundings, as a key's lifetime and week and a pool's day carry it. */
+export interface FundedSum {
+  /** The rows no subscription window paid, in dollars. */
+  billedUsd: number;
+  cost: number;
+  /** The plan rows as the Pro-week figure, null where a plan row priced nothing. */
+  equivalent: number | null;
+}
+/** A dollar position's dollars of a sum: every row's, the billed rows', or the plan rows' at the API price list. */
+export const dollarsUnder = (unit: DollarPosition, s: FundedSum): number => (unit === 'all' ? s.cost : unit === 'usd' ? s.billedUsd : s.cost - s.billedUsd);
+/**
+ * A sum's two sides, each undefined where it has no rows, so a sum of one funding shows one figure and no "0%" side.
+ * A null figure is a plan row priced nothing, a side with rows whatever the other rows priced, and a zero reads as no
+ * plan rows.
+ */
+export const nativeSidesOf = (s: FundedSum): { billed: number | undefined; equivalent: number | null | undefined } => ({
+  billed: s.billedUsd > 0 ? s.billedUsd : undefined,
+  equivalent: s.equivalent === null || s.equivalent > 0 ? s.equivalent : undefined,
+});
 /**
  * The Cost by chart's note on the groups it draws as gaps: one label ("research unpriced in 3 buckets, drawn as gaps",
  * "1 bucket, drawn as a gap"), up to three joined by middle dots, a count past three ("5 groups unpriced in 12 buckets,
