@@ -2,6 +2,7 @@
 //! newest utilization sample per account with the router's own charges since it, and the in-flight counts per key
 //! and per account. Every mutation reports whether it changed anything so the task knows what to write through.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
@@ -1555,12 +1556,20 @@ impl RoutingState {
         }
     }
 
+    /// `key` under the dated id its model resolved to. The lookups run on every selection and renewal, so a key is
+    /// built only for a model that resolved to another id.
+    fn canonical_key<'k>(&self, key: &'k PinKey) -> Cow<'k, PinKey> {
+        match self.resolutions.get(&key.model) {
+            Some(dated) => Cow::Owned(PinKey {
+                model: dated.clone(),
+                ..key.clone()
+            }),
+            None => Cow::Borrowed(key),
+        }
+    }
+
     pub fn pin(&self, key: &PinKey) -> Option<&PinRow> {
-        let canonical = PinKey {
-            model: self.canonical(&key.model).to_string(),
-            ..key.clone()
-        };
-        self.pins.get(&canonical)
+        self.pins.get(&*self.canonical_key(key))
     }
 
     /// A fresh pin under a key another pin held (a release that lands the session elsewhere) takes the old one off
@@ -1592,11 +1601,8 @@ impl RoutingState {
     /// Sets the held pin's fast usage in the state alone, for a test that prices a round over fast usage. A renewal
     /// folds its fast usage into the row the task both puts here and writes, so the stored row never lags the state.
     pub fn set_fast_burn(&mut self, key: &PinKey, burn: PinBurn) {
-        let key = PinKey {
-            model: self.canonical(&key.model).to_string(),
-            ..key.clone()
-        };
-        if let Some(pin) = self.pins.get_mut(&key) {
+        let key = self.canonical_key(key);
+        if let Some(pin) = self.pins.get_mut(&*key) {
             pin.burn_fast = burn;
         }
     }
@@ -1614,36 +1620,21 @@ impl RoutingState {
 
     /// Records that a selection or a completion renewed the pin under the key since its placement.
     pub(crate) fn mark_renewed(&mut self, key: &PinKey) {
-        let key = PinKey {
-            model: self.canonical(&key.model).to_string(),
-            ..key.clone()
-        };
-        if self.pins.contains_key(&key) {
-            self.renewed.insert(key);
+        let key = self.canonical_key(key);
+        if self.pins.contains_key(&*key) && !self.renewed.contains(&*key) {
+            self.renewed.insert(key.into_owned());
         }
     }
 
     /// Whether the pin under the key was renewed since its placement.
     pub fn renewed_since_placement(&self, key: &PinKey) -> bool {
-        let key = PinKey {
-            model: self.canonical(&key.model).to_string(),
-            ..key.clone()
-        };
-        self.renewed.contains(&key)
+        self.renewed.contains(&*self.canonical_key(key))
     }
 
     /// Whether only auxiliary requests have used the pin held under the key (resolved as `pin` resolves it) since
     /// its placement, read from the row, false where no pin stands.
     pub fn auxiliary_only(&self, key: &PinKey) -> bool {
-        // Read on every renewal, so a key is built only for a model that resolved to another id.
-        let held = match self.resolutions.get(&key.model) {
-            Some(dated) => self.pins.get(&PinKey {
-                model: dated.clone(),
-                ..key.clone()
-            }),
-            None => self.pins.get(key),
-        };
-        held.is_some_and(|pin| pin.auxiliary_only)
+        self.pin(key).is_some_and(|pin| pin.auxiliary_only)
     }
 
     /// The pin's warmth under its own flag, the read every selector path takes.
@@ -1652,10 +1643,7 @@ impl RoutingState {
     }
 
     pub(crate) fn remove_pin(&mut self, key: &PinKey) -> Option<PinRow> {
-        let key = PinKey {
-            model: self.canonical(&key.model).to_string(),
-            ..key.clone()
-        };
+        let key = self.canonical_key(key);
         self.take_pin(&key)
     }
 
