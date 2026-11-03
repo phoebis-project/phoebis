@@ -565,6 +565,15 @@ export class MockApi implements Api {
     return { ...k, guardrails: this.guardrailRefs('keys', k.id), poolGuardrails: this.guardrailRefs('pools', k.poolId) };
   }
 
+  /**
+   * Restamps the pools and keys a guardrail write moved, so a pool or key dialog opened before the write presents a
+   * stamp the row no longer carries, as the routes refuse it.
+   */
+  private restampSubjects(pools: ReadonlySet<string>, keys: ReadonlySet<string>) {
+    this.pools = this.pools.map((p) => (pools.has(p.id) ? { ...p, ...restamp(p) } : p));
+    this.keys = this.keys.map((k) => (keys.has(k.id) ? { ...k, ...restamp(k) } : k));
+  }
+
   /** A pool's or a key's guardrails in the order it runs them. */
   private guardrailRefs(kind: 'keys' | 'pools', subjectId: string): GuardrailRef[] {
     return this.guardrails
@@ -848,12 +857,7 @@ export class MockApi implements Api {
     const stamp = preset === undefined ? null : { currentVersion: preset.version, customized: false, id: preset.id, version: preset.version };
     const row: Guardrail = { ...blank, keys: this.attached(blank, 'keys', input.keys), pools: this.attached(blank, 'pools', input.pools), preset: this.presetStateOf(stamp, blank.conditions) };
     this.guardrails = [...this.guardrails, row];
-    // A pool or key dialog opened before the create presents a stamp the row no longer carries, as the routes
-    // refuse it.
-    const movedPools = new Set(row.pools.map((a) => a.id));
-    const movedKeys = new Set(row.keys.map((a) => a.id));
-    this.pools = this.pools.map((p) => (movedPools.has(p.id) ? { ...p, ...restamp(p) } : p));
-    this.keys = this.keys.map((k) => (movedKeys.has(k.id) ? { ...k, ...restamp(k) } : k));
+    this.restampSubjects(new Set(row.pools.map((a) => a.id)), new Set(row.keys.map((a) => a.id)));
     return latency(this.guardrailView(row), 300);
   }
 
@@ -951,12 +955,7 @@ export class MockApi implements Api {
     this.buriedGuardrails.set(id, Math.floor(row.revision / INCARNATION_STAMP));
     // The attachments live on the row, so they leave with it and every other guardrail keeps its positions.
     this.guardrails = this.guardrails.filter((g) => g.id !== id);
-    // A pool or key dialog opened before the delete presents a stamp the row no longer carries, as the routes
-    // refuse it.
-    const movedPools = new Set(row.pools.map((a) => a.id));
-    const movedKeys = new Set(row.keys.map((a) => a.id));
-    this.pools = this.pools.map((p) => (movedPools.has(p.id) ? { ...p, ...restamp(p) } : p));
-    this.keys = this.keys.map((k) => (movedKeys.has(k.id) ? { ...k, ...restamp(k) } : k));
+    this.restampSubjects(new Set(row.pools.map((a) => a.id)), new Set(row.keys.map((a) => a.id)));
     return latency(undefined, 200);
   }
 
@@ -1453,10 +1452,7 @@ export class MockApi implements Api {
       const after = new Set(next[kind].map((a) => a.id));
       return new Set([...before, ...after].filter((s) => before.has(s) !== after.has(s)));
     };
-    const movedPools = changed('pools');
-    const movedKeys = changed('keys');
-    this.pools = this.pools.map((p) => (movedPools.has(p.id) ? { ...p, ...restamp(p) } : p));
-    this.keys = this.keys.map((k) => (movedKeys.has(k.id) ? { ...k, ...restamp(k) } : k));
+    this.restampSubjects(changed('pools'), changed('keys'));
     return latency(this.guardrailView(next), 250);
   }
 
