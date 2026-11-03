@@ -31,20 +31,14 @@ const DIAGNOSTICS: NavItem[] = [
   { to: '/meter', label: 'Meter', icon: <IconActivity size={16} /> },
 ];
 
-export const PAGE_TITLES: Record<string, string> = {
-  '/': 'Dashboard',
-  '/accounts': 'Accounts',
-  '/analytics': 'Analytics',
-  '/guardrails': 'Guardrails',
-  '/keys': 'Keys',
-  '/meter': 'Meter',
-  '/pools': 'Pools',
-  '/quota': 'Quota',
-  '/requests': 'Requests',
-  '/routing-log': 'Routing log',
-  '/sessions': 'Sessions',
-  '/settings': 'Settings',
-};
+export const PAGE_TITLES: Record<string, string> = Object.fromEntries([...NAV, ...DIAGNOSTICS].map((i) => [i.to, i.label]));
+
+const navLink = (item: NavItem) => (
+  <NavLink key={item.to} to={item.to} end={item.to === '/'} className={({ isActive }) => `nav__link ${isActive ? 'is-active' : ''}`}>
+    {item.icon}
+    <span>{item.label}</span>
+  </NavLink>
+);
 
 export function Shell() {
   const { pathname } = useLocation();
@@ -103,21 +97,11 @@ export function Shell() {
           <span className="brand__name">Phoebis Router</span>
         </div>
         <nav className="nav" aria-label="Primary">
-          {NAV.map((item) => (
-            <NavLink key={item.to} to={item.to} end={item.to === '/'} className={({ isActive }) => `nav__link ${isActive ? 'is-active' : ''}`}>
-              {item.icon}
-              <span>{item.label}</span>
-            </NavLink>
-          ))}
+          {NAV.map(navLink)}
           {diagnostics && (
             <div className="nav__group">
               <span className="nav__heading">Diagnostics</span>
-              {DIAGNOSTICS.map((item) => (
-                <NavLink key={item.to} to={item.to} className={({ isActive }) => `nav__link ${isActive ? 'is-active' : ''}`}>
-                  {item.icon}
-                  <span>{item.label}</span>
-                </NavLink>
-              ))}
+              {DIAGNOSTICS.map(navLink)}
             </div>
           )}
         </nav>
