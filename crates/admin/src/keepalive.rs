@@ -167,15 +167,11 @@ pub(crate) async fn overview(
             .copied()
             .unwrap_or(0);
         if row.kind == "probe" {
-            probes.ok += row.succeeded;
-            if Funding::of_rollup(&row.funding) == Funding::Plan {
-                probes.plan_ok += row.succeeded;
-            }
-            probes.failed +=
-                row.failed + row.rate_limited + row.exhausted + row.rejected + row.incomplete;
-            probes.held += row.probes_held;
-            probes.migrated += row.probe_migrated;
-            probes.skipped += row.probes_skipped;
+            let plan = Funding::of_rollup(&row.funding) == Funding::Plan;
+            probes.add(&phoebis_ledger::ProbeCounts {
+                plan_ok: if plan { row.succeeded } else { 0 },
+                ..phoebis_ledger::ProbeCounts::of(row)
+            });
         }
         if row.kind != "probe" && row.kept_warm_requests == 0 {
             continue;

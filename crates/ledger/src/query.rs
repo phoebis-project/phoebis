@@ -1702,6 +1702,34 @@ pub struct ProbeCounts {
     pub skipped: u64,
 }
 
+impl ProbeCounts {
+    /// The counts of `probes`, summed probe rows, all but `plan_ok`, which reads each row's funding: a probe's own
+    /// request row carries its outcome, and the engine's deltas carry what never ran.
+    pub fn of(probes: &RollupRow) -> ProbeCounts {
+        ProbeCounts {
+            failed: probes.failed
+                + probes.rate_limited
+                + probes.exhausted
+                + probes.rejected
+                + probes.incomplete,
+            held: probes.probes_held,
+            migrated: probes.probe_migrated,
+            ok: probes.succeeded,
+            plan_ok: 0,
+            skipped: probes.probes_skipped,
+        }
+    }
+
+    pub fn add(&mut self, o: &ProbeCounts) {
+        self.failed += o.failed;
+        self.held += o.held;
+        self.migrated += o.migrated;
+        self.ok += o.ok;
+        self.plan_ok += o.plan_ok;
+        self.skipped += o.skipped;
+    }
+}
+
 /// Whether every group of a read holds one account's rows, the one place the own-window shares add: the account
 /// grouping, or a filter naming exactly one account under any grouping. A read answers the shares only there, since
 /// shares of different accounts' windows do not add, and each row's own account tier prices it.
@@ -2276,19 +2304,10 @@ fn group_row(key: &str, group: GroupSum, label: String) -> GroupRow {
             plan_tokens_5m: plan.kept_warm_5m_tokens,
             plan_tokens_1h: plan.kept_warm_1h_tokens,
         },
-        // Derived from the group's probe rows alone: a probe's own request row carries its outcome, and the
-        // engine's deltas carry what never ran.
+        // Derived from the group's probe rows alone.
         probes: ProbeCounts {
-            failed: probes.failed
-                + probes.rate_limited
-                + probes.exhausted
-                + probes.rejected
-                + probes.incomplete,
-            held: probes.probes_held,
-            migrated: probes.probe_migrated,
-            ok: probes.succeeded,
             plan_ok: plan.probes_ok,
-            skipped: probes.probes_skipped,
+            ..ProbeCounts::of(&probes)
         },
         // From the probe rows: what the cache cost to keep warm is not a request the filter can drop.
         probe_cost_usd: dollars.probe_usd,
