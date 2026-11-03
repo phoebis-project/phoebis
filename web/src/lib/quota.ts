@@ -214,7 +214,8 @@ export const accountCooldown = (cooldowns: Cooldown[]): Cooldown | null => coold
 export const accountStatusOf = (flag: 'funding_required' | 'reauth_required' | 'unpaired' | null, enabled: boolean, cooldowns: Cooldown[]): Account['status'] =>
   flag ?? (!enabled ? 'paused' : accountCooldown(cooldowns) !== null ? 'cooldown' : 'ready');
 
-export function soonestReset(account: Account, now: number): WindowId | null {
+/** The soonest future reset with its window: the card's highlight reads the window, the soonest sort the instant. */
+export function soonestResetAt(account: Account, now: number): { at: number; id: WindowId } | null {
   let best: RateLimitWindow | null = null;
   let bestAt = Number.POSITIVE_INFINITY;
   for (const w of account.windows) {
@@ -226,9 +227,11 @@ export function soonestReset(account: Account, now: number): WindowId | null {
   }
   // A usage-based seat recovers at its spend window's reset, the one reset it carries.
   const spendAt = account.spend?.resetsAt ? Date.parse(account.spend.resetsAt) : Number.NaN;
-  if (spendAt > now && spendAt < bestAt) return 'spend';
-  return best ? best.id : null;
+  if (spendAt > now && spendAt < bestAt) return { at: spendAt, id: 'spend' };
+  return best ? { at: bestAt, id: best.id } : null;
 }
+
+export const soonestReset = (account: Account, now: number): WindowId | null => soonestResetAt(account, now)?.id ?? null;
 
 /** The accounts by one window's lead, the largest first, an account whose window is absent, expired or without a lead
  *  after every one with a lead, ties by label. `'7d_fable'` reads `fableWindow`. */

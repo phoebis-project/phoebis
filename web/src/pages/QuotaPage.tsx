@@ -10,7 +10,7 @@ import { IconChevronLeft, IconChevronRight, IconRefresh, IconUser } from '@/comp
 import { Badge, ErrorState, Meter, Pill, Segmented, Select, Skeleton } from '@/components/ui/primitives';
 import { CELL_MIN_PX, cellsFit, fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinor, fmtMinute, fmtPct, fmtRelative, fmtShortHour, fmtShortTime, getTimeFormat, upperFirst } from '@/lib/format';
 import { useAsync, useHashSection, useNow, useResizeObserver } from '@/lib/hooks';
-import { STATUS_LABEL, STATUS_TONE, burnWords, endOf, extraUsageState, hasSpendReading, isExpired, isQuotaListed, meterTone, onTimeline, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, slowedOf, soonestReset, sortByPace, spendResetTitle, timelineLanes, windowOf, type ExtraUsageState } from '@/lib/quota';
+import { STATUS_LABEL, STATUS_TONE, burnWords, endOf, extraUsageState, hasSpendReading, isExpired, isQuotaListed, meterTone, onTimeline, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, slowedOf, soonestReset, soonestResetAt, sortByPace, spendResetTitle, timelineLanes, windowOf, type ExtraUsageState } from '@/lib/quota';
 import { speedHover } from '@/lib/selection';
 import { DAY, HOUR } from '@/lib/time';
 
@@ -43,12 +43,7 @@ export function QuotaPage() {
     if (sort === 'pace7d') return sortByPace(subscriptions, '7d', now);
     if (sort === 'paceWeek') return sortByPace(subscriptions, '7d_fable', now);
     if (sort === 'soonest') {
-      const nextReset = (a: Account) => {
-        // A usage-based seat recovers at its spend window's reset, the one reset it carries.
-        const resets = [...a.windows.map((w) => w.resetsAt), ...(a.spend ? [a.spend.resetsAt] : [])];
-        const future = resets.flatMap((at) => (at === null ? [] : [Date.parse(at)])).filter((t) => t > now);
-        return future.length ? Math.min(...future) : Number.POSITIVE_INFINITY;
-      };
+      const nextReset = (a: Account) => soonestResetAt(a, now)?.at ?? Number.POSITIVE_INFINITY;
       return [...subscriptions].sort((a, b) => nextReset(a) - nextReset(b));
     }
     return subscriptions;
