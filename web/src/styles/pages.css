@@ -4802,7 +4802,8 @@
   }
 }
 
-.hbars--errors li {
+.hbars--errors li,
+.hbars--reasons li {
   display: grid;
   grid-template-columns: 180px 1fr auto;
   gap: 10px;
@@ -4810,7 +4811,14 @@
   font-size: 13px;
 }
 
-.hbars--errors .hbars__track {
+/* Reason labels run to "Previous message not found", so the first column is wider than the error codes'. */
+.hbars--reasons li {
+  grid-template-columns: 190px 1fr auto;
+}
+
+.hbars--errors .hbars__track,
+.hbars--moves .hbars__track,
+.hbars--reasons .hbars__track {
   height: 10px;
 }
 
@@ -4832,10 +4840,6 @@
   align-items: center;
 }
 
-.hbars--moves .hbars__track {
-  height: 10px;
-}
-
 .hbars__stack {
   display: flex;
   height: 100%;
@@ -4847,19 +4851,6 @@
 .hbars__seg {
   flex-basis: 0;
   min-width: 2px;
-}
-
-/* Reason labels run to "Previous message not found", so the first column is wider than the error codes'. */
-.hbars--reasons li {
-  display: grid;
-  grid-template-columns: 190px 1fr auto;
-  gap: 10px;
-  align-items: center;
-  font-size: 13px;
-}
-
-.hbars--reasons .hbars__track {
-  height: 10px;
 }
 
 /* "Replaced by a new registration" wraps in this column, and a centered row floats its bar and count away
