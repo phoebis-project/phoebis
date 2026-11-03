@@ -313,11 +313,15 @@ export function AnalyticsPage() {
   // figures stay drawn until the new answer lands, where a request that finished late shows, in the session log when it
   // falls on the first page. A preset's end moves to now at a boundary, and that change reads again.
   const reload = { paused, refreshMs: custom ? polledMs : 0 };
+  // A read whose load answers without a request (a hidden tab, the rollups in a session view, a side the unit leaves
+  // out) holds its refresh while that holds, since each empty answer still lands and re-renders the page. Each
+  // condition is one of the read's deps, so the opening of its tab reads it once.
+  const reloadWhile = (reads: boolean) => ({ paused: paused || !reads, refreshMs: reload.refreshMs });
   // A session view answers every section from the request log, so the rollup reads stay home while one is set.
-  const series = useAsync(() => (sessionId === null ? api.getAnalyticsSeries(query) : Promise.resolve<AnalyticsPoint[]>([])), [query, sessionId, generation], reload);
-  const breakdown = useAsync(() => (sessionId === null ? api.getAnalyticsBreakdown(query) : Promise.resolve<AnalyticsGroup[]>([])), [query, sessionId, generation], reload);
-  const byModel = useAsync(() => sideRead(tab === 'cache', sessionId, () => api.getAnalyticsBreakdown({ ...query, groupBy: 'model' })), [query, sessionId, tab, generation], reload);
-  const byPool = useAsync(() => sideRead(tab === 'cache-warming', sessionId, () => api.getAnalyticsBreakdown({ ...query, groupBy: 'pool' })), [query, sessionId, tab, generation], reload);
+  const series = useAsync(() => (sessionId === null ? api.getAnalyticsSeries(query) : Promise.resolve<AnalyticsPoint[]>([])), [query, sessionId, generation], reloadWhile(sessionId === null));
+  const breakdown = useAsync(() => (sessionId === null ? api.getAnalyticsBreakdown(query) : Promise.resolve<AnalyticsGroup[]>([])), [query, sessionId, generation], reloadWhile(sessionId === null));
+  const byModel = useAsync(() => sideRead(tab === 'cache', sessionId, () => api.getAnalyticsBreakdown({ ...query, groupBy: 'model' })), [query, sessionId, tab, generation], reloadWhile(tab === 'cache' && sessionId === null));
+  const byPool = useAsync(() => sideRead(tab === 'cache-warming', sessionId, () => api.getAnalyticsBreakdown({ ...query, groupBy: 'pool' })), [query, sessionId, tab, generation], reloadWhile(tab === 'cache-warming' && sessionId === null));
   // The log's last answer with the deps it answers, so an auto reload of the same deps reads the first page alone and
   // the later pages stand as the walk loaded them. Other deps walk the pages again. The ref names the current deps from
   // the moment a read starts, so a read under earlier deps that settles later keeps nothing.
@@ -342,9 +346,9 @@ export function AnalyticsPage() {
       });
     },
     [logClient, filters, fromIso, includeProbes, sessionId, sessionKey, toIso, generation],
-    reload,
+    reloadWhile(sessionId !== null),
   );
-  const accountRollups = useAsync(() => (tab === 'accounts' ? api.listAccountRollups(fromIso, toIso) : Promise.resolve(null)), [fromIso, toIso, tab, generation], reload);
+  const accountRollups = useAsync(() => (tab === 'accounts' ? api.listAccountRollups(fromIso, toIso) : Promise.resolve(null)), [fromIso, toIso, tab, generation], reloadWhile(tab === 'accounts'));
   // The fold rates the hour still running over the part of it this read saw, so the answer keeps its end and instant.
   // The instant is the read's own: the range clock stands still while another tab is open, and a read made later in
   // the same hour has seen more of it.
@@ -352,7 +356,7 @@ export function AnalyticsPage() {
     if (tab !== 'burn') return Promise.resolve(null);
     const readAt = clock.now();
     return readBurn(api, { from: fromIso, to: toIso }, pageBy, { accountIds: filters.accountId, userAgentGroups: agentGroups }).then((read) => ({ ...read, endMs: span.toMs, readAt }));
-  }, [fromIso, toIso, pageBy, filters.accountId, agentGroups, tab, generation], reload);
+  }, [fromIso, toIso, pageBy, filters.accountId, agentGroups, tab, generation], reloadWhile(tab === 'burn'));
   // The registry's list, for the account slots alone: the range's option list holds the accounts with traffic and
   // differs from the Dashboard's, and one account keeps one color across the views. It reads with the window, since
   // each answer redraws every chart of the open tab for colors, hints and resets that seldom move.
@@ -375,19 +379,19 @@ export function AnalyticsPage() {
   const reading = weekReadingOf(costs, costSettings.error, week);
   const { scale } = reading;
   const sized = useMemo(() => (burn.data && costs ? sizedAccounts(burn.data.accounts, costs) : null), [burn.data, costs]);
-  const rewrites = useAsync(() => (tab === 'traffic' ? api.getAnalyticsRewrites({ from: fromIso, to: toIso }) : Promise.resolve(null)), [fromIso, toIso, tab, generation], reload);
-  const refusalCategories = useAsync(() => (tab === 'traffic' ? api.getAnalyticsRefusalCategories(query) : Promise.resolve(null)), [query, tab, generation], reload);
+  const rewrites = useAsync(() => (tab === 'traffic' ? api.getAnalyticsRewrites({ from: fromIso, to: toIso }) : Promise.resolve(null)), [fromIso, toIso, tab, generation], reloadWhile(tab === 'traffic'));
+  const refusalCategories = useAsync(() => (tab === 'traffic' ? api.getAnalyticsRefusalCategories(query) : Promise.resolve(null)), [query, tab, generation], reloadWhile(tab === 'traffic'));
   // The counts route reads the range alone, which the card's subtitle says, since it carries no filter.
-  const guardrailCounts = useAsync(() => (tab === 'traffic' ? api.getAnalyticsGuardrails({ from: fromIso, to: toIso }) : Promise.resolve(null)), [fromIso, toIso, tab, generation], reload);
+  const guardrailCounts = useAsync(() => (tab === 'traffic' ? api.getAnalyticsGuardrails({ from: fromIso, to: toIso }) : Promise.resolve(null)), [fromIso, toIso, tab, generation], reloadWhile(tab === 'traffic'));
   // Side groupings on the page's own query, as byModel and byPool are; a session view folds them from the log.
-  const bySpeed = useAsync(() => sideRead(tab === 'traffic' || tab === 'cost', sessionId, () => api.getAnalyticsSeries({ ...query, groupBy: 'speed' })), [query, sessionId, tab, generation], reload);
-  const byEffort = useAsync(() => sideRead(tab === 'traffic', sessionId, () => api.getAnalyticsBreakdown({ ...query, groupBy: 'effort' })), [query, sessionId, tab, generation], reload);
+  const bySpeed = useAsync(() => sideRead(tab === 'traffic' || tab === 'cost', sessionId, () => api.getAnalyticsSeries({ ...query, groupBy: 'speed' })), [query, sessionId, tab, generation], reloadWhile((tab === 'traffic' || tab === 'cost') && sessionId === null));
+  const byEffort = useAsync(() => sideRead(tab === 'traffic', sessionId, () => api.getAnalyticsBreakdown({ ...query, groupBy: 'effort' })), [query, sessionId, tab, generation], reloadWhile(tab === 'traffic' && sessionId === null));
   // A dollar side narrows the three cost-bearing sections to the rows that side paid for, a filter the page's reads
   // cannot carry (Traffic, Latency and the Cache token charts read every row), so those sections read a second query
   // while one of them shows. The whole reads the page's own.
   const fundedTab = tab === 'cache' || tab === 'cache-warming' || tab === 'cost';
   const funded = sessionId === null && (unit === 'usd' || unit === 'equivalent');
-  const costSeries = useAsync(() => (funded && fundedTab ? api.getAnalyticsSeries({ ...query, funding }) : Promise.resolve<AnalyticsPoint[] | null>(null)), [query, funding, funded, fundedTab, generation], reload);
+  const costSeries = useAsync(() => (funded && fundedTab ? api.getAnalyticsSeries({ ...query, funding }) : Promise.resolve<AnalyticsPoint[] | null>(null)), [query, funding, funded, fundedTab, generation], reloadWhile(funded && fundedTab));
   // The Cache warming card's Probe cost tile is the one reader of this breakdown on its tab, and it reads the probe
   // rows counted under every position, the whole included: a breakdown that does not count probes drops a group left
   // with probe rows alone, whether a dollar side dropped the group's real rows or the group is probe-only in the whole
@@ -397,7 +401,7 @@ export function AnalyticsPage() {
   const costBreakdown = useAsync(
     () => ((funded && fundedTab) || warming ? api.getAnalyticsBreakdown({ ...query, funding: funded ? funding : undefined, includeProbes: query.includeProbes || warming }) : Promise.resolve<AnalyticsGroup[] | null>(null)),
     [query, funding, funded, fundedTab, warming, generation],
-    reload,
+    reloadWhile((funded && fundedTab) || warming),
   );
   // The Saved by probes chart's series twin of that breakdown, counting probes under the same funding: the page's
   // series counts them only when the address asks, and a bucket left with probe rows alone would draw no probe cost
@@ -405,29 +409,29 @@ export function AnalyticsPage() {
   const warmingSeries = useAsync(
     () => (warming ? api.getAnalyticsSeries({ ...query, funding: funded ? funding : undefined, includeProbes: true }) : Promise.resolve<AnalyticsPoint[] | null>(null)),
     [query, funding, funded, warming, generation],
-    reload,
+    reloadWhile(warming),
   );
   // Native pairs the whole read's plan probes with the billed probes' dollars, which no member of the whole carries, so
   // the Cache warming tab reads the billed rows once more, counting probes as the whole read does.
   const nativeWarming = warming && unit === 'native';
-  const billedBreakdown = useAsync(() => (nativeWarming ? api.getAnalyticsBreakdown({ ...query, funding: 'billed', includeProbes: true }) : Promise.resolve<AnalyticsGroup[] | null>(null)), [query, nativeWarming, generation], reload);
+  const billedBreakdown = useAsync(() => (nativeWarming ? api.getAnalyticsBreakdown({ ...query, funding: 'billed', includeProbes: true }) : Promise.resolve<AnalyticsGroup[] | null>(null)), [query, nativeWarming, generation], reloadWhile(nativeWarming));
   // And the chart's billed twin, whose dollars the native tooltip pairs with the plan side's equivalents.
-  const billedWarmingSeries = useAsync(() => (nativeWarming ? api.getAnalyticsSeries({ ...query, funding: 'billed', includeProbes: true }) : Promise.resolve<AnalyticsPoint[] | null>(null)), [query, nativeWarming, generation], reload);
+  const billedWarmingSeries = useAsync(() => (nativeWarming ? api.getAnalyticsSeries({ ...query, funding: 'billed', includeProbes: true }) : Promise.resolve<AnalyticsPoint[] | null>(null)), [query, nativeWarming, generation], reloadWhile(nativeWarming));
   // A dollar side narrows Cache by model's two cost cells alone, its token columns reading every row, so the side's
   // rows by model come from a read of their own beside the page's.
-  const byModelFunded = useAsync(() => (tab === 'cache' && funded ? api.getAnalyticsBreakdown({ ...query, funding, groupBy: 'model' }) : Promise.resolve<AnalyticsGroup[] | null>(null)), [query, funding, funded, tab, generation], reload);
+  const byModelFunded = useAsync(() => (tab === 'cache' && funded ? api.getAnalyticsBreakdown({ ...query, funding, groupBy: 'model' }) : Promise.resolve<AnalyticsGroup[] | null>(null)), [query, funding, funded, tab, generation], reloadWhile(tab === 'cache' && funded));
   // The by-pool table's Probe cost cell reads a dollar side's probes, and under native the billed probes beside the
   // whole read's equivalent. Probes count, so a pool left with probe rows alone on that side keeps its figure.
   const poolFunding = nativeWarming ? 'billed' : warming && funded ? funding : undefined;
   const fundedByPool = useAsync(
     () => (poolFunding !== undefined ? api.getAnalyticsBreakdown({ ...query, funding: poolFunding, groupBy: 'pool', includeProbes: true }) : Promise.resolve<AnalyticsGroup[] | null>(null)),
     [query, poolFunding, generation],
-    reload,
+    reloadWhile(poolFunding !== undefined),
   );
   const placements = useAsync(
     () => sideRead(tab === 'cache', sessionId, () => api.analyticsPlacements({ from: fromIso, keyIds: filters.keyId, poolIds: filters.poolId, to: toIso })),
     [fromIso, toIso, filters.keyId, filters.poolId, sessionId, tab, generation],
-    reload,
+    reloadWhile(tab === 'cache' && sessionId === null),
   );
   const budgets = useAsync(() => (tab === 'burn' ? api.analyticsBudgets() : Promise.resolve(null)), [tab]);
   // With no filter and no session the page's breakdown is the range's whole key list on its grouping.
