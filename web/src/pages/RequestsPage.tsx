@@ -16,7 +16,7 @@ import { ColumnsControl } from '@/components/ui/ColumnsControl';
 import type { Option } from '@/components/ui/OptionList';
 import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Input, KeyValue, Select, Skeleton } from '@/components/ui/primitives';
-import { addressWindow, RANGE_PRESETS, REQUESTS_CODEC, type RequestsAddress } from '@/lib/address';
+import { addressWindow, REQUESTS_CODEC, type RequestsAddress } from '@/lib/address';
 import { shareHint, shareHintLines } from '@/lib/analytics';
 import { autoModeLabel } from '@/lib/autoMode';
 import { bodyLines, bodyText, findHits } from '@/lib/bodies';
@@ -324,7 +324,7 @@ export function RequestsPage() {
 
   // A custom range names its own window, which Refresh reads again rather than moving it to now.
   const custom = filters.range.preset === 'custom';
-  const span = useMemo(() => addressWindow(filters.range, RANGE_PRESETS, '24h', loadedAt), [filters.range, loadedAt]);
+  const span = useMemo(() => addressWindow(filters.range, '24h', loadedAt), [filters.range, loadedAt]);
   const ended = spanEnded(custom, span.to, rangeTakenAt);
   const polledMs = effectiveInterval(intervalMs, ended);
   const query = useMemo<RequestQuery>(

@@ -37,7 +37,7 @@ export type KeySpec =
   /** Patterns joined by a newline, as the wire joins them, so a comma inside one rides. */
   | { kind: 'patterns'; name: string }
   /** The keys `range`, `from` and `to`. */
-  | { kind: 'range'; default: string; presets: readonly RangePreset[] }
+  | { kind: 'range'; default: string }
   | { kind: 'text'; name: string };
 
 export type SortDir = 'asc' | 'desc';
@@ -101,7 +101,7 @@ function readKey(key: KeySpec, params: URLSearchParams, now: number): unknown {
       // A pair is a span only while `from` precedes `to`, so a half, backward or unreadable pair reads as the preset.
       if (from !== '' && to !== '' && Date.parse(from) < Date.parse(to)) return { from, preset: 'custom', to } satisfies RangeValue;
       const name = params.get('range');
-      return { from: '', preset: key.presets.some((p) => p.name === name) && name !== null ? name : key.default, to: '' } satisfies RangeValue;
+      return { from: '', preset: RANGE_PRESETS.some((p) => p.name === name) && name !== null ? name : key.default, to: '' } satisfies RangeValue;
     }
     case 'text':
       return params.get(key.name) ?? '';
@@ -155,13 +155,13 @@ export function codecOf<F extends object>(spec: { [K in keyof F]: KeySpec }): Co
 }
 
 /** A preset's window from `now`, or a custom span's own instants. Named apart from quota.ts's windowOf, which the test entry also star-exports. */
-export function addressWindow(range: RangeValue, presets: readonly RangePreset[], fallback: string, now: number): { from: number; to: number } {
+export function addressWindow(range: RangeValue, fallback: string, now: number): { from: number; to: number } {
   if (range.preset === 'custom') {
     const from = Date.parse(range.from);
     const to = Date.parse(range.to);
     if (from < to) return { from, to };
   }
-  const preset = presets.find((p) => p.name === range.preset) ?? presets.find((p) => p.name === fallback);
+  const preset = RANGE_PRESETS.find((p) => p.name === range.preset) ?? RANGE_PRESETS.find((p) => p.name === fallback);
   return { from: now - (preset?.ms ?? 0), to: now };
 }
 
@@ -231,7 +231,7 @@ export const REQUESTS_CODEC = codecOf<RequestsAddress>({
   stopReasons: list('stop_reasons'),
   kind: { default: '', kind: 'choice', name: 'kind', values: REQUEST_KINDS },
   rows: { default: '25', kind: 'choice', name: 'rows', values: ['10', '25', '50', '100'] },
-  range: { default: '24h', kind: 'range', presets: RANGE_PRESETS },
+  range: { default: '24h', kind: 'range' },
 });
 /** The Requests address with no query. An empty query reads no instant, so one value answers every caller. */
 export const REQUESTS_DEFAULTS: RequestsAddress = REQUESTS_CODEC.fromParams(new URLSearchParams());
@@ -277,7 +277,7 @@ export const ANALYTICS_CODEC = codecOf<AnalyticsAddress>({
   probes: { kind: 'flag', name: 'probes' },
   unit: text('unit'),
   userAgents: { kind: 'patterns', name: 'user_agents' },
-  range: { default: '24h', kind: 'range', presets: RANGE_PRESETS },
+  range: { default: '24h', kind: 'range' },
 });
 
 /** The routing log's filters as the address holds them. */
@@ -306,7 +306,7 @@ export const ROUTING_LOG_CODEC = codecOf<LogFilters>({
   pools: list('pools'),
   request: text('request'),
   session: text('session'),
-  range: { default: '1h', kind: 'range', presets: RANGE_PRESETS },
+  range: { default: '1h', kind: 'range' },
 });
 
 /** The Meter view's one filter. */

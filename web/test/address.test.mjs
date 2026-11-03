@@ -183,9 +183,9 @@ test('an unknown key is absent after a round trip', () => {
 
 test('addressWindow reads a preset from now and a custom span as its own instants', () => {
   const now = Date.parse('2026-10-10T16:30:00Z');
-  assert.deepEqual(d.addressWindow(read(d.ROUTING_LOG_CODEC, 'range=6h').range, d.RANGE_PRESETS, '1h', now), { from: now - 6 * 3_600_000, to: now });
-  assert.deepEqual(d.addressWindow(read(d.ROUTING_LOG_CODEC, '').range, d.RANGE_PRESETS, '1h', now), { from: now - 3_600_000, to: now });
-  assert.deepEqual(d.addressWindow(CUSTOM, d.RANGE_PRESETS, '1h', now), { from: Date.parse(FROM), to: Date.parse(TO) });
+  assert.deepEqual(d.addressWindow(read(d.ROUTING_LOG_CODEC, 'range=6h').range, '1h', now), { from: now - 6 * 3_600_000, to: now });
+  assert.deepEqual(d.addressWindow(read(d.ROUTING_LOG_CODEC, '').range, '1h', now), { from: now - 3_600_000, to: now });
+  assert.deepEqual(d.addressWindow(CUSTOM, '1h', now), { from: Date.parse(FROM), to: Date.parse(TO) });
 });
 
 test('the one preset table carries the five presets by name, label and width, and each codec keeps its default', () => {

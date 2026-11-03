@@ -18,7 +18,7 @@ import { Badge, Button, Card, ErrorState, Meter, Segmented, Skeleton } from '@/c
 import { FilterBar } from '@/components/FilterBar';
 import { GroupBy as GroupByControl, GroupsButton } from '@/components/GroupBy';
 import { SectionBar } from '@/components/SectionBar';
-import { addressWindow, ANALYTICS_CODEC, type AnalyticsAddress, RANGE_PRESETS } from '@/lib/address';
+import { addressWindow, ANALYTICS_CODEC, type AnalyticsAddress } from '@/lib/address';
 import { ALLOWANCE_WEEKS, allowanceColumnWord, allowanceRows, allowanceSpan, fleetFigures, resetInstant, weeklyKeys, type AllowanceFigure } from '@/lib/allowance';
 import { CONVERSATION_CLASSES, MAX_BURN_LINES, NATIVE_SUBSET, UNIT_SUBSET, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, foldBurn, heldBars, heldHover, heldSpan, hintPlan, isolatedSlots, keptWarmNote, keptWarmTokens, modelGroupLabel, moveLabel, nativeCellOf, netSaving, niceAxisTop, oneAccountGroupOf, peakLines, placementCells, placementRungLabel, readBurn, sampledWindows, shareHint, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
@@ -316,7 +316,7 @@ export function AnalyticsPage() {
   // The query bounds come from the address's instants, which keep the milliseconds the inputs' minutes drop.
   const custom = a.range.preset === 'custom';
   const span = useMemo(() => {
-    const { from, to } = addressWindow(a.range, RANGE_PRESETS, '24h', now);
+    const { from, to } = addressWindow(a.range, '24h', now);
     return { fromMs: from, toMs: readEnd(custom, to, now) };
   }, [a.range, custom, now]);
   const fromIso = new Date(span.fromMs).toISOString();

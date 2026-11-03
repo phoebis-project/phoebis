@@ -12,7 +12,7 @@ import { FilterBar } from '@/components/FilterBar';
 import type { Option } from '@/components/ui/OptionList';
 import { IconChevronLeft, IconChevronRight, IconChevronsLeft } from '@/components/ui/icons';
 import { Badge, Button, Card, EmptyState, ErrorState, Skeleton, useDescription } from '@/components/ui/primitives';
-import { addressWindow, type LogFilters, RANGE_PRESETS, ROUTING_LOG_CODEC } from '@/lib/address';
+import { addressWindow, type LogFilters, ROUTING_LOG_CODEC } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { weekReadingOf } from '@/lib/costs';
 import { chipText, notLoadedReason, ROUTING_LOG_DIMENSIONS } from '@/lib/filterBar';
@@ -102,7 +102,7 @@ export function RoutingLogPage() {
 
   // A preset ends where the list was loaded, and a custom span reads its own instants, which Refresh reads again.
   const custom = filters.range.preset === 'custom';
-  const range = useMemo(() => addressWindow(filters.range, RANGE_PRESETS, '1h', loadedAt), [filters.range, loadedAt]);
+  const range = useMemo(() => addressWindow(filters.range, '1h', loadedAt), [filters.range, loadedAt]);
   const ended = spanEnded(custom, range.to, rangeTakenAt);
   const polledMs = effectiveInterval(intervalMs, ended);
   const query = useMemo<RoutingLogQuery>(
