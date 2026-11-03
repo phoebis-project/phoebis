@@ -3089,9 +3089,9 @@ impl Relay {
         } else {
             (None, Some(reader), false)
         };
-        let decoded = buffered
-            .as_ref()
-            .and_then(|b| inspectable_copy(&head, b, cut));
+        // Decoded once: the classification reads the text, and a body drained whole is forwarded as it decoded.
+        let decoded = buffered.as_ref().map(|b| decode_drained(&head, b, cut));
+        let text = decoded.as_ref().and_then(|d| d.as_deref().ok());
         // A streaming 200 is held until it commits: an error event ahead of `message_start` is a
         // rejection the caller must never see, because the request can still go to another account.
         let streaming = head.status == 200 && is_event_stream(&head);
@@ -3135,7 +3135,7 @@ impl Relay {
         if !ctx.can_strip && latches(ctx.admitted.trace) {
             // This leg cannot retry a strip, so the 400 is forwarded as it came; the account is still latched
             // against the item it named, a fact about the account whether or not this request could use it.
-            for item in refused_injected(head.status, decoded.as_deref(), ctx.injected) {
+            for item in refused_injected(head.status, text, ctx.injected) {
                 self.memory.latch(ctx.account, item);
             }
         }
@@ -3147,7 +3147,7 @@ impl Relay {
                 now: arrived,
                 fallback_ms: ctx.admitted.fallback_ms,
                 first_event: first_event.as_deref(),
-                body_prefix: decoded.as_deref(),
+                body_prefix: text,
                 injected: ctx.injected,
                 can_strip: ctx.can_strip,
                 wire_model: &ctx.admitted.identity.folded_model,
@@ -3192,7 +3192,7 @@ impl Relay {
         );
         // A mark this head forms carries the upstream's own words for it to the log's row.
         let marked = |(state, cause): (AccountState, StateCause)| {
-            (state, cause, decoded.as_deref().and_then(error_message))
+            (state, cause, text.and_then(error_message))
         };
 
         let (cooldown, mark, moves_pin) = match verdict {
@@ -3435,13 +3435,13 @@ impl Relay {
                         (bytes, Some(inspect), Some(on_error))
                     }
                 };
-                let responded = match (buffered, reader) {
-                    (Some(buffered), None) => {
+                let responded = match (decoded, reader) {
+                    (Some(decoded), None) => {
                         let guards = ctx.guards();
                         self.forward_buffered(
                             ctx.admitted.trace,
                             &head,
-                            buffered,
+                            decoded,
                             outcome,
                             renewal,
                             affinity,
@@ -3451,7 +3451,7 @@ impl Relay {
                     }
                     // A body cut at the bound goes out from the prefix the drain read, a held stream from its held
                     // bytes, and the reader produces the rest.
-                    (cut_prefix, reader) => {
+                    (_, reader) => {
                         let guards = ctx.guards();
                         self.stream(Forward {
                             affinity,
@@ -3465,7 +3465,7 @@ impl Relay {
                             on_error,
                             on_message_id,
                             outcome,
-                            prefix: cut_prefix.unwrap_or(prefix),
+                            prefix: buffered.unwrap_or(prefix),
                             rate_limit_event: false,
                             reader: reader.expect(
                                 "a head the table reads no body for, or one cut at the bound, still holds its reader",
@@ -3541,10 +3541,6 @@ impl Relay {
                 .await,
             );
         }
-        // Every failover row the table produces answers 400, 401, 403, 404, or 429, all of which were
-        // drained above, so the default here is the empty body of a head that carried none. A row
-        // added for a status outside that set would forward nothing instead of its own body.
-        let buffered = buffered.unwrap_or_default();
         if ctx.admitted.portable {
             return Next::FailOver {
                 auth_marked: ctx.auth_marked,
@@ -3560,6 +3556,9 @@ impl Relay {
                     .await,
             );
         }
+        // Every failover row the table produces answers 400, 401, 403, 404, or 429, all of which were
+        // drained above, so the defaults below are the empty body of a head that carried none. A row
+        // added for a status outside that set would forward nothing instead of its own body.
         let Some(reader) = reader else {
             // The answer the client gets is the upstream's rejection, and the guards stay with this pass.
             ctx.ending(REFUSED);
@@ -3567,7 +3566,7 @@ impl Relay {
                 self.forward_buffered(
                     ctx.admitted.trace,
                     &head,
-                    buffered,
+                    decoded.unwrap_or(Ok(Bytes::new())),
                     outcome,
                     None,
                     None,
@@ -3591,7 +3590,7 @@ impl Relay {
                 on_error: None,
                 on_message_id: None,
                 outcome,
-                prefix: buffered,
+                prefix: buffered.unwrap_or_default(),
                 rate_limit_event: false,
                 reader,
                 renewal: None,
@@ -4486,38 +4485,36 @@ impl Relay {
         with_outcome(built(builder, body), outcome)
     }
 
-    /// `renewal` is sent once the answer's usage is read, beside the completion. `guards` are the request's
-    /// counts, which a report the full mailbox makes wait holds on its task after the answer.
+    /// `decoded` is the drained body as `respond` decoded it. `renewal` is sent once the answer's usage is read,
+    /// beside the completion. `guards` are the request's counts, which a report the full mailbox makes wait holds on
+    /// its task after the answer.
     #[allow(clippy::too_many_arguments)]
     async fn forward_buffered(
         &self,
         trace: &Trace,
         head: &ResponseHead,
-        raw: Bytes,
+        decoded: Result<Bytes, TransportError>,
         outcome: RelayOutcome,
         renewal: Option<Renewal>,
         affinity: Option<AffinityFacts>,
         mut guards: Guards,
     ) -> Response {
         // A buffered answer is never an event stream, so its status alone says whether it is a rate limit.
-        let (builder, decoder) = match forward_head(head, false) {
-            Ok(parts) => parts,
+        let builder = match forward_head(head, false) {
+            Ok((builder, _)) => builder,
             Err(error) => {
                 tracing::warn!(%error, "the upstream response cannot be forwarded");
                 guards.ended(Some(TRANSPORT_ERROR));
                 return self.unreadable(trace, &error, outcome).await;
             }
         };
-        let payload = match decoder {
-            None => raw.clone(),
-            Some(mut decoder) => match decode_all(decoder.as_mut(), &raw) {
-                Ok(payload) => Bytes::from(payload),
-                Err(error) => {
-                    tracing::warn!(%error, "the upstream response cannot be decoded");
-                    guards.ended(Some(TRANSPORT_ERROR));
-                    return self.unreadable(trace, &error, outcome).await;
-                }
-            },
+        let payload = match decoded {
+            Ok(payload) => payload,
+            Err(error) => {
+                tracing::warn!(%error, "the upstream response cannot be decoded");
+                guards.ended(Some(TRANSPORT_ERROR));
+                return self.unreadable(trace, &error, outcome).await;
+            }
         };
         // The chunk is the decoded body the caller receives, since a consumer of a chunk was promised text.
         trace.publish_chunk(ResponseChunk {
@@ -5232,17 +5229,17 @@ fn user_agent(headers: &HeaderMap) -> &str {
 /// small compressed body has already expanded into memory.
 const DECODE_PIECE: usize = 4096;
 
-/// The decoded copy the classification table reads. A compressed body is decoded because the table reads JSON,
-/// and the copy is inspection only: the forward decodes the caller's body on its own. `None` means the payload does not
-/// decode or does not fit. `cut` is a body the drain stopped reading at the bound: its coded stream ends early and its
-/// text may run past the bound, so the copy is what decoded up to there, as far as the bound.
-fn inspectable_copy(head: &ResponseHead, raw: &[u8], cut: bool) -> Option<Vec<u8>> {
-    match encoding(head) {
-        Ok(Encoding::Identity) => Some(raw.to_vec()),
-        Ok(coding) if cut => Some(inspectable_prefix(decoder(coding).as_mut(), raw)),
-        Ok(coding) => decode_all(decoder(coding).as_mut(), raw).ok(),
-        Err(_) => None,
-    }
+/// The drained body decoded once: the classification table reads it as JSON, and a body drained whole is what
+/// `forward_buffered` sends. An error is a payload that does not decode or does not fit. `cut` is a body the drain
+/// stopped reading at the bound: its coded stream ends early and its text may run past the bound, so this is what
+/// decoded up to there, as far as the bound, for the classification alone, since the forward sends the raw prefix
+/// through its own decoder.
+fn decode_drained(head: &ResponseHead, raw: &Bytes, cut: bool) -> Result<Bytes, TransportError> {
+    Ok(match encoding(head)? {
+        Encoding::Identity => raw.clone(),
+        coding if cut => Bytes::from(inspectable_prefix(decoder(coding).as_mut(), raw)),
+        coding => Bytes::from(decode_all(decoder(coding).as_mut(), raw)?),
+    })
 }
 
 /// What a cut coded body decodes to, piece by piece until a piece fails or the bound is reached, with no finish:

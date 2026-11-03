@@ -2138,6 +2138,39 @@ async fn a_gzip_stream_decoded_for_the_client_builds_the_holds_decoder_alone_and
 }
 
 #[tokio::test]
+async fn a_forwarded_coded_rejection_drained_whole_reaches_the_client_decoded() {
+    // A non-portable request keeps its account, so a 429 the drain read whole is forwarded as the answer.
+    let rejection =
+        br#"{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}"#;
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Json {
+            status: 429,
+            headers: vec![("Content-Encoding".into(), "gzip".into())],
+            body: gzip(rejection),
+        },
+    }])
+    .await;
+    let h = common::harness(
+        &up,
+        &[common::oauth("a", "sk-ant-oat01-AAAA", 0)],
+        common::PoolSpec::default(),
+    )
+    .await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(common::non_portable_request(common::KEY, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 429);
+    assert!(resp.headers().get("content-encoding").is_none());
+    let forwarded = resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(forwarded.as_ref(), rejection.as_slice());
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_forwarded_coded_rejection_past_the_bound_reaches_the_client_decoded_prefix_and_rest() {
     // A non-portable request's 429 past the bound, decoded for the client as it is forwarded: no bus, no pin, no
     // hook and no conversation report read its body, so no copy of it is decoded beside the forward.
