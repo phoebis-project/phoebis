@@ -194,6 +194,25 @@ async fn a_top_level_key_that_does_not_decode_refuses_the_body() {
 }
 
 #[tokio::test]
+async fn a_repeat_ahead_of_a_syntax_error_is_refused_as_the_repeat() {
+    let up = FakeUpstream::start(vec![ok_rule()]).await;
+    let h = harness_restricted_to(&up, "claude-sonnet-4-5").await;
+    // The comma missing after `messages` stops the walk past both spellings of `model`, and the repeat it already
+    // read is the refusal, as a walk that stops on a repeat never reaches the error.
+    let body = r#"{"model":"claude-sonnet-4-5","model":"claude-opus-5","messages":[] "max_tokens":8}"#;
+    let (status, code, text) = send(&h, "/v1/messages", body).await;
+    assert_eq!(status, 400, "{text}");
+    assert_eq!(code, "body_shape", "{text}");
+    assert!(
+        // The wire body is JSON, so the message's own embedded quotes are backslash-escaped in it.
+        text.contains(r#"top-level member \"model\" more than once"#),
+        "{text}"
+    );
+    assert!(up.requests().is_empty(), "nothing reached the upstream");
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_second_top_level_model_is_refused_on_the_count_tokens_route_too() {
     let up = FakeUpstream::start(vec![ok_rule()]).await;
     let h = harness_restricted_to(&up, "claude-sonnet-4-5").await;
