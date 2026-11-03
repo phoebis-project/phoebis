@@ -10,12 +10,15 @@ export interface TokenSegment {
   slot: number;
 }
 
+/** The routes answer one output sum, so each view that splits it into thinking and plain output reads the rest here. */
+export const plainOutputOf = (t: { output: number; thinking: number }): number => Math.max(0, t.output - t.thinking);
+
 /** The counts behind the Tokens chart's kinds: the plain output is the output less its thinking share. */
 const countsOf = (usage: Usage): Record<TokenSegment['key'], number> => ({
   cacheRead: usage.cacheRead,
   cacheWrite1h: usage.cacheWrite1h,
   cacheWrite5m: usage.cacheWrite5m,
-  plainOutput: Math.max(0, usage.output - usage.thinking),
+  plainOutput: plainOutputOf(usage),
   thinking: usage.thinking,
   uncachedInput: usage.input,
 });

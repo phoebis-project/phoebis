@@ -33,6 +33,7 @@ import { useAsync, useQueryFilters, useRangeTakenAt, type Loaded } from '@/lib/h
 import { REFUSED_TITLE } from '@/lib/requests';
 import { CLIENT_PATTERNS_PLAIN, linkedKeyIds, refusalLink, requestsLink, type RequestsLinkInput, type RequestsLinkTarget } from '@/lib/requestsLink';
 import { words } from '@/lib/routingLog';
+import { plainOutputOf } from '@/lib/tokenBar';
 import { UNIT_FUNDING, UNIT_POSITIONS, type UnitPosition, type WeekPosition } from '@/lib/unit';
 import { WINDOW_HOURS, WINDOW_LABEL } from '@/lib/windows';
 
@@ -177,7 +178,7 @@ type Pct = Record<(typeof PERCENTILES)[number]['key'], number | null>;
 
 /** The routes answer one output sum; the chart stacks its thinking share and the rest, so the page derives the rest. */
 type SplitTokens = AnalyticsGroup['tokens'] & { plainOutput: number };
-const withPlainOutput = (t: AnalyticsGroup['tokens']): SplitTokens => ({ ...t, plainOutput: Math.max(0, t.output - t.thinking) });
+const withPlainOutput = (t: AnalyticsGroup['tokens']): SplitTokens => ({ ...t, plainOutput: plainOutputOf(t) });
 
 interface Bucket extends AnalyticsGroup {
   at: number;

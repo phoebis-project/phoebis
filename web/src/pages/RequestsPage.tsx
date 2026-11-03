@@ -33,6 +33,7 @@ import { useAsync, useNow, useQueryFilters, useRangeTakenAt } from '@/lib/hooks'
 import { costCellOf, costHeaderTitle, type CostUnit, costUnitOf, FREE_SHARE_TITLE, FUNDING_WORD, heldWords, NO_SHARE_TITLE, requestHintArgs, revisionsTitle } from '@/lib/requests';
 import { requestsWiden } from '@/lib/requestsLink';
 import { type Chip, logHref, requestLink } from '@/lib/routingLog';
+import { plainOutputOf } from '@/lib/tokenBar';
 import type { UnitPosition, WeekPosition } from '@/lib/unit';
 import { StatusBadge } from './DashboardPage';
 
@@ -731,7 +732,7 @@ function RequestDrawer({ context, guardrails, request, requestId, now, onClose, 
                 </tr>
                 <tr>
                   <td>Output, plain</td>
-                  <td className="right num">{fmtInt(Math.max(0, r.usage.output - r.usage.thinking))}</td>
+                  <td className="right num">{fmtInt(plainOutputOf(r.usage))}</td>
                 </tr>
                 <tr>
                   <td>Server tool calls</td>
