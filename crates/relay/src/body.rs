@@ -100,8 +100,8 @@ pub enum BodyMember {
     /// A billing line at `system[0].text` the strict decoder cannot read, a lone surrogate escape among its causes:
     /// the restoration decodes the line to fill its absent fields.
     BillingLine,
-    /// A billing stamp in `system[0].text` the decoded walk reads and the raw walk cannot reach; `carries_a_stamp`
-    /// says why such a body is refused.
+    /// A billing stamp in `system[0].text` the decoded walk reads and the raw walk cannot reach. `stamp_of` says why
+    /// such a body is refused.
     BillingStamp,
     /// A `cache_control` marker the decoder reads and the raw walk cannot reach, or one it reaches and cannot
     /// read.
@@ -609,10 +609,16 @@ fn detach_diagnostics(body: &mut Vec<u8>) -> bool {
 /// stripped.
 ///
 /// `find_cch` reads lowercase hex only, so a client stamping uppercase digits leaves a stamp that scanner
-/// cannot read at all; that counts as drift rather than as a body carrying no hash. Errs as `carries_a_stamp`
-/// errs, on a stamp only the decoded walk reaches.
+/// cannot read at all; that counts as drift rather than as a body carrying no hash. Errs as `stamp_of` errs, on a
+/// stamp only the decoded walk reaches.
 pub(crate) fn drift(body: &[u8]) -> Result<Option<DriftKind>, RelayError> {
-    let location = match stamp_of(body)? {
+    drift_of(body, stamp_of(body)?)
+}
+
+/// `drift` on the stamp `stamp_of` read, for admission, which reads the stamp once for this check and for the
+/// suffix check's gate.
+pub(crate) fn drift_of(body: &[u8], stamp: Stamp) -> Result<Option<DriftKind>, RelayError> {
+    let location = match stamp {
         Stamp::None | Stamp::Placeholder(_) => return Ok(None),
         Stamp::Unreadable => return Ok(Some(DriftKind::Hash)),
         Stamp::Hash(location) => location,
@@ -649,17 +655,11 @@ pub(crate) fn version_drift(
     (!reproduced).then_some(DriftKind::VersionSuffix)
 }
 
-/// Whether the billing block claims a hash, as the raw walk the restamp edits through reads `system[0].text`, erring
-/// as `stamp_of` errs.
-pub(crate) fn carries_a_stamp(body: &[u8]) -> Result<bool, RelayError> {
-    Ok(!matches!(stamp_of(body)?, Stamp::None))
-}
-
 /// The billing block's stamp as the raw walk the restamp edits through reads `system[0].text`.
 /// `Err(BodyShape(BillingStamp))` when the decoded walk, which sees a key spelled with an escape, finds a stamp
 /// the raw walk cannot reach: edited, such a body would carry the client's hash over bytes it was not computed
 /// for; unedited, a hash nothing verified.
-fn stamp_of(body: &[u8]) -> Result<Stamp, RelayError> {
+pub(crate) fn stamp_of(body: &[u8]) -> Result<Stamp, RelayError> {
     let stamp = phoebis_cch::stamp(body);
     if phoebis_cch::decoded_stamp_count(body) > usize::from(!matches!(stamp, Stamp::None)) {
         return Err(RelayError::BodyShape(BodyMember::BillingStamp));
@@ -1518,7 +1518,7 @@ mod tests {
         );
         assert!(
             matches!(
-                carries_a_stamp(&sent),
+                stamp_of(&sent),
                 Err(RelayError::BodyShape(BodyMember::BillingStamp))
             ),
             "the decoded walk reads the stamp the raw walk misses"
@@ -1585,7 +1585,7 @@ mod tests {
         );
         assert!(
             matches!(
-                carries_a_stamp(sent),
+                stamp_of(sent),
                 Err(RelayError::BodyShape(BodyMember::BillingStamp))
             ),
             "the decoded walk reads the stamp beside the lone surrogate"

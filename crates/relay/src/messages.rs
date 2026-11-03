@@ -23,6 +23,7 @@ use phoebis_bus::{
     RequestComplete, RequestObserved, RequestShape, ResponseChunk, ResponseFacts,
     ResponseHead as BusHead, Usage, ACCOUNT_CANCELED_CODE, CLIENT_GONE_CODE, ROUTER_SHUTDOWN_CODE,
 };
+use phoebis_cch::Stamp;
 use phoebis_guardrails::{evaluate_all, Evaluation, HeaderLookup, Lookup, RequestFacts};
 use phoebis_oauth::{AccessToken, AcquireError, Clock, CredentialManager};
 use phoebis_routing::{
@@ -1813,7 +1814,14 @@ impl Relay {
         // meets them, and the refusal's row keeps the model, the session and the agent. The hash goes first, so a
         // stamp only the decoded walk reaches is refused before the suffix's stamp gate reads past it. Only a
         // stamped line is judged for its suffix; a reduced-shape line has its missing fields restored instead.
-        let stamp = match crate::body::drift(&raw) {
+        let (stamped, drifted) = match crate::body::stamp_of(&raw) {
+            Ok(stamp) => (
+                !matches!(stamp, Stamp::None),
+                crate::body::drift_of(&raw, stamp),
+            ),
+            Err(error) => (false, Err(error)),
+        };
+        let stamp = match drifted {
             Ok(None) => None,
             Ok(Some(kind)) => Some(self.drift_refusal(
                 kind,
@@ -1843,7 +1851,7 @@ impl Relay {
                 client_version: &context.cli_version,
                 prompt_units: &context.prompt_units,
             };
-            if matches!(crate::body::carries_a_stamp(&raw), Ok(true)) {
+            if stamped {
                 if let Some(kind) = crate::body::version_drift(facts.cc_version.as_deref(), check) {
                     let refusal = self.drift_refusal(
                         kind,
