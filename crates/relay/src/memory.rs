@@ -1012,7 +1012,7 @@ mod tests {
     }
 
     #[test]
-    fn a_latch_answers_refuses_only_for_the_row_it_was_set_with() {
+    fn a_latch_is_refused_only_for_the_row_it_was_set_with() {
         let mem = SessionMemory::new(10, MEMORY_IDLE_MS);
         let account = row(1, 1);
         mem.latch(&account, Injected::Cch);
