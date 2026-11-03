@@ -1679,7 +1679,7 @@ fn run(
 
     // Step 3: a non-portable request is bound to its pin.
     if let (false, Some((current, warmth))) = (request.portable, pin.as_ref().zip(warmth)) {
-        if candidate_in(&eligible, &current.account_id).is_some() {
+        if let Some(candidate) = candidate_in(&eligible, &current.account_id) {
             if let Some(hold) = rewrite_answer(state, pool, request, current) {
                 return (
                     SelectResult::Held {
@@ -1696,6 +1696,7 @@ fn run(
                     snapshot,
                     pool,
                     current,
+                    candidate,
                     request,
                     warmth,
                     previous_account.as_deref(),
@@ -1872,7 +1873,7 @@ fn run(
     // A slowed pin waits before it renews. A pin whose account left the set takes the placement path below, whatever
     // deadline stands on it.
     if let Some((current, warmth)) = pin.as_ref().zip(warmth) {
-        if candidate_in(&eligible, &current.account_id).is_some() {
+        if let Some(candidate) = candidate_in(&eligible, &current.account_id) {
             if let Some(hold) = rewrite_answer(state, pool, request, current) {
                 return (
                     SelectResult::Held {
@@ -1897,6 +1898,7 @@ fn run(
                     snapshot,
                     pool,
                     current,
+                    candidate,
                     request,
                     warmth,
                     previous_account.as_deref(),
@@ -5343,13 +5345,14 @@ fn renew(
     snapshot: &RegistrySnapshot,
     pool: &PoolRow,
     current: &PinRow,
+    candidate: &Candidate,
     request: &SelectRequest,
     (verdict, cause): (Warmth, WarmthCause),
     previous_landing: Option<&str>,
     writes: &mut Vec<StateWrite>,
     rec: &mut Recorder,
 ) -> Selection {
-    let (candidates, now, fallback_ms) = (&request.candidates, request.now, request.fallback_ms);
+    let (now, fallback_ms) = (request.now, request.fallback_ms);
     let mut renewed = PinRow {
         last_used_at: now,
         ..current.clone()
@@ -5415,13 +5418,7 @@ fn renew(
     }
     Selection {
         account: selected_row(snapshot, &current.account_id),
-        upstream_model: candidates
-            .iter()
-            .find(|c| c.account_id == current.account_id)
-            .map(|c| c.upstream_model.clone())
-            .expect(
-                "a renewed pin passed the eligible-set test, which is built from the candidates",
-            ),
+        upstream_model: candidate.upstream_model.clone(),
         pin: Some(PinRef {
             key_id: current.key_id.clone(),
             session_id: current.session_id.clone(),
