@@ -356,6 +356,39 @@ mod tests {
     }
 
     #[test]
+    fn three_heads_are_found_whether_they_arrive_in_one_read_or_split_across_two() {
+        let head = |target: &str| {
+            format!("POST {target} HTTP/1.1\r\nHost: h\r\nContent-Length: 2\r\n\r\n{{}}")
+                .into_bytes()
+        };
+        let stream = [head("/a"), head("/b"), head("/c")].concat();
+        let targets = |reads: &[&[u8]]| {
+            let queue = head_queue();
+            let mut recorder =
+                HeadRecorder::new(std::io::Cursor::new(Vec::<u8>::new()), queue.clone());
+            for read in reads {
+                recorder.observe(read);
+            }
+            let targets: Vec<String> = queue
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|h| h.target.clone())
+                .collect();
+            targets
+        };
+        // In one read the second head starts past the first one's body, so its end counts from there.
+        assert_eq!(targets(&[&stream]), ["/a", "/b", "/c"]);
+        // Split inside the second head: the second read finishes the held bytes and carries the third whole, so
+        // the third is found only where the end counts past the held bytes.
+        let split = head("/a").len() + 20;
+        assert_eq!(
+            targets(&[&stream[..split], &stream[split..]]),
+            ["/a", "/b", "/c"]
+        );
+    }
+
+    #[test]
     fn a_head_matches_only_the_request_it_was_read_from() {
         let (head, _) = OriginalHead::parse(HEAD).expect("the head parses");
         let request = |method: &str, target: &str| {
