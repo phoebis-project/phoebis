@@ -100,8 +100,8 @@ impl Inspect {
 
 fn committing(event: SseEvent) -> Option<Commit> {
     match event.name.as_deref() {
-        Some(b"message_start") => Some(Commit::MessageStart(Bytes::from(event.data))),
-        Some(b"error") => Some(Commit::Error(Bytes::from(event.data))),
+        Some(b"message_start") => Some(Commit::MessageStart(Bytes::copy_from_slice(&event.data))),
+        Some(b"error") => Some(Commit::Error(Bytes::copy_from_slice(&event.data))),
         _ => None,
     }
 }

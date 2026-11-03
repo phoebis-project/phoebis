@@ -2,12 +2,13 @@
 //! arrive split across reads. The pre-commit hold's parser goes on as the bus copy's past the commit, so a stream is
 //! parsed once and every reader sees the same events in the same order.
 
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 
+/// The name and the data share the parser's buffer, so a reader that keeps an event past the stream copies it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SseEvent {
-    pub name: Option<Vec<u8>>,
-    pub data: Vec<u8>,
+    pub name: Option<Bytes>,
+    pub data: Bytes,
 }
 
 /// More bytes buffered than the limit without a complete event among them.
@@ -156,7 +157,7 @@ impl SseParser {
 
     pub fn next_event(&mut self) -> Option<SseEvent> {
         let end = self.end_of_first_event()?;
-        let raw = self.buf.split_to(end);
+        let raw = self.buf.split_to(end).freeze();
         Some(parse_event(&raw))
     }
 
@@ -172,7 +173,7 @@ impl SseParser {
             self.buf.clear();
             return None;
         }
-        let raw = self.buf.split();
+        let raw = self.buf.split().freeze();
         Some(parse_event(&raw))
     }
 
@@ -214,9 +215,12 @@ fn line_end(buf: &[u8]) -> Option<(usize, usize)> {
     None
 }
 
-fn parse_event(raw: &[u8]) -> SseEvent {
+/// The name and a single data line are slices of `raw`. A second data line after a non-empty first is joined in a
+/// copy, and an empty first line adds no line break ahead of the next.
+fn parse_event(raw: &Bytes) -> SseEvent {
     let mut name = None;
-    let mut data = Vec::new();
+    let mut data = Bytes::new();
+    let mut joined: Option<BytesMut> = None;
     let mut at = 0;
     while at < raw.len() {
         let (line_end, ending_len) = line_end(&raw[at..]).unwrap_or((raw.len() - at, 0));
@@ -226,16 +230,29 @@ fn parse_event(raw: &[u8]) -> SseEvent {
             continue;
         }
         if let Some(v) = line.strip_prefix(b"event:") {
-            name = Some(v.strip_prefix(b" ").unwrap_or(v).to_vec());
+            name = Some(raw.slice_ref(v.strip_prefix(b" ").unwrap_or(v)));
         }
         if let Some(v) = line.strip_prefix(b"data:") {
-            if !data.is_empty() {
-                data.push(b'\n');
+            let v = v.strip_prefix(b" ").unwrap_or(v);
+            match joined.as_mut() {
+                Some(joined) => {
+                    joined.extend_from_slice(b"\n");
+                    joined.extend_from_slice(v);
+                }
+                None if data.is_empty() => data = raw.slice_ref(v),
+                None => {
+                    let mut copy = BytesMut::from(&data[..]);
+                    copy.extend_from_slice(b"\n");
+                    copy.extend_from_slice(v);
+                    joined = Some(copy);
+                }
             }
-            data.extend_from_slice(v.strip_prefix(b" ").unwrap_or(v));
         }
     }
-    SseEvent { name, data }
+    SseEvent {
+        name,
+        data: joined.map_or(data, BytesMut::freeze),
+    }
 }
 
 #[cfg(test)]
@@ -245,7 +262,7 @@ mod tests {
     fn names(parser: &mut SseParser) -> Vec<String> {
         let mut out = Vec::new();
         while let Some(event) = parser.next_event() {
-            out.push(String::from_utf8(event.name.unwrap_or_default()).unwrap());
+            out.push(String::from_utf8(event.name.unwrap_or_default().to_vec()).unwrap());
         }
         out
     }
@@ -269,7 +286,7 @@ mod tests {
         assert_eq!(first.name.as_deref(), Some(b"message_start".as_slice()));
         let second = p.next_event().unwrap();
         assert_eq!(
-            (second.name.as_deref(), second.data.as_slice()),
+            (second.name.as_deref(), &second.data[..]),
             (
                 Some(b"error".as_slice()),
                 b"{\"type\":\"error\"}".as_slice()
@@ -357,7 +374,7 @@ mod tests {
                 .feed(read)
                 .expect("a skipping parser takes every read");
             while let Some(event) = parser.next_event() {
-                out.push(String::from_utf8(event.data).unwrap());
+                out.push(String::from_utf8(event.data.to_vec()).unwrap());
             }
         }
         out

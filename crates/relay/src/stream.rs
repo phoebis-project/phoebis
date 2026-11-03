@@ -526,7 +526,7 @@ impl Publish {
                     self.stream_error = Some(error_type_of(&event.data));
                 }
                 if let Some(on_error) = self.on_error.take() {
-                    on_error(Bytes::copy_from_slice(&event.data), waiting);
+                    on_error(event.data.clone(), waiting);
                 }
                 None
             }
