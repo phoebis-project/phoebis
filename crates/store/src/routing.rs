@@ -1,6 +1,5 @@
 //! Routing state that survives a restart: session pins, cooldowns, and the overage evidence per account.
 
-use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
 use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 
 use crate::accounts::set_state_if_generations_on;
@@ -185,39 +184,12 @@ pub struct RekeyWrite {
     pub upsert_cooldowns: Vec<CooldownRow>,
 }
 
-/// What a hash in the `affinity` table is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AffinityChain {
-    Message,
-    Static,
-}
-
-impl AffinityChain {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            AffinityChain::Message => "message",
-            AffinityChain::Static => "static",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<AffinityChain> {
-        match value {
-            "message" => Some(AffinityChain::Message),
-            "static" => Some(AffinityChain::Static),
-            _ => None,
-        }
-    }
-}
-
-impl FromSql for AffinityChain {
-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        AffinityChain::parse(value.as_str()?).ok_or(FromSqlError::InvalidType)
-    }
-}
-
-impl ToSql for AffinityChain {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        Ok(self.as_str().into())
+text_enum! {
+    /// What a hash in the `affinity` table is.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum AffinityChain {
+        Message => "message",
+        Static => "static",
     }
 }
 

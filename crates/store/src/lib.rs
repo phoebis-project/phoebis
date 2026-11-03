@@ -1,5 +1,50 @@
 //! SQLite registry and encrypted credentials.
 
+/// A closed set of words one text column stores. Each variant sits beside its one word, so the column's reader and
+/// its writer cannot drift apart, and a stored word outside the set fails the read.
+macro_rules! text_enum {
+    (
+        $(#[$meta:meta])*
+        pub enum $name:ident {
+            $($(#[$variant_meta:meta])* $variant:ident => $word:literal),* $(,)?
+        }
+    ) => {
+        $(#[$meta])*
+        pub enum $name {
+            $($(#[$variant_meta])* $variant),*
+        }
+
+        impl $name {
+            pub fn as_str(self) -> &'static str {
+                match self {
+                    $($name::$variant => $word),*
+                }
+            }
+
+            pub fn parse(value: &str) -> Option<$name> {
+                match value {
+                    $($word => Some($name::$variant),)*
+                    _ => None,
+                }
+            }
+        }
+
+        impl rusqlite::types::FromSql for $name {
+            fn column_result(
+                value: rusqlite::types::ValueRef<'_>,
+            ) -> rusqlite::types::FromSqlResult<Self> {
+                $name::parse(value.as_str()?).ok_or(rusqlite::types::FromSqlError::InvalidType)
+            }
+        }
+
+        impl rusqlite::types::ToSql for $name {
+            fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+                Ok(self.as_str().into())
+            }
+        }
+    };
+}
+
 mod accounts;
 mod credentials;
 mod lock;

@@ -1,10 +1,11 @@
 use phoebis_guardrails::{Condition, GuardrailAction, GuardrailMode, Operator, Selector, Subject};
 use phoebis_store::{
     answers_stamp_token, stamp_token, AccountKind, AccountRow, AccountState, AccountUpdate,
-    Affinity, ApiKeyRow, AttachmentSubject, CanaryRead, Failover, GuardrailAttachment,
-    GuardrailRow, Identity, MemberWrite, MemoryKey, MemoryRecord, MemoryStore, ModelRule,
-    NewBundle, PinBurn, PinRow, PoolRow, ReturnToPlan, RulesMode, Secret, SlowDown, StateCause,
-    StorageKey, Store, StoreError, Strategy, SubagentPlacement, SubscriptionRow, WindowRow,
+    Affinity, AffinityChain, AffinityMode, ApiKeyRow, AttachmentSubject, BudgetPeriod, CanaryRead,
+    Failover, GuardrailAttachment, GuardrailRow, Identity, MemberWrite, MemoryKey, MemoryRecord,
+    MemoryStore, ModelRule, NewBundle, OveragePolicy, PinBurn, PinRow, PoolRow, ReturnToPlan,
+    RulesMode, Secret, SessionPlacement, SlowDown, StateCause, StorageKey, Store, StoreError,
+    Strategy, SubagentPlacement, SubscriptionRow, WarmSessions, WindowRow,
 };
 
 fn account(id: &str, kind: AccountKind) -> AccountRow {
@@ -1379,6 +1380,130 @@ fn a_stored_word_outside_the_list_fails_the_read() {
                 if column == "state_cause"
         ),
         "{error:?}"
+    );
+}
+
+/// Reads a word as a row on disk holds it, through the type's own column reader.
+fn stored_word<T: rusqlite::types::FromSql>(word: &str) -> T {
+    rusqlite::Connection::open_in_memory()
+        .unwrap()
+        .query_row("SELECT ?1", [word], |r| r.get(0))
+        .unwrap_or_else(|error| panic!("{word}: {error}"))
+}
+
+#[test]
+fn every_stored_word_of_the_text_enums_reads_as_its_variant() {
+    assert_eq!(stored_word::<AccountKind>("oauth"), AccountKind::Oauth);
+    assert_eq!(stored_word::<AccountKind>("api_key"), AccountKind::ApiKey);
+
+    assert_eq!(
+        stored_word::<AccountState>("unpaired"),
+        AccountState::Unpaired
+    );
+    assert_eq!(stored_word::<AccountState>("ready"), AccountState::Ready);
+    assert_eq!(
+        stored_word::<AccountState>("reauth_required"),
+        AccountState::ReauthRequired
+    );
+    assert_eq!(
+        stored_word::<AccountState>("funding_required"),
+        AccountState::FundingRequired
+    );
+    assert_eq!(
+        stored_word::<AccountState>("disconnected"),
+        AccountState::Disconnected
+    );
+
+    assert_eq!(
+        stored_word::<StateCause>("auth_failed"),
+        StateCause::AuthFailed
+    );
+    assert_eq!(stored_word::<StateCause>("deleted"), StateCause::Deleted);
+    assert_eq!(
+        stored_word::<StateCause>("funding_refused"),
+        StateCause::FundingRefused
+    );
+    assert_eq!(
+        stored_word::<StateCause>("funding_retry"),
+        StateCause::FundingRetry
+    );
+    assert_eq!(stored_word::<StateCause>("operator"), StateCause::Operator);
+    assert_eq!(stored_word::<StateCause>("paired"), StateCause::Paired);
+    assert_eq!(
+        stored_word::<StateCause>("refresh_failed"),
+        StateCause::RefreshFailed
+    );
+    assert_eq!(
+        stored_word::<StateCause>("unrecorded"),
+        StateCause::Unrecorded
+    );
+
+    assert_eq!(stored_word::<Strategy>("pace"), Strategy::Pace);
+    assert_eq!(stored_word::<Strategy>("priority"), Strategy::Priority);
+    assert_eq!(stored_word::<Strategy>("round_robin"), Strategy::RoundRobin);
+
+    assert_eq!(stored_word::<WarmSessions>("always"), WarmSessions::Always);
+    assert_eq!(stored_word::<WarmSessions>("never"), WarmSessions::Never);
+    assert_eq!(
+        stored_word::<WarmSessions>("when_needed"),
+        WarmSessions::WhenNeeded
+    );
+
+    assert_eq!(stored_word::<ReturnToPlan>("always"), ReturnToPlan::Always);
+    assert_eq!(stored_word::<ReturnToPlan>("never"), ReturnToPlan::Never);
+    assert_eq!(
+        stored_word::<ReturnToPlan>("when_cold"),
+        ReturnToPlan::WhenCold
+    );
+
+    assert_eq!(stored_word::<RulesMode>("extend"), RulesMode::Extend);
+    assert_eq!(stored_word::<RulesMode>("replace"), RulesMode::Replace);
+
+    assert_eq!(stored_word::<OveragePolicy>("allow"), OveragePolicy::Allow);
+    assert_eq!(stored_word::<OveragePolicy>("never"), OveragePolicy::Never);
+    assert_eq!(
+        stored_word::<OveragePolicy>("prefer_plan"),
+        OveragePolicy::PreferPlan
+    );
+
+    assert_eq!(stored_word::<AffinityMode>("always"), AffinityMode::Always);
+    assert_eq!(
+        stored_word::<AffinityMode>("when_cached"),
+        AffinityMode::WhenCached
+    );
+
+    assert_eq!(
+        stored_word::<SubagentPlacement>("by_cohort"),
+        SubagentPlacement::ByCohort
+    );
+    assert_eq!(
+        stored_word::<SubagentPlacement>("by_strategy"),
+        SubagentPlacement::ByStrategy
+    );
+    assert_eq!(
+        stored_word::<SubagentPlacement>("with_main"),
+        SubagentPlacement::WithMain
+    );
+
+    assert_eq!(
+        stored_word::<SessionPlacement>("by_strategy"),
+        SessionPlacement::ByStrategy
+    );
+    assert_eq!(
+        stored_word::<SessionPlacement>("by_warm_prefix"),
+        SessionPlacement::ByWarmPrefix
+    );
+
+    assert_eq!(stored_word::<BudgetPeriod>("day"), BudgetPeriod::Day);
+    assert_eq!(stored_word::<BudgetPeriod>("month"), BudgetPeriod::Month);
+
+    assert_eq!(
+        stored_word::<AffinityChain>("message"),
+        AffinityChain::Message
+    );
+    assert_eq!(
+        stored_word::<AffinityChain>("static"),
+        AffinityChain::Static
     );
 }
 

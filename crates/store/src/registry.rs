@@ -2,7 +2,6 @@
 //! change log every write appends to.
 
 use phoebis_guardrails::{Condition, GuardrailAction, GuardrailMode};
-use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
 use rusqlite::{params, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 #[cfg(any(test, feature = "debug-hooks"))]
@@ -14,118 +13,35 @@ use crate::{
     SubscriptionRow, LOCK_POISONED,
 };
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Strategy {
-    #[default]
-    Pace,
-    Priority,
-    RoundRobin,
-}
-
-impl Strategy {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Strategy::Pace => "pace",
-            Strategy::Priority => "priority",
-            Strategy::RoundRobin => "round_robin",
-        }
+text_enum! {
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub enum Strategy {
+        #[default]
+        Pace => "pace",
+        Priority => "priority",
+        RoundRobin => "round_robin",
     }
 }
 
-impl FromSql for Strategy {
-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        match value.as_str()? {
-            "pace" => Ok(Strategy::Pace),
-            "priority" => Ok(Strategy::Priority),
-            "round_robin" => Ok(Strategy::RoundRobin),
-            _ => Err(FromSqlError::InvalidType),
-        }
+text_enum! {
+    /// Which pins a shedding round may move once the cold ones are moved.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub enum WarmSessions {
+        Always => "always",
+        Never => "never",
+        #[default]
+        WhenNeeded => "when_needed",
     }
 }
 
-impl ToSql for Strategy {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        Ok(self.as_str().into())
-    }
-}
-
-/// Which pins a shedding round may move once the cold ones are moved.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum WarmSessions {
-    Always,
-    Never,
-    #[default]
-    WhenNeeded,
-}
-
-impl WarmSessions {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            WarmSessions::Always => "always",
-            WarmSessions::Never => "never",
-            WarmSessions::WhenNeeded => "when_needed",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<WarmSessions> {
-        match value {
-            "always" => Some(WarmSessions::Always),
-            "never" => Some(WarmSessions::Never),
-            "when_needed" => Some(WarmSessions::WhenNeeded),
-            _ => None,
-        }
-    }
-}
-
-impl FromSql for WarmSessions {
-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        WarmSessions::parse(value.as_str()?).ok_or(FromSqlError::InvalidType)
-    }
-}
-
-impl ToSql for WarmSessions {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        Ok(self.as_str().into())
-    }
-}
-
-/// When a session on an API-key member returns to a subscription member.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ReturnToPlan {
-    #[default]
-    Always,
-    Never,
-    WhenCold,
-}
-
-impl ReturnToPlan {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            ReturnToPlan::Always => "always",
-            ReturnToPlan::Never => "never",
-            ReturnToPlan::WhenCold => "when_cold",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<ReturnToPlan> {
-        match value {
-            "always" => Some(ReturnToPlan::Always),
-            "never" => Some(ReturnToPlan::Never),
-            "when_cold" => Some(ReturnToPlan::WhenCold),
-            _ => None,
-        }
-    }
-}
-
-impl FromSql for ReturnToPlan {
-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        ReturnToPlan::parse(value.as_str()?).ok_or(FromSqlError::InvalidType)
-    }
-}
-
-impl ToSql for ReturnToPlan {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        Ok(self.as_str().into())
+text_enum! {
+    /// When a session on an API-key member returns to a subscription member.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub enum ReturnToPlan {
+        #[default]
+        Always => "always",
+        Never => "never",
+        WhenCold => "when_cold",
     }
 }
 
@@ -204,229 +120,67 @@ pub struct ModelRule {
     pub not: bool,
 }
 
-/// How a key's own list meets its pool's: `Extend` appends the pool's entries after the key's own, `Replace`
-/// leaves them out. A pool has no mode: it inherits nothing.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum RulesMode {
-    #[default]
-    Extend,
-    Replace,
-}
-
-impl RulesMode {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            RulesMode::Extend => "extend",
-            RulesMode::Replace => "replace",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<RulesMode> {
-        match value {
-            "extend" => Some(RulesMode::Extend),
-            "replace" => Some(RulesMode::Replace),
-            _ => None,
-        }
+text_enum! {
+    /// How a key's own list meets its pool's: `Extend` appends the pool's entries after the key's own, `Replace`
+    /// leaves them out. A pool has no mode: it inherits nothing.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub enum RulesMode {
+        #[default]
+        Extend => "extend",
+        Replace => "replace",
     }
 }
 
-impl FromSql for RulesMode {
-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        RulesMode::parse(value.as_str()?).ok_or(FromSqlError::InvalidType)
+text_enum! {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum OveragePolicy {
+        Allow => "allow",
+        Never => "never",
+        PreferPlan => "prefer_plan",
     }
 }
 
-impl ToSql for RulesMode {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        Ok(self.as_str().into())
+text_enum! {
+    /// Whether a session or a subagent cohort holds its pin to one account regardless of cache evidence, or only
+    /// while the evidence still confirms a warm prefix there.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub enum AffinityMode {
+        #[default]
+        Always => "always",
+        WhenCached => "when_cached",
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OveragePolicy {
-    Allow,
-    Never,
-    PreferPlan,
-}
-
-impl OveragePolicy {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            OveragePolicy::Allow => "allow",
-            OveragePolicy::Never => "never",
-            OveragePolicy::PreferPlan => "prefer_plan",
-        }
+text_enum! {
+    /// Where a subagent of a pinned session lands without a pin of its own: by its cohort's own placement rules, by
+    /// the pool's ordinary selection strategy, or beside the session's main agent.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub enum SubagentPlacement {
+        ByCohort => "by_cohort",
+        #[default]
+        ByStrategy => "by_strategy",
+        WithMain => "with_main",
     }
 }
 
-impl FromSql for OveragePolicy {
-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        match value.as_str()? {
-            "allow" => Ok(OveragePolicy::Allow),
-            "never" => Ok(OveragePolicy::Never),
-            "prefer_plan" => Ok(OveragePolicy::PreferPlan),
-            _ => Err(FromSqlError::InvalidType),
-        }
+text_enum! {
+    /// Where a fresh session with no pin of its own lands: by the pool's ordinary selection strategy, or on whichever
+    /// account holds the warmest matching prefix.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub enum SessionPlacement {
+        #[default]
+        ByStrategy => "by_strategy",
+        ByWarmPrefix => "by_warm_prefix",
     }
 }
 
-impl ToSql for OveragePolicy {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        Ok(self.as_str().into())
-    }
-}
-
-/// Whether a session or a subagent cohort holds its pin to one account regardless of cache evidence, or only
-/// while the evidence still confirms a warm prefix there.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum AffinityMode {
-    #[default]
-    Always,
-    WhenCached,
-}
-
-impl AffinityMode {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            AffinityMode::Always => "always",
-            AffinityMode::WhenCached => "when_cached",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<AffinityMode> {
-        match value {
-            "always" => Some(AffinityMode::Always),
-            "when_cached" => Some(AffinityMode::WhenCached),
-            _ => None,
-        }
-    }
-}
-
-impl FromSql for AffinityMode {
-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        AffinityMode::parse(value.as_str()?).ok_or(FromSqlError::InvalidType)
-    }
-}
-
-impl ToSql for AffinityMode {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        Ok(self.as_str().into())
-    }
-}
-
-/// Where a subagent of a pinned session lands without a pin of its own: by its cohort's own placement rules, by
-/// the pool's ordinary selection strategy, or beside the session's main agent.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum SubagentPlacement {
-    ByCohort,
-    #[default]
-    ByStrategy,
-    WithMain,
-}
-
-impl SubagentPlacement {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            SubagentPlacement::ByCohort => "by_cohort",
-            SubagentPlacement::ByStrategy => "by_strategy",
-            SubagentPlacement::WithMain => "with_main",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<SubagentPlacement> {
-        match value {
-            "by_cohort" => Some(SubagentPlacement::ByCohort),
-            "by_strategy" => Some(SubagentPlacement::ByStrategy),
-            "with_main" => Some(SubagentPlacement::WithMain),
-            _ => None,
-        }
-    }
-}
-
-impl FromSql for SubagentPlacement {
-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        SubagentPlacement::parse(value.as_str()?).ok_or(FromSqlError::InvalidType)
-    }
-}
-
-impl ToSql for SubagentPlacement {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        Ok(self.as_str().into())
-    }
-}
-
-/// Where a fresh session with no pin of its own lands: by the pool's ordinary selection strategy, or on whichever
-/// account holds the warmest matching prefix.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum SessionPlacement {
-    #[default]
-    ByStrategy,
-    ByWarmPrefix,
-}
-
-impl SessionPlacement {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            SessionPlacement::ByStrategy => "by_strategy",
-            SessionPlacement::ByWarmPrefix => "by_warm_prefix",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<SessionPlacement> {
-        match value {
-            "by_strategy" => Some(SessionPlacement::ByStrategy),
-            "by_warm_prefix" => Some(SessionPlacement::ByWarmPrefix),
-            _ => None,
-        }
-    }
-}
-
-impl FromSql for SessionPlacement {
-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        SessionPlacement::parse(value.as_str()?).ok_or(FromSqlError::InvalidType)
-    }
-}
-
-impl ToSql for SessionPlacement {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        Ok(self.as_str().into())
-    }
-}
-
-/// The period a member's spend budget resets over.
-#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
-pub enum BudgetPeriod {
-    Day,
-    #[default]
-    Month,
-}
-
-impl BudgetPeriod {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            BudgetPeriod::Day => "day",
-            BudgetPeriod::Month => "month",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<BudgetPeriod> {
-        match value {
-            "day" => Some(BudgetPeriod::Day),
-            "month" => Some(BudgetPeriod::Month),
-            _ => None,
-        }
-    }
-}
-
-impl FromSql for BudgetPeriod {
-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        BudgetPeriod::parse(value.as_str()?).ok_or(FromSqlError::InvalidType)
-    }
-}
-
-impl ToSql for BudgetPeriod {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        Ok(self.as_str().into())
+text_enum! {
+    /// The period a member's spend budget resets over.
+    #[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
+    pub enum BudgetPeriod {
+        Day => "day",
+        #[default]
+        Month => "month",
     }
 }
 

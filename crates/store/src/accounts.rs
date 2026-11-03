@@ -1,139 +1,51 @@
 //! Account registry: rows, lifecycle state, and the lifecycle-generation bump that disconnects a slot.
 
-use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
 use rusqlite::{params, OptionalExtension, Row};
 
 use crate::registry::{organization_type_of, plan_of, usage_based_of, SubscriptionTerm};
 use crate::{Store, StoreError, LOCK_POISONED, PENDING_WHERE};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AccountKind {
-    Oauth,
-    ApiKey,
-}
-
-impl AccountKind {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            AccountKind::Oauth => "oauth",
-            AccountKind::ApiKey => "api_key",
-        }
+text_enum! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum AccountKind {
+        Oauth => "oauth",
+        ApiKey => "api_key",
     }
 }
 
-impl FromSql for AccountKind {
-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        match value.as_str()? {
-            "oauth" => Ok(AccountKind::Oauth),
-            "api_key" => Ok(AccountKind::ApiKey),
-            _ => Err(FromSqlError::InvalidType),
-        }
+text_enum! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum AccountState {
+        Unpaired => "unpaired",
+        Ready => "ready",
+        ReauthRequired => "reauth_required",
+        FundingRequired => "funding_required",
+        Disconnected => "disconnected",
     }
 }
 
-impl ToSql for AccountKind {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        Ok(self.as_str().into())
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AccountState {
-    Unpaired,
-    Ready,
-    ReauthRequired,
-    FundingRequired,
-    Disconnected,
-}
-
-impl AccountState {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            AccountState::Unpaired => "unpaired",
-            AccountState::Ready => "ready",
-            AccountState::ReauthRequired => "reauth_required",
-            AccountState::FundingRequired => "funding_required",
-            AccountState::Disconnected => "disconnected",
-        }
-    }
-}
-
-impl FromSql for AccountState {
-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        match value.as_str()? {
-            "unpaired" => Ok(AccountState::Unpaired),
-            "ready" => Ok(AccountState::Ready),
-            "reauth_required" => Ok(AccountState::ReauthRequired),
-            "funding_required" => Ok(AccountState::FundingRequired),
-            "disconnected" => Ok(AccountState::Disconnected),
-            _ => Err(FromSqlError::InvalidType),
-        }
-    }
-}
-
-impl ToSql for AccountState {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        Ok(self.as_str().into())
-    }
-}
-
-/// Who moved an account's state, stored beside it in the same statement and read by the routing log's transition
-/// row. The list is closed: a stored word outside it fails the read, as an unknown state does.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum StateCause {
-    /// The upstream refused the credential: a 401, or a 403 `authentication_error`, on an `api_key` account, or a
-    /// 401 on the replay with a freshly refreshed token.
-    AuthFailed,
-    /// The account's deletion. The row goes with it, so the word reaches the log alone.
-    Deleted,
-    /// The upstream named an `api_key` account's credit balance.
-    FundingRefused,
-    /// The router's own retry of a `funding_required` account, whose answer came back a success.
-    FundingRetry,
-    /// The admin routes, and whatever reaches them.
-    Operator,
-    /// A pairing's confirm.
-    Paired,
-    /// The token refresh's definitive failure, the oauth manager's own write.
-    RefreshFailed,
-    /// The migration's default on a row from before the column. No writer stores it.
-    Unrecorded,
-}
-
-impl StateCause {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            StateCause::AuthFailed => "auth_failed",
-            StateCause::Deleted => "deleted",
-            StateCause::FundingRefused => "funding_refused",
-            StateCause::FundingRetry => "funding_retry",
-            StateCause::Operator => "operator",
-            StateCause::Paired => "paired",
-            StateCause::RefreshFailed => "refresh_failed",
-            StateCause::Unrecorded => "unrecorded",
-        }
-    }
-}
-
-impl FromSql for StateCause {
-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        match value.as_str()? {
-            "auth_failed" => Ok(StateCause::AuthFailed),
-            "deleted" => Ok(StateCause::Deleted),
-            "funding_refused" => Ok(StateCause::FundingRefused),
-            "funding_retry" => Ok(StateCause::FundingRetry),
-            "operator" => Ok(StateCause::Operator),
-            "paired" => Ok(StateCause::Paired),
-            "refresh_failed" => Ok(StateCause::RefreshFailed),
-            "unrecorded" => Ok(StateCause::Unrecorded),
-            _ => Err(FromSqlError::InvalidType),
-        }
-    }
-}
-
-impl ToSql for StateCause {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        Ok(self.as_str().into())
+text_enum! {
+    /// Who moved an account's state, stored beside it in the same statement and read by the routing log's transition
+    /// row. The list is closed: a stored word outside it fails the read, as an unknown state does.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum StateCause {
+        /// The upstream refused the credential: a 401, or a 403 `authentication_error`, on an `api_key` account, or
+        /// a 401 on the replay with a freshly refreshed token.
+        AuthFailed => "auth_failed",
+        /// The account's deletion. The row goes with it, so the word reaches the log alone.
+        Deleted => "deleted",
+        /// The upstream named an `api_key` account's credit balance.
+        FundingRefused => "funding_refused",
+        /// The router's own retry of a `funding_required` account, whose answer came back a success.
+        FundingRetry => "funding_retry",
+        /// The admin routes, and whatever reaches them.
+        Operator => "operator",
+        /// A pairing's confirm.
+        Paired => "paired",
+        /// The token refresh's definitive failure, the oauth manager's own write.
+        RefreshFailed => "refresh_failed",
+        /// The migration's default on a row from before the column. No writer stores it.
+        Unrecorded => "unrecorded",
     }
 }
 
