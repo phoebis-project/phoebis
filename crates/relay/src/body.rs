@@ -455,22 +455,32 @@ fn rewrite_cache_ttl(
     Ok(changed)
 }
 
-/// The top-level `cache_control` member for a body with no marker anywhere: before `stream` when present, else
-/// last, the same placement rule `insert_diagnostics` uses.
+/// The top-level `cache_control` member for a body with no marker anywhere, placed as `insert_diagnostics` places
+/// its member.
 fn add_top_level_cache_control(body: &mut Vec<u8>, ttl: CacheTtl) {
     let member = match ttl {
-        CacheTtl::OneHour => r#""cache_control":{"type":"ephemeral","ttl":"1h"}"#.to_string(),
-        CacheTtl::FiveMinutes => r#""cache_control":{"type":"ephemeral"}"#.to_string(),
+        CacheTtl::OneHour => r#""cache_control":{"type":"ephemeral","ttl":"1h"}"#,
+        CacheTtl::FiveMinutes => r#""cache_control":{"type":"ephemeral"}"#,
     };
+    // The rewrite calls this only after the marker walk answered, and that walk fails unless the object closes.
+    let placed = insert_top_level_member(body, member);
+    assert!(placed, "checked to be an object");
+}
+
+/// Inserts a top-level `member` before `stream` when the body has one, so it lands where the measured client puts
+/// it, and last otherwise, answering whether it found a place. `starts_with_object` only checked the first byte
+/// and `edit_body` skips a full parse, so a body that opens with `{` and never closes reaches here. The upstream
+/// would refuse it either way, so nothing is inserted rather than guessing at a position that does not exist.
+fn insert_top_level_member(body: &mut Vec<u8>, member: &str) -> bool {
     match phoebis_cch::object_member_span(body, &["stream"]) {
         Some((start, _)) => {
             body.splice(start..start, format!("{member},").bytes());
+            true
         }
         None => {
-            let end = body
-                .iter()
-                .rposition(|b| *b == b'}')
-                .expect("checked to be an object");
+            let Some(end) = body.iter().rposition(|b| *b == b'}') else {
+                return false;
+            };
             let empty = body[..end]
                 .iter()
                 .rev()
@@ -480,6 +490,7 @@ fn add_top_level_cache_control(body: &mut Vec<u8>, ttl: CacheTtl) {
                 end..end,
                 format!("{}{member}", if empty { "" } else { "," }).bytes(),
             );
+            true
         }
     }
 }
@@ -555,8 +566,7 @@ fn span_ttl_ms(body: &[u8], (start, end): (usize, usize)) -> i64 {
         })
 }
 
-/// Before `stream` when the body has one, so the member lands where the measured client puts it; a body
-/// without `stream` gets it last. Never rewrites a member the client sent.
+/// Placed by `insert_top_level_member`. Never rewrites a member the client sent.
 fn insert_diagnostics(body: &mut Vec<u8>, previous: Option<&str>) -> bool {
     if phoebis_cch::object_member_span(body, &["diagnostics"]).is_some() {
         return false;
@@ -566,30 +576,7 @@ fn insert_diagnostics(body: &mut Vec<u8>, previous: Option<&str>) -> bool {
         previous.map_or("null".to_string(), |p| serde_json::to_string(p)
             .expect("a string encodes"))
     );
-    match phoebis_cch::object_member_span(body, &["stream"]) {
-        Some((start, _)) => {
-            body.splice(start..start, format!("{member},").bytes());
-            true
-        }
-        None => {
-            // `starts_with_object` only checked the first byte and `edit_body` skips a full parse, so a body
-            // that opens with `{` and never closes reaches here; the upstream would refuse it either way, so
-            // nothing is inserted rather than guessing at a position that does not exist.
-            let Some(end) = body.iter().rposition(|b| *b == b'}') else {
-                return false;
-            };
-            let empty = body[..end]
-                .iter()
-                .rev()
-                .find(|b| !phoebis_cch::JSON_WS.contains(b))
-                == Some(&b'{');
-            body.splice(
-                end..end,
-                format!("{}{member}", if empty { "" } else { "," }).bytes(),
-            );
-            true
-        }
-    }
+    insert_top_level_member(body, &member)
 }
 
 /// Sets a client-sent `diagnostics.previous_message_id` that names a message to `null`. A member already `null`, a
