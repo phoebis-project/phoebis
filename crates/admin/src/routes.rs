@@ -1992,13 +1992,13 @@ pub(crate) fn account(state: &AdminState, id: &str) -> Result<AccountRow, Respon
 pub(crate) struct AccountContext {
     pub cooldowns: Vec<CooldownRow>,
     pub day: BTreeMap<String, phoebis_ledger::Totals>,
-    /// Each account's profile, subscription and term, read once. A row created since reads its own.
-    pub extras: BTreeMap<String, phoebis_store::AccountExtras>,
     pub extra: Vec<phoebis_ledger::ExtraUsageSampleRecord>,
     /// The newest polled extra-usage row per account, the one that carries the amounts a later head row lacks.
     pub extra_polled: Vec<phoebis_ledger::ExtraUsageSampleRecord>,
     /// The newest extra-usage row per account that carries a share, which a later head naming the reset alone lacks.
     pub extra_share: Vec<phoebis_ledger::ExtraUsageSampleRecord>,
+    /// Each account's profile, subscription and term, read once. A row created since reads its own.
+    pub extras: BTreeMap<String, phoebis_store::AccountExtras>,
     /// The router's retry instant per `funding_required` account.
     pub funding_retries: BTreeMap<String, i64>,
     /// The router's windows per account, predicted at its clock, as the usage `GET` reads them.
@@ -2187,10 +2187,10 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
     AccountContext {
         cooldowns: state.router.cooldowns().await.unwrap_or_default(),
         day,
-        extras: state.store.account_extras().unwrap_or_default(),
         extra,
         extra_polled,
         extra_share,
+        extras: state.store.account_extras().unwrap_or_default(),
         funding_retries: state
             .router
             .funding_retries()
