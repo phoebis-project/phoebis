@@ -6,7 +6,7 @@
 
 use std::path::Path;
 #[cfg(any(test, feature = "debug-hooks"))]
-use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
@@ -64,7 +64,7 @@ pub struct LedgerDb {
     #[cfg(any(test, feature = "debug-hooks"))]
     fail_next_writer_read: Mutex<Option<WriterRead>>,
     #[cfg(any(test, feature = "debug-hooks"))]
-    hold_next_writer_read: Mutex<Option<ArmedHold>>,
+    hold_next_writer_read: Mutex<Option<(WriterRead, Arc<phoebis_store::HoldGate>)>>,
     #[cfg(any(test, feature = "debug-hooks"))]
     page_reads: AtomicUsize,
 }
@@ -220,33 +220,6 @@ impl Drop for Returned<'_> {
         }
     }
 }
-
-/// A test's hold on the next writer-side read that names its `WriterRead`, from
-/// `LedgerDb::debug_hold_next_writer_read`.
-#[cfg(any(test, feature = "debug-hooks"))]
-#[doc(hidden)]
-pub struct WriterReadHold {
-    parked: Arc<AtomicBool>,
-    release: std::sync::mpsc::Sender<()>,
-}
-
-#[cfg(any(test, feature = "debug-hooks"))]
-impl WriterReadHold {
-    /// Whether the writer has reached the held read and is parked on it. Never blocks: a test polls it through its
-    /// harness's `wait_for`, since the park happens on a blocking worker the test's runtime must stay free to start.
-    pub fn is_parked(&self) -> bool {
-        self.parked.load(Ordering::SeqCst)
-    }
-
-    /// Lets the parked read run. Dropping the hold releases it too, so a failing test never leaves the writer parked.
-    pub fn release(self) {
-        let _ = self.release.send(());
-    }
-}
-
-/// The read a hold parks, the flag its `WriterReadHold` reads and the receiver its release or drop wakes.
-#[cfg(any(test, feature = "debug-hooks"))]
-type ArmedHold = (WriterRead, Arc<AtomicBool>, std::sync::mpsc::Receiver<()>);
 
 #[cfg(any(test, feature = "debug-hooks"))]
 const INJECTED_READ_FAILURE: &str = "injected ledger read failure";
@@ -478,11 +451,9 @@ impl LedgerDb {
                 INJECTED_READ_FAILURE,
             )));
         }
-        let held = recovered(&self.hold_next_writer_read).take_if(|(armed, _, _)| *armed == which);
-        if let Some((_, parked, released)) = held {
-            parked.store(true, Ordering::SeqCst);
-            // A send and a dropped hold both end the wait.
-            let _ = released.recv();
+        let held = recovered(&self.hold_next_writer_read).take_if(|(armed, _)| *armed == which);
+        if let Some((_, gate)) = held {
+            gate.park();
         }
         Ok(())
     }
@@ -538,11 +509,10 @@ impl LedgerDb {
     /// commit while another connection reads, which is what a writer-side read does in production too.
     #[cfg(any(test, feature = "debug-hooks"))]
     #[doc(hidden)]
-    pub fn debug_hold_next_writer_read(&self, which: WriterRead) -> WriterReadHold {
-        let parked = Arc::new(AtomicBool::new(false));
-        let (release, released) = std::sync::mpsc::channel();
-        *recovered(&self.hold_next_writer_read) = Some((which, parked.clone(), released));
-        WriterReadHold { parked, release }
+    pub fn debug_hold_next_writer_read(&self, which: WriterRead) -> phoebis_store::Hold {
+        let gate = Arc::new(phoebis_store::HoldGate::default());
+        *recovered(&self.hold_next_writer_read) = Some((which, gate.clone()));
+        phoebis_store::Hold::new(gate)
     }
 
     /// The `read` calls this handle has run since it opened. A paged walk such as the guardrail dry run's takes one
