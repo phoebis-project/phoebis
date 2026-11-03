@@ -2,6 +2,7 @@
 //! account's credential in place of the router's key and the framing the relay is about to write.
 
 use axum::http::HeaderMap;
+use phoebis_bus::NEVER_COPIED;
 use phoebis_store::Secret;
 
 use crate::casing::OriginalHead;
@@ -17,35 +18,6 @@ pub enum CredentialKind {
 
 /// Beta only an OAuth credential may claim; an API key that sends it is rejected upstream.
 const OAUTH_BETA: &str = "oauth-2025-04-20";
-
-/// Caller headers the relay never repeats upstream: the hop-by-hop ones describe the caller's connection
-/// rather than the payload, cookies and proxy credentials are the caller's own secrets, forwarding headers
-/// would disclose the caller's network, and `x-keepalive-owner-id` is the router's internal ownership marker.
-/// The credential, `content-encoding`, `content-length`, and `host` are not here because the relay owns their
-/// values rather than dropping them; see the match below.
-const NEVER_COPIED: &[&str] = &[
-    "cookie",
-    // A caller's `Expect: 100-continue` would make the upstream wait for a continue the relay never sends, since
-    // the body is written at once.
-    "expect",
-    "forwarded",
-    "keep-alive",
-    "proxy-authenticate",
-    "proxy-authorization",
-    "proxy-connection",
-    "te",
-    "trailer",
-    "transfer-encoding",
-    "upgrade",
-    "via",
-    "x-forwarded-for",
-    "x-forwarded-host",
-    "x-forwarded-port",
-    "x-forwarded-proto",
-    "x-forwarded-server",
-    "x-keepalive-owner-id",
-    "x-real-ip",
-];
 
 /// The head the relay writes upstream. Every caller header travels as it was sent, in the order it was sent,
 /// except the never-copied set, the credential slot, the beta list, and the headers whose values describe the
@@ -355,15 +327,6 @@ mod tests {
             &[],
         )
         .headers
-    }
-
-    /// The bus may not depend on this crate, so it carries its own copy of this set and the two are kept in
-    /// step here: a header this relay refuses to repeat upstream must not reach a consumer either.
-    #[test]
-    fn the_bus_denylist_covers_every_never_copied_header() {
-        for name in NEVER_COPIED {
-            assert!(!phoebis_bus::header_published(name), "{name}");
-        }
     }
 
     #[test]

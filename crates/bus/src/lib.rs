@@ -16,7 +16,7 @@ pub use event::{
     Classifier, ClientFacts, CooldownSet, DiagnosticsSource, Event, Fork, GuardrailMatch,
     Interruption, Kind, Origin, Outcome, Phase, RequestComplete, RequestObserved, RequestShape,
     ResponseChunk, ResponseFacts, ResponseHead, Usage, BODY_SHAPE_ERROR_CODE, HEADER_DENYLIST,
-    OTHER_CLIENT, USER_AGENT_MAX_BYTES,
+    NEVER_COPIED, OTHER_CLIENT, USER_AGENT_MAX_BYTES,
 };
 
 /// Deep enough to hold a whole streamed answer's chunks behind a consumer that is busy for a moment; a

@@ -506,22 +506,17 @@ impl Event {
     }
 }
 
-/// Request headers no consumer may see, mirroring the relay's outbound rule so that what keepalive replays is
-/// what the caller sent. It holds the relay's `NEVER_COPIED` set (a unit test in crates/relay/src/headers.rs
-/// asserts the two agree, since the bus may not depend on the relay), the credentials, and the framing headers
-/// the relay regenerates for its own hop.
-///
-/// `accept-encoding` is the one entry that is neither: a probe asks for an identity answer so its usage parser reads
-/// the body without a decode, and the probe's bytes toward the upstream stay as the recorded fixtures pin them.
-pub const HEADER_DENYLIST: &[&str] = &[
-    "accept-encoding",
-    "authorization",
-    "connection",
-    "content-length",
+/// Caller headers the relay never repeats upstream: the hop-by-hop ones describe the caller's connection
+/// rather than the payload, cookies and proxy credentials are the caller's own secrets, forwarding headers
+/// would disclose the caller's network, and `x-keepalive-owner-id` is the router's internal ownership marker.
+/// The credential, `content-encoding`, `content-length`, and `host` are not here because the relay owns their
+/// values rather than dropping them, as the match in its `outbound_headers` shows.
+pub const NEVER_COPIED: &[&str] = &[
     "cookie",
+    // A caller's `Expect: 100-continue` would make the upstream wait for a continue the relay never sends, since
+    // the body is written at once.
     "expect",
     "forwarded",
-    "host",
     "keep-alive",
     "proxy-authenticate",
     "proxy-authorization",
@@ -531,7 +526,6 @@ pub const HEADER_DENYLIST: &[&str] = &[
     "transfer-encoding",
     "upgrade",
     "via",
-    "x-api-key",
     "x-forwarded-for",
     "x-forwarded-host",
     "x-forwarded-port",
@@ -541,11 +535,27 @@ pub const HEADER_DENYLIST: &[&str] = &[
     "x-real-ip",
 ];
 
-/// Everything the denylist does not name travels, so a header the client starts sending after this code was
+/// Request headers no consumer may see beyond `NEVER_COPIED`: the credentials, and the framing headers the relay
+/// regenerates for its own hop. `header_published` refuses a name either list holds, mirroring the relay's outbound
+/// rule so that what keepalive replays is what the caller sent.
+///
+/// `accept-encoding` is the one entry that is neither: a probe asks for an identity answer so its usage parser reads
+/// the body without a decode, and the probe's bytes toward the upstream stay as the recorded fixtures pin them.
+pub const HEADER_DENYLIST: &[&str] = &[
+    "accept-encoding",
+    "authorization",
+    "connection",
+    "content-length",
+    "host",
+    "x-api-key",
+];
+
+/// Everything the two lists do not name travels, so a header the client starts sending after this code was
 /// written still reaches a replay as the caller spelled it.
 pub fn header_published(name: &str) -> bool {
-    !HEADER_DENYLIST
+    !NEVER_COPIED
         .iter()
+        .chain(HEADER_DENYLIST)
         .any(|denied| denied.eq_ignore_ascii_case(name))
 }
 
