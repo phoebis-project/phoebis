@@ -176,6 +176,9 @@ const USER_AGENT: Dimension = { field: 'agent', group: 'Request', kind: 'pattern
  * the user agent's chip.
  */
 export const AGENT_ID: Dimension = { field: 'agentId', group: 'Subject', kind: 'id', label: 'Agent', mono: true, word: 'agent' };
+const REQUEST_ID: Dimension = { field: 'request', group: 'Subject', kind: 'id', label: 'Request', mono: true, word: 'request' };
+const SESSION_ID: Dimension = { field: 'session', group: 'Subject', kind: 'id', label: 'Session', mono: true, word: 'session' };
+const STATUS: Dimension = { anyLabel: 'All statuses', defaultValue: 'all', field: 'status', group: 'Accounts', kind: 'choice', label: 'Status', word: 'status' };
 
 /**
  * A dimension's disabled reason while its option list did not load, `{ [field]: "The key list did not load: ..." }`,
@@ -229,8 +232,8 @@ export const REQUESTS_DIMENSIONS: Dimension[] = [
   { field: 'turnOrigins', group: 'Request', kind: 'list', label: 'Turn origin', mono: true, word: 'turn origin' },
   USER_AGENT,
   AGENT_ID,
-  { field: 'request', group: 'Subject', kind: 'id', label: 'Request', mono: true, word: 'request' },
-  { field: 'session', group: 'Subject', kind: 'id', label: 'Session', mono: true, word: 'session' },
+  REQUEST_ID,
+  SESSION_ID,
 ];
 
 /** Kinds, Routing, Subject: the kinds lead, since their presets are the way to narrow this view. */
@@ -241,8 +244,8 @@ export const ROUTING_LOG_DIMENSIONS: Dimension[] = [
   CATALOG_MODEL,
   POOL,
   AGENT_ID,
-  { field: 'request', group: 'Subject', kind: 'id', label: 'Request', mono: true, word: 'request' },
-  { field: 'session', group: 'Subject', kind: 'id', label: 'Session', mono: true, word: 'session' },
+  REQUEST_ID,
+  SESSION_ID,
 ];
 
 /** Account alone: the route answers the trailing 30 days whatever the range, so the view offers none. */
@@ -260,7 +263,7 @@ export const ANALYTICS_DIMENSIONS: Dimension[] = [
   { field: 'clients', group: 'Request', kind: 'list', label: 'Client', mono: true, perValue: true, typed: true, word: 'client' },
   { field: 'probes', group: 'Request', kind: 'flag', label: 'Include probes', word: 'include probes' },
   { field: 'userAgents', group: 'Request', kind: 'list', label: 'User agent', mono: true, perValue: true, typed: true, word: 'user agent' },
-  { field: 'session', group: 'Subject', kind: 'id', label: 'Session', mono: true, word: 'session' },
+  SESSION_ID,
 ];
 
 /**
@@ -269,11 +272,11 @@ export const ANALYTICS_DIMENSIONS: Dimension[] = [
  */
 export const KEYS_DIMENSIONS: Dimension[] = [
   { ...POOL, group: 'Keys', perValue: true },
-  { anyLabel: 'All statuses', defaultValue: 'all', field: 'status', group: 'Keys', kind: 'choice', label: 'Status', word: 'status' },
+  { ...STATUS, group: 'Keys' },
 ];
 
 /** Accounts. The status choice's none is `all`, the codec's default. */
-export const ACCOUNTS_DIMENSIONS: Dimension[] = [{ anyLabel: 'All statuses', defaultValue: 'all', field: 'status', group: 'Accounts', kind: 'choice', label: 'Status', word: 'status' }];
+export const ACCOUNTS_DIMENSIONS: Dimension[] = [STATUS];
 
 /** Sessions. */
 export const SESSIONS_DIMENSIONS: Dimension[] = [
