@@ -752,23 +752,32 @@ fn lone_surrogate_escapes(token: &[u8], offset: usize, out: &mut Vec<usize>) {
 }
 
 pub fn sign(body: &[u8]) -> Result<Vec<u8>, CchError> {
-    let Some(loc) = find_cch(body) else {
-        return Ok(body.to_vec());
-    };
     let mut out = body.to_vec();
-    out[loc.digits_start..loc.digits_start + LEN].copy_from_slice(PLACEHOLDER);
-    let view = normalize(&out)?;
-    let h = xxh64(&view, SEED) & 0xF_FFFF;
-    out[loc.digits_start..loc.digits_start + LEN].copy_from_slice(format!("{h:05x}").as_bytes());
+    restamp_if_present(&mut out)?;
     Ok(out)
 }
 
-pub fn restamp_if_present(body: &mut Vec<u8>) -> Result<bool, CchError> {
-    if find_cch(body).is_none() {
+/// Signs the body in place where it carries a stamp, answering whether it did. The digits are zeroed for the view and
+/// written back on an error, so a failed restamp hands the caller the body it passed in.
+pub fn restamp_if_present(body: &mut [u8]) -> Result<bool, CchError> {
+    let Some(loc) = find_cch(body) else {
         return Ok(false);
+    };
+    let digits = loc.digits_start..loc.digits_start + LEN;
+    let mut kept = [0; LEN];
+    kept.copy_from_slice(&body[digits.clone()]);
+    body[digits.clone()].copy_from_slice(PLACEHOLDER);
+    match normalize(body) {
+        Ok(view) => {
+            let h = xxh64(&view, SEED) & 0xF_FFFF;
+            body[digits].copy_from_slice(format!("{h:05x}").as_bytes());
+            Ok(true)
+        }
+        Err(error) => {
+            body[digits].copy_from_slice(&kept);
+            Err(error)
+        }
     }
-    *body = sign(body)?;
-    Ok(true)
 }
 
 struct Edit {
@@ -1429,6 +1438,22 @@ mod tests {
             "the placeholder was replaced, so the comparison below is not two unsigned bodies"
         );
         assert_eq!(digits(&deep), digits(&shallow));
+    }
+
+    /// The scanner walks a bare `tru` as a literal and reaches the stamp, while the view's serde pass refuses it, so
+    /// the restamp fails after it zeroed the digits.
+    #[test]
+    fn a_restamp_whose_view_cannot_be_built_hands_back_the_body_with_its_digits() {
+        let body = br#"{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.220.test; cch=abcde;"}],"stream":tru}"#;
+        let mut restamped = body.to_vec();
+        assert!(matches!(
+            restamp_if_present(&mut restamped),
+            Err(CchError::Json(_))
+        ));
+        assert_eq!(
+            String::from_utf8_lossy(&restamped),
+            String::from_utf8_lossy(body)
+        );
     }
 
     #[test]
