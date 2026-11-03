@@ -696,7 +696,7 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
   const no = (i: number, facts: WalkFact[]) => lines.push(step(`move:${RULES[i]}`, 'no', facts));
   // The moving pin's last prompt and burn, which the gate prices on every candidate.
   const tokens = spec.pinFigures?.tokens ?? bodyTokensOf(r);
-  const pinBurn = spec.pinFigures?.burn ?? (spec.story ? PRIOR_BURN : {});
+  const pinBurn = spec.pinFigures?.burn ?? priorOf(spec);
   const gate = (reached: RecordCandidate[], fitsOnly: boolean): { answered: RecordCandidate[]; step: WalkStep } => {
     const reads = reached.map((c) => {
       const read = fitOf(c, at, pool, r.canonicalModel, tokens, pinBurn, true);
@@ -923,6 +923,8 @@ function roundOf(round: ShedRound, excess: number, pool: PoolSeed) {
 }
 
 const tierKey = (t: [number, number, number]) => t.join('/');
+/** The unit a member's score reads in: a paid source's remaining share, any other's share per hour. */
+const scoreUnitOf = (c: RecordCandidate) => (isPaidSource(accountById.get(c.accountId)!) ? 'percent' : 'percent_per_hour');
 
 /**
  * The pick among the members the partitions kept in the chosen account's tier, the set the engine's `choose` orders:
@@ -931,7 +933,6 @@ const tierKey = (t: [number, number, number]) => t.join('/');
 function pickOf(candidates: RecordCandidate[], kept: RecordCandidate[], chosen: string | null, strategy: string, source: string | undefined): { runnerUp: Score | null; score: Score | null; tierSize: number } {
   const winner = candidates.find((c) => c.accountId === chosen);
   if (!winner) return { runnerUp: null, score: null, tierSize: 0 };
-  const unit = (c: RecordCandidate) => (isPaidSource(accountById.get(c.accountId)!) ? 'percent' : 'percent_per_hour');
   const scoreOf = (c: RecordCandidate) => c.pace?.score ?? 0;
   const rest = kept.filter((c) => c !== winner && c.accountId !== source && tierKey(c.tier) === tierKey(winner.tier)).sort((x, y) => scoreOf(y) - scoreOf(x));
   winner.rank = 1;
@@ -943,7 +944,7 @@ function pickOf(candidates: RecordCandidate[], kept: RecordCandidate[], chosen: 
   const tierSize = rest.length + 1;
   if (strategy !== 'pace') return { runnerUp: null, score: null, tierSize };
   const best = rest[0];
-  return { runnerUp: best ? { accountId: best.accountId, score: scoreOf(best), unit: unit(best) } : null, score: { accountId: winner.accountId, score: scoreOf(winner), unit: unit(winner) }, tierSize };
+  return { runnerUp: best ? { accountId: best.accountId, score: scoreOf(best), unit: scoreUnitOf(best) } : null, score: { accountId: winner.accountId, score: scoreOf(winner), unit: scoreUnitOf(winner) }, tierSize };
 }
 
 /** Whether one tier ranks before another, compared member by member as the engine orders them. */
@@ -1103,7 +1104,7 @@ function reservationOf(spec: Spec, chosen: RecordCandidate | undefined): { reser
   if ((spec.kind !== 'placed' && spec.kind !== 'moved') || chosen === undefined || account === undefined || isPaidSource(account) || r.kind !== 'inference' || r.shape.requestedSpeed === 'fast' || r.classifier !== null) return null;
   const id = chosen.accountId;
   const rewrite = rewriteOf(spec.kind === 'moved' ? (spec.pinFigures?.tokens ?? bodyTokensOf(r)) : bodyTokensOf(r), r.canonicalModel);
-  const brought = spec.kind === 'moved' && spec.pinFigures ? spec.pinFigures.burn : spec.story ? PRIOR_BURN : {};
+  const brought = spec.kind === 'moved' && spec.pinFigures ? spec.pinFigures.burn : priorOf(spec);
   const burn = Object.fromEntries(drawnWindows(r.canonicalModel).flatMap((w) => (brought[w] === undefined ? [] : [[w, brought[w]]])));
   const expiresAt = spec.at + RESERVATION_MS;
   const facts = [
@@ -1255,7 +1256,7 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
       tierSize = ranked.tierSize;
       const tier = member(spec.accountId)?.tier ?? [0, 0, 0];
       // A burn fact follows each score, the burn the spare rate took off.
-      const scores = candidates.filter((c) => c.score !== null).flatMap((c) => [fact('score', c.score, isPaidSource(accountById.get(c.accountId)!) ? 'percent' : 'percent_per_hour', c.accountId), fact('burn', c.pace?.burn ?? 0, 'percent_per_hour', c.accountId)]);
+      const scores = candidates.filter((c) => c.score !== null).flatMap((c) => [fact('score', c.score, scoreUnitOf(c), c.accountId), fact('burn', c.pace?.burn ?? 0, 'percent_per_hour', c.accountId)]);
       // The strategy's ties are the ranked tier's best scores under Pace and the whole tier under Priority. The runway
       // breaks them for a move whose gate answered the fitting order and for a failover by its fitting members' reads,
       // and round robin's cursor picks alone.
@@ -1298,7 +1299,7 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
 
   const chosen = member(spec.accountId);
   const dispatched = spec.kind === 'placed' || spec.kind === 'renewed' || spec.kind === 'moved';
-  const attempt = dispatched ? r.attempts[spec.attempt - 1] : undefined;
+  const attempt = dispatchedAttempt(spec);
   const answered = attempt?.upstreamStatus === 200 && spec.attempt === r.attempts.length;
   const tier = dispatched && !spec.rung && spec.kind !== 'renewed' ? (chosen?.tier ?? null) : null;
   const pinEvents = pinEventsOf(spec, pinning);
