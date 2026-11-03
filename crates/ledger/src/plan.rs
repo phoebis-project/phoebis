@@ -45,11 +45,10 @@ impl Capacity {
         self.five_hour.is_some() || self.seven_day.is_some()
     }
 
-    fn on(&self, window: &str) -> Option<f64> {
+    fn on(&self, window: SharedWindow) -> Option<f64> {
         match window {
-            FIVE_HOUR => self.five_hour,
-            SEVEN_DAY => self.seven_day,
-            _ => None,
+            SharedWindow::FiveHour => self.five_hour,
+            SharedWindow::SevenDay => self.seven_day,
         }
     }
 }
@@ -63,10 +62,27 @@ pub struct PerWindow {
 }
 
 impl PerWindow {
-    fn on(&self, window: &str) -> Option<f64> {
+    fn on(&self, window: SharedWindow) -> f64 {
         match window {
-            FIVE_HOUR => Some(self.five_hour),
-            SEVEN_DAY => Some(self.seven_day),
+            SharedWindow::FiveHour => self.five_hour,
+            SharedWindow::SevenDay => self.seven_day,
+        }
+    }
+}
+
+/// One of the two shared windows a share prices on, parsed once from the file's text, so a reader of a capacity row
+/// or a band factor matches both and nothing else.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SharedWindow {
+    FiveHour,
+    SevenDay,
+}
+
+impl SharedWindow {
+    fn parse(window: &str) -> Option<SharedWindow> {
+        match window {
+            FIVE_HOUR => Some(SharedWindow::FiveHour),
+            SEVEN_DAY => Some(SharedWindow::SevenDay),
             _ => None,
         }
     }
@@ -393,10 +409,8 @@ impl SubscriptionCosts {
         let anchor = &self.unit;
         capacity_rules("capacity", &self.capacity, &anchor.tier)?;
         // `capacity_rules` refuses a null window on the anchor's row first, so this refuses a revision without the row.
-        if self
-            .capacity
-            .get(&anchor.tier)
-            .and_then(|row| row.on(&anchor.window))
+        if SharedWindow::parse(&anchor.window)
+            .and_then(|window| self.capacity.get(&anchor.tier)?.on(window))
             .is_none()
         {
             return Err(format!(
@@ -605,15 +619,13 @@ impl SubscriptionCosts {
     /// The shared window `window` prices on and the model-week divisor: the two shared windows price on themselves;
     /// a `model_windows` key on its `of` window over its `capacity_factor`; any other window starting with
     /// `seven_day` as the 7-day share once, as the classifier's window claims allow; anything else prices nothing.
-    fn priced_window(&self, window: &str) -> Option<(&str, f64)> {
+    fn priced_window(&self, window: &str) -> Option<(SharedWindow, f64)> {
         match window {
-            // The constants, never `window`: the elided result lifetime is `self`'s, which the argument does not
-            // outlive.
-            FIVE_HOUR => Some((FIVE_HOUR, 1.0)),
-            SEVEN_DAY => Some((SEVEN_DAY, 1.0)),
+            FIVE_HOUR => Some((SharedWindow::FiveHour, 1.0)),
+            SEVEN_DAY => Some((SharedWindow::SevenDay, 1.0)),
             w => match self.model_windows.get(w) {
-                Some(row) => Some((row.of.as_str(), row.capacity_factor)),
-                None if w.starts_with(SEVEN_DAY) => Some((SEVEN_DAY, 1.0)),
+                Some(row) => Some((SharedWindow::parse(&row.of)?, row.capacity_factor)),
+                None if w.starts_with(SEVEN_DAY) => Some((SharedWindow::SevenDay, 1.0)),
                 None => None,
             },
         }
@@ -653,7 +665,7 @@ impl SubscriptionCosts {
     }
 
     /// The regime's factor on `priced` where one lists the entrypoint, else the base, 1 outside the band.
-    fn factor_at(&self, priced: &str, entrypoint: Option<&str>, at: i64) -> f64 {
+    fn factor_at(&self, priced: SharedWindow, entrypoint: Option<&str>, at: i64) -> f64 {
         if !self.peak.covers(at) {
             return 1.0;
         }
@@ -661,11 +673,11 @@ impl SubscriptionCosts {
     }
 
     /// The factor the band sets on `priced` under the regime the entrypoint names, else the base one.
-    fn band_capacity_factor(&self, priced: &str, entrypoint: Option<&str>) -> f64 {
+    fn band_capacity_factor(&self, priced: SharedWindow, entrypoint: Option<&str>) -> f64 {
         let factors = self
             .regime_of(entrypoint)
             .map_or(&self.peak.capacity_factor, |r| &r.peak.capacity_factor);
-        factors.on(priced).unwrap_or(1.0)
+        factors.on(priced)
     }
 
     /// The anchor tier's capacity on `window` under the regime `entrypoint` names, in this revision: what one unit's
@@ -821,9 +833,10 @@ impl SubscriptionCosts {
             write_1h: None,
             output: None,
         };
-        let Some((divisor, capacity)) = self.priced_window(window).and_then(|(priced, divisor)| {
-            Some((divisor, self.anchor_capacity(priced, entrypoint)?))
-        }) else {
+        let Some((divisor, capacity)) = self
+            .priced_window(window)
+            .and_then(|(_, divisor)| Some((divisor, self.anchor_capacity(window, entrypoint)?)))
+        else {
             return RateTable {
                 rows: HashMap::new(),
                 long_context: HashMap::new(),
@@ -869,7 +882,7 @@ impl SubscriptionCosts {
     pub fn tier_factor(&self, tier: &str, window: &str, entrypoint: Option<&str>) -> Option<f64> {
         let (priced, _) = self.priced_window(window)?;
         let capacity = self.capacity_of(entrypoint, tier)?.on(priced)?;
-        Some(capacity / self.anchor_capacity(priced, entrypoint)?)
+        Some(capacity / self.anchor_capacity(window, entrypoint)?)
     }
 
     /// True for the two shared windows and every model week the file names; a week priced as the 7-day share for
@@ -992,7 +1005,7 @@ impl CostRevisions {
         crate::keys::untagged_string_keys(text).map_err(refuse)?;
         let file: CostFile = serde_norway::from_str(text).map_err(|e| refuse(e.to_string()))?;
         let unit = file.unit;
-        if !matches!(unit.window.as_str(), FIVE_HOUR | SEVEN_DAY) {
+        if SharedWindow::parse(&unit.window).is_none() {
             return Err(refuse(format!(
                 "unit.window: `{}` is neither {FIVE_HOUR} nor {SEVEN_DAY}",
                 unit.window
