@@ -457,13 +457,23 @@ export function refreshAttention(): Promise<void> {
   return attention.refresh();
 }
 
-/** A shared clock so every countdown on a page advances in the same tick. */
-export function useNow(intervalMs = 15_000): number {
+/**
+ * A shared clock so every countdown on a page advances in the same tick. While `active` is false, as for a dialog that
+ * draws nothing closed, no interval wakes the page, and the clock is read again before paint as it turns true, so the
+ * opening frame draws the current instant.
+ */
+export function useNow(intervalMs = 15_000, active = true): number {
   const [now, setNow] = useState(() => clock.now());
+  const wasActive = useRef(active);
+  useLayoutEffect(() => {
+    if (active && !wasActive.current) setNow(clock.now());
+    wasActive.current = active;
+  }, [active]);
   useEffect(() => {
+    if (!active) return;
     const id = clock.setInterval(() => setNow(clock.now()), intervalMs);
     return () => clock.clearInterval(id);
-  }, [intervalMs]);
+  }, [active, intervalMs]);
   return now;
 }
 

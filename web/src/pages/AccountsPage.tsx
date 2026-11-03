@@ -1087,7 +1087,7 @@ function PairingDialog({ open, start, label, repair, onClose, onPaired }: { labe
   // A credential sealed under another storage key refuses every confirm until a disconnect deletes it, so the footer
   // offers Disconnect in Confirm's place.
   const [sealed, setSealed] = useState(false);
-  const now = useNow(1_000);
+  const now = useNow(1_000, open);
   const restart = (next: PairingSession | null) => {
     setSession(next);
     setStep(1);

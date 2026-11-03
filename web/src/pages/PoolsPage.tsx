@@ -1202,7 +1202,7 @@ export function PoolDialog({
   /** The sessions under the pool's keys: a shedding round weighs the pool's own pins on a member alone. */
   sessions: Session[];
 }) {
-  const now = useNow();
+  const now = useNow(undefined, open);
   const [form, setForm] = useState<PoolForm>(blankForm);
   // The values the dialog opened with, which the discard question compares the form against.
   const [opened, setOpened] = useState(form);
