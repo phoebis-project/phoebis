@@ -93,10 +93,7 @@ impl Inspect {
 
     fn keep(&mut self, event: &SseEvent) {
         if let Some(read) = self.read.as_mut() {
-            read.events.push(SseEvent {
-                name: event.name.clone(),
-                data: event.data.clone(),
-            });
+            read.events.push(event.clone());
         }
     }
 }

@@ -4,7 +4,7 @@
 
 use bytes::BytesMut;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SseEvent {
     pub name: Option<Vec<u8>>,
     pub data: Vec<u8>,
