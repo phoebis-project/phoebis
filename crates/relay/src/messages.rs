@@ -2132,10 +2132,7 @@ impl Relay {
                 }
                 // A slot freed within the bound lets the next selection place there; past it the account is
                 // attempted and the next selection looks elsewhere.
-                SelectResult::Held {
-                    account_id,
-                    mut hold,
-                } => {
+                SelectResult::Held(mut hold) => {
                     // A slowed pin waits to its deadline before its head, under the request's `wait_bound` alone, and
                     // selects again with the hold on the request, which answers no second one. The hold is its own
                     // stage: it starts no retry bound and passes no account over, so a slot or reset wait after it
@@ -2186,6 +2183,7 @@ impl Relay {
                         trace.waited(&holds);
                         continue;
                     }
+                    let account_id = hold.account_id.clone();
                     // The account had its one hold of this request, or the request's one bound has passed: at its
                     // cap it is passed over as one whose wait ran out.
                     if held_for.contains(&account_id)

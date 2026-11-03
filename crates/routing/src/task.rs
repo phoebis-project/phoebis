@@ -3322,7 +3322,7 @@ impl Task {
                         )
                     }
                     SelectResult::Exhausted(_)
-                    | SelectResult::Held { .. }
+                    | SelectResult::Held(_)
                     | SelectResult::Refused(_) => (CancellationToken::new(), None, None),
                 };
                 let _ = reply.send(SelectAnswer {

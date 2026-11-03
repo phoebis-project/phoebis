@@ -653,12 +653,9 @@ impl Refusal {
 pub enum SelectResult {
     Exhausted(Exhaustion),
     /// The request waits before its head, the hold's `reason` saying why: every account the selection could place on
-    /// holds its cap (`account_id` the one it would have chosen), the pinned account's spent window resets inside the
-    /// retry bound, or the pin's account is slowed and the pin waits its deadline.
-    Held {
-        account_id: String,
-        hold: HoldFacts,
-    },
+    /// holds its cap (the hold's `account_id` the one it would have chosen), the pinned account's spent window resets
+    /// inside the retry bound, or the pin's account is slowed and the pin waits its deadline.
+    Held(HoldFacts),
     Refused(Refusal),
     Selected(Selection),
 }
@@ -1226,7 +1223,7 @@ pub fn decide(
     if rec.walk.iter().all(|step| step.step != "reserve") {
         let account = match &result {
             SelectResult::Selected(selection) => Some(selection.account.id.as_str()),
-            SelectResult::Held { account_id, .. } => Some(account_id.as_str()),
+            SelectResult::Held(hold) => Some(hold.account_id.as_str()),
             SelectResult::Exhausted(_) | SelectResult::Refused(_) => None,
         };
         rec.step(
@@ -1704,13 +1701,7 @@ fn run(
     if let (false, Some((current, warmth))) = (request.portable, pin.as_ref().zip(warmth)) {
         if let Some(candidate) = candidate_in(&eligible, &current.account_id) {
             if let Some(hold) = rewrite_answer(state, pool, request, current) {
-                return (
-                    SelectResult::Held {
-                        account_id: current.account_id.clone(),
-                        hold,
-                    },
-                    writes,
-                );
+                return (SelectResult::Held(hold), writes);
             }
             rec.step("bound", "renewed", vec![account_fact(&current.account_id)]);
             return (
@@ -1841,13 +1832,7 @@ fn run(
             if let MoveVerdict::Wait { until } = moved {
                 state.pace_held_until(&current.key(), until);
                 let hold = hold_facts(request, &current.account_id, "reset", Some(until), None);
-                return (
-                    SelectResult::Held {
-                        account_id: current.account_id.clone(),
-                        hold,
-                    },
-                    writes,
-                );
+                return (SelectResult::Held(hold), writes);
             }
             // A hold is for a fresh placement: with every destination at its cap the move is not made, the pin
             // renews in place at step 5 while its account stays eligible (a cooled one is released there and the
@@ -1902,22 +1887,10 @@ fn run(
     if let Some((current, warmth)) = pin.as_ref().zip(warmth) {
         if let Some(candidate) = candidate_in(&eligible, &current.account_id) {
             if let Some(hold) = rewrite_answer(state, pool, request, current) {
-                return (
-                    SelectResult::Held {
-                        account_id: current.account_id.clone(),
-                        hold,
-                    },
-                    writes,
-                );
+                return (SelectResult::Held(hold), writes);
             }
             if let Some(hold) = slow_down_answer(state, snapshot, pool, request, current, rec) {
-                return (
-                    SelectResult::Held {
-                        account_id: current.account_id.clone(),
-                        hold,
-                    },
-                    writes,
-                );
+                return (SelectResult::Held(hold), writes);
             }
             return (
                 SelectResult::Selected(renew(
@@ -2254,13 +2227,7 @@ fn run(
                             .unit("ms"),
                     ],
                 );
-                return (
-                    SelectResult::Held {
-                        account_id: hold.account_id.clone(),
-                        hold,
-                    },
-                    writes,
-                );
+                return (SelectResult::Held(hold), writes);
             }
         } else {
             for c in &selection_set {
@@ -7019,14 +6986,14 @@ fn finish(
                 .and_then(|failed_over| failed_over.cause.clone());
             skipped = u32::try_from(selection.trace.skipped.len()).unwrap_or(u32::MAX);
         }
-        SelectResult::Held { account_id, hold } => {
+        SelectResult::Held(hold) => {
             outcome.kind = "held";
-            outcome.account_id = Some(account_id.clone());
+            outcome.account_id = Some(hold.account_id.clone());
             // The pick's tier is the hold's only when the hold waits on the pick's account, whatever placed the
             // hold there, as `scores` keys the pick's score.
             outcome.tier = pick
                 .as_ref()
-                .filter(|pick| &pick.account_id == account_id)
+                .filter(|pick| pick.account_id == hold.account_id)
                 .map(|pick| pick.tier);
             // A slow-down hold copies the read it was answered from, so the outcome states what the engine read.
             let slowed = hold.reason == "slow_down";

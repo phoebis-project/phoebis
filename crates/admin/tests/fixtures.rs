@@ -2448,7 +2448,7 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
         .await
         .unwrap();
     let hold = match held.result {
-        SelectResult::Held { hold, .. } => hold,
+        SelectResult::Held(hold) => hold,
         other => panic!("the account at its cap holds the request, not {other:?}"),
     };
 
@@ -2463,7 +2463,7 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
         .await
         .unwrap();
     let wait = match capped.result {
-        SelectResult::Held { hold, .. } => phoebis_routing::HoldFacts {
+        SelectResult::Held(hold) => phoebis_routing::HoldFacts {
             held_ms: 60_000,
             ran_out: true,
             ..hold
@@ -2480,7 +2480,7 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
         .await
         .unwrap();
     let passed_over = match passed.result {
-        SelectResult::Held { account_id, .. } => account_id,
+        SelectResult::Held(hold) => hold.account_id,
         other => panic!("the other member at its cap holds the request too, not {other:?}"),
     };
     assert_ne!(

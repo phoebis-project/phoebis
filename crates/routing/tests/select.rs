@@ -6961,12 +6961,11 @@ fn a_budget_blocked_parents_pin_never_lands_a_capped_sibling() {
         request(&s, Some("session"), "claude-sonnet-5", true, &[], 2_000),
         "worker",
     );
-    let SelectResult::Held { account_id, hold } = select(&mut st, &s, &sub_req, &mut rng()).0
-    else {
+    let SelectResult::Held(hold) = select(&mut st, &s, &sub_req, &mut rng()).0 else {
         panic!("held on the strategy's choice")
     };
     assert_eq!(
-        account_id, "b",
+        hold.account_id, "b",
         "the parent's pin is on a member at its budget, so the request never lands there"
     );
     assert_eq!(hold.cohort, None);
@@ -7010,12 +7009,11 @@ fn a_held_subagent_is_held_on_its_cohorts_account() {
         ),
         "worker",
     );
-    let SelectResult::Held { account_id, hold } = select(&mut st, &s, &sub_req, &mut rng()).0
-    else {
+    let SelectResult::Held(hold) = select(&mut st, &s, &sub_req, &mut rng()).0 else {
         panic!("held on the cohort's account")
     };
     assert_eq!(
-        account_id, "b",
+        hold.account_id, "b",
         "the override moves the hold to the cohort's account rather than the strategy's a"
     );
     assert_eq!(
@@ -7070,11 +7068,13 @@ fn a_toolless_subagents_hold_never_follows_the_empty_tools_boundarys_cohort() {
         ),
         "worker",
     );
-    let SelectResult::Held { account_id, hold } = select(&mut st, &s, &sub_req, &mut rng()).0
-    else {
+    let SelectResult::Held(hold) = select(&mut st, &s, &sub_req, &mut rng()).0 else {
         panic!("held on the strategy's choice")
     };
-    assert_eq!(account_id, "a", "the strategy still picks a by priority");
+    assert_eq!(
+        hold.account_id, "a",
+        "the strategy still picks a by priority"
+    );
     assert_eq!(
         hold.cohort, None,
         "the empty-tools boundary carries no promised prefix, so it never names a cohort"
@@ -7125,12 +7125,11 @@ fn a_held_subagent_under_by_strategy_waits_on_the_strategys_choice_rather_than_i
         ),
         "worker",
     );
-    let SelectResult::Held { account_id, hold } = select(&mut st, &s, &sub_req, &mut rng()).0
-    else {
+    let SelectResult::Held(hold) = select(&mut st, &s, &sub_req, &mut rng()).0 else {
         panic!("held on the strategy's choice")
     };
     assert_eq!(
-        (account_id.as_str(), hold.cohort),
+        (hold.account_id.as_str(), hold.cohort),
         ("a", None),
         "a pool that places subagents by the strategy never names a cohort for the hold"
     );
@@ -7150,12 +7149,11 @@ fn a_held_marker_less_portable_subagent_waits_on_the_strategys_choice_rather_tha
         ),
         "worker",
     );
-    let SelectResult::Held { account_id, hold } = select(&mut st, &s, &sub_req, &mut rng()).0
-    else {
+    let SelectResult::Held(hold) = select(&mut st, &s, &sub_req, &mut rng()).0 else {
         panic!("held on the strategy's choice")
     };
     assert_eq!(
-        (account_id.as_str(), hold.cohort),
+        (hold.account_id.as_str(), hold.cohort),
         ("a", None),
         "a request that neither carries nor receives a marker reads no cache, so no cohort's warmth is its own"
     );
@@ -7382,12 +7380,11 @@ fn a_cohort_hold_that_times_out_lands_the_next_member_elsewhere() {
         &["s1"],
         true,
     );
-    let SelectResult::Held { account_id, hold } = select(&mut st, &s, &sub_req, &mut rng()).0
-    else {
+    let SelectResult::Held(hold) = select(&mut st, &s, &sub_req, &mut rng()).0 else {
         panic!("b holds once the cohort's account is attempted and its own entry no longer admits")
     };
     assert_eq!(
-        account_id, "b",
+        hold.account_id, "b",
         "a is attempted, so the override skips its entry and the strategy's choice takes the hold"
     );
     assert_eq!(
@@ -8702,7 +8699,7 @@ fn a_placement_after_a_move_the_cap_stopped_reads_its_candidates_again() {
     assert_eq!(fact(partitions, "at_cap"), &FactValue::Text("held".into()));
     assert_eq!(fact(partitions, "no_fit"), &FactValue::Int(1));
     assert!(
-        matches!(&d.result, SelectResult::Held { account_id, .. } if account_id == "c"),
+        matches!(&d.result, SelectResult::Held(hold) if hold.account_id == "c"),
         "{:?}",
         d.result
     );
@@ -9228,20 +9225,17 @@ fn every_candidate_at_its_cap_answers_held_with_the_best_of_them() {
     let (result, writes) = select(&mut st, &s, &req, &mut rng());
     assert_eq!(
         result,
-        SelectResult::Held {
+        SelectResult::Held(HoldFacts {
             account_id: "b".into(),
-            hold: HoldFacts {
-                account_id: "b".into(),
-                cohort: None,
-                held_ms: 0,
-                attempt: 1,
-                seq: 1,
-                ran_out: false,
-                reason: "cap",
-                until: None,
-                waits_for: None,
-            },
-        },
+            cohort: None,
+            held_ms: 0,
+            attempt: 1,
+            seq: 1,
+            ran_out: false,
+            reason: "cap",
+            until: None,
+            waits_for: None,
+        }),
         "b is the one priority would have chosen"
     );
     assert!(
@@ -9279,20 +9273,17 @@ fn a_held_round_robin_selection_leaves_the_turn_with_the_account_it_named() {
     let req = || request(&s, None, "claude-sonnet-5", true, &[], 1_000);
     assert_eq!(
         select(&mut st, &s, &req(), &mut rng()).0,
-        SelectResult::Held {
+        SelectResult::Held(HoldFacts {
             account_id: "a".into(),
-            hold: HoldFacts {
-                account_id: "a".into(),
-                cohort: None,
-                held_ms: 0,
-                attempt: 1,
-                seq: 1,
-                ran_out: false,
-                reason: "cap",
-                until: None,
-                waits_for: None,
-            },
-        },
+            cohort: None,
+            held_ms: 0,
+            attempt: 1,
+            seq: 1,
+            ran_out: false,
+            reason: "cap",
+            until: None,
+            waits_for: None,
+        }),
         "the round starts at a"
     );
     drop(tickets);
@@ -9354,20 +9345,17 @@ fn the_cap_binds_before_the_fit_so_a_free_account_without_runway_takes_the_place
     let on_b = st.in_flight().dispatched("b", 1_000);
     assert_eq!(
         select(&mut st, &s, &req(), &mut rng()).0,
-        SelectResult::Held {
+        SelectResult::Held(HoldFacts {
             account_id: "a".into(),
-            hold: HoldFacts {
-                account_id: "a".into(),
-                cohort: None,
-                held_ms: 0,
-                attempt: 1,
-                seq: 1,
-                ran_out: false,
-                reason: "cap",
-                until: None,
-                waits_for: None,
-            },
-        },
+            cohort: None,
+            held_ms: 0,
+            attempt: 1,
+            seq: 1,
+            ran_out: false,
+            reason: "cap",
+            until: None,
+            waits_for: None,
+        }),
         "with both at their cap the request is held on the one the fit keeps"
     );
     drop((on_a, on_b));
@@ -10568,13 +10556,12 @@ fn a_fresh_request_finds_no_warm_entry_of_another_lane_and_lands_by_the_strategy
     let (s, mut st) = capped_cohort_on_b(SubagentPlacement::ByCohort);
     let _a = st.in_flight().dispatched("a", 1_000);
     let _b = st.in_flight().dispatched("b", 1_000);
-    let SelectResult::Held { account_id, hold } =
-        select(&mut st, &s, &static_subagent(&fast), &mut rng()).0
+    let SelectResult::Held(hold) = select(&mut st, &s, &static_subagent(&fast), &mut rng()).0
     else {
         panic!("held on the strategy's choice")
     };
     assert_eq!(
-        (account_id.as_str(), hold.cohort),
+        (hold.account_id.as_str(), hold.cohort),
         ("a", None),
         "a cohort of another lane holds no subagent on its account"
     );
@@ -15874,7 +15861,7 @@ fn a_hold_records_its_place_and_bound() {
         &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 1_000),
         &mut rng(),
     );
-    assert!(matches!(d.result, SelectResult::Held { .. }));
+    assert!(matches!(d.result, SelectResult::Held(_)));
     assert_eq!(
         fact(line(&d.record, "partitions"), "at_cap"),
         &FactValue::Text("held".into())
@@ -16717,7 +16704,7 @@ fn a_session_pin_placement_and_a_cohort_hold_name_no_strategy_score() {
     let d = decide(&mut st, &s, &cohort, &mut rng());
     assert!(matches!(
         &d.result,
-        SelectResult::Held { account_id, .. } if account_id == "b"
+        SelectResult::Held(hold) if hold.account_id == "b"
     ));
     assert_eq!(
         (d.summary.by.kind, d.summary.by.value.as_str()),
@@ -16773,7 +16760,7 @@ fn a_cohort_hold_on_the_pick_s_own_account_reads_the_pick_s_tier_beside_its_scor
     let d = decide(&mut st, &s, &cohort, &mut rng());
     assert!(matches!(
         &d.result,
-        SelectResult::Held { account_id, .. } if account_id == "b"
+        SelectResult::Held(hold) if hold.account_id == "b"
     ));
     assert_eq!(
         (d.summary.by.kind, d.summary.by.value.as_str()),
@@ -18395,7 +18382,7 @@ fn a_hold_books_nothing_and_the_selection_after_it_books_for_the_request() {
     assert!(
         matches!(
             select(&mut st, &s, &req, &mut rng()).0,
-            SelectResult::Held { .. }
+            SelectResult::Held(_)
         ),
         "every member at its cap holds the request"
     );
@@ -18929,7 +18916,7 @@ fn a_candidate_without_a_read_keeps_its_place_in_the_ties() {
         &mut rng(),
     );
     assert!(
-        matches!(d.result, SelectResult::Held { .. }),
+        matches!(d.result, SelectResult::Held(_)),
         "every account at its cap holds the request: {:?}",
         d.result
     );
@@ -19633,20 +19620,17 @@ fn a_spent_pin_waits_in_place_for_a_reset_inside_the_retry_bound_and_moves_past_
     );
     assert_eq!(
         d.result,
-        SelectResult::Held {
+        SelectResult::Held(HoldFacts {
             account_id: "a".into(),
-            hold: HoldFacts {
-                account_id: "a".into(),
-                cohort: None,
-                held_ms: 0,
-                attempt: 1,
-                seq: 1,
-                ran_out: false,
-                reason: "reset",
-                until: Some(T + 30_000),
-                waits_for: None,
-            },
-        },
+            cohort: None,
+            held_ms: 0,
+            attempt: 1,
+            seq: 1,
+            ran_out: false,
+            reason: "reset",
+            until: Some(T + 30_000),
+            waits_for: None,
+        }),
         "a reset 30 s out under a bound of 60 s holds the request on its own account"
     );
     assert!(
@@ -19746,7 +19730,7 @@ fn a_spent_pin_waits_in_place_for_a_reset_inside_the_retry_bound_and_moves_past_
     // A wait the bound cut short leaves the account attempted, and the placement that follows names the reset it
     // waited for beside the wait.
     let mut st = spent(T + 30_000);
-    let SelectResult::Held { hold, .. } = select(
+    let SelectResult::Held(hold) = select(
         &mut st,
         &s,
         &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
@@ -19801,7 +19785,7 @@ fn a_request_holds_for_a_reset_once_per_source_and_moves_when_the_reset_moved_du
         st
     };
     let mut st = spent();
-    let SelectResult::Held { hold, .. } = select(
+    let SelectResult::Held(hold) = select(
         &mut st,
         &s,
         &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
@@ -20023,14 +20007,14 @@ fn a_spent_pins_wait_runs_to_the_end_of_a_cooldown_that_outlasts_the_reset() {
         &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
         &mut rng(),
     );
-    let SelectResult::Held { account_id, hold } = d.result.clone() else {
+    let SelectResult::Held(hold) = d.result.clone() else {
         panic!(
             "a cooldown ending inside the bound is waited out, not {:?}",
             d.result
         )
     };
     assert_eq!(
-        (account_id.as_str(), hold.reason, hold.until),
+        (hold.account_id.as_str(), hold.reason, hold.until),
         ("a", "reset", Some(T + 45_000)),
         "the wait runs to the later of the reset and the cooldown's end"
     );
@@ -22880,7 +22864,7 @@ fn a_second_selection_after_any_hold_folds_no_gap_into_the_pins_cycle() {
         0,
     );
     let first = main_turn(&s, "s1", T);
-    let SelectResult::Held { hold, .. } = select(&mut st, &s, &first, &mut rng()).0 else {
+    let SelectResult::Held(hold) = select(&mut st, &s, &first, &mut rng()).0 else {
         panic!("the reset 30 s out holds the request")
     };
     assert_eq!(hold.reason, "reset");
@@ -23033,7 +23017,7 @@ fn stamped_over(
 /// The hold a decision answered, with the account it waits on.
 fn held_on(d: &Decided) -> (String, HoldFacts) {
     match &d.result {
-        SelectResult::Held { account_id, hold } => (account_id.clone(), hold.clone()),
+        SelectResult::Held(hold) => (hold.account_id.clone(), hold.clone()),
         other => panic!("expected a hold, got {other:?}"),
     }
 }
@@ -28042,7 +28026,7 @@ fn a_row_idle_past_the_ttl_stands_through_a_cap_hold_and_the_landing_after_the_w
     let idle = request(&s, Some("s1"), "claude-sonnet-5", true, &[], idle_at);
     let d = decide(&mut st, &s, &idle, &mut rng());
     let hold = match &d.result {
-        SelectResult::Held { hold, .. } => hold.clone(),
+        SelectResult::Held(hold) => hold.clone(),
         other => panic!("every destination at its cap holds the placement, got {other:?}"),
     };
     assert_eq!(hold.reason, "cap");

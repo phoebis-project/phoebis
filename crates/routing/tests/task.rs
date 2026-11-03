@@ -5099,7 +5099,9 @@ async fn two_selections_answered_together_read_the_slot_the_first_one_charged() 
         .count();
     let held = [&one, &two]
         .iter()
-        .filter(|answer| matches!(&answer.result, SelectResult::Held { account_id, .. } if account_id == "a"))
+        .filter(
+            |answer| matches!(&answer.result, SelectResult::Held(hold) if hold.account_id == "a"),
+        )
         .count();
     assert_eq!(
         (landed, held),
@@ -13355,7 +13357,7 @@ async fn a_factor_under_one_emits_slow_down_started_once_and_a_return_to_one_end
         .unwrap()
         .result
     {
-        SelectResult::Held { hold, .. } => hold,
+        SelectResult::Held(hold) => hold,
         other => panic!("the pin with a cycle waits: {other:?}"),
     };
     assert_eq!(hold.reason, "slow_down");
@@ -14762,7 +14764,7 @@ async fn a_fail_over_whose_landing_was_held_names_the_account_left_on_the_next_r
         .await
         .unwrap();
     assert!(
-        matches!(&held.result, SelectResult::Held { account_id, .. } if account_id == "b"),
+        matches!(&held.result, SelectResult::Held(hold) if hold.account_id == "b"),
         "the failover's landing waits for b's slot: {:?}",
         held.result
     );
@@ -14832,7 +14834,7 @@ fn request_of(handle: &RouterHandle, request_id: &str, now: i64) -> SelectReques
 /// The rewrite hold a selection answered, naming `r-1`.
 fn rewrite_hold(answer: phoebis_routing::SelectAnswer) -> HoldFacts {
     match answer.result {
-        SelectResult::Held { hold, .. } => {
+        SelectResult::Held(hold) => {
             assert_eq!(
                 (hold.reason, hold.waits_for.as_deref()),
                 ("rewrite", Some("r-1"))

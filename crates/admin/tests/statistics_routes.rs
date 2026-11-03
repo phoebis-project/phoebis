@@ -5932,7 +5932,7 @@ async fn the_routing_log_reads_a_rewrite_hold_and_the_request_it_waited_for() {
         "r1 leaves direct: {landed:?}"
     );
     let hold = match select_s1(&parts, "r2", 1, now + 200, &[], Vec::new()).await {
-        phoebis_routing::SelectResult::Held { hold, .. } => hold,
+        phoebis_routing::SelectResult::Held(hold) => hold,
         other => panic!("the session's next request waits for r1's head, not {other:?}"),
     };
     let renewed = select_s1(
