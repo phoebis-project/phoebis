@@ -25,8 +25,7 @@ pub(crate) fn digest_of(token: &str) -> CreditDigest {
 }
 
 struct CreditEntry {
-    account_id: String,
-    incarnation: u64,
+    issuer: CreditAccount,
     recorded_at: i64,
 }
 
@@ -74,8 +73,10 @@ impl CreditStore {
             }
         }
         let entry = CreditEntry {
-            account_id: account_id.to_string(),
-            incarnation,
+            issuer: CreditAccount {
+                account_id: account_id.to_string(),
+                incarnation,
+            },
             recorded_at: now,
         };
         // A digest recorded again takes the back of the queue, so the cap never evicts the newer record through the
@@ -100,10 +101,7 @@ impl CreditStore {
             .entries
             .get(digest)
             .filter(|entry| entry.live(now))
-            .map(|entry| CreditAccount {
-                account_id: entry.account_id.clone(),
-                incarnation: entry.incarnation,
-            })
+            .map(|entry| entry.issuer.clone())
     }
 
     #[cfg(test)]
