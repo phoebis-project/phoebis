@@ -90,9 +90,8 @@ function readKey(key: KeySpec, params: URLSearchParams, now: number): unknown {
     case 'flag':
       return params.get(key.name) === '1';
     case 'list':
-      return (params.get(key.name) ?? '').split(',').filter(Boolean);
     case 'patterns':
-      return (params.get(key.name) ?? '').split('\n').filter(Boolean);
+      return (params.get(key.name) ?? '').split(key.kind === 'list' ? ',' : '\n').filter(Boolean);
     case 'range': {
       const from = instantOf(params.get('from'));
       const asked = instantOf(params.get('to'));
@@ -118,10 +117,8 @@ function writeKey(key: KeySpec, value: unknown, params: URLSearchParams): void {
       if (value === true) params.set(key.name, '1');
       return;
     case 'list':
-      if ((value as string[]).length > 0) params.set(key.name, (value as string[]).join(','));
-      return;
     case 'patterns':
-      if ((value as string[]).length > 0) params.set(key.name, (value as string[]).join('\n'));
+      if ((value as string[]).length > 0) params.set(key.name, (value as string[]).join(key.kind === 'list' ? ',' : '\n'));
       return;
     case 'range': {
       const range = value as RangeValue;
