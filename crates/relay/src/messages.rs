@@ -2064,7 +2064,6 @@ impl Relay {
             pool_id: pool.map(|p| p.id.clone()),
             portable,
             raw: &raw,
-            request_id: &trace.request_id,
             restore,
             retry_in_place: Duration::from_secs(failover.retry_in_place_seconds),
             target: &target,
@@ -2461,11 +2460,11 @@ impl Relay {
         let (code, response) = match exhaustion {
             Exhaustion::Untimed if at_cap => {
                 let failure = accounts_at_cap(admitted.retry_in_place.as_secs());
-                (failure.code, failure.response(admitted.request_id))
+                (failure.code, failure.response(&admitted.trace.request_id))
             }
             _ => (
                 exhaustion_code(exhaustion),
-                exhaustion_response(exhaustion, now, admitted.request_id),
+                exhaustion_response(exhaustion, now, &admitted.trace.request_id),
             ),
         };
         let mut outcome = self.outcome(
@@ -2576,7 +2575,7 @@ impl Relay {
             return Leg::Respond(
                 self.answer(
                     admitted.trace,
-                    pool_moved_response(admitted.request_id),
+                    pool_moved_response(&admitted.trace.request_id),
                     outcome,
                     None,
                     ResponseFacts::default(),
@@ -2821,7 +2820,7 @@ impl Relay {
             clock: self.clock.clone(),
             heads: self.heads.clone(),
             router: self.router.clone(),
-            request_id: admitted.request_id.to_string(),
+            request_id: admitted.trace.request_id.clone(),
             attempt: u32::from(*attempt) + 1,
             sent: false,
             goes_on: false,
@@ -2931,33 +2930,22 @@ impl Relay {
             admitted.trace.on_leg(*attempt, Some(&account.id));
             let responding = Responding {
                 account,
+                admitted,
                 attempt: *attempt,
                 auth_marked: false,
                 cache_ttl_ms: cache_ttl_ms(ttl),
-                caller: admitted.caller,
                 can_retry_in_place: !retried_in_place,
                 can_strip: !stripped_once,
                 cancel,
-                chains: admitted.chains,
-                classifier: admitted.classifier,
-                client_version: admitted.client_version.clone(),
                 credential_generation: credential.generation,
-                deadline: admitted.deadline,
                 diagnostics,
                 diagnostics_named,
                 end_guard: &mut *end_guard,
-                fallback_ms: admitted.fallback_ms,
-                fast: admitted.fast,
-                floor_held: &admitted.floor_held,
                 fresh_pin: selection.pin.is_some() && !selection.trace.renewed,
                 funding_ordinal,
                 head: &mut leg_head,
-                identity: admitted.identity,
                 injected: &injected,
-                key: admitted.key,
                 key_permit: &mut *key_permit,
-                lane: &admitted.lane,
-                markers_ttl_ms: admitted.markers_ttl_ms,
                 // A probe's answer is never remembered: the id it was given belongs to the turn it replayed,
                 // and recording it would make the next real turn name a probe.
                 memory_key: admitted
@@ -2966,15 +2954,10 @@ impl Relay {
                     .filter(|_| admitted.trace.kind != Kind::Probe),
                 pin: selection.pin.as_ref(),
                 pin_epoch,
-                portable: admitted.portable,
                 replayed,
-                request_id: admitted.request_id,
-                retry_in_place: admitted.retry_in_place,
                 seq,
                 ticket,
                 tier_ttls: tier_ttls(&edited),
-                trace: admitted.trace,
-                turn: admitted.turn,
                 uniform_ttl_ms: uniform_ttl(&edited),
             };
             let request = RawRequest {
@@ -3042,7 +3025,7 @@ impl Relay {
                     return Leg::Respond(
                         self.answer(
                             admitted.trace,
-                            ACCOUNT_CANCELED.response(admitted.request_id),
+                            ACCOUNT_CANCELED.response(&admitted.trace.request_id),
                             outcome,
                             None,
                             ResponseFacts::default(),
@@ -3074,7 +3057,7 @@ impl Relay {
                     return Leg::Respond(
                         self.answer(
                             admitted.trace,
-                            UPSTREAM_UNREACHABLE.response(admitted.request_id),
+                            UPSTREAM_UNREACHABLE.response(&admitted.trace.request_id),
                             outcome,
                             None,
                             ResponseFacts::default(),
@@ -3130,7 +3113,7 @@ impl Relay {
                         return Leg::Respond(
                             self.answer(
                                 admitted.trace,
-                                ACCOUNT_CANCELED.response(admitted.request_id),
+                                ACCOUNT_CANCELED.response(&admitted.trace.request_id),
                                 outcome,
                                 None,
                                 ResponseFacts::default(),
@@ -3204,16 +3187,16 @@ impl Relay {
         let reusable = keep_alive(&head, &framing);
         let mut reader = BodyReader::new(conn, leftover, framing);
         let mut outcome = self.outcome(
-            ctx.trace,
-            Some(ctx.key),
-            Some(ctx.identity),
+            ctx.admitted.trace,
+            Some(ctx.admitted.key),
+            Some(ctx.admitted.identity),
             &ctx.account.id,
             head.status,
             ctx.attempt,
             true,
             None,
             None,
-            ctx.client_version.clone(),
+            ctx.admitted.client_version.clone(),
             None,
             ctx.pin_epoch,
             Some(head_at),
@@ -3229,9 +3212,9 @@ impl Relay {
             ctx.account,
             &head,
             unified.as_ref(),
-            &ctx.identity.canonical_model,
+            &ctx.admitted.identity.canonical_model,
             observed_at,
-            ctx.request_id,
+            &ctx.admitted.trace.request_id,
         )
         .await;
 
@@ -3258,7 +3241,9 @@ impl Relay {
                 Err(error) => {
                     tracing::warn!(account = %ctx.account.id, %error, "the rejection body was not readable");
                     ctx.ending(TRANSPORT_ERROR);
-                    return Next::Respond(self.unreadable(ctx.trace, &error, outcome).await);
+                    return Next::Respond(
+                        self.unreadable(ctx.admitted.trace, &error, outcome).await,
+                    );
                 }
             }
         } else {
@@ -3296,7 +3281,9 @@ impl Relay {
                 Err(error) => {
                     tracing::warn!(account = %ctx.account.id, %error, "the stream ended before it committed");
                     ctx.ending(TRANSPORT_ERROR);
-                    return Next::Respond(self.unreadable(ctx.trace, &error, outcome).await);
+                    return Next::Respond(
+                        self.unreadable(ctx.admitted.trace, &error, outcome).await,
+                    );
                 }
             }
         }
@@ -3308,7 +3295,7 @@ impl Relay {
         {
             leg_head.arrived(arrived);
         }
-        if !ctx.can_strip && latches(ctx.trace) {
+        if !ctx.can_strip && latches(ctx.admitted.trace) {
             // This leg cannot retry a strip, so the 400 is forwarded as it came; the account is still latched
             // against the item it named, a fact about the account whether or not this request could use it.
             for item in refused_injected(head.status, decoded.as_deref(), ctx.injected) {
@@ -3319,16 +3306,16 @@ impl Relay {
             &head,
             &HeadContext {
                 kind: ctx.account.kind,
-                canonical_model: &ctx.identity.canonical_model,
+                canonical_model: &ctx.admitted.identity.canonical_model,
                 now: arrived,
-                fallback_ms: ctx.fallback_ms,
+                fallback_ms: ctx.admitted.fallback_ms,
                 first_event: first_event.as_deref(),
                 body_prefix: decoded.as_deref(),
                 injected: ctx.injected,
                 can_strip: ctx.can_strip,
-                wire_model: &ctx.identity.folded_model,
+                wire_model: &ctx.admitted.identity.folded_model,
                 model_rejection_ms: self.limits.model_rejection.as_millis() as i64,
-                fast: ctx.fast,
+                fast: ctx.admitted.fast,
                 unified: unified.as_ref(),
             },
         );
@@ -3349,13 +3336,14 @@ impl Relay {
                 }
         );
         let classified = attempt_outcome(&verdict, head.status, first_event.as_deref());
-        ctx.trace
+        ctx.admitted
+            .trace
             .head(
                 ctx.attempt,
                 &head,
                 committing,
                 classified,
-                cooldown_set(cooldown_seen, &ctx.identity.canonical_model),
+                cooldown_set(cooldown_seen, &ctx.admitted.identity.canonical_model),
                 written_at,
                 head_at,
             )
@@ -3434,15 +3422,15 @@ impl Relay {
                             };
                             let floor = backoff.length_ms > phoebis_oauth::TRANSIENT_BACKOFF_MS;
                             if backoff.length_ms > phoebis_oauth::SERVER_ERROR_BACKOFF_MS
-                                || (floor && ctx.floor_held.load(Ordering::Relaxed))
+                                || (floor && ctx.admitted.floor_held.load(Ordering::Relaxed))
                             {
                                 break (None, None, true);
                             }
                             if floor {
-                                ctx.floor_held.store(true, Ordering::Relaxed);
+                                ctx.admitted.floor_held.store(true, Ordering::Relaxed);
                             }
                             match self
-                                .wait_out(backoff.until, ctx.deadline, ctx.cancel, None)
+                                .wait_out(backoff.until, ctx.admitted.deadline, ctx.cancel, None)
                                 .await
                             {
                                 Waited::Cleared | Waited::Head => {}
@@ -3463,7 +3451,7 @@ impl Relay {
             // it the same 400 classifies as `Commit` and is forwarded as any other.
             Verdict::StripInjected(items) => {
                 // The retry itself still runs whatever the request is: it corrects this leg's own edit.
-                if latches(ctx.trace) {
+                if latches(ctx.admitted.trace) {
                     for item in &items {
                         self.memory.latch(ctx.account, *item);
                     }
@@ -3482,7 +3470,7 @@ impl Relay {
                 // token count is admitted under the same rule, but a counting answer says nothing about the
                 // balance, and neither does an error event the held stream committed on.
                 if ctx.account.state == AccountState::FundingRequired
-                    && ctx.trace.kind != Kind::CountTokens
+                    && ctx.admitted.trace.kind != Kind::CountTokens
                     && (200..300).contains(&head.status)
                     && first_event.is_none()
                 {
@@ -3519,7 +3507,7 @@ impl Relay {
                         let account_id = ctx.account.id.clone();
                         // The same wire-spelling key `previous` reads above, not the resolved identity: see its
                         // comment.
-                        let model = ctx.identity.folded_model.clone();
+                        let model = ctx.admitted.identity.folded_model.clone();
                         let clock = self.clock.clone();
                         Box::new(move |id: String| {
                             // Awaited on the body task before the next piece goes out, so the caller's next
@@ -3541,9 +3529,9 @@ impl Relay {
                 let (prefix, held, on_error) = match held {
                     None => (Bytes::new(), None, None),
                     Some(Held { bytes, inspect, .. }) => {
-                        let fallback_ms = ctx.fallback_ms;
+                        let fallback_ms = ctx.admitted.fallback_ms;
                         let model_rejection_ms = self.limits.model_rejection.as_millis() as i64;
-                        let fast = ctx.fast;
+                        let fast = ctx.admitted.fast;
                         // Two spellings captured for two purposes that diverge once a resolution lands: the
                         // canonical id is the cooldown's scope and `report_failover`'s model, the folded
                         // spelling is the wire model `classify`'s rejection arm matches the upstream's own
@@ -3562,10 +3550,10 @@ impl Relay {
                             self.clock.clone(),
                             ctx.account.id.clone(),
                             ctx.account.kind,
-                            ctx.identity.canonical_model.clone(),
-                            ctx.identity.folded_model.clone(),
-                            ctx.portable.then(|| ctx.pin.cloned()).flatten(),
-                            ctx.request_id.to_string(),
+                            ctx.admitted.identity.canonical_model.clone(),
+                            ctx.admitted.identity.folded_model.clone(),
+                            ctx.admitted.portable.then(|| ctx.pin.cloned()).flatten(),
+                            ctx.admitted.trace.request_id.clone(),
                         );
                         let head = ResponseHead {
                             status: head.status,
@@ -3620,7 +3608,13 @@ impl Relay {
                     (Some(buffered), None) => {
                         let guards = ctx.guards();
                         self.forward_buffered(
-                            ctx.trace, &head, buffered, outcome, renewal, affinity, guards,
+                            ctx.admitted.trace,
+                            &head,
+                            buffered,
+                            outcome,
+                            renewal,
+                            affinity,
+                            guards,
                         )
                         .await
                     }
@@ -3646,7 +3640,7 @@ impl Relay {
                                 "a head the table reads no body for, or one cut at the bound, still holds its reader",
                             ),
                             renewal,
-                            trace: ctx.trace,
+                            trace: ctx.admitted.trace,
                         })
                         .await
                     }
@@ -3666,13 +3660,13 @@ impl Relay {
         report_failover(
             &self.router,
             &ctx.account.id,
-            &ctx.identity.canonical_model,
+            &ctx.admitted.identity.canonical_model,
             cooldown,
             mark.map(marked),
-            (ctx.portable && moves_pin && retry_in_place.is_none())
+            (ctx.admitted.portable && moves_pin && retry_in_place.is_none())
                 .then(|| ctx.pin.cloned())
                 .flatten(),
-            ctx.request_id,
+            &ctx.admitted.trace.request_id,
             generations,
             arrived,
         )
@@ -3684,7 +3678,7 @@ impl Relay {
         // A held stream cannot be rewound onto another connection, so the only way not to commit it is to drop
         // it unread; a request bound to its account takes it as it came.
         if let Some(held) = held {
-            if ctx.portable {
+            if ctx.admitted.portable {
                 drop(reader);
                 return Next::FailOver {
                     auth_marked: ctx.auth_marked,
@@ -3711,7 +3705,7 @@ impl Relay {
                     reader: reader
                         .expect("a streaming head still holds the reader the hold read from"),
                     renewal: None,
-                    trace: ctx.trace,
+                    trace: ctx.admitted.trace,
                 })
                 .await,
             );
@@ -3720,7 +3714,7 @@ impl Relay {
         // drained above, so the default here is the empty body of a head that carried none. A row
         // added for a status outside that set would forward nothing instead of its own body.
         let buffered = buffered.unwrap_or_default();
-        if ctx.portable {
+        if ctx.admitted.portable {
             return Next::FailOver {
                 auth_marked: ctx.auth_marked,
             };
@@ -3740,7 +3734,7 @@ impl Relay {
             ctx.ending(REFUSED);
             return Next::Respond(
                 self.forward_buffered(
-                    ctx.trace,
+                    ctx.admitted.trace,
                     &head,
                     buffered,
                     outcome,
@@ -3770,7 +3764,7 @@ impl Relay {
                 rate_limit_event: false,
                 reader,
                 renewal: None,
-                trace: ctx.trace,
+                trace: ctx.admitted.trace,
             })
             .await,
         )
@@ -3794,13 +3788,17 @@ impl Relay {
         ctx.ending(EXHAUSTED);
         outcome.error_code = Some(exhaustion_code(&Exhaustion::Untimed).to_string());
         // A probe bound to its account never reaches the selector's exhaustion, so its own answer names the mark.
-        if ctx.trace.kind == Kind::Probe && ctx.auth_marked {
+        if ctx.admitted.trace.kind == Kind::Probe && ctx.auth_marked {
             outcome.obstacle = Some(REAUTH_OBSTACLE);
         }
         let response = self
             .answer(
-                ctx.trace,
-                exhaustion_response(&Exhaustion::Untimed, (self.clock)(), ctx.request_id),
+                ctx.admitted.trace,
+                exhaustion_response(
+                    &Exhaustion::Untimed,
+                    (self.clock)(),
+                    &ctx.admitted.trace.request_id,
+                ),
                 outcome,
                 None,
                 ResponseFacts::default(),
@@ -3829,18 +3827,18 @@ impl Relay {
         ctx.pin.map(|pin| Renewal {
             router: self.router.clone(),
             pin: pin.clone(),
-            origin: match ctx.trace.kind {
+            origin: match ctx.admitted.trace.kind {
                 Kind::Probe => "keepalive",
                 Kind::CountTokens | Kind::Inference => "client",
             },
             cache_ttl_ms: ctx
                 .cache_ttl_ms
-                .or(ctx.markers_ttl_ms)
+                .or(ctx.admitted.markers_ttl_ms)
                 .unwrap_or(DEFAULT_CACHE_TTL_MS),
             fresh: ctx.fresh_pin,
-            classifier: ctx.classifier,
-            turn: ctx.turn,
-            renews: ctx.trace.kind != Kind::CountTokens,
+            classifier: ctx.admitted.classifier,
+            turn: ctx.admitted.turn,
+            renews: ctx.admitted.trace.kind != Kind::CountTokens,
             generations: (
                 ctx.account.incarnation,
                 ctx.account.lifecycle_generation,
@@ -3853,40 +3851,46 @@ impl Relay {
     /// whatever the cache did and whether or not the request holds a pin, so a marker-less conversation still
     /// links its turns. `None` for a token count, which writes no cache.
     fn affinity(&self, ctx: &Responding<'_>) -> Option<AffinityFacts> {
-        if ctx.trace.kind == Kind::CountTokens {
+        if ctx.admitted.trace.kind == Kind::CountTokens {
             return None;
         }
         // The contract refuses a request without a session id at admission, before this path, so one that reached it
         // would send no conversation or usage report rather than panic.
-        let root = ctx.identity.session_id.clone()?;
+        let root = ctx.admitted.identity.session_id.clone()?;
         // An auxiliary request leaves no content entry: the client's quota probe has one message every probe of
         // the key shares, so an entry under it would read the next session's probe as a fork of this one. Its
         // static boundaries still land, a cache of their own the next probe of the same shape reads.
         let auxiliary = crate::identity::is_auxiliary(
-            crate::identity::header_id(ctx.caller, phoebis_guardrails::REQUEST_CLASS_HEADER)
-                .as_deref(),
+            crate::identity::header_id(
+                ctx.admitted.caller,
+                phoebis_guardrails::REQUEST_CLASS_HEADER,
+            )
+            .as_deref(),
         );
         Some(AffinityFacts {
             router: self.router.clone(),
             pending: self.pending_reports.clone(),
             account_id: ctx.account.id.clone(),
             incarnation: ctx.account.incarnation,
-            key_id: ctx.key.id.clone(),
-            key_generation: ctx.key.created_at,
-            canonical_model: ctx.identity.canonical_model.clone(),
-            entrypoint: ctx.identity.entrypoint.clone(),
-            classifier: ctx.classifier,
-            lane: ctx.lane.to_string(),
+            key_id: ctx.admitted.key.id.clone(),
+            key_generation: ctx.admitted.key.created_at,
+            canonical_model: ctx.admitted.identity.canonical_model.clone(),
+            entrypoint: ctx.admitted.identity.entrypoint.clone(),
+            classifier: ctx.admitted.classifier,
+            lane: ctx.admitted.lane.clone(),
             root,
             static_boundaries: ctx
+                .admitted
                 .chains
                 .map(|c| c.static_boundaries.clone())
                 .unwrap_or_default(),
             static_sizes: ctx
+                .admitted
                 .chains
                 .map(|c| c.static_sizes.clone())
                 .unwrap_or_default(),
             message_boundaries: ctx
+                .admitted
                 .chains
                 .filter(|_| !auxiliary)
                 .map(|c| c.message_boundaries.clone())
@@ -3894,10 +3898,10 @@ impl Relay {
             static_ttl_ms: ctx.tier_ttls.0,
             message_ttl_ms: ctx.tier_ttls.1,
             uniform_ttl_ms: ctx.uniform_ttl_ms,
-            request_id: ctx.trace.request_id.clone(),
+            request_id: ctx.admitted.trace.request_id.clone(),
             seq: ctx.seq,
             attempt: u32::from(ctx.attempt),
-            remembers: ctx.diagnostics.is_some() && ctx.trace.kind != Kind::Probe,
+            remembers: ctx.diagnostics.is_some() && ctx.admitted.trace.kind != Kind::Probe,
         })
     }
 
@@ -3920,7 +3924,7 @@ impl Relay {
         now: i64,
     ) -> Option<Duration> {
         let cooldown = cooldown?;
-        if !ctx.portable
+        if !ctx.admitted.portable
             || mark.is_some()
             || !ctx.can_retry_in_place
             || cooldown.window != phoebis_routing::RETRY_AFTER_WINDOW
@@ -3933,10 +3937,11 @@ impl Relay {
         // The deadline bounds this wait as it bounds the refresh ladder's: the retry a longer wait leads to would
         // be submitted after the request is due its answer, with its permits and buffers held all the while, so
         // the request moves on at once instead.
-        let left = ctx.deadline.map(|deadline| {
+        let left = ctx.admitted.deadline.map(|deadline| {
             Duration::from_millis(u64::try_from(deadline.saturating_sub(now)).unwrap_or(0))
         });
-        (delay <= ctx.retry_in_place && left.is_none_or(|left| delay < left)).then_some(delay)
+        (delay <= ctx.admitted.retry_in_place && left.is_none_or(|left| delay < left))
+            .then_some(delay)
     }
 
     /// The credential to dispatch with, from the same snapshot lineage as the row the selection chose: the row
@@ -4378,7 +4383,8 @@ impl Relay {
         head: &ResponseHead,
         written_at: i64,
     ) -> Response {
-        ctx.trace
+        ctx.admitted
+            .trace
             .head(
                 ctx.attempt,
                 head,
@@ -4397,16 +4403,16 @@ impl Relay {
     /// attempt would overwrite that outcome in the ledger.
     async fn canceled_after_head(&self, ctx: &Responding<'_>, status: u16) -> Response {
         let mut outcome = self.outcome(
-            ctx.trace,
-            Some(ctx.key),
-            Some(ctx.identity),
+            ctx.admitted.trace,
+            Some(ctx.admitted.key),
+            Some(ctx.admitted.identity),
             &ctx.account.id,
             status,
             ctx.attempt,
             true,
             None,
             None,
-            ctx.client_version.clone(),
+            ctx.admitted.client_version.clone(),
             Some(ACCOUNT_CANCELED_CODE),
             ctx.pin_epoch,
             None,
@@ -4417,8 +4423,8 @@ impl Relay {
         outcome.diagnostics = ctx.diagnostics;
         outcome.diagnostics_named = ctx.diagnostics_named;
         self.answer(
-            ctx.trace,
-            ACCOUNT_CANCELED.response(ctx.request_id),
+            ctx.admitted.trace,
+            ACCOUNT_CANCELED.response(&ctx.admitted.trace.request_id),
             outcome,
             None,
             ResponseFacts::default(),
@@ -4842,28 +4848,21 @@ enum NoCredential {
 /// What one attempt's response half reads about the request it belongs to.
 struct Responding<'a> {
     account: &'a AccountRow,
+    /// What admission read about the request, which every pass of every leg shares.
+    admitted: &'a Admitted<'a>,
     attempt: u8,
     /// Whether this pass marked the account `reauth_required`, carried back to the attempt loop through
     /// `Next::FailOver` and read by a probe's own answer.
     auth_marked: bool,
     /// The TTL this pass's body was coupled to, for the outcome the response half builds; `None` off the policy.
     cache_ttl_ms: Option<i64>,
-    caller: &'a HeaderMap,
     /// Whether this leg has not retried in place yet: one retry per leg.
     can_retry_in_place: bool,
     /// Whether this leg has not stripped yet. A strip retry is the router correcting its own edit on the same
     /// account, never a failover; the one-round rule is the only gate.
     can_strip: bool,
     cancel: &'a CancellationToken,
-    /// The two boundary chains the client's body hashed, for the affinity report; `None` for a body with no
-    /// chain.
-    chains: Option<&'a Chains>,
-    /// The request is the client's own classifier call, carried to its renewal and its affinity report.
-    classifier: bool,
-    client_version: Option<String>,
     credential_generation: u64,
-    /// `Admitted::deadline`, which ends the refresh ladder's wait.
-    deadline: Option<i64>,
     /// The source of the member on this pass's body, read for the completion event, the session memory's hook and
     /// the affinity report's id: an answer is remembered only for a request that carried or received the member.
     diagnostics: Option<DiagnosticsSource>,
@@ -4871,11 +4870,6 @@ struct Responding<'a> {
     diagnostics_named: bool,
     /// The request's end report, which a committed stream takes into its body with the permit and the ticket.
     end_guard: &'a mut Option<EndGuard>,
-    fallback_ms: i64,
-    /// The request carried `speed: "fast"`, which a throttle's classification reads.
-    fast: bool,
-    /// `Admitted::floor_held`, which the refresh ladder reads and sets.
-    floor_held: &'a AtomicBool,
     /// Whether this selection created `pin` rather than renewing one that already served.
     fresh_pin: bool,
     /// The funding ordinal the selection's claim answered, `None` off a `funding_required` account. Every pass of the
@@ -4883,22 +4877,14 @@ struct Responding<'a> {
     funding_ordinal: Option<u64>,
     /// The leg's head report, which the pass that learns the leg's answer sends.
     head: &'a mut Option<HeadGuard>,
-    identity: &'a RequestIdentity,
     /// The attempt's own additions, body and head, that a 400 might name.
     injected: &'a [Injected],
-    key: &'a ApiKeyRow,
     /// The request's permit, which a committed stream takes into its body.
     key_permit: &'a mut Option<KeyPermit>,
-    /// The cache lane the request writes to, for the affinity report.
-    lane: &'a str,
-    markers_ttl_ms: Option<i64>,
     memory_key: Option<&'a MemoryKey>,
     pin: Option<&'a PinRef>,
     pin_epoch: Option<u64>,
-    portable: bool,
     replayed: bool,
-    request_id: &'a str,
-    retry_in_place: Duration,
     /// The decision that selected this leg's account, its `seq` among the request's selections. Every pass of the
     /// leg answers under it.
     seq: u32,
@@ -4906,9 +4892,6 @@ struct Responding<'a> {
     ticket: Option<AccountTicket>,
     /// `tier_ttls` of the body as this pass sends it upstream, after the TTL rewrite.
     tier_ttls: (Option<i64>, Option<i64>),
-    trace: &'a Trace,
-    /// `Admitted::turn`, carried to the renewal.
-    turn: bool,
     /// `uniform_ttl` of the same body.
     uniform_ttl_ms: Option<i64>,
 }
@@ -5280,7 +5263,6 @@ struct Admitted<'a> {
     pool_id: Option<String>,
     portable: bool,
     raw: &'a Bytes,
-    request_id: &'a str,
     /// The first-party fields to restore, absent for anything but a `claude-cli/` inference request.
     restore: Option<RestoreContext>,
     /// The pool's `retry_in_place_seconds`: the longest throttle waited out on the same account, and the
