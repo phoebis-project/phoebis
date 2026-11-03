@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError } from '@/api';
@@ -900,7 +900,9 @@ function AllowanceColumn({ account, costs, holder, week, window: w }: { account:
   );
 }
 
-function TrendChart({ history, loading, hasFable }: { hasFable: boolean; history: QuotaHistory[] | null; loading: boolean }) {
+// Memoized, since the list's poll and the clock re-render the detail, and each render would rebuild the chart's lines
+// from the week of samples its props have not changed.
+const TrendChart = memo(function TrendChart({ history, loading, hasFable }: { hasFable: boolean; history: QuotaHistory[] | null; loading: boolean }) {
   const ink = useChartInk();
   const data = useMemo(() => (history ? joinTrend(history, hasFable) : []), [history, hasFable]);
   if (loading || !history) return <Skeleton height={220} />;
@@ -934,7 +936,7 @@ function TrendChart({ history, loading, hasFable }: { hasFable: boolean; history
       />
     </>
   );
-}
+});
 
 const ID_HINT = 'Lowercase letters, digits, and dashes, a letter or digit first, 64 at most. It names the account in every log and URL.';
 const ID_MALFORMED = 'not an id the router takes';
