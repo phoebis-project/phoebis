@@ -1,7 +1,7 @@
 import type { Attempt, ModelTiers, SubscriptionCosts, TypeMultiplier } from '@/api/types';
 import type { WeekReading } from '@/lib/analytics';
 import { has, lookup } from '@/lib/counts';
-import { undatedModel } from '@/lib/format';
+import { listWords, undatedModel } from '@/lib/format';
 import { planLabel } from '@/lib/quota';
 import { WEEK_TIER, type WeekPosition } from '@/lib/unit';
 
@@ -49,9 +49,6 @@ const REGIME_WORD: Readonly<Record<string, string>> = { interactive: 'Interactiv
 const CLIENT_NAME: Readonly<Record<string, string>> = { 'claude-desktop': 'Claude Desktop', 'claude-desktop-3p': 'Claude Desktop', 'claude-vscode': 'Claude VSCode', cli: 'Claude Code CLI' };
 const BASE_WORD = 'Headless';
 const BASE_CLIENTS = 'Claude Code CLI headless mode, the Agent SDK, Claude in Slack, etc.';
-
-/** "a", "a and b", "a, b and c". */
-const listWords = (words: string[]): string => (words.length < 2 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`);
 
 /** The headline word of a regime, the raw key for one the map lacks, and "Headless" for the base (null). */
 export const regimeWord = (name: string | null): string => (name === null ? BASE_WORD : (lookup(REGIME_WORD, name) ?? name));

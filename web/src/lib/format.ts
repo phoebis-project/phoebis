@@ -68,6 +68,12 @@ export const fmtShare = (ratio: number) => `${Number((ratio * 100).toPrecision(3
 export const shareLabel = (windowKey: string, share: number): string => `${fmtShare(share)} of ${lookup(WINDOW_LABEL, windowKeyId(windowKey) ?? '') ?? windowKey}`;
 /** A share as a whole percent with the space before the sign, as the pool card's badge writes it. */
 export const percentText = (share: number) => `${Math.round(share * 100)} %`;
+/** "a", "a and b", "a, b and c". */
+export const listWords = (words: string[]): string => (words.length < 2 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`);
+/** The values a list chip prints before it counts the rest. */
+const LISTED = 3;
+/** A list chip's values: the first few, then ` +N` for the rest. */
+export const listed = (words: string[]) => `${words.slice(0, LISTED).join(', ')}${words.length > LISTED ? ` +${words.length - LISTED}` : ''}`;
 const WINDOW_SHORT: ByWindow<string> = { '5h': '5h', '7d': '7d', '7d_fable': '7-day Fable' };
 /**
  * A share with its window's short word ("0.42% 5h", "0.12% 7d", "0.12% 7-day Fable"), for a cell too narrow for the

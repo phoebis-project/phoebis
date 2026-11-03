@@ -5,7 +5,7 @@ import { FAILOVER_MOVE_REASONS, moveLabel, RULE_MOVE_REASONS, type WeekReading }
 import { compareByModelTier } from './costs';
 import { has, lookup } from './counts';
 import type { ChipText } from './filterBar';
-import { fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtShare, fmtTime, fmtUsd, instant, shortModel, weekShort } from './format';
+import { fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtShare, fmtTime, fmtUsd, instant, listed, shortModel, weekShort } from './format';
 import { PLAN_WORD_LABEL, planLabel, POLL_OUTCOME_LABEL } from './quota';
 import { speedWord } from './selection';
 import { ageWord, HOUR, MINUTE, span } from './time';
@@ -202,9 +202,6 @@ export const ALL_KINDS: readonly string[] = [...Object.keys(DECISION_KIND_LABEL)
 /** A kind's word: "probe decisions" for the pseudo-kind, else its label. */
 export const kindWord = (kind: string): string => (kind === 'probe' ? 'probe decisions' : (lookup(DECISION_KIND_LABEL, kind) ?? lookup(EVENT_KIND_LABEL, kind) ?? kind));
 
-/** The words a Kinds chip prints before it counts the rest. */
-const KINDS_LISTED = 3;
-
 /**
  * The Kinds chip: one whole preset by its name, a union of whole presets and nothing else by their names in
  * KIND_PRESETS' order, else the kinds' words three then " +N", every word in the title. A set equal to every kind, or
@@ -219,7 +216,7 @@ export function kindsChipText(kinds: readonly string[]): ChipText {
   const values =
     whole.length > 0 && whole.reduce((n, p) => n + p.members.length, 0) === set.size
       ? whole.map((p) => p.label).join(', ')
-      : `${words.slice(0, KINDS_LISTED).join(', ')}${words.length > KINDS_LISTED ? ` +${words.length - KINDS_LISTED}` : ''}`;
+      : listed(words);
   return { text: `kinds: ${values}`, title: words.join(', '), values };
 }
 

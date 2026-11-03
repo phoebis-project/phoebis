@@ -2,7 +2,7 @@ import { isoOrNull } from '@/api/decode';
 import type { AttentionItem, AttentionKind } from '@/api/types';
 import { METER_CODEC } from './address';
 import { lookup } from './counts';
-import { fmtAbsolute, fmtRelative, instant as clockInstant, percentText } from './format';
+import { fmtAbsolute, fmtRelative, instant as clockInstant, listWords, percentText } from './format';
 import { WINDOW_WORD, entityHref, formatFact, logHref, sinceCondition, type LogLink } from './routingLog';
 import { speedWord } from './selection';
 
@@ -180,13 +180,12 @@ export function attentionDetail(item: AttentionItem, now: number): string {
   }
 }
 
-const words = (list: string[]): string => (list.length < 2 ? (list[0] ?? '') : `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`);
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
 const names = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
 /** The spent windows as the record names them, `5h`, `7d` or `Fable`, a key the console does not know as sent. */
 const windowsOf = (v: unknown): string => {
   const list = names(v);
-  return list.length === 0 ? '' : ` the ${words(list.map((w) => lookup(WINDOW_WORD, w) ?? w))} ${list.length === 1 ? 'window' : 'windows'}`;
+  return list.length === 0 ? '' : ` the ${listWords(list.map((w) => lookup(WINDOW_WORD, w) ?? w))} ${list.length === 1 ? 'window' : 'windows'}`;
 };
 
 /**
@@ -196,7 +195,7 @@ const windowsOf = (v: unknown): string => {
 function conditionWords(item: AttentionItem, now: number): string {
   const d = item.detail;
   const settingValues = d.setting_values !== null && typeof d.setting_values === 'object' ? (d.setting_values as Record<string, unknown>) : {};
-  const settings = words(
+  const settings = listWords(
     names(d.setting).map((name) => {
       const value = settingValues[name];
       return typeof value === 'number' ? `${name} ${percentText(value)}` : name;
@@ -230,7 +229,7 @@ function conditionWords(item: AttentionItem, now: number): string {
 function slowedWords(item: AttentionItem, now: number): string {
   const d = item.detail;
   const settingValues = d.setting_values !== null && typeof d.setting_values === 'object' ? (d.setting_values as Record<string, unknown>) : {};
-  const settings = words(
+  const settings = listWords(
     names(d.setting).map((name) => {
       const value = settingValues[name];
       return typeof value === 'number' ? `${name} ${Math.round(value)}` : name;

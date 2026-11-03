@@ -1,7 +1,7 @@
 // A type-only import, so the API bundle the unit tests load stays free of React.
 import type { Option } from '@/components/ui/OptionList';
 import { NO_CLASS } from './dimensions';
-import { shortId } from './format';
+import { listed, shortId } from './format';
 import { kindsChipText } from './routingLog';
 
 export type DimensionKind = 'choice' | 'flag' | 'id' | 'list' | 'pattern';
@@ -54,8 +54,6 @@ export interface Chip {
   values: string | null;
 }
 
-/** The values a list chip prints before it counts the rest. */
-const LISTED = 3;
 /** The chips the line shows before it folds the rest. */
 const SHOWN = 5;
 /** The cut an id chip prints, enough to tell two sessions or requests apart. */
@@ -64,7 +62,6 @@ const ID_SHOWN = 8;
 const TYPED_SHOWN = 32;
 
 const labelOf = (value: string, options: Option[]) => options.find((o) => o.value === value)?.label ?? value;
-const listed = (words: string[]) => `${words.slice(0, LISTED).join(', ')}${words.length > LISTED ? ` +${words.length - LISTED}` : ''}`;
 const worded = (word: string, values: string, title = values): ChipText => ({ text: `${word}: ${values}`, title, values });
 
 /** A non-empty list or text, a true flag, a choice off its `defaultValue` (the empty string unless set). */
