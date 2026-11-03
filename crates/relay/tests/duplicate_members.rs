@@ -166,6 +166,20 @@ async fn a_scan_that_cannot_finish_refuses_the_body_and_a_deep_single_member_is_
 }
 
 #[tokio::test]
+async fn a_model_spelled_only_with_an_escape_is_refused_as_missing() {
+    let up = FakeUpstream::start(vec![ok_rule()]).await;
+    let h = harness_restricted_to(&up, "claude-sonnet-4-5").await;
+    // The repeat check reads the decoded key as one `model`, and the model lookup reads a key by its own bytes, as
+    // the splice that rewrites the model does, so the escaped spelling names no model the relay could route on.
+    let body = r#"{"\u006dodel":"claude-sonnet-4-5","messages":[],"max_tokens":8,"metadata":{"user_id":"{\"device_id\":\"test-device\",\"account_uuid\":\"\",\"session_id\":\"s1\"}"}}"#;
+    let (status, code, text) = send(&h, "/v1/messages", body).await;
+    assert_eq!(status, 400, "{text}");
+    assert_eq!(code, "missing_model", "{text}");
+    assert!(up.requests().is_empty(), "nothing reached the upstream");
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_second_top_level_model_is_refused_on_the_count_tokens_route_too() {
     let up = FakeUpstream::start(vec![ok_rule()]).await;
     let h = harness_restricted_to(&up, "claude-sonnet-4-5").await;
