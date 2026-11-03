@@ -674,9 +674,9 @@ pub fn request_by_id(
     let Some(request) = request else {
         return Ok(None);
     };
-    let Some((mut request, attempts)) = with_attempts(conn, vec![request])?.pop() else {
-        return Ok(None);
-    };
+    let (mut request, attempts) = with_attempts(conn, vec![request])?
+        .pop()
+        .expect("with_attempts answers one row per request");
     request.guardrails = request_guardrails(conn, id)?;
     Ok(Some((request, attempts)))
 }
