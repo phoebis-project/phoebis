@@ -34,29 +34,45 @@ pub fn process(
     key_mode: RulesMode,
     pool_rules: &[ModelRule],
 ) -> Vec<ProcessedRule> {
-    let mut processed: Vec<ProcessedRule> = key_rules
-        .iter()
-        .cloned()
-        .map(|rule| ProcessedRule {
-            level: RuleLevel::Key,
-            rule,
+    ordered(key_rules, key_mode, pool_rules)
+        .map(|(level, rule)| ProcessedRule {
+            level,
+            rule: rule.clone(),
         })
-        .collect();
-    if key_mode == RulesMode::Extend {
-        processed.extend(pool_rules.iter().cloned().map(|rule| ProcessedRule {
-            level: RuleLevel::Pool,
-            rule,
-        }));
-    }
-    processed
+        .collect()
+}
+
+/// The entries `process` lists, in its order, borrowed, for a caller that judges one name and keeps no list.
+pub(crate) fn ordered<'a>(
+    key_rules: &'a [ModelRule],
+    key_mode: RulesMode,
+    pool_rules: &'a [ModelRule],
+) -> impl Iterator<Item = (RuleLevel, &'a ModelRule)> {
+    let pool_rules: &[ModelRule] = if key_mode == RulesMode::Extend {
+        pool_rules
+    } else {
+        &[]
+    };
+    key_rules
+        .iter()
+        .map(|rule| (RuleLevel::Key, rule))
+        .chain(pool_rules.iter().map(|rule| (RuleLevel::Pool, rule)))
 }
 
 /// Top to bottom, first match wins: a matching `not` entry denies, a matching plain entry allows, and a name no
 /// entry matches is allowed.
 pub fn allows(processed: &[ProcessedRule], canonical: &str) -> bool {
-    for entry in processed {
-        if pattern::matches(&entry.rule.pattern, canonical) {
-            return !entry.rule.not;
+    allowed_by(processed.iter().map(|entry| &entry.rule), canonical)
+}
+
+/// The first-match rule `allows` applies, over entries in the order they apply.
+pub(crate) fn allowed_by<'a>(
+    rules: impl IntoIterator<Item = &'a ModelRule>,
+    canonical: &str,
+) -> bool {
+    for rule in rules {
+        if pattern::matches(&rule.pattern, canonical) {
+            return !rule.not;
         }
     }
     true

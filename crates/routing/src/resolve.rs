@@ -1,6 +1,6 @@
 use phoebis_store::ApiKeyRow;
 
-use crate::rules::{allows, process};
+use crate::rules::{allowed_by, ordered};
 use crate::RegistrySnapshot;
 
 #[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
@@ -42,8 +42,8 @@ pub fn resolve(
     let Some(pool) = snapshot.pool(&key.pool_id) else {
         return Ok(Vec::new());
     };
-    let processed = process(&key.model_rules, key.model_rules_mode, &pool.model_rules);
-    if !allows(&processed, canonical_model) {
+    let rules = ordered(&key.model_rules, key.model_rules_mode, &pool.model_rules);
+    if !allowed_by(rules.map(|(_, rule)| rule), canonical_model) {
         return Err(ResolveError::ModelNotAllowed);
     }
     Ok(snapshot
