@@ -634,12 +634,15 @@ fn stamp_subject(tx: &Transaction<'_>, table: &str, id: &str, at: i64) -> Result
     Ok(())
 }
 
-fn rules_json(rules: &[ModelRule]) -> Result<String, StoreError> {
-    serde_json::to_string(rules).map_err(StoreError::from)
-}
-
-fn json_rules(raw: String) -> Result<Vec<ModelRule>, StoreError> {
-    serde_json::from_str(&raw).map_err(StoreError::from)
+/// A JSON text column decoded as its row is read: a malformed value fails the read of its row, as an unknown word does.
+fn json_column<T: serde::de::DeserializeOwned>(
+    r: &rusqlite::Row<'_>,
+    idx: usize,
+) -> rusqlite::Result<T> {
+    let raw: String = r.get(idx)?;
+    serde_json::from_str(&raw).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(idx, rusqlite::types::Type::Text, Box::new(e))
+    })
 }
 
 impl Store {
@@ -788,7 +791,7 @@ impl Store {
                 row.affinity_ttl_seconds as i64,
                 row.overage_policy,
                 row.window_ceiling,
-                rules_json(&row.model_rules)?,
+                serde_json::to_string(&row.model_rules)?,
                 row.keepalive_json,
                 row.body_capture_hours as i64,
                 row.prefer_subscription,
@@ -927,7 +930,7 @@ impl Store {
                 row.affinity_ttl_seconds as i64,
                 row.overage_policy,
                 row.window_ceiling,
-                rules_json(&row.model_rules)?,
+                serde_json::to_string(&row.model_rules)?,
                 row.keepalive_json,
                 row.body_capture_hours as i64,
                 row.prefer_subscription,
@@ -1109,7 +1112,7 @@ impl Store {
                 row.enabled,
                 row.revoked_at,
                 row.expires_at,
-                rules_json(&row.model_rules)?,
+                serde_json::to_string(&row.model_rules)?,
                 row.model_rules_mode,
                 row.long_context_twins,
                 row.keepalive_opt_out,
@@ -1186,7 +1189,7 @@ impl Store {
                 row.pool_id,
                 row.enabled,
                 row.expires_at,
-                rules_json(&row.model_rules)?,
+                serde_json::to_string(&row.model_rules)?,
                 row.model_rules_mode,
                 row.long_context_twins,
                 row.keepalive_opt_out,
@@ -2116,7 +2119,6 @@ fn all_keys(conn: &rusqlite::Connection) -> Result<Vec<ApiKeyRow>, StoreError> {
 }
 
 fn row_to_pool(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolRow> {
-    let rules: String = r.get(7)?;
     Ok(PoolRow {
         id: r.get(0)?,
         label: r.get(1)?,
@@ -2125,9 +2127,7 @@ fn row_to_pool(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolRow> {
         affinity_ttl_seconds: r.get::<_, i64>(4)? as u64,
         overage_policy: r.get(5)?,
         window_ceiling: r.get(6)?,
-        model_rules: json_rules(rules).map_err(|e| {
-            rusqlite::Error::FromSqlConversionFailure(7, rusqlite::types::Type::Text, Box::new(e))
-        })?,
+        model_rules: json_column(r, 7)?,
         keepalive_json: r.get(8)?,
         body_capture_hours: r.get::<_, i64>(9)? as u32,
         created_at: r.get(10)?,
@@ -2168,7 +2168,6 @@ fn row_to_pool(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolRow> {
 }
 
 fn row_to_key(r: &rusqlite::Row<'_>) -> rusqlite::Result<ApiKeyRow> {
-    let rules: String = r.get(15)?;
     Ok(ApiKeyRow {
         id: r.get(0)?,
         label: r.get(1)?,
@@ -2177,9 +2176,7 @@ fn row_to_key(r: &rusqlite::Row<'_>) -> rusqlite::Result<ApiKeyRow> {
         enabled: r.get(4)?,
         revoked_at: r.get(5)?,
         expires_at: r.get(6)?,
-        model_rules: json_rules(rules).map_err(|e| {
-            rusqlite::Error::FromSqlConversionFailure(15, rusqlite::types::Type::Text, Box::new(e))
-        })?,
+        model_rules: json_column(r, 15)?,
         model_rules_mode: r.get(16)?,
         long_context_twins: r.get(17)?,
         keepalive_opt_out: r.get(7)?,
@@ -2199,7 +2196,6 @@ fn row_to_key(r: &rusqlite::Row<'_>) -> rusqlite::Result<ApiKeyRow> {
 fn row_to_guardrail(r: &rusqlite::Row<'_>) -> rusqlite::Result<GuardrailRow> {
     let mode: String = r.get(4)?;
     let action: String = r.get(5)?;
-    let conditions: String = r.get(6)?;
     Ok(GuardrailRow {
         id: r.get(0)?,
         name: r.get(1)?,
@@ -2207,9 +2203,7 @@ fn row_to_guardrail(r: &rusqlite::Row<'_>) -> rusqlite::Result<GuardrailRow> {
         enabled: r.get(3)?,
         mode: GuardrailMode::parse(&mode).ok_or_else(|| unknown_word(4, &mode))?,
         action: GuardrailAction::parse(&action).ok_or_else(|| unknown_word(5, &action))?,
-        conditions: serde_json::from_str::<Vec<Condition>>(&conditions).map_err(|e| {
-            rusqlite::Error::FromSqlConversionFailure(6, rusqlite::types::Type::Text, Box::new(e))
-        })?,
+        conditions: json_column(r, 6)?,
         preset_id: r.get(7)?,
         preset_version: r.get(8)?,
         incarnation: r.get::<_, i64>(9)? as u64,
