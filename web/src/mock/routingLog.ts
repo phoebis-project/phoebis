@@ -6,7 +6,7 @@ import { shareIn, weightOf } from '@/lib/costs';
 import { placementHit } from '@/lib/format';
 import { endOf } from '@/lib/quota';
 import { compareRows } from '@/lib/routingLog';
-import { ACCOUNTS, LEDGER_WINDOW, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT, SUNSET_WEEK_RESETS_IN } from './accounts';
+import { ACCOUNTS, LEDGER_WINDOW, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT, SUNSET_WEEK_RESETS_IN, isPaidSource, kindTier } from './accounts';
 import { GUARDRAILS } from './guardrails';
 import { earliest, leadOf, paceHours } from './lead';
 import { SESSIONS } from './operations';
@@ -74,8 +74,6 @@ const hashOf = (boundary: string): string => {
 };
 
 const accountOf = new Map(ACCOUNTS.map((a) => [a.id, a]));
-/** A paid source, as the engine reads one: an API-key account or a usage-based seat, neither with plan capacity. */
-const isPaidSource = (a: Pick<Account, 'kind' | 'usageBased'>): boolean => a.kind === 'api_key' || a.usageBased;
 /** A static boundary is the client's own prefix, which every session of a main conversation or a subagent shares. */
 const staticBoundary = (agentId: string | null, depth: number) => `static|claude-code-${agentId === 'main' ? 'main' : 'subagent'}|${depth}`;
 const fact = (key: string, value: unknown, unit: string | null = null, accountId: string | null = null): WalkFact => ({ accountId, key, unit, value });
@@ -567,7 +565,7 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
       term: a.kind === 'api_key' || !sub
         ? { canceled: false, ended: false, endsAt: null, since: null, trialEndsAt: null, windingDown: false }
         : { canceled: a.canceled === true, ended: false, endsAt: sub.endsAt, since: sub.since, trialEndsAt: sub.trialEndsAt, windingDown: endsAt !== null && endsAt - at <= pool.windDownMinutes * MINUTE },
-      tier: [pool.preferSubscription ? (a.kind === 'api_key' || a.usageBased ? 2 : overage ? 1 : 0) : 0, m.priority, overage ? 1 : 0],
+      tier: [kindTier(pool.preferSubscription, paid, overage), m.priority, overage ? 1 : 0],
       verdict: obstacle ? 'out' : 'eligible',
       windows,
     };

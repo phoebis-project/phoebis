@@ -1,6 +1,6 @@
 import { agentTokenOf, plus } from '@/api/fold';
 import type {
-  Account, AccountKind, AccountRollup, ApiKey, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostShares, CostSplit, DiagnosticsSource, LatencyHistograms, PinMigrationReason, Placement,
+  AccountKind, AccountRollup, ApiKey, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostShares, CostSplit, DiagnosticsSource, LatencyHistograms, PinMigrationReason, Placement,
   PriceCells, QuotaSample, RateLimitWindow, RequestEvent, RequestKind, RequestLog, RequestOutcome, SelectionTrace, TrafficBucket, Usage, WastedProbeReason, WindowId, WindowSample,
 } from '@/api/types';
 import type { GuardrailMatch } from '@/api/types';
@@ -12,11 +12,11 @@ import { NO_CLASS, NO_EFFORT, foldClassifier, foldEffort, foldRequestClass } fro
 import { tokensTotal } from '@/lib/format';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
 import { endOf } from '@/lib/quota';
-import { ACCOUNTS, LEDGER_WINDOW, QUOTA_HISTORY, accountById, sharedWindowsOf } from './accounts';
+import { ACCOUNTS, LEDGER_WINDOW, QUOTA_HISTORY, accountById, isPaidSource, kindTier, sharedWindowsOf } from './accounts';
 import type { HourlyRollup } from './analytics';
 import { cellsFor } from './catalog';
 import { earliest, leadOf, paceHours } from './lead';
-import { keyById, poolById, type PoolSeed } from './pools';
+import { keyById, poolById } from './pools';
 import { createRng, type Rng } from './rng';
 import { ACCOUNT_ROLLUP_SAMPLE, REQUEST_SAMPLE, TABLES } from './samples';
 import { DAY, DELETED_HOLDER_END, HOUR, MINUTE, NIGHTLY_CAP_RAISED, NOW, OVERFLOW_LAPSED_AT, RESEARCH_BUDGET_AT, clock, daysAgo, iso, startOfHour } from './time';
@@ -358,8 +358,8 @@ function countOrder(ids: string[], poolId: string, atMs: number, model: string, 
   const pool = poolById.get(poolId);
   if (!pool) return ids;
   const tierOf = (id: string): number[] => {
-    const overage = id === 'nightly' && atMs >= NIGHTLY_CAP_RAISED ? 1 : 0;
-    return [pool.preferSubscription ? (kindOf(id) === 'api_key' || usageBasedOf(id) ? 2 : overage) : 0, pool.members.find((m) => m.accountId === id)?.priority ?? 0, overage];
+    const overage = id === 'nightly' && atMs >= NIGHTLY_CAP_RAISED;
+    return [kindTier(pool.preferSubscription, kindOf(id) === 'api_key' || usageBasedOf(id), overage), pool.members.find((m) => m.accountId === id)?.priority ?? 0, overage ? 1 : 0];
   };
   const windowId = model.includes('fable') ? '7d_fable' : '7d';
   const scoreOf = (id: string): number => {
@@ -1812,10 +1812,6 @@ function addStoryEvents() {
   }
 }
 
-/** The kind tier the engine files an attempt's account in: the plan-funded subscriptions, the ones the attempt read in
- *  overage, then the metered sources, the API keys and the usage-based seats. */
-const kindGroupOf = (pool: PoolSeed | undefined, account: Account | undefined, overage: boolean): number => (pool?.preferSubscription ? (account?.kind === 'api_key' || account?.usageBased ? 2 : overage ? 1 : 0) : 0);
-
 /**
  * The trace of a row outside the seeded streams: the strategy's pick in its account's tier, with nobody passed over.
  */
@@ -1824,7 +1820,7 @@ function undrawnTrace(r: RequestLog, a: Attempt, last: boolean): SelectionTrace 
   const account = accountById.get(a.accountId);
   const priority = pool?.members.find((m) => m.accountId === a.accountId)?.priority ?? 0;
   const overage = a.overageInUse === true;
-  return { cacheRead: last && r.status === 200 ? r.usage.cacheRead : null, cohortHold: null, moved: null, placement: null, renewed: false, skipped: [], strategy: pool?.strategy ?? 'pace', tier: [kindGroupOf(pool, account, overage), priority, overage ? 1 : 0] };
+  return { cacheRead: last && r.status === 200 ? r.usage.cacheRead : null, cohortHold: null, moved: null, placement: null, renewed: false, skipped: [], strategy: pool?.strategy ?? 'pace', tier: [kindTier(pool?.preferSubscription ?? false, account !== undefined && isPaidSource(account), overage), priority, overage ? 1 : 0] };
 }
 
 /**
@@ -1857,7 +1853,7 @@ function traceRequests() {
       const account = accountById.get(a.accountId);
       const inOverage = a.overageInUse === true;
       const overage = inOverage ? 1 : 0;
-      const group = kindGroupOf(pool, account, inOverage);
+      const group = kindTier(pool?.preferSubscription ?? false, account !== undefined && isPaidSource(account), inOverage);
       const priority = pool?.members.find((m) => m.accountId === a.accountId)?.priority ?? 0;
       // A request renews the pin its first selection finds live on the account it went to, and only then. The renewal
       // draw is taken either way, so the stream stays where it was, and a drawn renewal with no live pin to renew is

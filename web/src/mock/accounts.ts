@@ -492,6 +492,15 @@ export const ACCOUNTS: Account[] = SEEDS.map((a) => {
 
 export const accountById = new Map(ACCOUNTS.map((a) => [a.id, a]));
 
+/** A paid source, as the engine reads one: an API-key account or a usage-based seat, neither with plan capacity. */
+export const isPaidSource = (a: Pick<Account, 'kind' | 'usageBased'>): boolean => a.kind === 'api_key' || a.usageBased;
+/**
+ * The kind tier the engine files a member in where its pool prefers subscriptions: the plan-funded subscriptions, the
+ * ones in overage, then the paid sources. Each caller reads the overage its own way, the engine's at the instant it
+ * ranks. A pool that prefers none files every member in one tier.
+ */
+export const kindTier = (preferSubscription: boolean, paid: boolean, overage: boolean): number => (preferSubscription ? (paid ? 2 : overage ? 1 : 0) : 0);
+
 /** The ledger's key of each window the account view names, which the samples, the rollups and the routing log read. */
 export const LEDGER_WINDOW: Partial<Record<string, string>> = { '5h': 'five_hour', '7d': 'seven_day', '7d_fable': 'seven_day_fable' };
 
