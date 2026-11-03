@@ -255,22 +255,7 @@ impl SessionMemory {
     pub fn touch(&self, key: &MemoryKey, prompt_id: Option<&str>, now: i64) {
         let mut inner = self.inner.lock().unwrap();
         self.purge_held(&mut inner, now);
-        // A revived entry keeps the prompt id its record carried. The revival runs ahead of the eviction, so a
-        // write landing on a key evicted moments earlier continues that record rather than racing it to the store
-        // with a fresh one.
-        if !inner.entries.contains_key(key) {
-            self.revive_pending(&mut inner, key, now);
-        }
-        if !inner.entries.contains_key(key) {
-            self.evict_if_full(&mut inner);
-        }
-        let entry = inner.entries.entry(key.clone()).or_insert_with(|| Entry {
-            last_seen: now,
-            prompt_id: None,
-            accounts: HashMap::new(),
-        });
-        // A hook stamped at the head can land after a later write. The newer time stands.
-        entry.last_seen = entry.last_seen.max(now);
+        let entry = self.resident_entry(&mut inner, key, now);
         if let Some(id) = prompt_id {
             entry.prompt_id = Some(id.to_string());
         }
@@ -660,14 +645,11 @@ fn expired(last_seen: i64, now: i64, retention_ms: i64) -> bool {
 }
 
 impl SessionMemory {
-    /// The entry for `(key, account_id)`, inserting either level fresh when absent.
-    fn account_entry<'a>(
-        &self,
-        inner: &'a mut Inner,
-        key: &MemoryKey,
-        account_id: &str,
-        now: i64,
-    ) -> &'a mut AccountMemory {
+    /// The key's entry in the map, revived from the overlay or inserted fresh when absent, its `last_seen` raised
+    /// to `now`. A revived entry keeps the prompt id its record carried. The revival runs ahead of the eviction,
+    /// so a write landing on a key evicted moments earlier continues that record rather than racing it to the
+    /// store with a fresh one.
+    fn resident_entry<'a>(&self, inner: &'a mut Inner, key: &MemoryKey, now: i64) -> &'a mut Entry {
         if !inner.entries.contains_key(key) && !self.revive_pending(inner, key, now) {
             self.evict_if_full(inner);
         }
@@ -676,9 +658,20 @@ impl SessionMemory {
             prompt_id: None,
             accounts: HashMap::new(),
         });
-        // A hook stamped at the head can land after a later write; the newer time stands.
+        // A hook stamped at the head can land after a later write. The newer time stands.
         entry.last_seen = entry.last_seen.max(now);
         entry
+    }
+
+    /// The entry for `(key, account_id)`, inserting either level fresh when absent.
+    fn account_entry<'a>(
+        &self,
+        inner: &'a mut Inner,
+        key: &MemoryKey,
+        account_id: &str,
+        now: i64,
+    ) -> &'a mut AccountMemory {
+        self.resident_entry(inner, key, now)
             .accounts
             .entry(account_id.to_string())
             .or_insert_with(|| AccountMemory {
