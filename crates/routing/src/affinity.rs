@@ -313,8 +313,9 @@ impl AffinityMap {
         let static_written = written.filter(|_| read == 0);
         let message_ttl_ms = report.message_ttl_ms.map(|t| written.unwrap_or(t));
         let static_ttl_ms = report.static_ttl_ms.map(|t| static_written.unwrap_or(t));
-        let message_confirmed = report.cache_touched && message_ttl_ms.is_some();
-        let message_ttl = message_ttl_ms.unwrap_or(0);
+        let message_warmth = message_ttl_ms
+            .filter(|_| report.cache_touched)
+            .map(|ttl| (ttl, report.prefix_tokens));
         let mut rows = Vec::new();
 
         let tail = report.message_boundaries.len();
@@ -331,17 +332,13 @@ impl AffinityMap {
                 ordinal(index),
                 report,
                 root,
-                message_confirmed,
-                message_ttl,
-                report.prefix_tokens,
+                message_warmth,
                 message_id,
             ) {
                 rows.push(row);
             }
         }
         if report.cache_touched {
-            let static_confirmed = static_ttl_ms.is_some();
-            let static_ttl = static_ttl_ms.unwrap_or(0);
             for (index, boundary) in report.static_boundaries.iter().enumerate() {
                 let size = report.static_sizes.get(index).copied().unwrap_or(0);
                 if let Some(row) = self.upsert(
@@ -351,9 +348,7 @@ impl AffinityMap {
                     ordinal(index),
                     report,
                     root,
-                    static_confirmed,
-                    static_ttl,
-                    size,
+                    static_ttl_ms.map(|ttl| (ttl, size)),
                     None,
                 ) {
                     rows.push(row);
@@ -424,9 +419,10 @@ impl AffinityMap {
     }
 
     /// An existing entry with the same account, key and generation is refreshed in place and its key marked
-    /// dirty; any other case (new, or held by another key) replaces it and yields a row. `confirmed` decides
-    /// the warmth: when false a refreshed entry on the report's lane keeps its warm deadline, its `ttl_ms`
-    /// shrinking to the lifetime it has left, and one refreshed from another lane or a new one carries no warmth.
+    /// dirty; any other case (new, or held by another key) replaces it and yields a row. `warmth` is the TTL and the
+    /// prefix size the response confirmed: without it a refreshed entry on the report's lane keeps its warm deadline,
+    /// its `ttl_ms` shrinking to the lifetime it has left, and one refreshed from another lane or a new one carries no
+    /// warmth.
     /// `depth` is the boundary's place in the report's chain, which a refresh in place leaves as it was: a
     /// boundary's hash covers everything before it, so its place in the chain never changes.
     #[allow(clippy::too_many_arguments)]
@@ -438,9 +434,7 @@ impl AffinityMap {
         depth: u32,
         report: &AffinityReport,
         root: &str,
-        confirmed: bool,
-        ttl_ms: i64,
-        prefix_tokens: u64,
+        warmth: Option<(i64, u64)>,
         message_id: Option<&str>,
     ) -> Option<AffinityRow> {
         let existing = self
@@ -453,7 +447,7 @@ impl AffinityMap {
                     && entry.key_id == report.key_id
                     && entry.key_generation == report.key_generation =>
             {
-                if confirmed {
+                if let Some((ttl_ms, prefix_tokens)) = warmth {
                     entry.written_at = report.now;
                     entry.ttl_ms = ttl_ms;
                     entry.prefix_tokens = prefix_tokens;
@@ -496,13 +490,14 @@ impl AffinityMap {
             None => None,
         };
         let entry_root = inherited_root.unwrap_or_else(|| root.to_string());
+        let (ttl_ms, prefix_tokens) = warmth.unwrap_or((0, 0));
         let entry = AffinityEntry {
             chain,
             account_id: report.account_id.clone(),
             incarnation: report.incarnation,
             written_at: report.now,
-            ttl_ms: if confirmed { ttl_ms } else { 0 },
-            prefix_tokens: if confirmed { prefix_tokens } else { 0 },
+            ttl_ms,
+            prefix_tokens,
             key_id: report.key_id.clone(),
             key_generation: report.key_generation,
             message_id: message_id
