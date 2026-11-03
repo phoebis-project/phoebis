@@ -86,7 +86,7 @@ pub const CACHE_DIAGNOSIS_BETA: &str = Injected::CacheDiagnosisBeta.wire_name();
 pub const EXTENDED_TTL_BETA: &str = Injected::ExtendedTtlBeta.wire_name();
 /// The beta that asks the upstream to review each tool use; dropped with the `safeguards` member under an off
 /// auto-mode setting.
-pub const DANGEROUS_TOOL_USE_BETA: &str = "dangerous-tool-use-2026-09-03";
+pub const DANGEROUS_TOOL_USE_BETA: &str = phoebis_profile::DANGEROUS_TOOL_USE_BETA;
 /// The beta the client's auto-mode classifier sends, on both of its stages. With the class header `auxiliary` it
 /// marks the call.
 pub const CLASSIFIER_BETA: &str = "auto-mode-classifier-2026-07-16";

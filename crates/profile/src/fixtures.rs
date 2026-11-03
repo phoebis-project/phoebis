@@ -94,7 +94,8 @@ pub fn with_dangerous_tool_use_beta(head: &[u8]) -> Vec<u8> {
                     .take_while(|b| matches!(b, b'\r' | b'\n'))
                     .count();
             out.extend_from_slice(&line[..end]);
-            out.extend_from_slice(b",dangerous-tool-use-2026-09-03");
+            out.push(b',');
+            out.extend_from_slice(crate::DANGEROUS_TOOL_USE_BETA.as_bytes());
             out.extend_from_slice(&line[end..]);
             found = true;
         } else {

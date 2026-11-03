@@ -4,6 +4,10 @@
 pub mod catalog;
 pub mod fixtures;
 
+/// The beta that asks the upstream to review each tool use. It lives here, below the relay, so the relay's drop and
+/// the fixture heads that carry it name one value.
+pub const DANGEROUS_TOOL_USE_BETA: &str = "dangerous-tool-use-2026-09-03";
+
 pub struct Control {
     pub authorize_claude_ai: &'static str,
     pub authorize_console: &'static str,
