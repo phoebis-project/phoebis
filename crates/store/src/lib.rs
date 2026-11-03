@@ -1350,17 +1350,7 @@ mod tests {
     use super::*;
 
     fn canary_of(store: &Store) -> Option<String> {
-        store
-            .conn
-            .lock()
-            .unwrap()
-            .query_row(
-                "SELECT value FROM meta WHERE key = 'storage_key_canary'",
-                [],
-                |row| row.get(0),
-            )
-            .optional()
-            .unwrap()
+        stored_canary(&store.conn.lock().unwrap()).unwrap()
     }
 
     /// Account `a` holding one committed credential bundle, the first sealed row the one-time path proves.
@@ -1370,10 +1360,7 @@ mod tests {
 
     fn with_a_credential_on(store: &Store, id: &str) {
         store
-            .insert_account(&AccountRow {
-                state: AccountState::Unpaired,
-                ..AccountRow::for_tests(id, AccountKind::Oauth)
-            })
+            .insert_account(&account(id, AccountKind::Oauth))
             .unwrap();
         store
             .commit_credentials(
@@ -1864,16 +1851,7 @@ mod tests {
     fn a_held_lock_a_failing_disk_or_a_full_one_is_database_wide_and_a_refused_row_is_not() {
         let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
         let refused = store
-            .upsert_cooldown(&CooldownRow {
-                account_id: "ghost".into(),
-                scope: CooldownScope::Account,
-                until: 10_000,
-                set_at: 0,
-                reason: "rate_limit".into(),
-                window: "five_hour".into(),
-                source_request_id: None,
-                incarnation: 1,
-            })
+            .upsert_cooldown(&cooldown("ghost", "account"))
             .unwrap_err();
         assert!(!refused.is_database_wide(), "{refused}");
         for code in [
