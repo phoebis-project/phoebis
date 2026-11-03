@@ -12,6 +12,7 @@ import { FilterBar } from '@/components/FilterBar';
 import type { Option } from '@/components/ui/OptionList';
 import { IconChevronRight } from '@/components/ui/icons';
 import { PagerNav } from '@/components/ui/PagerNav';
+import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Badge, Button, Card, EmptyState, ErrorState, Skeleton, toggleRow, useHostedDescription } from '@/components/ui/primitives';
 import { addressWindow, type LogFilters, ROUTING_LOG_CODEC } from '@/lib/address';
 import { clock } from '@/lib/clock';
@@ -75,7 +76,7 @@ export function RoutingLogPage() {
   const [loadedAt, setLoadedAt] = useState(() => clock.now());
   // Off on the logs until the reader picks an interval, and page state, so a link or a reload opens the log off.
   const [intervalMs, setIntervalMs] = useState(0);
-  const [barOpen, setBarOpen] = useState(false);
+  const { cause: holdCause, host } = useHoldHost();
   const rangeTakenAt = useRangeTakenAt(filters.range);
 
   // A preset ends where the list was loaded, and a custom span reads its own instants, which Refresh reads again.
@@ -99,7 +100,7 @@ export function RoutingLogPage() {
     intervalMs: polledMs,
     list: log.data,
     paging,
-    paused: barOpen,
+    paused: holdCause !== null,
     read: (c, to) => api.listRoutingLog({ ...query, cursor: c, to: iso(readEnd(custom, range.to, to)) }),
     setPaging,
     stale: log.stale,
@@ -144,91 +145,92 @@ export function RoutingLogPage() {
   const disabled = { ...notLoadedReason('keys', 'key', keys), ...notLoadedReason('pools', 'pool', pools), ...notLoadedReason('accounts', 'account', accounts), ...notLoadedReason('models', 'model', catalog) };
 
   return (
-    <div className="routing-log stack">
-      <FilterBar
-        address={address}
-        count={shownCount(rows, nextCursor, log.data !== null)}
-        dimensions={dimensions}
-        disabled={disabled}
-        filters={barFilters}
-        onOpenChange={setBarOpen}
-        options={options}
-        presets={KIND_PRESET_ROWS}
-        range={{ now: clock.now, window: range }}
-        refresh={{
-          disabled: ended ? ENDED_RANGE : undefined,
-          intervalMs,
-          onIntervalChange: setIntervalMs,
-          onRefresh: refresh,
-          paused: barOpen ? 'menu' : cursor !== undefined ? 'olderPage' : null,
-          refreshTitle: custom ? `Rows from ${fmtTime(range.from)} to ${fmtTime(range.to)}. Refresh reads the same window again` : `Rows up to ${fmtTime(range.to)}. Refresh reads up to now`,
-        }}
-        update={update}
-      />
+    <PopoverHost.Provider value={host}>
+      <div className="routing-log stack">
+        <FilterBar
+          address={address}
+          count={shownCount(rows, nextCursor, log.data !== null)}
+          dimensions={dimensions}
+          disabled={disabled}
+          filters={barFilters}
+          options={options}
+          presets={KIND_PRESET_ROWS}
+          range={{ now: clock.now, window: range }}
+          refresh={{
+            disabled: ended ? ENDED_RANGE : undefined,
+            intervalMs,
+            onIntervalChange: setIntervalMs,
+            onRefresh: refresh,
+            paused: holdCause ?? (cursor !== undefined ? 'olderPage' : null),
+            refreshTitle: custom ? `Rows from ${fmtTime(range.from)} to ${fmtTime(range.to)}. Refresh reads the same window again` : `Rows up to ${fmtTime(range.to)}. Refresh reads up to now`,
+          }}
+          update={update}
+        />
 
-      {overrun !== null && (
-        <div className="callout callout--warning routing-log__overrun" role="status">
-          {FOLLOW_OVERRUN}
-        </div>
-      )}
+        {overrun !== null && (
+          <div className="callout callout--warning routing-log__overrun" role="status">
+            {FOLLOW_OVERRUN}
+          </div>
+        )}
 
-      <Card padded={false} className="card--table">
-        <div className="table-wrap">
-          <table className="table routing-log__table">
-            <thead>
-              <tr>
-                <th className="routing-log__chevron" />
-                <th className="routing-log__time">Time</th>
-                <th className="routing-log__kind">Kind</th>
-                <th className="routing-log__session">Session</th>
-                <th className="routing-log__account">Account</th>
-                <th className="routing-log__model">Model</th>
-                <th className="routing-log__by">By</th>
-                <th className="routing-log__fact">Fact</th>
-                <th className="routing-log__link" />
-              </tr>
-            </thead>
-            <tbody>
-              {log.loading && !log.data
-                ? Array.from({ length: 8 }, (_, i) => (
-                    <tr key={i} className="table__detail">
-                      <td colSpan={9}>
-                        <Skeleton />
-                      </td>
-                    </tr>
-                  ))
-                : rows.map((row) => {
-                    const id = identityOf(row);
-                    return (
-                      <Fragment key={id}>
-                        <LogRow row={row} rows={rows} isNew={fresh.has(id)} now={now} open={open.has(id)} onToggle={() => toggle(id)} />
-                        {open.has(id) && (
-                          <tr className="routing-log__panel table__detail">
-                            <td colSpan={9}>{row.type === 'decision' ? <DecisionCard now={now} onWiden={widen} row={row} /> : <EventDetail now={now} row={row} rows={rows} week={reading} />}</td>
-                          </tr>
-                        )}
-                      </Fragment>
-                    );
-                  })}
-              {!log.loading && rows.length === 0 && (
+        <Card padded={false} className="card--table">
+          <div className="table-wrap">
+            <table className="table routing-log__table">
+              <thead>
                 <tr>
-                  <td colSpan={9}>
-                    {error ? (
-                      <ErrorState title="Could not load the routing log" body={error} action={<Button onClick={log.reload}>Try again</Button>} />
-                    ) : (
-                      <EmptyState title="No decisions or events in this range." body="Widen the range or clear a filter." />
-                    )}
-                  </td>
+                  <th className="routing-log__chevron" />
+                  <th className="routing-log__time">Time</th>
+                  <th className="routing-log__kind">Kind</th>
+                  <th className="routing-log__session">Session</th>
+                  <th className="routing-log__account">Account</th>
+                  <th className="routing-log__model">Model</th>
+                  <th className="routing-log__by">By</th>
+                  <th className="routing-log__fact">Fact</th>
+                  <th className="routing-log__link" />
                 </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-        <footer className="pager">
-          <PagerNav atFirst={stack.length === 0} atLast={nextCursor === null} onFirst={resetPaging} onNext={goNext} onPrevious={goPrevious} />
-        </footer>
-      </Card>
-    </div>
+              </thead>
+              <tbody>
+                {log.loading && !log.data
+                  ? Array.from({ length: 8 }, (_, i) => (
+                      <tr key={i} className="table__detail">
+                        <td colSpan={9}>
+                          <Skeleton />
+                        </td>
+                      </tr>
+                    ))
+                  : rows.map((row) => {
+                      const id = identityOf(row);
+                      return (
+                        <Fragment key={id}>
+                          <LogRow row={row} rows={rows} isNew={fresh.has(id)} now={now} open={open.has(id)} onToggle={() => toggle(id)} />
+                          {open.has(id) && (
+                            <tr className="routing-log__panel table__detail">
+                              <td colSpan={9}>{row.type === 'decision' ? <DecisionCard now={now} onWiden={widen} row={row} /> : <EventDetail now={now} row={row} rows={rows} week={reading} />}</td>
+                            </tr>
+                          )}
+                        </Fragment>
+                      );
+                    })}
+                {!log.loading && rows.length === 0 && (
+                  <tr>
+                    <td colSpan={9}>
+                      {error ? (
+                        <ErrorState title="Could not load the routing log" body={error} action={<Button onClick={log.reload}>Try again</Button>} />
+                      ) : (
+                        <EmptyState title="No decisions or events in this range." body="Widen the range or clear a filter." />
+                      )}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          <footer className="pager">
+            <PagerNav atFirst={stack.length === 0} atLast={nextCursor === null} onFirst={resetPaging} onNext={goNext} onPrevious={goPrevious} />
+          </footer>
+        </Card>
+      </div>
+    </PopoverHost.Provider>
   );
 }
 

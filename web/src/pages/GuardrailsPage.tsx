@@ -6,7 +6,7 @@ import { useSession } from '@/app/session';
 import { blankCondition, ConditionsEditor } from '@/components/ConditionsEditor';
 import { FilterBar } from '@/components/FilterBar';
 import { OptionList, type Option, walkFocus } from '@/components/ui/OptionList';
-import { Popover } from '@/components/ui/Popover';
+import { Popover, PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { IconChevron, IconInfo, IconPlus } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Field, GroupedDialog, Input, Menu, PageLink, Refusal, Segmented, Select, Skeleton, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { poolKeysHref, requestHref } from '@/lib/address';
@@ -103,13 +103,12 @@ export function GuardrailsPage(): JSX.Element {
   const { notify } = useSession();
   const [dialog, setDialog] = useState<{ existing: Guardrail | null; source?: Guardrail } | null>(null);
   const [deleting, setDeleting] = useState<Guardrail | null>(null);
-  // The rows whose menu is open, by guardrail id: an answer landing under an open menu could move the rows beneath it.
-  const [openMenus, setOpenMenus] = useState<ReadonlySet<string>>(() => new Set());
   const [intervalMs, setIntervalMs] = useState(5_000);
-  const [barOpen, setBarOpen] = useState(false);
-  // The dialog resets its fields when it opens, so a refresh landing under it would move the lists it picks from.
-  const paused = dialog !== null || deleting !== null || openMenus.size > 0 || barOpen;
-  const pauseCause: PauseCause | null = dialog !== null || deleting !== null ? 'dialog' : openMenus.size > 0 || barOpen ? 'menu' : null;
+  // The dialog resets its fields when it opens, so a refresh landing under it would move the lists it picks from. A
+  // row's open menu holds the page through its host, since an answer landing under it could move the rows beneath it.
+  const { cause: holdCause, host } = useHoldHost();
+  const pauseCause: PauseCause | null = dialog !== null || deleting !== null ? 'dialog' : holdCause;
+  const paused = pauseCause !== null;
   const guardrails = useAsync(() => api.listGuardrails(), [], { paused, refreshMs: intervalMs });
   const counts = useAsync(() => api.getAnalyticsGuardrails('24h'), [], { paused, refreshMs: intervalMs });
   // The dialog's pickers alone draw the pools and the keys, so they read once per visit and again after a write, a
@@ -137,13 +136,6 @@ export function GuardrailsPage(): JSX.Element {
     if (done) notify(done);
     reload();
   };
-  const menuOpen = (id: string) => (open: boolean) =>
-    setOpenMenus((s) => {
-      const next = new Set(s);
-      if (open) next.add(id);
-      else next.delete(id);
-      return next;
-    });
 
   const row = (content: ReactNode, key: string | number = 'state') => (
     <tr key={key}>
@@ -216,7 +208,6 @@ export function GuardrailsPage(): JSX.Element {
               </td>
               <td className="right col-fit">
                 <Menu
-                  onOpenChange={menuOpen(g.id)}
                   items={[
                     { label: 'Edit', onClick: () => setDialog({ existing: g }) },
                     { label: 'Duplicate', onClick: () => setDialog({ existing: null, source: duplicateOf(g) }) },
@@ -231,68 +222,69 @@ export function GuardrailsPage(): JSX.Element {
         });
 
   return (
-    <div className="stack">
-      <FilterBar
-        address="/guardrails"
-        count={list === null ? '' : counted(list.length, 'guardrail', 'guardrails')}
-        filters={{}}
-        onOpenChange={setBarOpen}
-        refresh={{ intervalMs, onIntervalChange: setIntervalMs, onRefresh: reload, paused: pauseCause, refreshTitle: 'Reads the list again now' }}
-        update={() => undefined}
-      >
-        <CreateMenu presets={presetList} onBlank={() => setDialog({ existing: null })} onPreset={(p) => setDialog({ existing: null, source: fromPreset(p) })} />
-      </FilterBar>
-      <p className="page-head__meta guardrails__lead">{LEAD}</p>
-      <Card padded={false} className="card--table">
-        <div className="table-wrap">
-          <table className="table guardrails__table">
-            <thead>
-              <tr>
-                <th className="col-fill">Name</th>
-                <th className="col-fit">Mode</th>
-                <th className="col-fit">Enabled</th>
-                <th className="col-fit">Applies to</th>
-                <th className="right col-fit">Matches, 24h</th>
-                <th className="col-fill">Preset</th>
-                <th className="col-fit" />
-              </tr>
-            </thead>
-            <tbody>{body}</tbody>
-          </table>
-        </div>
-      </Card>
-      <GuardrailDialog
-        open={dialog !== null}
-        existing={dialog?.existing ?? null}
-        source={dialog?.source}
-        existingIds={new Set((list ?? []).map((g) => g.id))}
-        keys={keys.data ?? []}
-        pools={pools.data ?? []}
-        presets={presetList}
-        // Closing reads the list again, which a stale save's Reload counts on whatever the auto reload is set to.
-        onClose={() => {
-          setDialog(null);
-          reload();
-        }}
-        onSaved={() => {
-          notify(dialog?.existing ? 'Guardrail saved' : 'Guardrail created');
-          setDialog(null);
-          reload();
-        }}
-      />
-      <ConfirmDialog
-        open={deleting !== null}
-        onClose={() => setDeleting(null)}
-        title={deleting ? `Delete guardrail ${deleting.name}` : ''}
-        body={DELETE_BODY}
-        confirmLabel="Delete"
-        danger
-        onConfirm={() => {
-          const g = deleting;
-          if (g) void run(() => api.deleteGuardrail(g.id), 'Guardrail deleted');
-        }}
-      />
-    </div>
+    <PopoverHost.Provider value={host}>
+      <div className="stack">
+        <FilterBar
+          address="/guardrails"
+          count={list === null ? '' : counted(list.length, 'guardrail', 'guardrails')}
+          filters={{}}
+          refresh={{ intervalMs, onIntervalChange: setIntervalMs, onRefresh: reload, paused: pauseCause, refreshTitle: 'Reads the list again now' }}
+          update={() => undefined}
+        >
+          <CreateMenu presets={presetList} onBlank={() => setDialog({ existing: null })} onPreset={(p) => setDialog({ existing: null, source: fromPreset(p) })} />
+        </FilterBar>
+        <p className="page-head__meta guardrails__lead">{LEAD}</p>
+        <Card padded={false} className="card--table">
+          <div className="table-wrap">
+            <table className="table guardrails__table">
+              <thead>
+                <tr>
+                  <th className="col-fill">Name</th>
+                  <th className="col-fit">Mode</th>
+                  <th className="col-fit">Enabled</th>
+                  <th className="col-fit">Applies to</th>
+                  <th className="right col-fit">Matches, 24h</th>
+                  <th className="col-fill">Preset</th>
+                  <th className="col-fit" />
+                </tr>
+              </thead>
+              <tbody>{body}</tbody>
+            </table>
+          </div>
+        </Card>
+        <GuardrailDialog
+          open={dialog !== null}
+          existing={dialog?.existing ?? null}
+          source={dialog?.source}
+          existingIds={new Set((list ?? []).map((g) => g.id))}
+          keys={keys.data ?? []}
+          pools={pools.data ?? []}
+          presets={presetList}
+          // Closing reads the list again, which a stale save's Reload counts on whatever the auto reload is set to.
+          onClose={() => {
+            setDialog(null);
+            reload();
+          }}
+          onSaved={() => {
+            notify(dialog?.existing ? 'Guardrail saved' : 'Guardrail created');
+            setDialog(null);
+            reload();
+          }}
+        />
+        <ConfirmDialog
+          open={deleting !== null}
+          onClose={() => setDeleting(null)}
+          title={deleting ? `Delete guardrail ${deleting.name}` : ''}
+          body={DELETE_BODY}
+          confirmLabel="Delete"
+          danger
+          onConfirm={() => {
+            const g = deleting;
+            if (g) void run(() => api.deleteGuardrail(g.id), 'Guardrail deleted');
+          }}
+        />
+      </div>
+    </PopoverHost.Provider>
   );
 }
 

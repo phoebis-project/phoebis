@@ -14,6 +14,7 @@ import { FilterBar } from '@/components/FilterBar';
 import { MeterRatio } from '@/components/MeterRatio';
 import { SortControl } from '@/components/SortControl';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
+import { PopoverHost, useHold, useHoldHost } from '@/components/ui/Popover';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Field, Input, KeyValue, Meter, Refusal, Segmented, Skeleton } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
@@ -50,14 +51,13 @@ export function AccountsPage() {
   const { address, filters, update } = useQueryFilters(ACCOUNTS_CODEC);
   const [addOpen, setAddOpen] = useState(false);
   const [pairing, setPairing] = useState<{ start: PairingTarget; label: string; repair: boolean } | null>(null);
-  const [detailBusy, setDetailBusy] = useState(false);
   const [intervalMs, setIntervalMs] = useState(5_000);
-  const [barOpen, setBarOpen] = useState(false);
   // Counts the bar's Refresh presses, so a detail read that skips the list's cadence still reads again on one.
   const [generation, setGeneration] = useState(0);
-  // A save in flight or an editor open in the detail holds the list as a dialog does.
-  const dialogOpen = addOpen || pairing !== null || detailBusy;
-  const accounts = useAsync(() => api.listAccounts(), [], { paused: dialogOpen || barOpen, refreshMs: intervalMs });
+  // A save in flight or an editor open in the detail holds the list as a dialog does, through the page's host.
+  const { cause: holdCause, host } = useHoldHost();
+  const pauseCause = addOpen || pairing !== null ? 'dialog' : holdCause;
+  const accounts = useAsync(() => api.listAccounts(), [], { paused: pauseCause !== null, refreshMs: intervalMs });
   // The cost model the allowance block's figures price through, read once per visit: nothing in it depends on the
   // account a detail opens, and the block's Try again reads it again.
   const settings = useAsync(() => api.getSettings(), []);
@@ -109,7 +109,7 @@ export function AccountsPage() {
   // With auto reload off nothing else reads the row again, so the page reads the list on its own while the reading is in
   // flight. A read that falls due under a dialog, an editor or a menu is skipped, as the auto reload holds there, and the
   // timer reads the pause and the reload through a ref, so a pause neither restarts the span nor shifts the cadence.
-  const reread = useLatest({ paused: dialogOpen || barOpen, reload: accounts.reload });
+  const reread = useLatest({ paused: pauseCause !== null, reload: accounts.reload });
   useEffect(() => {
     if (awaiting === null || intervalMs !== 0) return;
     const from = clock.now();
@@ -132,107 +132,108 @@ export function AccountsPage() {
   }, [accounts.data, accountId, created, first, location.hash, location.search, navigate, selected]);
 
   return (
-    <div className="accounts">
-      <FilterBar
-        address={address}
-        count={accounts.data === null ? '' : plural(list.length, 'account')}
-        dimensions={ACCOUNTS_DIMENSIONS}
-        filters={filters}
-        onOpenChange={setBarOpen}
-        options={STATUS_OPTIONS}
-        placeholder="Search accounts"
-        refresh={{ intervalMs, onIntervalChange: setIntervalMs, onRefresh: refresh, paused: dialogOpen ? 'dialog' : barOpen ? 'menu' : null, refreshTitle: 'Reads the list again now' }}
-        update={update}
-      >
-        <SortControl keys={ACCOUNT_SORT_KEYS} onChange={(next) => update(sortAddressOf(ACCOUNT_SORT_KEYS, next))} value={{ dir, sort: filters.sort }} />
-        <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setAddOpen(true)}>
-          Add account
-        </Button>
-      </FilterBar>
-      <aside className="accounts__list">
-        <ul className="account-rows">
-          {!accounts.data
-            ? accounts.error
-              ? (
-                  <li>
-                    <ErrorState title="Could not load the accounts" body={accounts.error} retry={accounts.reload} />
-                  </li>
-                )
-              : [0, 1, 2].map((i) => (
-                  <li key={i} className="account-row">
-                    <Skeleton width="70%" />
-                    <Skeleton height={4} />
-                  </li>
-                ))
-            : accounts.data.length === 0
-              ? (
-                  <li>
-                    <EmptyState
-                      title="The router holds no account yet"
-                      body="Add an account to route requests."
-                      action={
-                        <Button size="sm" onClick={() => setAddOpen(true)}>
-                          Add account
-                        </Button>
-                      }
-                    />
-                  </li>
-                )
-              : list.map((a) => <AccountRow key={a.id} account={a} active={a.id === accountId} now={now} />)}
-          {accounts.data && accounts.data.length > 0 && list.length === 0 && (
-            <li>
-              <EmptyState title="No accounts match" body="Clear the search or the status filter." />
-            </li>
-          )}
-        </ul>
-      </aside>
-      <section className="accounts__detail">
-        {/* Accounts with none selected is a bare or stale URL the redirect above is about to replace, so nothing draws. */}
-        {selected ? (
-          <Descriptions>
-            {/* Keyed by the account, so a save still running when the operator moves on answers into its own
-                unmounted detail and never moves the token of an editor another account opened. */}
-            <AccountDetail key={selected.id} account={selected} awaitingReading={awaiting === selected.id} generation={generation} now={now} onBusyChange={setDetailBusy} onToast={notify} onPair={(repair) => setPairing({ start: { accountId: selected.id }, label: selected.label, repair })} onChanged={accounts.reload} settings={settings} />
-          </Descriptions>
-        ) : accounts.data === null ? (
-          <Skeleton height={400} />
-        ) : accounts.data.length === 0 ? (
-          <EmptyState title="No account to show" body="Add an account to see its detail here." />
-        ) : null}
-      </section>
-      <AddAccountDialog
-        open={addOpen}
-        existingIds={new Set((accounts.data ?? []).map((a) => a.id))}
-        onClose={() => setAddOpen(false)}
-        onDone={(done) => {
-          setAddOpen(false);
-          // An OAuth account is written when its pairing confirms, so there is nothing to reload yet.
-          if (done.kind === 'oauth') setPairing({ start: { id: done.id, session: done.session }, label: done.label, repair: false });
-          else {
+    <PopoverHost.Provider value={host}>
+      <div className="accounts">
+        <FilterBar
+          address={address}
+          count={accounts.data === null ? '' : plural(list.length, 'account')}
+          dimensions={ACCOUNTS_DIMENSIONS}
+          filters={filters}
+          options={STATUS_OPTIONS}
+          placeholder="Search accounts"
+          refresh={{ intervalMs, onIntervalChange: setIntervalMs, onRefresh: refresh, paused: pauseCause, refreshTitle: 'Reads the list again now' }}
+          update={update}
+        >
+          <SortControl keys={ACCOUNT_SORT_KEYS} onChange={(next) => update(sortAddressOf(ACCOUNT_SORT_KEYS, next))} value={{ dir, sort: filters.sort }} />
+          <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setAddOpen(true)}>
+            Add account
+          </Button>
+        </FilterBar>
+        <aside className="accounts__list">
+          <ul className="account-rows">
+            {!accounts.data
+              ? accounts.error
+                ? (
+                    <li>
+                      <ErrorState title="Could not load the accounts" body={accounts.error} retry={accounts.reload} />
+                    </li>
+                  )
+                : [0, 1, 2].map((i) => (
+                    <li key={i} className="account-row">
+                      <Skeleton width="70%" />
+                      <Skeleton height={4} />
+                    </li>
+                  ))
+              : accounts.data.length === 0
+                ? (
+                    <li>
+                      <EmptyState
+                        title="The router holds no account yet"
+                        body="Add an account to route requests."
+                        action={
+                          <Button size="sm" onClick={() => setAddOpen(true)}>
+                            Add account
+                          </Button>
+                        }
+                      />
+                    </li>
+                  )
+                : list.map((a) => <AccountRow key={a.id} account={a} active={a.id === accountId} now={now} />)}
+            {accounts.data && accounts.data.length > 0 && list.length === 0 && (
+              <li>
+                <EmptyState title="No accounts match" body="Clear the search or the status filter." />
+              </li>
+            )}
+          </ul>
+        </aside>
+        <section className="accounts__detail">
+          {/* Accounts with none selected is a bare or stale URL the redirect above is about to replace, so nothing draws. */}
+          {selected ? (
+            <Descriptions>
+              {/* Keyed by the account, so a save still running when the operator moves on answers into its own
+                  unmounted detail and never moves the token of an editor another account opened. */}
+              <AccountDetail key={selected.id} account={selected} awaitingReading={awaiting === selected.id} generation={generation} now={now} onToast={notify} onPair={(repair) => setPairing({ start: { accountId: selected.id }, label: selected.label, repair })} onChanged={accounts.reload} settings={settings} />
+            </Descriptions>
+          ) : accounts.data === null ? (
+            <Skeleton height={400} />
+          ) : accounts.data.length === 0 ? (
+            <EmptyState title="No account to show" body="Add an account to see its detail here." />
+          ) : null}
+        </section>
+        <AddAccountDialog
+          open={addOpen}
+          existingIds={new Set((accounts.data ?? []).map((a) => a.id))}
+          onClose={() => setAddOpen(false)}
+          onDone={(done) => {
+            setAddOpen(false);
+            // An OAuth account is written when its pairing confirms, so there is nothing to reload yet.
+            if (done.kind === 'oauth') setPairing({ start: { id: done.id, session: done.session }, label: done.label, repair: false });
+            else {
+              accounts.reload();
+              notify('API key added');
+            }
+          }}
+        />
+        <PairingDialog
+          open={pairing !== null}
+          start={pairing?.start ?? { accountId: '' }}
+          label={pairing?.label ?? ''}
+          repair={pairing?.repair ?? false}
+          onClose={() => setPairing(null)}
+          onPaired={(preview, confirmed) => {
+            const start = pairing?.start ?? null;
+            setPairing(null);
             accounts.reload();
-            notify('API key added');
-          }
-        }}
-      />
-      <PairingDialog
-        open={pairing !== null}
-        start={pairing?.start ?? { accountId: '' }}
-        label={pairing?.label ?? ''}
-        repair={pairing?.repair ?? false}
-        onClose={() => setPairing(null)}
-        onPaired={(preview, confirmed) => {
-          const start = pairing?.start ?? null;
-          setPairing(null);
-          accounts.reload();
-          notify(`Paired ${preview.email}`);
-          if (confirmed.firstPollInFlight) setAwaiting(confirmed.accountId);
-          if (start !== null && 'id' in start) {
-            setCreated({ id: start.id, reading: false });
-            navigate({ hash: location.hash, pathname: accountHref(start.id), search: location.search });
-          }
-        }}
-      />
-    </div>
+            notify(`Paired ${preview.email}`);
+            if (confirmed.firstPollInFlight) setAwaiting(confirmed.accountId);
+            if (start !== null && 'id' in start) {
+              setCreated({ id: start.id, reading: false });
+              navigate({ hash: location.hash, pathname: accountHref(start.id), search: location.search });
+            }
+          }}
+        />
+      </div>
+    </PopoverHost.Provider>
   );
 }
 
@@ -265,7 +266,7 @@ function AccountRow({ account, active, now }: { account: Account; active: boolea
   );
 }
 
-function AccountDetail({ account, awaitingReading, generation, now, onBusyChange, onToast, onPair, onChanged, settings }: { account: Account; awaitingReading: boolean; generation: number; now: number; onBusyChange: (busy: boolean) => void; onChanged: () => void; onPair: (repair: boolean) => void; onToast: (m: string) => void; settings: Loaded<Settings> }) {
+function AccountDetail({ account, awaitingReading, generation, now, onToast, onPair, onChanged, settings }: { account: Account; awaitingReading: boolean; generation: number; now: number; onChanged: () => void; onPair: (repair: boolean) => void; onToast: (m: string) => void; settings: Loaded<Settings> }) {
   const navigate = useNavigate();
   const history = useAsync(() => api.getQuotaHistory(account.id), [account.id]);
   const { week } = useAppSettings();
@@ -301,13 +302,9 @@ function AccountDetail({ account, awaitingReading, generation, now, onBusyChange
     setAnswered(null);
   }
   const current = answered ?? account;
-  // The list holds its refresh while anything here is open or running. The cleanup reports false too: Delete account
-  // navigates away inside its action, so the detail can unmount before `busy` clears.
-  const held = busy || catalogOpen || confirm !== null || editing || endForm !== null;
-  useEffect(() => {
-    onBusyChange(held);
-    return () => onBusyChange(false);
-  }, [held, onBusyChange]);
+  // The list holds its refresh while anything here is open or running, and the hold leaves with the detail: Delete
+  // account navigates away inside its action, so the detail can unmount before `busy` clears.
+  useHold(busy || catalogOpen || confirm !== null || editing || endForm !== null, 'dialog');
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;

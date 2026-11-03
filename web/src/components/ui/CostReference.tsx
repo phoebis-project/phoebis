@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { useId, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '@/api';
 import { effectiveLabel } from '@/api/decode';
@@ -11,6 +11,7 @@ import { clock } from '@/lib/clock';
 import { revisionAt } from '@/lib/costs';
 import { useAsync, useNow } from '@/lib/hooks';
 import { MINUTE } from '@/lib/time';
+import { useHold } from './Popover';
 import { Button, Dialog, ErrorState, Select, Skeleton, Tabs } from './primitives';
 
 export type CostTab = 'api-prices' | 'plan-rates' | 'tiers';
@@ -36,26 +37,14 @@ const unionOf = (settings: Settings): Dated[] => {
   return [...byDate].map(([effective, effectiveDate]) => ({ effective, effectiveDate })).sort((a, b) => (a.effectiveDate ?? a.effective).localeCompare(b.effectiveDate ?? b.effective));
 };
 
-/**
- * The "Cost reference" link, whose dialog opens on `tab`. `onOpenChange` hears the dialog open and close, for a page
- * whose auto reload waits while a dialog is open.
- */
-export function CostReferenceLink({ onOpenChange, tab }: { onOpenChange?: (open: boolean) => void; tab: CostTab }) {
+/** The "Cost reference" link, whose dialog opens on `tab` and holds the page's auto reload while open. */
+export function CostReferenceLink({ tab }: { tab: CostTab }) {
   const [open, setOpen] = useState(false);
   const [shown, setShown] = useState<CostTab>(tab);
   // The chosen revision date, null for the entries in force at the opening.
   const [revision, setRevision] = useState<string | null>(null);
   const [openedAt, setOpenedAt] = useState(0);
-  // A link unmounted with its dialog open reports it closed, so the page's pause does not outlive the dialog.
-  const openChange = useRef(onOpenChange);
-  useLayoutEffect(() => {
-    openChange.current = onOpenChange;
-  });
-  useEffect(() => {
-    if (!open) return;
-    openChange.current?.(true);
-    return () => openChange.current?.(false);
-  }, [open]);
+  useHold(open, 'dialog');
   // Read on every opening, so the dialog shows the tables in force, and never while it is closed.
   const settings = useAsync(() => (open ? api.getSettings() : Promise.resolve(null)), [open]);
   const close = () => setOpen(false);

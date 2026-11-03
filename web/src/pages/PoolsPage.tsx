@@ -22,6 +22,7 @@ import { SpeedChip } from '@/components/ui/SpeedChip';
 import { sumTileOf, Tile } from '@/components/ui/Tile';
 import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
+import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Badge, BadgeLink, Button, Card, ConfirmDialog, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, PageLink, Refusal, Select, Skeleton, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { accountHref, poolKeysHref } from '@/lib/address';
 import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, dollarsUnder, moveLabel, nativeSidesOf, sidesLine, sumFunded, type FundedSum, type WeekReading } from '@/lib/analytics';
@@ -239,11 +240,11 @@ export function PoolsPage() {
   const returnRange = dialog?.range ?? '7d';
   const [deleting, setDeleting] = useState<Pool | null>(null);
   const [intervalMs, setIntervalMs] = useState(5_000);
-  const [barOpen, setBarOpen] = useState(false);
   // The pool dialog draws these lists, so auto reload waits while it is open rather than change them under an edit, and
   // while the Delete pool confirm is open, as every read waits under a dialog.
-  const dialogOpen = dialog !== null || deleting !== null;
-  const reread = { paused: dialogOpen || barOpen, refreshMs: intervalMs };
+  const { cause: holdCause, host } = useHoldHost();
+  const pauseCause = dialog !== null || deleting !== null ? 'dialog' : holdCause;
+  const reread = { paused: pauseCause !== null, refreshMs: intervalMs };
   const pools = useAsync(() => api.listPools(), [], reread);
   const accounts = useAsync(() => api.listAccounts(), [], reread);
   const keys = useAsync(() => api.listKeys(), [], reread);
@@ -331,120 +332,121 @@ export function PoolsPage() {
   const dayTile = totals ? sumTileOf(unit, totals.day, reading) : null;
 
   return (
-    <div className="stack" ref={pageRef}>
-      <FilterBar
-        address="/pools"
-        count={pools.data === null ? '' : plural(pools.data.length, 'pool')}
-        filters={{}}
-        onOpenChange={setBarOpen}
-        refresh={{
-          intervalMs,
-          onIntervalChange: setIntervalMs,
-          onRefresh: () => {
+    <PopoverHost.Provider value={host}>
+      <div className="stack" ref={pageRef}>
+        <FilterBar
+          address="/pools"
+          count={pools.data === null ? '' : plural(pools.data.length, 'pool')}
+          filters={{}}
+          refresh={{
+            intervalMs,
+            onIntervalChange: setIntervalMs,
+            onRefresh: () => {
+              pools.reload();
+              accounts.reload();
+              keys.reload();
+              catalog.reload();
+              sessions.reload();
+              overview.reload();
+              settings.reload();
+            },
+            paused: pauseCause,
+            refreshTitle: 'Reads the list again now',
+          }}
+          update={() => undefined}
+        >
+          <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setDialog({ initialGroup: null, pool: null })}>
+            Create pool
+          </Button>
+        </FilterBar>
+        <p className="page-head__meta">A pool groups accounts behind a set of keys. Requests pick a member by priority, stick to it per session, and fail over when a member hits a rate limit.</p>
+        <div className="stat-grid stat-grid--fit">
+          <Tile label="Pools" value={totals ? fmtInt(totals.pools) : null} />
+          <Tile label="Accounts in pools" value={totals ? fmtInt(totals.accounts) : null} />
+          <Tile label="Keys" value={totals && totals.keys !== null ? fmtInt(totals.keys) : keysRead === 'failed' ? <span className="muted">n/a</span> : null} />
+          <Tile label="Requests, 24h" value={totals ? fmtInt(totals.requests) : null} />
+          <Tile label="Cost, 24h" value={dayTile?.value ?? null} title={dayTile?.title} failure={dayTile?.value === null ? reading.failure : null} />
+        </div>
+        {/* A failed read leaves the cards on the last answer's items, or none before the first. This line says so. */}
+        {attention.error !== null && <AttentionLine items={attention.items} error={attention.error} loadedAt={attention.loadedAt} now={now} refresh={refreshAttention} />}
+        <div className="pool-grid">
+          {pools.data
+            ? pools.data.map((p) => (
+                <PoolCard
+                  key={p.id}
+                  pool={p}
+                  keys={keysByPool.get(p.id) ?? []}
+                  keysRead={keysRead}
+                  accounts={accounts.data}
+                  accountById={accountById}
+                  attention={(attention.items ?? []).filter((i) => i.pools.includes(p.id))}
+                  now={now}
+                  reading={reading}
+                  onEdit={() => setDialog({ initialGroup: null, pool: p })}
+                  onDelete={() => setDeleting(p)}
+                />
+              ))
+            : pools.error
+              ? <ErrorState title="Could not load the pools" body={pools.error} retry={pools.reload} />
+              : [0, 1].map((i) => <Skeleton key={i} height={360} />)}
+        </div>
+        <PoolDialog
+          open={dialog !== null}
+          captureMaxHours={settings.data?.retention.bodyCaptureMaxHours}
+          pool={dialog?.pool ?? null}
+          initialGroup={dialog?.initialGroup ?? null}
+          onClose={(reload) => {
+            setDialog(null);
+            if (reload) {
+              pools.reload();
+              keys.reload();
+            }
+          }}
+          accounts={accounts.data ?? []}
+          accountsFailed={failedFirst(accounts) ? accounts.error : null}
+          accountsLoaded={accounts.data !== null || accounts.error !== null}
+          onRetryAccounts={accounts.reload}
+          keys={keys.data ?? []}
+          pools={pools.data ?? []}
+          sessions={dialog?.pool ? (sessionsByPool.get(dialog.pool.id) ?? []) : []}
+          idleReturns={{
+            // The last answer outlives a pending or failed read, which after a pick is the other range's, so the dialog
+            // draws an answer read for the range it names, its loading or its error otherwise.
+            buckets: (dialog?.pool && answer?.pools.find((p) => p.poolId === dialog.pool?.id)?.idleReturns) || [],
+            error: answer === null && !overview.loading ? overview.error : null,
+            loading: answer === null && overview.loading,
+            onRange: (range) => setDialog((d) => d && { ...d, range }),
+            range: returnRange,
+          }}
+          models={(catalog.data ?? []).map((m) => ({ label: m.id, value: m.id }))}
+          onSaved={(created) => {
+            setDialog(null);
+            notify(created ? 'Pool created' : 'Pool saved');
             pools.reload();
-            accounts.reload();
             keys.reload();
-            catalog.reload();
+          }}
+          // The pool route lists its keys, so a key created, moved or revoked from the dialog changes the card's
+          // warning too.
+          onKeysChanged={() => {
+            keys.reload();
+            pools.reload();
             sessions.reload();
             overview.reload();
-            settings.reload();
-          },
-          paused: dialogOpen ? 'dialog' : barOpen ? 'menu' : null,
-          refreshTitle: 'Reads the list again now',
-        }}
-        update={() => undefined}
-      >
-        <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setDialog({ initialGroup: null, pool: null })}>
-          Create pool
-        </Button>
-      </FilterBar>
-      <p className="page-head__meta">A pool groups accounts behind a set of keys. Requests pick a member by priority, stick to it per session, and fail over when a member hits a rate limit.</p>
-      <div className="stat-grid stat-grid--fit">
-        <Tile label="Pools" value={totals ? fmtInt(totals.pools) : null} />
-        <Tile label="Accounts in pools" value={totals ? fmtInt(totals.accounts) : null} />
-        <Tile label="Keys" value={totals && totals.keys !== null ? fmtInt(totals.keys) : keysRead === 'failed' ? <span className="muted">n/a</span> : null} />
-        <Tile label="Requests, 24h" value={totals ? fmtInt(totals.requests) : null} />
-        <Tile label="Cost, 24h" value={dayTile?.value ?? null} title={dayTile?.title} failure={dayTile?.value === null ? reading.failure : null} />
+          }}
+        />
+        <ConfirmDialog
+          open={deleting !== null}
+          onClose={() => setDeleting(null)}
+          title={deleting ? `Delete pool ${deleting.name}` : 'Delete pool'}
+          confirmLabel="Delete"
+          danger
+          body="Deletes the pool and its memberships. Its keys must be moved or revoked first."
+          onConfirm={() => {
+            if (deleting) void removePool(deleting);
+          }}
+        />
       </div>
-      {/* A failed read leaves the cards on the last answer's items, or none before the first. This line says so. */}
-      {attention.error !== null && <AttentionLine items={attention.items} error={attention.error} loadedAt={attention.loadedAt} now={now} refresh={refreshAttention} />}
-      <div className="pool-grid">
-        {pools.data
-          ? pools.data.map((p) => (
-              <PoolCard
-                key={p.id}
-                pool={p}
-                keys={keysByPool.get(p.id) ?? []}
-                keysRead={keysRead}
-                accounts={accounts.data}
-                accountById={accountById}
-                attention={(attention.items ?? []).filter((i) => i.pools.includes(p.id))}
-                now={now}
-                reading={reading}
-                onEdit={() => setDialog({ initialGroup: null, pool: p })}
-                onDelete={() => setDeleting(p)}
-              />
-            ))
-          : pools.error
-            ? <ErrorState title="Could not load the pools" body={pools.error} retry={pools.reload} />
-            : [0, 1].map((i) => <Skeleton key={i} height={360} />)}
-      </div>
-      <PoolDialog
-        open={dialog !== null}
-        captureMaxHours={settings.data?.retention.bodyCaptureMaxHours}
-        pool={dialog?.pool ?? null}
-        initialGroup={dialog?.initialGroup ?? null}
-        onClose={(reload) => {
-          setDialog(null);
-          if (reload) {
-            pools.reload();
-            keys.reload();
-          }
-        }}
-        accounts={accounts.data ?? []}
-        accountsFailed={failedFirst(accounts) ? accounts.error : null}
-        accountsLoaded={accounts.data !== null || accounts.error !== null}
-        onRetryAccounts={accounts.reload}
-        keys={keys.data ?? []}
-        pools={pools.data ?? []}
-        sessions={dialog?.pool ? (sessionsByPool.get(dialog.pool.id) ?? []) : []}
-        idleReturns={{
-          // The last answer outlives a pending or failed read, which after a pick is the other range's, so the dialog
-          // draws an answer read for the range it names, its loading or its error otherwise.
-          buckets: (dialog?.pool && answer?.pools.find((p) => p.poolId === dialog.pool?.id)?.idleReturns) || [],
-          error: answer === null && !overview.loading ? overview.error : null,
-          loading: answer === null && overview.loading,
-          onRange: (range) => setDialog((d) => d && { ...d, range }),
-          range: returnRange,
-        }}
-        models={(catalog.data ?? []).map((m) => ({ label: m.id, value: m.id }))}
-        onSaved={(created) => {
-          setDialog(null);
-          notify(created ? 'Pool created' : 'Pool saved');
-          pools.reload();
-          keys.reload();
-        }}
-        // The pool route lists its keys, so a key created, moved or revoked from the dialog changes the card's
-        // warning too.
-        onKeysChanged={() => {
-          keys.reload();
-          pools.reload();
-          sessions.reload();
-          overview.reload();
-        }}
-      />
-      <ConfirmDialog
-        open={deleting !== null}
-        onClose={() => setDeleting(null)}
-        title={deleting ? `Delete pool ${deleting.name}` : 'Delete pool'}
-        confirmLabel="Delete"
-        danger
-        body="Deletes the pool and its memberships. Its keys must be moved or revoked first."
-        onConfirm={() => {
-          if (deleting) void removePool(deleting);
-        }}
-      />
-    </div>
+    </PopoverHost.Provider>
   );
 }
 

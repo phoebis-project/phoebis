@@ -10,7 +10,7 @@ import { useChartInk } from '@/components/charts/useChartInk';
 import { FilterBar } from '@/components/FilterBar';
 import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor';
 import { OptionList } from '@/components/ui/OptionList';
-import { Popover } from '@/components/ui/Popover';
+import { Popover, PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { sumTileOf, Tile } from '@/components/ui/Tile';
 import { IconChevron, IconInfo, IconPlus, IconWarning, IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, ErrorState, Expert, Field, GroupedDialog, Input, Menu, PageLink, Refusal, Segmented, Select, Skeleton, Toggle, type DialogGroup } from '@/components/ui/primitives';
@@ -108,15 +108,15 @@ export function KeysPage() {
   const [created, setCreated] = useState<{ key: CreatedApiKey; title: string } | null>(null);
   const [confirm, setConfirm] = useState<{ body: string; danger?: boolean; label: string; onConfirm: () => void; title: string } | null>(null);
   const { notify } = useSession();
-  // The rows whose menu is open, by key id: an answer landing under an open menu could add or drop rows beneath it.
-  const [openMenus, setOpenMenus] = useState<ReadonlySet<string>>(() => new Set());
   const [intervalMs, setIntervalMs] = useState(5_000);
-  const [barOpen, setBarOpen] = useState(false);
-  // The key dialog resets its fields whenever the pool list changes, so a refresh landing under it would wipe them.
-  const paused = dialog !== null || created !== null || confirm !== null || openMenus.size > 0;
-  const pauseCause: PauseCause | null = dialog !== null || created !== null || confirm !== null ? 'dialog' : openMenus.size > 0 || barOpen ? 'menu' : null;
-  const keys = useAsync(() => api.listKeys(), [], { paused: paused || barOpen, refreshMs: intervalMs });
-  const pools = useAsync(() => api.listPools(), [], { paused: paused || barOpen, refreshMs: intervalMs });
+  // The key dialog resets its fields whenever the pool list changes, so a refresh landing under it would wipe them. A
+  // row's open menu holds the page through its host, since an answer landing under it could add or drop rows beneath
+  // it.
+  const { cause: holdCause, host } = useHoldHost();
+  const pauseCause: PauseCause | null = dialog !== null || created !== null || confirm !== null ? 'dialog' : holdCause;
+  const paused = pauseCause !== null;
+  const keys = useAsync(() => api.listKeys(), [], { paused, refreshMs: intervalMs });
+  const pools = useAsync(() => api.listPools(), [], { paused, refreshMs: intervalMs });
 
   useAddressEdit(keys.data, 'Key', (key, group) => setDialog({ initialGroup: isKeyGroup(group) ? group : 'key', key }));
 
@@ -194,253 +194,246 @@ export function KeysPage() {
   };
 
   return (
-    <div className="stack" ref={pageRef}>
-      <FilterBar
-        address={address}
-        count={keys.data === null ? '' : plural(rows.length, 'key')}
-        dimensions={KEYS_DIMENSIONS}
-        disabled={notLoadedReason('pools', 'pool', pools)}
-        filters={filters}
-        onOpenChange={setBarOpen}
-        options={{ ...STATUS_OPTIONS, pools: poolOptions }}
-        placeholder="Search keys"
-        refresh={{
-          intervalMs,
-          onIntervalChange: setIntervalMs,
-          onRefresh: () => {
-            keys.reload();
-            pools.reload();
-            settings.reload();
-          },
-          paused: pauseCause,
-          refreshTitle: 'Reads the list again now',
-        }}
-        update={update}
-      >
-        <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setDialog({ initialGroup: null, key: null })}>
-          Create key
-        </Button>
-      </FilterBar>
-      <div className="stat-grid">
-        <Tile label="Keys" value={totals ? fmtInt(totals.keys) : null} />
-        <Tile label="Active" value={totals ? fmtInt(totals.active) : null} />
-        <Tile label="Lifetime requests" value={totals ? fmtCompact(totals.requests) : null} />
-        <Tile label="Lifetime cost" value={lifetimeTile?.value ?? null} title={lifetimeTile?.title} failure={lifetimeTile?.value === null ? reading.failure : null} />
-      </div>
+    <PopoverHost.Provider value={host}>
+      <div className="stack" ref={pageRef}>
+        <FilterBar
+          address={address}
+          count={keys.data === null ? '' : plural(rows.length, 'key')}
+          dimensions={KEYS_DIMENSIONS}
+          disabled={notLoadedReason('pools', 'pool', pools)}
+          filters={filters}
+          options={{ ...STATUS_OPTIONS, pools: poolOptions }}
+          placeholder="Search keys"
+          refresh={{
+            intervalMs,
+            onIntervalChange: setIntervalMs,
+            onRefresh: () => {
+              keys.reload();
+              pools.reload();
+              settings.reload();
+            },
+            paused: pauseCause,
+            refreshTitle: 'Reads the list again now',
+          }}
+          update={update}
+        >
+          <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setDialog({ initialGroup: null, key: null })}>
+            Create key
+          </Button>
+        </FilterBar>
+        <div className="stat-grid">
+          <Tile label="Keys" value={totals ? fmtInt(totals.keys) : null} />
+          <Tile label="Active" value={totals ? fmtInt(totals.active) : null} />
+          <Tile label="Lifetime requests" value={totals ? fmtCompact(totals.requests) : null} />
+          <Tile label="Lifetime cost" value={lifetimeTile?.value ?? null} title={lifetimeTile?.title} failure={lifetimeTile?.value === null ? reading.failure : null} />
+        </div>
 
-      <div className="keys-layout">
-        <Card title="Lifetime cost by key" subtitle="Relative spend across all keys">
-          {keys.data ? (
-            <ul className="hbars">
-              {[...keys.data]
-                // An unknown rank sorts below a zero, so a flagged key comes last.
-                .sort((a, b) => (rankOf(b) ?? -1) - (rankOf(a) ?? -1))
-                .map((k) => {
-                  const figure = keyFigureOf(unit, k.lifetime, 'No request yet', reading);
-                  const rank = rankOf(k);
-                  return (
-                    <li key={k.id}>
-                      <div className="hbars__head">
-                        <span>
-                          {k.name} <span className="muted mono">{k.prefix}…</span>
-                        </span>
-                        <span className="num">
-                          {figure === null ? <PendingFigure failure={reading.failure} /> : <span title={figure.title}>{figure.text}</span>} <span className="muted">{fmtCompact(k.lifetime.requests)} {noun(k.lifetime.requests, 'request')}</span>
-                        </span>
-                      </div>
-                      <div className="hbars__track">
-                        <span className="hbars__fill" style={{ width: `${maxRank > 0 && rank !== null ? (rank / maxRank) * 100 : 0}%`, background: ink.series[0] }} />
-                      </div>
-                    </li>
-                  );
-                })}
-            </ul>
-          ) : (
-            <Skeleton height={120} />
-          )}
-        </Card>
+        <div className="keys-layout">
+          <Card title="Lifetime cost by key" subtitle="Relative spend across all keys">
+            {keys.data ? (
+              <ul className="hbars">
+                {[...keys.data]
+                  // An unknown rank sorts below a zero, so a flagged key comes last.
+                  .sort((a, b) => (rankOf(b) ?? -1) - (rankOf(a) ?? -1))
+                  .map((k) => {
+                    const figure = keyFigureOf(unit, k.lifetime, 'No request yet', reading);
+                    const rank = rankOf(k);
+                    return (
+                      <li key={k.id}>
+                        <div className="hbars__head">
+                          <span>
+                            {k.name} <span className="muted mono">{k.prefix}…</span>
+                          </span>
+                          <span className="num">
+                            {figure === null ? <PendingFigure failure={reading.failure} /> : <span title={figure.title}>{figure.text}</span>} <span className="muted">{fmtCompact(k.lifetime.requests)} {noun(k.lifetime.requests, 'request')}</span>
+                          </span>
+                        </div>
+                        <div className="hbars__track">
+                          <span className="hbars__fill" style={{ width: `${maxRank > 0 && rank !== null ? (rank / maxRank) * 100 : 0}%`, background: ink.series[0] }} />
+                        </div>
+                      </li>
+                    );
+                  })}
+              </ul>
+            ) : (
+              <Skeleton height={120} />
+            )}
+          </Card>
 
-        <Card padded={false} className="card--table">
-          <div className="table-wrap">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th className="col-fill">Name</th>
-                  <th className="col-fit">Prefix</th>
-                  <th className="col-fit">Pool</th>
-                  <th className="col-fill">Models</th>
-                  <th className="right col-fit">Usage, 7d</th>
-                  <th className="col-fit">Expiry</th>
-                  <th className="col-fill">Status</th>
-                  <th className="col-fit" />
-                </tr>
-              </thead>
-              <tbody>
-                {!keys.data
-                  ? keys.error
-                    ? (
-                        <tr>
-                          <td colSpan={8}>
-                            <ErrorState title="Could not load the keys" body={keys.error} retry={keys.reload} />
+          <Card padded={false} className="card--table">
+            <div className="table-wrap">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th className="col-fill">Name</th>
+                    <th className="col-fit">Prefix</th>
+                    <th className="col-fit">Pool</th>
+                    <th className="col-fill">Models</th>
+                    <th className="right col-fit">Usage, 7d</th>
+                    <th className="col-fit">Expiry</th>
+                    <th className="col-fill">Status</th>
+                    <th className="col-fit" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {!keys.data
+                    ? keys.error
+                      ? (
+                          <tr>
+                            <td colSpan={8}>
+                              <ErrorState title="Could not load the keys" body={keys.error} retry={keys.reload} />
+                            </td>
+                          </tr>
+                        )
+                      : [0, 1, 2].map((i) => (
+                          <tr key={i} className="table__detail">
+                            <td colSpan={8}>
+                              <Skeleton />
+                            </td>
+                          </tr>
+                        ))
+                    : rows.map((k) => (
+                        <tr key={k.id} id={k.id} tabIndex={-1} className="key-row">
+                          <td className="col-fill" title={k.name}>
+                            <b>{k.name}</b>
+                            {/* A fill column cuts a line with the ellipsis, so each line carries its whole text on its title. */}
+                            <span className="sub" title={captureLine(k, poolById.get(k.poolId) ?? null)}>
+                              {captureLabel(effectiveCaptureHours(k, poolById.get(k.poolId) ?? null))}
+                              {k.bodyCaptureHours === null && (
+                                <span className="muted" title={CAPTURE_INHERIT_HINT}>
+                                  {' '}
+                                  inherited
+                                </span>
+                              )}
+                            </span>
+                            {k.keepaliveOptOut && <span className="sub" title="keepalive off">keepalive off</span>}
                           </td>
-                        </tr>
-                      )
-                    : [0, 1, 2].map((i) => (
-                        <tr key={i} className="table__detail">
-                          <td colSpan={8}>
-                            <Skeleton />
+                          <td className="mono col-fit">{k.prefix}…</td>
+                          <td className="mono col-fit">{k.poolId}</td>
+                          <td className="col-fill">{k.modelRules.length ? <span className="mono" title={k.modelRules.map((r) => (r.not ? `NOT ${r.pattern}` : r.pattern)).join(', ')}>{plural(k.modelRules.length, 'rule')}{k.modelRulesMode === 'replace' && ' (replace)'}</span> : <span className="muted" title={NO_RULES[k.modelRulesMode]}>{NO_RULES[k.modelRulesMode]}</span>}</td>
+                          <td className="right num col-fit">
+                            {fmtCompact(k.usage7d.tokens)} tok
+                            <WeekLine reading={reading} unit={unit} usage={k.usage7d} />
                           </td>
-                        </tr>
-                      ))
-                  : rows.map((k) => (
-                      <tr key={k.id} id={k.id} tabIndex={-1} className="key-row">
-                        <td className="col-fill" title={k.name}>
-                          <b>{k.name}</b>
-                          {/* A fill column cuts a line with the ellipsis, so each line carries its whole text on its title. */}
-                          <span className="sub" title={captureLine(k, poolById.get(k.poolId) ?? null)}>
-                            {captureLabel(effectiveCaptureHours(k, poolById.get(k.poolId) ?? null))}
-                            {k.bodyCaptureHours === null && (
-                              <span className="muted" title={CAPTURE_INHERIT_HINT}>
-                                {' '}
-                                inherited
+                          <td className="col-fit" title={k.expiresAt ? fmtAbsolute(k.expiresAt) : undefined}>{k.expiresAt ? fmtDate(k.expiresAt) : <span className="muted">Never</span>}</td>
+                          <td className="col-fill">
+                            <Badge tone={KEY_STATUS_TONE[k.status]} dot title={k.status} describe={false}>
+                              <span className="key-row__badge-label">{k.status}</span>
+                            </Badge>
+                            {k.lastUsedAt && <span className="sub" title={`used ${fmtRelative(k.lastUsedAt, now)}`}>used {fmtRelative(k.lastUsedAt, now)}</span>}
+                            {/* The route answers 0 once the rotation grace has passed, so the page needs no clock of its own. */}
+                            {k.sessionsOnRetiredSecret > 0 && (
+                              <span className="sub" title={`${retiredNote(k.sessionsOnRetiredSecret)}. ${k.retiredSecretLastUsedAt ? `${RETIRED_SECRET_HINT} Previous secret last used ${fmtRelative(k.retiredSecretLastUsedAt, now)}.` : RETIRED_SECRET_HINT}`}>
+                                {retiredNote(k.sessionsOnRetiredSecret)}
                               </span>
                             )}
-                          </span>
-                          {k.keepaliveOptOut && <span className="sub" title="keepalive off">keepalive off</span>}
-                        </td>
-                        <td className="mono col-fit">{k.prefix}…</td>
-                        <td className="mono col-fit">{k.poolId}</td>
-                        <td className="col-fill">{k.modelRules.length ? <span className="mono" title={k.modelRules.map((r) => (r.not ? `NOT ${r.pattern}` : r.pattern)).join(', ')}>{plural(k.modelRules.length, 'rule')}{k.modelRulesMode === 'replace' && ' (replace)'}</span> : <span className="muted" title={NO_RULES[k.modelRulesMode]}>{NO_RULES[k.modelRulesMode]}</span>}</td>
-                        <td className="right num col-fit">
-                          {fmtCompact(k.usage7d.tokens)} tok
-                          <WeekLine reading={reading} unit={unit} usage={k.usage7d} />
-                        </td>
-                        <td className="col-fit" title={k.expiresAt ? fmtAbsolute(k.expiresAt) : undefined}>{k.expiresAt ? fmtDate(k.expiresAt) : <span className="muted">Never</span>}</td>
-                        <td className="col-fill">
-                          <Badge tone={KEY_STATUS_TONE[k.status]} dot title={k.status} describe={false}>
-                            <span className="key-row__badge-label">{k.status}</span>
-                          </Badge>
-                          {k.lastUsedAt && <span className="sub" title={`used ${fmtRelative(k.lastUsedAt, now)}`}>used {fmtRelative(k.lastUsedAt, now)}</span>}
-                          {/* The route answers 0 once the rotation grace has passed, so the page needs no clock of its own. */}
-                          {k.sessionsOnRetiredSecret > 0 && (
-                            <span className="sub" title={`${retiredNote(k.sessionsOnRetiredSecret)}. ${k.retiredSecretLastUsedAt ? `${RETIRED_SECRET_HINT} Previous secret last used ${fmtRelative(k.retiredSecretLastUsedAt, now)}.` : RETIRED_SECRET_HINT}`}>
-                              {retiredNote(k.sessionsOnRetiredSecret)}
-                            </span>
-                          )}
-                        </td>
-                        <td className="right col-fit">
-                          <Menu
-                            onOpenChange={(open) =>
-                              setOpenMenus((s) => {
-                                const next = new Set(s);
-                                if (open) next.add(k.id);
-                                else next.delete(k.id);
-                                return next;
-                              })
-                            }
-                            items={[
-                              { label: 'Edit', onClick: () => setDialog({ initialGroup: null, key: k }) },
-                              {
-                                label: 'Rotate',
-                                onClick: () =>
-                                  setConfirm({
-                                    title: `Rotate ${k.name}`,
-                                    body: 'A new secret is issued and shown once. The old secret keeps working for 15 minutes so running sessions can switch.',
-                                    label: 'Rotate',
-                                    onConfirm: () =>
-                                      void run(async () => {
-                                        setCreated({ key: await api.rotateKey(k.id), title: 'Key rotated' });
-                                      }),
-                                  }),
-                              },
-                              {
-                                label: 'Revoke',
-                                disabled: k.status !== 'active',
-                                onClick: () =>
-                                  setConfirm({
-                                    title: `Revoke ${k.name}`,
-                                    body: 'Requests with this key are rejected immediately. Its history stays in the ledger.',
-                                    label: 'Revoke',
-                                    danger: true,
-                                    onConfirm: () =>
-                                      void run(async () => {
-                                        await api.revokeKey(k.id);
-                                        notify('Key revoked');
-                                      }),
-                                  }),
-                              },
-                              {
-                                label: 'Delete',
-                                danger: true,
-                                onClick: () =>
-                                  setConfirm({
-                                    title: `Delete ${k.name}`,
-                                    body: 'Removes the key and detaches its request history from the key name. This cannot be undone.',
-                                    label: 'Delete',
-                                    danger: true,
-                                    onConfirm: () =>
-                                      void run(async () => {
-                                        await api.deleteKey(k.id);
-                                        notify('Key deleted');
-                                      }),
-                                  }),
-                              },
-                            ]}
-                          />
-                        </td>
-                      </tr>
-                    ))}
-                {keys.data?.length === 0 && (
-                  // A filter that matches no key keeps the table bare; only a registry with no key at all says so.
-                  <tr>
-                    <td colSpan={8}>
-                      <EmptyState
-                        title="No keys yet"
-                        action={
-                          <Button size="sm" onClick={() => setDialog({ initialGroup: null, key: null })}>
-                            Create key
-                          </Button>
-                        }
-                      />
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-      </div>
+                          </td>
+                          <td className="right col-fit">
+                            <Menu
+                              items={[
+                                { label: 'Edit', onClick: () => setDialog({ initialGroup: null, key: k }) },
+                                {
+                                  label: 'Rotate',
+                                  onClick: () =>
+                                    setConfirm({
+                                      title: `Rotate ${k.name}`,
+                                      body: 'A new secret is issued and shown once. The old secret keeps working for 15 minutes so running sessions can switch.',
+                                      label: 'Rotate',
+                                      onConfirm: () =>
+                                        void run(async () => {
+                                          setCreated({ key: await api.rotateKey(k.id), title: 'Key rotated' });
+                                        }),
+                                    }),
+                                },
+                                {
+                                  label: 'Revoke',
+                                  disabled: k.status !== 'active',
+                                  onClick: () =>
+                                    setConfirm({
+                                      title: `Revoke ${k.name}`,
+                                      body: 'Requests with this key are rejected immediately. Its history stays in the ledger.',
+                                      label: 'Revoke',
+                                      danger: true,
+                                      onConfirm: () =>
+                                        void run(async () => {
+                                          await api.revokeKey(k.id);
+                                          notify('Key revoked');
+                                        }),
+                                    }),
+                                },
+                                {
+                                  label: 'Delete',
+                                  danger: true,
+                                  onClick: () =>
+                                    setConfirm({
+                                      title: `Delete ${k.name}`,
+                                      body: 'Removes the key and detaches its request history from the key name. This cannot be undone.',
+                                      label: 'Delete',
+                                      danger: true,
+                                      onConfirm: () =>
+                                        void run(async () => {
+                                          await api.deleteKey(k.id);
+                                          notify('Key deleted');
+                                        }),
+                                    }),
+                                },
+                              ]}
+                            />
+                          </td>
+                        </tr>
+                      ))}
+                  {keys.data?.length === 0 && (
+                    // A filter that matches no key keeps the table bare; only a registry with no key at all says so.
+                    <tr>
+                      <td colSpan={8}>
+                        <EmptyState
+                          title="No keys yet"
+                          action={
+                            <Button size="sm" onClick={() => setDialog({ initialGroup: null, key: null })}>
+                              Create key
+                            </Button>
+                          }
+                        />
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        </div>
 
-      <KeyDialog
-        open={dialog !== null}
-        captureMaxHours={settings.data?.retention.bodyCaptureMaxHours}
-        existing={dialog?.key ?? null}
-        initialGroup={dialog?.initialGroup ?? null}
-        onClose={() => setDialog(null)}
-        onReload={() => {
-          setDialog(null);
-          keys.reload();
-        }}
-        pools={poolList}
-        existingIds={new Set((keys.data ?? []).map((k) => k.id))}
-        onCreated={(c) => {
-          setDialog(null);
-          setCreated({ key: c, title: 'Key created' });
-          keys.reload();
-        }}
-        onUpdated={() => {
-          setDialog(null);
-          notify('Key saved');
-          keys.reload();
-        }}
-      />
-      <SecretDialog secret={created?.key.secret ?? null} title={created?.title ?? 'Key created'} onClose={() => setCreated(null)}>
-        <p className="secondary">
-          Set it as <code>CLAUDE_CODE_OAUTH_TOKEN</code> on the client. The Settings page has the full snippet.
-        </p>
-      </SecretDialog>
-      <ConfirmDialog open={confirm !== null} onClose={() => setConfirm(null)} title={confirm?.title ?? ''} body={confirm?.body ?? ''} confirmLabel={confirm?.label} danger={confirm?.danger} onConfirm={() => confirm?.onConfirm()} />
-    </div>
+        <KeyDialog
+          open={dialog !== null}
+          captureMaxHours={settings.data?.retention.bodyCaptureMaxHours}
+          existing={dialog?.key ?? null}
+          initialGroup={dialog?.initialGroup ?? null}
+          onClose={() => setDialog(null)}
+          onReload={() => {
+            setDialog(null);
+            keys.reload();
+          }}
+          pools={poolList}
+          existingIds={new Set((keys.data ?? []).map((k) => k.id))}
+          onCreated={(c) => {
+            setDialog(null);
+            setCreated({ key: c, title: 'Key created' });
+            keys.reload();
+          }}
+          onUpdated={() => {
+            setDialog(null);
+            notify('Key saved');
+            keys.reload();
+          }}
+        />
+        <SecretDialog secret={created?.key.secret ?? null} title={created?.title ?? 'Key created'} onClose={() => setCreated(null)}>
+          <p className="secondary">
+            Set it as <code>CLAUDE_CODE_OAUTH_TOKEN</code> on the client. The Settings page has the full snippet.
+          </p>
+        </SecretDialog>
+        <ConfirmDialog open={confirm !== null} onClose={() => setConfirm(null)} title={confirm?.title ?? ''} body={confirm?.body ?? ''} confirmLabel={confirm?.label} danger={confirm?.danger} onConfirm={() => confirm?.onConfirm()} />
+      </div>
+    </PopoverHost.Provider>
   );
 }
 

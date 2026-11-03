@@ -11,7 +11,7 @@ for (const key of ['document', 'navigator', 'HTMLElement', 'Element', 'Node', 'g
 globalThis.window = window;
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 after(() => window.close());
-const { act, createElement: h, createRoot, FilterBar, RefreshControl, useState } = await import('./dist/ui.js');
+const { act, createElement: h, createRoot, FilterBar, PopoverHost, RefreshControl, useState } = await import('./dist/ui.js');
 const { RELOAD_INTERVALS } = await import('./dist/api.js');
 
 const roots = [];
@@ -184,7 +184,7 @@ const REFRESH = { intervalMs: 5_000, onIntervalChange() {}, onRefresh() {}, paus
 const NOW = Date.parse('2026-09-16T14:30:00.000Z');
 
 /** A bar over filters the host holds, each patch merged and recorded. */
-function bar(props = {}, start = {}) {
+function bar(props = {}, start = {}, host = null) {
   const patches = [];
   const seen = { root: null };
   function Host() {
@@ -203,7 +203,7 @@ function bar(props = {}, start = {}) {
       ...props,
     });
   }
-  render(h(Host));
+  render(host === null ? h(Host) : h(PopoverHost.Provider, { value: host }, h(Host)));
   return { patches, root: () => seen.root };
 }
 
@@ -254,18 +254,18 @@ test('a FilterBar Clear all writes every dimension and leaves the range, the sea
   assert.equal(b.root().querySelector('.chip-line'), null);
 });
 
-test('a FilterBar reports its open interval menu and its Add filter popover through onOpenChange', () => {
+test("a FilterBar's open interval menu and Add filter popover hold the page's host as a menu", () => {
   const reports = [];
-  const b = bar({ dimensions: [KEY], onOpenChange: (open) => reports.push(open) });
-  assert.deepEqual(reports, [], 'nothing open, nothing said at mount');
+  const b = bar({ dimensions: [KEY] }, {}, { add: (id, cause) => reports.push(`add ${cause}`), remove: () => reports.push('remove') });
+  assert.deepEqual(reports, [], 'nothing open, nothing held at mount');
   const part = b.root().querySelector('button.refresh-control__part');
   click(part);
-  assert.deepEqual(reports, [true], 'the interval menu opens');
+  assert.deepEqual(reports, ['add menu'], 'the interval menu opens');
   click(part);
-  assert.deepEqual(reports, [true, false], 'and closes');
+  assert.deepEqual(reports, ['add menu', 'remove'], 'and closes');
   const add = [...b.root().querySelectorAll('button')].find((el) => el.textContent === 'Add filter');
   click(add);
-  assert.deepEqual(reports, [true, false, true], 'Add filter opens');
+  assert.deepEqual(reports, ['add menu', 'remove', 'add menu'], 'Add filter opens');
   press('Escape');
-  assert.deepEqual(reports, [true, false, true, false], 'and closes on Escape');
+  assert.deepEqual(reports, ['add menu', 'remove', 'add menu', 'remove'], 'and closes on Escape');
 });

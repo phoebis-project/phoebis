@@ -13,6 +13,7 @@ import { Legend, timeTip, type TooltipRow } from '@/components/charts/Tooltip';
 import { CostReferenceLink } from '@/components/ui/CostReference';
 import type { Option } from '@/components/ui/OptionList';
 import { figuresValue, Tile } from '@/components/ui/Tile';
+import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Badge, Card, ErrorState, Meter, Segmented, Skeleton } from '@/components/ui/primitives';
 import { FilterBar } from '@/components/FilterBar';
 import { GroupBy as GroupByControl, GroupsButton } from '@/components/GroupBy';
@@ -240,9 +241,8 @@ export function AnalyticsPage() {
   const filtersHeight = useStickyHeight(filtersRef);
   // 5 s when the page opens, and page state, so a link or a reload opens on it.
   const [intervalMs, setIntervalMs] = useState(5_000);
-  const [barOpen, setBarOpen] = useState(false);
-  const [costOpen, setCostOpen] = useState(false);
-  const pauseCause = costOpen ? 'dialog' : barOpen ? 'menu' : null;
+  // The Burn's Cost reference dialog and the bar's menus and popovers hold every read through the page's host.
+  const { cause: pauseCause, host } = useHoldHost();
   const paused = pauseCause !== null;
   const rangeTakenAt = useRangeTakenAt(a.range);
   const [tab, chooseTab] = useHashSection(SECTIONS, 'traffic');
@@ -607,472 +607,472 @@ export function AnalyticsPage() {
   const refusalInput: ReasonLink = { ...linkInput, filters: { ...linkInput.filters, keyIds: filters.keyId } };
 
   return (
-    <div className="stack">
-      <FilterBar
-        address={address}
-        dimensions={dimensions}
-        filters={a}
-        onOpenChange={setBarOpen}
-        options={barOptions}
-        range={{ now: clock.now, window: { from: span.fromMs, to: span.toMs } }}
-        ref={filtersRef}
-        refresh={{
-          disabled: ended ? ENDED_RANGE : undefined,
-          intervalMs,
-          note: intervalMs === 0 && !custom ? `the window ends ${fmtShortTime(toIso)}` : undefined,
-          onIntervalChange: setIntervalMs,
-          onRefresh: retry,
-          paused: pauseCause,
-          refreshTitle: custom ? `Window from ${fmtShortTime(fromIso)} to ${fmtShortTime(toIso)}. Refresh reads the same window again` : `Window ends ${fmtShortTime(toIso)}. Refresh reads up to now`,
-        }}
-        sticky
-        update={update}
-      >
-        <GroupByControl onChange={changeGroupBy} options={GROUP_OPTIONS} value={pageBy} />
-        {groupBy === 'user_agent' && <GroupsButton onCommit={commitGroups} value={clientGroups} />}
-      </FilterBar>
-      {!log.stale && log.data?.partial && (
-        <p className="muted" role="status">
-          Partial: the first {fmtInt(SESSION_PAGE_LIMIT * SESSION_PAGE_SIZE)} requests of the range
-        </p>
-      )}
+    <PopoverHost.Provider value={host}>
+      <div className="stack">
+        <FilterBar
+          address={address}
+          dimensions={dimensions}
+          filters={a}
+          options={barOptions}
+          range={{ now: clock.now, window: { from: span.fromMs, to: span.toMs } }}
+          ref={filtersRef}
+          refresh={{
+            disabled: ended ? ENDED_RANGE : undefined,
+            intervalMs,
+            note: intervalMs === 0 && !custom ? `the window ends ${fmtShortTime(toIso)}` : undefined,
+            onIntervalChange: setIntervalMs,
+            onRefresh: retry,
+            paused: pauseCause,
+            refreshTitle: custom ? `Window from ${fmtShortTime(fromIso)} to ${fmtShortTime(toIso)}. Refresh reads the same window again` : `Window ends ${fmtShortTime(toIso)}. Refresh reads up to now`,
+          }}
+          sticky
+          update={update}
+        >
+          <GroupByControl onChange={changeGroupBy} options={GROUP_OPTIONS} value={pageBy} />
+          {groupBy === 'user_agent' && <GroupsButton onCommit={commitGroups} value={clientGroups} />}
+        </FilterBar>
+        {!log.stale && log.data?.partial && (
+          <p className="muted" role="status">
+            Partial: the first {fmtInt(SESSION_PAGE_LIMIT * SESSION_PAGE_SIZE)} requests of the range
+          </p>
+        )}
 
-      <SectionBar sections={SECTIONS} shown={tab} onChoose={chooseTab} offset={filtersHeight} />
+        <SectionBar sections={SECTIONS} shown={tab} onChoose={chooseTab} offset={filtersHeight} />
 
-      {failure !== null && (
-        <ErrorState title="Could not load the analytics for these filters" body={failure} retry={retry} />
-      )}
-      {empty && <div className="empty">No traffic in this range.</div>}
+        {failure !== null && (
+          <ErrorState title="Could not load the analytics for these filters" body={failure} retry={retry} />
+        )}
+        {empty && <div className="empty">No traffic in this range.</div>}
 
-      {tab === 'traffic' && (
-        <Section id="traffic" shown={shown} title="Traffic" meta={loading ? undefined : `${fmtInt(totals.requests)} requests, ${pctOrDash(errorRateOf(totals))} errors`}>
-          <div className="grid-2 traffic-grid">
-            <ChartCard title="Requests by outcome" subtitle="Per bucket, stacked" loading={loading} legend={OUTCOME_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtInt(totals[s.key]) }))}>
-              <BarChart data={buckets} margin={CHART_MARGIN} barCategoryGap={2}>
-                <CartesianGrid vertical={false} stroke={ink.grid} />
-                <XAxis {...axis} />
-                <YAxis tickLine={false} axisLine={false} width={36} allowDecimals={false} />
-                <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => OUTCOME_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtInt(p[s.key]) })))} />
-                {OUTCOME_SERIES.map((s, i) => (
-                  <Bar key={s.key} dataKey={s.key} stackId="a" fill={ink.series[s.slot]} stroke={ink.surface} strokeWidth={1} maxBarSize={22} radius={i === OUTCOME_SERIES.length - 1 ? [3, 3, 0, 0] : 0} isAnimationActive={false} />
-                ))}
-              </BarChart>
-            </ChartCard>
+        {tab === 'traffic' && (
+          <Section id="traffic" shown={shown} title="Traffic" meta={loading ? undefined : `${fmtInt(totals.requests)} requests, ${pctOrDash(errorRateOf(totals))} errors`}>
+            <div className="grid-2 traffic-grid">
+              <ChartCard title="Requests by outcome" subtitle="Per bucket, stacked" loading={loading} legend={OUTCOME_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtInt(totals[s.key]) }))}>
+                <BarChart data={buckets} margin={CHART_MARGIN} barCategoryGap={2}>
+                  <CartesianGrid vertical={false} stroke={ink.grid} />
+                  <XAxis {...axis} />
+                  <YAxis tickLine={false} axisLine={false} width={36} allowDecimals={false} />
+                  <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => OUTCOME_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtInt(p[s.key]) })))} />
+                  {OUTCOME_SERIES.map((s, i) => (
+                    <Bar key={s.key} dataKey={s.key} stackId="a" fill={ink.series[s.slot]} stroke={ink.surface} strokeWidth={1} maxBarSize={22} radius={i === OUTCOME_SERIES.length - 1 ? [3, 3, 0, 0] : 0} isAnimationActive={false} />
+                  ))}
+                </BarChart>
+              </ChartCard>
 
-            <Card title="Errors by code" subtitle="Failed and incomplete responses in range, the refused requests left out">
-              {loading ? <Skeleton height={90} /> : <ErrorBars errors={totals.errors} color={ink.series[7]} />}
-            </Card>
+              <Card title="Errors by code" subtitle="Failed and incomplete responses in range, the refused requests left out">
+                {loading ? <Skeleton height={90} /> : <ErrorBars errors={totals.errors} color={ink.series[7]} />}
+              </Card>
 
-            {/* The two refusal lists follow the errors in turn, so the grid pairs Requests by outcome with Errors by
-                code, the two refusal cards, Failovers with Migration rewrites and Requests by speed with Effort levels,
-                eight cards and no lone one. */}
-            <Card title="Refusals by code" subtitle="Requests the router refused before any account was asked, not in the counts">
-              {loading ? <Skeleton height={90} /> : <ErrorBars color={ink.series[7]} empty="No request was refused in this range." errors={totals.refusals} />}
-            </Card>
+              {/* The two refusal lists follow the errors in turn, so the grid pairs Requests by outcome with Errors by
+                  code, the two refusal cards, Failovers with Migration rewrites and Requests by speed with Effort levels,
+                  eight cards and no lone one. */}
+              <Card title="Refusals by code" subtitle="Requests the router refused before any account was asked, not in the counts">
+                {loading ? <Skeleton height={90} /> : <ErrorBars color={ink.series[7]} empty="No request was refused in this range." errors={totals.refusals} />}
+              </Card>
 
-            {/* Its own error with Try again, as a card reading a route of its own draws one, and no count while the
-                answer is stale, so no figure stands under links for filters it was not read for. */}
-            <Card title="Refusals by category" subtitle={`Answers the upstream refused in range, by category, each a request that succeeded${refusalsNote(sessionId !== null)}`}>
-              {refusalCategories.error !== null ? (
-                <ErrorState title="Could not load refusals by category" body={refusalCategories.error} retry={refusalCategories.reload} />
-              ) : refusalCategories.data === null || refusalCategories.stale ? (
-                <Skeleton height={90} />
-              ) : (
-                <CountBars color={ink.series[7]} empty="No answer was refused in this range." rows={refusalRows(refusalCategories.data, refusalInput, plainLinks)} />
-              )}
-            </Card>
+              {/* Its own error with Try again, as a card reading a route of its own draws one, and no count while the
+                  answer is stale, so no figure stands under links for filters it was not read for. */}
+              <Card title="Refusals by category" subtitle={`Answers the upstream refused in range, by category, each a request that succeeded${refusalsNote(sessionId !== null)}`}>
+                {refusalCategories.error !== null ? (
+                  <ErrorState title="Could not load refusals by category" body={refusalCategories.error} retry={refusalCategories.reload} />
+                ) : refusalCategories.data === null || refusalCategories.stale ? (
+                  <Skeleton height={90} />
+                ) : (
+                  <CountBars color={ink.series[7]} empty="No answer was refused in this range." rows={refusalRows(refusalCategories.data, refusalInput, plainLinks)} />
+                )}
+              </Card>
 
-            <ChartCard title="Failovers" subtitle="Attempts that moved to another member" loading={loading} legend={[{ color: ink.series[3], label: 'Failovers', shape: 'line', value: fmtInt(totals.failovers) }]}>
-              <LineChart data={buckets} margin={CHART_MARGIN}>
-                <CartesianGrid vertical={false} stroke={ink.grid} />
-                <XAxis {...axis} />
-                <YAxis tickLine={false} axisLine={false} width={36} allowDecimals={false} />
-                <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Bucket>((p) => [{ color: ink.series[3], label: 'failovers', value: fmtInt(p.failovers) }])} />
-                <Line type="monotone" dataKey="failovers" stroke={ink.series[3]} strokeWidth={2} dot={false} isAnimationActive={false} />
-              </LineChart>
-            </ChartCard>
+              <ChartCard title="Failovers" subtitle="Attempts that moved to another member" loading={loading} legend={[{ color: ink.series[3], label: 'Failovers', shape: 'line', value: fmtInt(totals.failovers) }]}>
+                <LineChart data={buckets} margin={CHART_MARGIN}>
+                  <CartesianGrid vertical={false} stroke={ink.grid} />
+                  <XAxis {...axis} />
+                  <YAxis tickLine={false} axisLine={false} width={36} allowDecimals={false} />
+                  <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Bucket>((p) => [{ color: ink.series[3], label: 'failovers', value: fmtInt(p.failovers) }])} />
+                  <Line type="monotone" dataKey="failovers" stroke={ink.series[3]} strokeWidth={2} dot={false} isAnimationActive={false} />
+                </LineChart>
+              </ChartCard>
 
-            <RewritesCard answer={rewrites.stale ? null : rewrites.data} error={rewrites.error} loading={rewrites.data === null || rewrites.stale} axis={axis} unfiltered={unfiltered} />
+              <RewritesCard answer={rewrites.stale ? null : rewrites.data} error={rewrites.error} loading={rewrites.data === null || rewrites.stale} axis={axis} unfiltered={unfiltered} />
 
-            <SpeedCard points={speedPoints} error={speedError} loading={speedLoading} axis={axis} />
+              <SpeedCard points={speedPoints} error={speedError} loading={speedLoading} axis={axis} />
 
-            <Card title="Effort levels" subtitle="Requests per effort level in range">
-              {sessionId === null && byEffort.error !== null ? (
-                <ErrorState title="Could not load effort levels" body={byEffort.error} />
-              ) : effortLoading ? (
-                <Skeleton height={90} />
-              ) : (
-                <EffortBars groups={effortGroups} color={ink.series[2]} />
-              )}
-            </Card>
-          </div>
-          {/* Below the grid at full width, so the four columns read as the table under it does. */}
-          <GuardrailsCard answer={guardrailCounts.stale ? null : guardrailCounts.data} error={guardrailCounts.error} />
-          <BreakdownTable
-            title={`Traffic by ${groupLabel.toLowerCase()}`}
-            loading={loading}
-            groupLabel={groupLabel}
-            columns={[<span key="requests" title="The refused requests are left out, see the Refused column">Requests</span>, 'OK', 'Rate limited', 'Failed', 'Incomplete', 'Exhausted', 'Rejected', <span key="refused" title={REFUSED_TITLE}>Refused</span>, <span key="rate" title="The refused requests are left out, see the Refused column">Error rate</span>, 'Failovers', 'Search', 'Fetch']}
-            rows={groups.map((g) => ({
-              key: g.key,
-              label: g.label,
-              // Search and Fetch count the server-tool calls the group's answers made, not tokens.
-              cells: [fmtInt(g.requests), fmtInt(g.succeeded), fmtInt(g.rateLimited), fmtInt(g.failed), fmtInt(g.incomplete), fmtInt(g.exhausted), fmtInt(g.rejected), fmtInt(g.refused), rateCell(errorRateOf(g)), fmtInt(g.failovers), fmtInt(g.tokens.webSearch), fmtInt(g.tokens.webFetch)],
-            }))}
-          />
-        </Section>
-      )}
-
-      {tab === 'burn' && (
-        <Section id="burn" shown={shown} title="Burn" meta={`Tokens, spend and plan share over the range${otherFilters ? BURN_UNFILTERED_NOTE : ''}`}>
-          {/* The plan card's figure waits on the chosen week's scale and, where its lines are one account's, on the
-              tiers that pick their category, both carried by `burnReading` with their failure. Spend per minute
-              sizes nothing, so it draws while the settings read is out. */}
-          <BurnCharts
-            account={burnAccount}
-            answer={burn.stale ? null : (burn.data?.answer ?? null)}
-            accounts={burn.stale ? null : (burn.data?.accounts ?? null)}
-            costs={costs}
-            error={burn.error}
-            groupBy={pageBy}
-            loading={burn.data === null || burn.stale}
-            reading={burnReading}
-            onCostReferenceOpenChange={setCostOpen}
-            rangeEndMs={burn.data?.endMs}
-            readAt={burn.data?.readAt}
-            sized={sized}
-            slotOf={slotOf}
-          />
-          <BudgetTable budgets={budgets.data} error={budgets.error} now={now} />
-        </Section>
-      )}
-
-      {tab === 'latency' && (
-        <Section id="latency" shown={shown} title="Latency" meta="Percentiles read from merged per-hour histograms">
-          <div className="stack">
-            {LATENCY_METRICS.map((m) => (
-              <LatencyRow key={m.key} metric={m} series={buckets} totals={totals} loading={loading} axis={axis} />
-            ))}
-          </div>
-          <BreakdownTable
-            title={`Latency by ${groupLabel.toLowerCase()}`}
-            loading={loading}
-            groupLabel={groupLabel}
-            columns={[
-              'Requests',
-              <PctLabel key="a" text="TTFB p50" />,
-              <PctLabel key="b" text="TTFB p99" />,
-              <PctLabel key="c" text="TTFT p99" />,
-              <PctLabel key="d" text="Duration p99" />,
-              <PctLabel key="e" text="tok/s p50" />,
-            ]}
-            rows={groups.map((g) => ({
-              key: g.key,
-              label: g.label,
-              cells: [
-                fmtInt(g.requests),
-                fmtMs(g.percentiles.ttfbMs.p50),
-                fmtMs(g.percentiles.ttfbMs.p99),
-                fmtMs(g.percentiles.ttftMs.p99),
-                fmtMs(g.percentiles.durationMs.p99),
-                g.percentiles.outputTps.p50 === null ? '-' : g.percentiles.outputTps.p50.toFixed(0),
-              ],
-            }))}
-          />
-        </Section>
-      )}
-
-      {tab === 'cache' && (
-        <Section id="cache" shown={shown} title="Cache" meta={loading ? undefined : `${fmtPct(hitRatioOf(totals) ?? 0)} hit ratio, ${fmtInt(totals.expiredBetweenTurns)} expired between turns, ${fmtPct(cachedShareOf(totals) ?? 0)} of input read from cache`}>
-          <div className="grid-2">
-            <ChartCard title="Tokens" subtitle="Per bucket, stacked by kind" loading={loading} legend={TOKEN_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtCompact(totals.tokens[s.key]) }))}>
-              <BarChart data={buckets} margin={CHART_MARGIN} barCategoryGap={2}>
-                <CartesianGrid vertical={false} stroke={ink.grid} />
-                <XAxis {...axis} />
-                <YAxis tickFormatter={(v: number) => fmtCompact(v)} tickLine={false} axisLine={false} width={44} />
-                <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => TOKEN_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtCompact(p.tokens[s.key]) })))} />
-                {TOKEN_SERIES.map((s, i) => (
-                  <Bar key={s.key} dataKey={`tokens.${s.key}`} stackId="a" fill={ink.series[s.slot]} stroke={ink.surface} strokeWidth={1} maxBarSize={22} radius={i === TOKEN_SERIES.length - 1 ? [3, 3, 0, 0] : 0} isAnimationActive={false} />
-                ))}
-              </BarChart>
-            </ChartCard>
-
-            <ChartCard
-              title="Hit ratio and cached share"
-              subtitle="Share of requests that read the cache, and share of input tokens served from it"
+              <Card title="Effort levels" subtitle="Requests per effort level in range">
+                {sessionId === null && byEffort.error !== null ? (
+                  <ErrorState title="Could not load effort levels" body={byEffort.error} />
+                ) : effortLoading ? (
+                  <Skeleton height={90} />
+                ) : (
+                  <EffortBars groups={effortGroups} color={ink.series[2]} />
+                )}
+              </Card>
+            </div>
+            {/* Below the grid at full width, so the four columns read as the table under it does. */}
+            <GuardrailsCard answer={guardrailCounts.stale ? null : guardrailCounts.data} error={guardrailCounts.error} />
+            <BreakdownTable
+              title={`Traffic by ${groupLabel.toLowerCase()}`}
               loading={loading}
-              legend={[
-                { color: ink.series[0], label: 'Cache hit ratio', shape: 'line', value: fmtPct(hitRatioOf(totals) ?? 0) },
-                { color: ink.series[2], label: 'Cached share of input', shape: 'line', value: fmtPct(cachedShareOf(totals) ?? 0) },
+              groupLabel={groupLabel}
+              columns={[<span key="requests" title="The refused requests are left out, see the Refused column">Requests</span>, 'OK', 'Rate limited', 'Failed', 'Incomplete', 'Exhausted', 'Rejected', <span key="refused" title={REFUSED_TITLE}>Refused</span>, <span key="rate" title="The refused requests are left out, see the Refused column">Error rate</span>, 'Failovers', 'Search', 'Fetch']}
+              rows={groups.map((g) => ({
+                key: g.key,
+                label: g.label,
+                // Search and Fetch count the server-tool calls the group's answers made, not tokens.
+                cells: [fmtInt(g.requests), fmtInt(g.succeeded), fmtInt(g.rateLimited), fmtInt(g.failed), fmtInt(g.incomplete), fmtInt(g.exhausted), fmtInt(g.rejected), fmtInt(g.refused), rateCell(errorRateOf(g)), fmtInt(g.failovers), fmtInt(g.tokens.webSearch), fmtInt(g.tokens.webFetch)],
+              }))}
+            />
+          </Section>
+        )}
+
+        {tab === 'burn' && (
+          <Section id="burn" shown={shown} title="Burn" meta={`Tokens, spend and plan share over the range${otherFilters ? BURN_UNFILTERED_NOTE : ''}`}>
+            {/* The plan card's figure waits on the chosen week's scale and, where its lines are one account's, on the
+                tiers that pick their category, both carried by `burnReading` with their failure. Spend per minute
+                sizes nothing, so it draws while the settings read is out. */}
+            <BurnCharts
+              account={burnAccount}
+              answer={burn.stale ? null : (burn.data?.answer ?? null)}
+              accounts={burn.stale ? null : (burn.data?.accounts ?? null)}
+              costs={costs}
+              error={burn.error}
+              groupBy={pageBy}
+              loading={burn.data === null || burn.stale}
+              reading={burnReading}
+              rangeEndMs={burn.data?.endMs}
+              readAt={burn.data?.readAt}
+              sized={sized}
+              slotOf={slotOf}
+            />
+            <BudgetTable budgets={budgets.data} error={budgets.error} now={now} />
+          </Section>
+        )}
+
+        {tab === 'latency' && (
+          <Section id="latency" shown={shown} title="Latency" meta="Percentiles read from merged per-hour histograms">
+            <div className="stack">
+              {LATENCY_METRICS.map((m) => (
+                <LatencyRow key={m.key} metric={m} series={buckets} totals={totals} loading={loading} axis={axis} />
+              ))}
+            </div>
+            <BreakdownTable
+              title={`Latency by ${groupLabel.toLowerCase()}`}
+              loading={loading}
+              groupLabel={groupLabel}
+              columns={[
+                'Requests',
+                <PctLabel key="a" text="TTFB p50" />,
+                <PctLabel key="b" text="TTFB p99" />,
+                <PctLabel key="c" text="TTFT p99" />,
+                <PctLabel key="d" text="Duration p99" />,
+                <PctLabel key="e" text="tok/s p50" />,
               ]}
-            >
-              <LineChart data={buckets.map((b) => ({ ...b, hitRatio: pct100(hitRatioOf(b)), cachedShare: pct100(cachedShareOf(b)) }))} margin={CHART_MARGIN}>
-                <CartesianGrid vertical={false} stroke={ink.grid} />
-                <XAxis {...axis} />
-                <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tickFormatter={(v: number) => `${v}%`} tickLine={false} axisLine={false} width={40} />
-                <Tooltip
-                  cursor={{ stroke: ink.axis }}
-                  content={timeTip<Bucket & { cachedShare: number | null; hitRatio: number | null }>((p) => [
-                    { color: ink.series[0], label: 'cache hit ratio', value: pct(p.hitRatio) },
-                    { color: ink.series[2], label: 'cached share of input', value: pct(p.cachedShare) },
-                  ])}
-                />
-                <Line type="monotone" dataKey="hitRatio" stroke={ink.series[0]} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
-                <Line type="monotone" dataKey="cachedShare" stroke={ink.series[2]} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
-              </LineChart>
-            </ChartCard>
-
-            <ChartCard
-              title="Write cost vs read cost"
-              subtitle={
-                cacheEquivalent
-                  ? `Share of the chosen week per bucket spent writing the cache and reading it back by the subscription requests${cacheSides.billed === undefined ? '' : `, the billed requests ${usdOrDash(costTotals.billed.cacheWrite)} writing and ${usdOrDash(costTotals.billed.cacheRead)} reading`}`
-                  : `USD per bucket spent writing the cache and reading it back, ${UNIT_SPLIT[unit === 'native' ? 'usd' : dollars]}`
-              }
-              loading={cacheEquivalent ? figureLoading : costLoading}
-              failure={cacheEquivalent ? figureFailure : failed(costError)}
-              legend={
-                cacheScale !== null
-                  ? [
-                      { color: ink.series[3], label: 'Write cost', value: equivalentOrDash(cacheFigure?.write, week, cacheScale) },
-                      { color: ink.series[2], label: 'Read cost', value: equivalentOrDash(cacheFigure?.read, week, cacheScale) },
-                    ]
-                  : [
-                      { color: ink.series[3], label: 'Write cost', value: usdOrDash(costTotals[cacheDollars].cacheWrite) },
-                      { color: ink.series[2], label: 'Read cost', value: usdOrDash(costTotals[cacheDollars].cacheRead) },
-                    ]
-              }
-            >
-              {/* The bars draw the Pro-week figure, so the axis and the tooltip read it in the chosen week. */}
-              {cacheScale !== null ? (
-                <BarChart data={costBuckets} margin={CHART_MARGIN} barCategoryGap={4} barGap={2}>
-                  <CartesianGrid vertical={false} stroke={ink.grid} />
-                  <XAxis {...axis} />
-                  <YAxis tickFormatter={(v: number) => fmtShare(v * cacheScale)} tickLine={false} axisLine={false} width={60} />
-                  <Tooltip
-                    cursor={{ fill: ink.grid, opacity: 0.6 }}
-                    content={timeTip<Bucket>((p) => [
-                      { color: ink.series[3], label: 'write cost', value: equivalentOrDash(p.cacheEquivalent?.write, week, cacheScale) },
-                      { color: ink.series[2], label: 'read cost', value: equivalentOrDash(p.cacheEquivalent?.read, week, cacheScale) },
-                    ])}
-                  />
-                  <Bar dataKey="cacheEquivalent.write" fill={ink.series[3]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />
-                  <Bar dataKey="cacheEquivalent.read" fill={ink.series[2]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />
-                </BarChart>
-              ) : (
-                <BarChart data={costBuckets} margin={CHART_MARGIN} barCategoryGap={4} barGap={2}>
-                  <CartesianGrid vertical={false} stroke={ink.grid} />
-                  <XAxis {...axis} />
-                  <YAxis {...usdAxis(costBuckets.flatMap((b) => [b[cacheDollars].cacheWrite ?? 0, b[cacheDollars].cacheRead ?? 0]))} tickLine={false} axisLine={false} />
-                  <Tooltip
-                    cursor={{ fill: ink.grid, opacity: 0.6 }}
-                    content={timeTip<Bucket>((p) => [
-                      { color: ink.series[3], label: 'write cost', value: cacheSplit === null ? '-' : usdOrDash(p[cacheDollars].cacheWrite) },
-                      { color: ink.series[2], label: 'read cost', value: cacheSplit === null ? '-' : usdOrDash(p[cacheDollars].cacheRead) },
-                    ])}
-                  />
-                  {cacheSplit !== null && <Bar dataKey={`${cacheDollars}.cacheWrite`} fill={ink.series[3]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
-                  {cacheSplit !== null && <Bar dataKey={`${cacheDollars}.cacheRead`} fill={ink.series[2]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
-                </BarChart>
-              )}
-            </ChartCard>
-
-            <Card title="Misses by reason" subtitle={MISS_REASON_BLURB}>
-              {loading ? <Skeleton height={190} /> : <ReasonBars link={linkInput} plainLinks={plainLinks} totals={totals} />}
-            </Card>
-          </div>
-          <MissReasonsByGroup groupBy={groupBy} groups={groups} groupLabel={groupLabel} link={linkInput} loading={loading} plainLinks={plainLinks} />
-          {sessionId === null && (
-            <CacheByModel
-              groups={byModel.stale ? [] : (byModel.data ?? [])}
-              funded={fundedModels}
-              failure={failed(modelError) ?? (weekWait ? reading.failure : null)}
-              loading={byModel.data === null || byModel.stale || (funded && (byModelFunded.data === null || byModelFunded.stale)) || weekWait}
-              reading={reading}
-              unit={unit}
-            />
-          )}
-          {/* The route reads no session, so a session view has no placements of its own to show. */}
-          {sessionId === null && (
-            <PlacementTable
-              error={placements.error}
-              rows={placements.stale ? null : placements.data}
-              unfiltered={filters.accountId.length > 0 || filters.model.length > 0 || patterns.userAgents.length > 0 || patterns.clients.length > 0}
-            />
-          )}
-        </Section>
-      )}
-
-      {tab === 'cost' && (
-        <Section id="cost" shown={shown} title="Cost" meta={figureLoading || figureFailure !== null || costHead === null ? undefined : costHead.meta} metaTitle={costHead?.unpriced ? UNPRICED_TITLE : undefined}>
-          <div className="tiles-row">
-            <Tile label={costHead?.tile.label ?? 'Cost'} value={figureLoading || costHead === null ? null : figuresValue(costHead.tile.figures)} note={costHead?.tile.note ?? NATIVE_SUBSET} title={costHead?.unpriced ? UNPRICED_TITLE : unit === 'native' ? (tileHint ?? undefined) : undefined} failure={figureFailure} />
-            {unit === 'native' ? (
-              <>
-                <Tile label="Cost per request" value={figureLoading || nativeRatios === null ? null : figuresValue(nativeRatios.perRequest.figures)} note={nativeRatios === null ? null : nativeRatios.perRequest.note} failure={figureFailure} />
-                <Tile label="Cost per 1k output tokens" value={figureLoading || nativeRatios === null ? null : figuresValue(nativeRatios.perThousand.figures)} note={nativeRatios === null ? null : nativeRatios.perThousand.note} failure={figureFailure} />
-              </>
-            ) : (
-              <>
-                <Tile label="Cost per request" value={costLoading ? null : fmtUsd(costTotals.requests ? costTotals.costUsd / costTotals.requests : 0)} note={`${fmtInt(costTotals.requests)} requests`} failure={failed(costError)} />
-                <Tile label="Cost per 1k output tokens" value={costLoading ? null : fmtUsd(costTotals.tokens.output ? (costTotals.costUsd / costTotals.tokens.output) * 1000 : 0)} note={`${fmtCompact(costTotals.tokens.output)} output tokens`} failure={failed(costError)} />
-              </>
-            )}
-            <Tile label="Fast mode spend" value={speedError !== null ? '-' : speedLoading ? null : fmtUsd(fastSpend)} note="usage credits, at the fast cells" />
-          </div>
-          <div className="grid-2">
-            <CostByGroup points={costPoints} groupBy={groupBy} groupSlot={groupSlot} loading={figureLoading} failure={figureFailure} axis={axis} reading={reading} unit={unit} />
-            {/* Native draws a ring per funding, each in its own unit. */}
-            <Card title="Cost split" subtitle={unit === 'native' ? NATIVE_SPLIT_NOTE : `By token kind, in dollars at the API price list, ${UNIT_SPLIT[dollars]}`}>
-              {/* The request summary carries one total and no split, so a session view has nothing to draw here. */}
-              {sessionId !== null ? (
-                <p className="muted">{SESSION_COST_NOTE}</p>
-              ) : figureFailure !== null ? (
-                <ErrorState title={failureHead(figureFailure, 'cost split')} body={figureFailure.text} />
-              ) : figureLoading ? (
-                <Skeleton height={148} />
-              ) : unit === 'native' ? (
-                scale === null ? <Skeleton height={148} /> : <NativeSplit totals={costTotals} week={week} weekFactor={scale} />
-              ) : costSplit === null ? (
-                <Skeleton height={148} />
-              ) : (
-                <CostDonut cost={costSplit} />
-              )}
-            </Card>
-          </div>
-          {sessionId === null && unit === 'native' && (
-            <BreakdownTable
-              className="native-cost-table"
-              title={`Cost by ${groupLabel.toLowerCase()}`}
-              subtitle={`Totals for the selected range and filters, ${NATIVE_SUBSET}`}
-              failure={figureFailure}
-              loading={figureLoading}
-              groupLabel={groupLabel}
-              columns={NATIVE_COLUMNS}
-              rows={scale === null ? [] : costGroups.map((g) => nativeRowOf(g, week, scale, rowHint(g)))}
-            />
-          )}
-          {sessionId === null && unit !== 'native' && (
-            <BreakdownTable
-              title={`Cost by ${groupLabel.toLowerCase()}`}
-              subtitle={`Totals for the selected range and filters, ${costHead?.subset ?? ''}`}
-              failure={failed(costError)}
-              loading={costLoading}
-              groupLabel={groupLabel}
-              columns={['Requests', 'Cost', 'Input', 'Cache read', 'Cache write', 'Output', 'Per request', 'Per 1k output']}
-              rows={costGroups.map((g) => ({
+              rows={groups.map((g) => ({
                 key: g.key,
                 label: g.label,
                 cells: [
                   fmtInt(g.requests),
-                  fmtUsd(g.costUsd),
-                  fmtUsd(g.cost.input),
-                  usdOrDash(g.cost.cacheRead),
-                  usdOrDash(g.cost.cacheWrite),
-                  fmtUsd(g.cost.output),
-                  fmtUsd(g.requests ? g.costUsd / g.requests : 0),
-                  fmtUsd(g.tokens.output ? (g.costUsd / g.tokens.output) * 1000 : 0),
+                  fmtMs(g.percentiles.ttfbMs.p50),
+                  fmtMs(g.percentiles.ttfbMs.p99),
+                  fmtMs(g.percentiles.ttftMs.p99),
+                  fmtMs(g.percentiles.durationMs.p99),
+                  g.percentiles.outputTps.p50 === null ? '-' : g.percentiles.outputTps.p50.toFixed(0),
                 ],
               }))}
             />
-          )}
-        </Section>
-      )}
+          </Section>
+        )}
 
-      {tab === 'cache-warming' && (
-        <Section id="cache-warming" shown={shown} title="Cache warming" meta={sessionId === null ? 'Probe rows are always counted here, whatever the toggle above says' : SESSION_SOURCE_NOTE}>
-          <div className="tiles-row">
-            <Tile label="Probe cost" value={probeTile.value} note={probeTile.note} failure={figureFailure} />
-            <Tile label="Saved by probes" value={savingTile.value} note={savingTile.note} failure={figureFailure} />
-            <Tile label="Net saving" value={netTile.value} note={netTile.note} tone={netTile.critical ? 'critical' : undefined} failure={figureFailure} />
-            <Tile label="Kept warm" value={loading ? null : keptWarm === null ? '-' : fmtInt(keptWarm.requests)} note={keptWarm === null ? UNAVAILABLE_NOTE : keptWarmNote(keptWarm)} />
-          </div>
-          <div className="grid-2 warming-grid">
-            <ChartCard title="Probes by outcome" subtitle="Per bucket, stacked" loading={loading} legend={PROBE_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, title: s.hint, value: probesUnmeasured ? '-' : fmtInt(totals.probes[s.key]) }))}>
-              <BarChart data={buckets} margin={CHART_MARGIN} barCategoryGap={2}>
-                <CartesianGrid vertical={false} stroke={ink.grid} />
-                <XAxis {...axis} />
-                <YAxis tickLine={false} axisLine={false} width={36} allowDecimals={false} />
-                <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => PROBE_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, title: s.hint, value: probesUnmeasured ? '-' : fmtInt(p.probes[s.key]) })))} />
-                {!probesUnmeasured &&
-                  PROBE_SERIES.map((s, i) => (
-                    <Bar key={s.key} dataKey={`probes.${s.key}`} stackId="a" fill={ink.series[s.slot]} stroke={ink.surface} strokeWidth={1} maxBarSize={22} radius={i === PROBE_SERIES.length - 1 ? [3, 3, 0, 0] : 0} isAnimationActive={false} />
+        {tab === 'cache' && (
+          <Section id="cache" shown={shown} title="Cache" meta={loading ? undefined : `${fmtPct(hitRatioOf(totals) ?? 0)} hit ratio, ${fmtInt(totals.expiredBetweenTurns)} expired between turns, ${fmtPct(cachedShareOf(totals) ?? 0)} of input read from cache`}>
+            <div className="grid-2">
+              <ChartCard title="Tokens" subtitle="Per bucket, stacked by kind" loading={loading} legend={TOKEN_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtCompact(totals.tokens[s.key]) }))}>
+                <BarChart data={buckets} margin={CHART_MARGIN} barCategoryGap={2}>
+                  <CartesianGrid vertical={false} stroke={ink.grid} />
+                  <XAxis {...axis} />
+                  <YAxis tickFormatter={(v: number) => fmtCompact(v)} tickLine={false} axisLine={false} width={44} />
+                  <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => TOKEN_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtCompact(p.tokens[s.key]) })))} />
+                  {TOKEN_SERIES.map((s, i) => (
+                    <Bar key={s.key} dataKey={`tokens.${s.key}`} stackId="a" fill={ink.series[s.slot]} stroke={ink.surface} strokeWidth={1} maxBarSize={22} radius={i === TOKEN_SERIES.length - 1 ? [3, 3, 0, 0] : 0} isAnimationActive={false} />
                   ))}
-              </BarChart>
-            </ChartCard>
+                </BarChart>
+              </ChartCard>
 
-            <Card title="Wasted probes" subtitle={`${WASTED_PROBE_BLURB} ${WASTED_PROBE_UNIT[unit]}`}>
-              {figureFailure !== null ? (
-                <ErrorState title={failureHead(figureFailure, 'wasted probes')} body={figureFailure.text} />
-              ) : figureLoading ? (
-                <Skeleton height={190} />
-              ) : probesUnmeasured ? (
-                <p className="muted">{WARMING_UNAVAILABLE}</p>
+              <ChartCard
+                title="Hit ratio and cached share"
+                subtitle="Share of requests that read the cache, and share of input tokens served from it"
+                loading={loading}
+                legend={[
+                  { color: ink.series[0], label: 'Cache hit ratio', shape: 'line', value: fmtPct(hitRatioOf(totals) ?? 0) },
+                  { color: ink.series[2], label: 'Cached share of input', shape: 'line', value: fmtPct(cachedShareOf(totals) ?? 0) },
+                ]}
+              >
+                <LineChart data={buckets.map((b) => ({ ...b, hitRatio: pct100(hitRatioOf(b)), cachedShare: pct100(cachedShareOf(b)) }))} margin={CHART_MARGIN}>
+                  <CartesianGrid vertical={false} stroke={ink.grid} />
+                  <XAxis {...axis} />
+                  <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tickFormatter={(v: number) => `${v}%`} tickLine={false} axisLine={false} width={40} />
+                  <Tooltip
+                    cursor={{ stroke: ink.axis }}
+                    content={timeTip<Bucket & { cachedShare: number | null; hitRatio: number | null }>((p) => [
+                      { color: ink.series[0], label: 'cache hit ratio', value: pct(p.hitRatio) },
+                      { color: ink.series[2], label: 'cached share of input', value: pct(p.cachedShare) },
+                    ])}
+                  />
+                  <Line type="monotone" dataKey="hitRatio" stroke={ink.series[0]} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+                  <Line type="monotone" dataKey="cachedShare" stroke={ink.series[2]} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+                </LineChart>
+              </ChartCard>
+
+              <ChartCard
+                title="Write cost vs read cost"
+                subtitle={
+                  cacheEquivalent
+                    ? `Share of the chosen week per bucket spent writing the cache and reading it back by the subscription requests${cacheSides.billed === undefined ? '' : `, the billed requests ${usdOrDash(costTotals.billed.cacheWrite)} writing and ${usdOrDash(costTotals.billed.cacheRead)} reading`}`
+                    : `USD per bucket spent writing the cache and reading it back, ${UNIT_SPLIT[unit === 'native' ? 'usd' : dollars]}`
+                }
+                loading={cacheEquivalent ? figureLoading : costLoading}
+                failure={cacheEquivalent ? figureFailure : failed(costError)}
+                legend={
+                  cacheScale !== null
+                    ? [
+                        { color: ink.series[3], label: 'Write cost', value: equivalentOrDash(cacheFigure?.write, week, cacheScale) },
+                        { color: ink.series[2], label: 'Read cost', value: equivalentOrDash(cacheFigure?.read, week, cacheScale) },
+                      ]
+                    : [
+                        { color: ink.series[3], label: 'Write cost', value: usdOrDash(costTotals[cacheDollars].cacheWrite) },
+                        { color: ink.series[2], label: 'Read cost', value: usdOrDash(costTotals[cacheDollars].cacheRead) },
+                      ]
+                }
+              >
+                {/* The bars draw the Pro-week figure, so the axis and the tooltip read it in the chosen week. */}
+                {cacheScale !== null ? (
+                  <BarChart data={costBuckets} margin={CHART_MARGIN} barCategoryGap={4} barGap={2}>
+                    <CartesianGrid vertical={false} stroke={ink.grid} />
+                    <XAxis {...axis} />
+                    <YAxis tickFormatter={(v: number) => fmtShare(v * cacheScale)} tickLine={false} axisLine={false} width={60} />
+                    <Tooltip
+                      cursor={{ fill: ink.grid, opacity: 0.6 }}
+                      content={timeTip<Bucket>((p) => [
+                        { color: ink.series[3], label: 'write cost', value: equivalentOrDash(p.cacheEquivalent?.write, week, cacheScale) },
+                        { color: ink.series[2], label: 'read cost', value: equivalentOrDash(p.cacheEquivalent?.read, week, cacheScale) },
+                      ])}
+                    />
+                    <Bar dataKey="cacheEquivalent.write" fill={ink.series[3]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />
+                    <Bar dataKey="cacheEquivalent.read" fill={ink.series[2]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />
+                  </BarChart>
+                ) : (
+                  <BarChart data={costBuckets} margin={CHART_MARGIN} barCategoryGap={4} barGap={2}>
+                    <CartesianGrid vertical={false} stroke={ink.grid} />
+                    <XAxis {...axis} />
+                    <YAxis {...usdAxis(costBuckets.flatMap((b) => [b[cacheDollars].cacheWrite ?? 0, b[cacheDollars].cacheRead ?? 0]))} tickLine={false} axisLine={false} />
+                    <Tooltip
+                      cursor={{ fill: ink.grid, opacity: 0.6 }}
+                      content={timeTip<Bucket>((p) => [
+                        { color: ink.series[3], label: 'write cost', value: cacheSplit === null ? '-' : usdOrDash(p[cacheDollars].cacheWrite) },
+                        { color: ink.series[2], label: 'read cost', value: cacheSplit === null ? '-' : usdOrDash(p[cacheDollars].cacheRead) },
+                      ])}
+                    />
+                    {cacheSplit !== null && <Bar dataKey={`${cacheDollars}.cacheWrite`} fill={ink.series[3]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
+                    {cacheSplit !== null && <Bar dataKey={`${cacheDollars}.cacheRead`} fill={ink.series[2]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
+                  </BarChart>
+                )}
+              </ChartCard>
+
+              <Card title="Misses by reason" subtitle={MISS_REASON_BLURB}>
+                {loading ? <Skeleton height={190} /> : <ReasonBars link={linkInput} plainLinks={plainLinks} totals={totals} />}
+              </Card>
+            </div>
+            <MissReasonsByGroup groupBy={groupBy} groups={groups} groupLabel={groupLabel} link={linkInput} loading={loading} plainLinks={plainLinks} />
+            {sessionId === null && (
+              <CacheByModel
+                groups={byModel.stale ? [] : (byModel.data ?? [])}
+                funded={fundedModels}
+                failure={failed(modelError) ?? (weekWait ? reading.failure : null)}
+                loading={byModel.data === null || byModel.stale || (funded && (byModelFunded.data === null || byModelFunded.stale)) || weekWait}
+                reading={reading}
+                unit={unit}
+              />
+            )}
+            {/* The route reads no session, so a session view has no placements of its own to show. */}
+            {sessionId === null && (
+              <PlacementTable
+                error={placements.error}
+                rows={placements.stale ? null : placements.data}
+                unfiltered={filters.accountId.length > 0 || filters.model.length > 0 || patterns.userAgents.length > 0 || patterns.clients.length > 0}
+              />
+            )}
+          </Section>
+        )}
+
+        {tab === 'cost' && (
+          <Section id="cost" shown={shown} title="Cost" meta={figureLoading || figureFailure !== null || costHead === null ? undefined : costHead.meta} metaTitle={costHead?.unpriced ? UNPRICED_TITLE : undefined}>
+            <div className="tiles-row">
+              <Tile label={costHead?.tile.label ?? 'Cost'} value={figureLoading || costHead === null ? null : figuresValue(costHead.tile.figures)} note={costHead?.tile.note ?? NATIVE_SUBSET} title={costHead?.unpriced ? UNPRICED_TITLE : unit === 'native' ? (tileHint ?? undefined) : undefined} failure={figureFailure} />
+              {unit === 'native' ? (
+                <>
+                  <Tile label="Cost per request" value={figureLoading || nativeRatios === null ? null : figuresValue(nativeRatios.perRequest.figures)} note={nativeRatios === null ? null : nativeRatios.perRequest.note} failure={figureFailure} />
+                  <Tile label="Cost per 1k output tokens" value={figureLoading || nativeRatios === null ? null : figuresValue(nativeRatios.perThousand.figures)} note={nativeRatios === null ? null : nativeRatios.perThousand.note} failure={figureFailure} />
+                </>
               ) : (
-                <WastedProbes group={costTotals} probes={probesOf(costTotals)} unit={unit} billed={billedTotals} reading={reading} />
+                <>
+                  <Tile label="Cost per request" value={costLoading ? null : fmtUsd(costTotals.requests ? costTotals.costUsd / costTotals.requests : 0)} note={`${fmtInt(costTotals.requests)} requests`} failure={failed(costError)} />
+                  <Tile label="Cost per 1k output tokens" value={costLoading ? null : fmtUsd(costTotals.tokens.output ? (costTotals.costUsd / costTotals.tokens.output) * 1000 : 0)} note={`${fmtCompact(costTotals.tokens.output)} output tokens`} failure={failed(costError)} />
+                </>
               )}
-            </Card>
+              <Tile label="Fast mode spend" value={speedError !== null ? '-' : speedLoading ? null : fmtUsd(fastSpend)} note="usage credits, at the fast cells" />
+            </div>
+            <div className="grid-2">
+              <CostByGroup points={costPoints} groupBy={groupBy} groupSlot={groupSlot} loading={figureLoading} failure={figureFailure} axis={axis} reading={reading} unit={unit} />
+              {/* Native draws a ring per funding, each in its own unit. */}
+              <Card title="Cost split" subtitle={unit === 'native' ? NATIVE_SPLIT_NOTE : `By token kind, in dollars at the API price list, ${UNIT_SPLIT[dollars]}`}>
+                {/* The request summary carries one total and no split, so a session view has nothing to draw here. */}
+                {sessionId !== null ? (
+                  <p className="muted">{SESSION_COST_NOTE}</p>
+                ) : figureFailure !== null ? (
+                  <ErrorState title={failureHead(figureFailure, 'cost split')} body={figureFailure.text} />
+                ) : figureLoading ? (
+                  <Skeleton height={148} />
+                ) : unit === 'native' ? (
+                  scale === null ? <Skeleton height={148} /> : <NativeSplit totals={costTotals} week={week} weekFactor={scale} />
+                ) : costSplit === null ? (
+                  <Skeleton height={148} />
+                ) : (
+                  <CostDonut cost={costSplit} />
+                )}
+              </Card>
+            </div>
+            {sessionId === null && unit === 'native' && (
+              <BreakdownTable
+                className="native-cost-table"
+                title={`Cost by ${groupLabel.toLowerCase()}`}
+                subtitle={`Totals for the selected range and filters, ${NATIVE_SUBSET}`}
+                failure={figureFailure}
+                loading={figureLoading}
+                groupLabel={groupLabel}
+                columns={NATIVE_COLUMNS}
+                rows={scale === null ? [] : costGroups.map((g) => nativeRowOf(g, week, scale, rowHint(g)))}
+              />
+            )}
+            {sessionId === null && unit !== 'native' && (
+              <BreakdownTable
+                title={`Cost by ${groupLabel.toLowerCase()}`}
+                subtitle={`Totals for the selected range and filters, ${costHead?.subset ?? ''}`}
+                failure={failed(costError)}
+                loading={costLoading}
+                groupLabel={groupLabel}
+                columns={['Requests', 'Cost', 'Input', 'Cache read', 'Cache write', 'Output', 'Per request', 'Per 1k output']}
+                rows={costGroups.map((g) => ({
+                  key: g.key,
+                  label: g.label,
+                  cells: [
+                    fmtInt(g.requests),
+                    fmtUsd(g.costUsd),
+                    fmtUsd(g.cost.input),
+                    usdOrDash(g.cost.cacheRead),
+                    usdOrDash(g.cost.cacheWrite),
+                    fmtUsd(g.cost.output),
+                    fmtUsd(g.requests ? g.costUsd / g.requests : 0),
+                    fmtUsd(g.tokens.output ? (g.costUsd / g.tokens.output) * 1000 : 0),
+                  ],
+                }))}
+              />
+            )}
+          </Section>
+        )}
 
-            <SavingChart
-              axis={axis}
-              billed={billedWarmingPoints}
-              failure={failed(warmingError) ?? (weekWait ? reading.failure : null)}
-              loading={(sessionId === null ? warmingLoading : loading) || weekWait}
-              points={sessionId === null ? warmingPoints : points}
+        {tab === 'cache-warming' && (
+          <Section id="cache-warming" shown={shown} title="Cache warming" meta={sessionId === null ? 'Probe rows are always counted here, whatever the toggle above says' : SESSION_SOURCE_NOTE}>
+            <div className="tiles-row">
+              <Tile label="Probe cost" value={probeTile.value} note={probeTile.note} failure={figureFailure} />
+              <Tile label="Saved by probes" value={savingTile.value} note={savingTile.note} failure={figureFailure} />
+              <Tile label="Net saving" value={netTile.value} note={netTile.note} tone={netTile.critical ? 'critical' : undefined} failure={figureFailure} />
+              <Tile label="Kept warm" value={loading ? null : keptWarm === null ? '-' : fmtInt(keptWarm.requests)} note={keptWarm === null ? UNAVAILABLE_NOTE : keptWarmNote(keptWarm)} />
+            </div>
+            <div className="grid-2 warming-grid">
+              <ChartCard title="Probes by outcome" subtitle="Per bucket, stacked" loading={loading} legend={PROBE_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, title: s.hint, value: probesUnmeasured ? '-' : fmtInt(totals.probes[s.key]) }))}>
+                <BarChart data={buckets} margin={CHART_MARGIN} barCategoryGap={2}>
+                  <CartesianGrid vertical={false} stroke={ink.grid} />
+                  <XAxis {...axis} />
+                  <YAxis tickLine={false} axisLine={false} width={36} allowDecimals={false} />
+                  <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => PROBE_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, title: s.hint, value: probesUnmeasured ? '-' : fmtInt(p.probes[s.key]) })))} />
+                  {!probesUnmeasured &&
+                    PROBE_SERIES.map((s, i) => (
+                      <Bar key={s.key} dataKey={`probes.${s.key}`} stackId="a" fill={ink.series[s.slot]} stroke={ink.surface} strokeWidth={1} maxBarSize={22} radius={i === PROBE_SERIES.length - 1 ? [3, 3, 0, 0] : 0} isAnimationActive={false} />
+                    ))}
+                </BarChart>
+              </ChartCard>
+
+              <Card title="Wasted probes" subtitle={`${WASTED_PROBE_BLURB} ${WASTED_PROBE_UNIT[unit]}`}>
+                {figureFailure !== null ? (
+                  <ErrorState title={failureHead(figureFailure, 'wasted probes')} body={figureFailure.text} />
+                ) : figureLoading ? (
+                  <Skeleton height={190} />
+                ) : probesUnmeasured ? (
+                  <p className="muted">{WARMING_UNAVAILABLE}</p>
+                ) : (
+                  <WastedProbes group={costTotals} probes={probesOf(costTotals)} unit={unit} billed={billedTotals} reading={reading} />
+                )}
+              </Card>
+
+              <SavingChart
+                axis={axis}
+                billed={billedWarmingPoints}
+                failure={failed(warmingError) ?? (weekWait ? reading.failure : null)}
+                loading={(sessionId === null ? warmingLoading : loading) || weekWait}
+                points={sessionId === null ? warmingPoints : points}
+                reading={reading}
+                session={sessionId !== null}
+                unit={unit}
+              />
+
+              <ChartCard title="Kept-warm requests" subtitle="Requests whose cache read followed a probe" loading={loading} legend={[{ color: ink.series[0], label: 'Kept-warm requests', value: keptWarm === null ? '-' : fmtInt(keptWarm.requests) }]}>
+                <BarChart data={buckets} margin={CHART_MARGIN} barCategoryGap={2}>
+                  <CartesianGrid vertical={false} stroke={ink.grid} />
+                  <XAxis {...axis} />
+                  <YAxis tickLine={false} axisLine={false} width={36} allowDecimals={false} />
+                  <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => [{ color: ink.series[0], label: 'kept-warm requests', value: keptWarm === null || p.keptWarm === null ? '-' : fmtInt(p.keptWarm.requests) }])} />
+                  {keptWarm !== null && <Bar dataKey="keptWarm.requests" fill={ink.series[0]} maxBarSize={22} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
+                </BarChart>
+              </ChartCard>
+
+              <ChartCard title="Kept-warm tokens" subtitle="Cache-read tokens on those requests" loading={loading} legend={[{ color: ink.series[2], label: 'Kept-warm tokens', value: keptWarm === null ? '-' : fmtCompact(keptWarmTokens(keptWarm)) }]}>
+                <BarChart data={buckets} margin={CHART_MARGIN} barCategoryGap={2}>
+                  <CartesianGrid vertical={false} stroke={ink.grid} />
+                  <XAxis {...axis} />
+                  <YAxis tickFormatter={(v: number) => fmtCompact(v)} tickLine={false} axisLine={false} width={44} />
+                  <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => [{ color: ink.series[2], label: 'kept-warm tokens', value: keptWarm === null || p.keptWarm === null ? '-' : fmtCompact(keptWarmTokens(p.keptWarm)) }])} />
+                  {keptWarm !== null && <Bar dataKey={(p: Bucket) => (p.keptWarm === null ? null : keptWarmTokens(p.keptWarm))} fill={ink.series[2]} maxBarSize={22} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
+                </BarChart>
+              </ChartCard>
+            </div>
+            <KeepaliveByPool
+              groups={poolGroups}
+              funded={fundedPools}
+              failure={failed(poolError) ?? (weekWait ? reading.failure : null)}
+              loading={(sessionId === null ? byPool.data === null || byPool.stale || (poolFunding !== undefined && (fundedByPool.data === null || fundedByPool.stale)) : loading) || weekWait}
               reading={reading}
-              session={sessionId !== null}
               unit={unit}
             />
+          </Section>
+        )}
 
-            <ChartCard title="Kept-warm requests" subtitle="Requests whose cache read followed a probe" loading={loading} legend={[{ color: ink.series[0], label: 'Kept-warm requests', value: keptWarm === null ? '-' : fmtInt(keptWarm.requests) }]}>
-              <BarChart data={buckets} margin={CHART_MARGIN} barCategoryGap={2}>
-                <CartesianGrid vertical={false} stroke={ink.grid} />
-                <XAxis {...axis} />
-                <YAxis tickLine={false} axisLine={false} width={36} allowDecimals={false} />
-                <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => [{ color: ink.series[0], label: 'kept-warm requests', value: keptWarm === null || p.keptWarm === null ? '-' : fmtInt(p.keptWarm.requests) }])} />
-                {keptWarm !== null && <Bar dataKey="keptWarm.requests" fill={ink.series[0]} maxBarSize={22} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
-              </BarChart>
-            </ChartCard>
-
-            <ChartCard title="Kept-warm tokens" subtitle="Cache-read tokens on those requests" loading={loading} legend={[{ color: ink.series[2], label: 'Kept-warm tokens', value: keptWarm === null ? '-' : fmtCompact(keptWarmTokens(keptWarm)) }]}>
-              <BarChart data={buckets} margin={CHART_MARGIN} barCategoryGap={2}>
-                <CartesianGrid vertical={false} stroke={ink.grid} />
-                <XAxis {...axis} />
-                <YAxis tickFormatter={(v: number) => fmtCompact(v)} tickLine={false} axisLine={false} width={44} />
-                <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => [{ color: ink.series[2], label: 'kept-warm tokens', value: keptWarm === null || p.keptWarm === null ? '-' : fmtCompact(keptWarmTokens(p.keptWarm)) }])} />
-                {keptWarm !== null && <Bar dataKey={(p: Bucket) => (p.keptWarm === null ? null : keptWarmTokens(p.keptWarm))} fill={ink.series[2]} maxBarSize={22} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
-              </BarChart>
-            </ChartCard>
-          </div>
-          <KeepaliveByPool
-            groups={poolGroups}
-            funded={fundedPools}
-            failure={failed(poolError) ?? (weekWait ? reading.failure : null)}
-            loading={(sessionId === null ? byPool.data === null || byPool.stale || (poolFunding !== undefined && (fundedByPool.data === null || fundedByPool.stale)) : loading) || weekWait}
-            reading={reading}
-            unit={unit}
-          />
-        </Section>
-      )}
-
-      {tab === 'accounts' && (
-        <Section id="accounts" shown={shown} title="Accounts" meta="Peak utilization, window usage, pace, ineligible time, and pin churn per account">
-          <AccountsSection
-            accountIds={filters.accountId}
-            allowance={{ answer: unusedAllowance.stale ? null : unusedAllowance.data, costs: costSettings.data?.subscriptionCosts ?? null, error: unusedAllowance.error ?? costSettings.error }}
-            bucketMs={bucketMs}
-            error={accountRollups.error}
-            loading={accountRollups.data === null || accountRollups.stale}
-            otherFilters={otherFilters}
-            rollups={accountRollups.stale ? null : accountRollups.data}
-            slotOf={slotOf}
-            span={span}
-            axis={axis}
-            week={week}
-          />
-        </Section>
-      )}
-    </div>
+        {tab === 'accounts' && (
+          <Section id="accounts" shown={shown} title="Accounts" meta="Peak utilization, window usage, pace, ineligible time, and pin churn per account">
+            <AccountsSection
+              accountIds={filters.accountId}
+              allowance={{ answer: unusedAllowance.stale ? null : unusedAllowance.data, costs: costSettings.data?.subscriptionCosts ?? null, error: unusedAllowance.error ?? costSettings.error }}
+              bucketMs={bucketMs}
+              error={accountRollups.error}
+              loading={accountRollups.data === null || accountRollups.stale}
+              otherFilters={otherFilters}
+              rollups={accountRollups.stale ? null : accountRollups.data}
+              slotOf={slotOf}
+              span={span}
+              axis={axis}
+              week={week}
+            />
+          </Section>
+        )}
+      </div>
+    </PopoverHost.Provider>
   );
 }
 
@@ -2188,7 +2188,6 @@ function BurnCharts({
   error,
   groupBy,
   loading,
-  onCostReferenceOpenChange,
   rangeEndMs,
   readAt,
   reading,
@@ -2202,8 +2201,6 @@ function BurnCharts({
   error: string | null;
   groupBy: BurnGroup;
   loading: boolean;
-  /** The Cost reference dialog opening and closing, which the page's auto reload waits for. */
-  onCostReferenceOpenChange: (open: boolean) => void;
   rangeEndMs: number | undefined;
   readAt: number | undefined;
   reading: WeekReading;
@@ -2272,7 +2269,7 @@ function BurnCharts({
   };
   const subtitle = (
     <>
-      {PLAN_SUBTITLE}.{partial ? ` ${PARTIAL_NOTE}.` : ''} <CostReferenceLink onOpenChange={onCostReferenceOpenChange} tab="tiers" />
+      {PLAN_SUBTITLE}.{partial ? ` ${PARTIAL_NOTE}.` : ''} <CostReferenceLink tab="tiers" />
     </>
   );
   const { scale: weekFactor, week } = reading;

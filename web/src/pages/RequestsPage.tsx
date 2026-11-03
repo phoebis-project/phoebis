@@ -17,6 +17,7 @@ import { CostTd } from '@/components/ui/CostTd';
 import type { Option } from '@/components/ui/OptionList';
 import { IconChevronLeft, IconChevronRight, IconX } from '@/components/ui/icons';
 import { PagerNav } from '@/components/ui/PagerNav';
+import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Badge, Button, Card, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Input, KeyValue, Select, Skeleton } from '@/components/ui/primitives';
 import { accountHref, addressWindow, requestHref, REQUESTS_CODEC, type RequestsAddress } from '@/lib/address';
 import { shareHint, shareHintLines, type WeekReading } from '@/lib/analytics';
@@ -292,7 +293,7 @@ export function RequestsPage() {
   const [loadedAt, setLoadedAt] = useState(() => clock.now());
   // Off on the logs until the reader picks an interval, and page state, so a link or a reload opens the log off.
   const [intervalMs, setIntervalMs] = useState(0);
-  const [barOpen, setBarOpen] = useState(false);
+  const { cause: holdCause, host } = useHoldHost();
   const rangeTakenAt = useRangeTakenAt(filters.range);
   const update = (patch: Partial<Filters>) => {
     const next = { ...filters, ...patch };
@@ -321,7 +322,7 @@ export function RequestsPage() {
     intervalMs: polledMs,
     list: requests.data && listed(requests.data),
     paging,
-    paused: Boolean(requestId) || barOpen,
+    paused: Boolean(requestId) || holdCause !== null,
     read: (c, to, landedAfter) => api.listRequests(pollQuery(query, custom, span.to, to, c, landedAfter)).then(listed),
     setPaging,
     stale: requests.stale,
@@ -370,189 +371,190 @@ export function RequestsPage() {
   const fills = COLUMNS.some((c) => shown.has(c.id) && 'fill' in c && c.fill);
 
   return (
-    <div className={`requests ${requestId ? 'has-drawer' : ''}`}>
-      <FilterBar
-        address={address}
-        count={shownCount(rows, nextCursor, requests.data !== null)}
-        dimensions={REQUESTS_DIMENSIONS}
-        disabled={disabled}
-        filters={filters}
-        onOpenChange={setBarOpen}
-        options={options}
-        placeholder="Search id, session, key, account, model, error, message id"
-        range={{ now: clock.now, window: span }}
-        refresh={{
-          disabled: ended ? ENDED_RANGE : undefined,
-          intervalMs,
-          onIntervalChange: setIntervalMs,
-          onRefresh: refresh,
-          paused: requestId ? 'request' : barOpen ? 'menu' : cursor !== undefined ? 'olderPage' : null,
-          refreshTitle: custom ? `Rows from ${fmtTime(filters.range.from)} to ${fmtTime(filters.range.to)}. Refresh reads the same window again` : `Rows up to ${fmtTime(loadedAt)}. Refresh reads up to now`,
-        }}
-        update={update}
-      >
-        <ColumnsControl columns={COLUMNS} visible={visible} onChange={setVisible} />
-      </FilterBar>
-      <div className="stack">
-        {overrun !== null && (
-          <div className="callout callout--warning requests__overrun" role="status">
-            {FOLLOW_OVERRUN}
-          </div>
-        )}
+    <PopoverHost.Provider value={host}>
+      <div className={`requests ${requestId ? 'has-drawer' : ''}`}>
+        <FilterBar
+          address={address}
+          count={shownCount(rows, nextCursor, requests.data !== null)}
+          dimensions={REQUESTS_DIMENSIONS}
+          disabled={disabled}
+          filters={filters}
+          options={options}
+          placeholder="Search id, session, key, account, model, error, message id"
+          range={{ now: clock.now, window: span }}
+          refresh={{
+            disabled: ended ? ENDED_RANGE : undefined,
+            intervalMs,
+            onIntervalChange: setIntervalMs,
+            onRefresh: refresh,
+            paused: requestId ? 'request' : (holdCause ?? (cursor !== undefined ? 'olderPage' : null)),
+            refreshTitle: custom ? `Rows from ${fmtTime(filters.range.from)} to ${fmtTime(filters.range.to)}. Refresh reads the same window again` : `Rows up to ${fmtTime(loadedAt)}. Refresh reads up to now`,
+          }}
+          update={update}
+        >
+          <ColumnsControl columns={COLUMNS} visible={visible} onChange={setVisible} />
+        </FilterBar>
+        <div className="stack">
+          {overrun !== null && (
+            <div className="callout callout--warning requests__overrun" role="status">
+              {FOLLOW_OVERRUN}
+            </div>
+          )}
 
-        <Card padded={false} className="card--table">
-          <div className="table-wrap">
-            <table className={`table table--hover requests__table${timeFormat === '12h' ? ' requests__table--12h' : ''}${fills ? '' : ' table--no-fill'}`}>
-              <thead>
-                <tr>
-                  {shown.has('time') && <th className="col-fill">Time</th>}
-                  {shown.has('key') && <th className="col-fit">Key</th>}
-                  {shown.has('pool') && <th className="col-fit">Pool</th>}
-                  {shown.has('account') && <th className="col-fit">Account</th>}
-                  {shown.has('model') && <th className="col-fit">Model</th>}
-                  {shown.has('client') && <th className="col-fit">Client</th>}
-                  {shown.has('kind') && <th className="col-fit">Kind</th>}
-                  {shown.has('transport') && <th className="col-fit">Transport</th>}
-                  {shown.has('status') && <th className="col-fit">Status</th>}
-                  {shown.has('attempts') && <th className="col-fit" title="How many attempts the request took, the trail on hover">Attempts</th>}
-                  {shown.has('ttfb') && <th className="right col-fit">TTFB</th>}
-                  {shown.has('tokens') && <th className="right col-fit">Tokens</th>}
-                  {shown.has('cost') && (
-                    <th className="right col-fit" title={costHeaderTitle(unit)}>
-                      Cost
-                    </th>
-                  )}
-                  <th className="col-fit" />
-                </tr>
-              </thead>
-              <tbody>
-                {/* A list read in flight over a stand-in page (the poll's newest page holding the place of a read that
-                    failed) keeps the stand-in's rows drawn, so the skeleton rows are the empty table's alone. */}
-                {requests.loading && !requests.data && rows.length === 0
-                  ? Array.from({ length: 8 }, (_, i) => (
-                      <tr key={i} className="table__detail">
-                        <td colSpan={shown.size + 1}>
-                          <Skeleton />
-                        </td>
-                      </tr>
-                    ))
-                  : rows.map((r) => (
-                      <tr
-                        key={r.id}
-                        className={[r.id === requestId ? 'is-selected' : '', fresh.has(r.id) ? 'is-new' : ''].filter(Boolean).join(' ')}
-                        onClick={() => navigate({ pathname: requestHref(r.id), search: location.search })}
-                        tabIndex={0}
-                        // A key pressed on a link in the row is the link's own, so Enter on Routing opens the log
-                        // alone.
-                        onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && navigate({ pathname: requestHref(r.id), search: location.search })}
-                      >
-                        {shown.has('time') && (
-                          <td className="num requests__time col-fill" title={fmtAbsolute(r.at)}>
-                            {fmtDatedTime(r.at, now)}
-                            <span className="sub mono" title={r.id}>{r.id}</span>
-                          </td>
-                        )}
-                        {shown.has('key') && <td className="mono col-fit">{r.keyId ?? '-'}</td>}
-                        {shown.has('pool') && <td className="mono col-fit">{r.poolId ?? '-'}</td>}
-                        {shown.has('account') && <td className="col-fit">{r.accountId ?? '-'}</td>}
-                        {shown.has('model') && (
-                          <td className="mono nowrap col-fit" title={shortModel(r.model) === r.model ? undefined : r.model}>
-                            {r.model === '' ? <span className="muted">-</span> : shortModel(r.model)}
-                          </td>
-                        )}
-                        {shown.has('client') && (
-                          <td className="mono requests__client col-fit" title={r.client ?? undefined}>
-                            {r.client === null ? <span className="muted">-</span> : <span className="requests__client-text" title={r.client}>{r.client}</span>}
-                            {r.agentType && (
-                              <span className="sub" title={r.agentType}>
-                                {r.agentType}
-                              </span>
-                            )}
-                          </td>
-                        )}
-                        {shown.has('kind') && <td className="col-fit">{words(r.kind)}</td>}
-                        {shown.has('transport') && (
-                          <td className="col-fit">
-                            <Badge tone={r.transport === 'sse' ? 'accent' : 'neutral'}>{r.transport === 'sse' ? 'SSE' : 'JSON'}</Badge>
-                          </td>
-                        )}
-                        {shown.has('status') && (
-                          <td className="col-fit">
-                            <span className="requests__status">
-                              <StatusBadge status={r.status} />
-                              {servingResponse(r)?.stopReason === 'refusal' && (
-                                <Badge tone="warning" title={UPSTREAM_REFUSAL_TITLE}>
-                                  {servingResponse(r)?.refusalCategory ?? 'none'}
-                                </Badge>
-                              )}
-                              {r.outcome !== 'succeeded' && <span className="muted requests__outcome">{REQUEST_OUTCOME_LABEL[r.outcome]}</span>}
-                            </span>
-                          </td>
-                        )}
-                        {shown.has('attempts') && (
-                          <td className="col-fit">
-                            <span className="requests__attempts">
-                              <AttemptCount attempts={r.attempts} />
-                              {r.held && <HeldBadge held={r.held} />}
-                            </span>
-                          </td>
-                        )}
-                        {shown.has('ttfb') && <td className="right num col-fit">{fmtMs(r.ttfbMs)}</td>}
-                        {shown.has('tokens') && (
-                          <td className="right num col-fit">
-                            {fmtCompact(tokensTotal(r.usage))}
-                            <span className="sub">{r.usage.cacheRead > 0 ? `${fmtCompact(r.usage.cacheRead)} cached` : 'uncached'}</span>
-                          </td>
-                        )}
-                        {shown.has('cost') && <CostCell context={context} request={r} unit={unit} />}
-                        <td className="right col-fit">
-                          <span className="requests__links">
-                            <Link to={routingLogHref(r, now)} onClick={(e) => e.stopPropagation()}>
-                              Routing
-                            </Link>
-                            <Link to={{ pathname: requestHref(r.id), search: location.search }} onClick={(e) => e.stopPropagation()}>
-                              Details
-                            </Link>
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                {!requests.loading && rows.length === 0 && (
-                  <tr className="table__detail">
-                    <td colSpan={shown.size + 1}>
-                      {error ? (
-                        <ErrorState title="Could not load the request log" body={error} action={<Button onClick={requests.reload}>Try again</Button>} />
-                      ) : (
-                        <EmptyState title="No requests match" body="Widen the range or clear a filter." action={<Button onClick={reset}>Reset filters</Button>} />
-                      )}
-                    </td>
+          <Card padded={false} className="card--table">
+            <div className="table-wrap">
+              <table className={`table table--hover requests__table${timeFormat === '12h' ? ' requests__table--12h' : ''}${fills ? '' : ' table--no-fill'}`}>
+                <thead>
+                  <tr>
+                    {shown.has('time') && <th className="col-fill">Time</th>}
+                    {shown.has('key') && <th className="col-fit">Key</th>}
+                    {shown.has('pool') && <th className="col-fit">Pool</th>}
+                    {shown.has('account') && <th className="col-fit">Account</th>}
+                    {shown.has('model') && <th className="col-fit">Model</th>}
+                    {shown.has('client') && <th className="col-fit">Client</th>}
+                    {shown.has('kind') && <th className="col-fit">Kind</th>}
+                    {shown.has('transport') && <th className="col-fit">Transport</th>}
+                    {shown.has('status') && <th className="col-fit">Status</th>}
+                    {shown.has('attempts') && <th className="col-fit" title="How many attempts the request took, the trail on hover">Attempts</th>}
+                    {shown.has('ttfb') && <th className="right col-fit">TTFB</th>}
+                    {shown.has('tokens') && <th className="right col-fit">Tokens</th>}
+                    {shown.has('cost') && (
+                      <th className="right col-fit" title={costHeaderTitle(unit)}>
+                        Cost
+                      </th>
+                    )}
+                    <th className="col-fit" />
                   </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-          <footer className="pager">
-            <label className="row">
-              <span className="muted">Rows</span>
-              <Select value={filters.rows} onChange={(e) => update({ rows: Number(e.target.value) })}>
-                {PAGE_SIZES.map((n) => (
-                  <option key={n} value={n}>
-                    {n}
-                  </option>
-                ))}
-              </Select>
-            </label>
-            <PagerNav atFirst={stack.length === 0} atLast={nextCursor === null} onFirst={resetPaging} onNext={goNext} onPrevious={goPrevious} />
-          </footer>
-        </Card>
-      </div>
+                </thead>
+                <tbody>
+                  {/* A list read in flight over a stand-in page (the poll's newest page holding the place of a read that
+                      failed) keeps the stand-in's rows drawn, so the skeleton rows are the empty table's alone. */}
+                  {requests.loading && !requests.data && rows.length === 0
+                    ? Array.from({ length: 8 }, (_, i) => (
+                        <tr key={i} className="table__detail">
+                          <td colSpan={shown.size + 1}>
+                            <Skeleton />
+                          </td>
+                        </tr>
+                      ))
+                    : rows.map((r) => (
+                        <tr
+                          key={r.id}
+                          className={[r.id === requestId ? 'is-selected' : '', fresh.has(r.id) ? 'is-new' : ''].filter(Boolean).join(' ')}
+                          onClick={() => navigate({ pathname: requestHref(r.id), search: location.search })}
+                          tabIndex={0}
+                          // A key pressed on a link in the row is the link's own, so Enter on Routing opens the log
+                          // alone.
+                          onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && navigate({ pathname: requestHref(r.id), search: location.search })}
+                        >
+                          {shown.has('time') && (
+                            <td className="num requests__time col-fill" title={fmtAbsolute(r.at)}>
+                              {fmtDatedTime(r.at, now)}
+                              <span className="sub mono" title={r.id}>{r.id}</span>
+                            </td>
+                          )}
+                          {shown.has('key') && <td className="mono col-fit">{r.keyId ?? '-'}</td>}
+                          {shown.has('pool') && <td className="mono col-fit">{r.poolId ?? '-'}</td>}
+                          {shown.has('account') && <td className="col-fit">{r.accountId ?? '-'}</td>}
+                          {shown.has('model') && (
+                            <td className="mono nowrap col-fit" title={shortModel(r.model) === r.model ? undefined : r.model}>
+                              {r.model === '' ? <span className="muted">-</span> : shortModel(r.model)}
+                            </td>
+                          )}
+                          {shown.has('client') && (
+                            <td className="mono requests__client col-fit" title={r.client ?? undefined}>
+                              {r.client === null ? <span className="muted">-</span> : <span className="requests__client-text" title={r.client}>{r.client}</span>}
+                              {r.agentType && (
+                                <span className="sub" title={r.agentType}>
+                                  {r.agentType}
+                                </span>
+                              )}
+                            </td>
+                          )}
+                          {shown.has('kind') && <td className="col-fit">{words(r.kind)}</td>}
+                          {shown.has('transport') && (
+                            <td className="col-fit">
+                              <Badge tone={r.transport === 'sse' ? 'accent' : 'neutral'}>{r.transport === 'sse' ? 'SSE' : 'JSON'}</Badge>
+                            </td>
+                          )}
+                          {shown.has('status') && (
+                            <td className="col-fit">
+                              <span className="requests__status">
+                                <StatusBadge status={r.status} />
+                                {servingResponse(r)?.stopReason === 'refusal' && (
+                                  <Badge tone="warning" title={UPSTREAM_REFUSAL_TITLE}>
+                                    {servingResponse(r)?.refusalCategory ?? 'none'}
+                                  </Badge>
+                                )}
+                                {r.outcome !== 'succeeded' && <span className="muted requests__outcome">{REQUEST_OUTCOME_LABEL[r.outcome]}</span>}
+                              </span>
+                            </td>
+                          )}
+                          {shown.has('attempts') && (
+                            <td className="col-fit">
+                              <span className="requests__attempts">
+                                <AttemptCount attempts={r.attempts} />
+                                {r.held && <HeldBadge held={r.held} />}
+                              </span>
+                            </td>
+                          )}
+                          {shown.has('ttfb') && <td className="right num col-fit">{fmtMs(r.ttfbMs)}</td>}
+                          {shown.has('tokens') && (
+                            <td className="right num col-fit">
+                              {fmtCompact(tokensTotal(r.usage))}
+                              <span className="sub">{r.usage.cacheRead > 0 ? `${fmtCompact(r.usage.cacheRead)} cached` : 'uncached'}</span>
+                            </td>
+                          )}
+                          {shown.has('cost') && <CostCell context={context} request={r} unit={unit} />}
+                          <td className="right col-fit">
+                            <span className="requests__links">
+                              <Link to={routingLogHref(r, now)} onClick={(e) => e.stopPropagation()}>
+                                Routing
+                              </Link>
+                              <Link to={{ pathname: requestHref(r.id), search: location.search }} onClick={(e) => e.stopPropagation()}>
+                                Details
+                              </Link>
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                  {!requests.loading && rows.length === 0 && (
+                    <tr className="table__detail">
+                      <td colSpan={shown.size + 1}>
+                        {error ? (
+                          <ErrorState title="Could not load the request log" body={error} action={<Button onClick={requests.reload}>Try again</Button>} />
+                        ) : (
+                          <EmptyState title="No requests match" body="Widen the range or clear a filter." action={<Button onClick={reset}>Reset filters</Button>} />
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <footer className="pager">
+              <label className="row">
+                <span className="muted">Rows</span>
+                <Select value={filters.rows} onChange={(e) => update({ rows: Number(e.target.value) })}>
+                  {PAGE_SIZES.map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </Select>
+              </label>
+              <PagerNav atFirst={stack.length === 0} atLast={nextCursor === null} onFirst={resetPaging} onNext={goNext} onPrevious={goPrevious} />
+            </footer>
+          </Card>
+        </div>
 
-      {requestId && (
-        <Descriptions>
-          <RequestDrawer context={context} request={selected} requestId={requestId} guardrails={guardrails.data} now={now} rows={read.rows} settings={settings.data} unit={unit} onClose={() => navigate({ pathname: '/requests', search: location.search })} />
-        </Descriptions>
-      )}
-    </div>
+        {requestId && (
+          <Descriptions>
+            <RequestDrawer context={context} request={selected} requestId={requestId} guardrails={guardrails.data} now={now} rows={read.rows} settings={settings.data} unit={unit} onClose={() => navigate({ pathname: '/requests', search: location.search })} />
+          </Descriptions>
+        )}
+      </div>
+    </PopoverHost.Provider>
   );
 }
 

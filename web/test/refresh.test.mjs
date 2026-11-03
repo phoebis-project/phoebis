@@ -11,7 +11,7 @@ for (const key of ['document', 'navigator', 'HTMLElement', 'Element', 'Node', 'g
 globalThis.window = window;
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 after(() => window.close());
-const { act, ApiError, call, createElement: h, createRoot, fakeClock, installClock, Menu, queueToast, setHooks, useAsync } = await import('./dist/ui.js');
+const { act, ApiError, call, createElement: h, createRoot, fakeClock, installClock, Menu, PopoverHost, queueToast, setHooks, useAsync } = await import('./dist/ui.js');
 
 const ORIGIN = Date.UTC(2026, 8, 16, 14, 30);
 const at = (ms) => new Date(ORIGIN + ms).toISOString();
@@ -499,21 +499,22 @@ test('an identical text is dropped, and so is a failure of a route already queue
   assert.equal(queueToast(refused, toast(6, 'the viewer role cannot change anything', 'failure', 6_000)), refused, 'a refusal already queued adds none');
 });
 
-test('a menu reports open and closed and nothing at mount', () => {
+test("a menu holds its page's host as a menu while open, nothing at mount, and lets go on close and on unmount", () => {
   const reports = [];
+  const host = { add: (id, cause) => reports.push(`add ${cause}`), remove: () => reports.push('remove') };
   const container = document.createElement('div');
   document.body.append(container);
   const root = createRoot(container);
-  act(() => root.render(h(Menu, { items: [{ label: 'Edit', onClick() {} }], onOpenChange: (open) => reports.push(open) })));
-  assert.deepEqual(reports, [], 'a closed menu says nothing as it mounts');
+  act(() => root.render(h(PopoverHost.Provider, { value: host }, h(Menu, { items: [{ label: 'Edit', onClick() {} }] }))));
+  assert.deepEqual(reports, [], 'a closed menu holds nothing as it mounts');
   const trigger = container.querySelector('.menu__trigger');
   act(() => trigger.click());
-  assert.deepEqual(reports, [true]);
+  assert.deepEqual(reports, ['add menu']);
   act(() => trigger.click());
-  assert.deepEqual(reports, [true, false]);
+  assert.deepEqual(reports, ['add menu', 'remove']);
   act(() => trigger.click());
   act(() => root.unmount());
-  assert.deepEqual(reports, [true, false, true, false], 'a menu unmounted open reports it closed');
+  assert.deepEqual(reports, ['add menu', 'remove', 'add menu', 'remove'], 'a menu unmounted open lets go of its hold');
 });
 
 test('the frozen harness clock fires timers only on tick, each at its deadline', async () => {

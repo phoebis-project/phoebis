@@ -7,6 +7,7 @@ import { SectionBar } from '@/components/SectionBar';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { IconChevronLeft, IconChevronRight, IconRefresh, IconUser } from '@/components/ui/icons';
+import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Badge, ErrorState, Meter, Pill, Segmented, Select, Skeleton } from '@/components/ui/primitives';
 import { CELL_MIN_PX, cellsFit, fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinor, fmtMinute, fmtPct, fmtRelative, fmtShortHour, fmtShortTime, getTimeFormat, noun, plural, upperFirst } from '@/lib/format';
 import { useAsync, useHashSection, useNow, useResizeObserver } from '@/lib/hooks';
@@ -23,8 +24,8 @@ const QUOTA_SECTIONS = [
 
 export function QuotaPage() {
   const [intervalMs, setIntervalMs] = useState(5_000);
-  const [barOpen, setBarOpen] = useState(false);
-  const accounts = useAsync(() => api.listAccounts(), [], { paused: barOpen, refreshMs: intervalMs });
+  const { cause: pauseCause, host } = useHoldHost();
+  const accounts = useAsync(() => api.listAccounts(), [], { paused: pauseCause !== null, refreshMs: intervalMs });
   const now = useNow();
   const [sort, setSort] = useState<Sort>('default');
   const [refreshing, setRefreshing] = useState(false);
@@ -66,56 +67,57 @@ export function QuotaPage() {
   const failure = accounts.error && !accounts.data ? <ErrorState title="Could not load the accounts" body={accounts.error} action={<Pill onClick={reload}>Try again</Pill>} /> : null;
 
   return (
-    <div className="stack">
-      <FilterBar
-        address="/quota"
-        count={
-          accounts.data === null ? (
-            ''
-          ) : (
-            <>
-              {plural(total, 'account')}
-              {attention > 0 && <span className="filter-bar__count--critical">, {attention} {noun(attention, 'needs', 'need')} attention</span>}
-            </>
-          )
-        }
-        filters={{}}
-        onOpenChange={setBarOpen}
-        refresh={{ intervalMs, onIntervalChange: setIntervalMs, onRefresh: reload, paused: barOpen ? 'menu' : null, refreshTitle: 'Reads the list again now' }}
-        update={() => undefined}
-      >
-        <Pill onClick={() => void refreshAll()} disabled={refreshing} title={refreshHint} icon={<IconRefresh size={13} className={refreshing ? 'spin' : ''} />}>
-          Refresh all
-        </Pill>
-      </FilterBar>
+    <PopoverHost.Provider value={host}>
+      <div className="stack">
+        <FilterBar
+          address="/quota"
+          count={
+            accounts.data === null ? (
+              ''
+            ) : (
+              <>
+                {plural(total, 'account')}
+                {attention > 0 && <span className="filter-bar__count--critical">, {attention} {noun(attention, 'needs', 'need')} attention</span>}
+              </>
+            )
+          }
+          filters={{}}
+          refresh={{ intervalMs, onIntervalChange: setIntervalMs, onRefresh: reload, paused: pauseCause, refreshTitle: 'Reads the list again now' }}
+          update={() => undefined}
+        >
+          <Pill onClick={() => void refreshAll()} disabled={refreshing} title={refreshHint} icon={<IconRefresh size={13} className={refreshing ? 'spin' : ''} />}>
+            Refresh all
+          </Pill>
+        </FilterBar>
 
-      <SectionBar sections={QUOTA_SECTIONS} shown={shown} onChoose={choose} />
+        <SectionBar sections={QUOTA_SECTIONS} shown={shown} onChoose={choose} />
 
-      {shown === 'accounts' ? (
-        <section className="quota-section" id="accounts" role="tabpanel" aria-labelledby="tab-accounts">
-          <div className="quota-sort">
-            <Select value={sort} onChange={(e) => setSort(e.target.value as Sort)} aria-label="Sort">
-              <option value="default">Default order</option>
-              <option value="soonest">Soonest recovery</option>
-              <option value="pace5h">5-hour pace</option>
-              <option value="pace7d">7-day pace</option>
-              <option value="paceWeek">7-day Fable pace</option>
-            </Select>
-          </div>
-          {failure ?? (
-            <div className="quota-grid">
-              {!accounts.data
-                ? [0, 1, 2].map((i) => <QuotaCardSkeleton key={i} />)
-                : visible.map((a) => <QuotaCard key={a.id} account={a} snapshot={snapById.get(a.id)} now={now} refreshing={refreshing} refreshHint={refreshHint} onRefreshed={reload} />)}
+        {shown === 'accounts' ? (
+          <section className="quota-section" id="accounts" role="tabpanel" aria-labelledby="tab-accounts">
+            <div className="quota-sort">
+              <Select value={sort} onChange={(e) => setSort(e.target.value as Sort)} aria-label="Sort">
+                <option value="default">Default order</option>
+                <option value="soonest">Soonest recovery</option>
+                <option value="pace5h">5-hour pace</option>
+                <option value="pace7d">7-day pace</option>
+                <option value="paceWeek">7-day Fable pace</option>
+              </Select>
             </div>
-          )}
-        </section>
-      ) : (
-        <section className="quota-section" id="quota-windows" role="tabpanel" aria-labelledby="tab-quota-windows">
-          {failure ?? (accounts.data && <ResetTimeline accounts={subscriptions.filter(onTimeline)} now={now} slotOf={slotOf} />)}
-        </section>
-      )}
-    </div>
+            {failure ?? (
+              <div className="quota-grid">
+                {!accounts.data
+                  ? [0, 1, 2].map((i) => <QuotaCardSkeleton key={i} />)
+                  : visible.map((a) => <QuotaCard key={a.id} account={a} snapshot={snapById.get(a.id)} now={now} refreshing={refreshing} refreshHint={refreshHint} onRefreshed={reload} />)}
+              </div>
+            )}
+          </section>
+        ) : (
+          <section className="quota-section" id="quota-windows" role="tabpanel" aria-labelledby="tab-quota-windows">
+            {failure ?? (accounts.data && <ResetTimeline accounts={subscriptions.filter(onTimeline)} now={now} slotOf={slotOf} />)}
+          </section>
+        )}
+      </div>
+    </PopoverHost.Provider>
   );
 }
 

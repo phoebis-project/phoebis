@@ -11,6 +11,7 @@ import { CostReferenceLink } from '@/components/ui/CostReference';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { Tile } from '@/components/ui/Tile';
 import { IconChevron } from '@/components/ui/icons';
+import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skeleton, useHostedDescription } from '@/components/ui/primitives';
 import { accountHref, ANALYTICS_CODEC, REQUESTS_CODEC, SESSION_SORT_KEYS, SESSIONS_CODEC, type SessionsAddress, sortAddressOf, sortDirOf, type SortDir } from '@/lib/address';
 import { clock } from '@/lib/clock';
@@ -231,12 +232,11 @@ function parkDetail(a: KeepaliveRecipe, now: number): string {
 
 export function SessionsPage() {
   const [intervalMs, setIntervalMs] = useState(5_000);
-  const [barOpen, setBarOpen] = useState(false);
   const [pending, setPending] = useState<Row | null>(null);
-  const [costOpen, setCostOpen] = useState(false);
-  // The rows whose menu is open, by row: an answer landing under an open menu could add or drop rows beneath it.
-  const [openMenus, setOpenMenus] = useState<ReadonlySet<string>>(() => new Set());
-  const pauseCause = pending !== null || costOpen ? 'dialog' : openMenus.size > 0 || barOpen ? 'menu' : null;
+  // The Cost reference dialog and the bar's and the rows' menus hold the reads through the page's host, since an answer
+  // landing under a row's open menu could add or drop rows beneath it.
+  const { cause: holdCause, host } = useHoldHost();
+  const pauseCause = pending !== null ? 'dialog' : holdCause;
   const reread = { paused: pauseCause !== null, refreshMs: intervalMs };
   // The router keeps a session while it is used, so the list is read again rather than aged on this clock alone: a
   // session still sending requests would otherwise drop off once its first-read activity crossed the expiry. The
@@ -335,219 +335,211 @@ export function SessionsPage() {
   // The expand gutter, the Session column and the menu are drawn whatever the control hides.
   const columns = visible.size + 3;
 
-  const menuChange = (id: string, open: boolean) =>
-    setOpenMenus((s) => {
-      const next = new Set(s);
-      if (open) next.add(id);
-      else next.delete(id);
-      return next;
-    });
-
   return (
-    <div className="stack">
-      {/* TypeScript rejects an address that shares no key with the bar's optional range and search, so this one is read
-          with an optional search it never sets. */}
-      <FilterBar<SessionsAddress & { search?: string }>
-        address={address}
-        count={rows === null ? '' : plural(rows.length, 'session')}
-        dimensions={SESSIONS_DIMENSIONS}
-        filters={filters}
-        onOpenChange={setBarOpen}
-        refresh={{
-          intervalMs,
-          onIntervalChange: setIntervalMs,
-          onRefresh: () => {
-            accounts.reload();
-            overview.reload();
-            recipes.reload();
-            sessions.reload();
-          },
-          paused: pauseCause,
-          refreshTitle: 'Reads the list again now',
-        }}
-        update={update}
-      >
-        <ColumnsControl columns={SESSION_COLUMNS} visible={visible} onChange={setVisible} />
-        <SortControl keys={SESSION_SORT_KEYS} onChange={(next) => update(sortAddressOf(SESSION_SORT_KEYS, next))} value={{ dir, sort: filters.sort }} />
-      </FilterBar>
-      <div className="page-head">
-        <div className="page-head__lead">
-          <p className="page-head__meta">
-            Every session within the session expiry that the filters keep, with the account each model is pinned to and each agent&apos;s cache-warming recipe.{' '}
-            <button type="button" className="link-btn" aria-expanded={howOpen} aria-controls={howId} onClick={() => setHowOpen((v) => !v)}>
-              How pins and recipes work
-            </button>
-          </p>
-          <p id={howId} className="page-head__meta" hidden={!howOpen}>
-            Every Claude Code session the router has seen within the session expiry, and every conversation it identified without a session id, whether or not a keepalive mod registered it. A pin binds each model a session uses to one
-            account, so subagents on another model may sit on another account, and with affinity off every request picks again. Where cache warming is on, each agent carries a recipe that replays its
-            cacheable prefix just before the prompt cache expires, so the next real turn reads the cache instead of rewriting it.
-          </p>
+    <PopoverHost.Provider value={host}>
+      <div className="stack">
+        {/* TypeScript rejects an address that shares no key with the bar's optional range and search, so this one is read
+            with an optional search it never sets. */}
+        <FilterBar<SessionsAddress & { search?: string }>
+          address={address}
+          count={rows === null ? '' : plural(rows.length, 'session')}
+          dimensions={SESSIONS_DIMENSIONS}
+          filters={filters}
+          refresh={{
+            intervalMs,
+            onIntervalChange: setIntervalMs,
+            onRefresh: () => {
+              accounts.reload();
+              overview.reload();
+              recipes.reload();
+              sessions.reload();
+            },
+            paused: pauseCause,
+            refreshTitle: 'Reads the list again now',
+          }}
+          update={update}
+        >
+          <ColumnsControl columns={SESSION_COLUMNS} visible={visible} onChange={setVisible} />
+          <SortControl keys={SESSION_SORT_KEYS} onChange={(next) => update(sortAddressOf(SESSION_SORT_KEYS, next))} value={{ dir, sort: filters.sort }} />
+        </FilterBar>
+        <div className="page-head">
+          <div className="page-head__lead">
+            <p className="page-head__meta">
+              Every session within the session expiry that the filters keep, with the account each model is pinned to and each agent&apos;s cache-warming recipe.{' '}
+              <button type="button" className="link-btn" aria-expanded={howOpen} aria-controls={howId} onClick={() => setHowOpen((v) => !v)}>
+                How pins and recipes work
+              </button>
+            </p>
+            <p id={howId} className="page-head__meta" hidden={!howOpen}>
+              Every Claude Code session the router has seen within the session expiry, and every conversation it identified without a session id, whether or not a keepalive mod registered it. A pin binds each model a session uses to one
+              account, so subagents on another model may sit on another account, and with affinity off every request picks again. Where cache warming is on, each agent carries a recipe that replays its
+              cacheable prefix just before the prompt cache expires, so the next real turn reads the cache instead of rewriting it.
+            </p>
+          </div>
+          <CostReferenceLink tab="plan-rates" />
         </div>
-        <CostReferenceLink onOpenChange={setCostOpen} tab="plan-rates" />
-      </div>
 
-      <div className="stat-grid stat-grid--caps">
-        <Tile label="Sessions" value={o && rows ? <span className="nowrap">{`${fmtInt(rows.length)} of ${fmtInt(o.limits.sessions.max)}`}</span> : null} note={sessionsNote} title={hiddenTitle} failure={failed(firstFailed?.error ?? null)} />
-        {/* The sessions and the recipes are two reads that land apart, so the figure can trail the hidden lines by a
-            read, which is accepted. Only a line the recipes list carries comes off, so a record that never drew a line
-            is never subtracted. */}
-        <Tile
-          label="Agents"
-          value={
-            o && rows ? (
-              <span
-                className="nowrap"
-                title={`The rows shown hold ${fmtInt(agentRecords)} agent records against the cap.${hidden > 0 ? ` ${fmtInt(hidden)} of them are subagents the mod released while their session lives, which draw no line and keep their slot for one cache TTL after the release, then leave the engine.` : ''}${hiddenTitle === undefined ? '' : ` ${hiddenTitle}.`}`}
-              >
-                {`${fmtInt(Math.max(0, agentRecords - hidden))} of ${fmtInt(o.limits.agents.max)}`}
-              </span>
-            ) : null
-          }
-          note={lifecycle ? `${fmtInt(lifecycle.busy)} busy, ${fmtInt(lifecycle.idle)} idle, ${fmtInt(lifecycle.parked)} parked` : null}
-          title={hiddenTitle}
-          failure={failed(firstFailed?.error ?? null)}
-        />
-        <Tile
-          label="Retained"
-          value={o ? <span className="nowrap">{`${fmtMiB(o.limits.retainedBytes.count)} of ${fmtMiB(o.limits.retainedBytes.max)}`}</span> : null}
-          note="prompts kept for probes"
-          failure={failed(overviewError)}
-        />
-        <ProbeTile overview={o} error={overviewError} />
-        {/* The count is router-wide, so a warm tone means at least one pool is paying for probes that did not land. */}
-        <Tile
-          label="Expired between turns, 24h"
-          value={o ? fmtInt(o.expiredBetweenTurns24h) : null}
-          note="misses cache warming exists to prevent"
-          tone={o && o.expiredBetweenTurns24h > 0 && warmingSomewhere ? 'warning' : undefined}
-          failure={failed(overviewError)}
-        />
-        <Tile
-          label="Bus gaps"
-          value={o ? fmtInt(o.busGaps) : null}
-          note="times the keepalive engine missed bus events"
-          tone={o && o.busGaps > 0 ? 'warning' : undefined}
-          failure={failed(overviewError)}
-        />
-      </div>
-      {firstFailed !== null && (
-        <p className="sessions__notice" role="status">
-          Could not load the {firstFailed.name}: {firstFailed.error}{' '}
-          <Button size="sm" onClick={reloadOf[firstFailed.name]}>
-            Try again
-          </Button>
-        </p>
-      )}
-      {failedFirst(accounts) && (
-        <p className="sessions__notice" role="status">
-          Could not load the accounts: {accounts.error}{' '}
-          <Button size="sm" onClick={accounts.reload}>
-            Try again
-          </Button>
-        </p>
-      )}
-
-      <Card
-        padded={false}
-        className="card--table"
-        title="Sessions"
-        subtitle="One row per session. Open a row for the cache-warming recipe each agent carries"
-        actions={
-          rows && rows.length > 0 ? (
-            <Button size="sm" onClick={() => setExpanded(allOpen ? new Set() : new Set(rows.map((r) => rowKey(r.session))))} aria-pressed={allOpen}>
-              {allOpen ? 'Collapse all' : 'Expand all'}
+        <div className="stat-grid stat-grid--caps">
+          <Tile label="Sessions" value={o && rows ? <span className="nowrap">{`${fmtInt(rows.length)} of ${fmtInt(o.limits.sessions.max)}`}</span> : null} note={sessionsNote} title={hiddenTitle} failure={failed(firstFailed?.error ?? null)} />
+          {/* The sessions and the recipes are two reads that land apart, so the figure can trail the hidden lines by a
+              read, which is accepted. Only a line the recipes list carries comes off, so a record that never drew a line
+              is never subtracted. */}
+          <Tile
+            label="Agents"
+            value={
+              o && rows ? (
+                <span
+                  className="nowrap"
+                  title={`The rows shown hold ${fmtInt(agentRecords)} agent records against the cap.${hidden > 0 ? ` ${fmtInt(hidden)} of them are subagents the mod released while their session lives, which draw no line and keep their slot for one cache TTL after the release, then leave the engine.` : ''}${hiddenTitle === undefined ? '' : ` ${hiddenTitle}.`}`}
+                >
+                  {`${fmtInt(Math.max(0, agentRecords - hidden))} of ${fmtInt(o.limits.agents.max)}`}
+                </span>
+              ) : null
+            }
+            note={lifecycle ? `${fmtInt(lifecycle.busy)} busy, ${fmtInt(lifecycle.idle)} idle, ${fmtInt(lifecycle.parked)} parked` : null}
+            title={hiddenTitle}
+            failure={failed(firstFailed?.error ?? null)}
+          />
+          <Tile
+            label="Retained"
+            value={o ? <span className="nowrap">{`${fmtMiB(o.limits.retainedBytes.count)} of ${fmtMiB(o.limits.retainedBytes.max)}`}</span> : null}
+            note="prompts kept for probes"
+            failure={failed(overviewError)}
+          />
+          <ProbeTile overview={o} error={overviewError} />
+          {/* The count is router-wide, so a warm tone means at least one pool is paying for probes that did not land. */}
+          <Tile
+            label="Expired between turns, 24h"
+            value={o ? fmtInt(o.expiredBetweenTurns24h) : null}
+            note="misses cache warming exists to prevent"
+            tone={o && o.expiredBetweenTurns24h > 0 && warmingSomewhere ? 'warning' : undefined}
+            failure={failed(overviewError)}
+          />
+          <Tile
+            label="Bus gaps"
+            value={o ? fmtInt(o.busGaps) : null}
+            note="times the keepalive engine missed bus events"
+            tone={o && o.busGaps > 0 ? 'warning' : undefined}
+            failure={failed(overviewError)}
+          />
+        </div>
+        {firstFailed !== null && (
+          <p className="sessions__notice" role="status">
+            Could not load the {firstFailed.name}: {firstFailed.error}{' '}
+            <Button size="sm" onClick={reloadOf[firstFailed.name]}>
+              Try again
             </Button>
-          ) : undefined
-        }
-      >
-        {rows === null && cardFailed !== null ? (
-          <div style={{ padding: 20 }}>
-            <ErrorState
-              title="Could not load the sessions"
-              body={cardFailed.error}
-              retry={() => {
-                sessions.reload();
-                keys.reload();
-                recipes.reload();
-              }}
-            />
-          </div>
-        ) : rows === null ? (
-          <div style={{ padding: 20 }}>
-            <Skeleton height={14} />
-          </div>
-        ) : rows.length === 0 ? (
-          <div style={{ padding: 20 }}>
-            {hiddenTitle === undefined ? (
-              <EmptyState title="No live sessions" body="A session appears here on its first request, or as soon as the keepalive mod registers it, and drops off once it passes the session expiry." />
-            ) : (
-              <EmptyState title="No sessions kept by the filters" body={`${hiddenTitle}.`} />
-            )}
-          </div>
-        ) : (
-          <div className="table-wrap">
-            <table className="table sessions-table">
-              <thead>
-                <tr>
-                  {/* The gutter keeps its own width and takes neither column class, whose 1% would outrank it. */}
-                  <th className="sessions-table__gutter" />
-                  <th className="col-fill">Session</th>
-                  {visible.has('key') && <th className="col-fit">Key</th>}
-                  {visible.has('model') && <th className="col-fit">Model</th>}
-                  {visible.has('context') && <th className="col-fit">Context</th>}
-                  {visible.has('effort') && <th className="col-fit">Effort</th>}
-                  {visible.has('runway') && <th className="col-fit">Runway</th>}
-                  {visible.has('lastUsed') && <th className="col-fit">Last used</th>}
-                  {visible.has('requests') && <th className="col-fit right">Requests</th>}
-                  {visible.has('lastRequest') && <th className="col-fit">Last request</th>}
-                  {visible.has('agents') && <th className="col-fit right">Agents</th>}
-                  {visible.has('companion') && <th className="col-fit">Companion</th>}
-                  {visible.has('cacheWarming') && <th className="col-fit">Cache warming</th>}
-                  {visible.has('nextProbe') && <th className="col-fit">Next probe</th>}
-                  <th className="col-fit" />
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row) => (
-                  <SessionRows
-                    key={rowKey(row.session)}
-                    accountById={accountById}
-                    row={row}
-                    open={expanded.has(rowKey(row.session))}
-                    onToggle={() => toggle(rowKey(row.session))}
-                    now={now}
-                    columns={columns}
-                    current={current === rowDomId(row.session)}
-                    expireAfterSeconds={expireAfterSeconds}
-                    forkBase={row.session.forkedFrom === null ? null : rowDomId({ ...row.session, sessionId: row.session.forkedFrom })}
-                    listedRows={listedRows}
-                    onFollowFork={followFork}
-                    onMenuChange={(open) => menuChange(rowKey(row.session), open)}
-                    onOpen={(path) => navigate(path)}
-                    onRelease={() => setPending(row)}
-                    visible={visible}
-                  />
-                ))}
-              </tbody>
-            </table>
-          </div>
+          </p>
         )}
-      </Card>
+        {failedFirst(accounts) && (
+          <p className="sessions__notice" role="status">
+            Could not load the accounts: {accounts.error}{' '}
+            <Button size="sm" onClick={accounts.reload}>
+              Try again
+            </Button>
+          </p>
+        )}
 
-      <ConfirmDialog
-        open={pending !== null}
-        onClose={() => setPending(null)}
-        title="Release session"
-        confirmLabel="Release"
-        body={
-          pending
-            ? `Session ${sessionLabel(pending.session, SESSION_CHARS)} loses its pin to ${pending.session.accountId ?? 'its account'} and every recipe on it is dropped. The next request picks an account again and the prompt cache on ${pending.session.accountId ?? 'it'} goes cold.`
-            : ''
-        }
-        onConfirm={onConfirmRelease}
-      />
-    </div>
+        <Card
+          padded={false}
+          className="card--table"
+          title="Sessions"
+          subtitle="One row per session. Open a row for the cache-warming recipe each agent carries"
+          actions={
+            rows && rows.length > 0 ? (
+              <Button size="sm" onClick={() => setExpanded(allOpen ? new Set() : new Set(rows.map((r) => rowKey(r.session))))} aria-pressed={allOpen}>
+                {allOpen ? 'Collapse all' : 'Expand all'}
+              </Button>
+            ) : undefined
+          }
+        >
+          {rows === null && cardFailed !== null ? (
+            <div style={{ padding: 20 }}>
+              <ErrorState
+                title="Could not load the sessions"
+                body={cardFailed.error}
+                retry={() => {
+                  sessions.reload();
+                  keys.reload();
+                  recipes.reload();
+                }}
+              />
+            </div>
+          ) : rows === null ? (
+            <div style={{ padding: 20 }}>
+              <Skeleton height={14} />
+            </div>
+          ) : rows.length === 0 ? (
+            <div style={{ padding: 20 }}>
+              {hiddenTitle === undefined ? (
+                <EmptyState title="No live sessions" body="A session appears here on its first request, or as soon as the keepalive mod registers it, and drops off once it passes the session expiry." />
+              ) : (
+                <EmptyState title="No sessions kept by the filters" body={`${hiddenTitle}.`} />
+              )}
+            </div>
+          ) : (
+            <div className="table-wrap">
+              <table className="table sessions-table">
+                <thead>
+                  <tr>
+                    {/* The gutter keeps its own width and takes neither column class, whose 1% would outrank it. */}
+                    <th className="sessions-table__gutter" />
+                    <th className="col-fill">Session</th>
+                    {visible.has('key') && <th className="col-fit">Key</th>}
+                    {visible.has('model') && <th className="col-fit">Model</th>}
+                    {visible.has('context') && <th className="col-fit">Context</th>}
+                    {visible.has('effort') && <th className="col-fit">Effort</th>}
+                    {visible.has('runway') && <th className="col-fit">Runway</th>}
+                    {visible.has('lastUsed') && <th className="col-fit">Last used</th>}
+                    {visible.has('requests') && <th className="col-fit right">Requests</th>}
+                    {visible.has('lastRequest') && <th className="col-fit">Last request</th>}
+                    {visible.has('agents') && <th className="col-fit right">Agents</th>}
+                    {visible.has('companion') && <th className="col-fit">Companion</th>}
+                    {visible.has('cacheWarming') && <th className="col-fit">Cache warming</th>}
+                    {visible.has('nextProbe') && <th className="col-fit">Next probe</th>}
+                    <th className="col-fit" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row) => (
+                    <SessionRows
+                      key={rowKey(row.session)}
+                      accountById={accountById}
+                      row={row}
+                      open={expanded.has(rowKey(row.session))}
+                      onToggle={() => toggle(rowKey(row.session))}
+                      now={now}
+                      columns={columns}
+                      current={current === rowDomId(row.session)}
+                      expireAfterSeconds={expireAfterSeconds}
+                      forkBase={row.session.forkedFrom === null ? null : rowDomId({ ...row.session, sessionId: row.session.forkedFrom })}
+                      listedRows={listedRows}
+                      onFollowFork={followFork}
+                      onOpen={(path) => navigate(path)}
+                      onRelease={() => setPending(row)}
+                      visible={visible}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+
+        <ConfirmDialog
+          open={pending !== null}
+          onClose={() => setPending(null)}
+          title="Release session"
+          confirmLabel="Release"
+          body={
+            pending
+              ? `Session ${sessionLabel(pending.session, SESSION_CHARS)} loses its pin to ${pending.session.accountId ?? 'its account'} and every recipe on it is dropped. The next request picks an account again and the prompt cache on ${pending.session.accountId ?? 'it'} goes cold.`
+              : ''
+          }
+          onConfirm={onConfirmRelease}
+        />
+      </div>
+    </PopoverHost.Provider>
   );
 }
 
@@ -563,7 +555,6 @@ function SessionRows({
   forkBase,
   listedRows,
   onFollowFork,
-  onMenuChange,
   onOpen,
   onRelease,
   visible,
@@ -578,7 +569,6 @@ function SessionRows({
   listedRows: ReadonlyMap<string, Row>;
   now: number;
   onFollowFork: (id: string) => void;
-  onMenuChange: (open: boolean) => void;
   onOpen: (path: string) => void;
   onRelease: () => void;
   onToggle: () => void;
@@ -754,7 +744,6 @@ function SessionRows({
         <td className="col-fit" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
           <Menu
             label={`Actions for session ${shortId(session.sessionId, SESSION_CHARS)}${session.historical ? ', deleted holder' : ''}`}
-            onOpenChange={onMenuChange}
             items={[
               { label: 'View in analytics', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(analyticsHref(trafficSession, session)) },
               { label: 'View in requests', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(requestsHref(trafficSession, session, session.lastRequestAt)) },

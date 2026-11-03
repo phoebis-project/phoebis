@@ -9,6 +9,7 @@ import { floatAt, menuPlacement, type MenuAlign, type MenuPlacement } from '@/li
 import type { BadgeTone } from '@/lib/quota';
 import { IconCheck, IconChevron, IconCopy, IconSearch, IconWarning, IconX } from './icons';
 import { walkFocus } from './OptionList';
+import { useHold } from './Popover';
 
 const DescriptionHost = createContext<{ base: string; register: (text: string) => () => void } | null>(null);
 const fnv1a = (text: string): string => {
@@ -1040,19 +1041,9 @@ const CLIPPING = new Set(['auto', 'clip', 'hidden', 'scroll']);
  * first column opens rightward, since a list aligned to its right edge would run past the table wrap's left edge,
  * which clips it.
  */
-export function Menu({ align = 'right', items, label = 'Actions', onOpenChange }: { align?: MenuAlign; items: { danger?: boolean; disabled?: boolean; label: string; onClick: () => void; title?: string }[]; label?: string; onOpenChange?: (open: boolean) => void }) {
+export function Menu({ align = 'right', items, label = 'Actions' }: { align?: MenuAlign; items: { danger?: boolean; disabled?: boolean; label: string; onClick: () => void; title?: string }[]; label?: string }) {
   const [open, setOpen] = useState(false);
-  // A page that holds its refresh while a menu is open counts the open ones, so a closed menu says nothing as it
-  // mounts and one that unmounts open still reports itself closed.
-  const openChange = useRef(onOpenChange);
-  useLayoutEffect(() => {
-    openChange.current = onOpenChange;
-  });
-  useEffect(() => {
-    if (!open) return;
-    openChange.current?.(true);
-    return () => openChange.current?.(false);
-  }, [open]);
+  useHold(open, 'menu');
   const [placement, setPlacement] = useState<MenuPlacement>(IN_FLOW);
   // Each opening measures the list in flow, so a closed menu drops the last opening's placement as it closes.
   if (!open && placement !== IN_FLOW) setPlacement(IN_FLOW);

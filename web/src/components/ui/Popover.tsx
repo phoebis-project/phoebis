@@ -1,5 +1,6 @@
-import { createContext, type FocusEvent, type KeyboardEvent, type ReactNode, useCallback, useContext, useEffect, useLayoutEffect, useRef } from 'react';
+import { createContext, type FocusEvent, type KeyboardEvent, type ReactNode, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import type { PauseCause } from '@/lib/follow';
 import { useLatest } from '@/lib/hooks';
 import { useOutsidePress } from './primitives';
 
@@ -50,8 +51,55 @@ export const blurLeaves = (anchor: HTMLElement, close: () => void) => (e: FocusE
   if (to !== null && !e.currentTarget.contains(to) && !anchor.contains(to)) close();
 };
 
-/** The context a bar provides: every Popover under it reports its open state, so the page can pause auto reload while a menu or a popover is open. */
-export const PopoverHost = createContext<{ add: (id: string) => void; remove: (id: string) => void } | null>(null);
+/** What an open overlay holds a page's auto reload for, in the refresh control's words for the pause. */
+export type HoldCause = Extract<PauseCause, 'dialog' | 'menu'>;
+
+/** A page's register of the overlays open under it, each under its own id with its cause. */
+export interface HoldHost {
+  add: (id: string, cause: HoldCause) => void;
+  remove: (id: string) => void;
+}
+
+/**
+ * The context a page provides: every popover, menu and cost reference dialog under it holds the page's auto reload
+ * while it is open. A component under no provider holds nothing.
+ */
+export const PopoverHost = createContext<HoldHost | null>(null);
+
+/** Holds the page's auto reload for `cause` while `active`, and lets go as it turns false or the caller unmounts. */
+export function useHold(active: boolean, cause: HoldCause): void {
+  const host = useContext(PopoverHost);
+  const id = useId();
+  useEffect(() => {
+    if (!active || host === null) return;
+    host.add(id, cause);
+    return () => host.remove(id);
+  }, [active, cause, host, id]);
+}
+
+/**
+ * A page's host for its `PopoverHost` provider, and the cause its open overlays hold auto reload for: a dialog before
+ * a menu, null while none is open.
+ */
+export function useHoldHost(): { cause: HoldCause | null; host: HoldHost } {
+  const [holds, setHolds] = useState<ReadonlyMap<string, HoldCause>>(() => new Map());
+  // An open overlay registers again whenever the host's value changes, so the value is made once.
+  const host = useMemo<HoldHost>(
+    () => ({
+      add: (id, cause) => setHolds((m) => (m.get(id) === cause ? m : new Map(m).set(id, cause))),
+      remove: (id) =>
+        setHolds((m) => {
+          if (!m.has(id)) return m;
+          const next = new Map(m);
+          next.delete(id);
+          return next;
+        }),
+    }),
+    [],
+  );
+  const causes = [...holds.values()];
+  return { cause: causes.includes('dialog') ? 'dialog' : causes.length > 0 ? 'menu' : null, host };
+}
 
 export interface PopoverProps {
   /** The element the box hangs 8 px under, left edges aligned, and the one focus returns to on Escape. */
@@ -84,7 +132,6 @@ export interface PopoverProps {
  */
 export function Popover({ anchor, children, className, id, label, labelledBy, onClose, open, placeKey, role = 'dialog' }: PopoverProps): JSX.Element | null {
   const ref = useRef<HTMLDivElement>(null);
-  const host = useContext(PopoverHost);
   const shown = open && anchor !== null;
   // Read through a ref, so an opener's new close function each render places nothing again.
   const closeRef = useLatest(onClose);
@@ -127,11 +174,7 @@ export function Popover({ anchor, children, className, id, label, labelledBy, on
     if (!shown || el === null || el.contains(document.activeElement)) return;
     (el.querySelector<HTMLElement>(TABBABLE) ?? el).focus({ preventScroll: true });
   }, [anchor, shown]);
-  useEffect(() => {
-    if (!shown || host === null) return;
-    host.add(id);
-    return () => host.remove(id);
-  }, [host, id, shown]);
+  useHold(shown, 'menu');
   useOutsidePress(shown && anchor !== null, () => [ref.current, anchor], onClose);
   if (!open || anchor === null) return null;
   const leave = blurLeaves(anchor, onClose);

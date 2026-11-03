@@ -5,6 +5,7 @@ import { FilterBar } from '@/components/FilterBar';
 import { MeterRatio } from '@/components/MeterRatio';
 import type { Option } from '@/components/ui/OptionList';
 import { IconChevron } from '@/components/ui/icons';
+import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Button, Card, ErrorState, Skeleton, toggleRow } from '@/components/ui/primitives';
 import { accountHref, METER_CODEC, type MeterAddress } from '@/lib/address';
 import { clock } from '@/lib/clock';
@@ -210,8 +211,8 @@ export function MeterPage(): JSX.Element {
   const accounts = useAsync(() => api.listAccounts(), []);
   // Off on this view until the reader picks an interval, and page state, so a link or a reload opens it off.
   const [intervalMs, setIntervalMs] = useState(0);
-  const [barOpen, setBarOpen] = useState(false);
-  const read = useAsync(() => api.getAnalyticsReconciliations({ accountIds: filters.accounts }), [filters.accounts], { paused: barOpen, refreshMs: intervalMs });
+  const { cause: pauseCause, host } = useHoldHost();
+  const read = useAsync(() => api.getAnalyticsReconciliations({ accountIds: filters.accounts }), [filters.accounts], { paused: pauseCause !== null, refreshMs: intervalMs });
   // An answer for the filters before a change draws nothing, so no group stands under a filter it was not read for.
   const rows = read.stale ? null : (read.data?.reconciliations ?? null);
   const groups = useMemo(() => (rows === null ? null : meterGroups(rows)), [rows]);
@@ -231,36 +232,37 @@ export function MeterPage(): JSX.Element {
   const card = { accounts: filters.accounts, error, newest, now, onExpand: expand, onRetry: read.reload, onToggle: toggle, open, shown };
 
   return (
-    <div className="meter-view stack">
-      {/* TypeScript rejects an address that shares no key with the bar's optional range and search, so this one is read
-          with an optional search it never sets. */}
-      <FilterBar<MeterAddress & { search?: string }>
-        address={address}
-        count={count}
-        dimensions={METER_DIMENSIONS}
-        disabled={notLoadedReason('accounts', 'account', accounts)}
-        filters={filters}
-        onOpenChange={setBarOpen}
-        options={options}
-        refresh={{
-          intervalMs,
-          onIntervalChange: setIntervalMs,
-          onRefresh: () => {
-            accounts.reload();
-            read.reload();
-          },
-          paused: barOpen ? 'menu' : null,
-          refreshTitle: 'Reads the windows again now',
-        }}
-        update={update}
-      />
-      <div className="page-head">
-        <div className="page-head__lead">
-          <p className="page-head__meta">{METER_HINT}</p>
+    <PopoverHost.Provider value={host}>
+      <div className="meter-view stack">
+        {/* TypeScript rejects an address that shares no key with the bar's optional range and search, so this one is read
+            with an optional search it never sets. */}
+        <FilterBar<MeterAddress & { search?: string }>
+          address={address}
+          count={count}
+          dimensions={METER_DIMENSIONS}
+          disabled={notLoadedReason('accounts', 'account', accounts)}
+          filters={filters}
+          options={options}
+          refresh={{
+            intervalMs,
+            onIntervalChange: setIntervalMs,
+            onRefresh: () => {
+              accounts.reload();
+              read.reload();
+            },
+            paused: pauseCause,
+            refreshTitle: 'Reads the windows again now',
+          }}
+          update={update}
+        />
+        <div className="page-head">
+          <div className="page-head__lead">
+            <p className="page-head__meta">{METER_HINT}</p>
+          </div>
         </div>
+        <GroupsCard {...card} first={GROUP_PAGE.weekly} groups={groups?.weekly ?? null} onMore={more(GROUP_PAGE.weekly)} title="Weekly windows" variant="weekly" />
+        <GroupsCard {...card} first={GROUP_PAGE.fiveHour} groups={groups?.fiveHour ?? null} onMore={more(GROUP_PAGE.fiveHour)} title="5-hour windows" variant="five-hour" />
       </div>
-      <GroupsCard {...card} first={GROUP_PAGE.weekly} groups={groups?.weekly ?? null} onMore={more(GROUP_PAGE.weekly)} title="Weekly windows" variant="weekly" />
-      <GroupsCard {...card} first={GROUP_PAGE.fiveHour} groups={groups?.fiveHour ?? null} onMore={more(GROUP_PAGE.fiveHour)} title="5-hour windows" variant="five-hour" />
-    </div>
+    </PopoverHost.Provider>
   );
 }
