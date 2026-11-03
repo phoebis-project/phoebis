@@ -145,7 +145,7 @@ pub(crate) fn samples_from_unified(
         ),
         (
             SEVEN_DAY_OVERAGE_INCLUDED,
-            float("anthropic-ratelimit-unified-7d_oi-utilization"),
+            unified.seven_day_oi_utilization,
             unified.seven_day_oi_reset,
         ),
     ];
