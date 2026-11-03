@@ -13,7 +13,7 @@ use crate::{BodyMember, RelayError};
 
 /// Carries the adapter's own failure code, which is finer grained than the Anthropic error type a downstream
 /// client reads, so an operator can tell two failures apart without a log line.
-pub(crate) const ERROR_CODE_HEADER: &str = "x-phoebis-error-code";
+pub const ERROR_CODE_HEADER: &str = "x-phoebis-error-code";
 
 pub(crate) const SHOULD_RETRY_HEADER: &str = "x-should-retry";
 

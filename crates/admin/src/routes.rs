@@ -3290,7 +3290,7 @@ pub(crate) fn fence_revision(sent: Option<&serde_json::Value>) -> Result<Option<
 pub(crate) fn failure_with_code(status: StatusCode, code: &'static str, message: &str) -> Response {
     let mut response = failure(status, message);
     response.headers_mut().insert(
-        HeaderName::from_static("x-phoebis-error-code"),
+        HeaderName::from_static(phoebis_relay::ERROR_CODE_HEADER),
         HeaderValue::from_static(code),
     );
     response

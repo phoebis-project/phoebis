@@ -50,7 +50,8 @@ pub use classify::{
 };
 pub use drift::DriftGuard;
 pub use errors::{
-    anthropic_error, auth_error_response, key_refusal_response, no_store, LEDGER_BEHIND,
+    anthropic_error, auth_error_response, key_refusal_response, no_store, ERROR_CODE_HEADER,
+    LEDGER_BEHIND,
 };
 pub use exhaustion::exhaustion_response;
 pub use headers::{outbound_headers, CredentialKind};
