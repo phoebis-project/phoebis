@@ -21,11 +21,17 @@ pub struct ResponseHead {
 
 impl ResponseHead {
     pub fn get(&self, name: &str) -> Option<&str> {
-        self.headers
-            .iter()
-            .find(|(n, _)| n.eq_ignore_ascii_case(name))
-            .map(|(_, v)| v.as_str())
+        header(&self.headers, name)
     }
+}
+
+/// The first value under `name` in a recorded header list, matched without regard to case, for every head the
+/// relay keeps as name and value pairs.
+pub fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    headers
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case(name))
+        .map(|(_, v)| v.as_str())
 }
 
 pub async fn read_head<R: AsyncRead + Unpin>(

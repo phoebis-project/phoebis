@@ -57,10 +57,7 @@ impl OriginalHead {
 
     /// The first value under `name`, matched without regard to case.
     pub fn get(&self, name: &str) -> Option<&str> {
-        self.headers
-            .iter()
-            .find(|(n, _)| n.eq_ignore_ascii_case(name))
-            .map(|(_, v)| v.as_str())
+        phoebis_transport::response::header(&self.headers, name)
     }
 }
 
