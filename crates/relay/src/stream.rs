@@ -27,7 +27,7 @@ use crate::credit::CreditStore;
 use crate::hold::INSPECT_BUFFER;
 use crate::identity::PendingReports;
 use crate::messages::{cut_code, Guards, RelayOutcome, Trace, CANCELED, REFUSED, TRANSPORT_ERROR};
-use crate::observe::{answer_from_json, is_tool_use_delta, message_id_from_json, Answer};
+use crate::observe::{answer_from_json, is_tool_use_delta, Answer};
 use crate::sse::{SseEvent, SseParser};
 
 /// Chunks held between the upstream reader and the caller's socket. Deep enough that a caller pausing for a
@@ -478,7 +478,7 @@ impl Publish {
                     answer_from_json(&event.data, &["message"], self.outcome.diagnostics_named);
                 self.usage.merge(&answer.usage);
                 self.response.merge(&answer.response);
-                if let Some(id) = message_id_from_json(&event.data, &["message"]) {
+                if let Some(id) = answer.message_id {
                     self.saw_message_id(id);
                 }
                 Some(Phase::MessageStart {
@@ -567,7 +567,7 @@ impl Publish {
             self.response.merge(&answer.response);
             // A JSON answer is whole only at the body's end.
             self.record_credit(&answer);
-            if let Some(id) = message_id_from_json(&json, &[]) {
+            if let Some(id) = answer.message_id {
                 self.saw_message_id(id);
             }
         }

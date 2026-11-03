@@ -29,11 +29,14 @@ pub(crate) fn wants_stream(body: &[u8]) -> bool {
         .is_some_and(|(start, end)| &body[start..end] == b"true")
 }
 
+#[derive(Default)]
 pub(crate) struct Answer {
     pub usage: Usage,
     pub response: ResponseFacts,
     /// The digest of `stop_details.fallback_credit_token`, taken here so the bytes never leave the read.
     pub credit_digest: Option<CreditDigest>,
+    /// The answer's string `id` under the path.
+    pub message_id: Option<String>,
 }
 
 /// The usage block, the cache diagnostics beside it, and what the answer says about itself, from one parse.
@@ -42,18 +45,13 @@ pub(crate) struct Answer {
 /// `named` says whether the pass's body carried a `diagnostics` member naming a previous message, the one case where
 /// a null answer member reads `none`.
 pub(crate) fn answer_from_json(body: &[u8], path: &[&str], named: bool) -> Answer {
-    let empty = || Answer {
-        usage: Usage::default(),
-        response: ResponseFacts::default(),
-        credit_digest: None,
-    };
     let Ok(root) = serde_json::from_slice::<Value>(body) else {
-        return empty();
+        return Answer::default();
     };
     let mut at = &root;
     for key in path {
         let Some(next) = at.get(*key) else {
-            return empty();
+            return Answer::default();
         };
         at = next;
     }
@@ -131,23 +129,13 @@ pub(crate) fn answer_from_json(body: &[u8], path: &[&str], named: bool) -> Answe
         usage,
         response,
         credit_digest,
+        message_id: text(at.get("id")),
     }
 }
 
 /// A `content_block_delta` whose delta is tool input, which is what the keepalive view counts as tool use.
 pub(crate) fn is_tool_use_delta(data: &[u8]) -> bool {
     crate::body::find(data, br#""input_json_delta""#).is_some()
-}
-
-/// The message id of a Messages answer: `message.id` under `path` (`["message"]` for `message_start`, empty for a
-/// JSON answer). `None` when the document does not parse or carries no string id.
-pub(crate) fn message_id_from_json(body: &[u8], path: &[&str]) -> Option<String> {
-    let root = serde_json::from_slice::<Value>(body).ok()?;
-    let mut at = &root;
-    for key in path {
-        at = at.get(*key)?;
-    }
-    at.get("id").and_then(Value::as_str).map(str::to_string)
 }
 
 #[cfg(test)]
@@ -316,33 +304,39 @@ mod tests {
     #[test]
     fn the_message_id_is_read_under_the_path_and_nowhere_else() {
         assert_eq!(
-            message_id_from_json(
+            answer_from_json(
                 br#"{"type":"message_start","message":{"id":"msg_01","usage":{}}}"#,
-                &["message"]
+                &["message"],
+                false
             )
+            .message_id
             .as_deref(),
             Some("msg_01")
         );
         assert_eq!(
-            message_id_from_json(br#"{"id":"msg_02","type":"message"}"#, &[]).as_deref(),
+            answer_from_json(br#"{"id":"msg_02","type":"message"}"#, &[], false)
+                .message_id
+                .as_deref(),
             Some("msg_02")
         );
         assert_eq!(
-            message_id_from_json(
+            answer_from_json(
                 br#"{"type":"message_start","message":{"id":7}}"#,
-                &["message"]
-            ),
+                &["message"],
+                false
+            )
+            .message_id,
             None,
             "a non-string id is no id"
         );
         assert_eq!(
-            message_id_from_json(br#"{"type":"message_start"}"#, &["message"]),
+            answer_from_json(br#"{"type":"message_start"}"#, &["message"], false).message_id,
             None
         );
     }
 
     #[test]
     fn an_unparseable_document_yields_no_id() {
-        assert_eq!(message_id_from_json(b"{not json", &[]), None);
+        assert_eq!(answer_from_json(b"{not json", &[], false).message_id, None);
     }
 }
