@@ -956,6 +956,23 @@ const CLIPPING = new Set(['auto', 'clip', 'hidden', 'scroll']);
  * which clips it.
  */
 /**
+ * Calls `onOutside` on a mouse press outside every node `inside` names, while `active` holds. Both are read when the
+ * press lands, so a caller passes fresh functions each render and the listener stays put.
+ */
+export function useOutsidePress(active: boolean, inside: () => (Node | null | undefined)[], onOutside: () => void): void {
+  const latest = useLatest({ inside, onOutside });
+  useEffect(() => {
+    if (!active) return;
+    const down = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (!latest.current.inside().some((node) => node?.contains(target))) latest.current.onOutside();
+    };
+    document.addEventListener('mousedown', down);
+    return () => document.removeEventListener('mousedown', down);
+  }, [active, latest]);
+}
+
+/**
  * Leaves a fixed layer when its trigger moves: a fixed layer stays where it was drawn while the page moves under it, so
  * it leaves rather than float beside another row. A scroll is read by whether it moved `target` from `rest`, the box it
  * rested at once the layer opened: the scroll that brought the row into view can report after the click that opened
@@ -1011,15 +1028,7 @@ export function Menu({ align = 'right', items, label = 'Actions', onOpenChange }
   const triggerRef = useRef<HTMLButtonElement>(null);
   // Where the trigger rested once the list floated, so a fixed layer can tell whether the page has moved under it.
   const anchor = useRef<DOMRect | null>(null);
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (!ref.current?.contains(target) && !listRef.current?.contains(target)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
-  }, [open]);
+  useOutsidePress(open, () => [ref.current, listRef.current], () => setOpen(false));
   // Measured once per opening, after the list has drawn below its trigger and before the browser paints it. A table
   // wrap that scrolls sideways clips on both axes, so its edges bound the list as much as the viewport's do. A row
   // too short for the list on either side inside its wrap (a table filtered to one row) moves the list out of the

@@ -1,6 +1,7 @@
 import { createContext, type FocusEvent, type KeyboardEvent, type ReactNode, useCallback, useContext, useEffect, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useLatest } from '@/lib/hooks';
+import { useOutsidePress } from './primitives';
 
 /** The room the box keeps from the window's edges and from its anchor. */
 const GAP = 8;
@@ -102,15 +103,7 @@ export function Popover({ anchor, children, className, id, label, labelledBy, on
     host.add(id);
     return () => host.remove(id);
   }, [host, id, shown]);
-  useEffect(() => {
-    if (!shown || anchor === null) return;
-    const down = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (!ref.current?.contains(target) && !anchor.contains(target)) onClose();
-    };
-    document.addEventListener('mousedown', down);
-    return () => document.removeEventListener('mousedown', down);
-  }, [anchor, onClose, shown]);
+  useOutsidePress(shown && anchor !== null, () => [ref.current, anchor], onClose);
   if (!open || anchor === null) return null;
   // A blur naming no element (a click on a button Safari gives no focus, the window losing focus) closes nothing, as a
   // menu's does.

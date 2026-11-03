@@ -2,7 +2,7 @@ import { type FocusEvent, type KeyboardEvent, useCallback, useEffect, useId, use
 import type { DecisionRecord, DecisionSummary } from '@/api/types';
 import { ChipView } from '@/components/ChipView';
 import { StripPopover } from '@/components/StripPopover';
-import { Badge, Described } from '@/components/ui/primitives';
+import { Badge, Described, useOutsidePress } from '@/components/ui/primitives';
 import { clock } from '@/lib/clock';
 import { BRACKET_TICK, BRACKET_WORD_RISE, type LabelHeights, layoutStrip, LEAF_HALF, leafName, type OpenPopover, popoverStore, RADIUS, stationModel, stationName, type StripAnchor, TERMINUS_RADIUS, terminusName, type PathState } from '@/lib/decisionStrip';
 import { anchorPlan } from '@/lib/stripFacts';
@@ -152,16 +152,7 @@ export function DecisionStrip({ now, record, row }: { now: number; record: Decis
   };
   const handlers = (anchor: StripAnchor) => ({ onBlur: blurred(anchor), onClick: () => pin(anchor, false), onKeyDown: keyDown(anchor), onKeyUp: keyUp, onMouseEnter: enter(anchor), onMouseLeave: leave(anchor), ref: anchorRef(anchor) });
   const pinned = open?.pinned ? open.anchor : null;
-  useEffect(() => {
-    if (pinned === null) return undefined;
-    const onOutside = (e: MouseEvent) => {
-      const target = e.target as Node;
-      const anchors = [...buttons.current.values()];
-      if (!document.getElementById(popoverId)?.contains(target) && !anchors.some((b) => b.contains(target))) setOpen(null);
-    };
-    document.addEventListener('mousedown', onOutside);
-    return () => document.removeEventListener('mousedown', onOutside);
-  }, [pinned, popoverId, setOpen]);
+  useOutsidePress(pinned !== null, () => [document.getElementById(popoverId), ...buttons.current.values()], () => setOpen(null));
   // Captured on the document ahead of every other handler, so a key from the strip or its popover closes the popover
   // alone: a dialog around the card never takes it too. A key from a control outside both is that control's, so the
   // popover a hover opened over it closes and the key runs on, and a filter's open list closes on the same press. Focus
