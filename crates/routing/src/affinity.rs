@@ -423,10 +423,10 @@ impl AffinityMap {
     }
 
     /// An existing entry with the same account, key and generation is refreshed in place and its key marked
-    /// dirty; any other case (new, or held by another key) replaces it and yields a row. `warmth` is the TTL and the
-    /// prefix size the response confirmed: without it a refreshed entry on the report's lane keeps its warm deadline,
-    /// its `ttl_ms` shrinking to the lifetime it has left, and one refreshed from another lane or a new one carries no
-    /// warmth.
+    /// dirty, and any other case (new, or held by another key) replaces it and yields a row. `warmth` is the TTL and
+    /// the prefix size the response confirmed: without it a refreshed entry on the report's lane keeps its warm
+    /// deadline, its `ttl_ms` shrinking to the lifetime it has left, and one refreshed from another lane or a new one
+    /// carries no warmth.
     /// `depth` is the boundary's place in the report's chain, which a refresh in place leaves as it was: a
     /// boundary's hash covers everything before it, so its place in the chain never changes.
     #[allow(clippy::too_many_arguments)]
