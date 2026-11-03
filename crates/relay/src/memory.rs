@@ -324,25 +324,19 @@ impl SessionMemory {
     /// latch a round early; the cost is one more 400 before it is set again, and never a wrong skip.
     pub fn latch(&self, account: &AccountRow, item: Injected) {
         let mut inner = self.inner.lock().unwrap();
-        let current = inner.latches.get(&account.id);
-        let stale = current
-            .is_none_or(|l| l.incarnation != account.incarnation || l.revision != account.revision);
-        if stale {
-            inner.latches.insert(
-                account.id.clone(),
-                Latch {
-                    incarnation: account.incarnation,
-                    revision: account.revision,
-                    items: BTreeSet::new(),
-                },
-            );
-        }
-        inner
+        let fresh = || Latch {
+            incarnation: account.incarnation,
+            revision: account.revision,
+            items: BTreeSet::new(),
+        };
+        let latch = inner
             .latches
-            .get_mut(&account.id)
-            .unwrap()
-            .items
-            .insert(item);
+            .entry(account.id.clone())
+            .or_insert_with(fresh);
+        if latch.incarnation != account.incarnation || latch.revision != account.revision {
+            *latch = fresh();
+        }
+        latch.items.insert(item);
     }
 
     /// A late 400 for an attempt made under an older row lands nowhere: `latch` records the row it was given,
