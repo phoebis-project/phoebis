@@ -1,4 +1,4 @@
-import { Fragment, type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, type KeyboardEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { IconCheck } from './icons';
 
 export interface Option {
@@ -80,6 +80,16 @@ export function walkRows(e: KeyboardEvent<HTMLElement>, list: HTMLElement): void
   if ((e.key === 'Home' || e.key === 'End') && !onChoice) return;
   const walked = e.key === 'Home' || e.key === 'End' ? choices : stops;
   walkFocus(e, walked, e.target);
+}
+
+/** A one-choice row with the lists' check mark, the radio rows `ROWS` walks. */
+export function RadioRow({ checked, children, onClick }: { checked: boolean; children: ReactNode; onClick: () => void }) {
+  return (
+    <button type="button" role="radio" aria-checked={checked} className="add-filter__row" onClick={onClick}>
+      <span className="mselect__check">{checked && <IconCheck size={14} />}</span>
+      {children}
+    </button>
+  );
 }
 
 /** The multi-select's body: `div.option-list[role=listbox][aria-multiselectable]`, the `.mselect__search` field, "No matches", the `.mselect__option--all` row with its three states, the `.mselect__group` headings and the `.mselect__option` rows, ArrowDown, ArrowUp, Home and End walking the field and the rows. Escape is the opener's. */

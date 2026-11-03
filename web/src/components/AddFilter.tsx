@@ -1,7 +1,7 @@
 import { Fragment, type RefObject, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
-import { OptionList, type Option, type Preset, walkRows } from '@/components/ui/OptionList';
+import { OptionList, type Option, type Preset, RadioRow, walkRows } from '@/components/ui/OptionList';
 import { Popover } from '@/components/ui/Popover';
-import { IconCheck, IconChevronLeft, IconPlus } from '@/components/ui/icons';
+import { IconChevronLeft, IconPlus } from '@/components/ui/icons';
 import { Button, Input } from '@/components/ui/primitives';
 import { chipText, type Dimension, emptyValue, hasValue } from '@/lib/filterBar';
 
@@ -259,10 +259,9 @@ export function AddFilter({ buttonRef, dimensions, disabled = {}, edit, filters,
             {[{ label: d.anyLabel ?? '', value: none }, ...known.filter((o) => o.value !== none)].map((o) => {
               const on = o.value === none ? !hasValue(d, value) : value === o.value;
               return (
-                <button key={o.value} type="button" role="radio" aria-checked={on} className="add-filter__row" onClick={() => write(d, o.value)}>
-                  <span className="mselect__check">{on && <IconCheck size={14} />}</span>
+                <RadioRow key={o.value} checked={on} onClick={() => write(d, o.value)}>
                   {o.label}
-                </button>
+                </RadioRow>
               );
             })}
           </div>

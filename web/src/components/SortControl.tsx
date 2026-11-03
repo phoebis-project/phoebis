@@ -1,5 +1,5 @@
 import { useId, useState } from 'react';
-import { IconCheck } from '@/components/ui/icons';
+import { RadioRow } from '@/components/ui/OptionList';
 import { Popover } from '@/components/ui/Popover';
 import { Button } from '@/components/ui/primitives';
 import type { SortDir, SortKey } from '@/lib/address';
@@ -44,10 +44,9 @@ export function SortControl({ keys, onChange, value }: SortControlProps): JSX.El
     onChange(next);
   };
   const radio = (id: string, text: string, on: boolean, choose: () => void) => (
-    <button key={id} type="button" role="radio" aria-checked={on} className="add-filter__row" onClick={choose}>
-      <span className="mselect__check">{on && <IconCheck size={14} />}</span>
+    <RadioRow key={id} checked={on} onClick={choose}>
       {text}
-    </button>
+    </RadioRow>
   );
   return (
     <>
