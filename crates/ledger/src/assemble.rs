@@ -229,7 +229,7 @@ impl Assembler {
                 if let Some(previous) = entry.attempts.last_mut() {
                     previous.finished_at = Some(selected.started_at);
                 }
-                entry.attempts.push(attempt_row(&selected));
+                entry.attempts.push(attempt_row(selected));
                 Vec::new()
             }
             Event::ResponseHead(head) => {
@@ -294,7 +294,7 @@ impl Assembler {
             }
             Event::ResponseChunk(chunk) => self.chunk(&chunk),
             Event::RequestComplete(complete) => match self.remove(&complete.request_id) {
-                Some(entry) => finish(entry, &complete, now),
+                Some(entry) => finish(entry, complete, now),
                 None => Vec::new(),
             },
         }
@@ -377,17 +377,17 @@ pub(crate) fn gap(request_id: &str, reason: &str, at: i64) -> Record {
     })
 }
 
-fn attempt_row(selected: &AccountSelected) -> AttemptRecord {
+fn attempt_row(selected: AccountSelected) -> AttemptRecord {
     AttemptRecord {
-        request_id: selected.request_id.clone(),
-        attempt: selected.attempt as u32,
-        account_id: selected.account_id.clone(),
         account_kind: AccountKind::parse(&selected.account_kind).unwrap_or_default(),
+        request_id: selected.request_id,
+        attempt: selected.attempt as u32,
+        account_id: selected.account_id,
         usage_based: selected.usage_based,
         pin_epoch: selected.pin_epoch,
         started_at: selected.started_at,
         outcome: "transport_error".into(),
-        selection: selected.selection.clone(),
+        selection: selected.selection,
         ..AttemptRecord::default()
     }
 }
@@ -435,7 +435,7 @@ fn terminal_outcome(complete: &RequestComplete) -> Option<&'static str> {
     }
 }
 
-fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> {
+fn finish(entry: InFlight, mut complete: RequestComplete, now: i64) -> Vec<Record> {
     let InFlight {
         observed,
         user_agent,
@@ -477,14 +477,14 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
             .ttfc_ms
             .map(|ttfc| observed.received_at + ttfc - last.started_at)
             .filter(|ttfc| *ttfc >= 0);
-        if let Some(usage) = &complete.usage {
+        if let Some(usage) = complete.usage.take() {
             last.input_tokens = usage.input_tokens;
             last.output_tokens = usage.output_tokens;
             last.cache_read_tokens = usage.cache_read_tokens;
             last.cache_write_5m_tokens = usage.cache_write_5m_tokens;
             last.cache_write_1h_tokens = usage.cache_write_1h_tokens;
-            last.service_tier = usage.service_tier.clone();
-            last.cache_miss_reason = usage.cache_miss_reason.clone();
+            last.service_tier = usage.service_tier;
+            last.cache_miss_reason = usage.cache_miss_reason;
             last.thinking_tokens = usage.thinking_tokens;
             last.web_search_requests = usage.web_search_requests;
             last.web_fetch_requests = usage.web_fetch_requests;
@@ -501,20 +501,19 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
                 }
             }
         }
-        let response = &complete.response;
-        last.stop_reason = response.stop_reason.clone();
-        last.stop_sequence = response.stop_sequence.clone();
+        let response = std::mem::take(&mut complete.response);
+        last.stop_reason = response.stop_reason;
+        last.stop_sequence = response.stop_sequence;
         // The answer's model is worth a column only when it is not the one the router resolved: a fallback
         // served the request, or the upstream spelled the id its own way.
         last.served_model = response
             .model
-            .clone()
             .filter(|served| *served != observed.canonical_model && *served != observed.model);
-        last.speed = response.speed.clone();
-        last.inference_geo = response.inference_geo.clone();
+        last.speed = response.speed;
+        last.inference_geo = response.inference_geo;
         last.cleared_input_tokens = response.cleared_input_tokens;
-        last.refusal_category = response.refusal_category.clone();
-        last.refusal_recommended_model = response.refusal_recommended_model.clone();
+        last.refusal_category = response.refusal_category;
+        last.refusal_recommended_model = response.refusal_recommended_model;
         // No transport failed a headless attempt that the account's removal, the client's leaving or the router's
         // shutdown cut short, so it files as canceled over its row's `transport_error` default.
         if last.upstream_status.is_none()
@@ -527,12 +526,12 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         }
         // Only the committed answer has a message; an earlier attempt of the request never carries one.
         if last.upstream_status.is_some() {
-            last.upstream_message_id = complete.message_id.clone();
+            last.upstream_message_id = complete.message_id.take();
         }
         // A head classified as succeeded whose body then failed: the request's terminal cause wins for this
         // attempt alone; a failover classification on an earlier attempt is left as it was.
         if last.upstream_status.is_some() && last.outcome == "succeeded" {
-            if let Some(outcome) = terminal_outcome(complete) {
+            if let Some(outcome) = terminal_outcome(&complete) {
                 last.outcome = outcome.into();
             }
         }
@@ -601,7 +600,7 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
     // still worth reading, and the row says so via `response_truncated`.
     let bodies = response_body.map(|assembled| BodyRecord {
         request_id: observed.request_id.clone(),
-        request_body: observed.body.to_vec(),
+        request_body: Vec::from(observed.body),
         response_body: (!assembled.is_empty()).then_some(assembled),
         // The request is never cut: it is the bus's whole `Bytes`, read once at observation.
         request_len_seen: request_len,
@@ -615,18 +614,36 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
     } else {
         complete.attempt as u32
     };
+    // A body refused for its shape before any dispatch never reached an upstream, whatever admission read of its
+    // member, and the standing says so beside the outcome's code. A failover leg refused for its shape comes after a
+    // leg that did reach one, so that row keeps what admission read. Read ahead of the row, which takes the code.
+    let auto_mode = if complete.outcome == Outcome::Rejected
+        && complete.error_code.as_deref() == Some(BODY_SHAPE_ERROR_CODE)
+    {
+        Some(AutoMode::BodyShape.as_str().to_string())
+    } else {
+        observed.auto_mode.map(|m| m.as_str().to_string())
+    };
+    // The ledger's reading of the row's own facts, as the drift and the contract members are: the relay's outcome and
+    // the bus's completion carry no flag.
+    let refused = crate::refusals::is_refusal(
+        observed.kind.as_str(),
+        complete.outcome.as_str(),
+        complete.error_code.as_deref(),
+        attempt_count,
+    );
     let request = RequestRecord {
-        id: observed.request_id.clone(),
+        id: observed.request_id,
         received_at: observed.received_at,
         finished_at: Some(complete.finished_at),
-        key_id: observed.key_id.clone(),
+        key_id: observed.key_id,
         key_generation: observed.key_generation,
-        pool_id: observed.pool_id.clone(),
-        session_id: observed.session_id.clone(),
-        agent_id: observed.agent_id.clone(),
-        parent_agent_id: observed.parent_agent_id.clone(),
-        model: observed.model.clone(),
-        canonical_model: observed.canonical_model.clone(),
+        pool_id: observed.pool_id,
+        session_id: observed.session_id,
+        agent_id: observed.agent_id,
+        parent_agent_id: observed.parent_agent_id,
+        model: observed.model,
+        canonical_model: observed.canonical_model,
         stream: observed.stream,
         kind: observed.kind.as_str().into(),
         origin: observed.origin.as_str().into(),
@@ -641,12 +658,12 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         // A ledger task behind the bus reads the message_stop chunk after the relay finished the request, and a
         // stream end drawn after the finish would be a wrong figure.
         stream_end_at: stream_end_at.map(|at| at.min(complete.finished_at)),
-        error_code: complete.error_code.clone(),
+        error_code: complete.error_code,
         // Set here rather than only in the attempt loop above: a drift or a contract refusal answers before any
         // account is selected, so it has no attempt row to carry the kind or the item, and the request row is the one
         // place left.
-        client_drift: complete.client_drift.clone(),
-        client_contract: complete.client_contract.clone(),
+        client_drift: complete.client_drift,
+        client_contract: complete.client_contract,
         kept_warm: false,
         bodies_captured: bodies.is_some(),
         // A gap or a short trail only means something for a key that captures: a non-capturing key
@@ -659,8 +676,8 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
                     .is_some_and(|body| (body.len() as u64) < b.response_len_seen)
         }),
         user_agent,
-        effort: observed.shape.effort.clone(),
-        thinking_type: observed.shape.thinking_type.clone(),
+        effort: observed.shape.effort,
+        thinking_type: observed.shape.thinking_type,
         thinking_budget: observed.shape.thinking_budget,
         max_tokens: observed.shape.max_tokens,
         tool_count: observed.shape.tool_count,
@@ -668,50 +685,34 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         message_count: observed.shape.message_count,
         context_edits: observed.shape.context_edits.join(","),
         temperature: observed.shape.temperature,
-        requested_speed: observed.shape.speed.clone(),
-        requested_service_tier: observed.shape.service_tier.clone(),
+        requested_speed: observed.shape.speed,
+        requested_service_tier: observed.shape.service_tier,
         presented_retired: observed.presented_retired,
         rotation_at: observed.rotation_at,
-        client: Some(observed.client.class.clone()),
-        agent_type: observed.client.agent_type.clone(),
-        compaction: observed.client.compaction.clone(),
-        context_compacted: observed.client.context_compacted.clone(),
+        client: Some(observed.client.class),
+        agent_type: observed.client.agent_type,
+        compaction: observed.client.compaction,
+        context_compacted: observed.client.context_compacted,
         prev_tool_ms: observed.client.prev_tool_ms,
-        turn_origin: observed.client.turn_origin.clone(),
-        request_class: observed.client.request_class.clone(),
+        turn_origin: observed.client.turn_origin,
+        request_class: observed.client.request_class,
         classifier: observed.client.classifier.map(|c| c.as_str().to_string()),
-        forked_from: observed.fork.forked_from.clone(),
+        forked_from: observed.fork.forked_from,
         fork_depth: observed.fork.fork_depth,
-        // A body refused for its shape before any dispatch never reached an upstream, whatever admission read of
-        // its member; the standing says so beside the outcome's code. A failover leg refused for its shape comes
-        // after a leg that did reach one, so that row keeps what admission read.
-        auto_mode: if complete.outcome == Outcome::Rejected
-            && complete.error_code.as_deref() == Some(BODY_SHAPE_ERROR_CODE)
-        {
-            Some(AutoMode::BodyShape.as_str().to_string())
-        } else {
-            observed.auto_mode.map(|m| m.as_str().to_string())
-        },
-        held: complete.held.clone(),
+        auto_mode,
+        held: complete.held,
         diagnostics_source: complete.diagnostics.map(|s| s.as_str().to_string()),
-        guardrail_id: observed.guardrail_id.clone(),
+        guardrail_id: observed.guardrail_id,
         guardrails: observed
             .guardrails
-            .iter()
+            .into_iter()
             .map(|m| GuardrailMatchRecord {
-                guardrail_id: m.id.clone(),
+                guardrail_id: m.id,
                 position: m.position,
                 blocked: m.blocked,
             })
             .collect(),
-        // The ledger's reading of the row's own facts, as the drift and the contract members above are: the relay's
-        // outcome and the bus's completion carry no flag.
-        refused: crate::refusals::is_refusal(
-            observed.kind.as_str(),
-            complete.outcome.as_str(),
-            complete.error_code.as_deref(),
-            attempt_count,
-        ),
+        refused,
     };
     records.push(Record::Request {
         request,
