@@ -39,12 +39,11 @@ use phoebis_store::{
 };
 use phoebis_transport::control::Resolver;
 use phoebis_transport::decode::{decoder, encoding, request_encoding, Decoder, Encoding};
-use phoebis_transport::pool::{Pool, PoolKey};
+use phoebis_transport::pool::{Conn, Pool, PoolKey};
 use phoebis_transport::request::RawRequest;
 use phoebis_transport::response::{framing, keep_alive, BodyReader, ResponseHead};
 use phoebis_transport::TransportError;
 use serde_json::json;
-use tokio::io::AsyncRead;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -81,7 +80,7 @@ use crate::ratelimit::{head_sample, retry_after, upstream_date, UnifiedHeaders};
 use crate::sse::SseParser;
 use crate::stream::{
     drain_bounded, relay_body, AffinityFacts, Checkin, Cut, Drained, HeldText, OnError,
-    OnMessageId, Publish, Relayed, Renewal, ReturnToPool, Waiting, MAX_BUFFERED_BODY,
+    OnMessageId, Publish, Relayed, Renewal, Waiting, MAX_BUFFERED_BODY,
 };
 use crate::{
     edit_body, presented_key, BodyEdits, BodyMember, CacheTtl, CacheTtlPolicy, DriftKind,
@@ -3004,12 +3003,7 @@ impl Relay {
 
     /// The half of an attempt that runs once the head is in: the drain, the pre-commit hold, the verdict, and
     /// the response or the decision to move on.
-    async fn respond<C: AsyncRead + ReturnToPool + Send + Unpin + 'static>(
-        &self,
-        mut ctx: Responding<'_>,
-        sent: Sent<C>,
-        checkin: Checkin,
-    ) -> Next {
+    async fn respond(&self, mut ctx: Responding<'_>, sent: Sent<Conn>, checkin: Checkin) -> Next {
         let Sent {
             conn,
             head,
@@ -3071,7 +3065,7 @@ impl Relay {
             match drained {
                 Ok(Drained::Complete(buffered)) => {
                     if reusable {
-                        reader.into_inner().return_to(checkin.clone());
+                        checkin.clone().put(reader.into_inner());
                     }
                     (Some(buffered), None, false)
                 }
@@ -4354,10 +4348,7 @@ impl Relay {
             .await;
     }
 
-    async fn stream<C: AsyncRead + ReturnToPool + Send + Unpin + 'static>(
-        &self,
-        forward: Forward<'_, C>,
-    ) -> Response {
+    async fn stream(&self, forward: Forward<'_>) -> Response {
         let Forward {
             affinity,
             cancel,
@@ -4585,7 +4576,7 @@ fn unreachable_outcome(outcome: RelayOutcome, code: &str) -> RelayOutcome {
 }
 
 /// A response whose head is settled and whose body is still on the wire.
-struct Forward<'a, C> {
+struct Forward<'a> {
     /// The conversation report a committed answer sends, beside the renewal; `None` for a rejection.
     affinity: Option<AffinityFacts>,
     cancel: CancellationToken,
@@ -4606,7 +4597,7 @@ struct Forward<'a, C> {
     /// Set where a held 200's first event is a `rate_limit_error`: that answer is the upstream's rate limit as a
     /// 429 is, so it keeps the rate-limit families.
     rate_limit_event: bool,
-    reader: BodyReader<C>,
+    reader: BodyReader<Conn>,
     /// A pinned request's report, sent when the body ends: a committed answer's renewal, or the release of a
     /// pin its own rejection ends.
     renewal: Option<Renewal>,

@@ -713,18 +713,14 @@ pub(crate) struct Checkin {
     pub key: PoolKey,
 }
 
-pub(crate) trait ReturnToPool: Sized {
-    fn return_to(self, checkin: Checkin);
-}
-
-impl ReturnToPool for Conn {
-    fn return_to(self, checkin: Checkin) {
-        checkin.pool.checkin(checkin.key, self);
+impl Checkin {
+    pub(crate) fn put(self, conn: Conn) {
+        self.pool.checkin(self.key, conn);
     }
 }
 
 /// Everything the body task needs once the head has been forwarded.
-pub(crate) struct Relayed<C> {
+pub(crate) struct Relayed {
     /// Canceled when the account this body belongs to is disconnected or deleted.
     pub cancel: CancellationToken,
     pub checkin: Checkin,
@@ -736,16 +732,13 @@ pub(crate) struct Relayed<C> {
     /// Body bytes already read, which go out ahead of anything the reader still produces.
     pub prefix: Bytes,
     pub publish: Option<Publish>,
-    pub reader: BodyReader<C>,
+    pub reader: BodyReader<Conn>,
 }
 
 /// Relays the upstream body as it arrives: one task reads, the response body drains the channel, and the
 /// connection goes back to the pool only after a clean end. Spawned under `tracker` rather than bare, so a
 /// shutdown can wait for a task a cut connection left running.
-pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
-    relayed: Relayed<C>,
-    tracker: &TaskTracker,
-) -> Body {
+pub(crate) fn relay_body(relayed: Relayed, tracker: &TaskTracker) -> Body {
     let (tx, rx) = mpsc::channel::<Result<Bytes, TransportError>>(CHANNEL_DEPTH);
     tracker.spawn(async move {
         let Relayed {
@@ -872,7 +865,7 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
             // caller sees the end of the body, which is the only ordering a sequential caller can observe.
             BodyEnd::Complete => {
                 if keep_alive {
-                    reader.into_inner().return_to(checkin);
+                    checkin.put(reader.into_inner());
                 }
             }
         }
