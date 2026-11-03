@@ -1,9 +1,9 @@
 import type { Account, MemberEligibility, Pool, RateLimitWindow, Session } from '@/api/types';
-import { lookup } from './counts';
 import { byteOrder, fmtDuration, instant, percentText, plural } from './format';
 import { endOf, minuteSpan, windowOf } from './quota';
 import { speedWord, windingDown } from './selection';
 import { HOUR } from './time';
+import { WINDOW_SHORT, windowKeyId } from './windows';
 
 export type SheddingPreset = 'balanced' | 'conservative' | 'custom' | 'fast';
 
@@ -85,10 +85,11 @@ const windowStart = (w: RateLimitWindow, now: number): number | null => {
 /** A plan window the trigger reads, in the order the router's round walks them: the shared windows, then the week. */
 export type ShedWindow = '5h' | '7d' | '7d_fable';
 const TRIGGER_ORDER: ShedWindow[] = ['5h', '7d', '7d_fable'];
-const PREVIEW_WINDOW: Record<ShedWindow, string> = { '5h': '5h', '7d': '7d', '7d_fable': '7-day Fable' };
-/** A session's `burnWindow` as the window the trigger reads, a key it does not know as none. */
-const BURN_WINDOW: Readonly<Record<string, ShedWindow>> = { five_hour: '5h', seven_day: '7d', seven_day_fable: '7d_fable' };
-const burnWindowOf = (key: string | null): ShedWindow | null => (key === null ? null : (lookup(BURN_WINDOW, key) ?? null));
+/** A session's `burnWindow` under any of its spellings as the window the trigger reads, an unknown key as none. */
+const burnWindowOf = (key: string | null): ShedWindow | null => {
+  const id = windowKeyId(key ?? '');
+  return TRIGGER_ORDER.find((w) => w === id) ?? null;
+};
 
 const readingOf = (account: Account, id: ShedWindow): RateLimitWindow | null => (id === '7d_fable' ? account.fableWindow : windowOf(account, id));
 /**
@@ -316,7 +317,7 @@ export function shedPreviewLine(preview: ShedPreview, now: number = Date.now()):
   const held = preview.held.map((h) => `${h.label}'s 5-hour window is ${minuteSpan(h.ageMs)} old, under the hold of ${minuteSpan(h.holdMs)}, so its round reads the next window.`);
   if (hot.length === 0) {
     const at = closest === null ? '' : closest.window === '5h' ? `at ${instant(closest.horizon, now)}` : `in ${fmtDuration(closest.horizon - now)}`;
-    const nearest = closest === null ? '' : `: the closest is ${closest.label}, ${PREVIEW_WINDOW[closest.window]} ${percentText(closest.projection)} ${at}`;
+    const nearest = closest === null ? '' : `: the closest is ${closest.label}, ${WINDOW_SHORT[closest.window]} ${percentText(closest.projection)} ${at}`;
     return [...off, `No member projects over the ceiling on any window${nearest}.`, ...held].join(' ');
   }
   const over = hot.length === 1 ? `1 member projects over the ceiling: ${hot[0].label}.` : `${hot.length} members project over the ceiling: ${hot.map((h) => h.label).join(', ')}.`;

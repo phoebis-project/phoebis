@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-const { judged, latestPerWindow, meterGroups, meterWindowWord, SPARK, sparkOf } = await import('./dist/api.js');
+const { judged, latestPerWindow, meterGroups, SPARK, sparkOf, windowWord } = await import('./dist/api.js');
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -38,7 +38,7 @@ const ends = (rows) => rows.map((r) => r.windowEnd);
 const newestFirst = (rows) => [...rows].sort((x, y) => Date.parse(y.windowEnd) - Date.parse(x.windowEnd));
 
 test('a window reads its Usage card word, and a window the console does not know reads under its key', () => {
-  assert.deepEqual(['five_hour', 'seven_day', 'seven_day_fable', 'seven_day_opus'].map(meterWindowWord), ['5-hour', '7-day', 'Fable', 'seven_day_opus']);
+  assert.deepEqual(['five_hour', 'seven_day', 'seven_day_fable', 'seven_day_opus'].map(windowWord), ['5-hour', '7-day', 'Fable', 'seven_day_opus']);
 });
 
 test('the band judges a ratio once the rise and the priced share each reach 5%', () => {

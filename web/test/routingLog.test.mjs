@@ -1702,6 +1702,13 @@ test('the Pace header passes over a subscription candidate whose pace names no w
   assert.equal(d.paceHeader(record({ candidates: [lapsed] })), 'Pace', 'no subscription candidate names a window');
 });
 
+test('the Pace header under the fable spelling reads the 7-day Fable word, and an unknown spelling keeps its raw text', () => {
+  const pace = { burn: 0.004, deadline: null, end: null, hours: 66, remaining: 0.66, reset: null, score: 0.006 };
+  const header = (window) => d.paceHeader(record({ candidates: [candidate({ pace: { ...pace, window } })] }));
+  assert.equal(header('fable'), 'Spare rate, 7-day Fable per hour', "the router's own windows spell the Fable week fable");
+  assert.equal(header('monthly'), 'Spare rate, monthly per hour', 'a window the console does not know reads as sent');
+});
+
 test("a Pace cell reads the score in the unit the record's pick step gives it, else the unit its pace's shape names, and a seat's title reads its allowance", () => {
   // A lapsed seat carries no spend entry, so its cells read by the plan arm, while the engine scores it as a paid
   // source: a percent with a burn of 0, and a pace with no hours, no deadline and no window, which its title reads.

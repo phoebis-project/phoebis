@@ -3,7 +3,6 @@ import { flushSync } from 'react-dom';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Dot, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
-import { windowId } from '@/api/decode';
 import { foldGroups, foldRequests, loadSessionRequests, sumGroups, type SessionRequests } from '@/api/fold';
 import { useAppSettings } from '@/app/settings';
 import type { Account, AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, GuardrailCounts, LatencyHistograms, MemberBudget, PlacementRow, RefusalCategoriesAnswer, RequestLog, RewritesAnswer, SubscriptionCosts, UnusedAllowanceAnswer } from '@/api/types';
@@ -35,7 +34,7 @@ import { CLIENT_PATTERNS_PLAIN, linkedKeyIds, refusalLink, requestsLink, type Re
 import { words } from '@/lib/routingLog';
 import { plainOutputOf } from '@/lib/tokenBar';
 import { UNIT_FUNDING, UNIT_POSITIONS, type UnitPosition, type WeekPosition } from '@/lib/unit';
-import { WINDOW_HOURS, WINDOW_LABEL } from '@/lib/windows';
+import { WINDOW_HOURS, windowLabelOf } from '@/lib/windows';
 
 /** The dimensions the breakdown route groups on; `all` is the ungrouped total every section reads. */
 type GroupBy = Exclude<AnalyticsGroupBy, 'all'>;
@@ -2601,7 +2600,7 @@ const NO_SAMPLE_HINT = 'no utilization sampled in range';
  * week by its own name, since the decoder folds that key onto the model week elsewhere and the cards never draw two
  * windows as one.
  */
-const toggleLabel = (id: string): string => (id === 'seven_day_overage_included' ? '7-day, extra usage' : WINDOW_LABEL[windowId(id) ?? ''] ?? id);
+const toggleLabel = (id: string): string => (id === 'seven_day_overage_included' ? '7-day, extra usage' : windowLabelOf(id));
 
 /** An hour with no sample carries no peak, so the maximum is over the sampled hours alone and null without one. */
 function peakOf(values: (number | null)[]): number | null {

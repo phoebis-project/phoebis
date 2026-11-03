@@ -25,13 +25,13 @@ import { ACCOUNTS_DIMENSIONS } from '@/lib/filterBar';
 import { fmtAbsolute, fmtCredits, fmtDate, fmtDated, fmtDayShort, fmtDuration, fmtEndsIn, fmtInt, fmtRelative, pct } from '@/lib/format';
 import { accountPatchOf, advancesOwnToken, derivedId, endZoneLabel, subscriptionEndFormOf, subscriptionEndRefusal, tickCanceled, type SubscriptionEndForm } from '@/lib/forms';
 import { useAsync, useLatest, useNow, useQueryFilters } from '@/lib/hooks';
-import { latestPerWindow, meterGroups, meterWindowWord } from '@/lib/meter';
+import { latestPerWindow, meterGroups } from '@/lib/meter';
 import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, accountCooldown, planEndedSentence, planWordLabel, slowedOf } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
 import { speedHover } from '@/lib/selection';
 import { joinTrend } from '@/lib/trend';
 import type { WeekPosition } from '@/lib/unit';
-import { WINDOW_HOURS, WINDOW_LABEL, windowKeyId } from '@/lib/windows';
+import { WINDOW_HOURS, windowLabelOf, windowWord } from '@/lib/windows';
 
 /** The Status dimension's options, in the labels' order. */
 const STATUS_OPTIONS = { status: ACCOUNT_STATUSES.map((s) => ({ label: STATUS_LABEL[s], value: s })) };
@@ -891,7 +891,7 @@ function DriftCard({ accountId, answer, error, onRetry }: { accountId: string; a
             const off = group?.off ?? 0;
             const windows = group?.rows.length ?? 1;
             return {
-              label: meterWindowWord(latest.window),
+              label: windowWord(latest.window),
               value: (
                 <span className="meter-drift__line">
                   <span className="meter-drift__ratio">
@@ -926,7 +926,7 @@ function AllowanceColumn({ account, costs, holder, week, window: w }: { account:
   return (
     <div className="allowance__col">
       <div className="wbar__head">
-        <span className="wbar__label">{WINDOW_LABEL[windowKeyId(w.window) ?? ''] ?? w.window}</span>
+        <span className="wbar__label">{windowLabelOf(w.window)}</span>
         <AllowanceText className="wbar__pct num" figure={figure(latest)} />
       </div>
       {latest && (

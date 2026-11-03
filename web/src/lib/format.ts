@@ -2,7 +2,7 @@ import type { Placement } from '@/api/types';
 import { lookup } from '@/lib/counts';
 import { DAY, HOUR, MINUTE } from '@/lib/time';
 import { WEEK_LABEL, type WeekPosition } from '@/lib/unit';
-import { type ByWindow, WINDOW_LABEL, windowKeyId } from '@/lib/windows';
+import { WINDOW_SHORT, windowKeyId, windowLabelOf } from '@/lib/windows';
 
 export type TimeFormat = '12h' | '24h';
 
@@ -66,7 +66,7 @@ export const pct = (v: number | null | undefined, signed = false) => {
 /** A share of a window as a percent to three significant digits, trailing zeros dropped: 8.41%, 0.219%, 12.5%. */
 export const fmtShare = (ratio: number) => `${Number((ratio * 100).toPrecision(3))}%`;
 /** A share with its window named ("0.42% of 5-hour", "0.12% of 7-day Fable"), a window the pages do not know under its key. */
-export const shareLabel = (windowKey: string, share: number): string => `${fmtShare(share)} of ${lookup(WINDOW_LABEL, windowKeyId(windowKey) ?? '') ?? windowKey}`;
+export const shareLabel = (windowKey: string, share: number): string => `${fmtShare(share)} of ${windowLabelOf(windowKey)}`;
 /** A share as a whole percent with the space before the sign, as the pool card's badge writes it. */
 export const percentText = (share: number) => `${Math.round(share * 100)} %`;
 /** A count with its noun, `1 day`, `3 days`, `2 cache-map entries` where the plural is not the noun with an s. */
@@ -79,7 +79,6 @@ const LISTED = 3;
 export const listed = (words: string[]) => `${words.slice(0, LISTED).join(', ')}${words.length > LISTED ? ` +${words.length - LISTED}` : ''}`;
 /** Two strings in code-unit order, the same on every machine, which `localeCompare` is not. */
 export const byteOrder = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
-const WINDOW_SHORT: ByWindow<string> = { '5h': '5h', '7d': '7d', '7d_fable': '7-day Fable' };
 /**
  * A share with its window's short word ("0.42% 5h", "0.12% 7d", "0.12% 7-day Fable"), for a cell too narrow for the
  * full form. A window the pages do not know reads under its key, and `shareLabel` stays the full form.

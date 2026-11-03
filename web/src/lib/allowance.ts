@@ -6,7 +6,7 @@ import { byteOrder, fmtAbsolute, fmtDated, fmtDayMonth, fmtShare, plural, weekSh
 import { pricedTier } from '@/lib/quota';
 import { DAY } from '@/lib/time';
 import type { WeekPosition } from '@/lib/unit';
-import { WINDOW_LABEL, windowKeyId, windowRank } from '@/lib/windows';
+import { windowRank, windowWord } from '@/lib/windows';
 
 /** The weeks the Accounts block and the Analytics card read: the latest reset and the three before it. */
 export const ALLOWANCE_WEEKS = 4;
@@ -108,7 +108,7 @@ export function weeklyKeys(accounts: AllowanceAccount[]): string[] {
 }
 
 /** A window's word in the card's column heads: "7-day", "Fable", a model week the console does not know by its key. */
-export const allowanceColumnWord = (window: string): string => (window === 'seven_day_fable' ? 'Fable' : (lookup(WINDOW_LABEL, windowKeyId(window) ?? '') ?? window));
+export const allowanceColumnWord = (window: string): string => windowWord(window);
 
 /** The block's own words for where a reading came from, since the routing log's `window reset` panel names none. */
 const SOURCE_WORD = new Map([

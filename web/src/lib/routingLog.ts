@@ -9,7 +9,7 @@ import { fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtShare, fmtTime, fmtUsd, ins
 import { PLAN_WORD_LABEL, planLabel, POLL_OUTCOME_LABEL } from './quota';
 import { speedWord } from './selection';
 import { ageWord, HOUR, MINUTE, span } from './time';
-import { WINDOW_KEYS } from './windows';
+import { WINDOW_KEYS, WINDOW_LABEL, windowKeyId, windowLabelOf } from './windows';
 
 export { ageWord };
 
@@ -1385,9 +1385,8 @@ function placementChipOf(c: RecordCandidate): Chip | null {
   return null;
 }
 
-/** A Pace window's word in the column header and its phrase in a cell's hover. Any other window reads its id. */
-const PACE_WINDOW_WORD: Record<string, string> = { seven_day: '7-day', seven_day_fable: '7-day Fable' };
-const PACE_WINDOW_PHRASE: Record<string, string> = { seven_day: 'the 7-day window', seven_day_fable: 'the 7-day Fable window' };
+/** A Pace window's word in the column header and in a cell's hover. A window the console does not know reads its id. */
+const paceWindowWord = (id: string): string => lookup(WINDOW_LABEL, windowKeyId(id) ?? '') ?? words(id);
 
 /**
  * A usage-based seat: the engine writes a paid source's pace with no hours, no deadline and no window whatever its
@@ -1411,7 +1410,7 @@ export function paceHeader(record: DecisionRecord): string {
   const pace = record.candidates.find((c) => c.kind === 'oauth' && !isSpendSeat(c) && (c.pace?.window ?? null) !== null)?.pace;
   const id = pace?.window ?? null;
   if (id === null) return 'Pace';
-  return (pace?.burn ?? null) === null ? `Pace, ${wordOf(PACE_WINDOW_WORD, id)} left per hour` : `Spare rate, ${wordOf(PACE_WINDOW_WORD, id)} per hour`;
+  return (pace?.burn ?? null) === null ? `Pace, ${paceWindowWord(id)} left per hour` : `Spare rate, ${paceWindowWord(id)} per hour`;
 }
 
 /**
@@ -1437,7 +1436,7 @@ function paceTitle(c: RecordCandidate, record: DecisionRecord, now: number): str
   if (isSpendSeat(c)) return `${fmtPct(p.remaining)} of its allowance left. Scored by the remaining share alone, with no division by hours.`;
   // A pace built by hand without the key names no window, as a null one does.
   const id = p.window ?? null;
-  const share = id === null ? 'its window' : (lookup(PACE_WINDOW_PHRASE, id) ?? `the ${words(id)} window`);
+  const share = id === null ? 'its window' : `the ${paceWindowWord(id)} window`;
   // Whole hours would read a deadline under half an hour away as "0 h".
   const over = p.hours === null ? '' : ` over ${p.hours < 1 ? `${Math.round(p.hours * 60)} min` : `${Math.round(p.hours)} h`}`;
   // The deadline is the earlier of the two, so one equal to the reset is the reset whatever the end reads.
@@ -1772,8 +1771,6 @@ const SOURCE_WORD: Record<string, string> = { clock: 'the clock walk', head: 'th
 const hourlyShare = (perHour: number) => `${(perHour * 100).toFixed(1)} %/h`;
 /** A move's destination fit as the gate worded it. */
 const FIT_WORD: Record<string, string> = { fits: 'fits', least_bad: 'least bad', rewrite_only: 'rewrite only' };
-/** The window a shedding round's pin names in `rewrite_window`, in the words an earlier build's rewrite label read. */
-const REWRITE_WINDOW_WORD: Record<string, string> = { five_hour: '5-hour', seven_day: '7-day', seven_day_fable: '7-day Fable' };
 /**
  * A pin's Rewrite cell. A round that names its `rewrite_unit` stored the Pro-week figure, which reads in the chosen
  * week titled with the window the pick compared on, untitled where the pick compared on none, and a dash while the
@@ -1782,7 +1779,7 @@ const REWRITE_WINDOW_WORD: Record<string, string> = { five_hour: '5-hour', seven
  */
 const rewriteCell = (rewrite: number | null, window: string | null, unit: string | null, week: WeekReading): Chip => {
   if (rewrite === null) return plain('-');
-  const word = window === null ? null : (lookup(REWRITE_WINDOW_WORD, window) ?? window);
+  const word = window === null ? null : windowLabelOf(window);
   if (unit !== 'pro_week') return plain(word === null ? fmtShare(rewrite) : `${fmtShare(rewrite)} of 20x ${word}`);
   if (week.scale === null) return week.error === null ? plain('-') : { ...plain('-'), title: week.error };
   const cell = plain(weekShort(rewrite * week.scale, week.week));

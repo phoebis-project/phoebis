@@ -11,7 +11,8 @@ import { clock } from '@/lib/clock';
 import { METER_DIMENSIONS, notLoadedReason } from '@/lib/filterBar';
 import { fmtAbsolute, fmtDated, fmtInt, fmtShare, instant } from '@/lib/format';
 import { useAsync, useQueryFilters } from '@/lib/hooks';
-import { GROUP_PAGE, GROUP_STEP, METER_HINT, meterGroups, meterWindowWord, SPARK, sparkOf, sparkY, type MeterGroup } from '@/lib/meter';
+import { GROUP_PAGE, GROUP_STEP, METER_HINT, meterGroups, SPARK, sparkOf, sparkY, type MeterGroup } from '@/lib/meter';
+import { windowWord } from '@/lib/windows';
 
 const COLUMNS = 8;
 const plural = (n: number, one: string) => `${fmtInt(n)} ${one}${n === 1 ? '' : 's'}`;
@@ -106,7 +107,7 @@ function GroupLine({ group, newest, onToggle, open }: { group: MeterGroup; newes
       <td className="mono col-fill" title={group.accountId}>
         <Link to={`/accounts/${encodeURIComponent(group.accountId)}`}>{group.accountId}</Link>
       </td>
-      <td className="col-fit">{meterWindowWord(group.window)}</td>
+      <td className="col-fit">{windowWord(group.window)}</td>
       <td className="right num col-fit">
         <MeterRatio row={latest} />
       </td>
