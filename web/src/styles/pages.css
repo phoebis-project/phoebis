@@ -1724,7 +1724,6 @@
    stacking. */
 .serving .chips {
   flex-wrap: nowrap;
-  gap: 6px;
 }
 
 .pool__chart {
@@ -2345,12 +2344,6 @@
   transform: rotate(90deg);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .routing-log__chevron svg {
-    transition: none;
-  }
-}
-
 /* Time asks for the whole table, so the fixed layout gives it what the other columns leave. A column with no width
    would share that rest with the column an open row's full-width cell adds while Model is hidden, its span counting
    the hidden column. */
@@ -2714,7 +2707,6 @@
   display: flex;
   gap: 6px;
   align-items: center;
-  box-sizing: border-box;
   height: 24px;
   padding: 0 8px;
   white-space: nowrap;
@@ -2794,13 +2786,6 @@
 .strip-station.is-selected,
 .strip-candidate.is-selected,
 .strip-terminus.is-selected {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.strip-station:focus-visible,
-.strip-candidate:focus-visible,
-.strip-terminus:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -2923,11 +2908,6 @@
   font-size: 12.5px;
 }
 
-.decision-card__candidates th {
-  font-size: 12px;
-  white-space: nowrap;
-}
-
 .decision-card__candidates th,
 .decision-card__candidates td {
   padding: 6px;
@@ -2944,9 +2924,6 @@
 }
 
 .decision-card__candidates .sub {
-  display: block;
-  font-size: 11.5px;
-  color: var(--ink-2);
   white-space: nowrap;
 }
 
@@ -3799,10 +3776,6 @@
 .steps li.is-current {
   color: var(--ink);
   font-weight: 600;
-}
-
-.steps li.is-done {
-  color: var(--ink-2);
 }
 
 .steps__num {
