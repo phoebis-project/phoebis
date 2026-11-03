@@ -237,3 +237,12 @@ test("the Refused hover names the refusals the request figures leave out, and th
     "Requests refused for the client's or a policy's cause before any account was asked. The router's own refusals, account_canceled, accounts_unavailable, body_budget_exhausted, key_body_reads, ledger_behind and router_unavailable, count as requests instead.",
   );
 });
+
+test('the request order puts the newer request first and the higher id first at one instant', () => {
+  const rows = [
+    { at: '2026-09-16T10:00:00.000Z', id: 'req_a' },
+    { at: '2026-09-16T10:00:00.000Z', id: 'req_b' },
+    { at: '2026-09-16T11:00:00.000Z', id: 'req_c' },
+  ];
+  assert.deepEqual([...rows].sort(d.compareRequests).map((r) => r.id), ['req_c', 'req_b', 'req_a']);
+});
