@@ -7,24 +7,20 @@ use axum::http::HeaderMap;
 
 use crate::identity::{user_agent_of, CLAUDE_CLI_PREFIX};
 
-pub struct DriftGuard;
-
-impl DriftGuard {
-    /// The version out of a `claude-cli/` user agent, or `None` for a caller that is not one.
-    pub fn check(&self, headers: &HeaderMap) -> Option<String> {
-        Some(
-            user_agent_of(headers)?
-                .strip_prefix(CLAUDE_CLI_PREFIX)?
-                .split(' ')
-                .next()?
-                .into(),
-        )
-    }
+/// The version out of a `claude-cli/` user agent, or `None` for a caller that is not one.
+pub(crate) fn client_version(headers: &HeaderMap) -> Option<String> {
+    Some(
+        user_agent_of(headers)?
+            .strip_prefix(CLAUDE_CLI_PREFIX)?
+            .split(' ')
+            .next()?
+            .into(),
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::DriftGuard;
+    use super::client_version;
     use axum::http::HeaderMap;
 
     fn agent(value: &str) -> HeaderMap {
@@ -35,21 +31,16 @@ mod tests {
 
     #[test]
     fn every_claude_cli_version_is_read_and_any_other_caller_reads_none() {
-        let guard = DriftGuard;
         assert_eq!(
-            guard
-                .check(&agent("claude-cli/2.1.269 (external, cli)"))
-                .as_deref(),
+            client_version(&agent("claude-cli/2.1.269 (external, cli)")).as_deref(),
             Some("2.1.269")
         );
         assert_eq!(
-            guard
-                .check(&agent("claude-cli/2.1.300 (external, cli)"))
-                .as_deref(),
+            client_version(&agent("claude-cli/2.1.300 (external, cli)")).as_deref(),
             Some("2.1.300"),
             "a version the profile never measured is read the same way"
         );
-        assert_eq!(guard.check(&agent("curl/8.5.0")), None);
-        assert_eq!(guard.check(&HeaderMap::new()), None);
+        assert_eq!(client_version(&agent("curl/8.5.0")), None);
+        assert_eq!(client_version(&HeaderMap::new()), None);
     }
 }

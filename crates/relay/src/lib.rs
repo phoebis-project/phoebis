@@ -48,7 +48,6 @@ pub use chains::{canonical, Chains};
 pub use classify::{
     classify, next_month_start, Cooldown, HeadContext, Scope, Verdict, SPEND_CAP_REASON,
 };
-pub use drift::DriftGuard;
 pub use errors::{
     anthropic_error, auth_error_response, key_refusal_response, no_store, ERROR_CODE_HEADER,
     LEDGER_BEHIND,

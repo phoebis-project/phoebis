@@ -85,9 +85,9 @@ use crate::stream::{
     STREAM_CUT, STREAM_STALLED, STREAM_UNDECODABLE,
 };
 use crate::{
-    edit_body, presented_key, BodyEdits, BodyMember, CacheTtl, CacheTtlPolicy, DriftGuard,
-    Markerless, NativeEdit, RelayError, SafeguardsEdit, TtlBranch, UpstreamGzip,
-    DANGEROUS_TOOL_USE_BETA, EXTENDED_TTL_BETA,
+    edit_body, presented_key, BodyEdits, BodyMember, CacheTtl, CacheTtlPolicy, Markerless,
+    NativeEdit, RelayError, SafeguardsEdit, TtlBranch, UpstreamGzip, DANGEROUS_TOOL_USE_BETA,
+    EXTENDED_TTL_BETA,
 };
 
 /// How often the session memory's changes reach the store; a crash loses at most this much of it, and the
@@ -270,7 +270,6 @@ pub struct Relay {
     /// The decoders built for the hold's reads of a response.
     #[cfg(feature = "debug-hooks")]
     pub(crate) decoders_built: Arc<std::sync::atomic::AtomicU64>,
-    drift: DriftGuard,
     heads: Arc<Heads>,
     pub(crate) limits: Limits,
     manager: Arc<CredentialManager>,
@@ -359,7 +358,6 @@ impl Relay {
             credits: Arc::new(CreditStore::new()),
             #[cfg(feature = "debug-hooks")]
             decoders_built: Arc::default(),
-            drift: DriftGuard,
             heads: Arc::new(Mutex::new(HashMap::new())),
             limits,
             manager,
@@ -1350,7 +1348,7 @@ impl Relay {
         let capture_hours = snapshot
             .body_capture_hours(&key)
             .min(self.limits.body_capture_max_hours);
-        let client_version = self.drift.check(&parts.headers);
+        let client_version = crate::drift::client_version(&parts.headers);
         // The class is read off the user agent alone, with no body read yet to justify: the router admits Claude
         // Code and refuses any other client before the bytes it would never use are even taken off the wire.
         if ClientClass::of_label(&client_class(&parts.headers)) != ClientClass::ClaudeCode {

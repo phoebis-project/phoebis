@@ -238,7 +238,7 @@ pub(crate) fn is_auxiliary(request_class: Option<&str>) -> bool {
 /// The first item of the contract the request lacks, in the table's order, or `None`. The version and the
 /// session header are judged for every kind, since a token count and a keepalive probe send both, and the five
 /// body and class items for an inference request alone. `client_version` is the user agent's version as
-/// `DriftGuard` reads it, judged against the client's own spelling. The class header is judged before the two
+/// `client_version` reads it, judged against the client's own spelling. The class header is judged before the two
 /// items that depend on it, so a request without it is never refused for them, and the line is required where
 /// `system` is an array alone, so the client's quota probe (no `system`) is outside the item.
 pub(crate) fn contract_gap(
@@ -489,13 +489,13 @@ mod tests {
     }
 
     /// The gap of a request of `kind` as `handle` reads it: the identity and the body facts off the one body, the
-    /// class through `header_id` and the version through `DriftGuard`.
+    /// class through `header_id` and the version through `client_version`.
     fn gap_of(headers: &HeaderMap, body: &serde_json::Value, kind: Kind) -> Option<&'static str> {
         let bytes = serde_json::to_vec(body).unwrap();
         let identity = identify(headers, &bytes).expect("the body has a model");
         let (facts, _) = crate::facts::BodyFacts::read_with_tree(&bytes);
         let class = header_id(headers, "x-claude-code-request-class");
-        let version = crate::DriftGuard.check(headers);
+        let version = crate::drift::client_version(headers);
         contract_gap(
             headers,
             &identity,
