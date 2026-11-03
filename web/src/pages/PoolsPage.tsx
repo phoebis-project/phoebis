@@ -27,7 +27,7 @@ import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, UNPRICED_TITLE, equivalentOrD
 import { anchorOf } from '@/lib/attention';
 import { weekReadingOf } from '@/lib/costs';
 import { fmtAbsolute, fmtCompact, fmtDuration, fmtHourTick, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtUsd, messageOf, shortModel } from '@/lib/format';
-import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, guardrailIdsOf, guardrailsChange, poolRefusals, sortKeys, type PoolGroup } from '@/lib/forms';
+import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, guardrailIdsOf, guardrailsChange, keyFormOf, keyInputOf, poolRefusals, sortKeys, type PoolGroup } from '@/lib/forms';
 import { refreshAttention, useAsync, useAttention, useLatest, useNow } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, slowDownPreview, slowDownPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
@@ -1410,18 +1410,7 @@ export function PoolDialog({
     setMoveBusy(true);
     setMoveError(null);
     try {
-      await api.updateKey(moving.id, {
-        autoModeServer: moving.autoModeServer,
-        bodyCaptureHours: moving.bodyCaptureHours,
-        enabled: moving.enabled,
-        keepaliveOptOut: moving.keepaliveOptOut,
-        longContextTwins: moving.longContextTwins,
-        modelRules: moving.modelRules,
-        modelRulesMode: moving.modelRulesMode,
-        name: moving.name,
-        notes: moving.notes,
-        poolId: moveTo,
-      }, moving.revision);
+      await api.updateKey(moving.id, keyInputOf({ ...keyFormOf(moving, moving.poolId), poolId: moveTo }, now), moving.revision);
       setMoved((prev) => new Set(prev).add(moving.id));
       setMoving(null);
       onKeysChanged();

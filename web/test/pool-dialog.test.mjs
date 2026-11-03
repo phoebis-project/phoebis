@@ -33,7 +33,7 @@ const LIMIT = 72;
 const SETTINGS = { retention: { bodyCaptureMaxHours: LIMIT } };
 
 const roots = [];
-const reads = { getKeyModels: api.getKeyModels, getSettings: api.getSettings, listCatalogOf: api.listCatalogOf };
+const reads = { getKeyModels: api.getKeyModels, getSettings: api.getSettings, listCatalogOf: api.listCatalogOf, updateKey: api.updateKey };
 beforeEach(() => {
   // A frozen clock, so the dialog's ticking instant arms no window timer.
   const clock = fakeClock();
@@ -224,4 +224,64 @@ test('a new pool opens with the switch to keep prompt caches warm off, and free 
   assert.ok(warm, 'the Keepalive group holds the switch');
   assert.equal(warm.getAttribute('aria-checked'), 'false', 'the switch starts off');
   assert.equal(warm.disabled, false, "the new form's affinity of an hour leaves the switch enabled, so off is the form's own value");
+});
+
+test("a key move sends the stored key's settings with the new pool, the name trimmed and an empty note as none", async () => {
+  holdSettings();
+  const pool = pools[0];
+  const target = pools.find((p) => p.id !== pool.id);
+  assert.ok(target, 'the mock holds a second pool to move the key to');
+  // Every setting off the key dialog's defaults, and a name and a note that the dialog's own save would never store.
+  const stored = {
+    autoModeServer: false,
+    bodyCaptureHours: 12,
+    enabled: false,
+    expiresAt: '2026-12-01T00:00:00.000Z',
+    guardrails: [],
+    id: 'mover',
+    keepaliveOptOut: true,
+    longContextTwins: false,
+    modelRules: [{ not: true, pattern: 'claude-opus-*' }],
+    modelRulesMode: 'replace',
+    name: '  mover  ',
+    notes: '',
+    poolId: pool.id,
+    prefix: 'phx_mover',
+    revision: 7,
+    status: 'active',
+  };
+  const sent = [];
+  api.updateKey = async (id, input, revision) => {
+    sent.push({ id, input, revision });
+    return { ...stored, poolId: input.poolId };
+  };
+  const { container, draw } = mount();
+  await draw(poolDialog({ accounts, accountsLoaded: true, keys: [stored], pool }));
+  const row = [...container.querySelectorAll('dialog[open] .keys-table tbody tr')].find((tr) => tr.children[0]?.textContent === stored.name);
+  act(() => row?.querySelector('.menu__trigger')?.click());
+  act(() => [...(row?.querySelectorAll('[role="menuitem"]') ?? [])].find((b) => b.textContent?.trim() === 'Move to…')?.click());
+  const move = [...document.querySelectorAll('dialog[open]')].pop();
+  const select = move?.querySelector('select[aria-label="Destination pool"]');
+  act(() => {
+    Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(select, target.id);
+    select.dispatchEvent(new window.Event('change', { bubbles: true }));
+  });
+  act(() => [...(move?.querySelectorAll('.dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Move key')?.click());
+  await settled();
+  assert.equal(sent.length, 1, 'the move writes once');
+  assert.equal(sent[0].id, 'mover');
+  assert.equal(sent[0].revision, 7, "the write carries the stored key's revision");
+  assert.deepStrictEqual(sent[0].input, {
+    autoModeServer: false,
+    bodyCaptureHours: 12,
+    enabled: false,
+    expiresAt: undefined,
+    keepaliveOptOut: true,
+    longContextTwins: false,
+    modelRules: [{ not: true, pattern: 'claude-opus-*' }],
+    modelRulesMode: 'replace',
+    name: 'mover',
+    notes: null,
+    poolId: target.id,
+  });
 });
