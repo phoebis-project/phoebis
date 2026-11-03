@@ -26,7 +26,6 @@ phoebis-oauth = { path = "../oauth" }
 phoebis-relay = { path = "../relay" }
 phoebis-routing = { path = "../routing" }
 phoebis-store = { path = "../store" }
-phoebis-transport = { path = "../transport" }
 rusqlite = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -47,6 +46,7 @@ phoebis-profile = { path = "../profile" }
 phoebis-routing = { path = "../routing", features = ["debug-hooks"] }
 # The test builders of the registry's rows, kept off the dependency above so a release build carries none.
 phoebis-store = { path = "../store", features = ["test-support"] }
+phoebis-transport = { path = "../transport" }
 rand = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
