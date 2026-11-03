@@ -1969,20 +1969,17 @@ pub fn spawn(
                         #[cfg(any(test, feature = "debug-hooks"))]
                         task.release_reports();
                         while let Some(command) = rx.recv().await {
-                            match command {
-                                Command::Report(report, seq) => task.numbered_report(report, seq),
-                                // A resolution is a report with an answer: it lands with the drain rather than
-                                // leaving the catalog cache to publish the spelling again after a restart.
-                                Command::Resolve { spelling, dated_id, at, reply } => {
-                                    task.resolve(&spelling, &dated_id, at);
-                                    let _ = reply.send(());
-                                }
-                                // The mailbox took it, so it is emitted rather than lost uncounted.
-                                Command::RecordRefusal { request, refusal } => {
-                                    task.record_refusal(&request, &refusal);
-                                }
-                                Command::StateMoved { rows } => task.state_moved(rows),
-                                _ => {}
+                            if matches!(
+                                command,
+                                Command::Report(..)
+                                    // A resolution is a report with an answer: it lands with the drain rather
+                                    // than leaving the catalog cache to publish the spelling again after a restart.
+                                    | Command::Resolve { .. }
+                                    // The mailbox took it, so it is emitted rather than lost uncounted.
+                                    | Command::RecordRefusal { .. }
+                                    | Command::StateMoved { .. }
+                            ) {
+                                task.handle(command).await;
                             }
                         }
                         // A reading inserted after the last turn's drain lands as a queued report does.
