@@ -93,6 +93,10 @@ const hitRatioOf = (g: AnalyticsGroup) => (g.cacheHits + g.cacheMisses + g.uncac
 const cachedShareOf = (g: AnalyticsGroup) => (inputOf(g) ? g.tokens.cacheRead / inputOf(g) : null);
 const probesOf = (g: AnalyticsGroup) => g.probes.ok + g.probes.held + g.probes.skipped + g.probes.failed;
 const usdOrDash = (v: number | null) => (v === null ? '-' : fmtUsd(v));
+/** A figure per counted unit, scaled, and null where the figure or the count is unknown or the count is not positive. */
+const per = (v: number | null, count: number | null, scale: number) => (v === null || count === null || !(count > 0) ? null : (v / count) * scale);
+/** The billed rows' count, the whole less the plan rows, unknown where the plan count is. */
+const billedCount = (plan: number | null, whole: number) => (plan === null ? null : whole - plan);
 /**
  * A dollar axis's tick labels, all at the one precision the largest figure the axis draws sets, and a width that
  * holds the longest of them: the chart's box clips a label wider than its axis. At the axis's 11 px a digit or the
@@ -124,19 +128,18 @@ type NativeRatio = { figures: CostFigure[]; note: string };
 function nativeRatiosOf(totals: AnalyticsGroup, week: WeekPosition, weekFactor: number): { perRequest: NativeRatio; perThousand: NativeRatio } {
   const sides = sidesOf(totals);
   const ratio = (count: number | null, whole: number, scale: number, word: string, note: (n: number) => string): NativeRatio => {
-    const billedCount = count === null ? null : whole - count;
-    const per = (v: number | null, n: number | null) => (v === null || n === null || !(n > 0) ? null : (v / n) * scale);
-    const equivalent = sides.equivalent === undefined ? null : per(sides.equivalent, count);
+    const billed = billedCount(count, whole);
+    const equivalent = sides.equivalent === undefined ? null : per(sides.equivalent, count, scale);
     return {
-      figures: [...(sides.equivalent === undefined ? [] : [{ text: equivalentOrDash(equivalent, week, weekFactor), word: 'subscription' }]), ...(sides.billed === undefined ? [] : [{ text: usdOrDash(per(sides.billed, billedCount)), word: 'billed' }])],
+      figures: [...(sides.equivalent === undefined ? [] : [{ text: equivalentOrDash(equivalent, week, weekFactor), word: 'subscription' }]), ...(sides.billed === undefined ? [] : [{ text: usdOrDash(per(sides.billed, billed, scale)), word: 'billed' }])],
       note:
-        count === null || billedCount === null
+        count === null || billed === null
           ? `${note(whole)} ${word}`
           : sides.billed === undefined
             ? `${note(count)} subscription ${word}`
             : sides.equivalent === undefined
-              ? `${note(billedCount)} billed ${word}`
-              : `${note(count)} subscription ${word}, ${note(billedCount)} billed`,
+              ? `${note(billed)} billed ${word}`
+              : `${note(count)} subscription ${word}, ${note(billed)} billed`,
     };
   };
   return { perRequest: ratio(totals.planRequests, totals.requests, 1, 'requests', fmtInt), perThousand: ratio(totals.planOutputTokens, totals.tokens.output, 1000, 'output tokens', fmtCompact) };
@@ -160,10 +163,9 @@ const nativeCell = (cell: { main: string; sub: string; title: string }): ReactNo
 function nativeRowOf(g: AnalyticsGroup, week: WeekPosition, weekFactor: number, hint: string | null): { cells: ReactNode[]; key: string; label: string; title: string } {
   const sides = sidesOf(g);
   const figure = sides.equivalent === undefined ? null : g.costEquivalent;
-  const per = (v: number | null, count: number | null, scale: number) => (v === null || count === null || !(count > 0) ? null : (v / count) * scale);
   // Undefined leaves a side with no rows out of the cell, as the tiles leave it out.
   const both = (equivalent: number | null, billed: number | null, shown: string | null = null) => nativeCell(nativeCellOf(sides.equivalent === undefined ? undefined : equivalent, sides.billed === undefined ? undefined : billed, week, weekFactor, shown));
-  const ratio = (planCount: number | null, whole: number, scale: number) => both(per(figure, planCount, scale), per(sides.billed ?? null, planCount === null ? null : whole - planCount, scale));
+  const ratio = (planCount: number | null, whole: number, scale: number) => both(per(figure, planCount, scale), per(sides.billed ?? null, billedCount(planCount, whole), scale));
   // The route labels every group, the model grouping's empty key included, since the ledger labels that key itself.
   const label = g.label;
   return {
