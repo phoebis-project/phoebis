@@ -2,7 +2,7 @@ import type { AllowanceAccount, AllowanceReset, AllowanceWindow, SubscriptionCos
 import { HINT_WINDOW } from '@/lib/analytics';
 import { anchorTier, pricedWindow, tierCapacity, weekScale, weekUnpricedTitle } from '@/lib/costs';
 import { lookup } from '@/lib/counts';
-import { fmtAbsolute, fmtShare, fmtShortTime, weekShort } from '@/lib/format';
+import { byteOrder, fmtAbsolute, fmtShare, fmtShortTime, weekShort } from '@/lib/format';
 import { pricedTier } from '@/lib/quota';
 import { DAY } from '@/lib/time';
 import type { WeekPosition } from '@/lib/unit';
@@ -173,7 +173,7 @@ export function allowanceRows(answer: UnusedAllowanceAnswer, costs: Subscription
       Number(a.unpriced) - Number(b.unpriced) ||
       by(lead(a, 'seven_day'), lead(b, 'seven_day')) ||
       by(lead(a, 'seven_day_fable'), lead(b, 'seven_day_fable')) ||
-      (a.accountId < b.accountId ? -1 : a.accountId > b.accountId ? 1 : 0),
+      byteOrder(a.accountId, b.accountId),
   );
 }
 

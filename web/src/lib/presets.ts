@@ -1,6 +1,6 @@
 import type { Account, MemberEligibility, Pool, RateLimitWindow, Session } from '@/api/types';
 import { lookup } from './counts';
-import { fmtDuration, instant, percentText } from './format';
+import { byteOrder, fmtDuration, instant, percentText } from './format';
 import { endOf, minuteSpan, windowOf } from './quota';
 import { speedWord, windingDown } from './selection';
 import { HOUR } from './time';
@@ -28,7 +28,6 @@ export const FAILOVER_PRESETS: Record<Exclude<FailoverPreset, 'custom'>, { inFli
 
 // A share the store kept as a REAL can read back a rounding off the literal it was saved from.
 const near = (a: number, b: number) => Math.abs(a - b) < 1e-9;
-const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
 export function sheddingPresetOf(p: Pick<Pool, 'burnAverageSeconds' | 'shedCap' | 'shedDwellSeconds'>): SheddingPreset {
   const names = Object.keys(SHEDDING_PRESETS) as Exclude<SheddingPreset, 'custom'>[];
@@ -226,7 +225,7 @@ export function shedPreview(
     const pins = sessions
       .filter((s) => s.pinned && s.accountId === account.id)
       // The router walks an account's pins in key, session and model order, which settles ties in the sorts below.
-      .sort((a, b) => cmp(a.keyId, b.keyId) || cmp(a.sessionId, b.sessionId) || cmp(a.model ?? '', b.model ?? ''));
+      .sort((a, b) => byteOrder(a.keyId, b.keyId) || byteOrder(a.sessionId, b.sessionId) || byteOrder(a.model ?? '', b.model ?? ''));
     const five = readingOf(account, '5h');
     const start = five === null ? null : windowStart(five, now);
     // A start at or after `now`, from a reset more than five hours ahead, is no reading of a fresh window, so it holds

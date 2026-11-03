@@ -2,7 +2,7 @@ import type { AccountPatch, KeyInput, PoolEngineFields, PoolInput } from '@/api/
 import { AFFINITY_MODE_VALUES, iso, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/decode';
 import { slug } from '@/api/http';
 import type { Account, ApiKey, GuardrailRef, ModelRule, ModelRulesMode, Pool, PoolKeepalive, PoolWarning } from '@/api/types';
-import { fmtInt, toLocalInput, viewingZone } from './format';
+import { byteOrder, fmtInt, toLocalInput, viewingZone } from './format';
 import { checkPattern } from './patterns';
 import { DAY } from './time';
 
@@ -271,7 +271,7 @@ export function poolWarnings(pool: WarnedSettings, cohort: number): PoolWarning[
   if (pool.warmSessions === 'never') {
     warn('warm_never', ['warm_sessions'], 'With warm sessions never a round stops after the cold sessions, so the excess is covered only while cold sessions carry it.');
   }
-  return out.sort((a, b) => (a.code < b.code ? -1 : a.code > b.code ? 1 : 0));
+  return out.sort((a, b) => byteOrder(a.code, b.code));
 }
 
 export type AutoModeOverride = 'inherit' | 'off' | 'on';

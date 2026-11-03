@@ -1,6 +1,7 @@
 import type { Reconciliation } from '@/api/types';
 import { judged, RATIO_HIGH, RATIO_LOW, ratioOff } from './analytics';
 import { lookup } from './counts';
+import { byteOrder } from './format';
 import { DAY } from './time';
 import { WINDOW_LABEL, windowKeyId, windowRank } from './windows';
 
@@ -19,7 +20,6 @@ export function meterWindowWord(window: string): string {
 }
 
 /** The windows' order: the 5-hour window, the 7-day one, the known model week, then any other key by its spelling. */
-const byteOrder = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 const byWindow = (a: string, b: string) => windowRank(a) - windowRank(b) || byteOrder(a, b);
 const newestFirst = (a: Reconciliation, b: Reconciliation) => Date.parse(b.windowEnd) - Date.parse(a.windowEnd);
 

@@ -77,6 +77,8 @@ export const listWords = (words: string[]): string => (words.length < 2 ? words.
 const LISTED = 3;
 /** A list chip's values: the first few, then ` +N` for the rest. */
 export const listed = (words: string[]) => `${words.slice(0, LISTED).join(', ')}${words.length > LISTED ? ` +${words.length - LISTED}` : ''}`;
+/** Two strings in code-unit order, the same on every machine, which `localeCompare` is not. */
+export const byteOrder = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 const WINDOW_SHORT: ByWindow<string> = { '5h': '5h', '7d': '7d', '7d_fable': '7-day Fable' };
 /**
  * A share with its window's short word ("0.42% 5h", "0.12% 7d", "0.12% 7-day Fable"), for a cell too narrow for the
