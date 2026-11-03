@@ -11,7 +11,9 @@ use phoebis_transport::control::ControlClient;
 use serde_json::Value;
 use tokio::sync::Semaphore;
 
-use crate::exchange::{control_request, parse_profile, ControlKind, OauthError, ProfileResponse};
+use crate::exchange::{
+    control_request, instant_ms, parse_profile, ControlKind, OauthError, ProfileResponse,
+};
 use crate::manager::{retry_after_ms, AcquireError, Clock, CredentialManager, LandedMark};
 
 // A poisoned mutex means a prior panic happened while the cache or in-flight map was being mutated, so the
@@ -336,7 +338,7 @@ fn window_from_value(key: &str, value: &Value) -> Option<UsageWindow> {
     Some(UsageWindow {
         key: key.to_string(),
         utilization: object.get("utilization").and_then(Value::as_f64),
-        resets_at: object.get("resets_at").and_then(parse_resets_at),
+        resets_at: object.get("resets_at").and_then(instant_ms),
     })
 }
 
@@ -353,16 +355,8 @@ fn fable_from_limits(limits: &Value) -> Option<UsageWindow> {
     Some(UsageWindow {
         key: FABLE_WINDOW_KEY.to_string(),
         utilization: entry.get("percent").and_then(Value::as_f64),
-        resets_at: entry.get("resets_at").and_then(parse_resets_at),
+        resets_at: entry.get("resets_at").and_then(instant_ms),
     })
-}
-
-fn parse_resets_at(value: &Value) -> Option<i64> {
-    value
-        .as_str()?
-        .parse::<jiff::Timestamp>()
-        .ok()
-        .map(|t| t.as_millisecond())
 }
 
 struct ParsedUsage {

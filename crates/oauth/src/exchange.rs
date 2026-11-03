@@ -227,6 +227,15 @@ pub struct ProfileResponse {
     pub raw: Value,
 }
 
+/// An RFC 3339 string as Unix milliseconds, `None` for a value that is not a string or does not parse.
+pub(crate) fn instant_ms(value: &Value) -> Option<i64> {
+    value
+        .as_str()?
+        .parse::<jiff::Timestamp>()
+        .ok()
+        .map(|t| t.as_millisecond())
+}
+
 pub fn parse_profile(body: &[u8]) -> Result<ProfileResponse, OauthError> {
     let raw: Value = serde_json::from_slice(body)?;
     let field = |parent: &str, key: &str| -> Option<String> {
@@ -237,11 +246,7 @@ pub fn parse_profile(body: &[u8]) -> Result<ProfileResponse, OauthError> {
     let email = field("account", "email")
         .ok_or_else(|| OauthError::Malformed("profile has no account.email".into()))?;
     let organization_uuid = field("organization", "uuid");
-    let millis = |key: &str| -> Option<i64> {
-        field("organization", key)
-            .and_then(|s| s.parse::<jiff::Timestamp>().ok())
-            .map(|t| t.as_millisecond())
-    };
+    let millis = |key: &str| raw.get("organization")?.get(key).and_then(instant_ms);
     let subscription = SubscriptionRow {
         plan: if raw["account"]["has_claude_max"].as_bool().unwrap_or(false) {
             Some("max".to_string())
