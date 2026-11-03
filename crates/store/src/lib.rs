@@ -90,8 +90,8 @@ pub use registry::{
     canonical_id, key_prefix, AccountUpdate, Affinity, AffinityMode, ApiKeyRow, AttachmentSubject,
     BudgetPeriod, Failover, GuardrailAttachment, GuardrailRow, MemberWrite, ModelRule,
     OveragePolicy, PoolMember, PoolRow, RegistryChange, RegistryLoad, RetiredSecret, ReturnToPlan,
-    RulesMode, SessionPlacement, Shedding, SlowDown, Strategy, SubagentPlacement, SubscriptionTerm,
-    WarmSessions, GUARDRAIL_BOUND, KEY_SECRET_PREFIX, ROTATION_GRACE_MS,
+    RulesMode, SessionPlacement, Shedding, SlowDown, Strategy, SubagentPlacement, SubjectKind,
+    SubscriptionTerm, WarmSessions, GUARDRAIL_BOUND, KEY_SECRET_PREFIX, ROTATION_GRACE_MS,
 };
 pub use routing::{
     AffinityChain, AffinityRow, CooldownRow, CooldownScope, CreditsRow, FirstSeenRow, OverageRow,

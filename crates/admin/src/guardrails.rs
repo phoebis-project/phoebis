@@ -16,7 +16,8 @@ use phoebis_guardrails::{
 };
 use phoebis_ledger::{guardrail_sample_page, request_body, SampleSubject};
 use phoebis_store::{
-    stamp_token, AttachmentSubject, GuardrailRow, RegistryLoad, StoreError, GUARDRAIL_BOUND,
+    stamp_token, AttachmentSubject, GuardrailRow, RegistryLoad, StoreError, SubjectKind,
+    GUARDRAIL_BOUND,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -368,7 +369,7 @@ impl AttachmentIndex {
     }
 
     /// The guardrail's subjects of one kind, `pool` or `key`, in position order and by id within a position.
-    pub(crate) fn views_for(&self, guardrail_id: &str, kind: &str) -> Vec<AttachmentView> {
+    pub(crate) fn views_for(&self, guardrail_id: &str, kind: SubjectKind) -> Vec<AttachmentView> {
         let mut views: Vec<AttachmentView> = self
             .by_guardrail
             .get(guardrail_id)
@@ -396,8 +397,8 @@ pub(crate) fn guardrail_json(row: &GuardrailRow, index: &AttachmentIndex) -> Gua
         action: row.action.as_str().to_string(),
         conditions: row.conditions.iter().map(ConditionView::from).collect(),
         preset: preset_state(row),
-        pools: index.views_for(&row.id, "pool"),
-        keys: index.views_for(&row.id, "key"),
+        pools: index.views_for(&row.id, SubjectKind::Pool),
+        keys: index.views_for(&row.id, SubjectKind::Key),
         revision: stamp_token(row.incarnation, row.updated_at),
         created_at: row.created_at,
         updated_at: row.updated_at,
