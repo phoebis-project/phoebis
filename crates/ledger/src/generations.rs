@@ -60,7 +60,7 @@ pub fn reconcile_key_generations(
             let mut after_rowid = 0;
             loop {
                 let page =
-                    read_rollups_of_key_generation(&tx, &key.id, 0, from_hour, after_rowid, PAGE)?;
+                    read_rollups_of_key_generation(&tx, &key.id, from_hour, after_rowid, PAGE)?;
                 let Some((last_rowid, _)) = page.last() else {
                     break;
                 };

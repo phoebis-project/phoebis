@@ -2119,23 +2119,21 @@ pub async fn read_rollups_paged(
     Ok(())
 }
 
-/// One page of one key's rows at one generation, for the startup stamp that moves the unstamped rows of a
-/// live key: `rollups_hourly` is a rowid table, so the page after `after_rowid` is the next `limit` rows in
-/// rowid order and the caller carries the last rowid forward. `from_hour` narrows to the rows at or after an
-/// hour, for an id whose earlier holder's rows sit under the same generation.
+/// One page of one key's rows at generation 0, the unstamped rows the startup stamp moves onto a live key:
+/// `rollups_hourly` is a rowid table, so the page after `after_rowid` is the next `limit` rows in rowid order and
+/// the caller carries the last rowid forward. `from_hour` narrows to the rows at or after an hour, for an id whose
+/// earlier holder's rows sit at generation 0 too.
 pub(crate) fn read_rollups_of_key_generation(
     conn: &Connection,
     key_id: &str,
-    key_generation: i64,
     from_hour: Option<i64>,
     after_rowid: i64,
     limit: usize,
 ) -> Result<Vec<(i64, RollupRow)>, LedgerError> {
-    let mut stmt = conn.prepare(&format!("SELECT rowid, {COLUMNS} FROM rollups_hourly WHERE key_id = ?1 AND key_generation = ?2 AND hour >= ?3 AND rowid > ?4 ORDER BY rowid LIMIT ?5"))?;
+    let mut stmt = conn.prepare(&format!("SELECT rowid, {COLUMNS} FROM rollups_hourly WHERE key_id = ?1 AND key_generation = 0 AND hour >= ?2 AND rowid > ?3 ORDER BY rowid LIMIT ?4"))?;
     let rows = stmt.query_map(
         params![
             key_id,
-            key_generation,
             from_hour.unwrap_or(i64::MIN),
             after_rowid,
             limit as i64
