@@ -544,8 +544,9 @@ pub const HEADER_DENYLIST: &[&str] = &[
 /// Everything the denylist does not name travels, so a header the client starts sending after this code was
 /// written still reaches a replay as the caller spelled it.
 pub fn header_published(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    !HEADER_DENYLIST.contains(&lower.as_str())
+    !HEADER_DENYLIST
+        .iter()
+        .any(|denied| denied.eq_ignore_ascii_case(name))
 }
 
 /// Bound on the `User-Agent` a ledger row keeps, the same as the identity fields carry: the header reaches the
