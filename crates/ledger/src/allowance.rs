@@ -57,8 +57,8 @@ fn share_left(utilization: f64) -> f64 {
 
 /// The weekly resets of the listed accounts whose event `at` lies in `[from, to]`, read off the stored `window_reset`
 /// events, plus one `term_ended` row per weekly window with a reading before each `(account_id, end_at)` of `term_ends`
-/// whose end lies at or after `from`. The read keeps the listed accounts, every account's rows where the list is empty,
-/// since the ledger holds no account kind: the caller lists the `oauth` accounts it answers for. A term end's row reads
+/// whose end lies at or after `from`. The read keeps the listed accounts and answers no row for an empty list, since the
+/// ledger holds no account kind: the caller lists the `oauth` accounts it answers for. A term end's row reads
 /// the last reading before the end of a week still open at it (its reset at or after the end), the head's
 /// overage-included week folded into `seven_day_fable` with the newer reading standing, and a reading with no
 /// utilization skipped. A reading with no reset instant shows no open week. A reset of an account in `term_ends` at or
@@ -71,6 +71,9 @@ pub fn unused_allowance(
     to: i64,
     term_ends: &[(String, i64)],
 ) -> Result<Vec<AllowanceReset>, LedgerError> {
+    if accounts.is_empty() {
+        return Ok(Vec::new());
+    }
     let mut ends: HashMap<&str, i64> = HashMap::new();
     for (account_id, end_at) in term_ends {
         ends.entry(account_id.as_str())
@@ -82,18 +85,14 @@ pub fn unused_allowance(
         Value::Integer(to),
         Value::Text(WINDOW_RESET.into()),
     ];
-    let filter = if accounts.is_empty() {
-        String::new()
-    } else {
-        binds.extend(accounts.iter().cloned().map(Value::Text));
-        format!(
-            " AND account_id IN ({})",
-            (4..4 + accounts.len())
-                .map(|n| format!("?{n}"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
-    };
+    binds.extend(accounts.iter().cloned().map(Value::Text));
+    let filter = format!(
+        " AND account_id IN ({})",
+        (4..4 + accounts.len())
+            .map(|n| format!("?{n}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
     let mut stmt = conn.prepare(&format!(
         "SELECT account_id, at, detail FROM events \
          WHERE kind = ?3 AND at >= ?1 AND at <= ?2{filter} \

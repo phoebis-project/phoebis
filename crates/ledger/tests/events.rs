@@ -2803,22 +2803,10 @@ fn the_unused_allowance_lists_each_weekly_reset_in_range_newest_first_and_a_term
         "the listed accounts' weekly resets newest first, the share clamped to the unit interval, and the term end \
          read from the last reading before it"
     );
-    let every = db
+    let none = db
         .read_blocking(|c| unused_allowance(c, &[], from, to, &[]))
         .unwrap();
-    let mut expected = a_rows();
-    expected.push(reset_row(
-        "b",
-        "seven_day",
-        now - 2 * DAY - 60_000,
-        1.0 - 0.25,
-        now - 2 * DAY,
-        "clock",
-    ));
-    assert_eq!(
-        every, expected,
-        "the empty list keeps every account's resets"
-    );
+    assert_eq!(none, [], "an empty list reads no account's resets");
 }
 
 #[test]

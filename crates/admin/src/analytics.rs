@@ -1288,16 +1288,6 @@ pub(crate) async fn unused_allowance(
         .map(|a| a.id.clone())
         .collect();
     oauth.sort();
-    // An empty list reads every account's rows in the ledger, a deleted or an API key account's among them, so a filter
-    // that names no subscription account and a registry that holds none both answer without the read.
-    if oauth.is_empty() {
-        return Json(UnusedAllowance {
-            from,
-            to,
-            accounts: Vec::new(),
-        })
-        .into_response();
-    }
     // The term is read at the range's end, capped at `now`. A trial whose end passed by then while the plan carried on
     // ended no plan, so a passed trial end ends a week only through a plan-ended flag that followed it, at the flag's
     // instant. An end still ahead of `now` ends no week yet, and a custom range may reach a day past it. An end before
