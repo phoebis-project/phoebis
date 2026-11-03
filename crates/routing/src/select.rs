@@ -290,6 +290,26 @@ pub enum MigrateReason {
 }
 
 impl MigrateReason {
+    /// The order step 4 runs its rules in, which the walk keeps: a fired rule's successors read `not_run`.
+    const ORDER: [MigrateReason; 5] = [
+        MigrateReason::Spent,
+        MigrateReason::Overage,
+        MigrateReason::ReturnToPlan,
+        MigrateReason::Drain,
+        MigrateReason::Shed,
+    ];
+
+    /// The rule's walk step.
+    fn step(self) -> &'static str {
+        match self {
+            MigrateReason::Drain => "move:drain",
+            MigrateReason::Overage => "move:overage",
+            MigrateReason::ReturnToPlan => "move:return_to_plan",
+            MigrateReason::Shed => "move:shed",
+            MigrateReason::Spent => "move:spent",
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             MigrateReason::Drain => "drain",
@@ -1258,15 +1278,6 @@ pub fn select(
     (result, writes)
 }
 
-/// The order step 4 runs its rules in, which the walk keeps: a fired rule's successors read `not_run`.
-const RULES: [&str; 5] = [
-    "move:spent",
-    "move:overage",
-    "move:return_to_plan",
-    "move:drain",
-    "move:shed",
-];
-
 /// What a decision read while it ran, appended where each fact was read, so the record holds the engine's own
 /// readings and never a second look at the state.
 #[derive(Default)]
@@ -1735,12 +1746,16 @@ fn run(
             } else {
                 "subscription_ended"
             };
-            for rule in RULES {
-                rec.step(rule, "not_run", vec![Fact::text("reason", reason)]);
+            for rule in MigrateReason::ORDER {
+                rec.step(rule.step(), "not_run", vec![Fact::text("reason", reason)]);
             }
         } else if let Some((candidate, words)) = directed {
-            for rule in RULES {
-                rec.step(rule, "not_run", vec![Fact::text("reason", words.reason)]);
+            for rule in MigrateReason::ORDER {
+                rec.step(
+                    rule.step(),
+                    "not_run",
+                    vec![Fact::text("reason", words.reason)],
+                );
             }
             if candidate.account_id == current.account_id {
                 // The pin renews in place at step 5, which reads the account's pace as a pinned turn does.
@@ -3574,15 +3589,23 @@ fn move_of<'a>(
     // A fast request draws usage credits and no plan window, so neither a spent window nor plan overage is a
     // reason to move its session.
     if request.fast {
-        rec.step(RULES[0], "no", vec![Fact::bool("fast", true)]);
+        rec.step(
+            MigrateReason::Spent.step(),
+            "no",
+            vec![Fact::bool("fast", true)],
+        );
     } else if !pool.shedding.migrate_when_spent {
         rec.step(
-            RULES[0],
+            MigrateReason::Spent.step(),
             "no",
             vec![Fact::bool("migrate_when_spent", false)],
         );
     } else if holds_allowance(state, snapshot, &current.account_id, window, now) {
-        rec.step(RULES[0], "no", vec![Fact::bool("holds_allowance", true)]);
+        rec.step(
+            MigrateReason::Spent.step(),
+            "no",
+            vec![Fact::bool("holds_allowance", true)],
+        );
     } else {
         // A reset inside the retry bound costs less than a cold rewrite: the request waits for it in place and the
         // pin renews once the window has refunded. The 429 that spent the window cools the account a margin past the
@@ -3619,7 +3642,7 @@ fn move_of<'a>(
         {
             let wait_ms = until - now;
             rec.step(
-                RULES[0],
+                MigrateReason::Spent.step(),
                 "held",
                 vec![
                     Fact::bool("holds_allowance", false),
@@ -3628,7 +3651,7 @@ fn move_of<'a>(
                     Fact::int("wait_ms", wait_ms).unit("ms"),
                 ],
             );
-            not_run_after(rec, 0, &slow_down_facts);
+            not_run_after(rec, MigrateReason::Spent, &slow_down_facts);
             return MoveVerdict::Wait { until };
         }
         let gate = gate(
@@ -3649,10 +3672,9 @@ fn move_of<'a>(
         );
         let facts = vec![Fact::bool("holds_allowance", false)];
         if !gate.set.is_empty() {
-            let (set, reads) = fired(rec, 0, facts, gate, &slow_down_facts);
-            return MoveVerdict::Move(MigrateReason::Spent, set, reads);
+            return fired(rec, MigrateReason::Spent, facts, gate, &slow_down_facts);
         }
-        no_destination(rec, 0, facts, gate, &slow_down_facts);
+        no_destination(rec, MigrateReason::Spent, facts, gate, &slow_down_facts);
     }
 
     // A subscription account in overage hands the session back to plan quota, warm or cold, onto a plan-funded
@@ -3661,17 +3683,29 @@ fn move_of<'a>(
     // account is about to get its plan back, and moving now would move it twice.
     let current_kind = kind(&current.account_id);
     if request.fast {
-        rec.step(RULES[1], "no", vec![Fact::bool("fast", true)]);
+        rec.step(
+            MigrateReason::Overage.step(),
+            "no",
+            vec![Fact::bool("fast", true)],
+        );
     } else if !prefer_plan {
         rec.step(
-            RULES[1],
+            MigrateReason::Overage.step(),
             "no",
             vec![Fact::text("overage_policy", pool.overage_policy.as_str())],
         );
     } else if current_kind != Some(AccountKind::Oauth) {
-        rec.step(RULES[1], "no", vec![kind_fact(current_kind)]);
+        rec.step(
+            MigrateReason::Overage.step(),
+            "no",
+            vec![kind_fact(current_kind)],
+        );
     } else if !state.in_overage(&current.account_id, now, fallback_ms) {
-        rec.step(RULES[1], "no", vec![Fact::bool("in_overage", false)]);
+        rec.step(
+            MigrateReason::Overage.step(),
+            "no",
+            vec![Fact::bool("in_overage", false)],
+        );
     } else {
         let grace_ms = i64::from(pool.failover.overage_move_grace_minutes) * 60_000;
         let reset = state.overage(&current.account_id).and_then(|e| e.reset);
@@ -3680,7 +3714,7 @@ fn move_of<'a>(
             Some(reset) => {
                 facts.push(Fact::int("reset_in_grace", reset - now).unit("ms"));
                 facts.push(Fact::int("grace_ms", grace_ms).unit("ms"));
-                rec.step(RULES[1], "no", facts);
+                rec.step(MigrateReason::Overage.step(), "no", facts);
             }
             None => {
                 let gate = gate(
@@ -3696,10 +3730,9 @@ fn move_of<'a>(
                     rec,
                 );
                 if !gate.set.is_empty() {
-                    let (set, reads) = fired(rec, 1, facts, gate, &slow_down_facts);
-                    return MoveVerdict::Move(MigrateReason::Overage, set, reads);
+                    return fired(rec, MigrateReason::Overage, facts, gate, &slow_down_facts);
                 }
-                no_destination(rec, 1, facts, gate, &slow_down_facts);
+                no_destination(rec, MigrateReason::Overage, facts, gate, &slow_down_facts);
             }
         }
     }
@@ -3712,7 +3745,7 @@ fn move_of<'a>(
     let mode = pool.failover.return_to_plan;
     if !paid_source(snapshot, &current.account_id) {
         rec.step(
-            RULES[2],
+            MigrateReason::ReturnToPlan.step(),
             "no",
             vec![kind_fact(current_kind), Fact::text("mode", mode.as_str())],
         );
@@ -3741,7 +3774,7 @@ fn move_of<'a>(
             }
         };
         if !returns {
-            rec.step(RULES[2], "no", facts);
+            rec.step(MigrateReason::ReturnToPlan.step(), "no", facts);
         } else {
             let gate = gate(
                 state,
@@ -3756,19 +3789,38 @@ fn move_of<'a>(
                 rec,
             );
             if !gate.set.is_empty() {
-                let (set, reads) = fired(rec, 2, facts, gate, &slow_down_facts);
-                return MoveVerdict::Move(MigrateReason::ReturnToPlan, set, reads);
+                return fired(
+                    rec,
+                    MigrateReason::ReturnToPlan,
+                    facts,
+                    gate,
+                    &slow_down_facts,
+                );
             }
-            no_destination(rec, 2, facts, gate, &slow_down_facts);
+            no_destination(
+                rec,
+                MigrateReason::ReturnToPlan,
+                facts,
+                gate,
+                &slow_down_facts,
+            );
         }
     }
 
     // A cold pin costs nothing to move off an account about to end. A warm one stays: past the end the
     // `subscription_ended` exclusion releases it and the upstream refuses the dead token.
     if !cold {
-        rec.step(RULES[3], "no", vec![Fact::bool("cold", false)]);
+        rec.step(
+            MigrateReason::Drain.step(),
+            "no",
+            vec![Fact::bool("cold", false)],
+        );
     } else if !winding_down(snapshot, pool, &current.account_id, now) {
-        rec.step(RULES[3], "no", vec![Fact::bool("winding_down", false)]);
+        rec.step(
+            MigrateReason::Drain.step(),
+            "no",
+            vec![Fact::bool("winding_down", false)],
+        );
     } else {
         let gate = gate(
             state,
@@ -3784,10 +3836,9 @@ fn move_of<'a>(
         );
         let facts = vec![Fact::bool("cold", true), Fact::bool("winding_down", true)];
         if !gate.set.is_empty() {
-            let (set, reads) = fired(rec, 3, facts, gate, &slow_down_facts);
-            return MoveVerdict::Move(MigrateReason::Drain, set, reads);
+            return fired(rec, MigrateReason::Drain, facts, gate, &slow_down_facts);
         }
-        no_destination(rec, 3, facts, gate, &slow_down_facts);
+        no_destination(rec, MigrateReason::Drain, facts, gate, &slow_down_facts);
     }
 
     // The switch turns the round off and nothing else: the rules above, the fit gate and the reservations ran as they
@@ -3795,7 +3846,7 @@ fn move_of<'a>(
     if !load_shedding(pool) {
         rule_line(
             rec,
-            4,
+            MigrateReason::Shed,
             "not_run",
             vec![Fact::text("round", "off")],
             &slow_down_facts,
@@ -3944,7 +3995,7 @@ fn move_of<'a>(
             facts.push(Fact::text("round", "within_dwell"));
         }
     } else if waiting.is_empty() && stretch_waits.is_none() && young.is_none() {
-        rule_line(rec, 4, "no", facts, &slow_down_facts);
+        rule_line(rec, MigrateReason::Shed, "no", facts, &slow_down_facts);
         return MoveVerdict::Stay;
     }
     // A pin on an account cooled for this model is not renewed at step 5, so the fresh placement replaces it:
@@ -3960,7 +4011,7 @@ fn move_of<'a>(
         .is_some()
     {
         facts.push(Fact::bool("cooldown", true));
-        rule_line(rec, 4, "no", facts, &slow_down_facts);
+        rule_line(rec, MigrateReason::Shed, "no", facts, &slow_down_facts);
         return MoveVerdict::Stay;
     }
     // A pin moves only when its session asks, so an unmarked pin never moves for utilization and a marked one
@@ -3969,7 +4020,7 @@ fn move_of<'a>(
     let marked = state.shed_marked(&current.key());
     facts.push(Fact::bool("marked", marked));
     if !marked {
-        rule_line(rec, 4, "no", facts, &slow_down_facts);
+        rule_line(rec, MigrateReason::Shed, "no", facts, &slow_down_facts);
         return MoveVerdict::Stay;
     }
     if request.fast
@@ -3977,7 +4028,7 @@ fn move_of<'a>(
             == BurnUnit::WindowShare
     {
         facts.push(Fact::bool("window_share_fast", true));
-        rule_line(rec, 4, "no", facts, &slow_down_facts);
+        rule_line(rec, MigrateReason::Shed, "no", facts, &slow_down_facts);
         return MoveVerdict::Stay;
     }
     // The shed rule's keep is the no-return test alone: a pin never returns inside the dwell to the account that
@@ -4001,23 +4052,22 @@ fn move_of<'a>(
         rec,
     );
     if gate.set.is_empty() {
-        no_destination(rec, 4, facts, gate, &slow_down_facts);
+        no_destination(rec, MigrateReason::Shed, facts, gate, &slow_down_facts);
         return MoveVerdict::Stay;
     }
-    let (set, reads) = fired(rec, 4, facts, gate, &slow_down_facts);
-    MoveVerdict::Move(MigrateReason::Shed, set, reads)
+    fired(rec, MigrateReason::Shed, facts, gate, &slow_down_facts)
 }
 
 /// A rule that moves the pin: its line with the destinations, the rules after it `not_run`, then the fit table the
-/// destinations were taken from. Answers the destinations, which the strategy ranks, with the gate's reads, whose
-/// runway breaks the strategy's tie.
+/// destinations were taken from. Answers the move to the destinations, which the strategy ranks, with the gate's
+/// reads, whose runway breaks the strategy's tie.
 fn fired<'a>(
     rec: &mut Recorder,
-    rule: usize,
+    rule: MigrateReason,
     mut facts: Vec<Fact>,
     gate: Gate<'a>,
     slow_down_facts: &[Fact],
-) -> (Vec<&'a Candidate>, Vec<(String, FitRead)>) {
+) -> MoveVerdict<'a> {
     let Gate {
         set, reads, step, ..
     } = gate;
@@ -4028,27 +4078,31 @@ fn fired<'a>(
     rule_line(rec, rule, "fired", facts, slow_down_facts);
     not_run_after(rec, rule, slow_down_facts);
     rec.walk.push(step);
-    (set, reads)
+    MoveVerdict::Move(rule, set, reads)
 }
 
 /// A rule's line, the shed rule's with the slow-down facts the decision's read left beside its own, so every pinned
 /// decision shows the account's pace whichever rule answered.
 fn rule_line(
     rec: &mut Recorder,
-    rule: usize,
+    rule: MigrateReason,
     verdict: &'static str,
     mut facts: Vec<Fact>,
     slow_down_facts: &[Fact],
 ) {
-    if RULES[rule] == "move:shed" {
+    if rule == MigrateReason::Shed {
         facts.extend_from_slice(slow_down_facts);
     }
-    rec.step(RULES[rule], verdict, facts);
+    rec.step(rule.step(), verdict, facts);
 }
 
 /// The lines of the rules after `rule`, `not_run` since `rule` answered.
-fn not_run_after(rec: &mut Recorder, rule: usize, slow_down_facts: &[Fact]) {
-    for later in rule + 1..RULES.len() {
+fn not_run_after(rec: &mut Recorder, rule: MigrateReason, slow_down_facts: &[Fact]) {
+    for later in MigrateReason::ORDER
+        .into_iter()
+        .skip_while(|r| *r != rule)
+        .skip(1)
+    {
         rule_line(rec, later, "not_run", Vec::new(), slow_down_facts);
     }
 }
@@ -4351,7 +4405,7 @@ fn water_fill(
 /// The fit table follows when the gate read any candidate, so the record says why none passed.
 fn no_destination(
     rec: &mut Recorder,
-    rule: usize,
+    rule: MigrateReason,
     mut facts: Vec<Fact>,
     gate: Gate<'_>,
     slow_down_facts: &[Fact],
