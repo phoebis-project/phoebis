@@ -1747,6 +1747,11 @@ impl Relay {
         let guardrail_id = evaluation.blocked.map(|i| guardrails[i].id.clone());
         let client = client_facts(&parts.headers, Some(&identity), Some(&facts));
         let classifier = client.classifier.is_some();
+        let static_hash = facts
+            .chains
+            .as_ref()
+            .and_then(|c| c.static_hash())
+            .map(String::from);
         trace
             .observed(
                 Some(&key),
@@ -1757,16 +1762,8 @@ impl Relay {
                 stream,
                 capture_hours,
                 facts.shape.clone(),
-                facts
-                    .chains
-                    .as_ref()
-                    .and_then(|c| c.static_hash())
-                    .map(String::from),
-                facts
-                    .chains
-                    .as_ref()
-                    .map(|c| c.message_boundaries.to_vec())
-                    .unwrap_or_default(),
+                static_hash.clone(),
+                boundaries.to_vec(),
                 client,
                 auto_mode,
                 retired,
@@ -2160,11 +2157,7 @@ impl Relay {
                     count: admitted.trace.kind == Kind::CountTokens,
                     request_class: hints.request_class.clone(),
                     context_compacted: hints.context_compacted.is_some(),
-                    static_hash: facts
-                        .chains
-                        .as_ref()
-                        .and_then(|c| c.static_hash())
-                        .map(String::from),
+                    static_hash: static_hash.clone(),
                     boundaries: facts
                         .chains
                         .as_ref()
