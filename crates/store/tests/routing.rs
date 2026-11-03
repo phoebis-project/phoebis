@@ -1,8 +1,9 @@
 use phoebis_routing::lane_key;
 use phoebis_store::{
     AccountKind, AccountRow, AffinityChain, AffinityRow, ApiKeyRow, CooldownRow, CooldownScope,
-    CreditsRow, FirstSeenRow, OverageRow, PinBurn, PinKey, PinMark, PinRow, PoolRow, RekeyWrite,
-    ResolutionRow, RulesMode, ShedRoundRow, ShedStamp, StorageKey, Store, WindowRow, WindowSetRow,
+    CreditsRow, EvidenceSource, FirstSeenRow, OverageRow, PinBurn, PinKey, PinMark, PinRow,
+    PoolRow, RekeyWrite, ResolutionRow, RulesMode, ShedRoundRow, ShedStamp, StorageKey, Store,
+    WindowRow, WindowSetRow,
 };
 
 const SPELLING: &str = "claude-sonnet-4-5";
@@ -125,6 +126,40 @@ fn every_stored_cooldown_scope_text_loads_as_its_scope() {
             CooldownScope::Fast,
             CooldownScope::FastCredits,
             CooldownScope::Model("claude-opus-5".into()),
+        ]
+    );
+}
+
+/// The routing load reads `sample` as a sample and any other stored word as a head, so a row it cannot name still
+/// loads.
+#[test]
+fn an_overage_source_stored_under_any_word_but_sample_loads_as_a_head() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let storage_key = StorageKey::generate();
+    seed_accounts(&Store::open(&path, &storage_key).unwrap(), &["a", "b", "c"]);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute(
+        "INSERT INTO overage_state (account_id, in_use, observed_at, source, incarnation) VALUES \
+         ('a', 1, 1, 'head', 1), ('b', 1, 1, 'sample', 1), ('c', 1, 1, 'poll', 1)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let sources: Vec<(String, EvidenceSource)> = Store::open(&path, &storage_key)
+        .unwrap()
+        .load_routing()
+        .unwrap()
+        .overage
+        .into_iter()
+        .map(|row| (row.account_id, row.source))
+        .collect();
+    assert_eq!(
+        sources,
+        [
+            ("a".to_string(), EvidenceSource::Head),
+            ("b".to_string(), EvidenceSource::Sample),
+            ("c".to_string(), EvidenceSource::Head),
         ]
     );
 }
@@ -749,7 +784,7 @@ fn overage_evidence_only_moves_forward_in_time() {
         since: Some(50),
         reset: Some(900),
         observed_at: 100,
-        source: "head".into(),
+        source: EvidenceSource::Head,
         incarnation: 1,
     };
     assert!(store.upsert_overage(&newer).unwrap());
@@ -1190,7 +1225,7 @@ fn the_routing_rows_carry_the_holder_they_were_recorded_for() {
         since: Some(50),
         reset: None,
         observed_at: 100,
-        source: "sample".into(),
+        source: EvidenceSource::Sample,
         incarnation: 3,
     };
     store.upsert_overage(&reading).unwrap();

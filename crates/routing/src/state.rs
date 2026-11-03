@@ -81,20 +81,7 @@ pub fn entrypoint_of(pin: &PinRow) -> Option<&str> {
     Some(pin.entrypoint.as_str()).filter(|entrypoint| !entrypoint.is_empty())
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EvidenceSource {
-    Head,
-    Sample,
-}
-
-impl EvidenceSource {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            EvidenceSource::Head => "head",
-            EvidenceSource::Sample => "sample",
-        }
-    }
-}
+pub use phoebis_store::EvidenceSource;
 
 /// Where a window's reading came from: a response head, the usage poll, the registry at start (which keeps no
 /// origin), or the router's own prediction once a charge or a passed reset moved the stored reading.
@@ -1535,11 +1522,7 @@ impl RoutingState {
                             since: o.since,
                             reset: o.reset,
                             observed_at: o.observed_at,
-                            source: if o.source == "sample" {
-                                EvidenceSource::Sample
-                            } else {
-                                EvidenceSource::Head
-                            },
+                            source: o.source,
                             incarnation: o.incarnation,
                         },
                     )

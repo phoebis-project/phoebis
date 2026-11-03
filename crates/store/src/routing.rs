@@ -179,6 +179,38 @@ pub struct CooldownRow {
     pub incarnation: u64,
 }
 
+/// Where an account's overage evidence came from: a response head or a usage sample. Stored as `head` or `sample`,
+/// and any text but `sample` reads as `Head`, so no stored word fails the routing load.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EvidenceSource {
+    Head,
+    Sample,
+}
+
+impl EvidenceSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EvidenceSource::Head => "head",
+            EvidenceSource::Sample => "sample",
+        }
+    }
+}
+
+impl FromSql for EvidenceSource {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        Ok(match value.as_str()? {
+            "sample" => EvidenceSource::Sample,
+            _ => EvidenceSource::Head,
+        })
+    }
+}
+
+impl ToSql for EvidenceSource {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(self.as_str().into())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OverageRow {
     pub account_id: String,
@@ -186,7 +218,7 @@ pub struct OverageRow {
     pub since: Option<i64>,
     pub reset: Option<i64>,
     pub observed_at: i64,
-    pub source: String,
+    pub source: EvidenceSource,
     pub incarnation: u64,
 }
 

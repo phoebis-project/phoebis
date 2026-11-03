@@ -6622,7 +6622,7 @@ async fn a_usage_based_seat_starts_out_of_overage_over_a_stored_in_use_row_and_r
             since: Some(500),
             reset: Some(25 * HOUR),
             observed_at: 500,
-            source: "head".into(),
+            source: phoebis_routing::EvidenceSource::Head,
             incarnation: 1,
         })
         .unwrap();

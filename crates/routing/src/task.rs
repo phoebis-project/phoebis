@@ -3709,7 +3709,7 @@ impl Task {
                             since: current.since,
                             reset: current.reset,
                             observed_at: current.observed_at,
-                            source: current.source.as_str().into(),
+                            source: current.source,
                             incarnation: current.incarnation,
                         })]);
                     }
