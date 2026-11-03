@@ -345,6 +345,12 @@ fn pattern_any(
     clauses.push(format!("({})", parts.join(" OR ")));
 }
 
+/// `expr` read off the serving attempt of the request whose id `request_id` names: its last attempt, the one the
+/// rollups file the request under.
+fn serving_attempt(expr: &str, request_id: &str) -> String {
+    format!("(SELECT {expr} FROM attempts a WHERE a.request_id = {request_id} ORDER BY a.attempt DESC LIMIT 1)")
+}
+
 /// The `WHERE` clauses `filter` sets on the requests table with the values they bind, numbered in the order bound.
 /// The key filter reads the selectors the analytics do, against the row's `(key_id, key_generation)`, and `live` says
 /// which generation a bare id names.
@@ -395,8 +401,8 @@ fn filter_clauses(
         // The serving attempt is the last, the account the rollups file a request under, so a request that failed
         // over lists under the account that answered it. A request no attempt served reads as the reserved id.
         clauses.push(format!(
-            "COALESCE((SELECT a.account_id FROM attempts a WHERE a.request_id = requests.id \
-             ORDER BY a.attempt DESC LIMIT 1), '{UNATTRIBUTED}') IN ({marks})"
+            "COALESCE({}, '{UNATTRIBUTED}') IN ({marks})",
+            serving_attempt("a.account_id", "requests.id")
         ));
     }
     if !filter.speeds.is_empty() {
@@ -404,8 +410,12 @@ fn filter_clauses(
         // The serving attempt is the last: an earlier 429 carries no speed and must not read as standard. The speed
         // follows the rollups' fold: the speed the serving attempt's answer reported, `standard` for an answer with
         // usage that reported none, and the speed the request asked for where no attempt answered.
+        let speed = serving_attempt(
+            "COALESCE(a.speed, CASE WHEN COALESCE(a.input_tokens, a.output_tokens, a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens) IS NOT NULL THEN 'standard' END)",
+            "requests.id",
+        );
         clauses.push(format!(
-            "COALESCE((SELECT COALESCE(a.speed, CASE WHEN COALESCE(a.input_tokens, a.output_tokens, a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens) IS NOT NULL THEN 'standard' END) FROM attempts a WHERE a.request_id = requests.id ORDER BY a.attempt DESC LIMIT 1), CASE WHEN requests.requested_speed = 'fast' THEN 'fast' ELSE 'standard' END) IN ({marks})"
+            "COALESCE({speed}, CASE WHEN requests.requested_speed = 'fast' THEN 'fast' ELSE 'standard' END) IN ({marks})"
         ));
     }
     if !filter.cache_miss_reasons.is_empty() {
@@ -413,7 +423,8 @@ fn filter_clauses(
         // The serving attempt is the last, the one the rollups count a request's reason on. A request with no
         // attempt or a null serving reason matches nothing.
         clauses.push(format!(
-            "(SELECT a.cache_miss_reason FROM attempts a WHERE a.request_id = requests.id ORDER BY a.attempt DESC LIMIT 1) IN ({marks})"
+            "{} IN ({marks})",
+            serving_attempt("a.cache_miss_reason", "requests.id")
         ));
     }
     // The serving attempt is the last, as for the accounts. A NULL matches no list, so a serving attempt that names no
@@ -421,13 +432,15 @@ fn filter_clauses(
     if !filter.stop_reasons.is_empty() {
         let marks = bind_all(&filter.stop_reasons, &mut args);
         clauses.push(format!(
-            "COALESCE((SELECT a.stop_reason FROM attempts a WHERE a.request_id = requests.id ORDER BY a.attempt DESC LIMIT 1), '-') IN ({marks})"
+            "COALESCE({}, '-') IN ({marks})",
+            serving_attempt("a.stop_reason", "requests.id")
         ));
     }
     if !filter.refusal_categories.is_empty() {
         let marks = bind_all(&filter.refusal_categories, &mut args);
         clauses.push(format!(
-            "COALESCE((SELECT a.refusal_category FROM attempts a WHERE a.request_id = requests.id ORDER BY a.attempt DESC LIMIT 1), '-') IN ({marks})"
+            "COALESCE({}, '-') IN ({marks})",
+            serving_attempt("a.refusal_category", "requests.id")
         ));
     }
     if !filter.efforts.is_empty() {
@@ -663,15 +676,16 @@ pub fn refusal_categories(
         ..filter.clone()
     };
     let (args, mut clauses) = filter_clauses(&filter, live);
-    clauses.push(
-        "(SELECT a.stop_reason FROM attempts a WHERE a.request_id = requests.id ORDER BY a.attempt DESC LIMIT 1) = 'refusal'"
-            .into(),
-    );
+    clauses.push(format!(
+        "{} = 'refusal'",
+        serving_attempt("a.stop_reason", "requests.id")
+    ));
     // SQL does not express the fold, so the patterns match each raw pair in memory, grouped first so a pair repeated
     // across many refusals folds once per category.
     let sql = format!(
-        "SELECT COALESCE((SELECT a.refusal_category FROM attempts a WHERE a.request_id = requests.id ORDER BY a.attempt DESC LIMIT 1), '-') AS category, \
+        "SELECT COALESCE({}, '-') AS category, \
          client, user_agent, COUNT(*) FROM requests WHERE {} GROUP BY category, client, user_agent",
+        serving_attempt("a.refusal_category", "requests.id"),
         clauses.join(" AND ")
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -3551,7 +3565,7 @@ pub fn session_activity(
     conn: &Connection,
     since: i64,
 ) -> Result<Vec<SessionActivity>, LedgerError> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&format!(
         "WITH recent AS (SELECT id, key_id, key_generation, session_id AS grp, received_at, canonical_model, \
          presented_retired, rotation_at, refused FROM requests \
          WHERE key_id IS NOT NULL AND session_id IS NOT NULL AND kind != 'probe' AND received_at >= ?1), \
@@ -3561,10 +3575,11 @@ pub fn session_activity(
          SUM(CASE WHEN refused = 0 THEN 1 ELSE 0 END) OVER (PARTITION BY key_id, key_generation, grp) AS n \
          FROM recent) \
          SELECT key_id, key_generation, grp, first_at, received_at, n, canonical_model, \
-         (SELECT a.account_id FROM attempts a WHERE a.request_id = ranked.id ORDER BY a.attempt DESC LIMIT 1), \
+         {}, \
          presented_retired, rotation_at \
          FROM ranked WHERE nth = 1 ORDER BY received_at DESC",
-    )?;
+        serving_attempt("a.account_id", "ranked.id")
+    ))?;
     let rows = stmt.query_map(params![since], |r| {
         Ok(SessionActivity {
             key_id: r.get(0)?,
