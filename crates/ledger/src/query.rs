@@ -9,7 +9,7 @@ use phoebis_bus::{Classifier, Kind};
 use phoebis_routing::{
     window_for, MemberSpend, PinUsage, DAY_MS, FIVE_HOUR, HOUR_MS, REFRESHING_CLASSES, SEVEN_DAY,
 };
-use phoebis_store::{AccountKind, BudgetPeriod};
+use phoebis_store::{canonical_id, AccountKind, BudgetPeriod};
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -381,7 +381,7 @@ fn filter_clauses(
         &filter
             .models
             .iter()
-            .map(|m| m.to_ascii_lowercase())
+            .map(|m| canonical_id(m))
             .collect::<Vec<_>>(),
         &mut args,
         &mut clauses,
@@ -1936,7 +1936,7 @@ impl RollupFilter {
             pools: self.pools.clone(),
             accounts: self.accounts.clone(),
             kinds: self.kinds.clone(),
-            models: self.models.iter().map(|m| m.to_ascii_lowercase()).collect(),
+            models: self.models.iter().map(|m| canonical_id(m)).collect(),
             keys,
         })
     }
@@ -3881,7 +3881,7 @@ pub fn placements(
         &filter
             .models
             .iter()
-            .map(|m| m.to_ascii_lowercase())
+            .map(|m| canonical_id(m))
             .collect::<Vec<_>>(),
         &mut args,
         &mut clauses,

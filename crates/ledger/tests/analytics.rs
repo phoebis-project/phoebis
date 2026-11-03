@@ -1863,6 +1863,49 @@ fn group_by_speed_splits_the_rows_by_served_speed() {
     );
 }
 
+/// The rows carry the canonical model, the router's fold of a request's `model`, so a filter folds its value the same
+/// way: the `[1m]` spelling names the model it stands for.
+#[test]
+fn a_model_filter_in_the_long_context_spelling_lists_its_canonical_models_requests() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    for (id, model) in [("r-sonnet", "claude-sonnet-5"), ("r-opus", "claude-opus-5")] {
+        let request = RequestRecord {
+            id: id.into(),
+            received_at: 1_000,
+            finished_at: Some(1_500),
+            canonical_model: model.into(),
+            model: model.into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(200),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        };
+        let attempt = AttemptRecord {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: "a".into(),
+            upstream_status: Some(200),
+            outcome: "succeeded".into(),
+            ..Default::default()
+        };
+        db.insert_request(&request, &[attempt], None).unwrap();
+    }
+    let filter = RequestFilter {
+        models: vec!["claude-sonnet-5[1m]".into()],
+        ..Default::default()
+    };
+    let listed: Vec<String> = db
+        .read_blocking(|c| list_requests(c, &filter, &LiveKeys::default(), None, 10))
+        .unwrap()
+        .0
+        .into_iter()
+        .map(|(r, _)| r.id)
+        .collect();
+    assert_eq!(listed, vec!["r-sonnet"]);
+}
+
 #[test]
 fn the_speed_filter_reads_the_serving_attempts_speed() {
     let db = LedgerDb::open_in_memory().unwrap();
