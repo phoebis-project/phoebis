@@ -825,14 +825,9 @@ impl SubscriptionCosts {
             write_1h: None,
             output: None,
         };
-        let Some((priced, divisor)) = self.priced_window(window) else {
-            return RateTable {
-                rows: HashMap::new(),
-                long_context: HashMap::new(),
-                fallback,
-            };
-        };
-        let Some(capacity) = self.anchor_capacity(priced, entrypoint) else {
+        let Some((divisor, capacity)) = self.priced_window(window).and_then(|(priced, divisor)| {
+            Some((divisor, self.anchor_capacity(priced, entrypoint)?))
+        }) else {
             return RateTable {
                 rows: HashMap::new(),
                 long_context: HashMap::new(),
