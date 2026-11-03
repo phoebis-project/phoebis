@@ -553,7 +553,7 @@ fn the_request_list_by_key_keeps_its_plan_under_statistics() {
     };
     let live = LiveKeys(BTreeMap::from([("main".into(), KEY_GENERATION)]));
     let (sql, args) = list_requests_statement(&filter, &live, None, 50).unwrap();
-    let steps = plan(&db, &sql, params_from_iter(args.iter().map(|a| a.as_ref())));
+    let steps = plan(&db, &sql, params_from_iter(args));
     assert!(
         seeks(&steps, "requests_key", &["key_id=?"]) && !walks(&steps, &["requests"]),
         "{steps:?}"
@@ -568,7 +568,7 @@ fn the_request_list_by_session_keeps_its_plan_under_statistics() {
         ..RequestFilter::default()
     };
     let (sql, args) = list_requests_statement(&filter, &LiveKeys::default(), None, 50).unwrap();
-    let steps = plan(&db, &sql, params_from_iter(args.iter().map(|a| a.as_ref())));
+    let steps = plan(&db, &sql, params_from_iter(args));
     assert!(
         seeks(&steps, "requests_session", &["session_id=?"]) && !walks(&steps, &["requests"]),
         "{steps:?}"
@@ -588,7 +588,7 @@ fn the_routing_log_by_session_keeps_its_plan_under_statistics() {
     };
     let statement = decision_statement(&filter).expect("no kind is named, so decisions are read");
     let (sql, args) = decision_rows_statement(statement, None, 51);
-    let steps = plan(&db, &sql, params_from_iter(args.iter().map(|a| a.as_ref())));
+    let steps = plan(&db, &sql, params_from_iter(args));
     assert!(
         (seeks(&steps, "decisions_at", &["at>?"])
             || seeks(&steps, "decisions_session", &["session_id=?"]))

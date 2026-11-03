@@ -10,7 +10,7 @@ use phoebis_routing::{
     window_for, MemberSpend, PinUsage, DAY_MS, FIVE_HOUR, HOUR_MS, REFRESHING_CLASSES, SEVEN_DAY,
 };
 use phoebis_store::{AccountKind, BudgetPeriod};
-use rusqlite::{params, params_from_iter, Connection, OptionalExtension, ToSql};
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -169,10 +169,10 @@ pub struct RequestFilter {
     pub fixed_end: bool,
 }
 
-fn in_list<T: ToSql + Clone + 'static>(
+pub(crate) fn in_list<T: Clone + Into<rusqlite::types::Value>>(
     column: &str,
     values: &[T],
-    args: &mut Vec<Box<dyn ToSql>>,
+    args: &mut Vec<rusqlite::types::Value>,
     clauses: &mut Vec<String>,
 ) {
     if values.is_empty() {
@@ -182,11 +182,14 @@ fn in_list<T: ToSql + Clone + 'static>(
     clauses.push(format!("{column} IN ({marks})"));
 }
 
-fn bind_all<T: ToSql + Clone + 'static>(values: &[T], args: &mut Vec<Box<dyn ToSql>>) -> String {
+pub(crate) fn bind_all<T: Clone + Into<rusqlite::types::Value>>(
+    values: &[T],
+    args: &mut Vec<rusqlite::types::Value>,
+) -> String {
     values
         .iter()
         .map(|v| {
-            args.push(Box::new(v.clone()));
+            args.push(v.clone().into());
             format!("?{}", args.len())
         })
         .collect::<Vec<_>>()
@@ -218,7 +221,7 @@ pub(crate) fn class_fold_sql(column: &str) -> String {
 fn in_list_or_null(
     column: &str,
     values: &[String],
-    args: &mut Vec<Box<dyn ToSql>>,
+    args: &mut Vec<rusqlite::types::Value>,
     clauses: &mut Vec<String>,
 ) {
     if !values.iter().any(|v| v == UNATTRIBUTED) {
@@ -234,35 +237,69 @@ fn in_list_or_null(
 fn key_lifetimes(
     selectors: &[String],
     live: &LiveKeys,
-    args: &mut Vec<Box<dyn ToSql>>,
+    args: &mut Vec<rusqlite::types::Value>,
     clauses: &mut Vec<String>,
 ) {
     if selectors.is_empty() {
         return;
     }
-    let mut parts = Vec::new();
-    for selector in selectors {
-        if selector == UNATTRIBUTED {
-            args.push(Box::new(selector.clone()));
-            parts.push(format!("key_id = ?{} OR key_id IS NULL", args.len()));
-            continue;
-        }
-        let Some((id, generation)) = live.lifetime_of(selector) else {
-            continue;
-        };
-        args.push(Box::new(id.to_string()));
-        let at_id = args.len();
-        args.push(Box::new(generation));
-        parts.push(format!(
-            "(key_id = ?{at_id} AND key_generation = ?{})",
-            at_id + 1
-        ));
-    }
-    clauses.push(if parts.is_empty() {
-        "0".into()
+    let keys = key_selectors(selectors, live);
+    if keys.is_empty() {
+        clauses.push("0".into());
     } else {
-        format!("({})", parts.join(" OR "))
-    });
+        key_clause(&keys, true, args, clauses);
+    }
+}
+
+/// Each selector as `LiveKeys::selects` reads it: the reserved id at any generation, every other selector at the
+/// lifetime `lifetime_of` answers. A selector that names no lifetime drops out.
+fn key_selectors(selectors: &[String], live: &LiveKeys) -> Vec<KeySelector> {
+    selectors
+        .iter()
+        .filter_map(|selector| {
+            if selector == UNATTRIBUTED {
+                return Some(KeySelector {
+                    key_id: UNATTRIBUTED.into(),
+                    key_generation: None,
+                });
+            }
+            live.lifetime_of(selector)
+                .map(|(id, generation)| KeySelector {
+                    key_id: id.into(),
+                    key_generation: Some(generation),
+                })
+        })
+        .collect()
+}
+
+/// One clause matching any of `keys`, a selector with a generation on the pair and one without on the id alone. With
+/// `reserved_is_null` a selector without a generation also reaches the NULL `key_id` the requests table stores for
+/// the reserved id, where the rollups store the id itself. No clause when `keys` is empty.
+pub(crate) fn key_clause(
+    keys: &[KeySelector],
+    reserved_is_null: bool,
+    args: &mut Vec<rusqlite::types::Value>,
+    clauses: &mut Vec<String>,
+) {
+    if keys.is_empty() {
+        return;
+    }
+    let parts: Vec<String> = keys
+        .iter()
+        .map(|k| {
+            args.push(k.key_id.clone().into());
+            let at_id = args.len();
+            match k.key_generation {
+                Some(generation) => {
+                    args.push(generation.into());
+                    format!("(key_id = ?{at_id} AND key_generation = ?{})", at_id + 1)
+                }
+                None if reserved_is_null => format!("key_id = ?{at_id} OR key_id IS NULL"),
+                None => format!("key_id = ?{at_id}"),
+            }
+        })
+        .collect();
+    clauses.push(format!("({})", parts.join(" OR ")));
 }
 
 /// One clause matching any of `patterns` against `column` under the wildcard grammar of `crate::pattern`;
@@ -270,7 +307,7 @@ fn key_lifetimes(
 fn pattern_any(
     column: &str,
     patterns: &[String],
-    args: &mut Vec<Box<dyn ToSql>>,
+    args: &mut Vec<rusqlite::types::Value>,
     clauses: &mut Vec<String>,
 ) {
     if patterns.is_empty() {
@@ -279,7 +316,7 @@ fn pattern_any(
     let parts: Vec<String> = patterns
         .iter()
         .map(|p| {
-            args.push(Box::new(crate::pattern::to_like(p)));
+            args.push(crate::pattern::to_like(p).into());
             format!(
                 "COALESCE({column}, '-') LIKE ?{} ESCAPE '{ESCAPE}'",
                 args.len()
@@ -292,28 +329,31 @@ fn pattern_any(
 /// The `WHERE` clauses `filter` sets on the requests table with the values they bind, numbered in the order bound.
 /// The key filter reads the selectors the analytics do, against the row's `(key_id, key_generation)`, and `live` says
 /// which generation a bare id names.
-fn filter_clauses(filter: &RequestFilter, live: &LiveKeys) -> (Vec<Box<dyn ToSql>>, Vec<String>) {
-    let mut args: Vec<Box<dyn ToSql>> = Vec::new();
+fn filter_clauses(
+    filter: &RequestFilter,
+    live: &LiveKeys,
+) -> (Vec<rusqlite::types::Value>, Vec<String>) {
+    let mut args: Vec<rusqlite::types::Value> = Vec::new();
     let mut clauses: Vec<String> = Vec::new();
     if let Some(text) = filter.text.as_deref().filter(|t| !t.is_empty()) {
-        args.push(Box::new(format!("%{}%", literal_like(text))));
+        args.push(format!("%{}%", literal_like(text)).into());
         let n = args.len();
         clauses.push(format!("(id LIKE ?{n} ESCAPE '{ESCAPE}' OR session_id LIKE ?{n} ESCAPE '{ESCAPE}' OR key_id LIKE ?{n} ESCAPE '{ESCAPE}' OR model LIKE ?{n} ESCAPE '{ESCAPE}' OR error_code LIKE ?{n} ESCAPE '{ESCAPE}' OR EXISTS (SELECT 1 FROM attempts a WHERE a.request_id = requests.id AND (a.account_id LIKE ?{n} ESCAPE '{ESCAPE}' OR a.upstream_request_id LIKE ?{n} ESCAPE '{ESCAPE}' OR a.upstream_message_id LIKE ?{n} ESCAPE '{ESCAPE}')))"));
     }
     if let Some(request) = filter.request.as_deref().filter(|r| !r.is_empty()) {
-        args.push(Box::new(request.to_string()));
+        args.push(request.to_string().into());
         clauses.push(format!("id = ?{}", args.len()));
     }
     if let Some(session) = filter.session.as_deref().filter(|s| !s.is_empty()) {
-        args.push(Box::new(session.to_string()));
+        args.push(session.to_string().into());
         clauses.push(format!("session_id = ?{}", args.len()));
     }
     if let Some(agent_id) = filter.agent_id.as_deref().filter(|a| !a.is_empty()) {
-        args.push(Box::new(agent_id.to_string()));
+        args.push(agent_id.to_string().into());
         clauses.push(format!("agent_id = ?{}", args.len()));
     }
     if let Some(landed_after) = filter.landed_after {
-        args.push(Box::new(landed_after));
+        args.push(landed_after.into());
         clauses.push(format!("landed_at > ?{}", args.len()));
     }
     key_lifetimes(&filter.keys, live, &mut args, &mut clauses);
@@ -451,11 +491,11 @@ fn filter_clauses(filter: &RequestFilter, live: &LiveKeys) -> (Vec<Box<dyn ToSql
         clauses.push("kind != 'probe'".into());
     }
     if let Some(from) = filter.from {
-        args.push(Box::new(from));
+        args.push(from.into());
         clauses.push(format!("received_at >= ?{}", args.len()));
     }
     if let Some(to) = filter.to {
-        args.push(Box::new(to));
+        args.push(to.into());
         clauses.push(format!("received_at <= ?{}", args.len()));
     }
     (args, clauses)
@@ -468,7 +508,7 @@ pub(crate) fn list_requests_statement(
     live: &LiveKeys,
     cursor: Option<&str>,
     limit: usize,
-) -> Result<(String, Vec<Box<dyn ToSql>>), LedgerError> {
+) -> Result<(String, Vec<rusqlite::types::Value>), LedgerError> {
     let (mut args, mut clauses) = filter_clauses(filter, live);
     if let Some(cursor) = cursor {
         let (at, id) = cursor
@@ -477,9 +517,9 @@ pub(crate) fn list_requests_statement(
         let at: i64 = at
             .parse()
             .map_err(|_| LedgerError::Yaml("cursor is <received_at>:<id>".into()))?;
-        args.push(Box::new(at));
+        args.push(at.into());
         let n = args.len();
-        args.push(Box::new(id.to_string()));
+        args.push(id.to_string().into());
         clauses.push(format!(
             "(received_at < ?{n} OR (received_at = ?{n} AND id < ?{}))",
             n + 1
@@ -492,7 +532,7 @@ pub(crate) fn list_requests_statement(
     };
     // One row past the page says whether a next page exists, so a page of exactly `limit` rows offers no
     // cursor that would only lead to an empty page.
-    args.push(Box::new((limit + 1) as i64));
+    args.push(((limit + 1) as i64).into());
     let sql = format!(
         "{REQUEST_SELECT}{where} ORDER BY received_at DESC, id DESC LIMIT ?{}",
         args.len()
@@ -511,10 +551,7 @@ pub fn list_requests(
     let (sql, args) = list_requests_statement(filter, live, cursor, limit)?;
     let mut stmt = conn.prepare(&sql)?;
     let mut requests = stmt
-        .query_map(
-            params_from_iter(args.iter().map(|a| a.as_ref())),
-            row_to_request,
-        )?
+        .query_map(params_from_iter(args), row_to_request)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let more = requests.len() > limit;
     requests.truncate(limit);
@@ -562,7 +599,7 @@ pub fn list_request_page(
     // admitted row's stamp from passing it. Under `fixed_end` the cap is off: the range's `to` is fixed, so a row
     // received before it and landed after it is read once by the poll that passes the stamp back.
     let (mut args, clauses) = filter_clauses(filter, live);
-    args.push(Box::new(filter.landed_after.unwrap_or(0)));
+    args.push(filter.landed_after.unwrap_or(0).into());
     let r#where = if clauses.is_empty() {
         String::new()
     } else {
@@ -573,7 +610,7 @@ pub fn list_request_page(
             "SELECT COALESCE(MAX(landed_at), ?{}) FROM requests{where}",
             args.len()
         ),
-        params_from_iter(args.iter().map(|a| a.as_ref())),
+        params_from_iter(args),
         |r| r.get(0),
     )?;
     let landed_through = if filter.fixed_end {
@@ -619,7 +656,7 @@ pub fn refusal_categories(
         clauses.join(" AND ")
     );
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(params_from_iter(args.iter().map(|a| a.as_ref())), |r| {
+    let rows = stmt.query_map(params_from_iter(args), |r| {
         Ok((
             r.get::<_, String>(0)?,
             r.get::<_, Option<String>>(1)?,
@@ -773,7 +810,7 @@ pub fn guardrail_sample_page(
         SampleSubject::Key(id) => (GUARDRAIL_SAMPLE_KEY_SQL, id),
         SampleSubject::Pool(id) => (GUARDRAIL_SAMPLE_POOL_SQL, id),
     };
-    let mut args: Vec<Box<dyn ToSql>> = vec![Box::new(id.to_string()), Box::new(since)];
+    let mut args: Vec<rusqlite::types::Value> = vec![id.to_string().into(), since.into()];
     let mut after = "";
     if let Some(cursor) = cursor {
         let (at, id) = cursor
@@ -782,16 +819,16 @@ pub fn guardrail_sample_page(
         let at: i64 = at
             .parse()
             .map_err(|_| LedgerError::Yaml("cursor is <received_at>:<id>".into()))?;
-        args.push(Box::new(at));
-        args.push(Box::new(id.to_string()));
+        args.push(at.into());
+        args.push(id.to_string().into());
         after = GUARDRAIL_SAMPLE_CURSOR_SQL;
     }
     // One row past the page says whether a next page exists, as `list_requests` reads it.
-    args.push(Box::new((limit + 1) as i64));
+    args.push(((limit + 1) as i64).into());
     let sql = format!("{base}{after}{GUARDRAIL_SAMPLE_ORDER_SQL}{}", args.len());
     let mut rows = conn
         .prepare(&sql)?
-        .query_map(params_from_iter(args.iter().map(|a| a.as_ref())), |r| {
+        .query_map(params_from_iter(args), |r| {
             Ok(SampleRow {
                 id: r.get(0)?,
                 received_at: r.get(1)?,
@@ -1152,28 +1189,28 @@ impl Answered {
 /// One statement's clauses and their arguments, over alias `d` for the decisions or `e` for the events.
 pub(crate) struct LogStatement {
     clauses: Vec<String>,
-    args: Vec<Box<dyn ToSql>>,
+    args: Vec<rusqlite::types::Value>,
 }
 
 impl LogStatement {
     fn new(alias: &str, filter: &RoutingLogFilter) -> LogStatement {
-        let mut args: Vec<Box<dyn ToSql>> = vec![Box::new(filter.from), Box::new(filter.to)];
+        let mut args: Vec<rusqlite::types::Value> = vec![filter.from.into(), filter.to.into()];
         let mut clauses = vec![format!("{alias}.at BETWEEN ?1 AND ?2")];
         if let Some(request) = &filter.request {
-            args.push(Box::new(request.clone()));
+            args.push(request.clone().into());
             clauses.push(format!("{alias}.request_id = ?{}", args.len()));
         }
         if let Some(session) = &filter.session {
-            args.push(Box::new(session.clone()));
+            args.push(session.clone().into());
             let exact = args.len();
-            args.push(Box::new(format!("{}%", literal_like(session))));
+            args.push(format!("{}%", literal_like(session)).into());
             clauses.push(format!(
                 "({alias}.session_id = ?{exact} OR {alias}.session_id LIKE ?{} ESCAPE '{ESCAPE}')",
                 exact + 1
             ));
         }
         if let Some(agent_id) = &filter.agent_id {
-            args.push(Box::new(agent_id.clone()));
+            args.push(agent_id.clone().into());
             clauses.push(format!("{alias}.agent_id = ?{}", args.len()));
         }
         in_list(
@@ -1201,8 +1238,8 @@ impl LogStatement {
         self.clauses.join(" AND ")
     }
 
-    fn params(&self) -> impl Iterator<Item = &dyn ToSql> {
-        self.args.iter().map(|a| a.as_ref())
+    fn params(&self) -> &[rusqlite::types::Value] {
+        &self.args
     }
 }
 
@@ -1333,13 +1370,13 @@ pub(crate) fn decision_rows_statement(
     mut statement: LogStatement,
     cursor: Option<&RoutingLogCursor>,
     page: i64,
-) -> (String, Vec<Box<dyn ToSql>>) {
+) -> (String, Vec<rusqlite::types::Value>) {
     if let Some(cursor) = cursor {
         let n = statement.args.len() + 1;
-        statement.args.push(Box::new(cursor.at));
-        statement.args.push(Box::new(i64::from(cursor.rank)));
-        statement.args.push(Box::new(cursor.request_id.clone()));
-        statement.args.push(Box::new(cursor.seq));
+        statement.args.push(cursor.at.into());
+        statement.args.push(i64::from(cursor.rank).into());
+        statement.args.push(cursor.request_id.clone().into());
+        statement.args.push(cursor.seq.into());
         statement.clauses.push(format!(
             "(d.at < ?{n} OR (d.at = ?{n} AND ?{} = 1 AND (d.request_id < ?{} OR (d.request_id = ?{} AND d.seq < ?{}))))",
             n + 1,
@@ -1348,7 +1385,7 @@ pub(crate) fn decision_rows_statement(
             n + 3
         ));
     }
-    statement.args.push(Box::new(page));
+    statement.args.push(page.into());
     let sql = format!(
         "SELECT d.request_id, d.seq, d.attempt, d.at, d.kind, d.probe, d.key_id, d.pool_id, d.session_id, \
          d.agent_id, d.model, d.account_id, d.from_account_id, d.summary, r.attempts, a.upstream_status, \
@@ -1372,7 +1409,7 @@ fn decision_rows(
     let (sql, args) = decision_rows_statement(statement, cursor, page);
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
-        .query_map(params_from_iter(args.iter().map(|a| a.as_ref())), |r| {
+        .query_map(params_from_iter(args), |r| {
             Ok((
                 DecisionListRow {
                     request_id: r.get(0)?,
@@ -1420,16 +1457,16 @@ fn event_rows(
 ) -> Result<Vec<EventListRow>, LedgerError> {
     if let Some(cursor) = cursor {
         let n = statement.args.len() + 1;
-        statement.args.push(Box::new(cursor.at));
-        statement.args.push(Box::new(i64::from(cursor.rank)));
-        statement.args.push(Box::new(cursor.rowid));
+        statement.args.push(cursor.at.into());
+        statement.args.push(i64::from(cursor.rank).into());
+        statement.args.push(cursor.rowid.into());
         statement.clauses.push(format!(
             "(e.at < ?{n} OR (e.at = ?{n} AND (?{} = 1 OR e.rowid < ?{})))",
             n + 1,
             n + 2
         ));
     }
-    statement.args.push(Box::new(page));
+    statement.args.push(page.into());
     let sql = format!(
         "SELECT e.rowid, e.at, e.kind, e.account_id, e.key_id, e.pool_id, e.session_id, e.agent_id, e.model, \
          e.request_id, e.actor, e.detail FROM events e WHERE {} ORDER BY e.at DESC, e.rowid DESC LIMIT ?{}",
@@ -1873,23 +1910,7 @@ impl RollupFilter {
     /// reserved id at any generation, every other selector at the lifetime `lifetime_of` answers. `None` when the
     /// filter names keys and none of them names a lifetime, which selects no row rather than every row.
     pub fn rollup_select(&self, live: &LiveKeys) -> Option<RollupSelect> {
-        let keys: Vec<KeySelector> = self
-            .keys
-            .iter()
-            .filter_map(|selector| {
-                if selector == UNATTRIBUTED {
-                    return Some(KeySelector {
-                        key_id: UNATTRIBUTED.into(),
-                        key_generation: None,
-                    });
-                }
-                live.lifetime_of(selector)
-                    .map(|(id, generation)| KeySelector {
-                        key_id: id.into(),
-                        key_generation: Some(generation),
-                    })
-            })
-            .collect();
+        let keys = key_selectors(&self.keys, live);
         if !self.keys.is_empty() && keys.is_empty() {
             return None;
         }
@@ -3799,7 +3820,7 @@ pub fn placements(
     since: i64,
     until: i64,
 ) -> Result<Vec<PlacementRow>, LedgerError> {
-    let mut args: Vec<Box<dyn ToSql>> = vec![Box::new(since), Box::new(until)];
+    let mut args: Vec<rusqlite::types::Value> = vec![since.into(), until.into()];
     let mut clauses: Vec<String> = Vec::new();
     key_lifetimes(&filter.keys, live, &mut args, &mut clauses);
     in_list_or_null("pool_id", &filter.pools, &mut args, &mut clauses);
@@ -3838,7 +3859,7 @@ pub fn placements(
          AND r.received_at >= ?1 AND r.received_at < ?2{extra} GROUP BY 1 ORDER BY 1"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(params_from_iter(args.iter().map(|a| a.as_ref())), |r| {
+    let rows = stmt.query_map(params_from_iter(args), |r| {
         Ok(PlacementRow {
             rung: r.get(0)?,
             placements: r.get::<_, i64>(1)? as u64,
@@ -4431,7 +4452,7 @@ pub fn rewrite_series(
     filter: &SeriesFilter,
 ) -> Result<Vec<(i64, u64)>, LedgerError> {
     let (first, last) = bucket_range(filter)?;
-    let mut args: Vec<Box<dyn ToSql>> = vec![Box::new(first), Box::new(last)];
+    let mut args: Vec<rusqlite::types::Value> = vec![first.into(), last.into()];
     let mut clauses = vec!["hour >= ?1 AND hour < ?2".to_string()];
     in_list("account_id", &filter.accounts, &mut args, &mut clauses);
     let mut stmt = conn.prepare(&format!(
@@ -4439,7 +4460,7 @@ pub fn rewrite_series(
         clauses.join(" AND ")
     ))?;
     let hours = stmt
-        .query_map(params_from_iter(args.iter().map(|a| a.as_ref())), |r| {
+        .query_map(params_from_iter(args), |r| {
             Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)? as u64))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -4462,7 +4483,7 @@ pub fn held_series(
     filter: &SeriesFilter,
 ) -> Result<Vec<(i64, u64, u64)>, LedgerError> {
     let (first, last) = bucket_range(filter)?;
-    let mut args: Vec<Box<dyn ToSql>> = vec![Box::new(first), Box::new(last)];
+    let mut args: Vec<rusqlite::types::Value> = vec![first.into(), last.into()];
     let mut clauses = vec!["hour >= ?1 AND hour < ?2".to_string()];
     in_list("pool_id", &filter.pools, &mut args, &mut clauses);
     in_list("account_id", &filter.accounts, &mut args, &mut clauses);
@@ -4471,7 +4492,7 @@ pub fn held_series(
         clauses.join(" AND ")
     ))?;
     let hours = stmt
-        .query_map(params_from_iter(args.iter().map(|a| a.as_ref())), |r| {
+        .query_map(params_from_iter(args), |r| {
             Ok((
                 r.get::<_, i64>(0)?,
                 r.get::<_, i64>(1)? as u64,

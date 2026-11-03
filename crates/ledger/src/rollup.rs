@@ -19,8 +19,9 @@ use crate::histogram::Histogram;
 use crate::plan::{funding_of, Funding, PlanTables};
 use crate::pricing::{PriceRevisions, Speed};
 use crate::query::{
-    COOLDOWN_CLEARED, COOLDOWN_SET, OVERAGE_ENDED, PIN_CREATED, PIN_MIGRATED, ROUTER_STARTED,
-    SHEDDING_ROUND, SLOW_DOWN_ENDED, SLOW_DOWN_STARTED, WINDOW_CLEARED, WINDOW_SPENT,
+    in_list, key_clause, COOLDOWN_CLEARED, COOLDOWN_SET, OVERAGE_ENDED, PIN_CREATED, PIN_MIGRATED,
+    ROUTER_STARTED, SHEDDING_ROUND, SLOW_DOWN_ENDED, SLOW_DOWN_STARTED, WINDOW_CLEARED,
+    WINDOW_SPENT,
 };
 use crate::reconcile::{newest_rows, ReconciliationRow};
 use crate::record::{AttemptRecord, EventRecord, KeepaliveDelta, RequestRecord};
@@ -2016,19 +2017,6 @@ pub(crate) fn select_statement(
     to_hour: i64,
     select: &RollupSelect,
 ) -> (String, Vec<Value>) {
-    fn in_list(column: &str, values: &[String], binds: &mut Vec<Value>, clauses: &mut Vec<String>) {
-        if values.is_empty() {
-            return;
-        }
-        let marks: Vec<String> = values
-            .iter()
-            .map(|v| {
-                binds.push(Value::Text(v.clone()));
-                format!("?{}", binds.len())
-            })
-            .collect();
-        clauses.push(format!("{column} IN ({})", marks.join(", ")));
-    }
     let mut binds = vec![Value::Integer(from_hour), Value::Integer(to_hour)];
     let mut clauses = vec!["hour >= ?1 AND hour < ?2".to_string()];
     // The member index leads with the pool, so a pool bound alone would have the planner walk the pool's whole
@@ -2047,24 +2035,7 @@ pub(crate) fn select_statement(
     in_list("account_id", &select.accounts, &mut binds, &mut clauses);
     in_list("kind", &select.kinds, &mut binds, &mut clauses);
     in_list("canonical_model", &select.models, &mut binds, &mut clauses);
-    if !select.keys.is_empty() {
-        let parts: Vec<String> = select
-            .keys
-            .iter()
-            .map(|k| {
-                binds.push(Value::Text(k.key_id.clone()));
-                let at_id = binds.len();
-                match k.key_generation {
-                    Some(generation) => {
-                        binds.push(Value::Integer(generation));
-                        format!("(key_id = ?{at_id} AND key_generation = ?{})", at_id + 1)
-                    }
-                    None => format!("key_id = ?{at_id}"),
-                }
-            })
-            .collect();
-        clauses.push(format!("({})", parts.join(" OR ")));
-    }
+    key_clause(&select.keys, false, &mut binds, &mut clauses);
     let indexed = if select.pools.is_empty() || select.accounts.is_empty() {
         ""
     } else {
