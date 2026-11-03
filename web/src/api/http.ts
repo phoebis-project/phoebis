@@ -3,6 +3,7 @@ import type { GuardrailInput, GuardrailRange, GuardrailTestInput, OverviewRange 
 import * as d from './decode';
 import type { Account, AccountCatalog, AccountInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, PairingConfirmed, PairingInput, PairingPreview, PairingStart, RequestDetail, RequestQuery, RoutingLogQuery, SessionInfo } from './types';
 import { clock } from '@/lib/clock';
+import { DAY } from '@/lib/time';
 
 export class ApiError extends Error {
   code: string | null;
@@ -211,7 +212,7 @@ export class HttpApi implements Api {
   createAccount = async (input: AccountInput): Promise<Account> => d.decodeAccount(await call('POST', '/admin/accounts', { id: input.id, kind: input.kind, label: input.label, secret: input.secret }, DIALOG_WRITE));
   createGuardrail = async (input: GuardrailInput) => d.decodeGuardrail(await call('POST', '/admin/guardrails', { ...d.encodeGuardrail(input), id: slug(input.name) }, DIALOG_WRITE));
   createKey = async (input: CreateKeyInput): Promise<CreatedApiKey> => {
-    const expires_at = input.expiresInDays === null ? null : Date.now() + input.expiresInDays * 86_400_000;
+    const expires_at = input.expiresInDays === null ? null : Date.now() + input.expiresInDays * DAY;
     const r = await call<Record<string, unknown>>('POST', '/admin/keys', { ...d.encodeKey(input), expires_at, id: slug(input.name) }, DIALOG_WRITE);
     return d.decodeCreatedKey(r);
   };

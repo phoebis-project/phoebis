@@ -10,6 +10,7 @@ import { WindowsByTier } from '@/components/costs/WindowsByTier';
 import { clock } from '@/lib/clock';
 import { revisionAt } from '@/lib/costs';
 import { useAsync, useNow } from '@/lib/hooks';
+import { MINUTE } from '@/lib/time';
 import { Button, Dialog, ErrorState, Select, Skeleton, Tabs } from './primitives';
 
 export type CostTab = 'api-prices' | 'plan-rates' | 'tiers';
@@ -133,7 +134,7 @@ export function CostReferenceLink({ onOpenChange, tab }: { onOpenChange?: (open:
  * tables are the entries in force at the dialog's instant, the cost model's problem the envelope's.
  */
 function CostPanels({ costs, error, onTab, prices, problem, tab }: { costs: SubscriptionCosts | null; error: string | null; onTab: (tab: CostTab) => void; prices: ModelPrice[] | null; problem: string | null; tab: CostTab }) {
-  const now = useNow(60_000);
+  const now = useNow(MINUTE);
   const id = useId();
   // Both model tables fold their older models together, and a new opening mounts the panels folded again.
   const [olderOpen, setOlderOpen] = useState(false);

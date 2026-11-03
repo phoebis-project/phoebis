@@ -4,6 +4,7 @@ import { useFormatVersion } from '@/app/settings';
 import { Card } from '@/components/ui/primitives';
 import { bandCaption, bandNow, bandSentence, bandWeek, hhmm, nextLocalChange, partsIn, regimeNames, regimeWord, zoneCity } from '@/lib/costs';
 import { fmtPct, fmtShortTime, getTimeFormat, viewingZone } from '@/lib/format';
+import { MINUTE } from '@/lib/time';
 
 const pad = (n: number) => String(n).padStart(2, '0');
 
@@ -18,7 +19,7 @@ const clockAt = (at: number) => fmtShortTime(at);
 
 /** "3 h 30 min", "45 min". */
 const fmtSpan = (ms: number) => {
-  const minutes = Math.round(ms / 60_000);
+  const minutes = Math.round(ms / MINUTE);
   const hours = Math.floor(minutes / 60);
   return hours > 0 ? `${hours} h ${pad(minutes % 60)} min` : `${minutes} min`;
 };
