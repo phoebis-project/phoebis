@@ -127,9 +127,8 @@ began. An account whose meter drifted reads `acct-a: 5h charged 2.0x the table, 
 with the ratio the meter charged against the cost model, under the label "Meter drift against the table", and opens the
 [Meter](#meter) view on the account. A parked ledger record adds "Replay parked records", which answers `Landed {n}, {n}
 still parked`. Where the line is too narrow for its lead, the "+N more" badge and that button with its answer together,
-the button and its answer take a second row. The line reads again every 30 seconds and when the window regains focus,
-and a tick or a focus that finds its previous read still out is skipped, so a slow read lands and the next tick reads
-again.
+the button and its answer take a second row. The line also reads again when the window regains focus, and a tick or a
+focus that finds its previous read still out is skipped, so a slow read lands and the next tick reads again.
 
 Five tiles follow, each with a sparkline over the last 24 hours: "Requests, 24h" with `{n} per hour`, "Tokens, 24h"
 with `{pct} served from cache`, "Estimated cost, 24h" in the top bar's unit, "Error rate, 24h" with "No requests",
