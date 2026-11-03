@@ -9,13 +9,13 @@ import { Button, Card, ErrorState, Skeleton } from '@/components/ui/primitives';
 import { accountHref, METER_CODEC, type MeterAddress } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { METER_DIMENSIONS, notLoadedReason } from '@/lib/filterBar';
-import { fmtAbsolute, fmtDated, fmtInt, fmtShare, instant } from '@/lib/format';
+import { fmtAbsolute, fmtDated, fmtInt, fmtShare, instant, noun } from '@/lib/format';
 import { useAsync, useQueryFilters } from '@/lib/hooks';
 import { GROUP_PAGE, GROUP_STEP, METER_HINT, meterGroups, SPARK, sparkOf, sparkY, type MeterGroup } from '@/lib/meter';
 import { windowWord } from '@/lib/windows';
 
 const COLUMNS = 8;
-const plural = (n: number, one: string) => `${fmtInt(n)} ${one}${n === 1 ? '' : 's'}`;
+const plural = (n: number, one: string) => `${fmtInt(n)} ${noun(n, one)}`;
 const groupKey = (g: Pick<MeterGroup, 'accountId' | 'window'>) => `${g.accountId}:${g.window}`;
 
 /** The group's judged windows over the trailing 30 days to the answer's newest window, the band shaded behind them. */

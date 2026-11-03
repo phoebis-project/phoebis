@@ -5,7 +5,7 @@ import { IconMonitor, IconMoon, IconSun } from '@/components/ui/icons';
 import { Badge, Card, CopyButton, ErrorState, KeyValue, Segmented, Select, Skeleton } from '@/components/ui/primitives';
 import { UnitLegend, WeekSwitch } from '@/components/ui/UnitControls';
 import { revisionAt } from '@/lib/costs';
-import { fmtDuration, type TimeFormat } from '@/lib/format';
+import { fmtDuration, plural, type TimeFormat } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
 import { snippetFor } from '@/lib/snippet';
 import { positionOf, UNIT_LABEL, UNIT_POSITIONS } from '@/lib/unit';
@@ -49,7 +49,7 @@ const ENV_TERMS: { body: string; term: string }[] = [
 const bootstrapNote = (setting: string) => `Set by ${setting} in the configuration file`;
 
 /** About's words for a retention key's day count, where 0 keeps the rows forever. */
-const keptFor = (days: number) => (days === 0 ? 'kept forever' : days === 1 ? 'kept for 1 day' : `kept for ${days} days`);
+const keptFor = (days: number) => (days === 0 ? 'kept forever' : `kept for ${plural(days, 'day')}`);
 
 /**
  * A table's date in force, its revision count and the next date while one is pending, read at one instant by the rule
@@ -59,7 +59,7 @@ const revisionsNote = (revisions: { effective: string; effectiveDate: string | n
   const inForce = revisionAt(revisions, now);
   if (inForce === null) return `effective ${effectiveLabel(sent)}`;
   const pending = revisions.find((r) => r !== inForce && r.effectiveDate !== null && Date.parse(r.effectiveDate) > now);
-  const count = revisions.length === 1 ? '1 revision' : `${revisions.length} revisions`;
+  const count = plural(revisions.length, 'revision');
   return `effective ${effectiveLabel(inForce.effective)}, ${count}${pending === undefined ? '' : `, next ${effectiveLabel(pending.effective)}`}`;
 };
 
@@ -143,7 +143,7 @@ export function SettingsPage() {
                 { label: 'Storage path', value: s.storage.path, mono: true, title: bootstrapNote('storage.path') },
                 { label: 'Requests, samples and the routing log', value: keptFor(s.retention.retentionDays), title: bootstrapNote('stats.retention_days') },
                 { label: 'Rollups', value: keptFor(s.retention.rollupRetentionDays), title: bootstrapNote('stats.rollup_retention_days') },
-                { label: 'Body capture', value: `at most ${s.retention.bodyCaptureMaxHours} ${s.retention.bodyCaptureMaxHours === 1 ? 'hour' : 'hours'}`, title: bootstrapNote('stats.body_capture_max_hours') },
+                { label: 'Body capture', value: `at most ${plural(s.retention.bodyCaptureMaxHours, 'hour')}`, title: bootstrapNote('stats.body_capture_max_hours') },
                 { label: 'Session expiry', value: `${fmtDuration(s.sessions.expireAfterSeconds * 1000)} (${s.sessions.expireAfterSeconds} s)`, title: bootstrapNote('sessions.expire_after_seconds') },
                 { label: 'Non-companion timeout', value: `${fmtDuration(s.sessions.nonCompanionIdleSeconds * 1000)} (${s.sessions.nonCompanionIdleSeconds} s)`, title: bootstrapNote('sessions.non_companion_idle_seconds') },
                 { label: 'Admin secret', value: <SecretBadge configured={s.access.adminConfigured} />, title: 'The secret the variable admin.secret_env names. It reaches every route.' },

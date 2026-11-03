@@ -26,7 +26,7 @@ import { accountHref, KEYS_CODEC } from '@/lib/address';
 import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, dollarsUnder, moveLabel, nativeSidesOf, sidesLine, sumFunded, type FundedSum, type WeekReading } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
 import { weekReadingOf } from '@/lib/costs';
-import { fmtCompact, fmtDuration, fmtHourTick, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtUsd, messageOf, shortModel } from '@/lib/format';
+import { fmtCompact, fmtDuration, fmtHourTick, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtUsd, messageOf, noun, plural, shortModel } from '@/lib/format';
 import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, guardrailIdsOf, guardrailsChange, keyFormOf, keyInputOf, poolRefusals, sortKeys, type PoolGroup } from '@/lib/forms';
 import { failedFirst, refreshAttention, useAsync, useAttention, useLatest, useNow } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
@@ -54,7 +54,7 @@ const CAP_PERCENT = { max: 100, min: 10 } as const;
  */
 const FEATURES: { group: PoolGroup; on: (pool: Pool) => boolean; word: (pool: Pool) => string }[] = [
   // Every attached guardrail, a disabled one too, since its attachment stands either way.
-  { group: 'guardrails', on: (p) => p.guardrails.length > 0, word: (p) => (p.guardrails.length === 1 ? '1 guardrail' : `${p.guardrails.length} guardrails`) },
+  { group: 'guardrails', on: (p) => p.guardrails.length > 0, word: (p) => plural(p.guardrails.length, 'guardrail') },
   { group: 'autoMode', on: (p) => !p.autoModeServer, word: () => 'server-side auto mode off' },
   // Drawn on every pool, so a pool whose switch is off says so on its card.
   { group: 'shedding', on: () => true, word: (p) => (p.loadShedding ? `sheds above ${percentOf(p.windowCeiling)} %` : 'shedding off') },
@@ -340,7 +340,7 @@ export function PoolsPage() {
     <div className="stack" ref={pageRef}>
       <FilterBar
         address="/pools"
-        count={pools.data === null ? '' : `${pools.data.length} ${pools.data.length === 1 ? 'pool' : 'pools'}`}
+        count={pools.data === null ? '' : plural(pools.data.length, 'pool')}
         filters={{}}
         onOpenChange={setBarOpen}
         refresh={{
@@ -693,7 +693,7 @@ function PoolCard({
           </Badge>
           {keysRead === 'loaded' ? (
             <Link to={`/keys?${KEYS_CODEC.toParams({ pools: [pool.id], search: '', status: 'all' })}`} className={`pool__keys ${keys.length === 0 ? 'pool__keys--none' : ''}`}>
-              {keys.length === 0 ? 'No keys yet' : keys.length === 1 ? '1 key' : `${keys.length} keys`}
+              {keys.length === 0 ? 'No keys yet' : plural(keys.length, 'key')}
             </Link>
           ) : (
             keysRead === 'failed' && <span className="pool__keys pool__keys--unread">Keys unavailable</span>
@@ -868,7 +868,7 @@ function PoolCard({
           <dt>Active pins</dt>
           <dd className="num">
             {pool.activePins}
-            {formerPins > 0 && <span className="sub">{formerPins} on {formerPins === 1 ? 'a former member' : 'former members'}</span>}
+            {formerPins > 0 && <span className="sub">{formerPins} on {noun(formerPins, 'a former member', 'former members')}</span>}
           </dd>
         </div>
         <div>
@@ -2341,7 +2341,7 @@ export function PoolDialog({
           label="Retention (hours)"
           hint={
             <>
-              At most the bootstrap&apos;s body capture limit, {captureMaxHours !== undefined && `${captureMaxHours} ${captureMaxHours === 1 ? 'hour' : 'hours'} here, `}shown on the <PageLink to="/settings">Settings page&apos;s About card</PageLink>.
+              At most the bootstrap&apos;s body capture limit, {captureMaxHours !== undefined && `${plural(captureMaxHours, 'hour')} here, `}shown on the <PageLink to="/settings">Settings page&apos;s About card</PageLink>.
             </>
           }
         >

@@ -12,7 +12,7 @@ import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Field, Grou
 import { KEYS_CODEC, requestHref } from '@/lib/address';
 import { effectiveCaptureHours } from '@/lib/capture';
 import type { PauseCause } from '@/lib/follow';
-import { fmtAbsolute, fmtInt, messageOf } from '@/lib/format';
+import { fmtAbsolute, fmtInt, messageOf, noun } from '@/lib/format';
 import { derivedId, sortKeys } from '@/lib/forms';
 import { guardrailRefusals, presetBadges, verdictWords } from '@/lib/guardrails';
 import { useAsync } from '@/lib/hooks';
@@ -36,7 +36,7 @@ const GROUP_LABEL: Record<GuardrailGroup, string> = { applies: 'Applies to', con
 /** The rail's order, which the dialog's work follows: what it is, what it checks, where it runs, how it would fare. */
 const GROUPS: GuardrailGroup[] = ['identity', 'conditions', 'applies', 'test'];
 
-const counted = (n: number, one: string, many: string) => `${fmtInt(n)} ${n === 1 ? one : many}`;
+const counted = (n: number, one: string, many: string) => `${fmtInt(n)} ${noun(n, one, many)}`;
 const byPosition = (list: GuardrailAttachment[]) => [...list].sort((a, b) => a.position - b.position);
 
 /** A create from a preset, as the dialog fills it: the preset's name, mode and conditions, and no description. */

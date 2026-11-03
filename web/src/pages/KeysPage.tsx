@@ -21,7 +21,7 @@ import { clock } from '@/lib/clock';
 import { weekReadingOf } from '@/lib/costs';
 import { KEYS_DIMENSIONS, notLoadedReason } from '@/lib/filterBar';
 import type { PauseCause } from '@/lib/follow';
-import { fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd, messageOf } from '@/lib/format';
+import { fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd, messageOf, noun, plural } from '@/lib/format';
 import { guardrailsChange, KEY_GROUPS, keyFormOf, keyInputOf, keyRefusals, sortKeys, type AutoModeOverride, type CaptureMode, type KeyGroup } from '@/lib/forms';
 import { useAsync, useNow, useQueryFilters, type Loaded } from '@/lib/hooks';
 import { scrollToElement } from '@/lib/scroll';
@@ -41,7 +41,7 @@ const MODES: { label: string; value: ModelRulesMode }[] = [
 ];
 const RETIRED_SECRET_HINT = 'Sessions whose newest request presented the previous secret. A session that registered a companion and sent no request since counts as switched.';
 /** The note under the Status badge. The fill column cuts it, so its title opens with the whole of it. */
-const retiredNote = (sessions: number) => `${sessions} ${sessions === 1 ? 'session' : 'sessions'} still on the previous secret`;
+const retiredNote = (sessions: number) => `${plural(sessions, 'session')} still on the previous secret`;
 const STATUS_OPTIONS = {
   status: [
     { label: 'Active', value: 'active' },
@@ -233,7 +233,7 @@ export function KeysPage() {
     <div className="stack" ref={pageRef}>
       <FilterBar
         address={address}
-        count={keys.data === null ? '' : `${rows.length} ${rows.length === 1 ? 'key' : 'keys'}`}
+        count={keys.data === null ? '' : plural(rows.length, 'key')}
         dimensions={KEYS_DIMENSIONS}
         disabled={notLoadedReason('pools', 'pool', pools)}
         filters={filters}
@@ -281,7 +281,7 @@ export function KeysPage() {
                           {k.name} <span className="muted mono">{k.prefix}…</span>
                         </span>
                         <span className="num">
-                          {figure === null ? <PendingFigure failure={reading.failure} /> : <span title={figure.title}>{figure.text}</span>} <span className="muted">{fmtCompact(k.lifetime.requests)} {k.lifetime.requests === 1 ? 'request' : 'requests'}</span>
+                          {figure === null ? <PendingFigure failure={reading.failure} /> : <span title={figure.title}>{figure.text}</span>} <span className="muted">{fmtCompact(k.lifetime.requests)} {noun(k.lifetime.requests, 'request')}</span>
                         </span>
                       </div>
                       <div className="hbars__track">
@@ -346,7 +346,7 @@ export function KeysPage() {
                         </td>
                         <td className="mono col-fit">{k.prefix}…</td>
                         <td className="mono col-fit">{k.poolId}</td>
-                        <td className="col-fill">{k.modelRules.length ? <span className="mono" title={k.modelRules.map((r) => (r.not ? `NOT ${r.pattern}` : r.pattern)).join(', ')}>{k.modelRules.length === 1 ? '1 rule' : `${k.modelRules.length} rules`}{k.modelRulesMode === 'replace' && ' (replace)'}</span> : <span className="muted" title={NO_RULES[k.modelRulesMode]}>{NO_RULES[k.modelRulesMode]}</span>}</td>
+                        <td className="col-fill">{k.modelRules.length ? <span className="mono" title={k.modelRules.map((r) => (r.not ? `NOT ${r.pattern}` : r.pattern)).join(', ')}>{plural(k.modelRules.length, 'rule')}{k.modelRulesMode === 'replace' && ' (replace)'}</span> : <span className="muted" title={NO_RULES[k.modelRulesMode]}>{NO_RULES[k.modelRulesMode]}</span>}</td>
                         <td className="right num col-fit">
                           {fmtCompact(k.usage7d.tokens)} tok
                           <WeekLine reading={reading} unit={unit} usage={k.usage7d} />
@@ -971,7 +971,7 @@ function EffectiveList({ processed }: { processed: Loaded<KeyModels | null> }) {
                 <span className="mono">{r.pattern}</span>
                 {cooling > 0 && (
                   <Badge tone="warning" title={r.cooldowns.map((c) => `${c.accountId}: ${c.scope.replace(/^model:/, '')}`).join(', ')}>
-                    {cooling} {cooling === 1 ? 'account' : 'accounts'} cooling
+                    {plural(cooling, 'account')} cooling
                   </Badge>
                 )}
               </li>

@@ -75,8 +75,10 @@ export const fmtShare = (ratio: number) => `${figure(ratio * 100)}%`;
 export const shareLabel = (windowKey: string, share: number): string => `${fmtShare(share)} of ${windowLabelOf(windowKey)}`;
 /** A share as a whole percent with the space before the sign, as the pool card's badge writes it. */
 export const percentText = (share: number) => `${Math.round(share * 100)} %`;
+/** The word a count takes, for a site that prints the count in a form of its own or leaves it out. */
+export const noun = (n: number, one: string, many = `${one}s`): string => (n === 1 ? one : many);
 /** A count with its noun, `1 day`, `3 days`, `2 cache-map entries` where the plural is not the noun with an s. */
-export const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
+export const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${noun(n, one, many)}`;
 /** "a", "a and b", "a, b and c". */
 export const listWords = (words: string[]): string => (words.length < 2 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`);
 /** The values a list chip prints before it counts the rest. */

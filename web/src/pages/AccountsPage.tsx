@@ -22,7 +22,7 @@ import { ALLOWANCE_SUBTITLE, FREE_NOTE, allowanceFigure, allowanceSpan, allowanc
 import { hintPlan } from '@/lib/analytics';
 import { clock } from '@/lib/clock';
 import { ACCOUNTS_DIMENSIONS } from '@/lib/filterBar';
-import { fmtAbsolute, fmtCredits, fmtDate, fmtDated, fmtDayShort, fmtDuration, fmtEndsIn, fmtInt, fmtRelative, messageOf, pct, upperFirst } from '@/lib/format';
+import { fmtAbsolute, fmtCredits, fmtDate, fmtDated, fmtDayShort, fmtDuration, fmtEndsIn, fmtInt, fmtRelative, messageOf, pct, plural, upperFirst } from '@/lib/format';
 import { accountPatchOf, advancesOwnToken, derivedId, endZoneLabel, subscriptionEndFormOf, subscriptionEndRefusal, tickCanceled, type SubscriptionEndForm } from '@/lib/forms';
 import { useAsync, useLatest, useNow, useQueryFilters } from '@/lib/hooks';
 import { latestPerWindow, meterGroups } from '@/lib/meter';
@@ -132,7 +132,7 @@ export function AccountsPage() {
     <div className="accounts">
       <FilterBar
         address={address}
-        count={accounts.data === null ? '' : `${list.length} ${list.length === 1 ? 'account' : 'accounts'}`}
+        count={accounts.data === null ? '' : plural(list.length, 'account')}
         dimensions={ACCOUNTS_DIMENSIONS}
         filters={filters}
         onOpenChange={setBarOpen}
@@ -842,7 +842,7 @@ function DriftCard({ accountId, answer, error, onRetry }: { accountId: string; a
                   <span className="meter-drift__ratio">
                     <MeterRatio row={latest} />
                   </span>
-                  <span className="meter-drift__meta" title={`ended ${fmtAbsolute(latest.windowEnd)}, ${off} of the ${windows} ${windows === 1 ? 'window' : 'windows'} of the last 30 days off the band`}>
+                  <span className="meter-drift__meta" title={`ended ${fmtAbsolute(latest.windowEnd)}, ${off} of the ${plural(windows, 'window')} of the last 30 days off the band`}>
                     {`${fmtDated(Date.parse(latest.windowEnd))}, ${off} of ${windows} off`}
                   </span>
                 </span>
@@ -895,7 +895,7 @@ function AllowanceColumn({ account, costs, holder, week, window: w }: { account:
         </div>
       ))}
       <div className="allowance__row allowance__total">
-        <span>{counted === 1 ? 'Total, 1 week' : `Total, ${counted} weeks`}</span>
+        <span>{`Total, ${plural(counted, 'week')}`}</span>
         <AllowanceText className="num" figure={weeksFigure(w, account, costs, week)} />
       </div>
     </div>
@@ -1316,7 +1316,7 @@ function PairingExpiry({ remaining, expired, ready }: { expired: boolean; ready:
         </span>
       )}
       <span className="sr-only" aria-live="polite">
-        {expired ? 'This link has expired.' : `Link expires in ${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`}
+        {expired ? 'This link has expired.' : `Link expires in ${plural(minutes, 'minute')}`}
       </span>
     </>
   );

@@ -17,7 +17,7 @@ import { clock } from '@/lib/clock';
 import { tierOrder, weekReadingOf } from '@/lib/costs';
 import { chipText, notLoadedReason, ROUTING_LOG_DIMENSIONS } from '@/lib/filterBar';
 import { effectiveInterval, FOLLOW_OVERRUN, type Paging, pagingFor, readEnd, spanEnded } from '@/lib/follow';
-import { fmtAbsolute, fmtDatedTime, fmtInt, fmtTime, upperFirst } from '@/lib/format';
+import { fmtAbsolute, fmtDatedTime, fmtInt, fmtTime, plural, upperFirst } from '@/lib/format';
 import { useAsync, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';
 import { ALL_KINDS, byOf, catalogModel, compareRows, DECISION_KIND_LABEL, DECISION_KIND_TONE, entityHref, EVENT_KIND_LABEL, eventTone, factsOf, identityOf, KIND_PRESETS, type LogLink, logHref, movedFrom, registryTarget, words } from '@/lib/routingLog';
 
@@ -45,8 +45,6 @@ const EntityLink = ({ children, id, kind, mono = false }: { children?: ReactNode
     {children ?? id}
   </Link>
 );
-
-const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
 
 export function RoutingLogPage() {
   const { address, filters, update: rawUpdate } = useQueryFilters(ROUTING_LOG_CODEC);

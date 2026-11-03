@@ -1,7 +1,7 @@
 import { type ReactNode, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Button, Card } from '@/components/ui/primitives';
-import { fmtAbsolute, fmtRelative } from '@/lib/format';
+import { fmtAbsolute, fmtRelative, plural } from '@/lib/format';
 import { MODEL_SCOPE_PREFIX } from '@/lib/quota';
 import { entityHref } from '@/lib/routingLog';
 
@@ -36,7 +36,7 @@ export function CoolingDown({ busy = false, now, onClear, rows, showAccount = fa
           'Nothing cooling down'
         ) : (
           <span title={fmtAbsolute(earliest)}>
-            {rows.length} {rows.length === 1 ? 'scope' : 'scopes'} cooling, the earliest ends {fmtRelative(earliest, now)}
+            {plural(rows.length, 'scope')} cooling, the earliest ends {fmtRelative(earliest, now)}
           </span>
         )
       }
