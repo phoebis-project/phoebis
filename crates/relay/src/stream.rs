@@ -523,7 +523,9 @@ impl Publish {
             // client sees it; the bytes the client sees are untouched.
             Some(b"error") => {
                 if self.stream_error.is_none() {
-                    self.stream_error = Some(error_type_of(&event.data));
+                    self.stream_error = Some(
+                        crate::classify::error_type(&event.data).unwrap_or_else(|| "error".into()),
+                    );
                 }
                 if let Some(on_error) = self.on_error.take() {
                     on_error(event.data.clone(), waiting);
@@ -714,19 +716,6 @@ impl Publish {
             hook(id.clone()).await;
         }
     }
-}
-
-/// `error.type` of an SSE `error` event's data, or `error` when the data does not say.
-fn error_type_of(data: &[u8]) -> String {
-    serde_json::from_slice::<serde_json::Value>(data)
-        .ok()
-        .and_then(|v| {
-            v.get("error")
-                .and_then(|e| e.get("type"))
-                .and_then(|t| t.as_str())
-                .map(str::to_string)
-        })
-        .unwrap_or_else(|| "error".into())
 }
 
 /// The measured pool a relayed connection came from, so the body task can hand it back.

@@ -1277,6 +1277,30 @@ async fn a_stream_cut_by_the_reader_mid_body_reads_stream_cut() {
     );
 }
 
+#[tokio::test]
+async fn an_error_event_whose_data_is_cut_short_files_the_type_its_text_names() {
+    let (status, cut, complete) = one_stream(
+        Respond::SseCut {
+            status: 200,
+            headers: vec![],
+            events: vec![
+                message_start_event(),
+                SseEvent {
+                    event: "error".into(),
+                    data: r#"{"type":"error","error":{"type":"overloaded_error""#.into(),
+                },
+            ],
+        },
+        common::default_limits(),
+    )
+    .await;
+    assert_eq!((status, cut), (200, true));
+    assert_eq!(
+        (complete.outcome, complete.error_code.as_deref()),
+        (phoebis_bus::Outcome::Failed, Some("overloaded_error"))
+    );
+}
+
 const CUT_WARNING: &str = "the upstream body ended short after the head";
 
 /// The `request-id` head the cut cases answer with, so the warning has an upstream request id to name.
