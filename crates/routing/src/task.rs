@@ -31,10 +31,10 @@ use crate::select::{
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, burn_folded, ceiling, default_burn_average_ms,
     entrypoint_of, is_plan_window, latest_full_reset, mark_holds, plan_windows, round_in_dwell,
-    shed_dwell_ms, slow_down_hold_ms, spend_reset_estimate, AccountTicket, BurnUnit, CreditsState,
-    EvidenceSource, InFlight, MemberSpend, OverageEvidence, PinRef, PinUsage, RateTable, Recorded,
-    RoutingState, SharePricer, SlowDownEdge, SpendWindow, StateWrite, UtilizationSample,
-    WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
+    shed_dwell_ms, slow_down_hold_ms, spend_reset_estimate, wait_until, AccountTicket, BurnUnit,
+    CreditsState, EvidenceSource, InFlight, MemberSpend, OverageEvidence, PinRef, PinUsage,
+    RateTable, Recorded, RoutingState, SharePricer, SlowDownEdge, SpendWindow, StateWrite,
+    UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use crate::{
     model_week, resolve, term, window_length_ms, Candidate, KeyRefusal, Presented, RegistrySnapshot,
@@ -1428,24 +1428,18 @@ impl RouterHandle {
         self.reports.applied.load(Ordering::Acquire)
     }
 
-    /// Resolves true once the task has applied the report numbered `seq`, false at `deadline`; registered
-    /// before the sequence is read, as `InFlight::wait_for_slot` registers its waiter.
+    /// Resolves true once the task has applied the report numbered `seq`, false at `deadline`.
     pub async fn wait_for_report(&self, seq: u64, deadline: Instant) -> bool {
-        loop {
-            // Registered before the watermark is read, so a report applied between the read and the wait
-            // still wakes this waiter.
-            let applied = self.reports.applied_notify.notified();
-            tokio::pin!(applied);
-            applied.as_mut().enable();
-            if self.applied_report() >= seq {
-                return true;
-            }
-            #[cfg(any(test, feature = "debug-hooks"))]
-            self.reports.waiter_registered.notify_one();
-            if tokio::time::timeout_at(deadline, applied).await.is_err() {
-                return self.applied_report() >= seq;
-            }
-        }
+        wait_until(
+            &self.reports.applied_notify,
+            deadline,
+            || self.applied_report() >= seq,
+            || {
+                #[cfg(any(test, feature = "debug-hooks"))]
+                self.reports.waiter_registered.notify_one();
+            },
+        )
+        .await
     }
 
     /// A spelling the catalog cache resolved to the dated id the API lists. Waits for room in the queue

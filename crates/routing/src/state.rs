@@ -1252,18 +1252,36 @@ impl InFlight {
     /// The slot is read, not reserved: the caller's next selection charges it, or finds that another request's
     /// selection already did.
     pub async fn wait_for_slot(&self, account_id: &str, cap: u32, deadline: Instant) -> bool {
-        loop {
-            // Registered before the count is read, so a release landing between the read and the wait still
-            // wakes this waiter.
-            let freed = self.0.freed.notified();
-            tokio::pin!(freed);
-            freed.as_mut().enable();
-            if self.account(account_id) < cap {
-                return true;
-            }
-            if tokio::time::timeout_at(deadline, freed).await.is_err() {
-                return self.account(account_id) < cap;
-            }
+        wait_until(
+            &self.0.freed,
+            deadline,
+            || self.account(account_id) < cap,
+            || {},
+        )
+        .await
+    }
+}
+
+/// Resolves true once `ready` reads true, else at `deadline` with its last read. `on_wait` runs after each read
+/// that found it false, before the wait.
+pub(crate) async fn wait_until(
+    notify: &Notify,
+    deadline: Instant,
+    ready: impl Fn() -> bool,
+    on_wait: impl Fn(),
+) -> bool {
+    loop {
+        // Registered before `ready` is read, so a wake landing between the read and the wait still wakes this
+        // waiter.
+        let woken = notify.notified();
+        tokio::pin!(woken);
+        woken.as_mut().enable();
+        if ready() {
+            return true;
+        }
+        on_wait();
+        if tokio::time::timeout_at(deadline, woken).await.is_err() {
+            return ready();
         }
     }
 }
