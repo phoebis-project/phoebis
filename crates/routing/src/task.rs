@@ -3000,7 +3000,7 @@ impl Task {
                     &pin_key.agent_id,
                     &pin_key.model,
                 );
-                let after = self.state.pin(&pin_key).cloned();
+                let after = self.state.pin(&pin_key);
                 let now = request.now;
                 let selected = matches!(result, SelectResult::Selected(_));
                 match (before.as_ref(), after) {
