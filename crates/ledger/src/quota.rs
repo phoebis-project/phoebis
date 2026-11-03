@@ -895,18 +895,7 @@ impl QuotaPoll {
 
     /// A mark the manager landed, a refresh's or a usage 401's, reported to the routing with no detail.
     async fn report_mark(router: &RouterHandle, mark: LandedMark) {
-        router
-            .report(Report::AccountState {
-                account_id: mark.account_id,
-                state: mark.state,
-                incarnation: mark.incarnation,
-                lifecycle_generation: mark.lifecycle_generation,
-                credential_generation: mark.credential_generation,
-                cause: mark.cause,
-                detail: None,
-                dispatched_ordinal: None,
-            })
-            .await;
+        router.report(Report::from(&mark)).await;
     }
 
     /// `poll_account` with the router, then `refresh_profile` where the poll did not read the profile, for every

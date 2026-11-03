@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
-use phoebis_oauth::{Clock, UsageSnapshot};
+use phoebis_oauth::{Clock, LandedMark, UsageSnapshot};
 use phoebis_store::{
     AccountState, CooldownRow, CooldownScope, PinBurn, PinKey, PinRow, PoolRow, RegistryLoad,
     RekeyWrite, RoutingLoad, RoutingTx, ShedRoundRow, StateCause, Store, StoreError,
@@ -664,6 +664,23 @@ pub enum Report {
         /// is not Claude Code, which prices at the base regime.
         entrypoint: Option<String>,
     },
+}
+
+/// A mark the credential manager landed, a refresh's or a usage 401's, as the routing hears it: no upstream detail,
+/// and no funding ordinal, which a funding retry's success alone carries.
+impl From<&LandedMark> for Report {
+    fn from(mark: &LandedMark) -> Report {
+        Report::AccountState {
+            account_id: mark.account_id.clone(),
+            state: mark.state,
+            incarnation: mark.incarnation,
+            lifecycle_generation: mark.lifecycle_generation,
+            credential_generation: mark.credential_generation,
+            cause: mark.cause,
+            detail: None,
+            dispatched_ordinal: None,
+        }
+    }
 }
 
 impl Report {

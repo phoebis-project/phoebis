@@ -4014,18 +4014,7 @@ impl Relay {
                     // The manager's store write starts no reload, so a mark this acquisition's refresh landed
                     // reaches routing through the report the ladder sends for its own.
                     if let Some(mark) = error.landed_mark() {
-                        self.router
-                            .report(Report::AccountState {
-                                account_id: mark.account_id.clone(),
-                                state: mark.state,
-                                incarnation: mark.incarnation,
-                                lifecycle_generation: mark.lifecycle_generation,
-                                credential_generation: mark.credential_generation,
-                                cause: mark.cause,
-                                detail: None,
-                                dispatched_ordinal: None,
-                            })
-                            .await;
+                        self.router.report(Report::from(mark)).await;
                         return Err(NoCredential::Marked);
                     }
                     return Err(NoCredential::Unavailable);
