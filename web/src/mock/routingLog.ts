@@ -12,7 +12,7 @@ import { KEY_REVOKED_AT, WORST_BUCKET, poolById, type PoolSeed } from './pools';
 import { BUDGET_CROSSING_ID, FORCED_MOVE_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, PLAN_WINDOWS, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, TIE_STORY_ID, UNSEEDED_IDS, cooldownOf, failsOver, holds, oauthWindows, requestById } from './requests';
 import { createRng } from './rng';
 import { TABLES } from './samples';
-import { DAY, HOUR, MINUTE, NOW, clock, iso } from './time';
+import { DAY, HOUR, MINUTE, NIGHTLY_CAP_RAISED, NOW, OVERFLOW_LAPSED_AT, RESEARCH_BUDGET_AT, clock, iso } from './time';
 
 /** Why a move rule fired, as the trace's `moved` names it. A failover's reasons move the pin from the task instead. */
 const RULES = ['spent', 'overage', 'return_to_plan', 'drain', 'shed'] as const;
@@ -276,7 +276,7 @@ export function budgetsAt(pool: PoolSeed, accountId: string, at: number): Record
   if (!member) return [];
   const spentOf = (period: 'day' | 'month') => {
     const now = member.spends.find((s) => s.period === period)?.spentUsd ?? 0;
-    return accountId === 'research' && period === 'day' && at < clock(12, 41, 7) ? 19.62 : now;
+    return accountId === 'research' && period === 'day' && at < RESEARCH_BUDGET_AT ? 19.62 : now;
   };
   const rows: RecordBudget[] = [];
   if (member.budgetDailyUsd !== null) rows.push({ budgetUsd: member.budgetDailyUsd, observedAt: iso(at), period: 'day', periodEnd: iso(startOfDay(at) + DAY), periodStart: iso(startOfDay(at)), spentUsd: spentOf('day') });
@@ -286,7 +286,7 @@ export function budgetsAt(pool: PoolSeed, accountId: string, at: number): Record
 
 /** The account's state at `at`: the Overflow workspace's credit balance ran out at 11:30:12. */
 const stateAt = (a: Account, at: number): string => {
-  if (a.id === 'overflow') return at < clock(11, 30, 12) ? 'ready' : 'funding_required';
+  if (a.id === 'overflow') return at < OVERFLOW_LAPSED_AT ? 'ready' : 'funding_required';
   return a.status === 'reauth_required' || a.status === 'funding_required' || a.status === 'unpaired' ? a.status : 'ready';
 };
 
@@ -298,7 +298,7 @@ const creditsAt = (accountId: string, at: number): RecordCandidate['credits'] =>
   if (accountId === 'primary') return { blocked: null, disabledReason: null, enabled: true, observedAt: iso(at - MINUTE), utilization: 0.3 };
   if (accountId === 'secondary') return { blocked: 'extra_usage_disabled', disabledReason: null, enabled: false, observedAt: iso(at - MINUTE), utilization: null };
   if (accountId !== 'nightly') return null;
-  const capped = at < clock(11, 30, 12);
+  const capped = at < NIGHTLY_CAP_RAISED;
   return { blocked: capped ? 'org_spend_cap_reached' : null, disabledReason: null, enabled: true, observedAt: iso(at - MINUTE), utilization: capped ? 1 : 0.31 };
 };
 
@@ -2645,14 +2645,14 @@ function buildEvents(): RoutingEvent[] {
     { accountId: 'nightly', at: iso(t(12, 26, 40)), detail: USAGE_503, kind: 'poll_failed' },
     ...legacyPolls(),
     ...reservePolls(),
-    { accountId: 'research', at: iso(t(12, 41, 7)), detail: { budget_usd: 20, period: 'day', period_end: startOfDay(t(12, 41, 7)) + DAY, source_request_id: BUDGET_CROSSING_ID, spent_usd: 20.4 }, kind: 'budget_reached', poolId: 'jobs', requestId: BUDGET_CROSSING_ID },
+    { accountId: 'research', at: iso(RESEARCH_BUDGET_AT), detail: { budget_usd: 20, period: 'day', period_end: startOfDay(RESEARCH_BUDGET_AT) + DAY, source_request_id: BUDGET_CROSSING_ID, spent_usd: 20.4 }, kind: 'budget_reached', poolId: 'jobs', requestId: BUDGET_CROSSING_ID },
     { accountId: 'primary', at: iso(fiveHourReset), detail: { next_reset: fiveHourReset + 5 * HOUR, observed: 'sample', ...currentPair('primary'), reset_at: fiveHourReset, utilization_before: beforeReset, window: 'five_hour' }, kind: 'window_reset' },
     ...WEEKLY_RESETS,
-    { accountId: 'overflow', at: iso(t(11, 30, 12)), detail: { cause: 'funding_refused', detail: 'Your credit balance is too low to access the Anthropic API.', from: 'ready', to: 'funding_required' }, kind: 'account_state_changed' },
+    { accountId: 'overflow', at: iso(OVERFLOW_LAPSED_AT), detail: { cause: 'funding_refused', detail: 'Your credit balance is too low to access the Anthropic API.', from: 'ready', to: 'funding_required' }, kind: 'account_state_changed' },
     {
       accountId: 'nightly',
-      at: iso(t(11, 30, 12)),
-      detail: { after: { disabled_reason: null, enabled: true, utilization: 0.31 }, before: { disabled_reason: null, enabled: true, utilization: 1 }, blocked_after: null, blocked_before: 'org_spend_cap_reached', observed_at: t(11, 30, 12) },
+      at: iso(NIGHTLY_CAP_RAISED),
+      detail: { after: { disabled_reason: null, enabled: true, utilization: 0.31 }, before: { disabled_reason: null, enabled: true, utilization: 1 }, blocked_after: null, blocked_before: 'org_spend_cap_reached', observed_at: NIGHTLY_CAP_RAISED },
       kind: 'fast_credits_changed',
     },
     { accountId: 'nightly', at: iso(OVERAGE_FROM), detail: {}, kind: 'overage_started' },

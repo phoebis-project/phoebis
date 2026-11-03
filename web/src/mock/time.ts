@@ -20,6 +20,16 @@ export const startOfHour = (ms: number) => Math.floor(ms / HOUR) * HOUR;
 export const clock = (h: number, m: number, s = 0): number => NOW - ((14 - h) * HOUR + (30 - m) * MINUTE - s * 1_000);
 
 /**
+ * When nightly's spend cap was raised, the instant the story fixes for the start of its overage, which the accounts
+ * seed reads before the day's requests date the overage's first head.
+ */
+export const NIGHTLY_CAP_RAISED = clock(11, 30, 12);
+/** When the Overflow workspace's credit balance ran out, so it needs funding from then on. */
+export const OVERFLOW_LAPSED_AT = clock(11, 30, 12);
+/** When research's spend crossed its day's budget. */
+export const RESEARCH_BUDGET_AT = clock(12, 41, 7);
+
+/**
  * When an earlier holder of the `desktop` key id was deleted and the live key created: on the hour, twenty hours back,
  * so the holder's session is still inside the session expiry and its newest rows inside the request log's default day,
  * listed under the earlier key generation, while the Sessions view lists the live key's session alone, the holder's

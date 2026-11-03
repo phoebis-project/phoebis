@@ -5,7 +5,7 @@ import { WINDOW_HOURS, WINDOW_LABEL, hoursOfKey } from '@/lib/windows';
 import { leadOf } from './lead';
 import { createRng } from './rng';
 import { ACCOUNT_SAMPLE, QUOTA_SNAPSHOT_SAMPLE } from './samples';
-import { DAY, HOUR, MINUTE, NOW, ago, ahead, clock, iso } from './time';
+import { DAY, HOUR, MINUTE, NIGHTLY_CAP_RAISED, NOW, ago, ahead, clock, iso } from './time';
 
 /** The windows the router projects, the 5-hour, the 7-day and the 7-day Fable window, as the route serves them. */
 const PROJECTED: readonly string[] = ['5h', '7d', '7d_fable'];
@@ -190,7 +190,7 @@ const SEEDS = [
     fastLane: null,
     // In plan overage from the first head after its spend cap was raised at 11:30:12, which `requests.ts` dates once
     // the day's requests are drawn. The raise stands in until then.
-    overage: { inUse: true, observedAt: ago(40_000), reset: ahead(1 * DAY + 18 * HOUR + 12 * MINUTE), since: iso(clock(11, 30, 12)) },
+    overage: { inUse: true, observedAt: ago(40_000), reset: ahead(1 * DAY + 18 * HOUR + 12 * MINUTE), since: iso(NIGHTLY_CAP_RAISED) },
     credential: {
       accessTokenExpiresAt: ahead(5 * HOUR + 50 * MINUTE),
       lastError: null,

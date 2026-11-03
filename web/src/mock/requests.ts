@@ -19,7 +19,7 @@ import { leadOf } from './lead';
 import { keyById, poolById, type PoolSeed } from './pools';
 import { createRng, type Rng } from './rng';
 import { ACCOUNT_ROLLUP_SAMPLE, REQUEST_SAMPLE, TABLES } from './samples';
-import { DAY, DELETED_HOLDER_END, HOUR, MINUTE, NOW, clock, daysAgo, iso, startOfHour } from './time';
+import { DAY, DELETED_HOLDER_END, HOUR, MINUTE, NIGHTLY_CAP_RAISED, NOW, OVERFLOW_LAPSED_AT, RESEARCH_BUDGET_AT, clock, daysAgo, iso, startOfHour } from './time';
 
 const rng = createRng(7_331);
 // The upstream's own ids draw from a stream of their own, so they move no draw of the rows.
@@ -335,18 +335,16 @@ export const HAIKU = 'claude-haiku-4-5-20251001';
 export function servable(accountId: string, atMs: number, model: string, fast: boolean): boolean {
   const within = (from: number, to: number) => atMs >= from && atMs < to;
   if (accountId === 'secondary') return !within(clock(14, 2, 11), clock(14, 55));
-  if (accountId === 'primary') return !(fast && within(clock(14, 27), clock(14, 42))) && !(model === HAIKU && within(clock(14, 24, 10), clock(15, 24)));
-  if (accountId === 'nightly') return !fast || atMs >= clock(11, 30, 12);
-  if (accountId === 'overflow') return atMs < clock(11, 30, 12);
-  if (accountId === 'research') return atMs < clock(12, 41, 7);
+  // Primary's two spans are its seed's cooldowns: a fast scope holds a fast request, a model scope that model.
+  if (accountId === 'primary') return !accountById.get('primary')!.cooldowns.some((c) => (c.scope === 'fast' ? fast : c.scope === `model:${model}`) && within(Date.parse(c.setAt), Date.parse(c.until)));
+  if (accountId === 'nightly') return !fast || atMs >= NIGHTLY_CAP_RAISED;
+  if (accountId === 'overflow') return atMs < OVERFLOW_LAPSED_AT;
+  if (accountId === 'research') return atMs < RESEARCH_BUDGET_AT;
   return true;
 }
 
 /** An account a request is handed to, or a story attempt's, walks its windows back at a fixed factor, not a draw. */
 const SERVED_FACTOR = 0.8;
-
-/** When nightly's spend cap was raised, the instant the story fixes for the start of its overage. */
-export const NIGHTLY_CAP_RAISED = clock(11, 30, 12);
 
 /**
  * The order the engine takes a token count's members in: the best tier first, then under Pace the highest score off
@@ -2364,7 +2362,7 @@ function synthesizeMissReasons(hm: Rng, ok: number, asksForDiagnostics: boolean)
 }
 
 // The smoke run reads the holder's day through this module.
-export { DELETED_HOLDER_DAY } from './time';
+export { DELETED_HOLDER_DAY, NIGHTLY_CAP_RAISED } from './time';
 
 function historicalRollups(): HourlyRollup[] {
   const h = createRng(99);
