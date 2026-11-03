@@ -281,8 +281,9 @@ impl Condition {
     }
 
     /// Every validation rule but the compile: the member rules in the order name, path, selector, then the
-    /// operator's row, then the value. The header name comes back lowercased, the path parsed, the number parsed.
-    pub fn check(&self) -> Result<Checked, Reason> {
+    /// operator's row, then the value. The probe comes back in the one shape the subject admits, the header name
+    /// lowercased, the path parsed, the number parsed.
+    pub fn check(&self) -> Result<Probe<String>, Reason> {
         let subject = self.subject;
         let header = match &self.name {
             Some(_) if subject != Subject::Header => {
@@ -325,32 +326,55 @@ impl Condition {
             (Operator::Absent | Operator::Present, Some(_)) => {
                 return Err(not_applicable("value", operator.as_str()));
             }
-            (Operator::Absent, None) => Test::Absent,
-            (Operator::Present, None) => Test::Present,
+            (Operator::Absent, None) => BodyTest::Absent,
+            (Operator::Present, None) => BodyTest::Present,
             (_, None) => return Err(reason("value is required")),
-            (Operator::Gt, Some(value)) => Test::Gt(number(value)?),
-            (Operator::Lt, Some(value)) => Test::Lt(number(value)?),
+            (Operator::Gt, Some(value)) => BodyTest::Gt(number(value)?),
+            (Operator::Lt, Some(value)) => BodyTest::Lt(number(value)?),
             (Operator::Matches, Some(pattern)) => {
                 if pattern.chars().count() > PATTERN_MAX_CHARS {
                     return Err(Reason(format!(
                         "pattern is longer than {PATTERN_MAX_CHARS} characters"
                     )));
                 }
-                Test::Matches(pattern.to_string())
+                BodyTest::Matches(pattern.to_string())
             }
             (Operator::Equals, Some(value)) => {
                 if subject == Subject::Kind && !matches!(value, "inference" | "count_tokens") {
                     return Err(reason("kind is inference or count_tokens"));
                 }
-                Test::Equals(value.to_string())
+                BodyTest::Equals(value.to_string())
             }
         };
-        Ok(Checked {
-            subject,
-            header,
-            path,
-            selector,
-            test,
+        // The rules above admit each member on its own subject alone and each operator on its row alone, so every
+        // arm below finds what it reads. An arm that did not would refuse as the rule it stands behind does.
+        let row = || not_applicable(&format!("operator {}", operator.as_str()), subject.as_str());
+        let fact_test = |test: BodyTest<String>| match test {
+            BodyTest::Absent => Ok(FactTest::Absent),
+            BodyTest::Present => Ok(FactTest::Present),
+            BodyTest::Equals(value) => Ok(FactTest::Equals(value)),
+            BodyTest::Matches(pattern) => Ok(FactTest::Matches(pattern)),
+            BodyTest::Gt(_) | BodyTest::Lt(_) => Err(row()),
+        };
+        Ok(match subject {
+            Subject::Header => Probe::Header(
+                header.ok_or_else(|| reason("name is required"))?,
+                fact_test(test)?,
+            ),
+            Subject::Body => Probe::Body(path.ok_or_else(|| reason("path is required"))?, test),
+            Subject::Message => {
+                let selector = selector.ok_or_else(|| reason("selector is required"))?;
+                match test {
+                    BodyTest::Matches(pattern) => Probe::Message(selector, pattern),
+                    _ => return Err(row()),
+                }
+            }
+            Subject::AgentType => Probe::Fact(FactSubject::AgentType, fact_test(test)?),
+            Subject::Client => Probe::Fact(FactSubject::Client, fact_test(test)?),
+            Subject::Kind => Probe::Fact(FactSubject::Kind, fact_test(test)?),
+            Subject::Model => Probe::Fact(FactSubject::Model, fact_test(test)?),
+            Subject::RequestClass => Probe::Fact(FactSubject::RequestClass, fact_test(test)?),
+            Subject::UserAgent => Probe::Fact(FactSubject::UserAgent, fact_test(test)?),
         })
     }
 }
@@ -381,23 +405,107 @@ fn not_applicable(member: &str, word: &str) -> Reason {
     Reason(format!("{member} does not apply to {word}"))
 }
 
+/// A checked condition in the one shape its subject admits, generic over its pattern: the written text after `check`,
+/// the compiled regex after the compile. A header always has its name, a body test its path and a message its selector
+/// and its pattern, so the evaluator reads no shape `check` refuses.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Checked {
-    pub subject: Subject,
-    pub header: Option<String>,
-    pub path: Option<BodyPath>,
-    pub selector: Option<Selector>,
-    pub test: Test,
+pub enum Probe<P> {
+    Fact(FactSubject, FactTest<P>),
+    Header(String, FactTest<P>),
+    Body(BodyPath, BodyTest<P>),
+    Message(Selector, P),
 }
 
+impl<P> Probe<P> {
+    pub fn subject(&self) -> Subject {
+        match self {
+            Probe::Fact(subject, _) => Subject::from(*subject),
+            Probe::Header(..) => Subject::Header,
+            Probe::Body(..) => Subject::Body,
+            Probe::Message(..) => Subject::Message,
+        }
+    }
+
+    /// The same probe over the pattern `compile` makes of the written one.
+    pub(crate) fn try_map<Q, E>(
+        self,
+        compile: impl FnOnce(P) -> Result<Q, E>,
+    ) -> Result<Probe<Q>, E> {
+        Ok(match self {
+            Probe::Fact(subject, test) => Probe::Fact(subject, test.try_map(compile)?),
+            Probe::Header(name, test) => Probe::Header(name, test.try_map(compile)?),
+            Probe::Body(path, test) => Probe::Body(path, test.try_map(compile)?),
+            Probe::Message(selector, pattern) => Probe::Message(selector, compile(pattern)?),
+        })
+    }
+}
+
+/// The six subjects `RequestFacts` answers by name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FactSubject {
+    AgentType,
+    Client,
+    Kind,
+    Model,
+    RequestClass,
+    UserAgent,
+}
+
+impl From<FactSubject> for Subject {
+    fn from(subject: FactSubject) -> Subject {
+        match subject {
+            FactSubject::AgentType => Subject::AgentType,
+            FactSubject::Client => Subject::Client,
+            FactSubject::Kind => Subject::Kind,
+            FactSubject::Model => Subject::Model,
+            FactSubject::RequestClass => Subject::RequestClass,
+            FactSubject::UserAgent => Subject::UserAgent,
+        }
+    }
+}
+
+/// A test on one value that is there or not, a fact's or a header's.
 #[derive(Clone, Debug, PartialEq)]
-pub enum Test {
+pub enum FactTest<P> {
+    Absent,
+    Present,
+    Equals(String),
+    Matches(P),
+}
+
+impl<P> FactTest<P> {
+    fn try_map<Q, E>(self, compile: impl FnOnce(P) -> Result<Q, E>) -> Result<FactTest<Q>, E> {
+        Ok(match self {
+            FactTest::Absent => FactTest::Absent,
+            FactTest::Present => FactTest::Present,
+            FactTest::Equals(value) => FactTest::Equals(value),
+            FactTest::Matches(pattern) => FactTest::Matches(compile(pattern)?),
+        })
+    }
+}
+
+/// A test on the values a body path resolves to, the one subject that compares numbers.
+#[derive(Clone, Debug, PartialEq)]
+pub enum BodyTest<P> {
     Absent,
     Present,
     Equals(String),
     Gt(f64),
     Lt(f64),
-    Matches(String),
+    Matches(P),
+}
+
+impl<P> BodyTest<P> {
+    fn try_map<Q, E>(self, compile: impl FnOnce(P) -> Result<Q, E>) -> Result<BodyTest<Q>, E> {
+        Ok(match self {
+            BodyTest::Absent => BodyTest::Absent,
+            BodyTest::Present => BodyTest::Present,
+            BodyTest::Equals(value) => BodyTest::Equals(value),
+            BodyTest::Gt(bound) => BodyTest::Gt(bound),
+            BodyTest::Lt(bound) => BodyTest::Lt(bound),
+            BodyTest::Matches(pattern) => BodyTest::Matches(compile(pattern)?),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -587,19 +695,29 @@ mod tests {
         assert!(serde_json::from_value::<Condition>(unknown_member.clone()).is_err());
         assert!(serde_json::from_value::<ConditionWords>(unknown_member).is_err());
 
-        let empty = with_value(with_path(condition(Body, Equals), "model"), "")
+        let Probe::Body(_, empty) = with_value(with_path(condition(Body, Equals), "model"), "")
             .check()
-            .expect("an empty value is a value");
-        assert_eq!(empty.test, Test::Equals(String::new()));
-        let header = with_name(condition(Header, Present), "X-Test")
+            .expect("an empty value is a value")
+        else {
+            panic!("a body condition checks to a body probe");
+        };
+        assert_eq!(empty, BodyTest::Equals(String::new()));
+        let Probe::Header(header, _) = with_name(condition(Header, Present), "X-Test")
             .check()
-            .expect("a header token checks");
-        assert_eq!(header.header.as_deref(), Some("x-test"));
-        let number = with_value(with_path(condition(Body, Gt), "max_tokens"), "1e2")
-            .check()
-            .expect("a number checks");
-        assert_eq!(number.test, Test::Gt(100.0));
-        assert_eq!(number.path, Some(BodyPath::parse("max_tokens").unwrap()));
+            .expect("a header token checks")
+        else {
+            panic!("a header condition checks to a header probe");
+        };
+        assert_eq!(header, "x-test");
+        let Probe::Body(path, number) =
+            with_value(with_path(condition(Body, Gt), "max_tokens"), "1e2")
+                .check()
+                .expect("a number checks")
+        else {
+            panic!("a body condition checks to a body probe");
+        };
+        assert_eq!(number, BodyTest::Gt(100.0));
+        assert_eq!(path, BodyPath::parse("max_tokens").unwrap());
         assert!(with_value(condition(Kind, Equals), "count_tokens")
             .check()
             .is_ok());

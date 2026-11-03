@@ -1,6 +1,6 @@
 use phoebis_guardrails::{
     evaluate, evaluate_all, parse_body, texts, CompiledGuardrail, Condition, Evaluation,
-    GuardrailAction, GuardrailMode, HeaderLookup, HintLookup, Lookup, Match, Operator,
+    GuardrailAction, GuardrailMode, HeaderLookup, HintLookup, Lookup, Match, Operator, Probe,
     RequestFacts, Selector, Subject, Verdict,
 };
 use serde_json::{json, Value};
@@ -503,14 +503,10 @@ fn a_header_name_is_lowercased_at_validation_and_read_through_the_lookup() {
         None,
         None,
     );
-    assert_eq!(
-        written
-            .check()
-            .expect("the condition checks")
-            .header
-            .as_deref(),
-        Some("x-claude-code-agent-type")
-    );
+    let Probe::Header(name, _) = written.check().expect("the condition checks") else {
+        panic!("a header condition checks to a header probe");
+    };
+    assert_eq!(name, "x-claude-code-agent-type");
 
     let headers = Headers(vec![("x-claude-code-agent-type", "explorer")]);
     let facts = RequestFacts {

@@ -11,12 +11,11 @@ pub mod presets;
 
 pub use body::parse_body;
 pub use compile::{
-    CompileError, CompiledCondition, CompiledGuardrail, CompiledTest, COMPILED_SIZE_LIMIT,
-    PATTERN_MAX_CHARS,
+    CompileError, CompiledCondition, CompiledGuardrail, COMPILED_SIZE_LIMIT, PATTERN_MAX_CHARS,
 };
 pub use condition::{
-    Checked, Condition, ConditionWords, GuardrailAction, GuardrailMode, Operator, Reason, Selector,
-    Subject, Test, MAX_CONDITIONS,
+    BodyTest, Condition, ConditionWords, FactSubject, FactTest, GuardrailAction, GuardrailMode,
+    Operator, Probe, Reason, Selector, Subject, MAX_CONDITIONS,
 };
 pub use evaluate::{
     evaluate, evaluate_all, texts, Evaluation, HeaderLookup, HintLookup, Lookup, Match,

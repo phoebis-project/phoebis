@@ -1,7 +1,8 @@
 use serde_json::Value;
 
-use crate::compile::{CompiledCondition, CompiledGuardrail, CompiledTest};
-use crate::condition::{Selector, Subject};
+use crate::compile::{CompiledCondition, CompiledGuardrail};
+use crate::condition::{BodyTest, FactSubject, FactTest, Probe, Selector};
+use crate::path::BodyPath;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Lookup<'a> {
@@ -144,62 +145,54 @@ pub fn texts(message: &Value) -> Box<dyn Iterator<Item = &str> + '_> {
 
 /// `None` where the condition reads a header the lookup cannot answer.
 fn decides(condition: &CompiledCondition, facts: &RequestFacts<'_>) -> Option<bool> {
-    match condition.subject {
-        Subject::Body => Some(body_holds(condition, facts.body)),
-        Subject::Message => Some(message_holds(condition, facts.body)),
-        _ => holds(&condition.test, fact(condition, facts)),
+    match &condition.probe {
+        Probe::Fact(subject, test) => holds(test, fact(*subject, facts)),
+        Probe::Header(name, test) => holds(test, facts.headers.get(name)),
+        Probe::Body(path, test) => Some(body_holds(path, test, facts.body)),
+        Probe::Message(selector, pattern) => Some(message_holds(*selector, pattern, facts.body)),
     }
 }
 
-fn fact<'f>(condition: &CompiledCondition, facts: &'f RequestFacts<'_>) -> Lookup<'f> {
+fn fact<'f>(subject: FactSubject, facts: &'f RequestFacts<'_>) -> Lookup<'f> {
     let optional = |value: Option<&'f str>| value.map_or(Lookup::Absent, Lookup::Value);
-    match condition.subject {
-        Subject::Kind => Lookup::Value(facts.kind),
-        Subject::RequestClass => optional(facts.request_class),
-        Subject::AgentType => optional(facts.agent_type),
-        Subject::Client => Lookup::Value(facts.client),
-        Subject::Model => Lookup::Value(facts.model),
-        Subject::UserAgent => optional(facts.user_agent),
-        Subject::Header => match &condition.header {
-            Some(name) => facts.headers.get(name),
-            None => Lookup::Absent,
-        },
-        Subject::Body | Subject::Message => Lookup::Absent,
+    match subject {
+        FactSubject::Kind => Lookup::Value(facts.kind),
+        FactSubject::RequestClass => optional(facts.request_class),
+        FactSubject::AgentType => optional(facts.agent_type),
+        FactSubject::Client => Lookup::Value(facts.client),
+        FactSubject::Model => Lookup::Value(facts.model),
+        FactSubject::UserAgent => optional(facts.user_agent),
     }
 }
 
-fn holds(test: &CompiledTest, lookup: Lookup<'_>) -> Option<bool> {
+fn holds(test: &FactTest<regex::Regex>, lookup: Lookup<'_>) -> Option<bool> {
     let value = match lookup {
         Lookup::Value(value) => Some(value),
         Lookup::Absent => None,
         Lookup::Unknown => return None,
     };
     Some(match test {
-        CompiledTest::Absent => value.is_none(),
-        CompiledTest::Present => value.is_some(),
-        CompiledTest::Equals(expected) => value == Some(expected.as_str()),
-        CompiledTest::Matches(pattern) => value.is_some_and(|value| pattern.is_match(value)),
-        CompiledTest::Gt(_) | CompiledTest::Lt(_) => false,
+        FactTest::Absent => value.is_none(),
+        FactTest::Present => value.is_some(),
+        FactTest::Equals(expected) => value == Some(expected.as_str()),
+        FactTest::Matches(pattern) => value.is_some_and(|value| pattern.is_match(value)),
     })
 }
 
-fn body_holds(condition: &CompiledCondition, body: Option<&Value>) -> bool {
-    let Some(path) = &condition.path else {
-        return false;
-    };
+fn body_holds(path: &BodyPath, test: &BodyTest<regex::Regex>, body: Option<&Value>) -> bool {
     let resolves =
         |found: &mut dyn FnMut(&Value) -> bool| body.is_some_and(|root| path.any(root, found));
-    match &condition.test {
-        CompiledTest::Absent => !resolves(&mut |_| true),
-        CompiledTest::Present => resolves(&mut |_| true),
-        CompiledTest::Equals(expected) => resolves(&mut |value| scalar_equals(value, expected)),
-        CompiledTest::Gt(bound) => {
+    match test {
+        BodyTest::Absent => !resolves(&mut |_| true),
+        BodyTest::Present => resolves(&mut |_| true),
+        BodyTest::Equals(expected) => resolves(&mut |value| scalar_equals(value, expected)),
+        BodyTest::Gt(bound) => {
             resolves(&mut |value| value.as_f64().is_some_and(|number| number > *bound))
         }
-        CompiledTest::Lt(bound) => {
+        BodyTest::Lt(bound) => {
             resolves(&mut |value| value.as_f64().is_some_and(|number| number < *bound))
         }
-        CompiledTest::Matches(pattern) => {
+        BodyTest::Matches(pattern) => {
             resolves(&mut |value| value.as_str().is_some_and(|text| pattern.is_match(text)))
         }
     }
@@ -216,11 +209,7 @@ fn scalar_equals(value: &Value, expected: &str) -> bool {
     }
 }
 
-fn message_holds(condition: &CompiledCondition, body: Option<&Value>) -> bool {
-    let (CompiledTest::Matches(pattern), Some(selector)) = (&condition.test, condition.selector)
-    else {
-        return false;
-    };
+fn message_holds(selector: Selector, pattern: &regex::Regex, body: Option<&Value>) -> bool {
     let Some(messages) = body
         .and_then(|root| root.get("messages"))
         .and_then(Value::as_array)

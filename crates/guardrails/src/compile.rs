@@ -1,7 +1,4 @@
-use crate::condition::{
-    Condition, GuardrailAction, GuardrailMode, Reason, Selector, Subject, Test, MAX_CONDITIONS,
-};
-use crate::path::BodyPath;
+use crate::condition::{Condition, GuardrailAction, GuardrailMode, Probe, Reason, MAX_CONDITIONS};
 
 pub const PATTERN_MAX_CHARS: usize = 2_048;
 pub const COMPILED_SIZE_LIMIT: usize = 1 << 20;
@@ -32,23 +29,9 @@ pub(crate) fn compile_pattern(pattern: &str) -> Result<regex::Regex, Reason> {
 }
 
 #[derive(Clone, Debug)]
-pub enum CompiledTest {
-    Absent,
-    Present,
-    Equals(String),
-    Gt(f64),
-    Lt(f64),
-    Matches(regex::Regex),
-}
-
-#[derive(Clone, Debug)]
 pub struct CompiledCondition {
     pub written: usize,
-    pub subject: Subject,
-    pub header: Option<String>,
-    pub path: Option<BodyPath>,
-    pub selector: Option<Selector>,
-    pub test: CompiledTest,
+    pub probe: Probe<regex::Regex>,
 }
 
 #[derive(Clone, Debug)]
@@ -78,27 +61,16 @@ impl CompiledGuardrail {
                 index,
                 reason: reason.0,
             };
-            let checked = condition.check().map_err(refused)?;
-            let test = match checked.test {
-                Test::Absent => CompiledTest::Absent,
-                Test::Present => CompiledTest::Present,
-                Test::Equals(value) => CompiledTest::Equals(value),
-                Test::Gt(bound) => CompiledTest::Gt(bound),
-                Test::Lt(bound) => CompiledTest::Lt(bound),
-                Test::Matches(pattern) => {
-                    CompiledTest::Matches(compile_pattern(&pattern).map_err(refused)?)
-                }
-            };
+            let probe = condition
+                .check()
+                .and_then(|probe| probe.try_map(|pattern| compile_pattern(&pattern)))
+                .map_err(refused)?;
             compiled.push(CompiledCondition {
                 written: index,
-                subject: checked.subject,
-                header: checked.header,
-                path: checked.path,
-                selector: checked.selector,
-                test,
+                probe,
             });
         }
-        compiled.sort_by_key(|condition| condition.subject.rank());
+        compiled.sort_by_key(|condition| condition.probe.subject().rank());
         Ok(CompiledGuardrail {
             id: id.to_string(),
             name: name.to_string(),
@@ -117,7 +89,7 @@ impl CompiledGuardrail {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::condition::Operator;
+    use crate::condition::{Operator, Selector, Subject};
 
     fn condition(subject: Subject, operator: Operator, value: Option<&str>) -> Condition {
         Condition {
@@ -224,7 +196,7 @@ mod tests {
         let order: Vec<(Subject, usize)> = guardrail
             .conditions
             .iter()
-            .map(|c| (c.subject, c.written))
+            .map(|c| (c.probe.subject(), c.written))
             .collect();
         assert_eq!(
             order,
