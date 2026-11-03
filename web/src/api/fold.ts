@@ -220,13 +220,11 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
   const clientPatterns = options.clientPatterns ?? [];
   const { funding } = options;
   // The agent is matched on its folded token, as the unscoped page's rollups hold it, so one pattern selects the same
-  // rows under both scopes.
-  const kept = rows.filter(
-    (r) =>
-      (!agentPatterns.length || agentPatterns.some((p) => matchesPattern(p, agentTokenOf(r.userAgent)))) &&
-      (!clientPatterns.length || clientPatterns.some((p) => matchesPattern(p, r.client ?? '-'))) &&
-      (funding === undefined || onSide(r, funding)),
-  );
+  // rows under both scopes. The token is folded once per row ahead of the patterns, since the fold splits the header.
+  const kept = rows.filter((r) => {
+    const agent = agentPatterns.length > 0 ? agentTokenOf(r.userAgent) : null;
+    return (agent === null || agentPatterns.some((p) => matchesPattern(p, agent))) && (!clientPatterns.length || clientPatterns.some((p) => matchesPattern(p, r.client ?? '-'))) && (funding === undefined || onSide(r, funding));
+  });
   for (const r of kept) {
     const key = keyOf(r, by, options.agentGroups ?? []);
     const entry = groups.get(key) ?? { group: emptyFolded(key, labelOf(r, key, by, latest)), rows: [] };
