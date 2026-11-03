@@ -182,6 +182,24 @@ pub(crate) fn in_list<T: Clone + Into<rusqlite::types::Value>>(
     clauses.push(format!("{column} IN ({marks})"));
 }
 
+/// The pool term of a rollups read. The member index leads with the pool, so a pool bound alone would have the
+/// planner walk the pool's whole retention before the hour filter: the unary plus keeps that term off the index, as
+/// `top_sessions_statement` keeps its accounts off theirs, and a pool with an account bound keeps the member index's
+/// full prefix.
+pub(crate) fn pool_term(
+    pools: &[String],
+    accounts: &[String],
+    args: &mut Vec<rusqlite::types::Value>,
+    clauses: &mut Vec<String>,
+) {
+    let column = if accounts.is_empty() {
+        "+pool_id"
+    } else {
+        "pool_id"
+    };
+    in_list(column, pools, args, clauses);
+}
+
 pub(crate) fn bind_all<T: Clone + Into<rusqlite::types::Value>>(
     values: &[T],
     args: &mut Vec<rusqlite::types::Value>,
@@ -4475,6 +4493,26 @@ pub fn rewrite_series(
     Ok(points)
 }
 
+/// `held_series`'s statement and its binds over the hours `[first, last)`, spelled once so the plan test explains the
+/// statement the read runs.
+pub(crate) fn held_series_statement(
+    filter: &SeriesFilter,
+    first: i64,
+    last: i64,
+) -> (String, Vec<rusqlite::types::Value>) {
+    let mut args: Vec<rusqlite::types::Value> = vec![first.into(), last.into()];
+    let mut clauses = vec!["hour >= ?1 AND hour < ?2".to_string()];
+    pool_term(&filter.pools, &filter.accounts, &mut args, &mut clauses);
+    in_list("account_id", &filter.accounts, &mut args, &mut clauses);
+    (
+        format!(
+            "SELECT hour, SUM(slow_down_held_ms), SUM(slow_down_held) FROM rollups_hourly WHERE {} GROUP BY hour",
+            clauses.join(" AND ")
+        ),
+        args,
+    )
+}
+
 /// The slow-down's held time per bucket over the filter's pools and accounts: `(at, held_ms, requests)`, the hourly
 /// rollups' slow-down waits summed and the requests that waited, the bucket's `at` in milliseconds as `rewrite_series`
 /// answers it. The sums are SQLite's, so the read carries no row of the table into memory.
@@ -4483,14 +4521,8 @@ pub fn held_series(
     filter: &SeriesFilter,
 ) -> Result<Vec<(i64, u64, u64)>, LedgerError> {
     let (first, last) = bucket_range(filter)?;
-    let mut args: Vec<rusqlite::types::Value> = vec![first.into(), last.into()];
-    let mut clauses = vec!["hour >= ?1 AND hour < ?2".to_string()];
-    in_list("pool_id", &filter.pools, &mut args, &mut clauses);
-    in_list("account_id", &filter.accounts, &mut args, &mut clauses);
-    let mut stmt = conn.prepare(&format!(
-        "SELECT hour, SUM(slow_down_held_ms), SUM(slow_down_held) FROM rollups_hourly WHERE {} GROUP BY hour",
-        clauses.join(" AND ")
-    ))?;
+    let (sql, args) = held_series_statement(filter, first, last);
+    let mut stmt = conn.prepare(&sql)?;
     let hours = stmt
         .query_map(params_from_iter(args), |r| {
             Ok((
@@ -4900,6 +4932,31 @@ mod tests {
             Ok(rows)
         })
         .unwrap()
+    }
+
+    /// A pool alone binds no leading column the hour range would not serve better: the member index would walk the
+    /// pool's whole retention before the hour filter, so the held time's hour range stays the outer search.
+    #[test]
+    fn the_pool_only_held_series_searches_the_hour_range_off_the_member_index() {
+        let filter = SeriesFilter {
+            pools: vec!["p".into()],
+            ..SeriesFilter::default()
+        };
+        let (sql, binds) = held_series_statement(&filter, 0, 3_600);
+        let plan = plan_of(&sql, binds);
+        assert!(
+            plan.iter()
+                .any(|step| step.starts_with("SEARCH rollups_hourly")
+                    && step.contains("hour>?")
+                    && step.contains("hour<?")),
+            "{plan:?}"
+        );
+        assert!(
+            !plan
+                .iter()
+                .any(|step| step.contains("rollups_hourly_member")),
+            "{plan:?}"
+        );
     }
 
     /// At least two seeks of the requests go through the session index and no step walks the table, on a ledger whose

@@ -19,9 +19,9 @@ use crate::histogram::Histogram;
 use crate::plan::{funding_of, Funding, PlanTables};
 use crate::pricing::{PriceRevisions, Speed};
 use crate::query::{
-    in_list, key_clause, COOLDOWN_CLEARED, COOLDOWN_SET, OVERAGE_ENDED, PIN_CREATED, PIN_MIGRATED,
-    ROUTER_STARTED, SHEDDING_ROUND, SLOW_DOWN_ENDED, SLOW_DOWN_STARTED, WINDOW_CLEARED,
-    WINDOW_SPENT,
+    in_list, key_clause, pool_term, COOLDOWN_CLEARED, COOLDOWN_SET, OVERAGE_ENDED, PIN_CREATED,
+    PIN_MIGRATED, ROUTER_STARTED, SHEDDING_ROUND, SLOW_DOWN_ENDED, SLOW_DOWN_STARTED,
+    WINDOW_CLEARED, WINDOW_SPENT,
 };
 use crate::reconcile::{newest_rows, ReconciliationRow};
 use crate::record::{AttemptRecord, EventRecord, KeepaliveDelta, RequestRecord};
@@ -2019,19 +2019,7 @@ pub(crate) fn select_statement(
 ) -> (String, Vec<Value>) {
     let mut binds = vec![Value::Integer(from_hour), Value::Integer(to_hour)];
     let mut clauses = vec!["hour >= ?1 AND hour < ?2".to_string()];
-    // The member index leads with the pool, so a pool bound alone would have the planner walk the pool's whole
-    // retention before the hour filter. The unary plus keeps that term off the index, as `top_sessions_statement`
-    // keeps its accounts off theirs, and a pool with an account bound keeps the member index's full prefix.
-    in_list(
-        if select.accounts.is_empty() {
-            "+pool_id"
-        } else {
-            "pool_id"
-        },
-        &select.pools,
-        &mut binds,
-        &mut clauses,
-    );
+    pool_term(&select.pools, &select.accounts, &mut binds, &mut clauses);
     in_list("account_id", &select.accounts, &mut binds, &mut clauses);
     in_list("kind", &select.kinds, &mut binds, &mut clauses);
     in_list("canonical_model", &select.models, &mut binds, &mut clauses);
