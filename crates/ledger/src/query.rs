@@ -1030,12 +1030,16 @@ pub struct RoutingLogFilter {
 
 /// `<at>:<rank>:<id>`: rank 1 for a decision (`id` is `<request_id>/<seq>`), 0 for an event (`id` its rowid).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RoutingLogCursor {
-    pub at: i64,
-    pub rank: u8,
-    pub request_id: Option<String>,
-    pub seq: Option<u32>,
-    pub rowid: Option<i64>,
+pub enum RoutingLogCursor {
+    Decision {
+        at: i64,
+        request_id: String,
+        seq: u32,
+    },
+    Event {
+        at: i64,
+        rowid: i64,
+    },
 }
 
 impl RoutingLogCursor {
@@ -1050,47 +1054,41 @@ impl RoutingLogCursor {
                 if request_id.is_empty() {
                     return None;
                 }
-                Some(RoutingLogCursor {
+                Some(RoutingLogCursor::Decision {
                     at,
-                    rank: 1,
-                    request_id: Some(request_id.to_string()),
-                    seq: Some(seq.parse().ok()?),
-                    rowid: None,
+                    request_id: request_id.to_string(),
+                    seq: seq.parse().ok()?,
                 })
             }
-            "0" => Some(RoutingLogCursor {
+            "0" => Some(RoutingLogCursor::Event {
                 at,
-                rank: 0,
-                request_id: None,
-                seq: None,
-                rowid: Some(id.parse().ok()?),
+                rowid: id.parse().ok()?,
             }),
             _ => None,
         }
     }
 
     pub fn encode(&self) -> String {
-        match (&self.request_id, self.seq, self.rowid) {
-            (Some(request_id), Some(seq), _) => format!("{}:1:{request_id}/{seq}", self.at),
-            (_, _, rowid) => format!("{}:0:{}", self.at, rowid.unwrap_or_default()),
+        match self {
+            RoutingLogCursor::Decision {
+                at,
+                request_id,
+                seq,
+            } => format!("{at}:1:{request_id}/{seq}"),
+            RoutingLogCursor::Event { at, rowid } => format!("{at}:0:{rowid}"),
         }
     }
 
     fn of(row: &RoutingLogRow) -> RoutingLogCursor {
         match row {
-            RoutingLogRow::Decision(d) => RoutingLogCursor {
+            RoutingLogRow::Decision(d) => RoutingLogCursor::Decision {
                 at: d.at,
-                rank: 1,
-                request_id: Some(d.request_id.clone()),
-                seq: Some(d.seq),
-                rowid: None,
+                request_id: d.request_id.clone(),
+                seq: d.seq,
             },
-            RoutingLogRow::Event(e) => RoutingLogCursor {
+            RoutingLogRow::Event(e) => RoutingLogCursor::Event {
                 at: e.at,
-                rank: 0,
-                request_id: None,
-                seq: None,
-                rowid: Some(e.id),
+                rowid: e.id,
             },
         }
     }
@@ -1409,19 +1407,29 @@ pub(crate) fn decision_rows_statement(
     cursor: Option<&RoutingLogCursor>,
     page: i64,
 ) -> (String, Vec<rusqlite::types::Value>) {
-    if let Some(cursor) = cursor {
-        let n = statement.args.len() + 1;
-        statement.args.push(cursor.at.into());
-        statement.args.push(i64::from(cursor.rank).into());
-        statement.args.push(cursor.request_id.clone().into());
-        statement.args.push(cursor.seq.into());
-        statement.clauses.push(format!(
-            "(d.at < ?{n} OR (d.at = ?{n} AND ?{} = 1 AND (d.request_id < ?{} OR (d.request_id = ?{} AND d.seq < ?{}))))",
-            n + 1,
-            n + 2,
-            n + 2,
-            n + 3
-        ));
+    let n = statement.args.len() + 1;
+    match cursor {
+        None => {}
+        Some(RoutingLogCursor::Decision {
+            at,
+            request_id,
+            seq,
+        }) => {
+            statement.args.push((*at).into());
+            statement.args.push(request_id.clone().into());
+            statement.args.push((*seq).into());
+            statement.clauses.push(format!(
+                "(d.at < ?{n} OR (d.at = ?{n} AND (d.request_id < ?{} OR (d.request_id = ?{} AND d.seq < ?{}))))",
+                n + 1,
+                n + 1,
+                n + 2
+            ));
+        }
+        // Decisions rank before events at one `at`, so an event's cursor already passed every decision at its own.
+        Some(RoutingLogCursor::Event { at, .. }) => {
+            statement.args.push((*at).into());
+            statement.clauses.push(format!("d.at < ?{n}"));
+        }
     }
     statement.args.push(page.into());
     let sql = format!(
@@ -1494,16 +1502,22 @@ fn event_rows(
     cursor: Option<&RoutingLogCursor>,
     page: i64,
 ) -> Result<Vec<EventListRow>, LedgerError> {
-    if let Some(cursor) = cursor {
-        let n = statement.args.len() + 1;
-        statement.args.push(cursor.at.into());
-        statement.args.push(i64::from(cursor.rank).into());
-        statement.args.push(cursor.rowid.into());
-        statement.clauses.push(format!(
-            "(e.at < ?{n} OR (e.at = ?{n} AND (?{} = 1 OR e.rowid < ?{})))",
-            n + 1,
-            n + 2
-        ));
+    let n = statement.args.len() + 1;
+    match cursor {
+        None => {}
+        // Decisions rank before events at one `at`, so a decision's cursor leaves every event at its own to read.
+        Some(RoutingLogCursor::Decision { at, .. }) => {
+            statement.args.push((*at).into());
+            statement.clauses.push(format!("e.at <= ?{n}"));
+        }
+        Some(RoutingLogCursor::Event { at, rowid }) => {
+            statement.args.push((*at).into());
+            statement.args.push((*rowid).into());
+            statement.clauses.push(format!(
+                "(e.at < ?{n} OR (e.at = ?{n} AND e.rowid < ?{}))",
+                n + 1
+            ));
+        }
     }
     statement.args.push(page.into());
     let sql = format!(
