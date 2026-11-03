@@ -881,13 +881,14 @@ for `claude-cli/2.1.310 (external, cli)`. The classifier grouping lists the requ
 `none`, as the Requests view's Classifier filter names them.
 
 Auto reload is at 5 s when the view opens, set on the split Refresh button's dropdown as on the Requests view and kept
-out of the page's address. At each interval it reads the account list again and, once a new bucket of the range has
-begun, moves the window's end to now and reads every chart again, so a page left open shows the hour it is in. It waits
-while a menu or popover under the bar or the Cost reference dialog is open, or the tab is hidden. Off, the window's end
-holds where it was read and the dropdown's title adds "the window ends {time}" until a filter, the range or Refresh
-moves it. The split Refresh button's body moves the end to now and reads every chart again. A custom range holds its own
-end either way, and one whose end lay more than a minute in the past when the page took it reads Off in the dropdown,
-disabled, while a link whose range ends at the moment it was made reads on.
+out of the page's address. At each interval, once a new bucket of the range has begun, it moves the window's end to now
+and reads the account list and every chart again, so a page left open shows the hour it is in. It waits while a menu or
+popover under the bar or the Cost reference dialog is open, or the tab is hidden. Off, the window's end holds where it
+was read and the dropdown's title adds "the window ends {time}" until a filter, the range or Refresh moves it. The split
+Refresh button's body moves the end to now and reads the account list and every chart again. A custom range holds its
+own end either way, and one whose end lay more than a minute in the past when the page took it reads Off in the
+dropdown, disabled, while a link whose range ends at the moment it was made reads on. A custom range whose end has not
+passed reads the account list again at each interval, as it reads its charts.
 
 Filtered to one session the view sums the request log instead of the hourly rollups and says so, over the first 10,000
 requests of the range, and a session with more reads "Partial: the first 10,000 requests of the range" on a line under

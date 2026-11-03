@@ -18461,9 +18461,10 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   delete api.getSettings;
   results.push({ name: '/analytics with the settings read failing the unused allowance card draws its error state', ok: refused?.error === 'Could not load the unused allowance' && refused.ids.length === 0, missing: [JSON.stringify(refused)] });
 
-  // A weekly row changes once a week, so the card reads once per Accounts filter and again once the registry's poll
+  // A weekly row changes once a week, so the card reads once per Accounts filter and again once the registry's read
   // answers a weekly window past its reset, never at the list's 5 s cadence, under a custom range whose end is still
-  // ahead as under a preset.
+  // ahead as under a preset. Under a preset the registry reads with the window, so a reset shows once the window next
+  // moves.
   const cadence = countCalls('getAnalyticsUnusedAllowance');
   const watched = await mount('/analytics#accounts', { now: CLOCK_ORIGIN });
   const mounted = cadence.calls.length;
@@ -18475,6 +18476,10 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   api.listAccounts = async (...args) => (await listAccounts.apply(api, args)).map((a) => (a.id === 'primary' ? { ...a, windows: a.windows.map((w) => (w.id === '7d' ? { ...w, resetsAt: new Date(Date.parse(w.resetsAt) + 7 * DAY_MS).toISOString() } : w)) } : a));
   tick(5_000);
   await watched.settle();
+  const unseen = cadence.calls.length;
+  // A range change moves the window here. A tick past the hour would also fire every timer of the pages this run
+  // keeps mounted, and their reads would count.
+  await watched.navigate('/analytics?range=7d#accounts');
   const moved = cadence.calls.length;
   api.listAccounts = listAccounts;
   watched.unmount();
@@ -18489,9 +18494,9 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   ahead.unmount();
   cadence.restore();
   results.push({
-    name: "/analytics the unused allowance card reads again after a weekly reset passes and not at the list's cadence, under a custom range whose end is ahead too",
-    ok: mounted === 1 && polled === 1 && moved === 2 && opened === moved + 1 && ticked === 0,
-    missing: [`${mounted} at mount, ${polled} after a tick, ${moved} after the reset, ${opened - moved} on the custom range's mount, ${ticked} over its two ticks`],
+    name: "/analytics the unused allowance card reads again once the window's next move reads a weekly reset, and not at the list's cadence, under a custom range whose end is ahead too",
+    ok: mounted === 1 && polled === 1 && unseen === 1 && moved === 2 && opened === moved + 1 && ticked === 0,
+    missing: [`${mounted} at mount, ${polled} after a tick, ${unseen} at the tick after the reset, ${moved} once the window moved, ${opened - moved} on the custom range's mount, ${ticked} over its two ticks`],
   });
 }
 {
@@ -21448,7 +21453,7 @@ m.unmount();
     page.unmount();
   }
   {
-    const name = "/analytics starts auto reload at 5 s, reads the registry at the interval, holds the end while off with the title naming it, and names a custom range's window on Refresh";
+    const name = "/analytics starts auto reload at 5 s, reads the registry with the window and not at the interval, holds the end while off with the title naming it, and names a custom range's window on Refresh";
     const part = (page) => ({ disabled: intervalPart(page)?.disabled ?? null, title: intervalPart(page)?.getAttribute('title') ?? null, word: intervalWord(page) });
     const hour = Date.UTC(2026, 8, 16, 15);
     const page = await mount('/analytics', { now: CLOCK_ORIGIN });
@@ -21485,8 +21490,8 @@ m.unmount();
     registry.restore();
     ended.unmount();
 
-    // An open Groups popover is a menu under the bar: the registry and the boundary wait for it, and run once it
-    // closes.
+    // An open Groups popover is a menu under the bar: the boundary waits for it, and once it closes moves the window,
+    // which reads the registry again.
     const grouped = await mount('/analytics?by=user_agent', { now: CLOCK_ORIGIN });
     await groupsField(grouped);
     const pausedPart = part(grouped);
@@ -21506,7 +21511,7 @@ m.unmount();
       name,
       ok:
         JSON.stringify(start) === JSON.stringify({ disabled: false, title: 'Auto reload every 5 s', word: '5 s' }) &&
-        polled === 1 &&
+        polled === 0 &&
         JSON.stringify(off) === JSON.stringify({ disabled: false, title: 'Auto reload off, the window ends 14:30', word: 'Off', refresh: 'Window ends 14:30. Refresh reads up to now' }) &&
         JSON.stringify(held) === JSON.stringify({ registry: 0, series: 0, title: 'Auto reload off, the window ends 14:30' }) &&
         JSON.stringify(refreshed) === JSON.stringify({ ends: [new Date(CLOCK_ORIGIN + 5_000 + 3_600_000).toISOString()], title: 'Auto reload off, the window ends 15:30' }) &&
@@ -21518,6 +21523,40 @@ m.unmount();
         resumed.series.length === 2 &&
         resumed.series.every((to) => Date.parse(to) >= hour),
       missing: [JSON.stringify(start), `${polled} registry reads in 5 s`, JSON.stringify(off), JSON.stringify(held), JSON.stringify(refreshed), JSON.stringify(endedPart), `${endedReads} registry reads on the ended span`, JSON.stringify(pausedPart), JSON.stringify(paused), JSON.stringify(resumed)],
+    });
+  }
+  {
+    // The registry feeds the account slots and the weekly resets alone, so it reads with the window: once per move of a
+    // preset's end and never at the interval, and at the interval under a custom range whose end is open, as the
+    // window's own reads do.
+    const name = '/analytics the account list is read once per window change and not per period under a preset, and once per period under a custom range whose end is open';
+    const preset = await mount('/analytics', { now: CLOCK_ORIGIN });
+    let registry = countCalls('listAccounts');
+    tick(5_000);
+    await preset.settle();
+    tick(5_000);
+    await preset.settle();
+    const periods = registry.calls.length;
+    // Past 15:00, the hour boundary that moves the 24-hour window's end.
+    tick(30 * 60_000);
+    await preset.settle();
+    const moved = registry.calls.length - periods;
+    registry.restore();
+    preset.unmount();
+    const open = await mount(`/analytics?from=${isoAt(CLOCK_ORIGIN - 2 * 3_600_000)}&to=${isoAt(CLOCK_ORIGIN)}`, { now: CLOCK_ORIGIN });
+    await chooseInterval(open, '5 s');
+    registry = countCalls('listAccounts');
+    tick(5_000);
+    await open.settle();
+    tick(5_000);
+    await open.settle();
+    const live = registry.calls.length;
+    registry.restore();
+    open.unmount();
+    results.push({
+      name,
+      ok: periods === 0 && moved === 1 && live === 2,
+      missing: [`${periods} reads over two periods under the preset`, `${moved} reads as the window moved`, `${live} reads over two periods under the custom range`],
     });
   }
   {

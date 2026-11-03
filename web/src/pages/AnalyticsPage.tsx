@@ -372,11 +372,12 @@ export function AnalyticsPage() {
     return readBurn(api, { from: fromIso, to: toIso }, pageBy, { accountIds: filters.accountId, userAgentGroups: agentGroups }).then((read) => ({ ...read, endMs: span.toMs, readAt }));
   }, [fromIso, toIso, pageBy, filters.accountId, agentGroups, tab, generation], reload);
   // The registry's list, for the account slots alone: the range's option list holds the accounts with traffic and
-  // differs from the Dashboard's, and one account keeps one color across the views.
-  const registry = useAsync(() => api.listAccounts(), [], { paused, refreshMs: polledMs });
+  // differs from the Dashboard's, and one account keeps one color across the views. It reads with the window, since
+  // each answer redraws every chart of the open tab for colors, hints and resets that seldom move.
+  const registry = useAsync(() => api.listAccounts(), [fromIso, toIso, generation], reload);
   const slotOf = useMemo(() => accountSlots((registry.data ?? []).map((a) => a.id)), [registry.data]);
   // A weekly row changes once a week, so the unused allowance card reads once per Accounts filter, again on Refresh and
-  // once the registry's poll answers a weekly window of an account under the filter past its reset, never at the list's
+  // once the registry's read answers a weekly window of an account under the filter past its reset, never at the list's
   // cadence, under a custom range too. The registry's first answer moves no reset, so the page's load reads once.
   const weeklyResetsAt = registry.data === null ? null : weeklyResetsKey(registry.data.filter((a) => filters.accountId.length === 0 || filters.accountId.includes(a.id)));
   const [resets, setResets] = useState({ at: weeklyResetsAt, moved: 0 });
