@@ -294,41 +294,8 @@ impl RollupRow {
     }
 
     pub fn add(&mut self, o: &RollupRow) {
-        self.requests += o.requests;
-        self.succeeded += o.succeeded;
-        self.rate_limited += o.rate_limited;
-        self.failed += o.failed;
-        self.exhausted += o.exhausted;
-        self.incomplete += o.incomplete;
-        self.rejected += o.rejected;
-        self.attempts += o.attempts;
-        self.failovers += o.failovers;
-        self.cache_hits += o.cache_hits;
-        self.cache_misses += o.cache_misses;
-        self.uncached_requests += o.uncached_requests;
-        self.input_tokens += o.input_tokens;
-        self.cache_read_tokens += o.cache_read_tokens;
-        self.cache_write_5m_tokens += o.cache_write_5m_tokens;
-        self.cache_write_1h_tokens += o.cache_write_1h_tokens;
-        self.output_tokens += o.output_tokens;
-        self.thinking_tokens += o.thinking_tokens;
-        self.web_search_requests += o.web_search_requests;
-        self.web_fetch_requests += o.web_fetch_requests;
-        self.kept_warm_requests += o.kept_warm_requests;
-        self.kept_warm_5m_tokens += o.kept_warm_5m_tokens;
-        self.kept_warm_1h_tokens += o.kept_warm_1h_tokens;
-        self.probe_migrated += o.probe_migrated;
-        self.wasted_probes += o.wasted_probes;
-        self.wasted_input_tokens += o.wasted_input_tokens;
-        self.wasted_cache_read_tokens += o.wasted_cache_read_tokens;
-        self.wasted_cache_write_5m_tokens += o.wasted_cache_write_5m_tokens;
-        self.wasted_cache_write_1h_tokens += o.wasted_cache_write_1h_tokens;
-        self.wasted_output_tokens += o.wasted_output_tokens;
+        self.each_count(o, |a, b| *a += b);
         add_counts(&mut self.wasted_probe_reasons, &o.wasted_probe_reasons);
-        self.probes_skipped += o.probes_skipped;
-        self.probes_held += o.probes_held;
-        self.slow_down_held_ms += o.slow_down_held_ms;
-        self.slow_down_held += o.slow_down_held;
         self.ttfb_hist.merge(&o.ttfb_hist);
         self.ttfc_hist.merge(&o.ttfc_hist);
         self.duration_hist.merge(&o.duration_hist);
@@ -336,6 +303,53 @@ impl RollupRow {
         add_counts(&mut self.errors, &o.errors);
         add_counts(&mut self.refusals, &o.refusals);
         add_counts(&mut self.cache_miss_reasons, &o.cache_miss_reasons);
+    }
+
+    /// Every counter of the row paired with `o`'s, so `add` and `subtract` list them once.
+    fn each_count(&mut self, o: &RollupRow, mut f: impl FnMut(&mut u64, u64)) {
+        f(&mut self.requests, o.requests);
+        f(&mut self.succeeded, o.succeeded);
+        f(&mut self.rate_limited, o.rate_limited);
+        f(&mut self.failed, o.failed);
+        f(&mut self.exhausted, o.exhausted);
+        f(&mut self.incomplete, o.incomplete);
+        f(&mut self.rejected, o.rejected);
+        f(&mut self.attempts, o.attempts);
+        f(&mut self.failovers, o.failovers);
+        f(&mut self.cache_hits, o.cache_hits);
+        f(&mut self.cache_misses, o.cache_misses);
+        f(&mut self.uncached_requests, o.uncached_requests);
+        f(&mut self.input_tokens, o.input_tokens);
+        f(&mut self.cache_read_tokens, o.cache_read_tokens);
+        f(&mut self.cache_write_5m_tokens, o.cache_write_5m_tokens);
+        f(&mut self.cache_write_1h_tokens, o.cache_write_1h_tokens);
+        f(&mut self.output_tokens, o.output_tokens);
+        f(&mut self.thinking_tokens, o.thinking_tokens);
+        f(&mut self.web_search_requests, o.web_search_requests);
+        f(&mut self.web_fetch_requests, o.web_fetch_requests);
+        f(&mut self.kept_warm_requests, o.kept_warm_requests);
+        f(&mut self.kept_warm_5m_tokens, o.kept_warm_5m_tokens);
+        f(&mut self.kept_warm_1h_tokens, o.kept_warm_1h_tokens);
+        f(&mut self.probe_migrated, o.probe_migrated);
+        f(&mut self.wasted_probes, o.wasted_probes);
+        f(&mut self.wasted_input_tokens, o.wasted_input_tokens);
+        f(
+            &mut self.wasted_cache_read_tokens,
+            o.wasted_cache_read_tokens,
+        );
+        f(
+            &mut self.wasted_cache_write_5m_tokens,
+            o.wasted_cache_write_5m_tokens,
+        );
+        f(
+            &mut self.wasted_cache_write_1h_tokens,
+            o.wasted_cache_write_1h_tokens,
+        );
+        f(&mut self.wasted_output_tokens, o.wasted_output_tokens);
+        f(&mut self.probes_skipped, o.probes_skipped);
+        f(&mut self.probes_held, o.probes_held);
+        f(&mut self.slow_down_held_ms, o.slow_down_held_ms);
+        f(&mut self.slow_down_held, o.slow_down_held);
     }
 
     /// Who paid for the row, its funding word read as `Funding::of_rollup` reads it, so every reader takes one rule.
@@ -430,61 +444,8 @@ impl RollupRow {
     /// The inverse of `add` for a contribution that was added before; counters saturate at zero so a row that
     /// drifted cannot go negative, and a count that reaches zero leaves the map.
     pub fn subtract(&mut self, o: &RollupRow) {
-        self.requests = self.requests.saturating_sub(o.requests);
-        self.succeeded = self.succeeded.saturating_sub(o.succeeded);
-        self.rate_limited = self.rate_limited.saturating_sub(o.rate_limited);
-        self.failed = self.failed.saturating_sub(o.failed);
-        self.exhausted = self.exhausted.saturating_sub(o.exhausted);
-        self.incomplete = self.incomplete.saturating_sub(o.incomplete);
-        self.rejected = self.rejected.saturating_sub(o.rejected);
-        self.attempts = self.attempts.saturating_sub(o.attempts);
-        self.failovers = self.failovers.saturating_sub(o.failovers);
-        self.cache_hits = self.cache_hits.saturating_sub(o.cache_hits);
-        self.cache_misses = self.cache_misses.saturating_sub(o.cache_misses);
-        self.uncached_requests = self.uncached_requests.saturating_sub(o.uncached_requests);
-        self.input_tokens = self.input_tokens.saturating_sub(o.input_tokens);
-        self.cache_read_tokens = self.cache_read_tokens.saturating_sub(o.cache_read_tokens);
-        self.cache_write_5m_tokens = self
-            .cache_write_5m_tokens
-            .saturating_sub(o.cache_write_5m_tokens);
-        self.cache_write_1h_tokens = self
-            .cache_write_1h_tokens
-            .saturating_sub(o.cache_write_1h_tokens);
-        self.output_tokens = self.output_tokens.saturating_sub(o.output_tokens);
-        self.thinking_tokens = self.thinking_tokens.saturating_sub(o.thinking_tokens);
-        self.web_search_requests = self
-            .web_search_requests
-            .saturating_sub(o.web_search_requests);
-        self.web_fetch_requests = self.web_fetch_requests.saturating_sub(o.web_fetch_requests);
-        self.kept_warm_requests = self.kept_warm_requests.saturating_sub(o.kept_warm_requests);
-        self.kept_warm_5m_tokens = self
-            .kept_warm_5m_tokens
-            .saturating_sub(o.kept_warm_5m_tokens);
-        self.kept_warm_1h_tokens = self
-            .kept_warm_1h_tokens
-            .saturating_sub(o.kept_warm_1h_tokens);
-        self.probe_migrated = self.probe_migrated.saturating_sub(o.probe_migrated);
-        self.wasted_probes = self.wasted_probes.saturating_sub(o.wasted_probes);
-        self.wasted_input_tokens = self
-            .wasted_input_tokens
-            .saturating_sub(o.wasted_input_tokens);
-        self.wasted_cache_read_tokens = self
-            .wasted_cache_read_tokens
-            .saturating_sub(o.wasted_cache_read_tokens);
-        self.wasted_cache_write_5m_tokens = self
-            .wasted_cache_write_5m_tokens
-            .saturating_sub(o.wasted_cache_write_5m_tokens);
-        self.wasted_cache_write_1h_tokens = self
-            .wasted_cache_write_1h_tokens
-            .saturating_sub(o.wasted_cache_write_1h_tokens);
-        self.wasted_output_tokens = self
-            .wasted_output_tokens
-            .saturating_sub(o.wasted_output_tokens);
+        self.each_count(o, |a, b| *a = a.saturating_sub(b));
         subtract_counts(&mut self.wasted_probe_reasons, &o.wasted_probe_reasons);
-        self.probes_skipped = self.probes_skipped.saturating_sub(o.probes_skipped);
-        self.probes_held = self.probes_held.saturating_sub(o.probes_held);
-        self.slow_down_held_ms = self.slow_down_held_ms.saturating_sub(o.slow_down_held_ms);
-        self.slow_down_held = self.slow_down_held.saturating_sub(o.slow_down_held);
         self.ttfb_hist.subtract(&o.ttfb_hist);
         self.ttfc_hist.subtract(&o.ttfc_hist);
         self.duration_hist.subtract(&o.duration_hist);
