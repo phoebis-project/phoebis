@@ -68,8 +68,9 @@ pub(crate) struct RungWalk<'a> {
     pub visited: Vec<Visited<'a>>,
 }
 
-/// The prompt cache's two lifetimes in milliseconds: the default and the hour a marker can ask for.
+/// The prompt cache's default lifetime in milliseconds.
 pub const FIVE_MINUTES_MS: i64 = 300_000;
+/// The hour in milliseconds a cache marker can ask for in place of the default lifetime.
 pub const ONE_HOUR_MS: i64 = 3_600_000;
 
 /// What a completed inference or probe answer reports: its conversation's links always, and the cache facts
