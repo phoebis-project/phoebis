@@ -96,7 +96,8 @@ export function DashboardPage() {
 
   const o = overview.data;
   const costs = settings.data?.subscriptionCosts ?? null;
-  const reading = weekReadingOf(costs, settings.error, week);
+  // A failed or unpriced reading builds its failure afresh on each call, and the cost tile's memo keys on it.
+  const reading = useMemo(() => weekReadingOf(costs, settings.error, week), [costs, settings.error, week]);
   const { failure, scale } = reading;
   // Sparkline memoizes on its values, and the page re-renders on its five reads and the clock, so the sparks and the
   // cost tile follow the overview, the reading and the unit alone.
