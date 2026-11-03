@@ -1050,17 +1050,6 @@ fn attempt_outcome(verdict: &Verdict, status: u16, first_event: Option<&[u8]>) -
 /// the TTL it coupled the body to (the fourth element), `None` off the policy.
 type Built = Result<(Vec<u8>, Vec<Injected>, Vec<Injected>, Option<CacheTtl>), RelayError>;
 
-/// Every kind of injection the relay may make. Order carries no meaning: it only seeds a `BTreeSet`.
-const INJECTED_KINDS: [Injected; 7] = [
-    Injected::CacheDiagnosisBeta,
-    Injected::Cch,
-    Injected::ClientRequestId,
-    Injected::Diagnostics,
-    Injected::ExtendedTtlBeta,
-    Injected::PrevReq,
-    Injected::PromptId,
-];
-
 /// The glue between what admission recorded and what this leg actually sends: builds a `Restore` from the
 /// context every account shares, this leg's previous-request lookup, and the fields the account has refused, so
 /// `Restore::skip` mirrors the same set `NativeEdit::diagnostics` is gated on.
@@ -2830,10 +2819,7 @@ impl Relay {
         };
         // Seeded from what this account has already refused, so a leg the operator has not touched since the
         // last 400 never resubmits a field or a beta the upstream is known to reject.
-        let mut skip: BTreeSet<Injected> = INJECTED_KINDS
-            .into_iter()
-            .filter(|item| self.memory.refuses(account, *item))
-            .collect();
+        let mut skip: BTreeSet<Injected> = self.memory.refused(account);
         let (mut edited, mut body_injected, mut inject_betas, mut ttl) = match build(&skip) {
             Ok(built) => built,
             Err(error) => {

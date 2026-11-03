@@ -339,15 +339,19 @@ impl SessionMemory {
         latch.items.insert(item);
     }
 
-    /// A late 400 for an attempt made under an older row lands nowhere: `latch` records the row it was given,
-    /// and `refuses` matches the current row's incarnation and revision exactly.
-    pub fn refuses(&self, account: &AccountRow, item: Injected) -> bool {
+    /// The items the account's latch holds. A late 400 for an attempt made under an older row lands nowhere:
+    /// `latch` records the row it was given, and `refused` matches the current row's incarnation and revision
+    /// exactly.
+    pub fn refused(&self, account: &AccountRow) -> BTreeSet<Injected> {
         let inner = self.inner.lock().unwrap();
-        inner.latches.get(&account.id).is_some_and(|latch| {
-            latch.incarnation == account.incarnation
-                && latch.revision == account.revision
-                && latch.items.contains(&item)
-        })
+        inner
+            .latches
+            .get(&account.id)
+            .filter(|latch| {
+                latch.incarnation == account.incarnation && latch.revision == account.revision
+            })
+            .map(|latch| latch.items.clone())
+            .unwrap_or_default()
     }
 
     /// Drops entries idle past the configured bound; run by every write on the lock it already holds, at most
@@ -1006,17 +1010,17 @@ mod tests {
         let mem = SessionMemory::new(10, MEMORY_IDLE_MS);
         let account = row(1, 1);
         mem.latch(&account, Injected::Cch);
-        assert!(mem.refuses(&account, Injected::Cch));
+        assert!(mem.refused(&account).contains(&Injected::Cch));
         assert!(
-            !mem.refuses(&account, Injected::PromptId),
+            !mem.refused(&account).contains(&Injected::PromptId),
             "a different item was never latched"
         );
         assert!(
-            !mem.refuses(&row(1, 2), Injected::Cch),
+            !mem.refused(&row(1, 2)).contains(&Injected::Cch),
             "a later revision clears the latch"
         );
         assert!(
-            !mem.refuses(&row(2, 1), Injected::Cch),
+            !mem.refused(&row(2, 1)).contains(&Injected::Cch),
             "a different incarnation clears the latch"
         );
     }
