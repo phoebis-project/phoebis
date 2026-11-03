@@ -140,18 +140,18 @@ pub trait Decoder: Send {
 pub fn decoder(e: Encoding) -> Box<dyn Decoder> {
     match e {
         Encoding::Identity => Box::new(Identity),
-        Encoding::Gzip => Box::new(GzipDecoder(Some(flate2::write::GzDecoder::new(
+        Encoding::Gzip => Box::new(Streaming(Some(flate2::write::GzDecoder::new(
             BoundedSink::default(),
         )))),
-        Encoding::Deflate => Box::new(DeflateDecoder(Some(flate2::write::ZlibDecoder::new(
+        Encoding::Deflate => Box::new(Streaming(Some(flate2::write::ZlibDecoder::new(
             BoundedSink::default(),
         )))),
-        Encoding::Brotli => Box::new(BrotliDecoder(Some(brotli::DecompressorWriter::new(
+        Encoding::Brotli => Box::new(Streaming(Some(brotli::DecompressorWriter::new(
             BoundedSink::default(),
             4096,
         )))),
         // Context creation only fails under allocation failure, which is unrecoverable here regardless.
-        Encoding::Zstd => Box::new(ZstdDecoder(Some(
+        Encoding::Zstd => Box::new(Streaming(Some(
             zstd::stream::write::Decoder::new(BoundedSink::default())
                 .expect("zstd decoder context"),
         ))),
@@ -182,105 +182,91 @@ fn already_finished() -> TransportError {
     TransportError::Response("decoder used after finish".into())
 }
 
-struct GzipDecoder(Option<flate2::write::GzDecoder<BoundedSink>>);
+/// A library writer decoding into the sink. The codings differ only in the call that ends the stream.
+trait SinkWriter: Write + Send {
+    fn sink(&mut self) -> &mut BoundedSink;
+    #[cfg(test)]
+    fn sink_ref(&self) -> &BoundedSink;
+    fn end(&mut self) -> io::Result<()>;
+}
 
-impl Decoder for GzipDecoder {
+impl SinkWriter for flate2::write::GzDecoder<BoundedSink> {
+    fn sink(&mut self) -> &mut BoundedSink {
+        self.get_mut()
+    }
+    #[cfg(test)]
+    fn sink_ref(&self) -> &BoundedSink {
+        self.get_ref()
+    }
+    fn end(&mut self) -> io::Result<()> {
+        self.try_finish()
+    }
+}
+
+impl SinkWriter for flate2::write::ZlibDecoder<BoundedSink> {
+    fn sink(&mut self) -> &mut BoundedSink {
+        self.get_mut()
+    }
+    #[cfg(test)]
+    fn sink_ref(&self) -> &BoundedSink {
+        self.get_ref()
+    }
+    fn end(&mut self) -> io::Result<()> {
+        self.try_finish()
+    }
+}
+
+impl SinkWriter for brotli::DecompressorWriter<BoundedSink> {
+    fn sink(&mut self) -> &mut BoundedSink {
+        self.get_mut()
+    }
+    #[cfg(test)]
+    fn sink_ref(&self) -> &BoundedSink {
+        self.get_ref()
+    }
+    fn end(&mut self) -> io::Result<()> {
+        self.close()
+    }
+}
+
+impl SinkWriter for zstd::stream::write::Decoder<'static, BoundedSink> {
+    fn sink(&mut self) -> &mut BoundedSink {
+        self.get_mut()
+    }
+    #[cfg(test)]
+    fn sink_ref(&self) -> &BoundedSink {
+        self.get_ref()
+    }
+    fn end(&mut self) -> io::Result<()> {
+        self.flush()
+    }
+}
+
+/// `None` once `finish_bounded` ended the stream, so a later call is refused rather than written to a finished writer.
+struct Streaming<W>(Option<W>);
+
+impl<W: SinkWriter> Decoder for Streaming<W> {
     fn feed_bounded(&mut self, input: &[u8], budget: usize) -> Result<Vec<u8>, TransportError> {
         let d = self.0.as_mut().ok_or_else(already_finished)?;
-        d.get_mut().prepare(budget);
+        d.sink().prepare(budget);
         // A write-side decoder keeps what it just decoded until the next write, so without the flush a caller
         // reading the stream as it arrives would see one chunk's bytes only after the following chunk.
         let wrote = d.write_all(input).and_then(|()| d.flush());
-        d.get_mut().collect(budget, wrote)
+        d.sink().collect(budget, wrote)
     }
 
     fn finish_bounded(&mut self, budget: usize) -> Result<Vec<u8>, TransportError> {
         let d = self.0.as_mut().ok_or_else(already_finished)?;
-        d.get_mut().prepare(budget);
-        let wrote = d.try_finish();
-        let out = d.get_mut().collect(budget, wrote)?;
+        d.sink().prepare(budget);
+        let wrote = d.end();
+        let out = d.sink().collect(budget, wrote)?;
         self.0 = None;
         Ok(out)
     }
 
     #[cfg(test)]
     fn retained(&self) -> usize {
-        self.0.as_ref().map_or(0, |d| d.get_ref().high_water)
-    }
-}
-
-struct DeflateDecoder(Option<flate2::write::ZlibDecoder<BoundedSink>>);
-
-impl Decoder for DeflateDecoder {
-    fn feed_bounded(&mut self, input: &[u8], budget: usize) -> Result<Vec<u8>, TransportError> {
-        let d = self.0.as_mut().ok_or_else(already_finished)?;
-        d.get_mut().prepare(budget);
-        let wrote = d.write_all(input).and_then(|()| d.flush());
-        d.get_mut().collect(budget, wrote)
-    }
-
-    fn finish_bounded(&mut self, budget: usize) -> Result<Vec<u8>, TransportError> {
-        let d = self.0.as_mut().ok_or_else(already_finished)?;
-        d.get_mut().prepare(budget);
-        let wrote = d.try_finish();
-        let out = d.get_mut().collect(budget, wrote)?;
-        self.0 = None;
-        Ok(out)
-    }
-
-    #[cfg(test)]
-    fn retained(&self) -> usize {
-        self.0.as_ref().map_or(0, |d| d.get_ref().high_water)
-    }
-}
-
-struct BrotliDecoder(Option<brotli::DecompressorWriter<BoundedSink>>);
-
-impl Decoder for BrotliDecoder {
-    fn feed_bounded(&mut self, input: &[u8], budget: usize) -> Result<Vec<u8>, TransportError> {
-        let d = self.0.as_mut().ok_or_else(already_finished)?;
-        d.get_mut().prepare(budget);
-        let wrote = d.write_all(input).and_then(|()| d.flush());
-        d.get_mut().collect(budget, wrote)
-    }
-
-    fn finish_bounded(&mut self, budget: usize) -> Result<Vec<u8>, TransportError> {
-        let d = self.0.as_mut().ok_or_else(already_finished)?;
-        d.get_mut().prepare(budget);
-        let wrote = d.close();
-        let out = d.get_mut().collect(budget, wrote)?;
-        self.0 = None;
-        Ok(out)
-    }
-
-    #[cfg(test)]
-    fn retained(&self) -> usize {
-        self.0.as_ref().map_or(0, |d| d.get_ref().high_water)
-    }
-}
-
-struct ZstdDecoder(Option<zstd::stream::write::Decoder<'static, BoundedSink>>);
-
-impl Decoder for ZstdDecoder {
-    fn feed_bounded(&mut self, input: &[u8], budget: usize) -> Result<Vec<u8>, TransportError> {
-        let d = self.0.as_mut().ok_or_else(already_finished)?;
-        d.get_mut().prepare(budget);
-        let wrote = d.write_all(input).and_then(|()| d.flush());
-        d.get_mut().collect(budget, wrote)
-    }
-
-    fn finish_bounded(&mut self, budget: usize) -> Result<Vec<u8>, TransportError> {
-        let d = self.0.as_mut().ok_or_else(already_finished)?;
-        d.get_mut().prepare(budget);
-        let wrote = d.flush();
-        let out = d.get_mut().collect(budget, wrote)?;
-        self.0 = None;
-        Ok(out)
-    }
-
-    #[cfg(test)]
-    fn retained(&self) -> usize {
-        self.0.as_ref().map_or(0, |d| d.get_ref().high_water)
+        self.0.as_ref().map_or(0, |d| d.sink_ref().high_water)
     }
 }
 
@@ -524,7 +510,7 @@ mod tests {
             .write_all(&gzip(&vec![0u8; (8 << 20) + 5_000]))
             .unwrap();
         *inner.get_mut() = BoundedSink::default();
-        let mut d = GzipDecoder(Some(inner));
+        let mut d = Streaming(Some(inner));
         let error = d.finish_bounded(1024).unwrap_err();
         assert!(matches!(error, TransportError::TooLarge(1024)), "{error}");
         assert!(d.retained() <= 1024, "{}", d.retained());
