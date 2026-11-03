@@ -345,9 +345,9 @@ const POOL_ROWS: PoolSeed[] = [
   },
 ];
 
-// MockApi restamps revision at construction, so the served figure is not this seed's. The sample's warnings are the
-// captured pool's, so the seed drops them: the mock answers its own.
-export const POOLS: PoolSeed[] = POOL_ROWS.map(({ warnings: _, ...seed }: PoolSeed & { warnings?: unknown }) => seed);
+// MockApi restamps revision at construction, so the served figure is not this seed's. The sample's guardrails and
+// warnings are the captured pool's, so the seed drops them: the mock answers its own.
+export const POOLS: PoolSeed[] = POOL_ROWS.map(({ guardrails: _g, warnings: _w, ...seed }: PoolSeed & { guardrails?: unknown; warnings?: unknown }) => seed);
 
 export const poolById = new Map(POOLS.map((p) => [p.id, p]));
 
