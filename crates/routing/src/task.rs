@@ -2760,6 +2760,13 @@ fn standing_runway(
 }
 
 impl Task {
+    fn snapshot(&self) -> Arc<RegistrySnapshot> {
+        self.snapshot
+            .read()
+            .expect("snapshot lock poisoned")
+            .clone()
+    }
+
     /// A send with no receiver is an error and means nothing: the loop must never depend on anyone listening.
     fn emit(&self, event: RouterEvent) {
         let _ = self.events.send(event);
@@ -2806,11 +2813,7 @@ impl Task {
 
     /// The decision of a request the relay refused before asking for a selection, built on the current snapshot.
     fn record_refusal(&self, request: &RefusedRequest, refusal: &RefusalFacts) {
-        let snapshot = self
-            .snapshot
-            .read()
-            .expect("snapshot lock poisoned")
-            .clone();
+        let snapshot = self.snapshot();
         let (record, summary) = DecisionRecord::refused(request, &snapshot, refusal);
         self.emit(RouterEvent::Decision {
             summary: Arc::new(summary),
@@ -2893,11 +2896,7 @@ impl Task {
     async fn handle(&mut self, command: Command) {
         match command {
             Command::Select { mut request, reply } => {
-                let snapshot = self
-                    .snapshot
-                    .read()
-                    .expect("snapshot lock poisoned")
-                    .clone();
+                let snapshot = self.snapshot();
                 // Keyed on the dated id from the first request after a resolution lands, so a fresh pin and a
                 // fresh cooldown never start a second life under the spelling the resolution just retired.
                 request.canonical_model =
@@ -3365,19 +3364,11 @@ impl Task {
                 let _ = reply.send(self.state.pins());
             }
             Command::PinsStanding { reply } => {
-                let snapshot = self
-                    .snapshot
-                    .read()
-                    .expect("snapshot lock poisoned")
-                    .clone();
+                let snapshot = self.snapshot();
                 let _ = reply.send(pins_standing(&self.state, &snapshot, (self.clock)()));
             }
             Command::Projections { pool_id, reply } => {
-                let snapshot = self
-                    .snapshot
-                    .read()
-                    .expect("snapshot lock poisoned")
-                    .clone();
+                let snapshot = self.snapshot();
                 let _ = reply.send(projections(
                     &self.state,
                     &snapshot,
@@ -3390,11 +3381,7 @@ impl Task {
                 let _ = reply.send(self.state.fast_burns());
             }
             Command::PinsByPool { reply } => {
-                let snapshot = self
-                    .snapshot
-                    .read()
-                    .expect("snapshot lock poisoned")
-                    .clone();
+                let snapshot = self.snapshot();
                 let mut by_pool: BTreeMap<&str, u64> = BTreeMap::new();
                 for key_id in self.state.pin_key_ids() {
                     let pool = snapshot
@@ -3418,11 +3405,7 @@ impl Task {
                 let _ = reply.send(self.state.accounting_degraded());
             }
             Command::MemberSpends { reply } => {
-                let snapshot = self
-                    .snapshot
-                    .read()
-                    .expect("snapshot lock poisoned")
-                    .clone();
+                let snapshot = self.snapshot();
                 let rows = snapshot
                     .budgeted_members()
                     .flat_map(|m| {
@@ -3458,11 +3441,7 @@ impl Task {
             }
             Command::SpendWindows { reply } => {
                 let now = (self.clock)();
-                let snapshot = self
-                    .snapshot
-                    .read()
-                    .expect("snapshot lock poisoned")
-                    .clone();
+                let snapshot = self.snapshot();
                 let mut windows: Vec<(String, SpendWindow)> = snapshot
                     .accounts()
                     .filter_map(|account| {
@@ -3570,11 +3549,7 @@ impl Task {
                 }
             }
             Report::MemberSpend(rows) => {
-                let snapshot = self
-                    .snapshot
-                    .read()
-                    .expect("snapshot lock poisoned")
-                    .clone();
+                let snapshot = self.snapshot();
                 self.state.record_member_spend(&snapshot, rows);
             }
             Report::Accounting { degraded } => self.state.set_accounting_degraded(degraded),
@@ -3685,11 +3660,7 @@ impl Task {
                 // Read before the fold replaces it, and the holder's own: another holder's state is no edge. The edge's
                 // before is the state the selector read at this clock, a lapsed spend share included.
                 let before = self.state.credits_of(&account_id, incarnation).cloned();
-                let snapshot = self
-                    .snapshot
-                    .read()
-                    .expect("snapshot lock poisoned")
-                    .clone();
+                let snapshot = self.snapshot();
                 let blocked_before = self
                     .state
                     .credits_blocked(&snapshot, &account_id, incarnation, (self.clock)())
@@ -3751,12 +3722,7 @@ impl Task {
                 }
                 // A usage-based seat's overage family is its spend window, which `Report::SpendHead` carries. A leg
                 // that read its snapshot before the class landed still reports it here, and it records nothing.
-                if self
-                    .snapshot
-                    .read()
-                    .expect("snapshot lock poisoned")
-                    .usage_based(&account_id)
-                {
+                if self.snapshot().usage_based(&account_id) {
                     return;
                 }
                 evidence.incarnation = incarnation;
@@ -4077,11 +4043,7 @@ impl Task {
                 }
                 // Neither the poll nor a head knows the account's plan, and the pair is the one the account holds as
                 // the reading lands: a later profile read moves the readings after it and leaves this week's alone.
-                let snapshot = self
-                    .snapshot
-                    .read()
-                    .expect("snapshot lock poisoned")
-                    .clone();
+                let snapshot = self.snapshot();
                 let (plan, tier) = (snapshot.plan(&account_id), snapshot.tier(&account_id));
                 for reading in sample.windows.values_mut() {
                     reading.plan = plan.map(String::from);
@@ -4225,11 +4187,7 @@ impl Task {
                 if self.moved_past(&account_id, incarnation) || fast || classifier {
                     return;
                 }
-                let snapshot = self
-                    .snapshot
-                    .read()
-                    .expect("snapshot lock poisoned")
-                    .clone();
+                let snapshot = self.snapshot();
                 // An api_key account bills its tokens and a usage-based seat its spend window, so neither has a plan
                 // window to charge, whatever tier the seat's profile names, and an account whose tier the profile has
                 // not named yet or whose plan the cost model does not price has no factor to price through.
@@ -4391,11 +4349,7 @@ impl Task {
         lifecycle_generation: u64,
         credential_generation: u64,
     ) -> bool {
-        let snapshot = self
-            .snapshot
-            .read()
-            .expect("snapshot lock poisoned")
-            .clone();
+        let snapshot = self.snapshot();
         let Some(account) = holder(&snapshot, account_id, incarnation) else {
             return true;
         };
@@ -4414,11 +4368,7 @@ impl Task {
     }
 
     fn moved_past(&self, account_id: &str, incarnation: u64) -> bool {
-        let snapshot = self
-            .snapshot
-            .read()
-            .expect("snapshot lock poisoned")
-            .clone();
+        let snapshot = self.snapshot();
         holder(&snapshot, account_id, incarnation).is_none()
     }
 
@@ -4473,11 +4423,7 @@ impl Task {
         digest_key: [u8; 32],
         loaded_at: i64,
     ) {
-        let previous = self
-            .snapshot
-            .read()
-            .expect("snapshot lock poisoned")
-            .clone();
+        let previous = self.snapshot();
         let next = Arc::new(
             RegistrySnapshot::from_load(load, digest_key, loaded_at, previous.revision + 1)
                 .with_guardrails(guardrails),
@@ -4516,11 +4462,7 @@ impl Task {
     /// The burn window of the pool the key routes through; the default preset's for a key the snapshot no
     /// longer holds, whose pin the next purge drops anyway.
     fn burn_window_ms(&self, key_id: &str) -> i64 {
-        let snapshot = self
-            .snapshot
-            .read()
-            .expect("snapshot lock poisoned")
-            .clone();
+        let snapshot = self.snapshot();
         snapshot
             .key_pool(key_id)
             .map_or_else(default_burn_average_ms, burn_average_ms)
@@ -4552,11 +4494,7 @@ impl Task {
     }
 
     fn purge(&mut self) {
-        let snapshot = self
-            .snapshot
-            .read()
-            .expect("snapshot lock poisoned")
-            .clone();
+        let snapshot = self.snapshot();
         let now = (self.clock)();
         // A permit or a ticket whose guard's drop never reached the table: a panic, or a stream past the relay's
         // idle bound with no bound of its own.
