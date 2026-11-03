@@ -15102,7 +15102,6 @@ async fn a_head_of_an_earlier_leg_leaves_the_mark_a_later_landing_set() {
 }
 
 /// A turn of `session` under `agent` and `class` on `model`, with `attempted` so the case steers where it lands.
-#[allow(clippy::too_many_arguments)]
 fn agent_turn(
     handle: &RouterHandle,
     session: &str,

@@ -1221,7 +1221,7 @@ fn round_write(
 /// `main` and no agent header whatever turn it judges, so it is routed as the agent of the session's turn that ended
 /// last (`RoutingState::latest_turn_pin`), on whose account the upstream keeps the call free. `None` for every other
 /// request, and for a classifier call with no turn pin to follow. The routing task writes the answer into the request
-/// ahead of its pin lookup, so every read of the selection runs under the routed agent; a call still under another
+/// ahead of its pin lookup, so every read of the selection runs under the routed agent. A call still under another
 /// agent is directed nowhere (`judged_candidate`).
 pub fn routed_agent(state: &RoutingState, request: &SelectRequest) -> Option<String> {
     if !request.classifier {
@@ -5640,8 +5640,9 @@ const JUDGED_WORDS: DirectedWords = DirectedWords {
 /// account. `None` for every other request, for a non-portable call, and for a judged account that cannot serve the
 /// call, which is then placed like any request. `None` too where `own`, the call's live pin, is the judged pin itself:
 /// the session's turn runs on the classifier's model and the two share the pin, so the call stays a request of that
-/// conversation and renews or moves as one did before. A move rule that fires on such a call moves the conversation
-/// once, and that one call lands off the judged turn's account and is charged; the next call follows the moved pin.
+/// conversation and renews or moves as any request does. A move rule that fires on such a call moves the conversation,
+/// and the calls left for the judged turn then renew the moved pin off that turn's account and are charged until the
+/// conversation's next turn runs there.
 fn judged_candidate<'a>(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -5655,7 +5656,7 @@ fn judged_candidate<'a>(
     }
     let judged = state.latest_turn_pin(&request.key_id, &request.session_id)?;
     // The task routed the request as the judged agent ahead of this read (`routed_agent`), so the pin the call is held
-    // under and the account it is directed to never disagree; a request still under another agent follows no one.
+    // under and the account it is directed to never disagree. A request still under another agent follows no one.
     if judged.agent_id != request.agent_id || own.is_some_and(|own| own.key() == judged.key()) {
         return None;
     }
