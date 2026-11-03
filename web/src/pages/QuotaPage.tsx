@@ -741,7 +741,7 @@ function ResetTimeline({ accounts, now, slotOf }: { accounts: Account[]; now: nu
   const lanes = timelineLanes(accounts, mode === 'session' ? '5h' : '7d');
 
   return (
-    <section className="timeline card">
+    <section className="timeline card card--padded">
       <header className="timeline__head">
         <div>
           <h2 className="card__title">Quota windows</h2>

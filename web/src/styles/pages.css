@@ -797,10 +797,6 @@
 }
 
 /* Timeline */
-.timeline {
-  padding: 18px 20px;
-}
-
 .timeline__head {
   display: flex;
   flex-wrap: wrap;
