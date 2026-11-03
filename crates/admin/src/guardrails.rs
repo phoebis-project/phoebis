@@ -210,24 +210,6 @@ pub(crate) struct PresetList {
 /// Rows per `read` call, so a console read waits for at most one page of the dry run.
 pub const SAMPLE_PAGE: usize = 50;
 
-/// The cursor the next read starts after: the last row this read consumed where it stopped early with its room
-/// filled, else the page's own next cursor, so a read past a full page skips none of its unconsumed rows. A read
-/// stops early only once the sample is full and the loop then ends, so this guards a later read the loop does not
-/// issue.
-fn sample_cursor(
-    last_consumed: Option<(i64, &str)>,
-    next: Option<RequestCursor>,
-    stopped_early: bool,
-) -> Option<RequestCursor> {
-    match last_consumed {
-        Some((received_at, id)) if stopped_early => Some(RequestCursor {
-            id: id.to_string(),
-            received_at,
-        }),
-        _ => next,
-    }
-}
-
 /// A definition and the requests to test it on: `guardrail` or `conditions`, and `pool_id` or `key_id`. The mode and
 /// the action play no part, since the test answers whether the definition matches. An unknown field in the body is
 /// refused.
@@ -883,12 +865,10 @@ pub(crate) async fn test(State(state): State<Arc<AdminState>>, body: Bytes) -> R
                     page,
                 )?;
                 let mut out = Vec::with_capacity(rows.len().min(room));
-                let mut consumed = 0;
                 for row in &rows {
                     if out.len() == room {
                         break;
                     }
-                    consumed += 1;
                     // The body aged out, or its own key's capture window ended before the purge reached it, so the
                     // row answers nothing and takes no place in the sample.
                     let Some(body) = request_body(c, &row.id, now)? else {
@@ -915,11 +895,7 @@ pub(crate) async fn test(State(state): State<Arc<AdminState>>, body: Bytes) -> R
                     let verdict = evaluate(&compiled, &facts);
                     out.push((row.id.clone(), row.received_at, verdict));
                 }
-                let last_consumed = rows[..consumed]
-                    .last()
-                    .map(|row| (row.received_at, row.id.as_str()));
-                let stopped_early = consumed < rows.len();
-                Ok((out, sample_cursor(last_consumed, next, stopped_early)))
+                Ok((out, next))
             })
             .await;
         let (verdicts, next) = match read {
@@ -1145,28 +1121,5 @@ pub(crate) async fn remove(
             failure(StatusCode::NOT_FOUND, "guardrail not found")
         }
         Err(error) => store_failure(error),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sample_cursor_names_the_last_consumed_row_where_the_read_stopped_early_and_the_pages_next_otherwise(
-    ) {
-        let cursor = |received_at: i64, id: &str| RequestCursor {
-            id: id.to_string(),
-            received_at,
-        };
-        assert_eq!(
-            sample_cursor(Some((5, "r5")), Some(cursor(1, "r1")), true),
-            Some(cursor(5, "r5"))
-        );
-        assert_eq!(
-            sample_cursor(Some((5, "r5")), Some(cursor(1, "r1")), false),
-            Some(cursor(1, "r1"))
-        );
-        assert_eq!(sample_cursor(None, None, false), None);
     }
 }
