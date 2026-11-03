@@ -15,6 +15,7 @@ import { endOf } from '@/lib/quota';
 import { ACCOUNTS, LEDGER_WINDOW, sharedWindowsOf } from './accounts';
 import { earliest } from './lead';
 import { keyById } from './pools';
+import { requestsIn, sumOf, sumSplit, tokensIn } from './requests';
 import { createRng } from './rng';
 import type { EventSeed } from './routingLog';
 import { TABLES } from './samples';
@@ -169,7 +170,6 @@ interface WindowSum {
 }
 
 
-const tokensOfRow = (r: HourlyRollup) => r.tokens.uncachedInput + r.tokens.cacheRead + r.tokens.cacheWrite5m + r.tokens.cacheWrite1h + r.tokens.output;
 const planRows = (list: HourlyRollup[]) => list.filter((r) => r.funding === 'plan');
 
 /**
@@ -180,7 +180,7 @@ const planRows = (list: HourlyRollup[]) => list.filter((r) => r.funding === 'pla
 function costSharesOf(counted: HourlyRollup[]): Record<string, number> {
   const sums = new Map<string, WindowSum>();
   for (const r of planRows(counted)) {
-    if (tokensOfRow(r) === 0) continue;
+    if (tokensIn(r) === 0) continue;
     for (const [window, share] of Object.entries(r.shares)) {
       const s = sums.get(window) ?? { sum: 0, unpriced: false };
       if (share === null) s.unpriced = true;
@@ -246,7 +246,7 @@ function equivalentsOfGroup(counted: HourlyRollup[], probeRows: HourlyRollup[]):
   let write: number | null = 0;
   const split: CostSplit = { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 };
   for (const r of planRows(counted)) {
-    if (tokensOfRow(r) === 0) continue;
+    if (tokensIn(r) === 0) continue;
     cost = plus(cost, r.equivalent);
     const figures = figuresOf(r);
     read = plus(read, figures.cacheRead);
@@ -259,7 +259,7 @@ function equivalentsOfGroup(counted: HourlyRollup[], probeRows: HourlyRollup[]):
   for (const r of planRows(probeRows)) {
     probeUsd += r.probeCostUsd;
     wastedUsd += r.wastedProbeUsd;
-    if (tokensOfRow(r) > 0) probe = plus(probe, r.equivalent);
+    if (tokensIn(r) > 0) probe = plus(probe, r.equivalent);
   }
   let saving: number | null = 0;
   for (const r of planRows(counted)) {
@@ -292,7 +292,6 @@ const shareAccountOf = (key: string, groupBy: AnalyticsGroupBy, accountIds: stri
 function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes: boolean, groupBy: AnalyticsGroupBy, accountIds: string[] | undefined): AnalyticsGroup {
   const counted = includeProbes ? rows : rows.filter((r) => r.kind !== 'probe');
   const probeRows = rows.filter((r) => r.kind === 'probe');
-  const sum = (list: HourlyRollup[], read: (r: HourlyRollup) => number) => list.reduce((n, r) => n + read(r), 0);
   const account = shareAccountOf(key, groupBy, accountIds);
   const tier = account === null ? undefined : TIER_OF.get(account);
   const costShares = account !== null && KIND_OF.get(account) === 'oauth' && tier !== undefined ? costSharesOf(counted) : null;
@@ -310,16 +309,16 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
   const histograms = { durationMs: emptyHistogram(), outputTps: emptyHistogram(), ttfbMs: emptyHistogram(), ttftMs: emptyHistogram() };
   for (const m of METRICS) histograms[m] = mergeHistograms(counted.map((r) => r.histograms[m]));
 
-  const rateLimited = sum(counted, (r) => r.requests.rate_limited);
-  const overloaded = sum(counted, (r) => r.requests.overloaded);
-  const upstreamError = sum(counted, (r) => r.requests.upstream_error);
-  const undecodable = sum(counted, (r) => r.requests.undecodable);
-  const clientGone = sum(counted, (r) => r.requests.client_gone);
-  const routerShutdown = sum(counted, (r) => r.requests.router_shutdown);
-  const incomplete = sum(counted, (r) => r.requests.incomplete);
-  const succeeded = sum(counted, (r) => r.requests.ok);
+  const rateLimited = sumOf(counted, (r) => r.requests.rate_limited);
+  const overloaded = sumOf(counted, (r) => r.requests.overloaded);
+  const upstreamError = sumOf(counted, (r) => r.requests.upstream_error);
+  const undecodable = sumOf(counted, (r) => r.requests.undecodable);
+  const clientGone = sumOf(counted, (r) => r.requests.client_gone);
+  const routerShutdown = sumOf(counted, (r) => r.requests.router_shutdown);
+  const incomplete = sumOf(counted, (r) => r.requests.incomplete);
+  const succeeded = sumOf(counted, (r) => r.requests.ok);
   const requests = succeeded + rateLimited + overloaded + upstreamError + clientGone + routerShutdown + incomplete;
-  const failovers = sum(counted, (r) => r.failovers);
+  const failovers = sumOf(counted, (r) => r.failovers);
   const errors = emptyCounts();
   if (rateLimited) errors.rate_limit_error = rateLimited;
   if (overloaded) errors.overloaded_error = overloaded;
@@ -335,56 +334,56 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
     ...equivalentsOfGroup(counted, probeRows),
     // Every attempt past the first on a request is a failover, so the two together are what the accounts saw.
     attempts: requests + failovers,
-    billed: { cacheRead: sum(billed, (r) => r.cost.cacheRead), cacheWrite: sum(billed, (r) => r.cost.cacheWrite), input: sum(billed, (r) => r.cost.input), output: sum(billed, (r) => r.cost.output) },
-    billedUsd: sum(billed, (r) => r.costUsd),
-    cacheHits: sum(counted, (r) => r.cacheHits),
-    cacheMisses: sum(counted, (r) => r.cacheMisses),
+    billed: sumSplit(billed.map((r) => r.cost)),
+    billedUsd: sumOf(billed, (r) => r.costUsd),
+    cacheHits: sumOf(counted, (r) => r.cacheHits),
+    cacheMisses: sumOf(counted, (r) => r.cacheMisses),
     cacheMissReasons,
-    cost: { cacheRead: sum(counted, (r) => r.cost.cacheRead), cacheWrite: sum(counted, (r) => r.cost.cacheWrite), input: sum(counted, (r) => r.cost.input), output: sum(counted, (r) => r.cost.output) },
+    cost: sumSplit(counted.map((r) => r.cost)),
     costShares,
-    costUsd: sum(counted, (r) => r.costUsd),
+    costUsd: sumOf(counted, (r) => r.costUsd),
     errors,
     // The fixture ledger records no exhausted pool, and its refused requests file under the refusals map and never
     // under Rejected.
     exhausted: 0,
-    expiredBetweenTurns: sum(counted, (r) => r.expiredBetweenTurns),
+    expiredBetweenTurns: sumOf(counted, (r) => r.expiredBetweenTurns),
     failed: overloaded + upstreamError + clientGone + routerShutdown,
     failovers,
     histograms,
     incomplete,
     // A row's funding is its credited request's, so the plan-funded credits are the plan rows' own.
     keptWarm: {
-      planRequests: sum(countedPlan, (r) => r.keptWarm.requests),
-      planTokens1h: sum(countedPlan, (r) => r.keptWarm.tokens1h),
-      planTokens5m: sum(countedPlan, (r) => r.keptWarm.tokens5m),
-      requests: sum(counted, (r) => r.keptWarm.requests),
-      tokens1h: sum(counted, (r) => r.keptWarm.tokens1h),
-      tokens5m: sum(counted, (r) => r.keptWarm.tokens5m),
+      planRequests: sumOf(countedPlan, (r) => r.keptWarm.requests),
+      planTokens1h: sumOf(countedPlan, (r) => r.keptWarm.tokens1h),
+      planTokens5m: sumOf(countedPlan, (r) => r.keptWarm.tokens5m),
+      requests: sumOf(counted, (r) => r.keptWarm.requests),
+      tokens1h: sumOf(counted, (r) => r.keptWarm.tokens1h),
+      tokens5m: sumOf(counted, (r) => r.keptWarm.tokens5m),
     },
     key,
     keyCreatedAt: null,
     keyId: null,
     label,
     percentiles: { durationMs: quartet(histograms.durationMs), outputTps: quartet(histograms.outputTps), ttfbMs: quartet(histograms.ttfbMs), ttftMs: quartet(histograms.ttftMs) },
-    planOutputTokens: sum(countedPlan, (r) => r.tokens.output),
-    planRequests: sum(countedPlan, (r) => r.requests.ok + r.requests.incomplete + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error + r.requests.client_gone + r.requests.router_shutdown),
-    probeCostUsd: sum(probeRows, (r) => r.probeCostUsd),
-    probes: { failed: sum(probeRows, (r) => r.probes.failed), held: sum(probeRows, (r) => r.probes.held), migrated: sum(probeRows, (r) => r.probeMigrated), ok: sum(probeRows, (r) => r.probes.ok), planOk: sum(planRows(probeRows), (r) => r.probes.ok), skipped: sum(probeRows, (r) => r.probes.skipped) },
+    planOutputTokens: sumOf(countedPlan, (r) => r.tokens.output),
+    planRequests: sumOf(countedPlan, requestsIn),
+    probeCostUsd: sumOf(probeRows, (r) => r.probeCostUsd),
+    probes: { failed: sumOf(probeRows, (r) => r.probes.failed), held: sumOf(probeRows, (r) => r.probes.held), migrated: sumOf(probeRows, (r) => r.probeMigrated), ok: sumOf(probeRows, (r) => r.probes.ok), planOk: sumOf(planRows(probeRows), (r) => r.probes.ok), skipped: sumOf(probeRows, (r) => r.probes.skipped) },
     rateLimited,
     refusals,
     refused: Object.values(refusals).reduce((n, c) => n + c, 0),
     rejected: 0,
     requests,
-    savingUsd: sum(counted, (r) => r.savingUsd),
+    savingUsd: sumOf(counted, (r) => r.savingUsd),
     succeeded,
     tokens: {
-      cacheRead: sum(counted, (r) => r.tokens.cacheRead), cacheWrite1h: sum(counted, (r) => r.tokens.cacheWrite1h), cacheWrite5m: sum(counted, (r) => r.tokens.cacheWrite5m), output: sum(counted, (r) => r.tokens.output),
-      thinking: sum(counted, (r) => r.tokens.thinking), uncachedInput: sum(counted, (r) => r.tokens.uncachedInput), webFetch: sum(counted, (r) => r.tokens.webFetch), webSearch: sum(counted, (r) => r.tokens.webSearch),
+      cacheRead: sumOf(counted, (r) => r.tokens.cacheRead), cacheWrite1h: sumOf(counted, (r) => r.tokens.cacheWrite1h), cacheWrite5m: sumOf(counted, (r) => r.tokens.cacheWrite5m), output: sumOf(counted, (r) => r.tokens.output),
+      thinking: sumOf(counted, (r) => r.tokens.thinking), uncachedInput: sumOf(counted, (r) => r.tokens.uncachedInput), webFetch: sumOf(counted, (r) => r.tokens.webFetch), webSearch: sumOf(counted, (r) => r.tokens.webSearch),
     },
-    uncached: sum(counted, (r) => r.uncached),
+    uncached: sumOf(counted, (r) => r.uncached),
     wastedProbeReasons,
-    wastedProbeUsd: sum(probeRows, (r) => r.wastedProbeUsd),
-    wastedProbes: sum(probeRows, (r) => r.wastedProbes),
+    wastedProbeUsd: sumOf(probeRows, (r) => r.wastedProbeUsd),
+    wastedProbes: sumOf(probeRows, (r) => r.wastedProbes),
   };
 }
 
@@ -525,7 +524,7 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
     sums.set(group, byAt);
     const s = byAt.get(at) ?? emptyBurn();
     byAt.set(at, s);
-    const tokens = r.tokens.uncachedInput + r.tokens.cacheRead + r.tokens.cacheWrite5m + r.tokens.cacheWrite1h + r.tokens.output;
+    const tokens = tokensIn(r);
     s.cached += r.tokens.cacheRead;
     s.tokens += tokens;
     s.uncached += r.tokens.uncachedInput;

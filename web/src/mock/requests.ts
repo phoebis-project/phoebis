@@ -241,7 +241,7 @@ function savingUsdOf(model: string, kept: { tokens1h: number; tokens5m: number }
 /** A kept request's read under the TTL its own write took, five minutes for a request that wrote none. */
 const keptOf = (r: RequestLog) => (r.usage.cacheWrite1h > 0 ? { tokens1h: r.usage.cacheRead, tokens5m: 0 } : { tokens1h: 0, tokens5m: r.usage.cacheRead });
 
-const sumSplit = (parts: CostSplit[]): CostSplit => parts.reduce((s, c) => ({ cacheRead: s.cacheRead + c.cacheRead, cacheWrite: s.cacheWrite + c.cacheWrite, input: s.input + c.input, output: s.output + c.output }), { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 });
+export const sumSplit = (parts: CostSplit[]): CostSplit => parts.reduce((s, c) => ({ cacheRead: s.cacheRead + c.cacheRead, cacheWrite: s.cacheWrite + c.cacheWrite, input: s.input + c.input, output: s.output + c.output }), { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 });
 
 // Its own stream, so these draws leave the fixtures the main stream feeds alone.
 const missRng = createRng(1_517);
@@ -2599,7 +2599,7 @@ export const DAY_ROWS: RequestLog[] = counted(DAY_FROM);
 const TOTAL_ROWS: RequestLog[] = counted(TOTALS_FROM);
 const COUNTED_ROLLUPS = ALL_ROLLUPS.filter((r) => r.kind !== 'probe');
 
-const sumOf = <T,>(list: T[], read: (x: T) => number) => list.reduce((n, x) => n + read(x), 0);
+export const sumOf = <T,>(list: T[], read: (x: T) => number) => list.reduce((n, x) => n + read(x), 0);
 /** Rollups' billed dollars and their plan rows' Pro-week figure, as the keys route sums a key's rows: an hour's figure
  *  is null where a request with tokens priced nothing, which nulls the sum, and 0 with no plan row. */
 const sidesOf = (rows: HourlyRollup[]): Pick<ApiKey['usage7d'], 'billedUsd' | 'equivalent'> => {
@@ -2621,8 +2621,8 @@ export const requestSidesOf = (rows: RequestLog[]): Pick<TrafficBucket, 'billedU
     equivalent: plan.some((r) => tokensTotal(r.usage) > 0 && r.costEquivalent === null) ? null : sumOf(plan, (r) => r.costEquivalent ?? 0),
   };
 };
-const requestsIn = (r: HourlyRollup) => r.requests.ok + r.requests.incomplete + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error + r.requests.client_gone + r.requests.router_shutdown;
-const tokensIn = (r: HourlyRollup) => r.tokens.uncachedInput + r.tokens.cacheRead + r.tokens.cacheWrite5m + r.tokens.cacheWrite1h + r.tokens.output;
+export const requestsIn = (r: HourlyRollup) => r.requests.ok + r.requests.incomplete + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error + r.requests.client_gone + r.requests.router_shutdown;
+export const tokensIn = (r: HourlyRollup) => r.tokens.uncachedInput + r.tokens.cacheRead + r.tokens.cacheWrite5m + r.tokens.cacheWrite1h + r.tokens.output;
 const inWeek = (r: HourlyRollup) => Date.parse(r.hour) >= WEEK_FROM;
 
 /**
