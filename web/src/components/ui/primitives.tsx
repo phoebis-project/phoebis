@@ -1021,11 +1021,6 @@ const IN_FLOW: MenuPlacement = { kind: 'down' };
 const CLIPPING = new Set(['auto', 'clip', 'hidden', 'scroll']);
 
 /**
- * A row's actions behind a trigger. `align` names the trigger edge the list lines up with: a menu in a row's
- * first column opens rightward, since a list aligned to its right edge would run past the table wrap's left edge,
- * which clips it.
- */
-/**
  * An expandable row's handlers: a click opens the row unless it lands on a link or a button inside it, which follows,
  * and Enter or Space opens it while the row itself has the focus, not a control inside it.
  */
@@ -1040,6 +1035,11 @@ export const toggleRow = (onToggle: () => void): { onClick: (e: ReactMouseEvent<
   },
 });
 
+/**
+ * A row's actions behind a trigger. `align` names the trigger edge the list lines up with: a menu in a row's
+ * first column opens rightward, since a list aligned to its right edge would run past the table wrap's left edge,
+ * which clips it.
+ */
 export function Menu({ align = 'right', items, label = 'Actions', onOpenChange }: { align?: MenuAlign; items: { danger?: boolean; disabled?: boolean; label: string; onClick: () => void; title?: string }[]; label?: string; onOpenChange?: (open: boolean) => void }) {
   const [open, setOpen] = useState(false);
   // A page that holds its refresh while a menu is open counts the open ones, so a closed menu says nothing as it
