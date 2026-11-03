@@ -98,6 +98,8 @@ interface Row {
   account: Account | null;
   /** Every recipe filed under the session, as the route answered them: the no-recipe causes read this list. */
   agents: KeepaliveRecipe[];
+  /** When the router forgets the session, from `expiryOf`. */
+  expiresAt: number | null;
   /** The engine is done with the session, which draws every line it holds under the released sentence. */
   finished: boolean;
   /** The lines the row draws in the view's order: the recipes `shown` holds and the pins no recipe stands on. */
@@ -110,6 +112,15 @@ interface Row {
   /** The recipes the row draws, the release filter applied: the summary, the badges and the probe state read them. */
   shown: KeepaliveRecipe[];
 }
+
+/**
+ * The instant the router forgets an idle session, null without an expiry or a use. A session known from the ledger or
+ * from a registration alone carries no activity of its own, so the last ledgered request stands in for it.
+ */
+const expiryOf = (session: Pick<Session, 'lastRequestAt' | 'lastUsedAt'>, expireAfterSeconds: number | null): number | null => {
+  const lastUsed = session.lastUsedAt ?? session.lastRequestAt;
+  return expireAfterSeconds === null || lastUsed === null ? null : Date.parse(lastUsed) + expireAfterSeconds * 1000;
+};
 
 /** One session id can be held by two generations of a key id, so all three name a row. */
 const rowKey = (session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'>) => `${session.keyId}:${session.keyGeneration}:${session.sessionId}`;
@@ -151,7 +162,7 @@ function idleLimitRanOutAt(session: Session, pool: Pool | null): string | null {
  * that. `showReleased`: the Released agents filter, which draws a live session's released lines. `sort` and `dir`: the
  * sort control's key and direction, which order the rows and each row's lines.
  */
-function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], accounts: Account[], keys: ApiKey[], pools: Pool[], poolsFailed: boolean, showReleased: boolean, sort: string, dir: SortDir, now: number): Row[] {
+function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], accounts: Account[], keys: ApiKey[], pools: Pool[], poolsFailed: boolean, showReleased: boolean, sort: string, dir: SortDir, expireAfterSeconds: number | null, now: number): Row[] {
   const accountById = new Map(accounts.map((a) => [a.id, a]));
   const keyById = new Map(keys.map((k) => [k.id, k]));
   const poolById = new Map(pools.map((p) => [p.id, p]));
@@ -199,6 +210,7 @@ function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], accounts: Ac
     return {
       account: accountById.get(session.accountId ?? '') ?? null,
       agents,
+      expiresAt: expiryOf(session, expireAfterSeconds),
       finished,
       lines: orderLines(sessionLines(session, shown), sort, dir),
       noRecipe: agents.length === 0 || idleLimitOnly ? causes.join(' and ') : null,
@@ -269,10 +281,7 @@ export function SessionsPage() {
   const listed = useMemo(
     () =>
       sessionData && recipeData && keys.data
-        ? buildRows(sessionData, recipeData, accounts.data ?? [], keys.data, pools.data ?? [], poolsFailed, filters.released, filters.sort, dir, now).filter((r) => {
-            const lastUsed = r.session.lastUsedAt ?? r.session.lastRequestAt;
-            return expireAfterSeconds === null || lastUsed === null || Date.parse(lastUsed) + expireAfterSeconds * 1000 > now;
-          })
+        ? buildRows(sessionData, recipeData, accounts.data ?? [], keys.data, pools.data ?? [], poolsFailed, filters.released, filters.sort, dir, expireAfterSeconds, now).filter((r) => r.expiresAt === null || r.expiresAt > now)
         : null,
     [sessionData, recipeData, accounts.data, keys.data, pools.data, poolsFailed, filters.released, filters.sort, dir, expireAfterSeconds, now],
   );
@@ -509,7 +518,6 @@ export function SessionsPage() {
                       now={now}
                       columns={columns}
                       current={current === rowDomId(row.session)}
-                      expireAfterSeconds={expireAfterSeconds}
                       forkBase={row.session.forkedFrom === null ? null : rowDomId({ ...row.session, sessionId: row.session.forkedFrom })}
                       listedRows={listedRows}
                       onFollowFork={followFork}
@@ -549,7 +557,6 @@ function SessionRows({
   now,
   columns,
   current,
-  expireAfterSeconds,
   forkBase,
   listedRows,
   onFollowFork,
@@ -561,7 +568,6 @@ function SessionRows({
   columns: number;
   /** Whether a fork link last led here. */
   current: boolean;
-  expireAfterSeconds: number | null;
   /** The element id the base of a forked session would carry, whether or not it is listed; null off a fork. */
   forkBase: string | null;
   listedRows: ReadonlyMap<string, Row>;
@@ -574,7 +580,7 @@ function SessionRows({
   row: Row;
   visible: ReadonlySet<SessionColumnId>;
 }) {
-  const { account, lines, session, shown } = row;
+  const { account, expiresAt, lines, session, shown } = row;
   const summary = stateSummary(shown);
   // A line takes its account from its pin, or from its recipe where no pin stands, and a recipe whose request was
   // refused before any account served it names none, so that line is left out. The badge counts every other line on
@@ -586,10 +592,8 @@ function SessionRows({
   // A retained agent with no time is waiting on its first stream event, which is
   // a different thing from a session nothing probes.
   const pendingProbe = shown.some((a) => a.state === 'retained' && a.nextProbeAt === null);
-  // A session known from the ledger or from a registration alone carries no activity of its own, so the last
-  // ledgered request stands in for it and the expiry counts from there.
+  // The last ledgered request stands in for a session with no activity of its own, as its expiry reads it.
   const lastUsed = session.lastUsedAt ?? session.lastRequestAt;
-  const expiresAt = expireAfterSeconds === null || lastUsed === null ? null : new Date(Date.parse(lastUsed) + expireAfterSeconds * 1000).toISOString();
   // Analytics and the request log read the ledger, so a session that never reached it has nothing to open. The count
   // leaves a refused request out while the log lists it, so a ledgered row reads off the last request instead.
   const hasTraffic = session.lastRequestAt !== null;
@@ -674,7 +678,7 @@ function SessionRows({
         {visible.has('lastUsed') && (
           <td className="col-fit" title={fmtAbsolute(lastUsed)}>
             {fmtRelative(lastUsed, now)}
-            {expiresAt && (
+            {expiresAt !== null && (
               <span className="sub" title={`Drops off this list at ${fmtAbsolute(expiresAt)}`}>
                 expires {fmtRelative(expiresAt, now)}
               </span>
