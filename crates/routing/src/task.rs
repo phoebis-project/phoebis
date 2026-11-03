@@ -1760,10 +1760,9 @@ struct Task {
     /// `MIGRATION_WINDOW_MS` lands on the row's figures and reports a migration rather than a fresh pin, and the purge
     /// drops older entries.
     invalidated: HashMap<PinKey, Invalidated>,
-    /// The reloads the running load answers: those that were waiting when it started.
-    load_waiters: Vec<oneshot::Sender<Result<(), String>>>,
-    /// Whether a registry load runs. At most one does.
-    loading: bool,
+    /// The reloads the running load answers, those that were waiting when it started, and `None` while no registry
+    /// load runs. At most one does.
+    load_waiters: Option<Vec<oneshot::Sender<Result<(), String>>>>,
     /// While set the loop skips the purge tick, so no purge runs. `Command::ReleasePurge` clears it, and the first
     /// purge runs at the first tick after it.
     purge_held: bool,
@@ -1935,8 +1934,7 @@ pub fn spawn(
         events,
         handle_tx: tx.downgrade(),
         invalidated: HashMap::new(),
-        load_waiters: Vec::new(),
-        loading: false,
+        load_waiters: None,
         #[cfg(any(test, feature = "debug-hooks"))]
         parked: None,
         purge_held,
@@ -3300,7 +3298,7 @@ impl Task {
             }
             Command::Reload { reply } => {
                 self.reload_waiters.push(reply);
-                if !self.loading {
+                if self.load_waiters.is_none() {
                     self.start_load();
                 }
             }
@@ -3308,10 +3306,9 @@ impl Task {
                 let answer = loaded.map(|(load, guardrails, digest_key)| {
                     self.swap(load, guardrails, digest_key, started_at)
                 });
-                for waiter in self.load_waiters.drain(..) {
+                for waiter in self.load_waiters.take().into_iter().flatten() {
                     let _ = waiter.send(answer.clone());
                 }
-                self.loading = false;
                 if !self.reload_waiters.is_empty() {
                     self.start_load();
                 }
@@ -4441,8 +4438,7 @@ impl Task {
         let Some(tx) = self.handle_tx.upgrade() else {
             return;
         };
-        self.loading = true;
-        self.load_waiters = std::mem::take(&mut self.reload_waiters);
+        self.load_waiters = Some(std::mem::take(&mut self.reload_waiters));
         let store = self.store.clone();
         let started_at = (self.clock)();
         // The blocking load runs under a task that awaits it, so a panic in the load still sends its `Swap` and
