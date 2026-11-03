@@ -31,7 +31,7 @@ test('a 401 outside the login runs the unauthorized hook and the login 401 does 
   setHooks({ onForbidden: () => { forbidden += 1; }, onUnauthorized: () => { unauthorized += 1; } });
   stub(() => answer(401, { error: 'no admin session' }));
   await assert.rejects(call('GET', '/admin/keys'));
-  await assert.rejects(call('POST', '/admin/session', { secret: 'x' }));
+  await assert.rejects(new HttpApi().login('x'));
   assert.equal(unauthorized, 1);
   stub(() => answer(403, { error: 'origin is not allowed' }));
   await assert.rejects(new HttpApi().pauseAccount('a'));
@@ -45,10 +45,10 @@ test("the login route's refusals reach the login screen alone, never the shell's
   setHooks({ onFailure: () => { failures += 1; }, onForbidden: () => { forbidden += 1; }, onUnauthorized: () => { unauthorized += 1; } });
   for (const status of [400, 401, 403, 429, 500]) {
     stub(() => answer(status, { error: 'refused' }));
-    await assert.rejects(call('POST', '/admin/session', { secret: 'x' }), (e) => e instanceof ApiError && e.status === status);
+    await assert.rejects(new HttpApi().login('x'), (e) => e instanceof ApiError && e.status === status);
   }
   stub(() => Promise.reject(new TypeError('fetch failed')));
-  await assert.rejects(call('POST', '/admin/session', { secret: 'x' }), (e) => e instanceof ApiError && e.status === 0);
+  await assert.rejects(new HttpApi().login('x'), (e) => e instanceof ApiError && e.status === 0);
   assert.deepEqual([failures, forbidden, unauthorized], [0, 0, 0]);
   stub(() => answer(429, { error: 'too many failed logins, try again in a minute' }));
   await assert.rejects(call('GET', '/admin/keys'));

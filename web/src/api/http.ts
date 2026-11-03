@@ -109,14 +109,13 @@ const READ_DEADLINE_MS = 60_000;
 
 /**
  * `quiet` keeps a failure from the shell's toast for a read that draws its own failed state and repeats on a schedule,
- * which would otherwise toast once per tick; a 401 still returns the console to the login.
+ * which would otherwise toast once per tick, and a 401 still returns the console to the login. `own` runs no hook at
+ * all, the 401's included, for the login screen, which draws every refusal of its own call: the shell that would
+ * toast one mounts only after the next login succeeds, where it would report a failure the operator has already read.
  */
-export async function call<T = unknown>(method: string, path: string, body?: unknown, { quiet: asked = false }: { quiet?: boolean } = {}): Promise<T> {
+export async function call<T = unknown>(method: string, path: string, body?: unknown, { own = false, quiet: asked = false }: { own?: boolean; quiet?: boolean } = {}): Promise<T> {
   // Read before the first await: the quiet window is synchronous, and the report comes after the answer.
   const silent = asked || quiet;
-  // The login screen draws every refusal of its own route, and the shell that would toast one mounts only after
-  // the next login succeeds, where it would report a failure the operator has already read.
-  const login = method === 'POST' && path === '/admin/session';
   // A write gets no deadline: one the router landed after the console gave up would read as failed, and the page
   // would offer to retry a write that already happened.
   const deadline = method === 'GET' ? new AbortController() : null;
@@ -134,7 +133,7 @@ export async function call<T = unknown>(method: string, path: string, body?: unk
     // A router that never answered, or not within the deadline: the page below draws its error state, and the hook
     // says which route.
     const message = deadline?.signal.aborted ? `no answer within ${READ_DEADLINE_MS / 1_000} s` : e instanceof Error ? e.message : String(e);
-    if (!login && !silent) reportFailure({ message, path, status: 0 });
+    if (!own && !silent) reportFailure({ message, path, status: 0 });
     throw new ApiError(0, message, null, path);
   } finally {
     if (timer !== null) clock.clearTimeout(timer);
@@ -148,7 +147,7 @@ export async function call<T = unknown>(method: string, path: string, body?: unk
   if (!response.ok) {
     const answered = parsed && typeof parsed === 'object' && typeof (parsed as { error?: unknown }).error === 'string' ? (parsed as { error: string }).error : null;
     const message = answered ?? `${method} ${path} answered ${response.status}`;
-    if (!login) {
+    if (!own) {
       if (response.status === 401) hooks.onUnauthorized();
       else if (response.status === 403 && !silent) hooks.onForbidden(message);
       // A 404 is how the routes answer for a request or a body the router never kept, which the page reading
@@ -287,7 +286,7 @@ export class HttpApi implements Api {
     d.decodeRoutingLogPage(await call('GET', `/admin/routing-log${qs({ accounts: q.accountIds, agent_id: q.agentId, cursor: q.cursor, from: q.from, keys: q.keyIds, kinds: q.kinds, limit: q.limit, models: q.models, pools: q.poolIds, request: q.request, session: q.session, to: q.to })}`));
   listSessions = async () => (await call<{ sessions: unknown[] }>('GET', '/admin/sessions')).sessions.map(d.decodeSession);
   login = async (secret: string, stayLoggedIn?: boolean): Promise<SessionInfo> => {
-    await call<void>('POST', '/admin/session', { secret, stay_logged_in: stayLoggedIn === true });
+    await call<void>('POST', '/admin/session', { secret, stay_logged_in: stayLoggedIn === true }, { own: true });
     const me = await this.getSession();
     if (!me) throw new SessionNotKept();
     return me;
