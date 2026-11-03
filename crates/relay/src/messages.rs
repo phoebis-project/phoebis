@@ -1450,16 +1450,18 @@ impl Relay {
                     .await;
             }
         };
+        // One walk of the top-level object serves every lookup admission makes on the raw body below.
+        let members = phoebis_cch::TopLevelMembers::read(&raw);
         // The tree lives to the guardrail step and no further: the body budget does not count it, and it is
         // dropped before the observation waits on the bus.
-        let (facts, tree) = BodyFacts::read_with_tree(&raw);
+        let (facts, tree) = BodyFacts::read_with_tree(&members);
         let auto_mode_server = snapshot.auto_mode_server(&key);
         let auto_mode = facts.shape.safeguards.then_some(if auto_mode_server {
             AutoMode::Server
         } else {
             AutoMode::Stripped
         });
-        let stream = wants_stream(&raw);
+        let stream = wants_stream(&members);
         // Read after the body, so the refusal's row carries the request's shape, and before the first fact is
         // published, so no probe is paid for and no request is accepted that the ledger cannot record while its
         // writer is behind. The refusal's own facts go best-effort: the bus queue fills behind a writer that
@@ -1478,26 +1480,28 @@ impl Relay {
             RepeatedMember::Stream,
             RepeatedMember::System,
         ];
-        let repeated =
-            phoebis_cch::repeated_top_level_member(&raw, &top_level.map(RepeatedMember::path))
-                .map(|repeated| {
-                    repeated.map(|name| {
-                        top_level
-                            .into_iter()
-                            .find(|member| member.path() == name)
-                            .expect("the scanner answers one of the names it was handed")
-                    })
+        let repeated = members
+            .repeated_top_level_member(&top_level.map(RepeatedMember::path))
+            .map(|repeated| {
+                repeated.map(|name| {
+                    top_level
+                        .into_iter()
+                        .find(|member| member.path() == name)
+                        .expect("the scanner answers one of the names it was handed")
                 })
-                .and_then(|repeated| match repeated {
-                    Some(member) => Ok(Some(member)),
-                    None => phoebis_cch::first_system_block_member_count(&raw, "text")
-                        .map(|texts| (texts > 1).then_some(RepeatedMember::BillingLine)),
-                })
-                .and_then(|repeated| match repeated {
-                    Some(member) => Ok(Some(member)),
-                    None => phoebis_cch::repeated_member_within(&raw, "metadata", &["user_id"])
-                        .map(|repeated| repeated.map(|_| RepeatedMember::MetadataUserId)),
-                });
+            })
+            .and_then(|repeated| match repeated {
+                Some(member) => Ok(Some(member)),
+                None => members
+                    .first_system_block_member_count("text")
+                    .map(|texts| (texts > 1).then_some(RepeatedMember::BillingLine)),
+            })
+            .and_then(|repeated| match repeated {
+                Some(member) => Ok(Some(member)),
+                None => members
+                    .repeated_member_within("metadata", &["user_id"])
+                    .map(|repeated| repeated.map(|_| RepeatedMember::MetadataUserId)),
+            });
         let refusal = if behind {
             Some(RelayError::LedgerBehind)
         } else {
@@ -1508,7 +1512,7 @@ impl Relay {
                 Err(error) => Some(RelayError::Cch(error)),
             }
         };
-        let identified = refusal.map_or_else(|| identify(&parts.headers, &raw), Err);
+        let identified = refusal.map_or_else(|| identify(&parts.headers, &members), Err);
         let mut identity = match identified {
             Ok(identity) => identity,
             Err(error) => {
@@ -1882,8 +1886,8 @@ impl Relay {
             && facts.markers_ttl_ms.is_some()
             && facts.shape.tool_count >= 1;
         // The same raw lookup `insert_diagnostics` makes, so the recorded source and the edit never disagree.
-        let client_diagnostics = trace.kind != Kind::CountTokens
-            && phoebis_cch::object_member_span(&raw, &["diagnostics"]).is_some();
+        let client_diagnostics =
+            trace.kind != Kind::CountTokens && members.object_member_span("diagnostics").is_some();
         let cache_ttl_policy = pool
             .map(|p| CacheTtlPolicy::from_json(&p.cache_ttl_json))
             .unwrap_or_default();

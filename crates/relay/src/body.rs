@@ -662,10 +662,19 @@ fn starts_with_object(body: &[u8]) -> bool {
 }
 
 /// The span of the `account_uuid` value inside the escaped `metadata.user_id` string, `None` where the body
-/// has no such string member, the member has no `account_uuid` key, or the value never closes. The contract
-/// and the splice read one search, so the item holds exactly where the splice succeeds.
-pub(crate) fn account_uuid_value_span(body: &[u8]) -> Option<(usize, usize)> {
-    let (start, end) = phoebis_cch::string_member_span(body, &["metadata", "user_id"])?;
+/// has no such string member, the member has no `account_uuid` key, or the value never closes.
+fn account_uuid_value_span(body: &[u8]) -> Option<(usize, usize)> {
+    account_uuid_in(
+        body,
+        phoebis_cch::string_member_span(body, &["metadata", "user_id"])?,
+    )
+}
+
+/// The span of the `account_uuid` value inside the `metadata.user_id` string whose span, quotes included, is
+/// `user_id`, `None` where the string has no `account_uuid` key or the value never closes. The contract and the
+/// splice read one search, so the item holds exactly where the splice succeeds.
+pub(crate) fn account_uuid_in(body: &[u8], user_id: (usize, usize)) -> Option<(usize, usize)> {
+    let (start, end) = user_id;
     let key_at = find(&body[start..end], ESCAPED_UUID_KEY)?;
     let value_start = start + key_at + ESCAPED_UUID_KEY.len();
     // The value ends at the first `\"` that opens an escape of its own. Stepping over each escape pair keeps the

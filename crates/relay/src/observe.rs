@@ -24,9 +24,10 @@ pub(crate) fn published_headers(headers: &HeaderMap, inflated: bool) -> Vec<(Str
 
 /// The top-level `stream` flag, through the one JSON scanner the workspace has: a `"stream"` member inside a
 /// tool schema or a tool input is skipped with the value that holds it.
-pub(crate) fn wants_stream(body: &[u8]) -> bool {
-    phoebis_cch::bool_member_span(body, &["stream"])
-        .is_some_and(|(start, end)| &body[start..end] == b"true")
+pub(crate) fn wants_stream(members: &phoebis_cch::TopLevelMembers<'_>) -> bool {
+    members
+        .bool_member_span("stream")
+        .is_some_and(|(start, end)| &members.body()[start..end] == b"true")
 }
 
 #[derive(Default)]
@@ -289,6 +290,7 @@ mod tests {
 
     #[test]
     fn a_stream_flag_and_a_tool_use_delta_are_recognised() {
+        let wants_stream = |body: &[u8]| wants_stream(&phoebis_cch::TopLevelMembers::read(body));
         assert!(wants_stream(br#"{"model":"m","stream":true}"#));
         assert!(wants_stream(br#"{"model":"m", "stream": true}"#));
         assert!(!wants_stream(br#"{"model":"m","stream":false}"#));

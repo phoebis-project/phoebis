@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use axum::http::HeaderMap;
 use phoebis_bus::{Kind, OTHER_CLIENT};
+use phoebis_cch::TopLevelMembers;
 use phoebis_routing::{
     ClientClass, ConversationLookup, ConversationQuery, MAIN_AGENT, REFRESHING_CLASSES,
 };
@@ -71,8 +72,11 @@ pub struct RequestIdentity {
 }
 
 /// Reads what the request says about itself, which `climb` completes with the fork facts.
-pub fn identify(headers: &HeaderMap, body: &[u8]) -> Result<RequestIdentity, RelayError> {
-    let model = string_member(body, &["model"]).ok_or(RelayError::NoModel)?;
+pub fn identify(
+    headers: &HeaderMap,
+    members: &TopLevelMembers<'_>,
+) -> Result<RequestIdentity, RelayError> {
+    let model = string_member(members, &["model"]).ok_or(RelayError::NoModel)?;
     let folded_model = phoebis_store::canonical_id(&model);
     // The model reaches log lines and ledger keys, so it is bounded and charset-checked here rather than
     // wherever it is printed. Unlike the identifiers below it cannot be dropped: a request without a usable
@@ -97,7 +101,10 @@ pub fn identify(headers: &HeaderMap, body: &[u8]) -> Result<RequestIdentity, Rel
         client: client.label,
         forked_from: None,
         fork_depth: None,
-        has_user_id: crate::body::account_uuid_value_span(body).is_some(),
+        has_user_id: members
+            .string_member_span(&["metadata", "user_id"])
+            .and_then(|user_id| crate::body::account_uuid_in(members.body(), user_id))
+            .is_some(),
     })
 }
 
@@ -346,9 +353,9 @@ pub(crate) fn header_id(headers: &HeaderMap, name: &str) -> Option<String> {
 }
 
 /// Decodes a string member of the top-level object without re-serializing the body around it.
-fn string_member(body: &[u8], path: &[&str]) -> Option<String> {
-    let (start, end) = phoebis_cch::string_member_span(body, path)?;
-    serde_json::from_slice::<String>(&body[start..end]).ok()
+fn string_member(members: &TopLevelMembers<'_>, path: &[&str]) -> Option<String> {
+    let (start, end) = members.string_member_span(path)?;
+    serde_json::from_slice::<String>(&members.body()[start..end]).ok()
 }
 
 #[cfg(test)]
@@ -359,7 +366,8 @@ mod tests {
 
     #[test]
     fn the_model_suffix_is_folded_and_the_metadata_session_is_not_read() {
-        let identity = identify(&HeaderMap::new(), BODY).expect("the body has a model");
+        let identity = identify(&HeaderMap::new(), &TopLevelMembers::read(BODY))
+            .expect("the body has a model");
         assert_eq!(identity.session_id, None);
         assert_eq!(identity.agent_id, "main");
         assert_eq!(identity.folded_model, "claude-sonnet-4-5");
@@ -371,22 +379,22 @@ mod tests {
     fn a_model_outside_the_charset_or_over_the_bound_is_rejected() {
         let euro = br#"{"model":"claude-sonnet-4-5\u20ac\u20ac"}"#;
         assert!(matches!(
-            identify(&HeaderMap::new(), euro),
+            identify(&HeaderMap::new(), &TopLevelMembers::read(euro)),
             Err(RelayError::InvalidModel)
         ));
         let newline = br#"{"model":"claude\nsonnet"}"#;
         assert!(matches!(
-            identify(&HeaderMap::new(), newline),
+            identify(&HeaderMap::new(), &TopLevelMembers::read(newline)),
             Err(RelayError::InvalidModel)
         ));
         let long = format!(r#"{{"model":"{}"}}"#, "m".repeat(257));
         assert!(matches!(
-            identify(&HeaderMap::new(), long.as_bytes()),
+            identify(&HeaderMap::new(), &TopLevelMembers::read(long.as_bytes())),
             Err(RelayError::InvalidModel)
         ));
         let empty = br#"{"model":""}"#;
         assert!(matches!(
-            identify(&HeaderMap::new(), empty),
+            identify(&HeaderMap::new(), &TopLevelMembers::read(empty)),
             Err(RelayError::InvalidModel)
         ));
     }
@@ -396,11 +404,12 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("x-claude-code-agent-id", "bad id!".parse().unwrap());
         headers.insert("x-claude-code-session-id", "s-2".parse().unwrap());
-        let identity = identify(&headers, BODY).expect("the body has a model");
+        let identity =
+            identify(&headers, &TopLevelMembers::read(BODY)).expect("the body has a model");
         assert_eq!(identity.agent_id, "main");
         assert_eq!(identity.session_id.as_deref(), Some("s-2"));
         assert!(matches!(
-            identify(&headers, b"{\"messages\":[]}"),
+            identify(&headers, &TopLevelMembers::read(b"{\"messages\":[]}")),
             Err(RelayError::NoModel)
         ));
     }
@@ -413,7 +422,7 @@ mod tests {
             headers
         };
         let entrypoint = |headers: &HeaderMap| {
-            identify(headers, BODY)
+            identify(headers, &TopLevelMembers::read(BODY))
                 .expect("the body has a model")
                 .entrypoint
         };
@@ -442,10 +451,12 @@ mod tests {
             axum::http::header::USER_AGENT,
             "claude-cli/2.1.269".parse().unwrap(),
         );
-        let identity = identify(&headers, BODY).expect("the body has a model");
+        let identity =
+            identify(&headers, &TopLevelMembers::read(BODY)).expect("the body has a model");
         assert_eq!(identity.class, ClientClass::ClaudeCode);
         assert_eq!(identity.client, "claude-code/cli");
-        let identity = identify(&HeaderMap::new(), BODY).expect("the body has a model");
+        let identity = identify(&HeaderMap::new(), &TopLevelMembers::read(BODY))
+            .expect("the body has a model");
         assert_eq!(identity.class, ClientClass::Other);
     }
 
@@ -494,8 +505,9 @@ mod tests {
     /// class through `header_id` and the version through `client_version`.
     fn gap_of(headers: &HeaderMap, body: &serde_json::Value, kind: Kind) -> Option<&'static str> {
         let bytes = serde_json::to_vec(body).unwrap();
-        let identity = identify(headers, &bytes).expect("the body has a model");
-        let (facts, _) = crate::facts::BodyFacts::read_with_tree(&bytes);
+        let members = TopLevelMembers::read(&bytes);
+        let identity = identify(headers, &members).expect("the body has a model");
+        let (facts, _) = crate::facts::BodyFacts::read_with_tree(&members);
         let class = header_id(headers, "x-claude-code-request-class");
         let version = crate::drift::client_version(headers);
         contract_gap(

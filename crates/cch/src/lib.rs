@@ -464,24 +464,6 @@ fn decoded_key(body: &[u8], ks: usize, ke: usize) -> Option<Cow<'_, str>> {
     }
 }
 
-/// The first of `names` whose decoded key appears more than once among the top-level object's members.
-pub fn repeated_top_level_member(
-    body: &[u8],
-    names: &[&'static str],
-) -> Result<Option<&'static str>, CchError> {
-    TopLevelMembers::read(body).repeated_top_level_member(names)
-}
-
-/// The first of `names` whose decoded key appears more than once among the members of the top-level object
-/// `parent`, as `TopLevelMembers::repeated_member_within` reads it.
-pub fn repeated_member_within(
-    body: &[u8],
-    parent: &str,
-    names: &[&'static str],
-) -> Result<Option<&'static str>, CchError> {
-    TopLevelMembers::read(body).repeated_member_within(parent, names)
-}
-
 /// How many of the top-level object's members carry `name` once their keys are decoded.
 pub fn top_level_member_count(body: &[u8], name: &str) -> Result<usize, CchError> {
     TopLevelMembers::read(body).top_level_member_count(name)
@@ -784,12 +766,6 @@ pub fn decoded_stamp_count(body: &[u8]) -> usize {
         })
     });
     count
-}
-
-/// How many members of the first `system` block carry `name` once their keys are decoded, as
-/// `TopLevelMembers::first_system_block_member_count` reads it.
-pub fn first_system_block_member_count(body: &[u8], name: &str) -> Result<usize, CchError> {
-    TopLevelMembers::read(body).first_system_block_member_count(name)
 }
 
 /// Walks the object at `s` (its `{` not yet eaten), handing `member` each member's key as `keys` reads it with `s` at
@@ -1337,11 +1313,17 @@ mod tests {
             "{admitted}"
         );
         assert!(
-            matches!(repeated_top_level_member(&body, &["model"]), Ok(None)),
+            matches!(
+                TopLevelMembers::read(&body).repeated_top_level_member(&["model"]),
+                Ok(None)
+            ),
             "{admitted}"
         );
         assert!(
-            matches!(first_system_block_member_count(&body, "text"), Ok(1)),
+            matches!(
+                TopLevelMembers::read(&body).first_system_block_member_count("text"),
+                Ok(1)
+            ),
             "{admitted}"
         );
         assert!(
@@ -1360,14 +1342,14 @@ mod tests {
             assert_eq!(string_member_span(&body, &["model"]), None, "{refused}");
             assert!(
                 matches!(
-                    repeated_top_level_member(&body, &["model"]),
+                    TopLevelMembers::read(&body).repeated_top_level_member(&["model"]),
                     Err(CchError::TooDeep(_))
                 ),
                 "{refused}"
             );
             assert!(
                 matches!(
-                    first_system_block_member_count(&body, "text"),
+                    TopLevelMembers::read(&body).first_system_block_member_count("text"),
                     Err(CchError::TooDeep(_))
                 ),
                 "{refused}"
@@ -1434,7 +1416,7 @@ mod tests {
         assert!(serde_json::from_slice::<serde_json::Value>(&at_the_bound).is_err());
         assert!(
             matches!(
-                first_system_block_member_count(&at_the_bound, "text"),
+                TopLevelMembers::read(&at_the_bound).first_system_block_member_count("text"),
                 Err(CchError::TooDeep(_))
             ),
             "the root, the system array and the element's arrays reach the bound"
@@ -1443,7 +1425,10 @@ mod tests {
             format!(r#"{{"system":[{{"text":"x"}},{}]}}"#, arrays(MAX_DEPTH - 3)).into_bytes();
         assert!(serde_json::from_slice::<serde_json::Value>(&under_it).is_ok());
         assert!(
-            matches!(first_system_block_member_count(&under_it, "text"), Ok(1)),
+            matches!(
+                TopLevelMembers::read(&under_it).first_system_block_member_count("text"),
+                Ok(1)
+            ),
             "one level less reads as serde reads it"
         );
     }
@@ -1814,11 +1799,9 @@ mod tests {
             "the caller decides what a second spelling means"
         );
         assert_eq!(
-            repeated_top_level_member(
-                br#"{"safeguards":[1],"model":"m","safeguards":[2]}"#,
-                &["safeguards"]
-            )
-            .unwrap(),
+            TopLevelMembers::read(br#"{"safeguards":[1],"model":"m","safeguards":[2]}"#)
+                .repeated_top_level_member(&["safeguards"])
+                .unwrap(),
             Some("safeguards")
         );
     }
@@ -1993,7 +1976,9 @@ mod tests {
     fn an_escaped_repeat_of_a_top_level_member_is_found_by_its_decoded_key() {
         let body = "{\"model\":\"a\",\"messages\":[],\"\\u006dodel\":\"b\"}".as_bytes();
         assert_eq!(
-            repeated_top_level_member(body, &["metadata", "model", "stream"]).unwrap(),
+            TopLevelMembers::read(body)
+                .repeated_top_level_member(&["metadata", "model", "stream"])
+                .unwrap(),
             Some("model")
         );
     }
@@ -2033,7 +2018,9 @@ mod tests {
     fn a_repeat_inside_a_nested_object_is_not_a_top_level_repeat() {
         let body = br#"{"model":"a","metadata":{"model":"x","model":"y"},"messages":[]}"#;
         assert_eq!(
-            repeated_top_level_member(body, &["metadata", "model", "stream"]).unwrap(),
+            TopLevelMembers::read(body)
+                .repeated_top_level_member(&["metadata", "model", "stream"])
+                .unwrap(),
             None
         );
     }
@@ -2046,19 +2033,18 @@ mod tests {
             br#"{"model":"a","metadata":{"\u0075ser_id":"a","user_id":"b"},"messages":[]}"#,
         ] {
             assert_eq!(
-                repeated_member_within(body, "metadata", &["user_id"]).unwrap(),
+                TopLevelMembers::read(body)
+                    .repeated_member_within("metadata", &["user_id"])
+                    .unwrap(),
                 Some("user_id"),
                 "{}",
                 String::from_utf8_lossy(body)
             );
         }
         assert_eq!(
-            repeated_member_within(
-                br#"{"metadata":{"user_id":"a","model":"x","model":"y"}}"#,
-                "metadata",
-                &["user_id"]
-            )
-            .unwrap(),
+            TopLevelMembers::read(br#"{"metadata":{"user_id":"a","model":"x","model":"y"}}"#)
+                .repeated_member_within("metadata", &["user_id"])
+                .unwrap(),
             None,
             "a member not named is not looked at"
         );
@@ -2068,7 +2054,9 @@ mod tests {
     fn a_repeat_below_the_parents_own_members_is_not_found() {
         let deeper = br#"{"metadata":{"user_id":"a","extra":{"user_id":"b","user_id":"c"}},"messages":[{"role":"user","content":[{"type":"tool_use","input":{"metadata":{"user_id":"d","user_id":"e"}}}]}]}"#;
         assert_eq!(
-            repeated_member_within(deeper, "metadata", &["user_id"]).unwrap(),
+            TopLevelMembers::read(deeper)
+                .repeated_member_within("metadata", &["user_id"])
+                .unwrap(),
             None
         );
         for absent_or_not_an_object in [
@@ -2077,7 +2065,9 @@ mod tests {
             br#"{"metadata":["user_id","user_id"]}"#,
         ] {
             assert_eq!(
-                repeated_member_within(absent_or_not_an_object, "metadata", &["user_id"]).unwrap(),
+                TopLevelMembers::read(absent_or_not_an_object)
+                    .repeated_member_within("metadata", &["user_id"])
+                    .unwrap(),
                 None
             );
         }
@@ -2121,7 +2111,7 @@ mod tests {
     fn a_body_whose_top_level_is_an_array_is_refused() {
         let body = br#"[{"model":"a"}]"#;
         assert!(matches!(
-            repeated_top_level_member(body, &["metadata", "model", "stream"]),
+            TopLevelMembers::read(body).repeated_top_level_member(&["metadata", "model", "stream"]),
             Err(CchError::Json(0))
         ));
     }

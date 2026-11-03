@@ -3,6 +3,7 @@
 
 use axum::http::HeaderMap;
 use phoebis_bus::RequestShape;
+use phoebis_cch::TopLevelMembers;
 use serde_json::Value;
 
 use crate::cache_ttl::CacheTtl;
@@ -71,11 +72,13 @@ pub const RESUME_PLACEHOLDER: &str = "[Orphaned tool result removed due to conve
 
 impl BodyFacts {
     /// The facts and the parsed root they were read from, for a caller that reads the tree once more and drops it.
-    pub fn read_with_tree(body: &[u8]) -> (BodyFacts, Option<Value>) {
+    pub fn read_with_tree(members: &TopLevelMembers<'_>) -> (BodyFacts, Option<Value>) {
+        let body = members.body();
         // Counted over decoded keys on the walk the cut runs on rather than read from the parse below, so the
         // request row says what the cut acts on under an off setting whatever the parse makes of the body.
-        let safeguards =
-            phoebis_cch::top_level_member_count(body, "safeguards").is_ok_and(|n| n >= 1);
+        let safeguards = members
+            .top_level_member_count("safeguards")
+            .is_ok_and(|n| n >= 1);
         let Some(root) = phoebis_guardrails::parse_body(body) else {
             let facts = BodyFacts {
                 prompt_units: vec![[b'0' as u16; 3]],
@@ -204,7 +207,7 @@ impl BodyFacts {
     /// The handler keeps the tree for the guardrail step, so the facts alone are what the tests read.
     #[cfg(test)]
     pub fn read(body: &[u8]) -> BodyFacts {
-        Self::read_with_tree(body).0
+        Self::read_with_tree(&TopLevelMembers::read(body)).0
     }
 }
 
@@ -911,13 +914,15 @@ mod tests {
     #[test]
     fn read_with_tree_answers_the_tree_for_a_parsed_body_and_none_for_one_that_does_not_parse() {
         let body = br#"{"model":"m","messages":[{"role":"user","content":"hi"}]}"#;
-        let (_, tree) = BodyFacts::read_with_tree(body);
+        let (_, tree) = BodyFacts::read_with_tree(&TopLevelMembers::read(body));
         assert_eq!(tree, Some(serde_json::from_slice::<Value>(body).unwrap()));
         // The client cuts a string mid-pair, and the reading copy still yields a tree.
         let cut = br#"{"model":"m","messages":[{"role":"user","content":"a\ud83d"}]}"#;
         assert!(serde_json::from_slice::<Value>(cut).is_err());
-        assert!(BodyFacts::read_with_tree(cut).1.is_some());
-        let (facts, tree) = BodyFacts::read_with_tree(b"not json");
+        assert!(BodyFacts::read_with_tree(&TopLevelMembers::read(cut))
+            .1
+            .is_some());
+        let (facts, tree) = BodyFacts::read_with_tree(&TopLevelMembers::read(b"not json"));
         assert_eq!(tree, None);
         assert!(facts.chains.is_none());
     }
