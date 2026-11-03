@@ -13,7 +13,7 @@ import { KEYS_CODEC, requestHref } from '@/lib/address';
 import { effectiveCaptureHours } from '@/lib/capture';
 import type { PauseCause } from '@/lib/follow';
 import { fmtAbsolute, fmtInt, messageOf, noun } from '@/lib/format';
-import { derivedId, sortKeys } from '@/lib/forms';
+import { derivedId, sameValues } from '@/lib/forms';
 import { guardrailRefusals, presetBadges, verdictWords } from '@/lib/guardrails';
 import { useAsync } from '@/lib/hooks';
 
@@ -669,7 +669,7 @@ export function GuardrailDialog({ existing, existingIds, keys, onClose, onSaved,
   const refusedGroups = new Set<string>(refusals.map((r) => r.group));
   if (rowRefusal) refusedGroups.add('conditions');
   const groups: DialogGroup[] = GROUPS.map((id) => ({ body: bodies[id], id, label: GROUP_LABEL[id], refused: refusedGroups.has(id) }));
-  const unsaved = presetVersion !== null || JSON.stringify(sortKeys(form)) !== JSON.stringify(sortKeys(opened));
+  const unsaved = presetVersion !== null || !sameValues(form, opened);
 
   return (
     <GroupedDialog

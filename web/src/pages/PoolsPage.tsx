@@ -27,7 +27,7 @@ import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, dollarsUnder, moveLabel, nati
 import { anchorOf } from '@/lib/attention';
 import { weekReadingOf } from '@/lib/costs';
 import { fmtCompact, fmtDuration, fmtHourTick, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtUsd, messageOf, noun, plural, shortModel } from '@/lib/format';
-import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, guardrailIdsOf, guardrailsChange, keyFormOf, keyInputOf, poolRefusals, sortKeys, type PoolGroup } from '@/lib/forms';
+import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, guardrailIdsOf, guardrailsChange, keyFormOf, keyInputOf, poolRefusals, sameValues, type PoolGroup } from '@/lib/forms';
 import { failedFirst, refreshAttention, useAsync, useAttention, useLatest, useNow } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, slowDownPreview, slowDownPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
@@ -1092,11 +1092,6 @@ const blankForm = (): PoolForm => ({
   strategy: 'pace',
   subagentPlacement: POOL_AFFINITY_DEFAULTS.subagentPlacement,
 });
-
-// The compare the discard question reads. Key order is dropped on purpose: `members` is rebuilt in tick order, so a
-// member unticked and ticked again at its old priority reads as no change (`budgets` keeps an unticked member's
-// entry, so it is not rebuilt).
-const sameForm = (a: PoolForm, b: PoolForm): boolean => JSON.stringify(sortKeys(a)) === JSON.stringify(sortKeys(b));
 
 const formFrom = (pool: Pool): PoolForm => ({
   affinity: pool.affinityTtlSeconds,
@@ -2385,7 +2380,9 @@ export function PoolDialog({
         open={open}
         onClose={() => onClose(attempted)}
         title={pool ? `Edit pool ${pool.name}` : 'Create pool'}
-        unsaved={!sameForm(form, opened)}
+        // Key order is dropped on purpose: `members` is rebuilt in tick order, so a member unticked and ticked again at
+        // its old priority reads as no change (`budgets` keeps an unticked member's entry, so it is not rebuilt).
+        unsaved={!sameValues(form, opened)}
         railLabel="Pool settings"
         groups={groups}
         chosen={chosen}

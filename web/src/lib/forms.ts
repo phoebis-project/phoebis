@@ -128,6 +128,8 @@ export function derivedId(name: string): { id: string; unnamed: boolean } {
 /** `value` with every object's keys in sorted order, so a discard question's compare reads values alone. */
 export const sortKeys = (value: unknown): unknown =>
   Array.isArray(value) ? value.map(sortKeys) : value !== null && typeof value === 'object' ? Object.fromEntries(Object.keys(value as object).sort().map((k) => [k, sortKeys((value as Record<string, unknown>)[k])])) : value;
+/** The discard question's compare: the two values alike, whatever order their keys were written in. */
+export const sameValues = (a: unknown, b: unknown): boolean => JSON.stringify(sortKeys(a)) === JSON.stringify(sortKeys(b));
 
 /** A new pool's or key's name whose derived id is no name or one `taken` holds, as the sentence that holds the save. */
 const derivedIdRefusal = (noun: 'key' | 'pool', name: string, taken: ReadonlySet<string>): string | null => {

@@ -22,7 +22,7 @@ import { weekReadingOf } from '@/lib/costs';
 import { KEYS_DIMENSIONS, notLoadedReason } from '@/lib/filterBar';
 import type { PauseCause } from '@/lib/follow';
 import { fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd, messageOf, noun, plural } from '@/lib/format';
-import { guardrailsChange, KEY_GROUPS, keyFormOf, keyInputOf, keyRefusals, sortKeys, type AutoModeOverride, type CaptureMode, type KeyGroup } from '@/lib/forms';
+import { guardrailsChange, KEY_GROUPS, keyFormOf, keyInputOf, keyRefusals, sameValues, type AutoModeOverride, type CaptureMode, type KeyGroup } from '@/lib/forms';
 import { useAsync, useNow, useQueryFilters, type Loaded } from '@/lib/hooks';
 import { scrollToElement } from '@/lib/scroll';
 import type { UnitPosition } from '@/lib/unit';
@@ -912,7 +912,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
       open={open}
       onClose={onClose}
       title={existing ? `Edit ${existing.name}` : 'Create key'}
-      unsaved={JSON.stringify(sortKeys(current)) !== JSON.stringify(sortKeys(opened))}
+      unsaved={!sameValues(current, opened)}
       railLabel="Key settings"
       groups={groups}
       chosen={chosen}
