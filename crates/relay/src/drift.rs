@@ -3,17 +3,22 @@
 //! beside it live with the body edits: a billing hash this build cannot reproduce (`hash`), and a `cc_version`
 //! suffix that does not reproduce from the prompt and the user agent (`version_suffix`).
 
-use axum::http::{header, HeaderMap};
+use axum::http::HeaderMap;
+
+use crate::identity::{user_agent_of, CLAUDE_CLI_PREFIX};
 
 pub struct DriftGuard;
 
 impl DriftGuard {
     /// The version out of a `claude-cli/` user agent, or `None` for a caller that is not one.
     pub fn check(&self, headers: &HeaderMap) -> Option<String> {
-        let agent = headers
-            .get(header::USER_AGENT)
-            .and_then(|v| v.to_str().ok())?;
-        Some(agent.strip_prefix("claude-cli/")?.split(' ').next()?.into())
+        Some(
+            user_agent_of(headers)?
+                .strip_prefix(CLAUDE_CLI_PREFIX)?
+                .split(' ')
+                .next()?
+                .into(),
+        )
     }
 }
 

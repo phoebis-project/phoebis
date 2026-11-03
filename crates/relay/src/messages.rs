@@ -1735,11 +1735,8 @@ impl Relay {
             Evaluation::default()
         } else {
             let headers = HeaderMapLookup(&parts.headers);
-            let user_agent = parts
-                .headers
-                .get(header::USER_AGENT)
-                .and_then(|v| v.to_str().ok())
-                .map(phoebis_bus::user_agent_cut);
+            let user_agent =
+                crate::identity::user_agent_of(&parts.headers).map(phoebis_bus::user_agent_cut);
             let agent_type =
                 crate::identity::header_id(&parts.headers, phoebis_guardrails::AGENT_TYPE_HEADER);
             let request = RequestFacts {
@@ -5486,10 +5483,7 @@ fn built(builder: Builder, body: Body) -> Response {
 
 /// The caller's own `User-Agent`, the only handle an operator has on which client drifted.
 fn user_agent(headers: &HeaderMap) -> &str {
-    headers
-        .get(header::USER_AGENT)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("")
+    crate::identity::user_agent_of(headers).unwrap_or("")
 }
 
 /// Bytes fed to a decoder at a time, so the bound below is checked as the copy grows rather than after a

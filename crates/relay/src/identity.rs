@@ -84,7 +84,7 @@ pub fn identify(headers: &HeaderMap, body: &[u8]) -> Result<RequestIdentity, Rel
     // The header is the client's own statement of the session, and the climb starts from it.
     let session_id = header_id(headers, "x-claude-code-session-id");
     let entrypoint = user_agent_of(headers)
-        .filter(|agent| agent.starts_with("claude-cli/"))
+        .filter(|agent| agent.starts_with(CLAUDE_CLI_PREFIX))
         .map(|agent| entrypoint_of(agent).to_string());
     let client = client_class(headers);
     Ok(RequestIdentity {
@@ -299,14 +299,17 @@ pub(crate) fn restores_prev_req(request_class: Option<&str>, headers: &HeaderMap
 /// for a log line and a ledger key.
 pub fn client_class(headers: &HeaderMap) -> String {
     let user_agent = user_agent_of(headers).unwrap_or_default();
-    if user_agent.starts_with("claude-cli/") {
+    if user_agent.starts_with(CLAUDE_CLI_PREFIX) {
         return format!("claude-code/{}", entrypoint_of(user_agent));
     }
     OTHER_CLIENT.to_string()
 }
 
+/// What a Claude Code user agent starts with, ahead of the client's version.
+pub(crate) const CLAUDE_CLI_PREFIX: &str = "claude-cli/";
+
 /// The `User-Agent` header as text, `None` where the request carries none or it is not visible ASCII.
-fn user_agent_of(headers: &HeaderMap) -> Option<&str> {
+pub(crate) fn user_agent_of(headers: &HeaderMap) -> Option<&str> {
     headers
         .get(axum::http::header::USER_AGENT)
         .and_then(|v| v.to_str().ok())
