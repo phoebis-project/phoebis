@@ -102,7 +102,9 @@ A condition is one row of the dialog's Conditions group: a subject, the subject'
 name, a body path or a message selector), an operator from the subject's row below and, for `equals`, `gt`, `lt` and
 `matches`, a value. Every member is text, so the API carries no typed value. A guardrail holds 1 to 16 conditions, and
 the admin API refuses a condition it cannot read with a 400 reading `conditions[{i}]: {reason}`, `{i}` counting from
-zero, which the dialog shows under row `i + 1`.
+zero, which the dialog shows under row `i + 1`. The count is checked first, so a list of the wrong length answers
+`conditions holds 1 to 16 entries` whatever its conditions hold, and an unknown subject, operator or selector word is
+named before any other fault of a condition.
 
 | Subject | What it reads | Operators |
 | --- | --- | --- |

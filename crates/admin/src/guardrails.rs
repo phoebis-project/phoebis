@@ -11,8 +11,8 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_bus::OTHER_CLIENT;
 use phoebis_guardrails::{
-    evaluate, parse_body, CompiledGuardrail, Condition, ConditionWords, GuardrailAction,
-    GuardrailMode, HintLookup, Preset, RequestFacts, Verdict, MAX_CONDITIONS,
+    evaluate, parse_body, CompileError, CompiledGuardrail, Condition, ConditionWords,
+    GuardrailAction, GuardrailMode, HintLookup, Preset, RequestFacts, Verdict, MAX_CONDITIONS,
 };
 use phoebis_ledger::{guardrail_sample_page, request_body, RequestCursor, SampleSubject};
 use phoebis_store::{
@@ -440,9 +440,10 @@ fn preset_view(preset: &Preset) -> GuardrailPresetView {
     }
 }
 
-/// `Condition::from_words`, `check` and `CompiledGuardrail::compile` over the list, the refusal `conditions[{i}]:
-/// {reason}` or `conditions holds 1 to 16 entries`. The compiled form is dropped, so a row never holds a pattern the
-/// router's build could not compile.
+/// `Condition::from_words` over the list, then `CompiledGuardrail::compile`, which checks and compiles each
+/// condition, the refusal `conditions[{i}]: {reason}` or `conditions holds 1 to 16 entries`. The count is checked
+/// first, so a list of the wrong length names its length before any of its conditions. The compiled form is dropped,
+/// so a row never holds a pattern the router's build could not compile.
 // The error is a rendered HTTP response, returned once per request and dropped, so boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
@@ -450,21 +451,21 @@ pub(crate) fn validate_conditions(views: &[ConditionView]) -> Result<Vec<Conditi
     if views.is_empty() || views.len() > MAX_CONDITIONS {
         return Err(failure(
             StatusCode::BAD_REQUEST,
-            "conditions holds 1 to 16 entries",
+            &CompileError::Count.to_string(),
         ));
     }
-    let mut conditions = Vec::with_capacity(views.len());
-    for (i, view) in views.iter().enumerate() {
-        let condition = Condition::from_words(&ConditionWords::from(view))
-            .and_then(|condition| condition.check().map(|_| condition))
-            .map_err(|reason| {
+    let conditions = views
+        .iter()
+        .enumerate()
+        .map(|(i, view)| {
+            Condition::from_words(&ConditionWords::from(view)).map_err(|reason| {
                 failure(
                     StatusCode::BAD_REQUEST,
                     &format!("conditions[{i}]: {reason}"),
                 )
-            })?;
-        conditions.push(condition);
-    }
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     CompiledGuardrail::compile(
         "",
         "",

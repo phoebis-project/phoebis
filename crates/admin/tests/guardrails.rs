@@ -670,6 +670,29 @@ async fn every_400_sentence_is_answered_one_by_one() {
 }
 
 #[tokio::test]
+async fn a_list_of_the_wrong_length_is_refused_for_its_count_before_any_of_its_conditions() {
+    let (parts, cookie) = seeded().await;
+    let mut conditions = vec![j!({"subject": "weather", "operator": "equals", "value": "rain"})];
+    conditions.extend(vec![condition(); 16]);
+    let body = j!({"id": "g1", "name": "G", "conditions": conditions});
+    let response = post(
+        &parts.app,
+        "/admin/guardrails",
+        &body.to_string(),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        refusal(response).await,
+        (
+            StatusCode::BAD_REQUEST,
+            "conditions holds 1 to 16 entries".to_string()
+        ),
+        "seventeen conditions, the first an unknown subject"
+    );
+}
+
+#[tokio::test]
 async fn an_array_body_is_refused_as_no_object_on_the_three_guardrail_routes() {
     let (parts, cookie) = seeded().await;
     let app = &parts.app;

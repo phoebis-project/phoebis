@@ -523,6 +523,8 @@ same bound, and the request log and the routing log filter on an agent id
 ([Statistics](statistics.md#refused-requests)).
 A guardrail block writes a `refused` decision row with the guardrail's name beside its request row, so the routing log
 shows the block ([Guardrails](guardrails.md#observe-then-enforce)).
+A guardrail's conditions answer their count first, then an unknown subject, operator or selector word, then the first
+other fault by its index ([The conditions](guardrails.md#the-conditions)).
 
 The router serves Claude Code alone: a request on the two Messages routes from any other client is refused `403`
 `client_not_allowed` before its body is read, under every key ([Clients](routing.md#clients)). The contract gained the
