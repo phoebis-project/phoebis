@@ -262,7 +262,7 @@ impl CatalogService {
         // the whole discovery is bounded by `self.timeout`, not just the network exchange.
         let (status, body) = tokio::time::timeout(self.timeout, async {
             let headers = self.credential_headers(account, secret).await?;
-            self.send(account, MODELS_TARGET.to_string(), headers).await
+            self.send(account, headers).await
         })
         .await
         .map_err(|_| DiscoveryError::Unreachable("timed out".into()))??;
@@ -884,36 +884,31 @@ impl CatalogService {
     async fn send(
         &self,
         account: &AccountRow,
-        target: String,
         headers: Vec<(String, String)>,
     ) -> Result<(u16, Vec<u8>), DiscoveryError> {
         let request = RawRequest {
             method: "GET",
-            target,
+            target: MODELS_TARGET.to_string(),
             headers,
             body: Bytes::new(),
         };
         let addr = (self.resolver)(UPSTREAM_AUTHORITY).await.ok_or_else(|| {
             DiscoveryError::Unreachable(format!("no address for {UPSTREAM_AUTHORITY}"))
         })?;
-        tokio::time::timeout(self.timeout, async {
-            let key = PoolKey {
-                account_id: account.id.clone(),
-                host: UPSTREAM_AUTHORITY.to_string(),
-            };
-            let (mut conn, _) = self
-                .pool
-                .checkout(&key, addr)
-                .await
-                .map_err(|e| DiscoveryError::Unreachable(e.to_string()))?;
-            let (status, body, reusable) = exchange(&mut conn, &request).await?;
-            if reusable {
-                self.pool.checkin(key, conn);
-            }
-            Ok((status, body))
-        })
-        .await
-        .map_err(|_| DiscoveryError::Unreachable("timed out".into()))?
+        let key = PoolKey {
+            account_id: account.id.clone(),
+            host: UPSTREAM_AUTHORITY.to_string(),
+        };
+        let (mut conn, _) = self
+            .pool
+            .checkout(&key, addr)
+            .await
+            .map_err(|e| DiscoveryError::Unreachable(e.to_string()))?;
+        let (status, body, reusable) = exchange(&mut conn, &request).await?;
+        if reusable {
+            self.pool.checkin(key, conn);
+        }
+        Ok((status, body))
     }
 
     fn fresh_slot(&self, key: &SlotKey, now: i64) -> Option<Catalog> {

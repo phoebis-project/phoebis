@@ -9,7 +9,7 @@ use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
 use phoebis_bus::{Bus, Delivery, Event};
-use phoebis_relay::{Warmth, ERROR_HOLD, MAX_BODY};
+use phoebis_relay::{DiscoveryError, Warmth, ERROR_HOLD, MAX_BODY};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownScope, NewBundle, RekeyWrite,
     ResolutionRow, RulesMode, Secret, StorageKey, Store,
@@ -233,6 +233,34 @@ async fn a_body_over_the_bound_fails_the_fetch_and_caches_no_rows() {
             format!("the models response is malformed: response body exceeds {MAX_BODY} bytes")
                 .as_str()
         )
+    );
+}
+
+#[tokio::test]
+async fn a_models_endpoint_that_never_answers_ends_the_discovery_as_timed_out() {
+    let up = FakeUpstream::start(vec![]).await;
+    let catalog_up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/models?limit=1000".into(),
+        respond: Respond::Gated(Box::new(json_list(&["claude-opus-5"]))),
+    }])
+    .await;
+    let h = harness_with_catalog(
+        &up,
+        catalog_up,
+        &[api_key("a", "sk-ant-api03-A", 0)],
+        PoolSpec::default(),
+    )
+    .await;
+    let a = h.store.account("a").unwrap().unwrap();
+    // Twice the harness's discovery timeout, so a discovery left without its bound fails here and never hangs.
+    let discovered =
+        tokio::time::timeout(default_limits().head_timeout * 2, h.catalog.discover(&a))
+            .await
+            .expect("the discovery's own timeout ends it");
+    assert!(
+        matches!(&discovered, Err(DiscoveryError::Unreachable(m)) if m == "timed out"),
+        "a models endpoint that never answers ends as timed out, got {:?}",
+        discovered.as_ref().err()
     );
 }
 
