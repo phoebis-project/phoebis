@@ -1,5 +1,5 @@
 import { iso, PIN_RELEASE_REASON_VALUES } from '@/api/decode';
-import type { DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, ModelTiers, PinReason, PinReleaseReason, Placement, PrefixEntry, RecordCandidate, RecordOutcome, RecordSettings, RoutingEvent, RoutingLogRow, WalkFact, WalkStep } from '@/api/types';
+import type { CohortHold, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, ModelTiers, PinReason, PinReleaseReason, Placement, PrefixEntry, RecordCandidate, RecordOutcome, RecordSettings, RoutingEvent, RoutingLogRow, WalkFact, WalkStep } from '@/api/types';
 import { ROUTING_LOG_CODEC, type RangeValue } from './address';
 import { FAILOVER_MOVE_REASONS, moveLabel, RULE_MOVE_REASONS, type WeekReading } from './analytics';
 import { compareByModelTier } from './costs';
@@ -1609,6 +1609,10 @@ export function settingValue(key: SettingKey, settings: RecordSettings): string 
 /** The relay's status for an exhaustion: a dated one a 429, a model no member serves a 404, the rest a 503. */
 const EXHAUSTION_STATUS: Record<string, number> = { fast_credits: 429, fast_lane: 429, model_rejected: 404, timed: 429 };
 export const PLACE_WORD: Record<string, string> = { strategy_pick: 'strategy pick' };
+/** A wait's reason as a held row's hover and the Hold row read it: `cap` waited for a slot the in-flight cap freed. */
+export const WAIT_REASON_WORD: Record<string, string> = { cap: 'for a slot', reset: 'for the reset', rewrite: 'for the rewrite in flight', slow_down: 'for the slow-down' };
+/** Where a hold waited: its cohort's account, else the last one it waited on. */
+export const heldAccount = (h: CohortHold): string | null => h.cohort ?? h.waitedOn[h.waitedOn.length - 1] ?? null;
 
 /**
  * The card's outcome: Cause, Pin written, Cache-map entries, Cache read, Hold, Answer and Spend, each where it applies.
@@ -1689,7 +1693,7 @@ export function outcomeRows(record: DecisionRecord, now: number, row?: DecisionS
     rows.push({ chips: [accountChip(o.hold.accountId, 'on'), plain(wordOf(PLACE_WORD, place)), plain(span(o.hold.boundMs), 'bound'), ...ranOutChip], label: 'Hold', title: HOLD_HINT });
   } else if (o.cohortHold !== null) {
     const h = o.cohortHold;
-    const account = h.cohort ?? h.waitedOn[h.waitedOn.length - 1] ?? null;
+    const account = heldAccount(h);
     const on = account === null ? [] : [accountChip(account, 'on')];
     const slot = plain(h.cohort !== null ? 'cohort' : 'strategy pick');
     const ended = (ms: number) => plain(span(ms), c?.freed ? 'freed after' : 'held');
@@ -1700,7 +1704,7 @@ export function outcomeRows(record: DecisionRecord, now: number, row?: DecisionS
       // A wait for a reset or the slow-down is no slot's, so the in-flight cap's hover titles a slot's wait alone.
       h.waits.forEach((w, i) => {
         const final = i === h.waits.length - 1;
-        const reason = w.reason === 'cap' ? slot : plain(w.reason === 'slow_down' ? 'for the slow-down' : w.reason === 'reset' ? 'for the reset' : w.reason === 'rewrite' ? 'for the rewrite in flight' : words(w.reason));
+        const reason = w.reason === 'cap' ? slot : plain(lookup(WAIT_REASON_WORD, w.reason) ?? words(w.reason));
         // The router fills the accounts waited on from the same holds in the same order, so each wait names its own.
         const waited = h.waitedOn[i] ?? null;
         const own = waited === null ? on : [accountChip(waited, 'on')];

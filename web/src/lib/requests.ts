@@ -5,6 +5,7 @@ import { type Funding, fundingOf, inBand, nativeOf, revisionAt } from '@/lib/cos
 import { lookup } from '@/lib/counts';
 import { servingAttempt } from '@/lib/dimensions';
 import { fmtUsd, fmtWeek, weekShort } from '@/lib/format';
+import { heldAccount, WAIT_REASON_WORD } from '@/lib/routingLog';
 import type { UnitPosition, WeekPosition } from '@/lib/unit';
 
 /** The route's order, newest first and the higher id first at one instant, which a poll's merge and the mock keep. */
@@ -22,10 +23,7 @@ export const FREE_SHARE_TITLE = 'Free on the plan: a client classifier call take
 export const REFUSED_TITLE =
   "Requests refused for the client's or a policy's cause before any account was asked. The router's own refusals, account_canceled, accounts_unavailable, body_budget_exhausted, key_body_reads, ledger_behind and router_unavailable, count as requests instead.";
 
-/** A wait's reason as a held row's hover names it: `cap` waited for a slot the in-flight cap freed. */
-const WAIT_REASON_WORD: Record<string, string> = { cap: 'for a slot', reset: 'for the reset', rewrite: 'for the rewrite in flight', slow_down: 'for the slow-down' };
-/** Where a hold waited: its cohort's account, else the last one it waited on. */
-const heldOn = (held: CohortHold) => held.cohort ?? held.waitedOn[held.waitedOn.length - 1] ?? 'an account';
+const heldOn = (held: CohortHold) => heldAccount(held) ?? 'an account';
 
 /**
  * A held row's badge, `waited 42 s`, and its hover, each wait with its reason in the row's order and the account it
