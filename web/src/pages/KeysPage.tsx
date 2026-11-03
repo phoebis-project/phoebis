@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'rea
 import { useLocation } from 'react-router-dom';
 import { api, ApiError } from '@/api';
 import { slug } from '@/api/http';
-import type { ApiKey, CreatedApiKey, Guardrail, GuardrailRef, KeyModels, KeyStatus, ModelRule, ModelRulesMode, Pool } from '@/api/types';
+import type { ApiKey, CreatedApiKey, Guardrail, GuardrailRef, KeyModels, KeyStatus, ModelRulesMode, Pool } from '@/api/types';
 import { useSession } from '@/app/session';
 import { useAppSettings } from '@/app/settings';
 import { useAddressEdit } from '@/app/useAddressEdit';
@@ -23,7 +23,7 @@ import { weekReadingOf } from '@/lib/costs';
 import { KEYS_DIMENSIONS, notLoadedReason } from '@/lib/filterBar';
 import type { PauseCause } from '@/lib/follow';
 import { fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd, messageOf, noun, plural } from '@/lib/format';
-import { guardrailsChange, KEY_GROUPS, keyFormOf, keyInputOf, keyRefusals, refusalsView, sameValues, saveStatus, type AutoModeOverride, type CaptureMode, type KeyGroup } from '@/lib/forms';
+import { guardrailsChange, KEY_GROUPS, keyFormOf, keyInputOf, keyRefusals, refusalsView, sameValues, saveStatus, type AutoModeOverride, type KeyForm, type KeyGroup } from '@/lib/forms';
 import { MODE_TONE } from '@/lib/guardrails';
 import { useAsync, useNow, useQueryFilters, type Loaded } from '@/lib/hooks';
 import { scrollToElement } from '@/lib/scroll';
@@ -573,19 +573,9 @@ export function GuardrailList({ inherited = [], onChange, pending, refs, registr
  */
 export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools, captureMaxHours, existing = null, existingIds, initialGroup = null, initialPoolId, lockPool = false }: { /** The bootstrap's body capture limit from the host page's settings read, undefined while that read is out. */ captureMaxHours?: number; existing?: ApiKey | null; existingIds: ReadonlySet<string>; initialGroup?: KeyGroup | null; initialPoolId?: string; lockPool?: boolean; onClose: () => void; onCreated: (c: CreatedApiKey) => void; /** The stale save's Reload: closes the dialog and reads the keys again. */ onReload?: () => void; onUpdated?: (k: ApiKey) => void; open: boolean; pools: KeyDialogPool[] }) {
   const [chosen, setChosen] = useState<KeyGroup>('key');
-  const [name, setName] = useState('');
-  const [poolId, setPoolId] = useState('');
-  const [longContextTwins, setLongContextTwins] = useState(true);
-  const [modelRules, setModelRules] = useState<ModelRule[]>([]);
-  const [modelRulesMode, setModelRulesMode] = useState<ModelRulesMode>('extend');
-  const [expiry, setExpiry] = useState('never');
-  const [autoModeServer, setAutoModeServer] = useState<AutoModeOverride>('inherit');
-  const [notes, setNotes] = useState('');
-  const [captureMode, setCaptureMode] = useState<CaptureMode>('inherit');
-  const [captureHours, setCaptureHours] = useState('6');
-  const [optOut, setOptOut] = useState(false);
-  const [enabled, setEnabled] = useState(true);
-  const [guardrails, setGuardrails] = useState<string[]>([]);
+  const [form, setForm] = useState<KeyForm>(() => keyFormOf(null, ''));
+  const set = <K extends keyof KeyForm>(key: K, value: KeyForm[K]) => setForm((f) => ({ ...f, [key]: value }));
+  const { autoModeServer, captureHours, captureMode, enabled, expiry, guardrails, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId } = form;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [stale, setStale] = useState<string | null>(null);
@@ -611,23 +601,11 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
   if (!open && resetFor !== null) setResetFor(null);
   if (resetDue) {
     // A key cannot exist without a pool, so the first pool stands in until one is picked.
-    const form = keyFormOf(existing, initialPoolId ?? pools[0]?.id ?? '');
+    const next = keyFormOf(existing, initialPoolId ?? pools[0]?.id ?? '');
     setResetFor({ existing, initialGroup, initialPoolId });
-    setOpened(form);
+    setOpened(next);
+    setForm(next);
     setChosen(initialGroup ?? 'key');
-    setName(form.name);
-    setPoolId(form.poolId);
-    setLongContextTwins(form.longContextTwins);
-    setModelRules(form.modelRules);
-    setModelRulesMode(form.modelRulesMode);
-    setExpiry(form.expiry);
-    setAutoModeServer(form.autoModeServer);
-    setNotes(form.notes);
-    setCaptureMode(form.captureMode);
-    setCaptureHours(form.captureHours);
-    setOptOut(form.optOut);
-    setEnabled(form.enabled);
-    setGuardrails(form.guardrails);
     setBusy(false);
     setError(null);
     setStale(null);
@@ -636,16 +614,16 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
   // render that resets. The fill is no edit of the operator's, so the opening values take it too where they hold no
   // pool yet.
   if (open && !resetDue && existing === null && poolId === '' && pools.length > 0) {
-    setPoolId(pools[0].id);
+    set('poolId', pools[0].id);
     if (opened.poolId === '') setOpened({ ...opened, poolId: pools[0].id });
   }
 
   const moving = existing !== null && poolId !== existing.poolId;
-  const current = { autoModeServer, captureHours, captureMode, enabled, expiry, guardrails, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId };
-  // The server's words leave with the next edit to any field. A failed save changes none, so they stand until then.
-  const [edited, setEdited] = useState(current);
-  if ((Object.keys(current) as (keyof typeof current)[]).some((field) => current[field] !== edited[field])) {
-    setEdited(current);
+  // The server's words leave with the next edit to any field. A failed save changes none, so they stand until then. The
+  // compare runs field by field, so a field written again unchanged, as the override's focus writes its mode, keeps them.
+  const [edited, setEdited] = useState(form);
+  if ((Object.keys(form) as (keyof KeyForm)[]).some((field) => form[field] !== edited[field])) {
+    setEdited(form);
     setError(null);
   }
 
@@ -653,7 +631,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
     setBusy(true);
     setError(null);
     setStale(null);
-    const input = keyInputOf(current, clock.now());
+    const input = keyInputOf(form, clock.now());
     try {
       if (existing) {
         const updated = await api.updateKey(existing.id, { ...input, ...guardrailsChange(guardrails, opened.guardrails) }, existing.revision);
@@ -689,7 +667,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
         )}
         <div className="cells">
           <Field label="Name" className="cell--half" hint={!existing && name.trim() ? `Id: ${slug(name.trim())}` : undefined}>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="workstation" autoFocus aria-invalid={invalid('Name')} />
+            <Input value={name} onChange={(e) => set('name', e.target.value)} placeholder="workstation" autoFocus aria-invalid={invalid('Name')} />
           </Field>
           <Field
             label="Pool"
@@ -704,7 +682,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
               )
             }
           >
-            <Select value={poolId} onChange={(e) => setPoolId(e.target.value)} disabled={lockPool} aria-invalid={invalid('Pool')}>
+            <Select value={poolId} onChange={(e) => set('poolId', e.target.value)} disabled={lockPool} aria-invalid={invalid('Pool')}>
               {pools.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
@@ -713,7 +691,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
             </Select>
           </Field>
           <Field label="Notes">
-            <textarea className="input" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Where this key lives and who holds it" />
+            <textarea className="input" value={notes} onChange={(e) => set('notes', e.target.value)} placeholder="Where this key lives and who holds it" />
           </Field>
         </div>
       </>
@@ -724,12 +702,12 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
           <Field label="Enabled" beside hint="Off refuses the key and keeps it, so it can come back on without a new secret. A revoked key cannot.">
             {/* The route refuses to re-enable a revoked key, so its switch says so rather than offering it. */}
             <span title={existing.status === 'revoked' ? 'a revoked key cannot be re-enabled' : undefined}>
-              <Toggle checked={enabled} onChange={setEnabled} label="Enabled" disabled={existing.status === 'revoked'} />
+              <Toggle checked={enabled} onChange={(v) => set('enabled', v)} label="Enabled" disabled={existing.status === 'revoked'} />
             </span>
           </Field>
         )}
         <Field label="Expiry" hint="An expired key is refused, but its history stays in the ledger.">
-          <Select value={expiry} onChange={(e) => setExpiry(e.target.value)} aria-label="Expiry">
+          <Select value={expiry} onChange={(e) => set('expiry', e.target.value)} aria-label="Expiry">
             {existing && <option value="keep">Keep the current expiry</option>}
             {!existing && <option value="never">No expiration</option>}
             <option value="7">7 days</option>
@@ -742,7 +720,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
         </Field>
         <Expert>
           <Field label="Server-side auto mode" hint="Inherit follows the pool. Off drops the client's server-side tool-use checks on this key, so the client reviews with classifier requests of its own. On keeps them whatever the pool says.">
-            <Select value={autoModeServer} onChange={(e) => setAutoModeServer(e.target.value as AutoModeOverride)} aria-label="Server-side auto mode">
+            <Select value={autoModeServer} onChange={(e) => set('autoModeServer', e.target.value as AutoModeOverride)} aria-label="Server-side auto mode">
               <option value="inherit">Inherit ({pool?.autoModeServer === false ? 'off' : 'on'}, the pool&apos;s setting)</option>
               <option value="on">On</option>
               <option value="off">Off</option>
@@ -760,7 +738,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
           plain
           hint="Top to bottom, first match wins. The saved key's Effective list shows the list it ends up with."
         >
-          <PatternEditor label="Model rules" value={modelRules} onChange={setModelRules} inherited={modelRulesMode === 'extend' ? (pool?.modelRules ?? []) : []} suggestions={suggestions} />
+          <PatternEditor label="Model rules" value={modelRules} onChange={(v) => set('modelRules', v)} inherited={modelRulesMode === 'extend' ? (pool?.modelRules ?? []) : []} suggestions={suggestions} />
         </Field>
         {rulesRefusal && <Refusal>{rulesRefusal}</Refusal>}
         <Expert>
@@ -769,13 +747,13 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
           <Field label="Pool rules" plain hint="Extend applies the pool's rules, in gray, after this key's own. Replace applies this key's rules alone.">
             {/* Its own block, so the segmented control keeps its content width. */}
             <div>
-              <Segmented<ModelRulesMode> ariaLabel="How this key's rules meet the pool's" value={modelRulesMode} options={MODES} onChange={setModelRulesMode} />
+              <Segmented<ModelRulesMode> ariaLabel="How this key's rules meet the pool's" value={modelRulesMode} options={MODES} onChange={(v) => set('modelRulesMode', v)} />
             </div>
           </Field>
         </Expert>
         <Expert>
           <Field label="List [1m] twins in the models listing" beside hint="Claude Code sizes its context window by the id, so the twin lets it use the long-context window the upstream reports.">
-            <Toggle checked={longContextTwins} onChange={setLongContextTwins} label="List [1m] twins in the models listing" />
+            <Toggle checked={longContextTwins} onChange={(v) => set('longContextTwins', v)} label="List [1m] twins in the models listing" />
           </Field>
         </Expert>
         {existing && <EffectiveList processed={processed} />}
@@ -795,7 +773,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
         >
           {/* The chosen pool's list, so a key moved in this dialog shows the pool it lands in, and the key's own read of
               its pool's list until the pool list arrives. */}
-          <GuardrailList inherited={pool?.guardrails ?? (existing?.poolId === poolId ? existing.poolGuardrails : [])} onChange={setGuardrails} pending={existing ? undefined : 'Guardrails can be attached once the key is saved.'} refs={existing?.guardrails ?? []} registry={registry} value={guardrails} />
+          <GuardrailList inherited={pool?.guardrails ?? (existing?.poolId === poolId ? existing.poolGuardrails : [])} onChange={(v) => set('guardrails', v)} pending={existing ? undefined : 'Guardrails can be attached once the key is saved.'} refs={existing?.guardrails ?? []} registry={registry} value={guardrails} />
         </Field>
       </div>
     ),
@@ -810,7 +788,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
             </>
           }
         >
-          <Toggle checked={optOut} onChange={setOptOut} label="Cache warming opt-out" />
+          <Toggle checked={optOut} onChange={(v) => set('optOut', v)} label="Cache warming opt-out" />
         </Field>
       </div>
     ),
@@ -835,11 +813,11 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
           >
             <div className="radio-list" role="radiogroup" aria-label="Capture request and response bodies">
               <label className={`radio-list__item ${captureMode === 'inherit' ? 'is-active' : ''}`}>
-                <input type="radio" name={`capture-${existing?.id ?? 'new'}`} checked={captureMode === 'inherit'} onChange={() => setCaptureMode('inherit')} />
+                <input type="radio" name={`capture-${existing?.id ?? 'new'}`} checked={captureMode === 'inherit'} onChange={() => set('captureMode', 'inherit')} />
                 <span>Inherit from pool ({poolHours > 0 ? `${poolHours} h` : 'off'})</span>
               </label>
               <label className={`radio-list__item ${captureMode === 'override' ? 'is-active' : ''}`}>
-                <input type="radio" name={`capture-${existing?.id ?? 'new'}`} checked={captureMode === 'override'} onChange={() => setCaptureMode('override')} />
+                <input type="radio" name={`capture-${existing?.id ?? 'new'}`} checked={captureMode === 'override'} onChange={() => set('captureMode', 'override')} />
                 <span className="row">
                   Override:
                   <Input
@@ -847,8 +825,8 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
                     min={1}
                     max={captureMaxHours}
                     value={captureHours}
-                    onChange={(e) => setCaptureHours(e.target.value)}
-                    onFocus={() => setCaptureMode('override')}
+                    onChange={(e) => set('captureHours', e.target.value)}
+                    onFocus={() => set('captureMode', 'override')}
                     style={{ flex: 1 }}
                     aria-label="Capture hours for this key"
                     aria-invalid={invalid('Capture hours for this key')}
@@ -857,7 +835,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
                 </span>
               </label>
               <label className={`radio-list__item ${captureMode === 'off' ? 'is-active' : ''}`}>
-                <input type="radio" name={`capture-${existing?.id ?? 'new'}`} checked={captureMode === 'off'} onChange={() => setCaptureMode('off')} />
+                <input type="radio" name={`capture-${existing?.id ?? 'new'}`} checked={captureMode === 'off'} onChange={() => set('captureMode', 'off')} />
                 <span>Off for this key</span>
               </label>
             </div>
@@ -874,7 +852,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
       open={open}
       onClose={onClose}
       title={existing ? `Edit ${existing.name}` : 'Create key'}
-      unsaved={!sameValues(current, opened)}
+      unsaved={!sameValues(form, opened)}
       railLabel="Key settings"
       groups={groups}
       chosen={chosen}
