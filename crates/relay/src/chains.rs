@@ -14,6 +14,8 @@ const STATIC_SEED: &[u8] = b"phoebis-static-chain-v1";
 const MESSAGE_SEED: &[u8] = b"phoebis-message-chain-v1";
 const ATTRIBUTION_PREFIX: &str = "x-anthropic-billing-header: ";
 
+type Link = sha2::digest::Output<Sha256>;
+
 /// The two cumulative boundary-hash chains of a request body, lowercase hex, computed on the client's bytes.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Chains {
@@ -40,25 +42,26 @@ impl Chains {
         let mut static_boundaries = Vec::new();
         let mut static_sizes = Vec::new();
         let mut running_bytes: u64 = 0;
-        let mut previous = Sha256::digest(STATIC_SEED).to_vec();
-        let (next, len) = boundary(&previous, tools);
+        let mut scratch = Vec::new();
+        let mut previous = Sha256::digest(STATIC_SEED);
+        let (next, len) = boundary(&previous, tools, &mut scratch);
         previous = next;
         running_bytes += len;
-        static_boundaries.push(hex(&previous));
+        static_boundaries.push(format!("{previous:x}"));
         static_sizes.push(running_bytes / 4);
         for block in system_blocks(root.get("system")) {
-            let (next, len) = boundary(&previous, block);
+            let (next, len) = boundary(&previous, block, &mut scratch);
             previous = next;
             running_bytes += len;
-            static_boundaries.push(hex(&previous));
+            static_boundaries.push(format!("{previous:x}"));
             static_sizes.push(running_bytes / 4);
         }
         let mut message_boundaries = Vec::new();
-        let mut previous = Sha256::digest(MESSAGE_SEED).to_vec();
+        let mut previous = Sha256::digest(MESSAGE_SEED);
         if let Some(Value::Array(messages)) = root.get("messages") {
             for message in messages {
-                previous = boundary(&previous, message).0;
-                message_boundaries.push(hex(&previous));
+                previous = boundary(&previous, message, &mut scratch).0;
+                message_boundaries.push(format!("{previous:x}"));
             }
         }
         Some(Chains {
@@ -109,24 +112,24 @@ fn write_canonical(value: &Value, out: &mut Vec<u8>, place: Place) {
     match value {
         Value::Object(map) => {
             out.push(b'{');
-            let mut keys: Vec<&str> = map
-                .keys()
-                .map(String::as_str)
-                .filter(|k| *k != "cache_control")
+            let mut members: Vec<(&str, &Value)> = map
+                .iter()
+                .map(|(key, member)| (key.as_str(), member))
+                .filter(|(key, _)| *key != "cache_control")
                 .collect();
-            keys.sort_unstable();
-            for (i, key) in keys.iter().enumerate() {
+            members.sort_unstable_by_key(|(key, _)| *key);
+            for (i, (key, member)) in members.into_iter().enumerate() {
                 if i > 0 {
                     out.push(b',');
                 }
                 serde_json::to_writer(&mut *out, key).expect("a JSON key always encodes");
                 out.push(b':');
-                let below = match (place, *key) {
+                let below = match (place, key) {
                     (Place::Entry, "content") => Place::EntryContent,
                     (Place::Block, "content") => Place::BlockContent,
                     _ => Place::Deeper,
                 };
-                write_canonical(&map[*key], out, below);
+                write_canonical(member, out, below);
             }
             out.push(b'}');
         }
@@ -190,18 +193,14 @@ fn kept_text_blocks(items: &[Value]) -> Option<&[Value]> {
 
 /// One link of a chain: the digest of the previous boundary's bytes and the block's canonical form, plus the
 /// canonical byte length the static chain's promised-size estimate needs, so a caller never canonicalizes the
-/// same block twice.
-fn boundary(previous: &[u8], block: &Value) -> (Vec<u8>, u64) {
-    let mut bytes = Vec::new();
-    canonical(block, &mut bytes);
+/// same block twice. `scratch` holds the canonical form, cleared first, so one buffer serves a whole chain.
+fn boundary(previous: &Link, block: &Value, scratch: &mut Vec<u8>) -> (Link, u64) {
+    scratch.clear();
+    canonical(block, scratch);
     let mut hasher = Sha256::new();
     hasher.update(previous);
-    hasher.update(&bytes);
-    (hasher.finalize().to_vec(), bytes.len() as u64)
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    hasher.update(&*scratch);
+    (hasher.finalize(), scratch.len() as u64)
 }
 
 /// `system`'s blocks in the order the static chain hashes them: a string is one block, an array's own blocks in
