@@ -46,6 +46,20 @@ struct AccountRecordV1 {
     request_id: Option<String>,
 }
 
+/// `RecordV1` borrowed from an entry, so a flush serializes under the memory lock without copying the entry
+/// first. The members keep `RecordV1`'s names and order, which every reader decodes by.
+#[derive(serde::Serialize)]
+struct RecordV1Ref<'a> {
+    accounts: HashMap<&'a str, AccountRecordV1Ref<'a>>,
+    prompt_id: Option<&'a str>,
+}
+
+#[derive(serde::Serialize)]
+struct AccountRecordV1Ref<'a> {
+    message_ids: &'a HashMap<String, String>,
+    request_id: Option<&'a str>,
+}
+
 /// A field or beta the relay inserted on its own; what a 400 rule strips and a latch names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Injected {
@@ -94,21 +108,21 @@ impl Entry {
     /// The entry's own `last_seen` is the record's, never a flush clock: a save that recovers after an outage
     /// must not stamp an expired entry fresh.
     fn record(&self) -> MemoryRecord {
-        let v1 = RecordV1 {
+        let v1 = RecordV1Ref {
             accounts: self
                 .accounts
                 .iter()
                 .map(|(id, a)| {
                     (
-                        id.clone(),
-                        AccountRecordV1 {
-                            message_ids: a.message_ids.clone(),
-                            request_id: a.request_id.clone(),
+                        id.as_str(),
+                        AccountRecordV1Ref {
+                            message_ids: &a.message_ids,
+                            request_id: a.request_id.as_deref(),
                         },
                     )
                 })
                 .collect(),
-            prompt_id: self.prompt_id.clone(),
+            prompt_id: self.prompt_id.as_deref(),
         };
         MemoryRecord {
             record_version: RECORD_VERSION,
