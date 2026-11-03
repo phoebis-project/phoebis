@@ -2,7 +2,7 @@ import { Fragment, useMemo } from 'react';
 import type { SubscriptionCosts } from '@/api/types';
 import { useFormatVersion } from '@/app/settings';
 import { Card } from '@/components/ui/primitives';
-import { bandCaption, bandNow, bandSentence, bandWeek, hhmm, nextLocalChange, partsIn, regimeNames, regimeWord, zoneCity } from '@/lib/costs';
+import { bandCaption, bandNow, bandSentence, bandWeek, COST_WINDOWS, hhmm, nextLocalChange, partsIn, regimeNames, regimeWord, zoneCity } from '@/lib/costs';
 import { figure, fmtPct, fmtShortTime, getTimeFormat, viewingZone } from '@/lib/format';
 import { MINUTE } from '@/lib/time';
 
@@ -36,10 +36,7 @@ export const nowLine = (costs: SubscriptionCosts, now: number): string => {
 const shareCost = (factor: number) => `${figure(1 / factor)}x`;
 const factorText = (factor: number) => (factor === 1 ? `no band, holds ${fmtPct(factor)}` : `holds ${fmtPct(factor)}, a share costs ${shareCost(factor)}`);
 
-const FACTOR_WINDOWS: { key: 'fiveHour' | 'sevenDay'; label: string }[] = [
-  { key: 'fiveHour', label: '5-hour window' },
-  { key: 'sevenDay', label: '7-day window' },
-];
+const FACTOR_WINDOWS = COST_WINDOWS.map((w) => ({ key: w.factor, label: `${w.label} window` }));
 
 const HOUR_TICKS = [0, 3, 6, 9, 12, 15, 18, 21, 24];
 // Past 20:00 the now marker's label would run off the track's end, so it sits on the marker's left.

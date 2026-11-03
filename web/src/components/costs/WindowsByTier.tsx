@@ -1,14 +1,11 @@
 import { useState } from 'react';
 import type { SubscriptionCosts } from '@/api/types';
 import { Card, Segmented } from '@/components/ui/primitives';
-import { anchorTier, fullWindowsAWeek, regimeNames, regimeTitle, regimeWord, smallestTier, tierCapacity, withRegime, type CostWindow } from '@/lib/costs';
+import { anchorTier, COST_WINDOWS, fullWindowsAWeek, regimeNames, regimeTitle, regimeWord, sizedTiers, smallestTier, tierCapacity, withRegime, type CostWindow } from '@/lib/costs';
 import { figure, fmtInt, fmtShare } from '@/lib/format';
 import { planLabel } from '@/lib/quota';
 
-const WINDOWS: { factor: 'fiveHour' | 'sevenDay'; key: CostWindow; short: string }[] = [
-  { factor: 'fiveHour', key: 'five_hour', short: '5-hour' },
-  { factor: 'sevenDay', key: 'seven_day', short: '7-day' },
-];
+const WINDOWS = COST_WINDOWS.map((w) => ({ factor: w.factor, key: w.key, short: w.label }));
 
 /** The band control both tabs share: the peak band's state a figure is read in, outside the band until switched.
  *  `unreachable` disables the state no instant reaches, under its title. */
@@ -34,7 +31,7 @@ export function BandSwitch({ inside, onChange, unreachable = null }: { inside: b
  *  the smallest tier's under the Headless row, each tier's week counted in full 5-hour windows. */
 export function WindowsByTier({ costs }: { costs: SubscriptionCosts }) {
   const [inside, setInside] = useState(false);
-  const tiers = Object.keys(costs.capacity).filter((tier) => WINDOWS.some((w) => tierCapacity(costs, tier, w.key) !== null));
+  const tiers = sizedTiers(costs);
   // A tier the regime names with neither window sized still gets its row, since the regime prices it unsized.
   const regimes = regimeNames(costs).map((name) => ({ model: withRegime(costs, name), name, tiers: Object.keys(costs.regimes[name].capacity) }));
   // One scale for every row the card draws, so a regime's window reads against the base's in the bar's length.

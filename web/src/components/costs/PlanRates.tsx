@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { ModelPrice, SubscriptionCosts } from '@/api/types';
 import { Input, Segmented } from '@/components/ui/primitives';
-import { anchorTier, bandNow, MODEL_WEEK_TIERS, modelWeeks, regimeNames, regimeTitle, regimeWord, shareIn, tierCapacity, tierGroups, unreachableBand, weightedWindows, weightOf, withRegime, type CostWindow, type TokenType, type Usage } from '@/lib/costs';
+import { anchorTier, bandNow, COST_WINDOWS, MODEL_WEEK_TIERS, modelWeeks, regimeNames, regimeTitle, regimeWord, shareIn, sizedTiers, tierGroups, unreachableBand, weightedWindows, weightOf, withRegime, type TokenType, type Usage } from '@/lib/costs';
 import { lookup } from '@/lib/counts';
 import { figure, fmtShare, undatedModel, upperFirst } from '@/lib/format';
 import { planLabel } from '@/lib/quota';
@@ -15,10 +15,7 @@ export const TOKEN_TYPES: { key: TokenType; label: string }[] = [
   { key: 'cacheWrite1h', label: 'Write 1h' },
   { key: 'output', label: 'Output' },
 ];
-const WINDOWS: { key: CostWindow; label: string }[] = [
-  { key: 'five_hour', label: '5-hour window' },
-  { key: 'seven_day', label: '7-day window' },
-];
+const WINDOWS = COST_WINDOWS.map((w) => ({ key: w.key, label: `${w.label} window` }));
 /** In millions: one click per decade, where the spinner's arrows step 100,000 tokens. */
 const PICKS = [0.1, 1, 10];
 /** "1M", "2.5M", "100k". */
@@ -49,7 +46,7 @@ export function FoldRow({ cols, count, onToggle, open }: { cols: number; count: 
  */
 export function PlanRates({ costs, now, olderOpen, onToggleOlder, prices }: { costs: SubscriptionCosts; now: number; olderOpen: boolean; onToggleOlder: () => void; prices: ModelPrice[] }) {
   // The anchor's tier first, since every figure the console prints is a share of its week, then the file's order.
-  const sized = Object.keys(costs.capacity).filter((tier) => WINDOWS.some((w) => tierCapacity(costs, tier, w.key) !== null));
+  const sized = sizedTiers(costs);
   const tiers = [...sized.filter((tier) => tier === anchorTier(costs)), ...sized.filter((tier) => tier !== anchorTier(costs))];
   const [tier, setTier] = useState(() => anchorTier(costs));
   const regimes = regimeNames(costs);

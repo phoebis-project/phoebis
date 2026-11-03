@@ -1,10 +1,11 @@
-import type { Attempt, ModelTiers, SubscriptionCosts, TypeMultiplier } from '@/api/types';
+import type { Attempt, ModelTiers, SubscriptionCosts, TypeMultiplier, WindowFactors } from '@/api/types';
 import type { WeekReading } from '@/lib/analytics';
 import { has, lookup } from '@/lib/counts';
 import { formatIn, listWords, undatedModel } from '@/lib/format';
 import { planLabel } from '@/lib/quota';
 import { DAY, HOUR, MINUTE } from '@/lib/time';
 import { WEEK_TIER, type WeekPosition } from '@/lib/unit';
+import { WINDOW_LABEL } from '@/lib/windows';
 
 /**
  * The share rule of the subscription cost model, the console's one copy of what the ledger prices: a token costs the
@@ -13,6 +14,13 @@ import { WEEK_TIER, type WeekPosition } from '@/lib/unit';
  */
 
 export type CostWindow = 'five_hour' | 'seven_day';
+/** The two windows the cost model sizes, as the cost views draw them: each window's key, the key of its peak capacity
+ *  factor and its label. */
+export const COST_WINDOWS: readonly { factor: keyof WindowFactors; key: CostWindow; label: string }[] = [
+  { factor: 'fiveHour', key: 'five_hour', label: WINDOW_LABEL['5h'] },
+  { factor: 'sevenDay', key: 'seven_day', label: WINDOW_LABEL['7d'] },
+];
+const factorKey = (window: CostWindow): keyof WindowFactors => COST_WINDOWS.find((w) => w.key === window)?.factor ?? 'sevenDay';
 export type TokenType = keyof TypeMultiplier;
 export interface Usage { cacheRead: number; cacheWrite1h: number; cacheWrite5m: number; input: number; output: number }
 
@@ -28,7 +36,9 @@ export const tierRow = (costs: SubscriptionCosts, tier: string): SubscriptionCos
   return key === undefined ? undefined : costs.capacity[key];
 };
 
-export const tierCapacity = (costs: SubscriptionCosts, tier: string, window: CostWindow): number | null => tierRow(costs, tier)?.[window === 'five_hour' ? 'fiveHour' : 'sevenDay'] ?? null;
+export const tierCapacity = (costs: SubscriptionCosts, tier: string, window: CostWindow): number | null => tierRow(costs, tier)?.[factorKey(window)] ?? null;
+/** The tiers the cost model sizes on either window, in the file's order. */
+export const sizedTiers = (costs: SubscriptionCosts): string[] => Object.keys(costs.capacity).filter((tier) => COST_WINDOWS.some((w) => tierCapacity(costs, tier, w.key) !== null));
 
 /** The shared window `window` prices on and the model-week divisor, as the ledger reads it; null for no plan window. */
 export const pricedWindow = (costs: SubscriptionCosts, window: string): { divisor: number; priced: CostWindow } | null => {
@@ -168,7 +178,7 @@ export const inBand = (costs: SubscriptionCosts, at: number): boolean | null => 
 const factorOf = (costs: SubscriptionCosts, window: string, inside: boolean): number => {
   const w = pricedWindow(costs, window);
   if (w === null || !inside) return 1;
-  return 1 / costs.peak.capacityFactor[w.priced === 'five_hour' ? 'fiveHour' : 'sevenDay'];
+  return 1 / costs.peak.capacityFactor[factorKey(w.priced)];
 };
 
 /** The weight the band puts on a charge landing on `window` at `at`: the reciprocal of the priced window's capacity
