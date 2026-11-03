@@ -351,6 +351,37 @@ pub enum RouterEvent {
     },
 }
 
+impl RouterEvent {
+    fn pin_created(key: &PinKey, account_id: &str, epoch: u64, at: i64) -> RouterEvent {
+        RouterEvent::PinCreated {
+            key_id: key.key_id.clone(),
+            session_id: key.session_id.clone(),
+            agent_id: key.agent_id.clone(),
+            model: key.model.clone(),
+            account_id: account_id.to_string(),
+            epoch,
+            at,
+        }
+    }
+
+    fn pin_expired(
+        key: &PinKey,
+        account_id: &str,
+        reasons: Vec<&'static str>,
+        at: i64,
+    ) -> RouterEvent {
+        RouterEvent::PinExpired {
+            key_id: key.key_id.clone(),
+            session_id: key.session_id.clone(),
+            agent_id: key.agent_id.clone(),
+            model: key.model.clone(),
+            account_id: account_id.to_string(),
+            reasons,
+            at,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct RouterConfig {
     /// The meter's peak band at a renewal's instant: a pin's banded copy folds its tokens times it, the plain
@@ -2954,12 +2985,6 @@ impl Task {
                 // Collected rather than emitted, so the decision naming them goes out first and the ledger lands
                 // its row and its pin events in one tick.
                 let mut pin_events = Vec::new();
-                let (k, s, ag, m) = (
-                    &pin_key.key_id,
-                    &pin_key.session_id,
-                    &pin_key.agent_id,
-                    &pin_key.model,
-                );
                 let after = self.state.pin(&pin_key);
                 let now = request.now;
                 let selected = matches!(result, SelectResult::Selected(_));
@@ -2988,10 +3013,10 @@ impl Task {
                                 let (fit, runway_ms, binding) =
                                     destination_fit(&record, &new.account_id);
                                 pin_events.push(RouterEvent::PinMigrated {
-                                    key_id: k.clone(),
-                                    session_id: s.clone(),
-                                    agent_id: ag.clone(),
-                                    model: m.clone(),
+                                    key_id: pin_key.key_id.clone(),
+                                    session_id: pin_key.session_id.clone(),
+                                    agent_id: pin_key.agent_id.clone(),
+                                    model: pin_key.model.clone(),
                                     from_account: from,
                                     to_account: new.account_id.clone(),
                                     epoch: new.epoch,
@@ -3003,48 +3028,39 @@ impl Task {
                                     at: now,
                                 });
                             }
-                            None => pin_events.push(RouterEvent::PinCreated {
-                                key_id: k.clone(),
-                                session_id: s.clone(),
-                                agent_id: ag.clone(),
-                                model: m.clone(),
-                                account_id: new.account_id.clone(),
-                                epoch: new.epoch,
-                                at: now,
-                            }),
+                            None => pin_events.push(RouterEvent::pin_created(
+                                &pin_key,
+                                &new.account_id,
+                                new.epoch,
+                                now,
+                            )),
                         }
                     }
                     (Some(old), Some(new)) if old.epoch != new.epoch => {
                         if let SelectResult::Selected(selection) = &result {
                             match selection.migrated {
                                 None => {
-                                    pin_events.push(RouterEvent::PinExpired {
-                                        key_id: k.clone(),
-                                        session_id: s.clone(),
-                                        agent_id: ag.clone(),
-                                        model: m.clone(),
-                                        account_id: old.account_id.clone(),
-                                        reasons: released.clone(),
-                                        at: now,
-                                    });
-                                    pin_events.push(RouterEvent::PinCreated {
-                                        key_id: k.clone(),
-                                        session_id: s.clone(),
-                                        agent_id: ag.clone(),
-                                        model: m.clone(),
-                                        account_id: new.account_id.clone(),
-                                        epoch: new.epoch,
-                                        at: now,
-                                    });
+                                    pin_events.push(RouterEvent::pin_expired(
+                                        &pin_key,
+                                        &old.account_id,
+                                        released.clone(),
+                                        now,
+                                    ));
+                                    pin_events.push(RouterEvent::pin_created(
+                                        &pin_key,
+                                        &new.account_id,
+                                        new.epoch,
+                                        now,
+                                    ));
                                 }
                                 Some(reason) => {
                                     let (fit, runway_ms, binding) =
                                         destination_fit(&record, &new.account_id);
                                     pin_events.push(RouterEvent::PinMigrated {
-                                        key_id: k.clone(),
-                                        session_id: s.clone(),
-                                        agent_id: ag.clone(),
-                                        model: m.clone(),
+                                        key_id: pin_key.key_id.clone(),
+                                        session_id: pin_key.session_id.clone(),
+                                        agent_id: pin_key.agent_id.clone(),
+                                        model: pin_key.model.clone(),
                                         from_account: old.account_id.clone(),
                                         to_account: new.account_id.clone(),
                                         epoch: new.epoch,
@@ -3059,15 +3075,12 @@ impl Task {
                             }
                         }
                     }
-                    (Some(old), None) => pin_events.push(RouterEvent::PinExpired {
-                        key_id: k.clone(),
-                        session_id: s.clone(),
-                        agent_id: ag.clone(),
-                        model: m.clone(),
-                        account_id: old.account_id.clone(),
-                        reasons: released,
-                        at: now,
-                    }),
+                    (Some(old), None) => pin_events.push(RouterEvent::pin_expired(
+                        &pin_key,
+                        &old.account_id,
+                        released,
+                        now,
+                    )),
                     _ => {}
                 }
                 record.outcome.pin_events = pin_events.iter().filter_map(pin_event_facts).collect();
@@ -3834,15 +3847,12 @@ impl Task {
                 self.state.remove_pin(&key);
                 let ended = self.state.end_first_seen(&key.key_id, &key.session_id);
                 let now = (self.clock)();
-                self.emit(RouterEvent::PinExpired {
-                    key_id: key.key_id.clone(),
-                    session_id: key.session_id.clone(),
-                    agent_id: key.agent_id.clone(),
-                    model: key.model.clone(),
-                    account_id: current.account_id.clone(),
-                    reasons: vec!["client_error"],
-                    at: now,
-                });
+                self.emit(RouterEvent::pin_expired(
+                    &key,
+                    &current.account_id,
+                    vec!["client_error"],
+                    now,
+                ));
                 if let Some(event) = released_mark(&current, now) {
                     self.emit(event);
                 }
@@ -4488,15 +4498,12 @@ impl Task {
             });
         }
         for (row, reason) in &purged.pins {
-            self.emit(RouterEvent::PinExpired {
-                key_id: row.key_id.clone(),
-                session_id: row.session_id.clone(),
-                agent_id: row.agent_id.clone(),
-                model: row.model.clone(),
-                account_id: row.account_id.clone(),
-                reasons: vec![*reason],
-                at: now,
-            });
+            self.emit(RouterEvent::pin_expired(
+                &row.key(),
+                &row.account_id,
+                vec![*reason],
+                now,
+            ));
             if let Some(event) = released_mark(row, now) {
                 self.emit(event);
             }
