@@ -180,6 +180,20 @@ async fn a_model_spelled_only_with_an_escape_is_refused_as_missing() {
 }
 
 #[tokio::test]
+async fn a_top_level_key_that_does_not_decode_refuses_the_body() {
+    let up = FakeUpstream::start(vec![ok_rule()]).await;
+    let h = harness_restricted_to(&up, "claude-sonnet-4-5").await;
+    // A lone surrogate escape: the scanner walks the key and a decoder refuses it, so the repeat check cannot say
+    // which member it names.
+    let body = r#"{"model":"claude-sonnet-4-5","messages":[],"max_tokens":8,"\udc00":1,"metadata":{"user_id":"{\"device_id\":\"test-device\",\"account_uuid\":\"\",\"session_id\":\"s1\"}"}}"#;
+    let (status, code, text) = send(&h, "/v1/messages", body).await;
+    assert_eq!(status, 400, "{text}");
+    assert_eq!(code, "invalid_body", "{text}");
+    assert!(up.requests().is_empty(), "nothing reached the upstream");
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_second_top_level_model_is_refused_on_the_count_tokens_route_too() {
     let up = FakeUpstream::start(vec![ok_rule()]).await;
     let h = harness_restricted_to(&up, "claude-sonnet-4-5").await;
