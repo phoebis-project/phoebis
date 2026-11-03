@@ -459,6 +459,40 @@ impl Store {
         Ok(value)
     }
 
+    /// Deletes the first-seen rows of a session with no pin (an account's cascade, a lapsed failover), called by
+    /// `spawn` ahead of `load_routing`, never inside it.
+    pub fn sweep_first_seen(&self) -> Result<usize, StoreError> {
+        self.routing_commit(|conn| in_transaction(conn, |tx| sweep_first_seen_on(tx)))
+    }
+
+    pub fn purge_cooldowns_before(&self, now: i64) -> Result<usize, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        Ok(conn.execute("DELETE FROM cooldowns WHERE until < ?1", params![now])?)
+    }
+
+    /// Drops every window, window set and credits row whose incarnation is not its account's. The router's purge
+    /// tick calls it.
+    pub fn purge_stale_windows(&self) -> Result<usize, StoreError> {
+        self.routing_commit(|conn| in_transaction(conn, |tx| purge_stale_windows_on(tx)))
+    }
+
+    /// All or nothing: a crash or a failed statement part way through would leave rows under the dated id with no
+    /// spelling row to find them by after a restart, or a row deleted under the spelling and never re-inserted.
+    pub fn rekey_resolution(&self, rekey: &RekeyWrite) -> Result<(), StoreError> {
+        self.routing_commit(|conn| in_transaction(conn, |tx| rekey_resolution_on(tx, rekey)))
+    }
+
+    /// The persisted map on its own: the accessor seeds the catalog cache's published map at start.
+    pub fn resolutions(&self) -> Result<Vec<ResolutionRow>, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        all_resolutions(&conn)
+    }
+}
+
+/// Seams for the tests that write one row at a time, each its own commit, where the router's writes travel in
+/// `write_routing` batches.
+#[cfg(any(test, feature = "test-support"))]
+impl Store {
     pub fn upsert_pin(&self, pin: &PinRow) -> Result<(), StoreError> {
         self.routing_commit(|conn| in_transaction(conn, |tx| upsert_pin_on(tx, pin)))
     }
@@ -471,12 +505,6 @@ impl Store {
     /// `delete_pin` for a pin that leaves for good, one transaction.
     pub fn end_pin(&self, key: &PinKey, ended: Option<i64>) -> Result<bool, StoreError> {
         self.routing_commit(|conn| in_transaction(conn, |tx| delete_pin_on(tx, key, ended)))
-    }
-
-    /// Deletes the first-seen rows of a session with no pin (an account's cascade, a lapsed failover), called by
-    /// `spawn` ahead of `load_routing`, never inside it.
-    pub fn sweep_first_seen(&self) -> Result<usize, StoreError> {
-        self.routing_commit(|conn| in_transaction(conn, |tx| sweep_first_seen_on(tx)))
     }
 
     /// `INSERT OR REPLACE`: the router writes a record's row only when it creates the record, so a second write under
@@ -530,11 +558,6 @@ impl Store {
         self.routing_commit(|conn| delete_cooldown_on(conn, account_id, scope))
     }
 
-    pub fn purge_cooldowns_before(&self, now: i64) -> Result<usize, StoreError> {
-        let conn = self.conn.lock().expect(LOCK_POISONED);
-        Ok(conn.execute("DELETE FROM cooldowns WHERE until < ?1", params![now])?)
-    }
-
     pub fn upsert_overage(&self, row: &OverageRow) -> Result<bool, StoreError> {
         self.routing_commit(|conn| upsert_overage_on(conn, row))
     }
@@ -568,12 +591,6 @@ impl Store {
         self.routing_commit(|conn| upsert_credits_on(conn, row))
     }
 
-    /// Drops every window, window set and credits row whose incarnation is not its account's. The router's purge
-    /// tick calls it.
-    pub fn purge_stale_windows(&self) -> Result<usize, StoreError> {
-        self.routing_commit(|conn| in_transaction(conn, |tx| purge_stale_windows_on(tx)))
-    }
-
     /// Writes the pool's round on the account, replacing the one before it. `incarnation` is the account's at the
     /// round.
     pub fn replace_shed_round(
@@ -594,18 +611,6 @@ impl Store {
         self.routing_commit(|conn| {
             in_transaction(conn, |tx| purge_shed_rounds_before_on(tx, before))
         })
-    }
-
-    /// All or nothing: a crash or a failed statement part way through would leave rows under the dated id with no
-    /// spelling row to find them by after a restart, or a row deleted under the spelling and never re-inserted.
-    pub fn rekey_resolution(&self, rekey: &RekeyWrite) -> Result<(), StoreError> {
-        self.routing_commit(|conn| in_transaction(conn, |tx| rekey_resolution_on(tx, rekey)))
-    }
-
-    /// The persisted map on its own: the accessor seeds the catalog cache's published map at start.
-    pub fn resolutions(&self) -> Result<Vec<ResolutionRow>, StoreError> {
-        let conn = self.conn.lock().expect(LOCK_POISONED);
-        all_resolutions(&conn)
     }
 }
 
