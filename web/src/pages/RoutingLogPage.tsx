@@ -14,12 +14,12 @@ import { IconChevronLeft, IconChevronRight, IconChevronsLeft } from '@/component
 import { Badge, Button, Card, EmptyState, ErrorState, Skeleton, useDescription } from '@/components/ui/primitives';
 import { addressWindow, type LogFilters, ROUTING_LOG_CODEC } from '@/lib/address';
 import { clock } from '@/lib/clock';
-import { weekReadingOf } from '@/lib/costs';
+import { tierOrder, weekReadingOf } from '@/lib/costs';
 import { chipText, notLoadedReason, ROUTING_LOG_DIMENSIONS } from '@/lib/filterBar';
 import { effectiveInterval, FOLLOW_OVERRUN, type Paging, pagingFor, readEnd, spanEnded } from '@/lib/follow';
 import { fmtAbsolute, fmtDatedTime, fmtInt, fmtTime, upperFirst } from '@/lib/format';
 import { useAsync, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';
-import { ALL_KINDS, byOf, catalogModel, compareModels, compareRows, DECISION_KIND_LABEL, DECISION_KIND_TONE, entityHref, EVENT_KIND_LABEL, eventTone, factsOf, identityOf, KIND_PRESETS, type LogLink, logHref, movedFrom, registryTarget } from '@/lib/routingLog';
+import { ALL_KINDS, byOf, catalogModel, compareRows, DECISION_KIND_LABEL, DECISION_KIND_TONE, entityHref, EVENT_KIND_LABEL, eventTone, factsOf, identityOf, KIND_PRESETS, type LogLink, logHref, movedFrom, registryTarget } from '@/lib/routingLog';
 
 const PAGE_SIZE = 25;
 
@@ -57,21 +57,12 @@ export function RoutingLogPage() {
   const pools = useAsync(() => api.listPools(), []);
   const accounts = useAsync(() => api.listAccounts(), []);
   const catalog = useAsync(() => api.listCatalog(), []);
-  // `compareModels` reads the tiers the shell sets from its settings answer, which can land after the catalog. The
-  // settings' tiers are the dependency that sorts the list again when they land, and the memo reads them so its
-  // dependency list can name them.
   const { modelTiers, week } = useAppSettings();
   // The cost model whose capacities scale a shedding round's Pro-week rewrite to the chosen week. The Pro week reads
   // without it.
   const settings = useAsync(() => api.getSettings(), []);
   const reading = weekReadingOf(settings.data?.subscriptionCosts ?? null, settings.error, week);
-  const modelOptions = useMemo<Option[]>(() => {
-    void modelTiers;
-    return (catalog.data ?? [])
-      .map((m) => m.id)
-      .sort((a, b) => compareModels(a, b))
-      .map((id) => ({ label: id, value: id }));
-  }, [catalog.data, modelTiers]);
+  const modelOptions = useMemo<Option[]>(() => tierOrder((catalog.data ?? []).map((m) => m.id), modelTiers).map((id) => ({ label: id, value: id })), [catalog.data, modelTiers]);
 
   // The cursor and the pages before it belong to the address they were read under, so a filter change drops them in
   // the render that brings it, and one list request follows.

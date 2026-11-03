@@ -2,7 +2,6 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import type { ModelTiers } from '@/api/types';
 import { setTimeFormat as applyTimeFormat, type TimeFormat } from '@/lib/format';
 import { useLocalStorage, useMediaQuery } from '@/lib/hooks';
-import { setModelTiers as applyModelTiers } from '@/lib/routingLog';
 import { positionOf, weekOf, type UnitPosition, type WeekPosition } from '@/lib/unit';
 
 export type ExpertChoice = 'off' | 'on';
@@ -48,13 +47,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   const setExpertView = useCallback((on: boolean) => storeExpert(on ? 'on' : 'off'), [storeExpert]);
   const [unit, setUnit] = useLocalStorage('phoebis.unit', positionOf);
   const [week, setWeek] = useLocalStorage('phoebis.week', weekOf);
-  const [modelTiers, storeModelTiers] = useState<ModelTiers>(NO_TIERS);
-  // The routing log's comparator reads the module's pair, so it holds the new order before the context change
-  // re-renders the lists that sort through it.
-  const setModelTiers = useCallback((tiers: ModelTiers) => {
-    applyModelTiers(tiers);
-    storeModelTiers(tiers);
-  }, []);
+  const [modelTiers, setModelTiers] = useState<ModelTiers>(NO_TIERS);
   // Applied while the first render is still being built, so the timestamps below are already in the stored format.
   const [formatVersion, setFormatVersion] = useState(() => {
     applyTimeFormat(storedFormat);

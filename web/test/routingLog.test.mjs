@@ -208,6 +208,20 @@ for (const [name, row, by, facts, page] of EVENTS) {
   });
 }
 
+test("a pin reads the first placement of its second, and a failover the answer of its request's latest earlier attempt", () => {
+  const pin = event('pin_created', { agent_id: 'main', epoch: 52 }, { sessionId: 's-created' });
+  const later = decision({ at: iso(at + 700), by: strategy('pace', [0, 0, 0]), sessionId: 's-created' });
+  assert.equal(read(pin, [placement, later]).by, 'static rung', "two placements in the pin's second, the first in the page");
+  const moved = event('pin_migrated', { agent_id: 'main', epoch: 54, from_account: 'secondary', reason: 'cooldown' }, { sessionId: 's-moved' });
+  const attempt = (o) => decision({ requestId: 'req_twice', sessionId: 's-moved', ...o });
+  const attempts = [
+    attempt({ accountId: 'secondary', at: iso(at - 2_000), seq: 1, status: 529 }),
+    attempt({ accountId: 'secondary', at: iso(at - 1_000), seq: 2, status: 429 }),
+    attempt({ at: iso(at + 300), seq: 3, status: 200 }),
+  ];
+  assert.deepEqual(read(moved, attempts).facts, ['answer 429'], "two failed attempts before the one in the move's second, the later one");
+});
+
 test("a cooldown's words read the router's spellings alone, and any other reads as sent", () => {
   assert.equal(read(event('cooldown_cleared', { cause: 'deadline', scope: 'account' })).by, 'deadline', 'the router writes a cooldown that ran out as expired');
   assert.equal(read(event('cooldown_cleared', { cause: 'operator', scope: 'account' })).by, 'operator', 'and one cleared by hand as admin');
@@ -465,39 +479,10 @@ test('an auto reload poll stops at eight pages and names the cursor that reaches
   assert.equal(d.FOLLOW_OVERRUN, 'More rows arrived than auto reload could fetch. Reload to read them.');
 });
 
-// The two model tier members the shell hands the module, and the empty pair it holds before the settings answer.
+// The tier order a catalog change lists its models in, and the empty pair every other event's detail is read under,
+// since none of them reads the tiers.
 const SHIPPED_TIERS = { modelTier: {}, tierOrder: ['fable', 'opus', 'sonnet', 'haiku'] };
 const NO_TIERS = { modelTier: {}, tierOrder: [] };
-/** Runs `body` under `tiers`, then hands the module the empty pair again, so no case reads another's order. */
-const underTiers = (tiers, body) => {
-  d.setModelTiers(tiers);
-  try {
-    body();
-  } finally {
-    d.setModelTiers(NO_TIERS);
-  }
-};
-
-test("model ids order by the cost model's tier order, newest version first, a tier the order lacks last", () => {
-  const ids = ['claude-haiku-4-5-20251001', 'claude-sonnet-5', 'claude-opus-5', 'claude-fable-5-1', 'claude-sonnet-5-5', 'claude-opus-5-5', 'claude-opus-4-5-20251101', 'some-other-model'];
-  underTiers(SHIPPED_TIERS, () => {
-    assert.deepEqual([...ids].sort(d.compareModels), ['claude-fable-5-1', 'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-5-20251101', 'claude-sonnet-5-5', 'claude-sonnet-5', 'claude-haiku-4-5-20251001', 'some-other-model']);
-  });
-  underTiers({ modelTier: {}, tierOrder: ['haiku', 'fable'] }, () => {
-    assert.deepEqual([...ids].sort(d.compareModels), ['claude-haiku-4-5-20251001', 'claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-opus-5', 'claude-sonnet-5', 'claude-opus-4-5-20251101', 'some-other-model'], 'the two tiers the order names first, the rest by version and id');
-  });
-  // Before the settings answer, or under a cost model that names no tier, the version and the id alone.
-  assert.deepEqual([...ids].sort(d.compareModels), ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-fable-5-1', 'claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5-20251001', 'claude-opus-4-5-20251101', 'some-other-model']);
-});
-
-test("a model_tier entry orders a model among the tier it names, as the cost reference orders it, a dated id by its undated one", () => {
-  const tiers = { modelTier: { 'claude-opus-4-8': 'haiku' }, tierOrder: SHIPPED_TIERS.tierOrder };
-  const ids = ['claude-haiku-4-5-20251001', 'claude-opus-4-8-20260101', 'claude-sonnet-5', 'claude-opus-5', 'claude-haiku-5-5'];
-  underTiers(tiers, () => {
-    assert.deepEqual([...ids].sort(d.compareModels), ['claude-opus-5', 'claude-sonnet-5', 'claude-haiku-5-5', 'claude-opus-4-8-20260101', 'claude-haiku-4-5-20251001']);
-    assert.deepEqual([...ids].sort(d.compareModels), d.tierOrder(ids, tiers), 'one tier rule for both surfaces');
-  });
-});
 
 // The decision card's half of the vocabulary: the record's walk, candidates, folds and outcome, and the event detail.
 
@@ -969,7 +954,7 @@ test("an outcome with a cause reads it in the event card's words", () => {
   assert.deepEqual(rows(record({ outcome: { cause: marked, fromAccountId: 'secondary', kind: 'moved' } })).Cause, ['funding required by credit balance']);
   // The event card's row of the same move spells each cause alike.
   for (const [reason, cause] of [['cooldown', cooled], ['mark', marked], ['fast_lane', { cause: null, reason: 'fast_rate_limit', scope: 'fast', state: null, window: 'fast' }]]) {
-    const pair = d.detailPairs(event('pin_migrated', { agent_id: 'main', cause, epoch: 54, from_account: 'secondary', reason }), NOW, [], PRO).find((p) => p.label === 'Cause');
+    const pair = d.detailPairs(event('pin_migrated', { agent_id: 'main', cause, epoch: 54, from_account: 'secondary', reason }), NOW, [], PRO, NO_TIERS).find((p) => p.label === 'Cause');
     assert.deepEqual(texts(pair.chips), rows(record({ outcome: { cause, kind: 'placed' } })).Cause, reason);
   }
   assert.equal(rows(record({ outcome: { cause: null, kind: 'placed' } })).Cause, undefined, 'an outcome with no cause draws no Cause row');
@@ -1067,7 +1052,7 @@ test('every event kind has its detail pairs starting with When, Account and Pool
   assert.deepEqual(Object.keys(DETAIL_EVENTS).sort(), Object.keys(d.EVENT_KIND_LABEL).sort());
   for (const [kind, [detail, own]] of Object.entries(DETAIL_EVENTS)) {
     const row = event(kind, detail, { actor: 'admin', agentId: 'main', keyId: 'desktop', model: 'claude-haiku-4-5-20251001', poolId: 'all', requestId: 'req_1', sessionId: 's1-0000-4000' });
-    const pairs = d.detailPairs(row, NOW, [], PRO);
+    const pairs = d.detailPairs(row, NOW, [], PRO, NO_TIERS);
     assert.deepEqual(pairs.slice(0, 3).map((p) => [p.label, texts(p.chips)]), [['When', [d.fmtAbsolute(iso(ms(14, 0)))]], ['Account', ['primary']], ['Pool', ['all']]], kind);
     assert.deepEqual(pairs[1].chips[0].entity, { id: 'primary', kind: 'account' }, kind);
     assert.deepEqual(pairs[2].chips[0].entity, { id: 'all', kind: 'pool' }, kind);
@@ -1076,17 +1061,17 @@ test('every event kind has its detail pairs starting with When, Account and Pool
     for (const p of pairs) for (const c of p.chips) assert.ok(p.label === 'When' || !/(?<!\d),|,(?!\d)|;/.test(chipText(c)), `${kind} ${p.label}: ${chipText(c)}`);
   }
   // A mark's move is a failover, and its cause reads in the account state card's words.
-  const marked = Object.fromEntries(d.detailPairs(event('pin_migrated', DETAIL_EVENTS.pin_migrated[0]), NOW, [], PRO).map((p) => [p.label, texts(p.chips)]));
+  const marked = Object.fromEntries(d.detailPairs(event('pin_migrated', DETAIL_EVENTS.pin_migrated[0]), NOW, [], PRO, NO_TIERS).map((p) => [p.label, texts(p.chips)]));
   assert.deepEqual([marked.Reason, marked.Cause, marked['Moved by']], [[d.PIN_MIGRATION_LABEL.mark], ['funding required by credit balance'], ['failover']]);
-  const without = d.detailPairs(event('router_started', { pins_loaded: 10 }, { accountId: null }), NOW, [], PRO);
+  const without = d.detailPairs(event('router_started', { pins_loaded: 10 }, { accountId: null }), NOW, [], PRO, NO_TIERS);
   assert.deepEqual(without.slice(0, 2).map((p) => p.label), ['When', 'Pins loaded']);
-  const round = d.detailPairs(event('shedding_round', DETAIL_EVENTS.shedding_round[0]), NOW, [], PRO).find((p) => p.label === 'Pins');
+  const round = d.detailPairs(event('shedding_round', DETAIL_EVENTS.shedding_round[0]), NOW, [], PRO, NO_TIERS).find((p) => p.label === 'Pins');
   assert.deepEqual(round.table.head, ['Session', 'Agent', 'Warmth', 'Burn', 'Last prompt', 'Rewrite', 'Destination', 'Mark']);
   assert.deepEqual(round.table.rows.map((r) => r.map(chipText)), [
     ['s1', 'c21e', 'cold', '7.0 %/h', '48.1K', '0.5% of 20x 7-day Fable', 'secondary', 'marked'],
     ['s2', 'd93b', 'warm', '-', '48K', '-', '-', 'off window'],
   ]);
-  const restart = d.detailPairs(event('shedding_round', DETAIL_EVENTS.shedding_round[0]), NOW, [], PRO).find((p) => p.label === 'Survive a restart');
+  const restart = d.detailPairs(event('shedding_round', DETAIL_EVENTS.shedding_round[0]), NOW, [], PRO, NO_TIERS).find((p) => p.label === 'Survive a restart');
   assert.deepEqual(texts(restart.chips), ['persisted']);
 });
 
@@ -1095,7 +1080,7 @@ test("a round's off-window pin reads its word and the rewrite cell names its uni
   // A round that names no rewrite unit is an earlier build's, whose figure prints as stored under any chosen week, so
   // the cells read under the Ultra week, whose scale would shrink a converted figure.
   const drawn = (body) => {
-    const pairs = d.detailPairs(event('shedding_round', body), NOW, [], ULTRA);
+    const pairs = d.detailPairs(event('shedding_round', body), NOW, [], ULTRA, NO_TIERS);
     return { rows: pairs.find((p) => p.label === 'Pins').table.rows.map((r) => [chipText(r[5]), chipText(r[7])]), skipped: texts(pairs.find((p) => p.label === 'Skipped')?.chips ?? []) };
   };
   // The Fable pin's rewrite is its week's 20x equivalent, and the Opus pin, which draws no 7-day Fable window, sat out.
@@ -1115,7 +1100,7 @@ test("a round's Pro-week rewrite reads in the chosen week, titled with the windo
   const detail = { ...DETAIL_EVENTS.shedding_round[0], rewrite_unit: 'pro_week' };
   const pin = { ...detail.pins[0], rewrite: 0.0222 };
   const cell = (p, week) => {
-    const c = d.detailPairs(event('shedding_round', { ...detail, pins: [p] }), NOW, [], week).find((x) => x.label === 'Pins').table.rows[0][5];
+    const c = d.detailPairs(event('shedding_round', { ...detail, pins: [p] }), NOW, [], week, NO_TIERS).find((x) => x.label === 'Pins').table.rows[0][5];
     return [chipText(c), c.title ?? null];
   };
   // The Ultra week holds twenty Pro weeks on the test tables, so 2.22% of a Pro week is 0.111% of an Ultra week.
@@ -1127,7 +1112,7 @@ test("a round's Pro-week rewrite reads in the chosen week, titled with the windo
 test("a round's Pro-week rewrite whose pin names no window still reads in the chosen week, with no hover", () => {
   const detail = { ...DETAIL_EVENTS.shedding_round[0], rewrite_unit: 'pro_week' };
   const pin = { ...detail.pins[0], rewrite: 0.0222, rewrite_window: null };
-  const c = d.detailPairs(event('shedding_round', { ...detail, pins: [pin] }), NOW, [], ULTRA).find((x) => x.label === 'Pins').table.rows[0][5];
+  const c = d.detailPairs(event('shedding_round', { ...detail, pins: [pin] }), NOW, [], ULTRA, NO_TIERS).find((x) => x.label === 'Pins').table.rows[0][5];
   // The pick compared the pin on no window of its own, and its 2.22% of a Pro week is still 0.111% of an Ultra week.
   assert.deepEqual([chipText(c), c.title ?? null], ['0.111% Ultra week', null]);
 });
@@ -1135,7 +1120,7 @@ test("a round's Pro-week rewrite whose pin names no window still reads in the ch
 test("a round's Pro-week rewrite waits on the week's scale, and a failed settings read titles its dash with the error", () => {
   const detail = { ...DETAIL_EVENTS.shedding_round[0], rewrite_unit: 'pro_week' };
   const cell = (week) => {
-    const c = d.detailPairs(event('shedding_round', detail), NOW, [], week).find((x) => x.label === 'Pins').table.rows[0][5];
+    const c = d.detailPairs(event('shedding_round', detail), NOW, [], week, NO_TIERS).find((x) => x.label === 'Pins').table.rows[0][5];
     return [chipText(c), c.title ?? null];
   };
   assert.deepEqual(cell({ failure: null, scale: null, week: 'ultra' }), ['-', null]);
@@ -1149,7 +1134,7 @@ test("an approved account's booking names its 7-day reservation in the strip's r
 });
 
 test('a cleared window reads its readings before and after, its unchanged reset and its source, and nothing of why', () => {
-  const pairs = (detail) => Object.fromEntries(d.detailPairs(event('window_cleared', detail), NOW, [], PRO).map((p) => [p.label, texts(p.chips)]));
+  const pairs = (detail) => Object.fromEntries(d.detailPairs(event('window_cleared', detail), NOW, [], PRO, NO_TIERS).map((p) => [p.label, texts(p.chips)]));
   assert.deepEqual(pairs(DETAIL_EVENTS.window_cleared[0]), {
     When: [d.fmtAbsolute(iso(ms(14, 0)))],
     Account: ['primary'],
@@ -1167,7 +1152,7 @@ test('a cleared window reads its readings before and after, its unchanged reset 
 });
 
 test('the two slow-down events read their pairs and effects', () => {
-  const pairs = (kind, detail) => Object.fromEntries(d.detailPairs(event(kind, detail, { poolId: 'work' }), NOW, [], PRO).map((p) => [p.label, texts(p.chips)]));
+  const pairs = (kind, detail) => Object.fromEntries(d.detailPairs(event(kind, detail, { poolId: 'work' }), NOW, [], PRO, NO_TIERS).map((p) => [p.label, texts(p.chips)]));
   const started = pairs('slow_down_started', { demand: 0.12, factor: 0.5, reset: ms(18, 20), stretch_ms: 2_520_000, threshold_ms: 1_800_000 });
   assert.deepEqual(started, {
     When: [d.fmtAbsolute(iso(ms(14, 0)))],
@@ -1194,6 +1179,7 @@ test("a round's Trigger reads the stretch under the slow-down, its Demand pair t
         NOW,
         [],
         PRO,
+        NO_TIERS,
       ).map((p) => [p.label, texts(p.chips)]),
     );
   // Under the slow-down the horizon is the reset less the threshold, so the reset reads the horizon put back.
@@ -1216,7 +1202,7 @@ test('a mark healed under the threshold says so', () => {
       { type: 'event', account_id: 'secondary', actor: null, agent_id: 'main', at: ms(14, 20), detail: { agent_id: 'main', marked_at: ms(13, 0), marked_on: 'secondary', marked_window: 'five_hour', projection: 0.91, reason: 'healed', stretch_ms: null, threshold_ms: null }, id: 32, key_id: 'desktop', kind: 'mark_cleared', model: 'claude-sonnet-5-5', pool_id: 'all', request_id: null, session_id: 's2-0000-4000' },
     ],
   });
-  const reason = (row) => texts(d.detailPairs(row, NOW, [], PRO).find((p) => p.label === 'Reason').chips);
+  const reason = (row) => texts(d.detailPairs(row, NOW, [], PRO, NO_TIERS).find((p) => p.label === 'Reason').chips);
   // The detail's own threshold, 45 minutes here, since the pool's setting may have moved since the heal.
   assert.deepEqual(reason(page.rows[0]), ['healed: the stretch read 24 min under the threshold 45 min']);
   assert.deepEqual(reason(page.rows[1]), ['healed: the 5h projection read 91% under the ceiling']);
@@ -1226,7 +1212,7 @@ test("a shedding round's rates read share per hour of the window that fired: the
   const fixture = d.decodeRoutingLogPage(JSON.parse(readFileSync(new URL('./fixtures/routing_log.json', import.meta.url), 'utf8')).body);
   const round = fixture.rows.find((r) => r.type === 'event' && r.kind === 'shedding_round');
   const drawn = (row) => {
-    const pairs = d.detailPairs(row, NOW, [], PRO);
+    const pairs = d.detailPairs(row, NOW, [], PRO, NO_TIERS);
     return { cap: texts(pairs.find((p) => p.label === 'Cap').chips), pins: pairs.find((p) => p.label === 'Pins').table.rows.map((r) => chipText(r[3])), share: pairs.some((p) => p.label === 'Share'), unit: texts(pairs.find((p) => p.label === 'Unit').chips) };
   };
   // The router's row: a cap of 0.2, a target of 0.024 an hour, and a pin of 0.07 an hour that is the whole burn removed.
@@ -1240,7 +1226,7 @@ test("a shedding round's rates read share per hour of the window that fired: the
 test('a failed usage poll and a stream cut after its head read their presets and their pairs', () => {
   const presetOf = (kind) => d.KIND_PRESETS.find((p) => p.members.includes(kind))?.label;
   assert.deepEqual([presetOf('poll_failed'), presetOf('stream_interrupted')], ['account state and windows', 'exhaustion and refusals']);
-  const pairs = (kind, detail, o) => d.detailPairs(event(kind, detail, o), NOW, [], PRO).map((p) => [p.label, texts(p.chips)]);
+  const pairs = (kind, detail, o) => d.detailPairs(event(kind, detail, o), NOW, [], PRO, NO_TIERS).map((p) => [p.label, texts(p.chips)]);
   // A transport failure answered no status, so the pair says what failed in its place.
   assert.deepEqual(pairs('poll_failed', { endpoint: 'profile', error: 'transport: connection refused (os error 111)', status: null, transport: true }).slice(1), [
     ['Account', ['primary']],
@@ -1264,14 +1250,14 @@ test('a failed usage poll and a stream cut after its head read their presets and
     ['Upstream request', ['req_011CUcut_7a']],
     ['Attempt', ['2']],
   ]);
-  const request = d.detailPairs(event('stream_interrupted', cut, own), NOW, [], PRO).find((p) => p.label === 'Request').chips[0];
+  const request = d.detailPairs(event('stream_interrupted', cut, own), NOW, [], PRO, NO_TIERS).find((p) => p.label === 'Request').chips[0];
   assert.equal(request.href, '/requests/req_5e2f7a19-b03');
   assert.deepEqual(pairs('stream_interrupted', { ...cut, upstream_request_id: null }, own).map(([label]) => label).slice(2), ['Request', 'Code', 'Text', 'Bytes relayed', 'Attempt'], 'a head with no request id draws no Upstream request');
 });
 
 test("a stream cut's code prints in the mono face, as the request drawer's Error row prints it", () => {
   const cut = { attempt: 2, bytes_relayed: 18_432, code: 'stream_stalled', text: 'no chunk for 30 s', upstream_request_id: 'req_011CUcut_7a' };
-  const code = d.detailPairs(event('stream_interrupted', cut, { requestId: 'req_5e2f7a19-b03' }), NOW, [], PRO).find((p) => p.label === 'Code').chips;
+  const code = d.detailPairs(event('stream_interrupted', cut, { requestId: 'req_5e2f7a19-b03' }), NOW, [], PRO, NO_TIERS).find((p) => p.label === 'Code').chips;
   assert.deepEqual(code.map((c) => [c.value, c.mono === true]), [['stream_stalled', true]]);
 });
 
@@ -1284,7 +1270,7 @@ test("an ended plan and its return read their words, their preset and the read's
   // The router's two rows on the fixture's account, as the routing log route answers them.
   const fixture = d.decodeRoutingLogPage(JSON.parse(readFileSync(new URL('./fixtures/routing_log.json', import.meta.url), 'utf8')).body);
   const rowOf = (kind) => fixture.rows.find((r) => r.type === 'event' && r.kind === kind);
-  const pairs = (row) => d.detailPairs(row, NOW, [], PRO).map((p) => [p.label, texts(p.chips)]);
+  const pairs = (row) => d.detailPairs(row, NOW, [], PRO, NO_TIERS).map((p) => [p.label, texts(p.chips)]);
   assert.deepEqual(pairs(rowOf('plan_ended')).slice(1), [
     ['Account', ['business']],
     ['Source', ['usage 403']],
@@ -1311,7 +1297,7 @@ test("a round that walked no pin and left one out off the window that fired read
     pins: [pin({ model: 'claude-fable-5-1', note: 'current', session_id: '89cd1c92-5f0e', skip: 'fast_lane' }), pin({})], projection: 0.97, reason: 'off_window', removed: 0, shed_cap: 0.5, target: 0,
     unit: 'window_share', utilization: 0.65, warm_sessions: 'when_needed', window: 'seven_day_fable',
   };
-  const outcome = d.detailPairs(event('shedding_round', detail), NOW, [], PRO).find((p) => p.label === 'Outcome');
+  const outcome = d.detailPairs(event('shedding_round', detail), NOW, [], PRO, NO_TIERS).find((p) => p.label === 'Outcome');
   // Guards: the Outcome row prints any reason through its words, and an unknown word reads neutral.
   assert.deepEqual(texts(outcome.chips), ['nothing to mark: off window']);
   assert.equal(d.verdictTone('off_window'), 'neutral');
@@ -1319,7 +1305,7 @@ test("a round that walked no pin and left one out off the window that fired read
 });
 
 test('the pin moved, shedding round, cleared mark and expired reservation details read their pairs', () => {
-  const pairs = (kind, detail, o) => Object.fromEntries(d.detailPairs(event(kind, detail, { requestId: 'req_1', sessionId: 's1-0000-4000', ...o }), NOW, [], PRO).map((p) => [p.label, p.table ? p.table : texts(p.chips)]));
+  const pairs = (kind, detail, o) => Object.fromEntries(d.detailPairs(event(kind, detail, { requestId: 'req_1', sessionId: 's1-0000-4000', ...o }), NOW, [], PRO, NO_TIERS).map((p) => [p.label, p.table ? p.table : texts(p.chips)]));
   const moved = (more) => pairs('pin_migrated', { agent_id: 'main', epoch: 53, from_account: 'secondary', reason: 'shed', ...more });
   assert.deepEqual([moved({ binding: 'five_hour', fit: 'fits', runway_ms: 7_800_000 })['Destination fit'], moved({ binding: 'five_hour', fit: 'fits', runway_ms: 7_800_000 }).Runway], [['fits'], ['2 h 10 min']]);
   assert.deepEqual([moved({ binding: 'five_hour', fit: 'least_bad', runway_ms: 0 })['Destination fit'], moved({ binding: 'five_hour', fit: 'least_bad', runway_ms: 0 }).Runway], [['least bad'], ['none']]);
@@ -1362,6 +1348,7 @@ test('the pin moved, shedding round, cleared mark and expired reservation detail
         NOW,
         [],
         PRO,
+        NO_TIERS,
       ).map((p) => [p.label, p.table ? p.table.rows.map((r) => r.map(chipText)) : texts(p.chips)]),
     );
   const share = legacy('window_share');
@@ -1460,7 +1447,7 @@ test('the settings fold lists twenty-four rows, draws the five as not recorded o
 });
 
 test('the event detail draws the pairs its event carries: the effect, the meaning, the reading and the backoff span', () => {
-  const pairs = (kind, detail, o) => Object.fromEntries(d.detailPairs(event(kind, detail, o), NOW, [], PRO).map((p) => [p.label, texts(p.chips)]));
+  const pairs = (kind, detail, o) => Object.fromEntries(d.detailPairs(event(kind, detail, o), NOW, [], PRO, NO_TIERS).map((p) => [p.label, texts(p.chips)]));
   assert.deepEqual(pairs('account_state_changed', { cause: 'funding_refused', detail: null, from: 'ready', to: 'funding_required' }).Effect, ['the account leaves every eligible set until funded']);
   assert.deepEqual(pairs('account_state_changed', { cause: 'deleted', detail: null, from: 'ready', to: 'deleted' }).Effect, ['the account left the registry and this is its last row']);
   assert.deepEqual(pairs('account_state_changed', { cause: 'operator', detail: null, from: 'funding_required', to: 'ready' }).Effect, ['the account joins the eligible sets']);
@@ -1479,7 +1466,7 @@ test('the event detail draws the pairs its event carries: the effect, the meanin
 });
 
 test("a backoff's close reads by its cause, and a window reset names where the reset was read from", () => {
-  const pairs = (kind, detail) => d.detailPairs(event(kind, detail), NOW, [], PRO).map((p) => [p.label, texts(p.chips)]).slice(2);
+  const pairs = (kind, detail) => d.detailPairs(event(kind, detail), NOW, [], PRO, NO_TIERS).map((p) => [p.label, texts(p.chips)]).slice(2);
   const by = (detail) => d.byOf(event('poll_backoff_ended', detail), []).value;
   const close = { attempts: 3, duration_ms: 25 * MINUTE, resumed_at: ms(8, 15, 3) };
   const resumed = [['Backed off', ['from 07:50', 'to 08:15']], ['Attempts', ['3']], ['Resumed', ['08:15']]];
@@ -1496,7 +1483,7 @@ test("a backoff's close reads by its cause, and a window reset names where the r
 
 test("an account edit's drawer reads each pair and the replaced secret beside them, with no reading of decisions", () => {
   const pairs = (diff, kind = 'account_updated', target = 'annex') =>
-    d.detailPairs(event('registry_changed', { diff, kind, target }, { accountId: null, actor: 'admin', at: iso(ms(9, 8, 30)) }), NOW, [], PRO).map((p) => [p.label, texts(p.chips)]);
+    d.detailPairs(event('registry_changed', { diff, kind, target }, { accountId: null, actor: 'admin', at: iso(ms(9, 8, 30)) }), NOW, [], PRO, NO_TIERS).map((p) => [p.label, texts(p.chips)]);
   assert.deepEqual(pairs({ label: { from: 'annex', to: 'Studio annex' }, secret_replaced: true }), [
     ['When', [d.fmtAbsolute(iso(ms(9, 8, 30)))]],
     ['Change', ['account edited', 'annex']],
@@ -1519,7 +1506,7 @@ test("an account edit's drawer reads each pair and the replaced secret beside th
 test('a registry change reads the renamed pool settings by their new word, marks the removed ones and reads each fraction as a percent', () => {
   const pool = { accountId: null, actor: 'admin', at: iso(ms(9, 5, 12)), poolId: 'all' };
   const change = (diff) => event('registry_changed', { diff, kind: 'pool_updated', target: 'all' }, pool);
-  const pairs = (diff) => Object.fromEntries(d.detailPairs(change(diff), NOW, [], PRO).map((p) => [p.label, texts(p.chips)]));
+  const pairs = (diff) => Object.fromEntries(d.detailPairs(change(diff), NOW, [], PRO, NO_TIERS).map((p) => [p.label, texts(p.chips)]));
   assert.deepEqual(read(change({ window_ceiling: { from: 0.95, to: 0.9 } })), { by: 'pool edited', facts: ['field window ceiling', 'to 90%'] });
   assert.deepEqual(read(change({ shed_cap: { from: 0.5, to: 0.2 } })), { by: 'pool edited', facts: ['field shed cap', 'to 20%'] });
   assert.deepEqual(read(change({ shed_share: { from: 0.5, to: 0.25 } })), { by: 'pool edited', facts: ['field shed cap (then shed_share)', 'to 25%'] });
@@ -1540,7 +1527,7 @@ test('a registry change reads the renamed pool settings by their new word, marks
 test("a pool save's keepalive policy reads as its dotted fields, each under its label, and no decision reads them", () => {
   const pool = { accountId: null, actor: 'admin', at: iso(ms(9, 5, 12)), poolId: 'all' };
   const change = (diff) => event('registry_changed', { diff, kind: 'pool_updated', target: 'all' }, pool);
-  const pairs = (diff) => d.detailPairs(change(diff), NOW, [], PRO).map((p) => [p.label, texts(p.chips)]).slice(2);
+  const pairs = (diff) => d.detailPairs(change(diff), NOW, [], PRO, NO_TIERS).map((p) => [p.label, texts(p.chips)]).slice(2);
   // A decision record carries no keepalive policy, so a policy-only save reads no Reading it row.
   assert.deepEqual(pairs({ 'keepalive.max_idle_seconds': { from: 43_200, to: 86_400 }, 'keepalive.enabled': { from: null, to: true } }), [
     ['Change', ['pool edited', 'all']],
@@ -1556,9 +1543,9 @@ test("a model rejection reads its until off the page's cooldown row and has no p
   const at = iso(ms(14, 12, 5));
   const rejection = event('model_rejected', { attempt: 1, request_id: 'req_011', source_request_id: 'req_011', wire_model: 'claude-haiku-4-5' }, { at, model: 'claude-haiku-4-5-20251001', requestId: 'req_011' });
   const cooldown = (o = {}, detail = {}) => event('cooldown_set', { reason: 'model_rejected', scope: 'model:claude-haiku-4-5-20251001', source_request_id: 'req_011', until: ms(15, 24), window: 'model', ...detail }, { at, id: 8, requestId: 'req_011', ...o });
-  const until = (rows) => d.detailPairs(rejection, NOW, rows, PRO).find((p) => p.label === 'Until')?.chips.map(chipText);
+  const until = (rows) => d.detailPairs(rejection, NOW, rows, PRO, NO_TIERS).find((p) => p.label === 'Until')?.chips.map(chipText);
   assert.deepEqual(until([cooldown()]), ['15:24']);
-  assert.deepEqual(d.detailPairs(rejection, NOW, [cooldown()], PRO).slice(2).map((p) => p.label), ['Model sent', 'Model resolved', 'Cooldown scope', 'Attempt', 'Until', 'Request']);
+  assert.deepEqual(d.detailPairs(rejection, NOW, [cooldown()], PRO, NO_TIERS).slice(2).map((p) => p.label), ['Model sent', 'Model resolved', 'Cooldown scope', 'Attempt', 'Until', 'Request']);
   assert.deepEqual(until([decision({ at }), cooldown()]), ['15:24'], 'the decisions beside it are passed over');
   assert.equal(until([]), undefined, 'no cooldown row on the page');
   assert.equal(until([cooldown({ accountId: 'secondary' })]), undefined, "another account's cooldown");
@@ -1571,7 +1558,7 @@ test("a model rejection reads the until off its own request's cooldown row, what
   const at = ms(14, 12, 5);
   const rejection = (o = {}) => event('model_rejected', { attempt: 1, request_id: 'req_011', source_request_id: 'req_011', wire_model: 'claude-haiku-4-5' }, { at: iso(at), model: 'claude-haiku-4-5-20251001', requestId: 'req_011', ...o });
   const cooldown = (o = {}, detail = {}) => event('cooldown_set', { reason: 'model_rejected', scope: 'model:claude-haiku-4-5-20251001', source_request_id: 'req_011', until: ms(15, 24), window: 'model', ...detail }, { at: iso(at + 3), id: 8, requestId: 'req_011', ...o });
-  const until = (row, rows) => d.detailPairs(row, NOW, rows, PRO).find((p) => p.label === 'Until')?.chips.map(chipText);
+  const until = (row, rows) => d.detailPairs(row, NOW, rows, PRO, NO_TIERS).find((p) => p.label === 'Until')?.chips.map(chipText);
   assert.deepEqual(until(rejection(), [cooldown()]), ['15:24'], 'the router dated the cooldown 3 ms after the rejection');
   assert.deepEqual(until(rejection(), [cooldown({ at: iso(at - 2) })]), ['15:24'], 'and 2 ms before it');
   assert.equal(until(rejection(), [cooldown({ requestId: 'req_012' }, { source_request_id: 'req_012' })]), undefined, "another request's cooldown a few milliseconds on");
@@ -1579,12 +1566,9 @@ test("a model rejection reads the until off its own request's cooldown row, what
 });
 
 test("the catalog change lists its models in the cost model's tier order, newest first", () => {
-  const catalog = () => Object.fromEntries(d.detailPairs(event('catalog_changed', { added: ['claude-haiku-4-5', 'claude-opus-5', 'claude-fable-5-1', 'claude-opus-5-5'], count: 12, removed: ['claude-sonnet-4-5', 'claude-opus-4-5', 'claude-sonnet-5'] }), NOW, [], PRO).map((p) => [p.label, texts(p.chips)]));
-  underTiers(SHIPPED_TIERS, () => {
-    const pairs = catalog();
-    assert.deepEqual(pairs.Added, ['claude-fable-5-1', 'claude-opus-5-5', 'claude-opus-5', 'claude-haiku-4-5']);
-    assert.deepEqual(pairs.Removed, ['claude-opus-4-5', 'claude-sonnet-5', 'claude-sonnet-4-5']);
-  });
+  const pairs = Object.fromEntries(d.detailPairs(event('catalog_changed', { added: ['claude-haiku-4-5', 'claude-opus-5', 'claude-fable-5-1', 'claude-opus-5-5'], count: 12, removed: ['claude-sonnet-4-5', 'claude-opus-4-5', 'claude-sonnet-5'] }), NOW, [], PRO, SHIPPED_TIERS).map((p) => [p.label, texts(p.chips)]));
+  assert.deepEqual(pairs.Added, ['claude-fable-5-1', 'claude-opus-5-5', 'claude-opus-5', 'claude-haiku-4-5']);
+  assert.deepEqual(pairs.Removed, ['claude-opus-4-5', 'claude-sonnet-5', 'claude-sonnet-4-5']);
 });
 
 test('the verdict line reads the cache pending only while the answer has not ended, and keys a landing depth by its rung', () => {

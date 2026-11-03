@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import type { RoutingEvent, RoutingLogRow } from '@/api/types';
+import { useAppSettings } from '@/app/settings';
 import { ChipView, rowValue } from '@/components/ChipView';
 import { KeyValue } from '@/components/ui/primitives';
 import type { WeekReading } from '@/lib/analytics';
@@ -33,7 +34,8 @@ function PinTable({ table }: { table: NonNullable<DetailPair['table']> }) {
 
 /** An event row opened: When, Account and Pool, then the kind's own pairs, and the request it names in the foot. */
 export function EventDetail({ now, row, rows, week }: { now: number; row: RoutingEvent; rows: readonly RoutingLogRow[]; week: WeekReading }) {
-  const pairs = detailPairs(row, now, rows, week);
+  const { modelTiers } = useAppSettings();
+  const pairs = detailPairs(row, now, rows, week, modelTiers);
   return (
     <div className="event-detail">
       <KeyValue rows={pairs.map((p) => ({ label: p.label, value: p.table ? <PinTable table={p.table} /> : rowValue(p.chips) }))} />

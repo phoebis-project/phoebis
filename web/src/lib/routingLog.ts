@@ -2,7 +2,7 @@ import { iso, list, numOrNull as num, PIN_RELEASE_REASON_VALUES, strOrNull as st
 import type { CohortHold, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, ModelTiers, PinReason, PinReleaseReason, Placement, PrefixEntry, RecordCandidate, RecordOutcome, RecordSettings, RoutingEvent, RoutingLogRow, WalkFact, WalkStep } from '@/api/types';
 import { ROUTING_LOG_CODEC, type RangeValue } from './address';
 import { FAILOVER_MOVE_REASONS, moveLabel, RULE_MOVE_REASONS, type WeekReading } from './analytics';
-import { compareByModelTier } from './costs';
+import { tierOrder } from './costs';
 import { has, lookup } from './counts';
 import type { ChipText } from './filterBar';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtShare, fmtTime, fmtUsd, instant, listed, plural, shortModel, weekShort } from './format';
@@ -481,6 +481,48 @@ function cooldownBy(e: RoutingEvent): string {
   return window === 'retry_after' ? '429 retry-after' : '429';
 }
 
+/** The decisions of one rows array that a pin's By and a failover's answer read. */
+interface PageIndex {
+  /** Each request's decisions that carry a status, the highest seq first and page order among equal ones. */
+  answered: Map<string, DecisionSummary[]>;
+  /** Every decision of a slot, in page order. */
+  decisions: Map<string, DecisionSummary[]>;
+  /** The first placed decision of a slot in page order. */
+  placed: Map<string, DecisionSummary>;
+}
+
+/**
+ * A slot is one session, account and second. A row whose `at` does not parse has none, as the second it would land in
+ * matches no other.
+ */
+const slotOf = (sessionId: string | null, accountId: string | null, at: number): string | null => (Number.isNaN(at) ? null : JSON.stringify([sessionId, accountId, Math.floor(at / 1_000)]));
+
+// Every render asks each pin and failover row of the log for its match, and the rows array keeps its identity until a
+// poll or a read replaces it, so each array is indexed once in place of a scan of the whole list per row.
+const pageIndexes = new WeakMap<readonly RoutingLogRow[], PageIndex>();
+
+function pageIndexOf(page: readonly RoutingLogRow[]): PageIndex {
+  const known = pageIndexes.get(page);
+  if (known !== undefined) return known;
+  const index: PageIndex = { answered: new Map(), decisions: new Map(), placed: new Map() };
+  const add = <T>(map: Map<string, T[]>, key: string, value: T) => {
+    const list = map.get(key);
+    if (list === undefined) map.set(key, [value]);
+    else list.push(value);
+  };
+  for (const r of page) {
+    if (r.type !== 'decision') continue;
+    if (r.status !== null) add(index.answered, r.requestId, r);
+    const slot = slotOf(r.sessionId, r.accountId, atOf(r));
+    if (slot === null) continue;
+    add(index.decisions, slot, r);
+    if (r.kind === 'placed' && !index.placed.has(slot)) index.placed.set(slot, r);
+  }
+  for (const list of index.answered.values()) list.sort((a, b) => b.seq - a.seq);
+  pageIndexes.set(page, index);
+  return index;
+}
+
 function eventBy(e: RoutingEvent, page: readonly RoutingLogRow[]): Chip {
   const d = e.detail;
   switch (e.kind) {
@@ -514,7 +556,8 @@ function eventBy(e: RoutingEvent, page: readonly RoutingLogRow[]): Chip {
       return { value: 'in overage' };
     case 'pin_created': {
       // The pin a placement created lands in the same second as the decision that made it, under the same session.
-      const placement = page.find((r): r is DecisionSummary => r.type === 'decision' && r.kind === 'placed' && r.sessionId === e.sessionId && r.accountId === e.accountId && Math.floor(atOf(r) / 1_000) === Math.floor(atOf(e) / 1_000));
+      const slot = slotOf(e.sessionId, e.accountId, atOf(e));
+      const placement = slot === null ? undefined : pageIndexOf(page).placed.get(slot);
       return placement ? decisionBy(placement) : { value: 'placement' };
     }
     case 'pin_expired': {
@@ -588,11 +631,11 @@ const FAILOVER_MOVES = new Set<string>(FAILOVER_MOVE_REASONS);
  */
 function failoverAnswer(e: RoutingEvent, page: readonly RoutingLogRow[]): number | null {
   if (e.sessionId === null) return null;
-  const second = Math.floor(atOf(e) / 1_000);
-  const decisions = page.filter((r): r is DecisionSummary => r.type === 'decision');
-  for (const next of decisions) {
-    if (next.sessionId !== e.sessionId || next.accountId !== e.accountId || Math.floor(atOf(next) / 1_000) !== second) continue;
-    const failed = decisions.filter((r) => r.requestId === next.requestId && r.seq < next.seq && r.status !== null).sort((a, b) => b.seq - a.seq)[0];
+  const slot = slotOf(e.sessionId, e.accountId, atOf(e));
+  if (slot === null) return null;
+  const { answered, decisions } = pageIndexOf(page);
+  for (const next of decisions.get(slot) ?? []) {
+    const failed = answered.get(next.requestId)?.find((r) => r.seq < next.seq);
     if (failed) return failed.status;
   }
   return null;
@@ -781,19 +824,6 @@ export const clockMinute = (at: number, now: number): LogLink => {
   const from = Math.floor(at / MINUTE) * MINUTE;
   return { from, to: Math.min(from + MINUTE - 1, now) };
 };
-
-// Held at module level, as the time format is, so `compareModels` keeps the shape `Array.sort` takes.
-let modelTiers: ModelTiers = { modelTier: {}, tierOrder: [] };
-
-/** The two tier members the shell read off the settings answer. The empty pair compares by version and id alone. */
-export const setModelTiers = (tiers: ModelTiers): void => {
-  modelTiers = tiers;
-};
-
-/** Model ids in the cost model's tier order, newest version first, an id of a tier the order lacks last. */
-export function compareModels(a: string, b: string): number {
-  return compareByModelTier(modelTiers, a, b);
-}
 
 // The decision card and the event detail: the record's walk, its candidates, its folds and its outcome, and an event's
 // pairs. Every chip holds one value or one key-value pair, and every entity it names is a link.
@@ -1792,9 +1822,9 @@ const rewriteCell = (rewrite: number | null, window: string | null, unit: string
 };
 
 /** An event's detail as pairs: When, Account and Pool first, then the kind's own. `rows` are the rows the page holds,
- *  which a model rejection reads its cooldown's until off, and `week` the chosen week a shedding round's Pro-week
- *  rewrite reads in. */
-export function detailPairs(row: RoutingEvent, now: number, rows: readonly RoutingLogRow[], week: WeekReading): DetailPair[] {
+ *  which a model rejection reads its cooldown's until off, `week` the chosen week a shedding round's Pro-week rewrite
+ *  reads in, and `tiers` the cost model's tier order a catalog change lists its models in. */
+export function detailPairs(row: RoutingEvent, now: number, rows: readonly RoutingLogRow[], week: WeekReading, tiers: ModelTiers): DetailPair[] {
   const d = row.detail;
   const pairs: DetailPair[] = [{ chips: [plain(fmtAbsolute(row.at))], label: 'When' }];
   if (row.accountId !== null) pairs.push({ chips: [accountChip(row.accountId)], label: 'Account' });
@@ -1850,8 +1880,8 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
     }
     case 'catalog_changed':
       // The writer lists the models alphabetically, and every cell that lists models reads them by family and version.
-      add('Added', ...list(d.added).map(String).sort(compareModels).map((m) => modelChip(m)));
-      add('Removed', ...list(d.removed).map(String).sort(compareModels).map((m) => modelChip(m)));
+      add('Added', ...tierOrder(list(d.added).map(String), tiers).map((m) => modelChip(m)));
+      add('Removed', ...tierOrder(list(d.removed).map(String), tiers).map((m) => modelChip(m)));
       add('Models', count(d.count));
       break;
     case 'cooldown_cleared':
