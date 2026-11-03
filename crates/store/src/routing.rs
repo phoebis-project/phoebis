@@ -1,6 +1,7 @@
 //! Routing state that survives a restart: session pins, cooldowns, and the overage evidence per account.
 
 use std::fmt;
+use std::sync::LazyLock;
 
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
 use rusqlite::{params, Connection, Transaction, TransactionBehavior};
@@ -810,86 +811,87 @@ fn mark_from(r: &rusqlite::Row<'_>, first: usize) -> rusqlite::Result<Option<Pin
     )
 }
 
+static UPSERT_PIN: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "INSERT INTO pins ({PIN_COLUMNS}) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47) \
+         ON CONFLICT(key_id, session_id, agent_id, model) DO UPDATE SET \
+           account_id = excluded.account_id, epoch = excluded.epoch, created_at = excluded.created_at, \
+           last_used_at = excluded.last_used_at, key_generation = excluded.key_generation, \
+           incarnation = excluded.incarnation, burn_at = excluded.burn_at, \
+           last_input_tokens = excluded.last_input_tokens, last_refresh_at = excluded.last_refresh_at, \
+           cache_ttl_ms = excluded.cache_ttl_ms, shed_from = excluded.shed_from, shed_at = excluded.shed_at, \
+           static_hash = excluded.static_hash, tail_hash = excluded.tail_hash, lane = excluded.lane, \
+           burn_cache_read = excluded.burn_cache_read, burn_input = excluded.burn_input, \
+           burn_output = excluded.burn_output, burn_write_1h = excluded.burn_write_1h, \
+           burn_write_5m = excluded.burn_write_5m, burn_banded_cache_read = excluded.burn_banded_cache_read, \
+           burn_banded_input = excluded.burn_banded_input, burn_banded_output = excluded.burn_banded_output, \
+           burn_banded_write_1h = excluded.burn_banded_write_1h, burn_banded_write_5m = excluded.burn_banded_write_5m, \
+           burn_fast_cache_read = excluded.burn_fast_cache_read, burn_fast_input = excluded.burn_fast_input, \
+           burn_fast_output = excluded.burn_fast_output, burn_fast_write_1h = excluded.burn_fast_write_1h, \
+           burn_fast_write_5m = excluded.burn_fast_write_5m, \
+           burn_unmetered_cache_read = excluded.burn_unmetered_cache_read, \
+           burn_unmetered_input = excluded.burn_unmetered_input, \
+           burn_unmetered_output = excluded.burn_unmetered_output, \
+           burn_unmetered_write_1h = excluded.burn_unmetered_write_1h, \
+           burn_unmetered_write_5m = excluded.burn_unmetered_write_5m, marked_at = excluded.marked_at, \
+           marked_on = excluded.marked_on, marked_window = excluded.marked_window, \
+           entrypoint = excluded.entrypoint, last_classifier = excluded.last_classifier, \
+           shed_reason = excluded.shed_reason, auxiliary_only = excluded.auxiliary_only, \
+           effort = excluded.effort"
+    )
+});
+
 fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
-    conn.execute(
-        &format!(
-            "INSERT INTO pins ({PIN_COLUMNS}) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47) \
-             ON CONFLICT(key_id, session_id, agent_id, model) DO UPDATE SET \
-               account_id = excluded.account_id, epoch = excluded.epoch, created_at = excluded.created_at, \
-               last_used_at = excluded.last_used_at, key_generation = excluded.key_generation, \
-               incarnation = excluded.incarnation, burn_at = excluded.burn_at, \
-               last_input_tokens = excluded.last_input_tokens, last_refresh_at = excluded.last_refresh_at, \
-               cache_ttl_ms = excluded.cache_ttl_ms, shed_from = excluded.shed_from, shed_at = excluded.shed_at, \
-               static_hash = excluded.static_hash, tail_hash = excluded.tail_hash, lane = excluded.lane, \
-               burn_cache_read = excluded.burn_cache_read, burn_input = excluded.burn_input, \
-               burn_output = excluded.burn_output, burn_write_1h = excluded.burn_write_1h, \
-               burn_write_5m = excluded.burn_write_5m, burn_banded_cache_read = excluded.burn_banded_cache_read, \
-               burn_banded_input = excluded.burn_banded_input, burn_banded_output = excluded.burn_banded_output, \
-               burn_banded_write_1h = excluded.burn_banded_write_1h, burn_banded_write_5m = excluded.burn_banded_write_5m, \
-               burn_fast_cache_read = excluded.burn_fast_cache_read, burn_fast_input = excluded.burn_fast_input, \
-               burn_fast_output = excluded.burn_fast_output, burn_fast_write_1h = excluded.burn_fast_write_1h, \
-               burn_fast_write_5m = excluded.burn_fast_write_5m, \
-               burn_unmetered_cache_read = excluded.burn_unmetered_cache_read, \
-               burn_unmetered_input = excluded.burn_unmetered_input, \
-               burn_unmetered_output = excluded.burn_unmetered_output, \
-               burn_unmetered_write_1h = excluded.burn_unmetered_write_1h, \
-               burn_unmetered_write_5m = excluded.burn_unmetered_write_5m, marked_at = excluded.marked_at, \
-               marked_on = excluded.marked_on, marked_window = excluded.marked_window, \
-               entrypoint = excluded.entrypoint, last_classifier = excluded.last_classifier, \
-               shed_reason = excluded.shed_reason, auxiliary_only = excluded.auxiliary_only, \
-               effort = excluded.effort"
-        ),
-        params![
-            pin.key_id,
-            pin.session_id,
-            pin.agent_id,
-            pin.model,
-            pin.account_id,
-            pin.epoch as i64,
-            pin.created_at,
-            pin.last_used_at,
-            pin.key_generation,
-            pin.incarnation as i64,
-            pin.burn_at,
-            pin.last_input_tokens as i64,
-            pin.last_refresh_at,
-            pin.cache_ttl_ms,
-            pin.shed.as_ref().map(|shed| &shed.from),
-            pin.shed.as_ref().map(|shed| shed.at),
-            pin.static_hash,
-            pin.tail_hash,
-            pin.lane,
-            pin.burn.cache_read,
-            pin.burn.input,
-            pin.burn.output,
-            pin.burn.write_1h,
-            pin.burn.write_5m,
-            pin.burn_banded.cache_read,
-            pin.burn_banded.input,
-            pin.burn_banded.output,
-            pin.burn_banded.write_1h,
-            pin.burn_banded.write_5m,
-            pin.burn_fast.cache_read,
-            pin.burn_fast.input,
-            pin.burn_fast.output,
-            pin.burn_fast.write_1h,
-            pin.burn_fast.write_5m,
-            pin.burn_unmetered.cache_read,
-            pin.burn_unmetered.input,
-            pin.burn_unmetered.output,
-            pin.burn_unmetered.write_1h,
-            pin.burn_unmetered.write_5m,
-            pin.mark.as_ref().map(|mark| mark.at),
-            pin.mark.as_ref().map(|mark| &mark.on),
-            pin.mark.as_ref().map(|mark| &mark.window),
-            pin.entrypoint,
-            pin.last_classifier,
-            pin.shed.as_ref().and_then(|shed| shed.reason.as_ref()),
-            pin.auxiliary_only,
-            pin.effort
-        ],
-    )?;
+    conn.prepare_cached(&UPSERT_PIN)?.execute(params![
+        pin.key_id,
+        pin.session_id,
+        pin.agent_id,
+        pin.model,
+        pin.account_id,
+        pin.epoch as i64,
+        pin.created_at,
+        pin.last_used_at,
+        pin.key_generation,
+        pin.incarnation as i64,
+        pin.burn_at,
+        pin.last_input_tokens as i64,
+        pin.last_refresh_at,
+        pin.cache_ttl_ms,
+        pin.shed.as_ref().map(|shed| &shed.from),
+        pin.shed.as_ref().map(|shed| shed.at),
+        pin.static_hash,
+        pin.tail_hash,
+        pin.lane,
+        pin.burn.cache_read,
+        pin.burn.input,
+        pin.burn.output,
+        pin.burn.write_1h,
+        pin.burn.write_5m,
+        pin.burn_banded.cache_read,
+        pin.burn_banded.input,
+        pin.burn_banded.output,
+        pin.burn_banded.write_1h,
+        pin.burn_banded.write_5m,
+        pin.burn_fast.cache_read,
+        pin.burn_fast.input,
+        pin.burn_fast.output,
+        pin.burn_fast.write_1h,
+        pin.burn_fast.write_5m,
+        pin.burn_unmetered.cache_read,
+        pin.burn_unmetered.input,
+        pin.burn_unmetered.output,
+        pin.burn_unmetered.write_1h,
+        pin.burn_unmetered.write_5m,
+        pin.mark.as_ref().map(|mark| mark.at),
+        pin.mark.as_ref().map(|mark| &mark.on),
+        pin.mark.as_ref().map(|mark| &mark.window),
+        pin.entrypoint,
+        pin.last_classifier,
+        pin.shed.as_ref().and_then(|shed| shed.reason.as_ref()),
+        pin.auxiliary_only,
+        pin.effort
+    ])?;
     Ok(())
 }
 
@@ -897,10 +899,7 @@ fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
 /// cascade holds whatever order a backlog writes in. `delete_pin`, `RoutingTx::delete_pin` and
 /// `rekey_resolution_on` pass `None`, so a replacement keeps them.
 fn delete_pin_on(conn: &Connection, key: &PinKey, ended: Option<i64>) -> Result<bool, StoreError> {
-    let deleted = conn.execute(
-        "DELETE FROM pins WHERE key_id = ?1 AND session_id = ?2 AND agent_id = ?3 AND model = ?4",
-        params![key.key_id, key.session_id, key.agent_id, key.model],
-    )? > 0;
+    let deleted = conn.prepare_cached("DELETE FROM pins WHERE key_id = ?1 AND session_id = ?2 AND agent_id = ?3 AND model = ?4")?.execute(params![key.key_id, key.session_id, key.agent_id, key.model])? > 0;
     if let Some(ended) = ended {
         end_first_seen_on(conn, &key.key_id, &key.session_id, ended)?;
     }
@@ -913,10 +912,7 @@ fn end_first_seen_on(
     session_id: &str,
     ended: i64,
 ) -> Result<usize, StoreError> {
-    Ok(conn.execute(
-        "DELETE FROM session_first_seen WHERE key_id = ?1 AND session_id = ?2 AND first_seen_at <= ?3",
-        params![key_id, session_id, ended],
-    )?)
+    Ok(conn.prepare_cached("DELETE FROM session_first_seen WHERE key_id = ?1 AND session_id = ?2 AND first_seen_at <= ?3")?.execute(params![key_id, session_id, ended])?)
 }
 
 fn sweep_first_seen_on(conn: &Connection) -> Result<usize, StoreError> {
@@ -927,10 +923,7 @@ fn sweep_first_seen_on(conn: &Connection) -> Result<usize, StoreError> {
 }
 
 fn insert_first_seen_on(conn: &Connection, row: &FirstSeenRow) -> Result<(), StoreError> {
-    conn.execute(
-        "INSERT OR REPLACE INTO session_first_seen (key_id, session_id, agent_id, first_seen_at) VALUES (?1, ?2, ?3, ?4)",
-        params![row.key_id, row.session_id, row.agent_id, row.first_seen_at],
-    )?;
+    conn.prepare_cached("INSERT OR REPLACE INTO session_first_seen (key_id, session_id, agent_id, first_seen_at) VALUES (?1, ?2, ?3, ?4)")?.execute(params![row.key_id, row.session_id, row.agent_id, row.first_seen_at])?;
     Ok(())
 }
 
@@ -946,15 +939,14 @@ fn delete_first_seen_on(
 }
 
 fn upsert_cooldown_on(conn: &Connection, row: &CooldownRow) -> Result<(), StoreError> {
-    conn.execute("INSERT INTO cooldowns (account_id, scope, until, set_at, reason, window, source_request_id, incarnation) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+    conn.prepare_cached("INSERT INTO cooldowns (account_id, scope, until, set_at, reason, window, source_request_id, incarnation) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
          ON CONFLICT(account_id, scope) DO UPDATE SET \
            set_at = MAX(cooldowns.set_at, excluded.set_at), \
            reason = CASE WHEN excluded.until > cooldowns.until THEN excluded.reason ELSE cooldowns.reason END, \
            window = CASE WHEN excluded.until > cooldowns.until THEN excluded.window ELSE cooldowns.window END, \
            source_request_id = CASE WHEN excluded.until > cooldowns.until THEN excluded.source_request_id ELSE cooldowns.source_request_id END, \
            until = MAX(cooldowns.until, excluded.until), \
-           incarnation = excluded.incarnation",
-        params![row.account_id, row.scope, row.until, row.set_at, row.reason, row.window, row.source_request_id, row.incarnation as i64])?;
+           incarnation = excluded.incarnation")?.execute(params![row.account_id, row.scope, row.until, row.set_at, row.reason, row.window, row.source_request_id, row.incarnation as i64])?;
     Ok(())
 }
 
@@ -963,21 +955,25 @@ fn delete_cooldown_on(
     account_id: &str,
     scope: &CooldownScope,
 ) -> Result<bool, StoreError> {
-    Ok(conn.execute(
-        "DELETE FROM cooldowns WHERE account_id = ?1 AND scope = ?2",
-        params![account_id, scope],
-    )? > 0)
+    Ok(conn
+        .prepare_cached("DELETE FROM cooldowns WHERE account_id = ?1 AND scope = ?2")?
+        .execute(params![account_id, scope])?
+        > 0)
 }
 
-fn upsert_affinity_on(conn: &Connection, rows: &[AffinityRow]) -> Result<(), StoreError> {
-    let mut stmt = conn.prepare(&format!(
+static UPSERT_AFFINITY: LazyLock<String> = LazyLock::new(|| {
+    format!(
         "INSERT INTO affinity ({AFFINITY_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14) \
          ON CONFLICT(model, hash) DO UPDATE SET \
            chain = excluded.chain, account_id = excluded.account_id, incarnation = excluded.incarnation, \
            written_at = excluded.written_at, ttl_ms = excluded.ttl_ms, prefix_tokens = excluded.prefix_tokens, \
            key_id = excluded.key_id, key_generation = excluded.key_generation, root = excluded.root, \
            lane = excluded.lane, depth = excluded.depth, message_id = excluded.message_id"
-    ))?;
+    )
+});
+
+fn upsert_affinity_on(conn: &Connection, rows: &[AffinityRow]) -> Result<(), StoreError> {
+    let mut stmt = conn.prepare_cached(&UPSERT_AFFINITY)?;
     for row in rows {
         stmt.execute(params![
             row.model,
@@ -1001,7 +997,7 @@ fn upsert_affinity_on(conn: &Connection, rows: &[AffinityRow]) -> Result<(), Sto
 
 fn delete_affinity_on(conn: &Connection, keys: &[(String, String)]) -> Result<usize, StoreError> {
     let mut deleted = 0;
-    let mut stmt = conn.prepare("DELETE FROM affinity WHERE model = ?1 AND hash = ?2")?;
+    let mut stmt = conn.prepare_cached("DELETE FROM affinity WHERE model = ?1 AND hash = ?2")?;
     for (model, hash) in keys {
         deleted += stmt.execute(params![model, hash])?;
     }
@@ -1010,25 +1006,22 @@ fn delete_affinity_on(conn: &Connection, keys: &[(String, String)]) -> Result<us
 
 fn upsert_overage_on(conn: &Connection, row: &OverageRow) -> Result<bool, StoreError> {
     // A reading from another holder of the id is no timeline to be newer than.
-    let written = conn.execute("INSERT INTO overage_state (account_id, in_use, since, reset, observed_at, source, incarnation) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+    let written = conn.prepare_cached("INSERT INTO overage_state (account_id, in_use, since, reset, observed_at, source, incarnation) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
          ON CONFLICT(account_id) DO UPDATE SET in_use = excluded.in_use, since = excluded.since, reset = excluded.reset, observed_at = excluded.observed_at, source = excluded.source, incarnation = excluded.incarnation \
-         WHERE excluded.observed_at > overage_state.observed_at OR excluded.incarnation <> overage_state.incarnation",
-        params![row.account_id, row.in_use, row.since, row.reset, row.observed_at, row.source, row.incarnation as i64])?;
+         WHERE excluded.observed_at > overage_state.observed_at OR excluded.incarnation <> overage_state.incarnation")?.execute(params![row.account_id, row.in_use, row.since, row.reset, row.observed_at, row.source, row.incarnation as i64])?;
     Ok(written > 0)
 }
 
 fn upsert_window_on(conn: &Connection, row: &WindowRow) -> Result<bool, StoreError> {
     // The `WHERE` on the select is what lets SQLite parse the `ON CONFLICT` of an insert-select, and it is
     // the incarnation check too: a deleted and re-paired id answers no row, so nothing is inserted.
-    let written = conn.execute(
-        "INSERT INTO usage_windows (account_id, window, utilization, reset, observed_at, incarnation, plan, tier) \
+    let written = conn.prepare_cached("INSERT INTO usage_windows (account_id, window, utilization, reset, observed_at, incarnation, plan, tier) \
          SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8 FROM accounts WHERE id = ?1 AND incarnation = ?6 \
          ON CONFLICT(account_id, window) DO UPDATE SET utilization = excluded.utilization, \
            reset = excluded.reset, observed_at = excluded.observed_at, incarnation = excluded.incarnation, \
            plan = excluded.plan, tier = excluded.tier \
          WHERE excluded.observed_at > usage_windows.observed_at \
-           OR excluded.incarnation <> usage_windows.incarnation",
-        params![
+           OR excluded.incarnation <> usage_windows.incarnation")?.execute(params![
             row.account_id,
             row.window,
             row.utilization,
@@ -1037,27 +1030,27 @@ fn upsert_window_on(conn: &Connection, row: &WindowRow) -> Result<bool, StoreErr
             row.incarnation as i64,
             row.plan,
             row.tier
-        ],
-    )?;
+        ])?;
     Ok(written > 0)
 }
 
 fn upsert_window_set_on(conn: &Connection, row: &WindowSetRow) -> Result<bool, StoreError> {
     // The insert-select is the incarnation check, as `upsert_window_on`'s is.
-    let written = conn.execute(
-        "INSERT INTO usage_window_sets (account_id, windows, observed_at, incarnation) \
+    let written = conn
+        .prepare_cached(
+            "INSERT INTO usage_window_sets (account_id, windows, observed_at, incarnation) \
          SELECT ?1, ?2, ?3, ?4 FROM accounts WHERE id = ?1 AND incarnation = ?4 \
          ON CONFLICT(account_id) DO UPDATE SET windows = excluded.windows, \
            observed_at = excluded.observed_at, incarnation = excluded.incarnation \
          WHERE excluded.observed_at > usage_window_sets.observed_at \
            OR excluded.incarnation <> usage_window_sets.incarnation",
-        params![
+        )?
+        .execute(params![
             row.account_id,
             row.windows,
             row.observed_at,
             row.incarnation as i64
-        ],
-    )?;
+        ])?;
     Ok(written > 0)
 }
 
@@ -1067,49 +1060,39 @@ fn delete_window_on(
     window: &str,
     incarnation: u64,
 ) -> Result<bool, StoreError> {
-    Ok(conn.execute(
-        "DELETE FROM usage_windows WHERE account_id = ?1 AND window = ?2 AND incarnation = ?3",
-        params![account_id, window, incarnation as i64],
-    )? > 0)
+    Ok(conn
+        .prepare_cached(
+            "DELETE FROM usage_windows WHERE account_id = ?1 AND window = ?2 AND incarnation = ?3",
+        )?
+        .execute(params![account_id, window, incarnation as i64])?
+        > 0)
 }
 
 fn upsert_credits_on(conn: &Connection, row: &CreditsRow) -> Result<bool, StoreError> {
-    let written = conn.execute(
-        "INSERT INTO usage_credits (account_id, enabled, disabled_reason, utilization, observed_at, incarnation) \
+    let written = conn.prepare_cached("INSERT INTO usage_credits (account_id, enabled, disabled_reason, utilization, observed_at, incarnation) \
          SELECT ?1, ?2, ?3, ?4, ?5, ?6 FROM accounts WHERE id = ?1 AND incarnation = ?6 \
          ON CONFLICT(account_id) DO UPDATE SET enabled = excluded.enabled, \
            disabled_reason = excluded.disabled_reason, utilization = excluded.utilization, \
            observed_at = excluded.observed_at, incarnation = excluded.incarnation \
          WHERE excluded.observed_at > usage_credits.observed_at \
-           OR excluded.incarnation <> usage_credits.incarnation",
-        params![
+           OR excluded.incarnation <> usage_credits.incarnation")?.execute(params![
             row.account_id,
             row.enabled,
             row.disabled_reason,
             row.utilization,
             row.observed_at,
             row.incarnation as i64
-        ],
-    )?;
+        ])?;
     Ok(written > 0)
 }
 
 fn purge_stale_windows_on(conn: &Connection) -> Result<usize, StoreError> {
-    let windows = conn.execute(
-        "DELETE FROM usage_windows WHERE NOT EXISTS (SELECT 1 FROM accounts \
-         WHERE accounts.id = usage_windows.account_id AND accounts.incarnation = usage_windows.incarnation)",
-        [],
-    )?;
-    let credits = conn.execute(
-        "DELETE FROM usage_credits WHERE NOT EXISTS (SELECT 1 FROM accounts \
-         WHERE accounts.id = usage_credits.account_id AND accounts.incarnation = usage_credits.incarnation)",
-        [],
-    )?;
-    let sets = conn.execute(
-        "DELETE FROM usage_window_sets WHERE NOT EXISTS (SELECT 1 FROM accounts \
-         WHERE accounts.id = usage_window_sets.account_id AND accounts.incarnation = usage_window_sets.incarnation)",
-        [],
-    )?;
+    let windows = conn.prepare_cached("DELETE FROM usage_windows WHERE NOT EXISTS (SELECT 1 FROM accounts \
+         WHERE accounts.id = usage_windows.account_id AND accounts.incarnation = usage_windows.incarnation)")?.execute([])?;
+    let credits = conn.prepare_cached("DELETE FROM usage_credits WHERE NOT EXISTS (SELECT 1 FROM accounts \
+         WHERE accounts.id = usage_credits.account_id AND accounts.incarnation = usage_credits.incarnation)")?.execute([])?;
+    let sets = conn.prepare_cached("DELETE FROM usage_window_sets WHERE NOT EXISTS (SELECT 1 FROM accounts \
+         WHERE accounts.id = usage_window_sets.account_id AND accounts.incarnation = usage_window_sets.incarnation)")?.execute([])?;
     Ok(windows + credits + sets)
 }
 
@@ -1120,30 +1103,23 @@ fn replace_shed_round_on(
     incarnation: u64,
     round_at: i64,
 ) -> Result<(), StoreError> {
-    conn.execute(
-        "INSERT OR REPLACE INTO shed_rounds (pool_id, account_id, incarnation, round_at) VALUES (?1, ?2, ?3, ?4)",
-        params![pool_id, account_id, incarnation as i64, round_at],
-    )?;
+    conn.prepare_cached("INSERT OR REPLACE INTO shed_rounds (pool_id, account_id, incarnation, round_at) VALUES (?1, ?2, ?3, ?4)")?.execute(params![pool_id, account_id, incarnation as i64, round_at])?;
     Ok(())
 }
 
 fn purge_shed_rounds_before_on(conn: &Connection, before: i64) -> Result<usize, StoreError> {
-    Ok(conn.execute(
-        "DELETE FROM shed_rounds WHERE round_at < ?1",
-        params![before],
-    )?)
+    Ok(conn
+        .prepare_cached("DELETE FROM shed_rounds WHERE round_at < ?1")?
+        .execute(params![before])?)
 }
 
 fn rekey_resolution_on(conn: &Connection, rekey: &RekeyWrite) -> Result<(), StoreError> {
-    conn.execute(
-        "INSERT INTO model_resolutions (spelling, dated_id, resolved_at) VALUES (?1, ?2, ?3) \
-         ON CONFLICT(spelling) DO UPDATE SET dated_id = excluded.dated_id, resolved_at = excluded.resolved_at",
-        params![
+    conn.prepare_cached("INSERT INTO model_resolutions (spelling, dated_id, resolved_at) VALUES (?1, ?2, ?3) \
+         ON CONFLICT(spelling) DO UPDATE SET dated_id = excluded.dated_id, resolved_at = excluded.resolved_at")?.execute(params![
             rekey.resolution.spelling,
             rekey.resolution.dated_id,
             rekey.resolution.resolved_at
-        ],
-    )?;
+        ])?;
     for key in &rekey.delete_pins {
         delete_pin_on(conn, key, None)?;
     }

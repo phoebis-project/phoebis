@@ -697,22 +697,21 @@ pub(crate) fn set_state_if_generations_on(
     credential_generation: u64,
 ) -> Result<Option<(u64, AccountState)>, StoreError> {
     let Some(before) = conn
-        .query_row(
-            "SELECT state FROM accounts WHERE id = ?1",
-            params![id],
-            |row| row.get::<_, AccountState>(0),
-        )
+        .prepare_cached("SELECT state FROM accounts WHERE id = ?1")?
+        .query_row(params![id], |row| row.get::<_, AccountState>(0))
         .optional()?
     else {
         return Ok(None);
     };
     let revision: Option<i64> = conn
-        .query_row(
+        .prepare_cached(
             "UPDATE accounts SET state = ?2, state_cause = ?7, revision = revision + 1, updated_at = ?3 \
              WHERE id = ?1 AND lifecycle_generation = ?4 AND incarnation = ?6 \
              AND (EXISTS (SELECT 1 FROM credentials WHERE account_id = ?1 AND generation = ?5) \
                   OR EXISTS (SELECT 1 FROM api_key_secrets WHERE account_id = ?1 AND generation = ?5)) \
              RETURNING revision",
+        )?
+        .query_row(
             params![
                 id,
                 state,

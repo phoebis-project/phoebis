@@ -104,6 +104,11 @@ pub use schema::SCHEMA_VERSION;
 /// `SQLITE_BUSY`: rusqlite's own default, named so the registry rides no library default.
 pub const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The connection's cache of prepared statements. The routing writer's batch alone runs 21 cached statements, and the
+/// session memory, the keepalive save and the per-holder credential reads cache theirs beside them, about 30 in all,
+/// so rusqlite's default of 16 would evict and recompile some on every batch. 64 holds them all with room.
+const STATEMENT_CACHE_CAPACITY: usize = 64;
+
 // A poisoned store mutex means a prior panic happened while a write was in flight; the store's
 // on-disk state may be half-written, so continuing past that point is not safe.
 const LOCK_POISONED: &str = "store connection mutex poisoned by a prior panic";
@@ -1216,6 +1221,7 @@ fn prepare(
     migrations: &[(u32, &str)],
 ) -> Result<(), StoreError> {
     conn.busy_timeout(BUSY_TIMEOUT)?;
+    conn.set_prepared_statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
     // A per-connection setting, never written to the database file, so it costs nothing to set before the
     // version is even known.
     conn.pragma_update(None, "foreign_keys", "ON")?;
