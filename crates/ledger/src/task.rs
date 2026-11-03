@@ -469,20 +469,23 @@ pub fn spawn(
         }
     });
     ledger.track(purge);
-    tokio::spawn(writer(
-        db.clone(),
+    let handles = Handles {
+        clock,
+        db: db.clone(),
+        metrics,
         pricing,
+        router,
+        stats,
         tables,
         unpriced,
-        router,
+    };
+    tokio::spawn(writer(
+        handles,
         rx,
         control_rx,
         stopped,
         assembler,
-        stats,
-        metrics,
-        clock,
-        config,
+        config.event_poll,
         done_tx,
         start_landed,
     ));
@@ -556,22 +559,22 @@ async fn land_all(ledger: &Ledger, records: Vec<Record>) {
 
 #[allow(clippy::too_many_arguments)]
 async fn writer(
-    db: Arc<LedgerDb>,
-    pricing: Arc<Pricing>,
-    tables: Arc<PlanTables>,
-    unpriced: Unpriced,
-    router: RouterHandle,
+    handles: Handles,
     mut rx: mpsc::Receiver<Record>,
     mut control: mpsc::Receiver<ReplayParked>,
     mut stopped: watch::Receiver<bool>,
     assembler: tokio::task::JoinHandle<()>,
-    stats: Arc<LedgerStats>,
-    metrics: Arc<Metrics>,
-    clock: Clock,
-    config: LedgerConfig,
+    event_poll: Duration,
     done: oneshot::Sender<()>,
     mut start_landed: Option<oneshot::Sender<()>>,
 ) {
+    let Handles {
+        clock,
+        db,
+        router,
+        stats,
+        ..
+    } = &handles;
     let mut assembler = Some(assembler);
     // The assembler's handle once the stop was seen: the writer keeps reading while it waits for the
     // assembler to end, since the assembler may be waiting on this very channel for room.
@@ -581,39 +584,21 @@ async fn writer(
     // nothing else wakes the loop again until the next record or a boundary tick days out.
     // This arm re-checks the revision at the mirror's own cadence regardless, at the cost of one extra
     // `router.snapshot()` per poll.
-    let mut revision_poll = tokio::time::interval(config.event_poll);
+    let mut revision_poll = tokio::time::interval(event_poll);
     revision_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     revision_poll.tick().await;
     // Drops the writer has not yet reported: the channel's, read from the counter each round, and its own.
     let mut reported: u64 = 0;
     let mut spends = Spends {
-        db: db.clone(),
-        pricing: pricing.clone(),
-        tables: tables.clone(),
-        unpriced: unpriced.clone(),
-        router: router.clone(),
-        stats: stats.clone(),
-        metrics: metrics.clone(),
-        clock: clock.clone(),
-        event_poll: config.event_poll,
+        handles: handles.clone(),
+        event_poll,
         revision: router.snapshot().revision,
         due: None,
         budgets: Budgets::default(),
         pending: Vec::new(),
     };
     // Ahead of the start's spend read, so a parked priced record that lands now is in the first report.
-    let _ = land_parked(
-        &db,
-        &pricing,
-        &tables,
-        &unpriced,
-        &stats,
-        &metrics,
-        &router.snapshot(),
-        clock(),
-        &clock,
-    )
-    .await;
+    let _ = handles.land_parked(&router.snapshot(), clock()).await;
     // The start's budget rows wait for the first batch and follow its records: the start row `spawn` recorded is the
     // channel's first record, and it dates the gap from the newest row before it, which must be the previous run's.
     spends.start().await;
@@ -623,14 +608,7 @@ async fn writer(
     loop {
         if let Some(batch) = held.take() {
             let mut ctx = WriterCtx {
-                db: &db,
-                pricing: &pricing,
-                tables: &tables,
-                unpriced: &unpriced,
-                router: &router,
-                stats: &stats,
-                metrics: &metrics,
-                clock: &clock,
+                handles: &handles,
                 stopped: &mut stopped,
             };
             let retry = if batch.retried {
@@ -683,19 +661,7 @@ async fn writer(
                     let _ = reply.send(Err(LedgerError::WriterHeld));
                     continue;
                 }
-                let replayed = match land_parked(
-                    &db,
-                    &pricing,
-                    &tables,
-                    &unpriced,
-                    &stats,
-                    &metrics,
-                    &router.snapshot(),
-                    now,
-                    &clock,
-                )
-                .await
-                {
+                let replayed = match handles.land_parked(&router.snapshot(), now).await {
                     Ok((landed, _)) => {
                         // The spend read the start runs after its own pass: the landed money reaches the routing
                         // table before the caller hears the counts, so a selection after a replay that crossed a
@@ -730,7 +696,7 @@ async fn writer(
             }
             // Re-armed after every run: the boundary a budgeted member's period ends on, so a pool whose
             // traffic never touches this writer still turns over its spend at the period's edge.
-            _ = sleep_until(spends.due, &clock) => {
+            _ = sleep_until(spends.due, clock) => {
                 spends.refresh(&[]).await;
                 continue;
             }
@@ -745,19 +711,9 @@ async fn writer(
         let priced = priced_attempts(&records);
         records.extend(spends.take_pending());
         let batch = Arc::new(records);
-        match land(
-            &db,
-            &pricing,
-            &tables,
-            &unpriced,
-            &stats,
-            &metrics,
-            &router.snapshot(),
-            &batch,
-            0..batch.len(),
-            &clock,
-        )
-        .await
+        match handles
+            .land(&router.snapshot(), &batch, 0..batch.len())
+            .await
         {
             // A degraded ledger reads the spend after any batch that lands, since that read is what clears it.
             Landed::Written => {
@@ -796,20 +752,7 @@ async fn writer(
                     detail: Some(format!(r#"{{"dropped":{}}}"#, dropped - reported)),
                     ..Default::default()
                 })]);
-                if let Landed::Written = land(
-                    &db,
-                    &pricing,
-                    &tables,
-                    &unpriced,
-                    &stats,
-                    &metrics,
-                    &router.snapshot(),
-                    &gap,
-                    0..1,
-                    &clock,
-                )
-                .await
-                {
+                if let Landed::Written = handles.land(&router.snapshot(), &gap, 0..1).await {
                     reported = dropped;
                     stats.gaps.fetch_add(1, Ordering::Relaxed);
                     stats.last_gap_at.store(clock(), Ordering::Relaxed);
@@ -879,15 +822,21 @@ enum Retry {
 /// The writer's own handles, for the retries. The writer is what the `Ledger` handle sends to, so a record of its
 /// own (a poison row's gap) lands through `land`, as the gap report's does.
 struct WriterCtx<'a> {
-    db: &'a Arc<LedgerDb>,
-    pricing: &'a Arc<Pricing>,
-    tables: &'a Arc<PlanTables>,
-    unpriced: &'a Unpriced,
-    router: &'a RouterHandle,
-    stats: &'a Arc<LedgerStats>,
-    metrics: &'a Arc<Metrics>,
-    clock: &'a Clock,
+    handles: &'a Handles,
     stopped: &'a mut watch::Receiver<bool>,
+}
+
+/// What the writer, its spend refresh and its landing passes read and report through, built once in `spawn`.
+#[derive(Clone)]
+struct Handles {
+    clock: Clock,
+    db: Arc<LedgerDb>,
+    metrics: Arc<Metrics>,
+    pricing: Arc<Pricing>,
+    router: RouterHandle,
+    stats: Arc<LedgerStats>,
+    tables: Arc<PlanTables>,
+    unpriced: Unpriced,
 }
 
 #[derive(PartialEq)]
@@ -914,26 +863,13 @@ async fn wait_on_clock(
 /// A failed batch is retried in place, then replayed one record at a time. Nothing new is taken from the channel
 /// while this runs, so order holds and admission's mark fires behind the held batch.
 async fn retry_held(ctx: &mut WriterCtx<'_>, held: Held) -> Retry {
-    let snapshot = ctx.router.snapshot();
+    let snapshot = ctx.handles.router.snapshot();
     for delay in BATCH_RETRY_DELAYS {
-        if wait_on_clock(delay, ctx.clock, ctx.stopped).await == Wait::Stopped {
+        if wait_on_clock(delay, &ctx.handles.clock, ctx.stopped).await == Wait::Stopped {
             return Retry::Stopped(held);
         }
         let rest = held.from..held.records.len();
-        match land(
-            ctx.db,
-            ctx.pricing,
-            ctx.tables,
-            ctx.unpriced,
-            ctx.stats,
-            ctx.metrics,
-            &snapshot,
-            &held.records,
-            rest,
-            ctx.clock,
-        )
-        .await
-        {
+        match ctx.handles.land(&snapshot, &held.records, rest).await {
             Landed::Written | Landed::Lost => return Retry::Settled,
             Landed::Refused { .. } => {}
         }
@@ -944,7 +880,7 @@ async fn retry_held(ctx: &mut WriterCtx<'_>, held: Held) -> Retry {
 /// A batch the database as a whole refused is tried again every `BATCH_RETRY_HOLD`, one record at a time, until it
 /// lands or the process stops; it is never dropped.
 async fn hold(ctx: &mut WriterCtx<'_>, held: Held) -> Retry {
-    if wait_on_clock(BATCH_RETRY_HOLD, ctx.clock, ctx.stopped).await == Wait::Stopped {
+    if wait_on_clock(BATCH_RETRY_HOLD, &ctx.handles.clock, ctx.stopped).await == Wait::Stopped {
         return Retry::Stopped(held);
     }
     replay(ctx, held).await
@@ -953,23 +889,10 @@ async fn hold(ctx: &mut WriterCtx<'_>, held: Held) -> Retry {
 /// One record per transaction. A record the database as a whole refuses is held with everything after it; one
 /// refused on its own row is a poison row, parked when it carries money and dropped with its gap otherwise.
 async fn replay(ctx: &mut WriterCtx<'_>, held: Held) -> Retry {
-    let snapshot = ctx.router.snapshot();
+    let snapshot = ctx.handles.router.snapshot();
     for index in held.from..held.records.len() {
         let one = index..index + 1;
-        let error = match land(
-            ctx.db,
-            ctx.pricing,
-            ctx.tables,
-            ctx.unpriced,
-            ctx.stats,
-            ctx.metrics,
-            &snapshot,
-            &held.records,
-            one,
-            ctx.clock,
-        )
-        .await
-        {
+        let error = match ctx.handles.land(&snapshot, &held.records, one).await {
             Landed::Written | Landed::Lost => continue,
             // A full disk, an I/O error or a lock held past the timeout refuses every record after this one as
             // well, so the rest of the batch waits with it; a constraint or a trigger refused this row alone.
@@ -993,7 +916,9 @@ async fn replay(ctx: &mut WriterCtx<'_>, held: Held) -> Retry {
             } if attempts.iter().any(AttemptRecord::has_usage) => {
                 // The parking table has no constraint a serialized record can violate, so a park the database
                 // refuses is the database's: the record stays held rather than lost.
-                if park(ctx, request, attempts, bodies.is_some(), &error)
+                if ctx
+                    .handles
+                    .park(request, attempts, bodies.is_some(), &error)
                     .await
                     .is_err()
                 {
@@ -1005,78 +930,68 @@ async fn replay(ctx: &mut WriterCtx<'_>, held: Held) -> Retry {
                 }
             }
             record @ Record::Request { request, .. } => {
-                count_drop(ctx.stats, ctx.metrics, table_of(record));
+                count_drop(&ctx.handles.stats, &ctx.handles.metrics, table_of(record));
                 // The writer lands its own gap as a batch of one, as the gap report does: a send into its own
                 // channel would meet the queue it stopped draining.
                 let gap = Arc::new(vec![crate::assemble::gap(
                     &request.id,
                     "poison",
-                    (ctx.clock)(),
+                    (ctx.handles.clock)(),
                 )]);
-                let _ = land(
-                    ctx.db,
-                    ctx.pricing,
-                    ctx.tables,
-                    ctx.unpriced,
-                    ctx.stats,
-                    ctx.metrics,
-                    &snapshot,
-                    &gap,
-                    0..1,
-                    ctx.clock,
-                )
-                .await;
+                let _ = ctx.handles.land(&snapshot, &gap, 0..1).await;
             }
-            other => count_drop(ctx.stats, ctx.metrics, table_of(other)),
+            other => count_drop(&ctx.handles.stats, &ctx.handles.metrics, table_of(other)),
         }
     }
     Retry::Settled
 }
 
-/// Parks a priced record the database refused on its own row: one `parked_records` row with the request row and
-/// its attempts and without the captured bodies, so the capture is lost and the money is not.
-async fn park(
-    ctx: &WriterCtx<'_>,
-    request: &RequestRecord,
-    attempts: &[AttemptRecord],
-    captured: bool,
-    error: &str,
-) -> Result<(), LedgerError> {
-    let record = serde_json::to_string(&ParkedRows { request, attempts })?;
-    let at = (ctx.clock)();
-    let request_id = request.id.clone();
-    let pool_id = request.pool_id.clone();
-    let account_id = attempts.last().map(|a| a.account_id.clone());
-    let refusal = error.to_string();
-    let parked = blocking(ctx.db, move |db| {
-        db.insert_parked(
-            at,
-            &request_id,
-            pool_id.as_deref(),
-            account_id.as_deref(),
-            &record,
-            &refusal,
-        )
-    })
-    .await;
-    match &parked {
-        Ok(()) => {
-            ctx.stats.parked_priced.fetch_add(1, Ordering::Relaxed);
-            tracing::warn!(
+impl Handles {
+    /// Parks a priced record the database refused on its own row: one `parked_records` row with the request row and
+    /// its attempts and without the captured bodies, so the capture is lost and the money is not.
+    async fn park(
+        &self,
+        request: &RequestRecord,
+        attempts: &[AttemptRecord],
+        captured: bool,
+        error: &str,
+    ) -> Result<(), LedgerError> {
+        let record = serde_json::to_string(&ParkedRows { request, attempts })?;
+        let at = (self.clock)();
+        let request_id = request.id.clone();
+        let pool_id = request.pool_id.clone();
+        let account_id = attempts.last().map(|a| a.account_id.clone());
+        let refusal = error.to_string();
+        let parked = blocking(&self.db, move |db| {
+            db.insert_parked(
+                at,
+                &request_id,
+                pool_id.as_deref(),
+                account_id.as_deref(),
+                &record,
+                &refusal,
+            )
+        })
+        .await;
+        match &parked {
+            Ok(()) => {
+                self.stats.parked_priced.fetch_add(1, Ordering::Relaxed);
+                tracing::warn!(
+                    request_id = %request.id,
+                    pool = request.pool_id.as_deref().unwrap_or(crate::rollup::UNATTRIBUTED),
+                    %error,
+                    capture_dropped = captured,
+                    "a priced record could not be written. It is parked and tried again at the next start or on a replay"
+                );
+            }
+            Err(park_error) => tracing::error!(
                 request_id = %request.id,
-                pool = request.pool_id.as_deref().unwrap_or(crate::rollup::UNATTRIBUTED),
-                %error,
-                capture_dropped = captured,
-                "a priced record could not be written. It is parked and tried again at the next start or on a replay"
-            );
+                error = %park_error,
+                "a priced record could not be parked, so it stays held"
+            ),
         }
-        Err(park_error) => tracing::error!(
-            request_id = %request.id,
-            error = %park_error,
-            "a priced record could not be parked, so it stays held"
-        ),
+        parked
     }
-    parked
 }
 
 /// The stop's last try at a held batch: one replay, and what the database still refuses is lost and counted, the
@@ -1092,86 +1007,70 @@ async fn drain_held(ctx: &mut WriterCtx<'_>, held: Held) {
         "the ledger stopped with records it could not write, and they are lost"
     );
     for record in lost {
-        count_drop(ctx.stats, ctx.metrics, table_of(record));
+        count_drop(&ctx.handles.stats, &ctx.handles.metrics, table_of(record));
     }
 }
 
-/// Every parked record is tried once at start and on each replay, in the order it was parked, each in its own
-/// transaction, which deletes the parked row as it lands the record, so a replay is charged once however the process
-/// fares between the two: one that lands leaves the table and is observed as a landed record; one that fails keeps its
-/// row with the error it met this time. Answers how many landed and how many were kept, or the error of a row read
-/// that failed, since a pass that never ran is not one that kept every row.
-#[allow(clippy::too_many_arguments)]
-async fn land_parked(
-    db: &Arc<LedgerDb>,
-    pricing: &Arc<Pricing>,
-    tables: &Arc<PlanTables>,
-    unpriced: &Unpriced,
-    stats: &Arc<LedgerStats>,
-    metrics: &Arc<Metrics>,
-    snapshot: &RegistrySnapshot,
-    now: i64,
-    clock: &Clock,
-) -> Result<(u64, u64), LedgerError> {
-    let rows = db
+impl Handles {
+    /// Every parked record is tried once at start and on each replay, in the order it was parked, each in its own
+    /// transaction, which deletes the parked row as it lands the record, so a replay is charged once however the
+    /// process fares between the two: one that lands leaves the table and is observed as a landed record, and one that
+    /// fails keeps its row with the error it met this time. Answers how many landed and how many were kept, or the
+    /// error of a row read that failed, since a pass that never ran is not one that kept every row.
+    async fn land_parked(
+        &self,
+        snapshot: &RegistrySnapshot,
+        now: i64,
+    ) -> Result<(u64, u64), LedgerError> {
+        let db = &self.db;
+        let rows = db
         .writer_read(WriterRead::ParkedRows, crate::db::parked_rows)
         .await
         .inspect_err(|error| {
             tracing::warn!(%error, "the parked records could not be read, so they wait for the next start or replay");
         })?;
-    if rows.is_empty() {
-        return Ok((0, 0));
-    }
-    let (mut landed, mut kept) = (0u64, 0u64);
-    for row in rows {
-        let outcome = match serde_json::from_str::<ParkedRecord>(&row.record) {
-            Ok(parked) => {
-                // The capture was not parked, so the row claims none: the drawer would read a captured request
-                // whose bodies are gone as one whose bodies aged out.
-                let batch = Arc::new(vec![Record::Request {
-                    request: RequestRecord {
-                        bodies_captured: false,
-                        ..parked.request
-                    },
-                    attempts: parked.attempts,
-                    bodies: None,
-                }]);
-                land_acknowledging(
-                    db,
-                    pricing,
-                    tables,
-                    unpriced,
-                    stats,
-                    metrics,
-                    snapshot,
-                    &batch,
-                    0..1,
-                    Some(row.id),
-                    clock,
-                )
-                .await
-            }
-            Err(error) => Landed::Refused {
-                database_wide: false,
-                error: error.to_string(),
-            },
-        };
-        let id = row.id;
-        let error = match outcome {
-            Landed::Written => {
-                landed += 1;
-                continue;
-            }
-            Landed::Refused { error, .. } => error,
-            Landed::Lost => "the write panicked".to_string(),
-        };
-        kept += 1;
-        if let Err(error) = blocking(db, move |db| db.update_parked(id, &error, now)).await {
-            tracing::warn!(%error, id, "a parked record's row could not be updated");
+        if rows.is_empty() {
+            return Ok((0, 0));
         }
+        let (mut landed, mut kept) = (0u64, 0u64);
+        for row in rows {
+            let outcome = match serde_json::from_str::<ParkedRecord>(&row.record) {
+                Ok(parked) => {
+                    // The capture was not parked, so the row claims none: the drawer would read a captured request
+                    // whose bodies are gone as one whose bodies aged out.
+                    let batch = Arc::new(vec![Record::Request {
+                        request: RequestRecord {
+                            bodies_captured: false,
+                            ..parked.request
+                        },
+                        attempts: parked.attempts,
+                        bodies: None,
+                    }]);
+                    self.land_acknowledging(snapshot, &batch, 0..1, Some(row.id))
+                        .await
+                }
+                Err(error) => Landed::Refused {
+                    database_wide: false,
+                    error: error.to_string(),
+                },
+            };
+            let id = row.id;
+            let error = match outcome {
+                Landed::Written => {
+                    landed += 1;
+                    continue;
+                }
+                Landed::Refused { error, .. } => error,
+                Landed::Lost => "the write panicked".to_string(),
+            };
+            kept += 1;
+            if let Err(error) = blocking(db, move |db| db.update_parked(id, &error, now)).await {
+                tracing::warn!(%error, id, "a parked record's row could not be updated");
+            }
+        }
+        tracing::info!(landed, kept, "the parked records were tried");
+        Ok((landed, kept))
     }
-    tracing::info!(landed, kept, "the parked records were tried");
-    Ok((landed, kept))
 }
 
 /// Runs `f` against the ledger on a blocking worker; a worker that died answers as an I/O error.
@@ -1397,14 +1296,7 @@ fn budget_period_ended(previous: &MemberSpend, spend: &MemberSpend, at: i64) -> 
 /// The writer's spend refresh: the handles it reads and reports through, the budget edges measured across refreshes,
 /// and the budget rows not yet landed.
 struct Spends {
-    db: Arc<LedgerDb>,
-    pricing: Arc<Pricing>,
-    tables: Arc<PlanTables>,
-    unpriced: Unpriced,
-    router: RouterHandle,
-    stats: Arc<LedgerStats>,
-    metrics: Arc<Metrics>,
-    clock: Clock,
+    handles: Handles,
     event_poll: Duration,
     /// The registry revision the last read priced its members under, which the writer compares the router's against
     /// to recompute after a budget or period edited under it.
@@ -1420,8 +1312,9 @@ impl Spends {
     /// period starts in it). A crossing without a row, such as one a budget set while the router was down made, is
     /// announced.
     async fn start(&mut self) {
-        let (from, _) = period_bounds(BudgetPeriod::Month, (self.clock)());
+        let (from, _) = period_bounds(BudgetPeriod::Month, (self.handles.clock)());
         match self
+            .handles
             .db
             .writer_read(WriterRead::AnnouncedCrossings, move |conn| {
                 announced_crossings(conn, from)
@@ -1442,14 +1335,14 @@ impl Spends {
     /// one `event_poll` later rather than at the period's end, since every budgeted member waits on it. The budget
     /// rows the read crosses wait in `pending`.
     async fn read(&mut self, priced: &[PricedAttempt]) {
-        let now = (self.clock)();
-        let degraded = self.stats.degraded.load(Ordering::Relaxed);
-        let snapshot = self.router.snapshot();
+        let now = (self.handles.clock)();
+        let degraded = self.handles.stats.degraded.load(Ordering::Relaxed);
+        let snapshot = self.handles.router.snapshot();
         self.revision = snapshot.revision;
         let spend = refresh_member_spends(
-            &self.db,
-            &self.pricing,
-            &self.router,
+            &self.handles.db,
+            &self.handles.pricing,
+            &self.handles.router,
             &snapshot,
             now,
             self.due,
@@ -1463,7 +1356,7 @@ impl Spends {
             self.pending.extend(edges);
         }
         if spend.refreshed {
-            if self.stats.degraded.swap(false, Ordering::Relaxed) {
+            if self.handles.stats.degraded.swap(false, Ordering::Relaxed) {
                 tracing::info!("the ledger caught up, so budgeted members are placed on again");
             }
             self.due = spend.due;
@@ -1489,19 +1382,10 @@ impl Spends {
             return;
         }
         let batch: Batch = Arc::new(self.pending.iter().cloned().map(Record::Event).collect());
-        let landed = land(
-            &self.db,
-            &self.pricing,
-            &self.tables,
-            &self.unpriced,
-            &self.stats,
-            &self.metrics,
-            &self.router.snapshot(),
-            &batch,
-            0..batch.len(),
-            &self.clock,
-        )
-        .await;
+        let landed = self
+            .handles
+            .land(&self.handles.router.snapshot(), &batch, 0..batch.len())
+            .await;
         // A refused batch keeps its rows for the next batch or refresh, as a held batch keeps its records.
         if !matches!(landed, Landed::Refused { .. }) {
             self.pending.clear();
@@ -1659,205 +1543,207 @@ fn table_of(record: &Record) -> &'static str {
     }
 }
 
-/// One transaction over `range` of the batch on a blocking thread. A transaction that fails rolls back and leaves
-/// the records to the caller to retry, replay or park; only a panicking closure drops them, counted, so the gap
-/// that follows names them. Metrics are observed only after the commit succeeds, so a failed write never reaches
-/// the request or sample series.
-#[allow(clippy::too_many_arguments)]
-async fn land(
-    db: &Arc<LedgerDb>,
-    pricing: &Arc<Pricing>,
-    tables: &Arc<PlanTables>,
-    unpriced: &Unpriced,
-    stats: &Arc<LedgerStats>,
-    metrics: &Arc<Metrics>,
-    snapshot: &RegistrySnapshot,
-    batch: &Batch,
-    range: Range<usize>,
-    clock: &Clock,
-) -> Landed {
-    land_acknowledging(
-        db, pricing, tables, unpriced, stats, metrics, snapshot, batch, range, None, clock,
-    )
-    .await
-}
+impl Handles {
+    /// One transaction over `range` of the batch on a blocking thread. A transaction that fails rolls back and leaves
+    /// the records to the caller to retry, replay or park; only a panicking closure drops them, counted, so the gap
+    /// that follows names them. Metrics are observed only after the commit succeeds, so a failed write never reaches
+    /// the request or sample series.
+    async fn land(
+        &self,
+        snapshot: &RegistrySnapshot,
+        batch: &Batch,
+        range: Range<usize>,
+    ) -> Landed {
+        self.land_acknowledging(snapshot, batch, range, None).await
+    }
 
-/// `land`, deleting the parked row the batch replays in the record's own transaction. A row deleted after the commit
-/// could outlive its landing, through a failed delete or a retention pass that cut the raw rows, and the next start
-/// would charge the record again; a row deleted ahead of a failed commit would lose the money.
-#[allow(clippy::too_many_arguments)]
-async fn land_acknowledging(
-    db: &Arc<LedgerDb>,
-    pricing: &Arc<Pricing>,
-    tables: &Arc<PlanTables>,
-    unpriced: &Unpriced,
-    stats: &Arc<LedgerStats>,
-    metrics: &Arc<Metrics>,
-    snapshot: &RegistrySnapshot,
-    batch: &Batch,
-    range: Range<usize>,
-    parked: Option<i64>,
-    clock: &Clock,
-) -> Landed {
-    let db = db.clone();
-    let clock = clock.clone();
-    let revisions = pricing.revisions();
-    let tiers = batch_tiers(snapshot, &batch[range.clone()]);
-    let records = batch.clone();
-    let size = range.len() as u64;
-    let landed = range.clone();
-    let observed = revisions.clone();
-    let written = tokio::task::spawn_blocking(move || {
-        // The cache-map writes that found no decision, counted once the transaction commits: an orphan in a batch
-        // that rolls back is tried again with it.
-        let mut orphans = Vec::new();
-        // Made at the transaction's first decision and kept for the rest, rather than a context per decision.
-        let mut compressor: Option<zstd::bulk::Compressor> = None;
-        let result = db.write(|conn| {
-            let tx = begin_write(conn)?;
-            for record in &records[range] {
-                match record {
-                    Record::Event(event) => {
-                        insert_event_in(&tx, event)?;
-                        crate::rollup::fold_event(&tx, event)?;
-                    }
-                    Record::Keepalive(delta) => {
-                        crate::rollup::fold_keepalive(&tx, delta)?;
-                    }
-                    Record::Request {
-                        request,
-                        attempts,
-                        bodies,
-                    } => {
-                        let mut attempts = attempts.to_vec();
-                        for a in &mut attempts {
-                            a.tier = tiers.get(&a.account_id).cloned().flatten();
+    /// `land`, deleting the parked row the batch replays in the record's own transaction. A row deleted after the
+    /// commit could outlive its landing, through a failed delete or a retention pass that cut the raw rows, and the
+    /// next start would charge the record again, while a row deleted ahead of a failed commit would lose the money.
+    async fn land_acknowledging(
+        &self,
+        snapshot: &RegistrySnapshot,
+        batch: &Batch,
+        range: Range<usize>,
+        parked: Option<i64>,
+    ) -> Landed {
+        let Handles {
+            clock,
+            db,
+            metrics,
+            pricing,
+            stats,
+            tables,
+            unpriced,
+            ..
+        } = self;
+        let db = db.clone();
+        let clock = clock.clone();
+        let revisions = pricing.revisions();
+        let tiers = batch_tiers(snapshot, &batch[range.clone()]);
+        let records = batch.clone();
+        let size = range.len() as u64;
+        let landed = range.clone();
+        let observed = revisions.clone();
+        let written = tokio::task::spawn_blocking(move || {
+            // The cache-map writes that found no decision, counted once the transaction commits: an orphan in a batch
+            // that rolls back is tried again with it.
+            let mut orphans = Vec::new();
+            // Made at the transaction's first decision and kept for the rest, rather than a context per decision.
+            let mut compressor: Option<zstd::bulk::Compressor> = None;
+            let result = db.write(|conn| {
+                let tx = begin_write(conn)?;
+                for record in &records[range] {
+                    match record {
+                        Record::Event(event) => {
+                            insert_event_in(&tx, event)?;
+                            crate::rollup::fold_event(&tx, event)?;
                         }
-                        let previous =
-                            insert_request_in(&tx, request, &attempts, bodies.as_ref(), clock())?;
-                        crate::rollup::fold_request(
-                            &tx,
+                        Record::Keepalive(delta) => {
+                            crate::rollup::fold_keepalive(&tx, delta)?;
+                        }
+                        Record::Request {
                             request,
-                            &attempts,
-                            previous.as_ref().map(|(r, a)| (r, a.as_slice())),
-                            &revisions,
-                        )?;
-                    }
-                    Record::Samples { quota, extra, .. } => {
-                        insert_samples_in(&tx, quota, extra.as_ref())?;
-                    }
-                    Record::Decision(row) => {
-                        let summary = serde_json::to_string(&row.summary)?;
-                        // Compressed here, inside the batch on the blocking thread, so the request path and the
-                        // broadcast carry the typed record and no frame. The default level folds this JSON four
-                        // to six times. The bulk compressor writes the content size into the frame's header, which
-                        // a reader checks against its bound before it decodes.
-                        let compressor = match &mut compressor {
-                            Some(compressor) => compressor,
-                            None => compressor.insert(zstd::bulk::Compressor::new(0)?),
-                        };
-                        let frame = compressor.compress(&serde_json::to_vec(&row.record)?)?;
-                        insert_decision_in(&tx, row, &summary, &frame)?;
-                    }
-                    Record::CacheMap(write) => {
-                        let entries = serde_json::to_string(&write.entries)?;
-                        if update_cache_map_in(&tx, write, &entries)? == 0 {
-                            orphans.push((write.request_id.clone(), write.seq, write.attempt));
+                            attempts,
+                            bodies,
+                        } => {
+                            let mut attempts = attempts.to_vec();
+                            for a in &mut attempts {
+                                a.tier = tiers.get(&a.account_id).cloned().flatten();
+                            }
+                            let previous = insert_request_in(
+                                &tx,
+                                request,
+                                &attempts,
+                                bodies.as_ref(),
+                                clock(),
+                            )?;
+                            crate::rollup::fold_request(
+                                &tx,
+                                request,
+                                &attempts,
+                                previous.as_ref().map(|(r, a)| (r, a.as_slice())),
+                                &revisions,
+                            )?;
+                        }
+                        Record::Samples { quota, extra, .. } => {
+                            insert_samples_in(&tx, quota, extra.as_ref())?;
+                        }
+                        Record::Decision(row) => {
+                            let summary = serde_json::to_string(&row.summary)?;
+                            // Compressed here, inside the batch on the blocking thread, so the request path and the
+                            // broadcast carry the typed record and no frame. The default level folds this JSON four
+                            // to six times. The bulk compressor writes the content size into the frame's header, which
+                            // a reader checks against its bound before it decodes.
+                            let compressor = match &mut compressor {
+                                Some(compressor) => compressor,
+                                None => compressor.insert(zstd::bulk::Compressor::new(0)?),
+                            };
+                            let frame = compressor.compress(&serde_json::to_vec(&row.record)?)?;
+                            insert_decision_in(&tx, row, &summary, &frame)?;
+                        }
+                        Record::CacheMap(write) => {
+                            let entries = serde_json::to_string(&write.entries)?;
+                            if update_cache_map_in(&tx, write, &entries)? == 0 {
+                                orphans.push((write.request_id.clone(), write.seq, write.attempt));
+                            }
+                        }
+                        Record::RouterStarted {
+                            version,
+                            counts,
+                            at,
+                        } => {
+                            let event = EventRecord {
+                                at: *at,
+                                kind: ROUTER_STARTED.into(),
+                                detail: Some(
+                                    json!({
+                                        "version": version,
+                                        "pins_loaded": counts.pins,
+                                        "shedding_marks_loaded": counts.shed_marks,
+                                        "shedding_rounds_stale": counts.shed_rounds_stale,
+                                        "windows_loaded": counts.windows,
+                                        "affinity_entries_loaded": counts.affinity_entries,
+                                        "down_since": newest_row_at(&tx)?,
+                                        // A held request lives in the process alone, so no start keeps one.
+                                        "holds_lost": true,
+                                    })
+                                    .to_string(),
+                                ),
+                                ..Default::default()
+                            };
+                            insert_event_in(&tx, &event)?;
+                            crate::rollup::fold_event(&tx, &event)?;
                         }
                     }
-                    Record::RouterStarted {
-                        version,
-                        counts,
-                        at,
-                    } => {
-                        let event = EventRecord {
-                            at: *at,
-                            kind: ROUTER_STARTED.into(),
-                            detail: Some(
-                                json!({
-                                    "version": version,
-                                    "pins_loaded": counts.pins,
-                                    "shedding_marks_loaded": counts.shed_marks,
-                                    "shedding_rounds_stale": counts.shed_rounds_stale,
-                                    "windows_loaded": counts.windows,
-                                    "affinity_entries_loaded": counts.affinity_entries,
-                                    "down_since": newest_row_at(&tx)?,
-                                    // A held request lives in the process alone, so no start keeps one.
-                                    "holds_lost": true,
-                                })
-                                .to_string(),
-                            ),
-                            ..Default::default()
-                        };
-                        insert_event_in(&tx, &event)?;
-                        crate::rollup::fold_event(&tx, &event)?;
-                    }
                 }
-            }
-            if let Some(id) = parked {
-                delete_parked_in(&tx, id)?;
-            }
-            tx.commit()?;
-            Ok::<(), LedgerError>(())
-        });
-        (result, orphans)
-    })
-    .await;
-    match written {
-        Ok((Ok(()), orphans)) => {
-            stats.written.fetch_add(size, Ordering::Relaxed);
-            stats
-                .cache_map_orphans
-                .fetch_add(orphans.len() as u64, Ordering::Relaxed);
-            for (request_id, seq, attempt) in orphans {
-                tracing::debug!(
-                    %request_id,
-                    seq,
-                    attempt,
-                    "a cache map found no decision to land on, so it is counted and dropped"
-                );
-            }
-            // The batch's own attempts serve the observers: the copies the transaction stamped differ in `tier`
-            // alone, which neither reads.
-            for record in &batch[landed] {
-                match record {
-                    Record::Request {
-                        request, attempts, ..
-                    } => {
-                        let in_force = observed.in_force(request.received_at);
-                        // Counted at the landing, once per request, since every read prices the same counts again,
-                        // and after the commit, since a refused batch runs its transaction again on the retry or
-                        // the replay.
-                        if attempts.iter().any(AttemptRecord::has_usage)
-                            && in_force.price(&request.canonical_model).is_none()
-                        {
-                            pricing.unknown_counter().fetch_add(1, Ordering::Relaxed);
+                if let Some(id) = parked {
+                    delete_parked_in(&tx, id)?;
+                }
+                tx.commit()?;
+                Ok::<(), LedgerError>(())
+            });
+            (result, orphans)
+        })
+        .await;
+        match written {
+            Ok((Ok(()), orphans)) => {
+                stats.written.fetch_add(size, Ordering::Relaxed);
+                stats
+                    .cache_map_orphans
+                    .fetch_add(orphans.len() as u64, Ordering::Relaxed);
+                for (request_id, seq, attempt) in orphans {
+                    tracing::debug!(
+                        %request_id,
+                        seq,
+                        attempt,
+                        "a cache map found no decision to land on, so it is counted and dropped"
+                    );
+                }
+                // The batch's own attempts serve the observers: the copies the transaction stamped differ in `tier`
+                // alone, which neither reads.
+                for record in &batch[landed] {
+                    match record {
+                        Record::Request {
+                            request, attempts, ..
+                        } => {
+                            let in_force = observed.in_force(request.received_at);
+                            // Counted at the landing, once per request, since every read prices the same counts again,
+                            // and after the commit, since a refused batch runs its transaction again on the retry or
+                            // the replay.
+                            if attempts.iter().any(AttemptRecord::has_usage)
+                                && in_force.price(&request.canonical_model).is_none()
+                            {
+                                pricing.unknown_counter().fetch_add(1, Ordering::Relaxed);
+                            }
+                            note_unpriced(tables, unpriced, request, attempts);
+                            metrics.observe_request(in_force, request, attempts);
                         }
-                        note_unpriced(tables, unpriced, request, attempts);
-                        metrics.observe_request(in_force, request, attempts);
+                        Record::Samples { quota, poll, .. } => {
+                            metrics.observe_samples(quota, *poll)
+                        }
+                        _ => {}
                     }
-                    Record::Samples { quota, poll, .. } => metrics.observe_samples(quota, *poll),
-                    _ => {}
+                }
+                Landed::Written
+            }
+            Ok((Err(error), _)) => {
+                tracing::error!(%error, records = size, "a ledger batch could not be written");
+                stats.write_failures.fetch_add(1, Ordering::Relaxed);
+                Landed::Refused {
+                    database_wide: error.is_database_wide(),
+                    error: error.to_string(),
                 }
             }
-            Landed::Written
-        }
-        Ok((Err(error), _)) => {
-            tracing::error!(%error, records = size, "a ledger batch could not be written");
-            stats.write_failures.fetch_add(1, Ordering::Relaxed);
-            Landed::Refused {
-                database_wide: error.is_database_wide(),
-                error: error.to_string(),
+            Err(error) => {
+                tracing::error!(%error, records = size, "the ledger writer panicked, so the batch is lost");
+                stats.write_failures.fetch_add(1, Ordering::Relaxed);
+                stats.dropped.fetch_add(size, Ordering::Relaxed);
+                for record in &batch[landed] {
+                    metrics.observe_drop(table_of(record));
+                }
+                Landed::Lost
             }
-        }
-        Err(error) => {
-            tracing::error!(%error, records = size, "the ledger writer panicked, so the batch is lost");
-            stats.write_failures.fetch_add(1, Ordering::Relaxed);
-            stats.dropped.fetch_add(size, Ordering::Relaxed);
-            for record in &batch[landed] {
-                metrics.observe_drop(table_of(record));
-            }
-            Landed::Lost
         }
     }
 }
@@ -2218,16 +2104,18 @@ mod tests {
             .into(),
         };
         let spends = Spends {
-            db: Arc::new(LedgerDb::open_in_memory().unwrap()),
-            pricing: Arc::new(Pricing::new(
-                PriceRevisions::new(vec![table], "test").expect("one entry is a list"),
-            )),
-            tables: Arc::new(PlanTables::shipped()),
-            unpriced: Unpriced::default(),
-            router,
-            stats: Arc::new(LedgerStats::default()),
-            metrics: Arc::new(Metrics::new()),
-            clock: Arc::new(move || clock.load(Ordering::SeqCst)),
+            handles: Handles {
+                clock: Arc::new(move || clock.load(Ordering::SeqCst)),
+                db: Arc::new(LedgerDb::open_in_memory().unwrap()),
+                metrics: Arc::new(Metrics::new()),
+                pricing: Arc::new(Pricing::new(
+                    PriceRevisions::new(vec![table], "test").expect("one entry is a list"),
+                )),
+                router,
+                stats: Arc::new(LedgerStats::default()),
+                tables: Arc::new(PlanTables::shipped()),
+                unpriced: Unpriced::default(),
+            },
             event_poll: Duration::from_secs(5),
             revision: 0,
             due: None,
@@ -2262,6 +2150,7 @@ mod tests {
             ..Default::default()
         };
         spends
+            .handles
             .db
             .insert_request(&request, std::slice::from_ref(&attempt), None)
             .unwrap();
@@ -2277,6 +2166,7 @@ mod tests {
         spends: &Spends,
     ) -> Vec<(String, Option<String>, Option<String>, serde_json::Value)> {
         spends
+            .handles
             .db
             .events(0, i64::MAX, 100)
             .await
@@ -2409,7 +2299,7 @@ mod tests {
                 "test",
             )
             .unwrap();
-        spends.router.reload().await.unwrap();
+        spends.handles.router.reload().await.unwrap();
         spends.refresh(&[]).await;
         spends.refresh(&[]).await;
         let rows = budget_rows(&spends).await;
