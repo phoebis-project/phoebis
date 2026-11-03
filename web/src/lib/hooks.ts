@@ -8,16 +8,18 @@ import { clock } from './clock';
 import { messageOf } from './format';
 
 export interface Loaded<T> {
+  /**
+   * `data` while it answers the current deps, else null: a load for other deps is running, or the last load failed. A
+   * caller that draws the answer reads this one.
+   */
+  current: T | null;
   data: T | null;
   error: string | null;
   /** When the answer in `data` landed, as an ISO instant; null until the first one. */
   fetchedAt: string | null;
   loading: boolean;
   reload: () => void;
-  /**
-   * `data` does not answer the current deps: a load for other deps is running, or the last load failed. The
-   * data is kept for callers that tolerate an older answer; one that draws it as the answer checks this first.
-   */
+  /** `data` does not answer the current deps, which `data` is kept through for a caller that tolerates an older answer. */
   stale: boolean;
 }
 
@@ -299,7 +301,8 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
     // changes.
   }, [latest, paused, refreshMs, settle]);
 
-  return { data, error, fetchedAt, loading, reload: () => setNonce((n) => n + 1), stale: error !== null || (loadedFor !== null && !sameDeps(loadedFor, deps)) };
+  const stale = error !== null || (loadedFor !== null && !sameDeps(loadedFor, deps));
+  return { current: stale ? null : data, data, error, fetchedAt, loading, reload: () => setNonce((n) => n + 1), stale };
 }
 
 /**

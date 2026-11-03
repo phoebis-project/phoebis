@@ -909,7 +909,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
 
 /** The list the saved key is judged by, from the route rather than the form, so an unsaved edit does not show here. */
 function EffectiveList({ processed }: { processed: Loaded<KeyModels | null> }) {
-  const rules = processed.stale ? null : processed.data?.rules;
+  const rules = processed.current?.rules;
   return (
     <div className="field">
       <span className="field__label">Effective list</span>

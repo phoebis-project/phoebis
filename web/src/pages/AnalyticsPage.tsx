@@ -212,7 +212,7 @@ function sideRead<T>(open: boolean, sessionId: string | null, read: () => Promis
 function useDimensionKeys(from: string, to: string, groupBy: GroupBy, generation: number, shared?: Loaded<AnalyticsGroup[]>): Loaded<AnalyticsGroup[] | null> {
   const own = useAsync(() => (shared ? Promise.resolve(null) : api.getAnalyticsBreakdown({ from, groupBy, to })), [from, groupBy, to, generation, shared !== undefined]);
   const source = shared ?? own;
-  const current = source.stale ? null : source.data;
+  const current = source.current;
   const [last, setLast] = useState<AnalyticsGroup[] | null>(null);
   if (current !== null && current !== last) setLast(current);
   return current !== null ? source : { ...source, data: last };
@@ -483,7 +483,10 @@ export function AnalyticsPage() {
     budgets.reload();
     costSettings.reload();
   };
-  const rows = useMemo(() => (log.stale ? [] : (log.data?.requests ?? [])), [log.stale, log.data]);
+  // The memos below key on a read's current answer through a local, since the hooks lint takes a `.current` in a
+  // dependency list for a ref's.
+  const logAnswer = log.current;
+  const rows = useMemo(() => logAnswer?.requests ?? [], [logAnswer]);
   // The folds below share one pass of the pattern filter, and the key generations come from every row, since the kept
   // rows alone would label an earlier key holder as the live key.
   const kept = useMemo(() => keptRows(rows, patternOptions), [rows, patternOptions]);
@@ -494,26 +497,31 @@ export function AnalyticsPage() {
   // choice differs from what the range rule would have picked.
   const bucketMs = buckets.length > 1 ? buckets[1].at - buckets[0].at : rangeBucketMs;
   const groups = useMemo(() => (stale ? [] : sessionId === null ? (breakdown.data ?? []) : foldGroups(kept, groupBy, { agentGroups }, latest)), [stale, sessionId, breakdown.data, kept, groupBy, agentGroups, latest]);
-  const poolGroups = useMemo(() => (sessionId === null ? (byPool.stale ? [] : (byPool.data ?? [])) : foldGroups(kept, 'pool', { agentGroups }, latest)), [sessionId, byPool.stale, byPool.data, kept, agentGroups, latest]);
+  const byPoolAnswer = byPool.current;
+  const poolGroups = useMemo(() => (sessionId === null ? (byPoolAnswer ?? []) : foldGroups(kept, 'pool', { agentGroups }, latest)), [sessionId, byPoolAnswer, kept, agentGroups, latest]);
+  const bySpeedAnswer = bySpeed.current;
   const speedPoints = useMemo(
-    () => (sessionId === null ? (bySpeed.stale ? [] : (bySpeed.data ?? [])) : foldRequests(kept, rangeBucketMs, fromIso, toIso, 'speed', { agentGroups }, latest)),
-    [sessionId, bySpeed.stale, bySpeed.data, kept, rangeBucketMs, fromIso, toIso, agentGroups, latest],
+    () => (sessionId === null ? (bySpeedAnswer ?? []) : foldRequests(kept, rangeBucketMs, fromIso, toIso, 'speed', { agentGroups }, latest)),
+    [sessionId, bySpeedAnswer, kept, rangeBucketMs, fromIso, toIso, agentGroups, latest],
   );
-  const effortGroups = useMemo(() => (sessionId === null ? (byEffort.stale ? [] : (byEffort.data ?? [])) : foldGroups(kept, 'effort', { agentGroups }, latest)), [sessionId, byEffort.stale, byEffort.data, kept, agentGroups, latest]);
+  const byEffortAnswer = byEffort.current;
+  const effortGroups = useMemo(() => (sessionId === null ? (byEffortAnswer ?? []) : foldGroups(kept, 'effort', { agentGroups }, latest)), [sessionId, byEffortAnswer, kept, agentGroups, latest]);
   const totals = useMemo(() => totalsOf(groups), [groups]);
   // A session fold has no warming facts, so those figures read unavailable rather than zero.
   const { keptWarm } = totals;
   const probesUnmeasured = totals.fromRequests === true;
   // The cost-bearing sections' rows under the position: the funded query's under a dollar side, the page's own under
   // the whole, and in a session view the rows folded by who paid for them.
+  const costSeriesAnswer = costSeries.current;
   const costPoints = useMemo(() => {
     if (sessionId !== null) return funding === undefined ? points : stale ? [] : foldRequests(kept, rangeBucketMs, fromIso, toIso, groupBy, { agentGroups, funding }, latest);
-    return funded ? (costSeries.stale ? [] : (costSeries.data ?? [])) : points;
-  }, [sessionId, funding, funded, points, stale, kept, rangeBucketMs, fromIso, toIso, groupBy, agentGroups, latest, costSeries.stale, costSeries.data]);
+    return funded ? (costSeriesAnswer ?? []) : points;
+  }, [sessionId, funding, funded, points, stale, kept, rangeBucketMs, fromIso, toIso, groupBy, agentGroups, latest, costSeriesAnswer]);
+  const costBreakdownAnswer = costBreakdown.current;
   const costGroups = useMemo(() => {
     if (sessionId !== null) return funding === undefined ? groups : stale ? [] : foldGroups(kept, groupBy, { agentGroups, funding }, latest);
-    return funded || warming ? (costBreakdown.stale ? [] : (costBreakdown.data ?? [])) : groups;
-  }, [sessionId, funding, funded, warming, groups, stale, kept, groupBy, agentGroups, latest, costBreakdown.stale, costBreakdown.data]);
+    return funded || warming ? (costBreakdownAnswer ?? []) : groups;
+  }, [sessionId, funding, funded, warming, groups, stale, kept, groupBy, agentGroups, latest, costBreakdownAnswer]);
   const costBuckets = useMemo(() => (costPoints === points ? buckets : bucketsOf(costPoints)), [costPoints, points, buckets]);
   const costTotals = useMemo(() => totalsOf(costGroups), [costGroups]);
   const costHead = costHeadOf(unit, costTotals, week, scale);
@@ -553,15 +561,15 @@ export function AnalyticsPage() {
   const shown = failure === null;
   const loading = shown && (stale || (sessionId === null ? series.data === null || breakdown.data === null : log.data === null));
   const empty = shown && !loading && groups.length === 0;
-  const speedLoading = sessionId === null ? bySpeed.data === null || bySpeed.stale : loading;
-  const effortLoading = sessionId === null ? byEffort.data === null || byEffort.stale : loading;
+  const speedLoading = sessionId === null ? bySpeed.current === null : loading;
+  const effortLoading = sessionId === null ? byEffort.current === null : loading;
   const speedError = sessionId === null ? bySpeed.error : null;
   // The funded reads stand or fall on their own: while one is out or stale the cost surfaces read loading, and its
   // failure draws in place of their figures, so no figure of one position stands under another's subtitle.
   const costLoading = funded
-    ? costSeries.data === null || costSeries.stale || costBreakdown.data === null || costBreakdown.stale
+    ? costSeries.current === null || costBreakdown.current === null
     : warming
-      ? costBreakdown.data === null || costBreakdown.stale || (nativeWarming && (billedBreakdown.data === null || billedBreakdown.stale))
+      ? costBreakdown.current === null || (nativeWarming && billedBreakdown.current === null)
       : loading;
   const costError = funded ? (costSeries.error ?? costBreakdown.error) : warming ? (costBreakdown.error ?? billedBreakdown.error) : null;
   // Under native every week figure waits on the scale: a surface draws its skeleton while the cost model is out and the
@@ -572,15 +580,19 @@ export function AnalyticsPage() {
   const warmingError = sessionId === null ? (warmingSeries.error ?? billedWarmingSeries.error) : null;
   const modelError = byModel.error ?? byModelFunded.error;
   const poolError = sessionId === null ? (byPool.error ?? fundedByPool.error) : null;
-  const billedTotals = useMemo(() => (nativeWarming && !billedBreakdown.stale && billedBreakdown.data !== null ? sumGroups(billedBreakdown.data) : null), [nativeWarming, billedBreakdown.stale, billedBreakdown.data]);
+  const billedBreakdownAnswer = billedBreakdown.current;
+  const billedTotals = useMemo(() => (nativeWarming && billedBreakdownAnswer !== null ? sumGroups(billedBreakdownAnswer) : null), [nativeWarming, billedBreakdownAnswer]);
   const probeTile = warmingTileOf(unit, costTotals, figureLoading, sessionId !== null, reading, `${fmtInt(probesOf(costTotals))} probes`, probeSidesOf(costTotals, billedTotals, 'cost'), costTotals.probeCostUsd);
   const savingTile = warmingTileOf(unit, costTotals, figureLoading, sessionId !== null, reading, keptWarmRequests(costTotals), savingSidesOf(costTotals, billedTotals, 'gross'), costTotals.savingUsd);
   const netTile = warmingTileOf(unit, costTotals, figureLoading, sessionId !== null, reading, 'less the probe cost', savingSidesOf(costTotals, billedTotals, 'net'), netSaving(costTotals.savingUsd, costTotals.probeCostUsd));
-  const warmingPoints = useMemo(() => (warmingSeries.stale ? [] : (warmingSeries.data ?? [])), [warmingSeries.stale, warmingSeries.data]);
-  const billedWarmingPoints = nativeWarming && !billedWarmingSeries.stale ? billedWarmingSeries.data : null;
-  const warmingLoading = warmingSeries.data === null || warmingSeries.stale || (nativeWarming && (billedWarmingSeries.data === null || billedWarmingSeries.stale));
-  const fundedModels = useMemo(() => new Map((byModelFunded.stale ? [] : (byModelFunded.data ?? [])).map((g) => [g.key, g])), [byModelFunded.stale, byModelFunded.data]);
-  const fundedPools = useMemo(() => new Map((fundedByPool.stale ? [] : (fundedByPool.data ?? [])).map((g) => [g.key, g])), [fundedByPool.stale, fundedByPool.data]);
+  const warmingSeriesAnswer = warmingSeries.current;
+  const warmingPoints = useMemo(() => (warmingSeriesAnswer ?? []), [warmingSeriesAnswer]);
+  const billedWarmingPoints = nativeWarming ? billedWarmingSeries.current : null;
+  const warmingLoading = warmingSeries.current === null || (nativeWarming && billedWarmingSeries.current === null);
+  const byModelFundedAnswer = byModelFunded.current;
+  const fundedModels = useMemo(() => new Map((byModelFundedAnswer ?? []).map((g) => [g.key, g])), [byModelFundedAnswer]);
+  const fundedByPoolAnswer = fundedByPool.current;
+  const fundedPools = useMemo(() => new Map((fundedByPoolAnswer ?? []).map((g) => [g.key, g])), [fundedByPoolAnswer]);
   // Native draws the cache card's bars in the plan rows' figure with the billed dollars in its subtitle, and a range
   // with no plan row draws the billed rows' dollars, its one side.
   const cacheSides = sidesOf(costTotals);
@@ -631,7 +643,7 @@ export function AnalyticsPage() {
           <GroupByControl onChange={changeGroupBy} options={GROUP_OPTIONS} value={pageBy} />
           {groupBy === 'user_agent' && <GroupsButton onCommit={commitGroups} value={clientGroups} />}
         </FilterBar>
-        {!log.stale && log.data?.partial && (
+        {log.current?.partial && (
           <p className="muted" role="status">
             Partial: the first {fmtInt(SESSION_PAGE_LIMIT * SESSION_PAGE_SIZE)} requests of the range
           </p>
@@ -675,10 +687,10 @@ export function AnalyticsPage() {
               <Card title="Refusals by category" subtitle={`Answers the upstream refused in range, by category, each a request that succeeded${refusalsNote(sessionId !== null)}`}>
                 {refusalCategories.error !== null ? (
                   <ErrorState title="Could not load refusals by category" body={refusalCategories.error} retry={refusalCategories.reload} />
-                ) : refusalCategories.data === null || refusalCategories.stale ? (
+                ) : refusalCategories.current === null ? (
                   <Skeleton height={90} />
                 ) : (
-                  <CountBars color={ink.series[7]} empty="No answer was refused in this range." rows={refusalRows(refusalCategories.data, refusalInput, plainLinks)} />
+                  <CountBars color={ink.series[7]} empty="No answer was refused in this range." rows={refusalRows(refusalCategories.current, refusalInput, plainLinks)} />
                 )}
               </Card>
 
@@ -692,7 +704,7 @@ export function AnalyticsPage() {
                 </LineChart>
               </ChartCard>
 
-              <RewritesCard answer={rewrites.stale ? null : rewrites.data} error={rewrites.error} loading={rewrites.data === null || rewrites.stale} axis={axis} unfiltered={unfiltered} />
+              <RewritesCard answer={rewrites.current} error={rewrites.error} loading={rewrites.current === null} axis={axis} unfiltered={unfiltered} />
 
               <SpeedCard points={speedPoints} error={speedError} loading={speedLoading} axis={axis} />
 
@@ -707,7 +719,7 @@ export function AnalyticsPage() {
               </Card>
             </div>
             {/* Below the grid at full width, so the four columns read as the table under it does. */}
-            <GuardrailsCard answer={guardrailCounts.stale ? null : guardrailCounts.data} error={guardrailCounts.error} />
+            <GuardrailsCard answer={guardrailCounts.current} error={guardrailCounts.error} />
             <BreakdownTable
               title={`Traffic by ${groupLabel.toLowerCase()}`}
               loading={loading}
@@ -730,12 +742,12 @@ export function AnalyticsPage() {
                 sizes nothing, so it draws while the settings read is out. */}
             <BurnCharts
               account={burnAccount}
-              answer={burn.stale ? null : (burn.data?.answer ?? null)}
-              accounts={burn.stale ? null : (burn.data?.accounts ?? null)}
+              answer={burn.current?.answer ?? null}
+              accounts={burn.current?.accounts ?? null}
               costs={costs}
               error={burn.error}
               groupBy={pageBy}
-              loading={burn.data === null || burn.stale}
+              loading={burn.current === null}
               reading={burnReading}
               rangeEndMs={burn.data?.endMs}
               readAt={burn.data?.readAt}
@@ -883,10 +895,10 @@ export function AnalyticsPage() {
             <MissReasonsByGroup groupBy={groupBy} groups={groups} groupLabel={groupLabel} link={linkInput} loading={loading} plainLinks={plainLinks} />
             {sessionId === null && (
               <CacheByModel
-                groups={byModel.stale ? [] : (byModel.data ?? [])}
+                groups={byModel.current ?? []}
                 funded={fundedModels}
                 failure={failed(modelError) ?? (weekWait ? reading.failure : null)}
-                loading={byModel.data === null || byModel.stale || (funded && (byModelFunded.data === null || byModelFunded.stale)) || weekWait}
+                loading={byModel.current === null || (funded && byModelFunded.current === null) || weekWait}
                 reading={reading}
                 unit={unit}
               />
@@ -895,7 +907,7 @@ export function AnalyticsPage() {
             {sessionId === null && (
               <PlacementTable
                 error={placements.error}
-                rows={placements.stale ? null : placements.data}
+                rows={placements.current}
                 unfiltered={filters.accountId.length > 0 || filters.model.length > 0 || patterns.userAgents.length > 0 || patterns.clients.length > 0}
               />
             )}
@@ -1047,7 +1059,7 @@ export function AnalyticsPage() {
               groups={poolGroups}
               funded={fundedPools}
               failure={failed(poolError) ?? (weekWait ? reading.failure : null)}
-              loading={(sessionId === null ? byPool.data === null || byPool.stale || (poolFunding !== undefined && (fundedByPool.data === null || fundedByPool.stale)) : loading) || weekWait}
+              loading={(sessionId === null ? byPool.current === null || (poolFunding !== undefined && fundedByPool.current === null) : loading) || weekWait}
               reading={reading}
               unit={unit}
             />
@@ -1058,12 +1070,12 @@ export function AnalyticsPage() {
           <Section id="accounts" shown={shown} title="Accounts" meta="Peak utilization, window usage, pace, ineligible time, and pin churn per account">
             <AccountsSection
               accountIds={filters.accountId}
-              allowance={{ answer: unusedAllowance.stale ? null : unusedAllowance.data, costs: costSettings.data?.subscriptionCosts ?? null, error: unusedAllowance.error ?? costSettings.error }}
+              allowance={{ answer: unusedAllowance.current, costs: costSettings.data?.subscriptionCosts ?? null, error: unusedAllowance.error ?? costSettings.error }}
               bucketMs={bucketMs}
               error={accountRollups.error}
-              loading={accountRollups.data === null || accountRollups.stale}
+              loading={accountRollups.current === null}
               otherFilters={otherFilters}
-              rollups={accountRollups.stale ? null : accountRollups.data}
+              rollups={accountRollups.current}
               slotOf={slotOf}
               span={span}
               axis={axis}

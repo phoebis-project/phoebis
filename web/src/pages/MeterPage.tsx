@@ -214,7 +214,7 @@ export function MeterPage(): JSX.Element {
   const { cause: pauseCause, host } = useHoldHost();
   const read = useAsync(() => api.getAnalyticsReconciliations({ accountIds: filters.accounts }), [filters.accounts], { paused: pauseCause !== null, refreshMs: intervalMs });
   // An answer for the filters before a change draws nothing, so no group stands under a filter it was not read for.
-  const rows = read.stale ? null : (read.data?.reconciliations ?? null);
+  const rows = read.current?.reconciliations ?? null;
   const groups = useMemo(() => (rows === null ? null : meterGroups(rows)), [rows]);
   // One x axis for every spark: the 30 days to the answer's newest window end.
   const newest = useMemo(() => Math.max(0, ...(rows ?? []).map((r) => Date.parse(r.windowEnd))), [rows]);
