@@ -1,6 +1,6 @@
 import type { DecisionKind, DecisionRecord, WalkStep } from '@/api/types';
 import { has, lookup } from '@/lib/counts';
-import { candidateCells, DECISION_KIND_LABEL, DECISION_KIND_TONE, formatFact, PLACE_WORD, STEP_NAME, strategyWord, tierOf, verdictTone, verdictWord, words } from '@/lib/routingLog';
+import { candidateVerdict, DECISION_KIND_LABEL, DECISION_KIND_TONE, formatFact, PLACE_WORD, STEP_NAME, strategyWord, tierOf, verdictTone, verdictWord, words } from '@/lib/routingLog';
 import type { Chip, VerdictTone } from '@/lib/routingLog';
 
 export type Renderer = 'candidate' | 'chips' | 'hold' | 'list' | 'outcome' | 'rung' | 'sentence' | 'table';
@@ -149,6 +149,7 @@ const SHORT_ENDS = new Set(['admission', 'probe', 'selection']);
 const SLOT_OF: Record<DecisionKind, string> = { exhausted: 'exhausted', held: 'hold', moved: 'pick', placed: 'pick', refused: 'exhausted', renewed: 'pick' };
 const TERMINUS_OF: Record<DecisionKind, TerminusKind> = { exhausted: 'refused', held: 'held', moved: 'chosen', placed: 'chosen', refused: 'refused', renewed: 'chosen' };
 const HELD_FOR: Record<string, TerminusKind> = { reset: 'held_reset', rewrite: 'held_rewrite', slow_down: 'held_slow_down' };
+const HELD_TERMINI: ReadonlySet<TerminusKind> = new Set(Object.values(HELD_FOR));
 /**
  * The terminus an outcome names: a hold for the window's reset is the fourth way out, a hold for the slow-down the
  * fifth, a hold for the rewrite in flight the sixth, every other hold a slot's.
@@ -417,9 +418,9 @@ function hostOf(record: DecisionRecord, stations: Station[], shape: StripShape, 
 
 function leavesOf(record: DecisionRecord, now: number): Leaf[] {
   const all: Leaf[] = record.candidates.map((c) => {
-    const cells = candidateCells(c, record, now);
+    const verdict = candidateVerdict(c, now);
     const chosen = CHOSEN_VERDICTS.has(c.verdict);
-    return { accountId: c.accountId, badge: cells.verdict.badge, chip: cells.verdict.chip, chosen, more: 0, tone: chosen ? 'accent' : c.verdict === 'out' ? 'warning' : 'neutral' };
+    return { accountId: c.accountId, badge: verdict.badge, chip: verdict.chip, chosen, more: 0, tone: chosen ? 'accent' : c.verdict === 'out' ? 'warning' : 'neutral' };
   });
   if (all.length <= MAX_LEAVES) return all;
   const shown = all.slice(0, MAX_LEAVES);
@@ -433,7 +434,7 @@ function terminiOf(outcome: DecisionRecord['outcome'], shape: StripShape): Termi
   const kind = outcome.kind;
   const named = terminusOf(outcome);
   // The fourth, fifth and sixth ways out are drawn only where a walk took one, in the place of Held for a slot.
-  const termini: TerminusKind[] = ['chosen', named === 'held_reset' || named === 'held_rewrite' || named === 'held_slow_down' ? named : 'held', 'refused'];
+  const termini: TerminusKind[] = ['chosen', HELD_TERMINI.has(named) ? named : 'held', 'refused'];
   return termini.map((t) => ({
     badge: t === named ? DECISION_KIND_LABEL[kind] : null,
     // A pinned walk ends in Chosen, and in the terminus its outcome names when that is another.

@@ -1483,6 +1483,13 @@ const runwayWord = (c: RecordCandidate) => (c.fit === null ? '-' : c.runwayMs ==
 /** A spend window's lines: the share over the reset, and the estimate's word where no head has named the reset yet. */
 const spendLines = (w: RecordCandidate['windows'][string], now: number): string[] => [`spend ${fmtPct(w.utilization)}`, w.reset === null ? 'no reset' : formatFact(w.reset, 'time', now), ...(w.source === 'estimated' ? ['estimated'] : [])];
 
+/** A candidate's verdict: its badge, and the one chip that decided it with that chip's tone. */
+export function candidateVerdict(c: RecordCandidate, now: number): { badge: string; chip: Chip | null; tone: VerdictTone | null } {
+  const atCap = c.verdict === 'out' && (c.partition === 'at_cap' || c.obstacle?.name === 'at_cap');
+  const badge = c.verdict === 'ranked' && c.rank !== null ? `ranked ${ordinal(c.rank)}` : atCap ? 'at cap' : wordOf(VERDICT_BADGE, c.verdict);
+  return { badge, ...verdictChipOf(c, now) };
+}
+
 /**
  * One member's row of the candidate table: the account and its plan, the tier, the three windows (or a key's one
  * merged reading, or a usage-based seat's spend window), the projection with the demand on its hover and the runway the
@@ -1490,8 +1497,6 @@ const spendLines = (w: RecordCandidate['windows'][string], now: number): string[
  * it. A chip that names the destination's fit carries its tone.
  */
 export function candidateCells(c: RecordCandidate, record: DecisionRecord, now: number): { account: Chip; inFlight: string; pace: string; paceTitle: string | null; plan: string; prefix: { hash: PrefixEntry | null; until: string | null }; projection: string[]; projectionTitle: string | null; runway: string; tier: string; verdict: { badge: string; chip: Chip | null; tone: VerdictTone | null }; windows: string[][] } {
-  const atCap = c.verdict === 'out' && (c.partition === 'at_cap' || c.obstacle?.name === 'at_cap');
-  const badge = c.verdict === 'ranked' && c.rank !== null ? `ranked ${ordinal(c.rank)}` : atCap ? 'at cap' : wordOf(VERDICT_BADGE, c.verdict);
   // A seat whose share lapsed carries no spend entry, so it reads as an OAuth candidate with no window at any tier.
   const spend = hasSpendEntry(c);
   const windows =
@@ -1516,7 +1521,7 @@ export function candidateCells(c: RecordCandidate, record: DecisionRecord, now: 
     projectionTitle: projectionTitle(c, now),
     runway: runwayWord(c),
     tier: `${tierWord(c.tier, c.kind, 'plan')} P${c.tier[1]}`,
-    verdict: { badge, ...verdictChipOf(c, now) },
+    verdict: candidateVerdict(c, now),
     windows,
   };
 }
