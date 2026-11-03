@@ -177,7 +177,9 @@ function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], accounts: Ac
     const g = liveGeneration(r.keyId);
     if (g === null) continue;
     const id = `${r.keyId}:${g}:${r.sessionId}`;
-    bySession.set(id, [...(bySession.get(id) ?? []), r]);
+    const list = bySession.get(id);
+    if (list) list.push(r);
+    else bySession.set(id, [r]);
   }
   const rows = sessions.map((session) => {
     const agents = bySession.get(rowKey(session)) ?? [];

@@ -292,7 +292,11 @@ export function PoolsPage() {
   const accountById = useMemo(() => new Map((accounts.data ?? []).map((a) => [a.id, a])), [accounts.data]);
   const keysByPool = useMemo(() => {
     const m = new Map<string, ApiKey[]>();
-    for (const k of keys.data ?? []) m.set(k.poolId, [...(m.get(k.poolId) ?? []), k]);
+    for (const k of keys.data ?? []) {
+      const list = m.get(k.poolId);
+      if (list) list.push(k);
+      else m.set(k.poolId, [k]);
+    }
     return m;
   }, [keys.data]);
   // A session reaches a pool through its key, which is the only link the sessions route carries.
@@ -301,7 +305,10 @@ export function PoolsPage() {
     const m = new Map<string, Session[]>();
     for (const s of sessions.data ?? []) {
       const poolId = poolOf.get(s.keyId);
-      if (poolId !== undefined) m.set(poolId, [...(m.get(poolId) ?? []), s]);
+      if (poolId === undefined) continue;
+      const list = m.get(poolId);
+      if (list) list.push(s);
+      else m.set(poolId, [s]);
     }
     return m;
   }, [keys.data, sessions.data]);

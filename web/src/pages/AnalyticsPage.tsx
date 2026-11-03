@@ -2233,7 +2233,9 @@ function BurnCharts({
     const at = new Map<string, BurnPoint[]>();
     for (const p of answer?.points ?? []) {
       const slot = `${Date.parse(p.at)}|${p.group}`;
-      at.set(slot, [...(at.get(slot) ?? []), p]);
+      const list = at.get(slot);
+      if (list) list.push(p);
+      else at.set(slot, [p]);
     }
     return at;
   }, [answer]);
