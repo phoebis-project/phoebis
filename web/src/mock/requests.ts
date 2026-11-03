@@ -2163,10 +2163,9 @@ const heldRng = createRng(6_133);
  */
 const fundingKey = (r: RequestLog): HourlyRollup['funding'] => {
   const last = r.attempts[r.attempts.length - 1] as Attempt | undefined;
-  if (last?.accountKind === 'api_key') return 'billed';
-  if (last?.usageBased) return 'usage_based';
-  if (last?.response.speed === 'fast') return 'fast';
-  return last?.overageInUse === true ? 'overage' : 'plan';
+  if (last === undefined) return 'plan';
+  const funding = fundingOf(last);
+  return funding === 'api_key' ? 'billed' : funding;
 };
 
 /**
