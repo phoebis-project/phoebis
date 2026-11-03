@@ -92,8 +92,9 @@ impl BodyFacts {
                 chains: None,
                 markers_ttl_ms: None,
                 system_is_array: false,
-                // Fails open as `is_portable` does: a body no reader parses carries no reference the router could
-                // prove, and the upstream refuses it anyway.
+                // Fails open: a body no reader parses carries no reference the router could prove, and the upstream
+                // refuses it anyway. The keepalive reads `portable_of` on its own parsed tree and refuses such a body
+                // before it gets that far.
                 portable: true,
                 credit_digest: None,
             };
