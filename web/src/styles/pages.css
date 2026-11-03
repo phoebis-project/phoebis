@@ -2504,13 +2504,13 @@
 .event-detail {
   display: flex;
   flex-direction: column;
-  gap: 14px;
   font-size: 13px;
   line-height: 20px;
   white-space: normal;
 }
 
 .decision-card {
+  gap: 14px;
   padding: 6px 16px 16px;
 }
 
@@ -3493,7 +3493,6 @@
 
 .body-block__pre,
 .snippet {
-  max-height: 260px;
   padding: 10px 12px;
   margin: 0;
   overflow: auto;
@@ -3508,6 +3507,7 @@
 /* One line of the mono text, 12 px at 1.5. The viewer places its rows by the same figure. */
 .body-block__pre {
   --body-row: 18px;
+  max-height: 260px;
 }
 
 .body-rows {
@@ -3536,7 +3536,6 @@
 }
 
 .snippet {
-  max-height: none;
   margin-bottom: 10px;
 }
 
