@@ -185,19 +185,25 @@ const windowsOf = (v: unknown): string => {
   return list.length === 0 ? '' : ` the ${listWords(list.map((w) => lookup(WINDOW_WORD, w) ?? w))} ${list.length === 1 ? 'window' : 'windows'}`;
 };
 
+/** The settings a condition names, each with the pool's value where the route sends one, printed by `value`. */
+const settingWords = (d: AttentionItem['detail'], value: (n: number) => string): string => {
+  const values = rec(d.setting_values);
+  return listWords(
+    names(d.setting).map((name) => {
+      const v = values[name];
+      return typeof v === 'number' ? `${name} ${value(v)}` : name;
+    }),
+  );
+};
+const sinceWords = (item: AttentionItem, now: number): string => `since ${clockInstant(Date.parse(item.since), now)}`;
+
 /**
  * A routing condition's count, the settings it names with the pool's values where the route sends them, and its start,
  * without the subject.
  */
 function conditionWords(item: AttentionItem, now: number): string {
   const d = item.detail;
-  const settingValues = rec(d.setting_values);
-  const settings = listWords(
-    names(d.setting).map((name) => {
-      const value = settingValues[name];
-      return typeof value === 'number' ? `${name} ${percentText(value)}` : name;
-    }),
-  );
+  const settings = settingWords(d, percentText);
   const what = (() => {
     switch (item.kind) {
       case 'shed_no_runway':
@@ -217,7 +223,7 @@ function conditionWords(item: AttentionItem, now: number): string {
       }
     }
   })();
-  return [what, ...(settings ? [settings] : []), `since ${clockInstant(Date.parse(item.since), now)}`].join(', ');
+  return [what, ...(settings ? [settings] : []), sinceWords(item, now)].join(', ');
 }
 
 /**
@@ -227,18 +233,12 @@ function conditionWords(item: AttentionItem, now: number): string {
  */
 function slowedWords(item: AttentionItem, now: number): string {
   const d = item.detail;
-  const settingValues = rec(d.setting_values);
-  const settings = listWords(
-    names(d.setting).map((name) => {
-      const value = settingValues[name];
-      return typeof value === 'number' ? `${name} ${Math.round(value)}` : name;
-    }),
-  );
+  const settings = settingWords(d, (n) => String(Math.round(n)));
   const barMs = numOrNull(d.bar_ms);
   const bar = barMs === null ? [] : [`over ${formatFact(barMs, 'ms', now)}`];
   const factorMin = numOrNull(d.factor_min);
   const slowest = factorMin === null ? [] : [`slowest ${speedWord(factorMin)}`];
-  return [`slowed ${formatFact(num(d.slowed_ms), 'ms', now)} of the last 24 h`, ...bar, ...slowest, ...(settings ? [settings] : []), `since ${clockInstant(Date.parse(item.since), now)}`].join(', ');
+  return [`slowed ${formatFact(num(d.slowed_ms), 'ms', now)} of the last 24 h`, ...bar, ...slowest, ...(settings ? [settings] : []), sinceWords(item, now)].join(', ');
 }
 
 /** A ratio as the meter drift words print it: two decimals, one trailing zero dropped (`2.0`, `1.25`, `0.8`). */
@@ -258,7 +258,7 @@ function driftWords(item: AttentionItem, now: number): string {
     const ratio = `${ratioWord(num(w.ratio))}x`;
     return i === 0 ? `${lookup(WINDOW_WORD, word) ?? word} charged ${ratio} the table` : `${lookup(WINDOW_WORD, word) ?? word} ${ratio}`;
   });
-  return [...ratios, `since ${clockInstant(Date.parse(item.since), now)}`].join(', ');
+  return [...ratios, sinceWords(item, now)].join(', ');
 }
 
 /**
