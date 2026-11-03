@@ -1401,16 +1401,13 @@ impl Store {
             bundle,
             at,
         )?;
-        tx.execute(
-            "INSERT INTO refresh_attempts (account_id, incarnation, lifecycle_generation, credential_generation, \
-             started_at, resolved_at, outcome, detail) VALUES (?1, ?2, ?3, ?4, ?5, ?5, 'committed', 'pairing')",
-            params![
-                row.id,
-                incarnation as i64,
-                row.lifecycle_generation as i64,
-                generation as i64,
-                at
-            ],
+        crate::credentials::record_pairing_attempt(
+            &tx,
+            &row.id,
+            incarnation,
+            row.lifecycle_generation,
+            generation,
+            at,
         )?;
         record_change(
             &tx,

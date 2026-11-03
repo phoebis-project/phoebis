@@ -194,6 +194,29 @@ fn row_to_resolved_attempt(r: &rusqlite::Row<'_>) -> rusqlite::Result<ResolvedAt
     })
 }
 
+/// The resolved attempt a pairing writes beside the credential it committed, settled at `at`.
+pub(crate) fn record_pairing_attempt(
+    tx: &rusqlite::Transaction<'_>,
+    account_id: &str,
+    incarnation: u64,
+    lifecycle_generation: u64,
+    credential_generation: u64,
+    at: i64,
+) -> Result<(), StoreError> {
+    tx.execute(
+        "INSERT INTO refresh_attempts (account_id, incarnation, lifecycle_generation, credential_generation, \
+         started_at, resolved_at, outcome, detail) VALUES (?1, ?2, ?3, ?4, ?5, ?5, 'committed', 'pairing')",
+        params![
+            account_id,
+            incarnation as i64,
+            lifecycle_generation as i64,
+            credential_generation as i64,
+            at
+        ],
+    )?;
+    Ok(())
+}
+
 pub(crate) fn api_key_aad(account_id: &str) -> String {
     format!("{account_id}:api_key")
 }
@@ -394,16 +417,13 @@ impl Store {
             bundle,
             now,
         )?;
-        tx.execute(
-            "INSERT INTO refresh_attempts (account_id, incarnation, lifecycle_generation, credential_generation, \
-             started_at, resolved_at, outcome, detail) VALUES (?1, ?2, ?3, ?4, ?5, ?5, 'committed', 'pairing')",
-            params![
-                account_id,
-                incarnation as i64,
-                lifecycle_generation as i64,
-                generation as i64,
-                now
-            ],
+        record_pairing_attempt(
+            &tx,
+            account_id,
+            incarnation,
+            lifecycle_generation,
+            generation,
+            now,
         )?;
         tx.commit()?;
         Ok(generation)
