@@ -9,8 +9,8 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_ledger::{
-    decision_record, list_routing_log, DecisionListRow, EventListRow, RoutingLogCursor,
-    RoutingLogFilter, RoutingLogRow, DECISION_KINDS, EVENT_KINDS, PROBE_KIND,
+    decision_record, list_routing_log, DecisionListRow, EventListRow, LogKinds, RoutingLogCursor,
+    RoutingLogFilter, RoutingLogRow,
 };
 use phoebis_routing::HOUR_MS;
 use serde_json::{json, Map, Value};
@@ -522,13 +522,16 @@ pub(crate) async fn list(
         (Err(error), _) | (_, Err(error)) => return failure(StatusCode::BAD_REQUEST, &error),
     };
     // An emptied list reads as an absent one, every kind, as the emptied fields below read as absent.
-    let kinds = Some(list_param(&q, "kinds")).filter(|kinds| !kinds.is_empty());
-    if let Some(unknown) = kinds.iter().flatten().find(|kind| {
-        let kind = kind.as_str();
-        kind != PROBE_KIND && !DECISION_KINDS.contains(&kind) && !EVENT_KINDS.contains(&kind)
-    }) {
-        return failure(StatusCode::BAD_REQUEST, &format!("unknown kind {unknown}"));
-    }
+    let kinds = match Some(list_param(&q, "kinds"))
+        .filter(|kinds| !kinds.is_empty())
+        .map(|names| LogKinds::parse(&names))
+        .transpose()
+    {
+        Ok(kinds) => kinds,
+        Err(unknown) => {
+            return failure(StatusCode::BAD_REQUEST, &format!("unknown kind {unknown}"))
+        }
+    };
     let limit = match q.get("limit").map(|raw| raw.parse::<usize>()) {
         None => DEFAULT_LIMIT,
         Some(Ok(n)) if (1..=MAX_LIMIT).contains(&n) => n,

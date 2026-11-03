@@ -17,9 +17,9 @@ use phoebis_ledger::{
     apply_filter, breakdown, list_requests, member_spends, parked_count, parked_summary,
     read_rollups, run_retention, Assembler, AttemptRecord, AttentionGauges, BodyRecord,
     BudgetedMember, CacheMapWrite, DecisionRow, EventRecord, LedgerConfig, LedgerDb, LedgerError,
-    LiveKeys, ParkedSummary, PlanTables, PriceRevisions, Purged, Record, Replayed, RequestCursor,
-    RequestFilter, RequestRecord, RollupFilter, RollupRow, RollupSelect, Speed, WriterRead,
-    BATCH_RETRY_DELAYS, BATCH_RETRY_HOLD, LEDGER_BEHIND_DEPTH, UNATTRIBUTED,
+    LiveKeys, LogKinds, ParkedSummary, PlanTables, PriceRevisions, Purged, Record, Replayed,
+    RequestCursor, RequestFilter, RequestRecord, RollupFilter, RollupRow, RollupSelect, Speed,
+    WriterRead, BATCH_RETRY_DELAYS, BATCH_RETRY_HOLD, LEDGER_BEHIND_DEPTH, UNATTRIBUTED,
 };
 
 /// A rollup row's dollars, its counts priced through `price_row` at its own key on `prices`.
@@ -7527,7 +7527,10 @@ fn an_absent_kinds_lists_every_kind_and_kinds_names_exactly_its_set() {
         .unwrap();
     db.insert_event(&logged_event(400, "cooldown_set")).unwrap();
     let kinds = |kinds: &[&str]| phoebis_ledger::RoutingLogFilter {
-        kinds: Some(kinds.iter().map(|k| k.to_string()).collect()),
+        kinds: Some(
+            LogKinds::parse(&kinds.iter().map(|k| k.to_string()).collect::<Vec<_>>())
+                .expect("every kind is known"),
+        ),
         ..log_filter()
     };
     assert_eq!(
@@ -7602,7 +7605,7 @@ fn a_guardrails_refusal_reads_back_through_the_routing_log_with_its_kind_and_cod
     );
     put_decision(&db, &DecisionRow::of(summary, record, 100));
     let refused = phoebis_ledger::RoutingLogFilter {
-        kinds: Some(vec!["refused".into()]),
+        kinds: Some(LogKinds::parse(&["refused".into()]).expect("a decision kind")),
         ..log_filter()
     };
     let page = db

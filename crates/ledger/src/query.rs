@@ -1023,7 +1023,40 @@ pub struct RoutingLogFilter {
     pub models: Vec<String>,
     /// `None` is every decision and event kind, the probe decisions among them. `Some` is exactly the kinds named,
     /// `probe` the pseudo-kind for a probe decision of any kind.
-    pub kinds: Option<Vec<String>>,
+    pub kinds: Option<LogKinds>,
+}
+
+/// The kinds a routing log filter names, sorted once into the statement that reads each.
+#[derive(Clone, Debug, Default)]
+pub struct LogKinds {
+    pub decisions: Vec<String>,
+    pub events: Vec<String>,
+    /// `PROBE_KIND` was named: a probe decision of any kind.
+    pub probes: bool,
+}
+
+impl LogKinds {
+    /// The names sorted by the statement that reads them, the error the first name no kind and no `PROBE_KIND`
+    /// answers to.
+    pub fn parse(names: &[String]) -> Result<LogKinds, String> {
+        let mut kinds = LogKinds::default();
+        for name in names {
+            let kind = name.as_str();
+            let decision = DECISION_KINDS.contains(&kind);
+            let event = EVENT_KINDS.contains(&kind);
+            if kind != PROBE_KIND && !decision && !event {
+                return Err(name.clone());
+            }
+            kinds.probes |= kind == PROBE_KIND;
+            if decision {
+                kinds.decisions.push(name.clone());
+            }
+            if event {
+                kinds.events.push(name.clone());
+            }
+        }
+        Ok(kinds)
+    }
 }
 
 /// `<received_at>:<id>`, the request list's and the guardrail sample's cursor: the page after it starts below that
@@ -1310,15 +1343,13 @@ pub(crate) fn decision_statement(filter: &RoutingLogFilter) -> Option<LogStateme
         ));
     }
     if let Some(kinds) = &filter.kinds {
-        let named: Vec<String> = kinds
-            .iter()
-            .filter(|k| DECISION_KINDS.contains(&k.as_str()))
-            .cloned()
-            .collect();
-        let probes = kinds.iter().any(|k| k == PROBE_KIND);
-        let of_kind = (!named.is_empty())
-            .then(|| format!("d.kind IN ({})", bind_all(&named, &mut statement.args)));
-        let clause = match (of_kind, probes) {
+        let of_kind = (!kinds.decisions.is_empty()).then(|| {
+            format!(
+                "d.kind IN ({})",
+                bind_all(&kinds.decisions, &mut statement.args)
+            )
+        });
+        let clause = match (of_kind, kinds.probes) {
             (None, false) => return None,
             (None, true) => "d.probe = 1".to_string(),
             (Some(kind), false) => format!("{kind} AND d.probe = 0"),
@@ -1339,17 +1370,12 @@ fn event_statement(filter: &RoutingLogFilter) -> Option<LogStatement> {
         &mut statement.clauses,
     );
     if let Some(kinds) = &filter.kinds {
-        let named: Vec<String> = kinds
-            .iter()
-            .filter(|k| EVENT_KINDS.contains(&k.as_str()))
-            .cloned()
-            .collect();
-        if named.is_empty() {
+        if kinds.events.is_empty() {
             return None;
         }
         in_list(
             "e.kind",
-            &named,
+            &kinds.events,
             &mut statement.args,
             &mut statement.clauses,
         );
