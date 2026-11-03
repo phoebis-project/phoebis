@@ -247,7 +247,7 @@ fn oauth_cooldown(
                 scope: Scope::Account,
                 until: until.saturating_add(MARGIN_MS),
                 reason: "rate_limit",
-                window: exhaustion_window(Some(u), AccountKind::Oauth),
+                window: exhaustion_window(Some(u)),
             };
         }
         if model_only(u, ctx.canonical_model)
@@ -265,7 +265,7 @@ fn oauth_cooldown(
                 scope: Scope::Model,
                 until: until.saturating_add(MARGIN_MS),
                 reason: "rate_limit",
-                window: exhaustion_window(Some(u), AccountKind::Oauth),
+                window: exhaustion_window(Some(u)),
             };
         }
     }
@@ -276,7 +276,7 @@ fn oauth_cooldown(
         scope: Scope::Account,
         until: until.saturating_add(MARGIN_MS),
         reason: "rate_limit",
-        window: exhaustion_window(unified, AccountKind::Oauth),
+        window: exhaustion_window(unified),
     }
 }
 
@@ -400,19 +400,18 @@ fn api_key_cooldown(head: &ResponseHead, ctx: &HeadContext<'_>) -> Cooldown {
     }
 }
 
-pub fn exhaustion_window(unified: Option<&UnifiedHeaders>, kind: AccountKind) -> String {
-    if kind == AccountKind::Oauth {
-        if let Some(u) = unified {
-            if let Some(claim) = &u.representative_claim {
-                return claim.clone();
-            }
-            if u.five_hour_status.as_deref() == Some("rejected") {
-                return "five_hour".into();
-            }
-            if u.seven_day_status.as_deref() == Some("rejected") {
-                return "seven_day".into();
-            }
-        }
+pub fn exhaustion_window(unified: Option<&UnifiedHeaders>) -> String {
+    let Some(u) = unified else {
+        return "retry_after".into();
+    };
+    if let Some(claim) = &u.representative_claim {
+        return claim.clone();
+    }
+    if u.five_hour_status.as_deref() == Some("rejected") {
+        return phoebis_routing::FIVE_HOUR.into();
+    }
+    if u.seven_day_status.as_deref() == Some("rejected") {
+        return phoebis_routing::SEVEN_DAY.into();
     }
     "retry_after".into()
 }
@@ -1344,20 +1343,14 @@ mod tests {
             ],
         ))
         .unwrap();
-        assert_eq!(
-            exhaustion_window(Some(&claim), AccountKind::Oauth),
-            "seven_day_opus"
-        );
+        assert_eq!(exhaustion_window(Some(&claim)), "seven_day_opus");
         let seven = UnifiedHeaders::parse(&head(
             429,
             &[("anthropic-ratelimit-unified-7d-status", "rejected")],
         ))
         .unwrap();
-        assert_eq!(
-            exhaustion_window(Some(&seven), AccountKind::Oauth),
-            "seven_day"
-        );
-        assert_eq!(exhaustion_window(None, AccountKind::ApiKey), "retry_after");
+        assert_eq!(exhaustion_window(Some(&seven)), "seven_day");
+        assert_eq!(exhaustion_window(None), "retry_after");
     }
 
     fn refusal(message: &str) -> Vec<u8> {

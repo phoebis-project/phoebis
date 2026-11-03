@@ -46,8 +46,7 @@ pub use catalog::{
 };
 pub use chains::{canonical, Chains};
 pub use classify::{
-    classify, exhaustion_window, next_month_start, Cooldown, HeadContext, Scope, Verdict,
-    SPEND_CAP_REASON,
+    classify, next_month_start, Cooldown, HeadContext, Scope, Verdict, SPEND_CAP_REASON,
 };
 pub use drift::DriftGuard;
 pub use errors::{
