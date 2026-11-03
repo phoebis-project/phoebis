@@ -1,7 +1,7 @@
 import { useId, useLayoutEffect, useRef, useState } from 'react';
 import { api } from '@/api';
 import type { AttentionItem } from '@/api/types';
-import { ATTENTION_LABEL, ATTENTION_TONE, attentionHref, attentionTitle, attentionWords } from '@/lib/attention';
+import { ATTENTION_LABEL, ATTENTION_TONE, attentionHref, attentionKey, attentionTitle, attentionWords } from '@/lib/attention';
 import { fmtInt, fmtRelative } from '@/lib/format';
 import { useLatest, useResizeObserver } from '@/lib/hooks';
 import { Popover } from './Popover';
@@ -48,8 +48,7 @@ export function AttentionLine({ error, items, loadedAt, now, refresh }: { error:
   const drawn = error === null && items !== null && items.length > 0;
   const badges = (drawn ? items : []).map((item) => ({
     href: attentionHref(item, now),
-    // The raw kind keeps two conditions the console does not know apart on one subject.
-    key: `${item.rawKind ?? item.kind}:${item.subject.type}:${item.subject.id}`,
+    key: attentionKey(item),
     text: attentionWords(item, now) ?? `${ATTENTION_LABEL[item.kind]}: ${item.subject.label}`,
     title: attentionTitle(item, now),
     tone: ATTENTION_TONE[item.kind],

@@ -75,6 +75,9 @@ function conditionLog({ kind, link }: LinkedItem): { log: Pick<LogLink, 'account
 /** The entity each of the route's three link pages opens, in the kind entityHref takes. */
 const PAGE_ENTITY = { accounts: 'account', keys: 'key', pools: 'pool' } as const;
 
+/** An item's key in a list. The raw kind keeps two conditions the console does not know apart on one subject. */
+export const attentionKey = (item: Pick<AttentionItem, 'kind' | 'rawKind' | 'subject'>): string => `${item.rawKind ?? item.kind}:${item.subject.type}:${item.subject.id}`;
+
 /**
  * A `pool_exhausted` item opens the routing log on the pool's exhausted decisions from the condition's start, and a
  * routing condition on its subject's rounds, moves, walls and slow-downs since then. A meter drift opens the Meter view

@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import type { AttentionItem } from '@/api/types';
 import { Badge } from '@/components/ui/primitives';
-import { ATTENTION_LABEL, ATTENTION_TONE, attentionDetail, attentionHref, attentionLogLine } from '@/lib/attention';
+import { ATTENTION_LABEL, ATTENTION_TONE, attentionDetail, attentionHref, attentionKey, attentionLogLine } from '@/lib/attention';
 import { fmtRelative } from '@/lib/format';
 
 /**
@@ -19,8 +19,7 @@ export function AttentionRows({ items, now }: { items: AttentionItem[]; now: num
         const detail = attentionDetail(item, now);
         const log = attentionLogLine(item, now);
         return (
-          // The raw kind keeps two conditions the console does not know apart on one subject.
-          <li key={`${item.rawKind ?? item.kind}:${subject.type}:${subject.id}`} className="attention__row" title={`${detail} (${fmtRelative(item.since, now)})${log === null ? '' : `\n${log}`}`}>
+          <li key={attentionKey(item)} className="attention__row" title={`${detail} (${fmtRelative(item.since, now)})${log === null ? '' : `\n${log}`}`}>
             <Badge tone={ATTENTION_TONE[item.kind]}>{ATTENTION_LABEL[item.kind]}</Badge>
             {to ? <Link to={to}>{subject.label}</Link> : <span>{subject.label}</span>}
             <span className="attention__detail">{detail}</span>
