@@ -279,16 +279,9 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
 /** The short name and the remaining share, in the meter's own color. An expired window has no share to give, and a
  *  window the account does not carry names itself in the reset's cell, `absent` the chip's title. */
 function WindowChip({ absent, name, window: w, className, now }: { absent: string; className: string; name: string; now: number; window: RateLimitWindow | null }) {
-  if (!w) {
+  if (!w || isExpired(w, now)) {
     return (
-      <span className={`${className} qchip qchip--absent`} title={absent}>
-        <span className="qchip__name">{name}</span>
-      </span>
-    );
-  }
-  if (isExpired(w, now)) {
-    return (
-      <span className={`${className} qchip qchip--absent`} title={`${w.label}: expired, no reading since the reset`}>
+      <span className={`${className} qchip qchip--absent`} title={w ? `${w.label}: expired, no reading since the reset` : absent}>
         <span className="qchip__name">{name}</span>
       </span>
     );
