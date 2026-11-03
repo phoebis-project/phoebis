@@ -1718,8 +1718,8 @@ pub struct SharePricing<'a> {
 
 /// Whether every group of a read holds one account's rows, the one place the own-window shares add: the account
 /// grouping, or a filter naming exactly one account under any grouping.
-fn holds_one_account(group_by: &str, accounts: &[String]) -> bool {
-    group_by == "account" || names_one_account(accounts)
+fn holds_one_account(by: GroupBy, accounts: &[String]) -> bool {
+    by == GroupBy::Account || names_one_account(accounts)
 }
 
 /// Whether a filter names exactly one account, a name given twice counting once. The burn route gates its `unit` on
@@ -1935,20 +1935,72 @@ impl RollupFilter {
     }
 }
 
-pub const GROUP_BYS: &[&str] = &[
-    "account",
-    "all",
-    "classifier",
-    "client",
-    "effort",
-    "key",
-    "kind",
-    "model",
-    "pool",
-    "request_class",
-    "speed",
-    "user_agent",
-];
+/// A dimension the analytics group their rows by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GroupBy {
+    Account,
+    All,
+    Classifier,
+    Client,
+    Effort,
+    Key,
+    Kind,
+    Model,
+    Pool,
+    RequestClass,
+    Speed,
+    UserAgent,
+}
+
+impl GroupBy {
+    const EVERY: [GroupBy; 12] = [
+        GroupBy::Account,
+        GroupBy::All,
+        GroupBy::Classifier,
+        GroupBy::Client,
+        GroupBy::Effort,
+        GroupBy::Key,
+        GroupBy::Kind,
+        GroupBy::Model,
+        GroupBy::Pool,
+        GroupBy::RequestClass,
+        GroupBy::Speed,
+        GroupBy::UserAgent,
+    ];
+
+    /// The dimension a `group_by` word names, `None` for a word no dimension takes.
+    pub fn parse(name: &str) -> Option<GroupBy> {
+        GroupBy::EVERY.into_iter().find(|by| by.as_str() == name)
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            GroupBy::Account => "account",
+            GroupBy::All => "all",
+            GroupBy::Classifier => "classifier",
+            GroupBy::Client => "client",
+            GroupBy::Effort => "effort",
+            GroupBy::Key => "key",
+            GroupBy::Kind => "kind",
+            GroupBy::Model => "model",
+            GroupBy::Pool => "pool",
+            GroupBy::RequestClass => "request_class",
+            GroupBy::Speed => "speed",
+            GroupBy::UserAgent => "user_agent",
+        }
+    }
+}
+
+/// The `group_by` words, one per `GroupBy` in its order.
+pub const GROUP_BYS: &[&str] = &{
+    let mut words = [""; GroupBy::EVERY.len()];
+    let mut i = 0;
+    while i < words.len() {
+        words[i] = GroupBy::EVERY[i].as_str();
+        i += 1;
+    }
+    words
+};
 
 /// The group a pattern list files an agent under when no pattern matches.
 pub const OTHER_AGENTS: &str = "other";
@@ -1984,7 +2036,7 @@ impl LiveKeys {
         // A key id never carries `@` (the admin's slug rule), so the split is unambiguous.
         match key.rsplit_once('@') {
             Some((id, _)) => format!("{id} (deleted)"),
-            None => label_of(key, "key"),
+            None => label_of(key, GroupBy::Key),
         }
     }
 
@@ -2025,34 +2077,54 @@ impl LiveKeys {
     }
 }
 
-pub fn group_of(
-    row: &RollupRow,
-    group_by: &str,
-    live: &LiveKeys,
-    agent_groups: &[String],
-) -> String {
-    match group_by {
-        "key" => live.key_of(row),
-        "pool" => row.pool_id.clone(),
-        "account" => row.account_id.clone(),
-        "model" => row.canonical_model.clone(),
-        "kind" => row.kind.clone(),
-        "classifier" => row.classifier.clone(),
-        "client" => row.client.clone(),
-        "effort" => row.effort.clone(),
-        "request_class" => row.request_class.clone(),
-        "speed" => row.speed.clone(),
-        "user_agent" => {
-            if agent_groups.is_empty() {
-                return row.user_agent.clone();
+/// How a read files its rows into groups: the dimension, the live keys the key dimension reads a row's generation
+/// against, and the patterns that name the agent groups.
+#[derive(Clone, Copy)]
+struct Grouping<'a> {
+    agent_groups: &'a [String],
+    by: GroupBy,
+    live: &'a LiveKeys,
+}
+
+impl Grouping<'_> {
+    /// The group a row falls in.
+    fn group_of(&self, row: &RollupRow) -> String {
+        match self.by {
+            GroupBy::Account => row.account_id.clone(),
+            GroupBy::All => "all".into(),
+            GroupBy::Classifier => row.classifier.clone(),
+            GroupBy::Client => row.client.clone(),
+            GroupBy::Effort => row.effort.clone(),
+            GroupBy::Key => self.live.key_of(row),
+            GroupBy::Kind => row.kind.clone(),
+            GroupBy::Model => row.canonical_model.clone(),
+            GroupBy::Pool => row.pool_id.clone(),
+            GroupBy::RequestClass => row.request_class.clone(),
+            GroupBy::Speed => row.speed.clone(),
+            GroupBy::UserAgent => {
+                if self.agent_groups.is_empty() {
+                    return row.user_agent.clone();
+                }
+                self.agent_groups
+                    .iter()
+                    .find(|pattern| crate::pattern::matches(pattern, &row.user_agent))
+                    .cloned()
+                    .unwrap_or_else(|| OTHER_AGENTS.into())
             }
-            agent_groups
-                .iter()
-                .find(|pattern| crate::pattern::matches(pattern, &row.user_agent))
-                .cloned()
-                .unwrap_or_else(|| OTHER_AGENTS.into())
         }
-        _ => "all".into(),
+    }
+
+    /// A group's answered row under its label, the key dimension's row naming the holder its key names, for a reader
+    /// that prints the holder's creation in its own zone.
+    fn row_of(&self, key: &str, group: GroupSum) -> GroupRow {
+        if self.by != GroupBy::Key {
+            return group_row(key, group, label_of(key, self.by));
+        }
+        let mut row = group_row(key, group, self.live.label_of(key));
+        let (key_id, key_created_at) = self.live.holder_of(key);
+        row.key_id = Some(key_id);
+        row.key_created_at = key_created_at;
+        row
     }
 }
 
@@ -2060,11 +2132,11 @@ pub fn group_of(
 /// reserved id, the requests with no classifier call, as the Requests facet names them, `unattributed` for the
 /// reserved id under every other dimension, and "no model" for the model grouping's empty key, the requests the router
 /// rejected before routing. Each of these groups keeps its key, so a filter on it keeps working.
-fn label_of(key: &str, group_by: &str) -> String {
-    match (key, group_by) {
-        (UNATTRIBUTED, "classifier") => "none".into(),
+fn label_of(key: &str, by: GroupBy) -> String {
+    match (key, by) {
+        (UNATTRIBUTED, GroupBy::Classifier) => "none".into(),
         (UNATTRIBUTED, _) => "unattributed".into(),
-        ("", "model") => "no model".into(),
+        ("", GroupBy::Model) => "no model".into(),
         _ => key.into(),
     }
 }
@@ -2602,10 +2674,8 @@ struct GroupSum {
 /// What one read folds every row under: the grouping, whether probes count as requests, the share pricing and the
 /// tables and instant every row prices at. Built once per read.
 struct GroupRead<'a> {
-    agent_groups: &'a [String],
     costs: &'a PlanTables,
-    group_by: &'a str,
-    live: &'a LiveKeys,
+    grouping: Grouping<'a>,
     now: i64,
     prices: &'a PriceRevisions,
     pricing: Option<SharePricing<'a>>,
@@ -2618,16 +2688,14 @@ struct GroupSums(BTreeMap<String, GroupSum>);
 impl GroupSums {
     fn add(&mut self, read: &GroupRead<'_>, row: &RollupRow) {
         let GroupRead {
-            agent_groups,
             costs,
-            group_by,
-            live,
+            grouping,
             now,
             prices,
             pricing,
             probes_counted,
         } = *read;
-        let key = group_of(row, group_by, live, agent_groups);
+        let key = grouping.group_of(row);
         let entry = self.0.entry(key).or_insert_with(|| GroupSum {
             sum: RollupRow::default(),
             probes: RollupRow::default(),
@@ -2702,8 +2770,7 @@ impl GroupSums {
 
     fn finish(mut self, read: &GroupRead<'_>) -> Vec<GroupRow> {
         let GroupRead {
-            group_by,
-            live,
+            grouping,
             probes_counted,
             ..
         } = *read;
@@ -2715,18 +2782,7 @@ impl GroupSums {
         let mut out: Vec<GroupRow> = self
             .0
             .into_iter()
-            .map(|(k, group)| {
-                if group_by == "key" {
-                    let mut row = group_row(&k, group, live.label_of(&k));
-                    let (key_id, key_created_at) = live.holder_of(&k);
-                    row.key_id = Some(key_id);
-                    row.key_created_at = key_created_at;
-                    row
-                } else {
-                    let label = label_of(&k, group_by);
-                    group_row(&k, group, label)
-                }
-            })
+            .map(|(k, group)| grouping.row_of(&k, group))
             .collect();
         out.sort_by(|a, b| a.label.cmp(&b.label).then(a.key.cmp(&b.key)));
         out
@@ -2749,7 +2805,7 @@ pub fn series(
     from: i64,
     to: i64,
     bucket_seconds: i64,
-    group_by: &str,
+    group_by: GroupBy,
     probes_counted: bool,
     live: &LiveKeys,
     agent_groups: &[String],
@@ -2759,10 +2815,12 @@ pub fn series(
     now: i64,
 ) -> Result<Vec<SeriesPoint>, LedgerError> {
     let read = GroupRead {
-        agent_groups,
         costs,
-        group_by,
-        live,
+        grouping: Grouping {
+            agent_groups,
+            by: group_by,
+            live,
+        },
         now,
         prices,
         // The rows come with no filter, so only the account grouping holds one account's rows per group.
@@ -2791,7 +2849,7 @@ pub fn series(
 #[allow(clippy::too_many_arguments)]
 pub fn breakdown(
     rows: &[RollupRow],
-    group_by: &str,
+    group_by: GroupBy,
     probes_counted: bool,
     live: &LiveKeys,
     agent_groups: &[String],
@@ -2801,10 +2859,12 @@ pub fn breakdown(
     now: i64,
 ) -> Vec<GroupRow> {
     let read = GroupRead {
-        agent_groups,
         costs,
-        group_by,
-        live,
+        grouping: Grouping {
+            agent_groups,
+            by: group_by,
+            live,
+        },
         now,
         prices,
         // The rows come with no filter, so only the account grouping holds one account's rows per group.
@@ -2826,7 +2886,7 @@ pub async fn series_paged(
     from: i64,
     to: i64,
     bucket_seconds: i64,
-    group_by: &str,
+    group_by: GroupBy,
     pricing: Option<SharePricing<'_>>,
     prices: &PriceRevisions,
     costs: &PlanTables,
@@ -2837,10 +2897,12 @@ pub async fn series_paged(
     let starts: Vec<i64> = bucket_starts(first, last, bucket_seconds).collect();
     let mut buckets: Vec<GroupSums> = starts.iter().map(|_| GroupSums::default()).collect();
     let read = GroupRead {
-        agent_groups: &filter.user_agent_groups,
         costs,
-        group_by,
-        live,
+        grouping: Grouping {
+            agent_groups: &filter.user_agent_groups,
+            by: group_by,
+            live,
+        },
         now,
         prices,
         pricing: pricing.filter(|_| holds_one_account(group_by, &filter.accounts)),
@@ -2878,7 +2940,7 @@ pub async fn breakdown_paged(
     live: &LiveKeys,
     from: i64,
     to: i64,
-    group_by: &str,
+    group_by: GroupBy,
     pricing: Option<SharePricing<'_>>,
     prices: &PriceRevisions,
     costs: &PlanTables,
@@ -2886,10 +2948,12 @@ pub async fn breakdown_paged(
 ) -> Result<Vec<GroupRow>, LedgerError> {
     let mut sums = GroupSums::default();
     let read = GroupRead {
-        agent_groups: &filter.user_agent_groups,
         costs,
-        group_by,
-        live,
+        grouping: Grouping {
+            agent_groups: &filter.user_agent_groups,
+            by: group_by,
+            live,
+        },
         now,
         prices,
         pricing: pricing.filter(|_| holds_one_account(group_by, &filter.accounts)),
@@ -4425,7 +4489,7 @@ fn price_burn_row(
     );
 }
 
-/// The burn series of every group under `group_by`, any dimension `group_of` knows, within `filter`'s scopes, read
+/// The burn series of every group under `group_by`, any dimension `GroupBy` names, within `filter`'s scopes, read
 /// through `read_rollups_paged` and priced into the group's buckets as the pages arrive: each group's points are the
 /// ones `burn_series_over` answers for that group's rows alone, the shares answered where each group holds one
 /// account's rows. The groups are the ones the range itself holds, and the read reaches back to the first bucket's
@@ -4436,12 +4500,17 @@ pub async fn burn_groups_paged(
     tables: &PlanTables,
     prices: &PriceRevisions,
     filter: &SeriesFilter,
-    group_by: &str,
+    group_by: GroupBy,
     live: &LiveKeys,
     agent_groups: &[String],
     now: i64,
 ) -> Result<Vec<(String, Vec<BurnPoint>)>, LedgerError> {
     let shares = holds_one_account(group_by, &filter.accounts);
+    let grouping = Grouping {
+        agent_groups,
+        by: group_by,
+        live,
+    };
     let (first, last) = bucket_range(filter)?;
     let from_hour = hour_of(filter.from);
     let select = RollupSelect {
@@ -4464,7 +4533,7 @@ pub async fn burn_groups_paged(
             return;
         }
         let (points, held) = groups
-            .entry(group_of(row, group_by, live, agent_groups))
+            .entry(grouping.group_of(row))
             .or_insert_with(|| (empty_burn_points(first, last, filter.bucket_seconds), false));
         *held |= row.hour >= from_hour && row.hour < last;
         price_burn_row(
@@ -5473,7 +5542,7 @@ mod tests {
         row.input_tokens = 10;
         let groups = breakdown(
             &[row],
-            "all",
+            GroupBy::All,
             false,
             &LiveKeys::default(),
             &[],

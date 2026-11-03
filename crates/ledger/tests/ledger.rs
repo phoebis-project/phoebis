@@ -4133,7 +4133,7 @@ fn a_fast_attempt_prices_at_the_fast_cells_beside_a_standard_one() {
     )]));
     let groups = breakdown(
         &apply_filter(rows, &RollupFilter::default()),
-        "model",
+        phoebis_ledger::GroupBy::Model,
         false,
         &live,
         &[],
@@ -8120,7 +8120,7 @@ fn a_request_with_two_answered_attempts_books_each_at_the_set_its_own_prompt_sel
     )]));
     let groups = breakdown(
         &apply_filter(rows, &RollupFilter::default()),
-        "model",
+        phoebis_ledger::GroupBy::Model,
         false,
         &live,
         &[],

@@ -2400,7 +2400,7 @@ async fn a_fast_recipe_served_standard_settles_its_waste_as_plan_at_the_standard
     );
     let groups = phoebis_ledger::breakdown(
         &rows,
-        "account",
+        phoebis_ledger::GroupBy::Account,
         true,
         &phoebis_ledger::LiveKeys::default(),
         &[],

@@ -892,7 +892,7 @@ impl Captured {
 pub fn read_dollars(r: &Rig, rows: &[phoebis_ledger::RollupRow]) -> (f64, f64) {
     phoebis_ledger::breakdown(
         rows,
-        "all",
+        phoebis_ledger::GroupBy::All,
         true,
         &phoebis_ledger::LiveKeys::default(),
         &[],

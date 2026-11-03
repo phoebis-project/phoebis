@@ -4433,7 +4433,7 @@ async fn a_request_kept_warm_on_a_plan_funded_account_is_credited() {
 fn wasted_probe_figure(r: &Rig, rows: &[RollupRow]) -> Option<f64> {
     phoebis_ledger::breakdown(
         rows,
-        "account",
+        phoebis_ledger::GroupBy::Account,
         true,
         &phoebis_ledger::LiveKeys::default(),
         &[],
@@ -4715,7 +4715,7 @@ async fn a_credit_answered_across_a_revision_boundary_files_at_its_requests_arri
     let january = 1_500.0 * (long.cells.cache_write_5m - long.cells.cache_read) / 1_000_000.0;
     let saving = phoebis_ledger::breakdown(
         &rows,
-        "all",
+        phoebis_ledger::GroupBy::All,
         true,
         &phoebis_ledger::LiveKeys::default(),
         &[],

@@ -11,9 +11,8 @@ use phoebis_ledger::{
     breakdown_paged, bucket_seconds, burn_groups_paged, guardrail_counts, held_series, hour_ceil,
     hour_of, hourly_window_samples, lead_over_pace, moves_by_reason_and_fit, names_one_account,
     parse_range, read_account_rollups, read_reconciliations, rewrite_series, series_paged,
-    session_burn_series, AccountRollupRow, FundingFilter, GroupRow, HourlyWindowSample,
+    session_burn_series, AccountRollupRow, FundingFilter, GroupBy, GroupRow, HourlyWindowSample,
     LedgerError, LiveKeys, Patterns, RequestFilter, RollupFilter, SeriesFilter, SharePricing,
-    GROUP_BYS,
 };
 use phoebis_routing::{term, UtilizationSample, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
 use phoebis_store::{AccountKind, SubscriptionTerm};
@@ -23,23 +22,6 @@ use utoipa::ToSchema;
 use crate::openapi::{ErrorBody, LedgerFailure, RouterUnavailable};
 use crate::routes::{failure, reported_samples, store_failure, windows_lacked};
 use crate::AdminState;
-
-/// `session` beside the page's group-by dimensions: only the burn answers it, from the attempts, since the hourly
-/// rollups carry no session.
-const BURN_GROUP_BYS: &[&str] = &[
-    "account",
-    "classifier",
-    "client",
-    "effort",
-    "key",
-    "kind",
-    "model",
-    "pool",
-    "request_class",
-    "session",
-    "speed",
-    "user_agent",
-];
 
 fn list(q: &HashMap<String, String>, name: &str) -> Vec<String> {
     q.get(name)
@@ -99,7 +81,7 @@ fn filter_of(q: &HashMap<String, String>) -> Result<RollupFilter, &'static str> 
 
 /// The range in Unix milliseconds, the group-by, the filter, the live keys' generations the key dimension is read
 /// against, and the clock the range was read at, whose anchor row divides the Pro-week figure.
-type Selection = ((i64, i64), String, RollupFilter, LiveKeys, i64);
+type Selection = ((i64, i64), GroupBy, RollupFilter, LiveKeys, i64);
 
 /// The registry's account kinds by id, which name a burn group's unit.
 #[allow(clippy::result_large_err)]
@@ -116,13 +98,12 @@ async fn selection(state: &AdminState, q: &HashMap<String, String>) -> Result<Se
     let now = (state.clock)();
     let (from, to) = parse_range(q.get("range").map(String::as_str), now)
         .map_err(|m| failure(StatusCode::BAD_REQUEST, &m))?;
-    let group_by = q.get("group_by").cloned().unwrap_or_else(|| "all".into());
-    if !GROUP_BYS.contains(&group_by.as_str()) {
-        return Err(failure(
+    let group_by = GroupBy::parse(q.get("group_by").map_or("all", String::as_str)).ok_or_else(|| {
+        failure(
             StatusCode::BAD_REQUEST,
             "group_by is account, all, classifier, client, effort, key, kind, model, pool, request_class, speed, or user_agent",
-        ));
-    }
+        )
+    })?;
     let mut filter = filter_of(q).map_err(|m| failure(StatusCode::BAD_REQUEST, m))?;
     filter.funding = match q.get("funding").map(String::as_str) {
         None => None,
@@ -339,7 +320,7 @@ pub(crate) async fn series(
         from,
         to,
         bucket,
-        &group_by,
+        group_by,
         pricing,
         &state.pricing.revisions(),
         &state.tables,
@@ -354,13 +335,13 @@ pub(crate) async fn series(
     };
     let reported = reported_samples(&state).await;
     for point in &mut points {
-        bound_shares(&mut point.groups, &group_by, &filter.accounts, &reported);
+        bound_shares(&mut point.groups, group_by, &filter.accounts, &reported);
     }
     Json(Series {
         from,
         to,
         bucket_seconds: bucket,
-        group_by,
+        group_by: group_by.as_str().into(),
         points,
     })
     .into_response()
@@ -411,7 +392,7 @@ pub(crate) async fn breakdown(
         &live,
         from,
         to,
-        &group_by,
+        group_by,
         pricing,
         &state.pricing.revisions(),
         &state.tables,
@@ -424,14 +405,14 @@ pub(crate) async fn breakdown(
     };
     bound_shares(
         &mut rows,
-        &group_by,
+        group_by,
         &filter.accounts,
         &reported_samples(&state).await,
     );
     Json(Breakdown {
         from,
         to,
-        group_by,
+        group_by: group_by.as_str().into(),
         rows,
     })
     .into_response()
@@ -442,13 +423,13 @@ pub(crate) async fn breakdown(
 /// row recorded and knows no set, so the bound lands here after the pricing.
 fn bound_shares(
     rows: &mut [GroupRow],
-    group_by: &str,
+    group_by: GroupBy,
     accounts: &[String],
     reported: &BTreeMap<String, UtilizationSample>,
 ) {
     let one_account = names_one_account(accounts).then(|| accounts[0].as_str());
     for row in rows {
-        let account = if group_by == "account" {
+        let account = if group_by == GroupBy::Account {
             Some(row.key.as_str())
         } else {
             one_account
@@ -939,12 +920,20 @@ pub(crate) async fn burn(
         .get("group_by")
         .cloned()
         .unwrap_or_else(|| "account".into());
-    if !BURN_GROUP_BYS.contains(&group_by.as_str()) {
-        return failure(
-            StatusCode::BAD_REQUEST,
-            "group_by is account, classifier, client, effort, key, kind, model, pool, request_class, session, speed, or user_agent",
-        );
-    }
+    // `session` beside the page's group-by dimensions: only the burn answers it, from the attempts, since the hourly
+    // rollups carry no session. `None` names it.
+    let by = match group_by.as_str() {
+        "session" => None,
+        name => match GroupBy::parse(name) {
+            Some(by) if by != GroupBy::All => Some(by),
+            _ => {
+                return failure(
+                    StatusCode::BAD_REQUEST,
+                    "group_by is account, classifier, client, effort, key, kind, model, pool, request_class, session, speed, or user_agent",
+                )
+            }
+        },
+    };
     let agent_groups = match agent_list(&q, "user_agent_groups") {
         Ok(groups) => groups,
         Err(m) => return failure(StatusCode::BAD_REQUEST, m),
@@ -965,26 +954,29 @@ pub(crate) async fn burn(
         ..Default::default()
     };
     let prices = state.pricing.revisions();
-    let read = if group_by == "session" {
-        state
-            .ledger
-            .db()
-            .read(move |c| session_burn_series(c, &tables, &prices, &filter, now))
-            .await
-    } else {
+    let read = match by {
+        None => {
+            state
+                .ledger
+                .db()
+                .read(move |c| session_burn_series(c, &tables, &prices, &filter, now))
+                .await
+        }
         // One paged read for every group: each row is priced into its own group's buckets as its page arrives,
         // rather than the range read again per group under the reader lock.
-        burn_groups_paged(
-            state.ledger.db(),
-            &tables,
-            &prices,
-            &filter,
-            &group_by,
-            &LiveKeys::from_snapshot(&state.router.snapshot()),
-            &agent_groups,
-            now,
-        )
-        .await
+        Some(by) => {
+            burn_groups_paged(
+                state.ledger.db(),
+                &tables,
+                &prices,
+                &filter,
+                by,
+                &LiveKeys::from_snapshot(&state.router.snapshot()),
+                &agent_groups,
+                now,
+            )
+            .await
+        }
     };
     let series = match read {
         Ok(s) => s,
@@ -1001,7 +993,7 @@ pub(crate) async fn burn(
             // kind and its class name the unit a reader charts the group in, so a subscription whose tier no table
             // sizes reads apart from an api_key account or a usage-based seat, all answering no share. An account the
             // registry no longer holds has none.
-            let account = if group_by == "account" {
+            let account = if by == Some(GroupBy::Account) {
                 Some(&group)
             } else {
                 one_account.as_ref()

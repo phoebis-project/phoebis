@@ -10,11 +10,12 @@ use phoebis_ledger::{
     moves_by_reason, placements, pool_traffic, pools_traffic, price_equivalent, price_shares,
     read_account_rollups, read_rollups, refusal_categories, request_totals, rewrite_series,
     run_retention_blocking, series, series_paged, session_identities, AttemptRecord,
-    BudgetedMember, CostRevisions, EventRecord, FundingFilter, GroupRow, Histogram, KeepaliveDelta,
-    LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow, Patterns, PlanTables, PriceRevisions,
-    PriceTable, RequestFilter, RequestRecord, RollupFilter, RollupRow, RollupSelect, SeriesFilter,
-    SharePricing, Speed, TotalsBy, WindowShares, BILLED_FUNDING, FAST_FUNDING, NO_CLASS,
-    OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED, USAGE_BASED_FUNDING,
+    BudgetedMember, CostRevisions, EventRecord, FundingFilter, GroupBy, GroupRow, Histogram,
+    KeepaliveDelta, LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow, Patterns, PlanTables,
+    PriceRevisions, PriceTable, RequestFilter, RequestRecord, RollupFilter, RollupRow,
+    RollupSelect, SeriesFilter, SharePricing, Speed, TotalsBy, WindowShares, BILLED_FUNDING,
+    FAST_FUNDING, NO_CLASS, OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED,
+    USAGE_BASED_FUNDING,
 };
 use phoebis_routing::{
     PinUsage, RegistrySnapshot, RoutingState, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
@@ -436,7 +437,7 @@ fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation()
         .unwrap();
     let groups = breakdown(
         &apply_filter(rows.clone(), &RollupFilter::default()),
-        "key",
+        GroupBy::Key,
         true,
         &live,
         &[],
@@ -476,7 +477,7 @@ fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation()
     );
     let agents = breakdown(
         &apply_filter(rows.clone(), &RollupFilter::default()),
-        "user_agent",
+        GroupBy::UserAgent,
         true,
         &live,
         &[],
@@ -496,7 +497,7 @@ fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation()
     );
     let clients = breakdown(
         &apply_filter(rows.clone(), &RollupFilter::default()),
-        "client",
+        GroupBy::Client,
         true,
         &live,
         &[],
@@ -611,7 +612,7 @@ fn the_model_grouping_labels_its_empty_key_no_model_on_the_breakdown_and_the_ser
     ];
     let groups = breakdown(
         &apply_filter(rows.clone(), &RollupFilter::default()),
-        "model",
+        GroupBy::Model,
         true,
         &live,
         &[],
@@ -630,7 +631,7 @@ fn the_model_grouping_labels_its_empty_key_no_model_on_the_breakdown_and_the_ser
         0,
         HOUR_MS,
         3_600,
-        "model",
+        GroupBy::Model,
         true,
         &live,
         &[],
@@ -647,7 +648,7 @@ fn the_model_grouping_labels_its_empty_key_no_model_on_the_breakdown_and_the_ser
     );
     let kinds = breakdown(
         &apply_filter(rows, &RollupFilter::default()),
-        "kind",
+        GroupBy::Kind,
         true,
         &live,
         &[],
@@ -699,7 +700,7 @@ fn the_classifier_grouping_labels_its_reserved_id_none_on_the_breakdown_and_the_
             .map(|g| (g.key.clone(), g.label.clone()))
             .collect()
     };
-    let grouped = |group_by: &str| {
+    let grouped = |group_by: GroupBy| {
         breakdown(
             &apply_filter(rows.clone(), &RollupFilter::default()),
             group_by,
@@ -717,7 +718,7 @@ fn the_classifier_grouping_labels_its_reserved_id_none_on_the_breakdown_and_the_
         (UNATTRIBUTED.to_string(), "none".to_string()),
     ];
     assert_eq!(
-        labels(&grouped("classifier")),
+        labels(&grouped(GroupBy::Classifier)),
         want,
         "the reserved id keeps its key, so a filter on it works, and reads none, as the Requests facet names it"
     );
@@ -726,7 +727,7 @@ fn the_classifier_grouping_labels_its_reserved_id_none_on_the_breakdown_and_the_
         0,
         HOUR_MS,
         3_600,
-        "classifier",
+        GroupBy::Classifier,
         true,
         &live,
         &[],
@@ -741,7 +742,7 @@ fn the_classifier_grouping_labels_its_reserved_id_none_on_the_breakdown_and_the_
         vec![want],
         "the series labels its groups by the same function"
     );
-    for group_by in ["key", "account"] {
+    for group_by in [GroupBy::Key, GroupBy::Account] {
         let reserved = labels(&grouped(group_by))
             .into_iter()
             .find(|(key, _)| key == UNATTRIBUTED)
@@ -749,7 +750,7 @@ fn the_classifier_grouping_labels_its_reserved_id_none_on_the_breakdown_and_the_
         assert_eq!(
             reserved.as_deref(),
             Some("unattributed"),
-            "the {group_by} grouping keeps its label for the reserved id"
+            "the {group_by:?} grouping keeps its label for the reserved id"
         );
     }
 }
@@ -829,7 +830,12 @@ async fn a_four_hundred_day_range_read_in_pages_answers_the_unpaged_series_and_b
             &filter,
         );
         assert!(!rows.is_empty(), "the filter selects rows: {filter:?}");
-        for group_by in ["all", "effort", "key", "user_agent"] {
+        for group_by in [
+            GroupBy::All,
+            GroupBy::Effort,
+            GroupBy::Key,
+            GroupBy::UserAgent,
+        ] {
             let unpaged = series(
                 &rows,
                 from,
@@ -853,7 +859,7 @@ async fn a_four_hundred_day_range_read_in_pages_answers_the_unpaged_series_and_b
             assert_eq!(
                 serde_json::to_value(&paged).unwrap(),
                 serde_json::to_value(&unpaged).unwrap(),
-                "series by {group_by} under {filter:?}"
+                "series by {group_by:?} under {filter:?}"
             );
             let unpaged = breakdown(
                 &rows,
@@ -874,7 +880,7 @@ async fn a_four_hundred_day_range_read_in_pages_answers_the_unpaged_series_and_b
             assert_eq!(
                 serde_json::to_value(&paged).unwrap(),
                 serde_json::to_value(&unpaged).unwrap(),
-                "breakdown by {group_by} under {filter:?}"
+                "breakdown by {group_by:?} under {filter:?}"
             );
         }
     }
@@ -907,7 +913,7 @@ fn a_group_of_probes_alone_stays_out_of_the_default_breakdown() {
     let filtered = apply_filter(rows, &RollupFilter::default());
     let default_groups = breakdown(
         &filtered,
-        "key",
+        GroupBy::Key,
         false,
         &live,
         &[],
@@ -922,7 +928,7 @@ fn a_group_of_probes_alone_stays_out_of_the_default_breakdown() {
     );
     let with_probes = breakdown(
         &filtered,
-        "key",
+        GroupBy::Key,
         true,
         &live,
         &[],
@@ -970,7 +976,7 @@ fn a_group_of_keepalive_credits_alone_stays_in_the_default_breakdown() {
     // row either; it belongs in the default breakdown, not just the probe-counted one.
     let default_groups = breakdown(
         &filtered,
-        "user_agent",
+        GroupBy::UserAgent,
         false,
         &live,
         &[],
@@ -1047,7 +1053,7 @@ fn the_saving_prices_each_kept_warm_count_at_its_ttls_write_rate_less_the_read()
     let rows = db
         .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
         .unwrap();
-    let saving = |group_by: &str, key: &str| {
+    let saving = |group_by: GroupBy, key: &str| {
         breakdown(
             &rows,
             group_by,
@@ -1066,17 +1072,17 @@ fn the_saving_prices_each_kept_warm_count_at_its_ttls_write_rate_less_the_read()
     };
     let listed = 2_000.0 * 3.0 + 300.0 * 5.0 - 2_300.0 * 0.5;
     assert!(
-        (saving("model", LISTED) - listed).abs() < 1e-9,
+        (saving(GroupBy::Model, LISTED) - listed).abs() < 1e-9,
         "the five-minute write and the hour's write less the read of both: {}",
-        saving("model", LISTED)
+        saving(GroupBy::Model, LISTED)
     );
     assert_eq!(
-        saving("model", "claude-unlisted-1"),
+        saving(GroupBy::Model, "claude-unlisted-1"),
         0.0,
         "a model the revision lacks prices no saving"
     );
     assert!(
-        (saving("all", "all") - listed).abs() < 1e-9,
+        (saving(GroupBy::All, "all") - listed).abs() < 1e-9,
         "and adds nothing beside a priced one"
     );
 }
@@ -1770,7 +1776,7 @@ fn a_breakdown_by_request_class_splits_conversation_from_overhead() {
     let filtered = apply_filter(rows, &RollupFilter::default());
     let groups = breakdown(
         &filtered,
-        "request_class",
+        GroupBy::RequestClass,
         false,
         &live,
         &[],
@@ -1844,7 +1850,7 @@ fn group_by_speed_splits_the_rows_by_served_speed() {
     let filtered = apply_filter(rows, &RollupFilter::default());
     let groups = breakdown(
         &filtered,
-        "speed",
+        GroupBy::Speed,
         false,
         &live,
         &[],
@@ -2043,7 +2049,7 @@ async fn account_groups(
         &LiveKeys::default(),
         from,
         to,
-        "account",
+        GroupBy::Account,
         pricing,
         &PRICES,
         &COSTS,
@@ -2249,7 +2255,7 @@ async fn a_dollar_read_and_a_shares_read_of_the_same_rows_answer_one_set_of_doll
         &LiveKeys::default(),
         from,
         to,
-        "account",
+        GroupBy::Account,
         None,
         &prices,
         &costs,
@@ -2263,7 +2269,7 @@ async fn a_dollar_read_and_a_shares_read_of_the_same_rows_answer_one_set_of_doll
         &LiveKeys::default(),
         from,
         to,
-        "account",
+        GroupBy::Account,
         Some(SharePricing { tables: &costs }),
         &prices,
         &costs,
@@ -2348,7 +2354,7 @@ fn test_costs() -> PlanTables {
 
 /// Every planted row's group under `group_by`, priced in the equivalent on `test_costs`, the probe rows joining the
 /// request side where `probes_counted`.
-fn test_cost_groups(db: &LedgerDb, group_by: &str, probes_counted: bool) -> Vec<GroupRow> {
+fn test_cost_groups(db: &LedgerDb, group_by: GroupBy, probes_counted: bool) -> Vec<GroupRow> {
     let rows = db
         .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
         .unwrap();
@@ -2383,7 +2389,7 @@ fn a_plan_row_on_a_model_the_cost_model_cannot_weigh_nulls_its_groups_figure() {
             },
         );
     }
-    let groups = test_cost_groups(&db, "account", false);
+    let groups = test_cost_groups(&db, GroupBy::Account, false);
     for (key, why) in [
         ("a", "a model with no tier"),
         ("b", "a tier with no weighted model"),
@@ -2417,13 +2423,13 @@ fn a_plan_probe_the_cost_model_cannot_weigh_nulls_the_probe_figure_and_not_the_r
             ..ShareRow::default()
         },
     );
-    let groups = test_cost_groups(&db, "account", false);
+    let groups = test_cost_groups(&db, GroupBy::Account, false);
     let a = group(&groups, "a");
     assert!(
         a.cost_equivalent.is_some() && a.probe_equivalent.is_none(),
         "the request row priced and the probe row did not: {a:?}"
     );
-    let counted = test_cost_groups(&db, "account", true);
+    let counted = test_cost_groups(&db, GroupBy::Account, true);
     assert_eq!(
         group(&counted, "a").cost_equivalent,
         None,
@@ -2481,7 +2487,7 @@ fn a_row_on_a_model_without_a_weight_nulls_the_figure_it_joins_alone() {
         Ok(())
     })
     .unwrap();
-    let groups = test_cost_groups(&db, "account", false);
+    let groups = test_cost_groups(&db, GroupBy::Account, false);
     let priced = |key: &str| {
         let g = group(&groups, key);
         (
@@ -2565,7 +2571,7 @@ fn the_kept_warm_and_probe_counts_count_what_a_plan_account_served_apart() {
         Ok(())
     })
     .unwrap();
-    let groups = test_cost_groups(&db, "model", false);
+    let groups = test_cost_groups(&db, GroupBy::Model, false);
     let g = group(&groups, "claude-sonnet-5-5");
     let kept = &g.kept_warm;
     assert_eq!(
@@ -2724,7 +2730,7 @@ fn a_haiku_row_adds_nothing_to_the_fable_week_and_never_nulls_it() {
     for order in ["as read", "reversed"] {
         let groups = breakdown(
             &rows,
-            "account",
+            GroupBy::Account,
             false,
             &LiveKeys::default(),
             &[],
@@ -2959,7 +2965,7 @@ async fn a_series_bucket_prices_as_the_breakdown_does() {
         from,
         to,
         3_600,
-        "account",
+        GroupBy::Account,
         Some(pricing),
         &PRICES,
         &COSTS,
@@ -3462,7 +3468,7 @@ async fn groups_by(
     db: &std::sync::Arc<LedgerDb>,
     filter: &RollupFilter,
     (from, to): (i64, i64),
-    group_by: &str,
+    group_by: GroupBy,
     tables: &PlanTables,
 ) -> Vec<GroupRow> {
     breakdown_paged(
@@ -3519,7 +3525,7 @@ async fn the_equivalent_under_the_model_grouping_adds_two_accounts_of_two_tiers_
         &db,
         &RollupFilter::default(),
         hour_range(WEEKDAY_OFF_PEAK),
-        "model",
+        GroupBy::Model,
         &tables,
     )
     .await;
@@ -3590,7 +3596,7 @@ async fn the_billed_dollars_and_the_plan_rows_dollars_add_to_the_group_s_cost() 
         &db,
         &RollupFilter::default(),
         hour_range(WEEKDAY_OFF_PEAK),
-        "all",
+        GroupBy::All,
         &share_tables(),
     )
     .await;
@@ -3638,7 +3644,7 @@ async fn the_equivalent_split_s_four_kinds_sum_to_the_figure_and_the_cache_halve
         &db,
         &RollupFilter::default(),
         hour_range(WEEKDAY_OFF_PEAK),
-        "model",
+        GroupBy::Model,
         &share_tables(),
     )
     .await;
@@ -3723,7 +3729,14 @@ async fn the_probe_equivalent_prices_the_probe_rows_and_the_wasted_counts() {
     .unwrap();
     let (from, _) = hour_range(WEEKDAY_OFF_PEAK);
     let (_, to) = hour_range(next_hour);
-    let groups = groups_by(&db, &with_probes(), (from, to), "model", &share_tables()).await;
+    let groups = groups_by(
+        &db,
+        &with_probes(),
+        (from, to),
+        GroupBy::Model,
+        &share_tables(),
+    )
+    .await;
     let fable = group(&groups, "claude-fable-5-1");
     let cost = equivalent_of("claude-fable-5-1", probe, WEEKDAY_OFF_PEAK);
     let waste = equivalent_of("claude-fable-5-1", wasted, next_hour);
@@ -3765,7 +3778,14 @@ async fn the_shares_answer_under_any_grouping_where_the_filter_names_one_account
             .and_then(|m| m.get(FIVE_HOUR))
             .copied()
     };
-    let spanning = groups_by(&db, &RollupFilter::default(), range, "model", &tables).await;
+    let spanning = groups_by(
+        &db,
+        &RollupFilter::default(),
+        range,
+        GroupBy::Model,
+        &tables,
+    )
+    .await;
     assert_eq!(
         five_hour(group(&spanning, "claude-fable-5-1")),
         None,
@@ -3775,12 +3795,19 @@ async fn the_shares_answer_under_any_grouping_where_the_filter_names_one_account
         accounts: vec!["a".into()],
         ..RollupFilter::default()
     };
-    let one = groups_by(&db, &named, range, "model", &tables).await;
+    let one = groups_by(&db, &named, range, GroupBy::Model, &tables).await;
     assert!(
         close(five_hour(group(&one, "claude-fable-5-1")).as_ref(), own),
         "the same group under a filter naming account a reads a's share: {one:?} vs {own}"
     );
-    let by_account = groups_by(&db, &RollupFilter::default(), range, "account", &tables).await;
+    let by_account = groups_by(
+        &db,
+        &RollupFilter::default(),
+        range,
+        GroupBy::Account,
+        &tables,
+    )
+    .await;
     for key in ["a", "b"] {
         assert!(
             close(five_hour(group(&by_account, key)).as_ref(), own),
@@ -3828,7 +3855,7 @@ async fn a_classifier_rows_cache_equivalents_and_split_read_zero_beside_its_zero
             ..RollupFilter::default()
         },
         hour_range(WEEKDAY_OFF_PEAK),
-        "model",
+        GroupBy::Model,
         &share_tables(),
     )
     .await;
@@ -5446,7 +5473,7 @@ async fn the_burn_groups_by_every_breakdown_dimension_and_answers_the_shares_whe
     plant_burn(&db, "r-b-opus", "b", PRO, "claude-opus-5-5", "s");
     let tables = PlanTables::shipped();
     let hour = hour_of(WEEKDAY_OFF_PEAK);
-    let read = |group_by: &'static str, accounts: Vec<String>| {
+    let read = |group_by: GroupBy, accounts: Vec<String>| {
         let db = db.clone();
         let tables = tables.clone();
         async move {
@@ -5479,7 +5506,7 @@ async fn the_burn_groups_by_every_breakdown_dimension_and_answers_the_shares_whe
         point_at(points, hour)
     };
     let million = usage(1_000_000, 0);
-    let by_model = read("model", Vec::new()).await;
+    let by_model = read(GroupBy::Model, Vec::new()).await;
     assert_eq!(
         by_model
             .iter()
@@ -5504,7 +5531,7 @@ async fn the_burn_groups_by_every_breakdown_dimension_and_answers_the_shares_whe
             && opus.five_hour_share.is_none(),
         "the two accounts' rows add in the figure and not in the shares: {opus:?} vs {equivalent}"
     );
-    let named = read("model", vec!["a".into()]).await;
+    let named = read(GroupBy::Model, vec!["a".into()]).await;
     let opus = point(&named, "claude-opus-5-5");
     let share = |tier: &str| {
         share_of(
@@ -5521,14 +5548,14 @@ async fn the_burn_groups_by_every_breakdown_dimension_and_answers_the_shares_whe
             .is_some_and(|s| (s - share(MAX_20X)).abs() < 1e-12),
         "a filter naming account a reads its share under any grouping: {opus:?}"
     );
-    let by_account = read("account", Vec::new()).await;
+    let by_account = read(GroupBy::Account, Vec::new()).await;
     assert!(
         point(&by_account, "b")
             .five_hour_share
             .is_some_and(|s| (s - share(PRO)).abs() < 1e-12),
         "each account group is one account, priced under the tier its rows recorded: {by_account:?}"
     );
-    let all = read("all", Vec::new()).await;
+    let all = read(GroupBy::All, Vec::new()).await;
     assert_eq!(
         all.iter()
             .map(|(group, _)| group.as_str())
@@ -6312,7 +6339,7 @@ async fn every_series_reader_refuses_a_range_whose_trailing_partial_bucket_is_on
                     filter.from,
                     filter.to,
                     BUCKET,
-                    "all",
+                    GroupBy::All,
                     false,
                     &live,
                     &[],
@@ -6334,7 +6361,7 @@ async fn every_series_reader_refuses_a_range_whose_trailing_partial_bucket_is_on
                     filter.from,
                     filter.to,
                     BUCKET,
-                    "all",
+                    GroupBy::All,
                     None,
                     &PRICES,
                     &COSTS,
@@ -6381,7 +6408,7 @@ async fn every_series_reader_refuses_a_range_whose_trailing_partial_bucket_is_on
         (
             "burn_groups_paged",
             refused(
-                burn_groups_paged(&db, &COSTS, &PRICES, &filter, "all", &live, &[], NOW)
+                burn_groups_paged(&db, &COSTS, &PRICES, &filter, GroupBy::All, &live, &[], NOW)
                     .await
                     .map(drop),
             ),
@@ -8092,7 +8119,7 @@ fn the_breakdown_answers_refused_and_refusals_per_group() {
     let filtered = apply_filter(rows, &RollupFilter::default());
     let groups = breakdown(
         &filtered,
-        "key",
+        GroupBy::Key,
         false,
         &live,
         &[],
@@ -8183,7 +8210,7 @@ fn a_probe_row_on_a_model_the_revision_lacks_prices_at_the_dearest_listed_cells(
     };
     let groups = breakdown(
         &[row("inference"), row("probe")],
-        "kind",
+        GroupBy::Kind,
         true,
         &LiveKeys::default(),
         &[],
