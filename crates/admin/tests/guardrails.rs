@@ -262,7 +262,7 @@ async fn a_show_reads_the_guardrail_and_its_attachments_off_one_take_of_the_stor
     }
     assert_eq!(
         fewest, 1,
-        "the row and its attachments come off the one registry load"
+        "the row and its attachments come off the one store take"
     );
 }
 
