@@ -168,19 +168,29 @@ export function KeysPage() {
     row.focus({ preventScroll: true });
   }, [filters, keys.data, location.hash, replaceLater, rows]);
 
-  const totals = keys.data
-    ? {
-        keys: keys.data.length,
-        active: keys.data.filter((k) => k.status === 'active').length,
-        requests: keys.data.reduce((s, k) => s + k.lifetime.requests, 0),
-        lifetime: sumFunded(keys.data.map((k) => k.lifetime)),
-      }
-    : null;
+  // The page re-renders on its two polls and the clock, so the sums and the lifetime card's order follow the keys and
+  // the unit alone.
+  const { byRank, maxRank, totals } = useMemo(() => {
+    const data = keys.data;
+    const rank = (k: ApiKey) => keyRankOf(unit, k.lifetime);
+    return {
+      // An unknown rank sorts below a zero, so a flagged key comes last.
+      byRank: data === null ? null : [...data].sort((a, b) => (rank(b) ?? -1) - (rank(a) ?? -1)),
+      // The top rank sets the full width: a fixed floor such as a dollar would dwarf the equivalent's bars, each a small
+      // fraction of a window.
+      maxRank: Math.max(0, ...(data ?? []).map(rank).filter((r) => r !== null)),
+      totals:
+        data === null
+          ? null
+          : {
+              keys: data.length,
+              active: data.filter((k) => k.status === 'active').length,
+              requests: data.reduce((s, k) => s + k.lifetime.requests, 0),
+              lifetime: sumFunded(data.map((k) => k.lifetime)),
+            },
+    };
+  }, [keys.data, unit]);
   const lifetimeTile = totals ? sumTileOf(unit, totals.lifetime, reading) : null;
-  const rankOf = (k: ApiKey) => keyRankOf(unit, k.lifetime);
-  // The top rank sets the full width: a fixed floor such as a dollar would dwarf the equivalent's bars, each a small
-  // fraction of a window.
-  const maxRank = Math.max(0, ...(keys.data ?? []).map(rankOf).filter((rank) => rank !== null));
 
   /** Runs one key mutation and reloads the table behind it; a rejection only toasts, leaving the list alone. */
   const run = async (action: () => Promise<void>) => {
@@ -230,30 +240,27 @@ export function KeysPage() {
 
         <div className="keys-layout">
           <Card title="Lifetime cost by key" subtitle="Relative spend across all keys">
-            {keys.data ? (
+            {byRank ? (
               <ul className="hbars">
-                {[...keys.data]
-                  // An unknown rank sorts below a zero, so a flagged key comes last.
-                  .sort((a, b) => (rankOf(b) ?? -1) - (rankOf(a) ?? -1))
-                  .map((k) => {
-                    const figure = keyFigureOf(unit, k.lifetime, 'No request yet', reading);
-                    const rank = rankOf(k);
-                    return (
-                      <li key={k.id}>
-                        <div className="hbars__head">
-                          <span>
-                            {k.name} <span className="muted mono">{k.prefix}…</span>
-                          </span>
-                          <span className="num">
-                            {figure === null ? <PendingFigure failure={reading.failure} /> : <span title={figure.title}>{figure.text}</span>} <span className="muted">{fmtCompact(k.lifetime.requests)} {noun(k.lifetime.requests, 'request')}</span>
-                          </span>
-                        </div>
-                        <div className="hbars__track">
-                          <span className="hbars__fill" style={{ width: `${maxRank > 0 && rank !== null ? (rank / maxRank) * 100 : 0}%`, background: ink.series[0] }} />
-                        </div>
-                      </li>
-                    );
-                  })}
+                {byRank.map((k) => {
+                  const figure = keyFigureOf(unit, k.lifetime, 'No request yet', reading);
+                  const rank = keyRankOf(unit, k.lifetime);
+                  return (
+                    <li key={k.id}>
+                      <div className="hbars__head">
+                        <span>
+                          {k.name} <span className="muted mono">{k.prefix}…</span>
+                        </span>
+                        <span className="num">
+                          {figure === null ? <PendingFigure failure={reading.failure} /> : <span title={figure.title}>{figure.text}</span>} <span className="muted">{fmtCompact(k.lifetime.requests)} {noun(k.lifetime.requests, 'request')}</span>
+                        </span>
+                      </div>
+                      <div className="hbars__track">
+                        <span className="hbars__fill" style={{ width: `${maxRank > 0 && rank !== null ? (rank / maxRank) * 100 : 0}%`, background: ink.series[0] }} />
+                      </div>
+                    </li>
+                  );
+                })}
               </ul>
             ) : (
               <Skeleton height={120} />

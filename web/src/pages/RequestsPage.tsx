@@ -324,35 +324,40 @@ export function RequestsPage() {
   };
   // The page size is how the operator reads the log rather than what it narrows to, so Reset filters keeps it.
   const reset = () => replace({ ...REQUESTS_CODEC.defaults, rows: filters.rows });
-  const options: Record<string, Option[]> = {
-    accounts: (accounts.data ?? []).map((a) => ({ label: a.label, value: a.id })),
-    agentTypes: AGENT_TYPES.map((v) => ({ label: v, value: v })),
-    cacheMissReasons: missReasonOptions(rows, filters.cacheMissReasons),
-    classifiers: [
-      { label: 'client classifier', value: 'client' },
-      { label: 'none', value: NO_CLASS },
-    ],
-    efforts: [...EFFORT_LEVELS, NO_EFFORT, OTHER_DIMENSION].map((v) => ({ label: v, value: v })),
-    guardrails: guardrailOptions(guardrails.data, rows, filters.guardrails),
-    keys: keyOptions(keys.data, filters.keys),
-    kind: [
-      { label: 'Inference', value: 'inference' },
-      { label: 'Count tokens', value: 'count_tokens' },
-      { label: 'Probe', value: 'probe' },
-    ],
-    models: (catalog.data ?? []).map((m) => ({ label: m.id, value: m.id })),
-    outcomes: REQUEST_OUTCOME_VALUES.map((o) => ({ label: REQUEST_OUTCOME_LABEL[o], value: o })),
-    pools: (pools.data ?? []).map((p) => ({ label: p.name, value: p.id })),
-    refusalCategories: wordOptions(REFUSAL_CATEGORIES, rows.map((r) => servingResponse(r)?.refusalCategory ?? null), filters.refusalCategories),
-    requestClasses: requestClassOptions(rows, filters.requestClasses),
-    speeds: [
-      { label: 'fast', value: 'fast' },
-      { label: 'standard', value: 'standard' },
-    ],
-    statuses: statusOptions(rows, filters.statuses),
-    stopReasons: wordOptions(STOP_REASONS, rows.map((r) => servingResponse(r)?.stopReason ?? null), filters.stopReasons),
-    turnOrigins: TURN_ORIGINS.map((v) => ({ label: v, value: v })),
-  };
+  // Six of the lists scan the drawn rows, which grow while the log follows, and the page re-renders on every poll and
+  // clock tick, so the lists follow their reads, the filters and the rows alone.
+  const options = useMemo<Record<string, Option[]>>(
+    () => ({
+      accounts: (accounts.data ?? []).map((a) => ({ label: a.label, value: a.id })),
+      agentTypes: AGENT_TYPES.map((v) => ({ label: v, value: v })),
+      cacheMissReasons: missReasonOptions(rows, filters.cacheMissReasons),
+      classifiers: [
+        { label: 'client classifier', value: 'client' },
+        { label: 'none', value: NO_CLASS },
+      ],
+      efforts: [...EFFORT_LEVELS, NO_EFFORT, OTHER_DIMENSION].map((v) => ({ label: v, value: v })),
+      guardrails: guardrailOptions(guardrails.data, rows, filters.guardrails),
+      keys: keyOptions(keys.data, filters.keys),
+      kind: [
+        { label: 'Inference', value: 'inference' },
+        { label: 'Count tokens', value: 'count_tokens' },
+        { label: 'Probe', value: 'probe' },
+      ],
+      models: (catalog.data ?? []).map((m) => ({ label: m.id, value: m.id })),
+      outcomes: REQUEST_OUTCOME_VALUES.map((o) => ({ label: REQUEST_OUTCOME_LABEL[o], value: o })),
+      pools: (pools.data ?? []).map((p) => ({ label: p.name, value: p.id })),
+      refusalCategories: wordOptions(REFUSAL_CATEGORIES, rows.map((r) => servingResponse(r)?.refusalCategory ?? null), filters.refusalCategories),
+      requestClasses: requestClassOptions(rows, filters.requestClasses),
+      speeds: [
+        { label: 'fast', value: 'fast' },
+        { label: 'standard', value: 'standard' },
+      ],
+      statuses: statusOptions(rows, filters.statuses),
+      stopReasons: wordOptions(STOP_REASONS, rows.map((r) => servingResponse(r)?.stopReason ?? null), filters.stopReasons),
+      turnOrigins: TURN_ORIGINS.map((v) => ({ label: v, value: v })),
+    }),
+    [accounts.data, catalog.data, filters, guardrails.data, keys.data, pools.data, rows],
+  );
   const disabled = { ...notLoadedReason('keys', 'key', keys), ...notLoadedReason('pools', 'pool', pools), ...notLoadedReason('accounts', 'account', accounts), ...notLoadedReason('models', 'model', catalog), ...notLoadedReason('guardrails', 'guardrail', guardrails) };
   const selected = requestId ? rows.find((r) => r.id === requestId) ?? null : null;
   const shown = requestId ? new Set<ColumnId>(COMPACT) : visible;
