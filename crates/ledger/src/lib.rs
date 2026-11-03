@@ -134,6 +134,10 @@ pub enum LedgerError {
     Plan(String),
     #[error("pricing table: {0}")]
     Yaml(String),
+    /// A series reader's refusal of the range it was asked for, raised before it reads a row. Its words are the
+    /// answer a route gives the caller.
+    #[error("{0}")]
+    Range(String),
     /// A file a newer build wrote: opening it would run no migration and read columns this build does not know. The
     /// message leaves `path` to the caller, whose context names the file.
     #[error(

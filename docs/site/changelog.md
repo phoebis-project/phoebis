@@ -443,7 +443,9 @@ attention item at the info level, for a plan-funded model that prices nothing ([
 scrape and `/v1/usage` run beside each other on four read-only connections, and the ledger's writer reads its own budget
 figures on its own connection ([The ledger writer](statistics.md#the-ledger-writer)). The ledger keeps planner
 statistics from the first start on and refreshes them after each hourly purge ([The ledger
-writer](statistics.md#the-ledger-writer)).
+writer](statistics.md#the-ledger-writer)). The analytics series and burn routes and a pool's traffic route answer `400`
+with the ledger's own words for a range that needs more points than a chart carries, a trailing partial bucket counted
+as one ([API reference](api-reference.md)).
 
 Every price is computed when it is read, from the token counts the ledger stores, at the price revision in force when
 the request arrived. The price table and the subscription cost model are revision lists keyed by effective date, the

@@ -6250,7 +6250,7 @@ async fn every_series_reader_refuses_a_range_whose_trailing_partial_bucket_is_on
     };
     let live = LiveKeys::default();
     let refused = |answer: Result<(), phoebis_ledger::LedgerError>| {
-        matches!(answer, Err(phoebis_ledger::LedgerError::Yaml(_)))
+        matches!(answer, Err(phoebis_ledger::LedgerError::Range(_)))
     };
     let answers = [
         (

@@ -4006,7 +4006,7 @@ fn first_edge(start: i64, end: i64, bucket_seconds: i64) -> Result<i64, LedgerEr
     // Checked before the division below it: `div_euclid` panics on a zero bucket, which `SeriesFilter::default()`
     // carries, rather than answering a range the guard below could still refuse.
     if bucket_seconds <= 0 {
-        return Err(LedgerError::Yaml(
+        return Err(LedgerError::Range(
             "bucket_seconds must be positive".to_string(),
         ));
     }
@@ -4014,7 +4014,7 @@ fn first_edge(start: i64, end: i64, bucket_seconds: i64) -> Result<i64, LedgerEr
     // The ceiling: the readers answer a trailing partial bucket as a point of its own.
     let count = (end - first).saturating_add(bucket_seconds - 1) / bucket_seconds;
     if !(0..=MAX_POINTS).contains(&count) {
-        return Err(LedgerError::Yaml(format!(
+        return Err(LedgerError::Range(format!(
             "the range needs {count} points, and the most a chart carries is {MAX_POINTS}"
         )));
     }

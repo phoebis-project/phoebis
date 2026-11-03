@@ -1632,7 +1632,7 @@ pub(crate) struct TrafficQuery {
     params(("id" = String, Path, description = "The pool's id"), TrafficQuery),
     responses(
         (status = 200, description = "The buckets over the range.", body = PoolTraffic),
-        (status = 400, description = "For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`", body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
+        (status = 400, description = "For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`\n\nFor a range the chart cannot carry, the ledger's own message: `the range needs {count} points, and the most a chart carries is 10000`.", body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
         (status = 404, description = "`pool not found`", body = ErrorBody, example = json!({"error": "pool not found"})),
         (status = 500, description = "- `storage failure`\n- `ledger failure`", body = ErrorBody, example = json!({"error": "storage failure"})),
     ),
@@ -1673,6 +1673,8 @@ pub(crate) async fn traffic(
             buckets,
         })
         .into_response(),
+        // The range's own refusal, raised before any read.
+        Err(e @ phoebis_ledger::LedgerError::Range(_)) => failure(StatusCode::BAD_REQUEST, &e.to_string()),
         Err(e) => crate::analytics::ledger_failure(e),
     }
 }
