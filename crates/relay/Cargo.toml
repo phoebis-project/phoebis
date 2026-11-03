@@ -39,7 +39,6 @@ tokio = { workspace = true }
 tokio-boring = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
-url = { workspace = true }
 
 [dev-dependencies]
 fake-upstream = { path = "../../tests/fake_upstream" }

@@ -4,8 +4,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use axum::extract::{Path, Request, State};
-use axum::http::{HeaderMap, StatusCode, Uri};
+use axum::extract::{Path, Query, Request, State};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use futures::future::join_all;
@@ -28,16 +28,6 @@ struct Access {
     accounts: Vec<AccountRow>,
     long_context_twins: bool,
     processed: Vec<ProcessedRule>,
-}
-
-fn query_of(uri: &Uri) -> HashMap<String, String> {
-    uri.query()
-        .map(|q| {
-            url::form_urlencoded::parse(q.as_bytes())
-                .into_owned()
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 fn row_json(row: &CatalogRow) -> serde_json::Value {
@@ -114,9 +104,12 @@ async fn caller_listing(relay: &Relay, access: &Access) -> Vec<CatalogRow> {
     listing(&members, &access.processed, access.long_context_twins)
 }
 
-pub(crate) async fn list(State(relay): State<Arc<Relay>>, request: Request) -> Response {
+pub(crate) async fn list(
+    State(relay): State<Arc<Relay>>,
+    Query(query): Query<HashMap<String, String>>,
+    request: Request,
+) -> Response {
     let request_id = new_request_id();
-    let query = query_of(request.uri());
     let access = match authenticate(&relay, request.headers(), &request_id).await {
         Ok(access) => access,
         Err(response) => return response,
