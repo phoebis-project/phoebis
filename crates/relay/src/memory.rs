@@ -253,8 +253,8 @@ impl SessionMemory {
     /// later reader. Nothing the restoration reads comes back: the id on the wire is the header's alone, since a
     /// minted one would be a field the client did not write.
     pub fn touch(&self, key: &MemoryKey, prompt_id: Option<&str>, now: i64) {
-        self.purge(now);
         let mut inner = self.inner.lock().unwrap();
+        self.purge_held(&mut inner, now);
         // A revived entry keeps the prompt id its record carried. The revival runs ahead of the eviction, so a
         // write landing on a key evicted moments earlier continues that record rather than racing it to the store
         // with a fresh one.
@@ -293,8 +293,8 @@ impl SessionMemory {
     }
 
     pub fn record_request_id(&self, key: &MemoryKey, account_id: &str, request_id: &str, now: i64) {
-        self.purge(now);
         let mut inner = self.inner.lock().unwrap();
+        self.purge_held(&mut inner, now);
         let account = account_entry(
             &mut inner,
             key,
@@ -315,8 +315,8 @@ impl SessionMemory {
         message_id: &str,
         now: i64,
     ) {
-        self.purge(now);
         let mut inner = self.inner.lock().unwrap();
+        self.purge_held(&mut inner, now);
         let account = account_entry(
             &mut inner,
             key,
@@ -364,11 +364,11 @@ impl SessionMemory {
         })
     }
 
-    /// Drops entries idle past the configured bound; run by every write, at most once a minute.
-    pub fn purge(&self, now: i64) {
-        let mut inner = self.inner.lock().unwrap();
-        purge_locked(&mut inner, now, self.idle_ms, self.cap);
-        self.ask_for_a_flush(&inner);
+    /// Drops entries idle past the configured bound; run by every write on the lock it already holds, at most
+    /// once a minute.
+    fn purge_held(&self, inner: &mut Inner, now: i64) {
+        purge_locked(inner, now, self.idle_ms, self.cap);
+        self.ask_for_a_flush(inner);
     }
 
     /// Waits until the overlay wants a flush ahead of the next tick. The flusher selects on this and on its
@@ -405,10 +405,10 @@ impl SessionMemory {
         let Some(store) = &self.store else {
             return false;
         };
-        self.purge(now);
         let (in_flight, mine) = loop {
             let waiter = {
                 let mut inner = self.inner.lock().unwrap();
+                self.purge_held(&mut inner, now);
                 if inner.entries.contains_key(key)
                     || revive_pending(&mut inner, key, now, self.cap, self.retention_ms)
                 {
