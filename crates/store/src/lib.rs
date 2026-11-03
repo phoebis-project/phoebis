@@ -540,10 +540,7 @@ impl Store {
     /// The key an in-memory snapshot digests presented secrets with, so a comparison never needs the raw
     /// storage key outside the store.
     pub fn digest_key(&self) -> [u8; 32] {
-        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&self.key.0)
-            .expect("HMAC-SHA256 accepts a 32 byte key");
-        mac.update(b"api-key-digest");
-        mac.finalize().into_bytes().into()
+        digest_with(&self.key.0, b"api-key-digest")
     }
 
     /// A database copy without the key file cannot use this to test guessed secrets: the digest is keyed,
