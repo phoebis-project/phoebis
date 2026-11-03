@@ -49,8 +49,9 @@ pub use state::{
     KeyPermit, LongContextRates, MemberSpend, OverageEvidence, PinPace, PinRef, PinUsage, Purged,
     RateTable, Rates, Reservation, RoutingState, SharePricer, SlowDownEdge, SlowDownState,
     SpendResetSource, SpendWindow, StateWrite, UtilizationSample, WindowReading, WindowSource,
-    BUCKET_LIFE_MS, BUCKET_TTL_MS, CYCLE_GAPS, DEFAULT_WINDOW_CEILING, FAST_INPUT, FAST_OUTPUT,
-    FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, MAX_BUCKETS_PER_ACCOUNT, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
+    BUCKET_LIFE_MS, BUCKET_TTL_MS, CYCLE_GAPS, DAY_MS, DEFAULT_WINDOW_CEILING, FAST_INPUT,
+    FAST_OUTPUT, FIVE_HOUR, HOUR_MS, IN_FLIGHT_RECLAIM_MS, MAX_BUCKETS_PER_ACCOUNT, SEVEN_DAY,
+    SEVEN_DAY_FABLE, WEEK_MS,
 };
 pub use task::{
     credits_from_usage, sample_from_usage, spawn, AccountProjection, AccountSlowDown, BandWeight,

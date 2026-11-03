@@ -28,8 +28,9 @@ pub const BUCKET_LIFE_MS: i64 = 60_000;
 pub const BUCKET_TTL_MS: i64 = 600_000;
 /// Bucket windows an account holds at most, the oldest reading evicted at insert.
 pub const MAX_BUCKETS_PER_ACCOUNT: usize = 64;
-pub const WEEK_MS: i64 = 7 * 24 * 3_600_000;
-pub(crate) const HOUR_MS: i64 = 3_600_000;
+pub const HOUR_MS: i64 = 3_600_000;
+pub const DAY_MS: i64 = 24 * HOUR_MS;
+pub const WEEK_MS: i64 = 7 * DAY_MS;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PinRef {

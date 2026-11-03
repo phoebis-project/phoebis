@@ -13,7 +13,7 @@ use phoebis_ledger::{
     SLOWED_LONG_KIND, SLOW_SETTINGS, WALL_REACHED_KIND, WALL_SETTINGS,
 };
 use phoebis_oauth::UsageService;
-use phoebis_routing::{shed_cap, RegistrySnapshot, RouterHandle};
+use phoebis_routing::{shed_cap, RegistrySnapshot, RouterHandle, DAY_MS};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, PoolRow, ResolvedAttempt, Settled, Store, StoreError,
 };
@@ -27,8 +27,6 @@ pub const BACKOFF_ATTENTION_AFTER_MS: i64 = 30 * 60 * 1_000;
 /// A loaded leaf holds `certificate_expiring` from this many days before its `not_after`. The router's
 /// `EXPIRY_WARNING_DAYS`, which `check-config` and `status` warn under, reads this constant.
 pub const CERTIFICATE_WARNING_DAYS: i64 = 30;
-
-const DAY_MS: i64 = 86_400_000;
 
 /// How many of a holder's newest settled refresh attempts one read walks: two make the condition, and the rest date
 /// the run's start as far back as the read reaches, which bounds the scan a scrape pays per account.

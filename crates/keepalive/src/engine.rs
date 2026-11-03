@@ -15,7 +15,7 @@ use phoebis_ledger::{Band, Ledger, Metrics, PlanTables, Pricing, Speed};
 use phoebis_oauth::Clock;
 use phoebis_relay::{CacheTtl, CacheTtlPolicy, Relay};
 use phoebis_routing::{
-    budget_deadline, listing, MemberSpend, RegistrySnapshot, RouterHandle, SEVEN_DAY,
+    budget_deadline, listing, MemberSpend, RegistrySnapshot, RouterHandle, DAY_MS, SEVEN_DAY,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, CooldownScope, OveragePolicy, PoolRow, Store,
@@ -242,8 +242,6 @@ impl serde::Serialize for Reason {
 /// The share of the previous main prompt a completion must read from the cache, under a chain that holds neither
 /// anchor boundary, for the engine to read a contradiction between its chain model and the upstream's.
 pub const CHAIN_CONTRADICTION_COVERAGE: f64 = 0.9;
-
-const DAY_MS: i64 = 86_400_000;
 
 /// The UTC day `ms` falls on, counted from the epoch. The day counters and their reader both go through it, so the
 /// two never disagree on where a day ends.

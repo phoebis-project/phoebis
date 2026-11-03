@@ -12,6 +12,7 @@ use phoebis_ledger::{
     decision_record, list_routing_log, DecisionListRow, EventListRow, RoutingLogCursor,
     RoutingLogFilter, RoutingLogRow, DECISION_KINDS, EVENT_KINDS, PROBE_KIND,
 };
+use phoebis_routing::HOUR_MS;
 use serde_json::{json, Map, Value};
 use utoipa::ToSchema;
 
@@ -23,7 +24,6 @@ use crate::AdminState;
 
 const DEFAULT_LIMIT: usize = 25;
 const MAX_LIMIT: usize = 200;
-const HOUR_MS: i64 = 3_600_000;
 
 /// The view's URL keys, alphabetical. A key outside them is refused rather than ignored, so a link built for another
 /// view never reads as a filter that took.
