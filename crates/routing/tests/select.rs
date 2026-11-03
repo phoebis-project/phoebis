@@ -12995,6 +12995,36 @@ fn a_seat_at_its_spend_cap_reads_spent_and_an_overage_deadline_reads_overage_whe
 }
 
 #[test]
+fn a_fast_request_beside_a_credits_blocked_member_and_a_spent_week_answers_the_weeks_reset() {
+    let s = snapshot(Pool {
+        policy: OveragePolicy::Never,
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_credits("a", credits(false, Some("org_level_disabled"), None, 1_000));
+    st.record_sample(
+        "b",
+        with_fable(sample(0.2, 0.1, 1_000), 1.0, Some(9 * HOUR)),
+        0,
+    );
+    assert_eq!(
+        select(
+            &mut st,
+            &s,
+            &fast(request(&s, None, "claude-fable-5-1", true, &[], 2_000)),
+            &mut rng()
+        )
+        .0,
+        SelectResult::Exhausted(Exhaustion::Timed {
+            deadline: 9 * HOUR,
+            window: SEVEN_DAY_FABLE.into()
+        }),
+        "a spent week is no credits block, so the wait for its reset answers"
+    );
+}
+
+#[test]
 fn a_usage_based_seats_plan_week_read_before_the_class_holds_no_request_and_refuses_no_placement() {
     // The week a plan seat read at its cap before it converted, which the routing state keeps across the class.
     let spent_week = sample(0.1, 1.0, T - 500).with(
