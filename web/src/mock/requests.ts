@@ -6,7 +6,7 @@ import type {
 import type { GuardrailMatch } from '@/api/types';
 import { emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { AGENT_TYPES } from '@/lib/client';
-import { equivalentOf, fundingOf, modelWeeks, pricedWindow, shareOf, tierCapacity, weightOf } from '@/lib/costs';
+import { anchorTier, fundingOf, inBand, modelWeeks, pricedWindow, shareIn, tierCapacity, weightOf } from '@/lib/costs';
 import { countOf, emptyCounts } from '@/lib/counts';
 import { NO_CLASS, NO_EFFORT, foldClassifier, foldEffort, foldRequestClass } from '@/lib/dimensions';
 import { tokensTotal } from '@/lib/format';
@@ -2037,9 +2037,10 @@ function costFiguresOf(r: RequestLog): Pick<RequestLog, 'costEquivalent' | 'cost
       );
     return { costEquivalent: 0, costShares: tier === undefined ? {} : zeros(tier), shareReason: 'client_classifier' };
   }
-  const weighted = weightOf(TABLES, r.canonicalModel, 'seven_day') !== null;
-  const shares: CostShares = tier === undefined ? {} : Object.fromEntries(windows.map((w) => [w, weighted ? shareOf(TABLES, w, tier, r.canonicalModel, r.usage, finishedMs) : null]));
-  return { costEquivalent: weighted ? equivalentOf(TABLES, r.canonicalModel, r.usage, finishedMs) : null, costShares: shares, shareReason: null };
+  // The band is read once for the figure and every window, each priced as the equivalent and the share read it.
+  const inside = weightOf(TABLES, r.canonicalModel, 'seven_day') !== null ? inBand(TABLES, finishedMs) : null;
+  const shares: CostShares = tier === undefined ? {} : Object.fromEntries(windows.map((w) => [w, inside === null ? null : shareIn(TABLES, w, tier, r.canonicalModel, r.usage, inside)]));
+  return { costEquivalent: inside === null ? null : shareIn(TABLES, 'seven_day', anchorTier(TABLES), r.canonicalModel, r.usage, inside), costShares: shares, shareReason: null };
 }
 
 /**
@@ -2183,8 +2184,11 @@ function hourShares(accountId: string, model: string, priced: { at: number; usag
   let equivalent: number | null = 0;
   for (const { at, usage } of priced) {
     if (tokensTotal(usage) === 0) continue;
-    equivalent = plus(equivalent, weighted ? equivalentOf(TABLES, model, usage, at) : null);
-    if (tier !== undefined) for (const w of windows) shares[w] = plus(shares[w], weighted ? shareOf(TABLES, w, tier, model, usage, at) : null);
+    // The band is read once per request for the figure and every window, each priced as the equivalent and the share
+    // read it.
+    const inside = weighted ? inBand(TABLES, at) : null;
+    equivalent = plus(equivalent, inside === null ? null : shareIn(TABLES, 'seven_day', anchorTier(TABLES), model, usage, inside));
+    if (tier !== undefined) for (const w of windows) shares[w] = plus(shares[w], inside === null ? null : shareIn(TABLES, w, tier, model, usage, inside));
   }
   return { equivalent, shares };
 }
