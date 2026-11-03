@@ -1,8 +1,9 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useId } from 'react';
 import type { Condition, ConditionSubject, MessageSelector } from '@/api/types';
-import { IconChevron, IconPlus, IconX } from '@/components/ui/icons';
-import { Button, Input, Select } from '@/components/ui/primitives';
+import { IconPlus } from '@/components/ui/icons';
+import { Button, Input, RowActions, Select } from '@/components/ui/primitives';
 import { KIND_VALUES, MAX_CONDITIONS, OPERATOR_LABEL, SELECTOR_LABEL, SUBJECTS, subjectOf, takesValue } from '@/lib/guardrails';
+import { useKeyedRows } from '@/lib/hooks';
 
 const SELECTORS = Object.keys(SELECTOR_LABEL) as MessageSelector[];
 const KIND_WORDS = KIND_VALUES.map((k) => k.value);
@@ -34,45 +35,9 @@ export const blankCondition = (): Condition => withSubject({ operator: 'absent',
  * `refusals` holds a row's sentence by its index, the console's own or the route's, drawn under the row.
  */
 export function ConditionsEditor({ onChange, refusals, value }: { onChange: (c: Condition[]) => void; refusals: ReadonlyMap<number, string>; value: Condition[] }): JSX.Element {
-  const rowId = useId();
   const refusalId = useId();
-  // A key per row that travels with it, so a row moved up or down keeps its node and the button keeps focus.
-  const [rows, setRows] = useState(() => ({ keys: value.map((_, i) => i), next: value.length }));
-  const focusKey = useRef<number | null>(null);
-  let keys = rows.keys;
-  if (keys.length !== value.length) {
-    let next = rows.next;
-    keys = keys.slice(0, value.length);
-    while (keys.length < value.length) keys.push(next++);
-    setRows({ keys, next });
-  }
-  // A row added by the button takes the focus once it is drawn, so the operator picks its subject straight away.
-  useEffect(() => {
-    if (focusKey.current === null) return;
-    const select = document.getElementById(`${rowId}-${focusKey.current}`);
-    if (!select) return;
-    focusKey.current = null;
-    select.focus();
-  });
-
-  const commit = (next: Condition[], order: number[], nextKey = rows.next) => {
-    setRows({ keys: order, next: nextKey });
-    onChange(next);
-  };
-  const update = (i: number, c: Condition) => onChange(value.map((x, j) => (j === i ? c : x)));
-  const move = (i: number, j: number) => {
-    const next = [...value];
-    const order = [...keys];
-    [next[i], next[j]] = [next[j], next[i]];
-    [order[i], order[j]] = [order[j], order[i]];
-    commit(next, order);
-  };
-  const remove = (i: number) => commit(value.filter((_, j) => j !== i), keys.filter((_, j) => j !== i));
-  const add = () => {
-    const key = rows.next;
-    focusKey.current = key;
-    commit([...value, blankCondition()], [...keys, key], key + 1);
-  };
+  // A row added by the button takes the focus on its subject, so the operator picks it straight away.
+  const { add, idOf, keys, move, remove, update } = useKeyedRows(value, onChange, blankCondition);
 
   return (
     <div className="conditions-editor" role="group" aria-label="Conditions">
@@ -88,7 +53,7 @@ export function ConditionsEditor({ onChange, refusals, value }: { onChange: (c: 
             return (
               <li key={key} className={`conditions-editor__row ${refusal ? 'is-refused' : ''}`}>
                 <div className="conditions-editor__line">
-                  <Select id={`${rowId}-${key}`} aria-label={`Condition ${n} subject`} value={c.subject} onChange={(e) => update(i, withSubject(c, e.target.value as ConditionSubject))}>
+                  <Select id={idOf(key)} aria-label={`Condition ${n} subject`} value={c.subject} onChange={(e) => update(i, withSubject(c, e.target.value as ConditionSubject))}>
                     {SUBJECTS.map((s) => (
                       <option key={s.value} value={s.value}>
                         {s.label}
@@ -134,9 +99,7 @@ export function ConditionsEditor({ onChange, refusals, value }: { onChange: (c: 
                       <Input className="mono" aria-label={`Condition ${n} value`} placeholder={c.operator === 'matches' ? '^Describe' : 'Value'} spellCheck={false} autoComplete="off" value={c.value ?? ''} aria-invalid={invalid} aria-describedby={described} onChange={(e) => update(i, { ...c, value: e.target.value })} />
                     ))}
                   <span className="conditions-editor__actions">
-                    <Button size="sm" variant="ghost" className="conditions-editor__up" icon={<IconChevron size={14} />} aria-label={`Move condition ${n} up`} disabled={i === 0} onClick={() => move(i, i - 1)} />
-                    <Button size="sm" variant="ghost" icon={<IconChevron size={14} />} aria-label={`Move condition ${n} down`} disabled={i === value.length - 1} onClick={() => move(i, i + 1)} />
-                    <Button size="sm" variant="ghost" icon={<IconX size={14} />} aria-label={`Remove condition ${n}`} onClick={() => remove(i)} />
+                    <RowActions count={value.length} index={i} noun="condition" onMove={move} onRemove={remove} upClass="conditions-editor__up" />
                   </span>
                 </div>
                 {refusal && (

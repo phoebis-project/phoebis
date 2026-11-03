@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MutableRefObject } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MutableRefObject } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '@/api';
 import { ApiError, quietly, reportRecovery } from '@/api/http';
@@ -82,6 +82,53 @@ export function streakFailed(streak: Streak, err: unknown, failing = true): void
  * writes it, since the hooks lint forbids writing a ref during render, so it is current before the passive effects and
  * the layout effects declared after the call.
  */
+/**
+ * An editable list's rows with keys that travel with them, so a row moved up or down keeps its node and its button keeps
+ * the focus. Rows the value gains from outside take fresh keys, and rows it drops give theirs up. A row `add` appends
+ * takes the focus once it is drawn, on the element its row gives the id `idOf(key)`, so the operator fills it straight
+ * away.
+ */
+export function useKeyedRows<T>(value: T[], onChange: (next: T[]) => void, blank: () => T) {
+  const rowId = useId();
+  const [rows, setRows] = useState(() => ({ keys: value.map((_, i) => i), next: value.length }));
+  const focusKey = useRef<number | null>(null);
+  let keys = rows.keys;
+  if (keys.length !== value.length) {
+    let next = rows.next;
+    keys = keys.slice(0, value.length);
+    while (keys.length < value.length) keys.push(next++);
+    setRows({ keys, next });
+  }
+  const idOf = (key: number) => `${rowId}-${key}`;
+  useEffect(() => {
+    if (focusKey.current === null) return;
+    const target = document.getElementById(idOf(focusKey.current));
+    if (!target) return;
+    focusKey.current = null;
+    target.focus();
+  });
+
+  const commit = (next: T[], order: number[], nextKey = rows.next) => {
+    setRows({ keys: order, next: nextKey });
+    onChange(next);
+  };
+  const update = (i: number, row: T) => onChange(value.map((x, j) => (j === i ? row : x)));
+  const move = (i: number, j: number) => {
+    const next = [...value];
+    const order = [...keys];
+    [next[i], next[j]] = [next[j], next[i]];
+    [order[i], order[j]] = [order[j], order[i]];
+    commit(next, order);
+  };
+  const remove = (i: number) => commit(value.filter((_, j) => j !== i), keys.filter((_, j) => j !== i));
+  const add = () => {
+    const key = rows.next;
+    focusKey.current = key;
+    commit([...value, blank()], [...keys, key], key + 1);
+  };
+  return { add, idOf, keys, move, remove, update };
+}
+
 export function useLatest<T>(value: T): MutableRefObject<T> {
   const ref = useRef(value);
   useLayoutEffect(() => {

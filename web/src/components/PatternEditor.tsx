@@ -1,8 +1,9 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { api } from '@/api';
 import type { ModelRule } from '@/api/types';
-import { IconChevron, IconInfo, IconPlus, IconX } from '@/components/ui/icons';
-import { Button, Input, Segmented } from '@/components/ui/primitives';
+import { IconInfo, IconPlus } from '@/components/ui/icons';
+import { Button, Input, RowActions, Segmented } from '@/components/ui/primitives';
+import { useKeyedRows } from '@/lib/hooks';
 import { UNDATED_MODEL_NOTE, checkPattern } from '@/lib/patterns';
 
 type Effect = 'allow' | 'deny';
@@ -58,47 +59,10 @@ export function PatternEditor({ inherited = [], label, onChange, suggestions, va
   value: ModelRule[];
 }): JSX.Element {
   const listId = useId();
-  const rowId = useId();
   const summaryId = useId();
   const refusalId = useId();
-  // A key per row that travels with it, so a row moved up or down keeps its node and the button keeps focus.
-  const [rows, setRows] = useState(() => ({ keys: value.map((_, i) => i), next: value.length }));
-  const focusKey = useRef<number | null>(null);
-  // Rows the value gains from outside take fresh keys, and rows it drops give theirs up.
-  let keys = rows.keys;
-  if (keys.length !== value.length) {
-    let next = rows.next;
-    keys = keys.slice(0, value.length);
-    while (keys.length < value.length) keys.push(next++);
-    setRows({ keys, next });
-  }
-  // A row added by the button takes the focus once it is drawn, so the operator types the pattern straight away.
-  useEffect(() => {
-    if (focusKey.current === null) return;
-    const input = document.getElementById(`${rowId}-${focusKey.current}`);
-    if (!input) return;
-    focusKey.current = null;
-    input.focus();
-  });
-
-  const commit = (rules: ModelRule[], order: number[], next = rows.next) => {
-    setRows({ keys: order, next });
-    onChange(rules);
-  };
-  const update = (i: number, rule: ModelRule) => onChange(value.map((r, j) => (j === i ? rule : r)));
-  const move = (i: number, j: number) => {
-    const rules = [...value];
-    const order = [...keys];
-    [rules[i], rules[j]] = [rules[j], rules[i]];
-    [order[i], order[j]] = [order[j], order[i]];
-    commit(rules, order);
-  };
-  const remove = (i: number) => commit(value.filter((_, j) => j !== i), keys.filter((_, j) => j !== i));
-  const add = () => {
-    const key = rows.next;
-    focusKey.current = key;
-    commit([...value, { not: false, pattern: '' }], [...keys, key], key + 1);
-  };
+  // A row added by the button takes the focus on its pattern, so the operator types it straight away.
+  const { add, idOf, keys, move, remove, update } = useKeyedRows(value, onChange, (): ModelRule => ({ not: false, pattern: '' }));
 
   const refusals = value.map((r) => checkPattern(r.pattern));
   const first = refusals.findIndex((r) => r !== null);
@@ -125,7 +89,7 @@ export function PatternEditor({ inherited = [], label, onChange, suggestions, va
                 <div className="pattern-editor__line">
                   <Segmented<Effect> ariaLabel={`Rule ${n} allows or denies`} value={rule.not ? 'deny' : 'allow'} options={EFFECTS} onChange={(v) => update(i, { ...rule, not: v === 'deny' })} />
                   <Input
-                    id={`${rowId}-${key}`}
+                    id={idOf(key)}
                     className="mono"
                     value={rule.pattern}
                     list={listId}
@@ -138,9 +102,7 @@ export function PatternEditor({ inherited = [], label, onChange, suggestions, va
                     onChange={(e) => update(i, { ...rule, pattern: e.target.value })}
                   />
                   <span className="pattern-editor__actions">
-                    <Button size="sm" variant="ghost" className="pattern-editor__up" icon={<IconChevron size={14} />} aria-label={`Move rule ${n} up`} disabled={i === 0} onClick={() => move(i, i - 1)} />
-                    <Button size="sm" variant="ghost" icon={<IconChevron size={14} />} aria-label={`Move rule ${n} down`} disabled={i === value.length - 1} onClick={() => move(i, i + 1)} />
-                    <Button size="sm" variant="ghost" icon={<IconX size={14} />} aria-label={`Remove rule ${n}`} onClick={() => remove(i)} />
+                    <RowActions count={value.length} index={i} noun="rule" onMove={move} onRemove={remove} upClass="pattern-editor__up" />
                   </span>
                 </div>
                 {refusal && (

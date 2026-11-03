@@ -129,6 +129,18 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
   );
 });
 
+/** A list row's Move up, Move down and Remove buttons, `noun` naming the row in their labels ("Move rule 2 up"). */
+export function RowActions({ count, index, noun, onMove, onRemove, upClass }: { count: number; index: number; noun: string; onMove: (from: number, to: number) => void; onRemove: (index: number) => void; upClass: string }) {
+  const n = index + 1;
+  return (
+    <>
+      <Button size="sm" variant="ghost" className={upClass} icon={<IconChevron size={14} />} aria-label={`Move ${noun} ${n} up`} disabled={index === 0} onClick={() => onMove(index, index - 1)} />
+      <Button size="sm" variant="ghost" icon={<IconChevron size={14} />} aria-label={`Move ${noun} ${n} down`} disabled={index === count - 1} onClick={() => onMove(index, index + 1)} />
+      <Button size="sm" variant="ghost" icon={<IconX size={14} />} aria-label={`Remove ${noun} ${n}`} onClick={() => onRemove(index)} />
+    </>
+  );
+}
+
 /** A caller that passes `active` is a toggle and reads as pressed or not, and a one-shot action passes none. */
 export function Pill({ children, active, onClick, disabled, title, icon }: { active?: boolean; children: ReactNode; disabled?: boolean; icon?: ReactNode; onClick?: () => void; title?: string }) {
   return (
