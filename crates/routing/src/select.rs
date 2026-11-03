@@ -97,16 +97,14 @@ pub struct SelectRequest {
     pub request_class: Option<String>,
     /// `x-claude-code-context-compacted` was present.
     pub context_compacted: bool,
-    /// The static chain's last boundary and every boundary of the message chain, lowercase hex; empty when
-    /// the body carried no chain.
-    pub static_hash: Option<String>,
-    /// Shared with the attempts before and after and with the answer's affinity report, never copied per attempt.
+    /// Every boundary of the message chain, lowercase hex, empty when the body carried no chain. Shared with the
+    /// attempts before and after and with the answer's affinity report, never copied per attempt.
     pub boundaries: Arc<[String]>,
     pub client: ClientClass,
     /// The user agent's entrypoint token, `None` for a client that is not Claude Code: the regime the request and the
     /// pin it places or renews price under.
     pub entrypoint: Option<String>,
-    /// Every static boundary in chain order; `static_hash` stays the last one.
+    /// Every static boundary in chain order, lowercase hex, the last one the static hash.
     pub static_boundaries: Arc<[String]>,
     /// The body carries a `cache_control` marker, or the TTL policy will add one: the cache gate.
     pub marker: bool,
@@ -142,6 +140,11 @@ pub struct SelectRequest {
 }
 
 impl SelectRequest {
+    /// The static chain's last boundary, `None` when the body carried no static chain.
+    pub fn static_hash(&self) -> Option<&String> {
+        self.static_boundaries.last()
+    }
+
     /// The key of the pin the request's session holds for its agent and model.
     pub(crate) fn pin_key(&self) -> PinKey {
         PinKey {
@@ -430,7 +433,7 @@ pub fn warmth_of(
             (Warmth::Untouched, WarmthCause::ClassAuxiliary)
         };
     }
-    if request.static_hash.is_none() && request.boundaries.is_empty() {
+    if request.static_hash().is_none() && request.boundaries.is_empty() {
         return refreshed(WarmthCause::Chainless);
     }
     // The pin's tail stays an anchor beside the map: the affinity report lands when the previous answer ends,
@@ -450,7 +453,10 @@ pub fn warmth_of(
         return refreshed(WarmthCause::ContinuesPin);
     }
     // The static prefix without a continuation restarted the conversation.
-    if request.static_hash.is_some() && request.static_hash == current.static_hash {
+    if request
+        .static_hash()
+        .is_some_and(|hash| Some(hash) == current.static_hash.as_ref())
+    {
         return (Warmth::Cold, WarmthCause::StaticRestart);
     }
     (Warmth::Untouched, WarmthCause::Foreign)
@@ -492,7 +498,7 @@ fn placed_auxiliary_only(request: &SelectRequest) -> bool {
 /// The request's two hashes, for a pin it refreshed, colded or created: the static prefix and the last message
 /// boundary, which the next continuation's boundaries contain.
 fn stamp_hashes(pin: &mut PinRow, request: &SelectRequest) {
-    pin.static_hash = request.static_hash.clone();
+    pin.static_hash = request.static_hash().cloned();
     pin.tail_hash = request.boundaries.last().cloned();
 }
 
@@ -2321,7 +2327,7 @@ fn run(
             epoch,
             lane: row.lane.clone(),
             refresh_stamped: true,
-            hashes_stamped: request.static_hash.is_some() || !request.boundaries.is_empty(),
+            hashes_stamped: request.static_hash().is_some() || !request.boundaries.is_empty(),
         });
         replace_expired(state, expired.take(), &mut writes);
         state.put_pin(row.clone());
@@ -5358,7 +5364,7 @@ fn renew(
         last_used_at: now,
         ..current.clone()
     };
-    let chained = request.static_hash.is_some() || !request.boundaries.is_empty();
+    let chained = request.static_hash().is_some() || !request.boundaries.is_empty();
     let auxiliary_only = state.auxiliary_only(&current.key());
     match verdict {
         Warmth::Refresh => {
@@ -7827,7 +7833,6 @@ mod banded_tests {
             count: false,
             request_class: None,
             context_compacted: false,
-            static_hash: None,
             boundaries: Arc::from([]),
             client: Default::default(),
             entrypoint: None,

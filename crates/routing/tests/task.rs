@@ -158,7 +158,6 @@ fn request(
         count: false,
         request_class: None,
         context_compacted: false,
-        static_hash: None,
         boundaries: Arc::from([]),
         client: ClientClass::ClaudeCode,
         entrypoint: None,
@@ -1117,7 +1116,6 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
             count: false,
             request_class: None,
             context_compacted: false,
-            static_hash: None,
             boundaries: Arc::from([]),
             client: ClientClass::ClaudeCode,
             entrypoint: None,
@@ -1259,7 +1257,6 @@ async fn resolve_answers_once_the_state_holds_the_spellings_pins_and_cooldowns_u
             count: false,
             request_class: None,
             context_compacted: false,
-            static_hash: None,
             boundaries: Arc::from([]),
             client: ClientClass::ClaudeCode,
             entrypoint: None,
@@ -6823,7 +6820,7 @@ async fn a_probe_after_a_compacted_request_refreshes_warmth() {
         probe,
         request_class: Some("main".into()),
         context_compacted: true,
-        static_hash: Some("s0".into()),
+        static_boundaries: Arc::from(["s0".to_string()]),
         boundaries: Arc::from(["c1".to_string()]),
         ..request(&handle, Some("s1"), now)
     };

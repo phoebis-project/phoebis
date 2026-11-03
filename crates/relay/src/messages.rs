@@ -1638,7 +1638,7 @@ impl Relay {
                 stream,
                 capture_hours,
                 facts.shape.clone(),
-                static_hash.clone(),
+                static_hash,
                 boundaries.to_vec(),
                 client,
                 auto_mode,
@@ -2037,7 +2037,6 @@ impl Relay {
                     count: admitted.trace.kind == Kind::CountTokens,
                     request_class: hints.request_class.clone(),
                     context_compacted: hints.context_compacted.is_some(),
-                    static_hash: static_hash.clone(),
                     boundaries: facts
                         .chains
                         .as_ref()

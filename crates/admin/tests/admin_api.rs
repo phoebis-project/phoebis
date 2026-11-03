@@ -6025,7 +6025,6 @@ async fn agent_turn(
             count: false,
             request_class: Some(if main { "main" } else { "subagent" }.into()),
             context_compacted: false,
-            static_hash: None,
             boundaries: std::sync::Arc::from([]),
             client: phoebis_routing::ClientClass::ClaudeCode,
             entrypoint: None,

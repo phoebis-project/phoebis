@@ -92,7 +92,6 @@ async fn next_trace(h: &Harness, session: &str) -> SelectionTrace {
             count: false,
             request_class: None,
             context_compacted: false,
-            static_hash: None,
             boundaries: Arc::from([]),
             client: ClientClass::ClaudeCode,
             entrypoint: None,

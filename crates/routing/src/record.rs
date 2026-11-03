@@ -183,7 +183,7 @@ impl ChainFacts {
         ChainFacts {
             static_boundaries: u32::try_from(request.static_boundaries.len()).unwrap_or(u32::MAX),
             boundaries: u32::try_from(request.boundaries.len()).unwrap_or(u32::MAX),
-            static_hash: request.static_hash.is_some(),
+            static_hash: request.static_hash().is_some(),
         }
     }
 }
