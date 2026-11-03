@@ -574,11 +574,7 @@ impl Store {
         if !db_path.try_exists()? {
             return Ok(CanaryRead::NoRegistry);
         }
-        let conn = Connection::open_with_flags(
-            db_path,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )?;
-        conn.busy_timeout(BUSY_TIMEOUT)?;
+        let conn = open_read_only(db_path, BUSY_TIMEOUT)?;
         let mismatch = || StoreError::KeyMismatch {
             path: db_path.to_path_buf(),
         };
@@ -607,11 +603,7 @@ impl Store {
         if !db_path.try_exists()? {
             return Ok(None);
         }
-        let conn = Connection::open_with_flags(
-            db_path,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )?;
-        conn.busy_timeout(BUSY_TIMEOUT)?;
+        let conn = open_read_only(db_path, BUSY_TIMEOUT)?;
         Ok(Some(read_version(&conn)?).filter(|version| *version != 0))
     }
 
@@ -1306,6 +1298,17 @@ fn readable_sealed_rows(conn: &Connection, key: &StorageKey) -> Result<u64, Stor
         }
     }
     Ok(readable)
+}
+
+/// A read-only connection to the file at `path` that takes no lock and writes nothing, waiting up to `busy_timeout`
+/// on another writer.
+pub(crate) fn open_read_only(path: &Path, busy_timeout: Duration) -> rusqlite::Result<Connection> {
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    conn.busy_timeout(busy_timeout)?;
+    Ok(conn)
 }
 
 fn has_table(conn: &Connection, name: &str) -> Result<bool, StoreError> {

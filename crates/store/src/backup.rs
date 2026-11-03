@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use rusqlite::backup::{Backup, StepResult};
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::Connection;
 
 use crate::permissions;
 
@@ -56,14 +56,7 @@ pub fn snapshot(
     destination: &Path,
     contention: Duration,
 ) -> Result<Snapshot, BackupError> {
-    let source = Connection::open_with_flags(
-        source_path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .map_err(sqlite(source_path))?;
-    source
-        .busy_timeout(RETRY_PAUSE)
-        .map_err(sqlite(source_path))?;
+    let source = crate::open_read_only(source_path, RETRY_PAUSE).map_err(sqlite(source_path))?;
     permissions::create_private_file(destination, 0o600).map_err(io(destination))?;
     let copied = copy(&source, source_path, destination, contention);
     if copied.is_err() {
