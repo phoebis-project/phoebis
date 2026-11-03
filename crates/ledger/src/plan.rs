@@ -944,14 +944,9 @@ impl SubscriptionCosts {
     }
 }
 
-/// The undated id, the id itself when it carries no date.
-fn undated_id(canonical_model: &str) -> &str {
-    phoebis_routing::listing::undated(canonical_model).unwrap_or(canonical_model)
-}
-
 /// The numeric segments of the undated id after its name segment (`claude-opus-4-8` reads `[4, 8]`).
 fn version_of(canonical_model: &str) -> Vec<u32> {
-    let rest = undated_id(canonical_model);
+    let rest = phoebis_routing::listing::undated_id(canonical_model);
     let rest = rest.strip_prefix("claude-").unwrap_or(rest);
     let (_, version) = rest.split_once('-').unwrap_or((rest, ""));
     version.split('-').filter_map(|p| p.parse().ok()).collect()

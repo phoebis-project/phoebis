@@ -27,13 +27,17 @@ pub fn undated(id: &str) -> Option<&str> {
     (suffix.len() == 8 && suffix.bytes().all(|b| b.is_ascii_digit())).then_some(base)
 }
 
+/// The undated id, the id itself when it carries no date.
+pub fn undated_id(id: &str) -> &str {
+    undated(id).unwrap_or(id)
+}
+
 /// The model tier name an id carries: the first `-` segment of its undated id after `claude-`
 /// (`claude-opus-9-20270101` reads `opus`), `None` without the prefix. The caller checks the name against its own
 /// tier list. The ledger's cost model and the routing rate table both read it, so an id no file lists prices under
 /// one model tier in both.
 pub fn tier_segment(canonical_model: &str) -> Option<&str> {
-    undated(canonical_model)
-        .unwrap_or(canonical_model)
+    undated_id(canonical_model)
         .strip_prefix("claude-")?
         .split('-')
         .next()

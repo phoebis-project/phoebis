@@ -1780,7 +1780,7 @@ fn note_unpriced(
         return;
     }
     let canonical = request.canonical_model.as_str();
-    let model = phoebis_routing::listing::undated(canonical).unwrap_or(canonical);
+    let model = phoebis_routing::listing::undated_id(canonical);
     let costs = tables.revisions.in_force(request.received_at);
     let mut served = unpriced.lock().expect(UNPRICED_POISONED);
     match costs.weight(canonical, SEVEN_DAY) {

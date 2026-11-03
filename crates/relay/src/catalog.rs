@@ -9,7 +9,7 @@ use bytes::{Bytes, BytesMut};
 use phoebis_oauth::{Clock, CredentialManager};
 use phoebis_profile::catalog::{MODELS_TARGET, MODELS_USER_AGENT};
 pub use phoebis_routing::listing::CatalogRow;
-use phoebis_routing::listing::{snapshot_date, undated};
+use phoebis_routing::listing::{snapshot_date, undated, undated_id};
 use phoebis_routing::{Report, RouterHandle};
 use phoebis_store::{AccountKind, AccountRow, AccountState, Secret, Store};
 use phoebis_transport::control::Resolver;
@@ -504,7 +504,7 @@ impl CatalogService {
                     .cloned()
                     .collect();
                 for candidate in carried.into_iter().chain(std::iter::once(triple)) {
-                    let spelling = undated(&candidate.1).unwrap_or(&candidate.1).to_string();
+                    let spelling = undated_id(&candidate.1).to_string();
                     if service.lookup(&spelling).as_deref() == Some(candidate.2.as_str()) {
                         mismatched.remove(&candidate);
                     } else {
