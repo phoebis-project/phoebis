@@ -502,7 +502,7 @@
 }
 
 .card__title {
-  font-size: 14px;
+  font-size: var(--body-size);
   font-weight: 600;
 }
 
@@ -1421,7 +1421,7 @@ textarea.input {
 }
 
 .dialog-group__title {
-  font-size: 14px;
+  font-size: var(--body-size);
   font-weight: 600;
   letter-spacing: -0.01em;
 }

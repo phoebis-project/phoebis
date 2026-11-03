@@ -3260,7 +3260,7 @@
 }
 
 .drawer__title {
-  font-size: 14px;
+  font-size: var(--body-size);
   font-weight: 600;
   overflow-wrap: anywhere;
 }
@@ -3383,7 +3383,7 @@
   flex: 1;
   height: 10px;
   background: var(--surface-3);
-  border-radius: 5px;
+  border-radius: var(--radius-pill);
 }
 
 .bodies {
@@ -3496,7 +3496,7 @@
 
 .probe-bar {
   height: 10px;
-  border-radius: 5px;
+  border-radius: var(--radius-pill);
 }
 
 .probe-bar__seg--ok {
