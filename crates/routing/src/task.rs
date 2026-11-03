@@ -2280,7 +2280,7 @@ fn replay(store: &Store, batch: Vec<StateWrite>) -> Landed {
     let mut remainder = Vec::new();
     let mut writes = batch.into_iter().enumerate();
     while let Some((index, write)) = writes.next() {
-        match apply_one(store, &write) {
+        match store.write_routing(|tx| apply_in(tx, std::slice::from_ref(&write))) {
             Ok(write_marks) => {
                 marks.absorb(write_marks);
                 // The rekey's upsert carries no generation check, so retrying a refused one after a later rekey
@@ -2420,72 +2420,6 @@ fn apply_in(tx: &mut RoutingTx<'_>, batch: &[StateWrite]) -> Result<Marks, Store
         }
     }
     Ok(marks)
-}
-
-/// One write through the store's own method for it, its own commit. Answers what an account-state mark did.
-fn apply_one(store: &Store, write: &StateWrite) -> Result<Marks, StoreError> {
-    let none = Marks::default;
-    match write {
-        StateWrite::AccountState {
-            account_id,
-            state,
-            incarnation,
-            lifecycle_generation,
-            credential_generation,
-            cause,
-            ..
-        } => store
-            .set_state_if_generations(
-                account_id,
-                *state,
-                *cause,
-                *incarnation,
-                *lifecycle_generation,
-                *credential_generation,
-            )
-            .map(|answer| Marks::of(write, answer)),
-        StateWrite::DeleteAffinity(keys) => store.delete_affinity(keys).map(|_| none()),
-        StateWrite::DeleteCooldown(account_id, scope) => {
-            store.delete_cooldown(account_id, scope).map(|_| none())
-        }
-        StateWrite::DeletePin(key) => store.delete_pin(key).map(|_| none()),
-        StateWrite::DeleteWindow {
-            account_id,
-            window,
-            incarnation,
-        } => store
-            .delete_window(account_id, window, *incarnation)
-            .map(|_| none()),
-        StateWrite::EndFirstSeen {
-            key_id,
-            session_id,
-            ended,
-        } => store
-            .end_first_seen(key_id, session_id, *ended)
-            .map(|_| none()),
-        StateWrite::EndPin(key, ended) => store.end_pin(key, *ended).map(|_| none()),
-        StateWrite::InsertFirstSeen(row) => store.insert_first_seen(row).map(|()| none()),
-        StateWrite::PurgeShedRounds { before } => {
-            store.purge_shed_rounds_before(*before).map(|_| none())
-        }
-        StateWrite::PurgeStaleWindows => store.purge_stale_windows().map(|_| none()),
-        StateWrite::Rekey(rekey) => store.rekey_resolution(rekey).map(|()| none()),
-        StateWrite::ShedRound {
-            pool_id,
-            account_id,
-            incarnation,
-            round_at,
-        } => store
-            .replace_shed_round(pool_id, account_id, *incarnation, *round_at)
-            .map(|()| none()),
-        StateWrite::UpsertAffinity(rows) => store.upsert_affinity(rows).map(|()| none()),
-        StateWrite::UpsertCooldown(row) => store.upsert_cooldown(row).map(|()| none()),
-        StateWrite::UpsertCredits(row) => store.upsert_credits(row).map(|_| none()),
-        StateWrite::UpsertOverage(row) => store.upsert_overage(row).map(|_| none()),
-        StateWrite::UpsertPin(row) => store.upsert_pin(row).map(|()| none()),
-        StateWrite::UpsertWindow(row) => store.upsert_window(row).map(|_| none()),
-        StateWrite::UpsertWindowSet(row) => store.upsert_window_set(row).map(|_| none()),
-    }
 }
 
 /// Closes the mailbox under the pending lock, so a reading pended from here on waits for the final drain rather than
