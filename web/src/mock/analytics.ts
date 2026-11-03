@@ -5,7 +5,7 @@ import type {
 } from '@/api/types';
 import { bucketShare } from '@/lib/analytics';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
-import { equivalentOf, modelWeeks, pricedWindow, tierCapacity, weightOf, type Usage } from '@/lib/costs';
+import { anchorTier, inBand, modelWeeks, pricedWindow, shareIn, tierCapacity, weightOf, type Usage } from '@/lib/costs';
 import { countOf, emptyCounts } from '@/lib/counts';
 import { earlierHolderLabel, placementHit } from '@/lib/format';
 import { emptyHistogram, mergeHistograms, quartet } from '@/lib/histogram';
@@ -203,6 +203,36 @@ const TOKEN_KINDS: Record<keyof CostSplit, (u: Usage) => Usage> = {
   output: (u) => ({ cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: u.output }),
 };
 
+/** The rows' figures, priced once: neither a row nor the cost model changes after load, and a hand-built row is a key
+ *  of its own. */
+const pricedRows = new WeakMap<HourlyRollup, Record<keyof CostSplit | 'keptRead' | 'keptWrite', number | null>>();
+
+/**
+ * A row's Pro-week figures at the row's hour: its four token kinds, and the kept-warm credit's cache read and cache
+ * writes. The band is read once where the model has a 7-day weight, and a figure is null where the weight or the
+ * band's reading is missing. A client classifier call takes no share of a plan window, so each of its figures reads
+ * zero, as the route answers them.
+ */
+function figuresOf(r: HourlyRollup): Record<keyof CostSplit | 'keptRead' | 'keptWrite', number | null> {
+  if (r.classifier === 'client') return { cacheRead: 0, cacheWrite: 0, input: 0, keptRead: 0, keptWrite: 0, output: 0 };
+  const known = pricedRows.get(r);
+  if (known) return known;
+  const inside = weightOf(TABLES, r.model, 'seven_day') !== null ? inBand(TABLES, Date.parse(r.hour)) : null;
+  const figure = (part: Usage) => (inside === null ? null : shareIn(TABLES, 'seven_day', anchorTier(TABLES), r.model, part, inside));
+  const usage = usageOf(r);
+  const kept = keptUsageOf(r);
+  const figures = {
+    cacheRead: figure(TOKEN_KINDS.cacheRead(usage)),
+    cacheWrite: figure(TOKEN_KINDS.cacheWrite(usage)),
+    input: figure(TOKEN_KINDS.input(usage)),
+    keptRead: figure(TOKEN_KINDS.cacheRead(kept)),
+    keptWrite: figure(TOKEN_KINDS.cacheWrite(kept)),
+    output: figure(TOKEN_KINDS.output(usage)),
+  };
+  pricedRows.set(r, figures);
+  return figures;
+}
+
 /**
  * The group's Pro-week figures over its plan-funded rows, summed under no account tier, so they add across accounts
  * and read under every grouping: the rows' own figures, each request priced at its completion, the cache read and
@@ -219,12 +249,10 @@ function equivalentsOfGroup(counted: HourlyRollup[], probeRows: HourlyRollup[]):
   for (const r of planRows(counted)) {
     if (tokensOfRow(r) === 0) continue;
     cost = plus(cost, r.equivalent);
-    const halves = equivalentsOf(r);
-    read = plus(read, halves.read);
-    write = plus(write, halves.write);
-    // A client classifier call's split reads zero, as its figure does.
-    if (r.classifier === 'client') continue;
-    for (const kind of Object.keys(TOKEN_KINDS) as (keyof CostSplit)[]) split[kind] += equivalentAt(r, TOKEN_KINDS[kind](usageOf(r))) ?? 0;
+    const figures = figuresOf(r);
+    read = plus(read, figures.cacheRead);
+    write = plus(write, figures.cacheWrite);
+    for (const kind of Object.keys(TOKEN_KINDS) as (keyof CostSplit)[]) split[kind] += figures[kind] ?? 0;
   }
   let probe: number | null = 0;
   let probeUsd = 0;
@@ -237,8 +265,8 @@ function equivalentsOfGroup(counted: HourlyRollup[], probeRows: HourlyRollup[]):
   let saving: number | null = 0;
   for (const r of planRows(counted)) {
     if (r.keptWarm.tokens1h + r.keptWarm.tokens5m === 0) continue;
-    const kept = equivalentsOf(r, keptUsageOf(r));
-    saving = kept.read === null || kept.write === null ? null : plus(saving, kept.write - kept.read);
+    const { keptRead, keptWrite } = figuresOf(r);
+    saving = keptRead === null || keptWrite === null ? null : plus(saving, keptWrite - keptRead);
   }
   const ratio = probeUsd > 0 ? wastedUsd / probeUsd : 0;
   return {
@@ -448,20 +476,6 @@ function bucketsOf(range: Range): { bucketMs: number; starts: number[] } {
 }
 
 const usageOf = (r: HourlyRollup): Usage => ({ cacheRead: r.tokens.cacheRead, cacheWrite1h: r.tokens.cacheWrite1h, cacheWrite5m: r.tokens.cacheWrite5m, input: r.tokens.uncachedInput, output: r.tokens.output });
-
-/** A row's tokens as the Pro-week figure, completing at the row's hour, null for a model without a weight of its
- *  own. */
-const equivalentAt = (r: HourlyRollup, usage: Usage): number | null => (weightOf(TABLES, r.model, 'seven_day') !== null ? equivalentOf(TABLES, r.model, usage, Date.parse(r.hour)) : null);
-
-/**
- * A row's cache read alone and its cache writes alone as the Pro-week figure at the row's hour. `usage` is the row's
- * own unless a caller prices other counts of it, as the kept-warm saving does. A client classifier call takes no share
- * of a plan window, so its cache read, cache write and kept-warm credit read zero too, as the route answers them.
- */
-function equivalentsOf(r: HourlyRollup, usage = usageOf(r)): Record<'read' | 'write', number | null> {
-  if (r.classifier === 'client') return { read: 0, write: 0 };
-  return { read: equivalentAt(r, { ...usage, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 }), write: equivalentAt(r, { ...usage, cacheRead: 0, input: 0, output: 0 }) };
-}
 
 /** A bucket's sums, each window's shares and the figures kept per row so one unpriced row nulls the window, as the
  *  route reads it. The model week's list holds the rows on a model with a week of its own alone. */
