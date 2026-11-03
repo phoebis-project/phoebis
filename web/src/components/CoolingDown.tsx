@@ -2,6 +2,7 @@ import { type ReactNode, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Button, Card } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtRelative } from '@/lib/format';
+import { entityHref } from '@/lib/routingLog';
 
 /** One scope an account cools under: an account's own cooldown row with its id. */
 export type CoolingRow = { accountId: string; reason: string; scope: string; until: string };
@@ -67,7 +68,7 @@ export function CoolingDown({ busy = false, now, onClear, rows, showAccount = fa
                       <tr key={`${r.accountId}/${r.scope}`}>
                         {showAccount && (
                           <td className="col-fit">
-                            <Link to={`/accounts/${r.accountId}`}>{r.accountId}</Link>
+                            <Link to={entityHref('account', r.accountId)}>{r.accountId}</Link>
                           </td>
                         )}
                         <td className="col-fit">{scope.mono ? <span className="mono">{scope.label}</span> : scope.label}</td>
