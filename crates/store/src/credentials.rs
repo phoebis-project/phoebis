@@ -528,20 +528,7 @@ impl Store {
     }
 
     pub fn api_key_secret(&self, account_id: &str) -> Result<Option<Secret>, StoreError> {
-        let conn = self.conn.lock().expect(LOCK_POISONED);
-        let row: Option<(Vec<u8>, Vec<u8>)> = conn
-            .query_row(
-                "SELECT sealed, nonce FROM api_key_secrets WHERE account_id = ?1",
-                params![account_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()?;
-        let Some((sealed, nonce)) = row else {
-            return Ok(None);
-        };
-        let plaintext = crypto::open(&self.key, &api_key_aad(account_id), &nonce, &sealed)?;
-        let value = String::from_utf8(plaintext).map_err(|_| StoreError::Crypto)?;
-        Ok(Some(Secret::new(&value)))
+        Ok(self.read_api_key(account_id)?.map(|(secret, _)| secret))
     }
 
     /// The rotation moves the account's revision too: the secret is one half of what a dispatch pairs with
@@ -581,6 +568,11 @@ impl Store {
             self.count_credential_read();
             self.park_on_credential_hold();
         }
+        self.read_api_key(account_id)
+    }
+
+    /// The opened plaintext is zeroized once the secret holds its copy, as a credential bundle's is.
+    fn read_api_key(&self, account_id: &str) -> Result<Option<(Secret, u64)>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         let row: Option<(Vec<u8>, Vec<u8>, i64)> = conn
             .query_row(
@@ -592,7 +584,12 @@ impl Store {
         let Some((sealed, nonce, generation)) = row else {
             return Ok(None);
         };
-        let plain = crypto::open(&self.key, &api_key_aad(account_id), &nonce, &sealed)?;
+        let plain = Zeroizing::new(crypto::open(
+            &self.key,
+            &api_key_aad(account_id),
+            &nonce,
+            &sealed,
+        )?);
         Ok(Some((
             Secret::new(std::str::from_utf8(&plain).map_err(|_| StoreError::Crypto)?),
             generation as u64,
