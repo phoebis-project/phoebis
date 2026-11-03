@@ -5522,7 +5522,6 @@ pub fn sample_from_usage(
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
     use std::sync::mpsc;
 
     use phoebis_store::{AccountKind, AccountRow, ResolutionRow, StorageKey, WindowRow};
@@ -5795,35 +5794,10 @@ mod tests {
         );
     }
 
-    /// A directory under the system's temporary one, removed on drop.
-    struct Scratch(PathBuf);
-
-    impl Scratch {
-        fn new(name: &str) -> Scratch {
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            Scratch(
-                std::env::temp_dir().join(format!("phoebis-{name}-{}-{nanos}", std::process::id())),
-            )
-        }
-
-        fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
     /// A store at `scratch` holding account `a`, and a second store on the same file through a link, as a backup or
     /// an operator's `sqlite3` would hold it: the process lock is per directory, and SQLite resolves the link to the
     /// one file and its one WAL.
-    fn linked_stores(scratch: &Scratch) -> (Store, Store) {
+    fn linked_stores(scratch: &tempfile::TempDir) -> (Store, Store) {
         let key = StorageKey::generate();
         let path = scratch.path().join("store").join("router.sqlite");
         let store = Store::open(&path, &key).unwrap();
@@ -5856,7 +5830,7 @@ mod tests {
     #[tokio::test]
     async fn a_database_wide_failure_counts_a_failed_batch_and_lands_its_remainder_at_the_next_wake(
     ) {
-        let scratch = Scratch::new("writer-remainder");
+        let scratch = tempfile::tempdir().unwrap();
         let (store, holder) = linked_stores(&scratch);
         store
             .debug_set_busy_timeout(Duration::from_millis(100))
@@ -5911,7 +5885,7 @@ mod tests {
 
     #[test]
     fn a_lock_held_past_the_busy_timeout_stops_the_replay_at_its_first_write() {
-        let scratch = Scratch::new("replay-busy");
+        let scratch = tempfile::tempdir().unwrap();
         let (store, holder) = linked_stores(&scratch);
         store
             .debug_set_busy_timeout(Duration::from_millis(100))
