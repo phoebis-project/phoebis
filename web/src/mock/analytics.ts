@@ -8,7 +8,7 @@ import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { anchorTier, inBand, modelWeeks, pricedWindow, shareIn, tierCapacity, weightOf, type Usage } from '@/lib/costs';
 import { countOf, emptyCounts } from '@/lib/counts';
-import { earlierHolderLabel, placementHit } from '@/lib/format';
+import { byteOrder, earlierHolderLabel, placementHit } from '@/lib/format';
 import { emptyHistogram, mergeHistograms, quartet } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
 import { endOf } from '@/lib/quota';
@@ -693,7 +693,7 @@ export function refusalCategoriesOf(requests: RequestLog[], q: AnalyticsQuery): 
     const category = answer.refusalCategory ?? '-';
     counts.set(category, (counts.get(category) ?? 0) + 1);
   }
-  const rows = [...counts].map(([category, requests]) => ({ category, requests })).sort((a, b) => b.requests - a.requests || (a.category < b.category ? -1 : a.category > b.category ? 1 : 0));
+  const rows = [...counts].map(([category, requests]) => ({ category, requests })).sort((a, b) => b.requests - a.requests || byteOrder(a.category, b.category));
   return { from: iso(fromMs), rows, to: iso(toMs) };
 }
 
@@ -805,7 +805,6 @@ function drawHistories(): Reconciliation[] {
   });
 }
 
-const byteOrder = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
 /**
  * The completed windows of the story's priced accounts over the trailing 30 days, newest first and then by account and

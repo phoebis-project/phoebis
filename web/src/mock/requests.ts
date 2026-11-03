@@ -9,7 +9,7 @@ import { AGENT_TYPES } from '@/lib/client';
 import { anchorTier, fundingOf, inBand, modelWeeks, pricedWindow, shareIn, tierCapacity, weightOf } from '@/lib/costs';
 import { countOf, emptyCounts } from '@/lib/counts';
 import { NO_CLASS, NO_EFFORT, foldClassifier, foldEffort, foldRequestClass } from '@/lib/dimensions';
-import { tokensTotal } from '@/lib/format';
+import { byteOrder, tokensTotal } from '@/lib/format';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
 import { endOf } from '@/lib/quota';
 import { ACCOUNTS, LEDGER_WINDOW, QUOTA_HISTORY, accountById, isPaidSource, kindTier, sharedWindowsOf } from './accounts';
@@ -1544,7 +1544,7 @@ export function landedAt(row: RequestLog): number {
     let previous = 0;
     landings = new Map(
       [...REQUESTS]
-        .sort((a, b) => finish(a) - finish(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+        .sort((a, b) => finish(a) - finish(b) || byteOrder(a.id, b.id))
         .map((r) => {
           previous = Math.max(finish(r), previous + 1);
           return [r.id, previous];

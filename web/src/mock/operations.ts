@@ -1,5 +1,6 @@
 import type { AgentContext, BurnUnit, CompanionState, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, RecipeCause, RecipeState, Session } from '@/api/types';
 import { anchorTier, tierCapacity, weightOf, type CostWindow } from '@/lib/costs';
+import { byteOrder } from '@/lib/format';
 import { lastActivity, pinTtlMs } from '@/lib/keepalive';
 import { accountById, sharedWindowsOf } from './accounts';
 import { API_PRICES_WIRE, SUBSCRIPTION_COSTS_WIRE, promptOf } from './catalog';
@@ -305,7 +306,6 @@ const pinLine = (line: Omit<AgentContext, 'createdAt' | 'warm'>): Omit<AgentCont
   ...line,
   warm: pinTtlMs(line, NOW) !== null,
 });
-const byteOrder = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 /** The route's order of a session's lines: main first, then by agent id and model as bytes. */
 const lineOrder = (a: Pick<AgentContext, 'agentId' | 'model'>, b: Pick<AgentContext, 'agentId' | 'model'>) =>
   (a.agentId === 'main') !== (b.agentId === 'main') ? (a.agentId === 'main' ? -1 : 1) : byteOrder(a.agentId, b.agentId) || byteOrder(a.model, b.model);
