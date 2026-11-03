@@ -13,7 +13,7 @@ use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_ledger::{
     hourly_window_samples, latest_quota, lead_over_pace, HourlyWindowSample, LedgerConfig,
-    LedgerDb, PlanTables, QuotaPoll, QuotaSampleRecord, Sampled, POLL_INTERVAL,
+    LedgerDb, PlanTables, QuotaPoll, QuotaSampleRecord, SampleSource, Sampled, POLL_INTERVAL,
 };
 use phoebis_oauth::PollOutcome;
 use phoebis_routing::{EvidenceSource, FIVE_HOUR, SEVEN_DAY};
@@ -308,7 +308,7 @@ async fn a_head_and_a_poll_in_one_bucket_land_one_row_per_window_and_the_head_ke
     let head = wait_for_async(Duration::from_secs(5), || async {
         let rows = h.db.quota_samples("a", bucket, bucket + 300).await.unwrap();
         rows.iter()
-            .any(|r| r.window == "five_hour" && r.source == "head")
+            .any(|r| r.window == "five_hour" && r.source == SampleSource::Head)
             .then_some(rows)
     })
     .await;
@@ -414,7 +414,7 @@ async fn a_head_and_a_poll_of_one_bucket_both_stand_in_either_order_and_the_late
         in_use: Some(false),
         utilization: Some(0.4),
         overage_reset: Some(now + 3_600_000),
-        source: "head".into(),
+        source: SampleSource::Head,
         ..Default::default()
     };
     let poll = phoebis_ledger::ExtraUsageSampleRecord {
@@ -425,7 +425,7 @@ async fn a_head_and_a_poll_of_one_bucket_both_stand_in_either_order_and_the_late
         used_credits: Some(1_234),
         utilization: Some(0.25),
         currency: Some("USD".into()),
-        source: "poll".into(),
+        source: SampleSource::Poll,
         ..Default::default()
     };
     for (first, second, order) in [
@@ -2707,7 +2707,7 @@ fn the_hourly_window_samples_are_each_window_s_last_sample_of_its_hour() {
         window: FIVE_HOUR.into(),
         utilization: Some(utilization),
         reset_at: Some(bucket * 1_000 + 3_600_000),
-        source: "poll".into(),
+        source: SampleSource::Poll,
         observed_at: Some(bucket * 1_000 + 17_000),
     };
     let sample = |bucket: i64, utilization: f64| sample_of("a", bucket, utilization);
@@ -2788,7 +2788,7 @@ fn latest_quota_answers_each_windows_newest_sample_of_the_day_and_an_account_who
         window: window.into(),
         utilization: Some(utilization),
         reset_at: Some(bucket * 1_000 + 3_600_000),
-        source: "poll".into(),
+        source: SampleSource::Poll,
         observed_at: Some(bucket * 1_000 + 17_000),
     };
     // `a` has two windows, the five-hour one sampled twice in the day, `b` one sample older than the day, and `c` one
@@ -3049,7 +3049,14 @@ async fn a_usage_based_attempts_head_row_carries_the_share_and_the_reset_with_no
                 .await
                 .unwrap()
                 .into_iter()
-                .map(|r| (r.in_use, r.utilization, r.overage_reset, r.source))
+                .map(|r| {
+                    (
+                        r.in_use,
+                        r.utilization,
+                        r.overage_reset,
+                        r.source.as_str().to_string(),
+                    )
+                })
                 .collect::<Vec<_>>()
         }
     };
@@ -3078,10 +3085,10 @@ async fn a_usage_based_attempts_head_row_carries_the_share_and_the_reset_with_no
 /// An extra-usage row of account `a` in `bucket` from `source`, with the amounts on a poll row alone.
 fn extra_row(
     bucket: i64,
-    source: &str,
+    source: SampleSource,
     utilization: f64,
 ) -> phoebis_ledger::ExtraUsageSampleRecord {
-    let polled = source == "poll";
+    let polled = source == SampleSource::Poll;
     phoebis_ledger::ExtraUsageSampleRecord {
         account_id: "a".into(),
         bucket,
@@ -3091,7 +3098,7 @@ fn extra_row(
         utilization: Some(utilization),
         currency: polled.then(|| "USD".into()),
         overage_reset: (!polled).then_some(bucket * 1_000 + 3_600_000),
-        source: source.into(),
+        source,
         ..Default::default()
     }
 }
@@ -3100,8 +3107,12 @@ fn extra_row(
 async fn the_polled_read_answers_the_poll_row_under_a_newer_head_row_while_the_latest_read_answers_the_head(
 ) {
     let now = NOW + 900_000;
-    let poll = extra_row(phoebis_ledger::bucket_of(NOW), "poll", 0.25);
-    let head = extra_row(phoebis_ledger::bucket_of(NOW + 600_000), "head", 0.4);
+    let poll = extra_row(phoebis_ledger::bucket_of(NOW), SampleSource::Poll, 0.25);
+    let head = extra_row(
+        phoebis_ledger::bucket_of(NOW + 600_000),
+        SampleSource::Head,
+        0.4,
+    );
     let db = Arc::new(LedgerDb::open_in_memory().unwrap());
     db.insert_samples(&[], Some(&poll)).unwrap();
     db.insert_samples(&[], Some(&head)).unwrap();
@@ -3125,8 +3136,8 @@ async fn the_polled_read_answers_the_poll_row_under_a_newer_head_row_while_the_l
 async fn the_polled_read_answers_the_poll_row_of_a_bucket_a_head_row_shares_in_either_order() {
     let now = NOW + 600_000;
     let bucket = phoebis_ledger::bucket_of(now);
-    let head = extra_row(bucket, "head", 0.4);
-    let poll = extra_row(bucket, "poll", 0.25);
+    let head = extra_row(bucket, SampleSource::Head, 0.4);
+    let poll = extra_row(bucket, SampleSource::Poll, 0.25);
     for (first, second, order) in [
         (&head, &poll, "the head first"),
         (&poll, &head, "the poll first"),
@@ -3149,11 +3160,19 @@ async fn the_polled_read_answers_the_poll_row_of_a_bucket_a_head_row_shares_in_e
 async fn the_share_read_answers_the_newest_row_that_carries_a_share_under_a_newer_head_naming_the_reset_alone(
 ) {
     let now = NOW + 900_000;
-    let poll = extra_row(phoebis_ledger::bucket_of(NOW), "poll", 0.25);
-    let head = extra_row(phoebis_ledger::bucket_of(NOW + 300_000), "head", 0.4);
+    let poll = extra_row(phoebis_ledger::bucket_of(NOW), SampleSource::Poll, 0.25);
+    let head = extra_row(
+        phoebis_ledger::bucket_of(NOW + 300_000),
+        SampleSource::Head,
+        0.4,
+    );
     let reset_only = phoebis_ledger::ExtraUsageSampleRecord {
         utilization: None,
-        ..extra_row(phoebis_ledger::bucket_of(NOW + 600_000), "head", 0.0)
+        ..extra_row(
+            phoebis_ledger::bucket_of(NOW + 600_000),
+            SampleSource::Head,
+            0.0,
+        )
     };
     let db = Arc::new(LedgerDb::open_in_memory().unwrap());
     for row in [&poll, &head, &reset_only] {
@@ -3183,13 +3202,13 @@ async fn the_share_read_answers_the_newest_row_that_carries_a_share_under_a_newe
 async fn a_head_naming_the_reset_alone_keeps_the_share_an_earlier_head_wrote_in_its_bucket() {
     let now = NOW + 900_000;
     let bucket = phoebis_ledger::bucket_of(NOW + 300_000);
-    let poll = extra_row(phoebis_ledger::bucket_of(NOW), "poll", 0.25);
-    let head = extra_row(bucket, "head", 1.0);
+    let poll = extra_row(phoebis_ledger::bucket_of(NOW), SampleSource::Poll, 0.25);
+    let head = extra_row(bucket, SampleSource::Head, 1.0);
     let later_reset = head.overage_reset.map(|reset| reset + 3_600_000);
     let reset_only = phoebis_ledger::ExtraUsageSampleRecord {
         utilization: None,
         overage_reset: later_reset,
-        ..extra_row(bucket, "head", 0.0)
+        ..extra_row(bucket, SampleSource::Head, 0.0)
     };
     let db = Arc::new(LedgerDb::open_in_memory().unwrap());
     for row in [&poll, &head, &reset_only] {

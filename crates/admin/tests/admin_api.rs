@@ -1508,7 +1508,7 @@ async fn a_usage_based_account_answers_its_class_and_no_overage_whatever_a_head_
                     currency: None,
                     disabled_reason: None,
                     overage_reset: Some(now + 3_600_000),
-                    source: "head".into(),
+                    source: phoebis_ledger::SampleSource::Head,
                     spend_limit_minor: None,
                     spend_used_minor: None,
                     spend_percent: None,
@@ -1621,7 +1621,7 @@ fn polled_row(
         currency: Some("USD".into()),
         disabled_reason: None,
         overage_reset: None,
-        source: "poll".into(),
+        source: phoebis_ledger::SampleSource::Poll,
         spend_limit_minor: spend.and_then(|(limit, _, _)| limit),
         spend_used_minor: spend.map(|(_, used, _)| used),
         spend_percent: spend.and_then(|(_, _, percent)| percent),
@@ -1645,7 +1645,7 @@ fn head_row(
         in_use,
         utilization: Some(utilization),
         overage_reset: Some(reset),
-        source: "head".into(),
+        source: phoebis_ledger::SampleSource::Head,
         ..Default::default()
     }
 }
@@ -2203,11 +2203,10 @@ async fn the_account_view_answers_the_fable_week_under_one_id_from_a_head_row_a_
         utilization: Some(utilization),
         reset_at: Some(NOW + 86_400_000),
         source: if window == "seven_day_fable" {
-            "poll"
+            phoebis_ledger::SampleSource::Poll
         } else {
-            "head"
-        }
-        .into(),
+            phoebis_ledger::SampleSource::Head
+        },
         observed_at: Some(at),
     };
     let held = |account: &str, utilization: f64, at: i64| Report::Sample {
@@ -2756,7 +2755,11 @@ async fn a_confirmed_pairing_polls_the_quota_at_once_and_a_refresh_records_its_r
         ["five_hour", "seven_day"],
         "one row per window the endpoint reports: {rows:?}"
     );
-    assert!(rows.iter().all(|r| r.source != "head"), "{rows:?}");
+    assert!(
+        rows.iter()
+            .all(|r| r.source != phoebis_ledger::SampleSource::Head),
+        "{rows:?}"
+    );
     let sample = routed_sample(&h.router, "business", NOW).await;
     assert!(
         sample.reading("five_hour").is_some(),
@@ -3342,7 +3345,7 @@ async fn an_account_the_router_holds_no_plan_window_of_lists_the_ledger_rows_at_
         window: window.into(),
         utilization: Some(utilization),
         reset_at: None,
-        source: "head".into(),
+        source: phoebis_ledger::SampleSource::Head,
         observed_at,
     };
     h.db.insert_samples(
@@ -3892,7 +3895,7 @@ async fn business_with_both_windows_paths() -> (common::Polled, String, serde_js
         window: window.into(),
         utilization: Some(utilization),
         reset_at: None,
-        source: "head".into(),
+        source: phoebis_ledger::SampleSource::Head,
         observed_at: Some(read_at),
     };
     h.db.insert_samples(&[row("five_hour", 0.4), row("seven_day", 0.5)], None)
@@ -5813,7 +5816,7 @@ async fn an_account_window_carries_its_projection_horizon_and_burn_and_null_wher
         window: window.into(),
         utilization: Some(utilization),
         reset_at: None,
-        source: "head".into(),
+        source: phoebis_ledger::SampleSource::Head,
         observed_at: None,
     };
     parts

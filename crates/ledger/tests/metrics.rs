@@ -12,7 +12,7 @@ use fake_upstream::{FakeUpstream, Rule};
 use phoebis_bus::SubscriberStats;
 use phoebis_ledger::{
     AttemptRecord, AttentionGaugeSource, AttentionGauges, LedgerConfig, Metrics, PriceRevisions,
-    Pricing, QuotaSampleRecord, RequestRecord, RoutingGauges,
+    Pricing, QuotaSampleRecord, RequestRecord, RoutingGauges, SampleSource,
 };
 use tower::ServiceExt;
 
@@ -192,7 +192,7 @@ fn gauges_come_from_the_routing_state_and_drops_are_counted_per_table() {
             window: "five_hour".into(),
             utilization: Some(0.42),
             reset_at: None,
-            source: "head".into(),
+            source: SampleSource::Head,
             observed_at: None,
         }],
         false,

@@ -577,7 +577,7 @@ async fn the_accounts_route_answers_each_hour_s_last_window_sample_with_its_lead
             window: window.into(),
             utilization,
             reset_at: Some(reset_at),
-            source: "poll".into(),
+            source: phoebis_ledger::SampleSource::Poll,
             observed_at: Some(at),
         }
     };
@@ -746,7 +746,7 @@ async fn the_accounts_route_runs_a_canceled_account_s_lead_to_its_end_inside_the
                 window: "seven_day".into(),
                 utilization: Some(0.41),
                 reset_at: Some(sampled_at + 6 * 24 * HOUR),
-                source: "poll".into(),
+                source: phoebis_ledger::SampleSource::Poll,
                 observed_at: Some(sampled_at),
             }],
             None,
@@ -2211,7 +2211,7 @@ async fn the_dashboard_reads_the_last_day_the_latest_quota_and_the_live_pins() {
                     window: "five_hour".into(),
                     utilization: Some(0.5),
                     reset_at: Some(now + HOUR),
-                    source: "head".into(),
+                    source: phoebis_ledger::SampleSource::Head,
                     observed_at: None,
                 },
                 phoebis_ledger::QuotaSampleRecord {
@@ -2220,7 +2220,7 @@ async fn the_dashboard_reads_the_last_day_the_latest_quota_and_the_live_pins() {
                     window: "five_hour".into(),
                     utilization: Some(0.6),
                     reset_at: Some(now + HOUR),
-                    source: "poll".into(),
+                    source: phoebis_ledger::SampleSource::Poll,
                     observed_at: None,
                 },
                 phoebis_ledger::QuotaSampleRecord {
@@ -2229,7 +2229,7 @@ async fn the_dashboard_reads_the_last_day_the_latest_quota_and_the_live_pins() {
                     window: "seven_day".into(),
                     utilization: Some(0.2),
                     reset_at: None,
-                    source: "poll".into(),
+                    source: phoebis_ledger::SampleSource::Poll,
                     observed_at: None,
                 },
             ],

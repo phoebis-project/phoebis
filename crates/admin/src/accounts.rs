@@ -706,7 +706,7 @@ pub(crate) async fn quota(
                 at: s.bucket * 1_000,
                 utilization: s.utilization,
                 resets_at: s.reset_at,
-                source: s.source,
+                source: s.source.as_str().into(),
             });
     }
     Json(Quota {
@@ -729,7 +729,7 @@ pub(crate) async fn quota(
                 currency: e.currency,
                 disabled_reason: e.disabled_reason,
                 overage_reset: e.overage_reset,
-                source: e.source,
+                source: e.source.as_str().into(),
             })
             .collect(),
     })

@@ -28,7 +28,7 @@ use crate::query::{
 };
 use crate::record::{
     AttemptRecord, BodyRecord, DecisionRow, EventRecord, ExtraUsageSampleRecord,
-    GuardrailMatchRecord, QuotaSampleRecord, RequestRecord,
+    GuardrailMatchRecord, QuotaSampleRecord, RequestRecord, SampleSource,
 };
 use crate::rollup::{key_range_statement, select_statement, RollupSelect};
 use crate::LedgerDb;
@@ -207,7 +207,7 @@ fn seed(db: &LedgerDb) {
                 window: window.into(),
                 utilization: Some(0.5),
                 reset_at: Some(bucket + 3_600),
-                source: "poll".into(),
+                source: SampleSource::Poll,
                 observed_at: Some(bucket * 1_000),
             });
             let extra = ExtraUsageSampleRecord {
@@ -215,7 +215,7 @@ fn seed(db: &LedgerDb) {
                 bucket,
                 is_enabled: true,
                 utilization: Some(0.1),
-                source: "poll".into(),
+                source: SampleSource::Poll,
                 ..ExtraUsageSampleRecord::default()
             };
             db.insert_samples(&quota, Some(&extra)).unwrap();

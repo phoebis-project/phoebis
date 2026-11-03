@@ -334,6 +334,41 @@ pub(crate) fn decode_record(
     Ok(serde_json::from_slice(&bytes)?)
 }
 
+/// The answer a sample came from. A response head truncates the window's percent and the usage poll rounds it. The
+/// column stores the word `as_str` answers, and a stored word outside the two fails the read.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SampleSource {
+    Head,
+    /// A record that names no source lands as a poll, which fills only a bucket nothing else wrote.
+    #[default]
+    Poll,
+}
+
+impl SampleSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SampleSource::Head => "head",
+            SampleSource::Poll => "poll",
+        }
+    }
+}
+
+impl rusqlite::types::FromSql for SampleSource {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        match value.as_str()? {
+            "head" => Ok(SampleSource::Head),
+            "poll" => Ok(SampleSource::Poll),
+            _ => Err(rusqlite::types::FromSqlError::InvalidType),
+        }
+    }
+}
+
+impl rusqlite::types::ToSql for SampleSource {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        Ok(self.as_str().into())
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct QuotaSampleRecord {
     pub account_id: String,
@@ -341,7 +376,7 @@ pub struct QuotaSampleRecord {
     pub window: String,
     pub utilization: Option<f64>,
     pub reset_at: Option<i64>,
-    pub source: String,
+    pub source: SampleSource,
     /// Milliseconds: the poll's `fetched_at` or the head's clock, stamping the reading itself where the bucket
     /// only names its five minutes.
     pub observed_at: Option<i64>,
@@ -359,7 +394,7 @@ pub struct ExtraUsageSampleRecord {
     pub currency: Option<String>,
     pub disabled_reason: Option<String>,
     pub overage_reset: Option<i64>,
-    pub source: String,
+    pub source: SampleSource,
     /// The poll's `spend` object as the body gave it: the cap and the spend in minor units, the percent on the
     /// percent scale, the currency and its exponent. Null on a head row and on a poll whose body carried no object.
     pub spend_limit_minor: Option<i64>,

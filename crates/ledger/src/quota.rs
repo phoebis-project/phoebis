@@ -23,7 +23,7 @@ use tokio::time::Instant;
 use crate::assemble::Record;
 use crate::events::{plan_ended, plan_restored, poll_backoff, poll_failed};
 use crate::plan::PlanTables;
-use crate::record::{ExtraUsageSampleRecord, QuotaSampleRecord};
+use crate::record::{ExtraUsageSampleRecord, QuotaSampleRecord, SampleSource};
 use crate::rollup::bucket_of;
 use crate::task::Ledger;
 
@@ -157,7 +157,7 @@ pub(crate) fn samples_from_unified(
                 window: window.into(),
                 utilization,
                 reset_at,
-                source: "head".into(),
+                source: SampleSource::Head,
                 observed_at: Some(observed_at),
             });
         }
@@ -181,7 +181,7 @@ pub(crate) fn samples_from_unified(
         currency: None,
         disabled_reason: unified.overage_disabled_reason.clone(),
         overage_reset: unified.overage_reset,
-        source: "head".into(),
+        source: SampleSource::Head,
         spend_limit_minor: None,
         spend_used_minor: None,
         spend_percent: None,
@@ -203,7 +203,7 @@ pub fn samples_from_poll(
         window: key.into(),
         utilization: utilization.map(|u| u / 100.0),
         reset_at,
-        source: "poll".into(),
+        source: SampleSource::Poll,
         observed_at: Some(snapshot.fetched_at),
     };
     // The `limits` window is the Fable week, as the router reads it: a top-level key of the same name would be a
@@ -234,7 +234,7 @@ pub fn samples_from_poll(
             currency: e.currency.clone(),
             disabled_reason: e.disabled_reason.clone(),
             overage_reset: None,
-            source: "poll".into(),
+            source: SampleSource::Poll,
             spend_limit_minor: spend.and_then(|s| s.limit_minor),
             spend_used_minor: spend.map(|s| s.used_minor),
             spend_percent: spend.and_then(|s| s.percent),

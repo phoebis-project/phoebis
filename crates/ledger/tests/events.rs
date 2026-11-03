@@ -8,7 +8,7 @@ use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_ledger::{
     event_of, recent_events_of_kind, unused_allowance, AllowanceReset, EventRecord, LedgerConfig,
-    LedgerDb, QuotaSampleRecord, WriterRead,
+    LedgerDb, QuotaSampleRecord, SampleSource, WriterRead,
 };
 use phoebis_routing::RouterEvent;
 use phoebis_store::{AccountState, MemberWrite, PoolRow, StateCause, StorageKey, Store};
@@ -2701,7 +2701,7 @@ fn weekly_sample(
         window: window.into(),
         utilization,
         reset_at: Some(reset_at),
-        source: "poll".into(),
+        source: SampleSource::Poll,
         observed_at: Some(observed_at),
     }
 }

@@ -964,7 +964,7 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
                     window: "five_hour".into(),
                     utilization: Some(0.4),
                     reset_at: Some(now + HOUR),
-                    source: "head".into(),
+                    source: phoebis_ledger::SampleSource::Head,
                     observed_at: None,
                 },
                 phoebis_ledger::QuotaSampleRecord {
@@ -973,7 +973,7 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
                     window: "five_hour".into(),
                     utilization: Some(0.5),
                     reset_at: Some(now + HOUR),
-                    source: "poll".into(),
+                    source: phoebis_ledger::SampleSource::Poll,
                     observed_at: None,
                 },
                 phoebis_ledger::QuotaSampleRecord {
@@ -982,7 +982,7 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
                     window: "seven_day_fable".into(),
                     utilization: Some(0.1),
                     reset_at: None,
-                    source: "poll".into(),
+                    source: phoebis_ledger::SampleSource::Poll,
                     observed_at: None,
                 },
             ],
@@ -997,7 +997,7 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
                 currency: Some("USD".into()),
                 disabled_reason: None,
                 overage_reset: None,
-                source: "poll".into(),
+                source: phoebis_ledger::SampleSource::Poll,
                 spend_limit_minor: None,
                 spend_used_minor: None,
                 spend_percent: None,
@@ -2457,7 +2457,7 @@ async fn the_unused_allowance_route_groups_each_subscription_accounts_weekly_res
                 window: "seven_day".into(),
                 utilization: Some(0.8),
                 reset_at: Some(end + 2 * DAY),
-                source: "poll".into(),
+                source: phoebis_ledger::SampleSource::Poll,
                 observed_at: Some(end - DAY),
             }],
             None,
@@ -2636,7 +2636,7 @@ async fn the_unused_allowance_route_answers_each_resets_plan_and_tier_and_null_o
                 window: "seven_day".into(),
                 utilization: Some(0.8),
                 reset_at: Some(end + 2 * DAY),
-                source: "poll".into(),
+                source: phoebis_ledger::SampleSource::Poll,
                 observed_at: Some(end - DAY),
             }],
             None,
@@ -2771,7 +2771,7 @@ async fn a_trial_end_that_passed_in_range_ends_a_week_only_where_the_plan_ended_
                     window: "seven_day".into(),
                     utilization: Some(utilization),
                     reset_at: Some(reset_at),
-                    source: "poll".into(),
+                    source: phoebis_ledger::SampleSource::Poll,
                     observed_at: Some(observed_at),
                 }
             }),
@@ -2851,7 +2851,7 @@ async fn a_term_end_before_the_range_still_drops_the_resets_after_it() {
                 window: "seven_day".into(),
                 utilization: Some(0.8),
                 reset_at: Some(week_reset),
-                source: "poll".into(),
+                source: phoebis_ledger::SampleSource::Poll,
                 observed_at: Some(end - DAY),
             }],
             None,
@@ -2965,7 +2965,7 @@ async fn a_canceled_end_still_ahead_of_now_ends_no_week_in_a_range_that_reaches_
                 window: "seven_day".into(),
                 utilization: Some(0.7),
                 reset_at: Some(reset_at + 7 * DAY),
-                source: "poll".into(),
+                source: phoebis_ledger::SampleSource::Poll,
                 observed_at: Some(now - DAY),
             }],
             None,
@@ -6058,11 +6058,10 @@ async fn the_dashboard_answers_one_fable_week_row_per_account_under_seven_day_fa
         utilization: Some(utilization),
         reset_at: Some(now + 86_400_000),
         source: if window == "seven_day_fable" {
-            "poll"
+            phoebis_ledger::SampleSource::Poll
         } else {
-            "head"
-        }
-        .into(),
+            phoebis_ledger::SampleSource::Head
+        },
         observed_at: Some(at),
     };
     parts

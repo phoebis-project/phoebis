@@ -6,7 +6,7 @@ use phoebis_ledger::test_tables::{api_prices, subscription_costs, JANUARY_2026};
 use phoebis_ledger::{
     bucket_of, fold_routing_conditions, newest_rows, read_reconciliations, reconcile,
     routing_conditions, AttemptRecord, LedgerDb, QuotaSampleRecord, ReconciliationRow,
-    RequestRecord, MIN_RISE, RATIO_HIGH, RATIO_LOW,
+    RequestRecord, SampleSource, MIN_RISE, RATIO_HIGH, RATIO_LOW,
 };
 use phoebis_routing::{FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
 
@@ -145,7 +145,7 @@ fn reading(window: &str, at: i64, utilization: f64, reset_at: i64) -> QuotaSampl
         window: window.into(),
         utilization: Some(utilization),
         reset_at: Some(reset_at),
-        source: "poll".into(),
+        source: SampleSource::Poll,
         observed_at: Some(at),
     }
 }
@@ -154,7 +154,7 @@ fn reading(window: &str, at: i64, utilization: f64, reset_at: i64) -> QuotaSampl
 /// head alone, so a case mixing the two puts every reading in a bucket of its own.
 fn head_reading(window: &str, at: i64, utilization: f64, reset_at: i64) -> QuotaSampleRecord {
     QuotaSampleRecord {
-        source: "head".into(),
+        source: SampleSource::Head,
         ..reading(window, at, utilization, reset_at)
     }
 }

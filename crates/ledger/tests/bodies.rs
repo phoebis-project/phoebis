@@ -345,7 +345,7 @@ async fn retention_purges_requests_events_and_samples_by_the_raw_window_and_roll
                 account_id: "a".into(),
                 bucket: 0,
                 window: "five_hour".into(),
-                source: "poll".into(),
+                source: phoebis_ledger::SampleSource::Poll,
                 ..Default::default()
             },
             // Older than thirty days and younger than `retention_days`: the samples follow the requests' window.
@@ -353,7 +353,7 @@ async fn retention_purges_requests_events_and_samples_by_the_raw_window_and_roll
                 account_id: "a".into(),
                 bucket: 30 * 86_400,
                 window: "five_hour".into(),
-                source: "poll".into(),
+                source: phoebis_ledger::SampleSource::Poll,
                 ..Default::default()
             },
         ],
@@ -503,13 +503,13 @@ async fn a_zero_retention_keeps_the_raw_rows_and_a_zero_rollup_retention_keeps_t
             account_id: "a".into(),
             bucket: 0,
             window: "five_hour".into(),
-            source: "poll".into(),
+            source: phoebis_ledger::SampleSource::Poll,
             ..Default::default()
         }],
         Some(&phoebis_ledger::ExtraUsageSampleRecord {
             account_id: "a".into(),
             bucket: 0,
-            source: "poll".into(),
+            source: phoebis_ledger::SampleSource::Poll,
             ..Default::default()
         }),
     )

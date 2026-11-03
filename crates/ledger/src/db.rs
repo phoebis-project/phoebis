@@ -20,7 +20,7 @@ use crate::pricing::PriceRevisions;
 use crate::query::request_by_id;
 use crate::record::{
     AttemptRecord, BodyRecord, CacheMapWrite, DecisionRow, EventRecord, ExtraUsageSampleRecord,
-    GuardrailMatchRecord, QuotaSampleRecord, RequestRecord,
+    GuardrailMatchRecord, QuotaSampleRecord, RequestRecord, SampleSource,
 };
 use crate::{schema, LedgerError};
 
@@ -735,10 +735,9 @@ pub(crate) fn insert_samples_in(
 ) -> Result<(), LedgerError> {
     for q in quota {
         // A head sample is the newest truth for its bucket, and a poll only fills a bucket nothing else wrote.
-        let verb = if q.source == "head" {
-            "INSERT OR REPLACE"
-        } else {
-            "INSERT OR IGNORE"
+        let verb = match q.source {
+            SampleSource::Head => "INSERT OR REPLACE",
+            SampleSource::Poll => "INSERT OR IGNORE",
         };
         conn.execute(
             &format!(
@@ -751,13 +750,12 @@ pub(crate) fn insert_samples_in(
         // Keyed by the source too, so a head updates the bucket's head row and the bucket's first poll keeps its row:
         // neither hides the other. A head that names the share or the reset alone keeps the other one the row holds,
         // since each header is its own reading: the row carries the bucket's last share and last reset.
-        let (verb, conflict) = if e.source == "head" {
-            (
+        let (verb, conflict) = match e.source {
+            SampleSource::Head => (
                 "INSERT",
                 " ON CONFLICT (account_id, bucket, source) DO UPDATE SET is_enabled = excluded.is_enabled, in_use = excluded.in_use, utilization = COALESCE(excluded.utilization, utilization), disabled_reason = excluded.disabled_reason, overage_reset = COALESCE(excluded.overage_reset, overage_reset)",
-            )
-        } else {
-            ("INSERT OR IGNORE", "")
+            ),
+            SampleSource::Poll => ("INSERT OR IGNORE", ""),
         };
         conn.execute(
             &format!(

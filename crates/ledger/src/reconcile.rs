@@ -13,6 +13,7 @@ use rusqlite::{params, params_from_iter, Connection, Row, Transaction};
 use crate::plan::{funding_of, Funding, PlanTables};
 use crate::pricing::{prompt_tokens, PriceRevisions, Speed};
 use crate::query::{price_usage, BurnPoint, UsageRow};
+use crate::record::SampleSource;
 use crate::rollup::UNATTRIBUTED;
 use crate::LedgerError;
 
@@ -85,27 +86,20 @@ impl ReconciliationRow {
 /// rounds, so one reading step down between the two is the same draw.
 const SOURCES_GAP: f64 = 0.01;
 
-/// The answer a reading came from. A response head truncates the window's percent and the usage poll rounds it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Source {
-    Head,
-    Poll,
-}
-
 #[derive(Clone, Copy, Debug)]
 struct Reading {
     /// `None` for a reading stored before its instant was kept.
     at: Option<i64>,
     utilization: f64,
     reset: i64,
-    source: Source,
+    source: SampleSource,
 }
 
 impl Reading {
     /// Whether the reading falls under `last` and so opens a part, a head under the poll before it only past the
     /// sources' gap.
     fn falls_from(&self, last: &Reading) -> bool {
-        let gap = if last.source == Source::Poll && self.source == Source::Head {
+        let gap = if last.source == SampleSource::Poll && self.source == SampleSource::Head {
             SOURCES_GAP
         } else {
             0.0
@@ -125,11 +119,14 @@ impl Part {
     /// The part's two ends under one source: its first and last polls where it holds two or more, else its first
     /// and last heads, `None` for a part with fewer than two readings of the chosen source.
     fn ends(&self) -> Option<(Reading, Reading)> {
-        let polls = self.readings.iter().filter(|r| r.source == Source::Poll);
+        let polls = self
+            .readings
+            .iter()
+            .filter(|r| r.source == SampleSource::Poll);
         let source = if polls.count() >= 2 {
-            Source::Poll
+            SampleSource::Poll
         } else {
-            Source::Head
+            SampleSource::Head
         };
         let mut chosen = self.readings.iter().filter(|r| r.source == source);
         let first = *chosen.next()?;
@@ -242,12 +239,12 @@ fn drop_faulty_dips(
         .collect();
     let polls = readings
         .iter()
-        .filter(|(_, r)| r.source == Source::Poll)
+        .filter(|(_, r)| r.source == SampleSource::Poll)
         .count();
     let source = if polls >= 2 {
-        Source::Poll
+        SampleSource::Poll
     } else {
-        Source::Head
+        SampleSource::Head
     };
     let chosen: Vec<usize> = readings
         .iter()
@@ -468,12 +465,7 @@ fn readings_of(
             utilization: r.get(0)?,
             reset: r.get(1)?,
             at: r.get(2)?,
-            // The writer files every source but a head as a poll, and so does this read.
-            source: if r.get::<_, String>(3)? == "head" {
-                Source::Head
-            } else {
-                Source::Poll
-            },
+            source: r.get(3)?,
         })
     })?;
     let mut out = Vec::new();

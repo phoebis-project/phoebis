@@ -94,6 +94,7 @@ pub use reconcile::{
 pub use record::{
     AttemptRecord, BodyRecord, CacheMapWrite, DecisionRow, EventRecord, ExtraUsageSampleRecord,
     GuardrailMatchRecord, KeepaliveDelta, ParkedRecord, QuotaSampleRecord, RequestRecord,
+    SampleSource,
 };
 pub use refold::{refold_bands, PRICE_BANDS_KEY, PRICE_BANDS_REFOLD_KEY};
 pub use refusals::{
