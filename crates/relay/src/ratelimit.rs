@@ -11,9 +11,42 @@ pub use phoebis_routing::{FAST_INPUT, FAST_OUTPUT};
 use phoebis_store::AccountKind;
 use phoebis_transport::response::ResponseHead;
 
-const PREFIX: &str = "anthropic-ratelimit-unified-";
-pub(crate) const BUCKET_PREFIX: &str = "anthropic-ratelimit-";
-pub(crate) const FAST_PREFIX: &str = "anthropic-fast-";
+/// A header name of the per-bucket family, spelled whole at compile time so a read builds no string.
+macro_rules! bucket {
+    ($($s:literal),+) => {
+        concat!("anthropic-ratelimit-", $($s),+)
+    };
+}
+
+/// A header name of the fast family, spelled as `bucket!` spells its own.
+macro_rules! fast {
+    ($($s:literal),+) => {
+        concat!("anthropic-fast-", $($s),+)
+    };
+}
+
+/// A header name of the unified family, spelled as `bucket!` spells its own.
+macro_rules! unified {
+    ($($s:literal),+) => {
+        concat!("anthropic-ratelimit-unified-", $($s),+)
+    };
+}
+
+/// A family's three header names under one of the name macros above: its limit, its remaining count and its
+/// reset.
+macro_rules! family {
+    ($names:ident, $family:literal) => {
+        [
+            $names!($family, "-limit"),
+            $names!($family, "-remaining"),
+            $names!($family, "-reset"),
+        ]
+    };
+}
+
+const PREFIX: &str = unified!("");
+pub(crate) const BUCKET_PREFIX: &str = bucket!("");
+pub(crate) const FAST_PREFIX: &str = fast!("");
 
 /// A unified window's status word, read by exact match on the trimmed value: a word in another case reads as
 /// `Other`.
@@ -63,42 +96,47 @@ impl UnifiedHeaders {
     /// The unified headers of a head given as its header list, for a reader that holds no transport head (the
     /// keepalive reads the bus's copy of it).
     pub fn parse_list(headers: &[(String, String)]) -> Option<UnifiedHeaders> {
-        if !headers
-            .iter()
-            .any(|(n, _)| n.to_ascii_lowercase().starts_with(PREFIX))
-        {
+        if !headers.iter().any(|(n, _)| {
+            n.as_bytes()
+                .get(..PREFIX.len())
+                .is_some_and(|p| p.eq_ignore_ascii_case(PREFIX.as_bytes()))
+        }) {
             return None;
         }
-        let text = |suffix: &str| {
-            let name = format!("{PREFIX}{suffix}");
+        let text = |name: &str| {
             headers
                 .iter()
-                .find(|(n, _)| n.eq_ignore_ascii_case(&name))
-                .map(|(_, v)| v.trim().to_string())
+                .find(|(n, _)| n.eq_ignore_ascii_case(name))
+                .map(|(_, v)| v.trim())
         };
-        let status = |suffix: &str| text(suffix).as_deref().map(WindowStatus::parse);
-        let secs = |suffix: &str| text(suffix).as_deref().and_then(epoch_millis);
-        let float = |suffix: &str| {
-            text(suffix)
+        let status = |name: &str| text(name).map(WindowStatus::parse);
+        let secs = |name: &str| text(name).and_then(epoch_millis);
+        let float = |name: &str| {
+            text(name)
                 .and_then(|v| v.parse::<f64>().ok())
                 .filter(|f| f.is_finite())
         };
-        let window = |prefix: &str| UnifiedWindow {
-            status: status(&format!("{prefix}-status")),
-            reset: secs(&format!("{prefix}-reset")),
-            utilization: float(&format!("{prefix}-utilization")),
-        };
+        macro_rules! window {
+            ($window:literal) => {
+                UnifiedWindow {
+                    status: status(unified!($window, "-status")),
+                    reset: secs(unified!($window, "-reset")),
+                    utilization: float(unified!($window, "-utilization")),
+                }
+            };
+        }
         Some(UnifiedHeaders {
-            status: status("status"),
-            reset: secs("reset"),
-            representative_claim: text("representative-claim"),
-            five_hour: window("5h"),
-            seven_day: window("7d"),
-            seven_day_oi: window("7d_oi"),
-            overage_in_use: text("overage-in-use").map(|v| v.eq_ignore_ascii_case("true")),
-            overage_utilization: float("overage-utilization"),
-            overage_reset: secs("overage-reset"),
-            overage_disabled_reason: text("overage-disabled-reason"),
+            status: status(unified!("status")),
+            reset: secs(unified!("reset")),
+            representative_claim: text(unified!("representative-claim")).map(str::to_string),
+            five_hour: window!("5h"),
+            seven_day: window!("7d"),
+            seven_day_oi: window!("7d_oi"),
+            overage_in_use: text(unified!("overage-in-use"))
+                .map(|v| v.eq_ignore_ascii_case("true")),
+            overage_utilization: float(unified!("overage-utilization")),
+            overage_reset: secs(unified!("overage-reset")),
+            overage_disabled_reason: text(unified!("overage-disabled-reason")).map(str::to_string),
         })
     }
 
@@ -139,12 +177,10 @@ pub struct BucketHeaders {
 
 impl BucketHeaders {
     pub fn parse(head: &ResponseHead) -> Option<BucketHeaders> {
-        let bucket =
-            |family: &str| bucket_family(head, &format!("{BUCKET_PREFIX}{family}"), rfc3339_millis);
         let headers = BucketHeaders {
-            requests: bucket("requests"),
-            input_tokens: bucket("input-tokens"),
-            output_tokens: bucket("output-tokens"),
+            requests: bucket_family(head, family!(bucket, "requests"), rfc3339_millis),
+            input_tokens: bucket_family(head, family!(bucket, "input-tokens"), rfc3339_millis),
+            output_tokens: bucket_family(head, family!(bucket, "output-tokens"), rfc3339_millis),
         };
         (headers.requests.is_some()
             || headers.input_tokens.is_some()
@@ -165,39 +201,31 @@ pub struct FastHeaders {
 
 impl FastHeaders {
     pub fn parse(head: &ResponseHead) -> Option<FastHeaders> {
-        let bucket = |family: &str| {
-            bucket_family(head, &format!("{FAST_PREFIX}{family}"), |v| {
-                epoch_millis(v).or_else(|| rfc3339_millis(v))
-            })
-        };
+        let reset_of = |v: &str| epoch_millis(v).or_else(|| rfc3339_millis(v));
         let headers = FastHeaders {
-            input: bucket("input-tokens"),
-            output: bucket("output-tokens"),
+            input: bucket_family(head, family!(fast, "input-tokens"), reset_of),
+            output: bucket_family(head, family!(fast, "output-tokens"), reset_of),
         };
         (headers.input.is_some() || headers.output.is_some()).then_some(headers)
     }
 }
 
 /// One family of three headers, `<name>-limit`, `<name>-remaining` and `<name>-reset`: `None` when the limit does
-/// not parse to a nonzero value or the remaining does not parse, since a malformed header must not move a pin; a
+/// not parse to a nonzero value or the remaining does not parse, since a malformed header must not move a pin. A
 /// reset `reset_of` cannot read is absent rather than refusing the family.
 fn bucket_family(
     head: &ResponseHead,
-    name: &str,
+    [limit, remaining, reset]: [&'static str; 3],
     reset_of: fn(&str) -> Option<i64>,
 ) -> Option<Bucket> {
     let limit = head
-        .get(&format!("{name}-limit"))?
+        .get(limit)?
         .trim()
         .parse::<u64>()
         .ok()
         .filter(|&limit| limit != 0)?;
-    let remaining = head
-        .get(&format!("{name}-remaining"))?
-        .trim()
-        .parse::<u64>()
-        .ok()?;
-    let reset = head.get(&format!("{name}-reset")).and_then(reset_of);
+    let remaining = head.get(remaining)?.trim().parse::<u64>().ok()?;
+    let reset = head.get(reset).and_then(reset_of);
     Some(Bucket {
         limit,
         remaining,
@@ -239,47 +267,28 @@ pub fn head_sample(
     match kind {
         AccountKind::Oauth => {
             if let Some(unified) = unified {
-                if let Some(utilization) = unified.five_hour.utilization {
-                    sample = sample.with(
-                        FIVE_HOUR,
-                        WindowReading {
-                            utilization,
-                            reset: unified.five_hour.reset,
-                            observed_at,
-                            source: WindowSource::Head,
-                            plan: None,
-                            tier: None,
-                        },
-                    );
-                }
-                if let Some(utilization) = unified.seven_day.utilization {
-                    sample = sample.with(
-                        SEVEN_DAY,
-                        WindowReading {
-                            utilization,
-                            reset: unified.seven_day.reset,
-                            observed_at,
-                            source: WindowSource::Head,
-                            plan: None,
-                            tier: None,
-                        },
-                    );
-                }
-                // The head carries the Fable week under the overage-included name, the one model week a head
-                // reports here; whether a second model week ever arrives by head is for the first live run to read.
-                // Unlike the shared windows, it carries no status of its own to gate on, only the utilization.
-                if let Some(utilization) = unified.seven_day_oi.utilization {
-                    sample = sample.with(
-                        SEVEN_DAY_FABLE,
-                        WindowReading {
-                            utilization,
-                            reset: unified.seven_day_oi.reset,
-                            observed_at,
-                            source: WindowSource::Head,
-                            plan: None,
-                            tier: None,
-                        },
-                    );
+                for (name, window) in [
+                    (FIVE_HOUR, &unified.five_hour),
+                    (SEVEN_DAY, &unified.seven_day),
+                    // The head carries the Fable week under the overage-included name, the one model week a
+                    // head reports here. Whether a second model week ever arrives by head is for the first live
+                    // run to read. Unlike the shared windows, it carries no status of its own to gate on, only
+                    // the utilization.
+                    (SEVEN_DAY_FABLE, &unified.seven_day_oi),
+                ] {
+                    if let Some(utilization) = window.utilization {
+                        sample.windows.insert(
+                            name.to_string(),
+                            WindowReading {
+                                utilization,
+                                reset: window.reset,
+                                observed_at,
+                                source: WindowSource::Head,
+                                plan: None,
+                                tier: None,
+                            },
+                        );
+                    }
                 }
             }
         }
@@ -291,8 +300,8 @@ pub fn head_sample(
                     (REQUESTS_BUCKET, buckets.requests),
                 ] {
                     if let Some(b) = bucket {
-                        sample = sample.with(
-                            &format!("{prefix}:{canonical_model}"),
+                        sample.windows.insert(
+                            format!("{prefix}:{canonical_model}"),
                             bucket_reading(b, observed_at),
                         );
                     }
@@ -303,7 +312,9 @@ pub fn head_sample(
     if let Some(fast) = FastHeaders::parse(head) {
         for (window, bucket) in [(FAST_INPUT, fast.input), (FAST_OUTPUT, fast.output)] {
             if let Some(b) = bucket {
-                sample = sample.with(window, bucket_reading(b, observed_at));
+                sample
+                    .windows
+                    .insert(window.to_string(), bucket_reading(b, observed_at));
             }
         }
     }
