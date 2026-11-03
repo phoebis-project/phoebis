@@ -403,7 +403,12 @@ const groupKeyOf = (groupBy: AnalyticsGroupBy, named: string[]): ((r: HourlyRoll
 export function groupsOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsGroup[] {
   const of = groupKeyOf(q.groupBy, q.userAgentGroups ?? []);
   const buckets = new Map<string, HourlyRollup[]>();
-  for (const r of rows) buckets.set(of(r), [...(buckets.get(of(r)) ?? []), r]);
+  for (const r of rows) {
+    const key = of(r);
+    const list = buckets.get(key);
+    if (list) list.push(r);
+    else buckets.set(key, [r]);
+  }
   return [...buckets.entries()].map(([key, list]) => ({ ...groupOf(key, labelOf(key, q.groupBy), list, q.includeProbes ?? false, q.groupBy, q.accountIds), ...holderOf(key, q.groupBy) })).sort((a, b) => a.label.localeCompare(b.label) || (a.keyCreatedAt ?? 0) - (b.keyCreatedAt ?? 0) || a.key.localeCompare(b.key));
 }
 
