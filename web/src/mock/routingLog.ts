@@ -1,5 +1,5 @@
 import type {
-  Account, AllowanceReset, AttemptWindow, CohortHold, DecisionKind, DecisionRecord, DecisionSummary, MoveCause, PinReason, Placement, PrefixEntry, RecordBudget, RecordCandidate, RecordCompletion, RecordCooldown, RecordOutcome,
+  Account, AllowanceReset, AttemptWindow, CohortHold, DecisionKind, DecisionRecord, DecisionSummary, MoveCause, PinReason, Placement, PrefixEntry, RecordBudget, RecordCandidate, RecordCompletion, RecordCooldown, RecordHold, RecordOutcome,
   PoolKeepalive, RecordPin, RecordRequest, RecordSettings, RequestLog, RoutingEvent, RoutingLogPage, RoutingLogQuery, Score, SummaryFact, WalkFact, WalkStep,
 } from '@/api/types';
 import { shareIn, weightOf } from '@/lib/costs';
@@ -1124,6 +1124,213 @@ function markOf(accountId: string, at: number): { at: number; on: string; window
 }
 
 /**
+ * The pin step: the pin the request found, or the reason it read none. A live pin is the one the routing state holds
+ * where the day's rows last left it inside the pool's window, else the trace's own, which the walk writes back with a
+ * fresh epoch where the state held none.
+ */
+function pinStepOf(spec: Spec, pool: PoolSeed, pinKey: string): { pin: RecordPin | null; pinReason: PinReason | null; steps: WalkStep[] } {
+  const r = spec.request;
+  const held = pins.get(pinKey);
+  if (typeof spec.pin === 'string' && spec.pin !== 'none') return { pin: null, pinReason: spec.pin, steps: spec.kind === 'refused' ? [] : [step('pin', 'none', [fact('reason', spec.pin)])] };
+  if (spec.pin === 'none') {
+    const pin: RecordPin = { accountId: null, createdAt: null, cycleMs: null, epoch: null, found: 'none', idleMs: null, incarnation: null, lane: null, lastRefreshAt: null, lastUsedAt: null, marked: false, markedAt: null, markedOn: null, markedWindow: null, refreshAgeMs: null, released: [], shed: null, slowDownUntil: null, warmth: null, warmthCause: null };
+    return { pin, pinReason: null, steps: [step('pin', 'none', [fact('found', 'none')])] };
+  }
+  const on = spec.from ?? spec.accountId ?? '';
+  // A drawn trace names where the pin lived. A pin the day's rows last left past its window was used by a request
+  // the day does not hold, so the trace's own idle age stands.
+  const recent = held !== undefined && held.accountId === on && spec.at - held.lastUsedAt <= pool.affinityTtlSeconds * 1_000;
+  const found = recent ? held : { accountId: on, createdAt: held?.createdAt ?? spec.at - 40 * MINUTE, cycleMs: null, epoch: held?.epoch ?? (epochs += 1), lastRefreshAt: spec.at - spec.pin.idleMs, lastUsedAt: spec.at - spec.pin.idleMs, shed: null };
+  pins.set(pinKey, found);
+  const idleMs = spec.at - found.lastUsedAt;
+  const released = spec.failover ? [spec.failover === 'fast_lane' ? 'fast_rate_limit' : 'cooldown'] : [];
+  // A shed move's pin carries the mark the round on its account wrote.
+  const mark = spec.rule === 'shed' ? markOf(found.accountId, spec.at) : null;
+  const pin: RecordPin = {
+    accountId: found.accountId, createdAt: iso(found.createdAt), cycleMs: spec.pinPace?.cycleMs ?? null, epoch: found.epoch, found: 'live', idleMs, incarnation: 1, lane: laneOf(r), lastRefreshAt: iso(spec.at - idleMs), lastUsedAt: iso(spec.at - idleMs),
+    marked: mark !== null, markedAt: mark === null ? null : iso(mark.at), markedOn: mark?.on ?? null, markedWindow: mark?.window ?? null, refreshAgeMs: idleMs, released,
+    shed: found.shed === null ? null : { at: iso(found.shed.at), from: found.shed.from, reason: found.shed.reason },
+    slowDownUntil: spec.pinPace?.slowDownUntil === null || spec.pinPace?.slowDownUntil === undefined ? null : iso(spec.pinPace.slowDownUntil), warmth: spec.pin.warmth, warmthCause: spec.pin.cause,
+  };
+  return { pin, pinReason: null, steps: [step('pin', 'match', [fact('found', 'live'), fact('account_id', found.accountId, null, found.accountId), fact('epoch', found.epoch, 'count'), fact('idle_ms', idleMs, 'ms'), fact('refresh_age_ms', idleMs, 'ms'), fact('warmth', spec.pin.warmth), fact('cause', spec.pin.cause), fact('marked', pin.marked)])] };
+}
+
+/**
+ * The move rules a live pin a portable request still reaches walks, and the destinations a fired rule names. A token
+ * count follows its pin, since it writes none a move could leave, and a pin past its account's end is released at
+ * renewal instead.
+ */
+function moveWalkOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, pin: RecordPin | null, portable: boolean, inPlace: 'reset' | 'rewrite' | 'slow_down' | null): { movedAmong: string[] | undefined; steps: WalkStep[] } {
+  const r = spec.request;
+  const steps: WalkStep[] = [];
+  let movedAmong: string[] | undefined;
+  if (pin?.found === 'live' && portable && !spec.failover && (spec.kind === 'renewed' || spec.kind === 'moved' || inPlace !== null)) {
+    const source = candidates.find((c) => c.accountId === pin.accountId);
+    const endsAt = source?.term?.endsAt ? Date.parse(source.term.endsAt) : null;
+    const skip = r.kind === 'count_tokens' ? 'count' : endsAt !== null && endsAt <= spec.at ? 'subscription_ended' : null;
+    if (skip !== null) {
+      for (const rule of RULES) steps.push(step(`move:${rule}`, 'not_run', [fact('reason', skip)]));
+    } else {
+      let move = moveOf(spec, candidates, pool, source, pin);
+      // A drawn renewal stays where its draw put it, so where a rule's reason holds every destination reads at its cap,
+      // no move is made and the pin renews in place. A story renewal reads the slots the story fills.
+      if (spec.kind === 'renewed' && move.fired !== null && !spec.story) {
+        for (const c of move.reached) c.inFlight = c.inFlightCap;
+        move = moveOf(spec, candidates, pool, source, pin);
+      }
+      // The shed line carries the account's read whichever rule answered, save a probe's, which reads none.
+      const pace = r.kind === 'probe' ? [] : slowFactsOf(source, pool, spec.at, cycleStands(spec, source?.accountId ?? '', pool));
+      steps.push(...move.lines.map((line) => (line.step === 'move:shed' ? { ...line, facts: [...line.facts, ...pace] } : line)));
+      if (move.fired !== null) {
+        steps.push(step('cap_filter', move.destinations.some((c) => c.inFlight < c.inFlightCap) ? 'passed' : 'dropped', move.destinations.map((c) => fact('in_flight', `${c.inFlight}/${c.inFlightCap}`, 'count', c.accountId))));
+        if (spec.kind === 'moved') {
+          movedAmong = move.destinations.map((c) => c.accountId);
+          for (const c of move.destinations) if (c.accountId !== spec.accountId) c.verdict = 'destination';
+        }
+      }
+    }
+  }
+  return { movedAmong, steps };
+}
+
+/**
+ * The placement walk: the partitions, the three rungs and the pick among the members they kept, or an exhaustion's
+ * empty pick. `walk` is the walk so far, whose fit lines tell a move's runway ties apart. A decision that holds in place
+ * or renews walks none.
+ */
+function placingWalkOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, inPlace: 'reset' | 'rewrite' | 'slow_down' | null, movedAmong: string[] | undefined, walk: readonly WalkStep[]): { pick: ReturnType<typeof pickOf>; steps: WalkStep[]; tierSize: number } {
+  const r = spec.request;
+  const member = (id: string | null | undefined) => candidates.find((c) => c.accountId === id);
+  const steps: WalkStep[] = [];
+  let pick: ReturnType<typeof pickOf> = { runnerUp: null, score: null, tierSize: 0 };
+  let tierSize = 0;
+  const placing = (spec.kind === 'placed' || spec.kind === 'moved' || spec.kind === 'held' || spec.kind === 'exhausted') && inPlace === null;
+  if (placing) {
+    const set = candidates.filter((c) => (movedAmong ? movedAmong.includes(c.accountId) : c.obstacle === null));
+    const partitions = narrowed(set, pool, r, movedAmong !== undefined, spec.failover !== undefined);
+    steps.push(step('partitions', partitions.left.length > 0 ? 'match' : 'none', partitions.facts));
+    const rung = spec.rung ?? null;
+    const subagent = r.agentId !== 'main';
+    const rungs: [string, Placement['rung']][] = [['rung:content', 'content'], ['rung:with_main', 'with_main'], ['rung:static', 'static']];
+    let matched = false;
+    for (const [name, which] of rungs) {
+      if (matched) {
+        steps.push(step(name, 'not_run'));
+        continue;
+      }
+      if (rung?.rung === which) {
+        matched = true;
+        const chosen = member(spec.accountId);
+        const entryOf = which === 'static' ? chosen?.prefix.staticMatch : chosen?.prefix.contentMatch;
+        steps.push(step(name, 'match', [fact('depth', rung.depth, 'count'), fact('prefix_tokens', rung.prefixTokens, 'tokens'), fact('account_id', spec.accountId, null, spec.accountId), ...(entryOf ? [fact('hash', entryOf.hash)] : [])]));
+        continue;
+      }
+      const reason = r.kind === 'count_tokens' ? 'count' : which === 'with_main' && !subagent ? 'class' : which === 'with_main' && pool.subagentPlacement !== 'with_main' ? 'policy_off' : 'no_entry';
+      steps.push(step(name, 'none', [fact('reason', reason)]));
+    }
+    if (!matched && spec.kind === 'exhausted') steps.push(step('pick', 'none', [fact('strategy', pool.strategy)]));
+    else if (!matched) {
+      // A hold's pick ranks the members as a placement's does and names the account it waits on, while its row reads
+      // the hold rather than a score.
+      const ranked = pickOf(candidates, partitions.left, spec.accountId, pool.strategy, spec.kind === 'moved' ? spec.from : undefined);
+      if (spec.kind !== 'held') pick = ranked;
+      tierSize = ranked.tierSize;
+      const tier = member(spec.accountId)?.tier ?? [0, 0, 0];
+      // A burn fact follows each score, the burn the spare rate took off.
+      const scores = candidates.filter((c) => c.score !== null).flatMap((c) => [fact('score', c.score, scoreUnitOf(c), c.accountId), fact('burn', c.pace?.burn ?? 0, 'percent_per_hour', c.accountId)]);
+      // The strategy's ties are the ranked tier's best scores under Pace and the whole tier under Priority. The runway
+      // breaks them for a move whose gate answered the fitting order and for a failover by its fitting members' reads,
+      // and round robin's cursor picks alone.
+      const ranks = candidates.filter((c) => c.rank !== null);
+      const ties = pool.strategy === 'pace' ? ranks.filter((c) => c.score === Math.max(...ranks.map((x) => x.score ?? 0))) : ranks;
+      const gateFits = [...walk, ...steps].some((w) => w.step === 'fit' && w.verdict === 'fits');
+      const byRunway = pool.strategy === 'round_robin' ? [] : runwayTiesOf(ties, (c) => (movedAmong ? gateFits : spec.failover !== undefined && c.fit === 'fits'));
+      // The draw is left to the runway's ties where they narrowed the strategy's, else to the strategy's own. Round
+      // robin's cursor names the chosen member's turn among the ranked tier, so it leaves no draw.
+      const draw =
+        pool.strategy === 'round_robin'
+          ? [fact('turn', `${member(spec.accountId)?.rank ?? 1} of ${ranks.length}`), fact('drawn', false)]
+          : [fact('ties', ties.map((c) => c.accountId)), ...(byRunway.length > 0 ? [fact('by_runway', byRunway.map((c) => c.accountId))] : []), fact('drawn', (byRunway.length > 0 ? byRunway : ties).length > 1)];
+      // The tier as the engine writes it, a list of three strings.
+      steps.push(step('pick', 'chosen', [fact('strategy', pool.strategy), fact('tier', tier.map(String)), ...scores, ...draw]));
+    }
+  }
+  return { pick, steps, tierSize };
+}
+
+/**
+ * The pin a dispatched decision writes back: every renewal, keeping its epoch and its stamp, and a placement or a move
+ * with a fresh epoch. A token count creates and moves none, so the session keeps the one it had.
+ */
+function pinWriteOf(spec: Spec, dispatched: boolean, pinning: boolean, pin: RecordPin | null, pinKey: string, stamps: { hashes: boolean; refresh: boolean }): RecordOutcome['pinWritten'] {
+  const r = spec.request;
+  if (!dispatched || !pinning || (r.kind === 'count_tokens' && spec.kind !== 'renewed')) return null;
+  const action = spec.kind === 'renewed' ? 'renewed' : pin?.found === 'live' || spec.failover ? 'moved' : 'created';
+  const prior = pins.get(pinKey);
+  const epoch = action === 'renewed' && prior ? prior.epoch : (epochs += 1);
+  // The engine stamps the row a shed move or a failover's landing writes with its source, a renewal keeps the row's
+  // stamp, and every other write clears it.
+  const source = spec.from ?? '';
+  const shed = action === 'renewed' ? (prior?.shed ?? null) : spec.failover ? { at: spec.at, from: source, reason: spec.failover } : spec.kind === 'moved' && spec.rule === 'shed' ? { at: spec.at, from: source, reason: 'round' } : null;
+  pins.set(pinKey, { accountId: spec.accountId ?? '', createdAt: action === 'renewed' && prior ? prior.createdAt : spec.at, cycleMs: spec.pinPace?.cycleMs ?? null, epoch, lastRefreshAt: spec.at, lastUsedAt: spec.at, shed });
+  return action === 'renewed' ? { action, epoch, hashesStamped: stamps.hashes, lane: laneOf(r), refreshStamped: stamps.refresh } : { action, epoch, hashesStamped: r.kind === 'inference', lane: laneOf(r), refreshStamped: true };
+}
+
+/**
+ * A dispatched decision's completion: the cache map its answer wrote, the reads it reported and its attempt's status.
+ * The router writes the message chain's rows first, each at the answer's one prefix, then the static chain's, each
+ * numbered by its place in that chain.
+ */
+function completionOf(spec: Spec, pool: PoolSeed, chosen: RecordCandidate | undefined, cache: { answered: boolean; hasUsage: boolean; hit: boolean | null; promised: number | null }): RecordCompletion {
+  const r = spec.request;
+  const usage = r.usage;
+  const attempt = dispatchedAttempt(spec);
+  const ttlMs = ttlOf(pool, chosen?.kind ?? 'oauth', r.agentId !== 'main', r.canonicalModel);
+  const prefixTokens = usage.cacheRead + usage.cacheWrite5m + usage.cacheWrite1h;
+  const written = spec.cacheMap
+    ? [
+        ...Array.from({ length: spec.cacheMap.messages }, (_, i) => ({ depth: i + 1, prefixTokens, tier: 'message' })),
+        ...spec.cacheMap.staticSizes.map((size, i) => ({ depth: i + 1, prefixTokens: size, tier: 'static' })),
+      ]
+    : [{ depth: (spec.rung?.depth ?? 0) + 1, prefixTokens, tier: 'message' }];
+  return {
+    cacheMapWritten: cache.answered && usage.cacheWrite5m + usage.cacheWrite1h > 0 ? written.map((e) => ({ accountId: spec.accountId ?? '', depth: e.depth, prefixTokens: e.prefixTokens, tier: e.tier, ttlMs })) : null,
+    cacheReadTokens: cache.hasUsage ? usage.cacheRead : null,
+    completedAt: attempt ? iso(Date.parse(attempt.startedAt) + (attempt.durationMs ?? 0)) : null,
+    freed: spec.heldBefore !== undefined,
+    heldMs: spec.heldBefore?.heldMs ?? null,
+    hit: cache.hit,
+    inputTokens: cache.hasUsage ? usage.input : null,
+    promisedTokens: cache.promised,
+    status: attempt?.upstreamStatus ?? null,
+  };
+}
+
+/**
+ * A held decision's hold. A slow-down hold copies the read it was answered from, its bound the pool's longest wait for
+ * the slow-down, which bounds a wait for a rewrite in flight too.
+ */
+function holdOf(spec: Spec, pool: PoolSeed, inPlace: 'reset' | 'rewrite' | 'slow_down' | null): RecordHold | null {
+  const slowed = inPlace === 'slow_down' ? slowReadAt(spec.accountId ?? '', pool, spec.at) : null;
+  if (spec.kind !== 'held' || !spec.hold) return null;
+  return {
+    accountId: spec.accountId ?? '',
+    boundMs: (inPlace === 'slow_down' || inPlace === 'rewrite' ? pool.slowDownHoldSeconds : pool.retryInPlaceSeconds) * 1_000,
+    cohort: spec.hold.cohort,
+    cycleMs: inPlace === 'slow_down' ? (spec.pinPace?.cycleMs ?? null) : null,
+    // The factor the hold was sized from: the read's, pulled toward 1 by the ramp.
+    factor: slowed ? 1 - (1 - slowed.factor) * rampAt(spec.accountId ?? '', pool, spec.at) : null,
+    reason: inPlace ?? 'cap',
+    // The speed the account's pins realize, as the shed line reads it.
+    speed: slowed ? (cycleStands(spec, spec.accountId ?? '', pool) ? slowed.speed : 1) : null,
+    stretchMs: slowed?.stretchMs ?? null,
+    thresholdMs: slowed ? pool.slowDownStretchSeconds * 1_000 : null,
+    until: inPlace !== null && spec.hold.until !== undefined ? iso(spec.hold.until) : null,
+    waitsFor: spec.hold.waitsFor ?? null,
+  };
+}
+
+/**
  * What the router recorded for one decision: the record and the row the list route answers. `messageRows` is the
  * request's most message rows any of its answers writes, which its chain's boundary count reads.
  */
@@ -1142,35 +1349,8 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
   const portable = r.client !== 'other';
   const pinKey = pinKeyOf(r);
   const pinning = pool.affinityTtlSeconds > 0 && r.sessionId !== null && (typeof spec.pin === 'object' || spec.pin === 'none');
-  const held = pins.get(pinKey);
-  const walk: WalkStep[] = [];
-  let pin: RecordPin | null = null;
-  let pinReason: PinReason | null = null;
-  if (typeof spec.pin === 'string' && spec.pin !== 'none') {
-    pinReason = spec.pin;
-    if (spec.kind !== 'refused') walk.push(step('pin', 'none', [fact('reason', spec.pin)]));
-  } else if (spec.pin === 'none') {
-    pin = { accountId: null, createdAt: null, cycleMs: null, epoch: null, found: 'none', idleMs: null, incarnation: null, lane: null, lastRefreshAt: null, lastUsedAt: null, marked: false, markedAt: null, markedOn: null, markedWindow: null, refreshAgeMs: null, released: [], shed: null, slowDownUntil: null, warmth: null, warmthCause: null };
-    walk.push(step('pin', 'none', [fact('found', 'none')]));
-  } else {
-    const on = spec.from ?? spec.accountId ?? '';
-    // A drawn trace names where the pin lived. A pin the day's rows last left past its window was used by a request
-    // the day does not hold, so the trace's own idle age stands.
-    const recent = held !== undefined && held.accountId === on && spec.at - held.lastUsedAt <= pool.affinityTtlSeconds * 1_000;
-    const found = recent ? held : { accountId: on, createdAt: held?.createdAt ?? spec.at - 40 * MINUTE, cycleMs: null, epoch: held?.epoch ?? (epochs += 1), lastRefreshAt: spec.at - spec.pin.idleMs, lastUsedAt: spec.at - spec.pin.idleMs, shed: null };
-    pins.set(pinKey, found);
-    const idleMs = spec.at - found.lastUsedAt;
-    const released = spec.failover ? [spec.failover === 'fast_lane' ? 'fast_rate_limit' : 'cooldown'] : [];
-    // A shed move's pin carries the mark the round on its account wrote.
-    const mark = spec.rule === 'shed' ? markOf(found.accountId, spec.at) : null;
-    pin = {
-      accountId: found.accountId, createdAt: iso(found.createdAt), cycleMs: spec.pinPace?.cycleMs ?? null, epoch: found.epoch, found: 'live', idleMs, incarnation: 1, lane: laneOf(r), lastRefreshAt: iso(spec.at - idleMs), lastUsedAt: iso(spec.at - idleMs),
-      marked: mark !== null, markedAt: mark === null ? null : iso(mark.at), markedOn: mark?.on ?? null, markedWindow: mark?.window ?? null, refreshAgeMs: idleMs, released,
-      shed: found.shed === null ? null : { at: iso(found.shed.at), from: found.shed.from, reason: found.shed.reason },
-      slowDownUntil: spec.pinPace?.slowDownUntil === null || spec.pinPace?.slowDownUntil === undefined ? null : iso(spec.pinPace.slowDownUntil), warmth: spec.pin.warmth, warmthCause: spec.pin.cause,
-    };
-    walk.push(step('pin', 'match', [fact('found', 'live'), fact('account_id', found.accountId, null, found.accountId), fact('epoch', found.epoch, 'count'), fact('idle_ms', idleMs, 'ms'), fact('refresh_age_ms', idleMs, 'ms'), fact('warmth', spec.pin.warmth), fact('cause', spec.pin.cause), fact('marked', pin.marked)]));
-  }
+  const { pin, pinReason, steps: pinSteps } = pinStepOf(spec, pool, pinKey);
+  const walk: WalkStep[] = [...pinSteps];
   if (spec.kind === 'refused') {
     walk.push(step('admission', 'refused', [fact('reason', spec.refusal?.reason ?? '')]), step('selection', 'not_run'));
   } else {
@@ -1184,36 +1364,8 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
     const facts = pinned ? [...(pinned.obstacle ? [fact('obstacle', pinned.obstacle.name)] : []), fact('tried', spec.attempted.includes(pinned.accountId))] : [];
     walk.push(step('probe', 'passed', facts));
   }
-  // A live pin a portable request still reaches walks the five rules, and a fired rule names its destinations. A token
-  // count follows its pin, since it writes none a move could leave, and a pin past its account's end is released at
-  // renewal instead.
-  let movedAmong: string[] | undefined;
-  if (pin?.found === 'live' && portable && !spec.failover && (spec.kind === 'renewed' || spec.kind === 'moved' || inPlace !== null)) {
-    const source = member(pin.accountId);
-    const endsAt = source?.term?.endsAt ? Date.parse(source.term.endsAt) : null;
-    const skip = r.kind === 'count_tokens' ? 'count' : endsAt !== null && endsAt <= spec.at ? 'subscription_ended' : null;
-    if (skip !== null) {
-      for (const rule of RULES) walk.push(step(`move:${rule}`, 'not_run', [fact('reason', skip)]));
-    } else {
-      let move = moveOf(spec, candidates, pool, source, pin);
-      // A drawn renewal stays where its draw put it, so where a rule's reason holds every destination reads at its cap,
-      // no move is made and the pin renews in place. A story renewal reads the slots the story fills.
-      if (spec.kind === 'renewed' && move.fired !== null && !spec.story) {
-        for (const c of move.reached) c.inFlight = c.inFlightCap;
-        move = moveOf(spec, candidates, pool, source, pin);
-      }
-      // The shed line carries the account's read whichever rule answered, save a probe's, which reads none.
-      const pace = r.kind === 'probe' ? [] : slowFactsOf(source, pool, spec.at, cycleStands(spec, source?.accountId ?? '', pool));
-      walk.push(...move.lines.map((line) => (line.step === 'move:shed' ? { ...line, facts: [...line.facts, ...pace] } : line)));
-      if (move.fired !== null) {
-        walk.push(step('cap_filter', move.destinations.some((c) => c.inFlight < c.inFlightCap) ? 'passed' : 'dropped', move.destinations.map((c) => fact('in_flight', `${c.inFlight}/${c.inFlightCap}`, 'count', c.accountId))));
-        if (spec.kind === 'moved') {
-          movedAmong = move.destinations.map((c) => c.accountId);
-          for (const c of move.destinations) if (c.accountId !== spec.accountId) c.verdict = 'destination';
-        }
-      }
-    }
-  }
+  const { movedAmong, steps: moveSteps } = moveWalkOf(spec, candidates, pool, pin, portable, inPlace);
+  walk.push(...moveSteps);
   // A renewal stamps the refresh on a turn that refreshes the pin, and the hashes on any turn that touches it and
   // carries a chain. A probe and a token count leave both.
   const warmth = typeof spec.pin === 'object' ? spec.pin.warmth : null;
@@ -1221,59 +1373,8 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
   if (spec.kind === 'renewed') {
     walk.push(step('renew', 'renewed', [fact('account_id', spec.accountId, null, spec.accountId), fact('lane', laneOf(r)), fact('refresh_stamped', stamps.refresh), fact('hashes_stamped', stamps.hashes)]));
   }
-  let pick: ReturnType<typeof pickOf> = { runnerUp: null, score: null, tierSize: 0 };
-  let tierSize = 0;
-  const placing = (spec.kind === 'placed' || spec.kind === 'moved' || spec.kind === 'held' || spec.kind === 'exhausted') && inPlace === null;
-  if (placing) {
-    const set = candidates.filter((c) => (movedAmong ? movedAmong.includes(c.accountId) : c.obstacle === null));
-    const partitions = narrowed(set, pool, r, movedAmong !== undefined, spec.failover !== undefined);
-    walk.push(step('partitions', partitions.left.length > 0 ? 'match' : 'none', partitions.facts));
-    const rung = spec.rung ?? null;
-    const subagent = r.agentId !== 'main';
-    const rungs: [string, Placement['rung']][] = [['rung:content', 'content'], ['rung:with_main', 'with_main'], ['rung:static', 'static']];
-    let matched = false;
-    for (const [name, which] of rungs) {
-      if (matched) {
-        walk.push(step(name, 'not_run'));
-        continue;
-      }
-      if (rung?.rung === which) {
-        matched = true;
-        const chosen = member(spec.accountId);
-        const entryOf = which === 'static' ? chosen?.prefix.staticMatch : chosen?.prefix.contentMatch;
-        walk.push(step(name, 'match', [fact('depth', rung.depth, 'count'), fact('prefix_tokens', rung.prefixTokens, 'tokens'), fact('account_id', spec.accountId, null, spec.accountId), ...(entryOf ? [fact('hash', entryOf.hash)] : [])]));
-        continue;
-      }
-      const reason = r.kind === 'count_tokens' ? 'count' : which === 'with_main' && !subagent ? 'class' : which === 'with_main' && pool.subagentPlacement !== 'with_main' ? 'policy_off' : 'no_entry';
-      walk.push(step(name, 'none', [fact('reason', reason)]));
-    }
-    if (!matched && spec.kind === 'exhausted') walk.push(step('pick', 'none', [fact('strategy', pool.strategy)]));
-    else if (!matched) {
-      // A hold's pick ranks the members as a placement's does and names the account it waits on, while its row reads
-      // the hold rather than a score.
-      const ranked = pickOf(candidates, partitions.left, spec.accountId, pool.strategy, spec.kind === 'moved' ? spec.from : undefined);
-      if (spec.kind !== 'held') pick = ranked;
-      tierSize = ranked.tierSize;
-      const tier = member(spec.accountId)?.tier ?? [0, 0, 0];
-      // A burn fact follows each score, the burn the spare rate took off.
-      const scores = candidates.filter((c) => c.score !== null).flatMap((c) => [fact('score', c.score, scoreUnitOf(c), c.accountId), fact('burn', c.pace?.burn ?? 0, 'percent_per_hour', c.accountId)]);
-      // The strategy's ties are the ranked tier's best scores under Pace and the whole tier under Priority. The runway
-      // breaks them for a move whose gate answered the fitting order and for a failover by its fitting members' reads,
-      // and round robin's cursor picks alone.
-      const ranks = candidates.filter((c) => c.rank !== null);
-      const ties = pool.strategy === 'pace' ? ranks.filter((c) => c.score === Math.max(...ranks.map((x) => x.score ?? 0))) : ranks;
-      const gateFits = walk.some((w) => w.step === 'fit' && w.verdict === 'fits');
-      const byRunway = pool.strategy === 'round_robin' ? [] : runwayTiesOf(ties, (c) => (movedAmong ? gateFits : spec.failover !== undefined && c.fit === 'fits'));
-      // The draw is left to the runway's ties where they narrowed the strategy's, else to the strategy's own. Round
-      // robin's cursor names the chosen member's turn among the ranked tier, so it leaves no draw.
-      const draw =
-        pool.strategy === 'round_robin'
-          ? [fact('turn', `${member(spec.accountId)?.rank ?? 1} of ${ranks.length}`), fact('drawn', false)]
-          : [fact('ties', ties.map((c) => c.accountId)), ...(byRunway.length > 0 ? [fact('by_runway', byRunway.map((c) => c.accountId))] : []), fact('drawn', (byRunway.length > 0 ? byRunway : ties).length > 1)];
-      // The tier as the engine writes it, a list of three strings.
-      walk.push(step('pick', 'chosen', [fact('strategy', pool.strategy), fact('tier', tier.map(String)), ...scores, ...draw]));
-    }
-  }
+  const { pick, steps: placingSteps, tierSize } = placingWalkOf(spec, candidates, pool, inPlace, movedAmong, walk);
+  walk.push(...placingSteps);
   if (spec.kind === 'held' && spec.hold && inPlace === null) {
     walk.push(step('hold', 'held', [fact('place', spec.hold.place), fact('account_id', spec.accountId, null, spec.accountId), fact('bound_ms', pool.retryInPlaceSeconds * 1_000, 'ms')]));
   }
@@ -1303,67 +1404,13 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
   const answered = attempt?.upstreamStatus === 200 && spec.attempt === r.attempts.length;
   const tier = dispatched && !spec.rung && spec.kind !== 'renewed' ? (chosen?.tier ?? null) : null;
   const pinEvents = pinEventsOf(spec, pinning);
-  let pinWritten: RecordOutcome['pinWritten'] = null;
-  // Every renewal writes the pin back. A token count creates and moves none, so the session keeps the one it had.
-  if (dispatched && pinning && (r.kind !== 'count_tokens' || spec.kind === 'renewed')) {
-    const action = spec.kind === 'renewed' ? 'renewed' : pin?.found === 'live' || spec.failover ? 'moved' : 'created';
-    const prior = pins.get(pinKey);
-    const epoch = action === 'renewed' && prior ? prior.epoch : (epochs += 1);
-    // The engine stamps the row a shed move or a failover's landing writes with its source, a renewal keeps the row's
-    // stamp, and every other write clears it.
-    const source = spec.from ?? '';
-    const shed = action === 'renewed' ? (prior?.shed ?? null) : spec.failover ? { at: spec.at, from: source, reason: spec.failover } : spec.kind === 'moved' && spec.rule === 'shed' ? { at: spec.at, from: source, reason: 'round' } : null;
-    pins.set(pinKey, { accountId: spec.accountId ?? '', createdAt: action === 'renewed' && prior ? prior.createdAt : spec.at, cycleMs: spec.pinPace?.cycleMs ?? null, epoch, lastRefreshAt: spec.at, lastUsedAt: spec.at, shed });
-    pinWritten = action === 'renewed' ? { action, epoch, hashesStamped: stamps.hashes, lane: laneOf(r), refreshStamped: stamps.refresh } : { action, epoch, hashesStamped: r.kind === 'inference', lane: laneOf(r), refreshStamped: true };
-  }
+  const pinWritten = pinWriteOf(spec, dispatched, pinning, pin, pinKey, stamps);
   const usage = r.usage;
   const promised = spec.rung && spec.rung.rung !== 'with_main' ? spec.rung.prefixTokens : null;
   const hasUsage = answered && bodyTokensOf(r) > 0;
   const hit = !hasUsage ? null : spec.rung ? placementHit(spec.rung, usage.cacheRead) : usage.cacheRead > 0;
-  const ttlMs = ttlOf(pool, chosen?.kind ?? 'oauth', r.agentId !== 'main', r.canonicalModel);
-  const prefixTokens = usage.cacheRead + usage.cacheWrite5m + usage.cacheWrite1h;
-  // The router writes the message chain's rows first, each at the answer's one prefix, then the static chain's, each
-  // numbered by its place in that chain.
-  const written = spec.cacheMap
-    ? [
-        ...Array.from({ length: spec.cacheMap.messages }, (_, i) => ({ depth: i + 1, prefixTokens, tier: 'message' })),
-        ...spec.cacheMap.staticSizes.map((size, i) => ({ depth: i + 1, prefixTokens: size, tier: 'static' })),
-      ]
-    : [{ depth: (spec.rung?.depth ?? 0) + 1, prefixTokens, tier: 'message' }];
-  const completion: RecordCompletion | null = dispatched
-    ? {
-        cacheMapWritten: answered && usage.cacheWrite5m + usage.cacheWrite1h > 0 ? written.map((e) => ({ accountId: spec.accountId ?? '', depth: e.depth, prefixTokens: e.prefixTokens, tier: e.tier, ttlMs })) : null,
-        cacheReadTokens: hasUsage ? usage.cacheRead : null,
-        completedAt: attempt ? iso(Date.parse(attempt.startedAt) + (attempt.durationMs ?? 0)) : null,
-        freed: spec.heldBefore !== undefined,
-        heldMs: spec.heldBefore?.heldMs ?? null,
-        hit,
-        inputTokens: hasUsage ? usage.input : null,
-        promisedTokens: promised,
-        status: attempt?.upstreamStatus ?? null,
-      }
-    : null;
-  // A slow-down hold copies the read it was answered from, its bound the pool's longest wait for the slow-down, which
-  // bounds a wait for a rewrite in flight too.
-  const slowed = inPlace === 'slow_down' ? slowReadAt(spec.accountId ?? '', pool, spec.at) : null;
-  const hold =
-    spec.kind === 'held' && spec.hold
-      ? {
-          accountId: spec.accountId ?? '',
-          boundMs: (inPlace === 'slow_down' || inPlace === 'rewrite' ? pool.slowDownHoldSeconds : pool.retryInPlaceSeconds) * 1_000,
-          cohort: spec.hold.cohort,
-          cycleMs: inPlace === 'slow_down' ? (spec.pinPace?.cycleMs ?? null) : null,
-          // The factor the hold was sized from: the read's, pulled toward 1 by the ramp.
-          factor: slowed ? 1 - (1 - slowed.factor) * rampAt(spec.accountId ?? '', pool, spec.at) : null,
-          reason: inPlace ?? 'cap',
-          // The speed the account's pins realize, as the shed line reads it.
-          speed: slowed ? (cycleStands(spec, spec.accountId ?? '', pool) ? slowed.speed : 1) : null,
-          stretchMs: slowed?.stretchMs ?? null,
-          thresholdMs: slowed ? pool.slowDownStretchSeconds * 1_000 : null,
-          until: inPlace !== null && spec.hold.until !== undefined ? iso(spec.hold.until) : null,
-          waitsFor: spec.hold.waitsFor ?? null,
-        }
-      : null;
+  const completion = dispatched ? completionOf(spec, pool, chosen, { answered, hasUsage, hit, promised }) : null;
+  const hold = holdOf(spec, pool, inPlace);
   // The decision that lands a failover's session on a pin names the cooldown that failed it over.
   const failedOver = spec.failover && pinWritten !== null ? r.attempts[spec.attempt - 2]?.cooldownSet : undefined;
   const outcome: RecordOutcome = {
