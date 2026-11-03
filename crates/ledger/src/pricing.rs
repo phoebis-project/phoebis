@@ -368,14 +368,17 @@ impl PriceTable {
     ) -> Option<(f64, CostSplit)> {
         let (_, row) = self.entry(canonical_model)?;
         let p = cells(row, speed, band);
-        let per_m = |tokens: u64, price: f64| tokens as f64 * price / 1_000_000.0;
-        let split = CostSplit {
-            input_usd: per_m(counts.input, p.input),
-            cache_read_usd: per_m(counts.cache_read, p.cache_read),
-            cache_write_usd: per_m(counts.write_5m, p.cache_write_5m)
-                + per_m(counts.write_1h, p.cache_write_1h),
-            output_usd: per_m(counts.output, p.output),
-        };
+        let split = split_of(
+            counts,
+            [
+                p.input,
+                p.cache_read,
+                p.cache_write_5m,
+                p.cache_write_1h,
+                p.output,
+            ],
+            |tokens, price| tokens as f64 * price / 1_000_000.0,
+        );
         Some((split.total(), split))
     }
 
@@ -472,6 +475,23 @@ impl PriceTable {
             output,
         };
         self.estimate_banded(model, speed, band, counts)
+    }
+}
+
+/// The four figures of five counts, `at` pricing each count at its cell, `cells` in the order input, cache read,
+/// 5-minute write, 1-hour write, output, and the two writes summed. `estimate_banded` and the probe rows' fallback
+/// both build their split here, each with its own arithmetic in `at`.
+pub(crate) fn split_of(
+    counts: phoebis_routing::PinUsage,
+    cells: [f64; 5],
+    at: impl Fn(u64, f64) -> f64,
+) -> CostSplit {
+    let [input, cache_read, write_5m, write_1h, output] = cells;
+    CostSplit {
+        input_usd: at(counts.input, input),
+        cache_read_usd: at(counts.cache_read, cache_read),
+        cache_write_usd: at(counts.write_5m, write_5m) + at(counts.write_1h, write_1h),
+        output_usd: at(counts.output, output),
     }
 }
 

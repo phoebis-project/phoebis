@@ -10,7 +10,7 @@ use phoebis_routing::{PinUsage, SEVEN_DAY};
 use crate::plan::{
     free_equivalent, free_shares, price_equivalent, price_shares, Funding, PlanTables, WindowShares,
 };
-use crate::pricing::{Band, PriceRevisions, Speed};
+use crate::pricing::{split_of, Band, PriceRevisions, Speed};
 use crate::query::PROBE_KIND;
 use crate::rollup::CostSplit;
 
@@ -138,17 +138,21 @@ pub fn price_row(
     }
 }
 
-/// The five counts at `fallback_rates(at)`, the two writes summed as `estimate_banded` sums them.
+/// The five counts at `fallback_rates(at)`, split through `split_of` as `estimate_banded` splits them.
 fn dearest(prices: &PriceRevisions, at: i64, counts: PinUsage) -> CostSplit {
     let rates = prices.fallback_rates(at);
-    let cell = |tokens: u64, rate: Option<f64>| tokens as f64 * rate.unwrap_or(0.0);
-    CostSplit {
-        input_usd: cell(counts.input, rates.input),
-        cache_read_usd: cell(counts.cache_read, rates.cache_read),
-        cache_write_usd: cell(counts.write_5m, rates.write_5m)
-            + cell(counts.write_1h, rates.write_1h),
-        output_usd: cell(counts.output, rates.output),
-    }
+    let rate = |rate: Option<f64>| rate.unwrap_or(0.0);
+    split_of(
+        counts,
+        [
+            rate(rates.input),
+            rate(rates.cache_read),
+            rate(rates.write_5m),
+            rate(rates.write_1h),
+            rate(rates.output),
+        ],
+        |tokens, rate| tokens as f64 * rate,
+    )
 }
 
 #[cfg(test)]
