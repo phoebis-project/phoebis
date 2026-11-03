@@ -22,7 +22,7 @@ import { ALLOWANCE_SUBTITLE, FREE_NOTE, allowanceFigure, allowanceSpan, allowanc
 import { hintPlan } from '@/lib/analytics';
 import { clock } from '@/lib/clock';
 import { ACCOUNTS_DIMENSIONS } from '@/lib/filterBar';
-import { fmtAbsolute, fmtCredits, fmtDate, fmtDated, fmtDayShort, fmtDuration, fmtEndsIn, fmtInt, fmtRelative, messageOf, pct } from '@/lib/format';
+import { fmtAbsolute, fmtCredits, fmtDate, fmtDated, fmtDayShort, fmtDuration, fmtEndsIn, fmtInt, fmtRelative, messageOf, pct, upperFirst } from '@/lib/format';
 import { accountPatchOf, advancesOwnToken, derivedId, endZoneLabel, subscriptionEndFormOf, subscriptionEndRefusal, tickCanceled, type SubscriptionEndForm } from '@/lib/forms';
 import { useAsync, useLatest, useNow, useQueryFilters } from '@/lib/hooks';
 import { latestPerWindow, meterGroups } from '@/lib/meter';
@@ -1009,7 +1009,7 @@ const ID_SHAPE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const ID_TAKEN = 'taken, customize the id';
 const ID_UNNAMED = 'none yet, the label needs a letter or digit';
 // The id line reads a state after `Id:`, where the customized field's hint leads with it as a sentence of its own.
-const sentence = (fragment: string) => `${fragment.charAt(0).toUpperCase()}${fragment.slice(1)}.`;
+const sentence = (fragment: string) => `${upperFirst(fragment)}.`;
 
 function AddAccountDialog({ open, existingIds, onClose, onDone }: { existingIds: ReadonlySet<string>; onClose: () => void; onDone: (done: { kind: 'api_key'; created: Account } | { id: string; kind: 'oauth'; label: string; session: PairingSession }) => void; open: boolean }) {
   const [kind, setKind] = useState<'api_key' | 'oauth'>('oauth');
