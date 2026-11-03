@@ -544,6 +544,25 @@ export class MockApi implements Api {
   }
 
   /**
+   * The refusals of a pool body the create and the edit share, the first in the route's order: the fields, the body
+   * capture bound, a doubled member and the member writes. Null where none applies.
+   */
+  private poolBodyRefusal(input: PoolInput): ApiError | null {
+    const refusal = poolRefusal(input);
+    if (refusal) return new ApiError(400, refusal, null);
+    if (input.bodyCaptureHours > this.settings.retention.bodyCaptureMaxHours) return new ApiError(400, 'body_capture_hours exceeds stats.body_capture_max_hours', null);
+    const repeated = repeatedId(input.members.map((m) => m.accountId));
+    if (repeated) return new ApiError(409, `members name account ${repeated} twice`, null);
+    const members = memberRefusal(input.members);
+    return members ? new ApiError(400, members, null) : null;
+  }
+
+  /** The keepalive figures a saved body resolves to, composed from its members' kinds as the router composes them. */
+  private resolvedOf(input: PoolInput): Pool['keepaliveResolved'] {
+    return resolvedFor(composedFor(input.members.map((m) => this.accounts.find((a) => a.id === m.accountId)?.kind ?? 'oauth'), input.cacheTtl), input.keepalive);
+  }
+
+  /**
    * The pool as the route answers it, with its keys listed from the key registry at the time of the read, and its
    * warnings the route's checks on the saved settings and the largest cohort among the pinned sessions under its keys.
    */
@@ -907,13 +926,8 @@ export class MockApi implements Api {
     if (input.guardrails !== undefined) throw new ApiError(400, 'guardrails applies on edit', null);
     const id = slug(input.name);
     if (this.pools.some((p) => p.id === id)) throw new ApiError(409, POOL_TAKEN, null);
-    const refusal = poolRefusal(input);
-    if (refusal) throw new ApiError(400, refusal, null);
-    if (input.bodyCaptureHours > this.settings.retention.bodyCaptureMaxHours) throw new ApiError(400, 'body_capture_hours exceeds stats.body_capture_max_hours', null);
-    const repeated = repeatedId(input.members.map((m) => m.accountId));
-    if (repeated) throw new ApiError(409, `members name account ${repeated} twice`, null);
-    const members = memberRefusal(input.members);
-    if (members) throw new ApiError(400, members, null);
+    const refused = this.poolBodyRefusal(input);
+    if (refused) throw refused;
     const held = heldElsewhere(input.members, this.pools, id);
     if (held) throw new ApiError(409, held, null);
     const pool: Omit<Pool, 'activePins' | 'guardrails' | 'keys' | 'members' | 'warnings'> & { members: Omit<PoolMember, 'activePins'>[] } = {
@@ -922,7 +936,7 @@ export class MockApi implements Api {
       cost24h: 0,
       id,
       // From the members' kinds, as the router composes them, and nothing for a pool with no member.
-      keepaliveResolved: resolvedFor(composedFor(input.members.map((m) => this.accounts.find((a) => a.id === m.accountId)?.kind ?? 'oauth'), input.cacheTtl), input.keepalive),
+      keepaliveResolved: this.resolvedOf(input),
       members: input.members.map((m) => {
         const account = this.accounts.find((a) => a.id === m.accountId);
         return writtenMember(m, account, input.slowDown, (member) => eligibilityOf(account, input.overagePolicy, member));
@@ -1493,17 +1507,10 @@ export class MockApi implements Api {
   async updatePool(id: string, input: PoolInput, revision?: number): Promise<Pool> {
     const idx = this.pools.findIndex((p) => p.id === id);
     if (idx < 0) return Promise.reject(new Error(`Unknown pool ${id}`));
-    const refusal = poolRefusal(input);
-    if (refusal) return Promise.reject(new ApiError(400, refusal, null));
-    if (input.bodyCaptureHours > this.settings.retention.bodyCaptureMaxHours) {
-      return Promise.reject(new ApiError(400, 'body_capture_hours exceeds stats.body_capture_max_hours', null));
-    }
     // The route refuses a repeat and a budget before the store looks any member up, and the store checks every member
     // inside the one transaction that writes the pool, so a refusal stores nothing.
-    const repeated = repeatedId(input.members.map((m) => m.accountId));
-    if (repeated) return Promise.reject(new ApiError(409, `members name account ${repeated} twice`, null));
-    const members = memberRefusal(input.members);
-    if (members) return Promise.reject(new ApiError(400, members, null));
+    const refused = this.poolBodyRefusal(input);
+    if (refused) return Promise.reject(refused);
     const { guardrails: guardrailIds, ...fields } = input;
     const twice = repeatedId(guardrailIds);
     if (twice !== null) return Promise.reject(new ApiError(400, `guardrails lists ${twice} twice`, null));
@@ -1532,7 +1539,7 @@ export class MockApi implements Api {
       ...current,
       ...fields,
       // From the saved members' kinds, as the router composes them on every save.
-      keepaliveResolved: resolvedFor(composedFor(input.members.map((m) => this.accounts.find((a) => a.id === m.accountId)?.kind ?? 'oauth'), input.cacheTtl), input.keepalive),
+      keepaliveResolved: this.resolvedOf(input),
       // Eligibility is the router's reading of live cooldowns and overages, not something a save can set. A save
       // does rewrite the budget, and a write answers no spend here, so a budget verdict is read again.
       members: input.members.map((m) => {
