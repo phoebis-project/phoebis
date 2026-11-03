@@ -256,7 +256,7 @@ function diagnosed(attempts: Attempt[], kind: RequestKind): Attempt[] {
   return attempts.map((a) => {
     if (a.upstreamStatus !== 200 || kind === 'count_tokens') return a;
     // An API-key account in this fixture answers without the beta, so the client never sees a comparison.
-    if (ACCOUNTS.find((x) => x.id === a.accountId)?.kind !== 'oauth') return { ...a, cacheMissReason: 'not_requested' as const };
+    if (a.accountKind !== 'oauth') return { ...a, cacheMissReason: 'not_requested' as const };
     // A failover lands on an account that never saw the turn before this one.
     if (a.index > 0) return { ...a, cacheMissReason: 'previous_message_not_found' as const };
     const cacheMissReason = missRng.weighted<CacheMissReason>([
@@ -752,7 +752,7 @@ function buildRequests(): RequestLog[] {
 function liftCooldowns(rows: RequestLog[]) {
   const uses = rows
     .flatMap((r) => {
-      const fast = fastTurn(r.keyId, r.model, r.kind);
+      const fast = r.shape.requestedSpeed === 'fast';
       return r.attempts.map((a) => ({ accountId: a.accountId, at: Date.parse(a.startedAt), fast, model: r.canonicalModel, r }));
     })
     .sort((x, y) => x.at - y.at);
@@ -793,7 +793,7 @@ function coolingAt(accountId: string, at: number, model: string, fast: boolean):
 
 /** Whether a request could wait on the account at `at`: one it could be served by then, which no cooldown holds. */
 const holdableAt = (r: RequestLog, accountId: string, at: number) => {
-  const fast = fastTurn(r.keyId, r.model, r.kind);
+  const fast = r.shape.requestedSpeed === 'fast';
   return servable(accountId, at, r.canonicalModel, fast) && !coolingAt(accountId, at, r.canonicalModel, fast);
 };
 
@@ -1606,7 +1606,7 @@ function supportedRule(r: RequestLog, from: string): PinMigrationReason | null {
   const pinned = LIVE_PIN.get(r.id);
   if (!pool || !head || r.kind === 'count_tokens' || pinned?.accountId !== from || !serves(from, r.canonicalModel)) return null;
   const at = Date.parse(head.startedAt);
-  const fast = fastTurn(r.keyId, r.model, r.kind);
+  const fast = r.shape.requestedSpeed === 'fast';
   const registryKind = (id: string) => accountById.get(id)?.kind;
   const inOverage = (id: string) => id === 'nightly' && at >= OVERAGE_FROM;
   const spent = (windows: AttemptWindow[]) => spentWindows(windows).length > 0;
