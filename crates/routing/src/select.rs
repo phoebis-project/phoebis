@@ -1090,19 +1090,10 @@ pub fn release_reasons(
         });
     }
     // The credits row blocks beside a later row too, and so does the poll's state, which no row records.
-    let credits_row = || {
-        state
-            .cooldowns_of(&pin.account_id, request.now)
-            .any(|row| row.scope == CooldownScope::FastCredits)
-    };
-    let credits_state = || {
-        snapshot.account(&pin.account_id).is_some_and(|account| {
-            state
-                .credits_blocked(snapshot, &pin.account_id, account.incarnation, request.now)
-                .is_some()
-        })
-    };
-    if request.fast && !reasons.contains(&FAST_CREDITS_REASON) && (credits_row() || credits_state())
+    if request.fast
+        && !reasons.contains(&FAST_CREDITS_REASON)
+        && (fast_credits_row(state, &pin.account_id, request.now).is_some()
+            || holder_credits_blocked(state, snapshot, &pin.account_id, request.now).is_some())
     {
         reasons.push(FAST_CREDITS_REASON);
     }
@@ -1948,11 +1939,7 @@ fn run(
             // Extra usage funds every model, so under `allow` a spent window goes on in overage unless the poll read
             // the account's extra usage as blocked. A state the poll has not read is no refusal.
             let funded = pool.overage_policy == OveragePolicy::Allow
-                && snapshot.account(&c.account_id).is_none_or(|a| {
-                    state
-                        .credits_blocked(snapshot, &c.account_id, a.incarnation, request.now)
-                        .is_none()
-                });
+                && holder_credits_blocked(state, snapshot, &c.account_id, request.now).is_none();
             if funded {
                 spent_model.push(c.account_id.clone());
                 left.push(c);
@@ -5245,10 +5232,7 @@ fn obstacle(
         return Some(cooldown(row));
     }
     if fast {
-        if let Some(row) = state
-            .cooldowns_of(account_id, now)
-            .find(|row| row.scope == CooldownScope::FastCredits)
-        {
+        if let Some(row) = fast_credits_row(state, account_id, now) {
             return Some(cooldown(row));
         }
         if let Some(reason) = state.credits_blocked(snapshot, account_id, account.incarnation, now)
@@ -5294,6 +5278,28 @@ fn obstacle(
         return Some(Obstacle::Attempted);
     }
     None
+}
+
+/// The account's live fast-credits row, which refuses a fast request whatever later row stands beside it.
+fn fast_credits_row<'a>(
+    state: &'a RoutingState,
+    account_id: &'a str,
+    now: i64,
+) -> Option<&'a CooldownRow> {
+    state
+        .cooldowns_of(account_id, now)
+        .find(|row| row.scope == CooldownScope::FastCredits)
+}
+
+/// The poll's credits block on the account's current holder, `None` for an account the snapshot does not hold.
+fn holder_credits_blocked<'a>(
+    state: &'a RoutingState,
+    snapshot: &RegistrySnapshot,
+    account_id: &str,
+    now: i64,
+) -> Option<&'a str> {
+    let account = snapshot.account(account_id)?;
+    state.credits_blocked(snapshot, account_id, account.incarnation, now)
 }
 
 /// Renews the pin and persists the request's verdict on it: a refreshing request stamps its refresh and its
