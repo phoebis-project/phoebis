@@ -930,7 +930,7 @@ async fn replay(ctx: &mut WriterCtx<'_>, held: Held) -> Retry {
                 }
             }
             record @ Record::Request { request, .. } => {
-                count_drop(&ctx.handles.stats, &ctx.handles.metrics, table_of(record));
+                ctx.handles.count_drop(table_of(record));
                 // The writer lands its own gap as a batch of one, as the gap report does: a send into its own
                 // channel would meet the queue it stopped draining.
                 let gap = Arc::new(vec![crate::assemble::gap(
@@ -940,7 +940,7 @@ async fn replay(ctx: &mut WriterCtx<'_>, held: Held) -> Retry {
                 )]);
                 let _ = ctx.handles.land(&snapshot, &gap, 0..1).await;
             }
-            other => count_drop(&ctx.handles.stats, &ctx.handles.metrics, table_of(other)),
+            other => ctx.handles.count_drop(table_of(other)),
         }
     }
     Retry::Settled
@@ -1007,7 +1007,7 @@ async fn drain_held(ctx: &mut WriterCtx<'_>, held: Held) {
         "the ledger stopped with records it could not write, and they are lost"
     );
     for record in lost {
-        count_drop(&ctx.handles.stats, &ctx.handles.metrics, table_of(record));
+        ctx.handles.count_drop(table_of(record));
     }
 }
 
@@ -1544,6 +1544,10 @@ fn table_of(record: &Record) -> &'static str {
 }
 
 impl Handles {
+    fn count_drop(&self, table: &'static str) {
+        count_drop(&self.stats, &self.metrics, table);
+    }
+
     /// One transaction over `range` of the batch on a blocking thread. A transaction that fails rolls back and leaves
     /// the records to the caller to retry, replay or park, and only a panicking closure drops them, counted, so the
     /// gap that follows names them. Metrics are observed only after the commit succeeds, so a failed write never reaches
