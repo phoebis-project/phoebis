@@ -1636,40 +1636,8 @@ impl Relay {
                 Err(error) => Some(RelayError::Cch(error)),
             }
         };
-        if let Some(error) = refusal {
-            drop(tree);
-            trace
-                .observed(
-                    Some(&key),
-                    None,
-                    &parts.headers,
-                    true,
-                    raw.clone(),
-                    stream,
-                    capture_hours,
-                    facts.shape.clone(),
-                    None,
-                    Vec::new(),
-                    client_facts(&parts.headers, None, Some(&facts)),
-                    auto_mode,
-                    presented == Presented::Retired,
-                    key.rotated_at,
-                    None,
-                    Vec::new(),
-                )
-                .await;
-            return self
-                .refused(
-                    &trace,
-                    0,
-                    relay_failure(&error),
-                    Some(&key),
-                    None,
-                    client_version.as_deref(),
-                )
-                .await;
-        }
-        let mut identity = match identify(&parts.headers, &raw) {
+        let identified = refusal.map_or_else(|| identify(&parts.headers, &raw), Err);
+        let mut identity = match identified {
             Ok(identity) => identity,
             Err(error) => {
                 drop(tree);
