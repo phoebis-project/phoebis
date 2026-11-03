@@ -8,8 +8,8 @@ const FAST_REASON_LABEL: Record<string, string> = { fast_credits: 'credits unava
 const reasonLabel = (reason: string) => lookup(FAST_REASON_LABEL, reason) ?? reason;
 
 /** The later of the two resets: a fast request draws on both buckets, so that is when both have refilled. */
-function laterReset(readings: (FastLaneReading | null)[]): string | null {
-  const resets = readings.flatMap((r) => (r?.resetsAt ? [r.resetsAt] : []));
+function laterReset(readings: FastLaneReading[]): string | null {
+  const resets = readings.flatMap((r) => (r.resetsAt ? [r.resetsAt] : []));
   return resets.length ? resets.reduce((a, b) => (Date.parse(b) > Date.parse(a) ? b : a)) : null;
 }
 
@@ -25,7 +25,7 @@ export function FastLane({ account, now }: { account: Account; now: number }): J
   // minutes, so a reading past its reset reads as the refilled bucket the router itself routes on.
   const used = lane ? ([['input', lane.input], ['output', lane.output]] as const).flatMap(([name, r]) => (r ? [`${name} ${fmtPct(refilled(r, now) ? 0 : r.utilization)} used`] : [])) : [];
   const readings = lane ? [lane.input, lane.output].filter((r): r is FastLaneReading => r !== null) : [];
-  const reset = lane ? laterReset([lane.input, lane.output]) : null;
+  const reset = laterReset(readings);
   // A reading with no reset may still be spent, so the lane reads refilled only when every reading has refilled; a
   // later reset already past beside such a reading says nothing of when.
   const when = reset === null ? [] : Date.parse(reset) > now ? [`resets ${fmtRelative(reset, now)}`] : readings.every((r) => refilled(r, now)) ? [`refilled ${fmtRelative(reset, now)}`] : [];
