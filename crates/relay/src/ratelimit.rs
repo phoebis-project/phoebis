@@ -810,6 +810,16 @@ mod tests {
     }
 
     #[test]
+    fn a_status_word_in_another_case_reads_as_no_known_status() {
+        let parsed = UnifiedHeaders::parse_list(&[(
+            "anthropic-ratelimit-unified-5h-status".to_string(),
+            "Allowed".to_string(),
+        )])
+        .expect("a unified name opens the read");
+        assert_eq!(parsed.five_hour.status, Some(WindowStatus::Other));
+    }
+
+    #[test]
     fn a_remaining_past_its_limit_clamps_the_utilization_rather_than_reading_negative() {
         let h = head(
             200,
