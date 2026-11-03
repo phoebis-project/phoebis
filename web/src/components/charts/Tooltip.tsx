@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { fmtAbsolute } from '@/lib/format';
 
 export interface TooltipRow {
   color?: string;
@@ -24,6 +25,15 @@ export function ChartTooltip({ title, rows }: { rows: TooltipRow[]; title: React
       ))}
     </div>
   );
+}
+
+/** A time chart's tooltip content: the hovered point's instant as the title over the rows `rows` builds from it. */
+export function timeTip<T extends { at: number }>(rows: (p: T) => TooltipRow[]) {
+  return function TipContent({ payload }: { payload?: readonly { payload?: unknown }[] }) {
+    const p = payload?.[0]?.payload as T | undefined;
+    if (!p) return null;
+    return <ChartTooltip title={fmtAbsolute(p.at)} rows={rows(p)} />;
+  };
 }
 
 /**

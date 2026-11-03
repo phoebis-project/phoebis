@@ -7,7 +7,7 @@ import { useSession } from '@/app/session';
 import { useAppSettings } from '@/app/settings';
 import { CatalogDialog } from '@/components/CatalogDialog';
 import { useChartInk } from '@/components/charts/useChartInk';
-import { ChartTooltip, Legend } from '@/components/charts/Tooltip';
+import { Legend, timeTip } from '@/components/charts/Tooltip';
 import { CoolingDown } from '@/components/CoolingDown';
 import { FastLane } from '@/components/FastLane';
 import { FilterBar } from '@/components/FilterBar';
@@ -935,20 +935,11 @@ function TrendChart({ history, loading, hasFable }: { hasFable: boolean; history
           <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tickFormatter={(v: number) => `${v}%`} tickLine={false} axisLine={false} width={40} />
           <Tooltip
             cursor={{ stroke: ink.axis }}
-            content={({ payload }) => {
-              const p = payload?.[0]?.payload as (typeof data)[number] | undefined;
-              if (!p) return null;
-              return (
-                <ChartTooltip
-                  title={fmtAbsolute(p.at)}
-                  rows={[
-                    { color: ink.series[0], label: '5-hour used', value: pct(p.u5) },
-                    { color: ink.series[1], label: '7-day used', value: p.u7 === null ? 'no sample yet' : pct(p.u7) },
-                    ...(hasFable ? [{ color: ink.series[2], label: 'Fable 7-day used', value: p.uf === null ? 'no sample yet' : pct(p.uf) }] : []),
-                  ]}
-                />
-              );
-            }}
+            content={timeTip<(typeof data)[number]>((p) => [
+              { color: ink.series[0], label: '5-hour used', value: pct(p.u5) },
+              { color: ink.series[1], label: '7-day used', value: p.u7 === null ? 'no sample yet' : pct(p.u7) },
+              ...(hasFable ? [{ color: ink.series[2], label: 'Fable 7-day used', value: p.uf === null ? 'no sample yet' : pct(p.uf) }] : []),
+            ])}
           />
           <Line type="linear" dataKey="u5" stroke={ink.series[0]} strokeWidth={1.5} dot={false} isAnimationActive={false} />
           <Line type="monotone" dataKey="u7" stroke={ink.series[1]} strokeWidth={2} dot={false} isAnimationActive={false} />

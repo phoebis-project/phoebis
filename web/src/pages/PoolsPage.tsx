@@ -12,7 +12,7 @@ import { useSession } from '@/app/session';
 import { useAppSettings } from '@/app/settings';
 import { AttentionRows } from '@/components/AttentionRows';
 import { useChartInk } from '@/components/charts/useChartInk';
-import { ChartTooltip, Legend } from '@/components/charts/Tooltip';
+import { Legend, timeTip } from '@/components/charts/Tooltip';
 import { FilterBar } from '@/components/FilterBar';
 import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor';
 import { AttentionLine } from '@/components/ui/AttentionLine';
@@ -26,7 +26,7 @@ import { accountHref, KEYS_CODEC } from '@/lib/address';
 import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, UNPRICED_TITLE, equivalentOrDash, moveLabel, nativeFiguresOf, type WeekReading } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
 import { weekReadingOf } from '@/lib/costs';
-import { fmtAbsolute, fmtCompact, fmtDuration, fmtHourTick, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtUsd, messageOf, shortModel } from '@/lib/format';
+import { fmtCompact, fmtDuration, fmtHourTick, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtUsd, messageOf, shortModel } from '@/lib/format';
 import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, guardrailIdsOf, guardrailsChange, keyFormOf, keyInputOf, poolRefusals, sortKeys, type PoolGroup } from '@/lib/forms';
 import { refreshAttention, useAsync, useAttention, useLatest, useNow } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
@@ -834,20 +834,11 @@ function PoolCard({
               <YAxis width={32} tickLine={false} axisLine={false} tick={{ fill: ink.ink2, fontSize: 11 }} allowDecimals={false} />
               <Tooltip
                 cursor={{ fill: ink.grid, opacity: 0.6 }}
-                content={({ payload }) => {
-                  const p = payload?.[0]?.payload as (typeof data)[number] | undefined;
-                  if (!p) return null;
-                  return (
-                    <ChartTooltip
-                      title={fmtAbsolute(p.at)}
-                      rows={[
-                        { color: ink.series[0], label: 'requests', value: fmtInt(p.requests) },
-                        { color: ink.ink2, label: '3-hour average', value: p.average.toFixed(1) },
-                        { label: 'tokens', value: fmtCompact(p.tokens) },
-                      ]}
-                    />
-                  );
-                }}
+                content={timeTip<(typeof data)[number]>((p) => [
+                  { color: ink.series[0], label: 'requests', value: fmtInt(p.requests) },
+                  { color: ink.ink2, label: '3-hour average', value: p.average.toFixed(1) },
+                  { label: 'tokens', value: fmtCompact(p.tokens) },
+                ])}
               />
               <Bar dataKey="requests" fill={ink.series[0]} radius={[3, 3, 0, 0]} maxBarSize={14} isAnimationActive={false} />
               <Line type="monotone" dataKey="average" stroke={ink.ink2} strokeWidth={2} dot={false} isAnimationActive={false} />

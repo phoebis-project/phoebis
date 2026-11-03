@@ -9,7 +9,7 @@ import type { Account, AccountRollup, AnalyticsGroup, AnalyticsGroupBy, Analytic
 import { Donut } from '@/components/charts/Donut';
 import { OUTCOME_SERIES, PERCENTILES, PROBE_SERIES, TOKEN_SERIES, accountColor, accountSlots, type ChartInk } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
-import { ChartTooltip, Legend, type TooltipRow } from '@/components/charts/Tooltip';
+import { Legend, timeTip, type TooltipRow } from '@/components/charts/Tooltip';
 import { CostReferenceLink } from '@/components/ui/CostReference';
 import type { Option } from '@/components/ui/OptionList';
 import { figuresValue, Tile } from '@/components/ui/Tile';
@@ -192,14 +192,6 @@ const totalsOf = (groups: AnalyticsGroup[]) => {
   return { ...summed, tokens: withPlainOutput(summed.tokens) };
 };
 const bucketsOf = (points: AnalyticsPoint[]): Bucket[] => points.map((p) => ({ at: Date.parse(p.at), ...totalsOf(p.groups) }));
-
-function timeTip<T extends { at: number }>(rows: (p: T) => TooltipRow[]) {
-  return function TipContent({ payload }: { payload?: readonly { payload?: unknown }[] }) {
-    const p = payload?.[0]?.payload as T | undefined;
-    if (!p) return null;
-    return <ChartTooltip title={fmtAbsolute(p.at)} rows={rows(p)} />;
-  };
-}
 
 /**
  * Every key the range holds on one dimension, read once per range so a filter never hides its own options. With no
