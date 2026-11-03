@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from 'react';
+import { useId, useMemo, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
 import type { Account, ApiKey, CompanionState, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, Pool, RecipeState, Session } from '@/api/types';
@@ -84,6 +84,14 @@ const COMPANION_HINT: Record<CompanionState, string> = {
   silent: 'The mod stopped reporting at the time shown. The retained prompts stay and are probed under the idle window from the last real request until it reports again or the window runs out.',
 };
 const COUNTS_HINT = 'Probes sent and requests they kept warm since midnight UTC';
+/**
+ * An optional instant's cell, spread into its wrapper: the time relative to now, else `empty` muted, with the absolute
+ * instant on the wrapper's title, so the hover target is the whole cell.
+ */
+const timeCell = (at: string | null, now: number, empty: string): { children: ReactNode; title: string | undefined } => ({
+  children: at ? <span className="num">{fmtRelative(at, now)}</span> : <span className="muted">{empty}</span>,
+  title: at ? fmtAbsolute(at) : undefined,
+});
 const NO_TRAFFIC_HINT = 'This session has no ledgered requests, so there is nothing to show in analytics or the request log.';
 interface Row {
   account: Account | null;
@@ -691,9 +699,7 @@ function SessionRows({
           </td>
         )}
         {visible.has('lastRequest') && (
-          <td className="col-fit" title={session.lastRequestAt ? fmtAbsolute(session.lastRequestAt) : undefined}>
-            {session.lastRequestAt ? <span className="num">{fmtRelative(session.lastRequestAt, now)}</span> : <span className="muted">none</span>}
-          </td>
+          <td className="col-fit" {...timeCell(session.lastRequestAt, now, 'none')} />
         )}
         {/* The sessions and the recipes are read apart, so the count stops at zero while the two disagree. */}
         {visible.has('agents') && <td className="right num col-fit">{Math.max(0, session.agents - row.released)}</td>}
@@ -741,13 +747,7 @@ function SessionRows({
           </td>
         )}
         {visible.has('nextProbe') && (
-          <td className="col-fit" title={session.keepalive.nextProbeAt ? fmtAbsolute(session.keepalive.nextProbeAt) : undefined}>
-            {session.keepalive.nextProbeAt ? (
-              <span className="num">{fmtRelative(session.keepalive.nextProbeAt, now)}</span>
-            ) : (
-              <span className="muted">{pendingProbe ? 'pending' : 'not scheduled'}</span>
-            )}
-          </td>
+          <td className="col-fit" {...timeCell(session.keepalive.nextProbeAt, now, pendingProbe ? 'pending' : 'not scheduled')} />
         )}
         {/* The actions sit in a menu, a fraction of spelled-out buttons' width, and close the row: the id leads it, so a
             reader scans ids down the first column, and the actions stay reachable at the row's end at 1280 px. */}
@@ -917,7 +917,7 @@ function AgentLine({ accountById, line, now, requestsTo }: { accountById: Readon
       <span className={context === '-' ? 'muted' : 'num'}>{context}</span>
       {accountId === null ? <span className="muted">none</span> : <LineAccount account={accountById.get(accountId) ?? null} id={accountId} now={now} />}
       {ttlMs === null ? <span className="muted">-</span> : <span className="num">{fmtDuration(ttlMs)}</span>}
-      <span title={lastRequestAt ? fmtAbsolute(lastRequestAt) : undefined}>{lastRequestAt ? <span className="num">{fmtRelative(lastRequestAt, now)}</span> : <span className="muted">none</span>}</span>
+      <span {...timeCell(lastRequestAt, now, 'none')} />
       {a === null ? (
         <>
           <span className="muted">-</span>
@@ -931,12 +931,8 @@ function AgentLine({ accountById, line, now, requestsTo }: { accountById: Readon
         </>
       ) : (
         <>
-          <span className="agents__probe" title={a.lastProbeAt ? fmtAbsolute(a.lastProbeAt) : undefined}>
-            {a.lastProbeAt ? <span className="num">{fmtRelative(a.lastProbeAt, now)}</span> : <span className="muted">none</span>}
-          </span>
-          <span title={a.nextProbeAt ? fmtAbsolute(a.nextProbeAt) : undefined}>
-            {a.nextProbeAt ? <span className="num">{fmtRelative(a.nextProbeAt, now)}</span> : <span className="muted">{a.state === 'retained' ? 'on first stream event' : 'not scheduled'}</span>}
-          </span>
+          <span className="agents__probe" {...timeCell(a.lastProbeAt, now, 'none')} />
+          <span {...timeCell(a.nextProbeAt, now, a.state === 'retained' ? 'on first stream event' : 'not scheduled')} />
           <span className="agents__counts num" title={COUNTS_HINT}>
             {a.probesToday} / {a.creditedToday}
           </span>
