@@ -1,6 +1,7 @@
-import { type RefObject, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { type RefObject, useLayoutEffect, useRef, useState } from 'react';
 import { FilterChip } from '@/components/FilterChip';
 import { type Chip, foldChips } from '@/lib/filterBar';
+import { useResizeObserver } from '@/lib/hooks';
 
 /** The chips the line may show before it folds, the most `foldChips` keeps. */
 const MOST = 5;
@@ -76,20 +77,11 @@ export function ChipLine({ addFilterRef, address, chips, editing = null, onClear
     };
     setFit(foldChips(chips, fits).shown.length);
   };
-  const measureRef = useRef(measure);
   // Every draw can change a chip's width (an option list loading turns ids into names), so each one measures again.
   useLayoutEffect(() => {
-    measureRef.current = measure;
     measure();
   });
-  const drawnLine = chips.length > 0;
-  useEffect(() => {
-    const line = lineRef.current;
-    if (!drawnLine || line === null || typeof ResizeObserver !== 'function') return;
-    const observer = new ResizeObserver(() => measureRef.current());
-    observer.observe(line);
-    return () => observer.disconnect();
-  }, [drawnLine]);
+  useResizeObserver(lineRef, measure, chips.length > 0);
 
   // A chip that leaves with the focus on it (its x, the popover's Remove, Clear all) drops focus to the body, so the
   // chip that stood after it takes the focus, its fold when it is folded, else Add filter. A focused body the fold

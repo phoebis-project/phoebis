@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
 import type { Account, AccountSlowDown, ExtraUsage, QuotaPoll, QuotaSnapshot, RateLimitWindow, Spend } from '@/api/types';
@@ -10,7 +10,7 @@ import { SpeedChip } from '@/components/ui/SpeedChip';
 import { IconChevronLeft, IconChevronRight, IconRefresh, IconUser } from '@/components/ui/icons';
 import { Badge, ErrorState, Meter, Pill, Segmented, Select, Skeleton } from '@/components/ui/primitives';
 import { CELL_MIN_PX, cellsFit, fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinor, fmtMinute, fmtPct, fmtRelative, fmtShortHour, fmtShortTime, getTimeFormat, upperFirst } from '@/lib/format';
-import { useAsync, useNow } from '@/lib/hooks';
+import { useAsync, useNow, useResizeObserver } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, burnWords, endOf, extraUsageState, hasSpendReading, isExpired, isQuotaListed, meterTone, onTimeline, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, slowedOf, soonestReset, sortByPace, spendResetTitle, timelineLanes, windowOf, type ExtraUsageState } from '@/lib/quota';
 import { speedHover } from '@/lib/selection';
 
@@ -650,20 +650,12 @@ function ResetTimeline({ accounts, now, slotOf }: { accounts: Account[]; now: nu
     const next = new Map<string, LabelStep>(labels.map(({ label, reset }, i) => [label.dataset.bar ?? '', !wholeCut[i] ? 0 : reset !== null && !shareCut[i] ? 1 : 2]));
     setSteps((was) => (was.size === next.size && [...next].every(([key, step]) => was.get(key) === step) ? was : next));
   };
-  const measureRef = useRef(measure);
   // Every draw can move a bar or change its words (a mode switch, a period paged, a new reading), so each one measures
   // again, and the observer covers a resize, since the tracks span the cells' width.
   useLayoutEffect(() => {
-    measureRef.current = measure;
     measure();
   });
-  useEffect(() => {
-    const row = cellsRef.current;
-    if (row === null || typeof ResizeObserver !== 'function') return;
-    const observer = new ResizeObserver(() => measureRef.current());
-    observer.observe(row);
-    return () => observer.disconnect();
-  }, []);
+  useResizeObserver(cellsRef, measure);
 
   const lanes = timelineLanes(accounts, mode === 'session' ? '5h' : '7d');
 

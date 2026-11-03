@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MutableRefObject } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MutableRefObject, type RefObject } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '@/api';
 import { ApiError, quietly, reportRecovery } from '@/api/http';
@@ -127,6 +127,21 @@ export function useKeyedRows<T>(value: T[], onChange: (next: T[]) => void, blank
     commit([...value, blank()], [...keys, key], key + 1);
   };
   return { add, idOf, keys, move, remove, update };
+}
+
+/**
+ * Calls `onResize` whenever the element under `ref` changes size, while `enabled` holds and the browser has a
+ * `ResizeObserver` (the jsdom harness has none). The latest callback runs, so a caller passes a fresh one each render.
+ */
+export function useResizeObserver(ref: RefObject<Element>, onResize: () => void, enabled = true): void {
+  const latest = useLatest(onResize);
+  useEffect(() => {
+    const el = ref.current;
+    if (!enabled || el === null || typeof ResizeObserver !== 'function') return;
+    const observer = new ResizeObserver(() => latest.current());
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [enabled, latest, ref]);
 }
 
 export function useLatest<T>(value: T): MutableRefObject<T> {

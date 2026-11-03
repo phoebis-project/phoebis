@@ -1,8 +1,9 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { useId, useLayoutEffect, useRef, useState } from 'react';
 import { api } from '@/api';
 import type { AttentionItem } from '@/api/types';
 import { ATTENTION_LABEL, ATTENTION_TONE, attentionHref, attentionTitle, attentionWords } from '@/lib/attention';
 import { fmtInt, fmtRelative } from '@/lib/format';
+import { useLatest, useResizeObserver } from '@/lib/hooks';
 import { Popover } from './Popover';
 import { Badge, BadgeLink, Pill, Skeleton } from './primitives';
 
@@ -105,21 +106,12 @@ export function AttentionLine({ error, items, loadedAt, now, refresh }: { error:
     setWrapped(wrap);
     setFit(count);
   };
-  const measureRef = useRef(measure);
-  useLayoutEffect(() => {
-    measureRef.current = measure;
-  });
+  const measureRef = useLatest(measure);
   // A width moves only with the words the line draws (the badges, the lead's count, the Replay button, its answer) or
   // with the line's own width, which the observer below follows.
   const words = [...badges.map((b) => b.text), parked ? 'parked' : '', replayed ?? ''].join('\n');
-  useLayoutEffect(() => measureRef.current(), [drawn, words]);
-  useEffect(() => {
-    const line = lineRef.current;
-    if (!drawn || line === null || typeof ResizeObserver !== 'function') return;
-    const observer = new ResizeObserver(() => measureRef.current());
-    observer.observe(line);
-    return () => observer.disconnect();
-  }, [drawn]);
+  useLayoutEffect(() => measureRef.current(), [drawn, measureRef, words]);
+  useResizeObserver(lineRef, measure, drawn);
 
   if (error !== null) {
     const title = loadedAt === null ? error : `${error}\nLast read: ${fmtRelative(loadedAt, now)}`;
