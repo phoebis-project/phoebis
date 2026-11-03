@@ -685,11 +685,11 @@ fn default_upstream_gzip() -> String {
 }
 
 fn default_memory_cap() -> usize {
-    65_536
+    phoebis_relay::MEMORY_CAP
 }
 
 fn default_memory_idle() -> u64 {
-    86_400
+    (phoebis_relay::MEMORY_IDLE_MS / 1_000) as u64
 }
 
 fn default_memory_retention() -> u32 {

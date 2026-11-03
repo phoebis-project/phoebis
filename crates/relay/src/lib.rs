@@ -56,7 +56,7 @@ pub use exhaustion::exhaustion_response;
 pub use headers::{outbound_headers, CredentialKind};
 pub use hold::{hold, Commit, Held, HeldRead, Inspect, INSPECT_BUFFER};
 pub use identity::{identifier_byte, identify, RequestIdentity};
-pub use memory::{MemoryKey, Previous};
+pub use memory::{MemoryKey, Previous, MEMORY_CAP, MEMORY_IDLE_MS};
 pub use messages::{
     new_request_id, router, Accounting, AccountingSource, Limits, Probe, ReadinessSource, Relay,
     RelayOutcome, ServedUnder, ShutdownMark, MEMORY_FLUSH_INTERVAL,
