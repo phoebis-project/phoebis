@@ -14,12 +14,12 @@ use rand::{Rng, RngExt};
 
 use crate::affinity::{AffinityEntry, AffinityMap, RungWalk, Visited};
 use crate::record::{
-    key_fact, settings_of, BudgetFacts, By, CandidateFacts, ChainFacts, CooldownFacts,
-    CreditsFacts, DecisionRecord, DecisionSummary, ExhaustionFacts, Fact, FactEntity, FactValue,
-    HoldOutcome, LaneFacts, MarkClearedFacts, MoveCause, ObstacleFacts, Outcome, OverageFacts,
-    PaceFacts, PinFacts, PinKeyFacts, PinShed, PinWritten, PrefixEntry, PrefixLookup, RefusalFacts,
-    RequestFacts, RequestFlags, ReservationFacts, Score, ShedPinFacts, ShedRoundFacts, SummaryFact,
-    TermFacts, WalkStep, WarmthFacts, WindowFacts, RECORD_VERSION, WALK_STEPS,
+    key_fact, settings_of, BudgetFacts, By, CandidateFacts, CooldownFacts, CreditsFacts,
+    DecisionRecord, DecisionSummary, ExhaustionFacts, Fact, FactEntity, FactValue, HoldOutcome,
+    MarkClearedFacts, MoveCause, ObstacleFacts, Outcome, OverageFacts, PaceFacts, PinFacts,
+    PinKeyFacts, PinShed, PinWritten, PrefixEntry, PrefixLookup, RefusalFacts, RefusedRequest,
+    RequestFacts, ReservationFacts, Score, ShedPinFacts, ShedRoundFacts, SummaryFact, TermFacts,
+    WalkStep, WarmthFacts, WindowFacts, RECORD_VERSION, WALK_STEPS,
 };
 use crate::state::{
     all_plan_windows, budget_reached, burn_average_ms, burn_decayed, ceiling, entrypoint_of,
@@ -6917,27 +6917,9 @@ fn five_hour_demand(
 
 fn request_facts(request: &SelectRequest, pool_id: String) -> RequestFacts {
     RequestFacts {
-        request_id: request.request_id.clone(),
-        attempt: request.attempt,
-        seq: request.seq,
-        at: request.now,
         received_at: request.received_at,
-        key_id: request.key_id.clone(),
-        key_generation: request.key_generation,
-        pool_id,
-        session_id: Some(request.session_id.clone()),
-        agent_id: request.agent_id.clone(),
-        parent_agent_id: request.parent_agent_id.clone(),
-        client_class: request.client.as_str(),
-        request_class: request.request_class.clone(),
-        canonical_model: request.canonical_model.clone(),
-        lane: LaneFacts::of(&request.lane),
-        flags: RequestFlags::of(request),
-        chain: ChainFacts::of(request),
-        attempted: request.attempted.clone(),
-        holds: request.holds.clone(),
-        registry_revision: request.revision,
         body_tokens: Some(request.body_tokens),
+        ..RequestFacts::of(RefusedRequest::from(request), pool_id, request.revision)
     }
 }
 

@@ -94,6 +94,39 @@ pub struct RequestFacts {
     pub body_tokens: Option<u64>,
 }
 
+impl RequestFacts {
+    /// The request block as a refusal records it: `received_at` at the request's `at` and no body estimate.
+    pub(crate) fn of(
+        request: RefusedRequest,
+        pool_id: String,
+        registry_revision: u64,
+    ) -> RequestFacts {
+        RequestFacts {
+            request_id: request.request_id,
+            attempt: request.attempt,
+            seq: request.seq,
+            at: request.at,
+            received_at: request.at,
+            key_id: request.key_id,
+            key_generation: request.key_generation,
+            pool_id,
+            session_id: request.session_id,
+            agent_id: request.agent_id,
+            parent_agent_id: request.parent_agent_id,
+            client_class: request.client.as_str(),
+            request_class: request.request_class,
+            canonical_model: request.canonical_model,
+            lane: request.lane,
+            flags: request.flags,
+            chain: request.chain,
+            attempted: request.attempted,
+            holds: request.holds,
+            registry_revision,
+            body_tokens: None,
+        }
+    }
+}
+
 /// The request's cache lane split from its `lane_key` spelling.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 pub struct LaneFacts {
@@ -853,29 +886,11 @@ impl DecisionRecord {
         let strategy = pool.map_or("", |pool| pool.strategy.as_str());
         let record = DecisionRecord {
             version: RECORD_VERSION,
-            request: RequestFacts {
-                request_id: request.request_id.clone(),
-                attempt: request.attempt,
-                seq: request.seq,
-                at: request.at,
-                received_at: request.at,
-                key_id: request.key_id.clone(),
-                key_generation: request.key_generation,
-                pool_id: key.map(|key| key.pool_id.clone()).unwrap_or_default(),
-                session_id: request.session_id.clone(),
-                agent_id: request.agent_id.clone(),
-                parent_agent_id: request.parent_agent_id.clone(),
-                client_class: request.client.as_str(),
-                request_class: request.request_class.clone(),
-                canonical_model: request.canonical_model.clone(),
-                lane: request.lane.clone(),
-                flags: request.flags.clone(),
-                chain: request.chain.clone(),
-                attempted: request.attempted.clone(),
-                holds: request.holds.clone(),
-                registry_revision: snapshot.revision,
-                body_tokens: None,
-            },
+            request: RequestFacts::of(
+                request.clone(),
+                key.map(|key| key.pool_id.clone()).unwrap_or_default(),
+                snapshot.revision,
+            ),
             pin: None,
             pin_reason: Some("not_looked_up"),
             settings: key.zip(pool).map(|(_, pool)| settings_of(pool)),
