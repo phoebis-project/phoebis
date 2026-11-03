@@ -71,7 +71,13 @@ export interface PopoverProps {
   role?: 'dialog' | 'menu';
 }
 
-/** StripPopover's rules on any anchor: createPortal at position fixed, visibility hidden until placed, kept 8 px inside the window, flipped above when it would pass the window's foot, placed again on resize and any scroll, closed once its anchor has left the document, aria-modal false, focus moved to the first tabbable (else the box) on open. Tab past the last stop moves on to the stop after the anchor and Shift+Tab before the first returns to the anchor, each closing the box. */
+/**
+ * StripPopover's rules on any anchor: createPortal at position fixed, visibility hidden until placed, kept 8 px inside
+ * the window, flipped above when it would pass the window's foot, placed again on resize and any scroll, closed once
+ * its anchor has left the document or the layout, aria-modal false, focus moved to the first tabbable (else the box)
+ * on open. Tab past the last stop moves on to the stop after the anchor and Shift+Tab before the first returns to the
+ * anchor, each closing the box.
+ */
 export function Popover({ anchor, children, className, id, label, labelledBy, onClose, open, placeKey, role = 'dialog' }: PopoverProps): JSX.Element | null {
   const ref = useRef<HTMLDivElement>(null);
   const host = useContext(PopoverHost);
@@ -81,9 +87,10 @@ export function Popover({ anchor, children, className, id, label, labelledBy, on
   const place = useCallback(() => {
     const el = ref.current;
     if (el === null || anchor === null) return;
-    // A box over an anchor that has left the document would hang from the window's corner, so it closes as the
-    // decision strip's popover does.
-    if (!anchor.isConnected) {
+    // A box over an anchor that has left the document (as the decision strip's popover also checks) or the layout (the
+    // top bar's legend button below 600 px) would hang from the window's corner, so it closes. A DOM with no layout
+    // engine answers an empty getClientRects for every anchor and has no checkVisibility, so only the latter is read.
+    if (!anchor.isConnected || anchor.checkVisibility?.() === false) {
       closeRef.current();
       return;
     }
