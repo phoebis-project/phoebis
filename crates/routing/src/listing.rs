@@ -53,8 +53,7 @@ pub fn row_for<R>(canonical_model: &str, get: impl Fn(&str) -> Option<R>) -> Opt
 /// The `YYYYMMDD` a dated id ends in, as an integer, so two snapshots of one spelling order by date; `None`
 /// when the id carries no eight-digit suffix.
 pub fn snapshot_date(id: &str) -> Option<u32> {
-    let (_, suffix) = id.rsplit_once('-')?;
-    (suffix.len() == 8).then(|| suffix.parse().ok()).flatten()
+    undated(id).and_then(|base| id[base.len() + 1..].parse().ok())
 }
 
 /// Input tokens above which a model gets a `[1m]` twin: Claude Code sizes its window at 200K unless the id ends
@@ -176,6 +175,11 @@ mod tests {
             "no trailing digits at all"
         );
         assert_eq!(undated("no-dash-here"), None);
+    }
+
+    #[test]
+    fn an_id_whose_eight_character_suffix_is_not_all_digits_has_no_snapshot_date() {
+        assert_eq!(snapshot_date("claude-x-+1234567"), None);
     }
 
     #[test]
