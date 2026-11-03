@@ -15093,3 +15093,102 @@ async fn a_head_of_an_earlier_leg_leaves_the_mark_a_later_landing_set() {
         "the later leg's report clears its own landing's mark"
     );
 }
+
+/// A turn of `session` under `agent` and `class` on `model`, with `attempted` so the case steers where it lands.
+#[allow(clippy::too_many_arguments)]
+fn agent_turn(
+    handle: &RouterHandle,
+    session: &str,
+    agent: &str,
+    class: &str,
+    model: &str,
+    attempted: &[&str],
+    now: i64,
+) -> SelectRequest {
+    let s = handle.snapshot();
+    SelectRequest {
+        agent_id: agent.into(),
+        canonical_model: model.into(),
+        folded_model: model.into(),
+        candidates: resolve(&s, s.key("k").unwrap(), model, model).unwrap(),
+        attempted: attempted.iter().map(|a| a.to_string()).collect(),
+        request_class: Some(class.into()),
+        lane: lane_key(model, "standard", "none", "-"),
+        ..request(handle, Some(session), now)
+    }
+}
+
+#[tokio::test]
+async fn a_classifier_call_follows_the_turn_that_ended_last_rather_than_the_request_that_arrived_last(
+) {
+    let store = seeded(&["a", "b", "c"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let opus = "claude-opus-5-5";
+    handle
+        .select(agent_turn(
+            &handle,
+            "s1",
+            "main",
+            "main",
+            opus,
+            &["b", "c"],
+            1_000,
+        ))
+        .await
+        .unwrap();
+    let x = handle
+        .select(agent_turn(
+            &handle,
+            "s1",
+            "x",
+            "subagent",
+            opus,
+            &["a", "c"],
+            2_000,
+        ))
+        .await
+        .unwrap();
+    assert!(matches!(x.result, SelectResult::Selected(ref s) if s.account.id == "b"));
+    // x's stream ends on b, then y's request arrives on c ahead of x's classifier call.
+    let usage = PinUsage {
+        input: 10,
+        cache_read: 0,
+        write_5m: 0,
+        write_1h: 0,
+        output: 5,
+    };
+    handle
+        .report(renewal(selected_pin(x), 3_000, usage, "client", 300_000))
+        .await;
+    let y = handle
+        .select(agent_turn(
+            &handle,
+            "s1",
+            "y",
+            "subagent",
+            opus,
+            &["a", "b"],
+            3_010,
+        ))
+        .await
+        .unwrap();
+    assert!(matches!(y.result, SelectResult::Selected(ref s) if s.account.id == "c"));
+    let call = SelectRequest {
+        classifier: true,
+        request_class: Some("auxiliary".into()),
+        ..request(&handle, Some("s1"), 3_020)
+    };
+    let answer = handle.select(call).await.unwrap();
+    assert!(
+        matches!(answer.result, SelectResult::Selected(ref s) if s.account.id == "b"),
+        "the call follows x's turn, whose stream ended last, not y's arrival: {:?}",
+        answer.result
+    );
+    let pins = handle.pins().await.unwrap();
+    assert!(
+        pins.iter()
+            .any(|p| p.agent_id == "x" && p.model == "claude-sonnet-5" && p.account_id == "b"),
+        "the call is held under x's own Sonnet 5 pin on b: {pins:?}"
+    );
+}

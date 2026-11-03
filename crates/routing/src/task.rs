@@ -4102,6 +4102,13 @@ impl Task {
                             renewed.entrypoint = pin.entrypoint.clone();
                             renewed.effort = pin.effort.clone().unwrap_or_default();
                         }
+                        // A client stream's end with its usage is a turn's end, which a classifier call that follows
+                        // judges: `latest_turn_pin` reads it ahead of the pins' stamps. A probe, a classifier call, an
+                        // answer without usage and a pin only auxiliary calls use end no turn.
+                        let turn_ended = origin == "client"
+                            && !classifier
+                            && usage.is_some()
+                            && !renewed.auxiliary_only;
                         if origin == "keepalive" {
                             // A probe's selection judged nothing, since it replays another request's facts; the
                             // renewal is the refresh it wrote. Its usage is the keepalive's cost, never the
@@ -4155,6 +4162,9 @@ impl Task {
                         }
                         self.state.put_pin(renewed.clone());
                         self.state.mark_renewed(&key);
+                        if turn_ended {
+                            self.state.note_turn_end(&key);
+                        }
                         self.write(vec![StateWrite::UpsertPin(renewed)]);
                     }
                 }

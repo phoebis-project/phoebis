@@ -1369,6 +1369,10 @@ pub struct RoutingState {
     /// The source and the reset of each usage-based account's share as a poll or a head of this run set it, by
     /// account id. Memory only, with no column: the share a restart loads takes the estimate over its own instant.
     spend_shares: HashMap<String, SpendShare>,
+    /// The pin of each session's turn that ended last, by key and session id, as the renewal report at a client
+    /// stream's end names it: what a classifier call that follows within milliseconds judges. Memory only: after a
+    /// restart the pins' own stamps stand in until the session's next turn ends.
+    turn_ends: HashMap<(String, String), PinKey>,
 }
 
 impl RoutingState {
@@ -1480,6 +1484,7 @@ impl RoutingState {
             slow_downs: HashMap::new(),
             spend_heads: HashMap::new(),
             spend_shares: HashMap::new(),
+            turn_ends: HashMap::new(),
         }
     }
 
@@ -3642,22 +3647,37 @@ impl RoutingState {
             })
     }
 
-    /// The session's pin whose turn ended last under one key, any agent and model: the renewal at a stream's end
-    /// stamps `last_used_at`, so the greatest stamp names the turn a classifier call that follows within milliseconds
-    /// judges. A pin only auxiliary calls use is left out, so a classifier pin never names itself. Rows stamped at one
-    /// instant answer the later placement, then the greater agent and model ids, so the answer never rests on the
-    /// map's order.
+    /// Records that a client turn under `key` ended now, the turn `latest_turn_pin` answers.
+    pub(crate) fn note_turn_end(&mut self, key: &PinKey) {
+        self.turn_ends
+            .insert((key.key_id.clone(), key.session_id.clone()), key.clone());
+    }
+
+    /// The session's pin whose turn ended last under one key, any agent and model: the pin the last client stream's
+    /// end renewed (`note_turn_end`) while that pin stands and is not only auxiliary calls', else the pin with the
+    /// greatest `last_used_at` among the session's pins that are not `auxiliary_only`, a stamp a stream's end moves
+    /// too, so a restart or a session whose first turn has not ended still reads a turn. A pin only auxiliary calls
+    /// use is left out, so a classifier pin never names itself. Rows stamped at one instant answer the later
+    /// placement, then the greater agent and model ids, so the answer never rests on the map's order.
     pub(crate) fn latest_turn_pin(&self, key_id: &str, session_id: &str) -> Option<&PinRow> {
-        self.pins
-            .values()
-            .filter(|p| p.key_id == key_id && p.session_id == session_id && !p.auxiliary_only)
-            .max_by_key(|&p| {
-                (
-                    p.last_used_at,
-                    p.created_at,
-                    p.agent_id.as_str(),
-                    p.model.as_str(),
-                )
+        self.turn_ends
+            .get(&(key_id.to_string(), session_id.to_string()))
+            .and_then(|key| self.pins.get(key))
+            .filter(|p| !p.auxiliary_only)
+            .or_else(|| {
+                self.pins
+                    .values()
+                    .filter(|p| {
+                        p.key_id == key_id && p.session_id == session_id && !p.auxiliary_only
+                    })
+                    .max_by_key(|&p| {
+                        (
+                            p.last_used_at,
+                            p.created_at,
+                            p.agent_id.as_str(),
+                            p.model.as_str(),
+                        )
+                    })
             })
     }
 
@@ -3715,6 +3735,7 @@ impl RoutingState {
         // comes on a later selection, so a tick between the two drops the pace and the landed pin starts a new one.
         let held = &self.pins;
         self.pin_paces.retain(|key, _| held.contains_key(key));
+        self.turn_ends.retain(|_, key| held.contains_key(key));
         let slow_downs = self.purge_slow_downs(snapshot, now);
         self.purge_projection_over(snapshot);
         // None of these needs a deletion written: the overage rows cascade with the account and the next holder's

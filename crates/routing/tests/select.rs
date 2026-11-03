@@ -1,16 +1,17 @@
 use phoebis_routing::{
-    cohort_hold, decide, effective_warm, lane_key, release_reasons, resolve, select, shed_dwell_ms,
-    warm, warmth_of, windows::MODEL_WINDOWS, AccountTicket, AffinityChain, AffinityMap,
-    AffinityRow, BandSegment, Banded, BudgetFacts, BurnRates, BurnUnit, CandidateFacts, ChainFacts,
-    ClientClass, CohortHold, CreditAccount, CreditsState, Decided, DecisionRecord, EvidenceSource,
-    Exhaustion, FactEntity, FactValue, FailedOver, HeadMark, HoldFacts, HoldOutcome, HoldWait,
-    LaneFacts, LongContextRates, MemberSpend, MigrateReason, MoveCause, OverageEvidence,
-    PinKeyFacts, PinRef, PinShed, Placement, RateTable, Rates, RefusalFacts, RefusedRequest,
-    RegimeRates, RegistrySnapshot, RequestFlags, Reservation, RoutingState, SelectRequest,
-    SelectResult, SharePricer, SlowDownEdge, SlowDownRead, SlowDownState, StateWrite,
-    UtilizationSample, WalkStep, Warmth, WarmthCause, WindowFacts, WindowReading, WindowSource,
-    FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS,
-    MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE, SLOW_DOWN_MIN_HOLD_MS, WEEK_MS,
+    cohort_hold, decide, effective_warm, lane_key, release_reasons, resolve, routed_agent, select,
+    shed_dwell_ms, warm, warmth_of, windows::MODEL_WINDOWS, AccountTicket, AffinityChain,
+    AffinityMap, AffinityRow, BandSegment, Banded, BudgetFacts, BurnRates, BurnUnit,
+    CandidateFacts, ChainFacts, ClientClass, CohortHold, CreditAccount, CreditsState, Decided,
+    DecisionRecord, EvidenceSource, Exhaustion, FactEntity, FactValue, FailedOver, HeadMark,
+    HoldFacts, HoldOutcome, HoldWait, LaneFacts, LongContextRates, MemberSpend, MigrateReason,
+    MoveCause, OverageEvidence, PinKeyFacts, PinRef, PinShed, Placement, RateTable, Rates,
+    RefusalFacts, RefusedRequest, RegimeRates, RegistrySnapshot, RequestFlags, Reservation,
+    RoutingState, SelectRequest, SelectResult, SharePricer, SlowDownEdge, SlowDownRead,
+    SlowDownState, StateWrite, UtilizationSample, WalkStep, Warmth, WarmthCause, WindowFacts,
+    WindowReading, WindowSource, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR,
+    IN_FLIGHT_RECLAIM_MS, MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE, SLOW_DOWN_MIN_HOLD_MS,
+    WEEK_MS,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
@@ -28916,6 +28917,15 @@ fn opus_turn(
     }
 }
 
+/// `req` under the agent the routing task routes it as before its selection (`routed_agent`): the judged turn's agent
+/// for a classifier call, its own for every other request.
+fn routed(st: &RoutingState, req: SelectRequest) -> SelectRequest {
+    match routed_agent(st, &req) {
+        Some(agent_id) => SelectRequest { agent_id, ..req },
+        None => req,
+    }
+}
+
 /// The client's marked classifier call of `session`, as the client sends it: an auxiliary call on Sonnet 5 under
 /// `main`, whatever agent's turn it judges.
 fn classifier_call(s: &RegistrySnapshot, session: &str, now: i64) -> SelectRequest {
@@ -28950,13 +28960,13 @@ fn a_classifier_call_follows_the_sessions_turn_that_ended_last_onto_its_account(
     };
     assert_eq!(picked(&select(&mut st, &s, &plain, &mut r).0), "a");
     // The classifier call follows the subagent's turn, under the subagent's own pin on the classifier's model.
-    let call = classifier_call(&s, "s1", 2_600);
+    let call = routed(&st, classifier_call(&s, "s1", 2_600));
     assert_eq!(picked(&select(&mut st, &s, &call, &mut r).0), "b");
     assert_eq!(pinned_agent(&st, "s1", "x").account_id, "b");
     // The main agent's next turn ends last, so the next call follows it onto the main's own Sonnet 5 pin.
     let main_turn = opus_turn(&s, "s1", "main", "main", &[], 3_000);
     select(&mut st, &s, &main_turn, &mut r);
-    let call = classifier_call(&s, "s1", 3_100);
+    let call = routed(&st, classifier_call(&s, "s1", 3_100));
     assert_eq!(picked(&select(&mut st, &s, &call, &mut r).0), "a");
     assert_eq!(pinned(&st, "s1").account_id, "a");
 }
@@ -28976,11 +28986,30 @@ fn a_classifier_call_whose_judged_account_cannot_serve_it_lands_like_any_request
     assert_eq!(picked(&select(&mut st, &s, &sub_turn, &mut r).0), "b");
     // b cools after the subagent's turn: the call cannot follow it and lands by the strategy.
     st.record_cooldown(cooled("b", "account", 5_000, "five_hour", "rate_limit"));
-    let call = classifier_call(&s, "s1", 2_600);
+    let call = routed(&st, classifier_call(&s, "s1", 2_600));
     assert_eq!(picked(&select(&mut st, &s, &call, &mut r).0), "a");
     assert_eq!(pinned_agent(&st, "s1", "x").account_id, "a");
     // Once b serves again, the next call follows the judged turn and its pin goes there.
-    let call = classifier_call(&s, "s1", 6_000);
+    let call = routed(&st, classifier_call(&s, "s1", 6_000));
     assert_eq!(picked(&select(&mut st, &s, &call, &mut r).0), "b");
     assert_eq!(pinned_agent(&st, "s1", "x").account_id, "b");
+}
+
+#[test]
+fn a_classifier_call_whose_judged_account_is_spent_lands_like_any_request() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let mut r = rng();
+    let main_turn = opus_turn(&s, "s1", "main", "main", &[], 1_000);
+    select(&mut st, &s, &main_turn, &mut r);
+    let sub_turn = opus_turn(&s, "s1", "x", "subagent", &["a"], 2_000);
+    assert_eq!(picked(&select(&mut st, &s, &sub_turn, &mut r).0), "b");
+    // b's 5-hour window reads spent after the subagent's turn: b stays eligible but holds no allowance.
+    st.record_sample("b", refreshing(1.0, HOUR, 2 * HOUR, 2_000), 1);
+    let call = routed(&st, classifier_call(&s, "s1", 2_600));
+    assert_eq!(picked(&select(&mut st, &s, &call, &mut r).0), "a");
+    assert_eq!(pinned_agent(&st, "s1", "x").account_id, "a");
 }

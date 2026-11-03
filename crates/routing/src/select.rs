@@ -1220,7 +1220,9 @@ fn round_write(
 /// The agent a request is routed as where it differs from the one it names: the client's own classifier call carries
 /// `main` and no agent header whatever turn it judges, so it is routed as the agent of the session's turn that ended
 /// last (`RoutingState::latest_turn_pin`), on whose account the upstream keeps the call free. `None` for every other
-/// request, and for a classifier call with no turn pin to follow.
+/// request, and for a classifier call with no turn pin to follow. The routing task writes the answer into the request
+/// ahead of its pin lookup, so every read of the selection runs under the routed agent; a call still under another
+/// agent is directed nowhere (`judged_candidate`).
 pub fn routed_agent(state: &RoutingState, request: &SelectRequest) -> Option<String> {
     if !request.classifier {
         return None;
@@ -1338,20 +1340,6 @@ fn run(
     rec: &mut Recorder,
 ) -> (SelectResult, Vec<StateWrite>) {
     let mut writes = Vec::new();
-    // The client's classifier call is routed as the agent of the turn it judges, so its pin is held under that agent
-    // (`routed_agent`). The task swapped the id ahead of its own pin lookup, and the swap here answers the same for a
-    // caller that did not.
-    let routed;
-    let request = match routed_agent(state, request) {
-        Some(agent_id) => {
-            routed = SelectRequest {
-                agent_id,
-                ..request.clone()
-            };
-            &routed
-        }
-        None => request,
-    };
     let Some(pool) = snapshot
         .key(&request.key_id)
         .and_then(|k| snapshot.pool(&k.pool_id))
@@ -5651,9 +5639,9 @@ const JUDGED_WORDS: DirectedWords = DirectedWords {
 /// account. The cap does not bound it, as it bounds no renewal: the call belongs to a session already on that
 /// account. `None` for every other request, for a non-portable call, and for a judged account that cannot serve the
 /// call, which is then placed like any request. `None` too where `own`, the call's live pin, is the judged pin itself:
-/// the session's turn runs on the classifier's model and the two share the pin, so the call is a request of that
-/// conversation and renews or moves as any request does, where a call directed to its own pin's account would hold
-/// the conversation off every move.
+/// the session's turn runs on the classifier's model and the two share the pin, so the call stays a request of that
+/// conversation and renews or moves as one did before. A move rule that fires on such a call moves the conversation
+/// once, and that one call lands off the judged turn's account and is charged; the next call follows the moved pin.
 fn judged_candidate<'a>(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -5666,7 +5654,9 @@ fn judged_candidate<'a>(
         return None;
     }
     let judged = state.latest_turn_pin(&request.key_id, &request.session_id)?;
-    if own.is_some_and(|own| own.key() == judged.key()) {
+    // The task routed the request as the judged agent ahead of this read (`routed_agent`), so the pin the call is held
+    // under and the account it is directed to never disagree; a request still under another agent follows no one.
+    if judged.agent_id != request.agent_id || own.is_some_and(|own| own.key() == judged.key()) {
         return None;
     }
     eligible
