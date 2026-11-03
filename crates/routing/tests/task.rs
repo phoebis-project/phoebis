@@ -3796,7 +3796,7 @@ async fn next_decision(
     match next_event(events).await {
         phoebis_routing::RouterEvent::Decision {
             summary, record, ..
-        } => (*summary, *record),
+        } => (Arc::unwrap_or_clone(summary), Arc::unwrap_or_clone(record)),
         other => panic!("the decision comes first, not {other:?}"),
     }
 }
@@ -5420,7 +5420,7 @@ async fn a_fail_over_after_a_cooldown_lands_on_the_invalidated_pins_own_burn() {
     );
     let record = loop {
         if let RouterEvent::Decision { record, .. } = next_event(&mut events).await {
-            break *record;
+            break Arc::unwrap_or_clone(record);
         }
     };
     // The pool keeps no warm pin, so a fresh session's prior burns nothing. The row the cooldown took off a burns 10

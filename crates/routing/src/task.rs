@@ -200,10 +200,11 @@ pub enum RouterEvent {
         at: i64,
     },
     /// One decision as the engine made it. The ledger stores the summary as the list row and the record as the
-    /// frame. Boxed so the enum stays the size of its other variants on the broadcast.
+    /// frame. Shared so the enum stays the size of its other variants on the broadcast, and so a receive clones a
+    /// pointer where a box would clone the decision.
     Decision {
-        summary: Box<DecisionSummary>,
-        record: Box<DecisionRecord>,
+        summary: Arc<DecisionSummary>,
+        record: Arc<DecisionRecord>,
         at: i64,
     },
     /// The cache-map rows a completed answer wrote, for the `cache_map` column of the decision that selected it:
@@ -2913,8 +2914,8 @@ impl Task {
             .clone();
         let (record, summary) = DecisionRecord::refused(request, &snapshot, refusal);
         self.emit(RouterEvent::Decision {
-            summary: Box::new(summary),
-            record: Box::new(record),
+            summary: Arc::new(summary),
+            record: Arc::new(record),
             at: request.at,
         });
     }
@@ -2957,8 +2958,8 @@ impl Task {
             },
         );
         self.emit(RouterEvent::Decision {
-            summary: Box::new(summary),
-            record: Box::new(record),
+            summary: Arc::new(summary),
+            record: Arc::new(record),
             at: request.now,
         });
         let _ = reply.send(SelectAnswer {
@@ -3284,8 +3285,8 @@ impl Task {
                     at: request.now,
                 });
                 self.emit(RouterEvent::Decision {
-                    summary: Box::new(summary),
-                    record: Box::new(record),
+                    summary: Arc::new(summary),
+                    record: Arc::new(record),
                     at: request.now,
                 });
                 for event in pin_events.into_iter().chain(mark).chain(round) {

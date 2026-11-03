@@ -2075,7 +2075,7 @@ async fn next_held(events: &mut broadcast::Receiver<RouterEvent>) -> DecisionRec
         } = event
         {
             if summary.kind == "held" {
-                return *record;
+                return std::sync::Arc::unwrap_or_clone(record);
             }
         }
     }
@@ -2420,7 +2420,7 @@ async fn after_the_wait(
         } = event
         {
             if record.request.request_id == request_id && summary.kind != "held" {
-                return *record;
+                return std::sync::Arc::unwrap_or_clone(record);
             }
         }
     }

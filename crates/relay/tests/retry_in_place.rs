@@ -1284,7 +1284,9 @@ async fn next_hold(events: &mut broadcast::Receiver<RouterEvent>) -> HoldOutcome
 }
 
 /// The next decision that placed or renewed a request rather than holding it, its record whole.
-async fn next_selected(events: &mut broadcast::Receiver<RouterEvent>) -> Box<DecisionRecord> {
+async fn next_selected(
+    events: &mut broadcast::Receiver<RouterEvent>,
+) -> std::sync::Arc<DecisionRecord> {
     loop {
         let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
             .await

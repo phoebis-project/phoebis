@@ -1673,7 +1673,7 @@ async fn decision_of(
             .expect("not lagged");
         if let RouterEvent::Decision { record, .. } = event {
             if record.request.request_id == request_id {
-                return *record;
+                return std::sync::Arc::unwrap_or_clone(record);
             }
         }
     }

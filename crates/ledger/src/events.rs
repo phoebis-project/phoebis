@@ -913,8 +913,11 @@ pub fn spawn_event_mirror(
         loop {
             tokio::select! {
                 received = events.recv() => match received {
+                    // The mirror is the broadcast's one production subscriber, so once the slot's copy drops the unwrap
+                    // takes the decision without a copy.
                     Ok(RouterEvent::Decision { summary, record, at }) => {
-                        ledger.record(Record::Decision(Box::new(DecisionRow::of(*summary, *record, at))));
+                        let row = DecisionRow::of(Arc::unwrap_or_clone(summary), Arc::unwrap_or_clone(record), at);
+                        ledger.record(Record::Decision(Box::new(row)));
                     }
                     Ok(RouterEvent::CacheMapWritten { request_id, seq, attempt, entries, at }) => {
                         ledger.record(Record::CacheMap(CacheMapWrite { request_id, seq, attempt, entries, at }));
@@ -1877,8 +1880,8 @@ mod tests {
         );
         assert_eq!(
             event_of(&RouterEvent::Decision {
-                summary: Box::new(summary),
-                record: Box::new(record),
+                summary: Arc::new(summary),
+                record: Arc::new(record),
                 at: 1,
             }),
             None
