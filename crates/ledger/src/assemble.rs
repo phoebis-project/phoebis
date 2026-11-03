@@ -409,12 +409,12 @@ fn fill_head(attempt: &mut AttemptRecord, head: &ResponseHead) -> Option<Unified
         attempt.cooldown_until = Some(cooldown.until);
     }
     let unified = UnifiedHeaders::parse_list(&head.headers)?;
-    attempt.ratelimit_5h_utilization = unified.five_hour_utilization;
-    attempt.ratelimit_5h_reset = unified.five_hour_reset;
-    attempt.ratelimit_7d_utilization = unified.seven_day_utilization;
-    attempt.ratelimit_7d_reset = unified.seven_day_reset;
-    attempt.ratelimit_7d_oi_reset = unified.seven_day_oi_reset;
-    attempt.ratelimit_7d_oi_utilization = unified.seven_day_oi_utilization;
+    attempt.ratelimit_5h_utilization = unified.five_hour.utilization;
+    attempt.ratelimit_5h_reset = unified.five_hour.reset;
+    attempt.ratelimit_7d_utilization = unified.seven_day.utilization;
+    attempt.ratelimit_7d_reset = unified.seven_day.reset;
+    attempt.ratelimit_7d_oi_reset = unified.seven_day_oi.reset;
+    attempt.ratelimit_7d_oi_utilization = unified.seven_day_oi.utilization;
     attempt.overage_in_use = unified.overage_in_use;
     attempt.overage_utilization = unified.overage_utilization;
     Some(unified)

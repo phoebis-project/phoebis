@@ -10,7 +10,7 @@ use phoebis_transport::response::ResponseHead;
 use serde_json::Value;
 
 use crate::memory::Injected;
-use crate::ratelimit::{retry_after, FastHeaders, UnifiedHeaders, WindowStatus};
+use crate::ratelimit::{retry_after, FastHeaders, UnifiedHeaders, UnifiedWindow, WindowStatus};
 
 /// Deadlines carry a second of margin so a request sent at the reset is not refused by a clock a hair behind.
 const MARGIN_MS: i64 = 1_000;
@@ -257,10 +257,12 @@ fn oauth_cooldown(
     if let Some(u) = unified {
         if shared_window_rejected(u, ctx.canonical_model) {
             let reset = [
-                u.five_hour_reset
-                    .filter(|_| u.five_hour_status == Some(WindowStatus::Rejected)),
-                u.seven_day_reset
-                    .filter(|_| u.seven_day_status == Some(WindowStatus::Rejected)),
+                u.five_hour
+                    .reset
+                    .filter(|_| u.five_hour.status == Some(WindowStatus::Rejected)),
+                u.seven_day
+                    .reset
+                    .filter(|_| u.seven_day.status == Some(WindowStatus::Rejected)),
                 u.reset,
             ]
             .into_iter()
@@ -269,12 +271,12 @@ fn oauth_cooldown(
             return row(Scope::Account, reset);
         }
         if model_only(u, ctx.canonical_model)
-            && (u.seven_day_oi_status == Some(WindowStatus::Rejected)
+            && (u.seven_day_oi.status == Some(WindowStatus::Rejected)
                 || u.status == Some(WindowStatus::Rejected))
         {
             // Same deadline rule as the shared row: the later of the rejected window's own reset and the
             // top-level reset, which only ever lengthens the cooldown when it wins.
-            let reset = [u.seven_day_oi_reset, u.reset].into_iter().flatten().max();
+            let reset = [u.seven_day_oi.reset, u.reset].into_iter().flatten().max();
             // The row keeps the upstream's claim: it reaches the client as an exhausted pool's claim, and the
             // client resumes only on a claim it knows. Recovery reads the model's own week, not this text.
             return row(Scope::Model, reset);
@@ -293,8 +295,8 @@ fn shared_window_rejected(u: &UnifiedHeaders, canonical_model: &str) -> bool {
 /// The 5-hour or the 7-day status rejected. The top-level status is left out for a fast request: it draws neither
 /// window, so a rejection neither window names is not theirs.
 fn plan_window_rejected(u: &UnifiedHeaders) -> bool {
-    u.five_hour_status == Some(WindowStatus::Rejected)
-        || u.seven_day_status == Some(WindowStatus::Rejected)
+    u.five_hour.status == Some(WindowStatus::Rejected)
+        || u.seven_day.status == Some(WindowStatus::Rejected)
 }
 
 fn fast_cooldown(
@@ -339,11 +341,11 @@ fn fast_cooldown(
 /// window the upstream reported under capacity is not the one that rejected. An absent status with no
 /// utilization, or a third status value, is evidence of nothing, and a model-only cooldown on that basis would
 /// keep sending an exhausted account traffic.
-fn shared_healthy(status: Option<WindowStatus>, utilization: Option<f64>) -> bool {
-    match status {
+fn shared_healthy(window: &UnifiedWindow) -> bool {
+    match window.status {
         Some(WindowStatus::Allowed | WindowStatus::AllowedWarning) => true,
         Some(_) => false,
-        None => utilization.is_some_and(|u| (0.0..1.0).contains(&u)),
+        None => window.utilization.is_some_and(|u| (0.0..1.0).contains(&u)),
     }
 }
 
@@ -360,8 +362,7 @@ fn model_only(u: &UnifiedHeaders, canonical_model: &str) -> bool {
     if own == phoebis_routing::SEVEN_DAY {
         return false;
     }
-    let shared_fine = shared_healthy(u.five_hour_status, u.five_hour_utilization)
-        && shared_healthy(u.seven_day_status, u.seven_day_utilization);
+    let shared_fine = shared_healthy(&u.five_hour) && shared_healthy(&u.seven_day);
     if !shared_fine {
         return false;
     }
@@ -369,7 +370,7 @@ fn model_only(u: &UnifiedHeaders, canonical_model: &str) -> bool {
         Some(claim) if claim == own => true,
         // Another family's week, or a week no row names: the account-wide cooldown, whatever `7d_oi` reads.
         Some(claim) if claim.starts_with("seven_day_") && claim != OVERAGE_INCLUDED_CLAIM => false,
-        _ => u.seven_day_oi_status == Some(WindowStatus::Rejected),
+        _ => u.seven_day_oi.status == Some(WindowStatus::Rejected),
     }
 }
 
@@ -393,10 +394,10 @@ pub fn exhaustion_window(unified: Option<&UnifiedHeaders>) -> String {
     if let Some(claim) = &u.representative_claim {
         return claim.clone();
     }
-    if u.five_hour_status == Some(WindowStatus::Rejected) {
+    if u.five_hour.status == Some(WindowStatus::Rejected) {
         return phoebis_routing::FIVE_HOUR.into();
     }
-    if u.seven_day_status == Some(WindowStatus::Rejected) {
+    if u.seven_day.status == Some(WindowStatus::Rejected) {
         return phoebis_routing::SEVEN_DAY.into();
     }
     RETRY_AFTER_WINDOW.into()
@@ -892,8 +893,7 @@ mod tests {
                 ("anthropic-ratelimit-unified-status", "rejected"),
                 ("anthropic-ratelimit-unified-5h-utilization", "1.0"),
                 ("anthropic-ratelimit-unified-7d-status", "allowed"),
-                // Pairs a utilization on the healthy side too, so a call that crossed the two windows'
-                // utilization arguments would read this one against the 5h status instead and answer Model.
+                // The healthy week reads a utilization of its own, which never speaks for the 5-hour window.
                 ("anthropic-ratelimit-unified-7d-utilization", "0.10"),
                 ("anthropic-ratelimit-unified-7d_oi-status", "rejected"),
             ],

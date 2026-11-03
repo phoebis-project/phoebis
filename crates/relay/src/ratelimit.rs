@@ -36,20 +36,23 @@ impl WindowStatus {
     }
 }
 
+/// One unified window's three headers, read together so a reader never pairs one window's status with
+/// another's utilization.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct UnifiedWindow {
+    pub status: Option<WindowStatus>,
+    pub reset: Option<i64>,
+    pub utilization: Option<f64>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct UnifiedHeaders {
     pub status: Option<WindowStatus>,
     pub reset: Option<i64>,
     pub representative_claim: Option<String>,
-    pub five_hour_status: Option<WindowStatus>,
-    pub five_hour_reset: Option<i64>,
-    pub five_hour_utilization: Option<f64>,
-    pub seven_day_status: Option<WindowStatus>,
-    pub seven_day_reset: Option<i64>,
-    pub seven_day_utilization: Option<f64>,
-    pub seven_day_oi_status: Option<WindowStatus>,
-    pub seven_day_oi_reset: Option<i64>,
-    pub seven_day_oi_utilization: Option<f64>,
+    pub five_hour: UnifiedWindow,
+    pub seven_day: UnifiedWindow,
+    pub seven_day_oi: UnifiedWindow,
     pub overage_in_use: Option<bool>,
     pub overage_utilization: Option<f64>,
     pub overage_reset: Option<i64>,
@@ -80,19 +83,18 @@ impl UnifiedHeaders {
                 .and_then(|v| v.parse::<f64>().ok())
                 .filter(|f| f.is_finite())
         };
+        let window = |prefix: &str| UnifiedWindow {
+            status: status(&format!("{prefix}-status")),
+            reset: secs(&format!("{prefix}-reset")),
+            utilization: float(&format!("{prefix}-utilization")),
+        };
         Some(UnifiedHeaders {
             status: status("status"),
             reset: secs("reset"),
             representative_claim: text("representative-claim"),
-            five_hour_status: status("5h-status"),
-            five_hour_reset: secs("5h-reset"),
-            five_hour_utilization: float("5h-utilization"),
-            seven_day_status: status("7d-status"),
-            seven_day_reset: secs("7d-reset"),
-            seven_day_utilization: float("7d-utilization"),
-            seven_day_oi_status: status("7d_oi-status"),
-            seven_day_oi_reset: secs("7d_oi-reset"),
-            seven_day_oi_utilization: float("7d_oi-utilization"),
+            five_hour: window("5h"),
+            seven_day: window("7d"),
+            seven_day_oi: window("7d_oi"),
             overage_in_use: text("overage-in-use").map(|v| v.eq_ignore_ascii_case("true")),
             overage_utilization: float("overage-utilization"),
             overage_reset: secs("overage-reset"),
@@ -108,12 +110,12 @@ impl UnifiedHeaders {
     /// Whether the shared window headers are present, which is what makes an absent overage flag mean "off".
     pub fn present(&self) -> bool {
         self.status.is_some()
-            || self.five_hour_status.is_some()
-            || self.five_hour_reset.is_some()
-            || self.seven_day_status.is_some()
-            || self.seven_day_reset.is_some()
-            || self.five_hour_utilization.is_some()
-            || self.seven_day_utilization.is_some()
+            || self.five_hour.status.is_some()
+            || self.five_hour.reset.is_some()
+            || self.seven_day.status.is_some()
+            || self.seven_day.reset.is_some()
+            || self.five_hour.utilization.is_some()
+            || self.seven_day.utilization.is_some()
     }
 }
 
@@ -237,12 +239,12 @@ pub fn head_sample(
     match kind {
         AccountKind::Oauth => {
             if let Some(unified) = unified {
-                if let Some(utilization) = unified.five_hour_utilization {
+                if let Some(utilization) = unified.five_hour.utilization {
                     sample = sample.with(
                         FIVE_HOUR,
                         WindowReading {
                             utilization,
-                            reset: unified.five_hour_reset,
+                            reset: unified.five_hour.reset,
                             observed_at,
                             source: WindowSource::Head,
                             plan: None,
@@ -250,12 +252,12 @@ pub fn head_sample(
                         },
                     );
                 }
-                if let Some(utilization) = unified.seven_day_utilization {
+                if let Some(utilization) = unified.seven_day.utilization {
                     sample = sample.with(
                         SEVEN_DAY,
                         WindowReading {
                             utilization,
-                            reset: unified.seven_day_reset,
+                            reset: unified.seven_day.reset,
                             observed_at,
                             source: WindowSource::Head,
                             plan: None,
@@ -266,12 +268,12 @@ pub fn head_sample(
                 // The head carries the Fable week under the overage-included name, the one model week a head
                 // reports here; whether a second model week ever arrives by head is for the first live run to read.
                 // Unlike the shared windows, it carries no status of its own to gate on, only the utilization.
-                if let Some(utilization) = unified.seven_day_oi_utilization {
+                if let Some(utilization) = unified.seven_day_oi.utilization {
                     sample = sample.with(
                         SEVEN_DAY_FABLE,
                         WindowReading {
                             utilization,
-                            reset: unified.seven_day_oi_reset,
+                            reset: unified.seven_day_oi.reset,
                             observed_at,
                             source: WindowSource::Head,
                             plan: None,
@@ -459,9 +461,9 @@ mod tests {
         );
         assert_eq!(
             (
-                u.five_hour_status,
-                u.five_hour_reset,
-                u.five_hour_utilization
+                u.five_hour.status,
+                u.five_hour.reset,
+                u.five_hour.utilization
             ),
             (
                 Some(WindowStatus::Allowed),
@@ -471,9 +473,9 @@ mod tests {
         );
         assert_eq!(
             (
-                u.seven_day_status,
-                u.seven_day_reset,
-                u.seven_day_utilization
+                u.seven_day.status,
+                u.seven_day.reset,
+                u.seven_day.utilization
             ),
             (
                 Some(WindowStatus::Allowed),
@@ -483,9 +485,9 @@ mod tests {
         );
         assert_eq!(
             (
-                u.seven_day_oi_status,
-                u.seven_day_oi_reset,
-                u.seven_day_oi_utilization
+                u.seven_day_oi.status,
+                u.seven_day_oi.reset,
+                u.seven_day_oi.utilization
             ),
             (
                 Some(WindowStatus::Rejected),
@@ -771,7 +773,7 @@ mod tests {
             ],
         );
         assert_eq!(
-            UnifiedHeaders::parse(&h).unwrap().seven_day_oi_utilization,
+            UnifiedHeaders::parse(&h).unwrap().seven_day_oi.utilization,
             None
         );
         assert!(head_sample(&h, AccountKind::Oauth, "claude-opus-5", 0).is_none());

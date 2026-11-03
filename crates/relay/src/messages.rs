@@ -4582,8 +4582,8 @@ impl Relay {
         let full = |u: Option<f64>| u.is_some_and(|u| u >= 1.0);
         let reset = unified.overage_reset.or_else(|| {
             [
-                (full(unified.five_hour_utilization), unified.five_hour_reset),
-                (full(unified.seven_day_utilization), unified.seven_day_reset),
+                (full(unified.five_hour.utilization), unified.five_hour.reset),
+                (full(unified.seven_day.utilization), unified.seven_day.reset),
             ]
             .into_iter()
             .filter(|(f, _)| *f)

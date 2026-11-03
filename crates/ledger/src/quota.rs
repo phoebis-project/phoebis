@@ -108,30 +108,18 @@ pub(crate) fn samples_from_unified(
     // The head names its windows `5h`, `7d` and `7d_oi`; the table spells them by the usage endpoint's keys, so a
     // head and a poll of one bucket write one row per window.
     let windows = [
-        (
-            FIVE_HOUR,
-            unified.five_hour_utilization,
-            unified.five_hour_reset,
-        ),
-        (
-            SEVEN_DAY,
-            unified.seven_day_utilization,
-            unified.seven_day_reset,
-        ),
-        (
-            SEVEN_DAY_OVERAGE_INCLUDED,
-            unified.seven_day_oi_utilization,
-            unified.seven_day_oi_reset,
-        ),
+        (FIVE_HOUR, &unified.five_hour),
+        (SEVEN_DAY, &unified.seven_day),
+        (SEVEN_DAY_OVERAGE_INCLUDED, &unified.seven_day_oi),
     ];
-    for (window, utilization, reset_at) in windows {
-        if utilization.is_some() || reset_at.is_some() {
+    for (window, reading) in windows {
+        if reading.utilization.is_some() || reading.reset.is_some() {
             quota.push(QuotaSampleRecord {
                 account_id: account_id.into(),
                 bucket,
                 window: window.into(),
-                utilization,
-                reset_at,
+                utilization: reading.utilization,
+                reset_at: reading.reset,
                 source: SampleSource::Head,
                 observed_at,
             });
