@@ -44,12 +44,7 @@ impl Chains {
         let mut running_bytes: u64 = 0;
         let mut scratch = Vec::new();
         let mut previous = Sha256::digest(STATIC_SEED);
-        let (next, len) = boundary(&previous, tools, &mut scratch);
-        previous = next;
-        running_bytes += len;
-        static_boundaries.push(format!("{previous:x}"));
-        static_sizes.push(running_bytes / 4);
-        for block in system_blocks(root.get("system")) {
+        for block in std::iter::once(tools).chain(system_blocks(root.get("system"))) {
             let (next, len) = boundary(&previous, block, &mut scratch);
             previous = next;
             running_bytes += len;
