@@ -2,7 +2,7 @@ import { isoOrNull, list, num, numOrNull, rec } from '@/api/decode';
 import type { AttentionItem, AttentionKind } from '@/api/types';
 import { METER_CODEC } from './address';
 import { lookup } from './counts';
-import { fmtAbsolute, fmtRelative, instant as clockInstant, listWords, percentText, plural } from './format';
+import { fmtAbsolute, fmtRelative, instant as clockInstant, listWords, messageOf, percentText, plural } from './format';
 import { WINDOW_WORD, entityHref, formatFact, logHref, sinceCondition, type LogLink } from './routingLog';
 import { speedWord } from './selection';
 
@@ -340,7 +340,7 @@ export function createAttentionPoll(read: () => Promise<AttentionItem[]>): {
       // A slow read that lands after a newer one started would put an older list back.
       if (mine === started) publish({ error: null, items, loadedAt: Date.now() });
     } catch (e) {
-      if (mine === started) publish({ ...state, error: e instanceof Error ? e.message : String(e) });
+      if (mine === started) publish({ ...state, error: messageOf(e) });
     } finally {
       out -= 1;
     }

@@ -12,7 +12,7 @@ import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Field, Grou
 import { KEYS_CODEC } from '@/lib/address';
 import { effectiveCaptureHours } from '@/lib/capture';
 import type { PauseCause } from '@/lib/follow';
-import { fmtAbsolute, fmtInt } from '@/lib/format';
+import { fmtAbsolute, fmtInt, messageOf } from '@/lib/format';
 import { derivedId, sortKeys } from '@/lib/forms';
 import { guardrailRefusals, presetBadges, verdictWords } from '@/lib/guardrails';
 import { useAsync } from '@/lib/hooks';
@@ -129,7 +129,7 @@ export function GuardrailsPage(): JSX.Element {
     try {
       await action();
     } catch (e) {
-      notify(e instanceof Error ? e.message : String(e));
+      notify(messageOf(e));
       return;
     }
     if (done) notify(done);
@@ -449,7 +449,7 @@ export function GuardrailDialog({ existing, existingIds, keys, onClose, onSaved,
         setStale(e.message);
         return;
       }
-      const message = e instanceof Error ? e.message : String(e);
+      const message = messageOf(e);
       const refused = /^conditions\[(\d+)\]: (.*)$/.exec(message);
       if (refused) {
         const index = Number(refused[1]);
@@ -472,7 +472,7 @@ export function GuardrailDialog({ existing, existingIds, keys, onClose, onSaved,
     } catch (e) {
       if (token !== runToken.current) return;
       setTested(null);
-      setTestError(e instanceof Error ? e.message : String(e));
+      setTestError(messageOf(e));
     }
     setTesting(false);
   };

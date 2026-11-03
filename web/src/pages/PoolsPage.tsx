@@ -26,7 +26,7 @@ import { KEYS_CODEC } from '@/lib/address';
 import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, UNPRICED_TITLE, equivalentOrDash, moveLabel, nativeFiguresOf, type WeekReading } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
 import { weekReadingOf } from '@/lib/costs';
-import { fmtAbsolute, fmtCompact, fmtDuration, fmtHourTick, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtUsd, shortModel } from '@/lib/format';
+import { fmtAbsolute, fmtCompact, fmtDuration, fmtHourTick, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtUsd, messageOf, shortModel } from '@/lib/format';
 import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, guardrailIdsOf, guardrailsChange, poolRefusals, sortKeys, type PoolGroup } from '@/lib/forms';
 import { refreshAttention, useAsync, useAttention, useLatest, useNow } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
@@ -318,7 +318,7 @@ export function PoolsPage() {
       await api.deletePool(p.id);
       notify('Pool deleted');
     } catch (e) {
-      notify(e instanceof ApiError && e.status === 409 ? 'Move or revoke its keys first' : e instanceof Error ? e.message : String(e));
+      notify(e instanceof ApiError && e.status === 409 ? 'Move or revoke its keys first' : messageOf(e));
     }
     pools.reload();
     keys.reload();
@@ -1426,7 +1426,7 @@ export function PoolDialog({
       setMoving(null);
       onKeysChanged();
     } catch (e) {
-      setMoveError(e instanceof Error ? e.message : String(e));
+      setMoveError(messageOf(e));
       // The key moved since the page read it, so the lists are out of date and the dialog's close reads them again.
       if (e instanceof ApiError && e.status === 409 && e.code === 'stale_edit') setAttempted(true);
     } finally {
@@ -1440,7 +1440,7 @@ export function PoolDialog({
       setRevoked((prev) => new Set(prev).add(k.id));
       onKeysChanged();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(messageOf(e));
     }
   };
 
@@ -1462,7 +1462,7 @@ export function PoolDialog({
         setAttempted(true);
         return;
       }
-      setError(e instanceof Error ? e.message : String(e));
+      setError(messageOf(e));
       if (e instanceof ApiError && e.status >= 400) setAttempted(true);
       return;
     }

@@ -16,7 +16,7 @@ import { ANALYTICS_CODEC, REQUESTS_CODEC, SESSION_SORT_KEYS, SESSIONS_CODEC, typ
 import { clock } from '@/lib/clock';
 import { failed } from '@/lib/costs';
 import { SESSIONS_DIMENSIONS } from '@/lib/filterBar';
-import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtMiB, fmtPct, fmtRelative, keyGenerationOf, keyLifetime, shortId, shortModel } from '@/lib/format';
+import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtMiB, fmtPct, fmtRelative, keyGenerationOf, keyLifetime, messageOf, shortId, shortModel } from '@/lib/format';
 import { CAUSE_HINT, CAUSE_LABEL, contextCell, firstFailedRead, isFinished, isReleasedLine, orderLines, orderRows, pinTtlMs, releasedCount, requestsRange, sessionLines, type SessionLine, type TileRead, WARNING_CAUSES } from '@/lib/keepalive';
 import { useAsync, useNow, useQueryFilters } from '@/lib/hooks';
 import { minuteSpan, type BadgeTone } from '@/lib/quota';
@@ -309,7 +309,7 @@ export function SessionsPage() {
         sessions.reload();
         recipes.reload();
       },
-      (e: unknown) => notify(e instanceof Error ? e.message : String(e)),
+      (e: unknown) => notify(messageOf(e)),
     );
   };
   // The listed rows by element id, so a fork's badge finds its base's row and reads the account the base sits on.

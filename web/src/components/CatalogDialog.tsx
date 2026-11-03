@@ -3,7 +3,7 @@ import { api } from '@/api';
 import type { AccountCatalog } from '@/api/types';
 import { IconRefresh, IconWarning } from '@/components/ui/icons';
 import { Button, Dialog, Skeleton } from '@/components/ui/primitives';
-import { fmtAbsolute, fmtDate, fmtInt, fmtRelative } from '@/lib/format';
+import { fmtAbsolute, fmtDate, fmtInt, fmtRelative, messageOf } from '@/lib/format';
 
 const tokens = (n: number | null) => (n === null ? '-' : fmtInt(n));
 // `created_at` reaches the console as the upstream sent it, which may be empty or not a date at all.
@@ -39,7 +39,7 @@ export function CatalogDialog({ accountId, label, now, onClose, open }: { accoun
         },
         (e: unknown) => {
           if (seq !== latest.current) return;
-          setFailure(e instanceof Error ? e.message : String(e));
+          setFailure(messageOf(e));
           setLoading(false);
         },
       );

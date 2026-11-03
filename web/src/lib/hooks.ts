@@ -5,6 +5,7 @@ import { ApiError, quietly, reportRecovery } from '@/api/http';
 import type { Codec, RangeValue } from './address';
 import { createAttentionPoll, type AttentionRead } from './attention';
 import { clock } from './clock';
+import { messageOf } from './format';
 
 export interface Loaded<T> {
   data: T | null;
@@ -33,7 +34,6 @@ export interface AsyncOptions {
 }
 
 const sameDeps = (a: readonly unknown[], b: readonly unknown[]) => a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
-const messageOf = (err: unknown) => (err instanceof Error ? err.message : String(err));
 const stamp = () => new Date(clock.now()).toISOString();
 
 /**

@@ -13,6 +13,9 @@ export const setTimeFormat = (f: TimeFormat) => {
 export const getTimeFormat = () => timeFormat;
 /** The browser's zone, the one every time the console shows reads in. */
 export const viewingZone = (): string => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+
+/** The words a failure shows: an error's message, and anything else thrown as its text. */
+export const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 // `hour12: false` prints the first hour of a day as 24 in en-US (`24:05`, which reads as the day before); the h23
 // cycle prints it as 00.
 const hourCycle = () => (timeFormat === '12h' ? 'h12' : 'h23');

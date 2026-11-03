@@ -22,7 +22,7 @@ import { ALLOWANCE_SUBTITLE, FREE_NOTE, allowanceFigure, allowanceSpan, allowanc
 import { hintPlan } from '@/lib/analytics';
 import { clock } from '@/lib/clock';
 import { ACCOUNTS_DIMENSIONS } from '@/lib/filterBar';
-import { fmtAbsolute, fmtCredits, fmtDate, fmtDated, fmtDayShort, fmtDuration, fmtEndsIn, fmtInt, fmtRelative, pct } from '@/lib/format';
+import { fmtAbsolute, fmtCredits, fmtDate, fmtDated, fmtDayShort, fmtDuration, fmtEndsIn, fmtInt, fmtRelative, messageOf, pct } from '@/lib/format';
 import { accountPatchOf, advancesOwnToken, derivedId, endZoneLabel, subscriptionEndFormOf, subscriptionEndRefusal, tickCanceled, type SubscriptionEndForm } from '@/lib/forms';
 import { useAsync, useLatest, useNow, useQueryFilters } from '@/lib/hooks';
 import { latestPerWindow, meterGroups } from '@/lib/meter';
@@ -339,7 +339,7 @@ function AccountDetail({ account, awaitingReading, generation, now, onBusyChange
       onChanged();
       return { answer };
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
+      const message = messageOf(e);
       // A stale refusal says the row moved under the editor: the edit is about values that are gone, so the operator
       // reloads and re-applies it rather than saving over what someone else wrote.
       if (onRefused && !mounted.current) onToast(`Save on ${account.label} refused: ${message}`);
@@ -1049,7 +1049,7 @@ function AddAccountDialog({ open, existingIds, onClose, onDone }: { existingIds:
       const created = await api.createAccount({ id, kind: 'api_key', label: label.trim(), secret });
       onDone({ kind: 'api_key', created });
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(messageOf(e));
     } finally {
       setBusy(false);
     }
@@ -1063,7 +1063,7 @@ function AddAccountDialog({ open, existingIds, onClose, onDone }: { existingIds:
       const session = await api.startPairing({ id, label: label.trim() });
       onDone({ id, kind: 'oauth', label: label.trim(), session });
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(messageOf(e));
     } finally {
       setBusy(false);
     }
@@ -1197,7 +1197,7 @@ function PairingDialog({ open, start, label, repair, onClose, onPaired }: { labe
         else void api.cancelPairing(s.id).catch(() => undefined);
       },
       (e: unknown) => {
-        if (run.alive) setError(e instanceof Error ? e.message : String(e));
+        if (run.alive) setError(messageOf(e));
       },
     );
     return () => {
@@ -1225,7 +1225,7 @@ function PairingDialog({ open, start, label, repair, onClose, onPaired }: { labe
       setPreview(p);
       setStep(2);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(messageOf(e));
     } finally {
       setBusy(false);
     }
@@ -1240,7 +1240,7 @@ function PairingDialog({ open, start, label, repair, onClose, onPaired }: { labe
       const confirmed = await api.confirmPairing(session.id);
       onPaired(preview, confirmed);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(messageOf(e));
       if (e instanceof ApiError && e.code === 'sealed_under_another_key') setSealed(true);
     } finally {
       setBusy(false);
@@ -1269,7 +1269,7 @@ function PairingDialog({ open, start, label, repair, onClose, onPaired }: { labe
       setPreview(null);
       setSealed(false);
     } catch (e) {
-      if (run.alive) setError(e instanceof Error ? e.message : String(e));
+      if (run.alive) setError(messageOf(e));
     } finally {
       setBusy(false);
     }

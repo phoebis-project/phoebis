@@ -21,7 +21,7 @@ import { clock } from '@/lib/clock';
 import { weekReadingOf } from '@/lib/costs';
 import { KEYS_DIMENSIONS, notLoadedReason } from '@/lib/filterBar';
 import type { PauseCause } from '@/lib/follow';
-import { fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd } from '@/lib/format';
+import { fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd, messageOf } from '@/lib/format';
 import { guardrailsChange, KEY_GROUPS, keyFormOf, keyInputOf, keyRefusals, sortKeys, type AutoModeOverride, type CaptureMode, type KeyGroup } from '@/lib/forms';
 import { useAsync, useNow, useQueryFilters, type Loaded } from '@/lib/hooks';
 import { scrollToElement } from '@/lib/scroll';
@@ -259,7 +259,7 @@ export function KeysPage() {
     try {
       await action();
     } catch (e) {
-      notify(e instanceof Error ? e.message : String(e));
+      notify(messageOf(e));
       return;
     }
     keys.reload();
@@ -748,7 +748,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
         setStale(e.message);
         return;
       }
-      setError(e instanceof Error ? e.message : String(e));
+      setError(messageOf(e));
     }
   };
 

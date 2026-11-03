@@ -3,6 +3,7 @@ import type { GuardrailInput, GuardrailRange, GuardrailTestInput, OverviewRange 
 import * as d from './decode';
 import type { Account, AccountCatalog, AccountInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, PairingConfirmed, PairingInput, PairingPreview, PairingStart, RequestDetail, RequestQuery, RoutingLogQuery, SessionInfo } from './types';
 import { clock } from '@/lib/clock';
+import { messageOf } from '@/lib/format';
 import { DAY } from '@/lib/time';
 
 export class ApiError extends Error {
@@ -148,7 +149,7 @@ export async function call<T = unknown>(method: string, path: string, body?: unk
   } catch (e) {
     // A router that never answered, or not within the deadline: the page below draws its error state, and the hook
     // says which route.
-    const message = e instanceof Error ? e.message : String(e);
+    const message = messageOf(e);
     if (!own && !silent) reportFailure({ message, path, status: 0 });
     throw new ApiError(0, message, null, path);
   }
@@ -275,7 +276,7 @@ export class HttpApi implements Api {
       });
     } catch (e) {
       // Raised as `call` raises it, so the login screen can tell a router that never answered from "no session".
-      throw new ApiError(0, e instanceof Error ? e.message : String(e), null);
+      throw new ApiError(0, messageOf(e), null);
     }
     if (answer.status === 401) return null;
     if (answer.body === null) throw new ApiError(answer.status, `GET /admin/session answered ${answer.status}`, null);

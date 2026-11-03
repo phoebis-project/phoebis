@@ -2,7 +2,7 @@ import { useId, useLayoutEffect, useRef, useState } from 'react';
 import { api } from '@/api';
 import type { AttentionItem } from '@/api/types';
 import { ATTENTION_LABEL, ATTENTION_TONE, attentionHref, attentionKey, attentionTitle, attentionWords } from '@/lib/attention';
-import { fmtInt, fmtRelative } from '@/lib/format';
+import { fmtInt, fmtRelative, messageOf } from '@/lib/format';
 import { useLatest, useResizeObserver } from '@/lib/hooks';
 import { Popover } from './Popover';
 import { Badge, BadgeLink, Pill, Skeleton } from './primitives';
@@ -31,7 +31,7 @@ export function AttentionLine({ error, items, loadedAt, now, refresh }: { error:
       setReplayed(`Landed ${fmtInt(landed)}, ${fmtInt(remaining)} still parked`);
       await refresh();
     } catch (e) {
-      setReplayed(e instanceof Error ? e.message : String(e));
+      setReplayed(messageOf(e));
     } finally {
       setReplaying(false);
     }

@@ -3,6 +3,7 @@ import { api, type SessionInfo } from '@/api';
 import { ApiError, SessionNotKept, setHooks } from '@/api/http';
 import { Button, Field, Input } from '@/components/ui/primitives';
 import { Mark } from '@/components/ui/Mark';
+import { messageOf } from '@/lib/format';
 
 export interface SessionState {
   /** Ends the dwell of the toast with this id, so the next one in the queue shows. */
@@ -177,9 +178,7 @@ export function LoginScreen({ notice, onLoggedIn, onRetry, outage }: { notice: s
               ? 'That secret does not match.'
               : e instanceof ApiError && e.status === 0
                 ? 'The router did not answer.'
-                : e instanceof Error
-                  ? e.message
-                  : String(e),
+                : messageOf(e),
       );
     } finally {
       setBusy(false);
