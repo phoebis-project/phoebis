@@ -1146,15 +1146,13 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
   const pool = poolById.get(r.poolId ?? '')!;
   const fast = r.shape.requestedSpeed === 'fast';
   const candidates = spec.kind === 'refused' ? [] : candidatesOf(spec, pool);
-  // A hold for a spent window's reset ends the walk at the spent rule, so it reads no placement's partitions.
-  const resetHold = spec.kind === 'held' && spec.hold?.place === 'reset';
-  // A slow-down hold waits on the pin the move rules left in place, before its renewal, so it reads no placement
-  // either.
-  const slowHold = spec.kind === 'held' && spec.hold?.place === 'slow_down';
-  // So does a moved pin's wait for the head of the request that carried the move.
-  const rewriteHold = spec.kind === 'held' && spec.hold?.place === 'rewrite';
+  // A hold for a spent window's reset ends the walk at the spent rule, so it reads no placement's partitions. A
+  // slow-down hold waits on the pin the move rules left in place, before its renewal, so it reads no placement either,
+  // and so does a moved pin's wait for the head of the request that carried the move.
+  const place = spec.hold?.place;
+  const inPlace = spec.kind === 'held' && (place === 'reset' || place === 'rewrite' || place === 'slow_down') ? place : null;
   if (!spec.story && (spec.kind === 'placed' || spec.kind === 'moved')) fillDrawnRivals(spec, candidates, pool);
-  if ((spec.kind === 'placed' || spec.kind === 'held' || spec.kind === 'exhausted') && !resetHold && !slowHold && !rewriteHold) readPlacementFits(spec, candidates, pool);
+  if ((spec.kind === 'placed' || spec.kind === 'held' || spec.kind === 'exhausted') && inPlace === null) readPlacementFits(spec, candidates, pool);
   const portable = r.client !== 'other';
   const pinKey = pinKeyOf(r);
   const pinning = pool.affinityTtlSeconds > 0 && r.sessionId !== null && (typeof spec.pin === 'object' || spec.pin === 'none');
@@ -1204,7 +1202,7 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
   // count follows its pin, since it writes none a move could leave, and a pin past its account's end is released at
   // renewal instead.
   let movedAmong: string[] | undefined;
-  if (pin?.found === 'live' && portable && !spec.failover && (spec.kind === 'renewed' || spec.kind === 'moved' || resetHold || slowHold || rewriteHold)) {
+  if (pin?.found === 'live' && portable && !spec.failover && (spec.kind === 'renewed' || spec.kind === 'moved' || inPlace !== null)) {
     const source = member(pin.accountId);
     const endsAt = source?.term?.endsAt ? Date.parse(source.term.endsAt) : null;
     const skip = r.kind === 'count_tokens' ? 'count' : endsAt !== null && endsAt <= spec.at ? 'subscription_ended' : null;
@@ -1239,7 +1237,7 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
   }
   let pick: ReturnType<typeof pickOf> = { runnerUp: null, score: null, tierSize: 0 };
   let tierSize = 0;
-  const placing = (spec.kind === 'placed' || spec.kind === 'moved' || spec.kind === 'held' || spec.kind === 'exhausted') && !resetHold && !slowHold && !rewriteHold;
+  const placing = (spec.kind === 'placed' || spec.kind === 'moved' || spec.kind === 'held' || spec.kind === 'exhausted') && inPlace === null;
   if (placing) {
     const set = candidates.filter((c) => (movedAmong ? movedAmong.includes(c.accountId) : c.obstacle === null));
     const partitions = narrowed(set, pool, r, movedAmong !== undefined, spec.failover !== undefined);
@@ -1290,7 +1288,7 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
       walk.push(step('pick', 'chosen', [fact('strategy', pool.strategy), fact('tier', tier.map(String)), ...scores, ...draw]));
     }
   }
-  if (spec.kind === 'held' && spec.hold && !resetHold && !slowHold && !rewriteHold) {
+  if (spec.kind === 'held' && spec.hold && inPlace === null) {
     walk.push(step('hold', 'held', [fact('place', spec.hold.place), fact('account_id', spec.accountId, null, spec.accountId), fact('bound_ms', pool.retryInPlaceSeconds * 1_000, 'ms')]));
   }
   const exhaustion = spec.kind === 'exhausted' ? (spec.exhaustion ?? exhaustionOf(candidates)) : null;
@@ -1361,22 +1359,22 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
     : null;
   // A slow-down hold copies the read it was answered from, its bound the pool's longest wait for the slow-down, which
   // bounds a wait for a rewrite in flight too.
-  const slowed = slowHold ? slowReadAt(spec.accountId ?? '', pool, spec.at) : null;
+  const slowed = inPlace === 'slow_down' ? slowReadAt(spec.accountId ?? '', pool, spec.at) : null;
   const hold =
     spec.kind === 'held' && spec.hold
       ? {
           accountId: spec.accountId ?? '',
-          boundMs: (slowHold || rewriteHold ? pool.slowDownHoldSeconds : pool.retryInPlaceSeconds) * 1_000,
+          boundMs: (inPlace === 'slow_down' || inPlace === 'rewrite' ? pool.slowDownHoldSeconds : pool.retryInPlaceSeconds) * 1_000,
           cohort: spec.hold.cohort,
-          cycleMs: slowHold ? (spec.pinPace?.cycleMs ?? null) : null,
+          cycleMs: inPlace === 'slow_down' ? (spec.pinPace?.cycleMs ?? null) : null,
           // The factor the hold was sized from: the read's, pulled toward 1 by the ramp.
           factor: slowed ? 1 - (1 - slowed.factor) * rampAt(spec.accountId ?? '', pool, spec.at) : null,
-          reason: resetHold ? 'reset' : slowHold ? 'slow_down' : rewriteHold ? 'rewrite' : 'cap',
+          reason: inPlace ?? 'cap',
           // The speed the account's pins realize, as the shed line reads it.
           speed: slowed ? (cycleStands(spec, spec.accountId ?? '', pool) ? slowed.speed : 1) : null,
           stretchMs: slowed?.stretchMs ?? null,
           thresholdMs: slowed ? pool.slowDownStretchSeconds * 1_000 : null,
-          until: (resetHold || slowHold || rewriteHold) && spec.hold.until !== undefined ? iso(spec.hold.until) : null,
+          until: inPlace !== null && spec.hold.until !== undefined ? iso(spec.hold.until) : null,
           waitsFor: spec.hold.waitsFor ?? null,
         }
       : null;
