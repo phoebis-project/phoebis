@@ -132,7 +132,7 @@ export interface FoldOptions {
 }
 
 /** The newest generation of each key id among the rows, the one the breakdown labels with the bare id. */
-function latestGenerations(rows: RequestLog[]): Map<string, number> {
+export function latestGenerations(rows: RequestLog[]): Map<string, number> {
   const latest = new Map<string, number>();
   for (const r of rows) if (r.keyId !== null) latest.set(r.keyId, Math.max(latest.get(r.keyId) ?? r.keyGeneration, r.keyGeneration));
   return latest;
@@ -210,22 +210,28 @@ function foldShares(g: AnalyticsGroup, rows: RequestLog[]) {
 }
 
 /**
+ * The rows the pattern lists and the funding side keep. The agent is matched on its folded token, as the unscoped
+ * page's rollups hold it, so one pattern selects the same rows under both scopes. The token is folded once per row
+ * ahead of the patterns, since the fold splits the header.
+ */
+export function keptRows(rows: RequestLog[], options: FoldOptions): RequestLog[] {
+  const agentPatterns = options.agentPatterns ?? [];
+  const clientPatterns = options.clientPatterns ?? [];
+  const { funding } = options;
+  return rows.filter((r) => {
+    const agent = agentPatterns.length > 0 ? agentTokenOf(r.userAgent) : null;
+    return (agent === null || agentPatterns.some((p) => matchesPattern(p, agent))) && (!clientPatterns.length || clientPatterns.some((p) => matchesPattern(p, r.client ?? '-'))) && (funding === undefined || onSide(r, funding));
+  });
+}
+
+/**
  * Request rows summed the way the rollups sum them, for the one filter the rollups cannot answer: a session.
  * `latest` is taken over every row of the range, so a bucket holding an earlier key holder alone still labels it
  * deleted.
  */
 export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: FoldOptions = {}, latest = latestGenerations(rows)): AnalyticsGroup[] {
   const groups = new Map<string, { group: AnalyticsGroup; rows: RequestLog[] }>();
-  const agentPatterns = options.agentPatterns ?? [];
-  const clientPatterns = options.clientPatterns ?? [];
-  const { funding } = options;
-  // The agent is matched on its folded token, as the unscoped page's rollups hold it, so one pattern selects the same
-  // rows under both scopes. The token is folded once per row ahead of the patterns, since the fold splits the header.
-  const kept = rows.filter((r) => {
-    const agent = agentPatterns.length > 0 ? agentTokenOf(r.userAgent) : null;
-    return (agent === null || agentPatterns.some((p) => matchesPattern(p, agent))) && (!clientPatterns.length || clientPatterns.some((p) => matchesPattern(p, r.client ?? '-'))) && (funding === undefined || onSide(r, funding));
-  });
-  for (const r of kept) {
+  for (const r of keptRows(rows, options)) {
     const key = keyOf(r, by, options.agentGroups ?? []);
     const entry = groups.get(key) ?? { group: emptyFolded(key, labelOf(r, key, by, latest)), rows: [] };
     groups.set(key, entry);
@@ -291,9 +297,9 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
   return [...groups.values()].map((e) => e.group).sort((a, b) => b.requests - a.requests || a.key.localeCompare(b.key));
 }
 
-export function foldRequests(rows: RequestLog[], bucketMs: number, from: string, to: string, by: AnalyticsGroupBy = 'all', options: FoldOptions = {}): AnalyticsPoint[] {
+/** Request rows bucketed and summed per bucket, `latest` taken over every row of the range as `foldGroups` takes it. */
+export function foldRequests(rows: RequestLog[], bucketMs: number, from: string, to: string, by: AnalyticsGroupBy = 'all', options: FoldOptions = {}, latest = latestGenerations(rows)): AnalyticsPoint[] {
   const end = Date.parse(to);
-  const latest = latestGenerations(rows);
   const start = Math.floor(Date.parse(from) / bucketMs) * bucketMs;
   // A range ending on a bucket start owns no part of that bucket, which is where the series route stops too. The last
   // bucket runs to its own end, past `to`.

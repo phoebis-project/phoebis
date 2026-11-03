@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Dot, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
-import { foldGroups, foldRequests, loadSessionRequests, sumGroups, type SessionRequests } from '@/api/fold';
+import { foldGroups, foldRequests, keptRows, latestGenerations, loadSessionRequests, sumGroups, type SessionRequests } from '@/api/fold';
 import { useAppSettings } from '@/app/settings';
 import type { Account, AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, GuardrailCounts, LatencyHistograms, MemberBudget, PlacementRow, RefusalCategoriesAnswer, RequestLog, RewritesAnswer, SubscriptionCosts, UnusedAllowanceAnswer } from '@/api/types';
 import { Donut } from '@/components/charts/Donut';
@@ -334,7 +334,7 @@ export function AnalyticsPage() {
   // lists over what it holds: several client patterns narrow here alone, a cursor page that crossed a filter change
   // may be wider than the patterns, and the user agent matches its folded token, as the unscoped page's rollups do,
   // where the route matches the raw header.
-  const foldOptions = useMemo(() => ({ agentGroups, agentPatterns: patterns.userAgents, clientPatterns: patterns.clients }), [agentGroups, patterns]);
+  const patternOptions = useMemo(() => ({ agentPatterns: patterns.userAgents, clientPatterns: patterns.clients }), [patterns]);
   // A custom span holds its end, so no dependency moves at the interval: its window's reads poll at it instead, and the
   // figures stay drawn until the new answer lands, where a request that finished late shows, in the session log when it
   // falls on the first page. A preset's end moves to now at a boundary, and that change reads again.
@@ -518,18 +518,22 @@ export function AnalyticsPage() {
     costSettings.reload();
   };
   const rows = useMemo(() => (log.stale ? [] : (log.data?.requests ?? [])), [log.stale, log.data]);
-  const points = useMemo(() => (stale ? [] : sessionId === null ? (series.data ?? []) : foldRequests(rows, rangeBucketMs, fromIso, toIso, groupBy, foldOptions)), [stale, sessionId, series.data, rows, rangeBucketMs, fromIso, toIso, groupBy, foldOptions]);
+  // The folds below share one pass of the pattern filter, and the key generations come from every row, since the kept
+  // rows alone would label an earlier key holder as the live key.
+  const kept = useMemo(() => keptRows(rows, patternOptions), [rows, patternOptions]);
+  const latest = useMemo(() => latestGenerations(rows), [rows]);
+  const points = useMemo(() => (stale ? [] : sessionId === null ? (series.data ?? []) : foldRequests(kept, rangeBucketMs, fromIso, toIso, groupBy, { agentGroups }, latest)), [stale, sessionId, series.data, kept, rangeBucketMs, fromIso, toIso, groupBy, agentGroups, latest]);
   const buckets = useMemo(() => bucketsOf(points), [points]);
   // The route chooses the bucket width; reading it back off two points keeps the ticks honest when that
   // choice differs from what the range rule would have picked.
   const bucketMs = buckets.length > 1 ? buckets[1].at - buckets[0].at : rangeBucketMs;
-  const groups = useMemo(() => (stale ? [] : sessionId === null ? (breakdown.data ?? []) : foldGroups(rows, groupBy, foldOptions)), [stale, sessionId, breakdown.data, rows, groupBy, foldOptions]);
-  const poolGroups = useMemo(() => (sessionId === null ? (byPool.stale ? [] : (byPool.data ?? [])) : foldGroups(rows, 'pool', foldOptions)), [sessionId, byPool.stale, byPool.data, rows, foldOptions]);
+  const groups = useMemo(() => (stale ? [] : sessionId === null ? (breakdown.data ?? []) : foldGroups(kept, groupBy, { agentGroups }, latest)), [stale, sessionId, breakdown.data, kept, groupBy, agentGroups, latest]);
+  const poolGroups = useMemo(() => (sessionId === null ? (byPool.stale ? [] : (byPool.data ?? [])) : foldGroups(kept, 'pool', { agentGroups }, latest)), [sessionId, byPool.stale, byPool.data, kept, agentGroups, latest]);
   const speedPoints = useMemo(
-    () => (sessionId === null ? (bySpeed.stale ? [] : (bySpeed.data ?? [])) : foldRequests(rows, rangeBucketMs, fromIso, toIso, 'speed', foldOptions)),
-    [sessionId, bySpeed.stale, bySpeed.data, rows, rangeBucketMs, fromIso, toIso, foldOptions],
+    () => (sessionId === null ? (bySpeed.stale ? [] : (bySpeed.data ?? [])) : foldRequests(kept, rangeBucketMs, fromIso, toIso, 'speed', { agentGroups }, latest)),
+    [sessionId, bySpeed.stale, bySpeed.data, kept, rangeBucketMs, fromIso, toIso, agentGroups, latest],
   );
-  const effortGroups = useMemo(() => (sessionId === null ? (byEffort.stale ? [] : (byEffort.data ?? [])) : foldGroups(rows, 'effort', foldOptions)), [sessionId, byEffort.stale, byEffort.data, rows, foldOptions]);
+  const effortGroups = useMemo(() => (sessionId === null ? (byEffort.stale ? [] : (byEffort.data ?? [])) : foldGroups(kept, 'effort', { agentGroups }, latest)), [sessionId, byEffort.stale, byEffort.data, kept, agentGroups, latest]);
   const totals = useMemo(() => totalsOf(groups), [groups]);
   // A session fold has no warming facts, so those figures read unavailable rather than zero.
   const { keptWarm } = totals;
@@ -537,13 +541,13 @@ export function AnalyticsPage() {
   // The cost-bearing sections' rows under the position: the funded query's under a dollar side, the page's own under
   // the whole, and in a session view the rows folded by who paid for them.
   const costPoints = useMemo(() => {
-    if (sessionId !== null) return funding === undefined ? points : stale ? [] : foldRequests(rows, rangeBucketMs, fromIso, toIso, groupBy, { ...foldOptions, funding });
+    if (sessionId !== null) return funding === undefined ? points : stale ? [] : foldRequests(kept, rangeBucketMs, fromIso, toIso, groupBy, { agentGroups, funding }, latest);
     return funded ? (costSeries.stale ? [] : (costSeries.data ?? [])) : points;
-  }, [sessionId, funding, funded, points, stale, rows, rangeBucketMs, fromIso, toIso, groupBy, foldOptions, costSeries.stale, costSeries.data]);
+  }, [sessionId, funding, funded, points, stale, kept, rangeBucketMs, fromIso, toIso, groupBy, agentGroups, latest, costSeries.stale, costSeries.data]);
   const costGroups = useMemo(() => {
-    if (sessionId !== null) return funding === undefined ? groups : stale ? [] : foldGroups(rows, groupBy, { ...foldOptions, funding });
+    if (sessionId !== null) return funding === undefined ? groups : stale ? [] : foldGroups(kept, groupBy, { agentGroups, funding }, latest);
     return funded || warming ? (costBreakdown.stale ? [] : (costBreakdown.data ?? [])) : groups;
-  }, [sessionId, funding, funded, warming, groups, stale, rows, groupBy, foldOptions, costBreakdown.stale, costBreakdown.data]);
+  }, [sessionId, funding, funded, warming, groups, stale, kept, groupBy, agentGroups, latest, costBreakdown.stale, costBreakdown.data]);
   const costBuckets = useMemo(() => (costPoints === points ? buckets : bucketsOf(costPoints)), [costPoints, points, buckets]);
   const costTotals = useMemo(() => totalsOf(costGroups), [costGroups]);
   const costHead = costHeadOf(unit, costTotals, week, scale);
