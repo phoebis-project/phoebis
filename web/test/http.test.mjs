@@ -449,26 +449,45 @@ test('the session probe raises the status it got and 0 for no answer', async () 
   await assert.rejects(new HttpApi().getSession(), (e) => e instanceof ApiError && e.status === 0 && e.message === 'fetch failed');
 });
 
+/**
+ * A fetch whose head answers at once and whose body stalls: the body fails as the read's signal aborts, and answers
+ * `text` once the clock is past the deadline, so a read that took no signal fails its case rather than hanging it.
+ */
+const stalledBody = (time, text) => async (_url, init = {}) => {
+  const body = new Promise((resolve, reject) => {
+    time.setTimeout(() => resolve(text), 60_001);
+    init.signal?.addEventListener('abort', () => reject(new DOMException('This operation was aborted', 'AbortError')));
+  });
+  return { headers: { get: () => null }, ok: true, status: 200, text: () => body };
+};
+
 test('a session read with no answer within the deadline fails as a read that never answered, and a 401 inside it still reads as no session', async () => {
   // The suite has no window, so the clock is frozen before the read arms its timer, and only a tick fires one.
   const time = fakeClock();
   time.freeze(0);
   installClock(time);
   try {
-    // The head answers at once and the body stalls: it fails as the read's signal aborts, and answers a session once
-    // the clock is past the deadline, so a read that took no signal fails the case rather than hanging it.
-    globalThis.fetch = async (_url, init = {}) => {
-      const body = new Promise((resolve, reject) => {
-        time.setTimeout(() => resolve(JSON.stringify({ session_id: 's' })), 60_001);
-        init.signal?.addEventListener('abort', () => reject(new DOMException('This operation was aborted', 'AbortError')));
-      });
-      return { headers: { get: () => null }, ok: true, status: 200, text: () => body };
-    };
+    globalThis.fetch = stalledBody(time, JSON.stringify({ session_id: 's' }));
     const read = new HttpApi().getSession();
     time.tick(60_001);
     await assert.rejects(read, (e) => e instanceof ApiError && e.status === 0 && e.message === 'no answer within 60 s');
     stub(() => answer(401, { error: 'no admin session' }));
     assert.equal(await new HttpApi().getSession(), null);
+  } finally {
+    installClock(null);
+  }
+});
+
+test('a GET with no answer within the deadline fails as a read that never answered', async () => {
+  setHooks({ onFailure: () => undefined, onForbidden: () => undefined, onRecovered: () => undefined, onUnauthorized: () => undefined });
+  const time = fakeClock();
+  time.freeze(0);
+  installClock(time);
+  try {
+    globalThis.fetch = stalledBody(time, JSON.stringify({ accounts: [] }));
+    const read = call('GET', '/admin/accounts');
+    time.tick(60_001);
+    await assert.rejects(read, (e) => e instanceof ApiError && e.status === 0 && e.message === 'no answer within 60 s');
   } finally {
     installClock(null);
   }
