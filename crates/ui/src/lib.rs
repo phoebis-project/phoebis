@@ -74,14 +74,16 @@ async fn fallback(request: Request<Body>) -> Response {
     // The reference page answers at its directory and its index, and nothing else under the directory lands on
     // the console's shell: a typo there is a JSON 404, as a stale asset path is. The bare directory answers the
     // page rather than redirecting, since the page's URLs are absolute and nothing resolves against its location.
-    if path == REFERENCE_PATH || path == "/api-reference/" || path == "/api-reference/index.html" {
-        return match lookup("api-reference/index.html") {
-            Some((bytes, mime)) => finish(file(bytes, &mime, head), NO_STORE),
-            None => finish(json_not_found(), NO_STORE),
-        };
-    }
-    if path.starts_with("/api-reference/") {
-        return finish(json_not_found(), NO_STORE);
+    if let Some(rest) = path.strip_prefix(REFERENCE_PATH) {
+        if matches!(rest, "" | "/" | "/index.html") {
+            return match lookup(&format!("{REFERENCE_PATH}/index.html")) {
+                Some((bytes, mime)) => finish(file(bytes, &mime, head), NO_STORE),
+                None => finish(json_not_found(), NO_STORE),
+            };
+        }
+        if rest.starts_with('/') {
+            return finish(json_not_found(), NO_STORE);
+        }
     }
     if let Some((bytes, mime)) = lookup(&path) {
         let cache = if path.starts_with("/assets/") {
