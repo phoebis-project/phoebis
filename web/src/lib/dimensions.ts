@@ -1,4 +1,4 @@
-import type { Attempt, AttemptResponse, RequestLog } from '@/api/types';
+import type { Attempt, AttemptResponse, CacheMissReason, RequestLog } from '@/api/types';
 
 /**
  * The folds the router's rollups and its request filters apply to a request, so a console control and the mock file a
@@ -41,7 +41,7 @@ export const servingAttempt = (r: Pick<RequestLog, 'attempts'>): Attempt | null 
 export const foldSpeed = (r: Pick<RequestLog, 'attempts' | 'shape'>): string => servingAttempt(r)?.response.speed ?? (r.shape.requestedSpeed === 'fast' ? 'fast' : 'standard');
 
 /** The serving attempt's cache-miss reason, the one the rollups count a request's reason on. */
-export const servedMissReason = (r: Pick<RequestLog, 'attempts'>) => servingAttempt(r)?.cacheMissReason ?? null;
+export const servedMissReason = (r: Pick<RequestLog, 'attempts'>): CacheMissReason | null => servingAttempt(r)?.cacheMissReason ?? null;
 
 /** The serving attempt's answer, where an attempt served the request. */
 export const servingResponse = (r: Pick<RequestLog, 'attempts'>): AttemptResponse | null => servingAttempt(r)?.response ?? null;
