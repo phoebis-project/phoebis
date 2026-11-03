@@ -402,7 +402,8 @@ its previous read still out, so a slow read lands and the next tick reads again 
 Requests and the Routing log auto reload also waits while the list for the view's filters is still loading, unless its
 last read failed ([The console](console.md)). Auto reload's read at once, when a wait ends or the interval changes a
 full interval after the last answer, also waits for a read still in flight and leaves the read to the next tick ([The
-console](console.md)).
+console](console.md)). An account's Cooling down table draws a model scope's id and a scope the console does not know
+in the mono face and Whole account, Fast mode and Fast mode credits in the text face ([Accounts](console.md#accounts)).
 
 Every finished request lands in the ledger as one row for the client request, one per attempt and one per routing
 decision, folded into the hourly rollup the analytics read ([Statistics](statistics.md#the-ledger)). Each attempt

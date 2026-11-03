@@ -9,12 +9,13 @@ export type CoolingRow = { accountId: string; reason: string; scope: string; unt
 const MODEL_SCOPE_PREFIX = 'model:';
 
 /** `Whole account` for the account scope, `Fast mode` and `Fast mode credits` for the fast lane's rate limit and
- *  usage-credits refusal, the model id for `model:<id>`. */
-export function scopeLabel(scope: string): string {
-  if (scope === 'account') return 'Whole account';
-  if (scope === 'fast') return 'Fast mode';
-  if (scope === 'fast_credits') return 'Fast mode credits';
-  return scope.startsWith(MODEL_SCOPE_PREFIX) ? scope.slice(MODEL_SCOPE_PREFIX.length) : scope;
+ *  usage-credits refusal, the model id for `model:<id>`. An identifier, the model id or a scope this build does not
+ *  know shown as sent, draws in the mono face, and the worded scopes do not. */
+export function scopeLabel(scope: string): { label: string; mono: boolean } {
+  if (scope === 'account') return { label: 'Whole account', mono: false };
+  if (scope === 'fast') return { label: 'Fast mode', mono: false };
+  if (scope === 'fast_credits') return { label: 'Fast mode credits', mono: false };
+  return { label: scope.startsWith(MODEL_SCOPE_PREFIX) ? scope.slice(MODEL_SCOPE_PREFIX.length) : scope, mono: true };
 }
 
 /**
@@ -60,28 +61,31 @@ export function CoolingDown({ busy = false, now, onClear, rows, showAccount = fa
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((r) => (
-                    <tr key={`${r.accountId}/${r.scope}`}>
-                      {showAccount && (
-                        <td className="col-fit">
-                          <Link to={`/accounts/${r.accountId}`}>{r.accountId}</Link>
+                  {rows.map((r) => {
+                    const scope = scopeLabel(r.scope);
+                    return (
+                      <tr key={`${r.accountId}/${r.scope}`}>
+                        {showAccount && (
+                          <td className="col-fit">
+                            <Link to={`/accounts/${r.accountId}`}>{r.accountId}</Link>
+                          </td>
+                        )}
+                        <td className="col-fit">{scope.mono ? <span className="mono">{scope.label}</span> : scope.label}</td>
+                        <td className="mono col-fill" title={r.reason}>{r.reason}</td>
+                        <td className="num col-fit">
+                          {fmtAbsolute(r.until)}
+                          <span className="sub">{fmtRelative(r.until, now)}</span>
                         </td>
-                      )}
-                      <td className="col-fit">{r.scope === 'account' ? scopeLabel(r.scope) : <span className="mono">{scopeLabel(r.scope)}</span>}</td>
-                      <td className="mono col-fill" title={r.reason}>{r.reason}</td>
-                      <td className="num col-fit">
-                        {fmtAbsolute(r.until)}
-                        <span className="sub">{fmtRelative(r.until, now)}</span>
-                      </td>
-                      {onClear && (
-                        <td className="right col-fit">
-                          <Button size="sm" disabled={busy} onClick={() => onClear(r)}>
-                            Clear
-                          </Button>
-                        </td>
-                      )}
-                    </tr>
-                  ))}
+                        {onClear && (
+                          <td className="right col-fit">
+                            <Button size="sm" disabled={busy} onClick={() => onClear(r)}>
+                              Clear
+                            </Button>
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
