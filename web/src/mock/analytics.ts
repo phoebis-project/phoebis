@@ -138,7 +138,6 @@ function selectsKey(selector: string, r: Pick<HourlyRollup, 'keyGeneration' | 'k
   return live !== undefined && r.keyId === selector && Date.parse(live.createdAt) === r.keyGeneration;
 }
 
-
 /**
  * Whether a row falls on the side the funding filter keeps, as the route reads it off the row's own funding: `plan` is
  * a plan-funded row, `billed` its complement, and the registry's current kinds move no row.
@@ -804,7 +803,6 @@ function drawHistories(): Reconciliation[] {
     return rows;
   });
 }
-
 
 /**
  * The completed windows of the story's priced accounts over the trailing 30 days, newest first and then by account and

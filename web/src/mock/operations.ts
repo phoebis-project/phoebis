@@ -463,7 +463,6 @@ const STATE_OF: Partial<Record<RecipeCause, RecipeState>> = {
 // keep their rolls.
 const LADDER_NEXT_PROBE: Partial<Record<RecipeCause, string>> = { probe_pool_exhausted: ahead(3 * MINUTE) };
 
-
 /**
  * What every line of a session the mod released whole reads, written over the drawn row. The row keeps its last request
  * and probe, the later of which dates the release inside the pool's cache TTL, since the router lists a released record
