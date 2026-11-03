@@ -1,11 +1,10 @@
 //! Token endpoint bodies, the four control-plane request shapes, and the responses they return.
 
 use bytes::Bytes;
-use phoebis_profile::Profile;
+use phoebis_profile::{ControlEndpoint, Profile};
 use phoebis_store::{NewBundle, Secret, SubscriptionRow};
 use phoebis_transport::request::RawRequest;
 use serde_json::{Map, Value};
-use url::Url;
 
 // Measured from the control fixtures under `crates/profile/fixtures/`: Axios sends this Accept and this
 // Accept-Encoding on every control call, and the usage endpoint is the only one that carries a beta header.
@@ -35,19 +34,19 @@ pub enum ControlKind {
 }
 
 impl ControlKind {
-    pub fn url(self, profile: &Profile) -> &'static str {
+    pub fn endpoint(self, profile: &Profile) -> ControlEndpoint {
         match self {
-            ControlKind::Token => profile.control.token_url,
-            ControlKind::Profile => profile.control.profile_url,
-            ControlKind::Roles => profile.control.roles_url,
-            ControlKind::Usage => profile.control.usage_url,
+            ControlKind::Token => profile.control.token,
+            ControlKind::Profile => profile.control.profile,
+            ControlKind::Roles => profile.control.roles,
+            ControlKind::Usage => profile.control.usage,
         }
     }
 
     /// The host to resolve, present as SNI, and send in `Host`; the token endpoint lives on a different
     /// host than the other three.
-    pub fn host(self, profile: &Profile) -> String {
-        split_url(self.url(profile)).0
+    pub fn host(self, profile: &Profile) -> &'static str {
+        self.endpoint(profile).host
     }
 }
 
@@ -89,7 +88,7 @@ pub fn control_request(
     bearer: Option<&str>,
     body: Option<Vec<u8>>,
 ) -> RawRequest {
-    let (host, target) = split_url(kind.url(profile));
+    let endpoint = kind.endpoint(profile);
     let body = Bytes::from(body.unwrap_or_default());
     let mut headers: Vec<(String, String)> = Vec::with_capacity(9);
     let mut push = |name: &str, value: &str| headers.push((name.to_string(), value.to_string()));
@@ -125,7 +124,7 @@ pub fn control_request(
         }
     }
     push("Accept-Encoding", ACCEPT_ENCODING);
-    push("Host", &host);
+    push("Host", endpoint.host);
     push("Connection", "close");
 
     RawRequest {
@@ -133,7 +132,7 @@ pub fn control_request(
             ControlKind::Token => "POST",
             ControlKind::Profile | ControlKind::Roles | ControlKind::Usage => "GET",
         },
-        target,
+        target: endpoint.target.to_string(),
         headers,
         body,
     }
@@ -276,19 +275,6 @@ fn json_body(pairs: &[(&str, &str)]) -> Vec<u8> {
         map.insert((*key).to_string(), Value::String((*value).to_string()));
     }
     serde_json::to_vec(&Value::Object(map)).expect("a map of strings always serializes")
-}
-
-/// Splits a pinned control URL into its host and its request target. The URLs are compile-time profile
-/// constants, so a parse failure is a profile bug rather than a runtime condition.
-fn split_url(url: &str) -> (String, String) {
-    let parsed = Url::parse(url).expect("profile control URLs are absolute");
-    let host = parsed.host_str().unwrap_or_default().to_string();
-    let mut target = parsed.path().to_string();
-    if let Some(query) = parsed.query() {
-        target.push('?');
-        target.push_str(query);
-    }
-    (host, target)
 }
 
 #[cfg(test)]

@@ -900,7 +900,7 @@ impl Inner {
         let host = ControlKind::Token.host(self.profile);
         tracing::debug!(host = %host, "refresh request sent");
 
-        let sent = self.control.send(request, &host, REFRESH_TIMEOUT).await;
+        let sent = self.control.send(request, host, REFRESH_TIMEOUT).await;
         let (head, payload) = match sent {
             Ok(response) => response,
             Err(error) if transport_before_write(&error) => {

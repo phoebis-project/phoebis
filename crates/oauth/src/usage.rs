@@ -212,7 +212,7 @@ pub struct PollFault {
 
 /// The credential a usage 401 refused, the fence the re-pair mark's conditional write compares: the account's lineage
 /// at the fetch's start and the acquired token's generation.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Refused {
     pub incarnation: u64,
     pub lifecycle_generation: u64,
@@ -374,18 +374,7 @@ enum FetchFailure {
         fault: PollFault,
         code: String,
     },
-    /// The usage endpoint's 401. `fetch` fills the fence's credential generation and `fetch_and_cache` its lineage.
     Unauthorized(Refused),
-}
-
-impl FetchFailure {
-    /// Completes a 401's fence with what the caller holds and leaves every other failure as it is.
-    fn fenced(mut self, fill: impl FnOnce(&mut Refused)) -> FetchFailure {
-        if let FetchFailure::Unauthorized(refused) = &mut self {
-            fill(refused);
-        }
-        self
-    }
 }
 
 /// Whose reading a fetch or a cache entry is. A deleted id created again draws a new incarnation but starts
@@ -509,11 +498,11 @@ fn status_fault(endpoint: &'static str, status: u16) -> PollFault {
     }
 }
 
-/// A usage status other than 200 and 429: the 401 that sends the account to the re-pair, its fence for `fetch` and
-/// `fetch_and_cache` to fill, the 403 that names an organization's refusal, and every other status a passing fault.
-fn usage_refusal(status: u16, body: &[u8]) -> FetchFailure {
+/// A usage status other than 200 and 429: the 401 that sends the account to the re-pair under `fence`, the 403 that
+/// names an organization's refusal, and every other status a passing fault.
+fn usage_refusal(status: u16, body: &[u8], fence: Refused) -> FetchFailure {
     if status == 401 {
-        return FetchFailure::Unauthorized(Refused::default());
+        return FetchFailure::Unauthorized(fence);
     }
     let fault = status_fault(USAGE_ENDPOINT, status);
     match error_code(body) {
@@ -833,7 +822,7 @@ impl UsageService {
             None,
         );
         let host = ControlKind::Profile.host(self.inner.profile);
-        let sent = self.inner.control.send(req, &host, FETCH_TIMEOUT).await;
+        let sent = self.inner.control.send(req, host, FETCH_TIMEOUT).await;
         drop(permit);
         let (head, body) = sent.map_err(|error| {
             UsageError::Fault(transport_fault(PROFILE_ENDPOINT, &error.to_string()))
@@ -902,22 +891,20 @@ impl Inner {
             return Ok((held, None));
         }
         let started = self.identity(account_id);
-        let (read_at, result) = self.fetch(account_id).await;
-        let result = result.map_err(|failure| {
-            failure.fenced(|refused| {
-                let lineage = started.unwrap_or_default();
-                refused.incarnation = lineage.incarnation;
-                refused.lifecycle_generation = lineage.lifecycle_generation;
-            })
-        });
+        let (read_at, result) = self.fetch(account_id, started.unwrap_or_default()).await;
         let ended = self.identity(account_id);
         self.commit(account_id, read_at, started != ended, ended, result)
     }
 
     /// The attempt's instant with its result: the send's, read once the credential and the concurrency permit
     /// are held, since a request that completes during those waits is already in what the endpoint answers and
-    /// the router drops a charge only up to the reading's instant; the failure's own when no request went out.
-    async fn fetch(&self, account_id: &str) -> (i64, Result<ParsedUsage, FetchFailure>) {
+    /// the router drops a charge only up to the reading's instant; the failure's own when no request went out. A 401
+    /// is fenced on `lineage`, the account's at the fetch's start, and the acquired token's generation.
+    async fn fetch(
+        &self,
+        account_id: &str,
+        lineage: Identity,
+    ) -> (i64, Result<ParsedUsage, FetchFailure>) {
         let token = match self.manager.acquire(account_id).await {
             Ok(token) => token,
             Err(error) => {
@@ -934,23 +921,26 @@ impl Inner {
             .await
             .expect("usage semaphore is never closed");
         let sent_at = (self.clock)();
-        let result = self.request_usage(token.secret.expose(), permit).await;
-        (
-            sent_at,
-            result.map_err(|failure| {
-                failure.fenced(|refused| refused.credential_generation = token.generation)
-            }),
-        )
+        let fence = Refused {
+            incarnation: lineage.incarnation,
+            lifecycle_generation: lineage.lifecycle_generation,
+            credential_generation: token.generation,
+        };
+        let result = self
+            .request_usage(token.secret.expose(), fence, permit)
+            .await;
+        (sent_at, result)
     }
 
     async fn request_usage(
         &self,
         bearer: &str,
+        fence: Refused,
         permit: tokio::sync::SemaphorePermit<'_>,
     ) -> Result<ParsedUsage, FetchFailure> {
         let req = control_request(self.profile, ControlKind::Usage, Some(bearer), None);
         let host = ControlKind::Usage.host(self.profile);
-        let sent = self.control.send(req, &host, FETCH_TIMEOUT).await;
+        let sent = self.control.send(req, host, FETCH_TIMEOUT).await;
         drop(permit);
         let (head, body) = sent.map_err(|error| {
             FetchFailure::Fault(transport_fault(USAGE_ENDPOINT, &error.to_string()))
@@ -963,7 +953,7 @@ impl Inner {
             });
         }
         if head.status != 200 {
-            return Err(usage_refusal(head.status, &body));
+            return Err(usage_refusal(head.status, &body, fence));
         }
         parse_usage(&body).map_err(|error| FetchFailure::Message(format!("parse: {error}")))
     }

@@ -1961,7 +1961,7 @@ async fn control_send(
     let host = kind.host(state.profile);
     state
         .control
-        .send(request, &host, CONTROL_TIMEOUT)
+        .send(request, host, CONTROL_TIMEOUT)
         .await
         .map_err(|error| format!("control request failed: {error}"))
 }

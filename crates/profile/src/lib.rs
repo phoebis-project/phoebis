@@ -15,14 +15,22 @@ pub enum Plane {
     Control,
 }
 
+/// A control endpoint in the parts the client sends: the host it resolves, presents as SNI and names in `Host`, and
+/// the request target. None of the four carries a port or a query.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ControlEndpoint {
+    pub host: &'static str,
+    pub target: &'static str,
+}
+
 pub struct Control {
     pub authorize_claude_ai: &'static str,
     pub authorize_console: &'static str,
     pub client_id: &'static str,
-    pub profile_url: &'static str,
-    pub roles_url: &'static str,
-    pub token_url: &'static str,
-    pub usage_url: &'static str,
+    pub profile: ControlEndpoint,
+    pub roles: ControlEndpoint,
+    pub token: ControlEndpoint,
+    pub usage: ControlEndpoint,
     pub axios_user_agent: &'static str,
     pub default_login_scopes: &'static str,
     /// The agent of the profile and roles reads. The token endpoint keeps the Axios agent and the usage read
@@ -51,10 +59,22 @@ static PROFILE_2_1_310: Profile = Profile {
         authorize_claude_ai: "https://claude.com/cai/oauth/authorize",
         authorize_console: "https://platform.claude.com/oauth/authorize",
         client_id: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
-        profile_url: "https://api.anthropic.com/api/oauth/profile",
-        roles_url: "https://api.anthropic.com/api/oauth/claude_cli/roles",
-        token_url: "https://platform.claude.com/v1/oauth/token",
-        usage_url: "https://api.anthropic.com/api/oauth/usage",
+        profile: ControlEndpoint {
+            host: "api.anthropic.com",
+            target: "/api/oauth/profile",
+        },
+        roles: ControlEndpoint {
+            host: "api.anthropic.com",
+            target: "/api/oauth/claude_cli/roles",
+        },
+        token: ControlEndpoint {
+            host: "platform.claude.com",
+            target: "/v1/oauth/token",
+        },
+        usage: ControlEndpoint {
+            host: "api.anthropic.com",
+            target: "/api/oauth/usage",
+        },
         axios_user_agent: "axios/1.15.2",
         default_login_scopes: "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload user:plugins",
         read_user_agent: "claude-code/2.1.310",
