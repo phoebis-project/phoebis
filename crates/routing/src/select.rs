@@ -180,6 +180,13 @@ pub fn lane_key(model: &str, speed: &str, thinking: &str, effort: &str) -> Strin
     format!("{model}|{speed}|{thinking}|{effort}")
 }
 
+/// The parts of a lane `lane_key` spells, from the end, where the lane's own three sit: the effort, the thinking, the
+/// speed, then the model, each `None` for a lane too short to hold it.
+pub(crate) fn lane_parts(lane: &str) -> [Option<&str>; 4] {
+    let mut parts = lane.rsplitn(4, '|');
+    [parts.next(), parts.next(), parts.next(), parts.next()]
+}
+
 /// Whether a pin or an entry stored on `stored` holds the cache a request on `lane` writes to. A row written
 /// before rows carried a lane stores none and adopts the request's, since it never recorded another cache.
 pub(crate) fn same_lane(stored: &str, lane: &str) -> bool {
@@ -188,7 +195,7 @@ pub(crate) fn same_lane(stored: &str, lane: &str) -> bool {
 
 /// Whether `lane` is a fast one: its speed part, the second of the three after the model, reads `fast`.
 fn lane_is_fast(lane: &str) -> bool {
-    lane.rsplit('|').nth(2) == Some("fast")
+    lane_parts(lane)[2] == Some("fast")
 }
 
 /// Where a fresh placement's account came from, for the trace and the console's hit-or-miss reading.

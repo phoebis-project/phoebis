@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use phoebis_store::PoolRow;
 
-use crate::select::{ClientClass, CohortHold, HoldFacts, Placement, SelectRequest};
+use crate::select::{lane_parts, ClientClass, CohortHold, HoldFacts, Placement, SelectRequest};
 use crate::state::Tier;
 use crate::RegistrySnapshot;
 
@@ -138,14 +138,11 @@ pub struct LaneFacts {
 impl LaneFacts {
     /// `lane_key` spells the lane `<model>|<speed>|<thinking>|<effort>`: the last three parts are the lane's own.
     pub(crate) fn of(lane: &str) -> LaneFacts {
-        let mut parts = lane.rsplitn(4, '|').map(String::from);
-        let effort = parts.next().unwrap_or_default();
-        let thinking = parts.next().unwrap_or_default();
-        let speed = parts.next().unwrap_or_default();
+        let [effort, thinking, speed, _] = lane_parts(lane).map(|part| part.unwrap_or_default());
         LaneFacts {
-            speed,
-            thinking,
-            effort,
+            speed: speed.to_string(),
+            thinking: thinking.to_string(),
+            effort: effort.to_string(),
         }
     }
 }

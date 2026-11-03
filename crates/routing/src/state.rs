@@ -16,8 +16,8 @@ use tokio::time::Instant;
 use crate::affinity::{AffinityMap, PurgedEntry};
 use crate::listing::{row_for, snapshot_date};
 use crate::select::{
-    affinity_ttl_ms, seconds_ms, Banded, SlowDownRead, RATE_LIMIT_REASON, RETRY_AFTER_WINDOW,
-    SLOW_DOWN_WAIT_MS,
+    affinity_ttl_ms, lane_parts, seconds_ms, Banded, SlowDownRead, RATE_LIMIT_REASON,
+    RETRY_AFTER_WINDOW, SLOW_DOWN_WAIT_MS,
 };
 use crate::task::BurnRates;
 use crate::windows::{model_week, window_for, MODEL_WINDOWS};
@@ -1544,8 +1544,8 @@ impl RoutingState {
     /// `canonical` applied to a lane's model part, the one ahead of its last three: a lane composed under a
     /// spelling before its resolution landed then names the model its pin and entries were relaned to.
     pub fn canonical_lane(&self, lane: &str) -> String {
-        match lane.rmatch_indices('|').nth(2) {
-            Some((at, _)) => format!("{}{}", self.canonical(&lane[..at]), &lane[at..]),
+        match lane_parts(lane)[3] {
+            Some(model) => format!("{}{}", self.canonical(model), &lane[model.len()..]),
             None => lane.to_string(),
         }
     }
