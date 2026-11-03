@@ -749,14 +749,7 @@ mod tests {
             &mut body,
             &NativeEdit {
                 account_uuid: AccountUuidEdit::Splice(UUID),
-                upstream_model: "claude-sonnet-4-5",
-                restore: None,
-                diagnostics: None,
-                cache_ttl: None,
-                markerless: Markerless::TakesTheMember,
-                safeguards: SafeguardsEdit::Keep,
-                sign_placeholder: false,
-                detach_diagnostics: false,
+                ..drop_edit(SafeguardsEdit::Keep)
             },
         )
         .expect("a JSON object is editable");
@@ -774,14 +767,7 @@ mod tests {
                 &mut body,
                 &NativeEdit {
                     account_uuid: AccountUuidEdit::Splice(UUID),
-                    upstream_model: "claude-sonnet-4-5",
-                    restore: None,
-                    diagnostics: None,
-                    cache_ttl: None,
-                    markerless: Markerless::TakesTheMember,
-                    safeguards: SafeguardsEdit::Keep,
-                    sign_placeholder: false,
-                    detach_diagnostics: false,
+                    ..drop_edit(SafeguardsEdit::Keep)
                 },
             ),
             Err(RelayError::BodyShape(BodyMember::MetadataUserId))
@@ -792,20 +778,7 @@ mod tests {
     fn a_body_with_no_top_level_model_is_refused_for_either_account_kind() {
         let mut body = br#"{"messages":[]}"#.to_vec();
         assert!(matches!(
-            edit_body(
-                &mut body,
-                &NativeEdit {
-                    account_uuid: AccountUuidEdit::Keep,
-                    upstream_model: "claude-sonnet-4-5",
-                    restore: None,
-                    diagnostics: None,
-                    cache_ttl: None,
-                    markerless: Markerless::TakesTheMember,
-                    safeguards: SafeguardsEdit::Keep,
-                    sign_placeholder: false,
-                    detach_diagnostics: false,
-                },
-            ),
+            edit_body(&mut body, &drop_edit(SafeguardsEdit::Keep)),
             Err(RelayError::BodyShape(BodyMember::Model))
         ));
         let mut oauth = String::from_utf8(native(UUID, "claude-sonnet-4-5"))
@@ -817,14 +790,7 @@ mod tests {
                 &mut oauth,
                 &NativeEdit {
                     account_uuid: AccountUuidEdit::Splice(UUID),
-                    upstream_model: "claude-sonnet-4-5",
-                    restore: None,
-                    diagnostics: None,
-                    cache_ttl: None,
-                    markerless: Markerless::TakesTheMember,
-                    safeguards: SafeguardsEdit::Keep,
-                    sign_placeholder: false,
-                    detach_diagnostics: false,
+                    ..drop_edit(SafeguardsEdit::Keep)
                 },
             ),
             Err(RelayError::BodyShape(BodyMember::Model))
@@ -834,21 +800,8 @@ mod tests {
     #[test]
     fn a_token_count_body_needs_no_account_uuid() {
         let mut body = br#"{"model":"claude-sonnet-4-5","messages":[]}"#.to_vec();
-        edit_body(
-            &mut body,
-            &NativeEdit {
-                account_uuid: AccountUuidEdit::Keep,
-                upstream_model: "claude-sonnet-4-5",
-                restore: None,
-                diagnostics: None,
-                cache_ttl: None,
-                markerless: Markerless::TakesTheMember,
-                safeguards: SafeguardsEdit::Keep,
-                sign_placeholder: false,
-                detach_diagnostics: false,
-            },
-        )
-        .expect("a token count's body has no slot for the account identity");
+        edit_body(&mut body, &drop_edit(SafeguardsEdit::Keep))
+            .expect("a token count's body has no slot for the account identity");
         assert_eq!(body, br#"{"model":"claude-sonnet-4-5","messages":[]}"#);
     }
 
@@ -859,14 +812,7 @@ mod tests {
             &mut body,
             &NativeEdit {
                 account_uuid: AccountUuidEdit::Splice("acct-uuid"),
-                upstream_model: "claude-sonnet-4-5",
-                restore: None,
-                diagnostics: None,
-                cache_ttl: None,
-                markerless: Markerless::TakesTheMember,
-                safeguards: SafeguardsEdit::Keep,
-                sign_placeholder: false,
-                detach_diagnostics: false,
+                ..drop_edit(SafeguardsEdit::Keep)
             },
         )
         .expect("a JSON object is editable");
@@ -881,20 +827,7 @@ mod tests {
     fn a_body_that_is_not_an_object_is_refused() {
         let mut body = b"[1,2,3]".to_vec();
         assert!(matches!(
-            edit_body(
-                &mut body,
-                &NativeEdit {
-                    account_uuid: AccountUuidEdit::Keep,
-                    upstream_model: "claude-sonnet-4-5",
-                    restore: None,
-                    diagnostics: None,
-                    cache_ttl: None,
-                    markerless: Markerless::TakesTheMember,
-                    safeguards: SafeguardsEdit::Keep,
-                    sign_placeholder: false,
-                    detach_diagnostics: false,
-                },
-            ),
+            edit_body(&mut body, &drop_edit(SafeguardsEdit::Keep)),
             Err(RelayError::NotAnObject)
         ));
     }
