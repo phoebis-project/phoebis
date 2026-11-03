@@ -99,10 +99,10 @@ pub struct Peak {
 impl Peak {
     /// The zone comes from the database bundled into the binary, so the hours never depend on the host's copy, or
     /// on the host having one.
-    fn resolve(&mut self) -> Result<(), LedgerError> {
+    fn resolve(&mut self) -> Result<(), String> {
         let zone = TimeZoneDatabase::bundled()
             .get(&self.zone)
-            .map_err(|e| LedgerError::Plan(format!("peak zone `{}`: {e}", self.zone)))?;
+            .map_err(|e| format!("peak zone `{}`: {e}", self.zone))?;
         self.resolved = Some(zone);
         Ok(())
     }
@@ -300,41 +300,39 @@ fn refuse(message: String) -> LedgerError {
 }
 
 /// A dated key would shadow the undated lookup for one release and vanish with the next.
-fn undated_key(section: &str, key: &str) -> Result<(), LedgerError> {
+fn undated_key(section: &str, key: &str) -> Result<(), String> {
     match phoebis_routing::listing::undated(key) {
-        Some(_) => Err(refuse(format!(
+        Some(_) => Err(format!(
             "{section}.{key}: a dated id, where the file keys undated ids"
-        ))),
+        )),
         None => Ok(()),
     }
 }
 
-fn weight_rule(path: &str, weight: f64) -> Result<(), LedgerError> {
+fn weight_rule(path: &str, weight: f64) -> Result<(), String> {
     if weight.is_finite() && weight > 0.0 {
         Ok(())
     } else {
-        Err(refuse(format!("{path}: a weight is a number above zero")))
+        Err(format!("{path}: a weight is a number above zero"))
     }
 }
 
-fn multiplier_rule(path: &str, multiplier: f64) -> Result<(), LedgerError> {
+fn multiplier_rule(path: &str, multiplier: f64) -> Result<(), String> {
     if multiplier.is_finite() && multiplier >= 0.0 {
         Ok(())
     } else {
-        Err(refuse(format!(
-            "{path}: a multiplier is a number at or above zero"
-        )))
+        Err(format!("{path}: a multiplier is a number at or above zero"))
     }
 }
 
 /// A capacity factor holds a fraction of its window: above zero, and 1 at most.
-fn factor_rule(path: &str, factor: f64) -> Result<(), LedgerError> {
+fn factor_rule(path: &str, factor: f64) -> Result<(), String> {
     if factor.is_finite() && factor > 0.0 && factor <= 1.0 {
         Ok(())
     } else {
-        Err(refuse(format!(
+        Err(format!(
             "{path}: a factor is a number above zero and at most 1"
-        )))
+        ))
     }
 }
 
@@ -344,13 +342,13 @@ fn capacity_rules(
     path: &str,
     rows: &IndexMap<String, Capacity>,
     anchor: &str,
-) -> Result<(), LedgerError> {
+) -> Result<(), String> {
     for (tier, row) in rows {
         for (window, capacity) in [(FIVE_HOUR, row.five_hour), (SEVEN_DAY, row.seven_day)] {
             if capacity.is_some_and(|c| !c.is_finite() || c <= 0.0) {
-                return Err(refuse(format!(
+                return Err(format!(
                     "{path}.{tier}.{window}: a capacity is a number above zero, or null"
-                )));
+                ));
             }
         }
     }
@@ -359,9 +357,9 @@ fn capacity_rules(
     if let Some(row) = rows.get(anchor) {
         for (window, capacity) in [(FIVE_HOUR, row.five_hour), (SEVEN_DAY, row.seven_day)] {
             if capacity.is_none() {
-                return Err(refuse(format!(
+                return Err(format!(
                     "{path}.{anchor}.{window}: the anchor tier carries a capacity on both windows"
-                )));
+                ));
             }
         }
     }
@@ -371,17 +369,14 @@ fn capacity_rules(
 impl SubscriptionCosts {
     /// The entry with its peak zone resolved and its rules checked, a refusal prefixed by the entry's date.
     fn resolved(mut self) -> Result<SubscriptionCosts, LedgerError> {
-        let checked = self.peak.resolve().and_then(|()| self.validate());
-        match checked {
-            Ok(()) => Ok(self),
-            Err(LedgerError::Plan(message)) => {
-                Err(refuse(format!("revision {}: {message}", self.effective)))
-            }
-            Err(other) => Err(other),
-        }
+        self.peak
+            .resolve()
+            .and_then(|()| self.validate())
+            .map_err(|message| refuse(format!("revision {}: {message}", self.effective)))?;
+        Ok(self)
     }
 
-    fn validate(&self) -> Result<(), LedgerError> {
+    fn validate(&self) -> Result<(), String> {
         let anchor = &self.unit;
         capacity_rules("capacity", &self.capacity, &anchor.tier)?;
         // `capacity_rules` refuses a null window on the anchor's row first, so this refuses a revision without the row.
@@ -391,19 +386,19 @@ impl SubscriptionCosts {
             .and_then(|row| row.on(&anchor.window))
             .is_none()
         {
-            return Err(refuse(format!(
+            return Err(format!(
                 "capacity.{}.{}: the anchor tier carries a capacity on the unit's window",
                 anchor.tier, anchor.window
-            )));
+            ));
         }
         let peak = &self.peak;
         for (name, hour) in [("from_hour", peak.from_hour), ("to_hour", peak.to_hour)] {
             if hour > 24 {
-                return Err(refuse(format!("peak.{name}: an hour is 0 to 24")));
+                return Err(format!("peak.{name}: an hour is 0 to 24"));
             }
         }
         if peak.from_hour >= peak.to_hour {
-            return Err(refuse("peak.from_hour: below to_hour".to_string()));
+            return Err("peak.from_hour: below to_hour".to_string());
         }
         let factors = &peak.capacity_factor;
         for (window, factor) in [
@@ -416,34 +411,32 @@ impl SubscriptionCosts {
         let mut listed: HashMap<&str, &str> = HashMap::new();
         for (key, regime) in &self.regimes {
             if !phoebis_relay::is_entrypoint_token(key) {
-                return Err(refuse(format!(
+                return Err(format!(
                     "regimes.{key}: a bare token of lowercase letters, digits, hyphens and underscores"
-                )));
+                ));
             }
             if regime.entrypoints.is_empty() {
-                return Err(refuse(format!("regimes.{key}.entrypoints: lists none")));
+                return Err(format!("regimes.{key}.entrypoints: lists none"));
             }
             for name in &regime.entrypoints {
                 if !phoebis_relay::is_entrypoint_token(name) {
-                    return Err(refuse(format!(
+                    return Err(format!(
                         "regimes.{key}.entrypoints: {name} is not a bare token of lowercase letters, digits, \
                          hyphens and underscores"
-                    )));
+                    ));
                 }
                 if let Some(other) = listed.insert(name, key) {
-                    return Err(refuse(format!(
+                    return Err(format!(
                         "regimes.{key}.entrypoints: {name} is listed by {other}"
-                    )));
+                    ));
                 }
             }
             if regime.capacity.is_empty() {
-                return Err(refuse(format!("regimes.{key}: names no tier")));
+                return Err(format!("regimes.{key}: names no tier"));
             }
             for tier in regime.capacity.keys() {
                 if !self.capacity.contains_key(tier) {
-                    return Err(refuse(format!(
-                        "regimes.{key}.capacity.{tier}: no capacity row"
-                    )));
+                    return Err(format!("regimes.{key}.capacity.{tier}: no capacity row"));
                 }
             }
             // `rate_table` divides by the regime's own anchor row, so the anchor rule holds there too.
@@ -476,19 +469,19 @@ impl SubscriptionCosts {
         for (model, weight) in &self.model_weight {
             undated_key("model_weight", model)?;
             if weight.is_some_and(|w| !w.is_finite() || w <= 0.0) {
-                return Err(refuse(format!(
+                return Err(format!(
                     "model_weight.{model}: a weight is a number above zero, or null"
-                )));
+                ));
             }
         }
         for (window, row) in &self.model_windows {
             if !window.starts_with("seven_day_") {
-                return Err(refuse(format!(
+                return Err(format!(
                     "model_windows.{window}: a model week starts with seven_day_"
-                )));
+                ));
             }
             if row.of != SEVEN_DAY {
-                return Err(refuse(format!("model_windows.{window}.of: {SEVEN_DAY}")));
+                return Err(format!("model_windows.{window}.of: {SEVEN_DAY}"));
             }
             factor_rule(
                 &format!("model_windows.{window}.capacity_factor"),
@@ -498,7 +491,7 @@ impl SubscriptionCosts {
         for (model, row) in &self.overrides {
             undated_key("overrides", model)?;
             if !self.model_weight.contains_key(model) {
-                return Err(refuse(format!("overrides.{model}: no model_weight row")));
+                return Err(format!("overrides.{model}: no model_weight row"));
             }
             for (name, multiplier) in row.type_multiplier.iter().flat_map(TypeOverride::named) {
                 if let Some(multiplier) = multiplier {
@@ -513,32 +506,28 @@ impl SubscriptionCosts {
                 if !matches!(window.as_str(), FIVE_HOUR | SEVEN_DAY)
                     && !self.model_windows.contains_key(window)
                 {
-                    return Err(refuse(format!(
+                    return Err(format!(
                         "{path}: neither a shared window nor a model_windows key"
-                    )));
+                    ));
                 }
                 weight_rule(&path, *weight)?;
             }
         }
         let tiers: HashSet<&str> = self.tier_order.iter().map(String::as_str).collect();
         if tiers.is_empty() || tiers.len() != self.tier_order.len() {
-            return Err(refuse(
-                "tier_order: a list of distinct tier names".to_string(),
-            ));
+            return Err("tier_order: a list of distinct tier names".to_string());
         }
         for (model, tier) in &self.model_tier {
             undated_key("model_tier", model)?;
             if !tiers.contains(tier.as_str()) {
-                return Err(refuse(format!(
-                    "model_tier.{model}: {tier} is not in tier_order"
-                )));
+                return Err(format!("model_tier.{model}: {tier} is not in tier_order"));
             }
         }
         // Every weighted model has a tier, so the cost reference's rows and the model order never guess one for a model
         // the file lists.
         for model in self.model_weight.keys().chain(self.overrides.keys()) {
             if !self.model_tier.contains_key(model) {
-                return Err(refuse(format!("model_tier: no tier for {model}")));
+                return Err(format!("model_tier: no tier for {model}"));
             }
         }
         Ok(())
