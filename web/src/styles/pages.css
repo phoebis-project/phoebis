@@ -195,7 +195,7 @@
   vertical-align: middle;
   background: none;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
 }
 
 .icon-btn:hover {
@@ -1868,13 +1868,13 @@
 .hbars__track {
   height: 8px;
   background: var(--surface-3);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
 }
 
 .hbars__fill {
   display: block;
   height: 100%;
-  border-radius: 0 4px 4px 0;
+  border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
 }
 
 .secret {
@@ -1913,7 +1913,7 @@
   position: relative;
   height: 8px;
   background: var(--surface-3);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
 }
 
 .ubar__tick {
@@ -3111,7 +3111,7 @@
   color: var(--ink-2);
   background: none;
   border: 1px solid var(--hairline);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
 }
 
 .pager__nav button:hover:not(:disabled) {
@@ -3209,7 +3209,7 @@
 .waterfall__bar {
   height: 18px;
   background: var(--surface-3);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
 }
 
 .probe-bar__seg,
@@ -3244,7 +3244,7 @@
 .waterfall__key {
   width: 12px;
   height: 8px;
-  border-radius: 2px;
+  border-radius: var(--radius-xxs);
 }
 
 .token-bar {
@@ -4086,7 +4086,7 @@
   flex: none;
   width: 10px;
   height: 10px;
-  border-radius: 2px;
+  border-radius: var(--radius-xxs);
 }
 
 .cost-ref__caption {
@@ -4167,7 +4167,7 @@
   left: 0;
   min-width: 4px;
   background: var(--series-1);
-  border-radius: 0 4px 4px 0;
+  border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
 }
 
 /* Inside the band a 5-hour window holds part of its capacity: the whole window is the light bar, what it holds the
@@ -4197,7 +4197,7 @@
 .cost-ref__segs span {
   flex: 1 1 0;
   background: var(--series-1);
-  border-radius: 2px;
+  border-radius: var(--radius-xxs);
 }
 
 /* Peak band */
@@ -4244,7 +4244,7 @@
   position: absolute;
   top: 2px;
   bottom: 2px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
 }
 
 .cost-ref__band-now::after {
@@ -4307,7 +4307,7 @@
   position: absolute;
   inset: 0 auto 0 0;
   background: var(--series-1);
-  border-radius: 0 4px 4px 0;
+  border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
 }
 
 @container (max-width: 760px) {
@@ -4489,7 +4489,7 @@
   flex: 1;
   min-width: 1px;
   background: var(--ramp-2);
-  border-radius: 2px 2px 0 0;
+  border-radius: var(--radius-xxs) var(--radius-xxs) 0 0;
 }
 
 .hist__bar.is-p99 {
@@ -4683,7 +4683,7 @@
   display: flex;
   height: 100%;
   overflow: hidden;
-  border-radius: 0 4px 4px 0;
+  border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
 }
 
 /* A fit of one move among many keeps a sliver rather than vanishing from its bar. */
