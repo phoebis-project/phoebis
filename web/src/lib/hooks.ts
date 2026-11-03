@@ -51,6 +51,33 @@ export function counted<T>(out: { current: number }, pending: Promise<T>): Promi
 }
 
 /**
+ * A poll's failing streak: whether its last read failed, so the next one runs quiet and the streak toasts once, and the
+ * routes it failed on, each reported recovered once by the read that ends it, which takes down the streak's notice.
+ */
+export interface Streak {
+  failing: boolean;
+  paths: Set<string>;
+}
+
+/** Calls `read`, quiet while the streak fails. */
+export function readQuiet<T>(streak: Streak, read: () => Promise<T>): Promise<T> {
+  return streak.failing ? quietly(read) : read();
+}
+
+/** Ends the streak on a read that answered, reporting each route it failed on recovered. */
+export function streakLanded(streak: Streak): void {
+  for (const path of streak.paths) reportRecovery(path);
+  streak.paths.clear();
+  streak.failing = false;
+}
+
+/** Notes a failed read's route, and marks the streak failing where `failing` holds. */
+export function streakFailed(streak: Streak, err: unknown, failing = true): void {
+  if (failing) streak.failing = true;
+  if (err instanceof ApiError && err.path !== null) streak.paths.add(err.path);
+}
+
+/**
  * Arms a poll that reads every `periodMs` while the tab is visible and `idle()` holds. When the tab comes back, and on
  * arming with `readDueNow`, it reads at once if `answeredAt()` is a full period old and `idle()` holds, with `returned`
  * true only for the tab's return. Returns the cleanup.
@@ -65,12 +92,11 @@ export function armPoll(periodMs: number, read: (returned: boolean) => void, idl
     const at = answeredAt();
     if (!document.hidden && idle() && at !== null && clock.now() - at >= periodMs) read(returned);
   };
-  const onVisible = () => readDue(true);
   if (readDueNow) readDue(false);
-  document.addEventListener('visibilitychange', onVisible);
+  const offVisible = onVisibility(() => readDue(true));
   return () => {
     clock.clearInterval(id);
-    document.removeEventListener('visibilitychange', onVisible);
+    offVisible();
   };
 }
 
@@ -108,19 +134,14 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
     landedSeq.current = seq;
     return true;
   };
-  // Whether the last read, the load or a refresh, failed: the next refresh runs quiet, so a failing streak toasts once.
-  const failing = useRef(false);
-  // The routes the streak failed on, each reported recovered once by the read that ends it, which takes down the
-  // failure notice the streak raised.
-  const failedPaths = useRef(new Set<string>());
+  // The streak of the hook's reads, the load's and the refreshes' alike.
+  const streak = useRef<Streak>({ failing: false, paths: new Set() });
   // The deps the streak's routes failed for.
   const failedFor = useRef(deps);
 
   const landed = useCallback((value: T, answered: readonly unknown[]) => {
     const at = stamp();
-    for (const path of failedPaths.current) reportRecovery(path);
-    failedPaths.current.clear();
-    failing.current = false;
+    streakLanded(streak.current);
     fetched.current = at;
     setData(value);
     setLoadedFor(answered);
@@ -128,8 +149,7 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
     setFetchedAt(at);
   }, []);
   const failed = (err: unknown) => {
-    failing.current = true;
-    if (err instanceof ApiError && err.path !== null) failedPaths.current.add(err.path);
+    streakFailed(streak.current, err);
     setError(messageOf(err));
   };
 
@@ -137,7 +157,7 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
     // A read for other deps answers other routes, so its success must not report the old streak's routes recovered; a
     // reload of the same deps keeps them, so its success still takes the streak's notice down.
     if (!sameDeps(failedFor.current, held)) {
-      failedPaths.current.clear();
+      streak.current.paths.clear();
       failedFor.current = held;
     }
     const current = { alive: true };
@@ -177,7 +197,7 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
       const seq = started.current;
       // A refresh starts only while no read is out, and a load for new deps ends the run a refresh still out belongs to,
       // so no refresh outruns a load.
-      counted(inFlight, failing.current ? quietly(read) : read()).then(
+      counted(inFlight, readQuiet(streak.current, read)).then(
         (value) => {
           if (!armed.alive || !loadRun.alive || !lands(seq)) return;
           landed(value, answered);

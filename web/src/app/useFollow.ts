@@ -1,8 +1,7 @@
 import { type Dispatch, type SetStateAction, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ApiError, quietly, reportRecovery } from '@/api/http';
 import { clock } from '@/lib/clock';
 import { type Followed, followPages, merged, type Overrun, type Paging, pagingFor } from '@/lib/follow';
-import { armPoll, counted } from '@/lib/hooks';
+import { armPoll, counted, readQuiet, type Streak, streakFailed, streakLanded } from '@/lib/hooks';
 
 /**
  * The auto reload poll both logs run: every `intervalMs` while the tab is visible, the page's `paused` is false and the
@@ -65,9 +64,7 @@ export function useFollow<R>(input: {
   useLayoutEffect(() => {
     latest.current = { address, compare, failed: error !== null, fixedEnd, identity, list: stale ? null : list, mark, overrun, read, shown, standIn };
   });
-  // A failing streak toasts once: the polls that continue it run quiet, and the one that ends it takes the streak's
-  // notice down, as `useAsync`'s refresh does.
-  const streak = useRef({ failing: false, paths: new Set<string>() });
+  const streak = useRef<Streak>({ failing: false, paths: new Set() });
   // When the last poll answered, null until one has, so a wait that ends reads at once only after a full interval.
   const lastAnswered = useRef<number | null>(null);
   // The hook's polls still out. It outlives the poll's effect, so the read at once and the first tick after a drawer
@@ -106,7 +103,7 @@ export function useFollow<R>(input: {
       // pass the row.
       let withheld = false;
       const page = (cursor: string | undefined) => {
-        const answer = failures.failing ? quietly(() => reader(cursor, to, landedAfter)) : reader(cursor, to, landedAfter);
+        const answer = readQuiet(failures, () => reader(cursor, to, landedAfter));
         return answer.then((p) => {
           if (fixedEnd && list === null && standing === null && p.rows.some(below)) withheld = true;
           return p;
@@ -120,9 +117,7 @@ export function useFollow<R>(input: {
         (polledPages) => {
           if (!armed.alive) return;
           lastAnswered.current = clock.now();
-          for (const path of failures.paths) reportRecovery(path);
-          failures.paths.clear();
-          failures.failing = false;
+          streakLanded(failures);
           // An answer for filters the reader has left since lands nowhere.
           const current = latest.current;
           if (current.address !== polled) return;
@@ -146,8 +141,7 @@ export function useFollow<R>(input: {
         (err: unknown) => {
           if (!armed.alive) return;
           // A failure under an address the reader has left since leaves the new address's streak to its own polls.
-          if (latest.current.address === polled) failures.failing = true;
-          if (err instanceof ApiError && err.path !== null) failures.paths.add(err.path);
+          streakFailed(failures, err, latest.current.address === polled);
         },
       );
     };
