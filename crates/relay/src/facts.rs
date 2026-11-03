@@ -259,22 +259,11 @@ fn tool_ms_sum(value: &str) -> Option<i64> {
     if value.len() > PREV_TOOL_DURATIONS_MAX_BYTES {
         return None;
     }
-    let mut sum: i64 = 0;
-    let mut parsed = false;
-    for entry in value.split(';') {
-        if entry.is_empty() {
-            continue;
-        }
-        let Some((_, ms)) = entry.rsplit_once('=') else {
-            continue;
-        };
-        let Ok(ms) = ms.parse::<u64>() else {
-            continue;
-        };
-        sum = sum.saturating_add(i64::try_from(ms).unwrap_or(i64::MAX));
-        parsed = true;
-    }
-    parsed.then_some(sum)
+    value
+        .split(';')
+        .filter_map(|entry| entry.rsplit_once('=')?.1.parse::<u64>().ok())
+        .map(|ms| i64::try_from(ms).unwrap_or(i64::MAX))
+        .reduce(i64::saturating_add)
 }
 
 /// The value of `<name>=` on the attribution line at `system[0]`, whatever its spelling; the caller applies the
