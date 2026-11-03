@@ -19,6 +19,7 @@ export const PHASES: { key: keyof RequestPhases; label: string }[] = [
  */
 export function PhaseWaterfall({ phases }: { phases: RequestPhases }) {
   const ink = useChartInk();
+  const rampAt = (k: number) => (k < ink.ramp.length ? ink.ramp[k] : ink.muted);
   const startMs = Date.parse(phases.receivedAt);
   const points = PHASES.map((p) => {
     const at = phases[p.key];
@@ -33,7 +34,7 @@ export function PhaseWaterfall({ phases }: { phases: RequestPhases }) {
   points.slice(1).forEach((p, i) => {
     if (p.at === null) return;
     const width = Math.max(0.5, ((p.at - prev) / total) * 100);
-    segments.push({ color: i < ink.ramp.length ? ink.ramp[i] : ink.muted, label: p.label, width });
+    segments.push({ color: rampAt(i), label: p.label, width });
     prev = p.at;
   });
   return (
@@ -46,7 +47,7 @@ export function PhaseWaterfall({ phases }: { phases: RequestPhases }) {
       <ul className="waterfall__legend">
         {points.map((p, i) => (
           <li key={p.key}>
-            <span className="waterfall__key" style={{ background: i === 0 ? ink.ink3 : p.at === null ? 'transparent' : i - 1 < ink.ramp.length ? ink.ramp[i - 1] : ink.muted, border: p.at === null ? `1px dashed ${ink.axis}` : undefined }} />
+            <span className="waterfall__key" style={{ background: i === 0 ? ink.ink3 : p.at === null ? 'transparent' : rampAt(i - 1), border: p.at === null ? `1px dashed ${ink.axis}` : undefined }} />
             <span>{p.label}</span>
             {p.at === null ? <span className="muted">not measured</span> : <span className="num">+{fmtMs(p.at - startMs)}</span>}
           </li>
