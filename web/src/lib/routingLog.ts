@@ -1,6 +1,6 @@
 import { iso, list, numOrNull as num, PIN_RELEASE_REASON_VALUES, strOrNull as str } from '@/api/decode';
 import type { CohortHold, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, ModelTiers, PinReason, PinReleaseReason, Placement, PrefixEntry, RecordCandidate, RecordOutcome, RecordSettings, RoutingEvent, RoutingLogRow, WalkFact, WalkStep } from '@/api/types';
-import { ROUTING_LOG_CODEC, type RangeValue } from './address';
+import { accountHref, requestHref, ROUTING_LOG_CODEC, type RangeValue } from './address';
 import { FAILOVER_MOVE_REASONS, moveLabel, RULE_MOVE_REASONS, type WeekReading } from './analytics';
 import { tierOrder } from './costs';
 import { has, lookup } from './counts';
@@ -760,9 +760,9 @@ export function factsOf(row: RoutingLogRow, now: number, page: readonly RoutingL
 export function entityHref(kind: FactEntity['kind'] | 'request' | 'session', id: string): string {
   switch (kind) {
     case 'account':
-      return `/accounts/${encodeURIComponent(id)}`;
+      return accountHref(id);
     case 'request':
-      return `/requests/${encodeURIComponent(id)}`;
+      return requestHref(id);
     // The Keys and Pools pages find and focus their entity by the address's hash.
     case 'key':
     case 'pool':

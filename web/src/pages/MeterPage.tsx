@@ -6,7 +6,7 @@ import { MeterRatio } from '@/components/MeterRatio';
 import type { Option } from '@/components/ui/OptionList';
 import { IconChevron } from '@/components/ui/icons';
 import { Button, Card, ErrorState, Skeleton } from '@/components/ui/primitives';
-import { METER_CODEC, type MeterAddress } from '@/lib/address';
+import { accountHref, METER_CODEC, type MeterAddress } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { METER_DIMENSIONS, notLoadedReason } from '@/lib/filterBar';
 import { fmtAbsolute, fmtDated, fmtInt, fmtShare, instant } from '@/lib/format';
@@ -105,7 +105,7 @@ function GroupLine({ group, newest, onToggle, open }: { group: MeterGroup; newes
         </span>
       </td>
       <td className="mono col-fill" title={group.accountId}>
-        <Link to={`/accounts/${encodeURIComponent(group.accountId)}`}>{group.accountId}</Link>
+        <Link to={accountHref(group.accountId)}>{group.accountId}</Link>
       </td>
       <td className="col-fit">{windowWord(group.window)}</td>
       <td className="right num col-fit">

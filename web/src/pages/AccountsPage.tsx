@@ -17,7 +17,7 @@ import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Field, Input, KeyValue, Meter, Segmented, Skeleton } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
-import { ACCOUNTS_CODEC, ACCOUNT_SORT_KEYS, METER_CODEC, sortAddressOf, sortDirOf } from '@/lib/address';
+import { accountHref, ACCOUNTS_CODEC, ACCOUNT_SORT_KEYS, METER_CODEC, sortAddressOf, sortDirOf } from '@/lib/address';
 import { ALLOWANCE_SUBTITLE, FREE_NOTE, allowanceFigure, allowanceSpan, allowanceWindows, newestResets, ownShareHover, pairOf, resetDate, resetHover, resetInstant, weeksFigure, type AllowanceFigure } from '@/lib/allowance';
 import { hintPlan } from '@/lib/analytics';
 import { clock } from '@/lib/clock';
@@ -124,7 +124,7 @@ export function AccountsPage() {
   const first = accounts.data?.find((a) => list.includes(a)) ?? accounts.data?.[0];
   useEffect(() => {
     if (created !== null && accountId === created.id) return;
-    if (accounts.data && !selected && first !== undefined) navigate({ hash: location.hash, pathname: `/accounts/${first.id}`, search: location.search }, { replace: true });
+    if (accounts.data && !selected && first !== undefined) navigate({ hash: location.hash, pathname: accountHref(first.id), search: location.search }, { replace: true });
   }, [accounts.data, accountId, created, first, location.hash, location.search, navigate, selected]);
 
   return (
@@ -224,7 +224,7 @@ export function AccountsPage() {
           if (confirmed.firstPollInFlight) setAwaiting(confirmed.accountId);
           if (start !== null && 'id' in start) {
             setCreated({ id: start.id, reading: false });
-            navigate({ hash: location.hash, pathname: `/accounts/${start.id}`, search: location.search });
+            navigate({ hash: location.hash, pathname: accountHref(start.id), search: location.search });
           }
         }}
       />
@@ -238,7 +238,7 @@ function AccountRow({ account, active, now }: { account: Account; active: boolea
   const slowed = slowedOf(account, now);
   return (
     <li>
-      <Link to={{ hash: location.hash, pathname: `/accounts/${account.id}`, search: location.search }} className={`account-row ${active ? 'is-active' : ''}`}>
+      <Link to={{ hash: location.hash, pathname: accountHref(account.id), search: location.search }} className={`account-row ${active ? 'is-active' : ''}`}>
         <div className="account-row__head">
           <span className="account-row__name">{account.label}</span>
           {account.plan && <Badge tone="neutral">{account.plan}</Badge>}

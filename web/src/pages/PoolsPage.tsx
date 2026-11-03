@@ -22,7 +22,7 @@ import { Tile } from '@/components/ui/Tile';
 import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, BadgeLink, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, PageLink, Select, Skeleton, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
-import { KEYS_CODEC } from '@/lib/address';
+import { accountHref, KEYS_CODEC } from '@/lib/address';
 import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, UNPRICED_TITLE, equivalentOrDash, moveLabel, nativeFiguresOf, type WeekReading } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
 import { weekReadingOf } from '@/lib/costs';
@@ -731,7 +731,7 @@ function PoolCard({
             'text' in part ? (
               <Fragment key={i}>{part.text}</Fragment>
             ) : (
-              <Link key={i} to={`/accounts/${part.accountId}`}>
+              <Link key={i} to={accountHref(part.accountId)}>
                 {part.label}
               </Link>
             ),
@@ -772,7 +772,7 @@ function PoolCard({
                   <tr key={p.account.id} className={isNext ? 'is-next' : undefined}>
                     <td className="pool__prio num col-fit">{grouped ? `${GROUP_LABEL[tier.group]} P${tier.priority}` : `P${tier.priority}`}</td>
                     <td className="col-fill" title={p.account.label}>
-                      <Link to={`/accounts/${p.account.id}`}>{p.account.label}</Link>
+                      <Link to={accountHref(p.account.id)}>{p.account.label}</Link>
                       {m && <MemberBudget member={m} />}
                     </td>
                     <td className="serving__standing col-fit" aria-describedby={whyId}>

@@ -13,6 +13,7 @@ import { Badge, Button, Card, EmptyState, ErrorState, Skeleton } from '@/compone
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { figuresValue } from '@/components/ui/Tile';
+import { accountHref, requestHref } from '@/lib/address';
 import { equivalentOrDash, nativeFiguresOf, shareHint, UNPRICED_TITLE, type WeekReading } from '@/lib/analytics';
 import { weekReadingOf } from '@/lib/costs';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortModel, tokensTotal } from '@/lib/format';
@@ -261,7 +262,7 @@ function WeighedRing({ figures, slotOf }: { figures: RingFigures; slotOf: (id: s
         {rows.map((r) => (
           <li key={r.id} className={hover && hover !== r.id ? 'is-dim' : ''} title={titleOf(r)}>
             <span className="legend__swatch" style={{ background: accountColor(ink, slotOf(r.id)) }} />
-            <Link to={`/accounts/${r.id}`}>{r.label}</Link>
+            <Link to={accountHref(r.id)}>{r.label}</Link>
             <span className="num">{fmtPct(r.remaining)}</span>
           </li>
         ))}
@@ -293,7 +294,7 @@ function AccountMini({ account, now }: { account: Account; now: number }) {
     </Badge>
   );
   return (
-    <Link to={`/accounts/${account.id}`} className="card card--padded account-mini">
+    <Link to={accountHref(account.id)} className="card card--padded account-mini">
       <div className="account-mini__head">
         <span className="account-mini__name">{account.label}</span>
         {/* The compact 5-hour bar has no room for the speed chip beside its label, so the chip stands by the status, the
@@ -394,7 +395,7 @@ function RecentTable({ accounts, rows, error, scale, settings, settingsError }: 
                 return (
                   <tr key={r.id}>
                     <td className="num col-fill" title={fmtAbsolute(r.at)}>
-                      <Link to={`/requests/${r.id}`}>{fmtTime(r.at)}</Link>
+                      <Link to={requestHref(r.id)}>{fmtTime(r.at)}</Link>
                       <span className="sub mono" title={r.id}>
                         {r.id}
                       </span>

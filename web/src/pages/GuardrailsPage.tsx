@@ -9,7 +9,7 @@ import { OptionList, type Option, walkFocus } from '@/components/ui/OptionList';
 import { Popover } from '@/components/ui/Popover';
 import { IconChevron, IconInfo, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Field, GroupedDialog, Input, Menu, PageLink, Segmented, Select, Skeleton, Toggle, type DialogGroup } from '@/components/ui/primitives';
-import { KEYS_CODEC } from '@/lib/address';
+import { KEYS_CODEC, requestHref } from '@/lib/address';
 import { effectiveCaptureHours } from '@/lib/capture';
 import type { PauseCause } from '@/lib/follow';
 import { fmtAbsolute, fmtInt, messageOf } from '@/lib/format';
@@ -660,7 +660,7 @@ export function GuardrailDialog({ existing, existingIds, keys, onClose, onSaved,
                         <tr key={r.id}>
                           <td className="col-fit">{fmtAbsolute(r.receivedAt)}</td>
                           <td className="col-fill mono" title={r.id}>
-                            <PageLink to={`/requests/${encodeURIComponent(r.id)}`}>{r.id}</PageLink>
+                            <PageLink to={requestHref(r.id)}>{r.id}</PageLink>
                           </td>
                           <td className="col-fit">{verdictWords(r)}</td>
                         </tr>

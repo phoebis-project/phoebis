@@ -198,3 +198,11 @@ test('the one preset table carries the five presets by name, label and width, an
   // A name the table does not hold reads as the view's default.
   assert.equal(read(d.ROUTING_LOG_CODEC, 'range=3h').range.preset, '1h');
 });
+
+test("an account's link encodes its id, so a reserved character stays inside the one path segment", () => {
+  assert.equal(d.accountHref('a b/c'), '/accounts/a%20b%2Fc');
+});
+
+test("a request's link encodes its id, so a reserved character stays inside the one path segment", () => {
+  assert.equal(d.requestHref('req a/b?c'), '/requests/req%20a%2Fb%3Fc');
+});

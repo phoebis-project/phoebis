@@ -16,7 +16,7 @@ import { ColumnsControl } from '@/components/ui/ColumnsControl';
 import type { Option } from '@/components/ui/OptionList';
 import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Input, KeyValue, Select, Skeleton } from '@/components/ui/primitives';
-import { addressWindow, REQUESTS_CODEC, type RequestsAddress } from '@/lib/address';
+import { accountHref, addressWindow, requestHref, REQUESTS_CODEC, type RequestsAddress } from '@/lib/address';
 import { shareHint, shareHintLines, type WeekReading } from '@/lib/analytics';
 import { autoModeLabel } from '@/lib/autoMode';
 import { bodyLines, bodyText, findHits } from '@/lib/bodies';
@@ -461,11 +461,11 @@ export function RequestsPage() {
                       <tr
                         key={r.id}
                         className={[r.id === requestId ? 'is-selected' : '', fresh.has(r.id) ? 'is-new' : ''].filter(Boolean).join(' ')}
-                        onClick={() => navigate({ pathname: `/requests/${r.id}`, search: location.search })}
+                        onClick={() => navigate({ pathname: requestHref(r.id), search: location.search })}
                         tabIndex={0}
                         // A key pressed on a link in the row is the link's own, so Enter on Routing opens the log
                         // alone.
-                        onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && navigate({ pathname: `/requests/${r.id}`, search: location.search })}
+                        onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && navigate({ pathname: requestHref(r.id), search: location.search })}
                       >
                         {shown.has('time') && (
                           <td className="num requests__time col-fill" title={fmtAbsolute(r.at)}>
@@ -531,7 +531,7 @@ export function RequestsPage() {
                             <Link to={routingLogHref(r, now)} onClick={(e) => e.stopPropagation()}>
                               Routing
                             </Link>
-                            <Link to={{ pathname: `/requests/${r.id}`, search: location.search }} onClick={(e) => e.stopPropagation()}>
+                            <Link to={{ pathname: requestHref(r.id), search: location.search }} onClick={(e) => e.stopPropagation()}>
                               Details
                             </Link>
                           </span>
@@ -657,7 +657,7 @@ function RequestDrawer({ context, guardrails, request, requestId, now, onClose, 
               rows={[
                 { label: 'Status', value: <StatusBadge status={r.status} /> },
                 { label: 'Outcome', value: REQUEST_OUTCOME_LABEL[r.outcome] },
-                { label: 'Account', value: r.accountId === null ? '-' : <Link to={`/accounts/${r.accountId}`}>{r.accountId}</Link> },
+                { label: 'Account', value: r.accountId === null ? '-' : <Link to={accountHref(r.accountId)}>{r.accountId}</Link> },
                 { label: 'Model', value: r.model === '' ? <span className="muted">-</span> : r.model, mono: r.model !== '' },
                 ...(r.canonicalModel !== r.model ? [{ label: 'Canonical model', value: r.canonicalModel, mono: true }] : []),
                 { label: 'TTFB', value: fmtMs(r.ttfbMs) },

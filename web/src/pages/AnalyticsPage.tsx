@@ -17,7 +17,7 @@ import { Badge, Button, Card, ErrorState, Meter, Segmented, Skeleton } from '@/c
 import { FilterBar } from '@/components/FilterBar';
 import { GroupBy as GroupByControl, GroupsButton } from '@/components/GroupBy';
 import { SectionBar } from '@/components/SectionBar';
-import { addressWindow, ANALYTICS_CODEC, type AnalyticsAddress } from '@/lib/address';
+import { accountHref, addressWindow, ANALYTICS_CODEC, type AnalyticsAddress } from '@/lib/address';
 import { ALLOWANCE_WEEKS, allowanceColumnWord, allowanceRows, allowanceSpan, fleetFigures, resetInstant, weeklyKeys, type AllowanceFigure } from '@/lib/allowance';
 import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, failureHead, foldBurn, heldBars, heldHover, heldSpan, hintPlan, isolatedSlots, keptWarmNote, keptWarmTokens, moveLabel, nativeCellOf, netSaving, niceAxisTop, oneAccountGroupOf, peakLines, placementCells, placementRungLabel, readBurn, sampledWindows, shareHint, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
@@ -2539,7 +2539,7 @@ function BudgetTable({ budgets, error, now }: { budgets: MemberBudget[] | null; 
                     {b.poolId}
                   </td>
                   <td className="mono col-fill" title={b.accountId}>
-                    <Link to={`/accounts/${b.accountId}`}>{b.accountId}</Link>
+                    <Link to={accountHref(b.accountId)}>{b.accountId}</Link>
                   </td>
                   <td className="col-fit">
                     <span className="budgets-table__spent">
@@ -2803,7 +2803,7 @@ function AllowanceTable({ answer, costs, error, week }: { answer: UnusedAllowanc
               rows?.map((r) => (
                 <tr key={r.accountId}>
                   <td className="mono col-fill" title={r.accountId}>
-                    <Link to={`/accounts/${r.accountId}`}>{r.accountId}</Link>
+                    <Link to={accountHref(r.accountId)}>{r.accountId}</Link>
                     {r.termEndedAt !== null && (
                       <span className="sub" title={fmtAbsolute(r.termEndedAt)}>
                         {`term ended ${resetInstant(r.termEndedAt)}`}

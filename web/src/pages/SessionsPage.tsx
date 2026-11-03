@@ -12,7 +12,7 @@ import { SpeedChip } from '@/components/ui/SpeedChip';
 import { Tile } from '@/components/ui/Tile';
 import { IconChevron } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skeleton, useHostedDescription } from '@/components/ui/primitives';
-import { ANALYTICS_CODEC, REQUESTS_CODEC, SESSION_SORT_KEYS, SESSIONS_CODEC, type SessionsAddress, sortAddressOf, sortDirOf, type SortDir } from '@/lib/address';
+import { accountHref, ANALYTICS_CODEC, REQUESTS_CODEC, SESSION_SORT_KEYS, SESSIONS_CODEC, type SessionsAddress, sortAddressOf, sortDirOf, type SortDir } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { failed } from '@/lib/costs';
 import { SESSIONS_DIMENSIONS } from '@/lib/filterBar';
@@ -988,7 +988,7 @@ function LineAccount({ account, id, now }: { account: Account | null; id: string
   const kind = useHostedDescription(title);
   return (
     <span className="agents__account">
-      <Link to={`/accounts/${id}`} title={title} aria-describedby={kind}>
+      <Link to={accountHref(id)} title={title} aria-describedby={kind}>
         {id}
       </Link>
       <SpeedChip {...memberSpeed({ speed: null }, account, now)} />

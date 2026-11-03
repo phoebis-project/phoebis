@@ -237,6 +237,10 @@ export const REQUESTS_CODEC = codecOf<RequestsAddress>({
 export const REQUESTS_DEFAULTS: RequestsAddress = REQUESTS_CODEC.fromParams(new URLSearchParams());
 export const requestsHref = (address: RequestsAddress): string => `/requests?${REQUESTS_CODEC.toParams(address)}`;
 
+export const accountHref = (id: string): string => `/accounts/${encodeURIComponent(id)}`;
+/** One request's own page, where `requestsHref` opens the filtered list. */
+export const requestHref = (id: string): string => `/requests/${encodeURIComponent(id)}`;
+
 export interface AnalyticsAddress {
   accounts: string[];
   /** The group-by, the Burn section's own `session` among its values. */
