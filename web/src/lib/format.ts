@@ -18,14 +18,12 @@ export const viewingZone = (): string => Intl.DateTimeFormat().resolvedOptions()
 const hourCycle = () => (timeFormat === '12h' ? 'h12' : 'h23');
 
 const compact = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 });
-const compact2 = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 2 });
 const plain = new Intl.NumberFormat('en-US');
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 const usd4 = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 4, maximumFractionDigits: 4 });
 
 export const fmtInt = (n: number) => plain.format(Math.round(n));
 export const fmtCompact = (n: number) => (Math.abs(n) < 1000 ? plain.format(Math.round(n)) : compact.format(n));
-export const fmtCompact2 = (n: number) => (Math.abs(n) < 1000 ? plain.format(Math.round(n)) : compact2.format(n));
 /** What a cut dropped, from the counts the ledger took as it read; a rendered body measures neither side. */
 export const bytesDropped = (seen: number, stored: number) => Math.max(0, seen - stored);
 // `n + 0` folds a negative zero onto a positive one: an empty sum of f64 costs reaches the wire as -0.0 and
@@ -289,9 +287,7 @@ export function fmtDayTick(ms: number, timeZone?: string): string {
   return clock === '00:00' ? day : `${day} ${new Date(ms).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit', timeZone })}`;
 }
 
-export function fmtHourTick(ms: number): string {
-  return new Date(ms).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit' });
-}
+export const fmtHourTick = (ms: number): string => fmtShortTime(new Date(ms).toISOString());
 
 /**
  * The analytics label of a key generation no live key holds, built here for the route's groups and the fold's alike
