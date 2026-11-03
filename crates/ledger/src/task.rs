@@ -159,21 +159,19 @@ pub struct Replayed {
     pub remaining: u64,
 }
 
-/// What a caller asks the writer to do on its own turn, between two batches.
-enum Control {
-    /// `deadline` is the caller's bound on the ledger's clock, and `claimed` is who owns the replay: the writer
-    /// takes it (`compare_exchange(false, true)`) at its turn before it runs `land_parked`, the caller takes it at
-    /// the deadline instead, and whoever loses the exchange stands down. A message the caller claimed is dropped
-    /// unanswered with a `debug` line naming the deadline. A message the writer claims at or past its deadline is
-    /// answered `WriterHeld` unrun, which covers a caller that went away before its deadline and so never took the
-    /// claim. A caller that gave up never has its replay run behind its back, and a message the writer claimed before
-    /// the deadline answers its real result however long the landing takes.
-    ReplayParked {
-        now: i64,
-        deadline: i64,
-        claimed: Arc<AtomicBool>,
-        reply: oneshot::Sender<Result<Replayed, LedgerError>>,
-    },
+/// A replay of the parked rows the caller asks the writer to run on its own turn, between two batches.
+/// `deadline` is the caller's bound on the ledger's clock, and `claimed` is who owns the replay: the writer takes it
+/// (`compare_exchange(false, true)`) at its turn before it runs `land_parked`, the caller takes it at the deadline
+/// instead, and whoever loses the exchange stands down. A message the caller claimed is dropped unanswered with a
+/// `debug` line naming the deadline. A message the writer claims at or past its deadline is answered `WriterHeld`
+/// unrun, which covers a caller that went away before its deadline and so never took the claim. A caller that gave up
+/// never has its replay run behind its back, and a message the writer claimed before the deadline answers its real
+/// result however long the landing takes.
+struct ReplayParked {
+    now: i64,
+    deadline: i64,
+    claimed: Arc<AtomicBool>,
+    reply: oneshot::Sender<Result<Replayed, LedgerError>>,
 }
 
 #[derive(Clone)]
@@ -192,7 +190,7 @@ pub struct Ledger {
     /// before the stop signal goes out, so none of them can enqueue into a channel that is closing.
     tasks: Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
     /// The writer's control channel: a replay asks for the writer's own turn through it.
-    control: mpsc::Sender<Control>,
+    control: mpsc::Sender<ReplayParked>,
     /// The writer's clock, which a replay's deadline is read on.
     clock: Clock,
     /// The days a request row is kept, as the configuration set them at the start.
@@ -319,7 +317,7 @@ impl Ledger {
         let deadline = (self.clock)() + bound.as_millis() as i64;
         let claimed = Arc::new(AtomicBool::new(false));
         let (reply, mut answer) = oneshot::channel();
-        let message = Control::ReplayParked {
+        let message = ReplayParked {
             now,
             deadline,
             claimed: claimed.clone(),
@@ -371,7 +369,7 @@ pub fn spawn(
     mut config: LedgerConfig,
 ) -> Ledger {
     let (tx, rx) = mpsc::channel(CHANNEL_DEPTH);
-    let (control, control_rx) = mpsc::channel::<Control>(1);
+    let (control, control_rx) = mpsc::channel::<ReplayParked>(1);
     let stats = Arc::new(LedgerStats::default());
     let unpriced = Unpriced::default();
     let (done_tx, done_rx) = oneshot::channel();
@@ -562,7 +560,7 @@ async fn writer(
     unpriced: Unpriced,
     router: RouterHandle,
     mut rx: mpsc::Receiver<Record>,
-    mut control: mpsc::Receiver<Control>,
+    mut control: mpsc::Receiver<ReplayParked>,
     mut stopped: watch::Receiver<bool>,
     assembler: tokio::task::JoinHandle<()>,
     stats: Arc<LedgerStats>,
@@ -668,7 +666,7 @@ async fn writer(
             // replay or a batch: two passes that read the table at once would each land the same row, and the landed
             // counts and the metrics would take it twice. The start-up pass ran on this task before the loop, under
             // the same rule.
-            Some(Control::ReplayParked { now, deadline, claimed, reply }) = control.recv() => {
+            Some(ReplayParked { now, deadline, claimed, reply }) = control.recv() => {
                 if claimed
                     .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
                     .is_err()
@@ -2009,7 +2007,7 @@ mod tests {
             stop: Arc::new(stop),
             done: Arc::new(Mutex::new(None)),
             tasks: Arc::new(std::sync::Mutex::new(Vec::new())),
-            control: mpsc::channel::<Control>(1).0,
+            control: mpsc::channel::<ReplayParked>(1).0,
             clock: Arc::new(|| 0),
             retention_days: LedgerConfig::default().retention_days,
         };
