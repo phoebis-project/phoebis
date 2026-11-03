@@ -155,7 +155,9 @@ function requestCost(request: RequestLog, unit: UnitPosition, context: CostConte
  * skeleton while the scale is out, and a dash titled with the context's failure where it carries one.
  */
 function CostCell({ context, request, unit }: { context: CostContext; request: RequestLog; unit: UnitPosition }) {
-  return <CostTd cell={costCellOf(requestCost(request, unit, context).unit, context.week, context.scale)} className="requests__cost" error={context.failure?.text ?? null} />;
+  // The unit alone, as the Dashboard's RecentCost builds it: the drawer's hint lines would be built for nothing per row.
+  const args = requestHintArgs(request, context.accounts, context.costs);
+  return <CostTd cell={costCellOf(costUnitOf(request, unit, args === null ? null : shareHint(...args)), context.week, context.scale)} className="requests__cost" error={context.failure?.text ?? null} />;
 }
 
 /** A component of its own, so the expression-bodied row map reads the hold's words once. */
