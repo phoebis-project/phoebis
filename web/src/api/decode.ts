@@ -1,7 +1,7 @@
 import type {
   Account, AccountCatalog, AccountKind, AccountRollup, AllowanceReset, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
-  CohortHold, CostRevision, CostSplit, DecisionKind, DecisionRecord, DecisionSummary, FastLaneReading, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, KeyModels, MemberBudget, ModelPrice, ModelRule, ModelRulesMode,
-  MoveCause, Overview, PairingConfirmed, PairingSession, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, PriceCells, PriceRevision, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, Reconciliation, ReconciliationsAnswer, RecordCandidate, RecordHold, RecordOutcome, RecordSettings, RefusalCategoriesAnswer, ReplayOutcome, RequestEvent, RequestLog, RequestPage, RequestPhases, RequestShape, RewritesAnswer,
+  CohortHold, CostRevision, CostSplit, DecisionKind, DecisionRecord, DecisionSummary, Exhaustion, FastLaneReading, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, KeyFigures, KeyModels, MemberBudget, ModelPrice, ModelRule, ModelRulesMode,
+  MoveCause, Overview, PairingConfirmed, PairingSession, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, PriceCells, PriceRevision, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, Reconciliation, ReconciliationsAnswer, RecordCandidate, RecordHold, RecordOutcome, RecordSettings, Refusal, RefusalCategoriesAnswer, ReplayOutcome, RequestEvent, RequestLog, RequestPage, RequestPhases, RequestShape, RewritesAnswer,
   RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, Settings, Spend, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, UnusedAllowanceAnswer, WastedProbeReason, WindowId, WindowSample,
 } from './types';
 import type { AgentContext } from './types';
@@ -292,6 +292,11 @@ export function decodeReplay(v: unknown): ReplayOutcome {
   return { landed: num(r.landed), remaining: num(r.remaining) };
 }
 
+const keyFigures = (v: unknown): KeyFigures => {
+  const f = rec(v);
+  return { billedUsd: num(f.billed_usd), cost: num(f.cost_usd), equivalent: numOrNull(f.equivalent), requests: num(f.requests) };
+};
+
 export function decodeKey(v: unknown): ApiKey {
   const k = rec(v);
   const expires = isoOrNull(k.expires_at);
@@ -308,7 +313,7 @@ export function decodeKey(v: unknown): ApiKey {
     id: str(k.id),
     keepaliveOptOut: bool(k.keepalive_opt_out),
     lastUsedAt: isoOrNull(k.last_used_at),
-    lifetime: { billedUsd: num(rec(k.lifetime).billed_usd), cost: num(rec(k.lifetime).cost_usd), equivalent: numOrNull(rec(k.lifetime).equivalent), requests: num(rec(k.lifetime).requests) },
+    lifetime: keyFigures(k.lifetime),
     longContextTwins: bool(k.long_context_twins, true),
     modelRules: list(k.model_rules).map(decodeModelRule),
     modelRulesMode: rulesMode(k.model_rules_mode),
@@ -325,13 +330,7 @@ export function decodeKey(v: unknown): ApiKey {
     // Routing refuses a key that is revoked, expired or switched off, in that order of finality.
     status: revoked !== null ? 'revoked' : expires !== null && Date.parse(expires) <= Date.now() ? 'expired' : enabled ? 'active' : 'disabled',
     updatedAt: isoOr(k.updated_at, epoch),
-    usage7d: {
-      billedUsd: num(rec(k.usage_7d).billed_usd),
-      cost: num(rec(k.usage_7d).cost_usd),
-      equivalent: numOrNull(rec(k.usage_7d).equivalent),
-      requests: num(rec(k.usage_7d).requests),
-      tokens: num(rec(k.usage_7d).tokens),
-    },
+    usage7d: { ...keyFigures(k.usage_7d), tokens: num(rec(k.usage_7d).tokens) },
   };
 }
 
@@ -526,8 +525,8 @@ const holdOf = (v: unknown): RecordHold | null =>
   }));
 /** Both shapes the router writes read through one object, the other shape's members null. */
 const causeOf = (v: unknown): MoveCause | null => orNull(v, (c) => ({ cause: strOrNull(c.cause), reason: strOrNull(c.reason), scope: strOrNull(c.scope), state: strOrNull(c.state), window: strOrNull(c.window) }));
-const exhaustionOf = (v: unknown) => orNull(v, (x) => ({ deadline: isoOrNull(x.deadline), kind: str(x.kind), obstacle: strOrNull(x.obstacle), reason: strOrNull(x.reason), window: strOrNull(x.window) }));
-const refusalOf = (v: unknown) => orNull(v, (x) => ({ code: str(x.code), kind: str(x.kind), reason: str(x.reason) }));
+const exhaustionOf = (v: unknown): Exhaustion | null => orNull(v, (x) => ({ deadline: isoOrNull(x.deadline), kind: str(x.kind), obstacle: strOrNull(x.obstacle), reason: strOrNull(x.reason), window: strOrNull(x.window) }));
+const refusalOf = (v: unknown): Refusal | null => orNull(v, (x) => ({ code: str(x.code), kind: str(x.kind), reason: str(x.reason) }));
 /** A value the console cannot draw as a number or a word drops its pair rather than drawing a guess. */
 const factOf = (v: unknown): SummaryFact[] => {
   const f = rec(v);

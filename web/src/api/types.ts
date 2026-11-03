@@ -558,6 +558,10 @@ export interface Pool {
 
 export type KeyStatus = 'active' | 'disabled' | 'expired' | 'revoked';
 
+/** `billedUsd` is the dollars of the requests no subscription window paid, and `equivalent` the plan-funded requests
+ *  as the Pro-week figure, null where a request priced nothing and 0 with no plan-funded request. */
+export interface KeyFigures { billedUsd: number; cost: number; equivalent: number | null; requests: number }
+
 export interface ApiKey {
   /** Null inherits the pool's `autoModeServer`; true or false overrides it for this key. */
   autoModeServer: boolean | null;
@@ -573,9 +577,7 @@ export interface ApiKey {
   /** Sessions on this key never receive cache-warming probes. */
   keepaliveOptOut: boolean;
   lastUsedAt: string | null;
-  /** `billedUsd` is the dollars of the requests no subscription window paid, and `equivalent` the plan-funded requests
-   *  as the Pro-week figure, null where a request priced nothing and 0 with no plan-funded request. */
-  lifetime: { billedUsd: number; cost: number; equivalent: number | null; requests: number };
+  lifetime: KeyFigures;
   /** Whether `GET /v1/models` under this key lists an `id[1m]` twin beside every long-context model. */
   longContextTwins: boolean;
   modelRules: ModelRule[];
@@ -598,7 +600,7 @@ export interface ApiKey {
   /** The stamp of the row's last write, which `revision` carries. */
   updatedAt: string;
   /** The week's figures, read as `lifetime`'s. */
-  usage7d: { billedUsd: number; cost: number; equivalent: number | null; requests: number; tokens: number };
+  usage7d: KeyFigures & { tokens: number };
 }
 
 export interface CreatedApiKey {
@@ -1020,6 +1022,10 @@ export interface Score {
   unit: string;
 }
 
+export interface Exhaustion { deadline: string | null; kind: string; obstacle: string | null; reason: string | null; window: string | null }
+/** The refusal's code (a key refusal's `revoked` and its siblings, a client's `drift` or `contract`) beside its sentence. */
+export interface Refusal { code: string; kind: string; reason: string }
+
 /** A decision row of the routing log: the summary the router wrote, with the facts of the attempt that completed it. */
 export interface DecisionSummary {
   type: 'decision';
@@ -1032,7 +1038,7 @@ export interface DecisionSummary {
   by: DecisionBy;
   /** Null until the completing attempt reports usage, and for a decision that sent nothing upstream. */
   cache: { hit: boolean; inputTokens: number; promisedTokens: number | null; readTokens: number } | null;
-  exhaustion: { deadline: string | null; kind: string; obstacle: string | null; reason: string | null; window: string | null } | null;
+  exhaustion: Exhaustion | null;
   /** One pair, or two at the most. */
   fact: SummaryFact[];
   fast: boolean;
@@ -1043,8 +1049,7 @@ export interface DecisionSummary {
   model: string | null;
   poolId: string | null;
   probe: boolean;
-  /** The refusal's code (a key refusal's `revoked` and its siblings, a client's `drift` or `contract`) beside its sentence. */
-  refusal: { code: string; kind: string; reason: string } | null;
+  refusal: Refusal | null;
   requestId: string;
   rule: string | null;
   rung: Placement | null;
@@ -1270,7 +1275,7 @@ export interface RecordCandidate {
   inFlightCap: number;
   inOverage: boolean;
   incarnation: number;
-  kind: 'api_key' | 'oauth';
+  kind: AccountKind;
   obstacle: { name: string; reason: string | null; until: string | null; window: string | null } | null;
   overage: { observedAt: string; reset: string | null; since: string; source: string } | null;
   /**
@@ -1371,7 +1376,7 @@ export interface RecordOutcome {
   cause: MoveCause | null;
   cohortHold: CohortHold | null;
   completion: RecordCompletion | null;
-  exhaustion: { deadline: string | null; kind: string; obstacle: string | null; reason: string | null; window: string | null } | null;
+  exhaustion: Exhaustion | null;
   fromAccountId: string | null;
   hold: RecordHold | null;
   inOverage: boolean;
@@ -1384,8 +1389,7 @@ export interface RecordOutcome {
   /** In the routing task's emit order: two for a replaced expired pin, `pin_expired` then `pin_created`. */
   pinEvents: { kind: string; reason: string | null }[];
   pinWritten: { action: string; epoch: number; hashesStamped: boolean; lane: string; refreshStamped: boolean } | null;
-  /** The refusal's code (a key refusal's `revoked` and its siblings, a client's `drift` or `contract`) beside its sentence. */
-  refusal: { code: string; kind: string; reason: string } | null;
+  refusal: Refusal | null;
   /** What the decision booked on the account until the usage replaces it: the rewrite and the burn per hour by plan window. */
   reservation: { accountId: string; burn: Record<string, number>; expiresAt: string; rewrite: Record<string, number> } | null;
   rule: string | null;
@@ -1933,36 +1937,34 @@ export interface PriceCells { cacheReadPerM: number; cacheWrite1hPerM: number; c
 /** The prices of an attempt whose prompt is longer than `over` tokens. */
 export interface LongContextPrice extends PriceCells { over: number }
 
-export interface ModelPrice {
-  cacheReadPerM: number;
-  cacheWrite1hPerM: number;
-  cacheWrite5mPerM: number;
+export interface ModelPrice extends PriceCells {
   /** The fast cells, null on a model that serves no fast mode. */
   fast: PriceCells | null;
-  inputPerM: number;
   /** The long-context set, null on a model priced one way. */
   longContext: LongContextPrice | null;
   model: string;
-  outputPerM: number;
 }
 
 export interface TypeMultiplier { cacheRead: number; cacheWrite1h: number; cacheWrite5m: number; input: number; output: number }
+/** Each tier's capacity on the two windows, null where the cost model sizes none. */
+export type CapacityRows = Record<string, { fiveHour: number | null; sevenDay: number | null }>;
+export interface WindowFactors { fiveHour: number; sevenDay: number }
 /** A pricing regime of the cost model: the entrypoints it covers, its capacity rows and its band factors. */
 export interface Regime {
-  capacity: Record<string, { fiveHour: number | null; sevenDay: number | null }>;
+  capacity: CapacityRows;
   entrypoints: string[];
-  peakCapacityFactor: { fiveHour: number; sevenDay: number };
+  peakCapacityFactor: WindowFactors;
 }
 /** The subscription cost model as the ledger loaded it, the file's keys in camel case and its maps in the file's order. */
 export interface SubscriptionCosts {
-  capacity: Record<string, { fiveHour: number | null; sevenDay: number | null }>;
+  capacity: CapacityRows;
   effective: string;
   /** Each undated model id's model tier, a name of `tierOrder`. */
   modelTier: Record<string, string>;
   modelWeight: Record<string, number | null>;
   modelWindows: Record<string, { capacityFactor: number; of: string }>;
   overrides: Record<string, { typeMultiplier?: Partial<TypeMultiplier>; weightByWindow?: Record<string, number> }>;
-  peak: { capacityFactor: { fiveHour: number; sevenDay: number }; fromHour: number; toHour: number; weekdays: boolean; zone: string };
+  peak: { capacityFactor: WindowFactors; fromHour: number; toHour: number; weekdays: boolean; zone: string };
   /** The regimes by name, in the file's order. A request prices under the one listing its entrypoint, else the base. */
   regimes: Record<string, Regime>;
   /** The model tiers in display order. */
