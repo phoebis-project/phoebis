@@ -538,7 +538,6 @@ export function foldBurn(
   groupBy: BurnGroup,
   bucketSeconds: number,
   sized: ReadonlySet<string>,
-  max = MAX_BURN_LINES,
   rangeEndMs?: number,
   nowMs = rangeEndMs,
   options: { account?: string | null } = {},
@@ -557,8 +556,8 @@ export function foldBurn(
   const figured = new Set(points.filter((p) => p.equivalent !== null).map((p) => lineOf(p.group)));
   const unitOf = (group: string): BurnLineUnit => (subscribed.has(group) ? (sized.has(byAccount ? group : (account ?? '')) || figured.has(group) ? 'window_share' : 'unknown') : 'usd');
   const ranked = [...tokens.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([k]) => k);
-  const kept: string[] = groupBy === 'request_class' ? LEGEND_ORDER : ranked.slice(0, max);
-  const folded = groupBy === 'request_class' ? [] : ranked.slice(max);
+  const kept: string[] = groupBy === 'request_class' ? LEGEND_ORDER : ranked.slice(0, MAX_BURN_LINES);
+  const folded = groupBy === 'request_class' ? [] : ranked.slice(MAX_BURN_LINES);
   const rests = (['window_share', 'unknown', 'usd'] as const).filter((unit) => folded.some((g) => unitOf(g) === unit));
   // The rests take the slots after the kept lines, so a group whose id happens to read `other` stays its own line.
   const slots = kept.length + rests.length;

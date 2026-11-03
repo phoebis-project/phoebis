@@ -59,7 +59,6 @@ test('a range ending now, twenty minutes into the running hour, rates that bucke
     'account',
     3_600,
     new Set(['primary']),
-    d.MAX_BURN_LINES,
     end,
     end,
   );
@@ -77,7 +76,7 @@ test('a range ending now, twenty minutes into the running hour, rates that bucke
 test('a past range ending twenty minutes into an hour rates that hour in full', () => {
   // The route reads whole hours through the hour ceiling of the range's end, so it answered the whole 14:00 hour.
   const at13 = Date.UTC(2026, 8, 16, 13);
-  const { rows } = d.foldBurn([point(at13, 'overflow', { uncachedTokens: 600 }), point(at13 + HOUR, 'overflow', { uncachedTokens: 600 })], 'key', 3_600, NONE, d.MAX_BURN_LINES, at13 + HOUR + 20 * 60_000, at13 + 3 * HOUR);
+  const { rows } = d.foldBurn([point(at13, 'overflow', { uncachedTokens: 600 }), point(at13 + HOUR, 'overflow', { uncachedTokens: 600 })], 'key', 3_600, NONE, at13 + HOUR + 20 * 60_000, at13 + 3 * HOUR);
   assert.deepEqual(rows.map((r) => r.seconds), [3_600, 3_600]);
   assert.deepEqual(rows.map((r) => r.uncached[0]), [10, 10]);
 });
@@ -86,7 +85,7 @@ test('a past range ending inside a 6-hour bucket rates it over the hours read', 
   // The bucket at 12:00 holds the hours 12:00 to 15:00, the hour ceiling of an end at 14:20.
   const at12 = Date.UTC(2026, 8, 16, 12);
   const end = at12 + 2 * HOUR + 20 * 60_000;
-  const { rows } = d.foldBurn([point(at12 - 6 * HOUR, 'overflow', { uncachedTokens: 3_600 }), point(at12, 'overflow', { uncachedTokens: 1_800 })], 'key', 6 * 3_600, NONE, d.MAX_BURN_LINES, end, end + 24 * HOUR);
+  const { rows } = d.foldBurn([point(at12 - 6 * HOUR, 'overflow', { uncachedTokens: 3_600 }), point(at12, 'overflow', { uncachedTokens: 1_800 })], 'key', 6 * 3_600, NONE, end, end + 24 * HOUR);
   assert.deepEqual(rows.map((r) => r.seconds), [21_600, 10_800]);
   assert.deepEqual(rows.map((r) => r.uncached[0]), [10, 10]);
 });
@@ -95,14 +94,14 @@ test('a range ending on a bucket boundary rates every bucket over the full width
   const at12 = Date.UTC(2026, 8, 16, 12);
   const points = [point(at12, 'overflow', { cachedTokens: 1_200, equivalent: 0.1, unit: 'window_share' }), point(at12 + HOUR, 'overflow', { uncachedTokens: 600, equivalent: 0.05, unit: 'window_share' })];
   const sized = new Set(['overflow']);
-  const ended = d.foldBurn(points, 'account', 3_600, sized, d.MAX_BURN_LINES, at12 + 2 * HOUR, at12 + 2 * HOUR);
+  const ended = d.foldBurn(points, 'account', 3_600, sized, at12 + 2 * HOUR, at12 + 2 * HOUR);
   assert.deepEqual(ended.rows.map((r) => r.seconds), [3_600, 3_600]);
   assert.deepEqual(ended, d.foldBurn(points, 'account', 3_600, sized), 'the same figures as a fold with no end');
 });
 
 test('a range that ended inside the running hour, read ten minutes later, rates that hour up to the read', () => {
   const at14 = Date.UTC(2026, 8, 16, 14);
-  const { rows } = d.foldBurn([point(at14, 'overflow', { uncachedTokens: 1_800 })], 'key', 3_600, NONE, d.MAX_BURN_LINES, at14 + 20 * 60_000, at14 + 30 * 60_000);
+  const { rows } = d.foldBurn([point(at14, 'overflow', { uncachedTokens: 1_800 })], 'key', 3_600, NONE, at14 + 20 * 60_000, at14 + 30 * 60_000);
   assert.deepEqual([rows[0].seconds, rows[0].uncached[0]], [1_800, 60], 'the route answered the hour as it stood at the read, 14:00 to 14:30');
 });
 
@@ -110,7 +109,7 @@ test('a running bucket sets the peak and the axis only once it covers a tenth of
   const at13 = Date.UTC(2026, 8, 16, 13);
   const points = [point(at13, 'primary', { equivalent: 0.06, uncachedTokens: 600, unit: 'window_share' }), point(at13 + HOUR, 'primary', { equivalent: 0.02, uncachedTokens: 100, unit: 'window_share' })];
   const sized = new Set(['primary']);
-  const fold = (seconds) => d.foldBurn(points, 'account', 3_600, sized, d.MAX_BURN_LINES, at13 + HOUR + seconds * 1_000, at13 + HOUR + seconds * 1_000);
+  const fold = (seconds) => d.foldBurn(points, 'account', 3_600, sized, at13 + HOUR + seconds * 1_000, at13 + HOUR + seconds * 1_000);
 
   const early = fold(20);
   assert.deepEqual(early.rows.map((r) => [r.seconds, r.partial, r.setsScale]), [[3_600, false, true], [20, true, false]]);
@@ -379,7 +378,7 @@ test('a filter naming one account sizes every group by that account, so its figu
   // The points carry no figure, so the sized set alone tells the plan line from tier unknown.
   const p = (group) => point(0, group, { tokens: 100, uncachedTokens: 100, unit: 'window_share', unpriced: true });
   const answered = [p('claude-opus-5-5'), p('claude-sonnet-4-6')];
-  const fold = (sized, account) => d.foldBurn(answered, 'model', 3_600, sized, d.MAX_BURN_LINES, undefined, undefined, { account }).lines.map((l) => l.unit);
+  const fold = (sized, account) => d.foldBurn(answered, 'model', 3_600, sized, undefined, undefined, { account }).lines.map((l) => l.unit);
   assert.deepEqual(fold(new Set(['primary']), 'primary'), ['window_share', 'window_share'], "the named account's tier sizes each model's line");
   assert.deepEqual(fold(NONE, 'primary'), ['unknown', 'unknown'], 'an account whose tier the cost model does not size reads tier unknown');
   assert.deepEqual(fold(new Set(['primary']), null), ['usd', 'usd'], 'with no account named the grouping mixes accounts');
@@ -388,7 +387,7 @@ test('a filter naming one account sizes every group by that account, so its figu
 test('under the request class grouping a filter naming one account sizes both class lines by that account', () => {
   const p = (group) => point(0, group, { tokens: 100, uncachedTokens: 100, unit: 'window_share', unpriced: true });
   const answered = [p('main'), p('subagent'), p('auxiliary')];
-  const fold = (sized) => d.foldBurn(answered, 'request_class', 3_600, sized, d.MAX_BURN_LINES, undefined, undefined, { account: 'primary' }).lines.map((l) => [l.key, l.unit]);
+  const fold = (sized) => d.foldBurn(answered, 'request_class', 3_600, sized, undefined, undefined, { account: 'primary' }).lines.map((l) => [l.key, l.unit]);
   assert.deepEqual(fold(new Set(['primary'])), [['conversation', 'window_share'], ['overhead', 'window_share']], "the named account's tier sizes the two folded lines");
   assert.deepEqual(fold(NONE), [['conversation', 'unknown'], ['overhead', 'unknown']], 'an account whose tier the cost model does not size reads tier unknown on both');
 });
