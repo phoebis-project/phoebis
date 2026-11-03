@@ -1086,83 +1086,75 @@ fn sealed_rows_open_under(conn: &Connection, key: &StorageKey) -> Result<Option<
 /// not have yet holds nothing sealed rather than failing the read.
 fn leading_sealed_rows(conn: &Connection) -> Result<Vec<SealedRow>, StoreError> {
     let mut rows = Vec::new();
-    if has_table(conn, "credentials")? {
-        let mut statement = conn.prepare(
-            "SELECT account_id, generation, nonce, sealed FROM credentials ORDER BY rowid LIMIT ?1",
-        )?;
-        let found = statement.query_map(params![PROOF_ROWS_PER_KIND], |row| {
-            Ok(SealedRow {
-                aad: credentials::credential_aad(&row.get::<_, String>(0)?, row.get(1)?),
-                nonce: row.get(2)?,
-                sealed: row.get(3)?,
-            })
-        })?;
-        rows.extend(found.collect::<rusqlite::Result<Vec<_>>>()?);
-    }
-    if has_table(conn, "api_key_secrets")? {
-        let mut statement = conn.prepare(
-            "SELECT account_id, nonce, sealed FROM api_key_secrets ORDER BY rowid LIMIT ?1",
-        )?;
-        let found = statement.query_map(params![PROOF_ROWS_PER_KIND], |row| {
-            Ok(SealedRow {
-                aad: credentials::api_key_aad(&row.get::<_, String>(0)?),
-                nonce: row.get(1)?,
-                sealed: row.get(2)?,
-            })
-        })?;
+    for (table, sql, row_of) in &SEALED_KINDS[..2] {
+        if !has_table(conn, table)? {
+            continue;
+        }
+        let mut statement = conn.prepare(&format!("{sql} ORDER BY rowid LIMIT ?1"))?;
+        let found = statement.query_map(params![PROOF_ROWS_PER_KIND], row_of)?;
         rows.extend(found.collect::<rusqlite::Result<Vec<_>>>()?);
     }
     Ok(rows)
+}
+
+type RowOf = fn(&rusqlite::Row<'_>) -> rusqlite::Result<SealedRow>;
+
+/// Each kind of sealed row: its table, the statement over it and the mapper to the row with its associated data.
+/// The start's sample reads the first two kinds, a recovery all three.
+const SEALED_KINDS: [(&str, &str, RowOf); 3] = [
+    (
+        "credentials",
+        "SELECT account_id, generation, nonce, sealed FROM credentials",
+        credential_row,
+    ),
+    (
+        "api_key_secrets",
+        "SELECT account_id, nonce, sealed FROM api_key_secrets",
+        api_key_row,
+    ),
+    (
+        "keepalive_agents",
+        "SELECT key_id, key_generation, session_id, agent_id, body_nonce, body_sealed FROM keepalive_agents \
+         WHERE body_sealed IS NOT NULL AND body_nonce IS NOT NULL",
+        recipe_row,
+    ),
+];
+
+fn credential_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SealedRow> {
+    Ok(SealedRow {
+        aad: credentials::credential_aad(&row.get::<_, String>(0)?, row.get(1)?),
+        nonce: row.get(2)?,
+        sealed: row.get(3)?,
+    })
+}
+
+fn api_key_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SealedRow> {
+    Ok(SealedRow {
+        aad: credentials::api_key_aad(&row.get::<_, String>(0)?),
+        nonce: row.get(1)?,
+        sealed: row.get(2)?,
+    })
+}
+
+fn recipe_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SealedRow> {
+    Ok(SealedRow {
+        aad: keepalive::keepalive_aad(
+            &row.get::<_, String>(0)?,
+            row.get(1)?,
+            &row.get::<_, String>(2)?,
+            &row.get::<_, String>(3)?,
+        ),
+        nonce: row.get(4)?,
+        sealed: row.get(5)?,
+    })
 }
 
 /// How many sealed rows open under `key`, over every row of each kind: credential bundles, API-key secrets and
 /// recipe bodies. A recovery discards what this finds unreadable, so it reads the whole registry once rather than the
 /// start's sample. A table the registry does not have yet holds nothing sealed.
 fn readable_sealed_rows(conn: &Connection, key: &StorageKey) -> Result<u64, StoreError> {
-    type RowOf = fn(&rusqlite::Row<'_>) -> rusqlite::Result<SealedRow>;
-    let kinds: [(&str, &str, RowOf); 3] = [
-        (
-            "credentials",
-            "SELECT account_id, generation, nonce, sealed FROM credentials",
-            |row| {
-                Ok(SealedRow {
-                    aad: credentials::credential_aad(&row.get::<_, String>(0)?, row.get(1)?),
-                    nonce: row.get(2)?,
-                    sealed: row.get(3)?,
-                })
-            },
-        ),
-        (
-            "api_key_secrets",
-            "SELECT account_id, nonce, sealed FROM api_key_secrets",
-            |row| {
-                Ok(SealedRow {
-                    aad: credentials::api_key_aad(&row.get::<_, String>(0)?),
-                    nonce: row.get(1)?,
-                    sealed: row.get(2)?,
-                })
-            },
-        ),
-        (
-            "keepalive_agents",
-            "SELECT key_id, key_generation, session_id, agent_id, body_nonce, body_sealed FROM keepalive_agents \
-             WHERE body_sealed IS NOT NULL AND body_nonce IS NOT NULL",
-            |row| {
-                Ok(SealedRow {
-                    aad: keepalive::keepalive_aad(
-                        &row.get::<_, String>(0)?,
-                        row.get(1)?,
-                        &row.get::<_, String>(2)?,
-                        &row.get::<_, String>(3)?,
-                    ),
-                    nonce: row.get(4)?,
-                    sealed: row.get(5)?,
-                })
-            },
-        ),
-    ];
     let mut readable = 0;
-    for (table, sql, row_of) in kinds {
+    for (table, sql, row_of) in SEALED_KINDS {
         if !has_table(conn, table)? {
             continue;
         }
