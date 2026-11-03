@@ -353,24 +353,27 @@ impl CredentialManager {
                     AcquireError::Unavailable(detail) => detail.clone(),
                     other => other.to_string(),
                 };
-                // An account stuck on the same failure for hours must not cost a store write per request
-                // it is handed: only a message that actually changed is worth landing.
-                let unchanged = self
-                    .inner
-                    .store
-                    .credential_metadata(account_id)
-                    .ok()
-                    .flatten()
-                    .is_some_and(|metadata| {
-                        metadata.last_error.as_deref() == Some(message.as_str())
-                    });
-                if !unchanged {
-                    if let Err(error) = self.inner.store.record_credential_error(
-                        account_id,
-                        account.incarnation,
-                        &message,
-                    ) {
-                        tracing::warn!(account = %account_id, %error, "could not record the credential failure");
+                match read {
+                    // The read and the write wait on the store's connection, which a leg's worker must not, and the
+                    // warning keeps the caller's span.
+                    Read::Blocking => {
+                        let store = self.inner.store.clone();
+                        let id = account_id.to_string();
+                        let incarnation = account.incarnation;
+                        let span = tracing::Span::current();
+                        let recorded = tokio::task::spawn_blocking(move || {
+                            let _entered = span.enter();
+                            record_failure(&store, &id, incarnation, &message);
+                        })
+                        .await;
+                        if let Err(error) = recorded {
+                            if error.is_panic() {
+                                std::panic::resume_unwind(error.into_panic());
+                            }
+                        }
+                    }
+                    Read::Inline => {
+                        record_failure(&self.inner.store, account_id, account.incarnation, &message)
                     }
                 }
                 Err(failure)
@@ -1282,6 +1285,21 @@ fn transport_before_write(error: &TransportError) -> bool {
         error,
         TransportError::Boring(_) | TransportError::Handshake(_) | TransportError::Unreachable(_)
     )
+}
+
+/// Lands `message` as the credential's last error. An account stuck on the same failure for hours must not cost a store
+/// write per request it is handed, so only a message that changed is written.
+fn record_failure(store: &Store, account_id: &str, incarnation: u64, message: &str) {
+    let unchanged = store
+        .credential_metadata(account_id)
+        .ok()
+        .flatten()
+        .is_some_and(|metadata| metadata.last_error.as_deref() == Some(message));
+    if !unchanged {
+        if let Err(error) = store.record_credential_error(account_id, incarnation, message) {
+            tracing::warn!(account = %account_id, %error, "could not record the credential failure");
+        }
+    }
 }
 
 /// The `error` member of a refusal, either the OAuth string form or the API's nested object form. Only the
