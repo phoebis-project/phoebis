@@ -49,8 +49,7 @@ const MAX_NOT_BEFORE_MS: i64 = 900_000;
 /// connection hold an account's only refresh slot.
 const REFRESH_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Unix milliseconds. Injected so tests can drive expiry without sleeping.
-pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
+pub use phoebis_store::Clock;
 
 #[derive(Debug)]
 pub struct AccessToken {

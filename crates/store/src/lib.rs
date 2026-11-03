@@ -331,8 +331,8 @@ impl Clone for StorageKey {
     }
 }
 
-/// The instant the store stamps a row with: the wall clock in production, and a test rig's own cell under
-/// `set_clock`, so a capture of the registry's answers reads the same twice.
+/// The instant the store stamps a row with, in Unix milliseconds: the wall clock in production, and a test rig's own
+/// cell under `set_clock`, so a capture of the registry's answers reads the same twice.
 pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
 
 pub struct Store {
