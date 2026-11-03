@@ -4093,8 +4093,9 @@ pub async fn pool_traffic(
 /// Every bucket in the range per pool of `pool_ids`, probes left out, from one statement on `conn` that sums each
 /// pool's rows by the price columns and the hour, so several pools read the table once and no row is decoded. Each
 /// group's dollars and Pro-week figure are priced from its summed counts through `price_group`, the figure against the
-/// anchor row in force at `now`. A pool without a row answers its zero buckets, and an empty `pool_ids` answers an
-/// empty map and runs no statement.
+/// anchor row in force at `now`. The statement orders the groups as it groups them, so a bucket adds its groups'
+/// figures in one order whichever plan SQLite picks. A pool without a row answers its zero buckets, and an empty
+/// `pool_ids` answers an empty map and runs no statement.
 #[allow(clippy::too_many_arguments)]
 pub fn pools_traffic(
     conn: &Connection,
@@ -4119,7 +4120,8 @@ pub fn pools_traffic(
     pool_term(pool_ids, &[], &mut args, &mut clauses);
     let mut stmt = conn.prepare(&format!(
         "SELECT pool_id, SUM(MAX(requests - succeeded, 0)), {PRICE_GROUP_COLUMNS}, {PRICE_GROUP_SUMS} \
-         FROM rollups_hourly WHERE {} GROUP BY pool_id, {PRICE_GROUP_COLUMNS}",
+         FROM rollups_hourly WHERE {} GROUP BY pool_id, {PRICE_GROUP_COLUMNS} \
+         ORDER BY pool_id, {PRICE_GROUP_COLUMNS}",
         clauses.join(" AND ")
     ))?;
     let groups = stmt.query_map(params_from_iter(args), |r| {
