@@ -77,7 +77,7 @@
   border-radius: var(--radius-pill);
 }
 
-.chip--removable button {
+.chip--removable .chip__remove {
   display: inline-grid;
   place-items: center;
   padding: 1px;
@@ -87,7 +87,7 @@
   border-radius: 50%;
 }
 
-.chip--removable button:hover {
+.chip--removable .chip__remove:hover {
   color: var(--ink);
   background: var(--surface-3);
 }
@@ -135,10 +135,10 @@
   display: none;
 }
 
-/* Two classes, so the body outranks `.chip--removable button` (one class and a type), which styles the x alone. */
 .chip--filter .chip__body {
   display: inline-flex;
   gap: 4px;
+  align-items: center;
   min-width: 0;
   padding: 3px 0 3px 9px;
   color: var(--ink);
@@ -146,10 +146,6 @@
   background: none;
   border: 0;
   border-radius: 0;
-}
-
-.chip--filter .chip__body:hover {
-  background: none;
 }
 
 /* The values give way to a narrow chip, so the word keeps one line rather than wrapping beside them. */

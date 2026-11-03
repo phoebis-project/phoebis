@@ -9,7 +9,7 @@ const sheet = (name) => readFileSync(new URL(`../src/styles/${name}.css`, import
  */
 const INK3_ALLOWED = new Set([
   ".add-filter__row[aria-disabled='true']",
-  '.chip--removable button',
+  '.chip--removable .chip__remove',
   '.dialog__close',
   '.dialog-group .input:disabled',
   '.icon-btn',
