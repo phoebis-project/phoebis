@@ -612,17 +612,16 @@ function eventFacts(e: RoutingEvent, now: number, page: readonly RoutingLogRow[]
     return ms === null || repeatsAt(e, 'time', ms) ? [] : [pair(key, ms, 'time', now)];
   };
   const lasted = (ms: number | null) => (ms === null ? [] : [pair('lasted', ms, 'ms', now)]);
-  const count = (key: FactKey, v: unknown) => {
+  const fact = (key: FactKey, v: unknown, unit: FactUnit) => {
     const n = num(v);
-    return n === null ? [] : [pair(key, n, 'count', now)];
+    return n === null ? [] : [pair(key, n, unit, now)];
   };
+  const count = (key: FactKey, v: unknown) => fact(key, v, 'count');
   switch (e.kind) {
     case 'account_state_changed':
       return [pair('state', wordOf(STATE_WORD, str(d.to) ?? 'unknown'), 'text', now)];
-    case 'budget_period_ended': {
-      const spent = num(d.previous_spent_usd);
-      return spent === null ? [] : [pair('spent', spent, 'usd', now)];
-    }
+    case 'budget_period_ended':
+      return fact('spent', d.previous_spent_usd, 'usd');
     case 'budget_reached': {
       const spent = num(d.spent_usd);
       const budget = num(d.budget_usd);
@@ -685,16 +684,12 @@ function eventFacts(e: RoutingEvent, now: number, page: readonly RoutingLogRow[]
     }
     case 'warm_prefix_expired': {
       const deepest = rec(d.deepest);
-      const tokens = num(deepest.prefix_tokens);
-      const depth = num(deepest.depth);
-      return [...(tokens === null ? [] : [pair('prefix', tokens, 'tokens', now)]), ...(depth === null ? [] : [pair('depth', depth, 'count', now)])];
+      return [...fact('prefix', deepest.prefix_tokens, 'tokens'), ...fact('depth', deepest.depth, 'count')];
     }
     case 'wind_down_started':
       return time('until', d.ends_at);
-    case 'window_reset': {
-      const before = num(d.utilization_before);
-      return before === null ? [] : [pair('was', before, 'percent', now)];
-    }
+    case 'window_reset':
+      return fact('was', d.utilization_before, 'percent');
     case 'window_spent':
       return time('resets', d.reset);
     default:
@@ -1806,18 +1801,13 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
     const kept = chips.filter((c): c is Chip => c !== null);
     if (kept.length > 0) pairs.push({ chips: kept, label });
   };
-  const time = (v: unknown, label?: string) => {
-    const ms = num(v);
-    return ms === null ? null : plain(formatFact(ms, 'time', now), label);
-  };
-  const count = (v: unknown) => {
+  const figure = (v: unknown, format: (n: number) => string, label?: string) => {
     const n = num(v);
-    return n === null ? null : plain(fmtInt(n));
+    return n === null ? null : plain(format(n), label);
   };
-  const pct = (v: unknown, label?: string) => {
-    const n = num(v);
-    return n === null ? null : plain(fmtPct(n), label);
-  };
+  const time = (v: unknown, label?: string) => figure(v, (ms) => formatFact(ms, 'time', now), label);
+  const count = (v: unknown) => figure(v, fmtInt);
+  const pct = (v: unknown, label?: string) => figure(v, fmtPct, label);
   const text = (v: unknown, map: Record<string, string> = {}) => {
     const s = str(v);
     return s === null ? null : plain(wordOf(map, s));
@@ -1843,17 +1833,14 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       add('Effect', text(d.to, STATE_EFFECT));
       break;
     case 'budget_period_ended': {
-      const spent = num(d.previous_spent_usd);
       add('Previous period', text(d.period));
-      add('Spent', spent === null ? null : plain(fmtUsd(spent)));
+      add('Spent', figure(d.previous_spent_usd, fmtUsd));
       add('Period start', time(d.period_start));
       break;
     }
     case 'budget_reached': {
-      const budget = num(d.budget_usd);
-      const spent = num(d.spent_usd);
-      add('Budget', budget === null ? null : plain(`${fmtUsd(budget)} a ${str(d.period) ?? 'period'}`));
-      add('Spent', spent === null ? null : plain(fmtUsd(spent)));
+      add('Budget', figure(d.budget_usd, (usd) => `${fmtUsd(usd)} a ${str(d.period) ?? 'period'}`));
+      add('Spent', figure(d.spent_usd, fmtUsd));
       add('Period ends', time(d.period_end));
       add('Effect', plain('the pool answers exhausted until then'));
       add('Crossed by', request);
@@ -2036,16 +2023,11 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       // place of a ceiling: it keeps its conversion and its reading, as the version 1 record keeps its own maps.
       if (d.ceiling === undefined && d.threshold !== undefined) {
         const unit = str(d.unit);
-        const perHour = (v: unknown, label?: string) => {
-          const n = num(v);
-          return n === null ? null : plain(unit === 'usd' ? `${fmtUsd(n * 3_600)}/h` : hourlyShare(n * 3_600), label);
-        };
-        const burnWindow = num(d.burn_window_seconds);
-        const dwellSeconds = num(d.dwell_seconds);
+        const perHour = (v: unknown, label?: string) => figure(v, (n) => (unit === 'usd' ? `${fmtUsd(n * 3_600)}/h` : hourlyShare(n * 3_600)), label);
         add('Started by', request, session, agent === null ? null : plain(agent, 'agent'));
         add('Reading', pct(d.utilization, w), pct(d.threshold, 'threshold'));
         add('Unit', text(d.unit));
-        add('Burn window', burnWindow === null ? null : plain(span(burnWindow * 1_000)));
+        add('Burn window', figure(d.burn_window_seconds, (s) => span(s * 1_000)));
         add('Share', pct(d.shed_share, 'share'), perHour(d.burn_sum, 'burn'), perHour(d.target, 'to shed'));
         add('Warm sessions', text(d.warm_sessions));
         const legacyPins = list(d.pins).map(rec);
@@ -2070,7 +2052,7 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
           });
         }
         add('Marks kept until', time(d.dwell_until));
-        add('Dwell', dwellSeconds === null ? null : plain(span(dwellSeconds * 1_000)));
+        add('Dwell', figure(d.dwell_seconds, (s) => span(s * 1_000)));
         if (typeof d.persisted === 'boolean') add('Survive a restart', plain(d.persisted ? 'persisted' : 'not persisted'));
         break;
       }
@@ -2078,12 +2060,7 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       const projection = num(d.projection);
       const horizon = num(d.horizon);
       const ceiling = num(d.ceiling);
-      const rate = (v: unknown, label?: string) => {
-        const n = num(v);
-        return n === null ? null : plain(hourlyShare(n), label);
-      };
-      const dwell = num(d.dwell_seconds);
-      const average = num(d.burn_average_seconds);
+      const rate = (v: unknown, label?: string) => figure(v, hourlyShare, label);
       add('Started by', request, session, agent === null ? null : plain(agent, 'agent'));
       // A weekly window's horizon is one 5-hour length ahead, which reads as the span, and the reset reads as its time.
       const when = horizon === null ? '' : horizon - at === 5 * HOUR ? ` in ${span(horizon - at)}` : ` at ${formatFact(horizon, 'time', now)}`;
@@ -2103,7 +2080,7 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       add('Excess', rate(d.excess));
       add('Cap', pct(d.shed_cap), rate(d.target, 'target'), rate(d.removed, 'removed'));
       add('Unit', text(d.unit));
-      add('Burn average', average === null ? null : plain(span(average * 1_000)));
+      add('Burn average', figure(d.burn_average_seconds, (s) => span(s * 1_000)));
       add('Warm sessions', text(d.warm_sessions));
       const pins = list(d.pins).map(rec);
       const rewriteUnit = str(d.rewrite_unit);
@@ -2141,7 +2118,7 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       const reason = str(d.reason);
       add('Outcome', outcome === null ? null : plain(outcome === 'nothing_to_mark' ? `nothing to mark${reason === null ? '' : `: ${words(reason)}`}` : words(outcome)));
       add('Next round after', time(d.dwell_until));
-      add('Dwell', dwell === null ? null : plain(span(dwell * 1_000)));
+      add('Dwell', figure(d.dwell_seconds, (s) => span(s * 1_000)));
       if (typeof d.persisted === 'boolean') add('Survive a restart', plain(d.persisted ? 'persisted' : 'not persisted'));
       break;
     }
@@ -2168,39 +2145,32 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       break;
     }
     case 'reservation_expired': {
-      const age = num(d.age_ms);
       add('Request', request);
       add('Attempt', count(d.attempt));
       add('Cause', text(d.cause));
       add('Reserved', ...shareChips(rec(d.shares)));
-      add('Held for', age === null ? null : plain(span(age)));
+      add('Held for', figure(d.age_ms, span));
       add('Effect', plain("the booked share left the account's prediction"));
       break;
     }
     case 'slow_down_ended': {
-      const lasted = num(d.duration_ms);
-      const slowest = num(d.factor_min);
-      const held = num(d.held_ms);
-      add('Lasted', lasted === null ? null : plain(span(lasted)));
-      add('Slowest', slowest === null ? null : plain(speedWord(slowest)));
-      add('Held', held === null ? null : plain(span(held)));
+      add('Lasted', figure(d.duration_ms, span));
+      add('Slowest', figure(d.factor_min, speedWord));
+      add('Held', figure(d.held_ms, span));
       add('Effect', plain("requests of the account's sessions pass unheld again"));
       break;
     }
     case 'slow_down_started': {
-      const factor = num(d.factor);
       const stretch = num(d.stretch_ms);
       const threshold = num(d.threshold_ms);
-      const demand = num(d.demand);
-      add('Speed', factor === null ? null : plain(speedWord(factor)));
+      add('Speed', figure(d.factor, speedWord));
       add('Stretch', stretch === null || threshold === null ? null : plain(`${span(stretch)} of ${span(threshold)}`));
-      add('Demand', demand === null ? null : plain(hourlyShare(demand)));
+      add('Demand', figure(d.demand, hourlyShare));
       add('Reset', time(d.reset));
       add('Effect', plain("requests of the account's sessions wait their cycle times the slow-down up to the hold"));
       break;
     }
     case 'stream_interrupted': {
-      const attempt = num(d.attempt);
       const code = str(d.code);
       const upstream = str(d.upstream_request_id);
       add('Request', request);
@@ -2209,26 +2179,23 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       add('Bytes relayed', count(d.bytes_relayed));
       // The upstream's id keeps its underscores, which `text` would read as spaces, and prints as the request drawer's.
       add('Upstream request', upstream === null ? null : { mono: true, value: upstream });
-      add('Attempt', attempt === null ? null : plain(String(attempt)));
+      add('Attempt', figure(d.attempt, String));
       break;
     }
     case 'warm_prefix_expired': {
       const deepest = rec(d.deepest);
-      const tokens = num(deepest.prefix_tokens);
-      const ttl = num(deepest.ttl_ms);
       add('Boundary', text(deepest.tier));
       add('Depth', count(deepest.depth));
-      add('Size', tokens === null ? null : plain(fmtCompact(tokens)));
-      add('Tier', ttl === null ? null : plain(ttlWord(ttl)));
+      add('Size', figure(deepest.prefix_tokens, fmtCompact));
+      add('Tier', figure(deepest.ttl_ms, ttlWord));
       add('Written', time(deepest.written_at));
       add('Entries', count(d.entries));
       add('Listed', plain('when the kind is chosen'));
       break;
     }
     case 'wind_down_started': {
-      const minutes = num(d.wind_down_minutes);
       add('Subscription ends', time(d.ends_at));
-      add('Wind-down', minutes === null ? null : plain(span(minutes * MINUTE)));
+      add('Wind-down', figure(d.wind_down_minutes, (m) => span(m * MINUTE)));
       add('Effect', plain('no fresh session starts on this account'));
       add('Cold pins', plain('drain to a sibling'));
       add('End from', text(d.end_source));
