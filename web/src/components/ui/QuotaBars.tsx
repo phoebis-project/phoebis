@@ -2,7 +2,7 @@ import type { Account, AccountSlowDown, RateLimitWindow, Spend } from '@/api/typ
 import { fmtAbsolute, fmtMinor, fmtPct, fmtRelative } from '@/lib/format';
 import { hasSpendReading, isExpired, isSubscription, meterTone, planEndedSentence, projectionParts, remainingOf, slowedOf, spendResetTitle } from '@/lib/quota';
 import { speedHover } from '@/lib/selection';
-import { WINDOW_ORDER } from '@/lib/windows';
+import { WINDOW_LABEL, WINDOW_ORDER } from '@/lib/windows';
 import { Meter } from './primitives';
 import { SpeedChip } from './SpeedChip';
 
@@ -132,11 +132,11 @@ export function WindowTriple({ account, now, compact = false, others = false }: 
   // One word each: "Fable 7d" wraps in the narrow compact columns, which drops
   // that meter a line below its two neighbors. Those columns have no room for a
   // speed chip beside the 5-hour label either, so a compact card draws it in its head.
-  const labels = compact ? { '5h': '5h', '7d': '7d', fable: 'Fable' } : { '5h': '5-hour', '7d': '7-day', fable: 'Fable' };
+  const labels = compact ? { '5h': '5h', '7d': '7d', fable: 'Fable' } : { '5h': WINDOW_LABEL['5h'], '7d': WINDOW_LABEL['7d'], fable: 'Fable' };
   return (
     <div className={`wbars wbars--3 ${compact ? 'wbars--compact' : ''}`}>
-      {w5 ? <WindowBar window={{ ...w5, label: labels['5h'] }} now={now} compact={compact} slowDown={compact ? null : slowedOf(account, now)} /> : <WindowBarAbsent compact={compact} label={labels['5h']} words="no 5-hour window" />}
-      {w7 ? <WindowBar window={{ ...w7, label: labels['7d'] }} now={now} compact={compact} /> : <WindowBarAbsent compact={compact} label={labels['7d']} words="no 7-day window" />}
+      {w5 ? <WindowBar window={{ ...w5, label: labels['5h'] }} now={now} compact={compact} slowDown={compact ? null : slowedOf(account, now)} /> : <WindowBarAbsent compact={compact} label={labels['5h']} words={`no ${WINDOW_LABEL['5h']} window`} />}
+      {w7 ? <WindowBar window={{ ...w7, label: labels['7d'] }} now={now} compact={compact} /> : <WindowBarAbsent compact={compact} label={labels['7d']} words={`no ${WINDOW_LABEL['7d']} window`} />}
       {account.fableWindow ? <WindowBar window={{ ...account.fableWindow, label: labels.fable }} now={now} compact={compact} /> : <WindowBarAbsent compact={compact} label={labels.fable} words="no Fable window" />}
       {rest.map((w) => (
         <WindowBar key={w.id} window={w} now={now} compact={compact} />

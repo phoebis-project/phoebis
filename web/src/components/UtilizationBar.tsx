@@ -1,6 +1,7 @@
 import { useRef, type KeyboardEvent, type PointerEvent, type RefObject } from 'react';
 import { Legend } from '@/components/charts/Tooltip';
 import { fmtPct } from '@/lib/format';
+import { WINDOW_LABEL } from '@/lib/windows';
 
 /** A member's shared-window readings, null where its row reports no such window. */
 export interface MemberReading {
@@ -72,8 +73,8 @@ export function UtilizationBar({ ceiling, max, min, readings }: { ceiling: Thres
   const windows = readings.flatMap((r) =>
     (
       [
-        ['5h', '5-hour', r.fiveHour],
-        ['7d', '7-day', r.sevenDay],
+        ['5h', WINDOW_LABEL['5h'], r.fiveHour],
+        ['7d', WINDOW_LABEL['7d'], r.sevenDay],
       ] as const
     ).flatMap(([id, name, w]) => (w === null ? [] : [{ id, key: `${r.id}-${id}`, label: r.label, name, used: w.utilization }])),
   );
@@ -93,8 +94,8 @@ export function UtilizationBar({ ceiling, max, min, readings }: { ceiling: Thres
       </div>
       <Legend
         items={[
-          { color: 'var(--series-1)', label: '5-hour reading' },
-          { color: 'var(--series-4)', label: '7-day reading' },
+          { color: 'var(--series-1)', label: `${WINDOW_LABEL['5h']} reading` },
+          { color: 'var(--series-4)', label: `${WINDOW_LABEL['7d']} reading` },
         ]}
       />
     </div>
