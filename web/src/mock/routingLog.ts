@@ -9,7 +9,7 @@ import { GUARDRAILS } from './guardrails';
 import { leadOf } from './lead';
 import { SESSIONS } from './operations';
 import { KEY_REVOKED_AT, WORST_BUCKET, poolById, type PoolSeed } from './pools';
-import { BUDGET_CROSSING_ID, FORCED_MOVE_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, TIE_STORY_ID, UNSEEDED_IDS, clock, failsOver, oauthWindows, requestById } from './requests';
+import { BUDGET_CROSSING_ID, FORCED_MOVE_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, PLAN_WINDOWS, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, TIE_STORY_ID, UNSEEDED_IDS, clock, cooldownOf, failsOver, holds, oauthWindows, requestById } from './requests';
 import { createRng } from './rng';
 import { TABLES } from './samples';
 import { DAY, HOUR, MINUTE, NOW, iso } from './time';
@@ -17,7 +17,6 @@ import { DAY, HOUR, MINUTE, NOW, iso } from './time';
 /** Why a move rule fired, as the trace's `moved` names it. A failover's reasons move the pin from the task instead. */
 const RULES = ['spent', 'overage', 'return_to_plan', 'drain', 'shed'] as const;
 const FAILOVER_REASONS = ['cooldown', 'fast_lane'];
-const PLAN_WINDOWS = ['five_hour', 'seven_day'] as const;
 const FIVE_HOURS = 5 * HOUR;
 /** How long a booking lives before the purge expires it, the router's `IN_FLIGHT_RECLAIM_MS`. */
 const RESERVATION_MS = HOUR;
@@ -235,16 +234,11 @@ function readingsOf(spec: Spec, accountId: string): AttemptWindow[] {
   return oauthWindows(accountId, spec.at, () => OLDER_FACTOR);
 }
 
-/** The window a 429's cooldown names: the spent plan window its head read, else the retry-after. */
-const windowOfReason = (reason: string) => (reason.startsWith('429 on 5h') ? 'five_hour' : reason.startsWith('429 on 7d') ? 'seven_day' : 'retry_after');
-
 /** A failover's cause from the cooldown that failed it over, in the words its cooldown row carries. */
-const causeOf = (reason: string, model: string): MoveCause =>
-  reason === 'model_rejected'
-    ? { cause: null, reason, scope: `model:${model}`, state: null, window: 'model_rejection' }
-    : reason === 'fast_rate_limit'
-      ? { cause: null, reason, scope: 'fast', state: null, window: 'fast' }
-      : { cause: null, reason: 'rate_limit', scope: 'account', state: null, window: windowOfReason(reason) };
+const causeOf = (reason: string, model: string): MoveCause => {
+  const c = cooldownOf(reason, model);
+  return { cause: null, reason: c.reason, scope: c.scope, state: null, window: c.window };
+};
 
 /** A cooldown row as the routing state holds it: the accounts' own rows and every row an attempt's answer set. */
 interface CooldownRow {
@@ -265,18 +259,12 @@ const cooldownRows: CooldownRow[] = [
       if (!a.cooldownSet) return [];
       const setAt = Date.parse(a.startedAt) + (a.durationMs ?? 0);
       const until = Date.parse(a.cooldownSet.until);
-      const reason = a.cooldownSet.reason;
-      if (reason === 'model_rejected') return [{ accountId: a.accountId, reason, scope: `model:${r.canonicalModel}`, setAt, until, window: 'model_rejection' }];
-      if (reason === 'fast_rate_limit') return [{ accountId: a.accountId, reason, scope: 'fast', setAt, until, window: 'fast' }];
-      return [{ accountId: a.accountId, reason: 'rate_limit', scope: 'account', setAt, until, window: windowOfReason(reason) }];
+      return [{ accountId: a.accountId, ...cooldownOf(a.cooldownSet.reason, r.canonicalModel), setAt, until }];
     }),
   ),
 ];
 // A story attempt set the row its account carries now, so one cooldown is listed once.
 const COOLDOWNS: CooldownRow[] = [...new Map(cooldownRows.map((c) => [`${c.accountId}|${c.scope}|${c.until}`, c])).values()];
-
-/** Whether a live row keeps this request off its account: a plan-window row holds a standard request alone. */
-const holds = (c: CooldownRow, model: string, fast: boolean) => (c.scope === 'account' ? !(fast && PLAN_WINDOWS.some((w) => w === c.window)) : c.scope === 'fast' ? fast : c.scope === `model:${model}`);
 
 const startOfDay = (at: number) => Math.floor(at / DAY) * DAY;
 const startOfMonth = (at: number) => { const d = new Date(at); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1); };
@@ -2582,18 +2570,12 @@ function buildEvents(): RoutingEvent[] {
       const answeredAt = Date.parse(a.startedAt) + (a.durationMs ?? 0);
       if (!a.cooldownSet) continue;
       const rejected = a.cooldownSet.reason === 'model_rejected';
-      const fast = a.cooldownSet.reason === 'fast_rate_limit';
       const until = Date.parse(a.cooldownSet.until);
+      const { reason, scope, window } = cooldownOf(a.cooldownSet.reason, r.canonicalModel);
       seeds.push({
         accountId: a.accountId,
         at: iso(answeredAt),
-        detail: {
-          reason: rejected ? 'model_rejected' : fast ? 'fast_rate_limit' : 'rate_limit',
-          scope: rejected ? `model:${r.canonicalModel}` : fast ? 'fast' : 'account',
-          source_request_id: r.id,
-          until,
-          window: rejected ? 'model_rejection' : fast ? 'fast' : windowOfReason(a.cooldownSet.reason),
-        },
+        detail: { reason, scope, source_request_id: r.id, until, window },
         kind: 'cooldown_set',
         ...(rejected ? { model: r.canonicalModel } : {}),
         requestId: r.id,

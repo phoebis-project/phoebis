@@ -772,12 +772,30 @@ function liftCooldowns(rows: RequestLog[]) {
 /** A turn the story runs in fast mode: the desktop key's Opus inference. */
 const fastTurn = (keyId: string | null, model: string, kind: RequestKind) => keyId === 'desktop' && model.includes('opus') && kind === 'inference';
 
+/** The window a 429's cooldown names: the spent plan window its head read, else the retry-after. */
+const windowOfReason = (reason: string) => (reason.startsWith('429 on 5h') ? 'five_hour' : reason.startsWith('429 on 7d') ? 'seven_day' : 'retry_after');
+
+/**
+ * A cooldown an answer set, in the reason, the scope and the window its routing-state row carries: a model's refusal
+ * scopes to that model, a fast lane's limit to the fast lane, and any other 429 to the account.
+ */
+export const cooldownOf = (reason: string, model: string): { reason: string; scope: string; window: string } =>
+  reason === 'model_rejected'
+    ? { reason, scope: `model:${model}`, window: 'model_rejection' }
+    : reason === 'fast_rate_limit'
+      ? { reason, scope: 'fast', window: 'fast' }
+      : { reason: 'rate_limit', scope: 'account', window: windowOfReason(reason) };
+
+export const PLAN_WINDOWS = ['five_hour', 'seven_day'] as const;
+
+/** Whether a live row keeps this request off its account: a plan-window row holds a standard request alone. */
+export const holds = (c: { scope: string; window: string }, model: string, fast: boolean) => (c.scope === 'account' ? !(fast && PLAN_WINDOWS.some((w) => w === c.window)) : c.scope === 'fast' ? fast : c.scope === `model:${model}`);
+
 /**
  * Whether a cooldown an answer set holds a request: a model's refusal holds that model, a fast lane's a fast request,
  * a spent plan window a standard one, and a retry-after every request.
  */
-const coolingHolds = (reason: string, setFor: string, model: string, fast: boolean) =>
-  reason === 'model_rejected' ? model === setFor : reason === 'fast_rate_limit' ? fast : reason.includes('window') ? !fast : true;
+const coolingHolds = (reason: string, setFor: string, model: string, fast: boolean) => holds(cooldownOf(reason, setFor), model, fast);
 
 /** Whether an answer's cooldown keeps the account from a request at `at`, before any later use lifted it. */
 function coolingAt(accountId: string, at: number, model: string, fast: boolean): boolean {
