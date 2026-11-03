@@ -11,7 +11,7 @@ import type {
 } from '@/api/types';
 import type { Guardrail, GuardrailAttachment, GuardrailCounts, GuardrailRef, GuardrailTestResult } from '@/api/types';
 import { type Clock, wallClock } from '@/lib/clock';
-import { foldClassifier, foldEffort, foldRequestClass } from '@/lib/dimensions';
+import { foldClassifier, foldEffort, foldRequestClass, foldSpeed, servedMissReason, servingResponse } from '@/lib/dimensions';
 import { modelRulesRefusal, poolWarnings, type NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
 import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
@@ -466,19 +466,17 @@ function matchesQuery(r: RequestLog, q: RequestQuery, live: Map<string, number>)
   if (q.client && !matchesPattern(q.client, r.client ?? '-')) return false;
   if (q.agentTypes?.length && !q.agentTypes.includes(r.agentType ?? '')) return false;
   if (q.turnOrigins?.length && !q.turnOrigins.includes(r.turnOrigin ?? '')) return false;
-  // The serving attempt is the last; a request no answer named a speed for reads as fast when it asked for fast and
-  // as standard otherwise, as the route reads it.
-  if (q.speeds?.length && !q.speeds.includes(r.attempts[r.attempts.length - 1]?.response.speed ?? (r.shape.requestedSpeed === 'fast' ? 'fast' : 'standard'))) return false;
+  if (q.speeds?.length && !q.speeds.includes(foldSpeed(r))) return false;
   if (q.held && r.held === null) return false;
   // The serving attempt is the last, the one the rollups count a request's reason on. A request with no attempt or a
   // null serving reason matches nothing.
   if (q.cacheMissReasons?.length) {
-    const reason = r.attempts[r.attempts.length - 1]?.cacheMissReason ?? null;
+    const reason = servedMissReason(r);
     if (reason === null || !q.cacheMissReasons.includes(reason)) return false;
   }
   // The stop reason and the category are the serving attempt's too, and `-` keeps a request whose serving attempt
   // carries none or that no attempt served.
-  const serving = r.attempts[r.attempts.length - 1]?.response;
+  const serving = servingResponse(r);
   if (q.stopReasons?.length && !q.stopReasons.includes(serving?.stopReason ?? '-')) return false;
   if (q.refusalCategories?.length && !q.refusalCategories.includes(serving?.refusalCategory ?? '-')) return false;
   if (q.efforts?.length && !q.efforts.includes(foldEffort(r.shape.effort))) return false;

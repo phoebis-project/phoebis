@@ -1,6 +1,8 @@
+import type { Attempt, AttemptResponse, RequestLog } from '@/api/types';
+
 /**
- * The folds the router's rollups and its request filters apply to a request's effort and class, so a console control
- * and the mock file a request under the value the route matches it by.
+ * The folds the router's rollups and its request filters apply to a request, so a console control and the mock file a
+ * request under the value the route matches it by.
  */
 
 /** The API's five effort levels in their order, the Effort control's options before `none` and `other`. */
@@ -28,3 +30,18 @@ export function foldRequestClass(raw: string | null): string {
 
 /** A request's classifier standing as the rollups file it: `-` for a request the marker does not hold. */
 export const foldClassifier = (value: string | null): string => value ?? NO_CLASS;
+
+/** The attempt whose answer the request ended on, the last, null for a request no attempt served. */
+export const servingAttempt = (r: Pick<RequestLog, 'attempts'>): Attempt | null => r.attempts[r.attempts.length - 1] ?? null;
+
+/**
+ * A request's speed as the rollups file it: its serving answer's, else fast where it asked for fast, since a fast
+ * request refused before any attempt served still asked for fast, else standard.
+ */
+export const foldSpeed = (r: Pick<RequestLog, 'attempts' | 'shape'>): string => servingAttempt(r)?.response.speed ?? (r.shape.requestedSpeed === 'fast' ? 'fast' : 'standard');
+
+/** The serving attempt's cache-miss reason, the one the rollups count a request's reason on. */
+export const servedMissReason = (r: Pick<RequestLog, 'attempts'>) => servingAttempt(r)?.cacheMissReason ?? null;
+
+/** The serving attempt's answer, where an attempt served the request. */
+export const servingResponse = (r: Pick<RequestLog, 'attempts'>): AttemptResponse | null => servingAttempt(r)?.response ?? null;

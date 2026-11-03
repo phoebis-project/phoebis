@@ -24,7 +24,7 @@ import { CACHE_MISS_REASONS, isDivergence, missLabel } from '@/lib/cache';
 import { AGENT_TYPES, TURN_ORIGINS } from '@/lib/client';
 import { clock } from '@/lib/clock';
 import { weekReadingOf } from '@/lib/costs';
-import { EFFORT_LEVELS, foldRequestClass, NO_CLASS, NO_EFFORT, OTHER_DIMENSION } from '@/lib/dimensions';
+import { EFFORT_LEVELS, foldRequestClass, NO_CLASS, NO_EFFORT, OTHER_DIMENSION, servedMissReason, servingAttempt, servingResponse } from '@/lib/dimensions';
 import { notLoadedReason, REQUESTS_DIMENSIONS } from '@/lib/filterBar';
 import { effectiveInterval, FOLLOW_OVERRUN, type Paging, pagingFor, pollQuery, readEnd, spanEnded } from '@/lib/follow';
 import { bytesDropped, earlierHolderLabel, fmtAbsolute, fmtCompact, fmtDatedTime, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, fmtWeek, forkLabel, shortAgent, shortId, shortModel, tokensTotal } from '@/lib/format';
@@ -88,12 +88,10 @@ const outcomesOf = (values: string[]): RequestOutcome[] => values.flatMap((v) =>
  * carry, alphabetically, so a link naming a reason the console has no label for still shows as chosen.
  */
 const missReasonOptions = (rows: RequestLog[], selected: string[]) => {
-  const served = rows.flatMap((r) => r.attempts[r.attempts.length - 1]?.cacheMissReason ?? []);
+  const served = rows.flatMap((r) => servedMissReason(r) ?? []);
   const others = new Set([...served, ...selected].filter((name) => !CACHE_MISS_REASONS.includes(name)));
   return [...CACHE_MISS_REASONS, ...[...others].sort()].map((name) => ({ label: missLabel(name), value: name }));
 };
-/** The serving attempt's answer, where an attempt served the request. */
-const servingResponse = (r: RequestLog): AttemptResponse | null => r.attempts[r.attempts.length - 1]?.response ?? null;
 /** The known words, then the loaded rows' other values and the filter's own, each as itself, then `-` labeled `none`. */
 function wordOptions(known: readonly string[], loaded: (string | null)[], chosen: string[]): Option[] {
   const others = new Set([...loaded, ...chosen].filter((v): v is string => v !== null && v !== '-' && !known.includes(v)));
@@ -609,8 +607,7 @@ function RequestDrawer({ context, guardrails, request, requestId, now, onClose, 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
-  // The last attempt is the one whose answer the request ended on.
-  const serving = r && r.attempts.length > 0 ? r.attempts[r.attempts.length - 1] : null;
+  const serving = r ? servingAttempt(r) : null;
   const answer = serving ? answerChips(serving.response, serving.serviceTier) : [];
 
   return (

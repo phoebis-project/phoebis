@@ -3,6 +3,7 @@ import type { Account, CohortHold, RequestLog, Settings, SubscriptionCosts } fro
 import { hintPlan } from '@/lib/analytics';
 import { type Funding, fundingOf, inBand, nativeOf, revisionAt } from '@/lib/costs';
 import { lookup } from '@/lib/counts';
+import { servingAttempt } from '@/lib/dimensions';
 import { fmtUsd, fmtWeek, weekShort } from '@/lib/format';
 import { ageWord } from '@/lib/routingLog';
 import type { UnitPosition, WeekPosition } from '@/lib/unit';
@@ -85,8 +86,8 @@ export function requestHintArgs(r: Pick<RequestLog, 'accountId' | 'at' | 'costSh
 /** `hint` is `shareHint` over the row, composed by the surface that holds the account and the cost model. */
 export function costUnitOf(r: Pick<RequestLog, 'attempts' | 'costEquivalent' | 'costShares' | 'costUsd' | 'shareReason' | 'tier'>, unit: UnitPosition, hint: string | null): CostUnit {
   const { costUsd: usd, shareReason: reason } = r;
-  const last = r.attempts[r.attempts.length - 1];
-  if (last === undefined) return { kind: 'unserved', usd };
+  const last = servingAttempt(r);
+  if (last === null) return { kind: 'unserved', usd };
   const funding = fundingOf(last);
   if (unit === 'native' && nativeOf(funding) === 'equivalent') return r.costEquivalent === null ? { kind: 'unpriced', usd } : { figure: r.costEquivalent, hint, kind: 'equivalent', reason, usd };
   // A billed request has no subscription equivalent to read, and a subscription request bills no dollars.

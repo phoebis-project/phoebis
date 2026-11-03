@@ -1,7 +1,7 @@
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { fundingOf } from '@/lib/costs';
 import { countOf, emptyCounts } from '@/lib/counts';
-import { foldClassifier, foldEffort, foldRequestClass } from '@/lib/dimensions';
+import { foldClassifier, foldEffort, foldRequestClass, foldSpeed, servedMissReason, servingAttempt } from '@/lib/dimensions';
 import { earlierHolderLabel } from '@/lib/format';
 import { emptyHistogram, histogramOf, mergeHistograms, percentileFromHistogram } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
@@ -106,8 +106,7 @@ const keyOf = (r: RequestLog, by: AnalyticsGroupBy, agentGroups: string[]): stri
   if (by === 'pool') return r.poolId ?? '-';
   if (by === 'request_class') return foldRequestClass(r.requestClass);
   if (by === 'classifier') return foldClassifier(r.classifier);
-  // A fast request refused before any attempt served still asked for fast, and the rollups file it so.
-  if (by === 'speed') return r.attempts[r.attempts.length - 1]?.response.speed ?? (r.shape.requestedSpeed === 'fast' ? 'fast' : 'standard');
+  if (by === 'speed') return foldSpeed(r);
   if (by === 'user_agent') {
     // The rollups key an agent by its token and file a row that named no client under '-', which every route
     // answers as unattributed; under a pattern list the token falls with every other unmatched client under
@@ -160,7 +159,7 @@ const outputTps = (r: RequestLog): number | null => (r.durationMs !== null && r.
  * which `onSide` reads off the empty trail, so the `api_key` answer here only keeps such a row out of the plan shares
  * it has none of.
  */
-const fundingOfRow = (r: RequestLog) => fundingOf(r.attempts[r.attempts.length - 1] ?? null);
+const fundingOfRow = (r: RequestLog) => fundingOf(servingAttempt(r));
 /**
  * Whether a row falls on the funding filter's side. The ledger files a request no attempt served under `plan` on the
  * unattributed account, so the filter follows that filing rather than the cell's dollar unit: a session view and the
@@ -283,7 +282,7 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
     if (r.usage.cacheRead > 0) g.cacheHits += 1;
     else if (r.usage.cacheWrite5m + r.usage.cacheWrite1h > 0) g.cacheMisses += 1;
     else g.uncached += 1;
-    const reason = r.attempts[r.attempts.length - 1]?.cacheMissReason ?? null;
+    const reason = servedMissReason(r);
     if (reason) g.cacheMissReasons[reason] = missCount(g.cacheMissReasons, reason) + 1;
     if (reason === 'none' && r.usage.cacheRead === 0) g.expiredBetweenTurns += 1;
   }
