@@ -1,4 +1,4 @@
-import { METRICS, agentTokenOf, plus } from '@/api/fold';
+import { agentTokenOf, plus } from '@/api/fold';
 import type {
   Account, AccountRollup, AllowanceReset, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, HeldPoint, LatencyHistograms, PinMigrationReason, PlacementRow, QuotaHistory, Reconciliation, ReconciliationsAnswer,
   RefusalCategoriesAnswer, RequestKind, RequestLog, RewritePoint, RewritesAnswer, UnusedAllowanceAnswer, WastedProbeReason,
@@ -9,7 +9,7 @@ import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, m
 import { anchorTier, inBand, modelWeeks, pricedWindow, shareIn, tierCapacity, weightOf, type Usage } from '@/lib/costs';
 import { countOf, emptyCounts } from '@/lib/counts';
 import { byteOrder, earlierHolderLabel, placementHit } from '@/lib/format';
-import { emptyHistogram, mergeHistograms, quartet } from '@/lib/histogram';
+import { mergeHistograms, quartet } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
 import { endOf } from '@/lib/quota';
 import { hoursOfKey } from '@/lib/windows';
@@ -306,8 +306,8 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
   const wastedProbeReasons = emptyWastedProbeReasons();
   for (const r of probeRows) for (const reason of WASTED_PROBE_REASONS) wastedProbeReasons[reason] += r.wastedProbeReasons[reason];
 
-  const histograms = { durationMs: emptyHistogram(), outputTps: emptyHistogram(), ttfbMs: emptyHistogram(), ttftMs: emptyHistogram() };
-  for (const m of METRICS) histograms[m] = mergeHistograms(counted.map((r) => r.histograms[m]));
+  const merged = (m: keyof LatencyHistograms) => mergeHistograms(counted.map((r) => r.histograms[m]));
+  const histograms: LatencyHistograms = { durationMs: merged('durationMs'), outputTps: merged('outputTps'), ttfbMs: merged('ttfbMs'), ttftMs: merged('ttftMs') };
 
   const rateLimited = sumOf(counted, (r) => r.requests.rate_limited);
   const overloaded = sumOf(counted, (r) => r.requests.overloaded);
