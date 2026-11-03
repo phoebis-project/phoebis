@@ -1036,13 +1036,15 @@ impl<'a> Scanner<'a> {
             } else {
                 None
             };
-            members.push(Member {
-                start: member_start,
-                end: member_end,
-                comma_before,
-                comma_after,
-                excluded,
-            });
+            if collect {
+                members.push(Member {
+                    start: member_start,
+                    end: member_end,
+                    comma_before,
+                    comma_after,
+                    excluded,
+                });
+            }
             if let Some(c) = comma_after {
                 comma_before = Some(c);
                 continue;
