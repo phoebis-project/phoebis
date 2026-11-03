@@ -1274,7 +1274,8 @@ candidate or a terminus opens its facts in a popover, and Tab, Enter, Space and 
 Shed station's Windows group reads the slow-down's `speed`, the share of it the holds apply as `ramp`, and the speed the
 holds `realized`, in the order the engine applies them. A pin step's `credit issuer` chip names the account that issued
 the fallback credit token the body carries, on which the request is placed ahead of the pin's renewal and the moves,
-under the credit rule of [Routing](routing.md#selection).
+under the credit rule of [Routing](routing.md#selection). A `judged turn` chip on the same step names the account of the
+turn a classifier call judges, on which the call is placed the same way, under the classifier rule there.
 
 "Candidates, by rank" lists every pool member with the chosen or held-on member tinted: Account with its plan beneath
 (the plan the router resolved from the organization type and the tier, "Free" among its words, or the tier word of a

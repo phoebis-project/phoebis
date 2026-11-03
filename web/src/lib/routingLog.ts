@@ -914,6 +914,7 @@ export const WALK_KEY: Record<string, string> = {
   idle_ms: 'idle',
   in_flight: 'in flight',
   in_overage: 'in overage',
+  judged: 'judged turn',
   kind: 'kind',
   ladder: 'ladder',
   lane: 'lane',

@@ -319,7 +319,10 @@ accounts. The identity a pin is held under is the session header [Clients](#clie
 One read comes ahead of a live pin's renewal, the moves and the strategy: a body carrying a fallback credit token the
 relay remembers is placed on the account that issued it, where that account is eligible and under its cap, or already
 holds the session's live pin, and the record's `pin` step reads `match` with the fact `credit` naming it ([The
-relay](relay.md#admission)).
+relay](relay.md#admission)). A Claude Code client's marked classifier call is the second such read: it goes to the
+account of the session's turn that ended last where that account is eligible and holds allowance, the cap not read since
+the call belongs to a session already there, and the `pin` step reads `match` with the fact `judged` naming it, the move
+rules, the rungs and the pick naming the reason `classifier` ([Clients](#clients)).
 
 A fresh request with no live pin lands where its prefix is already warm. The deepest message boundary any account still
 holds wins first, for a main conversation and a subagent alike. Both rungs read entries of the request's own cache lane
