@@ -6,6 +6,7 @@ import { ChipView, Chips, chipValue, rowValue } from '@/components/ChipView';
 import { DecisionStrip } from '@/components/DecisionStrip';
 import { EntryChips } from '@/components/EntryChips';
 import { Badge, Button, CopyButton, ErrorState, KeyValue, useDescription } from '@/components/ui/primitives';
+import { CHOSEN_VERDICTS } from '@/lib/decisionStrip';
 import { useAsync } from '@/lib/hooks';
 import {
   aroundRequest,
@@ -133,7 +134,7 @@ function Card({ now, onWiden, record, row }: { now: number; onWiden: (link: LogL
               <tbody>
                 {rankCandidates(record.candidates).map((c) => {
                   const cells = candidateCells(c, record, now);
-                  const tinted = ['chosen', 'held_on', 'renewed'].includes(c.verdict);
+                  const tinted = CHOSEN_VERDICTS.has(c.verdict);
                   return (
                     <tr key={c.accountId} className={tinted ? 'is-chosen' : undefined}>
                       <td>

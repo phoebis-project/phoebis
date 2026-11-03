@@ -159,7 +159,8 @@ const terminusOf = (outcome: DecisionRecord['outcome']): TerminusKind => {
   const reason = outcome.kind === 'held' ? outcome.hold?.reason : undefined;
   return reason !== undefined && has(HELD_FOR, reason) ? HELD_FOR[reason] : TERMINUS_OF[outcome.kind];
 };
-const CHOSEN_VERDICTS = new Set(['chosen', 'held_on', 'renewed']);
+/** The verdicts that mark the candidate the decision chose, the strip's leaf and the card's tinted row alike. */
+export const CHOSEN_VERDICTS = new Set(['chosen', 'held_on', 'renewed']);
 const MAX_LEAVES = 8;
 const UNKNOWN_KIND: StationKind = { group: null, renderer: 'chips', stub: null };
 
