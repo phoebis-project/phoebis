@@ -26,7 +26,7 @@ import { clock } from '@/lib/clock';
 import { failed, weekReadingOf, weekScale } from '@/lib/costs';
 import { ANALYTICS_DIMENSIONS, chipText, escapePattern } from '@/lib/filterBar';
 import { effectiveInterval, readEnd, spanEnded } from '@/lib/follow';
-import { fmtAbsolute, fmtBytes, fmtCompact, fmtDayTick, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtShortTime, fmtUsd, fmtUsdTick, fmtWeek, keyLifetime, pct, shortId, upperFirst, usdTickDigits, weekShort } from '@/lib/format';
+import { SESSION_CHARS, fmtAbsolute, fmtBytes, fmtCompact, fmtDayTick, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtShortTime, fmtUsd, fmtUsdTick, fmtWeek, keyLifetime, pct, shortId, upperFirst, usdTickDigits, weekShort } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
 import { useAsync, useQueryFilters, useRangeTakenAt, type Loaded } from '@/lib/hooks';
 import { readWindows } from '@/lib/quota';
@@ -2319,7 +2319,7 @@ function BurnCharts({
   const named = useMemo(() => lines.filter((l) => !l.other).map((l) => l.key).sort(), [lines]);
   const colorOf = (l: BurnLine) => (l.other ? ink.muted : groupBy === 'account' ? accountColor(ink, slotOf(l.key)) : ink.series[Math.min(7, named.indexOf(l.key))]);
   // A session id runs past any legend, so it shows cut the way the session filter's chip cuts it, whole on hover.
-  const nameOf = (l: BurnLine) => (groupBy === 'session' && !l.other ? shortId(l.label, 13) : l.label);
+  const nameOf = (l: BurnLine) => (groupBy === 'session' && !l.other ? shortId(l.label, SESSION_CHARS) : l.label);
   const titleOf = (l: BurnLine) => (groupBy === 'request_class' ? (l.key === 'conversation' ? CONVERSATION_HINT : OVERHEAD_HINT) : groupBy === 'session' && !l.other ? l.label : undefined);
   const axis = timeAxis((answer?.bucketSeconds ?? 3_600) * 1_000, ink);
   // Read off the buckets, not the lines: the class grouping draws its two lines even over a range with no traffic.
