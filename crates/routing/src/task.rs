@@ -2737,9 +2737,7 @@ fn pins_standing(state: &RoutingState, snapshot: &RegistrySnapshot, now: i64) ->
         .pins()
         .into_iter()
         .map(|pin| {
-            let pool = snapshot
-                .key(&pin.key_id)
-                .and_then(|key| snapshot.pool(&key.pool_id));
+            let pool = snapshot.key_pool(&pin.key_id);
             let average_ms = pool.map_or_else(default_burn_average_ms, burn_average_ms);
             let runway = pool.and_then(|pool| {
                 runways
@@ -4632,8 +4630,7 @@ impl Task {
             .expect("snapshot lock poisoned")
             .clone();
         snapshot
-            .key(key_id)
-            .and_then(|k| snapshot.pool(&k.pool_id))
+            .key_pool(key_id)
             .map_or_else(default_burn_average_ms, burn_average_ms)
     }
 

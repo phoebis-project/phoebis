@@ -220,6 +220,10 @@ impl RegistrySnapshot {
     pub fn pool(&self, id: &str) -> Option<&PoolRow> {
         self.pools.get(id)
     }
+    /// The pool of the key under `key_id`, `None` while the snapshot holds no such key.
+    pub fn key_pool(&self, key_id: &str) -> Option<&PoolRow> {
+        self.pool(&self.key(key_id)?.pool_id)
+    }
     pub fn pools(&self) -> impl Iterator<Item = &PoolRow> {
         self.pools.values()
     }

@@ -383,8 +383,7 @@ fn raise_reached(counters: &mut IdleReturns, counted: Option<usize>, bucket: usi
 /// selection or a retained recipe's tick refreshes.
 fn idle_returns_key(snapshot: &RegistrySnapshot, agent: &Agent) -> Option<String> {
     snapshot
-        .key(&agent.key_id)
-        .and_then(|key| snapshot.pool(&key.pool_id))
+        .key_pool(&agent.key_id)
         .map(|pool| pool.id.clone())
         .or_else(|| (!agent.pool_id.is_empty()).then(|| agent.pool_id.clone()))
         .or_else(|| agent.account.clone())

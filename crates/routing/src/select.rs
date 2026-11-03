@@ -1103,9 +1103,7 @@ pub fn release_reasons(
     request: &SelectRequest,
 ) -> Vec<&'static str> {
     let mut reasons = Vec::new();
-    let pool = snapshot
-        .key(&request.key_id)
-        .and_then(|k| snapshot.pool(&k.pool_id));
+    let pool = snapshot.key_pool(&request.key_id);
     if pool.is_some_and(|pool| request.now - pin.last_used_at > affinity_ttl_ms(pool)) {
         reasons.push("expired");
     }
