@@ -19,8 +19,8 @@ export const endOfMonth = (at: number) => { const d = new Date(at); return Date.
 
 /**
  * The story's wall-clock time on its pinned day, 2026-09-16 at 14:30 UTC, as an offset from the instant the mock loads
- * at, so every story fact holds at whichever clock the mock is loaded at. Kept here so the modules `requests.ts` imports
- * can date a story time as it does.
+ * at, so every story fact holds at whichever clock the mock is loaded at. Kept here so the modules `requests.ts`
+ * imports can date a story time as it does.
  */
 export const clock = (h: number, m: number, s = 0): number => NOW - ((14 - h) * HOUR + (30 - m) * MINUTE - s * 1_000);
 

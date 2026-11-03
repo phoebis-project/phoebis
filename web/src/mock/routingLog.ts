@@ -1195,8 +1195,8 @@ function moveWalkOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, p
 
 /**
  * The placement walk: the partitions, the three rungs and the pick among the members they kept, or an exhaustion's
- * empty pick. `walk` is the walk so far, whose fit lines tell a move's runway ties apart. A decision that holds in place
- * or renews walks none.
+ * empty pick. `walk` is the walk so far, whose fit lines tell a move's runway ties apart. A decision that holds in
+ * place or renews walks none.
  */
 function placingWalkOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, inPlace: 'reset' | 'rewrite' | 'slow_down' | null, movedAmong: string[] | undefined, walk: readonly WalkStep[]): { pick: ReturnType<typeof pickOf>; steps: WalkStep[]; tierSize: number } {
   const r = spec.request;
