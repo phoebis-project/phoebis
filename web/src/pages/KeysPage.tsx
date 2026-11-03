@@ -27,7 +27,7 @@ import { useAsync, useNow, useQueryFilters, type Loaded } from '@/lib/hooks';
 import { scrollToElement } from '@/lib/scroll';
 import type { UnitPosition } from '@/lib/unit';
 
-const STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral' | 'warning'> = { active: 'good', disabled: 'warning', expired: 'neutral', revoked: 'critical' };
+export const KEY_STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral' | 'warning'> = { active: 'good', disabled: 'warning', expired: 'neutral', revoked: 'critical' };
 const isKeyGroup = (value: string | null): value is KeyGroup => value !== null && (KEY_GROUPS as readonly string[]).includes(value);
 const captureLabel = (hours: number) => (hours > 0 ? `bodies captured, ${hours}h` : 'bodies not captured');
 /** The capture line whole, its inherited mark included, for the title of a line the fill column cuts. */
@@ -389,7 +389,7 @@ export function KeysPage() {
                         </td>
                         <td className="col-fit" title={k.expiresAt ? fmtAbsolute(k.expiresAt) : undefined}>{k.expiresAt ? fmtDate(k.expiresAt) : <span className="muted">Never</span>}</td>
                         <td className="col-fill">
-                          <Badge tone={STATUS_TONE[k.status]} dot title={k.status} describe={false}>
+                          <Badge tone={KEY_STATUS_TONE[k.status]} dot title={k.status} describe={false}>
                             <span className="key-row__badge-label">{k.status}</span>
                           </Badge>
                           {k.lastUsedAt && <span className="sub" title={`used ${fmtRelative(k.lastUsedAt, now)}`}>used {fmtRelative(k.lastUsedAt, now)}</span>}

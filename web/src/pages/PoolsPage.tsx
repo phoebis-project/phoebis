@@ -5,7 +5,7 @@ import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_DEFAULTS, type PoolInput }
 import { POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type OverviewRange, type PoolEngineFields } from '@/api/client';
 import { slug } from '@/api/http';
 import type {
-  Account, AffinityMode, ApiKey, AttentionItem, CacheTtl, CreatedApiKey, KeepaliveOverview, KeyStatus, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolMember, PoolStrategy, PoolWarning, Range, ReturnToPlan, Session,
+  Account, AffinityMode, ApiKey, AttentionItem, CacheTtl, CreatedApiKey, KeepaliveOverview, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolMember, PoolStrategy, PoolWarning, Range, ReturnToPlan, Session,
   SessionPlacement, SubagentPlacement, TtlRules, WarmSessions,
 } from '@/api/types';
 import { useSession } from '@/app/session';
@@ -35,9 +35,8 @@ import { minuteSpan, windowOf } from '@/lib/quota';
 import { aroundSubject, logHref, words } from '@/lib/routingLog';
 import { scrollToElement } from '@/lib/scroll';
 import { GROUP_LABEL, INELIGIBLE_LABEL, LAST_RESORT_LABEL, RULE_NOTE, STRATEGY_LABEL, cooldownBadge, kindOrdered, memberSpeed, overageBadge, poolStatusSentence, selectionOrder, type Placement, type StandingBadge, windingDownBadge } from '@/lib/selection';
-import { dollarsUnder, GuardrailList, KeyDialog, nativeSidesOf, sumTileOf, type FundedSum } from './KeysPage';
+import { dollarsUnder, GuardrailList, KEY_STATUS_TONE, KeyDialog, nativeSidesOf, sumTileOf, type FundedSum } from './KeysPage';
 
-const KEY_STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral' | 'warning'> = { active: 'good', disabled: 'warning', expired: 'neutral', revoked: 'critical' };
 const POOL_STATUS_TONE = { active: 'good', degraded: 'warning', disabled: 'neutral', exhausted: 'critical' } as const;
 // What a first pool needs, said on the create dialog's rail. The words stay while the refusal dots come and go.
 const CREATE_MARKS: Partial<Record<PoolGroup, string>> = { guardrails: 'after saving', identity: 'needed', keys: 'after saving', members: 'needed' };
