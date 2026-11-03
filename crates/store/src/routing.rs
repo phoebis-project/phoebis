@@ -371,7 +371,7 @@ impl Store {
             overage: tx.prepare("SELECT account_id, in_use, since, reset, observed_at, source, incarnation FROM overage_state ORDER BY account_id")?
                 .query_map([], |r| Ok(OverageRow { account_id: r.get(0)?, in_use: r.get(1)?, since: r.get(2)?, reset: r.get(3)?, observed_at: r.get(4)?, source: r.get(5)?, incarnation: r.get::<_, i64>(6)? as u64 }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
-            pins: tx.prepare(&format!("SELECT key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash, lane, {BURN_COLUMNS}, marked_at, marked_on, marked_window, entrypoint, last_classifier, shed_reason, auxiliary_only, effort FROM pins ORDER BY key_id, session_id, agent_id, model"))?
+            pins: tx.prepare(&format!("SELECT {PIN_COLUMNS} FROM pins ORDER BY key_id, session_id, agent_id, model"))?
                 .query_map([], |r| Ok(PinRow {
                     key_id: r.get(0)?, session_id: r.get(1)?, agent_id: r.get(2)?, model: r.get(3)?, account_id: r.get(4)?,
                     epoch: r.get::<_, i64>(5)? as u64, created_at: r.get(6)?, last_used_at: r.get(7)?,
@@ -760,12 +760,17 @@ fn in_transaction<T>(
     Ok(value)
 }
 
-// `burn_from` reads each copy's five columns in this order, the plain copy first.
-const BURN_COLUMNS: &str = "burn_cache_read, burn_input, burn_output, burn_write_1h, burn_write_5m, \
+// The load reads and the upsert binds the pin's columns in this one order. `burn_from` reads each burn copy's five
+// columns in it, the plain copy first.
+const PIN_COLUMNS: &str = "key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, \
+     key_generation, incarnation, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, \
+     static_hash, tail_hash, lane, \
+     burn_cache_read, burn_input, burn_output, burn_write_1h, burn_write_5m, \
      burn_banded_cache_read, burn_banded_input, burn_banded_output, burn_banded_write_1h, burn_banded_write_5m, \
      burn_fast_cache_read, burn_fast_input, burn_fast_output, burn_fast_write_1h, burn_fast_write_5m, \
      burn_unmetered_cache_read, burn_unmetered_input, burn_unmetered_output, burn_unmetered_write_1h, \
-     burn_unmetered_write_5m";
+     burn_unmetered_write_5m, \
+     marked_at, marked_on, marked_window, entrypoint, last_classifier, shed_reason, auxiliary_only, effort";
 
 fn burn_from(r: &rusqlite::Row<'_>, first: usize) -> rusqlite::Result<PinBurn> {
     Ok(PinBurn {
@@ -807,7 +812,7 @@ fn mark_from(r: &rusqlite::Row<'_>, first: usize) -> rusqlite::Result<Option<Pin
 fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
     conn.execute(
         &format!(
-            "INSERT INTO pins (key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash, lane, {BURN_COLUMNS}, marked_at, marked_on, marked_window, entrypoint, last_classifier, shed_reason, auxiliary_only, effort) \
+            "INSERT INTO pins ({PIN_COLUMNS}) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47) \
              ON CONFLICT(key_id, session_id, agent_id, model) DO UPDATE SET \
                account_id = excluded.account_id, epoch = excluded.epoch, created_at = excluded.created_at, \
