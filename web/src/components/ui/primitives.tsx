@@ -8,7 +8,7 @@ import { useLatest } from '@/lib/hooks';
 import { floatAt, menuPlacement, type MenuAlign, type MenuPlacement } from '@/lib/menu';
 import type { BadgeTone } from '@/lib/quota';
 import { IconCheck, IconChevron, IconCopy, IconSearch, IconWarning, IconX } from './icons';
-import { walkIndex } from './OptionList';
+import { walkFocus } from './OptionList';
 
 const DescriptionHost = createContext<{ base: string; register: (text: string) => () => void } | null>(null);
 const fnv1a = (text: string): string => {
@@ -1082,11 +1082,7 @@ export function Menu({ align = 'right', items, label = 'Actions', onOpenChange }
       return;
     }
     const items = [...(listRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [])];
-    const i = walkIndex(e.key, items.length, items.indexOf(e.target as HTMLButtonElement));
-    const to = i === null ? undefined : items[i];
-    if (!to) return;
-    e.preventDefault();
-    to.focus();
+    walkFocus(e, items, e.target);
   };
   // Safari, and Firefox on macOS, give a clicked button no focus, so a click on an item blurs the list naming no
   // element; a blur closes the list only when it names an element outside the list and the trigger, whose own click

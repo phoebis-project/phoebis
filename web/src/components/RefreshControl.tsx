@@ -1,5 +1,5 @@
 import { type KeyboardEvent, useId, useState } from 'react';
-import { walkIndex } from '@/components/ui/OptionList';
+import { walkFocus } from '@/components/ui/OptionList';
 import { Popover } from '@/components/ui/Popover';
 import { IconCheck, IconChevron, IconRefresh } from '@/components/ui/icons';
 import { PAUSE_CAUSE, type PauseCause, RELOAD_INTERVALS } from '@/lib/follow';
@@ -22,11 +22,7 @@ export interface RefreshControlProps {
 /** The menu's keys, as the Menu primitive walks its items: the arrows wrap, Home and End jump to either end. */
 function walk(e: KeyboardEvent<HTMLButtonElement>) {
   const items = [...(e.currentTarget.parentElement?.querySelectorAll<HTMLElement>('[role="menuitemradio"]') ?? [])];
-  const i = walkIndex(e.key, items.length, items.indexOf(e.currentTarget));
-  const to = i === null ? undefined : items[i];
-  if (!to) return;
-  e.preventDefault();
-  to.focus();
+  walkFocus(e, items, e.currentTarget);
 }
 
 /**

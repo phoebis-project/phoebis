@@ -57,6 +57,16 @@ export function walkIndex(key: string, count: number, at: number): number | null
   }
 }
 
+/** Moves the focus where `walkIndex` sends the key from `from` among `items`, claiming the key, and does nothing for a
+ *  key it does not map. */
+export function walkFocus(e: KeyboardEvent<HTMLElement>, items: readonly HTMLElement[], from: EventTarget | null): void {
+  const i = walkIndex(e.key, items.length, items.indexOf(from as HTMLElement));
+  const to = i === null ? undefined : items[i];
+  if (!to) return;
+  e.preventDefault();
+  to.focus();
+}
+
 /**
  * The list's keys: ArrowDown and ArrowUp walk the list's field and its rows, wrapping at either end, and Home and End
  * jump to the first and last row from a row. Home and End stay with the field, where they move the caret.
@@ -69,11 +79,7 @@ export function walkRows(e: KeyboardEvent<HTMLElement>, list: HTMLElement): void
   // Home and End move the caret in the field, so off a row they are the field's.
   if ((e.key === 'Home' || e.key === 'End') && !onChoice) return;
   const walked = e.key === 'Home' || e.key === 'End' ? choices : stops;
-  const i = walkIndex(e.key, walked.length, walked.indexOf(e.target as HTMLElement));
-  const to = i === null ? undefined : walked[i];
-  if (!to) return;
-  e.preventDefault();
-  to.focus();
+  walkFocus(e, walked, e.target);
 }
 
 /** The multi-select's body: `div.option-list[role=listbox][aria-multiselectable]`, the `.mselect__search` field, "No matches", the `.mselect__option--all` row with its three states, the `.mselect__group` headings and the `.mselect__option` rows, ArrowDown, ArrowUp, Home and End walking the field and the rows. Escape is the opener's. */
