@@ -2016,8 +2016,8 @@ function seedHolds() {
  * billed in dollars carries no reason, as the route answers both.
  */
 function costFiguresOf(r: RequestLog): Pick<RequestLog, 'costEquivalent' | 'costShares' | 'shareReason'> {
-  const serving = r.attempts[r.attempts.length - 1] ?? null;
-  if (serving === null || fundingOf(serving) !== 'plan') return { costEquivalent: null, costShares: null, shareReason: null };
+  if (!planPaid(r)) return { costEquivalent: null, costShares: null, shareReason: null };
+  const serving = r.attempts[r.attempts.length - 1];
   const tier = accountById.get(serving.accountId)?.subscription?.rateLimitTier;
   const finishedMs = Date.parse(r.at) + (r.durationMs ?? 0);
   const windows = shareWindowsOf(serving.accountId, r.canonicalModel);
@@ -2609,9 +2609,13 @@ const sidesOf = (rows: HourlyRollup[]): Pick<ApiKey['usage7d'], 'billedUsd' | 'e
     equivalent: plan.some((r) => r.equivalent === null) ? null : sumOf(plan, (r) => r.equivalent ?? 0),
   };
 };
-/** Whether a subscription window paid the request: its serving attempt's funding, which a request no account served
- *  has none of. */
-const planPaid = (r: RequestLog): boolean => r.attempts.length > 0 && fundingOf(r.attempts[r.attempts.length - 1]) === 'plan';
+/**
+ * Whether a subscription window paid the request: its serving attempt's funding, which a request no account served has
+ * none of. A declaration, since the cost figures read it while the module loads, above this line.
+ */
+export function planPaid(r: RequestLog): boolean {
+  return r.attempts.length > 0 && fundingOf(r.attempts[r.attempts.length - 1]) === 'plan';
+}
 /** The same over request rows, as the pools and dashboard routes sum theirs: a plan request with tokens that priced
  *  nothing nulls the figure, and one with no token prices nothing. */
 export const requestSidesOf = (rows: RequestLog[]): Pick<TrafficBucket, 'billedUsd' | 'equivalent'> => {

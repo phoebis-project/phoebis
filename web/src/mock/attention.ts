@@ -1,11 +1,10 @@
 import type { AttentionItem, Reconciliation, RoutingEvent } from '@/api/types';
 import { MIN_RISE, ratioOff } from '@/lib/analytics';
-import { fundingOf } from '@/lib/costs';
-import { undatedModel } from '@/lib/format';
+import { tokensTotal, undatedModel } from '@/lib/format';
 import { ACCOUNTS, accountById } from './accounts';
 import { RECONCILIATIONS } from './analytics';
 import { KEYS, POOLS } from './pools';
-import { REQUESTS } from './requests';
+import { REQUESTS, planPaid } from './requests';
 import { ROUTING_EVENTS } from './routingLog';
 import { ATTENTION_ITEM_SAMPLE, TABLES } from './samples';
 import { DAY, HOUR, MINUTE, NOW, ago, iso } from './time';
@@ -47,10 +46,7 @@ const sorted = (values: unknown[]) => [...new Set(values.map(String))].sort();
  */
 function unpriced(model: string): Pick<AttentionItem, 'detail' | 'since'> | null {
   // The rows run newest first.
-  const rows = REQUESTS.filter((r) => {
-    const serving = r.attempts[r.attempts.length - 1] ?? null;
-    return undatedModel(r.canonicalModel) === model && serving !== null && fundingOf(serving) === 'plan' && r.costEquivalent === null && r.usage.input + r.usage.output + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h > 0;
-  });
+  const rows = REQUESTS.filter((r) => undatedModel(r.canonicalModel) === model && planPaid(r) && r.costEquivalent === null && tokensTotal(r.usage) > 0);
   const first = rows[rows.length - 1];
   return first ? { detail: { model, requests: rows.length }, since: first.at } : null;
 }
