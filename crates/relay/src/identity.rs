@@ -316,16 +316,18 @@ fn user_agent_of(headers: &HeaderMap) -> Option<&str> {
 /// long-context suffix does.
 fn is_valid_model(value: &str) -> bool {
     (1..=MAX_ID_LEN).contains(&value.len())
-        && value.bytes().all(|b| {
-            b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'/' | b':' | b'[' | b']' | b'_')
-        })
+        && value
+            .bytes()
+            .all(|b| identifier_byte(b) || matches!(b, b'[' | b']'))
+}
+
+/// The bytes an identifier read off a header may hold: ASCII letters and digits and `-`, `.`, `/`, `:`, `_`.
+pub fn identifier_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'/' | b':' | b'_')
 }
 
 pub(crate) fn is_valid_id(value: &str) -> bool {
-    (1..=MAX_ID_LEN).contains(&value.len())
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'/' | b':' | b'_'))
+    (1..=MAX_ID_LEN).contains(&value.len()) && value.bytes().all(identifier_byte)
 }
 
 /// A malformed identifier is treated as absent: it is a label, never an authorization decision, so a caller

@@ -9,7 +9,7 @@ use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, ToSql, Transaction};
 
 use phoebis_bus::{Classifier, Kind};
-use phoebis_relay::EFFORT_LEVELS;
+use phoebis_relay::{identifier_byte, EFFORT_LEVELS};
 use phoebis_routing::{window_length_ms, PinUsage, WEEK_MS};
 use phoebis_store::AccountKind;
 
@@ -71,11 +71,6 @@ pub const LONG_BAND: &str = "long";
 pub const OTHER_DIMENSION: &str = phoebis_bus::OTHER_CLIENT;
 /// The longest identifier or user-agent token the hour row keeps.
 pub const DIMENSION_MAX_BYTES: usize = 64;
-
-/// The charset the relay reads a request class and a client hint with.
-fn identifier_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'/' | b':' | b'_')
-}
 
 /// The header's first product token (`name/version`, up to the first space), cut to `DIMENSION_MAX_BYTES`, else
 /// `OTHER_DIMENSION`: the build of a client is in the token, and the comment after it is free text.
