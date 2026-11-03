@@ -90,10 +90,8 @@
   --surface: #0d1117;
   --surface-2: #151b23;
   --surface-3: #212830;
-  --stripe: color-mix(in srgb, var(--surface-2) 50%, var(--surface));
   --hairline: #2f353d;
   --hairline-strong: #3d444d;
-  --strip-idle: color-mix(in srgb, var(--ink-2) 40%, transparent);
   --ink: #f0f6fc;
   --ink-2: #9198a1;
   --ink-3: #656c76;
@@ -108,20 +106,16 @@
   --mark-cell: #f2f3f5;
   --mark-body: #ffd23f;
 
-  --good: #0ca30c;
   --good-ink: #5ed35e;
   --good-soft: #17301a;
   --good-track: #1f3d22;
-  --warning: #fab219;
   --warning-ink: #f8c65a;
   --warning-soft: #3a2d10;
   --warning-track: #4a3a14;
   --info-ink: #86abcf;
   --info-soft: #18273a;
-  --serious: #ec835a;
   --serious-ink: #f3a17e;
   --serious-soft: #3d2418;
-  --critical: #d03b3b;
   --critical-border: #7a3a3a;
   --critical-ink: #ef7b7b;
   --critical-soft: #3c1c1c;
@@ -139,7 +133,6 @@
   --series-3: #199e70;
   --series-4: #c98500;
   --series-5: #d55181;
-  --series-6: #008300;
   --series-7: #9085e9;
   --series-8: #e66767;
   --series-muted: #656c76;
