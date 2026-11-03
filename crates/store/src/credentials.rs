@@ -595,6 +595,7 @@ impl Store {
     }
 
     /// The raw sealed blob of every credential row, for tests that assert plaintext is absent.
+    #[cfg(any(test, feature = "debug-hooks"))]
     #[doc(hidden)]
     pub fn debug_dump_credentials_table(&self) -> Result<Vec<Vec<u8>>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
