@@ -517,7 +517,9 @@ fn message_object(
 }
 
 /// Walks the array at `s`, handing `element` each object element with `s` at its `{` and skipping every other
-/// element whole. A value at that position that is not an array is skipped whole too.
+/// element whole. A value at that position that is not an array is skipped whole too. The array counts toward the
+/// depth bound while the walk stands inside it, and on every way out, an error included, the depth is back where it
+/// was.
 fn each_object_element<'a>(
     s: &mut Scanner<'a>,
     mut element: impl FnMut(&mut Scanner<'a>) -> Result<(), CchError>,
@@ -527,30 +529,31 @@ fn each_object_element<'a>(
         return s.value(false);
     }
     s.enter()?;
-    s.pos += 1;
-    s.ws();
-    if s.eat(b']') {
-        s.leave();
-        return Ok(());
-    }
-    loop {
+    let walked = (|| {
+        s.pos += 1;
         s.ws();
-        if s.body.get(s.pos) == Some(&b'{') {
-            element(s)?;
-        } else {
-            s.value(false)?;
+        if s.eat(b']') {
+            return Ok(());
         }
-        s.ws();
-        if s.eat(b',') {
-            continue;
+        loop {
+            s.ws();
+            if s.body.get(s.pos) == Some(&b'{') {
+                element(s)?;
+            } else {
+                s.value(false)?;
+            }
+            s.ws();
+            if s.eat(b',') {
+                continue;
+            }
+            if !s.eat(b']') {
+                return Err(CchError::Json(s.pos));
+            }
+            return Ok(());
         }
-        if !s.eat(b']') {
-            return Err(CchError::Json(s.pos));
-        }
-        break;
-    }
+    })();
     s.leave();
-    Ok(())
+    walked
 }
 
 /// How many billing stamps sit where `find_cch` looks, `system[0].text` of the top-level object, once every key
@@ -600,7 +603,8 @@ pub fn first_system_block_member_count(body: &[u8], name: &str) -> Result<usize,
 }
 
 /// Walks the object at `s` (its `{` not yet eaten), handing `member` each member's key as `keys` reads it with `s` at
-/// the value, which `member` reads. The object counts toward the depth bound while the walk stands inside it.
+/// the value, which `member` reads. The object counts toward the depth bound while the walk stands inside it, and on
+/// every way out, an error included, the depth is back where it was.
 fn each_member<'a>(
     s: &mut Scanner<'a>,
     keys: Keys,
@@ -610,33 +614,34 @@ fn each_member<'a>(
         return Err(CchError::Json(s.pos));
     }
     s.enter()?;
-    s.pos += 1;
-    s.ws();
-    if s.eat(b'}') {
-        s.leave();
-        return Ok(());
-    }
-    loop {
+    let walked = (|| {
+        s.pos += 1;
         s.ws();
-        let (ks, ke) = s.string()?;
-        s.ws();
-        if !s.eat(b':') {
-            return Err(CchError::Json(s.pos));
+        if s.eat(b'}') {
+            return Ok(());
         }
-        s.ws();
-        let body = s.body;
-        member(s, key_name(body, ks, ke, keys).as_ref())?;
-        s.ws();
-        if s.eat(b',') {
-            continue;
+        loop {
+            s.ws();
+            let (ks, ke) = s.string()?;
+            s.ws();
+            if !s.eat(b':') {
+                return Err(CchError::Json(s.pos));
+            }
+            s.ws();
+            let body = s.body;
+            member(s, key_name(body, ks, ke, keys).as_ref())?;
+            s.ws();
+            if s.eat(b',') {
+                continue;
+            }
+            if !s.eat(b'}') {
+                return Err(CchError::Json(s.pos));
+            }
+            return Ok(());
         }
-        if !s.eat(b'}') {
-            return Err(CchError::Json(s.pos));
-        }
-        break;
-    }
+    })();
     s.leave();
-    Ok(())
+    walked
 }
 
 /// A `system` value: when it is an array whose first element is an object, `member` is handed each of that object's
