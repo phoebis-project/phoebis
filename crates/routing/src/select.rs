@@ -25,7 +25,8 @@ use crate::state::{
     load_shedding, mark_holds, plan_windows, return_to_plan_dwell_ms, shed_cap, shed_dwell_ms,
     slow_down, slow_down_hold_ms, slow_down_stretch_ms, warm, BandSegment, BurnUnit, MemberSpend,
     PinPace, PinRef, PinUsage, Reservation, RoutingState, StateWrite, Tier, WindowReading,
-    FAST_INPUT, FAST_OUTPUT, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
+    FAST_INPUT, FAST_OUTPUT, FIVE_HOUR, HOUR_MS, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE,
+    WEEK_MS,
 };
 use crate::windows::{window_for, MODEL_WINDOWS};
 use crate::{paid_source, term, Candidate, KeyRefusal, RegistrySnapshot, ResolveError};
@@ -5973,7 +5974,7 @@ fn subagent_cohort<'a>(
     found
 }
 
-const WEEK_HOURS: f64 = 168.0;
+const WEEK_HOURS: f64 = (WEEK_MS / HOUR_MS) as f64;
 
 /// Pace's remaining allowance for a candidate at `now`, and the predicted reading's reset when it came from the
 /// candidate's own `window` (an api_key account's worst-bucket reset never enters the score). A subscription
