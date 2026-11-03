@@ -24,7 +24,9 @@ zstd, and any other coding answers `502` `upstream_undecodable` before any byte 
 reproduces over the empty prompt the client stamps, and a refusal on a resumed conversation names the resume
 ([Client drift](relay.md#client-drift)). A session that switches model between its turns names no previous message in
 its cache diagnostics on its first request to another account, like any move
-([The body edits](relay.md#the-body-edits)).
+([The body edits](relay.md#the-body-edits)). A billing line the strict decoder cannot read, as one holding a lone
+surrogate escape, is refused for its shape as `400` `body_shape` on a request whose line the relay restores
+([The body edits](relay.md#the-body-edits), [Refusal codes](client.md#refusal-codes)).
 A body carrying a fallback credit token from a refusal is placed on the account that issued it, the relay keeping the
 issuer under the token's digest in memory for an hour ([Admission](relay.md#admission)).
 The router requires the session header, the class header, the attribution line, `metadata.user_id` and the agent and

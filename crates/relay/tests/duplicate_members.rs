@@ -287,3 +287,24 @@ async fn a_lone_surrogate_beside_an_escaped_stamp_token_is_refused_before_anythi
     assert!(up.requests().is_empty(), "nothing reached the upstream");
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_billing_line_the_strict_decoder_cannot_read_is_refused_for_its_shape() {
+    let up = FakeUpstream::start(vec![ok_rule()]).await;
+    let h = harness_restricted_to(&up, "claude-sonnet-4-5").await;
+    // The raw walk reads past a lone surrogate escape, and the restoration decodes the line to fill its absent
+    // fields. The line names no version and claims no hash, so neither drift check reads it first.
+    let line = r"x-anthropic-billing-header: cc_entrypoint=sdk-cli; cc_workload=\udc00;";
+    let body = format!(
+        r#"{{"model":"claude-sonnet-4-5","system":[{{"type":"text","text":"{line}"}}],"messages":[],"max_tokens":8,"metadata":{{"user_id":"{{\"device_id\":\"test-device\",\"account_uuid\":\"\",\"session_id\":\"s1\"}}"}}}}"#
+    );
+    let (status, code, text) = send(&h, "/v1/messages", &body).await;
+    assert_eq!(status, 400, "{text}");
+    assert_eq!(code, "body_shape", "{text}");
+    assert!(
+        text.contains("billing line the relay cannot decode"),
+        "{text}"
+    );
+    assert!(up.requests().is_empty(), "nothing reached the upstream");
+    up.shutdown().await;
+}

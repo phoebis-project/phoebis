@@ -249,6 +249,9 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             error_type: "invalid_request_error",
             code: phoebis_bus::BODY_SHAPE_ERROR_CODE,
             message: Cow::Borrowed(match member {
+                BodyMember::BillingLine => {
+                    "the request body carries a billing line the relay cannot decode"
+                }
                 BodyMember::BillingStamp => {
                     "the request body carries a billing stamp the relay can neither check nor restamp"
                 }

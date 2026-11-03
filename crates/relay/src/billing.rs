@@ -3,7 +3,7 @@
 
 use std::borrow::Cow;
 
-use crate::body::BILLING_BLOCK;
+use crate::body::{BodyMember, BILLING_BLOCK};
 use crate::memory::Injected;
 use crate::RelayError;
 
@@ -40,7 +40,8 @@ pub struct Restore<'a> {
 /// Fills every absent field the restoration names on the attribution line at `system[0]`. A body whose first
 /// system block is not that line, or whose `system` is not an array, is left as sent: the relay never writes a
 /// line the client did not, so every restoration carries the client's own stamp. A present field is never
-/// rewritten.
+/// rewritten. A line the strict decoder cannot read, a lone surrogate escape among its causes, refuses the body as
+/// `BodyShape(BillingLine)` rather than sending it on unfilled.
 pub fn restore_billing_line(
     body: &mut Vec<u8>,
     restore: &Restore<'_>,
@@ -196,8 +197,10 @@ fn patch_line(
     end: usize,
     restore: &Restore<'_>,
 ) -> Result<Vec<Injected>, RelayError> {
-    let decoded: String = serde_json::from_slice(&body[start..end])
-        .expect("string_member_span validated a JSON string");
+    // The raw walk accepts any `\uXXXX`, so the span can hold an escape the strict decoder refuses.
+    let Ok(decoded) = serde_json::from_slice::<String>(&body[start..end]) else {
+        return Err(RelayError::BodyShape(BodyMember::BillingLine));
+    };
     // The dispatch above matched `BILLING_BLOCK`, which stops right after the colon; a line that carries no
     // space after it, or nothing at all past the prefix, is not a shape this build ever writes, and splicing a
     // field into it under the assumption that it is would double the prefix or leave a stray separator behind.

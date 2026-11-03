@@ -98,6 +98,9 @@ pub const CLASSIFIER_BETA: &str = "auto-mode-classifier-2026-07-16";
 /// resolved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BodyMember {
+    /// A billing line at `system[0].text` the strict decoder cannot read, a lone surrogate escape among its causes:
+    /// the restoration decodes the line to fill its absent fields.
+    BillingLine,
     /// A billing stamp in `system[0].text` the decoded walk reads and the raw walk cannot reach; `carries_a_stamp`
     /// says why such a body is refused.
     BillingStamp,
@@ -170,7 +173,7 @@ impl RepeatedMember {
 impl BodyMember {
     pub fn path(self) -> &'static str {
         match self {
-            BodyMember::BillingStamp => BILLING_LINE_PATH,
+            BodyMember::BillingLine | BodyMember::BillingStamp => BILLING_LINE_PATH,
             BodyMember::CacheControl => "cache_control",
             BodyMember::MetadataUserId => "metadata.user_id",
             BodyMember::Model => "model",
@@ -184,6 +187,9 @@ impl BodyMember {
     /// rather than absent, so none reads like the other two variants' "has no ... member to edit".
     pub(crate) fn shape_message(self) -> String {
         match self {
+            BodyMember::BillingLine => {
+                "request body carries a billing line the router cannot decode".into()
+            }
             BodyMember::BillingStamp => {
                 "request body carries a billing stamp the router cannot restamp".into()
             }
