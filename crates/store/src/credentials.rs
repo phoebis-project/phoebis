@@ -1,7 +1,5 @@
 //! Encrypted credential bundles, API-key secrets, and refresh-attempt bookkeeping.
 
-#[cfg(any(test, feature = "debug-hooks"))]
-use std::sync::atomic::Ordering;
 use std::sync::LazyLock;
 
 use rusqlite::{params, OptionalExtension};
@@ -388,15 +386,10 @@ impl Store {
     /// The seam `debug_fail_next_credential_commit` arms, checked before each commit's transaction.
     pub(crate) fn fail_injected_commit(&self) -> Result<(), StoreError> {
         #[cfg(any(test, feature = "debug-hooks"))]
-        if self
-            .hooks
-            .fail_next_credential_commit
-            .swap(false, std::sync::atomic::Ordering::SeqCst)
-        {
-            return Err(StoreError::Io(std::io::Error::other(
-                "injected credential commit failure",
-            )));
-        }
+        crate::injected_failure(
+            &self.hooks.fail_next_credential_commit,
+            "injected credential commit failure",
+        )?;
         Ok(())
     }
 
@@ -844,15 +837,10 @@ impl Store {
         limit: usize,
     ) -> Result<Vec<ResolvedAttempt>, StoreError> {
         #[cfg(any(test, feature = "debug-hooks"))]
-        if self
-            .hooks
-            .fail_next_refresh_read
-            .swap(false, Ordering::SeqCst)
-        {
-            return Err(StoreError::Io(std::io::Error::other(
-                "injected refresh read failure",
-            )));
-        }
+        crate::injected_failure(
+            &self.hooks.fail_next_refresh_read,
+            "injected refresh read failure",
+        )?;
         let conn = self.conn.lock().expect(LOCK_POISONED);
         let mut stmt = conn.prepare_cached(
             "SELECT id, account_id, started_at, resolved_at, outcome, detail, lifecycle_generation, \

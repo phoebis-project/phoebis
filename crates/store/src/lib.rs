@@ -450,15 +450,10 @@ impl Store {
 
     pub fn schema_version(&self) -> Result<u32, StoreError> {
         #[cfg(any(test, feature = "debug-hooks"))]
-        if self
-            .hooks
-            .fail_next_schema_version
-            .swap(false, Ordering::SeqCst)
-        {
-            return Err(StoreError::Io(std::io::Error::other(
-                "injected schema version read failure",
-            )));
-        }
+        injected_failure(
+            &self.hooks.fail_next_schema_version,
+            "injected schema version read failure",
+        )?;
         read_version(&self.conn.lock().expect(LOCK_POISONED))
     }
 
@@ -714,6 +709,15 @@ impl Store {
             .execute("DELETE FROM meta WHERE key = 'storage_key_canary'", [])?;
         Ok(())
     }
+}
+
+/// Fails the call once a test armed `flag`, disarming it.
+#[cfg(any(test, feature = "debug-hooks"))]
+pub(crate) fn injected_failure(flag: &AtomicBool, message: &'static str) -> Result<(), StoreError> {
+    if flag.swap(false, Ordering::SeqCst) {
+        return Err(StoreError::Io(std::io::Error::other(message)));
+    }
+    Ok(())
 }
 
 #[cfg(any(test, feature = "debug-hooks"))]

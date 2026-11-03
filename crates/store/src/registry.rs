@@ -4,8 +4,6 @@
 use phoebis_guardrails::{Condition, GuardrailAction, GuardrailMode};
 use rusqlite::{params, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
-#[cfg(any(test, feature = "debug-hooks"))]
-use std::sync::atomic::Ordering;
 
 use crate::credentials::store_api_key_secret;
 use crate::{
@@ -653,11 +651,7 @@ impl Store {
         #[cfg(any(test, feature = "debug-hooks"))]
         self.enter_load();
         #[cfg(any(test, feature = "debug-hooks"))]
-        if self.hooks.fail_next_load.swap(false, Ordering::SeqCst) {
-            return Err(StoreError::Io(std::io::Error::other(
-                "injected load failure",
-            )));
-        }
+        crate::injected_failure(&self.hooks.fail_next_load, "injected load failure")?;
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction()?;
         let load = RegistryLoad {
