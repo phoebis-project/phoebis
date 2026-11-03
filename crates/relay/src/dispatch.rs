@@ -55,9 +55,12 @@ pub(crate) async fn until_canceled<T>(
     work: impl Future<Output = T>,
     cancel: &CancellationToken,
 ) -> Option<T> {
+    // Biased with the cancellation first, so a tie answers `None`: an unbiased select could hand back the work of
+    // an account already gone.
     tokio::select! {
-        result = work => Some(result),
+        biased;
         _ = cancel.cancelled() => None,
+        result = work => Some(result),
     }
 }
 
