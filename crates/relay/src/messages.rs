@@ -2616,10 +2616,6 @@ impl Relay {
         // The body for this leg and what the editor added to it; the head is built per pass and reports its own.
         let build = |skip: &BTreeSet<Injected>| -> Built {
             let mut edited = admitted.raw.to_vec();
-            // Read ahead of every other edit, none of which add or remove a `cache_control` member, so this
-            // matches what the cache TTL rewrite itself will find.
-            let carries_a_marker =
-                phoebis_cch::cache_control_spans(&edited).is_ok_and(|spans| !spans.is_empty());
             let mut body_injected = Vec::new();
             let mut inject_betas: Vec<Injected> = Vec::new();
             let writes_cost_money =
@@ -2664,6 +2660,10 @@ impl Relay {
                     t
                 }
             });
+            // Read ahead of every other edit, none of which add or remove a `cache_control` member, so this
+            // matches what the cache TTL rewrite itself will find. A leg that couples no TTL never reads it.
+            let carries_a_marker = ttl.is_some()
+                && phoebis_cch::cache_control_spans(&edited).is_ok_and(|spans| !spans.is_empty());
             // A marker-less body that went as sent claims no TTL, whether because it is a count, because the
             // toggle left it alone or because its class is auxiliary: no beta for it, none dropped for it, and
             // none reported. A body that already carried a marker claims the rewrite's TTL even where the marker
