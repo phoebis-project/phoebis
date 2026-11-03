@@ -368,21 +368,6 @@ fn capacity_rules(
     Ok(())
 }
 
-/// The relay's `MAX_ID_LEN`, restated since the ledger cannot name the relay.
-const ENTRYPOINT_MAX: usize = 256;
-
-/// The entrypoint token alphabet: ASCII lowercase letters, ASCII digits, hyphens and underscores, 1 to
-/// `ENTRYPOINT_MAX` (256, the relay's `MAX_ID_LEN`) bytes, which `regimes.{key}` and each entry of
-/// `regimes.{key}.entrypoints` pass and the relay's `is_entrypoint_token` reads too. A digit is in it because
-/// `claude-desktop-3p` carries one, and an underscore because the client spells `claude_in_slack`, `local_agent` and
-/// the `remote_*` family with one. Every separator stays out, so no listed name can carry a second field.
-fn bare_token(candidate: &str) -> bool {
-    (1..=ENTRYPOINT_MAX).contains(&candidate.len())
-        && candidate
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
-}
-
 impl SubscriptionCosts {
     /// The entry with its peak zone resolved and its rules checked, a refusal prefixed by the entry's date.
     fn resolved(mut self) -> Result<SubscriptionCosts, LedgerError> {
@@ -430,7 +415,7 @@ impl SubscriptionCosts {
         // One regime prices an entrypoint, so a token two entries list is refused rather than read by file order.
         let mut listed: HashMap<&str, &str> = HashMap::new();
         for (key, regime) in &self.regimes {
-            if !bare_token(key) {
+            if !phoebis_relay::is_entrypoint_token(key) {
                 return Err(refuse(format!(
                     "regimes.{key}: a bare token of lowercase letters, digits, hyphens and underscores"
                 )));
@@ -439,7 +424,7 @@ impl SubscriptionCosts {
                 return Err(refuse(format!("regimes.{key}.entrypoints: lists none")));
             }
             for name in &regime.entrypoints {
-                if !bare_token(name) {
+                if !phoebis_relay::is_entrypoint_token(name) {
                     return Err(refuse(format!(
                         "regimes.{key}.entrypoints: {name} is not a bare token of lowercase letters, digits, \
                          hyphens and underscores"

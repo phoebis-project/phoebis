@@ -150,8 +150,8 @@ pub fn entrypoint_of(user_agent: &str) -> &str {
 /// The entrypoint token alphabet: ASCII lowercase letters, ASCII digits, hyphens and underscores, 1 to `MAX_ID_LEN`
 /// bytes, so `claude-desktop-3p` passes on its digit and `claude_in_slack`, `local_agent` and the `remote_*` family on
 /// their underscore, while a separator (`;`, `=`, whitespace, `/`, `.`) fails. Shared with the cross-check's read of
-/// `cc_entrypoint`, and the rule the cost model's loader restates for a regime's name and its entrypoints.
-pub(crate) fn is_entrypoint_token(candidate: &str) -> bool {
+/// `cc_entrypoint` and with the cost model's loader, which checks a regime's name and its entrypoints against it.
+pub fn is_entrypoint_token(candidate: &str) -> bool {
     // Bounded the same as `header_id`'s identifiers: a token running past this length reaches a log line and a
     // ledger key, so it reads as unknown rather than widening every row that names its class.
     (1..=crate::identity::MAX_ID_LEN).contains(&candidate.len())

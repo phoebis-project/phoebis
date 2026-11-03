@@ -31,6 +31,7 @@ mod sse;
 mod stream;
 
 pub use auth::{presented_key, AuthError};
+pub use billing::is_entrypoint_token;
 pub use body::{
     edit_body, BodyEdits, BodyMember, Markerless, NativeEdit, SafeguardsEdit, CACHE_DIAGNOSIS_BETA,
     CLASSIFIER_BETA, DANGEROUS_TOOL_USE_BETA, EXTENDED_TTL_BETA,
