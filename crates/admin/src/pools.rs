@@ -1674,7 +1674,9 @@ pub(crate) async fn traffic(
         })
         .into_response(),
         // The range's own refusal, raised before any read.
-        Err(e @ phoebis_ledger::LedgerError::Range(_)) => failure(StatusCode::BAD_REQUEST, &e.to_string()),
+        Err(e @ phoebis_ledger::LedgerError::Range(_)) => {
+            failure(StatusCode::BAD_REQUEST, &e.to_string())
+        }
         Err(e) => crate::analytics::ledger_failure(e),
     }
 }

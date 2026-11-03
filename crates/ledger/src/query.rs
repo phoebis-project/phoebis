@@ -4024,7 +4024,8 @@ fn first_edge(start: i64, end: i64, bucket_seconds: i64) -> Result<i64, LedgerEr
 /// The bucket edges a `SeriesFilter` reads over, past the guard every series reader shares.
 fn bucket_range(filter: &SeriesFilter) -> Result<(i64, i64), LedgerError> {
     let last = hour_ceil(filter.to);
-    Ok((first_edge(filter.from / 1_000, last, filter.bucket_seconds)?, last))
+    let first = first_edge(filter.from / 1_000, last, filter.bucket_seconds)?;
+    Ok((first, last))
 }
 
 /// Every bucket start of `[first, last)`, a trailing partial bucket included. The bucket must be positive.
