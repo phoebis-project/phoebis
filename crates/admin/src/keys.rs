@@ -215,7 +215,11 @@ pub(crate) struct KeyCreated {
 fn new_secret() -> String {
     let mut bytes = [0u8; 32];
     phoebis_oauth::random::fill(&mut bytes);
-    format!("phoebis-{}", URL_SAFE_NO_PAD.encode(bytes))
+    format!(
+        "{}{}",
+        phoebis_store::KEY_SECRET_PREFIX,
+        URL_SAFE_NO_PAD.encode(bytes)
+    )
 }
 
 // The error is a rendered HTTP response, returned once per request and dropped. Boxing it would buy a

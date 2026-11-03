@@ -562,10 +562,13 @@ pub fn canonical_id(upstream_id: &str) -> String {
     lowered.strip_suffix("[1m]").unwrap_or(&lowered).to_string()
 }
 
+/// What every secret the router issues for its own API keys starts with.
+pub const KEY_SECRET_PREFIX: &str = "phoebis-";
+
 /// The display prefix of a secret: what an operator sees in a list next to a key that is never shown again.
 pub fn key_prefix(secret: &str) -> String {
     secret
-        .strip_prefix("phoebis-")
+        .strip_prefix(KEY_SECRET_PREFIX)
         .unwrap_or(secret)
         .chars()
         .take(8)
