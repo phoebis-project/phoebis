@@ -244,19 +244,20 @@ async fn a_models_endpoint_that_never_answers_ends_the_discovery_as_timed_out() 
         respond: Respond::Gated(Box::new(json_list(&["claude-opus-5"]))),
     }])
     .await;
-    let h = harness_with_catalog(
+    let head_timeout = Duration::from_secs(1);
+    let h = harness_with_catalog_and_head_timeout(
         &up,
         catalog_up,
         &[api_key("a", "sk-ant-api03-A", 0)],
         PoolSpec::default(),
+        head_timeout,
     )
     .await;
     let a = h.store.account("a").unwrap().unwrap();
     // Twice the harness's discovery timeout, so a discovery left without its bound fails here and never hangs.
-    let discovered =
-        tokio::time::timeout(default_limits().head_timeout * 2, h.catalog.discover(&a))
-            .await
-            .expect("the discovery's own timeout ends it");
+    let discovered = tokio::time::timeout(head_timeout * 2, h.catalog.discover(&a))
+        .await
+        .expect("the discovery's own timeout ends it");
     assert!(
         matches!(&discovered, Err(DiscoveryError::Unreachable(m)) if m == "timed out"),
         "a models endpoint that never answers ends as timed out, got {:?}",

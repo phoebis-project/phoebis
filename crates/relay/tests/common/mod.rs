@@ -676,6 +676,37 @@ pub async fn harness_with_catalog(
     .await
 }
 
+/// `harness_with_catalog` under the caller's head timeout, which the catalog's discovery takes as its own
+/// bound: a case that waits out a stalled models endpoint ends in that time rather than in the default's ten
+/// seconds.
+pub async fn harness_with_catalog_and_head_timeout(
+    up: &FakeUpstream,
+    catalog_up: FakeUpstream,
+    accounts: &[TestAccount],
+    pool: PoolSpec,
+    head_timeout: Duration,
+) -> Harness {
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    build(
+        store,
+        up,
+        accounts,
+        pool,
+        Limits {
+            head_timeout,
+            ..default_limits()
+        },
+        None,
+        false,
+        None,
+        Some(catalog_up),
+        RouterConfig::default(),
+        None,
+        None,
+    )
+    .await
+}
+
 /// `harness_on_with_bus`, with the caller's own catalog fake in place of `catalog_rules()`'s: for a suite (like
 /// keepalive's) built around a session's pin and account continuity, where a spelling resolving to a dated id
 /// mid-test is not what the suite is about. `accounting`, when named, is the ledger's standing admission reads.
