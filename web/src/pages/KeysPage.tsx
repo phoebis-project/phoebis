@@ -970,5 +970,3 @@ function EffectiveList({ processed }: { processed: Loaded<KeyModels | null> }) {
     </div>
   );
 }
-
-export type { ApiKey };
