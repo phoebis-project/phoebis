@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use futures::future::{BoxFuture, FutureExt, Shared};
 use phoebis_profile::Profile;
-use phoebis_store::Store;
+use phoebis_store::{AccountRow, Store};
 use phoebis_transport::control::ControlClient;
 use serde_json::Value;
 use tokio::sync::Semaphore;
@@ -699,17 +699,21 @@ impl UsageService {
         Some(Duration::from_millis((not_before - now) as u64))
     }
 
-    /// The last snapshot held for the account, clean or carrying its last attempt's error, with no fetch;
+    /// The last snapshot held for the account's row, clean or carrying its last attempt's error, with no fetch;
     /// `None` for an entry another holder of the id left behind (a re-pairing or a delete and a new account
-    /// under the id that no route invalidated), so no caller shows the old holder's windows as the new one's.
-    pub fn latest(&self, account_id: &str) -> Option<UsageSnapshot> {
-        let identity = self.inner.identity(account_id);
+    /// under the id that no route invalidated), so no caller shows the old holder's windows as the new one's. The
+    /// holder is the row the caller holds, so the answer is for the account its response shows.
+    pub fn latest_for(&self, account: &AccountRow) -> Option<UsageSnapshot> {
+        let identity = Identity {
+            incarnation: account.incarnation,
+            lifecycle_generation: account.lifecycle_generation,
+        };
         self.inner
             .cache
             .lock()
             .expect(LOCK_POISONED)
-            .get(account_id)
-            .filter(|entry| identity == Some(entry.identity))
+            .get(&account.id)
+            .filter(|entry| entry.identity == identity)
             .map(|entry| entry.snapshot.clone())
     }
 

@@ -824,7 +824,7 @@ async fn usage_latest(State(state): State<Arc<AdminState>>, Path(id): Path<Strin
         Err(refusal) => return refusal,
     };
     let (poll, unread) = poll_standing(&state, &row);
-    let latest = state.usage.latest(&id);
+    let latest = state.usage.latest_for(&row);
     let held = match &latest {
         Some(snapshot) if has_windows(snapshot) => None,
         _ => state.router.samples().await.ok().and_then(|samples| {
@@ -2745,7 +2745,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
     // list read carries every account's standing. The poll never reads an API-key account.
     let usage = (row.kind == AccountKind::Oauth).then(|| {
         let (poll, unread) = poll_standing(state, row);
-        let latest = state.usage.latest(&row.id);
+        let latest = state.usage.latest_for(row);
         let held = match &latest {
             Some(snapshot) if has_windows(snapshot) => None,
             _ => ctx.held.get(&row.id).cloned(),

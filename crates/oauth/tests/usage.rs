@@ -800,7 +800,8 @@ mod service {
             },
         ])
         .await;
-        let service = service_for(&up, store_with_bundle_until(1_000_000 + 86_400_000), &now);
+        let store = store_with_bundle_until(1_000_000 + 86_400_000);
+        let service = service_for(&up, store.clone(), &now);
         let (lines, _sink) = crate::common::capture_tracing();
         let clean = service.poll("a").await.unwrap();
         assert!(clean.error.is_none());
@@ -835,7 +836,9 @@ mod service {
         assert_eq!(held.windows.len(), clean.windows.len(), "the old windows");
         assert_eq!(held.fetched_at, 1_000_000, "read when they were read");
         assert_eq!(usage_requests(&up), 1, "no request inside the hold");
-        let latest = service.latest("a").unwrap();
+        let latest = service
+            .latest_for(&store.account("a").unwrap().unwrap())
+            .unwrap();
         assert!(
             latest.error.is_none(),
             "the snapshot held is still the clean one"
@@ -847,7 +850,11 @@ mod service {
         assert!(fresh.error.is_none());
         assert_eq!(fresh.fetched_at, 1_120_000);
         assert_eq!(usage_requests(&up), 2, "a fresh request at the hold's end");
-        assert!(service.latest("a").unwrap().error.is_none());
+        assert!(service
+            .latest_for(&store.account("a").unwrap().unwrap())
+            .unwrap()
+            .error
+            .is_none());
         up.shutdown().await;
     }
 
@@ -1228,7 +1235,9 @@ mod service {
         );
         assert!(old.await.unwrap().is_err());
         assert!(
-            service.latest("a").is_none(),
+            service
+                .latest_for(&store.account("a").unwrap().unwrap())
+                .is_none(),
             "the cache holds no snapshot of the old holder"
         );
         assert_eq!(usage_requests(&up), 1);
@@ -1254,7 +1263,9 @@ mod service {
         let service = Arc::new(service_for(&up, store.clone(), &now));
         service.poll("a").await.unwrap();
         assert!(
-            service.latest("a").is_some(),
+            service
+                .latest_for(&store.account("a").unwrap().unwrap())
+                .is_some(),
             "the holder's own reading is cached"
         );
 
@@ -1273,7 +1284,9 @@ mod service {
             .insert_account(&AccountRow::for_tests("a", AccountKind::Oauth))
             .unwrap();
         assert!(
-            service.latest("a").is_none(),
+            service
+                .latest_for(&store.account("a").unwrap().unwrap())
+                .is_none(),
             "the cached reading belongs to the earlier holder and reads as absent"
         );
         up.release();
@@ -1281,7 +1294,9 @@ mod service {
             old.await.unwrap().is_err(),
             "a fetch that ended under another identity answers no reading, cached or fetched"
         );
-        assert!(service.latest("a").is_none());
+        assert!(service
+            .latest_for(&store.account("a").unwrap().unwrap())
+            .is_none());
         up.shutdown().await;
     }
 

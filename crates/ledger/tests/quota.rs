@@ -1767,7 +1767,9 @@ async fn a_usage_401_lands_reauth_required_under_auth_failed_and_the_poll_stops_
     assert_eq!(
         (
             usage.poll_status("a").and_then(|s| s.last_error),
-            usage.latest("a").and_then(|s| s.error)
+            usage
+                .latest_for(&h.store.account("a").unwrap().unwrap())
+                .and_then(|s| s.error)
         ),
         (
             Some("usage request rejected with status 401".to_string()),
