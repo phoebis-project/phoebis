@@ -1,5 +1,5 @@
 import type { CacheMissReason, WastedProbeReason } from '@/api/types';
-import { lookup } from '@/lib/counts';
+import { countOf, emptyCounts, lookup } from '@/lib/counts';
 
 /**
  * Reading order for the panels: the no-divergence answer, the diagnosed divergences, the two non-answers, then the
@@ -41,7 +41,7 @@ export const CACHE_MISS_SHORT: Record<CacheMissReason, string> = {
 /** A reason the console has no word for reads under the name the beta gave it. */
 export const missShort = (reason: CacheMissReason): string => lookup(CACHE_MISS_SHORT, reason) ?? reason;
 
-export const missCount = (reasons: Record<CacheMissReason, number>, reason: CacheMissReason): number => lookup(reasons, reason) ?? 0;
+export const missCount = countOf;
 
 /** The columns a breakdown draws: the known reasons in reading order, then every other name the groups carry, alphabetically. */
 export function missReasonOrder(groups: readonly { cacheMissReasons: Record<CacheMissReason, number> }[]): CacheMissReason[] {
@@ -75,7 +75,7 @@ export const emptyWastedProbeReasons = (): Record<WastedProbeReason, number> => 
  * its count nor, assigned, replaces the map's prototype.
  */
 export const emptyCacheMissReasons = (): Record<CacheMissReason, number> =>
-  Object.assign(Object.create(null) as Record<CacheMissReason, number>, {
+  Object.assign(emptyCounts(), {
     messages_changed: 0,
     model_changed: 0,
     none: 0,
