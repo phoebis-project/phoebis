@@ -1838,7 +1838,6 @@ function traceRequests() {
   // The placements draw from a stream of their own, so every trace drawn before them keeps its values.
   const p = createRng(4_111);
   const w = createRng(3_119);
-  const accountOf = new Map(ACCOUNTS.map((a) => [a.id, a]));
   for (const r of REQUESTS) {
     // The routing log's records write the story's traces, so no obstacle is drawn against what its cards show.
     if (STORY_IDS.has(r.id)) continue;
@@ -1856,7 +1855,7 @@ function traceRequests() {
       // The ledger folds the cache read into the trace of the attempt that answered, and only once it did.
       const cacheRead = i === all.length - 1 && r.status === 200 ? r.usage.cacheRead : null;
       const strategy = pool?.strategy ?? 'pace';
-      const account = accountOf.get(a.accountId);
+      const account = accountById.get(a.accountId);
       const inOverage = a.overageInUse === true;
       const overage = inOverage ? 1 : 0;
       const group = kindGroupOf(pool, account, inOverage);
@@ -1869,7 +1868,7 @@ function traceRequests() {
       if (first && (pool?.affinityTtlSeconds ?? 0) > 0 && LIVE_PIN.get(r.id)?.accountId === a.accountId) {
         return { ...a, selection: { cacheRead, cohortHold: null, moved: null, placement: null, renewed: true, skipped: [], strategy, tier: null } };
       }
-      if (drawnRenewal) return { ...a, selection: { cacheRead, cohortHold: null, moved: null, placement: null, renewed: false, skipped: [], strategy, tier: [group, priority, overage] } };
+      if (drawnRenewal) return { ...a, selection: undrawnTrace(r, a, i === all.length - 1) };
       const tried = new Set(all.slice(0, i).map((x) => x.accountId));
       const skipped = members.filter((id) => id !== a.accountId).map((accountId) => ({ accountId, obstacle: tried.has(accountId) ? 'attempted' : h.weighted(OBSTACLE_DRAWS) }));
       const placement = moved === undefined ? placementOf(p, r) : null;
