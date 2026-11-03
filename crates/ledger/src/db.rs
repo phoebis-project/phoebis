@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
+use phoebis_store::migrations;
 use rusqlite::{
     params, Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior,
 };
@@ -1157,7 +1158,7 @@ pub(crate) fn row_to_attempt(r: &rusqlite::Row<'_>) -> rusqlite::Result<AttemptR
 }
 
 /// The store's rule: a file a newer build wrote is refused before the schema or a migration runs over it. Then
-/// `SCHEMA`, the baseline at version 1, and `migrate` over the steps above the stored version.
+/// `SCHEMA`, the baseline at version 1, and the steps above the stored version.
 fn prepare(
     conn: &mut Connection,
     path: &Path,
@@ -1172,47 +1173,12 @@ fn prepare(
             supported,
         });
     }
-    // A fresh file carries its version row as the registry's does, so an `UPDATE` of the marker finds a row to
-    // change. The baseline and the row share one transaction, so a first open that dies midway leaves no table behind
-    // rather than tables without their marker. A row already there is kept, and an open that finds it writes nothing,
-    // so it lands beside a connection holding the write lock.
-    let tx = conn.transaction()?;
-    tx.execute_batch(schema::SCHEMA)?;
-    let marked = tx
-        .query_row(
-            "SELECT 1 FROM meta WHERE key = 'schema_version'",
-            [],
-            |_| Ok(()),
-        )
-        .optional()?
-        .is_some();
-    if !marked {
-        tx.execute(
-            "INSERT INTO meta (key, value) VALUES ('schema_version', '1')",
-            [],
-        )?;
-    }
-    tx.commit()?;
-    migrate(conn, current.max(1), migrations)
-}
-
-/// Applies every step above `current` in order, each inside its own transaction with the version it reaches, so a
-/// crash or a failing step leaves the version at the last step that committed.
-fn migrate(
-    conn: &mut Connection,
-    current: u32,
-    migrations: &[(u32, &str)],
-) -> Result<(), LedgerError> {
-    for (version, sql) in migrations {
-        if *version <= current {
-            continue;
-        }
-        let tx = conn.transaction()?;
-        tx.execute_batch(sql)?;
-        tx.execute("INSERT INTO meta (key, value) VALUES ('schema_version', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value", params![version.to_string()])?;
-        tx.commit()?;
-    }
-    Ok(())
+    Ok(migrations::apply(
+        conn,
+        schema::SCHEMA,
+        current,
+        migrations,
+    )?)
 }
 
 fn latest_version() -> u32 {
@@ -1222,25 +1188,7 @@ fn latest_version() -> u32 {
 /// A file that has never run `prepare` has no `meta` table yet, which reads as version 0, so the refusal of a
 /// newer file runs before `schema::SCHEMA` creates the table.
 pub(crate) fn read_version(conn: &Connection) -> Result<u32, LedgerError> {
-    let has_meta = conn
-        .query_row(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'",
-            [],
-            |_| Ok(()),
-        )
-        .optional()?
-        .is_some();
-    if !has_meta {
-        return Ok(0);
-    }
-    let stored: Option<String> = conn
-        .query_row(
-            "SELECT value FROM meta WHERE key = 'schema_version'",
-            [],
-            |row| row.get(0),
-        )
-        .optional()?;
-    Ok(stored.and_then(|v| v.parse().ok()).unwrap_or(0))
+    Ok(migrations::stored_version(conn, 0)?)
 }
 
 /// Shared by both opens, so an in-memory ledger analyzes at its open as a file does.
@@ -1998,25 +1946,7 @@ mod tests {
     }
 
     #[test]
-    fn an_open_that_finds_meta_without_its_marker_writes_the_version_row() {
-        // What a first open that died between the baseline and its marker left behind.
-        let mut conn = meta_alone();
-        prepare(&mut conn, Path::new(":memory:"), &[]).unwrap();
-        assert_eq!(raw_markers(&conn), vec!["1".to_string()]);
-    }
-
-    #[test]
-    fn an_open_that_finds_its_marker_keeps_it_and_adds_no_second_row() {
-        let mut conn = meta_alone();
-        conn.execute(
-            "INSERT INTO meta (key, value) VALUES ('schema_version', '1')",
-            [],
-        )
-        .unwrap();
-        prepare(&mut conn, Path::new(":memory:"), &[]).unwrap();
-        assert_eq!(raw_markers(&conn), vec!["1".to_string()]);
-
-        // A marker above this build's version is refused before the baseline's transaction begins.
+    fn a_marker_above_this_builds_version_is_refused_before_the_baselines_transaction_begins() {
         let mut conn = meta_alone();
         let newer = (latest_version() + 1).to_string();
         conn.execute(
@@ -2032,67 +1962,11 @@ mod tests {
         assert_eq!(raw_markers(&conn), vec![newer]);
     }
 
-    /// A step that creates a table and one that alters it, so a step applied twice or out of order fails.
-    const CHAIN: &[(u32, &str)] = &[
-        (2, "CREATE TABLE chain_probe (id INTEGER PRIMARY KEY);"),
-        (
-            3,
-            "ALTER TABLE chain_probe ADD COLUMN word TEXT NOT NULL DEFAULT 'x';",
-        ),
-    ];
-
-    /// The baseline with no step above it, so the chain tests start at version 1 whatever the build's own chain holds.
+    /// The baseline with no step above it, so the test starts at version 1 whatever the build's own chain holds.
     fn prepared_in_memory() -> Connection {
         let mut conn = Connection::open_in_memory().unwrap();
         prepare(&mut conn, Path::new(":memory:"), &[]).unwrap();
         conn
-    }
-
-    fn word_columns(conn: &Connection) -> i64 {
-        conn.query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('chain_probe') WHERE name = 'word'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap()
-    }
-
-    #[test]
-    fn a_chain_of_two_steps_applies_in_order_and_records_the_last_version() {
-        let mut conn = prepared_in_memory();
-        assert_eq!(read_version(&conn).unwrap(), 1);
-        migrate(&mut conn, 1, CHAIN).unwrap();
-        assert_eq!(read_version(&conn).unwrap(), 3);
-        assert_eq!(word_columns(&conn), 1);
-    }
-
-    #[test]
-    fn a_chain_resumes_above_the_stored_version_and_repeats_nothing() {
-        let mut conn = prepared_in_memory();
-        migrate(&mut conn, 1, &CHAIN[..1]).unwrap();
-        assert_eq!(read_version(&conn).unwrap(), 2);
-        migrate(&mut conn, 2, CHAIN).unwrap();
-        assert_eq!(read_version(&conn).unwrap(), 3);
-        assert_eq!(word_columns(&conn), 1);
-        migrate(&mut conn, 3, CHAIN).unwrap();
-        assert_eq!(read_version(&conn).unwrap(), 3);
-        assert_eq!(word_columns(&conn), 1);
-    }
-
-    #[test]
-    fn a_failing_step_leaves_the_version_at_the_last_step_that_landed() {
-        let mut conn = prepared_in_memory();
-        let error = migrate(&mut conn, 1, &[(2, CHAIN[0].1), (3, "THIS IS NOT SQL;")]).unwrap_err();
-        assert!(matches!(error, LedgerError::Sqlite(_)), "{error:?}");
-        assert_eq!(read_version(&conn).unwrap(), 2);
-        let probes: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'chain_probe'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(probes, 1, "the step that landed keeps its table");
     }
 
     fn estimated_columns(conn: &Connection) -> i64 {
@@ -2115,7 +1989,7 @@ mod tests {
             params![window_end, window_end - 18_000_000, window_end - 60_000],
         )
         .unwrap();
-        migrate(&mut conn, 1, schema::MIGRATIONS).unwrap();
+        migrations::apply(&mut conn, schema::SCHEMA, 1, schema::MIGRATIONS).unwrap();
         let rows = crate::reconcile::read_reconciliations(&conn, &[], window_end).unwrap();
         assert_eq!(
             rows.iter()

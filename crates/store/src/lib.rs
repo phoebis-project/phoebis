@@ -56,6 +56,7 @@ mod schema;
 pub mod backup;
 pub mod crypto;
 pub mod keepalive;
+pub mod migrations;
 pub mod permissions;
 
 use std::path::{Path, PathBuf};
@@ -72,6 +73,8 @@ use rand::Rng;
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 use sha2::Sha256;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
+
+use crate::migrations::has_table;
 
 pub use accounts::{
     answers_stamp_token, stamp_token, AccountExtras, AccountKind, AccountRow, AccountState,
@@ -1185,17 +1188,6 @@ pub(crate) fn open_read_only(path: &Path, busy_timeout: Duration) -> rusqlite::R
     Ok(conn)
 }
 
-fn has_table(conn: &Connection, name: &str) -> Result<bool, StoreError> {
-    Ok(conn
-        .query_row(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
-            params![name],
-            |_| Ok(()),
-        )
-        .optional()?
-        .is_some())
-}
-
 /// The canary sealed under `key`, the nonce `crypto::seal` drew stored as the value's first bytes.
 fn sealed_canary(key: &StorageKey) -> Result<String, StoreError> {
     let (nonce, sealed) = crypto::seal(key, CANARY_AAD, CANARY_PLAINTEXT)?;
@@ -1214,7 +1206,7 @@ fn open_canary(key: &StorageKey, value: &str) -> Result<Vec<u8>, StoreError> {
     crypto::open(key, CANARY_AAD, nonce, sealed)
 }
 
-/// Runs `SCHEMA`, the baseline at version 1, then `migrate` over the steps above the stored `schema_version`.
+/// Runs `SCHEMA`, the baseline at version 1, then the steps above the stored `schema_version`.
 fn prepare(
     conn: &mut Connection,
     on_disk: bool,
@@ -1236,51 +1228,12 @@ fn prepare(
         // cooldown clear or session release again.
         conn.pragma_update(None, "synchronous", "FULL")?;
     }
-    // A fresh file carries its version row as a stepped one does, so an `UPDATE` of the marker finds a row to change.
-    // The version read takes a `meta` without its row for version 1, so a file a crash left between the baseline and
-    // the row would read as prepared and never get its row: the two share one transaction, and any open that finds
-    // the row absent writes it. A row already there is kept, and an open that finds it writes nothing, so it lands
-    // beside a connection holding the write lock.
-    let tx = conn.transaction()?;
-    tx.execute_batch(schema::SCHEMA)?;
-    let marked = tx
-        .query_row(
-            "SELECT 1 FROM meta WHERE key = 'schema_version'",
-            [],
-            |_| Ok(()),
-        )
-        .optional()?
-        .is_some();
-    if !marked {
-        tx.execute(
-            "INSERT INTO meta (key, value) VALUES ('schema_version', '1')",
-            [],
-        )?;
-    }
-    tx.commit()?;
-    migrate(conn, current.max(1), migrations)
-}
-
-/// Applies every step above `current` in order, each inside its own transaction with the version it reaches, so a
-/// crash or a failing step leaves the version at the last step that committed.
-fn migrate(
-    conn: &mut Connection,
-    current: u32,
-    migrations: &[(u32, &str)],
-) -> Result<(), StoreError> {
-    for (version, sql) in migrations {
-        if *version <= current {
-            continue;
-        }
-        let tx = conn.transaction()?;
-        tx.execute_batch(sql)?;
-        tx.execute(
-            "INSERT INTO meta (key, value) VALUES ('schema_version', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![version.to_string()],
-        )?;
-        tx.commit()?;
-    }
-    Ok(())
+    Ok(migrations::apply(
+        conn,
+        schema::SCHEMA,
+        current,
+        migrations,
+    )?)
 }
 
 /// The refusal `prepare` makes before it writes anything, answering the stored version.
@@ -1299,17 +1252,7 @@ fn check_schema(conn: &Connection) -> Result<u32, StoreError> {
 /// above runs before `schema::SCHEMA` creates it. A `meta` without a `schema_version` row reads as
 /// version 1, the baseline `schema::SCHEMA` creates.
 fn read_version(conn: &Connection) -> Result<u32, StoreError> {
-    if !has_table(conn, "meta")? {
-        return Ok(0);
-    }
-    let stored: Option<String> = conn
-        .query_row(
-            "SELECT value FROM meta WHERE key = 'schema_version'",
-            [],
-            |row| row.get(0),
-        )
-        .optional()?;
-    Ok(stored.and_then(|v| v.parse().ok()).unwrap_or(1))
+    Ok(migrations::stored_version(conn, 1)?)
 }
 
 /// A value that does not parse is refused rather than read as 0, which would let every token signed before the first
@@ -1888,62 +1831,6 @@ mod tests {
         );
     }
 
-    /// A step that creates a table and one that alters it, so a step applied twice or out of order fails.
-    const CHAIN: &[(u32, &str)] = &[
-        (2, "CREATE TABLE chain_probe (id INTEGER PRIMARY KEY);"),
-        (
-            3,
-            "ALTER TABLE chain_probe ADD COLUMN word TEXT NOT NULL DEFAULT 'x';",
-        ),
-    ];
-
-    /// The baseline with no step above it, so the chain tests start at version 1 whatever the build's own chain holds.
-    fn prepared_in_memory() -> Connection {
-        let mut conn = Connection::open_in_memory().unwrap();
-        prepare(&mut conn, false, &[]).unwrap();
-        conn
-    }
-
-    fn word_columns(conn: &Connection) -> i64 {
-        conn.query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('chain_probe') WHERE name = 'word'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap()
-    }
-
-    #[test]
-    fn a_chain_of_two_steps_applies_in_order_and_records_the_last_version() {
-        let mut conn = prepared_in_memory();
-        assert_eq!(read_version(&conn).unwrap(), 1);
-        migrate(&mut conn, 1, CHAIN).unwrap();
-        assert_eq!(read_version(&conn).unwrap(), 3);
-        assert_eq!(word_columns(&conn), 1);
-    }
-
-    #[test]
-    fn a_chain_resumes_above_the_stored_version_and_repeats_nothing() {
-        let mut conn = prepared_in_memory();
-        migrate(&mut conn, 1, &CHAIN[..1]).unwrap();
-        assert_eq!(read_version(&conn).unwrap(), 2);
-        migrate(&mut conn, 2, CHAIN).unwrap();
-        assert_eq!(read_version(&conn).unwrap(), 3);
-        assert_eq!(word_columns(&conn), 1);
-        migrate(&mut conn, 3, CHAIN).unwrap();
-        assert_eq!(read_version(&conn).unwrap(), 3);
-        assert_eq!(word_columns(&conn), 1);
-    }
-
-    #[test]
-    fn a_failing_step_leaves_the_version_at_the_last_step_that_landed() {
-        let mut conn = prepared_in_memory();
-        let error = migrate(&mut conn, 1, &[(2, CHAIN[0].1), (3, "THIS IS NOT SQL;")]).unwrap_err();
-        assert!(matches!(error, StoreError::Sqlite(_)), "{error:?}");
-        assert_eq!(read_version(&conn).unwrap(), 2);
-        assert!(has_table(&conn, "chain_probe").unwrap());
-    }
-
     #[test]
     fn a_failing_recovery_preparation_leaves_the_sealed_rows() {
         let dir = tempfile::tempdir().unwrap();
@@ -2048,46 +1935,6 @@ mod tests {
             vec!["meta".to_string()],
             "no statement of schema::SCHEMA or a migration ran before the refusal"
         );
-    }
-
-    /// `meta` alone, from the baseline's own `CREATE TABLE` for it.
-    fn meta_alone() -> Connection {
-        let ddl = schema::SCHEMA
-            .lines()
-            .find(|line| line.starts_with("CREATE TABLE IF NOT EXISTS meta "))
-            .expect("the baseline creates meta");
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(ddl).unwrap();
-        conn
-    }
-
-    fn raw_markers(conn: &Connection) -> Vec<String> {
-        conn.prepare("SELECT value FROM meta WHERE key = 'schema_version'")
-            .unwrap()
-            .query_map([], |row| row.get(0))
-            .unwrap()
-            .collect::<rusqlite::Result<_>>()
-            .unwrap()
-    }
-
-    #[test]
-    fn an_open_that_finds_meta_without_its_marker_writes_the_version_row() {
-        // What a first open that died between the baseline and its marker left behind.
-        let mut conn = meta_alone();
-        prepare(&mut conn, false, &[]).unwrap();
-        assert_eq!(raw_markers(&conn), vec!["1".to_string()]);
-    }
-
-    #[test]
-    fn an_open_that_finds_its_marker_keeps_it_and_adds_no_second_row() {
-        let mut conn = meta_alone();
-        conn.execute(
-            "INSERT INTO meta (key, value) VALUES ('schema_version', '1')",
-            [],
-        )
-        .unwrap();
-        prepare(&mut conn, false, &[]).unwrap();
-        assert_eq!(raw_markers(&conn), vec!["1".to_string()]);
     }
 
     #[test]
