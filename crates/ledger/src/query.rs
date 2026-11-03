@@ -2256,9 +2256,10 @@ fn passes_funding(r: &RollupRow, f: &RollupFilter) -> bool {
     }
 }
 
-/// The rows of a read the fixed filters already narrowed (`RollupFilter::rollup_select`) that the pattern filters
-/// keep, probe rows among them: whether those count as requests is `probes_counted`, which the sums take, so a
-/// probe's cost reaches the group under every filter.
+/// The rows the filter's two pattern filters keep, for the unpaged twins `breakdown` and `series`, which read rows
+/// held in memory where the paged readers' read binds the patterns in SQL (`RollupFilter::rollup_select`). Probe rows
+/// stay among them: whether those count as requests is `probes_counted`, which the sums take, so a probe's cost
+/// reaches the group under every filter.
 #[cfg(any(test, feature = "test-support"))]
 pub fn apply_filter(rows: Vec<RollupRow>, f: &RollupFilter) -> Vec<RollupRow> {
     rows.into_iter().filter(|r| passes_patterns(r, f)).collect()
