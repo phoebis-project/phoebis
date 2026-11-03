@@ -9,7 +9,7 @@ use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Transaction};
 
 use phoebis_bus::Kind;
-use phoebis_routing::{PinUsage, FIVE_HOUR, WEEK_MS};
+use phoebis_routing::{window_length_ms, PinUsage, WEEK_MS};
 use phoebis_store::AccountKind;
 
 use crate::db::LedgerDb;
@@ -1185,8 +1185,6 @@ const CONDITION_SPAN_MS: i64 = 24 * 3_600_000;
 /// How soon after a move a spent window on its destination counts against the move.
 const SPENT_AFTER_MOVE_MS: i64 = 3_600_000;
 
-const FIVE_HOURS_MS: i64 = 5 * 3_600_000;
-
 /// The settings each condition names, the ones an operator reads the condition against. The attention reader fills
 /// a cleared condition's `setting` from the same lists.
 pub const CEILING_SETTING: &[&str] = &["window_ceiling"];
@@ -1223,11 +1221,7 @@ fn newest_round(
     window: &str,
     at: i64,
 ) -> Result<Option<serde_json::Value>, LedgerError> {
-    let length = if window == FIVE_HOUR {
-        FIVE_HOURS_MS
-    } else {
-        WEEK_MS
-    };
+    let length = window_length_ms(window);
     Ok(tx
         .query_row(
             "SELECT detail FROM events WHERE kind = 'shedding_round' AND account_id = ?1 \

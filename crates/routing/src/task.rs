@@ -27,7 +27,6 @@ use crate::record::{
 use crate::select::{
     decide, pace_of, passes_reset, projection_of, projections_of, release_reasons, routed_agent,
     BurnRead, Decided, FailedOver, MigrateReason, Refusal, SelectRequest, SelectResult,
-    FIVE_HOUR_MS,
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, burn_folded, ceiling, default_burn_average_ms,
@@ -35,9 +34,11 @@ use crate::state::{
     spend_reset_estimate, AccountTicket, BurnUnit, CreditsState, EvidenceSource, InFlight,
     MemberSpend, OverageEvidence, PinRef, PinUsage, RateTable, Recorded, RoutingState, SharePricer,
     SlowDownEdge, SpendWindow, StateWrite, UtilizationSample, WindowReading, WindowSource,
-    FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
+    FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
-use crate::{resolve, term, window_for, Candidate, KeyRefusal, Presented, RegistrySnapshot};
+use crate::{
+    resolve, term, window_for, window_length_ms, Candidate, KeyRefusal, Presented, RegistrySnapshot,
+};
 
 /// The router loop's command queue size, which `/admin/system` reports. A report that finds the queue full waits for a
 /// slot; one the closed queue refuses at shutdown is dropped and counted under its kind.
@@ -2579,11 +2580,7 @@ fn destination_fit(
 /// since the request that opened the window can reach the upstream after `at`.
 fn same_cycle(announced: (Option<i64>, i64), reset: Option<i64>, now: i64, window: &str) -> bool {
     let (announced_reset, at) = announced;
-    let open_until = at.saturating_add(if window == FIVE_HOUR {
-        FIVE_HOUR_MS
-    } else {
-        WEEK_MS
-    });
+    let open_until = at.saturating_add(window_length_ms(window));
     let bound = open_until.saturating_add(RESET_SLACK_MS);
     match (announced_reset, reset) {
         (Some(announced), Some(reset)) => {
@@ -5624,6 +5621,7 @@ mod tests {
     use phoebis_store::{AccountKind, AccountRow, ResolutionRow, StorageKey, WindowRow};
 
     use super::*;
+    use crate::select::FIVE_HOUR_MS;
 
     fn cooldown(account_id: &str, scope: &str) -> CooldownRow {
         CooldownRow {

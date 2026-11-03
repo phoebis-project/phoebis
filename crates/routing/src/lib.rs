@@ -61,4 +61,4 @@ pub use task::{
 };
 #[cfg(any(test, feature = "debug-hooks"))]
 pub use task::{LoopPark, ReportHold};
-pub use windows::window_for;
+pub use windows::{window_for, window_length_ms};
