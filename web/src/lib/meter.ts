@@ -1,5 +1,5 @@
 import type { Reconciliation } from '@/api/types';
-import { MIN_RISE, RATIO_HIGH, RATIO_LOW, ratioOff } from './analytics';
+import { judged, RATIO_HIGH, RATIO_LOW, ratioOff } from './analytics';
 import { lookup } from './counts';
 import { WINDOW_LABEL, WINDOW_ORDER, windowKeyId } from './windows';
 
@@ -26,9 +26,6 @@ const windowRank = (window: string): number => {
 const byteOrder = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 const byWindow = (a: string, b: string) => windowRank(a) - windowRank(b) || byteOrder(a, b);
 const newestFirst = (a: Reconciliation, b: Reconciliation) => Date.parse(b.windowEnd) - Date.parse(a.windowEnd);
-
-/** Whether the band judges a row: the rise and the priced share each reach MIN_RISE. */
-export const judged = (row: Pick<Reconciliation, 'observedRise' | 'predictedShare'>): boolean => row.observedRise >= MIN_RISE && row.predictedShare >= MIN_RISE;
 
 export interface MeterGroup {
   accountId: string;

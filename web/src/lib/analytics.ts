@@ -681,7 +681,9 @@ export const MIN_RISE = 0.05;
 /** The band a completed window's ratio agrees with the table inside, symmetric in log terms, as the ledger reads it. */
 export const RATIO_HIGH = 1.25;
 export const RATIO_LOW = 0.8;
+/** Whether the band judges a row: the rise and the priced share each reach MIN_RISE. */
+export const judged = (row: Pick<Reconciliation, 'observedRise' | 'predictedShare'>): boolean => row.observedRise >= MIN_RISE && row.predictedShare >= MIN_RISE;
 /**
  * Off once the rise and the priced share each reach MIN_RISE and the ratio leaves the band, as the engine badges it.
  */
-export const ratioOff = (row: Pick<Reconciliation, 'observedRise' | 'predictedShare' | 'ratio'>): boolean => row.observedRise >= MIN_RISE && row.predictedShare >= MIN_RISE && (row.ratio < RATIO_LOW || row.ratio > RATIO_HIGH);
+export const ratioOff = (row: Pick<Reconciliation, 'observedRise' | 'predictedShare' | 'ratio'>): boolean => judged(row) && (row.ratio < RATIO_LOW || row.ratio > RATIO_HIGH);

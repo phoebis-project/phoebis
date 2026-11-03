@@ -1,7 +1,7 @@
 import type { Reconciliation } from '@/api/types';
 import { Badge } from '@/components/ui/primitives';
-import { ratioOff } from '@/lib/analytics';
-import { judged, UNJUDGED_TITLE } from '@/lib/meter';
+import { judged, ratioOff } from '@/lib/analytics';
+import { UNJUDGED_TITLE } from '@/lib/meter';
 
 /**
  * A completed window's ratio at two decimals with the four on hover: the warning badge where the band marks it, muted
