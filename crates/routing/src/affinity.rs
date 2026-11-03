@@ -245,13 +245,14 @@ impl AffinityMap {
         boundaries: &[String],
         accept: impl Fn(&AffinityEntry) -> bool,
     ) -> Option<(u32, &AffinityEntry)> {
+        let hashes = self.entries.get(self.canonical(canonical_model))?;
         boundaries
             .iter()
             .enumerate()
             .rev()
             .find_map(|(index, boundary)| {
-                let entry = self.entry(canonical_model, boundary)?;
-                accept(entry).then_some((index as u32 + 1, entry))
+                let entry = hashes.get(boundary.as_str())?;
+                accept(entry).then_some((ordinal(index), entry))
             })
     }
 
@@ -265,8 +266,11 @@ impl AffinityMap {
         gate: impl Fn(&'a AffinityEntry) -> Option<&'static str>,
     ) -> RungWalk<'a> {
         let mut walk = RungWalk::default();
+        let Some(hashes) = self.entries.get(self.canonical(canonical_model)) else {
+            return walk;
+        };
         for (index, boundary) in boundaries.iter().enumerate().rev() {
-            let Some(entry) = self.entry(canonical_model, boundary) else {
+            let Some(entry) = hashes.get(boundary.as_str()) else {
                 continue;
             };
             let refused_by = gate(entry);
@@ -274,7 +278,7 @@ impl AffinityMap {
                 walk.matched = Some(walk.visited.len());
             }
             walk.visited.push(Visited {
-                depth: index as u32 + 1,
+                depth: ordinal(index),
                 hash: boundary,
                 entry,
                 refused_by,
