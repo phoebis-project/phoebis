@@ -118,10 +118,6 @@ struct SlotKey {
     revision: u64,
 }
 
-struct Slot {
-    cached: Option<Catalog>,
-}
-
 /// What the startup fetch found before the bound: `landed` accounts answered rows, `failed` answered an error
 /// and are retried in the background, `pending` were still fetching when the bound passed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -147,7 +143,7 @@ pub struct CatalogService {
     pool: Arc<Pool>,
     resolver: Resolver,
     router: RouterHandle,
-    slots: Mutex<HashMap<SlotKey, Slot>>,
+    slots: Mutex<HashMap<SlotKey, Catalog>>,
     /// Bumped per account id by `evict`, independently of whether a slot yet exists to clear: a fill that
     /// started before an eviction, on a key the eviction never got to insert a slot for, still has to lose.
     generations: Mutex<HashMap<String, u64>>,
@@ -351,12 +347,10 @@ impl CatalogService {
                 .is_none()
                 .then(|| self.listing_changed(&key, &catalog))
                 .flatten();
-            self.slots.lock().expect(SLOTS_POISONED).insert(
-                key,
-                Slot {
-                    cached: Some(catalog.clone()),
-                },
-            );
+            self.slots
+                .lock()
+                .expect(SLOTS_POISONED)
+                .insert(key, catalog.clone());
             if let Some(change) = change {
                 let hook = self.on_change.lock().expect(ON_CHANGE_POISONED).clone();
                 if let Some(hook) = hook {
@@ -460,7 +454,6 @@ impl CatalogService {
             .lock()
             .expect(SLOTS_POISONED)
             .get(&key)
-            .and_then(|slot| slot.cached.as_ref())
             .map(|catalog| catalog.fetched_at);
         match fetched_at {
             Some(fetched_at) => fetched_at + every.as_millis() as i64 <= now,
@@ -760,8 +753,7 @@ impl CatalogService {
             slots
                 .iter()
                 .filter(|(key, _)| enabled.contains(&key.account_id))
-                .filter_map(|(_, slot)| slot.cached.as_ref())
-                .flat_map(|catalog| catalog.models.iter().cloned())
+                .flat_map(|(_, catalog)| catalog.models.iter().cloned())
                 .collect()
         };
         *self.listed.lock().expect(LISTED_POISONED) =
@@ -926,7 +918,7 @@ impl CatalogService {
 
     fn fresh_slot(&self, key: &SlotKey, now: i64) -> Option<Catalog> {
         let slots = self.slots.lock().expect(SLOTS_POISONED);
-        let catalog = slots.get(key)?.cached.as_ref()?;
+        let catalog = slots.get(key)?;
         let held =
             catalog.error.is_none() || catalog.fetched_at + ERROR_HOLD.as_millis() as i64 > now;
         held.then(|| catalog.clone())
