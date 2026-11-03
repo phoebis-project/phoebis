@@ -222,20 +222,32 @@ pub enum StoreError {
 }
 
 impl StoreError {
-    /// Whether the failure is the database's rather than one write's: a lock another connection held past
-    /// `BUSY_TIMEOUT`, a failing disk or a full one, which every write after it meets as well.
+    /// Whether the failure is the database's rather than one write's, as `is_database_wide_failure` reads it.
     pub fn is_database_wide(&self) -> bool {
-        matches!(
-            self,
-            StoreError::Sqlite(rusqlite::Error::SqliteFailure(failure, _))
-                if matches!(
-                    failure.code,
-                    rusqlite::ErrorCode::DatabaseBusy
-                        | rusqlite::ErrorCode::DiskFull
-                        | rusqlite::ErrorCode::SystemIoFailure
-                )
-        )
+        matches!(self, StoreError::Sqlite(error) if is_database_wide_failure(error))
     }
+}
+
+/// Whether a SQLite failure is the database's rather than one write's: a lock held past the busy timeout, a full disk,
+/// an I/O error, a closed handle, or a file that cannot be opened, is read-only (moved or deleted under the router
+/// among them), corrupt or no database at all. Every write after it meets it too. The registry and the ledger both
+/// read their failures through it, so the two files classify a failure alike.
+pub fn is_database_wide_failure(error: &rusqlite::Error) -> bool {
+    matches!(
+        error,
+        rusqlite::Error::SqliteFailure(failure, _)
+            if matches!(
+                failure.code,
+                rusqlite::ErrorCode::ApiMisuse
+                    | rusqlite::ErrorCode::CannotOpen
+                    | rusqlite::ErrorCode::DatabaseBusy
+                    | rusqlite::ErrorCode::DatabaseCorrupt
+                    | rusqlite::ErrorCode::DiskFull
+                    | rusqlite::ErrorCode::NotADatabase
+                    | rusqlite::ErrorCode::ReadOnly
+                    | rusqlite::ErrorCode::SystemIoFailure
+            )
+    )
 }
 
 /// What one `Store::purge_history` call deleted.
@@ -1790,8 +1802,15 @@ mod tests {
         );
     }
 
+    fn failure(code: std::ffi::c_int) -> StoreError {
+        StoreError::Sqlite(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(code),
+            None,
+        ))
+    }
+
     #[test]
-    fn a_held_lock_a_failing_disk_or_a_full_one_is_database_wide_and_a_refused_row_is_not() {
+    fn a_file_the_database_cannot_read_or_write_is_database_wide_and_a_refused_row_is_not() {
         let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
         let refused = store
             .upsert_cooldown(&cooldown("ghost", "account"))
@@ -1799,14 +1818,25 @@ mod tests {
         assert!(!refused.is_database_wide(), "{refused}");
         for code in [
             rusqlite::ffi::SQLITE_BUSY,
+            rusqlite::ffi::SQLITE_CANTOPEN,
+            rusqlite::ffi::SQLITE_CORRUPT,
             rusqlite::ffi::SQLITE_FULL,
             rusqlite::ffi::SQLITE_IOERR_WRITE,
+            rusqlite::ffi::SQLITE_MISUSE,
+            rusqlite::ffi::SQLITE_NOTADB,
+            rusqlite::ffi::SQLITE_READONLY,
+            rusqlite::ffi::SQLITE_READONLY_DBMOVED,
         ] {
-            let error = StoreError::Sqlite(rusqlite::Error::SqliteFailure(
-                rusqlite::ffi::Error::new(code),
-                None,
-            ));
-            assert!(error.is_database_wide(), "{error}");
+            let error = failure(code);
+            assert!(error.is_database_wide(), "{code}: {error}");
+        }
+        for code in [
+            rusqlite::ffi::SQLITE_CONSTRAINT_TRIGGER,
+            rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE,
+            rusqlite::ffi::SQLITE_TOOBIG,
+        ] {
+            let error = failure(code);
+            assert!(!error.is_database_wide(), "{code}: {error}");
         }
     }
 

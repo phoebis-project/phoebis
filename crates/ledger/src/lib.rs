@@ -151,63 +151,9 @@ pub enum LedgerError {
 }
 
 impl LedgerError {
-    /// Whether the failure is the database's rather than one row's: a lock held past the busy timeout, a full disk,
-    /// an I/O error, a closed handle, or a file that cannot be opened, is read-only (moved or deleted under the
-    /// router among them), corrupt or no database at all. Every write after it meets it too, so the record is held
-    /// rather than read as a poison row.
+    /// Whether the failure is the database's rather than one row's, as `phoebis_store::is_database_wide_failure` reads
+    /// it. Every write after it meets it too, so the record is held rather than read as a poison row.
     pub fn is_database_wide(&self) -> bool {
-        matches!(
-            self,
-            LedgerError::Sqlite(rusqlite::Error::SqliteFailure(failure, _))
-                if matches!(
-                    failure.code,
-                    rusqlite::ErrorCode::ApiMisuse
-                        | rusqlite::ErrorCode::CannotOpen
-                        | rusqlite::ErrorCode::DatabaseBusy
-                        | rusqlite::ErrorCode::DatabaseCorrupt
-                        | rusqlite::ErrorCode::DiskFull
-                        | rusqlite::ErrorCode::NotADatabase
-                        | rusqlite::ErrorCode::ReadOnly
-                        | rusqlite::ErrorCode::SystemIoFailure
-                )
-        )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::LedgerError;
-
-    fn failure(code: std::ffi::c_int) -> LedgerError {
-        LedgerError::Sqlite(rusqlite::Error::SqliteFailure(
-            rusqlite::ffi::Error::new(code),
-            None,
-        ))
-    }
-
-    #[test]
-    fn a_file_the_database_cannot_read_or_write_is_database_wide_and_a_refused_row_is_not() {
-        for code in [
-            rusqlite::ffi::SQLITE_BUSY,
-            rusqlite::ffi::SQLITE_CANTOPEN,
-            rusqlite::ffi::SQLITE_CORRUPT,
-            rusqlite::ffi::SQLITE_FULL,
-            rusqlite::ffi::SQLITE_IOERR_WRITE,
-            rusqlite::ffi::SQLITE_MISUSE,
-            rusqlite::ffi::SQLITE_NOTADB,
-            rusqlite::ffi::SQLITE_READONLY,
-            rusqlite::ffi::SQLITE_READONLY_DBMOVED,
-        ] {
-            let error = failure(code);
-            assert!(error.is_database_wide(), "{code}: {error}");
-        }
-        for code in [
-            rusqlite::ffi::SQLITE_CONSTRAINT_TRIGGER,
-            rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE,
-            rusqlite::ffi::SQLITE_TOOBIG,
-        ] {
-            let error = failure(code);
-            assert!(!error.is_database_wide(), "{code}: {error}");
-        }
+        matches!(self, LedgerError::Sqlite(error) if phoebis_store::is_database_wide_failure(error))
     }
 }
