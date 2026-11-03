@@ -1831,7 +1831,7 @@ fn run(
                     .iter()
                     .map(|c| state.in_flight().account(&c.account_id))
                     .collect();
-                let open = loads.iter().any(|n| *n < cap);
+                let open = set.iter().any(|c| under_cap(state, pool, &c.account_id));
                 rec.step(
                     "cap_filter",
                     if open { "passed" } else { "dropped" },
@@ -1997,9 +1997,7 @@ fn run(
     let under_cap: Vec<&Candidate> = selection_set
         .iter()
         .copied()
-        .filter(|c| {
-            request.count || state.in_flight().account(&c.account_id) < pool.failover.in_flight_cap
-        })
+        .filter(|c| request.count || under_cap(state, pool, &c.account_id))
         .collect();
     let held = under_cap.is_empty();
     let at_cap = if held && !selection_set.is_empty() {
@@ -2088,11 +2086,7 @@ fn run(
     let not_winding_down: Vec<&Candidate> = selection_set
         .iter()
         .copied()
-        .filter(|c| {
-            snapshot.term(&c.account_id).is_none_or(|term| {
-                !term::winding_down(term, request.now, pool.failover.wind_down_minutes)
-            })
-        })
+        .filter(|c| !winding_down(snapshot, pool, &c.account_id, request.now))
         .collect();
     partitions.push(narrow(
         &mut selection_set,
@@ -3099,10 +3093,7 @@ pub(crate) fn fit_of(
     };
     // An account inside the wind-down is no destination: the operator's `wind_down_minutes` is the one rule before
     // the end, and the same test keeps a fresh session off the account and drains its cold pins.
-    if snapshot
-        .term(candidate)
-        .is_some_and(|term| term::winding_down(term, now, pool.failover.wind_down_minutes))
-    {
+    if winding_down(snapshot, pool, candidate, now) {
         read.end = account_end(snapshot, candidate, now);
         read.verdict = "ending";
         return read;
@@ -3530,8 +3521,7 @@ fn gate<'a>(
             member.binding = read.binding.clone();
         }
     }
-    let cap = pool.failover.in_flight_cap;
-    let free = |(c, _): &(&Candidate, &FitRead)| state.in_flight().account(&c.account_id) < cap;
+    let free = |(c, _): &(&Candidate, &FitRead)| under_cap(state, pool, &c.account_id);
     let fits: Vec<_> = order(&set, &reads, "fits")
         .into_iter()
         .filter(free)
@@ -3812,14 +3802,9 @@ fn move_of<'a>(
 
     // A cold pin costs nothing to move off an account about to end. A warm one stays: past the end the
     // `subscription_ended` exclusion releases it and the upstream refuses the dead token.
-    let winding_down = |id: &str| {
-        snapshot
-            .term(id)
-            .is_some_and(|term| term::winding_down(term, now, pool.failover.wind_down_minutes))
-    };
     if !cold {
         rec.step(RULES[3], "no", vec![Fact::bool("cold", false)]);
-    } else if !winding_down(&current.account_id) {
+    } else if !winding_down(snapshot, pool, &current.account_id, now) {
         rec.step(RULES[3], "no", vec![Fact::bool("winding_down", false)]);
     } else {
         let gate = gate(
@@ -3830,7 +3815,7 @@ fn move_of<'a>(
             current,
             eligible,
             window,
-            &|c| !winding_down(&c.account_id),
+            &|c| !winding_down(snapshot, pool, &c.account_id, now),
             false,
             rec,
         );
@@ -4737,7 +4722,6 @@ fn destination_of(
     fallback_ms: i64,
 ) -> Option<(String, FitRead)> {
     let window = window_for(&pin.model);
-    let cap = pool.failover.in_flight_cap;
     let set: Vec<&Candidate> = eligible
         .iter()
         .copied()
@@ -4750,7 +4734,7 @@ fn destination_of(
         .filter(|c| {
             window == SEVEN_DAY || holds_allowance(state, snapshot, &c.account_id, window, now)
         })
-        .filter(|c| state.in_flight().account(&c.account_id) < cap)
+        .filter(|c| under_cap(state, pool, &c.account_id))
         .collect();
     let reads: Vec<(String, FitRead)> = set
         .iter()
@@ -5562,7 +5546,7 @@ fn blocked(
     own: Option<&PinKey>,
 ) -> Option<&'static str> {
     let now = request.now;
-    if state.in_flight().account(account_id) >= pool.failover.in_flight_cap {
+    if !under_cap(state, pool, account_id) {
         Some("at_cap")
     } else if fit_of(
         state,
@@ -5585,6 +5569,18 @@ fn blocked(
     }
 }
 
+/// Whether `account_id` holds a slot under the pool's in-flight cap.
+fn under_cap(state: &RoutingState, pool: &PoolRow, account_id: &str) -> bool {
+    state.in_flight().account(account_id) < pool.failover.in_flight_cap
+}
+
+/// Whether `account_id`'s subscription is inside the pool's wind-down before its end.
+fn winding_down(snapshot: &RegistrySnapshot, pool: &PoolRow, account_id: &str, now: i64) -> bool {
+    snapshot
+        .term(account_id)
+        .is_some_and(|term| term::winding_down(term, now, pool.failover.wind_down_minutes))
+}
+
 /// The candidate a fallback credit token places the request on: the issuer `credit_account` names, among the eligible
 /// set under the incarnation that answered the refusal, and under its in-flight cap unless the live pin is already
 /// there, since a renewal reads no cap. A count creates no pin and follows its pin, a probe warms the pin it was sent
@@ -5605,8 +5601,7 @@ fn credit_candidate<'a>(
         .copied()
         .find(|c| c.account_id == credit.account_id && c.incarnation == credit.incarnation)?;
     let renews = pinned == Some(candidate.account_id.as_str());
-    (renews || state.in_flight().account(&candidate.account_id) < pool.failover.in_flight_cap)
-        .then_some(candidate)
+    (renews || under_cap(state, pool, &candidate.account_id)).then_some(candidate)
 }
 
 /// The words a placement directed ahead of the moves and the strategy writes: `reason` on the move rules, the rungs
@@ -6762,7 +6757,7 @@ fn candidate_facts(
         trial_ends_at: t.trial_ends_at,
         canceled: t.canceled,
         ends_at: t.ends_at,
-        winding_down: term::winding_down(t, now, pool.failover.wind_down_minutes),
+        winding_down: winding_down(snapshot, pool, id, now),
         ended: term::ended(t, now),
     });
     CandidateFacts {
