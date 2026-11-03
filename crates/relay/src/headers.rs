@@ -3,7 +3,7 @@
 
 use axum::http::HeaderMap;
 use phoebis_bus::NEVER_COPIED;
-use phoebis_store::Secret;
+use phoebis_store::{AccountKind, Secret};
 
 use crate::casing::OriginalHead;
 use crate::memory::Injected;
@@ -236,10 +236,18 @@ pub fn outbound_headers(
 
 fn credential(kind: &CredentialKind) -> (String, String) {
     match kind {
-        CredentialKind::ApiKey { secret } => ("x-api-key".into(), secret.expose().into()),
-        CredentialKind::Oauth { bearer } => (
+        CredentialKind::ApiKey { secret } => credential_header(AccountKind::ApiKey, secret),
+        CredentialKind::Oauth { bearer } => credential_header(AccountKind::Oauth, bearer),
+    }
+}
+
+/// The header an account of `kind` presents `secret` in, spelled once for the messages and the models requests.
+pub(crate) fn credential_header(kind: AccountKind, secret: &Secret) -> (String, String) {
+    match kind {
+        AccountKind::ApiKey => ("x-api-key".into(), secret.expose().into()),
+        AccountKind::Oauth => (
             "Authorization".into(),
-            format!("Bearer {}", bearer.expose()),
+            format!("Bearer {}", secret.expose()),
         ),
     }
 }

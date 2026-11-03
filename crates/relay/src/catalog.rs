@@ -24,6 +24,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::dispatch::UPSTREAM_AUTHORITY;
+use crate::headers::credential_header;
 
 /// A models list is a few hundred short objects; anything past this is not one.
 pub const MAX_BODY: usize = 4 * 1024 * 1024;
@@ -785,14 +786,9 @@ impl CatalogService {
                         return Err(DiscoveryError::NoCredential);
                     }
                 };
-                (
-                    "Authorization".to_string(),
-                    format!("Bearer {}", token.secret.expose()),
-                )
+                credential_header(AccountKind::Oauth, &token.secret)
             }
-            (AccountKind::ApiKey, Some(staged)) => {
-                ("x-api-key".to_string(), staged.expose().to_string())
-            }
+            (AccountKind::ApiKey, Some(staged)) => credential_header(AccountKind::ApiKey, staged),
             (AccountKind::ApiKey, None) => {
                 let stored = match self.store.api_key_secret(&account.id) {
                     Ok(secret) => secret,
@@ -805,12 +801,9 @@ impl CatalogService {
                         None
                     }
                 };
-                (
-                    "x-api-key".to_string(),
-                    stored
-                        .ok_or(DiscoveryError::NoCredential)?
-                        .expose()
-                        .to_string(),
+                credential_header(
+                    AccountKind::ApiKey,
+                    &stored.ok_or(DiscoveryError::NoCredential)?,
                 )
             }
         };
