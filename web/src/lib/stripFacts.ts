@@ -108,6 +108,7 @@ function taker(step: WalkStep, placed: Set<WalkFact>) {
 
 const sentence = (text: string, unplaced: PopoverPlan['unplaced'] = []): Pick<PopoverPlan, 'block' | 'renderer' | 'unplaced'> => ({ block: { kind: 'sentence', text }, renderer: 'sentence', unplaced });
 const groups = (renderer: Renderer, list: PlanGroup[], unplaced: PopoverPlan['unplaced']): Pick<PopoverPlan, 'block' | 'renderer' | 'unplaced'> => ({ block: { kind: 'groups', groups: list.filter((g) => g.rows.length > 0) }, renderer, unplaced });
+const plainHead = (word: string, badge: string | null = null, tone: BadgeTone = 'neutral'): PopoverPlan['head'] => ({ account: null, badge, chip: null, second: [], tone, word });
 
 /**
  * A fact as list rows: one led by the fact's word, or one a chip where its chips carry labels of their own (the lane's
@@ -348,7 +349,7 @@ function remainingOf(model: StripModel, record: DecisionRecord, now: number): Pl
 function leafPlan(leaf: Leaf, model: StripModel, record: DecisionRecord, now: number): PopoverPlan {
   const member = leaf.accountId === null ? undefined : record.candidates.find((c) => c.accountId === leaf.accountId);
   if (member === undefined) {
-    return { block: { kind: 'table', table: remainingOf(model, record, now) }, head: { account: null, badge: null, chip: null, second: [], tone: 'neutral', word: leaf.badge }, renderer: 'table', unplaced: [] };
+    return { block: { kind: 'table', table: remainingOf(model, record, now) }, head: plainHead(leaf.badge), renderer: 'table', unplaced: [] };
   }
   const cells = candidateCells(member, record, now);
   const out = member.verdict === 'out';
@@ -372,9 +373,9 @@ function leafPlan(leaf: Leaf, model: StripModel, record: DecisionRecord, now: nu
 }
 
 function terminusPlan(t: Terminus, record: DecisionRecord, row: DecisionSummary | undefined, now: number): PopoverPlan {
-  if (t.state !== 'taken') return { head: { account: null, badge: null, chip: null, second: [], tone: 'neutral', word: t.word }, ...sentence(SENTENCE.notReached) };
+  if (t.state !== 'taken') return { head: plainHead(t.word), ...sentence(SENTENCE.notReached) };
   const rows = outcomeRows(record, now, row).map((r) => ({ chips: r.chips, label: r.label, ...(r.title === undefined ? {} : { title: r.title }) }));
-  return { head: { account: null, badge: t.badge, chip: null, second: [], tone: t.tone, word: t.word }, ...groups('outcome', [{ label: null, rows }], []) };
+  return { head: plainHead(t.word, t.badge, t.tone), ...groups('outcome', [{ label: null, rows }], []) };
 }
 
 /**
@@ -388,5 +389,5 @@ export function anchorPlan(anchor: StripAnchor, model: StripModel, record: Decis
   if (t !== undefined) return terminusPlan(t, record, row, now);
   const s = anchor.kind === 'station' ? model.stations.find((x) => x.id === anchor.id) : undefined;
   if (s !== undefined) return stationPlan(s, record, row, now);
-  return { head: { account: null, badge: null, chip: null, second: [], tone: 'neutral', word: '' }, ...sentence(SENTENCE.placeholder) };
+  return { head: plainHead(''), ...sentence(SENTENCE.placeholder) };
 }
