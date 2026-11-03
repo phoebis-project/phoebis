@@ -20,6 +20,18 @@ pub enum Subject {
 }
 
 impl Subject {
+    const ALL: &[Subject] = &[
+        Subject::AgentType,
+        Subject::Body,
+        Subject::Client,
+        Subject::Header,
+        Subject::Kind,
+        Subject::Message,
+        Subject::Model,
+        Subject::RequestClass,
+        Subject::UserAgent,
+    ];
+
     /// The JSON word.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -36,18 +48,7 @@ impl Subject {
     }
 
     pub fn parse(word: &str) -> Option<Subject> {
-        Some(match word {
-            "agent_type" => Subject::AgentType,
-            "body" => Subject::Body,
-            "client" => Subject::Client,
-            "header" => Subject::Header,
-            "kind" => Subject::Kind,
-            "message" => Subject::Message,
-            "model" => Subject::Model,
-            "request_class" => Subject::RequestClass,
-            "user_agent" => Subject::UserAgent,
-            _ => return None,
-        })
+        word_of(Subject::ALL, Subject::as_str, word)
     }
 
     /// The operators the subject takes, alphabetical.
@@ -94,6 +95,15 @@ pub enum Operator {
 }
 
 impl Operator {
+    const ALL: &[Operator] = &[
+        Operator::Absent,
+        Operator::Equals,
+        Operator::Gt,
+        Operator::Lt,
+        Operator::Matches,
+        Operator::Present,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Operator::Absent => "absent",
@@ -106,15 +116,7 @@ impl Operator {
     }
 
     pub fn parse(word: &str) -> Option<Operator> {
-        Some(match word {
-            "absent" => Operator::Absent,
-            "equals" => Operator::Equals,
-            "gt" => Operator::Gt,
-            "lt" => Operator::Lt,
-            "matches" => Operator::Matches,
-            "present" => Operator::Present,
-            _ => return None,
-        })
+        word_of(Operator::ALL, Operator::as_str, word)
     }
 }
 
@@ -131,6 +133,16 @@ pub enum Selector {
 }
 
 impl Selector {
+    const ALL: &[Selector] = &[
+        Selector::Any,
+        Selector::AnyAssistant,
+        Selector::AnyUser,
+        Selector::FirstUser,
+        Selector::Last,
+        Selector::LastAssistant,
+        Selector::LastUser,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Selector::Any => "any",
@@ -144,16 +156,7 @@ impl Selector {
     }
 
     pub fn parse(word: &str) -> Option<Selector> {
-        Some(match word {
-            "any" => Selector::Any,
-            "any_assistant" => Selector::AnyAssistant,
-            "any_user" => Selector::AnyUser,
-            "first_user" => Selector::FirstUser,
-            "last" => Selector::Last,
-            "last_assistant" => Selector::LastAssistant,
-            "last_user" => Selector::LastUser,
-            _ => return None,
-        })
+        word_of(Selector::ALL, Selector::as_str, word)
     }
 }
 
@@ -165,6 +168,8 @@ pub enum GuardrailMode {
 }
 
 impl GuardrailMode {
+    const ALL: &[GuardrailMode] = &[GuardrailMode::Enforce, GuardrailMode::Observe];
+
     pub fn as_str(self) -> &'static str {
         match self {
             GuardrailMode::Enforce => "enforce",
@@ -173,11 +178,7 @@ impl GuardrailMode {
     }
 
     pub fn parse(word: &str) -> Option<GuardrailMode> {
-        match word {
-            "enforce" => Some(GuardrailMode::Enforce),
-            "observe" => Some(GuardrailMode::Observe),
-            _ => None,
-        }
+        word_of(GuardrailMode::ALL, GuardrailMode::as_str, word)
     }
 }
 
@@ -188,6 +189,8 @@ pub enum GuardrailAction {
 }
 
 impl GuardrailAction {
+    const ALL: &[GuardrailAction] = &[GuardrailAction::Block];
+
     pub fn as_str(self) -> &'static str {
         match self {
             GuardrailAction::Block => "block",
@@ -195,11 +198,13 @@ impl GuardrailAction {
     }
 
     pub fn parse(word: &str) -> Option<GuardrailAction> {
-        match word {
-            "block" => Some(GuardrailAction::Block),
-            _ => None,
-        }
+        word_of(GuardrailAction::ALL, GuardrailAction::as_str, word)
     }
+}
+
+/// A word read back through the enum's own `as_str`, so each word is spelled once.
+fn word_of<T: Copy>(all: &[T], as_str: fn(T) -> &'static str, word: &str) -> Option<T> {
+    all.iter().copied().find(|v| as_str(*v) == word)
 }
 
 /// One condition as the row stores it: the typed words, the optional members as the subject or the operator takes
