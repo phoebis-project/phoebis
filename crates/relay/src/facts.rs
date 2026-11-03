@@ -350,7 +350,7 @@ pub(crate) fn note_entrypoint_disagreement(
 /// supplementary-plane character ahead of a sampled position has to shift the same way here or the suffix the
 /// two sides compute diverges on a legitimate prompt.
 fn prompt_units_of(text: &str) -> [u16; 3] {
-    let units: Vec<u16> = text.encode_utf16().collect();
+    let units: Vec<u16> = text.encode_utf16().take(21).collect();
     let at = |i: usize| units.get(i).copied().unwrap_or(b'0' as u16);
     [at(4), at(7), at(20)]
 }
