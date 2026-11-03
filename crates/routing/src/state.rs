@@ -745,17 +745,14 @@ impl RateTable {
     pub fn rates_for(&self, canonical_model: &str, prompt_tokens: u64) -> Rates {
         // One key wins for both maps, the exact id before the undated one as the ledger's `entry` resolves it, so
         // a dated row without the block never prices at the undated row's long-context rates.
-        let key = row_for(canonical_model, |k| {
-            self.rows.get_key_value(k).map(|(key, _)| key)
-        });
-        let Some(key) = key else {
+        let Some((key, rates)) = row_for(canonical_model, |k| self.rows.get_key_value(k)) else {
             // An id the table does not list reads `fallback`: no rate on the cost model's tables, where its pin ranks
             // last, and the dearest listed rate on the dollar tables.
             return self.fallback;
         };
         match self.long_context.get(key) {
             Some(long) if prompt_tokens > long.over => long.rates,
-            _ => self.rows[key],
+            _ => *rates,
         }
     }
 

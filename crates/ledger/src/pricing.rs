@@ -329,12 +329,7 @@ impl PriceTable {
     /// under: a dated id the catalog lists prices as the undated id the table ships. `price` and `model_label`
     /// both read this, so a label never names another row than the one that priced the request.
     fn entry(&self, canonical_model: &str) -> Option<(&str, &ModelRow)> {
-        self.models
-            .get_key_value(canonical_model)
-            .or_else(|| {
-                phoebis_routing::listing::undated(canonical_model)
-                    .and_then(|base| self.models.get_key_value(base))
-            })
+        phoebis_routing::listing::row_for(canonical_model, |k| self.models.get_key_value(k))
             .map(|(key, row)| (key.as_str(), row))
     }
 
