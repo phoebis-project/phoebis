@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Bar, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_DEFAULTS, type PoolInput } from '@/api';
@@ -28,7 +28,7 @@ import { anchorOf } from '@/lib/attention';
 import { weekReadingOf } from '@/lib/costs';
 import { fmtAbsolute, fmtCompact, fmtDuration, fmtHourTick, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtUsd, shortModel } from '@/lib/format';
 import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, guardrailIdsOf, guardrailsChange, poolRefusals, sortKeys, type PoolGroup } from '@/lib/forms';
-import { refreshAttention, useAsync, useAttention, useNow } from '@/lib/hooks';
+import { refreshAttention, useAsync, useAttention, useLatest, useNow } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, slowDownPreview, slowDownPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
 import { minuteSpan, windowOf } from '@/lib/quota';
@@ -1246,10 +1246,7 @@ export function PoolDialog({
   const [dwellFocused, setDwellFocused] = useState(false);
   // The reset reads the accounts through a ref: the parent hands down a fresh array on every render, and reacting to
   // that would wipe the form mid-edit.
-  const accountsNow = useRef(accounts);
-  useLayoutEffect(() => {
-    accountsNow.current = accounts;
-  });
+  const accountsNow = useLatest(accounts);
   useEffect(() => {
     if (!open) return;
     const next = pool ? formFrom(pool) : blankForm();
@@ -1266,7 +1263,7 @@ export function PoolDialog({
     setAttempted(false);
     setStale(null);
     setChosen(initialGroup ?? 'identity');
-  }, [open, pool, initialGroup]);
+  }, [open, pool, initialGroup, accountsNow]);
   // The server's refusal describes the form it was sent. Every control writes through `setForm`, so the next edit
   // takes it away, while a failed save changes no field and leaves it standing.
   const [refusedFor, setRefusedFor] = useState(form);

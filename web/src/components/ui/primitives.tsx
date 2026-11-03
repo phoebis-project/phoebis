@@ -4,6 +4,7 @@ import { Link, useRouteError } from 'react-router-dom';
 import type { ToastItem } from '@/app/session';
 import { useAppSettings } from '@/app/settings';
 import { clock } from '@/lib/clock';
+import { useLatest } from '@/lib/hooks';
 import { floatAt, menuPlacement, type MenuAlign, type MenuPlacement } from '@/lib/menu';
 import type { BadgeTone } from '@/lib/quota';
 import { IconCheck, IconChevron, IconCopy, IconSearch, IconWarning, IconX } from './icons';
@@ -419,10 +420,7 @@ function useModalDialog(open: boolean, onClose: () => void, unsaved: boolean) {
   const [asking, setAsking] = useState(false);
   // The latest `onClose` and `unsaved` behind one stable `request`, so the `cancel` listener is attached once per
   // element and never reads a stale prop.
-  const latest = useRef({ onClose, unsaved });
-  useLayoutEffect(() => {
-    latest.current = { onClose, unsaved };
-  });
+  const latest = useLatest({ onClose, unsaved });
   // The last control inside the dialog that took the focus: a click on the backdrop moves the focus off the control
   // before the dialog hears the click, so the active element alone would miss it.
   const lastFocused = useRef<HTMLElement | null>(null);
@@ -437,7 +435,7 @@ function useModalDialog(open: boolean, onClose: () => void, unsaved: boolean) {
     const active = last?.isConnected ? last : document.activeElement;
     held.current = active instanceof HTMLElement && ref.current?.contains(active) ? active : null;
     setAsking(true);
-  }, []);
+  }, [latest]);
   // Keep editing hands the focus back once the question is gone, not before: the question's modal leaves the dialog
   // under it inert, and a question that unmounts rather than closing restores nothing on its own.
   const refocus = useRef(false);
@@ -491,7 +489,7 @@ function useModalDialog(open: boolean, onClose: () => void, unsaved: boolean) {
     };
     el.addEventListener('cancel', onCancel);
     return () => el.removeEventListener('cancel', onCancel);
-  }, [request]);
+  }, [latest, request]);
   return { asking, keep, ref, request };
 }
 
@@ -726,10 +724,7 @@ export function GroupedDialog({
   const shown = expertView ? groups : groups.filter((g) => !g.expertOnly || g.refused);
   const expertOnlyOff = (id: string) => !expertView && groups.some((g) => g.id === id && g.expertOnly && !g.refused);
   // The open effect reads the rule through a ref, since the page hands in a new groups array on every render.
-  const hides = useRef(expertOnlyOff);
-  useLayoutEffect(() => {
-    hides.current = expertOnlyOff;
-  });
+  const hides = useLatest(expertOnlyOff);
   // A reset or a first group can name a group the filter took off, which would leave the dialog on a hidden panel
   // with no rail entry current, so the first shown group takes its place. The rail and the panels draw it in this
   // render: a page's reset that runs after the hand-off and names the hidden group again leaves the page's state as
@@ -785,7 +780,7 @@ export function GroupedDialog({
     pending.current = null;
     focusIn(chosen, choice.focus);
     // Only a choice moves focus; the helpers and the body ref change without one.
-  }, [chosen, chosenShown, initialGroup, open, setExpertView]);
+  }, [chosen, chosenShown, hides, initialGroup, open, setExpertView]);
   // The notice sits above the groups and is about the whole save, so one raised by a save pressed low in a long group
   // would land out of view; the body returns to its top when one appears.
   const noticed = Boolean(notice);
@@ -1124,10 +1119,7 @@ export function KeyValue({ rows, className = '' }: { className?: string; rows: {
 /** Draws the first toast of the queue for its dwell, then hands its id to `onDone` so the next one shows. */
 export function Toast({ onDone, queue }: { onDone: (id: number) => void; queue: ToastItem[] }) {
   // Keyed on the item rather than the callback, so a fresh callback on a re-render does not restart the dwell.
-  const done = useRef(onDone);
-  useLayoutEffect(() => {
-    done.current = onDone;
-  });
+  const done = useLatest(onDone);
   const showing = queue[0];
   const id = showing?.id;
   const dwellMs = showing?.dwellMs;
@@ -1135,7 +1127,7 @@ export function Toast({ onDone, queue }: { onDone: (id: number) => void; queue: 
     if (id === undefined || dwellMs === undefined) return;
     const timer = clock.setTimeout(() => done.current(id), dwellMs);
     return () => clock.clearTimeout(timer);
-  }, [id, dwellMs]);
+  }, [id, dwellMs, done]);
   if (!showing) return null;
   return (
     <div className="toast" role="status">

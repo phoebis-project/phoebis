@@ -1,7 +1,7 @@
-import { type Dispatch, type SetStateAction, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { type Dispatch, type SetStateAction, useEffect, useRef, useState } from 'react';
 import { clock } from '@/lib/clock';
 import { type Followed, followPages, merged, type Overrun, type Paging, pagingFor } from '@/lib/follow';
-import { armPoll, counted, readQuiet, type Streak, streakFailed, streakLanded } from '@/lib/hooks';
+import { armPoll, counted, readQuiet, type Streak, streakFailed, streakLanded, useLatest } from '@/lib/hooks';
 
 /**
  * The auto reload poll both logs run: every `intervalMs` while the tab is visible, the page's `paused` is false and the
@@ -60,10 +60,7 @@ export function useFollow<R>(input: {
   const overrun = following?.overrun ?? null;
   const standIn = following?.standIn ?? null;
   // The poll outlives renders, so it reads the current address, rows and reader through a ref.
-  const latest = useRef({ address, compare, failed: error !== null, fixedEnd, identity, list: stale ? null : list, mark, overrun, read, shown, standIn });
-  useLayoutEffect(() => {
-    latest.current = { address, compare, failed: error !== null, fixedEnd, identity, list: stale ? null : list, mark, overrun, read, shown, standIn };
-  });
+  const latest = useLatest({ address, compare, failed: error !== null, fixedEnd, identity, list: stale ? null : list, mark, overrun, read, shown, standIn });
   const streak = useRef<Streak>({ failing: false, paths: new Set() });
   // When the last poll answered, null until one has, so a wait that ends reads at once only after a full interval.
   const lastAnswered = useRef<number | null>(null);
@@ -153,7 +150,7 @@ export function useFollow<R>(input: {
     };
     // The poll reads the address, the rows and the reader through `latest`, so the effect re-arms only when the
     // interval or the pause changes.
-  }, [intervalMs, polling]);
+  }, [intervalMs, latest, polling]);
 
   const rows = following?.rows ?? list?.rows ?? [];
   const fresh = following?.fresh ?? new Set<string>();

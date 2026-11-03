@@ -1,5 +1,6 @@
 import { createContext, type FocusEvent, type KeyboardEvent, type ReactNode, useCallback, useContext, useEffect, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import { useLatest } from '@/lib/hooks';
 
 /** The room the box keeps from the window's edges and from its anchor. */
 const GAP = 8;
@@ -44,10 +45,7 @@ export function Popover({ anchor, children, className, id, label, labelledBy, on
   const host = useContext(PopoverHost);
   const shown = open && anchor !== null;
   // Read through a ref, so an opener's new close function each render places nothing again.
-  const closeRef = useRef(onClose);
-  useLayoutEffect(() => {
-    closeRef.current = onClose;
-  });
+  const closeRef = useLatest(onClose);
   const place = useCallback(() => {
     const el = ref.current;
     if (el === null || anchor === null) return;
@@ -72,7 +70,7 @@ export function Popover({ anchor, children, className, id, label, labelledBy, on
     // A list as tall as the window over a low anchor starts at the window's top rather than above it.
     el.style.top = `${Math.max(GAP, Math.min(top, tall - GAP - box.height))}px`;
     el.style.visibility = 'visible';
-  }, [anchor]);
+  }, [anchor, closeRef]);
   useLayoutEffect(place, [open, place, placeKey]);
   useEffect(() => {
     const el = ref.current;

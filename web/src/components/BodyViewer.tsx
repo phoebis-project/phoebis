@@ -1,5 +1,6 @@
 import { Fragment, memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { findOffsets, highlightJson, type Token } from '@/lib/bodies';
+import { useLatest } from '@/lib/hooks';
 
 /** One row of the mono font's line height, 12 px at 1.5. `--body-row` in pages.css carries the same figure. */
 export const ROW_PX = 18;
@@ -211,10 +212,7 @@ export function BodyViewer({ find, highlight, lines }: { find?: BodyFind; highli
   const term = find?.term ?? '';
   // The scroll follows the active hit's line, the term and each step, so a letter that moves the match along the same
   // line, or a step that lands on the same hit, scrolls again. The lines are read as they stand.
-  const latest = useRef(lines);
-  useLayoutEffect(() => {
-    latest.current = lines;
-  });
+  const latest = useLatest(lines);
   useLayoutEffect(() => {
     if (active === null) {
       toward.current = null;
@@ -224,7 +222,7 @@ export function BodyViewer({ find, highlight, lines }: { find?: BodyFind; highli
     const start = findOffsets(line, term)[0] ?? 0;
     toward.current = { columns: [columnsOf(line.slice(0, start)), columnsOf(line.slice(0, start + term.length))], row: active, side: true, top: true };
     settle();
-  }, [active, settle, step, term]);
+  }, [active, latest, settle, step, term]);
   // Sideways once the vertical part is applied and a commit draws the row on the block's floor: inside the observer's
   // read the block is still the mount's width, and a scrollLeft set there would clamp short of the column.
   useLayoutEffect(() => {

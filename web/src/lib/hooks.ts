@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MutableRefObject } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '@/api';
 import { ApiError, quietly, reportRecovery } from '@/api/http';
@@ -78,6 +78,19 @@ export function streakFailed(streak: Streak, err: unknown, failing = true): void
 }
 
 /**
+ * A ref to the value of the latest render, for an effect, a listener or a timer that outlives renders. A layout effect
+ * writes it, since the hooks lint forbids writing a ref during render, so it is current before the passive effects and
+ * the layout effects declared after the call.
+ */
+export function useLatest<T>(value: T): MutableRefObject<T> {
+  const ref = useRef(value);
+  useLayoutEffect(() => {
+    ref.current = value;
+  });
+  return ref;
+}
+
+/**
  * Arms a poll that reads every `periodMs` while the tab is visible and `idle()` holds. When the tab comes back, and on
  * arming with `readDueNow`, it reads at once if `answeredAt()` is a full period old and `idle()` holds, with `returned`
  * true only for the tab's return. Returns the cleanup.
@@ -109,10 +122,7 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
   const [loading, setLoading] = useState(true);
   const [nonce, setNonce] = useState(0);
   // The effects outlive renders, so they read the current load, deps and stamp through refs.
-  const latest = useRef({ deps, load });
-  useLayoutEffect(() => {
-    latest.current = { deps, load };
-  });
+  const latest = useLatest({ deps, load });
   // The deps the load effect keys on, replaced only when an element differs, so a caller's new array with the same
   // values reads nothing again.
   const [held, setHeld] = useState(deps);
@@ -190,7 +200,7 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
     };
     // Callers pass load inline, a new closure each render, so it is read through `latest` and the deps alone decide
     // when the effect reads again.
-  }, [held, nonce, settle]);
+  }, [held, latest, nonce, settle]);
 
   useEffect(() => {
     if (!refreshMs || paused) return;
@@ -215,7 +225,7 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
     };
     // The load is read through `latest` when the period fires, so the effect re-arms only when the period or the pause
     // changes.
-  }, [paused, refreshMs, settle]);
+  }, [latest, paused, refreshMs, settle]);
 
   return { data, error, fetchedAt, loading, reload: () => setNonce((n) => n + 1), stale: error !== null || (loadedFor !== null && !sameDeps(loadedFor, deps)) };
 }
@@ -229,10 +239,7 @@ export function useCommittedText(value: string, onCommit: (next: string) => void
   const committed = useRef(value);
   const timer = useRef<number | null>(null);
   // A pending commit fires after later renders, so it reads the caller's latest handler, never the one its keystroke saw.
-  const latest = useRef(onCommit);
-  useLayoutEffect(() => {
-    latest.current = onCommit;
-  });
+  const latest = useLatest(onCommit);
   const clear = () => {
     if (timer.current !== null) clock.clearTimeout(timer.current);
     timer.current = null;

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError } from '@/api';
@@ -24,7 +24,7 @@ import { clock } from '@/lib/clock';
 import { ACCOUNTS_DIMENSIONS } from '@/lib/filterBar';
 import { fmtAbsolute, fmtCredits, fmtDate, fmtDated, fmtDayShort, fmtDuration, fmtEndsIn, fmtInt, fmtRelative, pct } from '@/lib/format';
 import { accountPatchOf, advancesOwnToken, derivedId, endZoneLabel, subscriptionEndFormOf, subscriptionEndRefusal, tickCanceled, type SubscriptionEndForm } from '@/lib/forms';
-import { useAsync, useNow, useQueryFilters } from '@/lib/hooks';
+import { useAsync, useLatest, useNow, useQueryFilters } from '@/lib/hooks';
 import { latestPerWindow, meterGroups, meterWindowWord } from '@/lib/meter';
 import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, accountCooldown, planEndedSentence, planWordLabel, slowedOf } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
@@ -105,10 +105,7 @@ export function AccountsPage() {
   // With auto reload off nothing else reads the row again, so the page reads the list on its own while the reading is in
   // flight. A read that falls due under a dialog, an editor or a menu is skipped, as the auto reload holds there, and the
   // timer reads the pause and the reload through a ref, so a pause neither restarts the span nor shifts the cadence.
-  const reread = useRef({ paused: dialogOpen || barOpen, reload: accounts.reload });
-  useLayoutEffect(() => {
-    reread.current = { paused: dialogOpen || barOpen, reload: accounts.reload };
-  });
+  const reread = useLatest({ paused: dialogOpen || barOpen, reload: accounts.reload });
   useEffect(() => {
     if (awaiting === null || intervalMs !== 0) return;
     const from = clock.now();
@@ -119,7 +116,7 @@ export function AccountsPage() {
     };
     timer = clock.setTimeout(step, FIRST_READING_EVERY_MS);
     return () => clock.clearTimeout(timer);
-  }, [awaiting, intervalMs]);
+  }, [awaiting, intervalMs, reread]);
   // A bare /accounts, and a deleted account's URL that names a row the reloaded list no longer holds, lead to the
   // router's first account the list shows, so the detail never opens on a row the filters hide. Where they hide every
   // row it is the router's first. The query and the hash go along, since the address hook keeps the location for its
