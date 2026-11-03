@@ -303,13 +303,28 @@ test('one poll serves every reader, reads again on its schedule, and keeps the l
   assert.equal(reads, 4, 'the schedule stops with its last reader');
 });
 
-test('an older read that answers after a newer one leaves the newer answer standing', async (t) => {
+test('a read held across a tick lands, and the tick after it reads again', async (t) => {
   t.mock.timers.enable({ apis: ['setInterval'] });
   const pending = [];
   const poll = createAttentionPoll(() => new Promise((resolve) => pending.push(resolve)));
   const off = poll.subscribe(() => {});
   t.mock.timers.tick(ATTENTION_REFRESH_MS);
-  assert.equal(pending.length, 2);
+  assert.equal(pending.length, 1, 'the tick finds the first read still out and reads nothing');
+  pending[0]([item('pool_exhausted')]);
+  await flush();
+  assert.deepEqual(poll.snapshot().items.map((i) => i.kind), ['pool_exhausted'], 'the held read lands');
+  t.mock.timers.tick(ATTENTION_REFRESH_MS);
+  assert.equal(pending.length, 2, 'the tick after it reads again');
+  off();
+});
+
+test("a write's refresh reads beside a read still out, and the older answer that lands after it leaves the newer one standing", async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const pending = [];
+  const poll = createAttentionPoll(() => new Promise((resolve) => pending.push(resolve)));
+  const off = poll.subscribe(() => {});
+  void poll.refresh();
+  assert.equal(pending.length, 2, 'the refresh reads while the first read is still out');
   pending[1]([]);
   await flush();
   pending[0]([item('pool_exhausted')]);

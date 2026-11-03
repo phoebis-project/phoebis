@@ -308,9 +308,10 @@ export interface AttentionRead {
 
 /**
  * One schedule for every reader on the page: the first subscription reads at once and starts the interval, the window
- * regaining focus reads again, and the last one leaving stops both. Nothing runs before a subscription, since the
- * node test bundle loads this module with no window and no reader. `refresh` reads once now, for a write that changed
- * what the route answers.
+ * regaining focus reads again, and the last one leaving stops both. A tick or a focus that finds a read still out is
+ * skipped, so a read slower than the period lands and the tick after it reads again. Nothing runs before a
+ * subscription, since the node test bundle loads this module with no window and no reader. `refresh` reads once now,
+ * for a write that changed what the route answers, even beside a read still out, whose older answer then lands nothing.
  */
 export function createAttentionPoll(read: () => Promise<AttentionItem[]>): {
   refresh: () => Promise<void>;
@@ -321,21 +322,27 @@ export function createAttentionPoll(read: () => Promise<AttentionItem[]>): {
   const listeners = new Set<() => void>();
   let timer: ReturnType<typeof setInterval> | null = null;
   let started = 0;
+  let out = 0;
   const publish = (next: AttentionRead) => {
     state = next;
     for (const listener of listeners) listener();
   };
   const refresh = async () => {
     const mine = (started += 1);
+    out += 1;
     try {
       const items = await read();
       // A slow read that lands after a newer one started would put an older list back.
       if (mine === started) publish({ error: null, items, loadedAt: Date.now() });
     } catch (e) {
       if (mine === started) publish({ ...state, error: e instanceof Error ? e.message : String(e) });
+    } finally {
+      out -= 1;
     }
   };
-  const tick = () => void refresh();
+  const tick = () => {
+    if (out === 0) void refresh();
+  };
   return {
     refresh,
     snapshot: (): AttentionRead => state,
