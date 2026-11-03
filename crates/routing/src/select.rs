@@ -6737,10 +6737,7 @@ fn candidate_facts(
             );
         }
     }
-    let budget = snapshot
-        .members(&pool.id)
-        .iter()
-        .find(|m| m.account_id == id)
+    let budget = budgeted_member(snapshot, &pool.id, id)
         .map(|member| {
             let spends: Vec<&MemberSpend> = state.member_spends_of(&pool.id, id).collect();
             member
