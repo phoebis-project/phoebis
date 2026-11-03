@@ -80,7 +80,8 @@ export function meterTone(remaining: number): MeterTone {
 
 export const remainingOf = (w: RateLimitWindow) => Math.max(0, Math.min(1, 1 - w.utilization));
 
-export const windowOf = (account: Account, id: WindowId) => account.windows.find((w) => w.id === id) ?? null;
+/** An account's window by its id, the Fable week from `fableWindow`, which the decoder files apart from `windows`. */
+export const windowOf = (account: Account, id: WindowId): RateLimitWindow | null => (id === '7d_fable' ? account.fableWindow : (account.windows.find((w) => w.id === id) ?? null));
 
 /** A window whose reset has passed with no reading since: the card and the timeline agree on this one test. */
 export const isExpired = (w: RateLimitWindow, now: number) => w.resetsAt !== null && Date.parse(w.resetsAt) < now;
@@ -228,7 +229,7 @@ export function soonestReset(account: Account, now: number): WindowId | null {
  *  after every one with a lead, ties by label. `'7d_fable'` reads `fableWindow`. */
 export function sortByPace(accounts: Account[], windowId: '5h' | '7d' | '7d_fable', now: number): Account[] {
   const leadOf = (a: Account): number | null => {
-    const w = windowId === '7d_fable' ? a.fableWindow : windowOf(a, windowId);
+    const w = windowOf(a, windowId);
     return w === null || isExpired(w, now) ? null : w.lead;
   };
   return [...accounts].sort((a, b) => {

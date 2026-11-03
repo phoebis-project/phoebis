@@ -44,7 +44,7 @@ export function ringFigures(accounts: Account[], windowId: RingWindow, costs: Su
   let carried = false;
   for (const a of accounts) {
     if (!isQuotaListed(a) || !a.routingEnabled) continue;
-    const w = windowId === '7d_fable' ? a.fableWindow : windowOf(a, windowId);
+    const w = windowOf(a, windowId);
     // Counted before the gate, since a free plan's window stands though the gate weighs it at nothing.
     if (w !== null) carried = true;
     // Read before the window test, since a usage-based seat reports no plan window and is named all the same.

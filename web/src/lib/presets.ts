@@ -91,7 +91,6 @@ const burnWindowOf = (key: string | null): ShedWindow | null => {
   return TRIGGER_ORDER.find((w) => w === id) ?? null;
 };
 
-const readingOf = (account: Account, id: ShedWindow): RateLimitWindow | null => (id === '7d_fable' ? account.fableWindow : windowOf(account, id));
 /**
  * The router's `MODEL_WINDOWS`: a model whose id names the Fable family draws the 7-day Fable window beside the two
  * shared windows.
@@ -194,9 +193,9 @@ export function shedPreview(
         (account.kind === 'api_key'
           ? bucketRoom(account, now)
           : windowsOf(model)
-              .filter((id) => id !== '5h' || readingOf(account, '5h') !== null || readingOf(account, '7d') === null)
+              .filter((id) => id !== '5h' || windowOf(account, '5h') !== null || windowOf(account, '7d') === null)
               .every((id) => {
-                const projection = readingOf(account, id)?.projection ?? null;
+                const projection = windowOf(account, id)?.projection ?? null;
                 return projection !== null && projection < ceiling;
               })),
     );
@@ -217,7 +216,7 @@ export function shedPreview(
       .filter((s) => s.pinned && s.accountId === account.id)
       // The router walks an account's pins in key, session and model order, which settles ties in the sorts below.
       .sort((a, b) => byteOrder(a.keyId, b.keyId) || byteOrder(a.sessionId, b.sessionId) || byteOrder(a.model ?? '', b.model ?? ''));
-    const five = readingOf(account, '5h');
+    const five = windowOf(account, '5h');
     const start = five === null ? null : windowStart(five, now);
     // A start at or after `now`, from a reset more than five hours ahead, is no reading of a fresh window, so it holds
     // nothing, as the router reads it.
@@ -226,7 +225,7 @@ export function shedPreview(
     const read = TRIGGER_ORDER.filter((id) => id !== '7d_fable' || pins.some((s) => drawsFable(s.model)))
       .filter((id) => !(id === '5h' && heldNow))
       .flatMap((id) => {
-        const w = readingOf(account, id);
+        const w = windowOf(account, id);
         return w === null || w.projection === null || w.horizon === null ? [] : [{ burn: w.burn, horizon: Date.parse(w.horizon), id, projection: w.projection }];
       });
     // A young 5-hour window under the ceiling changes nothing in the round, so only one over it names its member: that
@@ -251,7 +250,7 @@ export function shedPreview(
       .filter((s) => windowsOf(s.model).includes(fired.id))
       .map((s) => {
         const window = burnWindowOf(s.burnWindow);
-        const own = window === null ? null : (readingOf(account, window)?.burn ?? null);
+        const own = window === null ? null : (windowOf(account, window)?.burn ?? null);
         const scale = fired.id === window ? 1 : own !== null && own > 0 && fired.burn !== null ? fired.burn / own : null;
         const served = s.burn === null || s.burnUnit !== 'window_share' ? null : burnDecayed(s.burn, s.burnAt, now, windowMs);
         return {
