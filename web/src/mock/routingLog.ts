@@ -20,6 +20,7 @@ import { DAY, HOUR, MINUTE, NIGHTLY_CAP_RAISED, NOW, OVERFLOW_LAPSED_AT, RESEARC
 const RULES = ['spent', 'overage', 'return_to_plan', 'drain', 'shed'] as const;
 const FAILOVER_REASONS = ['cooldown', 'fast_lane'];
 const FIVE_HOURS = 5 * HOUR;
+const FIVE_MINUTES = 5 * MINUTE;
 /** How long a booking lives before the purge expires it, the router's `IN_FLIGHT_RECLAIM_MS`. */
 const RESERVATION_MS = HOUR;
 
@@ -333,11 +334,11 @@ export function obstacleOf(a: Account, pool: PoolSeed, at: number, model: string
 
 /** The prefix TTL the pool's rules give a request: the plan's per class and model, the metered rules on a key. */
 function ttlOf(pool: PoolSeed, kind: Account['kind'], subagent: boolean, model: string): number {
-  if (!pool.cacheTtl.enabled) return 300_000;
+  if (!pool.cacheTtl.enabled) return FIVE_MINUTES;
   const rules = kind === 'api_key' ? pool.cacheTtl.metered : pool.cacheTtl.plan;
   const rule = rules.models.find((m) => m.model === model);
   const ttl = subagent ? (rule?.subagent ?? rules.subagent) : (rule?.main ?? rules.main);
-  return ttl === '1h' ? 3_600_000 : 300_000;
+  return ttl === '1h' ? HOUR : FIVE_MINUTES;
 }
 
 const entry = (boundary: string, o: { at: number; depth: number; prefixTokens: number; refusedBy?: string | null; ttlMs: number; writtenAt: number }): PrefixEntry => ({
@@ -1642,7 +1643,7 @@ function derivedSpecs(r: RequestLog): Spec[] {
     const prefix: Spec['prefix'] = {};
     const rung = s?.placement ?? null;
     if (rung && rung.rung !== 'with_main') {
-      const ttl = pool ? ttlOf(pool, accountOf.get(a.accountId)?.kind ?? 'oauth', r.agentId !== 'main', r.canonicalModel) : 300_000;
+      const ttl = pool ? ttlOf(pool, accountOf.get(a.accountId)?.kind ?? 'oauth', r.agentId !== 'main', r.canonicalModel) : FIVE_MINUTES;
       const boundary = rung.rung === 'static' ? staticBoundary(r.agentId, rung.depth) : `message|${r.sessionId ?? r.id}|${rung.depth}`;
       const found = entry(boundary, { at: start, depth: rung.depth, prefixTokens: rung.prefixTokens, ttlMs: ttl, writtenAt: start - 2 * MINUTE });
       prefix[a.accountId] = rung.rung === 'static' ? { static: found, staticMatch: found } : { content: found, contentMatch: found };
@@ -1661,8 +1662,6 @@ function derivedSpecs(r: RequestLog): Spec[] {
   return specs;
 }
 
-const ONE_HOUR = 3_600_000;
-const FIVE_MINUTES = 300_000;
 const sessionId = (prefix: string) => REQUESTS.find((r) => r.sessionId?.startsWith(prefix))?.sessionId ?? prefix;
 
 /**
@@ -1760,7 +1759,7 @@ function storySpecs(): Spec[] {
   const t = clock;
   const at = (id: string, seq: number, attempt: number, when: number, kind: DecisionKind, accountId: string | null, extra: Partial<Spec> = {}): Spec => ({ accountId, at: when, attempt, attempted: [], kind, pin: 'none', request: requestById.get(id)!, seq, story: true, ...extra });
   const live = (cause = 'continues_pin', idleMs = 60_000, warmth: 'cold' | 'refresh' | 'untouched' = 'refresh') => ({ cause, idleMs, warmth });
-  const mainStatic = (when: number, writtenAt: number, refusedBy: string | null = null) => entry(staticBoundary('main', 2), { at: when, depth: 2, prefixTokens: 31_200, refusedBy, ttlMs: ONE_HOUR, writtenAt });
+  const mainStatic = (when: number, writtenAt: number, refusedBy: string | null = null) => entry(staticBoundary('main', 2), { at: when, depth: 2, prefixTokens: 31_200, refusedBy, ttlMs: HOUR, writtenAt });
   const cohort = (when: number, refusedBy: string | null = null) => entry(staticBoundary('e90b', 1), { at: when, depth: 1, prefixTokens: 18_400, refusedBy, ttlMs: FIVE_MINUTES, writtenAt: t(14, 19, 52) });
   const message = (session: string, depth: number, prefixTokens: number, when: number, writtenAt: number, ttlMs: number) => entry(`message|${sessionId(session)}|${depth}`, { at: when, depth, prefixTokens, ttlMs, writtenAt });
   const placedStatic: Placement = { depth: 2, prefixTokens: 31_200, rung: 'static' };
@@ -1837,7 +1836,7 @@ function storySpecs(): Spec[] {
       failover: 'cooldown',
       from: 'secondary',
       pin: live(),
-      prefix: { primary: { static: mainStatic(t(14, 2, 11), t(13, 58, 2)), staticMatch: mainStatic(t(14, 2, 11), t(13, 58, 2)) }, secondary: { content: message('bcc805b6', 8, 58_900, t(14, 2, 11), t(14, 0, 24), ONE_HOUR), contentMatch: null } },
+      prefix: { primary: { static: mainStatic(t(14, 2, 11), t(13, 58, 2)), staticMatch: mainStatic(t(14, 2, 11), t(13, 58, 2)) }, secondary: { content: message('bcc805b6', 8, 58_900, t(14, 2, 11), t(14, 0, 24), HOUR), contentMatch: null } },
       rung: placedStatic,
     }),
     at('req_7a2d4c18-e95', 1, 1, t(14, 3), 'placed', 'primary'),
@@ -1846,7 +1845,7 @@ function storySpecs(): Spec[] {
     at('req_da52d141-a5a', 1, 1, t(14, 5, 12), 'moved', 'primary', {
       from: 'secondary',
       pin: live('continues_pin', 217_000),
-      prefix: { primary: { static: mainStatic(t(14, 5, 12), t(14, 2, 11)), staticMatch: mainStatic(t(14, 5, 12), t(14, 2, 11)) }, secondary: { content: message('0d588de5', 5, 44_600, t(14, 5, 12), t(14, 1, 47), ONE_HOUR), contentMatch: null } },
+      prefix: { primary: { static: mainStatic(t(14, 5, 12), t(14, 2, 11)), staticMatch: mainStatic(t(14, 5, 12), t(14, 2, 11)) }, secondary: { content: message('0d588de5', 5, 44_600, t(14, 5, 12), t(14, 1, 47), HOUR), contentMatch: null } },
       rule: 'spent',
       rung: placedStatic,
     }),
@@ -1858,7 +1857,7 @@ function storySpecs(): Spec[] {
     at('req_b2bed817-a58', 1, 1, t(14, 11, 44), 'placed', 'primary', {
       prefix: {
         nightly: { static: mainStatic(t(14, 11, 44), t(13, 30), 'band'), staticMatch: null },
-        primary: { static: entry(staticBoundary('main', 3), { at: t(14, 11, 44), depth: 3, prefixTokens: 33_900, refusedBy: 'expired', ttlMs: ONE_HOUR, writtenAt: t(13, 5, 10) }), staticMatch: mainStatic(t(14, 11, 44), t(14, 2, 11)) },
+        primary: { static: entry(staticBoundary('main', 3), { at: t(14, 11, 44), depth: 3, prefixTokens: 33_900, refusedBy: 'expired', ttlMs: HOUR, writtenAt: t(13, 5, 10) }), staticMatch: mainStatic(t(14, 11, 44), t(14, 2, 11)) },
       },
       rung: placedStatic,
     }),
