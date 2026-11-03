@@ -28,7 +28,7 @@ macro_rules! fast {
 /// A header name of the unified family, spelled as `bucket!` spells its own.
 macro_rules! unified {
     ($($s:literal),+) => {
-        concat!("anthropic-ratelimit-unified-", $($s),+)
+        bucket!("unified-", $($s),+)
     };
 }
 
