@@ -822,18 +822,10 @@ impl UsageService {
     /// that gate, so the two endpoints share one backoff per account.
     pub async fn profile(&self, account_id: &str) -> Result<ProfileResponse, UsageError> {
         let now = (self.inner.clock)();
-        if let Some(entry) = self
-            .inner
-            .cache
-            .lock()
-            .expect(LOCK_POISONED)
-            .get(account_id)
-        {
-            if now < entry.not_before {
-                return Err(UsageError::Unavailable(
-                    "the account is waiting out a rate limit".into(),
-                ));
-            }
+        if self.inner.next_attempt_at(account_id, now).is_some() {
+            return Err(UsageError::Unavailable(
+                "the account is waiting out a rate limit".into(),
+            ));
         }
         let token = self
             .inner
