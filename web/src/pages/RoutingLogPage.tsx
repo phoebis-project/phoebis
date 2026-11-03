@@ -18,7 +18,7 @@ import { tierOrder, weekReadingOf } from '@/lib/costs';
 import { chipText, notLoadedReason, ROUTING_LOG_DIMENSIONS } from '@/lib/filterBar';
 import { effectiveInterval, FOLLOW_OVERRUN, type Paging, pagingFor, readEnd, spanEnded } from '@/lib/follow';
 import { fmtAbsolute, fmtDatedTime, fmtInt, fmtTime, plural, upperFirst } from '@/lib/format';
-import { useAsync, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';
+import { toggled, useAsync, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';
 import { ALL_KINDS, byOf, catalogModel, compareRows, DECISION_KIND_LABEL, DECISION_KIND_TONE, entityHref, EVENT_KIND_LABEL, eventTone, factsOf, identityOf, KIND_PRESETS, type LogLink, logHref, movedFrom, registryTarget, words } from '@/lib/routingLog';
 
 const PAGE_SIZE = 25;
@@ -73,13 +73,7 @@ export function RoutingLogPage() {
   const [opened, setOpened] = useState<{ for: string; ids: Set<string> }>({ for: pageKey, ids: new Set() });
   if (opened.for !== pageKey) setOpened({ for: pageKey, ids: new Set() });
   const open = opened.for === pageKey ? opened.ids : new Set<string>();
-  const toggle = (id: string) =>
-    setOpened((o) => {
-      const ids = new Set(o.for === pageKey ? o.ids : []);
-      if (ids.has(id)) ids.delete(id);
-      else ids.add(id);
-      return { for: pageKey, ids };
-    });
+  const toggle = (id: string) => setOpened((o) => ({ for: pageKey, ids: toggled(o.for === pageKey ? o.ids : new Set(), id) }));
   const widen = (link: LogLink) => navigate(logHref(link));
   // The last hour ends where the list was loaded, so a cursor page is read against the window its cursor came from.
   // Refresh moves the end to now.

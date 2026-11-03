@@ -24,6 +24,13 @@ export interface Loaded<T> {
 /** A read that failed before it ever answered, so the view has nothing to draw but the failure. */
 export const failedFirst = (read: Pick<Loaded<unknown>, 'data' | 'error'>): boolean => read.data === null && read.error !== null;
 
+/** A copy of `set` with `key` flipped, for a state setter that opens or shuts one row. */
+export function toggled<T>(set: ReadonlySet<T>, key: T): Set<T> {
+  const next = new Set(set);
+  if (!next.delete(key)) next.add(key);
+  return next;
+}
+
 export interface AsyncOptions {
   /**
    * Re-run `load` every `refreshMs` while the document is visible and `paused` is false. A refresh keeps `data` drawn,

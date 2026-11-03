@@ -10,7 +10,7 @@ import { accountHref, METER_CODEC, type MeterAddress } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { METER_DIMENSIONS, notLoadedReason } from '@/lib/filterBar';
 import { fmtAbsolute, fmtDated, fmtInt, fmtShare, instant, noun } from '@/lib/format';
-import { useAsync, useQueryFilters } from '@/lib/hooks';
+import { toggled, useAsync, useQueryFilters } from '@/lib/hooks';
 import { GROUP_PAGE, GROUP_STEP, METER_HINT, meterGroups, SPARK, sparkOf, sparkY, type MeterGroup } from '@/lib/meter';
 import { windowWord } from '@/lib/windows';
 
@@ -228,13 +228,7 @@ export function MeterPage(): JSX.Element {
   // A group's open state and its shown windows are page state, so a reload or a link opens every group shut.
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
   const [shown, setShown] = useState<ReadonlyMap<string, number>>(() => new Map());
-  const toggle = (key: string) =>
-    setOpen((was) => {
-      const next = new Set(was);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
+  const toggle = (key: string) => setOpen((was) => toggled(was, key));
   const expand = (keys: string[]) => setOpen((was) => new Set([...was, ...keys]));
   const more = (first: number) => (key: string) => setShown((was) => new Map(was).set(key, (was.get(key) ?? first) + GROUP_STEP));
 

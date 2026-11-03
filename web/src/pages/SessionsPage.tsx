@@ -18,7 +18,7 @@ import { failed } from '@/lib/costs';
 import { SESSIONS_DIMENSIONS } from '@/lib/filterBar';
 import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtMiB, fmtPct, fmtRelative, keyGenerationOf, keyLifetime, messageOf, noun, plural, shortId, shortModel } from '@/lib/format';
 import { CAUSE_HINT, CAUSE_LABEL, contextCell, firstFailedRead, isFinished, isReleasedLine, orderLines, orderRows, pinTtlMs, releasedCount, requestsRange, sessionLines, type SessionLine, type TileRead, WARNING_CAUSES } from '@/lib/keepalive';
-import { failedFirst, useAsync, useNow, useQueryFilters } from '@/lib/hooks';
+import { failedFirst, toggled, useAsync, useNow, useQueryFilters } from '@/lib/hooks';
 import { minuteSpan, type BadgeTone } from '@/lib/quota';
 import { ageWord, aroundSubject, logHref } from '@/lib/routingLog';
 import { memberSpeed } from '@/lib/selection';
@@ -323,12 +323,7 @@ export function SessionsPage() {
   };
   const warmingSomewhere = (pools.data ?? []).some((p) => p.keepalive.enabled);
   const allOpen = rows !== null && rows.length > 0 && rows.every((r) => expanded.has(rowKey(r.session)));
-  const toggle = (id: string) =>
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (!next.delete(id)) next.add(id);
-      return next;
-    });
+  const toggle = (id: string) => setExpanded((prev) => toggled(prev, id));
   // The expand gutter, the Session column and the menu are drawn whatever the control hides.
   const columns = visible.size + 3;
 
