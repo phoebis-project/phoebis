@@ -17,7 +17,7 @@ use rusqlite::{
 };
 
 use crate::pricing::PriceRevisions;
-use crate::query::{request_by_id, row_to_extra_usage};
+use crate::query::request_by_id;
 use crate::record::{
     AttemptRecord, BodyRecord, CacheMapWrite, DecisionRow, EventRecord, ExtraUsageSampleRecord,
     GuardrailMatchRecord, QuotaSampleRecord, RequestRecord,
@@ -645,9 +645,7 @@ impl LedgerDb {
     ) -> Result<Vec<EventRecord>, LedgerError> {
         self.read(move |conn| {
             let mut stmt = conn.prepare("SELECT at, kind, account_id, key_id, session_id, model, actor, detail, pool_id, agent_id, request_id FROM events WHERE at >= ?1 AND at < ?2 ORDER BY at, rowid LIMIT ?3")?;
-            let rows = stmt.query_map(params![from, to, limit as i64], |r| {
-                Ok(EventRecord { at: r.get(0)?, kind: r.get(1)?, account_id: r.get(2)?, key_id: r.get(3)?, session_id: r.get(4)?, model: r.get(5)?, actor: r.get(6)?, detail: r.get(7)?, pool_id: r.get(8)?, agent_id: r.get(9)?, request_id: r.get(10)? })
-            })?;
+            let rows = stmt.query_map(params![from, to, limit as i64], row_to_event)?;
             Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         }).await
     }
@@ -669,17 +667,7 @@ impl LedgerDb {
         let account_id = account_id.to_string();
         self.read(move |conn| {
             let mut stmt = conn.prepare("SELECT account_id, bucket, window, utilization, reset_at, source, observed_at FROM quota_samples WHERE account_id = ?1 AND bucket >= ?2 AND bucket < ?3 ORDER BY window, bucket")?;
-            let rows = stmt.query_map(params![account_id, from, to], |r| {
-                Ok(QuotaSampleRecord {
-                    account_id: r.get(0)?,
-                    bucket: r.get(1)?,
-                    window: r.get(2)?,
-                    utilization: r.get(3)?,
-                    reset_at: r.get(4)?,
-                    source: r.get(5)?,
-                    observed_at: r.get(6)?,
-                })
-            })?;
+            let rows = stmt.query_map(params![account_id, from, to], row_to_quota_sample)?;
             Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         }).await
     }
@@ -693,7 +681,7 @@ impl LedgerDb {
         let account_id = account_id.to_string();
         self.read(move |conn| {
             let mut stmt = conn.prepare("SELECT account_id, bucket, is_enabled, in_use, monthly_limit, used_credits, utilization, currency, disabled_reason, overage_reset, source, spend_limit_minor, spend_used_minor, spend_percent, spend_currency, spend_exponent FROM extra_usage_samples WHERE account_id = ?1 AND bucket >= ?2 AND bucket < ?3 ORDER BY bucket, source")?;
-            let rows = stmt.query_map(params![account_id, from, to], row_to_extra_usage)?;
+            let rows = stmt.query_map(params![account_id, from, to], row_to_extra_usage_sample)?;
             Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         }).await
     }
@@ -1092,6 +1080,60 @@ pub(crate) fn row_to_attempt(r: &rusqlite::Row<'_>) -> rusqlite::Result<AttemptR
         upstream_message_id: r.get(42)?,
         written_at: r.get(43)?,
         usage_based: r.get(45)?,
+    })
+}
+
+/// An `events` row in the column order every reader of the table selects.
+pub(crate) fn row_to_event(r: &rusqlite::Row<'_>) -> rusqlite::Result<EventRecord> {
+    Ok(EventRecord {
+        at: r.get(0)?,
+        kind: r.get(1)?,
+        account_id: r.get(2)?,
+        key_id: r.get(3)?,
+        session_id: r.get(4)?,
+        model: r.get(5)?,
+        actor: r.get(6)?,
+        detail: r.get(7)?,
+        pool_id: r.get(8)?,
+        agent_id: r.get(9)?,
+        request_id: r.get(10)?,
+    })
+}
+
+/// A `quota_samples` row in the column order every reader of the table selects.
+pub(crate) fn row_to_quota_sample(r: &rusqlite::Row<'_>) -> rusqlite::Result<QuotaSampleRecord> {
+    Ok(QuotaSampleRecord {
+        account_id: r.get(0)?,
+        bucket: r.get(1)?,
+        window: r.get(2)?,
+        utilization: r.get(3)?,
+        reset_at: r.get(4)?,
+        source: r.get(5)?,
+        observed_at: r.get(6)?,
+    })
+}
+
+/// An `extra_usage_samples` row in the column order every reader of the table selects.
+pub(crate) fn row_to_extra_usage_sample(
+    r: &rusqlite::Row<'_>,
+) -> rusqlite::Result<ExtraUsageSampleRecord> {
+    Ok(ExtraUsageSampleRecord {
+        account_id: r.get(0)?,
+        bucket: r.get(1)?,
+        is_enabled: r.get(2)?,
+        in_use: r.get(3)?,
+        monthly_limit: r.get(4)?,
+        used_credits: r.get(5)?,
+        utilization: r.get(6)?,
+        currency: r.get(7)?,
+        disabled_reason: r.get(8)?,
+        overage_reset: r.get(9)?,
+        source: r.get(10)?,
+        spend_limit_minor: r.get(11)?,
+        spend_used_minor: r.get(12)?,
+        spend_percent: r.get(13)?,
+        spend_currency: r.get(14)?,
+        spend_exponent: r.get(15)?,
     })
 }
 

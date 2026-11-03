@@ -15,7 +15,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::db::{
-    request_guardrails, row_to_attempt, row_to_request, LedgerDb, ATTEMPT_SELECT, REQUEST_SELECT,
+    request_guardrails, row_to_attempt, row_to_event, row_to_extra_usage_sample,
+    row_to_quota_sample, row_to_request, LedgerDb, ATTEMPT_SELECT, REQUEST_SELECT,
 };
 use crate::histogram::Histogram;
 use crate::plan::{
@@ -872,21 +873,7 @@ pub fn request_events(
             marker,
             request.id
         ],
-        |r| {
-            Ok(EventRecord {
-                at: r.get(0)?,
-                kind: r.get(1)?,
-                account_id: r.get(2)?,
-                key_id: r.get(3)?,
-                session_id: r.get(4)?,
-                model: r.get(5)?,
-                actor: r.get(6)?,
-                detail: r.get(7)?,
-                pool_id: r.get(8)?,
-                agent_id: r.get(9)?,
-                request_id: r.get(10)?,
-            })
-        },
+        row_to_event,
     )?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
@@ -900,21 +887,7 @@ pub fn recent_events_of_kind(
     limit: usize,
 ) -> Result<Vec<EventRecord>, LedgerError> {
     let mut stmt = conn.prepare(RECENT_EVENTS_OF_KIND)?;
-    let rows = stmt.query_map(params![kind, limit as i64], |r| {
-        Ok(EventRecord {
-            at: r.get(0)?,
-            kind: r.get(1)?,
-            account_id: r.get(2)?,
-            key_id: r.get(3)?,
-            session_id: r.get(4)?,
-            model: r.get(5)?,
-            actor: r.get(6)?,
-            detail: r.get(7)?,
-            pool_id: r.get(8)?,
-            agent_id: r.get(9)?,
-            request_id: r.get(10)?,
-        })
-    })?;
+    let rows = stmt.query_map(params![kind, limit as i64], row_to_event)?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
@@ -928,21 +901,7 @@ pub fn recent_gaps(
     limit: usize,
 ) -> Result<Vec<EventRecord>, LedgerError> {
     let mut stmt = conn.prepare(RECENT_GAPS)?;
-    let rows = stmt.query_map(params![since, limit as i64], |r| {
-        Ok(EventRecord {
-            at: r.get(0)?,
-            kind: r.get(1)?,
-            account_id: r.get(2)?,
-            key_id: r.get(3)?,
-            session_id: r.get(4)?,
-            model: r.get(5)?,
-            actor: r.get(6)?,
-            detail: r.get(7)?,
-            pool_id: r.get(8)?,
-            agent_id: r.get(9)?,
-            request_id: r.get(10)?,
-        })
-    })?;
+    let rows = stmt.query_map(params![since, limit as i64], row_to_event)?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
@@ -3093,17 +3052,7 @@ pub(crate) const LATEST_QUOTA_SQL: &str = concat!(
 pub fn latest_quota(conn: &Connection, now: i64) -> Result<Vec<QuotaSampleRecord>, LedgerError> {
     let since = now / 1_000 - 86_400;
     let mut stmt = conn.prepare(LATEST_QUOTA_SQL)?;
-    let rows = stmt.query_map(params![since], |r| {
-        Ok(QuotaSampleRecord {
-            account_id: r.get(0)?,
-            bucket: r.get(1)?,
-            window: r.get(2)?,
-            utilization: r.get(3)?,
-            reset_at: r.get(4)?,
-            source: r.get(5)?,
-            observed_at: r.get(6)?,
-        })
-    })?;
+    let rows = stmt.query_map(params![since], row_to_quota_sample)?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
@@ -3213,30 +3162,6 @@ macro_rules! latest_extra_usage_sql {
 pub(crate) const LATEST_EXTRA_USAGE_SQL: &str =
     latest_extra_usage_sql!("", ", s.source = 'head' DESC");
 
-/// An `extra_usage_samples` row in the column order every reader of the table selects.
-pub(crate) fn row_to_extra_usage(
-    r: &rusqlite::Row<'_>,
-) -> rusqlite::Result<ExtraUsageSampleRecord> {
-    Ok(ExtraUsageSampleRecord {
-        account_id: r.get(0)?,
-        bucket: r.get(1)?,
-        is_enabled: r.get(2)?,
-        in_use: r.get(3)?,
-        monthly_limit: r.get(4)?,
-        used_credits: r.get(5)?,
-        utilization: r.get(6)?,
-        currency: r.get(7)?,
-        disabled_reason: r.get(8)?,
-        overage_reset: r.get(9)?,
-        source: r.get(10)?,
-        spend_limit_minor: r.get(11)?,
-        spend_used_minor: r.get(12)?,
-        spend_percent: r.get(13)?,
-        spend_currency: r.get(14)?,
-        spend_exponent: r.get(15)?,
-    })
-}
-
 /// The rows of one `latest_extra_usage_sql!` statement over the day before `now`.
 fn latest_extra_usage_of(
     conn: &Connection,
@@ -3245,7 +3170,7 @@ fn latest_extra_usage_of(
 ) -> Result<Vec<ExtraUsageSampleRecord>, LedgerError> {
     let since = now / 1_000 - 86_400;
     let mut stmt = conn.prepare(sql)?;
-    let rows = stmt.query_map(params![since], row_to_extra_usage)?;
+    let rows = stmt.query_map(params![since], row_to_extra_usage_sample)?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
