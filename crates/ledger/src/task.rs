@@ -2025,19 +2025,11 @@ async fn run_purge(
             }
         }
     };
-    let statistics = tokio::task::spawn_blocking({
-        let db = db.clone();
-        move || db.refresh_statistics()
-    })
-    .await;
-    match statistics {
-        Ok(Ok(true)) => tracing::debug!("the ledger's planner statistics were refreshed"),
-        Ok(Ok(false)) => {}
-        Ok(Err(error)) => {
-            tracing::warn!(%error, "the ledger's planner statistics could not be refreshed")
-        }
+    match blocking(db, |db| db.refresh_statistics()).await {
+        Ok(true) => tracing::debug!("the ledger's planner statistics were refreshed"),
+        Ok(false) => {}
         Err(error) => {
-            tracing::warn!(%error, "the ledger's planner statistics refresh did not finish")
+            tracing::warn!(%error, "the ledger's planner statistics could not be refreshed")
         }
     }
     match purged {
