@@ -141,9 +141,9 @@ export function fmtHours(ms: number): string {
 }
 
 /** "in 2h 14m" / "3m ago" style label; `now` is injected so lists tick together. */
-export function fmtRelative(isoTime: string | null, now: number): string {
-  if (!isoTime) return '-';
-  const delta = Date.parse(isoTime) - now;
+export function fmtRelative(at: number | string | null, now: number): string {
+  if (at === null || at === '') return '-';
+  const delta = (typeof at === 'number' ? at : Date.parse(at)) - now;
   if (Math.abs(delta) < 15_000) return 'now';
   return delta > 0 ? `in ${fmtDuration(delta)}` : `${fmtDuration(delta)} ago`;
 }
@@ -166,42 +166,54 @@ export const toLocalInput = (ms: number) => {
 
 export const upperFirst = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-export function fmtAbsolute(isoTime: string | null): string {
-  if (!isoTime) return '-';
-  const d = new Date(isoTime);
-  return d.toLocaleString('en-US', {
-    day: '2-digit',
-    hour: '2-digit',
-    hourCycle: hourCycle(),
-    minute: '2-digit',
-    month: 'short',
-    second: '2-digit',
-    year: 'numeric',
-  });
+// A formatter costs far more to build than to use, and the polled logs format a few instants per row on every render.
+const dateTimeFormats = new Map<string, Intl.DateTimeFormat>();
+/**
+ * `at` through the formatter of one shape, built once. `key` names the shape's fields, and the cache key adds the hour
+ * cycle and the zone the options carry, since the time format switches at run time and a chart names its own zone. A
+ * formatter without a zone keeps the one it resolved when built, so the instant's offset joins the key too, and a tab
+ * whose machine moves to a zone with another offset reads the new zone.
+ */
+export function formatIn(key: string, options: Intl.DateTimeFormatOptions, at: number | string): string {
+  const d = new Date(at);
+  // `format` throws on an invalid instant, where the `toLocale*String` methods read "Invalid Date".
+  if (Number.isNaN(d.getTime())) return 'Invalid Date';
+  const cached = `${key} ${options.hourCycle ?? ''} ${options.timeZone ?? ''} ${d.getTimezoneOffset()}`;
+  let f = dateTimeFormats.get(cached);
+  if (f === undefined) {
+    f = new Intl.DateTimeFormat('en-US', options);
+    dateTimeFormats.set(cached, f);
+  }
+  return f.format(d);
+}
+
+export function fmtAbsolute(at: number | string | null): string {
+  if (at === null || at === '') return '-';
+  return formatIn('absolute', { day: '2-digit', hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit', month: 'short', second: '2-digit', year: 'numeric' }, at);
 }
 
 /** `fmtAbsolute` to the minute: "Sep 14, 2026, 09:31" under the 24-hour format, "09:31 AM" under the 12-hour one. */
-export function fmtMinute(isoTime: string | null): string {
-  if (!isoTime) return '-';
-  return new Date(isoTime).toLocaleString('en-US', { day: '2-digit', hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit', month: 'short', year: 'numeric' });
+export function fmtMinute(at: number | string | null): string {
+  if (at === null || at === '') return '-';
+  return formatIn('minute', { day: '2-digit', hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit', month: 'short', year: 'numeric' }, at);
 }
 
 /** A budget period ends on a UTC day boundary, so its end drops the seconds and the year `fmtAbsolute` prints. */
 export function fmtPeriodEnd(isoTime: string): string {
-  return new Date(isoTime).toLocaleString('en-US', { day: '2-digit', hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit', month: 'short' });
+  return formatIn('periodEnd', { day: '2-digit', hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit', month: 'short' }, isoTime);
 }
 
-export function fmtTime(isoTime: string): string {
-  return new Date(isoTime).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit', second: '2-digit' });
+export function fmtTime(at: number | string): string {
+  return formatIn('time', { hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit', second: '2-digit' }, at);
 }
 
-export function fmtShortTime(isoTime: string): string {
-  return new Date(isoTime).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit' });
+export function fmtShortTime(at: number | string): string {
+  return formatIn('shortTime', { hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit' }, at);
 }
 
 /** The hour alone in the viewer's cycle for a short timeline cell: "06" under 24h, "6 AM" or "12 PM" under 12h. */
-export function fmtShortHour(isoTime: string): string {
-  const hour = new Date(isoTime).getHours();
+export function fmtShortHour(at: number | string): string {
+  const hour = new Date(at).getHours();
   if (timeFormat === '24h') return String(hour).padStart(2, '0');
   // Spelled here rather than by the formatter, which some ICU builds separate from the period with a narrow no-break
   // space, so the text reads the same in every browser.
@@ -234,17 +246,19 @@ export function cellsFit(widthPx: number, cycle: TimeFormat): number {
  * further off carries its date (`Sep 18 08:42`).
  */
 export function instant(ms: number, now: number): string {
-  const at = new Date(ms).toISOString();
-  if (Math.abs(ms - now) < DAY) return fmtShortTime(at);
-  return `${new Date(ms).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })} ${fmtShortTime(at)}`;
+  if (Math.abs(ms - now) < DAY) return fmtShortTime(ms);
+  return fmtDated(ms);
 }
+
+/** The day and the month of an instant, "Sep 12". */
+export const fmtDayMonth = (at: number | string): string => formatIn('dayMonth', { day: 'numeric', month: 'short' }, at);
 
 /**
  * An instant with its date always written ("Sep 16 13:11"): the Meter's window ends are read against each other across
  * days, so a window that ended today carries its date as `instant` would drop it.
  */
 export function fmtDated(ms: number): string {
-  return `${new Date(ms).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })} ${fmtShortTime(new Date(ms).toISOString())}`;
+  return `${fmtDayMonth(ms)} ${fmtShortTime(ms)}`;
 }
 
 /**
@@ -254,7 +268,7 @@ export function fmtDated(ms: number): string {
 export function fmtDatedTime(isoTime: string, now: number): string {
   const ms = Date.parse(isoTime);
   if (Math.abs(ms - now) < DAY) return fmtTime(isoTime);
-  return `${new Date(ms).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })} ${fmtTime(isoTime)}`;
+  return `${fmtDayMonth(ms)} ${fmtTime(isoTime)}`;
 }
 
 /** A custom span's words: the times alone inside one local calendar day, the date before each time across days. */
@@ -262,18 +276,16 @@ export function spanText(fromMs: number, toMs: number): string {
   const from = new Date(fromMs);
   const to = new Date(toMs);
   const sameDay = from.getFullYear() === to.getFullYear() && from.getMonth() === to.getMonth() && from.getDate() === to.getDate();
-  const day = (d: Date) => d.toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
-  const time = (d: Date) => fmtShortTime(d.toISOString());
-  return sameDay ? `${time(from)} to ${time(to)}` : `${day(from)} ${time(from)} to ${day(to)} ${time(to)}`;
+  return sameDay ? `${fmtShortTime(fromMs)} to ${fmtShortTime(toMs)}` : `${fmtDayMonth(fromMs)} ${fmtShortTime(fromMs)} to ${fmtDayMonth(toMs)} ${fmtShortTime(toMs)}`;
 }
 
 export function fmtDate(isoTime: string): string {
-  return new Date(isoTime).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' });
+  return formatIn('date', { day: '2-digit', month: 'short', year: 'numeric' }, isoTime);
 }
 
 /** The day in `timeZone`, or in the browser's zone when none is named. */
 export function fmtDayShort(ms: number, timeZone?: string): string {
-  return new Date(ms).toLocaleDateString('en-US', { day: '2-digit', month: 'short', timeZone });
+  return formatIn('dayShort', { day: '2-digit', month: 'short', timeZone }, ms);
 }
 
 /**
@@ -283,21 +295,21 @@ export function fmtDayShort(ms: number, timeZone?: string): string {
 export function fmtDayTick(ms: number, timeZone?: string): string {
   const day = fmtDayShort(ms, timeZone);
   // Midnight is read on the 24-hour clock whatever the time format, so it compares as one string.
-  const clock = new Date(ms).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h23', minute: '2-digit', timeZone });
-  return clock === '00:00' ? day : `${day} ${new Date(ms).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit', timeZone })}`;
+  const clock = formatIn('shortTime', { hour: '2-digit', hourCycle: 'h23', minute: '2-digit', timeZone }, ms);
+  return clock === '00:00' ? day : `${day} ${formatIn('shortTime', { hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit', timeZone }, ms)}`;
 }
 
-export const fmtHourTick = (ms: number): string => fmtShortTime(new Date(ms).toISOString());
+export const fmtHourTick = (ms: number): string => fmtShortTime(ms);
 
 /**
  * The analytics label of a key generation no live key holds, built here for the route's groups and the fold's alike
  * so both paths print one shape, the creation minute in the viewer's zone. Generation 0, the rows the ledger left
- * unstamped, and a generation that is no instant carry no creation time; `toISOString` would throw on the second.
+ * unstamped, and a generation that is no instant carry no creation time.
  */
 export const earlierHolderLabel = (id: string, generation: number): string => {
   const created = new Date(generation);
   if (generation === 0 || Number.isNaN(created.getTime())) return `${id} (deleted)`;
-  return `${id} (deleted, created ${fmtMinute(created.toISOString())})`;
+  return `${id} (deleted, created ${fmtMinute(generation)})`;
 };
 
 /** A client names itself in full, which is wider than any table cell affords; the whole string rides the title. */

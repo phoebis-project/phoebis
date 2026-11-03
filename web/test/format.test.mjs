@@ -101,6 +101,53 @@ test("a window's end carries its date whatever its distance from now, the time i
   }
 });
 
+/** How many `Intl.DateTimeFormat`s `run` builds, counted by a constructor that stands in for the global meanwhile. */
+const builds = (run) => {
+  const Real = Intl.DateTimeFormat;
+  let built = 0;
+  Intl.DateTimeFormat = function (...args) {
+    built += 1;
+    return new Real(...args);
+  };
+  try {
+    run();
+  } finally {
+    Intl.DateTimeFormat = Real;
+  }
+  return built;
+};
+
+/** Runs `run` with every instant `offset` minutes off UTC, so a case reads no formatter another case built. */
+const atOffset = (offset, run) => {
+  const real = Date.prototype.getTimezoneOffset;
+  Date.prototype.getTimezoneOffset = () => offset;
+  try {
+    run();
+  } finally {
+    Date.prototype.getTimezoneOffset = real;
+  }
+};
+
+test('two calls with one shape share a formatter', () => {
+  const at = Date.parse('2026-09-16T09:12:05Z');
+  const built = builds(() =>
+    atOffset(-17, () => {
+      fmtTime(at);
+      fmtTime(at + 1_000);
+    }),
+  );
+  assert.equal(built, 1, 'the second call reads the formatter the first one built');
+});
+
+test('a changed offset builds a new formatter', () => {
+  const at = Date.parse('2026-09-16T09:12:05Z');
+  const built = builds(() => {
+    atOffset(-23, () => fmtTime(at));
+    atOffset(-24, () => fmtTime(at));
+  });
+  assert.equal(built, 2, 'a formatter built before the zone moved serves no call after it');
+});
+
 test('a zero cost never carries a sign, whatever the wire sent', () => {
   assert.equal(fmtUsd(-0), '$0.00', 'an empty sum of f64 costs reaches the decoder as -0');
   assert.equal(fmtUsd(0), '$0.00');

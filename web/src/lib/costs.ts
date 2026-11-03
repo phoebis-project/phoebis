@@ -1,7 +1,7 @@
 import type { Attempt, ModelTiers, SubscriptionCosts, TypeMultiplier } from '@/api/types';
 import type { WeekReading } from '@/lib/analytics';
 import { has, lookup } from '@/lib/counts';
-import { listWords, undatedModel } from '@/lib/format';
+import { formatIn, listWords, undatedModel } from '@/lib/format';
 import { planLabel } from '@/lib/quota';
 import { DAY, HOUR, MINUTE } from '@/lib/time';
 import { WEEK_TIER, type WeekPosition } from '@/lib/unit';
@@ -286,9 +286,9 @@ const addDays = (date: string, days: number): string => new Date(dayStart(date) 
 const daysBetween = (from: string, to: string): number => Math.round((dayStart(to) - dayStart(from)) / DAY);
 const weekdayOf = (date: string): string => WEEKDAYS[(new Date(dayStart(date)).getUTCDay() + 6) % 7];
 const dayLabel = (date: string): string => {
-  const d = new Date(`${date}T12:00:00Z`);
-  const part = (o: Intl.DateTimeFormatOptions) => d.toLocaleDateString('en-US', { ...o, timeZone: 'UTC' });
-  return `${part({ weekday: 'short' })} ${part({ day: 'numeric' })} ${part({ month: 'short' })}`;
+  const noon = `${date}T12:00:00Z`;
+  const part = (key: string, o: Intl.DateTimeFormatOptions) => formatIn(key, { ...o, timeZone: 'UTC' }, noon);
+  return `${part('weekday', { weekday: 'short' })} ${part('dayOfMonth', { day: 'numeric' })} ${part('month', { month: 'short' })}`;
 };
 export const hhmm = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
 

@@ -411,7 +411,7 @@ export function RequestsPage() {
           onIntervalChange: setIntervalMs,
           onRefresh: refresh,
           paused: requestId ? 'request' : barOpen ? 'menu' : cursor !== undefined ? 'olderPage' : null,
-          refreshTitle: custom ? `Rows from ${fmtTime(filters.range.from)} to ${fmtTime(filters.range.to)}. Refresh reads the same window again` : `Rows up to ${fmtTime(iso(loadedAt))}. Refresh reads up to now`,
+          refreshTitle: custom ? `Rows from ${fmtTime(filters.range.from)} to ${fmtTime(filters.range.to)}. Refresh reads the same window again` : `Rows up to ${fmtTime(loadedAt)}. Refresh reads up to now`,
         }}
         update={update}
       >

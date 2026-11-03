@@ -183,7 +183,7 @@ export function RoutingLogPage() {
           onIntervalChange: setIntervalMs,
           onRefresh: refresh,
           paused: barOpen ? 'menu' : cursor !== undefined ? 'olderPage' : null,
-          refreshTitle: custom ? `Rows from ${fmtTime(iso(range.from))} to ${fmtTime(iso(range.to))}. Refresh reads the same window again` : `Rows up to ${fmtTime(iso(range.to))}. Refresh reads up to now`,
+          refreshTitle: custom ? `Rows from ${fmtTime(range.from)} to ${fmtTime(range.to)}. Refresh reads the same window again` : `Rows up to ${fmtTime(range.to)}. Refresh reads up to now`,
         }}
         update={update}
       />

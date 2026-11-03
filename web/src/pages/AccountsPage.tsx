@@ -976,7 +976,7 @@ function TrendChart({ history, loading, hasFable }: { hasFable: boolean; history
               if (!p) return null;
               return (
                 <ChartTooltip
-                  title={fmtAbsolute(new Date(p.at).toISOString())}
+                  title={fmtAbsolute(p.at)}
                   rows={[
                     { color: ink.series[0], label: '5-hour used', value: pct(p.u5) },
                     { color: ink.series[1], label: '7-day used', value: p.u7 === null ? 'no sample yet' : pct(p.u7) },

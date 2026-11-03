@@ -553,7 +553,7 @@ function SpendLane({ account, cells, color, now, nowPct, span, spend, stamp, ste
               key={b.start}
               className={`lane__bar lane__bar--${b.state}`}
               style={{ left: `${((from - span.startMs) / width) * 100}%`, width: `${((to - from) / width) * 100}%` }}
-              title={`${account.label}\n${fmtAbsolute(new Date(b.start).toISOString())} to ${fmtAbsolute(new Date(b.end).toISOString())}${filled ? `\n${share}` : ''}`}
+              title={`${account.label}\n${fmtAbsolute(b.start)} to ${fmtAbsolute(b.end)}${filled ? `\n${share}` : ''}`}
             >
               {filled && (
                 <span className="lane__clip">
@@ -596,7 +596,7 @@ function ResetTimeline({ accounts, now, slotOf }: { accounts: Account[]; now: nu
   const span = spanFor(mode, offset, now, rowWidth > 0 ? cellsFit(rowWidth, cycle) : 12);
   const width = span.endMs - span.startMs;
   const nowPct = now >= span.startMs && now < span.endMs ? ((now - span.startMs) / width) * 100 : null;
-  const stamp = (at: number) => (mode === 'session' ? fmtShortTime(new Date(at).toISOString()) : `${fmtDayShort(at)} ${fmtShortTime(new Date(at).toISOString())}`);
+  const stamp = (at: number) => (mode === 'session' ? fmtShortTime(at) : `${fmtDayShort(at)} ${fmtShortTime(at)}`);
 
   const cells = Array.from({ length: span.cells }, (_, i) => {
     const at = span.startMs + i * span.cellMs;
@@ -604,12 +604,12 @@ function ResetTimeline({ accounts, now, slotOf }: { accounts: Account[]; now: nu
     const dayStart = d.getHours() === 0;
     const head = mode === 'weekly' ? d.toLocaleDateString('en-US', { weekday: 'short' }) : dayStart ? fmtDayShort(at) : '';
     const day = d.toLocaleDateString('en-US', { day: 'numeric' });
-    const time = fmtShortTime(new Date(at).toISOString());
+    const time = fmtShortTime(at);
     return {
       at,
       head,
       shortHead: mode === 'weekly' ? head.charAt(0) : dayStart ? day : '',
-      shortSub: mode === 'weekly' ? day : fmtShortHour(new Date(at).toISOString()),
+      shortSub: mode === 'weekly' ? day : fmtShortHour(at),
       sub: mode === 'weekly' ? fmtDayShort(at) : time,
       today: new Date(at).setHours(0, 0, 0, 0) === new Date(now).setHours(0, 0, 0, 0),
       weekend: [0, 6].includes(d.getDay()),
@@ -801,7 +801,7 @@ function ResetTimeline({ accounts, now, slotOf }: { accounts: Account[]; now: nu
                         key={b.start}
                         className={`lane__bar lane__bar--${b.state}`}
                         style={{ left: `${((from - span.startMs) / width) * 100}%`, width: `${wPct}%` }}
-                        title={`${account.label}\n${fmtAbsolute(new Date(b.start).toISOString())} to ${fmtAbsolute(new Date(b.end).toISOString())}${b.state === 'live' && share ? `\n${share}` : ''}${b.stop < b.end ? `\nends ${fmtAbsolute(endsAt)}` : ''}`}
+                        title={`${account.label}\n${fmtAbsolute(b.start)} to ${fmtAbsolute(b.end)}${b.state === 'live' && share ? `\n${share}` : ''}${b.stop < b.end ? `\nends ${fmtAbsolute(endsAt)}` : ''}`}
                       >
                         {b.state === 'live' && share !== null && (
                           <span className="lane__clip">

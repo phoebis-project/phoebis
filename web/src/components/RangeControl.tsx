@@ -31,9 +31,9 @@ export function RangeControl({ now, onChange, value, window: shown }: RangeContr
   // The window the popover opened on, so the view's window moving on while it is open changes no untouched field.
   const [edit, setEdit] = useState<{ base: { from: number; to: number }; from: string; to: string } | null>(null);
   const custom = value.preset === 'custom';
-  const pair = `${fmtAbsolute(iso(shown.from))} to ${fmtAbsolute(iso(shown.to))}`;
+  const pair = `${fmtAbsolute(shown.from)} to ${fmtAbsolute(shown.to)}`;
   const label = RANGE_PRESETS.find((p) => p.name === value.preset)?.label ?? value.preset;
-  const ends = `${label}, ends ${fmtAbsolute(iso(shown.to))}`;
+  const ends = `${label}, ends ${fmtAbsolute(shown.to)}`;
 
   // A field's minute drops the window's seconds and milliseconds, so an untouched field keeps the window's own instant.
   const bound = (side: Side) => (edit === null ? Number.NaN : edit[side] === toLocalInput(edit.base[side]) ? edit.base[side] : Date.parse(edit[side]));

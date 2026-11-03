@@ -67,7 +67,7 @@ export function overageBadge(reset: string | null, now: number): StandingBadge {
 
 /** A winding-down member's badge: the time left before the plan's end, which the member is held back for. */
 export function windingDownBadge(end: number, now: number): StandingBadge {
-  const at = fmtAbsolute(new Date(end).toISOString());
+  const at = fmtAbsolute(end);
   return end > now ? { text: `winding down ${fmtDuration(end - now)}`, title: `Winding down to the plan's end at ${at}` } : { text: 'winding down', title: `Winding down past the plan's end at ${at}` };
 }
 

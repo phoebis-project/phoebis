@@ -14,7 +14,7 @@ export const minuteClock = (minutes: number): string => {
   return new Date(Date.UTC(2000, 0, 1, 0, minutes)).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h12', minute: '2-digit', timeZone: 'UTC' });
 };
 
-const clockAt = (at: number) => fmtShortTime(new Date(at).toISOString());
+const clockAt = (at: number) => fmtShortTime(at);
 
 /** "3 h 30 min", "45 min". */
 const fmtSpan = (ms: number) => {

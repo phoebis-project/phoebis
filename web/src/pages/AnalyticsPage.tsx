@@ -197,7 +197,7 @@ function timeTip<T extends { at: number }>(rows: (p: T) => TooltipRow[]) {
   return function TipContent({ payload }: { payload?: readonly { payload?: unknown }[] }) {
     const p = payload?.[0]?.payload as T | undefined;
     if (!p) return null;
-    return <ChartTooltip title={fmtAbsolute(new Date(p.at).toISOString())} rows={rows(p)} />;
+    return <ChartTooltip title={fmtAbsolute(p.at)} rows={rows(p)} />;
   };
 }
 

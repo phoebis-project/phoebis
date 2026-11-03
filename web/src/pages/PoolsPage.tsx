@@ -841,7 +841,7 @@ function PoolCard({
                   if (!p) return null;
                   return (
                     <ChartTooltip
-                      title={fmtAbsolute(new Date(p.at).toISOString())}
+                      title={fmtAbsolute(p.at)}
                       rows={[
                         { color: ink.series[0], label: 'requests', value: fmtInt(p.requests) },
                         { color: ink.ink2, label: '3-hour average', value: p.average.toFixed(1) },

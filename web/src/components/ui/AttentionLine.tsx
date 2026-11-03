@@ -122,7 +122,7 @@ export function AttentionLine({ error, items, loadedAt, now, refresh }: { error:
   }, [drawn]);
 
   if (error !== null) {
-    const title = loadedAt === null ? error : `${error}\nLast read: ${fmtRelative(new Date(loadedAt).toISOString(), now)}`;
+    const title = loadedAt === null ? error : `${error}\nLast read: ${fmtRelative(loadedAt, now)}`;
     return (
       <div className="attention-line">
         <Badge tone="warning" title={title}>

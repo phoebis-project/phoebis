@@ -2,7 +2,7 @@ import type { AllowanceAccount, AllowanceReset, AllowanceWindow, SubscriptionCos
 import { HINT_WINDOW } from '@/lib/analytics';
 import { anchorTier, pricedWindow, tierCapacity, weekScale, weekUnpricedTitle } from '@/lib/costs';
 import { lookup } from '@/lib/counts';
-import { byteOrder, fmtAbsolute, fmtShare, fmtShortTime, plural, weekShort } from '@/lib/format';
+import { byteOrder, fmtAbsolute, fmtDated, fmtDayMonth, fmtShare, plural, weekShort } from '@/lib/format';
 import { pricedTier } from '@/lib/quota';
 import { DAY } from '@/lib/time';
 import type { WeekPosition } from '@/lib/unit';
@@ -125,10 +125,10 @@ export const resetHover = (reset: AllowanceReset): string => `${fmtAbsolute(rese
 export const ownShareHover = (plan: string, window: string, shareLeft: number): string => `${plan}: ${fmtShare(shareLeft)} of ${lookup(HINT_WINDOW, window) ?? window} left`;
 
 /** A reset's day, "Sep 12": a week's reset lies days back, so the day is always written. */
-export const resetDate = (isoTime: string): string => new Date(isoTime).toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
+export const resetDate = (isoTime: string): string => fmtDayMonth(isoTime);
 
 /** A reset's day and time, "Sep 12 20:10", the day written even within a day of now. */
-export const resetInstant = (isoTime: string): string => `${resetDate(isoTime)} ${fmtShortTime(isoTime)}`;
+export const resetInstant = (isoTime: string): string => fmtDated(Date.parse(isoTime));
 
 /** One account of the Analytics card: each weekly window's last and four weeks' figures with the resets counted,
  *  keyed by the wire key, the 7-day window's count, the instant of a latest reset that is the term's end, and whether
