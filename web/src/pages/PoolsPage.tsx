@@ -385,6 +385,7 @@ export function PoolsPage() {
       </div>
       <PoolDialog
         open={dialog !== null}
+        captureMaxHours={settings.data?.retention.bodyCaptureMaxHours}
         pool={dialog?.pool ?? null}
         initialGroup={dialog?.initialGroup ?? null}
         onClose={(reload) => {
@@ -1133,6 +1134,7 @@ const formFrom = (pool: Pool): PoolForm => ({
 });
 
 export function PoolDialog({
+  captureMaxHours,
   open,
   pool,
   initialGroup = null,
@@ -1154,6 +1156,8 @@ export function PoolDialog({
   accountsFailed: string | null;
   /** Whether the accounts read has answered or failed. Before that no stored member is refused or marked unlisted. */
   accountsLoaded: boolean;
+  /** The bootstrap's body capture limit from the host page's settings read, undefined while that read is out. */
+  captureMaxHours?: number;
   /** The pool's idle-age counters from the keepalive overview, empty for a new pool or one the overview does not list. */
   idleReturns: ReturnRateProps;
   /** The group the address named. The reset opens on it, Identity otherwise. */
@@ -1180,10 +1184,8 @@ export function PoolDialog({
   const [attempted, setAttempted] = useState(false);
   const [stale, setStale] = useState<string | null>(null);
   const [chosen, setChosen] = useState<PoolGroup>('identity');
-  const settings = useAsync(() => api.getSettings(), []);
   // Once per opening of a saved pool, since a create takes no attachment and offers nothing to attach.
   const guardrailRegistry = useAsync(() => (open && pool ? api.listGuardrails() : Promise.resolve(null)), [open, pool?.id]);
-  const captureMaxHours = settings.data?.retention.bodyCaptureMaxHours;
   // The flag `GroupedDialog` hands its expert wrappers, whose registry the bodies built here cannot reach: a half cell
   // whose row-mate is expert spans the row while the mate is hidden.
   const { expertView } = useAppSettings();
@@ -2375,6 +2377,7 @@ export function PoolDialog({
       />
       <KeyDialog
         open={keyOpen}
+        captureMaxHours={captureMaxHours}
         onClose={() => setKeyOpen(false)}
         pools={keyDialogPools}
         existingIds={new Set([...keys, ...localKeys].map((k) => k.id))}

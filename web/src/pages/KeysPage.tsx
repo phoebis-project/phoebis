@@ -433,6 +433,7 @@ export function KeysPage() {
 
       <KeyDialog
         open={dialog !== null}
+        captureMaxHours={settings.data?.retention.bodyCaptureMaxHours}
         existing={dialog?.key ?? null}
         initialGroup={dialog?.initialGroup ?? null}
         onClose={() => setDialog(null)}
@@ -597,7 +598,7 @@ export function GuardrailList({ inherited = [], onChange, pending, refs, registr
  * inside a pool's own dialog. `existingIds` are the listed keys' ids, which a new
  * key's derived id is checked against before the create.
  */
-export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools, existing = null, existingIds, initialGroup = null, initialPoolId, lockPool = false }: { existing?: ApiKey | null; existingIds: ReadonlySet<string>; initialGroup?: KeyGroup | null; initialPoolId?: string; lockPool?: boolean; onClose: () => void; onCreated: (c: CreatedApiKey) => void; /** The stale save's Reload: closes the dialog and reads the keys again. */ onReload?: () => void; onUpdated?: (k: ApiKey) => void; open: boolean; pools: KeyDialogPool[] }) {
+export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools, captureMaxHours, existing = null, existingIds, initialGroup = null, initialPoolId, lockPool = false }: { /** The bootstrap's body capture limit from the host page's settings read, undefined while that read is out. */ captureMaxHours?: number; existing?: ApiKey | null; existingIds: ReadonlySet<string>; initialGroup?: KeyGroup | null; initialPoolId?: string; lockPool?: boolean; onClose: () => void; onCreated: (c: CreatedApiKey) => void; /** The stale save's Reload: closes the dialog and reads the keys again. */ onReload?: () => void; onUpdated?: (k: ApiKey) => void; open: boolean; pools: KeyDialogPool[] }) {
   const [chosen, setChosen] = useState<KeyGroup>('key');
   const [name, setName] = useState('');
   const [poolId, setPoolId] = useState('');
@@ -615,14 +616,12 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [stale, setStale] = useState<string | null>(null);
-  const settings = useAsync(() => api.getSettings(), []);
   const pool = pools.find((p) => p.id === poolId) ?? null;
   const poolName = pool?.name ?? poolId;
   const poolHours = pool?.bodyCaptureHours ?? 0;
-  const maxHours = settings.data?.retention.bodyCaptureMaxHours;
   const effectiveHours = captureMode === 'inherit' ? poolHours : captureMode === 'off' ? 0 : Number(captureHours);
   const suggestions = useCatalogSuggestions(pool?.members.map((m) => m.accountId) ?? [], open);
-  const refusals = keyRefusals({ captureHours, captureMode, modelRules, name, poolId }, { identity: { existingIds, isNew: existing === null }, maxHours });
+  const refusals = keyRefusals({ captureHours, captureMode, modelRules, name, poolId }, { identity: { existingIds, isNew: existing === null }, maxHours: captureMaxHours });
   const { first, invalid, refusalOf, refusedGroups } = refusalsView(refusals);
   const rulesRefusal = refusalOf('Model rules');
   const processed = useAsync(() => (open && existing ? api.getKeyModels(existing.id) : Promise.resolve(null)), [open, existing?.id]);
@@ -873,7 +872,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
                   <Input
                     type="number"
                     min={1}
-                    max={maxHours}
+                    max={captureMaxHours}
                     value={captureHours}
                     onChange={(e) => setCaptureHours(e.target.value)}
                     onFocus={() => setCaptureMode('override')}

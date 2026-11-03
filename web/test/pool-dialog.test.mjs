@@ -28,12 +28,11 @@ after(() => window.close());
 const { act, api, AppSettingsProvider, createElement: h, createRoot, fakeClock, installClock, KeyDialog, MemoryRouter, PoolDialog } = await import('./dist/ui.js');
 const { MockApi } = await import('./dist/api.js');
 
-// The bootstrap's limit the held settings read answers with, the test's own figure.
+// The bootstrap's limit the page's settings read hands the dialogs, the test's own figure.
 const LIMIT = 72;
-const SETTINGS = { retention: { bodyCaptureMaxHours: LIMIT } };
 
 const roots = [];
-const reads = { getKeyModels: api.getKeyModels, getSettings: api.getSettings, listCatalogOf: api.listCatalogOf, updateKey: api.updateKey };
+const reads = { getKeyModels: api.getKeyModels, listCatalogOf: api.listCatalogOf, updateKey: api.updateKey };
 beforeEach(() => {
   // A frozen clock, so the dialog's ticking instant arms no window timer.
   const clock = fakeClock();
@@ -51,17 +50,7 @@ afterEach(() => {
   installClock(null);
 });
 
-/** The settings read held until `answer` lands it. */
-function holdSettings() {
-  let answer;
-  const held = new Promise((resolve) => {
-    answer = resolve;
-  });
-  api.getSettings = () => held;
-  return () => answer(SETTINGS);
-}
-
-// A held read answers on a promise, which settles after a synchronous act has returned, so the wait steps out of the
+// A read answers on a promise, which settles after a synchronous act has returned, so the wait steps out of the
 // act environment for a few scheduler turns. An awaited act would keep the test process alive on its message channel.
 async function settled() {
   globalThis.IS_REACT_ACT_ENVIRONMENT = false;
@@ -125,7 +114,6 @@ function poolDialog(props) {
 }
 
 test('the pool retention is unbounded with the short hint and the floor alone until the settings read lands the limit', async () => {
-  const answer = holdSettings();
   const pool = pools.find((p) => p.bodyCaptureHours > 0);
   assert.ok(pool, 'the mock holds a pool that captures bodies');
   const { container, draw } = mount();
@@ -137,15 +125,13 @@ test('the pool retention is unbounded with the short hint and the floor alone un
   assert.equal(hint(), "At most the bootstrap's body capture limit, shown on the Settings page's About card.");
   type(field(), '');
   assert.equal(statusOf(container), 'Save is held: Retention is a whole number of hours of at least 1.', 'an emptied field names the floor alone');
-  answer();
-  await settled();
+  await draw(poolDialog({ accounts, accountsLoaded: true, captureMaxHours: LIMIT, pool }));
   assert.equal(field()?.getAttribute('max'), String(LIMIT), 'the limit lands as the ceiling');
   assert.equal(hint(), `At most the bootstrap's body capture limit, ${LIMIT} hours here, shown on the Settings page's About card.`);
   assert.equal(statusOf(container), `Save is held: Retention is a whole number of hours from 1 to ${LIMIT}.`);
 });
 
 test("a stored member's row waits disabled for the account list, then the list's answer frees it with its badge", async () => {
-  holdSettings();
   const pool = pools.find((p) => p.members.length > 1);
   assert.ok(pool, 'the mock holds a pool with more than one member');
   const missing = pool.members[0].accountId;
@@ -164,26 +150,24 @@ test("a stored member's row waits disabled for the account list, then the list's
 });
 
 test("the key override is unbounded with the floor's sentence until the settings read lands the limit", async () => {
-  const answer = holdSettings();
   const key = (await mock.listKeys()).find((k) => k.id === 'desktop');
   assert.ok(key, 'the mock holds the desktop key');
   const keyPools = pools.map((p) => ({ autoModeServer: p.autoModeServer, bodyCaptureHours: p.bodyCaptureHours, id: p.id, members: p.members.map((m) => ({ accountId: m.accountId })), modelRules: p.modelRules, name: p.name }));
   const { container, draw } = mount();
-  await draw(h(KeyDialog, { existing: key, existingIds: new Set(), onClose() {}, onCreated() {}, open: true, pools: keyPools }));
+  const keyDialog = (captureMaxHours) => h(KeyDialog, { captureMaxHours, existing: key, existingIds: new Set(), onClose() {}, onCreated() {}, open: true, pools: keyPools });
+  await draw(keyDialog(undefined));
   const capture = () => [...container.querySelectorAll('dialog[open] section.dialog-group')].find((s) => s.getAttribute('aria-label') === 'Capture');
   const field = () => capture()?.querySelector('input[aria-label="Capture hours for this key"]');
   act(() => capture()?.querySelectorAll('.radio-list__item')[1]?.querySelector('input[type="radio"]')?.click());
   assert.equal(field()?.hasAttribute('max'), false, 'no ceiling stands before the read answers');
   type(field(), '');
   assert.equal(statusOf(container), 'Save is held: Capture hours is a whole number of at least 1.', 'an emptied field names the floor alone');
-  answer();
-  await settled();
+  await draw(keyDialog(LIMIT));
   assert.equal(field()?.getAttribute('max'), String(LIMIT), 'the limit lands as the ceiling');
   assert.equal(statusOf(container), `Save is held: Capture hours is a whole number from 1 to ${LIMIT}.`);
 });
 
 test('an idle window set above the break-even reads a note under its field and its cost from the set value, while 0 and the other two ceilings read the cap', async () => {
-  holdSettings();
   const pool = pools.find((p) => p.id === 'jobs');
   assert.ok(pool && pool.keepalive.maxIdleSeconds > pool.keepaliveResolved.breakEvenSeconds.max, 'the mock holds a pool whose idle window is set above its whole break-even');
   const { container, draw } = mount();
@@ -216,7 +200,6 @@ test('an idle window set above the break-even reads a note under its field and i
 });
 
 test('a new pool opens with the switch to keep prompt caches warm off, and free to turn on', async () => {
-  holdSettings();
   const { container, draw } = mount();
   await draw(poolDialog({ accounts, accountsLoaded: true, pool: null }));
   const warm = container.querySelector('dialog[open] section.dialog-group[aria-label="Keepalive"] button[role="switch"][aria-label="Keep prompt caches warm"]');
@@ -226,7 +209,6 @@ test('a new pool opens with the switch to keep prompt caches warm off, and free 
 });
 
 test("a key move sends the stored key's settings with the new pool, the name trimmed and an empty note as none", async () => {
-  holdSettings();
   const pool = pools[0];
   const target = pools.find((p) => p.id !== pool.id);
   assert.ok(target, 'the mock holds a second pool to move the key to');
