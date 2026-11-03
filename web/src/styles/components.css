@@ -2220,3 +2220,218 @@ textarea.input {
     font-size: 11px;
   }
 }
+
+/* Shared page bits */
+.mt {
+  margin-top: 8px;
+}
+
+.card--table .card__head {
+  padding: 16px var(--card-inset) 0;
+  margin-bottom: 12px;
+}
+
+.card--table .table-wrap {
+  border-top: 1px solid var(--hairline);
+}
+
+.card--table .card__head + .table-wrap,
+.card--table > .table-wrap:first-child {
+  border-top: 0;
+}
+
+.callout {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  font-size: 13px;
+  border-radius: var(--radius-sm);
+}
+
+.callout svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.callout--critical {
+  color: var(--critical-ink);
+  background: var(--critical-soft);
+}
+
+.callout--warning {
+  color: var(--warning-ink);
+  background: var(--warning-soft);
+}
+
+.callout--info {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+}
+
+.chip {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  padding: 3px 9px;
+  font-size: 12.5px;
+  line-height: 18px;
+  background: var(--surface-2);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+}
+
+.chip__label {
+  color: var(--ink-2);
+}
+
+.chip--serious {
+  color: var(--serious-ink);
+  background: var(--serious-soft);
+  border-color: transparent;
+}
+
+.chip__flag {
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--serious);
+  border-radius: var(--radius-pill);
+}
+
+.chip--removable .chip__remove {
+  display: inline-grid;
+  place-items: center;
+  padding: 1px;
+  color: var(--ink-3);
+  background: none;
+  border: 0;
+  border-radius: 50%;
+}
+
+.chip--removable .chip__remove:hover {
+  color: var(--ink);
+  background: var(--surface-3);
+}
+
+/* Without centring, the min-height below stretches a child shorter than the
+   row, such as a badge, past the size it has everywhere else. */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+}
+
+/* The bar's chip line: one line, never wrapping, under the controls' row. */
+.chip-line {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+  align-items: center;
+}
+
+/* The fold reads each chip at its own width, which a chip shrunk to fit the line would hide. */
+.chip-line > * {
+  flex: none;
+}
+
+/* After "+N more" every chip stands, so the line wraps as it must. */
+.chip-line.is-expanded {
+  flex-wrap: wrap;
+}
+
+.chip-line .link-btn {
+  font-size: 12.5px;
+}
+
+.chip--filter {
+  max-width: 240px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.chip--filter .chip__body {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  min-width: 0;
+  padding: 3px 0 3px 9px;
+  color: var(--ink);
+  line-height: 18px;
+  background: none;
+  border: 0;
+  border-radius: 0;
+}
+
+/* The values give way to a narrow chip, so the word keeps one line rather than wrapping beside them. */
+.chip--filter .chip__word {
+  flex: none;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+/* The ellipsis draws on the values span, never on the inline-flex body. */
+.chip--filter .chip__values {
+  min-width: 0;
+}
+
+/* The pill clips at its round end, so the x stands as far in from it as the body's text stands from the start. */
+.chip--filter .chip__remove {
+  margin-right: 8px;
+}
+
+/* The pill clips what passes its edge, so a focused button's ring draws inside it. */
+.chip--filter button:focus-visible {
+  outline-offset: -2px;
+}
+
+.chip--more {
+  border-style: dashed;
+}
+
+.link-btn {
+  padding: 0 4px;
+  color: var(--accent-ink);
+  background: none;
+  border: 0;
+}
+
+.link-btn:hover {
+  text-decoration: underline;
+}
+
+/* The head's disclosure wraps to a line of its own at narrower widths, where it starts under the sentence's first
+   word; on the sentence's line the space before it is the gap. */
+.page-head__lead .link-btn {
+  padding-inline: 0;
+}
+
+.icon-btn {
+  display: inline-grid;
+  place-items: center;
+  padding: 4px;
+  margin-left: 6px;
+  color: var(--ink-3);
+  vertical-align: middle;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-xs);
+}
+
+.icon-btn:hover {
+  color: var(--ink);
+  background: var(--surface-3);
+}
+
+.spin {
+  animation: spin 900ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
