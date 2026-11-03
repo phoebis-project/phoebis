@@ -15038,14 +15038,17 @@ m.unmount();
     page.unmount();
   }
   {
-    // The new filter's list is held, so the poll that fires under it answers before the list does.
+    // The new filter's list is held, so a tick fires under it before the list answers, and the tick after it polls.
     const page = await mount('/routing-log', { now: CLOCK_ORIGIN });
     await chooseInterval(page, '5 s');
     const held = deferNextCall('listRoutingLog');
     await page.navigate('/routing-log?accounts=secondary');
     tick(5_000);
     await page.settle();
+    const underLoad = held.calls.length;
     held.release();
+    await page.settle();
+    tick(5_000);
     await page.settle();
     const [list, poll] = held.calls.map((c) => c[0]);
     held.restore();
@@ -15054,9 +15057,9 @@ m.unmount();
     const drawn = trs(page).map((tr) => `${cell(tr, 'time')?.firstChild?.textContent ?? ''} ${cell(tr, 'time')?.querySelector('a')?.textContent ?? '-'}`);
     const strays = drawn.filter((k) => !answered.has(k));
     results.push({
-      name: "/routing-log a filter change while auto reload is on never carries the old filter's rows",
-      ok: list?.accountIds?.join() === 'secondary' && poll?.accountIds?.join() === 'secondary' && drawn.length > 0 && strays.length === 0 && intervalWord(page) === '5 s',
-      missing: [`${drawn.length} drawn, ${strays.length} from the old filter`, ...strays.slice(0, 4)],
+      name: "/routing-log a filter change while auto reload is on polls nothing until the new filter's list answers, and never carries the old filter's rows",
+      ok: underLoad === 1 && list?.accountIds?.join() === 'secondary' && poll?.accountIds?.join() === 'secondary' && drawn.length > 0 && strays.length === 0 && intervalWord(page) === '5 s',
+      missing: [`${underLoad} reads under the held list`, `${drawn.length} drawn, ${strays.length} from the old filter`, ...strays.slice(0, 4)],
     });
     page.unmount();
   }

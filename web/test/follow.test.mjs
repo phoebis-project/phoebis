@@ -313,6 +313,18 @@ test("a poll still out across a drawer's open and close skips the next tick, and
   assert.deepEqual(g.sent, [ORIGIN + 5_000, ORIGIN + 15_000], 'the tick after it lands polls again');
 });
 
+test('a tick under a list load still out starts no poll, and the tick after the list lands polls', async () => {
+  const clock = frozen();
+  const r = route(60);
+  const f = follow({ list: null });
+  act(() => clock.tick(5_000));
+  assert.deepEqual(f.polls(), [], 'the tick under the list load still out starts no poll');
+  f.render({ list: { nextCursor: '26', rows: r.rows.slice(1, 26) } });
+  act(() => clock.tick(5_000));
+  assert.deepEqual(f.polls(), [ORIGIN + 10_000], 'the tick after the list lands polls');
+  await settled();
+});
+
 /**
  * A reader for a list that shows rows 1 to 25 of `route(27)`, every poll one page: row 0 arrived above the list before
  * the first poll, and row 26, which arrived before them all and was written after the list's read, comes from the

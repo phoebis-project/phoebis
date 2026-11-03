@@ -9,9 +9,10 @@ import { armPoll, counted } from '@/lib/hooks';
  * first page shows, read the newest pages up to now over the rows shown under `address` (the followed rows it holds,
  * else the list's), merge them under the fresh tint, keep an overrun's cursor with its poll's end, and toast a failing
  * streak once. When a wait ends a full interval after the last answer, the poll reads at once. A tick that finds a
- * poll of the hook still out is skipped. The caller hands in the list's last answer, its error and its paging state,
- * and reads back the rows to draw, the error to show, the pager's next cursor and the pager's handlers, so nothing the
- * caller passes depends on the hook's own state.
+ * poll of the hook still out is skipped, and so is one while no rows show under `address` and the list's read has not
+ * failed, since the list's own read is then still out. The caller hands in the list's last answer, its error and its
+ * paging state, and reads back the rows to draw, the error to show, the pager's next cursor and the pager's handlers,
+ * so nothing the caller passes depends on the hook's own state.
  *
  * A list that answers `landedThrough` runs the poll under a watermark: every page of a poll reads the rows written
  * after it (`read`'s `landedAfter`), the list's own stamp first and then each poll's first page's, so a request that
@@ -163,7 +164,7 @@ export function useFollow<R>(input: {
       );
     };
     // Only the tab's return read keeps its tint through the tick after it.
-    const disarm = armPoll(intervalMs, poll, () => out.current === 0, () => lastAnswered.current, true);
+    const disarm = armPoll(intervalMs, poll, () => out.current === 0 && (latest.current.shown !== null || latest.current.failed), () => lastAnswered.current, true);
     return () => {
       armed.alive = false;
       disarm();
