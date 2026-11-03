@@ -63,8 +63,7 @@ use crate::dispatch::{self, until_canceled, AttemptFailure, Sent};
 use crate::errors::{
     accounts_at_cap, auth_failure, body_budget_exhausted, key_body_reads, key_refusal,
     relay_failure, Failure, ACCOUNTS_AT_CAP, ACCOUNT_CANCELED, METHOD_NOT_ALLOWED,
-    MODEL_NOT_ALLOWED, NOT_FOUND, ROUTER_UNAVAILABLE, UPSTREAM_CUT, UPSTREAM_STALLED,
-    UPSTREAM_UNDECODABLE, UPSTREAM_UNREACHABLE,
+    MODEL_NOT_ALLOWED, NOT_FOUND, ROUTER_UNAVAILABLE, UPSTREAM_UNREACHABLE,
 };
 use crate::exhaustion::{exhaustion_code, exhaustion_response, pool_moved_response};
 use crate::facts::{BodyFacts, ClientHints};
@@ -81,9 +80,8 @@ use crate::observe::{answer_from_json, published_headers, wants_stream};
 use crate::ratelimit::{head_sample, retry_after, upstream_date, UnifiedHeaders};
 use crate::sse::SseParser;
 use crate::stream::{
-    drain_bounded, is_stalled, is_undecodable, relay_body, AffinityFacts, Checkin, Drained,
-    HeldText, OnError, OnMessageId, Publish, Relayed, Renewal, ReturnToPool, Waiting,
-    MAX_BUFFERED_BODY, STREAM_CUT, STREAM_STALLED, STREAM_UNDECODABLE,
+    drain_bounded, relay_body, AffinityFacts, Checkin, Cut, Drained, HeldText, OnError,
+    OnMessageId, Publish, Relayed, Renewal, ReturnToPool, Waiting, MAX_BUFFERED_BODY,
 };
 use crate::{
     edit_body, presented_key, BodyEdits, BodyMember, CacheTtl, CacheTtlPolicy, DriftKind,
@@ -4122,17 +4120,11 @@ impl Relay {
         error: &TransportError,
         outcome: RelayOutcome,
     ) -> Response {
-        let (failure, code) = if is_stalled(error) {
-            (UPSTREAM_STALLED, STREAM_STALLED)
-        } else if is_undecodable(error) {
-            (UPSTREAM_UNDECODABLE, STREAM_UNDECODABLE)
-        } else {
-            (UPSTREAM_CUT, STREAM_CUT)
-        };
+        let cut = Cut::of(error);
         self.answer(
             trace,
-            failure.response(&outcome.request_id),
-            unreachable_outcome(outcome, code),
+            cut.failure().response(&outcome.request_id),
+            unreachable_outcome(outcome, cut.code()),
         )
         .await
     }

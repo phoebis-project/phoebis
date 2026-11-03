@@ -25,6 +25,7 @@ use tokio_util::task::TaskTracker;
 use crate::catalog::CatalogService;
 use crate::credit::CreditStore;
 use crate::dispatch::until_canceled;
+use crate::errors::{Failure, UPSTREAM_CUT, UPSTREAM_STALLED, UPSTREAM_UNDECODABLE};
 use crate::hold::INSPECT_BUFFER;
 use crate::identity::PendingReports;
 use crate::messages::{cut_code, Guards, RelayOutcome, Trace, CANCELED, REFUSED, TRANSPORT_ERROR};
@@ -773,7 +774,7 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                         }
                     }
                     Err(error) => {
-                        let cut = Cut::of_decode(&error);
+                        let cut = Cut::of(&error);
                         let text = error.to_string();
                         let _ = send(&tx, &cancel, Err(error)).await;
                         break 'body BodyEnd::Failed { cut, text };
@@ -815,7 +816,7 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                 let piece = match decode_piece(decoder.as_mut(), chunk) {
                     Ok(piece) => piece,
                     Err(error) => {
-                        let cut = Cut::of_decode(&error);
+                        let cut = Cut::of(&error);
                         let text = error.to_string();
                         let _ = send(&tx, &cancel, Err(error)).await;
                         break 'body BodyEnd::Failed { cut, text };
@@ -848,7 +849,7 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                         }
                     }
                     Err(error) => {
-                        let cut = Cut::of_decode(&error);
+                        let cut = Cut::of(&error);
                         let text = error.to_string();
                         let _ = send(&tx, &cancel, Err(error)).await;
                         break 'body BodyEnd::Failed { cut, text };
@@ -925,14 +926,14 @@ enum BodyEnd {
 }
 
 #[derive(Clone, Copy)]
-enum Cut {
+pub(crate) enum Cut {
     Stalled,
     Transport,
     Undecodable,
 }
 
 impl Cut {
-    fn code(self) -> &'static str {
+    pub(crate) fn code(self) -> &'static str {
         match self {
             Cut::Stalled => STREAM_STALLED,
             Cut::Transport => STREAM_CUT,
@@ -940,10 +941,21 @@ impl Cut {
         }
     }
 
-    /// A decoder's failure: undecodable when the decoder refused the payload, and a cut for the per-chunk bound, so
-    /// the streamed body files the two errors as `unreadable` files them on a buffered one.
-    fn of_decode(error: &TransportError) -> Cut {
-        if is_undecodable(error) {
+    /// The relay's own 502 for a response it could not read after the head.
+    pub(crate) fn failure(self) -> Failure {
+        match self {
+            Cut::Stalled => UPSTREAM_STALLED,
+            Cut::Transport => UPSTREAM_CUT,
+            Cut::Undecodable => UPSTREAM_UNDECODABLE,
+        }
+    }
+
+    /// The idle bound's stall, a decoder's refusal of the payload, and a cut for anything else, the per-chunk bound
+    /// among them, so a streamed body and a buffered one file each error alike.
+    pub(crate) fn of(error: &TransportError) -> Cut {
+        if is_stalled(error) {
+            Cut::Stalled
+        } else if is_undecodable(error) {
             Cut::Undecodable
         } else {
             Cut::Transport
