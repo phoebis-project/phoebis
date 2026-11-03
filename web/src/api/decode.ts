@@ -2,7 +2,7 @@ import type {
   Account, AccountCatalog, AccountKind, AccountRollup, AllowanceReset, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
   CohortHold, CostRevision, CostSplit, DecisionKind, DecisionRecord, DecisionSummary, FastLaneReading, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, KeyModels, MemberBudget, ModelPrice, ModelRule, ModelRulesMode,
   MoveCause, Overview, PairingConfirmed, PairingSession, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, PriceCells, PriceRevision, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, Reconciliation, ReconciliationsAnswer, RecordCandidate, RecordHold, RecordOutcome, RecordSettings, RefusalCategoriesAnswer, ReplayOutcome, RequestEvent, RequestLog, RequestPage, RequestPhases, RequestShape, RewritesAnswer,
-  RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, Settings, Spend, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, UnusedAllowanceAnswer, WindowId, WindowSample,
+  RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, Settings, Spend, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, UnusedAllowanceAnswer, WastedProbeReason, WindowId, WindowSample,
 } from './types';
 import type { AgentContext } from './types';
 import type { StreamCut } from './types';
@@ -27,6 +27,7 @@ export const strOrNull = (v: unknown): string | null => (typeof v === 'string' ?
 export const num = (v: unknown, fallback = 0): number => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
 export const numOrNull = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const bool = (v: unknown, fallback = false): boolean => (typeof v === 'boolean' ? v : fallback);
+const boolOrNull = (v: unknown): boolean | null => (typeof v === 'boolean' ? v : null);
 const strings = (v: unknown): string[] => list(v).filter((x): x is string => typeof x === 'string');
 const oneOf = <T extends string>(values: readonly T[], v: unknown): T | undefined => values.find((x) => x === v);
 const accountKind = (v: unknown): AccountKind => oneOf(ACCOUNT_KIND_VALUES, v) ?? 'oauth';
@@ -109,7 +110,7 @@ export function decodeKeyModels(v: unknown): KeyModels {
     longContextTwins: bool(k.long_context_twins, true),
     modelRulesMode: rulesMode(k.model_rules_mode),
     poolId: str(k.pool_id),
-    rules: list(k.rules).map(rec).map((r) => ({ cooldowns: list(r.cooldowns).map(decodeRuleCooldown), level: str(r.level) === 'pool' ? 'pool' : 'key', not: bool(r.not), pattern: str(r.pattern) })),
+    rules: list(k.rules).map(rec).map((r) => ({ cooldowns: list(r.cooldowns).map(decodeRuleCooldown), level: str(r.level) === 'pool' ? 'pool' : 'key', ...decodeModelRule(r) })),
   };
 }
 
@@ -307,7 +308,7 @@ export function decodeKey(v: unknown): ApiKey {
   // A row from a route that reports no `enabled` is taken as on rather than off.
   const enabled = bool(k.enabled, true);
   return {
-    autoModeServer: k.auto_mode_server === true ? true : k.auto_mode_server === false ? false : null,
+    autoModeServer: boolOrNull(k.auto_mode_server),
     bodyCaptureHours: numOrNull(k.body_capture_hours),
     createdAt: isoOr(k.created_at, epoch),
     enabled,
@@ -427,7 +428,7 @@ export function decodePool(v: unknown): Pool {
     migrateWhenSpent: bool(p.migrate_when_spent, POOL_ENGINE_DEFAULTS.migrateWhenSpent),
     minSharedPrefixTokens: num(p.min_shared_prefix_tokens, POOL_AFFINITY_DEFAULTS.minSharedPrefixTokens),
     modelRules: list(p.model_rules).map(decodeModelRule),
-    movesPerHour: Object.fromEntries(Object.entries(rec(p.moves_per_hour)).filter((e): e is [string, number] => numOrNull(e[1]) !== null)),
+    movesPerHour: numberMap(p.moves_per_hour),
     name: str(p.label),
     overageMoveGraceMinutes: num(p.overage_move_grace_minutes, POOL_ENGINE_DEFAULTS.overageMoveGraceMinutes),
     overagePolicy: oneOf(OVERAGE_POLICY_VALUES, p.overage_policy) ?? 'prefer_plan',
@@ -497,7 +498,7 @@ export function decodeRequest(v: unknown): RequestLog {
   const r = rec(v);
   return {
     accountId: strOrNull(r.account_id), agentId: strOrNull(r.agent_id), agentType: strOrNull(r.agent_type), at: isoOr(r.at, epoch),
-    attempts: list(r.attempts).map(rec).map((a) => ({ accountId: str(a.account_id), accountKind: accountKind(a.account_kind), cacheMissReason: missReason(a.cache_miss_reason), cooldownSet: a.cooldown_set ? { reason: str(rec(a.cooldown_set).reason), until: isoOr(rec(a.cooldown_set).until, epoch) } : null, durationMs: numOrNull(a.duration_ms), index: num(a.index) - 1, outcome: outcomeOf(a.outcome), overageInUse: typeof a.overage_in_use === 'boolean' ? a.overage_in_use : null, response: responseOf(a.response), selection: decodeSelection(a.selection), serviceTier: strOrNull(a.service_tier), startedAt: isoOr(a.started_at, epoch), tier: strOrNull(a.tier), upstreamMessageId: strOrNull(a.upstream_message_id), upstreamRequestId: strOrNull(a.upstream_request_id), upstreamStatus: numOrNull(a.upstream_status), usageBased: bool(a.usage_based), windows: attemptWindows(a.windows) })),
+    attempts: list(r.attempts).map(rec).map((a) => ({ accountId: str(a.account_id), accountKind: accountKind(a.account_kind), cacheMissReason: missReason(a.cache_miss_reason), cooldownSet: a.cooldown_set ? { reason: str(rec(a.cooldown_set).reason), until: isoOr(rec(a.cooldown_set).until, epoch) } : null, durationMs: numOrNull(a.duration_ms), index: num(a.index) - 1, outcome: outcomeOf(a.outcome), overageInUse: boolOrNull(a.overage_in_use), response: responseOf(a.response), selection: decodeSelection(a.selection), serviceTier: strOrNull(a.service_tier), startedAt: isoOr(a.started_at, epoch), tier: strOrNull(a.tier), upstreamMessageId: strOrNull(a.upstream_message_id), upstreamRequestId: strOrNull(a.upstream_request_id), upstreamStatus: numOrNull(a.upstream_status), usageBased: bool(a.usage_based), windows: attemptWindows(a.windows) })),
     autoMode: oneOf(AUTO_MODE_VALUES, r.auto_mode) ?? null,
     canonicalModel: str(r.canonical_model), capturedBodies: bool(r.captured_bodies), classifier: r.classifier === 'client' ? 'client' : null, client: strOrNull(r.client), clientContract: strOrNull(r.client_contract), clientDrift: strOrNull(r.client_drift), compaction: strOrNull(r.compaction), contextCompacted: strOrNull(r.context_compacted),
     costEquivalent: numOrNull(r.cost_equivalent),
@@ -511,7 +512,7 @@ export function decodeRequest(v: unknown): RequestLog {
     kind: oneOf(REQUEST_KIND_VALUES, r.kind) ?? 'inference', model: str(r.model),
     outcome: oneOf(REQUEST_OUTCOME_VALUES, r.outcome) ?? 'failed',
     phases: phasesOf(r.phases, isoOr(r.at, epoch)),
-    poolId: strOrNull(r.pool_id), prevToolMs: numOrNull(r.prev_tool_ms), refused: r.refused === true, requestClass: strOrNull(r.request_class), responseTruncated: bool(r.response_truncated), sessionId: strOrNull(r.session_id), shape: shapeOf(r.shape), shareReason: r.share_reason === 'client_classifier' ? 'client_classifier' : null,
+    poolId: strOrNull(r.pool_id), prevToolMs: numOrNull(r.prev_tool_ms), refused: bool(r.refused), requestClass: strOrNull(r.request_class), responseTruncated: bool(r.response_truncated), sessionId: strOrNull(r.session_id), shape: shapeOf(r.shape), shareReason: r.share_reason === 'client_classifier' ? 'client_classifier' : null,
     status: numOrNull(r.status), tier: strOrNull(r.tier), transport: str(r.transport) === 'sse' ? 'sse' : 'json', ttfbMs: numOrNull(r.ttfb_ms), ttftMs: numOrNull(r.ttft_ms), turnOrigin: strOrNull(r.turn_origin), usage: usageOf(r.usage), userAgent: strOrNull(r.user_agent),
   };
 }
@@ -627,7 +628,7 @@ function decodeRecordOutcome(v: unknown): RecordOutcome {
     accountId: strOrNull(o.account_id), cause: causeOf(o.cause), cohortHold: cohortHoldOf(o.cohort_hold),
     completion: orNull(o.completion, (c) => ({
       cacheMapWritten: Array.isArray(c.cache_map_written) ? c.cache_map_written.map(rec).map((m) => ({ accountId: str(m.account_id), depth: num(m.depth), prefixTokens: num(m.prefix_tokens), tier: str(m.tier), ttlMs: num(m.ttl_ms) })) : null,
-      cacheReadTokens: numOrNull(c.cache_read_tokens), completedAt: isoOrNull(c.completed_at), freed: bool(c.freed), heldMs: numOrNull(c.held_ms), hit: typeof c.hit === 'boolean' ? c.hit : null, inputTokens: numOrNull(c.input_tokens), promisedTokens: numOrNull(c.promised_tokens), status: numOrNull(c.status),
+      cacheReadTokens: numOrNull(c.cache_read_tokens), completedAt: isoOrNull(c.completed_at), freed: bool(c.freed), heldMs: numOrNull(c.held_ms), hit: boolOrNull(c.hit), inputTokens: numOrNull(c.input_tokens), promisedTokens: numOrNull(c.promised_tokens), status: numOrNull(c.status),
     })),
     exhaustion: exhaustionOf(o.exhaustion), fromAccountId: strOrNull(o.from_account_id), hold: holdOf(o.hold), inOverage: bool(o.in_overage), kind: decisionKindOf(o.kind) ?? 'placed',
     markCleared: orNull(o.mark_cleared, (m) => ({ markedAt: isoOr(m.marked_at, epoch), markedOn: str(m.marked_on), markedWindow: str(m.marked_window), projection: numOrNull(m.projection), reason: str(m.reason) })),
@@ -652,7 +653,7 @@ function decodeRecordSettings(x: Rec, version: number): RecordSettings {
     affinityMode: str(x.affinity_mode), affinityTtlSeconds: num(x.affinity_ttl_seconds), inFlightCap: num(x.in_flight_cap), migrateWhenSpent: bool(x.migrate_when_spent),
     minSharedPrefixTokens: num(x.min_shared_prefix_tokens), overageMoveGraceMinutes: num(x.overage_move_grace_minutes), overagePolicy: str(x.overage_policy), poolUpdatedAt: isoOr(x.pool_updated_at, epoch),
     preferSubscription: bool(x.prefer_subscription), retryInPlaceSeconds: num(x.retry_in_place_seconds), returnToPlan: strOrNull(x.return_to_plan), returnToPlanDwellSeconds: numOrNull(x.return_to_plan_dwell_seconds),
-    sessionPlacement: str(x.session_placement), slowDown: typeof x.slow_down === 'boolean' ? x.slow_down : null, slowDownHoldSeconds: numOrNull(x.slow_down_hold_seconds),
+    sessionPlacement: str(x.session_placement), slowDown: boolOrNull(x.slow_down), slowDownHoldSeconds: numOrNull(x.slow_down_hold_seconds),
     slowDownStretchSeconds: numOrNull(x.slow_down_stretch_seconds), strategy: str(x.strategy), subagentPlacement: str(x.subagent_placement), warmSessions: str(x.warm_sessions), windDownMinutes: num(x.wind_down_minutes),
   };
   if (version === 1) {
@@ -702,24 +703,20 @@ export function decodeDecisionRecord(v: unknown): DecisionRecord {
   };
 }
 
-const record = <K extends string>(keys: readonly K[], v: unknown, empty: () => Record<K, number>): Record<K, number> => {
-  const out = empty();
+const wastedReasons = (v: unknown): Record<WastedProbeReason, number> => {
+  const out = emptyWastedProbeReasons();
   const m = rec(v);
-  for (const k of keys) out[k] = num(m[k]);
+  for (const k of WASTED_PROBE_REASONS) out[k] = num(m[k]);
   return out;
+};
+const countsOnto = (seed: Record<string, number>, v: unknown): Record<string, number> => {
+  for (const [name, n] of Object.entries(rec(v))) seed[name] = num(n);
+  return seed;
 };
 /** The route rolls reasons up by the name the beta sent, so a name the console does not know stays a key of its own. */
-const missReasons = (v: unknown): Record<CacheMissReason, number> => {
-  const out = emptyCacheMissReasons();
-  for (const [reason, n] of Object.entries(rec(v))) out[reason] = num(n);
-  return out;
-};
+const missReasons = (v: unknown): Record<CacheMissReason, number> => countsOnto(emptyCacheMissReasons(), v);
 /** The route answers an error code as the upstream or the router named it, so the codes are data, not a closed set. */
-const counts = (v: unknown): Record<string, number> => {
-  const out = emptyCounts();
-  for (const [name, n] of Object.entries(rec(v))) out[name] = num(n);
-  return out;
-};
+const counts = (v: unknown): Record<string, number> => countsOnto(emptyCounts(), v);
 const histogram = (v: unknown): number[] => { const h = list(v).map((x) => num(x)); return h.length === BUCKET_COUNT ? h : emptyHistogram(); };
 const quartet = (v: unknown) => { const q = rec(v); return { p50: numOrNull(q.p50), p90: numOrNull(q.p90), p95: numOrNull(q.p95), p99: numOrNull(q.p99) }; };
 
@@ -759,7 +756,7 @@ export function decodeAnalyticsGroup(v: unknown): AnalyticsGroup {
     savingEquivalent: numOrNull(g.saving_equivalent),
     savingUsd: num(g.saving_usd),
     succeeded: num(g.succeeded), tokens: { cacheRead: num(t.cache_read), cacheWrite1h: num(t.cache_write_1h), cacheWrite5m: num(t.cache_write_5m), output: num(t.output), thinking: num(t.thinking), uncachedInput: num(t.uncached_input), webFetch: num(t.web_fetch), webSearch: num(t.web_search) }, uncached: num(g.uncached),
-    wastedProbeReasons: record(WASTED_PROBE_REASONS, g.wasted_probe_reasons, emptyWastedProbeReasons), wastedProbeUsd: num(g.wasted_probe_usd), wastedProbes: num(g.wasted_probes),
+    wastedProbeReasons: wastedReasons(g.wasted_probe_reasons), wastedProbeUsd: num(g.wasted_probe_usd), wastedProbes: num(g.wasted_probes),
   };
 }
 export const decodeAnalyticsPoint = (v: unknown): AnalyticsPoint => ({ at: isoOr(rec(v).at, epoch), groups: list(rec(v).groups).map(decodeAnalyticsGroup) });
@@ -880,7 +877,7 @@ function decodeAgentContext(v: unknown): AgentContext {
 export function decodeSession(v: unknown): Session {
   const s = rec(v);
   const k = rec(s.keepalive);
-  return { accountId: strOrNull(s.account_id), agentContexts: list(s.agent_contexts).map(decodeAgentContext), agentId: strOrNull(s.agent_id), agents: num(s.agents), burn: numOrNull(s.burn), burnAt: isoOrNull(s.burn_at), burnEquivalent: numOrNull(s.burn_equivalent), burnUnit: burnUnit(s.burn_unit), burnWindow: strOrNull(s.burn_window), cacheTtlMs: numOrNull(s.cache_ttl_ms), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), cycleMs: numOrNull(s.cycle_ms), effort: strOrNull(s.effort), epoch: numOrNull(s.epoch), forkDepth: numOrNull(s.fork_depth), forkedFrom: strOrNull(s.forked_from), historical: bool(s.historical), keepalive: { cause: recipeCause(k.cause), lastGuard: guardVerdict(k.last_guard), nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastInputTokens: numOrNull(s.last_input_tokens), lastRefreshAt: isoOrNull(s.last_refresh_at), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), model: strOrNull(s.model), pinned: bool(s.pinned), presenceAgeSeconds: numOrNull(s.presence_age_seconds), requests: num(s.requests), runwayBounded: typeof s.runway_bounded === 'boolean' ? s.runway_bounded : null, runwayMs: numOrNull(s.runway_ms), sessionId: str(s.session_id), shedFrom: strOrNull(s.shed_from), shedReason: strOrNull(s.shed_reason), speed: numOrNull(s.speed) };
+  return { accountId: strOrNull(s.account_id), agentContexts: list(s.agent_contexts).map(decodeAgentContext), agentId: strOrNull(s.agent_id), agents: num(s.agents), burn: numOrNull(s.burn), burnAt: isoOrNull(s.burn_at), burnEquivalent: numOrNull(s.burn_equivalent), burnUnit: burnUnit(s.burn_unit), burnWindow: strOrNull(s.burn_window), cacheTtlMs: numOrNull(s.cache_ttl_ms), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), cycleMs: numOrNull(s.cycle_ms), effort: strOrNull(s.effort), epoch: numOrNull(s.epoch), forkDepth: numOrNull(s.fork_depth), forkedFrom: strOrNull(s.forked_from), historical: bool(s.historical), keepalive: { cause: recipeCause(k.cause), lastGuard: guardVerdict(k.last_guard), nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastInputTokens: numOrNull(s.last_input_tokens), lastRefreshAt: isoOrNull(s.last_refresh_at), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), model: strOrNull(s.model), pinned: bool(s.pinned), presenceAgeSeconds: numOrNull(s.presence_age_seconds), requests: num(s.requests), runwayBounded: boolOrNull(s.runway_bounded), runwayMs: numOrNull(s.runway_ms), sessionId: str(s.session_id), shedFrom: strOrNull(s.shed_from), shedReason: strOrNull(s.shed_reason), speed: numOrNull(s.speed) };
 }
 
 const recipeCause = (v: unknown): RecipeCause | null => oneOf(RECIPE_CAUSE_VALUES, v) ?? null;
@@ -914,7 +911,7 @@ export function decodeKeepaliveOverview(v: unknown): KeepaliveOverview {
   const p = rec(o.probes_24h);
   const l = rec(o.limits);
   const limit = (x: unknown) => ({ count: num(rec(x).count), max: num(rec(x).max) });
-  const pools = Array.isArray(o.pools) ? o.pools.map(rec) : [];
+  const pools = list(o.pools).map(rec);
   return {
     agents: { busy: num(rec(o.agents).busy), idle: num(rec(o.agents).idle), parked: num(rec(o.agents).parked) },
     busGaps: num(o.bus_gaps),
@@ -922,11 +919,11 @@ export function decodeKeepaliveOverview(v: unknown): KeepaliveOverview {
     limits: { agents: limit(l.agents), retainedBytes: limit(l.retained_bytes), sessions: limit(l.sessions) },
     pools: pools.map((q) => ({
       credited24h: num(q.credited_24h),
-      idleReturns: (Array.isArray(q.idle_returns) ? q.idle_returns.map(rec) : []).map((b) => ({ fromSeconds: num(b.from_seconds), reached: num(b.reached), returned: num(b.returned), toSeconds: numOrNull(b.to_seconds) })),
+      idleReturns: list(q.idle_returns).map(rec).map((b) => ({ fromSeconds: num(b.from_seconds), reached: num(b.reached), returned: num(b.returned), toSeconds: numOrNull(b.to_seconds) })),
       poolId: str(q.pool_id),
       probes24h: num(q.probes_24h),
       wasted24h: num(q.wasted_24h),
-      wastedReasons24h: record(WASTED_PROBE_REASONS, q.wasted_reasons_24h, emptyWastedProbeReasons),
+      wastedReasons24h: wastedReasons(q.wasted_reasons_24h),
     })),
     probes24h: { failed: num(p.failed), held: num(p.held), migrated: num(p.migrated), ok: num(p.ok), skipped: num(p.skipped) },
   };
