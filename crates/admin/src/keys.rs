@@ -12,14 +12,12 @@ use axum::Json;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use phoebis_routing::RegistrySnapshot;
-use phoebis_store::{
-    stamp_token, ApiKeyRow, AttachmentSubject, StoreError, GUARDRAIL_BOUND, ROTATION_GRACE_MS,
-};
+use phoebis_store::{stamp_token, ApiKeyRow, AttachmentSubject, StoreError, ROTATION_GRACE_MS};
 use serde_json::{json, Value};
 use utoipa::ToSchema;
 
 use crate::accounts::within_text_bound;
-use crate::guardrails::{distinct_ids, AttachmentIndex, GuardrailRef};
+use crate::guardrails::{attachment_refusal, distinct_ids, AttachmentIndex, GuardrailRef};
 use crate::openapi::{ErrorBody, RegistryUnavailable, StorageFailure};
 use crate::pools::valid_slug;
 use crate::routes::{
@@ -614,12 +612,7 @@ pub(crate) async fn patch(
             return failure(StatusCode::NOT_FOUND, &format!("guardrail {id} not found"))
         }
         // The store counts the pool the row names, so a `pool_id` change alone is refused here too.
-        Err(StoreError::KeyGuardrailBound(id)) => {
-            return failure(
-                StatusCode::BAD_REQUEST,
-                &format!("key {id} would hold more than {GUARDRAIL_BOUND} guardrails"),
-            )
-        }
+        Err(error @ StoreError::KeyGuardrailBound(_)) => return attachment_refusal(error),
         Err(error) => return store_failure(error),
     }
     if let Err(refusal) = reload_or_refuse(&state).await {

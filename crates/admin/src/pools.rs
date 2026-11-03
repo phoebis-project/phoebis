@@ -15,12 +15,11 @@ use phoebis_store::{
     stamp_token, AccountRow, Affinity, AffinityMode, ApiKeyRow, AttachmentSubject, CooldownRow,
     CooldownScope, Failover, MemberWrite, OveragePolicy, PinRow, PoolMember, PoolRow, ReturnToPlan,
     SessionPlacement, Shedding, SlowDown, StoreError, Strategy, SubagentPlacement, WarmSessions,
-    GUARDRAIL_BOUND,
 };
 use serde_json::{json, Value};
 use utoipa::ToSchema;
 
-use crate::guardrails::{distinct_ids, AttachmentIndex, GuardrailRef};
+use crate::guardrails::{attachment_refusal, distinct_ids, AttachmentIndex, GuardrailRef};
 use crate::openapi::{ErrorBody, RegistryUnavailable, StorageFailure};
 use crate::routes::{
     double_option, failure, failure_with_code, fence_token, parse_object, present,
@@ -859,17 +858,8 @@ pub(crate) async fn patch(
         Err(StoreError::GuardrailNotFound(id)) => {
             return failure(StatusCode::NOT_FOUND, &format!("guardrail {id} not found"))
         }
-        Err(StoreError::PoolGuardrailBound(id)) => {
-            return failure(
-                StatusCode::BAD_REQUEST,
-                &format!("pool {id} would hold more than {GUARDRAIL_BOUND} guardrails"),
-            )
-        }
-        Err(StoreError::KeyGuardrailBound(id)) => {
-            return failure(
-                StatusCode::BAD_REQUEST,
-                &format!("key {id} would hold more than {GUARDRAIL_BOUND} guardrails"),
-            )
+        Err(error @ (StoreError::PoolGuardrailBound(_) | StoreError::KeyGuardrailBound(_))) => {
+            return attachment_refusal(error)
         }
         Err(StoreError::AccountNotFound(id)) => {
             return failure(StatusCode::NOT_FOUND, &format!("account {id} not found"))

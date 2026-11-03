@@ -567,7 +567,7 @@ fn distinct_subjects(input: &GuardrailInput) -> Result<(), Response> {
 
 /// A refused attachment write as the API words it: the store's display names a key `api key`, and the bound counts
 /// inside the write, so the route maps its two errors rather than counting anything itself.
-fn attachment_refusal(error: StoreError) -> Response {
+pub(crate) fn attachment_refusal(error: StoreError) -> Response {
     match error {
         StoreError::KeyGuardrailBound(id) => failure(
             StatusCode::BAD_REQUEST,
