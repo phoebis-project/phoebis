@@ -1835,22 +1835,30 @@ impl RoutingState {
         now: i64,
         fast: bool,
     ) -> Option<&CooldownRow> {
+        if self.cooldowns.is_empty() {
+            return None;
+        }
         let canonical_model = self.canonical(canonical_model);
-        [
-            CooldownScope::Account,
-            CooldownScope::Fast,
-            CooldownScope::FastCredits,
-            CooldownScope::Model(canonical_model.to_string()),
-        ]
-        .into_iter()
-        .filter_map(|scope| self.cooldowns.get(&(account_id.to_string(), scope)))
-        .filter(|row| {
-            row.until > now && cooldown_holds(&row.scope, &row.window, canonical_model, fast)
-        })
-        .fold(None, |held: Option<&CooldownRow>, row| match held {
-            Some(held) if held.until >= row.until => Some(held),
-            _ => Some(row),
-        })
+        let mut held: Option<&CooldownRow> = None;
+        // An earlier scope wins a tie, so the scopes are probed in this order.
+        let mut probe = |key: &(String, CooldownScope)| {
+            if let Some(row) = self.cooldowns.get(key).filter(|row| {
+                row.until > now && cooldown_holds(&row.scope, &row.window, canonical_model, fast)
+            }) {
+                if held.is_none_or(|held| held.until < row.until) {
+                    held = Some(row);
+                }
+            }
+        };
+        let mut key = (account_id.to_string(), CooldownScope::Account);
+        probe(&key);
+        key.1 = CooldownScope::Fast;
+        probe(&key);
+        key.1 = CooldownScope::FastCredits;
+        probe(&key);
+        key.1 = CooldownScope::Model(canonical_model.to_string());
+        probe(&key);
+        held
     }
 
     /// Only a newer reading replaces the held one, so a slow poll cannot roll the state back; a reading of another
