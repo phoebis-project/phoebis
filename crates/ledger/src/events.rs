@@ -642,28 +642,39 @@ fn record_transition(
     detail: Option<&str>,
     at: i64,
 ) {
-    ledger.record(Record::Event(EventRecord {
+    state_row(
+        ledger,
+        account_id,
+        from,
+        to.as_str(),
+        cause.as_str(),
+        detail,
         at,
-        kind: ACCOUNT_STATE_CHANGED.into(),
-        account_id: Some(account_id.to_string()),
-        detail: Some(
-            json!({ "from": from.as_str(), "to": to.as_str(), "cause": cause.as_str(), "detail": detail })
-                .to_string(),
-        ),
-        ..Default::default()
-    }));
+    );
 }
 
 /// The account's last row: the registry holds no row under the identity the mirror held.
 fn record_deletion(ledger: &Ledger, account_id: &str, from: AccountState, at: i64) {
     // `deleted` is the one `to` that names no account state: the row it would describe is gone.
     let deleted = StateCause::Deleted.as_str();
+    state_row(ledger, account_id, from, deleted, deleted, None, at);
+}
+
+fn state_row(
+    ledger: &Ledger,
+    account_id: &str,
+    from: AccountState,
+    to: &str,
+    cause: &str,
+    detail: Option<&str>,
+    at: i64,
+) {
     ledger.record(Record::Event(EventRecord {
         at,
         kind: ACCOUNT_STATE_CHANGED.into(),
         account_id: Some(account_id.to_string()),
         detail: Some(
-            json!({ "from": from.as_str(), "to": deleted, "cause": deleted, "detail": null })
+            json!({ "from": from.as_str(), "to": to, "cause": cause, "detail": detail })
                 .to_string(),
         ),
         ..Default::default()
