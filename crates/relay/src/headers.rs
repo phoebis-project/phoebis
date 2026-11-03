@@ -328,6 +328,21 @@ mod tests {
         .headers
     }
 
+    /// An OAuth head that has a generated `x-client-request-id` to place.
+    fn emit_with_generated_id(original: &OriginalHead) -> OutboundHead {
+        outbound_headers(
+            &HeaderMap::new(),
+            Some(original),
+            &oauth(),
+            "api.anthropic.com",
+            7,
+            None,
+            Some("generated-id"),
+            &[],
+            &[],
+        )
+    }
+
     #[test]
     fn the_callers_order_spelling_and_values_travel_as_sent() {
         let caller = head(&[
@@ -444,18 +459,7 @@ mod tests {
             ("anthropic-version", "2023-06-01"),
             ("x-app", "cli"),
         ]);
-        let emitted = outbound_headers(
-            &HeaderMap::new(),
-            Some(&caller),
-            &oauth(),
-            "api.anthropic.com",
-            7,
-            None,
-            Some("generated-id"),
-            &[],
-            &[],
-        )
-        .headers;
+        let emitted = emit_with_generated_id(&caller).headers;
         let names: Vec<&str> = emitted.iter().map(|(n, _)| n.as_str()).collect();
         let app = names
             .iter()
@@ -468,18 +472,7 @@ mod tests {
     #[test]
     fn without_an_x_app_line_the_generated_id_precedes_the_credential() {
         let caller = head(&[("Authorization", "Bearer phoebis-testkey")]);
-        let emitted = outbound_headers(
-            &HeaderMap::new(),
-            Some(&caller),
-            &oauth(),
-            "api.anthropic.com",
-            7,
-            None,
-            Some("generated-id"),
-            &[],
-            &[],
-        )
-        .headers;
+        let emitted = emit_with_generated_id(&caller).headers;
         assert_eq!(
             emitted[0],
             ("x-client-request-id".into(), "generated-id".into())
@@ -494,18 +487,7 @@ mod tests {
             ("x-app", "cli"),
             ("x-client-request-id", "caller-id"),
         ]);
-        let emitted = outbound_headers(
-            &HeaderMap::new(),
-            Some(&caller),
-            &oauth(),
-            "api.anthropic.com",
-            7,
-            None,
-            Some("generated-id"),
-            &[],
-            &[],
-        )
-        .headers;
+        let emitted = emit_with_generated_id(&caller).headers;
         assert_eq!(
             emitted
                 .iter()
@@ -524,20 +506,6 @@ mod tests {
 
     #[test]
     fn the_generated_request_id_is_emitted_once_when_x_app_is_repeated() {
-        let emit = |caller: &OriginalHead| {
-            outbound_headers(
-                &HeaderMap::new(),
-                Some(caller),
-                &oauth(),
-                "api.anthropic.com",
-                7,
-                None,
-                Some("generated-id"),
-                &[],
-                &[],
-            )
-            .headers
-        };
         let ids = |emitted: &[(String, String)]| {
             emitted
                 .iter()
@@ -549,7 +517,7 @@ mod tests {
             ("x-app", "cli"),
             ("x-app", "cli"),
         ]);
-        let emitted = emit(&twice);
+        let emitted = emit_with_generated_id(&twice).headers;
         assert_eq!(ids(&emitted), 1, "two x-app lines, one id: {emitted:?}");
         assert_eq!(emitted[1].0, "x-app");
         assert_eq!(emitted[2].0, "x-client-request-id");
@@ -639,17 +607,7 @@ mod tests {
             .is_empty());
 
         let caller = head(&[("Authorization", "Bearer phoebis-testkey")]);
-        let outbound = outbound_headers(
-            &HeaderMap::new(),
-            Some(&caller),
-            &oauth(),
-            "api.anthropic.com",
-            7,
-            None,
-            Some("generated-id"),
-            &[],
-            &[],
-        );
+        let outbound = emit_with_generated_id(&caller);
         assert_eq!(outbound.injected, vec![Injected::ClientRequestId]);
     }
 
@@ -762,18 +720,7 @@ mod tests {
             ("Content-Encoding", "gzip"),
             ("Content-Length", "99"),
         ]);
-        let emitted = outbound_headers(
-            &HeaderMap::new(),
-            Some(&caller),
-            &api_key(),
-            "api.anthropic.com",
-            7,
-            None,
-            None,
-            &[],
-            &[],
-        )
-        .headers;
+        let emitted = emit(&caller, &api_key());
         assert!(
             !emitted
                 .iter()
