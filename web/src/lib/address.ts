@@ -1,4 +1,4 @@
-import { REQUEST_KIND_VALUES } from '@/api/decode';
+import { iso, REQUEST_KIND_VALUES } from '@/api/decode';
 import type { BurnGroup, KeyStatus, RequestKind } from '@/api/types';
 import { clock } from './clock';
 import { ACCOUNT_STATUSES } from './quota';
@@ -100,7 +100,7 @@ function readKey(key: KeySpec, params: URLSearchParams, now: number): unknown {
       const asked = instantOf(params.get('to'));
       // The end is capped before the pair is judged, as the range control caps it, so a pair wholly after now reads
       // as one that ends before it starts.
-      const to = asked !== '' && Date.parse(asked) > now ? new Date(now).toISOString() : asked;
+      const to = asked !== '' && Date.parse(asked) > now ? iso(now) : asked;
       // A pair is a span only while `from` precedes `to`, so a half, backward or unreadable pair reads as the preset.
       if (from !== '' && to !== '' && Date.parse(from) < Date.parse(to)) return { from, preset: 'custom', to } satisfies RangeValue;
       const name = params.get('range');

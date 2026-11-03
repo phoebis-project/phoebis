@@ -1,3 +1,4 @@
+import { isoOrNull } from '@/api/decode';
 import type { AttentionItem, AttentionKind } from '@/api/types';
 import { METER_CODEC } from './address';
 import { lookup } from './counts';
@@ -115,7 +116,6 @@ export function anchorOf(hash: string): string | null {
 
 const text = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null);
 const count = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
-const instant = (v: unknown): string | null => (typeof v === 'number' && Number.isFinite(v) ? new Date(v).toISOString() : null);
 const days = (n: number): string => `${n} ${n === 1 ? 'day' : 'days'}`;
 /** The listener a certificate item's subject names: `proxy.tls` is the proxy listener's pair. */
 const listenerOf = ({ subject }: AttentionItem): string => subject.id.replace(/\.tls$/, '');
@@ -150,7 +150,7 @@ export function attentionDetail(item: AttentionItem, now: number): string {
     }
     case 'poll_backoff': {
       const n = count(d.rate_limited_in_a_row);
-      const next = instant(d.next_attempt_at);
+      const next = isoOrNull(d.next_attempt_at);
       return `${n} rate-limited ${n === 1 ? 'answer' : 'answers'} in a row${next ? `, next attempt ${fmtRelative(next, now)}` : ''}`;
     }
     case 'certificate_expiring': {
@@ -158,10 +158,10 @@ export function attentionDetail(item: AttentionItem, now: number): string {
       const file = text(d.cert_file);
       // The route floors the days left, so a leaf at 0 ends within a day and one at -1 ended within the last day.
       const end = left === 0 ? 'expires today' : left === -1 ? 'expired today' : left < 0 ? `expired ${days(-left)} ago` : `expires in ${days(left)}`;
-      return `The ${listenerOf(item)} listener's certificate${file ? ` ${file}` : ''} ${end} (${fmtAbsolute(instant(d.expires))}). Replace the pair and run phoebis tls reload.`;
+      return `The ${listenerOf(item)} listener's certificate${file ? ` ${file}` : ''} ${end} (${fmtAbsolute(isoOrNull(d.expires))}). Replace the pair and run phoebis tls reload.`;
     }
     case 'certificate_reload_failed':
-      return `The ${listenerOf(item)} listener's pair did not load: ${text(d.error) ?? ''}. The router keeps serving the pair it loaded at ${fmtAbsolute(instant(d.serving_since))}.`;
+      return `The ${listenerOf(item)} listener's pair did not load: ${text(d.error) ?? ''}. The router keeps serving the pair it loaded at ${fmtAbsolute(isoOrNull(d.serving_since))}.`;
     case 'model_unpriced': {
       const n = count(d.requests);
       return `${text(d.model) ?? item.subject.id} has no weight in the cost model, so its ${n} plan-funded ${n === 1 ? 'request' : 'requests'} since ${fmtAbsolute(item.since)} priced no window share.`;
@@ -283,10 +283,10 @@ export function attentionTitle(item: AttentionItem, now: number): string {
     .filter(([, v]) => v !== null && v !== undefined)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([name, v]) => {
-      const at = /_(at|since)$|^expires$/.test(name) ? instant(v) : null;
+      const at = /_(at|since)$|^expires$/.test(name) ? isoOrNull(v) : null;
       // A window's end inside an object member is an instant too, dated in place so the object keeps its key order.
       const dated = (key: string, x: unknown): unknown => {
-        const end = key === 'window_end' ? instant(x) : null;
+        const end = key === 'window_end' ? isoOrNull(x) : null;
         return end ? fmtAbsolute(end) : x;
       };
       return `${name}: ${at ? fmtAbsolute(at) : typeof v === 'object' ? JSON.stringify(v, dated) : String(v)}`;

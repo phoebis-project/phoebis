@@ -1,5 +1,5 @@
 import type { AccountPatch, KeyInput, PoolEngineFields, PoolInput } from '@/api/client';
-import { AFFINITY_MODE_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/decode';
+import { AFFINITY_MODE_VALUES, iso, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/decode';
 import { slug } from '@/api/http';
 import type { Account, ApiKey, GuardrailRef, ModelRule, ModelRulesMode, Pool, PoolKeepalive, PoolWarning } from '@/api/types';
 import { fmtInt, toLocalInput } from './format';
@@ -334,7 +334,7 @@ export function keyInputOf(form: KeyForm, now: number): KeyInput {
     autoModeServer: form.autoModeServer === 'inherit' ? null : form.autoModeServer === 'on',
     bodyCaptureHours: form.captureMode === 'inherit' ? null : form.captureMode === 'off' ? 0 : Number(form.captureHours),
     enabled: form.enabled,
-    expiresAt: form.expiry === 'keep' ? undefined : form.expiry === 'never' ? null : new Date(now + Number(form.expiry) * 86_400_000).toISOString(),
+    expiresAt: form.expiry === 'keep' ? undefined : form.expiry === 'never' ? null : iso(now + Number(form.expiry) * 86_400_000),
     keepaliveOptOut: form.optOut,
     longContextTwins: form.longContextTwins,
     modelRules: form.modelRules,
