@@ -63,7 +63,11 @@ export interface PopoverProps {
   label?: string;
   /** The id of the element inside the box that names it. */
   labelledBy?: string;
-  /** Escape (consumed, so a drawer under the box stays open, and focus returned to the anchor), a mousedown outside the box and its anchor, and focus leaving for anything but the anchor. */
+  /**
+   * Escape (consumed, so a drawer under the box stays open, and focus returned to the anchor), a mousedown outside the
+   * box and its anchor, focus leaving for anything but the anchor, and an anchor that has left the document or the
+   * layout.
+   */
   onClose: () => void;
   open: boolean;
   /** A value whose change places the box again, such as the step an opener shows, since new content can change the box's size. */
