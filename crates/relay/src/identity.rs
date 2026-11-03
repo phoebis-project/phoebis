@@ -26,10 +26,6 @@ pub(crate) const ITEM_METADATA_USER_ID: &str = "metadata_user_id";
 pub(crate) const ITEM_AGENT_ID_HEADER: &str = "agent_id_header";
 pub(crate) const ITEM_COMPACTION_HEADER: &str = "compaction_header";
 
-/// Marker a downstream client appends to ask for the long-context tier. It is a client-side routing hint, so
-/// it is folded out of the canonical model the registry resolves against.
-const LONG_CONTEXT_SUFFIX: &str = "[1m]";
-
 /// Bound on an identifier or model name the relay repeats into logs and ledger keys.
 pub(crate) const MAX_ID_LEN: usize = 256;
 
@@ -78,13 +74,7 @@ pub struct RequestIdentity {
 /// Reads what the request says about itself, which `climb` completes with the fork facts.
 pub fn identify(headers: &HeaderMap, body: &[u8]) -> Result<RequestIdentity, RelayError> {
     let model = string_member(body, &["model"]).ok_or(RelayError::NoModel)?;
-    let folded_model = {
-        let lowered = model.to_ascii_lowercase();
-        lowered
-            .strip_suffix(LONG_CONTEXT_SUFFIX)
-            .unwrap_or(&lowered)
-            .to_string()
-    };
+    let folded_model = phoebis_store::canonical_id(&model);
     // The model reaches log lines and ledger keys, so it is bounded and charset-checked here rather than
     // wherever it is printed. Unlike the identifiers below it cannot be dropped: a request without a usable
     // model has nothing to relay.
