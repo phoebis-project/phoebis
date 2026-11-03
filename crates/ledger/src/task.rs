@@ -290,8 +290,7 @@ impl Ledger {
             Ok(()) => {}
             Err(mpsc::error::TrySendError::Full(record))
             | Err(mpsc::error::TrySendError::Closed(record)) => {
-                self.stats.dropped.fetch_add(1, Ordering::Relaxed);
-                self.metrics.observe_drop(table_of(&record));
+                count_drop(&self.stats, &self.metrics, table_of(&record));
             }
         }
     }
@@ -301,8 +300,7 @@ impl Ledger {
     /// offered to a full or closed channel.
     pub async fn record_request(&self, record: Record) {
         if let Err(mpsc::error::SendError(record)) = self.tx.send(record).await {
-            self.stats.dropped.fetch_add(1, Ordering::Relaxed);
-            self.metrics.observe_drop(table_of(&record));
+            count_drop(&self.stats, &self.metrics, table_of(&record));
         }
     }
 
@@ -533,8 +531,7 @@ async fn assemble(
                 for id in assembler.expire(now).ids {
                     // The ledger names it so the system page's gap list has a row for it rather than a count
                     // with nothing behind it.
-                    ledger.stats.dropped.fetch_add(1, Ordering::Relaxed);
-                    ledger.metrics.observe_drop("requests");
+                    count_drop(&ledger.stats, &ledger.metrics, "requests");
                     ledger.record(crate::assemble::gap(&id, "expired", now));
                 }
             }
@@ -1022,7 +1019,7 @@ async fn replay(ctx: &mut WriterCtx<'_>, held: Held) -> Retry {
                 }
             }
             record @ Record::Request { request, .. } => {
-                drop_counted(ctx, record);
+                count_drop(ctx.stats, ctx.metrics, table_of(record));
                 // The writer lands its own gap as a batch of one, as the gap report does: a send into its own
                 // channel would meet the queue it stopped draining.
                 let gap = Arc::new(vec![crate::assemble::gap(
@@ -1044,7 +1041,7 @@ async fn replay(ctx: &mut WriterCtx<'_>, held: Held) -> Retry {
                 )
                 .await;
             }
-            other => drop_counted(ctx, other),
+            other => count_drop(ctx.stats, ctx.metrics, table_of(other)),
         }
     }
     Retry::Settled
@@ -1096,11 +1093,6 @@ async fn park(
     parked
 }
 
-fn drop_counted(ctx: &WriterCtx<'_>, record: &Record) {
-    ctx.stats.dropped.fetch_add(1, Ordering::Relaxed);
-    ctx.metrics.observe_drop(table_of(record));
-}
-
 /// The stop's last try at a held batch: one replay, and what the database still refuses is lost and counted, the
 /// one thing a stop may lose.
 async fn drain_held(ctx: &mut WriterCtx<'_>, held: Held) {
@@ -1114,7 +1106,7 @@ async fn drain_held(ctx: &mut WriterCtx<'_>, held: Held) {
         "the ledger stopped with records it could not write, and they are lost"
     );
     for record in lost {
-        drop_counted(ctx, record);
+        count_drop(ctx.stats, ctx.metrics, table_of(record));
     }
 }
 
@@ -1668,6 +1660,11 @@ fn priced_attempts(batch: &[Record]) -> Vec<PricedAttempt> {
             _ => Vec::new(),
         })
         .collect()
+}
+
+fn count_drop(stats: &LedgerStats, metrics: &Metrics, table: &'static str) {
+    stats.dropped.fetch_add(1, Ordering::Relaxed);
+    metrics.observe_drop(table);
 }
 
 fn table_of(record: &Record) -> &'static str {
