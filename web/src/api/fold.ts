@@ -2,7 +2,7 @@ import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, m
 import { fundingOf } from '@/lib/costs';
 import { countOf, emptyCounts } from '@/lib/counts';
 import { foldClassifier, foldEffort, foldRequestClass, foldSpeed, servedMissReason, servingAttempt } from '@/lib/dimensions';
-import { earlierHolderLabel, keyLifetime } from '@/lib/format';
+import { earlierHolderLabel, keyLifetime, tokensTotal } from '@/lib/format';
 import { emptyHistogram, histogramOf, mergeHistograms, percentileFromHistogram } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
 import type { AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, FundingFilter, RequestLog, RequestPage } from './types';
@@ -173,9 +173,6 @@ const onSide = (r: RequestLog, side: FundingFilter) => (r.attempts.length === 0 
  */
 const heldProbe = (r: RequestLog) => r.kind === 'probe' && r.status === 503 && r.errorCode === 'ledger_behind';
 
-/** The five token counts a share is priced from, as the ledger sums them before it prices a row. */
-const tokensOf = (r: RequestLog) => r.usage.input + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h + r.usage.output;
-
 /**
  * A request row's Pro-week figure into its group's, as the ledger sums a group: a billed row's null adds nothing, and a
  * plan-funded row with tokens the cost model could not price nulls the group, so no partial sum reads as the whole. A
@@ -184,7 +181,7 @@ const tokensOf = (r: RequestLog) => r.usage.input + r.usage.cacheRead + r.usage.
 const addFigure = (sum: number | null, r: RequestLog): number | null => {
   if (sum === null) return null;
   if (r.costEquivalent !== null) return sum + r.costEquivalent;
-  return onSide(r, 'plan') && tokensOf(r) > 0 ? null : sum;
+  return onSide(r, 'plan') && tokensTotal(r.usage) > 0 ? null : sum;
 };
 
 /**
@@ -198,7 +195,7 @@ const addFigure = (sum: number | null, r: RequestLog): number | null => {
  */
 function foldShares(g: AnalyticsGroup, rows: RequestLog[]) {
   const plan = rows.filter((r) => fundingOfRow(r) === 'plan');
-  const priced = plan.filter((r) => tokensOf(r) > 0);
+  const priced = plan.filter((r) => tokensTotal(r.usage) > 0);
   if (priced.length === 0 || priced.some((r) => r.costShares === null || Object.keys(r.costShares).length === 0)) return;
   const shares: Record<string, number | null> = {};
   for (const r of priced) {
@@ -216,8 +213,7 @@ function foldShares(g: AnalyticsGroup, rows: RequestLog[]) {
  * deleted.
  */
 export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: FoldOptions = {}, latest = latestGenerations(rows)): AnalyticsGroup[] {
-  const groups = new Map<string, AnalyticsGroup>();
-  const lists = new Map<string, RequestLog[]>();
+  const groups = new Map<string, { group: AnalyticsGroup; rows: RequestLog[] }>();
   const agentPatterns = options.agentPatterns ?? [];
   const clientPatterns = options.clientPatterns ?? [];
   const { funding } = options;
@@ -231,8 +227,9 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
   );
   for (const r of kept) {
     const key = keyOf(r, by, options.agentGroups ?? []);
-    const g = groups.get(key) ?? emptyFolded(key, labelOf(r, key, by, latest));
-    groups.set(key, g);
+    const entry = groups.get(key) ?? { group: emptyFolded(key, labelOf(r, key, by, latest)), rows: [] };
+    groups.set(key, entry);
+    const g = entry.group;
     if (heldProbe(r)) {
       g.probes.held += 1;
       continue;
@@ -243,9 +240,7 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
       if (r.errorCode) g.refusals[r.errorCode] = countOf(g.refusals, r.errorCode) + 1;
       continue;
     }
-    const list = lists.get(key) ?? [];
-    list.push(r);
-    lists.set(key, list);
+    entry.rows.push(r);
     g.requests += 1;
     if (r.outcome === 'succeeded') g.succeeded += 1;
     else if (r.outcome === 'exhausted') g.exhausted += 1;
@@ -286,15 +281,14 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
     if (reason) g.cacheMissReasons[reason] = missCount(g.cacheMissReasons, reason) + 1;
     if (reason === 'none' && r.usage.cacheRead === 0) g.expiredBetweenTurns += 1;
   }
-  for (const [key, g] of groups) {
-    const list = lists.get(key) ?? [];
+  for (const { group: g, rows: list } of groups.values()) {
     const pick = (read: (r: RequestLog) => number | null) => list.map(read).filter((v): v is number => v !== null);
     g.histograms = { durationMs: histogramOf(pick((r) => r.durationMs)), outputTps: histogramOf(pick(outputTps)), ttfbMs: histogramOf(pick((r) => r.ttfbMs)), ttftMs: histogramOf(pick((r) => r.ttftMs)) };
     for (const m of METRICS) g.percentiles[m] = quartet(g.histograms[m]);
     // Shares of one account's windows add, and a group of any other dimension spans accounts, whose windows do not.
     if (by === 'account') foldShares(g, list);
   }
-  return [...groups.values()].sort((a, b) => b.requests - a.requests || a.key.localeCompare(b.key));
+  return [...groups.values()].map((e) => e.group).sort((a, b) => b.requests - a.requests || a.key.localeCompare(b.key));
 }
 
 export function foldRequests(rows: RequestLog[], bucketMs: number, from: string, to: string, by: AnalyticsGroupBy = 'all', options: FoldOptions = {}): AnalyticsPoint[] {
@@ -374,18 +368,7 @@ export function sumGroups(groups: AnalyticsGroup[]): AnalyticsGroup {
     for (const [code, n] of Object.entries(g.refusals)) out.refusals[code] = countOf(out.refusals, code) + n;
     for (const [reason, n] of Object.entries(g.cacheMissReasons)) out.cacheMissReasons[reason] = missCount(out.cacheMissReasons, reason) + n;
     if (g.fromRequests) out.fromRequests = true;
-    const kept = out.keptWarm;
-    out.keptWarm =
-      kept && g.keptWarm
-        ? {
-            planRequests: kept.planRequests + g.keptWarm.planRequests,
-            planTokens1h: kept.planTokens1h + g.keptWarm.planTokens1h,
-            planTokens5m: kept.planTokens5m + g.keptWarm.planTokens5m,
-            requests: kept.requests + g.keptWarm.requests,
-            tokens1h: kept.tokens1h + g.keptWarm.tokens1h,
-            tokens5m: kept.tokens5m + g.keptWarm.tokens5m,
-          }
-        : null;
+    out.keptWarm = plusBoth(out.keptWarm, g.keptWarm);
     for (const k of ['failed', 'held', 'migrated', 'ok', 'planOk', 'skipped'] as const) out.probes[k] += g.probes[k];
     for (const reason of WASTED_PROBE_REASONS) out.wastedProbeReasons[reason] += g.wastedProbeReasons[reason];
   }
