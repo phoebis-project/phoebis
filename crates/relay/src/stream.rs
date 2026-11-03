@@ -58,6 +58,9 @@ pub(crate) const STREAM_DECODED_CHUNK_MAX: usize = 1 << 20;
 /// mailbox refuses waits behind the client's answer and ahead of the answer's own end reports.
 pub(crate) type OnError = Box<dyn FnOnce(Bytes, &mut Waiting) + Send>;
 
+/// Records the answer's message id in the session memory, awaited on the body task before the next piece goes out.
+pub(crate) type OnMessageId = Box<dyn FnOnce(String) -> BoxFuture<'static, ()> + Send>;
+
 /// The held bytes of a stream as the pre-commit hold read them: their text and the events the hold took from them,
 /// the committing one last. The bus copy publishes these rather than decoding and parsing the held bytes again.
 pub(crate) struct HeldText {
@@ -161,7 +164,7 @@ pub(crate) struct Publish {
     /// Runs once, with the id, the moment it is known, and is awaited there: a later request on the same
     /// session reads the id before this body has finished, so the hand-off cannot wait for `finish`, and a
     /// flush must not overtake it.
-    pub on_message_id: Option<Box<dyn FnOnce(String) -> BoxFuture<'static, ()> + Send>>,
+    pub on_message_id: Option<OnMessageId>,
     /// The pin a committed answer renews, or a rejection releases, sent with the usage `finish` assembled.
     pub renewal: Option<Renewal>,
     /// The conversation report a committed answer sends, beside the renewal.

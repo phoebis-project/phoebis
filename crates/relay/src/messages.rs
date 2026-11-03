@@ -81,8 +81,8 @@ use crate::ratelimit::{head_sample, retry_after, upstream_date, UnifiedHeaders};
 use crate::sse::SseParser;
 use crate::stream::{
     drain_bounded, is_stalled, is_undecodable, relay_body, AffinityFacts, Checkin, Drained,
-    HeldText, OnError, Publish, Relayed, Renewal, ReturnToPool, Waiting, MAX_BUFFERED_BODY,
-    STREAM_CUT, STREAM_STALLED, STREAM_UNDECODABLE,
+    HeldText, OnError, OnMessageId, Publish, Relayed, Renewal, ReturnToPool, Waiting,
+    MAX_BUFFERED_BODY, STREAM_CUT, STREAM_STALLED, STREAM_UNDECODABLE,
 };
 use crate::{
     edit_body, presented_key, BodyEdits, BodyMember, CacheTtl, CacheTtlPolicy, DriftKind,
@@ -3487,9 +3487,7 @@ impl Relay {
                 // both reach the caller through `stream()`, so both parse for a message id the same way. An
                 // answer is remembered only for a request that carried or received the member, so a helper the
                 // gate refused never becomes the next turn's named predecessor.
-                let on_message_id: Option<
-                    Box<dyn FnOnce(String) -> BoxFuture<'static, ()> + Send>,
-                > = ctx
+                let on_message_id: Option<OnMessageId> = ctx
                     .memory_key
                     .filter(|_| ctx.diagnostics.is_some())
                     .map(|key| {
@@ -3511,8 +3509,7 @@ impl Relay {
                                     .record_message_id(&key, &account_id, &model, &id, now)
                                     .await;
                             }) as BoxFuture<'static, ()>
-                        })
-                            as Box<dyn FnOnce(String) -> BoxFuture<'static, ()> + Send>
+                        }) as OnMessageId
                     });
                 // Sent where the answer ends, the only place its usage is known.
                 let renewal = self.renewal(&ctx);
@@ -4801,7 +4798,7 @@ struct Forward<'a, C> {
     keep_alive: bool,
     /// Set for a committed stream, which is watched for a rate-limit error arriving after the commit.
     on_error: Option<OnError>,
-    on_message_id: Option<Box<dyn FnOnce(String) -> BoxFuture<'static, ()> + Send>>,
+    on_message_id: Option<OnMessageId>,
     outcome: RelayOutcome,
     prefix: Bytes,
     /// Set where a held 200's first event is a `rate_limit_error`: that answer is the upstream's rate limit as a
