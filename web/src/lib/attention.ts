@@ -144,7 +144,7 @@ export function attentionDetail(item: AttentionItem, now: number): string {
     }
     case 'ledger_record_parked': {
       const n = num(d.count);
-      const accounts = Array.isArray(d.accounts) ? d.accounts.filter((a): a is string => typeof a === 'string') : [];
+      const accounts = names(d.accounts);
       return `${plural(n, 'priced record')} parked, landing at the next start or on the dashboard's Replay${accounts.length ? ` (${accounts.join(', ')})` : ''}`;
     }
     case 'poll_backoff': {
