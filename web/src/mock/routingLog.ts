@@ -2355,28 +2355,30 @@ const USAGE_503 = { endpoint: 'usage', error: 'usage request rejected with statu
 /** How often the router's usage poll asks every polled account, its `POLL_INTERVAL`. */
 const POLL_INTERVAL_MS = 5 * MINUTE;
 
+/** An account's failed polls after its last clean read, one 503 at each slot before `endMs`. */
+function failedPolls(accountId: string, cleanAt: string, endMs: number): EventSeed[] {
+  const slots: number[] = [];
+  for (let at = Date.parse(cleanAt) + POLL_INTERVAL_MS; at < endMs; at += POLL_INTERVAL_MS) slots.push(at);
+  return slots.map((at) => ({ accountId, at: iso(at), detail: { ...USAGE_503 }, kind: 'poll_failed' }));
+}
+
 /**
  * Legacy's polls after its last clean read: the endpoint answered 503 at every slot until the one whose acquisition ran
  * the refresh the provider refused, and the poll asks an account it has to pair again nothing, so none follows.
  */
 function legacyPolls(): EventSeed[] {
   const clean = accountById.get('legacy')?.usage?.poll?.lastCleanAt;
-  if (!clean) return [];
-  const slots: number[] = [];
-  for (let at = Date.parse(clean) + POLL_INTERVAL_MS; at < LEGACY_LAPSED_AT; at += POLL_INTERVAL_MS) slots.push(at);
-  return slots.map((at) => ({ accountId: 'legacy', at: iso(at), detail: { ...USAGE_503 }, kind: 'poll_failed' }));
+  return clean ? failedPolls('legacy', clean, LEGACY_LAPSED_AT) : [];
 }
 
 /**
  * Reserve's polls after its last clean read: a 503 holds nothing back, so the poll asked at every slot and the
- * endpoint answered 503 each time, up to and including its last attempt.
+ * endpoint answered 503 each time, up to and including its last attempt, whose whole millisecond the bound passes.
  */
 function reservePolls(): EventSeed[] {
   const poll = accountById.get('reserve')?.usage?.poll;
   if (!poll?.lastCleanAt || !poll.lastAttemptAt) return [];
-  const slots: number[] = [];
-  for (let at = Date.parse(poll.lastCleanAt) + POLL_INTERVAL_MS; at <= Date.parse(poll.lastAttemptAt); at += POLL_INTERVAL_MS) slots.push(at);
-  return slots.map((at) => ({ accountId: 'reserve', at: iso(at), detail: { ...USAGE_503 }, kind: 'poll_failed' }));
+  return failedPolls('reserve', poll.lastCleanAt, Date.parse(poll.lastAttemptAt) + 1);
 }
 
 /**
