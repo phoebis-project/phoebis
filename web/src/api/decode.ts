@@ -921,8 +921,6 @@ export function decodeKeepaliveOverview(v: unknown): KeepaliveOverview {
   };
 }
 
-export const WINDOW_ID_VALUES = ['5h', '7d', '7d_oi'] as const;
-
 const priceCells = (m: Rec): PriceCells => ({ cacheReadPerM: num(m.cache_read), cacheWrite1hPerM: num(m.cache_write_1h), cacheWrite5mPerM: num(m.cache_write_5m), inputPerM: num(m.input), outputPerM: num(m.output) });
 const price = (model: string, m: Rec): ModelPrice => ({
   ...priceCells(m),
