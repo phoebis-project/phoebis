@@ -149,8 +149,6 @@ const PURGE_CHANGES: &str = "DELETE FROM registry_changes WHERE id IN ( \
 // credential, and AES-GCM gives a reader of the plaintext nothing toward the key.
 const CANARY_AAD: &str = "storage_key_canary";
 const CANARY_PLAINTEXT: &[u8] = b"phoebis-storage-key-canary";
-// The nonce `crypto::seal` draws, stored as the first bytes of the canary's value.
-const CANARY_NONCE_LEN: usize = 12;
 
 #[cfg(test)]
 thread_local! {
@@ -1031,16 +1029,7 @@ impl RecoveryStore {
 
     /// Seals the canary under `key` in one transaction, for a registry `key_matches` read as opening without one.
     pub fn seal_canary(&mut self, key: &StorageKey) -> Result<(), StoreError> {
-        let (nonce, sealed) = crypto::seal(key, CANARY_AAD, CANARY_PLAINTEXT)?;
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        tx.execute(
-            "INSERT INTO meta (key, value) VALUES ('storage_key_canary', ?1) ON CONFLICT(key) DO NOTHING",
-            params![encode_canary(&nonce, &sealed)],
-        )?;
-        tx.commit()?;
-        Ok(())
+        insert_canary(&mut self.conn, key)
     }
 
     pub fn sealed_counts(&self) -> Result<SealedCounts, StoreError> {
@@ -1073,7 +1062,7 @@ impl RecoveryStore {
         key: &StorageKey,
         cause: StateCause,
     ) -> Result<SealedCounts, StoreError> {
-        let (nonce, sealed) = crypto::seal(key, CANARY_AAD, CANARY_PLAINTEXT)?;
+        let canary = sealed_canary(key)?;
         // No `Store` clock exists here: the wall clock stamps the rows, as it does every write outside a test rig.
         let now = jiff::Timestamp::now().as_millisecond();
         let tx = self
@@ -1102,7 +1091,7 @@ impl RecoveryStore {
         )?;
         tx.execute(
             "INSERT INTO meta (key, value) VALUES ('storage_key_canary', ?1)",
-            params![encode_canary(&nonce, &sealed)],
+            params![canary],
         )?;
         tx.commit()?;
         Ok(counts)
@@ -1156,11 +1145,16 @@ fn check_or_seal_canary(
     if sealed_rows_open_under(conn, key)? == Some(false) {
         return Err(mismatch());
     }
-    let (nonce, sealed) = crypto::seal(key, CANARY_AAD, CANARY_PLAINTEXT)?;
+    insert_canary(conn, key)
+}
+
+/// Seals the canary under `key` in its own transaction, keeping a canary another writer sealed first.
+fn insert_canary(conn: &mut Connection, key: &StorageKey) -> Result<(), StoreError> {
+    let canary = sealed_canary(key)?;
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     tx.execute(
         "INSERT INTO meta (key, value) VALUES ('storage_key_canary', ?1) ON CONFLICT(key) DO NOTHING",
-        params![encode_canary(&nonce, &sealed)],
+        params![canary],
     )?;
     tx.commit()?;
     Ok(())
@@ -1325,8 +1319,10 @@ fn has_table(conn: &Connection, name: &str) -> Result<bool, StoreError> {
         .is_some())
 }
 
-fn encode_canary(nonce: &[u8], sealed: &[u8]) -> String {
-    base64::engine::general_purpose::STANDARD.encode([nonce, sealed].concat())
+/// The canary sealed under `key`, the nonce `crypto::seal` drew stored as the value's first bytes.
+fn sealed_canary(key: &StorageKey) -> Result<String, StoreError> {
+    let (nonce, sealed) = crypto::seal(key, CANARY_AAD, CANARY_PLAINTEXT)?;
+    Ok(base64::engine::general_purpose::STANDARD.encode([nonce, sealed].concat()))
 }
 
 /// Answers the canary's plaintext. A value that is not base64, or too short to hold a nonce, is refused like a
@@ -1336,7 +1332,7 @@ fn open_canary(key: &StorageKey, value: &str) -> Result<Vec<u8>, StoreError> {
         .decode(value)
         .map_err(|_| StoreError::Crypto)?;
     let (nonce, sealed) = joined
-        .split_at_checked(CANARY_NONCE_LEN)
+        .split_at_checked(crypto::NONCE_LEN)
         .ok_or(StoreError::Crypto)?;
     crypto::open(key, CANARY_AAD, nonce, sealed)
 }

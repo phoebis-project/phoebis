@@ -10,7 +10,7 @@ use rand::Rng;
 
 use crate::{StorageKey, StoreError};
 
-const NONCE_LEN: usize = 12;
+pub(crate) const NONCE_LEN: usize = 12;
 
 pub fn seal(
     key: &StorageKey,
