@@ -14,7 +14,7 @@ import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } 
 import { emptyCounts } from '@/lib/counts';
 import { earlierHolderLabel, fmtDate } from '@/lib/format';
 import { BUCKET_COUNT, emptyHistogram } from '@/lib/histogram';
-import { isFastScope, planWordLabel } from '@/lib/quota';
+import { accountStatusOf, planWordLabel } from '@/lib/quota';
 import { WINDOW_HOURS, WINDOW_LABEL, WINDOW_ORDER, hoursOfKey, windowKeyId } from '@/lib/windows';
 
 type Rec = Record<string, unknown>;
@@ -88,14 +88,10 @@ function decodeSpend(v: unknown): Spend | null {
 }
 
 /** The account's state and its flags folded onto the one badge the pages show. */
-function accountStatus(a: Rec, cooldowns: unknown[]): Account['status'] {
+function accountStatus(a: Rec, cooldowns: Account['cooldowns']): Account['status'] {
   const state = str(a.state);
-  if (state === 'reauth_required' || state === 'funding_required') return state;
-  if (state === 'unpaired' || state === 'disconnected') return 'unpaired';
-  if (!bool(a.enabled, true)) return 'paused';
-  // A fast-lane row holds fast-mode requests alone: the account still serves its standard traffic.
-  if (cooldowns.some((c) => !isFastScope(str(rec(c).scope)))) return 'cooldown';
-  return 'ready';
+  const flag = state === 'reauth_required' || state === 'funding_required' ? state : state === 'unpaired' || state === 'disconnected' ? 'unpaired' : null;
+  return accountStatusOf(flag, bool(a.enabled, true), cooldowns);
 }
 
 export function decodeModelRule(v: unknown): ModelRule {
@@ -141,6 +137,7 @@ export function decodeSubscription(profile: Rec | null, sub: Rec | null): Subscr
 export function decodeAccount(v: unknown): Account {
   const a = rec(v);
   const cooldowns = list(a.cooldowns).map(rec);
+  const decodedCooldowns = cooldowns.map((c) => ({ reason: str(c.reason), scope: str(c.scope), setAt: isoOr(c.set_at, epoch), until: isoOr(c.until, epoch), windowId: windowId(str(c.window)) }));
   const windows = drawnOrder(list(a.windows).map(rec).map(decodeWindow).filter((w): w is RateLimitWindow => w !== null));
   const fastLane = a.fast_lane === null || a.fast_lane === undefined ? null : rec(a.fast_lane);
   const extra = a.extra_usage === null || a.extra_usage === undefined ? null : rec(a.extra_usage);
@@ -154,7 +151,7 @@ export function decodeAccount(v: unknown): Account {
   const subscription = decodeSubscription(profile, sub);
   return {
     canceled: bool(a.canceled),
-    cooldowns: cooldowns.map((c) => ({ reason: str(c.reason), scope: str(c.scope), setAt: isoOr(c.set_at, epoch), until: isoOr(c.until, epoch), windowId: windowId(str(c.window)) })),
+    cooldowns: decodedCooldowns,
     credential: { accessTokenExpiresAt: isoOrNull(credential.access_expires_at), lastError: strOrNull(credential.last_error), lastRefreshAt: isoOrNull(credential.last_refresh_at), quarantined: bool(credential.quarantined), refreshTokenExpiresAt: isoOrNull(credential.refresh_expires_at) },
     email: strOrNull(identity.email),
     // Kept when the provider switched extra usage off: the reason it gave exists for exactly that account.
@@ -177,7 +174,7 @@ export function decodeAccount(v: unknown): Account {
       ? { factor: num(slowDown.factor, 1), holdMs: num(slowDown.hold_ms), since: isoOrNull(slowDown.since), speed: num(slowDown.speed, 1), stretchMs: num(slowDown.stretch_ms), thresholdMs: num(slowDown.threshold_ms) }
       : null,
     spend: decodeSpend(a.spend),
-    status: accountStatus(a, cooldowns),
+    status: accountStatus(a, decodedCooldowns),
     subscription,
     usage: a.usage === null || a.usage === undefined ? null : decodeSnapshot(str(a.id), a.usage),
     usageBased: bool(a.usage_based),

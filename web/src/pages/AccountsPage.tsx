@@ -26,7 +26,7 @@ import { fmtAbsolute, fmtCredits, fmtDate, fmtDated, fmtDayShort, fmtDuration, f
 import { accountPatchOf, advancesOwnToken, derivedId, endZoneLabel, subscriptionEndFormOf, subscriptionEndRefusal, tickCanceled, type SubscriptionEndForm } from '@/lib/forms';
 import { useAsync, useNow, useQueryFilters } from '@/lib/hooks';
 import { latestPerWindow, meterGroups, meterWindowWord } from '@/lib/meter';
-import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, isFastScope, planEndedSentence, planWordLabel, slowedOf } from '@/lib/quota';
+import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, accountCooldown, planEndedSentence, planWordLabel, slowedOf } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
 import { speedHover } from '@/lib/selection';
 import { joinTrend } from '@/lib/trend';
@@ -327,8 +327,7 @@ function AccountDetail({ account, awaitingReading, generation, now, onBusyChange
   const isOauth = account.kind === 'oauth';
   // A flagged account reports its flag as the status, so routing is the only honest read of whether it takes requests.
   const paused = !account.routingEnabled;
-  // A fast-lane row holds fast-mode requests alone, so the header counts the rows that cool the account.
-  const cooldown = account.cooldowns.find((c) => !isFastScope(c.scope)) ?? null;
+  const cooldown = accountCooldown(account.cooldowns);
   const extra = account.extraUsage;
   const overage = account.overage;
   /**

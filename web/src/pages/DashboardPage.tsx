@@ -17,7 +17,7 @@ import { equivalentOrDash, nativeFiguresOf, shareHint, UNPRICED_TITLE, type Week
 import { weekReadingOf } from '@/lib/costs';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortModel, tokensTotal } from '@/lib/format';
 import { refreshAttention, useAsync, useAttention, useNow, type Loaded } from '@/lib/hooks';
-import { STATUS_LABEL, STATUS_TONE, isFastScope, slowedOf } from '@/lib/quota';
+import { STATUS_LABEL, STATUS_TONE, accountCooldown, slowedOf } from '@/lib/quota';
 import { REFUSED_TITLE, costHeaderTitle, costUnitOf, glanceCellOf, requestHintArgs, revisionsTitle } from '@/lib/requests';
 import { ringFigures, ringLine, ringRowTitle, type RingFigures, type RingLeftOut, type RingRow, type RingWindow } from '@/lib/rings';
 import { speedHover } from '@/lib/selection';
@@ -285,8 +285,7 @@ function LeftOut({ accounts }: { accounts: RingLeftOut[] }) {
 }
 
 function AccountMini({ account, now }: { account: Account; now: number }) {
-  // A fast-lane row holds fast-mode requests alone, so the line reads a row that cools the account.
-  const cooldown = account.cooldowns.find((c) => !isFastScope(c.scope));
+  const cooldown = accountCooldown(account.cooldowns);
   const slowed = slowedOf(account, now);
   const status = (
     <Badge tone={STATUS_TONE[account.status]} dot>

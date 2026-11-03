@@ -15,7 +15,7 @@ import { foldClassifier, foldEffort, foldRequestClass } from '@/lib/dimensions';
 import { modelRulesRefusal, poolWarnings, type NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
 import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
-import { isFastScope } from '@/lib/quota';
+import { accountCooldown, accountStatusOf } from '@/lib/quota';
 import { compareRequests } from '@/lib/requests';
 import { ACCOUNTS, QUOTA_HISTORY, usageOf } from './accounts';
 import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, reconciliationsOf, refusalCategoriesOf, rewritesOf, seriesOf, unusedAllowanceOf } from './analytics';
@@ -382,13 +382,8 @@ function fromCallbackUrl(url: string): { code: string; state: string } | null {
  * A flag outranks the enabled bit and the cooldowns in the status the account view folds, so pausing never hides one.
  */
 const FLAGGED: Account['status'][] = ['funding_required', 'reauth_required', 'unpaired'];
-/** A fast-lane row holds fast-mode requests alone, so the account cools only under another scope's row. */
-const cooling = (cooldowns: Account['cooldowns']) => cooldowns.some((c) => !isFastScope(c.scope));
-const statusOf = (a: Account, enabled: boolean): Account['status'] => {
-  if (FLAGGED.includes(a.status)) return a.status;
-  if (!enabled) return 'paused';
-  return cooling(a.cooldowns) ? 'cooldown' : 'ready';
-};
+const statusOf = (a: Account, enabled: boolean): Account['status'] =>
+  accountStatusOf(FLAGGED.includes(a.status) ? (a.status as 'funding_required' | 'reauth_required' | 'unpaired') : null, enabled, a.cooldowns);
 
 type BudgetedSeed = Pick<PoolMember, 'budgetDailyUsd' | 'budgetMonthlyUsd' | 'spends'>;
 
@@ -765,7 +760,7 @@ export class MockApi implements Api {
   async clearCooldown(accountId: string, scope: string) {
     const a = this.account(accountId);
     const cooldowns = a.cooldowns.filter((c) => c.scope !== scope);
-    this.putAccount({ ...a, cooldowns, status: cooling(cooldowns) ? a.status : 'ready' });
+    this.putAccount({ ...a, cooldowns, status: accountCooldown(cooldowns) !== null ? a.status : 'ready' });
     return latency(undefined, 200);
   }
 

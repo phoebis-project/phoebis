@@ -1,4 +1,4 @@
-import type { Account, AccountSlowDown, ExtraUsage, PLAN_WORDS, PlanWord, PollOutcome, QuotaPoll, RateLimitWindow, Spend, SubscriptionCosts, WindowId } from '@/api/types';
+import type { Account, AccountSlowDown, Cooldown, ExtraUsage, PLAN_WORDS, PlanWord, PollOutcome, QuotaPoll, RateLimitWindow, Spend, SubscriptionCosts, WindowId } from '@/api/types';
 import { tierRow } from '@/lib/costs';
 import { lookup } from '@/lib/counts';
 import { fmtAbsolute, fmtPct, fmtRelative, instant } from '@/lib/format';
@@ -204,6 +204,14 @@ export const planEndedSentence = (planEndedAt: string, now: number, compact = fa
 /** The fast lane's two cooldown scopes, its rate limit's and its usage-credits refusal's: each holds fast-mode
  *  requests alone, so neither cools the account's standard traffic. */
 export const isFastScope = (scope: string) => scope === 'fast' || scope === 'fast_credits';
+
+/** The row that cools the account: the first on a scope beyond the fast lane's, null where none does. */
+export const accountCooldown = (cooldowns: Cooldown[]): Cooldown | null => cooldowns.find((c) => !isFastScope(c.scope)) ?? null;
+
+/** The one badge an account's flag, enabled bit and cooldowns fold to. A flag outranks the rest, so pausing never
+ *  hides one. */
+export const accountStatusOf = (flag: 'funding_required' | 'reauth_required' | 'unpaired' | null, enabled: boolean, cooldowns: Cooldown[]): Account['status'] =>
+  flag ?? (!enabled ? 'paused' : accountCooldown(cooldowns) !== null ? 'cooldown' : 'ready');
 
 export function soonestReset(account: Account, now: number): WindowId | null {
   let best: RateLimitWindow | null = null;
