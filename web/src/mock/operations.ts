@@ -1,5 +1,6 @@
 import type { AgentContext, BurnUnit, CompanionState, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, RecipeCause, RecipeState, Session } from '@/api/types';
 import { anchorTier, tierCapacity, weightOf, type CostWindow } from '@/lib/costs';
+import { lastActivity, pinTtlMs } from '@/lib/keepalive';
 import { accountById, sharedWindowsOf } from './accounts';
 import { API_PRICES_WIRE, SUBSCRIPTION_COSTS_WIRE } from './catalog';
 import { FIXTURES } from './generated/fixtures';
@@ -234,10 +235,7 @@ export const insideSessionExpiry = (lastAt: string, now: number): boolean => Dat
 /** Whether an instant is inside the non-companion timeout: a row or a line with no use on record is never older. */
 export const withinNonCompanionTimeout = (at: string | null, seconds: number, now: number): boolean => at === null || now - Date.parse(at) <= seconds * 1000;
 /** The later of a session's own last use and its last ledgered request, which the route's timeout reads. */
-export const lastUseOf = (s: Pick<Session, 'lastRequestAt' | 'lastUsedAt'>): string | null => {
-  const stamps = [s.lastUsedAt, s.lastRequestAt].filter((t): t is string => t !== null);
-  return stamps.length === 0 ? null : stamps.reduce((a, b) => (Date.parse(b) > Date.parse(a) ? b : a));
-};
+export const lastUseOf = lastActivity;
 
 // Grouped as the route's activity query groups a session's rows, by key, generation and session with probes left out,
 // so the earlier holder's rows count for its own row below, never for the live session that shares their id. A refused
@@ -305,7 +303,7 @@ const effortAt = (i: number) => EFFORT_WORDS[i % EFFORT_WORDS.length];
 /** A pin's line as the route answers it: warm while its last use is inside its cache TTL at the story's clock. */
 const pinLine = (line: Omit<AgentContext, 'createdAt' | 'warm'>): Omit<AgentContext, 'createdAt'> => ({
   ...line,
-  warm: line.lastUsedAt !== null && line.cacheTtlMs !== null && NOW - Date.parse(line.lastUsedAt) < line.cacheTtlMs,
+  warm: pinTtlMs(line, NOW) !== null,
 });
 const byteOrder = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 /** The route's order of a session's lines: main first, then by agent id and model as bytes. */
