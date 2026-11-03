@@ -116,10 +116,12 @@ pub struct HeadContext<'a> {
     pub model_rejection_ms: i64,
     /// The request carried `speed: "fast"`.
     pub fast: bool,
+    /// The head's unified rate-limit headers, parsed once by the caller for every reader of the head.
+    pub unified: Option<&'a UnifiedHeaders>,
 }
 
 pub fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
-    let unified = UnifiedHeaders::parse(head);
+    let unified = ctx.unified;
     let sse_rate_limited = head.status == 200
         && ctx
             .first_event
@@ -156,14 +158,12 @@ pub fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
     // statuses read, and so does a rate limit, whatever the account kind, unless the 5-hour or 7-day window or an
     // api_key spend cap rejected it, which are the account's and keep their own rows.
     if ctx.fast && rate_limited {
-        let credits_refused = unified
-            .as_ref()
-            .is_some_and(|u| u.overage_disabled_reason.is_some());
-        let plan_rejected = unified.as_ref().is_some_and(plan_window_rejected)
+        let credits_refused = unified.is_some_and(|u| u.overage_disabled_reason.is_some());
+        let plan_rejected = unified.is_some_and(plan_window_rejected)
             || (ctx.kind == AccountKind::ApiKey && ctx.body_prefix.is_some_and(names_spend_limit));
         if credits_refused || !plan_rejected {
             return Verdict::FailOver {
-                cooldown: Some(fast_cooldown(head, unified.as_ref(), ctx)),
+                cooldown: Some(fast_cooldown(head, unified, ctx)),
                 mark: None,
             };
         }
@@ -171,7 +171,7 @@ pub fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
     match ctx.kind {
         AccountKind::Oauth if rate_limited => {
             return Verdict::FailOver {
-                cooldown: Some(oauth_cooldown(head, unified.as_ref(), ctx)),
+                cooldown: Some(oauth_cooldown(head, unified, ctx)),
                 mark: None,
             }
         }
@@ -579,7 +579,21 @@ mod tests {
             wire_model: "claude-opus-5",
             model_rejection_ms: 3_600_000,
             fast: false,
+            unified: None,
         }
+    }
+
+    /// `classify` over the unified headers parsed off the head the case builds, the one parse the relay makes of
+    /// each head.
+    fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
+        let unified = UnifiedHeaders::parse(head);
+        super::classify(
+            head,
+            &HeadContext {
+                unified: unified.as_ref(),
+                ..*ctx
+            },
+        )
     }
 
     fn fast_ctx<'a>(kind: AccountKind) -> HeadContext<'a> {

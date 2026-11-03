@@ -221,9 +221,11 @@ fn rfc3339_millis(value: &str) -> Option<i64> {
 
 /// The selection sample a head implies: the unified windows for an OAuth account, the buckets under `rpm:`,
 /// `itpm:`, `otpm:` plus the canonical model for an api_key account, and for either kind the fast lane's two
-/// buckets under `FAST_INPUT` and `FAST_OUTPUT`; `None` when the head carries none of them.
+/// buckets under `FAST_INPUT` and `FAST_OUTPUT`; `None` when the head carries none of them. `unified` is the
+/// head's own unified headers, parsed once by the caller.
 pub fn head_sample(
     head: &ResponseHead,
+    unified: Option<&UnifiedHeaders>,
     kind: AccountKind,
     canonical_model: &str,
     observed_at: i64,
@@ -234,7 +236,7 @@ pub fn head_sample(
     };
     match kind {
         AccountKind::Oauth => {
-            if let Some(unified) = UnifiedHeaders::parse(head) {
+            if let Some(unified) = unified {
                 if let Some(utilization) = unified.five_hour_utilization {
                     sample = sample.with(
                         FIVE_HOUR,
@@ -347,6 +349,23 @@ pub fn retry_after(head: &ResponseHead, now: i64) -> Option<i64> {
 mod tests {
     use super::*;
     use phoebis_transport::response::ResponseHead;
+
+    /// `head_sample` over the unified headers parsed off the head the case builds, the one parse the relay makes
+    /// of each head.
+    fn head_sample(
+        head: &ResponseHead,
+        kind: AccountKind,
+        canonical_model: &str,
+        observed_at: i64,
+    ) -> Option<UtilizationSample> {
+        super::head_sample(
+            head,
+            UnifiedHeaders::parse(head).as_ref(),
+            kind,
+            canonical_model,
+            observed_at,
+        )
+    }
 
     fn head(status: u16, headers: &[(&str, &str)]) -> ResponseHead {
         ResponseHead {

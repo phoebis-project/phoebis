@@ -3252,6 +3252,8 @@ impl Relay {
         // When the head arrived, which is what stamps the overage evidence below for an upstream that
         // sends no `Date` of its own.
         let head_at = (self.clock)();
+        let unified = UnifiedHeaders::parse(&head);
+        let observed_at = upstream_date(&head).unwrap_or(head_at);
         let framing = framing(&head);
         let reusable = keep_alive(&head, &framing);
         let mut reader = BodyReader::new(conn, leftover, framing);
@@ -3272,15 +3274,17 @@ impl Relay {
             ctx.cache_ttl_ms,
         );
         outcome.upstream_request_id = head.get("request-id").map(str::to_string);
-        outcome.overage_in_use = UnifiedHeaders::parse(&head).and_then(|u| u.overage_in_use);
+        outcome.overage_in_use = unified.as_ref().and_then(|u| u.overage_in_use);
         outcome.diagnostics = ctx.diagnostics;
         outcome.diagnostics_named = ctx.diagnostics_named;
-        self.report_overage(ctx.account, &head, head_at).await;
+        self.report_overage(ctx.account, unified.as_ref(), observed_at)
+            .await;
         self.report_head_sample(
             ctx.account,
             &head,
+            unified.as_ref(),
             &ctx.identity.canonical_model,
-            head_at,
+            observed_at,
             ctx.request_id,
         )
         .await;
@@ -3379,6 +3383,7 @@ impl Relay {
                 wire_model: &ctx.identity.folded_model,
                 model_rejection_ms: self.limits.model_rejection.as_millis() as i64,
                 fast: ctx.fast,
+                unified: unified.as_ref(),
             },
         );
         let committing = match held.as_ref().map(|h| &h.commit) {
@@ -3631,6 +3636,7 @@ impl Relay {
                             // migrates; a non-portable request keeps its pin. The deadline is measured
                             // from the error's arrival, not from the selection.
                             let now = clock();
+                            let unified = UnifiedHeaders::parse(&head);
                             let verdict = classify(
                                 &head,
                                 &HeadContext {
@@ -3648,6 +3654,7 @@ impl Relay {
                                     wire_model: &wire_model,
                                     model_rejection_ms,
                                     fast,
+                                    unified: unified.as_ref(),
                                 },
                             );
                             if let Verdict::FailOver { cooldown, mark } = verdict {
@@ -4533,12 +4540,13 @@ impl Relay {
         &self,
         account: &AccountRow,
         head: &ResponseHead,
+        unified: Option<&UnifiedHeaders>,
         canonical_model: &str,
-        now: i64,
+        observed_at: i64,
         request_id: &str,
     ) {
-        let observed_at = upstream_date(head).unwrap_or(now);
-        let Some(sample) = head_sample(head, account.kind, canonical_model, observed_at) else {
+        let Some(sample) = head_sample(head, unified, account.kind, canonical_model, observed_at)
+        else {
             return;
         };
         self.router
@@ -4554,14 +4562,18 @@ impl Relay {
     /// Only an OAuth head with the unified headers is evidence, and everything else changes nothing. A usage-based
     /// seat's overage family is its spend window against the monthly cap, so its head reports the share and the reset
     /// and never overage evidence.
-    async fn report_overage(&self, account: &AccountRow, head: &ResponseHead, now: i64) {
+    async fn report_overage(
+        &self,
+        account: &AccountRow,
+        unified: Option<&UnifiedHeaders>,
+        observed_at: i64,
+    ) {
         if account.kind != AccountKind::Oauth {
             return;
         }
-        let Some(unified) = UnifiedHeaders::parse(head) else {
+        let Some(unified) = unified else {
             return;
         };
-        let observed_at = upstream_date(head).unwrap_or(now);
         if self.router.snapshot().usage_based(&account.id) {
             let utilization = unified.overage_utilization;
             if utilization.is_some() || unified.overage_reset.is_some() {
