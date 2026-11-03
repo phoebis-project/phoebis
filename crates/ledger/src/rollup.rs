@@ -2060,6 +2060,8 @@ pub struct RollupSelect {
     /// Canonical ids, which the rows carry lowercased.
     pub models: Vec<String>,
     pub keys: Vec<KeySelector>,
+    /// The probe rows left out in SQL, for a read that never counts them, so it decodes none to drop it.
+    pub exclude_probes: bool,
 }
 
 /// The page of the paged read, `read_rollups_paged`, which takes each page as its own read and folds it into the
@@ -2081,6 +2083,9 @@ pub(crate) fn select_statement(
     pool_term(&select.pools, &select.accounts, &mut binds, &mut clauses);
     in_list("account_id", &select.accounts, &mut binds, &mut clauses);
     in_list("kind", &select.kinds, &mut binds, &mut clauses);
+    if select.exclude_probes {
+        clauses.push("kind != 'probe'".into());
+    }
     in_list("canonical_model", &select.models, &mut binds, &mut clauses);
     key_clause(&select.keys, false, &mut binds, &mut clauses);
     let indexed = if select.pools.is_empty() || select.accounts.is_empty() {

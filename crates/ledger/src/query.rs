@@ -1988,6 +1988,7 @@ impl RollupFilter {
             kinds: self.kinds.clone(),
             models: self.models.iter().map(|m| canonical_id(m)).collect(),
             keys,
+            ..RollupSelect::default()
         })
     }
 }
@@ -3068,10 +3069,11 @@ pub fn dashboard_on(
     let mut errors: BTreeMap<String, u64> = BTreeMap::new();
     let mut refusals: BTreeMap<String, u64> = BTreeMap::new();
     let mut tokens_cached = 0;
-    visit_rollups(conn, from_hour, to_hour, &RollupSelect::default(), |r| {
-        if r.kind == Kind::Probe.as_str() {
-            return;
-        }
+    let select = RollupSelect {
+        exclude_probes: true,
+        ..RollupSelect::default()
+    };
+    visit_rollups(conn, from_hour, to_hour, &select, |r| {
         fold.add(&mut buckets, &r);
         if let Some(slot) = bucket_slot(&mut refused, from_hour, 3_600, r.hour) {
             *slot += r.refusals.values().sum::<u64>();
@@ -4117,7 +4119,7 @@ pub fn pools_traffic(
 
 /// The zero buckets of a traffic range and the fold that adds figures to the bucket of their hour, nothing before the
 /// first bucket or past the last. The pool readers add each priced group of their sum, and the dashboard's day each
-/// rollup row with the probes left out.
+/// rollup row of its read, which leaves the probe rows out.
 struct TrafficFold<'a> {
     first: i64,
     bucket_seconds: i64,
@@ -4154,9 +4156,6 @@ impl<'a> TrafficFold<'a> {
     }
 
     fn add(&self, out: &mut [TrafficBucket], r: &RollupRow) {
-        if r.kind == Kind::Probe.as_str() {
-            return;
-        }
         let (usd, billed, equivalent) = shared_figures(r, self.prices, self.costs, self.now);
         let totals = Totals {
             cost_usd: usd,

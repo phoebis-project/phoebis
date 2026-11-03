@@ -254,6 +254,7 @@ fn holding_row(
             key_id: delta.key_id.clone(),
             key_generation: None,
         }],
+        ..RollupSelect::default()
     };
     let mut holding: Vec<RollupRow> = read_rollups(conn, delta.hour, delta.hour + 3_600, &select)?
         .into_iter()
