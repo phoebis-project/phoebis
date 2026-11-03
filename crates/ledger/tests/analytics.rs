@@ -11,8 +11,8 @@ use phoebis_ledger::{
     read_account_rollups, read_rollups, refusal_categories, request_totals, rewrite_series,
     run_retention_blocking, series, series_paged, session_identities, AttemptRecord,
     BudgetedMember, CostRevisions, EventRecord, FundingFilter, GroupRow, Histogram, KeepaliveDelta,
-    LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow, PlanTables, PriceRevisions, PriceTable,
-    RequestFilter, RequestRecord, RollupFilter, RollupRow, RollupSelect, SeriesFilter,
+    LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow, Patterns, PlanTables, PriceRevisions,
+    PriceTable, RequestFilter, RequestRecord, RollupFilter, RollupRow, RollupSelect, SeriesFilter,
     SharePricing, Speed, WindowShares, BILLED_FUNDING, FAST_FUNDING, NO_CLASS, OVERAGE_FUNDING,
     PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED, USAGE_BASED_FUNDING,
 };
@@ -811,7 +811,7 @@ async fn a_four_hundred_day_range_read_in_pages_answers_the_unpaged_series_and_b
         accounts: vec!["a".into(), "b".into(), UNATTRIBUTED.into()],
         models: vec!["CLAUDE-SONNET-5".into(), "gpt-5".into()],
         kinds: vec!["inference".into(), "probe".into()],
-        user_agents: vec!["claude-cli/*".into()],
+        user_agents: Patterns::new(vec!["claude-cli/*".into()]).unwrap(),
         ..RollupFilter::default()
     };
     let whole = db
@@ -6937,7 +6937,7 @@ fn placements_apply_the_model_and_client_filter() {
             placements(
                 c,
                 &RollupFilter {
-                    clients: vec!["sdk/*".into()],
+                    clients: Patterns::new(vec!["sdk/*".into()]).unwrap(),
                     ..Default::default()
                 },
                 &LiveKeys::default(),

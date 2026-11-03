@@ -19,7 +19,7 @@ use crate::db::{
     row_to_request, with_attempts, LedgerDb, REQUEST_SELECT,
 };
 use crate::histogram::Histogram;
-use crate::pattern::{literal_like, ESCAPE};
+use crate::pattern::{literal_like, Patterns, ESCAPE};
 use crate::plan::{
     entrypoint_of_client, free_equivalent, free_shares, funding_of, price_equivalent, price_shares,
     CostRevisions, Funding, PlanTables,
@@ -1840,7 +1840,7 @@ pub enum FundingFilter {
     Plan,
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default)]
 pub struct RollupFilter {
     /// A value is a key id, which names the rows of the key holding it now, or `<id>@<generation>`, which
     /// names an earlier holder's.
@@ -1850,12 +1850,12 @@ pub struct RollupFilter {
     pub models: Vec<String>,
     pub kinds: Vec<String>,
     /// Patterns under the wildcard grammar; a row matches when any pattern matches its agent in full.
-    pub user_agents: Vec<String>,
+    pub user_agents: Patterns,
     /// Under `group_by=user_agent`, each pattern names a group and a row falls in the first that matches it;
     /// a row no pattern matches groups under `other`. Empty means every agent is its own group.
-    pub user_agent_groups: Vec<String>,
+    pub user_agent_groups: Patterns,
     /// Patterns under the wildcard grammar; a row matches when any pattern matches its client in full.
-    pub clients: Vec<String>,
+    pub clients: Patterns,
     pub include_probes: bool,
     /// Applied in memory beside the pattern filters, off the key's funding word; `None` keeps every row.
     pub funding: Option<FundingFilter>,

@@ -2,6 +2,8 @@
 //! backslash to quote either. The request log hands `to_like` to SQLite; the analytics test rollup rows in
 //! memory with `matches`, so the two views cannot drift apart on what a pattern means.
 
+use std::ops::Deref;
+
 /// The escape character every `LIKE` pattern of the ledger names, written into the statement as `ESCAPE '\'`. A
 /// backslash rather than SQLite's absent default, since a backslash is what the grammar itself uses and no measured
 /// user agent carries one.
@@ -59,6 +61,36 @@ pub fn within_bounds(patterns: &[String]) -> bool {
         && patterns
             .iter()
             .all(|p| p.chars().count() <= MAX_PATTERN_CHARS)
+}
+
+/// A pattern list within the bounds, built only through `Patterns::new`, so a filter that holds one was checked once,
+/// where the route read it.
+#[derive(Clone, Debug, Default)]
+pub struct Patterns(Vec<String>);
+
+impl Patterns {
+    /// `PATTERNS_TOO_LONG` for a list past the bounds.
+    pub fn new(patterns: Vec<String>) -> Result<Patterns, &'static str> {
+        if within_bounds(&patterns) {
+            Ok(Patterns(patterns))
+        } else {
+            Err(PATTERNS_TOO_LONG)
+        }
+    }
+}
+
+impl Deref for Patterns {
+    type Target = [String];
+
+    fn deref(&self) -> &[String] {
+        &self.0
+    }
+}
+
+impl From<Patterns> for Vec<String> {
+    fn from(patterns: Patterns) -> Vec<String> {
+        patterns.0
+    }
 }
 
 /// Whether `value` matches `pattern` under the same grammar, character by character; `*` is greedy over any run

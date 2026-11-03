@@ -43,7 +43,9 @@ pub use metrics::{
     gather, metrics_router, AttentionGaugeSource, AttentionGauges, KeepaliveAgents,
     KeepaliveGaugeSource, Metrics, RoutingGauges, FAMILIES,
 };
-pub use pattern::{literal_like, within_bounds as patterns_within_bounds, PATTERNS_TOO_LONG};
+pub use pattern::{
+    literal_like, within_bounds as patterns_within_bounds, Patterns, PATTERNS_TOO_LONG,
+};
 pub use plan::{
     entrypoint_of_client, free_equivalent, free_shares, funding_of, price_equivalent, price_shares,
     Capacity, CostRevisions, Funding, ModelWindow, Override, Peak, PerWindow, PlanTables, Regime,

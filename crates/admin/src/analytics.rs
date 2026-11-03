@@ -12,7 +12,8 @@ use phoebis_ledger::{
     hour_of, hourly_window_samples, lead_over_pace, moves_by_reason_and_fit, names_one_account,
     parse_range, read_account_rollups, read_reconciliations, rewrite_series, series_paged,
     session_burn_series, AccountRollupRow, FundingFilter, GroupRow, HourlyWindowSample,
-    LedgerError, LiveKeys, RequestFilter, RollupFilter, SeriesFilter, SharePricing, GROUP_BYS,
+    LedgerError, LiveKeys, Patterns, RequestFilter, RollupFilter, SeriesFilter, SharePricing,
+    GROUP_BYS,
 };
 use phoebis_routing::{term, UtilizationSample, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
 use phoebis_store::{AccountKind, SubscriptionTerm};
@@ -55,15 +56,18 @@ fn list(q: &HashMap<String, String>, name: &str) -> Vec<String> {
 /// The same list, split on newlines instead of commas: a pattern of the wildcard grammar carries no newline, and the
 /// request log's raw agents carry a comma (`claude-cli/2.1.269 (external, sdk-cli)`) that a pattern written against
 /// them keeps.
-fn agent_list(q: &HashMap<String, String>, name: &str) -> Vec<String> {
-    q.get(name)
-        .map(|v| {
-            v.split('\n')
-                .filter(|s| !s.is_empty())
-                .map(String::from)
-                .collect()
-        })
-        .unwrap_or_default()
+/// `PATTERNS_TOO_LONG` for a list past the bounds, the route's 400.
+fn agent_list(q: &HashMap<String, String>, name: &str) -> Result<Patterns, &'static str> {
+    Patterns::new(
+        q.get(name)
+            .map(|v| {
+                v.split('\n')
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_default(),
+    )
 }
 
 fn flag(q: &HashMap<String, String>, name: &str) -> bool {
@@ -77,20 +81,20 @@ pub(crate) fn hour_end(hour: i64) -> i64 {
     hour + 3_600
 }
 
-fn filter_of(q: &HashMap<String, String>) -> RollupFilter {
-    RollupFilter {
+fn filter_of(q: &HashMap<String, String>) -> Result<RollupFilter, &'static str> {
+    Ok(RollupFilter {
         keys: list(q, "keys"),
         pools: list(q, "pools"),
         accounts: list(q, "accounts"),
         models: list(q, "models"),
         kinds: list(q, "kinds"),
-        user_agents: agent_list(q, "user_agents"),
-        user_agent_groups: agent_list(q, "user_agent_groups"),
-        clients: agent_list(q, "clients"),
+        user_agents: agent_list(q, "user_agents")?,
+        user_agent_groups: agent_list(q, "user_agent_groups")?,
+        clients: agent_list(q, "clients")?,
         include_probes: flag(q, "include_probes"),
         // Read by `selection` alone: `placements` builds its filter here and never takes the parameter.
         funding: None,
-    }
+    })
 }
 
 /// The range in Unix milliseconds, the group-by, the filter, the live keys' generations the key dimension is read
@@ -119,16 +123,7 @@ async fn selection(state: &AdminState, q: &HashMap<String, String>) -> Result<Se
             "group_by is account, all, classifier, client, effort, key, kind, model, pool, request_class, speed, or user_agent",
         ));
     }
-    let mut filter = filter_of(q);
-    if !phoebis_ledger::patterns_within_bounds(&filter.user_agents)
-        || !phoebis_ledger::patterns_within_bounds(&filter.user_agent_groups)
-        || !phoebis_ledger::patterns_within_bounds(&filter.clients)
-    {
-        return Err(failure(
-            StatusCode::BAD_REQUEST,
-            phoebis_ledger::PATTERNS_TOO_LONG,
-        ));
-    }
+    let mut filter = filter_of(q).map_err(|m| failure(StatusCode::BAD_REQUEST, m))?;
     filter.funding = match q.get("funding").map(String::as_str) {
         None => None,
         Some("billed") => Some(FundingFilter::Billed),
@@ -587,13 +582,10 @@ pub(crate) async fn placements(
         Ok(r) => r,
         Err(m) => return failure(StatusCode::BAD_REQUEST, &m),
     };
-    let filter = filter_of(&q);
-    if !phoebis_ledger::patterns_within_bounds(&filter.user_agents)
-        || !phoebis_ledger::patterns_within_bounds(&filter.user_agent_groups)
-        || !phoebis_ledger::patterns_within_bounds(&filter.clients)
-    {
-        return failure(StatusCode::BAD_REQUEST, phoebis_ledger::PATTERNS_TOO_LONG);
-    }
+    let filter = match filter_of(&q) {
+        Ok(filter) => filter,
+        Err(m) => return failure(StatusCode::BAD_REQUEST, m),
+    };
     let live = LiveKeys::from_snapshot(&state.router.snapshot());
     let rows = match state
         .ledger
@@ -953,10 +945,10 @@ pub(crate) async fn burn(
             "group_by is account, classifier, client, effort, key, kind, model, pool, request_class, session, speed, or user_agent",
         );
     }
-    let agent_groups = agent_list(&q, "user_agent_groups");
-    if !phoebis_ledger::patterns_within_bounds(&agent_groups) {
-        return failure(StatusCode::BAD_REQUEST, phoebis_ledger::PATTERNS_TOO_LONG);
-    }
+    let agent_groups = match agent_list(&q, "user_agent_groups") {
+        Ok(groups) => groups,
+        Err(m) => return failure(StatusCode::BAD_REQUEST, m),
+    };
     let kinds = match kinds(&state) {
         Ok(kinds) => kinds,
         Err(r) => return r,
@@ -1181,26 +1173,29 @@ pub(crate) async fn refusal_categories(
         Ok(r) => r,
         Err(m) => return failure(StatusCode::BAD_REQUEST, &m),
     };
+    // The groups partition the series' rows, a row no pattern matches falling under `other`, so they narrow no count:
+    // the route holds them to the bound and reads nothing more of them, as `placements` does.
+    let (user_agents, clients) = match (
+        agent_list(&q, "user_agents"),
+        agent_list(&q, "clients"),
+        agent_list(&q, "user_agent_groups"),
+    ) {
+        (Ok(user_agents), Ok(clients), Ok(_)) => (user_agents, clients),
+        (Err(m), _, _) | (_, Err(m), _) | (_, _, Err(m)) => {
+            return failure(StatusCode::BAD_REQUEST, m)
+        }
+    };
     let filter = RequestFilter {
         keys: list(&q, "keys"),
         pools: list(&q, "pools"),
         accounts: list(&q, "accounts"),
         models: list(&q, "models"),
         kinds: list(&q, "kinds"),
-        user_agents: agent_list(&q, "user_agents"),
-        clients: agent_list(&q, "clients"),
+        user_agents: user_agents.into(),
+        clients: clients.into(),
         include_probes: flag(&q, "include_probes"),
         ..Default::default()
     };
-    // The groups partition the series' rows, a row no pattern matches falling under `other`, so they narrow no count:
-    // the route holds them to the bound and reads nothing more of them, as `placements` does.
-    let user_agent_groups = agent_list(&q, "user_agent_groups");
-    if !phoebis_ledger::patterns_within_bounds(&filter.user_agents)
-        || !phoebis_ledger::patterns_within_bounds(&user_agent_groups)
-        || !phoebis_ledger::patterns_within_bounds(&filter.clients)
-    {
-        return failure(StatusCode::BAD_REQUEST, phoebis_ledger::PATTERNS_TOO_LONG);
-    }
     let live = LiveKeys::from_snapshot(&state.router.snapshot());
     let rows = match state
         .ledger
