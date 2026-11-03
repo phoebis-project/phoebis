@@ -23,14 +23,12 @@ use crate::db::{
 use crate::events::{spawn_event_mirror, MirrorBaseline};
 use crate::metrics::Metrics;
 use crate::plan::{funding_of, Funding, PlanTables};
-use crate::pricing::{PriceRevisions, Pricing, Speed};
+use crate::pricing::{Pricing, Speed};
 use crate::query::{
     member_spends, period_bounds, BudgetedMember, BUDGET_PERIOD_ENDED, BUDGET_REACHED, LEDGER_GAP,
     ROUTER_STARTED,
 };
-use crate::record::{
-    AttemptRecord, EventRecord, ParkedRecord, ParkedRows, QuotaSampleRecord, RequestRecord,
-};
+use crate::record::{AttemptRecord, EventRecord, ParkedRecord, ParkedRows, RequestRecord};
 use crate::{LedgerDb, LedgerError, WriterRead};
 
 pub const CHANNEL_DEPTH: usize = 4_096;
@@ -1671,22 +1669,6 @@ fn table_of(record: &Record) -> &'static str {
     }
 }
 
-/// What a landed batch reports to the metrics registry, once the transaction that produced it has committed.
-// Boxing the request would put an allocation on a path every landed request takes, to shrink a value built
-// once per batch and consumed immediately after.
-#[allow(clippy::large_enum_variant)]
-enum Observation {
-    Request {
-        revisions: Arc<PriceRevisions>,
-        request: RequestRecord,
-        attempts: Vec<AttemptRecord>,
-    },
-    Samples {
-        quota: Vec<QuotaSampleRecord>,
-        poll: bool,
-    },
-}
-
 /// One transaction over `range` of the batch on a blocking thread. A transaction that fails rolls back and leaves
 /// the records to the caller to retry, replay or park; only a panicking closure drops them, counted, so the gap
 /// that follows names them. Metrics are observed only after the commit succeeds, so a failed write never reaches
@@ -1733,9 +1715,9 @@ async fn land_acknowledging(
     let tiers = tiers.clone();
     let records = batch.clone();
     let size = range.len() as u64;
-    let dropped_tables: Vec<&'static str> = batch[range.clone()].iter().map(table_of).collect();
+    let landed = range.clone();
+    let observed = revisions.clone();
     let written = tokio::task::spawn_blocking(move || {
-        let mut observations = Vec::new();
         // The cache-map writes that found no decision, counted once the transaction commits: an orphan in a batch
         // that rolls back is tried again with it.
         let mut orphans = Vec::new();
@@ -1768,18 +1750,9 @@ async fn land_acknowledging(
                             previous.as_ref().map(|(r, a)| (r, a.as_slice())),
                             &revisions,
                         )?;
-                        observations.push(Observation::Request {
-                            revisions: revisions.clone(),
-                            request: request.clone(),
-                            attempts,
-                        });
                     }
-                    Record::Samples { quota, extra, poll } => {
+                    Record::Samples { quota, extra, .. } => {
                         insert_samples_in(&tx, quota, extra.as_ref())?;
-                        observations.push(Observation::Samples {
-                            quota: quota.clone(),
-                            poll: *poll,
-                        });
                     }
                     Record::Decision(row) => {
                         let summary = serde_json::to_string(&row.summary)?;
@@ -1831,11 +1804,11 @@ async fn land_acknowledging(
             tx.commit()?;
             Ok::<(), LedgerError>(())
         });
-        (result, observations, orphans)
+        (result, orphans)
     })
     .await;
     match written {
-        Ok((Ok(()), observations, orphans)) => {
+        Ok((Ok(()), orphans)) => {
             stats.written.fetch_add(size, Ordering::Relaxed);
             stats
                 .cache_map_orphans
@@ -1848,37 +1821,32 @@ async fn land_acknowledging(
                     "a cache map found no decision to land on, so it is counted and dropped"
                 );
             }
-            for observation in observations {
-                match observation {
-                    Observation::Request {
-                        revisions,
-                        request,
-                        attempts,
+            // The batch's own attempts serve the observers: the copies the transaction stamped differ in `tier`
+            // alone, which neither reads.
+            for record in &batch[landed] {
+                match record {
+                    Record::Request {
+                        request, attempts, ..
                     } => {
+                        let in_force = observed.in_force(request.received_at);
                         // Counted at the landing, once per request, since every read prices the same counts again,
                         // and after the commit, since a refused batch runs its transaction again on the retry or
                         // the replay.
                         if attempts.iter().any(AttemptRecord::has_usage)
-                            && revisions
-                                .in_force(request.received_at)
-                                .price(&request.canonical_model)
-                                .is_none()
+                            && in_force.price(&request.canonical_model).is_none()
                         {
                             pricing.unknown_counter().fetch_add(1, Ordering::Relaxed);
                         }
-                        note_unpriced(tables, unpriced, &request, &attempts);
-                        metrics.observe_request(
-                            revisions.in_force(request.received_at),
-                            &request,
-                            &attempts,
-                        );
+                        note_unpriced(tables, unpriced, request, attempts);
+                        metrics.observe_request(in_force, request, attempts);
                     }
-                    Observation::Samples { quota, poll } => metrics.observe_samples(&quota, poll),
+                    Record::Samples { quota, poll, .. } => metrics.observe_samples(quota, *poll),
+                    _ => {}
                 }
             }
             Landed::Written
         }
-        Ok((Err(error), _, _)) => {
+        Ok((Err(error), _)) => {
             tracing::error!(%error, records = size, "a ledger batch could not be written");
             stats.write_failures.fetch_add(1, Ordering::Relaxed);
             Landed::Refused {
@@ -1890,8 +1858,8 @@ async fn land_acknowledging(
             tracing::error!(%error, records = size, "the ledger writer panicked, so the batch is lost");
             stats.write_failures.fetch_add(1, Ordering::Relaxed);
             stats.dropped.fetch_add(size, Ordering::Relaxed);
-            for table in &dropped_tables {
-                metrics.observe_drop(table);
+            for record in &batch[landed] {
+                metrics.observe_drop(table_of(record));
             }
             Landed::Lost
         }
@@ -2025,7 +1993,7 @@ async fn run_purge(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pricing::PriceTable;
+    use crate::pricing::{PriceRevisions, PriceTable};
     use phoebis_store::AccountKind;
 
     /// A ledger whose channel holds one record and has no writer draining it.
