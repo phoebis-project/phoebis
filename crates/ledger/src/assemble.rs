@@ -64,11 +64,6 @@ pub enum Record {
     },
 }
 
-/// What `expire` aged out: the request ids whose completion never came, each of which the caller files as a gap.
-pub struct Expired {
-    pub ids: Vec<String>,
-}
-
 pub(crate) struct InFlight {
     pub observed: RequestObserved,
     /// The caller's `User-Agent`, read off the observation's headers before they are released.
@@ -340,7 +335,9 @@ impl Assembler {
         records
     }
 
-    pub fn expire(&mut self, now: i64) -> Expired {
+    /// Ages out the entries silent for `IN_FLIGHT_TTL_MS` and answers their request ids, whose completion never
+    /// came, each of which the caller files as a gap.
+    pub fn expire(&mut self, now: i64) -> Vec<String> {
         let stale: Vec<String> = self
             .in_flight
             .iter()
@@ -356,7 +353,7 @@ impl Assembler {
                 "requests whose completion never reached the ledger were dropped"
             );
         }
-        Expired { ids: stale }
+        stale
     }
 }
 
@@ -1630,7 +1627,7 @@ mod tests {
         };
         let mut a = Assembler::new(clock);
         a.observe(observed("r5", Some("k")));
-        assert!(a.expire(1_000 + IN_FLIGHT_TTL_MS - 1).ids.is_empty());
+        assert!(a.expire(1_000 + IN_FLIGHT_TTL_MS - 1).is_empty());
         // Twenty minutes of chunks: each one is activity, so the entry outlives the TTL measured from observation.
         for minute in [5, 10, 15, 20] {
             now.store(1_000 + minute * 60_000, std::sync::atomic::Ordering::SeqCst);
@@ -1638,12 +1635,11 @@ mod tests {
         }
         assert!(
             a.expire(1_000 + 20 * 60_000 + IN_FLIGHT_TTL_MS - 1)
-                .ids
                 .is_empty(),
             "still active"
         );
         assert_eq!(
-            a.expire(1_000 + 20 * 60_000 + IN_FLIGHT_TTL_MS).ids,
+            a.expire(1_000 + 20 * 60_000 + IN_FLIGHT_TTL_MS),
             ["r5"],
             "silent for the whole TTL, and named so its gap can say which request it was"
         );
@@ -1809,7 +1805,7 @@ mod tests {
         let mut a = Assembler::new(clock_at(1_000));
         a.observe(observed_capturing_with_body("r1", vec![b'x'; 10]));
         a.chunk(&chunk_bytes("r1", 0, b"answer"));
-        assert_eq!(a.expire(1_000 + IN_FLIGHT_TTL_MS).ids.len(), 1);
+        assert_eq!(a.expire(1_000 + IN_FLIGHT_TTL_MS).len(), 1);
         let records = a.observe(observed_capturing_with_body(
             "r2",
             vec![b'x'; MAX_CAPTURE_BYTES],

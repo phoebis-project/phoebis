@@ -28,7 +28,7 @@ mod task;
 mod usage;
 
 pub use allowance::{unused_allowance, AllowanceReset};
-pub use assemble::{Assembler, Expired, Record, IN_FLIGHT_TTL_MS};
+pub use assemble::{Assembler, Record, IN_FLIGHT_TTL_MS};
 pub use bodies::{
     run_retention, run_retention_blocking, Purged, MAX_CAPTURED_BODY, PURGE_SLICE,
     PURGE_SLICE_BYTES,

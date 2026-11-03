@@ -524,7 +524,7 @@ async fn assemble(
             },
             _ = expire.tick() => {
                 let now = clock();
-                for id in assembler.expire(now).ids {
+                for id in assembler.expire(now) {
                     // The ledger names it so the system page's gap list has a row for it rather than a count
                     // with nothing behind it.
                     count_drop(&ledger.stats, &ledger.metrics, "requests");
