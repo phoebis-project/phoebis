@@ -9,8 +9,8 @@ use std::collections::{HashMap, HashSet};
 use phoebis_bus::{Event, Kind as RequestKind, Origin, Outcome};
 use phoebis_ledger::{
     polled, ParkedSummary, RoutingCondition, UnpricedModel, CEILING_SETTING,
-    DESTINATION_SPENT_KIND, METER_DRIFT_KIND, SHED_NO_RUNWAY_KIND, SLOWED_LONG_KIND, SLOW_SETTINGS,
-    WALL_REACHED_KIND, WALL_SETTINGS,
+    DESTINATION_SPENT_KIND, IN_FLIGHT_TTL_MS, METER_DRIFT_KIND, SHED_NO_RUNWAY_KIND,
+    SLOWED_LONG_KIND, SLOW_SETTINGS, WALL_REACHED_KIND, WALL_SETTINGS,
 };
 use phoebis_oauth::UsageService;
 use phoebis_routing::{shed_cap, RegistrySnapshot, RouterHandle};
@@ -33,9 +33,6 @@ const DAY_MS: i64 = 86_400_000;
 /// How many of a holder's newest settled refresh attempts one read walks: two make the condition, and the rest date
 /// the run's start as far back as the read reaches, which bounds the scan a scrape pays per account.
 pub const REFRESH_RUN_READ: usize = 16;
-
-/// How long an in-flight entry may wait for its completion before the arm forgets it.
-const IN_FLIGHT_TTL_MS: i64 = 15 * 60 * 1_000;
 
 /// The subject of a drift refusal whose completion names no client version.
 const UNKNOWN_VERSION: &str = "unknown";
