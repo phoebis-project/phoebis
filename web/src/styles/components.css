@@ -1015,7 +1015,9 @@ textarea.input {
   color: var(--ink-3);
 }
 
-/* Pattern editor: one bordered row per rule, the inherited rows after them in the muted ink */
+/* Pattern editor and conditions editor: one bordered row per rule or condition, the pattern editor's inherited rows
+   after them in the muted ink */
+.conditions-editor,
 .pattern-editor {
   display: flex;
   flex-direction: column;
@@ -1023,6 +1025,7 @@ textarea.input {
   min-width: 0;
 }
 
+.conditions-editor__rows,
 .pattern-editor__rows {
   display: flex;
   flex-direction: column;
@@ -1032,6 +1035,7 @@ textarea.input {
   list-style: none;
 }
 
+.conditions-editor__row,
 .pattern-editor__row {
   display: flex;
   flex-direction: column;
@@ -1041,6 +1045,7 @@ textarea.input {
   border-radius: var(--radius-sm);
 }
 
+.conditions-editor__row.is-refused,
 .pattern-editor__row.is-refused {
   border-color: var(--critical-border);
 }
@@ -1052,6 +1057,7 @@ textarea.input {
   min-width: 0;
 }
 
+.conditions-editor__actions,
 .pattern-editor__line .segmented,
 .pattern-editor__actions {
   flex: none;
@@ -1067,15 +1073,18 @@ textarea.input {
   flex: 1;
 }
 
+.conditions-editor__actions,
 .pattern-editor__actions {
   display: inline-flex;
   gap: 2px;
 }
 
+.conditions-editor__up svg,
 .pattern-editor__up svg {
   transform: rotate(180deg);
 }
 
+.conditions-editor__refusal,
 .pattern-editor__refusal {
   margin: 0;
   font-size: 12px;
