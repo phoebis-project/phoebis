@@ -242,7 +242,7 @@ test('the request order puts the newer request first and the higher id first at 
   const rows = [
     { at: '2026-09-16T10:00:00.000Z', id: 'req_a' },
     { at: '2026-09-16T10:00:00.000Z', id: 'req_b' },
-    { at: '2026-09-16T11:00:00.000Z', id: 'req_c' },
+    { at: '2026-09-16T11:00:00.000Z', id: 'req_0' },
   ];
-  assert.deepEqual([...rows].sort(d.compareRequests).map((r) => r.id), ['req_c', 'req_b', 'req_a']);
+  assert.deepEqual([...rows].sort(d.compareRequests).map((r) => r.id), ['req_0', 'req_b', 'req_a']);
 });
