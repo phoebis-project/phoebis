@@ -215,14 +215,7 @@ impl PairingSessions {
         now: i64,
     ) -> Result<PairingSession, PairingError> {
         let mut sessions = self.sessions.lock().expect(LOCK_POISONED);
-        let session = sessions.get_mut(id).ok_or(PairingError::NotFound)?;
-        if session.admin_session_id != admin_session_id {
-            return Err(PairingError::Forbidden);
-        }
-        expire_if_stale(session, now);
-        if matches!(session.status, PairingStatus::Expired) {
-            return Err(PairingError::Expired);
-        }
+        let session = owned_session(&mut sessions, id, admin_session_id, now)?;
         if !matches!(session.status, PairingStatus::Pending) {
             return Err(PairingError::AlreadyConsumed);
         }
@@ -323,14 +316,7 @@ impl PairingSessions {
 
     pub fn cancel(&self, id: &str, admin_session_id: &str, now: i64) -> Result<(), PairingError> {
         let mut sessions = self.sessions.lock().expect(LOCK_POISONED);
-        let session = sessions.get_mut(id).ok_or(PairingError::NotFound)?;
-        if session.admin_session_id != admin_session_id {
-            return Err(PairingError::Forbidden);
-        }
-        expire_if_stale(session, now);
-        if matches!(session.status, PairingStatus::Expired) {
-            return Err(PairingError::Expired);
-        }
+        let session = owned_session(&mut sessions, id, admin_session_id, now)?;
         // An ended session keeps the status it ended with: a confirm already installed the credential, a failure
         // already named its reason, a cancel already counted; relabeling any of them would say the opposite of
         // what happened.
