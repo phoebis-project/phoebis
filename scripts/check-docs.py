@@ -521,6 +521,8 @@ FIELD_FORWARD = "self.code"
 CODE_CONST = re.compile(r"\bconst ([A-Z_][A-Z0-9_]*): &(?:'static )?str = \"([a-z_]+)\";")
 LOCAL = re.compile(r"^[a-z_][a-z0-9_]*$")
 LET_CALL = re.compile(r"\blet ([a-z_][a-z0-9_]*) = ([a-z_][a-z0-9_]*)\(")
+# A code read straight off a call, `code: name(..)`, reads that function's arms as a `let` binding of it does.
+DIRECT_CALL = re.compile(r"^([a-z_][a-z0-9_]*)\(.*\)$")
 FN_NAME = re.compile(r"\bfn ([a-z_][a-z0-9_]*)\b")
 MATCH_BODY = re.compile(r"\s*match\b")
 FAILURE_CONST = re.compile(r"\bconst ([A-Z_][A-Z0-9_]*): Failure = Failure \{")
@@ -620,8 +622,9 @@ def match_arms(code, blanked, opened, close):
     return arms
 
 
-def failure_codes(code, blanked):
-    """The `code:` literal of each `Failure` const, by the const's name."""
+def failure_codes(code, blanked, consts):
+    """The code of each `Failure` const, by the const's name: its `code:` literal, or the value of the code const the
+    field names among `consts`."""
     found = {}
     for failure in FAILURE_CONST.finditer(blanked):
         opened = failure.end() - 1
@@ -629,9 +632,12 @@ def failure_codes(code, blanked):
         field = CODE_FIELD.search(fields)
         if field:
             start = opened + field.end()
-            literal = CODE_LITERAL.match(code[start : expression_end(blanked, start)].strip())
+            expression = code[start : expression_end(blanked, start)].strip()
+            literal = CODE_LITERAL.match(expression)
             if literal:
                 found[failure.group(1)] = literal.group(2)
+            elif CODE_IDENT.match(expression) and expression.rsplit("::", 1)[-1] in consts:
+                found[failure.group(1)] = consts[expression.rsplit("::", 1)[-1]]
     return found
 
 
@@ -673,12 +679,12 @@ def check_codes(code_files, client_md):
         code, blanked = tokenized(path.read_text(encoding="utf-8"))
         sources[path] = code, blanked
         consts.update(CODE_CONST.findall(code))
-        failures.update(failure_codes(code, blanked))
+        failures.update(failure_codes(code, blanked, consts))
         for offset, expression in code_expressions(code, blanked):
             literal = CODE_LITERAL.match(expression)
             if literal:
                 answered.add(literal.group(2))
-            elif CODE_IDENT.match(expression):
+            elif CODE_IDENT.match(expression) or DIRECT_CALL.match(expression):
                 pending.append((path, offset, expression))
             elif expression != FIELD_FORWARD:
                 print(f"{path.name}:{line_of(code, offset)}: unsupported code expression {expression}")
@@ -688,19 +694,23 @@ def check_codes(code_files, client_md):
     for path, offset, ident in pending:
         code, blanked = sources[path]
         line = line_of(code, offset)
-        name = ident.rsplit("::", 1)[-1]
-        if name in consts:
-            answered.add(consts[name])
-            continue
-        if not LOCAL.match(ident):
-            print(f"{path.name}:{line}: code {ident} resolves to no const in the files read")
-            findings += 1
-            continue
-        called = bound_call(blanked, offset, ident)
-        if called is None:
-            print(f"{path.name}:{line}: code {ident} resolves to no const or binding in the files read")
-            findings += 1
-            continue
+        direct = DIRECT_CALL.match(ident)
+        if direct:
+            called = direct.group(1)
+        else:
+            name = ident.rsplit("::", 1)[-1]
+            if name in consts:
+                answered.add(consts[name])
+                continue
+            if not LOCAL.match(ident):
+                print(f"{path.name}:{line}: code {ident} resolves to no const in the files read")
+                findings += 1
+                continue
+            called = bound_call(blanked, offset, ident)
+            if called is None:
+                print(f"{path.name}:{line}: code {ident} resolves to no const or binding in the files read")
+                findings += 1
+                continue
         bodies = [
             (source, opened, close)
             for source, (_, source_blanked) in sources.items()
