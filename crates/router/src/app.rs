@@ -457,20 +457,9 @@ pub async fn run_until(
     let proxy_acceptor = acceptor(&proxy_live);
     let admin_acceptor = acceptor(&admin_live);
     tls_live.fill(vec![("proxy", proxy_live), ("admin", admin_live)]);
-    let proxy_listener = tokio::net::TcpListener::bind(config.proxy.listen)
-        .await
-        .with_context(|| format!("binding proxy.listen {}", config.proxy.listen))?;
-    let admin_listener = tokio::net::TcpListener::bind(config.admin.listen)
-        .await
-        .with_context(|| format!("binding admin.listen {}", config.admin.listen))?;
-    let metrics_listener = tokio::net::TcpListener::bind(config.stats.metrics_listen)
-        .await
-        .with_context(|| {
-            format!(
-                "binding stats.metrics_listen {}",
-                config.stats.metrics_listen
-            )
-        })?;
+    let proxy_listener = bind("proxy.listen", config.proxy.listen).await?;
+    let admin_listener = bind("admin.listen", config.admin.listen).await?;
+    let metrics_listener = bind("stats.metrics_listen", config.stats.metrics_listen).await?;
     tracing::info!(
         proxy = %tls::url(&config.proxy.tls, config.proxy.listen),
         admin = %tls::url(&config.admin.tls, config.admin.listen),
@@ -514,6 +503,12 @@ pub async fn run_until(
     };
     let (stop, stop_rx) = tokio::sync::watch::channel(false);
     let proxy_stop = stop_rx.clone();
+    let limits = |max_connections, shutdown_mark| ListenLimits {
+        drain_timeout,
+        header_read_timeout: HEADER_READ_TIMEOUT,
+        max_connections,
+        shutdown_mark,
+    };
     // The relayed surface wraps every connection to preserve the caller's original header spelling. The admin and
     // metrics listeners serve a plain tower service on the same accept loop, under the same header read timeout and
     // connection cap.
@@ -527,12 +522,7 @@ pub async fn run_until(
             pricing.clone(),
         )),
         proxy_stop,
-        ListenLimits {
-            drain_timeout,
-            header_read_timeout: HEADER_READ_TIMEOUT,
-            max_connections: PROXY_MAX_CONNECTIONS,
-            shutdown_mark: Some(mark.clone()),
-        },
+        limits(PROXY_MAX_CONNECTIONS, Some(mark.clone())),
         proxy_acceptor,
     ));
     let mut admin_server = tokio::spawn(listen::serve(
@@ -540,12 +530,7 @@ pub async fn run_until(
         admin_listener,
         admin_app,
         stop_rx.clone(),
-        ListenLimits {
-            drain_timeout,
-            header_read_timeout: HEADER_READ_TIMEOUT,
-            max_connections: ADMIN_MAX_CONNECTIONS,
-            shutdown_mark: None,
-        },
+        limits(ADMIN_MAX_CONNECTIONS, None),
         admin_acceptor,
     ));
     let mut metrics_server = tokio::spawn(listen::serve(
@@ -563,12 +548,7 @@ pub async fn run_until(
             Some(ledger.clone()),
         ),
         stop_rx,
-        ListenLimits {
-            drain_timeout,
-            header_read_timeout: HEADER_READ_TIMEOUT,
-            max_connections: METRICS_MAX_CONNECTIONS,
-            shutdown_mark: None,
-        },
+        limits(METRICS_MAX_CONNECTIONS, None),
         None,
     ));
 
@@ -855,6 +835,13 @@ pub fn load_plan_tables(stats: &StatsConfig) -> anyhow::Result<phoebis_ledger::P
 /// Where a table is loaded from, for a refusal's line: the file, or the built-in one's name.
 fn file_or(path: Option<&std::path::Path>, built_in: &str) -> String {
     path.map_or_else(|| built_in.to_owned(), |path| path.display().to_string())
+}
+
+/// Binds `addr`, refused under the line that names the configuration key holding it.
+async fn bind(key: &str, addr: std::net::SocketAddr) -> anyhow::Result<tokio::net::TcpListener> {
+    tokio::net::TcpListener::bind(addr)
+        .await
+        .with_context(|| format!("binding {key} {addr}"))
 }
 
 /// The accept loop's acceptor: the pair's own, so a reload reaches the loop.
