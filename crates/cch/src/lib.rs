@@ -19,7 +19,7 @@ pub const JSON_WS: &[u8] = b" \t\r\n";
 /// Opening quote and prefix of the billing block as it appears in `system[0].text`.
 pub const BILLING_BLOCK: &[u8] = br#""x-anthropic-billing-header:"#;
 
-#[derive(Clone, Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum CchError {
     #[error("body is not valid JSON at byte {0}")]
     Json(usize),
