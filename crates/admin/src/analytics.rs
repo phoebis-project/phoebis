@@ -733,30 +733,27 @@ pub(crate) async fn accounts(
     type Hour = (AccountRollupRow, Map<String, Value>);
     let snapshot = state.router.snapshot();
     let mut by_account: BTreeMap<String, (AccountRollupRow, BTreeMap<i64, Hour>)> = BTreeMap::new();
+    let empty = |account_id: &str| {
+        (
+            AccountRollupRow {
+                account_id: account_id.to_string(),
+                ..Default::default()
+            },
+            BTreeMap::new(),
+        )
+    };
     for row in rows {
-        let entry = by_account.entry(row.account_id.clone()).or_insert_with(|| {
-            (
-                AccountRollupRow {
-                    account_id: row.account_id.clone(),
-                    ..Default::default()
-                },
-                BTreeMap::new(),
-            )
-        });
+        let entry = by_account
+            .entry(row.account_id.clone())
+            .or_insert_with(|| empty(&row.account_id));
         entry.0.add(&row);
         let hour = row.hour;
         entry.1.insert(hour, (row, base_windows()));
     }
     for s in samples {
-        let entry = by_account.entry(s.account_id.clone()).or_insert_with(|| {
-            (
-                AccountRollupRow {
-                    account_id: s.account_id.clone(),
-                    ..Default::default()
-                },
-                BTreeMap::new(),
-            )
-        });
+        let entry = by_account
+            .entry(s.account_id.clone())
+            .or_insert_with(|| empty(&s.account_id));
         // An hour with samples and no attempt is listed with null peaks and zero counts, so the cards draw an idle
         // hour's reading while the peaks and the sums stay the attempts' own.
         let (_, windows) = entry.1.entry(s.hour).or_insert_with(|| {
