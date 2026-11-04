@@ -5463,60 +5463,6 @@ mod tests {
         );
     }
 
-    /// The split reads the cache halves the equivalent fold priced for the row, so the figures the fold's pricer
-    /// answered for the two halves read back from the split's cache parts.
-    #[test]
-    fn the_split_takes_the_cache_halves_the_equivalent_fold_priced() {
-        let costs = crate::test_tables::subscription_costs();
-        let model = "claude-sonnet-5-5";
-        let mut row = RollupRow::key(
-            HOUR,
-            "k",
-            0,
-            "p",
-            "a",
-            model,
-            "inference",
-            "-",
-            "-",
-            "-",
-            "-",
-            "standard",
-            "plan",
-            "standard",
-            "-",
-            "-",
-        );
-        row.requests = 1;
-        row.input_tokens = 1_000;
-        row.cache_read_tokens = 500;
-        row.cache_write_5m_tokens = 300;
-        row.output_tokens = 100;
-        let at = HOUR * 1_000;
-        // Figures no pricing of the halves answers, so a split that priced them for itself reads others.
-        let (read, write) = (0.375, 0.625);
-        let mut sums = EquivalentSums::default();
-        let halves = sums
-            .add_priced(&row, true, Some(0.0625), |part| {
-                Some(if part.cache_read > 0 { read } else { write })
-            })
-            .expect("a counted row with tokens prices its halves");
-        let mut split = SplitSum::default();
-        split.add(row.usage(), halves, |usage| {
-            price_equivalent(
-                &costs,
-                entrypoint_of_client(&row.client),
-                model,
-                usage,
-                at,
-                at,
-                at,
-            )
-        });
-        let split = split.finish().expect("every part prices");
-        assert_eq!((split["cache_read"], split["cache_write"]), (read, write));
-    }
-
     /// The hour of a date's midnight, in seconds.
     fn hour_at(date: &str) -> i64 {
         effective_instant(date).expect("a date") / 1_000

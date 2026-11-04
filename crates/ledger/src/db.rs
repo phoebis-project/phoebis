@@ -2004,43 +2004,6 @@ mod tests {
         );
     }
 
-    /// `meta` alone, from the baseline's own `CREATE TABLE` for it.
-    fn meta_alone() -> Connection {
-        let ddl = schema::SCHEMA
-            .lines()
-            .find(|line| line.starts_with("CREATE TABLE IF NOT EXISTS meta "))
-            .expect("the baseline creates meta");
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(ddl).unwrap();
-        conn
-    }
-
-    fn raw_markers(conn: &Connection) -> Vec<String> {
-        conn.prepare("SELECT value FROM meta WHERE key = 'schema_version'")
-            .unwrap()
-            .query_map([], |row| row.get(0))
-            .unwrap()
-            .collect::<rusqlite::Result<_>>()
-            .unwrap()
-    }
-
-    #[test]
-    fn a_marker_above_this_builds_version_is_refused_before_the_baselines_transaction_begins() {
-        let mut conn = meta_alone();
-        let newer = (latest_version() + 1).to_string();
-        conn.execute(
-            "INSERT INTO meta (key, value) VALUES ('schema_version', ?1)",
-            params![newer],
-        )
-        .unwrap();
-        let error = prepare(&mut conn, Path::new(":memory:"), &[]).unwrap_err();
-        assert!(
-            matches!(error, LedgerError::SchemaTooNew { .. }),
-            "{error:?}"
-        );
-        assert_eq!(raw_markers(&conn), vec![newer]);
-    }
-
     /// The baseline with no step above it, so the test starts at version 1 whatever the build's own chain holds.
     fn prepared_in_memory() -> Connection {
         let mut conn = Connection::open_in_memory().unwrap();

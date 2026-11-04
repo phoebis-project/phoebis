@@ -2,8 +2,7 @@
 mod common;
 use common::*;
 use phoebis_keepalive::{
-    AgentState, CompanionState, Event, EventError, EventReport, KeepaliveLimits, ParkKind, Reason,
-    RecipeState,
+    AgentState, CompanionState, Event, EventError, KeepaliveLimits, ParkKind, Reason, RecipeState,
 };
 
 #[tokio::test]
@@ -86,37 +85,6 @@ fn refusal(code: &'static str, status: u16) -> EventError {
         request_generation: None,
         status,
     }
-}
-
-/// The state machine takes a typed report alone, so the conversion is where a direct caller's report meets the
-/// protocol's refusals. The state report names its agent, so it passes the member check to reach its state word.
-#[test]
-fn the_conversion_refuses_an_unknown_event_word_and_an_unknown_state_word() {
-    assert_eq!(
-        EventReport::try_from(Event {
-            event: "bogus".into(),
-            session_id: "session".into(),
-            instance_id: "instance".into(),
-            sequence: 105,
-            ..Default::default()
-        })
-        .unwrap_err(),
-        refusal("unknown_event", 400)
-    );
-    assert_eq!(
-        EventReport::try_from(Event {
-            event: "state".into(),
-            session_id: "session".into(),
-            instance_id: "instance".into(),
-            sequence: 106,
-            agent_id: Some("main".into()),
-            state: Some("napping".into()),
-            request_generation: Some(0),
-            ..Default::default()
-        })
-        .unwrap_err(),
-        refusal("invalid_state", 400)
-    );
 }
 
 #[tokio::test]

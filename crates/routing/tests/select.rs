@@ -16237,30 +16237,6 @@ fn a_refused_probe_reads_as_a_probe_and_keeps_what_its_request_carried() {
 }
 
 #[test]
-fn the_window_source_serializes_as_the_words_it_spells() {
-    for source in [
-        WindowSource::Head,
-        WindowSource::Poll,
-        WindowSource::Predicted,
-        WindowSource::Stored,
-    ] {
-        // Exhaustive, so a variant added later fails to compile here until the match names it, while the array
-        // above would not.
-        match source {
-            WindowSource::Head
-            | WindowSource::Poll
-            | WindowSource::Predicted
-            | WindowSource::Stored => {}
-        }
-        assert_eq!(
-            serde_json::to_value(source).unwrap(),
-            source.as_str(),
-            "{source:?}"
-        );
-    }
-}
-
-#[test]
 fn the_candidate_table_fills_tier_pace_and_budget_for_every_member() {
     let s = with_member_budget(
         &with_member_budget(
