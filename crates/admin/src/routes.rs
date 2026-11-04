@@ -2110,6 +2110,9 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
     let day_start = hour - 24 * 3_600;
     let prices = state.pricing.revisions();
     let tables = state.tables.clone();
+    // The projections ask each member's pool, so the registry is read before the join.
+    let members = state.store.all_pool_members().unwrap_or_default();
+    let extras = state.store.account_extras().unwrap_or_default();
     let ledger = async {
         let old = state
             .old_totals
@@ -2160,8 +2163,18 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
             })
             .await?;
         Ok::<_, phoebis_ledger::LedgerError>((old, read))
-    }
-    .await;
+    };
+    // Each read is a snapshot of its own, so they wait together and their order carries no meaning.
+    let (ledger, cooldowns, funding_retries, held, projections, overages, reported, spend_windows) = tokio::join!(
+        ledger,
+        state.router.cooldowns(),
+        state.router.funding_retries(),
+        state.router.samples(),
+        projections_by_account(state, &members),
+        state.router.overages(),
+        state.router.reported_samples(),
+        state.router.spend_windows(),
+    );
     let (old, (quota, extra, extra_polled, extra_share, day, six_days)) = match ledger {
         Ok(read) => read,
         Err(error) => {
@@ -2173,53 +2186,22 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
     // only the request counts reach the answer, and integer sums add exactly in any split.
     let week = crate::lifetime::lifetime_of(six_days, &day);
     let lifetime = crate::lifetime::lifetime_of(old, &week);
-    let members = state.store.all_pool_members().unwrap_or_default();
     AccountContext {
-        cooldowns: state.router.cooldowns().await.unwrap_or_default(),
+        cooldowns: cooldowns.unwrap_or_default(),
         day,
         extra,
         extra_polled,
         extra_share,
-        extras: state.store.account_extras().unwrap_or_default(),
-        funding_retries: state
-            .router
-            .funding_retries()
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .collect(),
-        held: state
-            .router
-            .samples()
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .collect(),
+        extras,
+        funding_retries: funding_retries.unwrap_or_default().into_iter().collect(),
+        held: held.unwrap_or_default().into_iter().collect(),
         lifetime,
-        projections: projections_by_account(state, &members).await,
+        projections,
         members,
-        overages: state
-            .router
-            .overages()
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .collect(),
+        overages: overages.unwrap_or_default().into_iter().collect(),
         quota,
-        reported: state
-            .router
-            .reported_samples()
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .collect(),
-        spend_windows: state
-            .router
-            .spend_windows()
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .collect(),
+        reported: reported.unwrap_or_default().into_iter().collect(),
+        spend_windows: spend_windows.unwrap_or_default().into_iter().collect(),
         week,
     }
 }

@@ -69,19 +69,18 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
     let now = (state.clock)();
     let prices = state.pricing.revisions();
     let tables = state.tables.clone();
-    let board = match state
-        .ledger
-        .db()
-        .read(move |c| dashboard_on(c, now, &prices, &tables))
-        .await
-    {
+    let (board, pins) = tokio::join!(
+        state
+            .ledger
+            .db()
+            .read(move |c| dashboard_on(c, now, &prices, &tables)),
+        state.router.pins_by_pool(),
+    );
+    let board = match board {
         Ok(board) => board,
         Err(e) => return ledger_failure(e),
     };
-    let pins = state
-        .router
-        .pins_by_pool()
-        .await
+    let pins = pins
         .map(|by_pool| by_pool.iter().map(|(_, n)| *n as usize).sum())
         .unwrap_or(0);
     Json(Dashboard {
