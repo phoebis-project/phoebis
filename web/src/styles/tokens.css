@@ -78,6 +78,7 @@
 
   --radius: 8px;
   --radius-sm: 5px;
+  /* The corner of the small controls and the bars, then the corner of the finest marks. */
   --radius-xs: 4px;
   --radius-xxs: 2px;
   --radius-pill: 999px;
