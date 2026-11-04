@@ -23,8 +23,8 @@ use crate::accounts::{check_slug, ACTOR};
 use crate::guardrails::{attachment_refusal, distinct_ids, AttachmentIndex, GuardrailRef};
 use crate::openapi::{ErrorBody, RegistryUnavailable, StorageFailure};
 use crate::routes::{
-    double_option, failure, failure_with_code, fence_token, parse_object, present,
-    reload_or_refuse, store_failure, CreatedId,
+    double_option, failure, fence_token, parse_object, present, reload_or_refuse, stale_edit,
+    store_failure, CreatedId,
 };
 use crate::rules::{parse_rules, RuleInput};
 use crate::AdminState;
@@ -828,7 +828,7 @@ pub(crate) async fn patch(
         }
     }
     if read_at != row.updated_at {
-        return failure_with_code(StatusCode::CONFLICT, "stale_edit", STALE_EDIT);
+        return stale_edit(STALE_EDIT);
     }
     match state.store.update_pool_with_members_and_guardrails(
         &row,
@@ -838,9 +838,7 @@ pub(crate) async fn patch(
         ACTOR,
     ) {
         Ok(at) => row.updated_at = at,
-        Err(StoreError::Stale) => {
-            return failure_with_code(StatusCode::CONFLICT, "stale_edit", STALE_EDIT)
-        }
+        Err(StoreError::Stale) => return stale_edit(STALE_EDIT),
         Err(StoreError::PoolNotFound(_)) => {
             return failure(StatusCode::NOT_FOUND, "pool not found")
         }

@@ -3213,7 +3213,7 @@ pub(crate) fn fence_token(
         .and_then(|stamp| i64::try_from(stamp).ok())
     {
         Some(stamp) if answers_stamp_token(incarnation, stamp, token) => Ok(stamp),
-        _ => Err(failure_with_code(StatusCode::CONFLICT, "stale_edit", stale)),
+        _ => Err(stale_edit(stale)),
     }
 }
 
@@ -3244,6 +3244,11 @@ pub(crate) fn failure_with_code(status: StatusCode, code: &'static str, message:
         HeaderValue::from_static(code),
     );
     response
+}
+
+/// The 409 an edit built from a read the row has since moved past answers, under the `stale_edit` code.
+pub(crate) fn stale_edit(message: &str) -> Response {
+    failure_with_code(StatusCode::CONFLICT, "stale_edit", message)
 }
 
 fn set_cookie(status: StatusCode, attributes: &str) -> Response {

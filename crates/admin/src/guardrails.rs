@@ -28,8 +28,8 @@ use crate::accounts::{check_slug, within_text_bound};
 use crate::analytics::ledger_failure;
 use crate::openapi::{ConditionView, ErrorBody, RegistryUnavailable, StorageFailure};
 use crate::routes::{
-    failure, failure_with_code, fence_token, parse_object, present, reload_or_refuse,
-    store_failure, CreatedId,
+    failure, fence_token, parse_object, present, reload_or_refuse, stale_edit, store_failure,
+    CreatedId,
 };
 use crate::AdminState;
 
@@ -1061,7 +1061,7 @@ pub(crate) async fn patch(
         return refusal;
     }
     if read_at != row.updated_at {
-        return failure_with_code(StatusCode::CONFLICT, "stale_edit", STALE_EDIT);
+        return stale_edit(STALE_EDIT);
     }
     match state.store.update_guardrail(
         &row,
@@ -1071,9 +1071,7 @@ pub(crate) async fn patch(
         ACTOR,
     ) {
         Ok(_) => {}
-        Err(StoreError::Stale) => {
-            return failure_with_code(StatusCode::CONFLICT, "stale_edit", STALE_EDIT)
-        }
+        Err(StoreError::Stale) => return stale_edit(STALE_EDIT),
         Err(StoreError::GuardrailNotFound(_)) => {
             return failure(StatusCode::NOT_FOUND, "guardrail not found")
         }

@@ -19,14 +19,16 @@ use utoipa::ToSchema;
 
 use crate::openapi::{ErrorBody, RegistryUnavailable, RouterUnavailable, StorageFailure};
 use crate::routes::{
-    account, account_json, double_option, failure, failure_with_code, fence_revision, parse_object,
-    present, reload_or_refuse, router_unavailable, store_failure, CreatedId,
+    account, account_json, double_option, failure, fence_revision, parse_object, present,
+    reload_or_refuse, router_unavailable, stale_edit, store_failure, CreatedId,
 };
 use crate::AdminState;
 
 pub(crate) const ACTOR: &str = "admin";
 
 pub(crate) const DUPLICATE_ID: &str = "an account with this id exists";
+
+const STALE_EDIT: &str = "the account changed while the edit was being saved";
 
 /// The account to create. A member the route does not name is ignored.
 #[derive(serde::Deserialize, ToSchema)]
@@ -348,11 +350,7 @@ pub(crate) async fn patch(
         || cancellation.is_some();
     if edits {
         if sent_token.is_some_and(|token| !row.answers_edit_token(token)) {
-            return failure_with_code(
-                StatusCode::CONFLICT,
-                "stale_edit",
-                "the account changed while the edit was being saved",
-            );
+            return stale_edit(STALE_EDIT);
         }
         // Any token sent matched here, so every field's commit below is fenced on the incarnation and the revision the
         // route read: an edit built from a stale read, or from an account since deleted and created again under its
@@ -374,13 +372,7 @@ pub(crate) async fn patch(
         };
         match state.store.commit_account_update(&update) {
             Ok(()) => {}
-            Err(StoreError::Stale) => {
-                return failure_with_code(
-                    StatusCode::CONFLICT,
-                    "stale_edit",
-                    "the account changed while the edit was being saved",
-                )
-            }
+            Err(StoreError::Stale) => return stale_edit(STALE_EDIT),
             Err(StoreError::AccountNotFound(_)) => {
                 return failure(StatusCode::NOT_FOUND, "account not found")
             }
