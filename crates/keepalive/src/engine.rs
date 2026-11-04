@@ -736,42 +736,30 @@ impl Agent {
     /// own, the one its open observation took from the recipe before it, an open compaction's own and the one it took,
     /// and its kept and unanswered probes', which an agent keeps after its recipe ended.
     pub(crate) fn follow_resolutions(&mut self, canonical: &HashMap<String, String>) -> bool {
-        let mut moved = false;
-        if let Some(dated) = canonical.get(&self.canonical_model) {
-            self.canonical_model = dated.clone();
-            moved = true;
-        }
-        if let Some(prior) = self.current.as_mut().and_then(|o| o.prior.as_mut()) {
-            if let Some(dated) = canonical.get(&prior.model) {
-                prior.model = dated.clone();
-                moved = true;
+        let follow = |model: &mut String| match canonical.get(model.as_str()) {
+            Some(dated) => {
+                *model = dated.clone();
+                true
             }
+            None => false,
+        };
+        let mut moved = follow(&mut self.canonical_model);
+        if let Some(prior) = self.current.as_mut().and_then(|o| o.prior.as_mut()) {
+            moved |= follow(&mut prior.model);
         }
         // The completion credits through the compaction's `prior` and settles the probes against its own model, so
         // both follow the probes' move, or a credit would sit beside a cold return of the probe that earned it.
         if let Some(compaction) = self.compaction.as_mut() {
-            if let Some(dated) = canonical.get(&compaction.canonical_model) {
-                compaction.canonical_model = dated.clone();
-                moved = true;
-            }
+            moved |= follow(&mut compaction.canonical_model);
             if let Some(prior) = compaction.prior.as_mut() {
-                if let Some(dated) = canonical.get(&prior.model) {
-                    prior.model = dated.clone();
-                    moved = true;
-                }
+                moved |= follow(&mut prior.model);
             }
         }
         for kept in &mut self.kept {
-            if let Some(dated) = canonical.get(&kept.canonical_model) {
-                kept.canonical_model = dated.clone();
-                moved = true;
-            }
+            moved |= follow(&mut kept.canonical_model);
         }
         for probe in &mut self.unanswered {
-            if let Some(dated) = canonical.get(&probe.model) {
-                probe.model = dated.clone();
-                moved = true;
-            }
+            moved |= follow(&mut probe.model);
         }
         moved
     }
