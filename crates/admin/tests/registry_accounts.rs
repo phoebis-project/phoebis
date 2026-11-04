@@ -2455,3 +2455,41 @@ async fn the_account_view_warns_on_a_tier_it_cannot_read_and_answers_as_if_no_su
         warned[0]
     );
 }
+
+#[tokio::test]
+async fn listing_one_more_account_takes_the_store_no_more_often() {
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    // The fewest takes over three lists, so a background task that takes the store during one of them cannot
+    // pass for a read the list made.
+    let takes_per_list = || {
+        let (app, cookie, store) = (app.clone(), cookie.clone(), store.clone());
+        async move {
+            let mut fewest = u64::MAX;
+            for _ in 0..3 {
+                let before = store.debug_lock_count();
+                let listed = get(&app, "/admin/accounts", Some(&cookie)).await;
+                assert_eq!(listed.status(), 200);
+                fewest = fewest.min(store.debug_lock_count() - before);
+            }
+            fewest
+        }
+    };
+    let two = takes_per_list().await;
+    assert_eq!(
+        post(
+            &app,
+            "/admin/accounts",
+            r#"{"id":"third","kind":"oauth","label":"Third"}"#,
+            Some(&cookie)
+        )
+        .await
+        .status(),
+        201
+    );
+    let three = takes_per_list().await;
+    assert_eq!(
+        three, two,
+        "the list takes the store the same number of times for three accounts as for two"
+    );
+}

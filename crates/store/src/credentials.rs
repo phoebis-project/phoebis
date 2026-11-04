@@ -2,7 +2,7 @@
 
 use std::sync::LazyLock;
 
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::{crypto, StorageKey, Store, StoreError, LOCK_POISONED, PENDING_WHERE};
@@ -227,6 +227,15 @@ pub struct LastAttempt {
     pub detail: Option<String>,
 }
 
+/// One holder's credential standing as `credential_standings` reads it, each part the answer of the one-account read
+/// of its name, so a failed read leaves the other two parts standing.
+#[derive(Debug)]
+pub struct CredentialStanding {
+    pub metadata: Result<Option<CredentialMetadata>, StoreError>,
+    pub last_attempt: Result<Option<LastAttempt>, StoreError>,
+    pub pending: Result<bool, StoreError>,
+}
+
 impl LastAttempt {
     /// `None` for an attempt still in flight.
     pub fn settled(&self) -> Option<Settled> {
@@ -234,6 +243,59 @@ impl LastAttempt {
             .as_deref()
             .map(|outcome| settled(outcome, self.detail.as_deref()))
     }
+}
+
+fn credential_metadata_in(
+    conn: &Connection,
+    account_id: &str,
+) -> Result<Option<CredentialMetadata>, StoreError> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT generation, issued_at, expires_at, refresh_expires_at, scopes, lifecycle_generation, last_error, updated_at \
+         FROM credentials WHERE account_id = ?1",
+    )?;
+    let metadata = stmt
+        .query_row(params![account_id], |row| {
+            Ok(CredentialMetadata {
+                generation: row.get::<_, i64>(0)? as u64,
+                issued_at: row.get(1)?,
+                expires_at: row.get(2)?,
+                refresh_expires_at: row.get(3)?,
+                scopes: row.get(4)?,
+                lifecycle_generation: row.get::<_, i64>(5)? as u64,
+                last_error: row.get(6)?,
+                last_error_at: row.get(7)?,
+            })
+        })
+        .optional()?;
+    Ok(metadata)
+}
+
+fn has_pending_refresh_attempt_in(
+    conn: &Connection,
+    account_id: &str,
+    incarnation: u64,
+) -> Result<bool, StoreError> {
+    let mut stmt = conn.prepare_cached(holder_pending_query())?;
+    let pending = stmt.query_row(params![account_id, incarnation as i64], |row| row.get(0))?;
+    Ok(pending)
+}
+
+fn last_refresh_attempt_in(
+    conn: &Connection,
+    account_id: &str,
+    incarnation: u64,
+) -> Result<Option<LastAttempt>, StoreError> {
+    let mut stmt = conn.prepare_cached(LAST_REFRESH_ATTEMPT)?;
+    let attempt = stmt
+        .query_row(params![account_id, incarnation as i64], |row| {
+            Ok(LastAttempt {
+                resolved_at: row.get(0)?,
+                outcome: row.get(1)?,
+                detail: row.get(2)?,
+            })
+        })
+        .optional()?;
+    Ok(attempt)
 }
 
 // (generation, sealed, nonce, issued_at, expires_at, refresh_expires_at, scopes, lifecycle_generation)
@@ -396,26 +458,22 @@ impl Store {
         &self,
         account_id: &str,
     ) -> Result<Option<CredentialMetadata>, StoreError> {
+        credential_metadata_in(&self.conn.lock().expect(LOCK_POISONED), account_id)
+    }
+
+    /// `credential_metadata`, `last_refresh_attempt` and `has_pending_refresh_attempt` for each `(account_id,
+    /// incarnation)`, in the order given, under one take of the connection, so a list of every account takes the
+    /// store once for them rather than three times per account.
+    pub fn credential_standings(&self, holders: &[(&str, u64)]) -> Vec<CredentialStanding> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
-        let mut stmt = conn.prepare_cached(
-            "SELECT generation, issued_at, expires_at, refresh_expires_at, scopes, lifecycle_generation, last_error, updated_at \
-             FROM credentials WHERE account_id = ?1",
-        )?;
-        let metadata = stmt
-            .query_row(params![account_id], |row| {
-                Ok(CredentialMetadata {
-                    generation: row.get::<_, i64>(0)? as u64,
-                    issued_at: row.get(1)?,
-                    expires_at: row.get(2)?,
-                    refresh_expires_at: row.get(3)?,
-                    scopes: row.get(4)?,
-                    lifecycle_generation: row.get::<_, i64>(5)? as u64,
-                    last_error: row.get(6)?,
-                    last_error_at: row.get(7)?,
-                })
+        holders
+            .iter()
+            .map(|&(account_id, incarnation)| CredentialStanding {
+                metadata: credential_metadata_in(&conn, account_id),
+                last_attempt: last_refresh_attempt_in(&conn, account_id, incarnation),
+                pending: has_pending_refresh_attempt_in(&conn, account_id, incarnation),
             })
-            .optional()?;
-        Ok(metadata)
+            .collect()
     }
 
     /// Records a credential failure that opened no refresh attempt (a backoff or a quarantine), so
@@ -911,10 +969,11 @@ impl Store {
         account_id: &str,
         incarnation: u64,
     ) -> Result<bool, StoreError> {
-        let conn = self.conn.lock().expect(LOCK_POISONED);
-        let mut stmt = conn.prepare_cached(holder_pending_query())?;
-        let pending = stmt.query_row(params![account_id, incarnation as i64], |row| row.get(0))?;
-        Ok(pending)
+        has_pending_refresh_attempt_in(
+            &self.conn.lock().expect(LOCK_POISONED),
+            account_id,
+            incarnation,
+        )
     }
 
     /// The newest attempt of the holder `incarnation` names: a previous holder's history under the same id is
@@ -924,18 +983,11 @@ impl Store {
         account_id: &str,
         incarnation: u64,
     ) -> Result<Option<LastAttempt>, StoreError> {
-        let conn = self.conn.lock().expect(LOCK_POISONED);
-        let mut stmt = conn.prepare_cached(LAST_REFRESH_ATTEMPT)?;
-        let attempt = stmt
-            .query_row(params![account_id, incarnation as i64], |row| {
-                Ok(LastAttempt {
-                    resolved_at: row.get(0)?,
-                    outcome: row.get(1)?,
-                    detail: row.get(2)?,
-                })
-            })
-            .optional()?;
-        Ok(attempt)
+        last_refresh_attempt_in(
+            &self.conn.lock().expect(LOCK_POISONED),
+            account_id,
+            incarnation,
+        )
     }
 
     /// The newest settled attempts of the holder `incarnation` names, newest first, bounded by `limit`: the

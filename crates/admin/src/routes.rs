@@ -30,8 +30,8 @@ use phoebis_routing::{
     SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
-    answers_stamp_token, stamp_token, AccountKind, AccountRow, AccountState, CooldownRow, Identity,
-    NewBundle, PoolMember, Settled, StateCause, StoreError,
+    answers_stamp_token, stamp_token, AccountKind, AccountRow, AccountState, CooldownRow,
+    CredentialStanding, Identity, NewBundle, PoolMember, Settled, StateCause, StoreError,
 };
 use phoebis_transport::response::ResponseHead;
 use serde::Deserialize;
@@ -609,7 +609,7 @@ async fn list_accounts(State(state): State<Arc<AdminState>>) -> Response {
         Err(error) => return store_failure(error),
     };
     // One ask for what every row shares: the router and the ledger each answer once for the whole list.
-    let ctx = account_context(&state).await;
+    let ctx = account_context(&state, &rows).await;
     let mut accounts = Vec::with_capacity(rows.len());
     for row in &rows {
         accounts.push(account_view(&state, row, &ctx).await);
@@ -1948,6 +1948,8 @@ pub(crate) fn account(state: &AdminState, id: &str) -> Result<AccountRow, Respon
 /// What every account row reads from the ledger and the registry, fetched once per list call.
 pub(crate) struct AccountContext {
     pub cooldowns: Vec<CooldownRow>,
+    /// Each viewed row's credential standing, read for every row under one store take.
+    pub credentials: BTreeMap<String, CredentialStanding>,
     pub day: BTreeMap<String, u64>,
     pub extra: Vec<phoebis_ledger::ExtraUsageSampleRecord>,
     /// The newest polled extra-usage row per account, the one that carries the amounts a later head row lacks.
@@ -2069,7 +2071,7 @@ fn window_projection(
         })
 }
 
-pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
+pub(crate) async fn account_context(state: &AdminState, rows: &[AccountRow]) -> AccountContext {
     let now = (state.clock)();
     let hour = phoebis_ledger::hour_of(now);
     let to = crate::analytics::hour_end(hour);
@@ -2078,6 +2080,15 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
     // The projections ask each member's pool, so the registry is read before the join.
     let members = state.store.all_pool_members().unwrap_or_default();
     let extras = state.store.account_extras().unwrap_or_default();
+    let holders: Vec<(&str, u64)> = rows
+        .iter()
+        .map(|row| (row.id.as_str(), row.incarnation))
+        .collect();
+    let credentials = rows
+        .iter()
+        .map(|row| row.id.clone())
+        .zip(state.store.credential_standings(&holders))
+        .collect();
     let ledger = async {
         let old = state
             .old_totals
@@ -2129,6 +2140,7 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
     let lifetime = crate::lifetime::lifetime_of(old, &week);
     AccountContext {
         cooldowns: cooldowns.unwrap_or_default(),
+        credentials,
         day,
         extra,
         extra_polled,
@@ -2500,7 +2512,7 @@ pub(crate) struct Verify {
 /// Never a token, in any branch: an account view is the one place a credential could plausibly be shown
 /// and must not be.
 pub(crate) async fn account_json(state: &AdminState, row: &AccountRow) -> Account {
-    let ctx = account_context(state).await;
+    let ctx = account_context(state, std::slice::from_ref(row)).await;
     account_view(state, row, &ctx).await
 }
 
@@ -2508,23 +2520,22 @@ pub(crate) async fn account_json(state: &AdminState, row: &AccountRow) -> Accoun
 /// ledger once.
 async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext) -> Account {
     let overage = ctx.overages.get(&row.id);
-    let credential = state.store.credential_metadata(&row.id).ok().flatten();
-    let attempt = state
-        .store
-        .last_refresh_attempt(&row.id, row.incarnation)
-        .ok()
-        .flatten();
+    let standing = ctx.credentials.get(&row.id);
+    let credential = standing
+        .and_then(|standing| standing.metadata.as_ref().ok())
+        .and_then(Option::as_ref);
+    let attempt = standing
+        .and_then(|standing| standing.last_attempt.as_ref().ok())
+        .and_then(Option::as_ref);
     // Past the refresh manager's floor a retry opens beside an `uncertain` attempt, and a retry that fails leaves
     // that attempt open, so the flag reads every open attempt of this holder rather than the newest alone: any
     // one of them is what a restart quarantines the account for.
-    let quarantined = state
-        .store
-        .has_pending_refresh_attempt(&row.id, row.incarnation)
-        .unwrap_or(false);
+    let quarantined = standing
+        .and_then(|standing| standing.pending.as_ref().ok())
+        .is_some_and(|pending| *pending);
     // A failure that opened no attempt (a backoff or a quarantine) still updates the credential row, so
     // whichever of the two landed last is the one that answers `credential.last_error`.
     let attempt_error = attempt
-        .as_ref()
         .filter(|attempt| {
             matches!(
                 attempt.settled(),
@@ -2691,7 +2702,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
             access_expires_at: credential.expires_at,
             refresh_expires_at: credential.refresh_expires_at,
             generation: credential.generation,
-            last_refresh_at: attempt.as_ref().and_then(|attempt| attempt.resolved_at),
+            last_refresh_at: attempt.and_then(|attempt| attempt.resolved_at),
             last_error: match (&attempt_error, credential.last_error.as_ref()) {
                 (Some((at, detail)), Some(text)) => {
                     // A tie favors the credential error: a backoff recorded right after the attempt that
