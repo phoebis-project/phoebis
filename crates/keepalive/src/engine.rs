@@ -3336,7 +3336,6 @@ impl Engine {
             }
             _ => return,
         };
-        let now = self.now();
         let mut inner = self.lock();
         if inner.compactions.contains_key(&chunk.request_id) {
             if inner.closed {
@@ -3373,7 +3372,7 @@ impl Engine {
         if current_attempt != Some(chunk.attempt) {
             return;
         }
-        inner.observe_usage(&key, &agent_id, usage, now);
+        inner.observe_usage(&key, &agent_id, usage);
     }
 
     fn on_complete(&self, complete: RequestComplete) {
@@ -3518,7 +3517,7 @@ impl Engine {
             .unwrap_or((false, false));
         if ready && !armed {
             if let Some(usage) = complete.usage.as_ref().map(ProbeUsage::from_bus) {
-                inner.observe_usage(&key, &agent_id, usage, now);
+                inner.observe_usage(&key, &agent_id, usage);
             }
         }
         let proved = inner.sessions[&key]
@@ -3835,13 +3834,7 @@ fn recipe_reason(reason: &str) -> Reason {
 impl Inner {
     /// The Go `observeLocked`: evidence from a ready attempt arms the schedule at the entry's expiry, the pool's
     /// lead and this schedule's jitter taken off by `due_at`. A retry already pending stays in force.
-    pub(crate) fn observe_usage(
-        &mut self,
-        key: &SessionKey,
-        agent_id: &str,
-        usage: ProbeUsage,
-        _now: i64,
-    ) {
+    pub(crate) fn observe_usage(&mut self, key: &SessionKey, agent_id: &str, usage: ProbeUsage) {
         let agent = self
             .sessions
             .get_mut(key)
