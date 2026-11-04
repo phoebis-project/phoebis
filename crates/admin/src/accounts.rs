@@ -20,7 +20,7 @@ use utoipa::ToSchema;
 use crate::openapi::{ErrorBody, RegistryUnavailable, RouterUnavailable, StorageFailure};
 use crate::routes::{
     account, account_json, double_option, failure, failure_with_code, fence_revision, parse_object,
-    present, reload_or_refuse, store_failure, CreatedId,
+    present, reload_or_refuse, router_unavailable, store_failure, CreatedId,
 };
 use crate::AdminState;
 
@@ -550,10 +550,7 @@ pub(crate) async fn clear_cooldown(
     match state.router.clear_cooldown(&id, scope).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => failure(StatusCode::NOT_FOUND, "no such cooldown"),
-        Err(_) => failure(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the router is not available",
-        ),
+        Err(_) => router_unavailable(),
     }
 }
 

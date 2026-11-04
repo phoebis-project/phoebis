@@ -20,7 +20,7 @@ use serde_json::{Map, Value};
 use utoipa::ToSchema;
 
 use crate::openapi::{ErrorBody, LedgerFailure, RouterUnavailable};
-use crate::routes::{failure, reported_samples, store_failure, windows_lacked};
+use crate::routes::{failure, reported_samples, router_unavailable, store_failure, windows_lacked};
 use crate::AdminState;
 
 fn list(q: &HashMap<String, String>, name: &str) -> Vec<String> {
@@ -472,10 +472,7 @@ pub(crate) struct BudgetMember {
 pub(crate) async fn budgets(State(state): State<Arc<AdminState>>) -> Response {
     let snapshot = state.router.snapshot();
     let Ok(spends) = state.router.member_spends().await else {
-        return failure(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the router is not available",
-        );
+        return router_unavailable();
     };
     // One row per budgeted period, so a member with both budgets reads twice, its day before its month.
     let mut members: Vec<(String, String, phoebis_store::BudgetPeriod, BudgetMember)> = snapshot

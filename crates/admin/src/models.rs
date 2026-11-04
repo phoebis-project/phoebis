@@ -11,10 +11,8 @@ use phoebis_store::{CooldownRow, CooldownScope};
 use utoipa::ToSchema;
 
 use crate::openapi::{ErrorBody, RouterUnavailable, StorageFailure};
-use crate::routes::{failure, store_failure};
+use crate::routes::{failure, router_unavailable, store_failure};
 use crate::AdminState;
-
-const ROUTER_UNAVAILABLE: &str = "the router is not available";
 
 /// The processed rule list a key is judged by, in the order it applies.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
@@ -109,7 +107,7 @@ pub(crate) async fn key_models(
     };
     let cooldowns = match state.router.cooldowns().await {
         Ok(rows) => rows,
-        Err(_) => return failure(StatusCode::SERVICE_UNAVAILABLE, ROUTER_UNAVAILABLE),
+        Err(_) => return router_unavailable(),
     };
     let now = (state.clock)();
     // Sorted once and stably, so each entry's filter keeps the order a filter and then a stable sort would give it.

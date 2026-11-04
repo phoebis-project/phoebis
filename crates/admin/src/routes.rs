@@ -3094,10 +3094,7 @@ pub(crate) async fn reload_or_refuse(state: &AdminState) -> Result<(), Response>
             tracing::error!(%error, "a registry write could not be published");
             Err(registry_unavailable())
         }
-        Err(ReloadError::Gone(_)) => Err(failure(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the router is not available",
-        )),
+        Err(ReloadError::Gone(_)) => Err(router_unavailable()),
     }
 }
 
@@ -3108,6 +3105,14 @@ pub(crate) fn registry_unavailable() -> Response {
         StatusCode::SERVICE_UNAVAILABLE,
         "registry_unavailable",
         "the registry was written but could not be reloaded, and the next successful reload publishes it",
+    )
+}
+
+/// The answer of every route that finds the routing task gone, so nothing can be published to it or read from it.
+pub(crate) fn router_unavailable() -> Response {
+    failure(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the router is not available",
     )
 }
 

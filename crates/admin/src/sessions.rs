@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use utoipa::ToSchema;
 
 use crate::openapi::{ErrorBody, RouterUnavailable};
-use crate::routes::failure;
+use crate::routes::{failure, router_unavailable};
 use crate::AdminState;
 
 /// The live pins joined with what the ledger saw and the keepalive engine's own view, one row per session.
@@ -198,10 +198,7 @@ pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
 #[allow(clippy::result_large_err)]
 pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, Response> {
     let Ok(pins) = state.router.pins_standing().await else {
-        return Err(failure(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the router is not available",
-        ));
+        return Err(router_unavailable());
     };
     // Read right after the pins ask and before the ledger read below awaits: a pin belongs to the live holder
     // of its key id alone, and taking this snapshot before that await keeps a key deleted and recreated during
@@ -680,12 +677,7 @@ pub(crate) async fn release(
     }
     let pins = match state.router.release_session(&key, &session).await {
         Ok(n) => n,
-        Err(_) => {
-            return failure(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "the router is not available",
-            )
-        }
+        Err(_) => return router_unavailable(),
     };
     let recipes = match state.keepalive.release(&key, &session) {
         Ok(recipes) => recipes,
