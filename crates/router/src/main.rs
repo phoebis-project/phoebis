@@ -228,13 +228,13 @@ fn main() -> anyhow::Result<()> {
             phoebis_ledger::LedgerDb::check_readable(ledger)
                 .with_context(|| format!("reading the ledger at {}", ledger.display()))?;
             let name = &config.admin.secret_env;
-            if phoebis_router::config::secret_is_unset(name) {
-                println!("warning: environment variable {name} is unset or empty");
-            }
             match phoebis_router::config::from_env(name) {
-                // An unset variable was warned about above: the file is checked without the unit's environment.
+                Ok(_) => {}
+                // A warning rather than a refusal: the file is checked without the unit's environment.
+                Err(phoebis_router::config::ConfigError::MissingSecret { .. }) => {
+                    println!("warning: environment variable {name} is unset or empty");
+                }
                 // A set one the start refuses (too short, the example's placeholder) is the same finding here.
-                Ok(_) | Err(phoebis_router::config::ConfigError::MissingSecret { .. }) => {}
                 Err(error) => return Err(error.into()),
             }
             let data_dir = phoebis_store::permissions::data_dir_of(&config.storage.path);

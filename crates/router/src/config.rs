@@ -542,12 +542,6 @@ fn same_file(left: &Path, right: &Path) -> bool {
     }
 }
 
-/// Whether `name` is a variable `from_env` would refuse as unset, so `check-config` warns about exactly the
-/// variables the start would find missing.
-pub fn secret_is_unset(name: &str) -> bool {
-    matches!(from_env(name), Err(ConfigError::MissingSecret { .. }))
-}
-
 /// The example file's own placeholder (`deploy/phoebis.env.example`), so a config copied without editing it
 /// refuses to start rather than run with a secret every reader of the repository already knows.
 const PLACEHOLDER_ADMIN_SECRET: &str = "replace-with-a-long-random-string";
