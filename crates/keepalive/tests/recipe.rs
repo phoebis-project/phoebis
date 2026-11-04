@@ -169,7 +169,7 @@ fn a_body_without_the_member_yields_the_recipe_it_did() {
         Recipe {
             // BODY's 221 bytes once edited, the 13 of "routing-alias" and the 80 of the headers.
             size: 314,
-            body,
+            body: body.into(),
             headers: headers(),
             model: "routing-alias".into(),
             ttl_ms: FIVE_MINUTES_MS,

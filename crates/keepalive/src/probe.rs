@@ -1087,7 +1087,7 @@ mod tests {
             canonical_model: "m".into(),
             entrypoint: None,
             recipe: Recipe {
-                body: Vec::new(),
+                body: Bytes::new(),
                 headers: Vec::new(),
                 model: "m".into(),
                 ttl_ms: 0,

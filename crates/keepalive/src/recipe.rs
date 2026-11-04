@@ -1,6 +1,7 @@
 //! What a probe replays: the request body with its output controls zeroed and its `safeguards` member cut, the headers
 //! the bus published, and the TTL the body asks for. The output-control exclusions are the Go engine's.
 
+use bytes::Bytes;
 use phoebis_cch::Stamp;
 use serde_json::Value;
 
@@ -11,7 +12,8 @@ pub const MAX_HEADER_BYTES: usize = 16_384;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Recipe {
-    pub body: Vec<u8>,
+    /// Shared rather than owned, so the tick hands a probe its body without copying it under the engine's lock.
+    pub body: Bytes,
     pub headers: Vec<(String, String)>,
     pub model: String,
     /// What the body's own markers ask for; 0 when it carries none, and the response decides.
@@ -235,7 +237,7 @@ pub fn make_recipe(
     }
     let size = edited.len() + header_bytes;
     Ok(Recipe {
-        body: edited,
+        body: edited.into(),
         headers: kept,
         model: model.to_string(),
         ttl_ms,

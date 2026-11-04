@@ -9,6 +9,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, PoisonError};
 use std::time::Duration;
 
+use bytes::Bytes;
 use phoebis_ledger::{Band, Speed};
 use phoebis_routing::{FIVE_HOUR, SEVEN_DAY};
 use phoebis_store::keepalive::BodyWrite;
@@ -688,7 +689,7 @@ impl PersistedObservation {
             // The request it followed ended with the process, so no credit reads its receipt.
             received_at: self.started,
             recipe: Recipe {
-                body,
+                body: Bytes::from(body),
                 headers,
                 model: self.recipe.model,
                 ttl_ms: self.recipe.ttl_ms,
@@ -737,7 +738,7 @@ fn agent_row(
     let recipe = agent.current.as_ref().map(|o| &o.recipe);
     let no_headers: &[(String, String)] = &[];
     let body_write = match recipe {
-        Some(recipe) if agent.body_dirty => BodyWrite::Seal(recipe.body.clone()),
+        Some(recipe) if agent.body_dirty => BodyWrite::Seal(recipe.body.to_vec()),
         None if agent.body_saved => BodyWrite::Clear,
         _ => BodyWrite::Keep,
     };
@@ -1490,7 +1491,7 @@ impl Engine {
             sessions.push(session_row(&row, session, now).expect("a session payload serializes"));
             for agent in session.agents.values() {
                 agents.push(KeepaliveAgentRow {
-                    body: agent.current.as_ref().map(|o| o.recipe.body.clone()),
+                    body: agent.current.as_ref().map(|o| o.recipe.body.to_vec()),
                     body_write: BodyWrite::Keep,
                     ..agent_row(&row, agent, now).expect("an agent payload serializes")
                 });
