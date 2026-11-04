@@ -5,14 +5,14 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use phoebis_routing::CreditAccount;
+use phoebis_routing::{CreditAccount, HOUR_MS};
 use sha2::{Digest, Sha256};
 
 /// Entries held at most, the oldest leaving at the cap.
 pub(crate) const CREDIT_CAP: usize = 4_096;
 /// How long an entry stands: the credit is spent by the next turn, and a session that never sends it holds the
 /// entry for nothing.
-pub(crate) const CREDIT_TTL_MS: i64 = 3_600_000;
+pub(crate) const CREDIT_TTL_MS: i64 = HOUR_MS;
 
 pub(crate) type CreditDigest = [u8; 32];
 

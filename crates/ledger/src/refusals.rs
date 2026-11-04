@@ -8,7 +8,7 @@
 use phoebis_bus::{Kind, Outcome};
 
 /// The codes that flag a rejected request with no attempt as refused, alphabetical.
-pub const REFUSAL_CODES: &[&str] = &[
+const REFUSAL_CODES: &[&str] = &[
     "auth_ambiguous",
     "auth_malformed",
     "auth_missing",
@@ -34,7 +34,12 @@ pub const REFUSAL_CODES: &[&str] = &[
 /// `REFUSAL_CODES` and an attempt count of zero, the count the row stores. An `auth_unknown` or a `model_not_allowed`
 /// answered at a reselect after an attempt stays a rejected request, also where the bus lost that attempt's selection
 /// event and the trail holds no row, and a probe the registry refused stays on its probe row.
-pub fn is_refusal(kind: Kind, outcome: Outcome, error_code: Option<&str>, attempts: u32) -> bool {
+pub(crate) fn is_refusal(
+    kind: Kind,
+    outcome: Outcome,
+    error_code: Option<&str>,
+    attempts: u32,
+) -> bool {
     kind != Kind::Probe
         && outcome == Outcome::Rejected
         && attempts == 0

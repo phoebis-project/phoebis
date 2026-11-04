@@ -6,14 +6,15 @@
 use std::collections::{BTreeMap, HashMap};
 
 use phoebis_routing::{
-    same_reset, window_for, FIVE_HOUR, HOUR_MS, RESET_SLACK_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
+    same_reset, window_for, window_length_ms, DAY_MS, FIVE_HOUR, HOUR_MS, RESET_SLACK_MS,
+    SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, Row, Transaction};
 
 use crate::plan::{Funding, PlanTables};
 use crate::pricing::PriceRevisions;
-use crate::query::{in_list, price_usage, BurnSums, PricedAttempt, PRICED_ATTEMPT_COLUMNS};
+use crate::query::{in_list, quota_accounts_cte, PricedAttempt, PRICED_ATTEMPT_COLUMNS};
 use crate::record::SampleSource;
 use crate::rollup::bucket_of;
 use crate::LedgerError;
@@ -29,23 +30,18 @@ pub const MIN_RISE: f64 = 0.05;
 
 /// How long a reconciled window is kept, by its `window_end`: the fold's purge and the route's trailing read share it,
 /// so the two agree at the edge.
-pub(crate) const RECONCILIATION_RETENTION_MS: i64 = 30 * 24 * 3_600_000;
+pub(crate) const RECONCILIATION_RETENTION_MS: i64 = 30 * DAY_MS;
 
 /// An account that serves nothing writes no new row, so its stale row leaves the condition once this old, while a
 /// serving account completes a 7-day window inside it.
-pub(crate) const DRIFT_HOLD_MS: i64 = 8 * 24 * 3_600_000;
+pub(crate) const DRIFT_HOLD_MS: i64 = 8 * DAY_MS;
 
 /// How long before a run's first reading an attempt completing inside the run may have started: it bounds the scan of
 /// the account's attempts and lies well past any answer's duration.
-const LONGEST_ATTEMPT_MS: i64 = 3_600_000;
+const LONGEST_ATTEMPT_MS: i64 = HOUR_MS;
 
-/// The windows a run is read on, each with its length: the two shared ones and the Fable week, the scarce window the
-/// pick prices in. The length bounds the buckets `readings_of` seeks, so a window joins the list with its own.
-const WINDOWS: [(&str, i64); 3] = [
-    (FIVE_HOUR, 5 * HOUR_MS),
-    (SEVEN_DAY, WEEK_MS),
-    (SEVEN_DAY_FABLE, WEEK_MS),
-];
+/// The windows a run is read on: the two shared ones and the Fable week, the scarce window the pick prices in.
+const WINDOWS: [&str; 3] = [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE];
 
 const COLUMNS: &str =
     "account_id, window, window_end, first_reading_at, last_reading_at, observed_rise, \
@@ -311,7 +307,7 @@ fn drop_faulty_dips(
 }
 
 /// Closes the complete runs since the newest row of each account and window, prices their plan-funded attempts
-/// through `price_usage` under each attempt's client, writes the rows with `INSERT OR IGNORE` and drops the rows whose
+/// through `price_row` under each attempt's client, writes the rows with `INSERT OR IGNORE` and drops the rows whose
 /// window ended more than 30 days before `now`, all on the caller's transaction. The hourly fold calls it before it
 /// folds the routing conditions, so `meter_drift` reads the windows the same tick closed.
 ///
@@ -337,27 +333,22 @@ pub fn reconcile(
     let Some(earliest) = earliest else {
         return Ok(());
     };
-    // One index seek per account from the one before it, where `DISTINCT` would walk every stored sample.
     let accounts: Vec<String> = tx
-        .prepare(
-            "WITH RECURSIVE a(id) AS ( \
-               SELECT MIN(account_id) FROM quota_samples \
-               UNION ALL \
-               SELECT (SELECT MIN(account_id) FROM quota_samples WHERE account_id > a.id) FROM a \
-               WHERE a.id IS NOT NULL) \
-             SELECT id FROM a WHERE id IS NOT NULL",
-        )?
+        .prepare(concat!(
+            quota_accounts_cte!(),
+            " SELECT account_id FROM accounts WHERE account_id IS NOT NULL"
+        ))?
         .query_map([], |r| r.get(0))?
         .collect::<Result<_, _>>()?;
     for account in &accounts {
         let newest = newest_window_ends(tx, account)?;
-        for (window, length) in WINDOWS {
+        for window in WINDOWS {
             let newest = newest.get(window).copied();
             // A run the table already holds names a reset at or before its window's newest row, and a window that ended
             // before the cutoff would leave with the next purge, while every reading of a run past both names a reset
             // past them less the slack, so older readings need not be read at all.
             let floor = newest.unwrap_or(i64::MIN).max(cutoff) - RESET_SLACK_MS;
-            for mut run in runs(&readings_of(tx, account, window, floor, length)?) {
+            for mut run in runs(&readings_of(tx, account, window, floor)?) {
                 let key = run.key();
                 let complete = run.closed_at.is_some() || key < now;
                 if !complete || key < cutoff || newest.is_some_and(|n| key <= n) {
@@ -471,14 +462,9 @@ fn newest_window_ends(
 
 /// The statement `readings_of` runs and its binds: the account, the window, the floor the reset lies past and the
 /// first bucket a reading naming such a reset sits in. A reading names the reset of a window open when it was read,
-/// so the reset lies at most the window's `length` past the reading, and the bucket bound lets the
+/// so the reset lies at most the window's length (`window_length_ms`) past the reading, and the bucket bound lets the
 /// `(account_id, window, bucket)` index seek where the reset alone would walk the window's whole retention.
-fn readings_statement(
-    account: &str,
-    window: &str,
-    floor: i64,
-    length: i64,
-) -> (&'static str, Vec<Value>) {
+fn readings_statement(account: &str, window: &str, floor: i64) -> (&'static str, Vec<Value>) {
     (
         "SELECT utilization, reset_at, observed_at, source FROM quota_samples \
          WHERE account_id = ?1 AND window = ?2 AND utilization IS NOT NULL AND reset_at > ?3 AND bucket >= ?4 \
@@ -487,7 +473,7 @@ fn readings_statement(
             Value::Text(account.to_string()),
             Value::Text(window.to_string()),
             Value::Integer(floor),
-            Value::Integer(bucket_of(floor - length)),
+            Value::Integer(bucket_of(floor - window_length_ms(window))),
         ],
     )
 }
@@ -498,9 +484,8 @@ fn readings_of(
     account: &str,
     window: &str,
     floor: i64,
-    length: i64,
 ) -> Result<Vec<Reading>, LedgerError> {
-    let (sql, binds) = readings_statement(account, window, floor, length);
+    let (sql, binds) = readings_statement(account, window, floor);
     let mut stmt = conn.prepare(sql)?;
     let rows = stmt.query_map(params_from_iter(binds), |r| {
         Ok(Reading {
@@ -564,21 +549,19 @@ fn predicted(
         {
             continue;
         }
-        let mut sums = BurnSums::default();
-        price_usage(&mut sums, prices, tables, key, usage, true);
-        let point = sums.point();
-        let priced = match window {
-            FIVE_HOUR => point.five_hour_share,
-            SEVEN_DAY => point.seven_day_share,
-            _ => point.model_week_share,
-        };
-        // The meter's rise carries what this attempt drew, so a sum of the others alone would read as drift.
-        if priced.is_none() && point.tokens > 0 {
-            return Ok(Prediction::Unpriced);
+        // An attempt with no token drew nothing, while the cost model refuses a model it has no weight for before it
+        // reads the usage, so pricing it would answer `Unpriced` for a draw of nothing.
+        if usage.prompt_tokens() + usage.output == 0 {
+            continue;
         }
-        if let Some(priced) = priced {
-            share += priced;
-            requests += 1;
+        let priced = crate::price::price_row(prices, tables, &key, usage);
+        match priced.shares.and_then(|s| s.get(window).copied().flatten()) {
+            // The meter's rise carries what this attempt drew, so a sum of the others alone would read as drift.
+            None => return Ok(Prediction::Unpriced),
+            Some(priced) => {
+                share += priced;
+                requests += 1;
+            }
         }
     }
     Ok(if !share.is_finite() {
@@ -657,7 +640,7 @@ mod tests {
 
     #[test]
     fn the_readings_of_a_window_seek_its_buckets_from_the_floor_less_its_length() {
-        let (sql, binds) = readings_statement("a", SEVEN_DAY, 30 * 86_400_000, WEEK_MS);
+        let (sql, binds) = readings_statement("a", SEVEN_DAY, 30 * 86_400_000);
         let plan = plan_of(sql, binds);
         assert!(
             plan.iter()

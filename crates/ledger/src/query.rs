@@ -3086,17 +3086,29 @@ pub fn dashboard_on(
     })
 }
 
-/// The accounts of `quota_samples` and each one's windows, by a skip over an index that leads with the account and
-/// over the account index's second column: one seek per account and per window rather than a walk of the table, since
-/// no index leads with `bucket`. The recursion's last row is the `NULL` that ends it, which every reader filters out.
-macro_rules! quota_account_windows_cte {
+/// The accounts of `quota_samples`, by a skip over an index that leads with the account: one seek per account where
+/// `DISTINCT` would walk every stored sample. The recursion's last row is the `NULL` that ends it, which every reader
+/// filters out.
+macro_rules! quota_accounts_cte {
     () => {
         "WITH RECURSIVE \
            accounts(account_id) AS ( \
              SELECT MIN(account_id) FROM quota_samples \
              UNION ALL \
              SELECT (SELECT MIN(q.account_id) FROM quota_samples q WHERE q.account_id > accounts.account_id) \
-               FROM accounts WHERE accounts.account_id IS NOT NULL), \
+               FROM accounts WHERE accounts.account_id IS NOT NULL)"
+    };
+}
+pub(crate) use quota_accounts_cte;
+
+/// `quota_accounts_cte!` and each account's windows, by a skip over the account index's second column: one seek per
+/// window rather than a walk of the table, since no index leads with `bucket`. The windows' recursion ends on a `NULL`
+/// too, which every reader filters out.
+macro_rules! quota_account_windows_cte {
+    () => {
+        concat!(
+            quota_accounts_cte!(),
+            ", \
            windows(account_id, window) AS ( \
              SELECT account_id, (SELECT MIN(q.window) FROM quota_samples q WHERE q.account_id = accounts.account_id) \
                FROM accounts WHERE accounts.account_id IS NOT NULL \
@@ -3104,6 +3116,7 @@ macro_rules! quota_account_windows_cte {
              SELECT account_id, (SELECT MIN(q.window) FROM quota_samples q \
                                   WHERE q.account_id = windows.account_id AND q.window > windows.window) \
                FROM windows WHERE windows.window IS NOT NULL)"
+        )
     };
 }
 

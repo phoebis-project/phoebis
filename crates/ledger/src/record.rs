@@ -7,6 +7,8 @@
 use phoebis_routing::{CacheMapEntry, DecisionRecord, DecisionSummary, PinUsage};
 use phoebis_store::AccountKind;
 
+use crate::plan::{funding_of, Funding};
+use crate::pricing::Speed;
 use crate::LedgerError;
 
 // A parked row outlives the build that wrote it, so a field a later build adds reads at its default.
@@ -197,6 +199,16 @@ impl AttemptRecord {
             write_1h: self.cache_write_1h_tokens.unwrap_or(0),
             output: self.output_tokens.unwrap_or(0),
         }
+    }
+
+    /// Who paid for the attempt, `funding_of` read off its own four facts.
+    pub fn funding(&self) -> Funding {
+        funding_of(
+            Some(self.account_kind),
+            self.usage_based,
+            self.overage_in_use,
+            Speed::of(self.speed.as_deref()),
+        )
     }
 }
 

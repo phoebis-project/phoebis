@@ -4,7 +4,7 @@
 use std::cell::OnceCell;
 
 use phoebis_routing::{
-    FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, MODEL_REJECTED_REASON, RATE_LIMIT_REASON,
+    FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, HOUR_MS, MODEL_REJECTED_REASON, RATE_LIMIT_REASON,
     RETRY_AFTER_WINDOW, SEVEN_DAY_OVERAGE_INCLUDED,
 };
 use phoebis_store::{AccountKind, AccountState, StateCause};
@@ -16,9 +16,9 @@ use crate::ratelimit::{retry_after, HeadReading, UnifiedHeaders, UnifiedWindow, 
 
 /// Deadlines carry a second of margin so a request sent at the reset is not refused by a clock a hair behind.
 const MARGIN_MS: i64 = 1_000;
-const PERMISSION_MS: i64 = 3_600_000;
+const PERMISSION_MS: i64 = HOUR_MS;
 const FAST_RATE_LIMIT_FALLBACK_MS: i64 = 600_000;
-const FAST_CREDITS_FALLBACK_MS: i64 = 3_600_000;
+const FAST_CREDITS_FALLBACK_MS: i64 = HOUR_MS;
 
 /// The window name a rejection row carries; the console shows it beside the deadline.
 pub const MODEL_REJECTION_WINDOW: &str = "model_rejection";

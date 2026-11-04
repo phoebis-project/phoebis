@@ -10,10 +10,10 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_bus::Classifier;
 use phoebis_ledger::{
-    entrypoint_of_client, free_equivalent, free_shares, funding_of, list_request_page,
-    price_equivalent, price_shares, request_by_id, request_events, AttemptRecord, Funding,
-    LiveKeys, Patterns, PlanTables, PriceRevisions, RequestCursor, RequestFilter, RequestRecord,
-    Speed, WindowShares, SHARE_REASON_CLIENT_CLASSIFIER,
+    entrypoint_of_client, free_equivalent, free_shares, list_request_page, price_equivalent,
+    price_shares, request_by_id, request_events, AttemptRecord, Funding, LiveKeys, Patterns,
+    PlanTables, PriceRevisions, RequestCursor, RequestFilter, RequestRecord, Speed, WindowShares,
+    SHARE_REASON_CLIENT_CLASSIFIER,
 };
 use phoebis_routing::{UtilizationSample, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_OVERAGE_INCLUDED};
 use serde_json::Value;
@@ -633,13 +633,7 @@ fn plan_figures(
     now: i64,
 ) -> Option<PlanFigures> {
     let a = attempts.last()?;
-    if funding_of(
-        Some(a.account_kind),
-        a.usage_based,
-        a.overage_in_use,
-        Speed::of(a.speed.as_deref()),
-    ) != Funding::Plan
-    {
+    if a.funding() != Funding::Plan {
         return None;
     }
     let usage = a.usage();

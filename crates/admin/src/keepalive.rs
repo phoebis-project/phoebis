@@ -148,29 +148,21 @@ pub(crate) async fn overview(
     let now = (state.clock)();
     let day = hour_of(now) - 24 * 3_600;
     let to = crate::analytics::hour_end(hour_of(now));
-    let rows = match state
+    let (expired, rows) = match state
         .ledger
         .db()
         .read(move |c| read_overview_rollups(c, day, to))
         .await
     {
-        Ok(rows) => rows,
+        Ok(read) => read,
         Err(e) => return ledger_failure(e),
     };
-    let mut expired = 0u64;
     let mut probes = phoebis_ledger::ProbeCounts::default();
     let mut pools: BTreeMap<String, PoolDay> = BTreeMap::new();
     for row in &rows {
         let probe = row.kind == phoebis_bus::Kind::Probe.as_str();
-        expired += row
-            .cache_miss_reasons
-            .get(phoebis_ledger::EXPIRED_BETWEEN_TURNS)
-            .copied()
-            .unwrap_or(0);
         if probe {
             probes.add_row(row.probe_view());
-        } else if row.kept_warm_requests == 0 {
-            continue;
         }
         // A row filed under no pool lists under its account, where the idle-age counters count that account's
         // windows, so the two sources meet on one row.

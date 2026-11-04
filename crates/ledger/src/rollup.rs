@@ -10,7 +10,7 @@ use rusqlite::{params, params_from_iter, Connection, OptionalExtension, ToSql, T
 
 use phoebis_bus::{Classifier, Kind};
 use phoebis_relay::{identifier_byte, EFFORT_LEVELS};
-use phoebis_routing::{window_length_ms, PinUsage, WEEK_MS};
+use phoebis_routing::{window_length_ms, PinUsage, DAY_MS, HOUR_MS, WEEK_MS};
 
 use crate::db::LedgerDb;
 #[cfg(test)]
@@ -91,17 +91,12 @@ fn answered_speed(a: &AttemptRecord) -> &str {
     a.speed.as_deref().unwrap_or(STANDARD_SPEED)
 }
 
-/// The speed of a request no attempt answered: the serving attempt's reported speed, else what `fold_speed` reads off
-/// the speed the request asked for.
+/// The speed of a request no attempt answered: the serving attempt's reported speed, else `fast` for a request that
+/// asked for it, else `STANDARD_SPEED`. The request row keeps the body's `speed` text as sent, and any other value
+/// would key a row of its own.
 fn unanswered_speed<'a>(a: Option<&'a AttemptRecord>, requested: Option<&str>) -> &'a str {
     a.and_then(|a| a.speed.as_deref())
-        .unwrap_or_else(|| fold_speed(requested))
-}
-
-/// `fast` for a request that asked for it, else `STANDARD_SPEED`: the request row keeps the body's `speed` text as
-/// sent, and any other value would key a row of its own.
-fn fold_speed(raw: Option<&str>) -> &'static str {
-    Speed::of(raw).as_str()
+        .unwrap_or_else(|| Speed::of(requested).as_str())
 }
 
 /// One of `EFFORT_LEVELS`, `NO_EFFORT` for a request that asked for none, else `OTHER_DIMENSION`.
@@ -372,16 +367,6 @@ impl RollupRow {
         }
     }
 
-    /// The account tier the row recorded, `None` for `UNATTRIBUTED`.
-    pub(crate) fn tier_of(&self) -> Option<&str> {
-        (self.tier != UNATTRIBUTED).then_some(self.tier.as_str())
-    }
-
-    /// Whether the row is the client's own classifier call.
-    pub(crate) fn is_classifier(&self) -> bool {
-        self.classifier == Classifier::Client.as_str()
-    }
-
     /// The price key of the row: its own model, speed, band, funding and `kind`, its tier (`None` under
     /// `UNATTRIBUTED`), the entrypoint its `client` names, and its hour as the instant, with no completion, read at
     /// `now`.
@@ -392,9 +377,9 @@ impl RollupRow {
             band: Band::of_rollup(&self.band),
             funding: self.funding_kind(),
             kind: self.kind.as_str(),
-            tier: self.tier_of(),
+            tier: (self.tier != UNATTRIBUTED).then_some(self.tier.as_str()),
             entrypoint: entrypoint_of_client(&self.client),
-            classifier: self.is_classifier(),
+            classifier: self.classifier == Classifier::Client.as_str(),
             at: self.hour * 1_000,
             band_at: None,
             now,
@@ -531,17 +516,8 @@ pub fn deltas_of(
 
     // An attempt's funding whole, read off its own four facts, so the key tells billed spend from plan spend without
     // the registry. A request no attempt served files under `plan`.
-    let funding_word = |a: Option<&AttemptRecord>| {
-        a.map_or(PLAN_FUNDING, |a| {
-            funding_of(
-                Some(a.account_kind),
-                a.usage_based,
-                a.overage_in_use,
-                Speed::of(a.speed.as_deref()),
-            )
-            .rollup_word()
-        })
-    };
+    let funding_word =
+        |a: Option<&AttemptRecord>| a.map_or(PLAN_FUNDING, |a| a.funding().rollup_word());
     let band_of = |a: &AttemptRecord| table.band_of(model, a.usage().prompt_tokens()).as_str();
     let base = RollupRow::key(
         hour_of(request.received_at),
@@ -745,9 +721,9 @@ fn slow_down_held_ms(held: Option<&str>) -> Option<u64> {
     (!slowed.is_empty()).then(|| slowed.iter().sum())
 }
 
-/// The 17 columns of a rollup row the keepalive overview folds, which `read_overview_rollups` answers. The overview
-/// reads a day of every row on each poll and holds a reader connection through the decode, so it reads these alone in
-/// place of all 58 a `RollupRow` decodes, the four histograms among them.
+/// The 16 columns of a probe or kept-warm rollup row the keepalive overview folds, which `read_overview_rollups`
+/// answers. The overview reads a day of every row on each poll and holds a reader connection through the decode, so it
+/// reads these alone in place of all 58 a `RollupRow` decodes, the four histograms among them.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct OverviewRollupRow {
     pub kind: String,
@@ -766,7 +742,6 @@ pub struct OverviewRollupRow {
     pub kept_warm_requests: u64,
     pub wasted_probes: u64,
     pub wasted_probe_reasons: BTreeMap<String, u64>,
-    pub cache_miss_reasons: BTreeMap<String, u64>,
 }
 
 impl OverviewRollupRow {
@@ -905,33 +880,15 @@ pub fn fold_request(
     Ok(())
 }
 
-/// The row under `delta`'s key with nothing in it yet.
-pub(crate) fn empty_row(delta: &RollupRow) -> RollupRow {
-    RollupRow::key(
-        delta.hour,
-        &delta.key_id,
-        delta.key_generation,
-        &delta.pool_id,
-        &delta.account_id,
-        &delta.canonical_model,
-        &delta.kind,
-        &delta.user_agent,
-        &delta.client,
-        &delta.effort,
-        &delta.request_class,
-        &delta.speed,
-        &delta.funding,
-        &delta.band,
-        &delta.tier,
-        &delta.classifier,
-    )
-}
-
-/// Adds `delta` to its row, the row started from the key where none stands.
+/// Adds `delta` to its row, or writes `delta` as the row where none stands.
 pub(crate) fn fold_delta(tx: &Transaction<'_>, delta: &RollupRow) -> Result<(), LedgerError> {
-    let mut row = read_rollup(tx, delta)?.unwrap_or_else(|| empty_row(delta));
-    row.add(delta);
-    write_rollup(tx, &row)
+    match read_rollup(tx, delta)? {
+        Some(mut row) => {
+            row.add(delta);
+            write_rollup(tx, &row)
+        }
+        None => write_rollup(tx, delta),
+    }
 }
 
 /// Takes a delta that was added before back out of its row. A row left holding nothing of any request or probe
@@ -1047,20 +1004,24 @@ pub fn fold_keepalive(tx: &Transaction<'_>, delta: &KeepaliveDelta) -> Result<()
         delta.tier.as_deref().unwrap_or(UNATTRIBUTED),
         NO_CLASS,
     );
-    let mut row = read_rollup(tx, &key)?.unwrap_or(key);
-    row.kept_warm_requests += delta.kept_warm_requests;
-    row.kept_warm_5m_tokens += delta.kept_warm_5m_tokens;
-    row.kept_warm_1h_tokens += delta.kept_warm_1h_tokens;
-    row.probe_migrated += delta.probe_migrated;
-    row.probes_skipped += delta.probes_skipped;
-    row.wasted_probes += delta.wasted_probes;
-    row.wasted_input_tokens += delta.wasted_input_tokens;
-    row.wasted_cache_read_tokens += delta.wasted_cache_read_tokens;
-    row.wasted_cache_write_5m_tokens += delta.wasted_cache_write_5m_tokens;
-    row.wasted_cache_write_1h_tokens += delta.wasted_cache_write_1h_tokens;
-    row.wasted_output_tokens += delta.wasted_output_tokens;
-    add_counts(&mut row.wasted_probe_reasons, &delta.wasted_probe_reasons);
-    write_rollup(tx, &row)?;
+    fold_delta(
+        tx,
+        &RollupRow {
+            kept_warm_requests: delta.kept_warm_requests,
+            kept_warm_5m_tokens: delta.kept_warm_5m_tokens,
+            kept_warm_1h_tokens: delta.kept_warm_1h_tokens,
+            probe_migrated: delta.probe_migrated,
+            probes_skipped: delta.probes_skipped,
+            wasted_probes: delta.wasted_probes,
+            wasted_input_tokens: delta.wasted_input_tokens,
+            wasted_cache_read_tokens: delta.wasted_cache_read_tokens,
+            wasted_cache_write_5m_tokens: delta.wasted_cache_write_5m_tokens,
+            wasted_cache_write_1h_tokens: delta.wasted_cache_write_1h_tokens,
+            wasted_output_tokens: delta.wasted_output_tokens,
+            wasted_probe_reasons: delta.wasted_probe_reasons.clone(),
+            ..key
+        },
+    )?;
     if let Some(id) = &delta.kept_warm_request_id {
         // The engine credits at completion while the writer batches, so the request's own row may land after
         // this mark; the insert consults the marks table for exactly that case.
@@ -1214,10 +1175,10 @@ pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), Ledge
 
 /// How far back the routing conditions read: a condition holds while one qualifying event lies this close to the fold,
 /// and `slowed_long` holds as well on a slow-down span open from before this cutoff, which no row inside it names.
-const CONDITION_SPAN_MS: i64 = 24 * 3_600_000;
+const CONDITION_SPAN_MS: i64 = DAY_MS;
 
 /// How soon after a move a spent window on its destination counts against the move.
-const SPENT_AFTER_MOVE_MS: i64 = 3_600_000;
+const SPENT_AFTER_MOVE_MS: i64 = HOUR_MS;
 
 // The pool settings a condition names, each spelled once for the lists below and for the attention reader, which
 // adds a pool's value of each setting a row names.
@@ -1280,7 +1241,7 @@ impl RoutingKind {
 const SLOWED_LONG_STRETCHES: i64 = 2;
 
 /// The bar's floor, so a pool near the threshold's own floor raises nothing on a few minutes of slow-down.
-const SLOWED_LONG_FLOOR_MS: i64 = 3_600_000;
+const SLOWED_LONG_FLOOR_MS: i64 = HOUR_MS;
 
 /// The detail of the newest `shedding_round` on the account's `window` inside the window's length before the wall at
 /// `at`, read on the wall's own window since a round projects the window that fired it. A round a weekly window's
@@ -1775,8 +1736,9 @@ fn account_row(
     hour: i64,
     account_id: &str,
 ) -> Result<AccountRollupRow, LedgerError> {
-    static STATEMENT: LazyLock<String> =
-        LazyLock::new(|| format!("{ACCOUNT_SELECT} WHERE hour = ?1 AND account_id = ?2"));
+    static STATEMENT: LazyLock<String> = LazyLock::new(|| {
+        format!("SELECT {ACCOUNT_COLUMNS} FROM account_rollups_hourly WHERE hour = ?1 AND account_id = ?2")
+    });
     Ok(tx
         .prepare_cached(&STATEMENT)?
         .query_row(params![hour, account_id], row_to_account)
@@ -1789,17 +1751,28 @@ fn account_row(
 }
 
 fn write_account(tx: &Transaction<'_>, row: &AccountRollupRow) -> Result<(), LedgerError> {
-    tx.prepare_cached(
-        "INSERT INTO account_rollups_hourly (hour, account_id, utilization_5h_max, utilization_7d_max, utilization_7d_oi_max, overage_seconds, cooldown_seconds, pins_created, pins_migrated_in, pins_migrated_out, rewrite_tokens, migrations_json, wall_early_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13) \
-         ON CONFLICT (hour, account_id) DO UPDATE SET utilization_5h_max = excluded.utilization_5h_max, utilization_7d_max = excluded.utilization_7d_max, utilization_7d_oi_max = excluded.utilization_7d_oi_max, overage_seconds = excluded.overage_seconds, cooldown_seconds = excluded.cooldown_seconds, pins_created = excluded.pins_created, pins_migrated_in = excluded.pins_migrated_in, pins_migrated_out = excluded.pins_migrated_out, rewrite_tokens = excluded.rewrite_tokens, migrations_json = excluded.migrations_json, wall_early_ms = excluded.wall_early_ms",
-    )?
-    .execute(params![
-            row.hour, row.account_id, row.utilization_5h_max, row.utilization_7d_max, row.utilization_7d_oi_max,
-            row.overage_seconds as i64, row.cooldown_seconds as i64, row.pins_created as i64, row.pins_migrated_in as i64,
-            row.pins_migrated_out as i64, row.rewrite_tokens as i64,
-            counts_json(&row.migrations),
-            row.wall_early_ms as i64,
-        ])?;
+    static STATEMENT: LazyLock<String> = LazyLock::new(|| {
+        upsert_statement(
+            "account_rollups_hourly",
+            ACCOUNT_COLUMNS,
+            "hour, account_id",
+        )
+    });
+    tx.prepare_cached(&STATEMENT)?.execute(params![
+        row.hour,
+        row.account_id,
+        row.utilization_5h_max,
+        row.utilization_7d_max,
+        row.utilization_7d_oi_max,
+        row.overage_seconds as i64,
+        row.cooldown_seconds as i64,
+        row.pins_created as i64,
+        row.pins_migrated_in as i64,
+        row.pins_migrated_out as i64,
+        row.rewrite_tokens as i64,
+        counts_json(&row.migrations),
+        row.wall_early_ms as i64,
+    ])?;
     Ok(())
 }
 
@@ -1906,23 +1879,51 @@ fn take_segments(
 }
 
 const COLUMNS: &str = "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, kept_warm_requests, kept_warm_5m_tokens, probe_migrated, wasted_probes, wasted_probe_reasons_json, probes_skipped, wasted_input_tokens, wasted_cache_read_tokens, wasted_cache_write_5m_tokens, wasted_cache_write_1h_tokens, wasted_output_tokens, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json, incomplete, probes_held, slow_down_held_ms, slow_down_held, kept_warm_1h_tokens, classifier, refusals_json";
-const ACCOUNT_SELECT: &str = "SELECT hour, account_id, utilization_5h_max, utilization_7d_max, utilization_7d_oi_max, overage_seconds, cooldown_seconds, pins_created, pins_migrated_in, pins_migrated_out, rewrite_tokens, migrations_json, wall_early_ms FROM account_rollups_hourly";
+const ACCOUNT_COLUMNS: &str = "hour, account_id, utilization_5h_max, utilization_7d_max, utilization_7d_oi_max, overage_seconds, cooldown_seconds, pins_created, pins_migrated_in, pins_migrated_out, rewrite_tokens, migrations_json, wall_early_ms";
+
+/// The rollup key, the table's primary key in its order: the upsert's conflict target, the order a read answers in and
+/// the columns `KEY_MATCH` names.
+const KEY_COLUMNS: [&str; 16] = [
+    "hour",
+    "key_id",
+    "key_generation",
+    "pool_id",
+    "account_id",
+    "canonical_model",
+    "kind",
+    "user_agent",
+    "client",
+    "effort",
+    "request_class",
+    "speed",
+    "funding",
+    "band",
+    "tier",
+    "classifier",
+];
 
 /// The sixteen terms that match one rollup key, bound in `key_params`' order.
-const KEY_MATCH: &str = "hour = ?1 AND key_id = ?2 AND pool_id = ?3 AND account_id = ?4 AND canonical_model = ?5 AND kind = ?6 AND user_agent = ?7 AND key_generation = ?8 AND effort = ?9 AND client = ?10 AND request_class = ?11 AND speed = ?12 AND funding = ?13 AND band = ?14 AND tier = ?15 AND classifier = ?16";
+static KEY_MATCH: LazyLock<String> = LazyLock::new(|| {
+    KEY_COLUMNS
+        .iter()
+        .enumerate()
+        .map(|(i, column)| format!("{column} = ?{}", i + 1))
+        .collect::<Vec<_>>()
+        .join(" AND ")
+});
 
 fn key_params(k: &RollupRow) -> [&dyn ToSql; 16] {
     [
         &k.hour,
         &k.key_id,
+        &k.key_generation,
         &k.pool_id,
         &k.account_id,
         &k.canonical_model,
         &k.kind,
         &k.user_agent,
-        &k.key_generation,
-        &k.effort,
         &k.client,
+        &k.effort,
         &k.request_class,
         &k.speed,
         &k.funding,
@@ -1930,6 +1931,24 @@ fn key_params(k: &RollupRow) -> [&dyn ToSql; 16] {
         &k.tier,
         &k.classifier,
     ]
+}
+
+/// The upsert of `columns` into `table` on the conflict target `key`, every column outside `key` taking the written
+/// row's value, bound in `columns`' order.
+fn upsert_statement(table: &str, columns: &str, key: &str) -> String {
+    let marks = (1..=columns.split(", ").count())
+        .map(|i| format!("?{i}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let set = columns
+        .split(", ")
+        .filter(|column| !key.split(", ").any(|k| k == *column))
+        .map(|column| format!("{column} = excluded.{column}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "INSERT INTO {table} ({columns}) VALUES ({marks}) ON CONFLICT ({key}) DO UPDATE SET {set}"
+    )
 }
 
 /// A count map as its column's JSON, a map that does not encode writing as no count.
@@ -1942,7 +1961,7 @@ pub(crate) fn read_rollup(
     key: &RollupRow,
 ) -> Result<Option<RollupRow>, LedgerError> {
     static STATEMENT: LazyLock<String> =
-        LazyLock::new(|| format!("SELECT {COLUMNS} FROM rollups_hourly WHERE {KEY_MATCH}"));
+        LazyLock::new(|| format!("SELECT {COLUMNS} FROM rollups_hourly WHERE {}", *KEY_MATCH));
     Ok(conn
         .prepare_cached(&STATEMENT)?
         .query_row(key_params(key), row_to_rollup)
@@ -1951,7 +1970,7 @@ pub(crate) fn read_rollup(
 
 pub(crate) fn delete_rollup(conn: &Connection, key: &RollupRow) -> Result<(), LedgerError> {
     static STATEMENT: LazyLock<String> =
-        LazyLock::new(|| format!("DELETE FROM rollups_hourly WHERE {KEY_MATCH}"));
+        LazyLock::new(|| format!("DELETE FROM rollups_hourly WHERE {}", *KEY_MATCH));
     conn.prepare_cached(&STATEMENT)?.execute(key_params(key))?;
     Ok(())
 }
@@ -1959,16 +1978,8 @@ pub(crate) fn delete_rollup(conn: &Connection, key: &RollupRow) -> Result<(), Le
 pub(crate) fn write_rollup(conn: &Connection, r: &RollupRow) -> Result<(), LedgerError> {
     // An upsert on the sixteen-column key updates a folded row in place where a replace deletes and inserts it again,
     // rewriting both indexes' entries and the rowid the startup stamp pages by.
-    static STATEMENT: LazyLock<String> = LazyLock::new(|| {
-        let key = "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier, classifier";
-        let set = COLUMNS
-            .split(", ")
-            .filter(|column| !key.split(", ").any(|k| k == *column))
-            .map(|column| format!("{column} = excluded.{column}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!("INSERT INTO rollups_hourly ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52, ?53, ?54, ?55, ?56, ?57, ?58) ON CONFLICT ({key}) DO UPDATE SET {set}")
-    });
+    static STATEMENT: LazyLock<String> =
+        LazyLock::new(|| upsert_statement("rollups_hourly", COLUMNS, &KEY_COLUMNS.join(", ")));
     conn.prepare_cached(&STATEMENT)?.execute(params![
         r.hour,
         r.key_id,
@@ -2187,8 +2198,9 @@ pub(crate) fn select_statement(
     };
     (
         format!(
-            "SELECT {COLUMNS} FROM rollups_hourly{indexed} WHERE {} ORDER BY hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier, classifier",
-            clauses.join(" AND ")
+            "SELECT {COLUMNS} FROM rollups_hourly{indexed} WHERE {} ORDER BY {}",
+            clauses.join(" AND "),
+            KEY_COLUMNS.join(", ")
         ),
         binds,
     )
@@ -2223,40 +2235,52 @@ pub(crate) fn visit_rollups(
     Ok(())
 }
 
-/// The overview's rows of `[from_hour, to_hour)` in no order, since its fold only sums them.
+/// The count every row of `[from_hour, to_hour)` files under `EXPIRED_BETWEEN_TURNS`, and the probe and kept-warm rows
+/// among them in no order, since the overview's fold only sums them and lists no other row.
 pub fn read_overview_rollups(
     conn: &Connection,
     from_hour: i64,
     to_hour: i64,
-) -> Result<Vec<OverviewRollupRow>, LedgerError> {
-    let mut stmt = conn.prepare(
-        "SELECT kind, funding, pool_id, account_id, succeeded, failed, rate_limited, exhausted, rejected, \
-         incomplete, probes_held, probe_migrated, probes_skipped, kept_warm_requests, wasted_probes, \
-         wasted_probe_reasons_json, cache_miss_reasons_json FROM rollups_hourly WHERE hour >= ?1 AND hour < ?2",
+) -> Result<(u64, Vec<OverviewRollupRow>), LedgerError> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT kind, kept_warm_requests, cache_miss_reasons_json, funding, pool_id, account_id, succeeded, failed, \
+         rate_limited, exhausted, rejected, incomplete, probes_held, probe_migrated, probes_skipped, wasted_probes, \
+         wasted_probe_reasons_json FROM rollups_hourly WHERE hour >= ?1 AND hour < ?2",
     )?;
-    let rows = stmt.query_map(params![from_hour, to_hour], |r| {
+    let mut rows = stmt.query(params![from_hour, to_hour])?;
+    let mut expired = 0u64;
+    let mut kept = Vec::new();
+    while let Some(r) = rows.next()? {
+        expired += counts_at(r, 2)?
+            .get(EXPIRED_BETWEEN_TURNS)
+            .copied()
+            .unwrap_or(0);
         let u = |i: usize| -> rusqlite::Result<u64> { Ok(r.get::<_, i64>(i)? as u64) };
-        Ok(OverviewRollupRow {
-            kind: r.get(0)?,
-            funding: r.get(1)?,
-            pool_id: r.get(2)?,
-            account_id: r.get(3)?,
-            succeeded: u(4)?,
-            failed: u(5)?,
-            rate_limited: u(6)?,
-            exhausted: u(7)?,
-            rejected: u(8)?,
-            incomplete: u(9)?,
-            probes_held: u(10)?,
-            probe_migrated: u(11)?,
-            probes_skipped: u(12)?,
-            kept_warm_requests: u(13)?,
-            wasted_probes: u(14)?,
-            wasted_probe_reasons: counts_at(r, 15)?,
-            cache_miss_reasons: counts_at(r, 16)?,
-        })
-    })?;
-    Ok(rows.collect::<rusqlite::Result<_>>()?)
+        let kept_warm_requests = u(1)?;
+        let kind = r.get_ref(0)?.as_str().map_err(rusqlite::Error::from)?;
+        if kind != Kind::Probe.as_str() && kept_warm_requests == 0 {
+            continue;
+        }
+        kept.push(OverviewRollupRow {
+            kind: kind.to_string(),
+            funding: r.get(3)?,
+            pool_id: r.get(4)?,
+            account_id: r.get(5)?,
+            succeeded: u(6)?,
+            failed: u(7)?,
+            rate_limited: u(8)?,
+            exhausted: u(9)?,
+            rejected: u(10)?,
+            incomplete: u(11)?,
+            probes_held: u(12)?,
+            probe_migrated: u(13)?,
+            probes_skipped: u(14)?,
+            kept_warm_requests,
+            wasted_probes: u(15)?,
+            wasted_probe_reasons: counts_at(r, 16)?,
+        });
+    }
+    Ok((expired, kept))
 }
 
 /// The rows of `[from_hour, to_hour)` under `select`, one `PAGE_HOURS` page per `read`, handed to `visit` in the
@@ -2340,7 +2364,7 @@ pub fn read_account_rollups(
     to_hour: i64,
 ) -> Result<Vec<AccountRollupRow>, LedgerError> {
     let mut stmt = conn.prepare(&format!(
-        "{ACCOUNT_SELECT} WHERE hour >= ?1 AND hour < ?2 ORDER BY hour, account_id"
+        "SELECT {ACCOUNT_COLUMNS} FROM account_rollups_hourly WHERE hour >= ?1 AND hour < ?2 ORDER BY hour, account_id"
     ))?;
     let rows = stmt.query_map(params![from_hour, to_hour], row_to_account)?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)

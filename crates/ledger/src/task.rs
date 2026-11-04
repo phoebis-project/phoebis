@@ -22,8 +22,8 @@ use crate::db::{
 };
 use crate::events::{spawn_event_mirror, MirrorBaseline};
 use crate::metrics::Metrics;
-use crate::plan::{funding_of, Funding, PlanTables};
-use crate::pricing::{Pricing, Speed};
+use crate::plan::{Funding, PlanTables};
+use crate::pricing::Pricing;
 use crate::query::{
     member_spends, period_bounds, BudgetedMember, BUDGET_PERIOD_ENDED, BUDGET_REACHED, LEDGER_GAP,
     ROUTER_STARTED,
@@ -1772,15 +1772,9 @@ fn note_unpriced(
     if request.classifier.as_deref() == Some(Classifier::Client.as_str()) {
         return;
     }
-    let plan_funded = attempts.iter().any(|a| {
-        a.has_usage()
-            && funding_of(
-                Some(a.account_kind),
-                a.usage_based,
-                a.overage_in_use,
-                Speed::of(a.speed.as_deref()),
-            ) == Funding::Plan
-    });
+    let plan_funded = attempts
+        .iter()
+        .any(|a| a.has_usage() && a.funding() == Funding::Plan);
     if !plan_funded {
         return;
     }

@@ -5,13 +5,14 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 
+use phoebis_routing::DAY_MS;
 use phoebis_store::AccountRow;
 pub use phoebis_store::MemoryKey;
 use phoebis_store::{MemoryRecord, MemoryStore, StoreError};
 
 /// The default idle bound, also the client's own session expiry default; `sessions.memory_idle_seconds`
 /// replaces it.
-pub const MEMORY_IDLE_MS: i64 = 24 * 3_600_000;
+pub const MEMORY_IDLE_MS: i64 = DAY_MS;
 /// Entries held at most; past it the least recently seen entry goes. The overlay an eviction leaves behind is
 /// bounded by the same cap in every regime: while the store answers, it asks for a flush the moment it reaches
 /// the cap, so a shed there happens only when that flush does not land first; while the store is failing, it
