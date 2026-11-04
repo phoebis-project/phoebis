@@ -237,34 +237,19 @@ pub enum ConfigError {
         "proxy.body_budget_bytes must be at least proxy.max_request_bytes ({minimum}), not {value}"
     )]
     BodyBudgetTooSmall { minimum: usize, value: u64 },
-    #[error("stats.body_capture_max_hours must be between 1 and 168, not {value}")]
-    BodyCaptureMaxOutOfRange { value: u32 },
-    #[error("proxy.body_read_seconds must be between 1 and {max}, not {value}")]
-    BodyReadOutOfRange { max: u64, value: u64 },
-    #[error("routing.catalog_refresh_seconds must be between 60 and 604800, not {value}")]
-    CatalogRefreshOutOfRange { value: u64 },
-    #[error("routing.cooldown_fallback_seconds must be between 1 and 3600, not {value}")]
-    CooldownFallbackOutOfRange { value: u64 },
     #[error("{0}")]
     Keepalive(#[from] LimitsError),
-    #[error("proxy.key_body_reads must be between 1 and 4096, not {value}")]
-    KeyBodyReadsOutOfRange { value: u32 },
     #[error("stats.ledger_path {path} must name a database file inside a directory")]
     LedgerPath { path: PathBuf },
-    #[error("proxy.max_request_bytes must be between 1024 and 33554432, not {value}")]
-    MaxRequestBytesOutOfRange { value: usize },
-    #[error("sessions.memory_cap must be between 1 and 1048576, not {value}")]
-    MemoryCapOutOfRange { value: usize },
-    #[error("sessions.memory_idle_seconds must be between 60 and 31536000, not {value}")]
-    MemoryIdleOutOfRange { value: u64 },
-    #[error("sessions.memory_retention_days must be between 1 and 3650, not {value}")]
-    MemoryRetentionOutOfRange { value: u32 },
     #[error("environment variable {name} is unset or empty")]
     MissingSecret { name: String },
-    #[error("routing.model_rejection_seconds must be between 1 and 604800, not {value}")]
-    ModelRejectionOutOfRange { value: u64 },
-    #[error("sessions.non_companion_idle_seconds must be between 60 and 31536000, not {value}")]
-    NonCompanionIdleOutOfRange { value: u64 },
+    #[error("{key} must be between {min} and {max}, not {value}")]
+    OutOfRange {
+        key: &'static str,
+        min: u64,
+        max: u64,
+        value: u64,
+    },
     #[error("environment variable {name} still holds the example placeholder")]
     PlaceholderSecret { name: String },
     #[error("cannot read {path}")]
@@ -272,8 +257,6 @@ pub enum ConfigError {
         path: PathBuf,
         source: std::io::Error,
     },
-    #[error("usage.refresh_concurrency must be between 1 and 16, not {value}")]
-    RefreshConcurrencyOutOfRange { value: usize },
     #[error("stats.rollup_retention_days must be 0 or at least stats.retention_days ({retention_days}), not {value}")]
     RollupRetentionTooShort { retention_days: u32, value: u32 },
     #[error("environment variable {name} holds a secret outside the allowed shape (printable ASCII, no surrounding spaces)")]
@@ -284,8 +267,6 @@ pub enum ConfigError {
     SessionExpiryTooShort,
     #[error("stats.ledger_path and storage.path must name different files, not {path}")]
     SharedDatabasePath { path: PathBuf },
-    #[error("routing.startup_fetch_seconds must be between 1 and 60, not {value}")]
-    StartupFetchOutOfRange { value: u64 },
     #[error("storage.path {path} must name a database file inside a directory")]
     StoragePath { path: PathBuf },
     #[error("the configuration is not valid YAML")]
@@ -359,12 +340,27 @@ impl Default for UsageConfig {
     }
 }
 
-fn check_shape(config: &Config) -> Result<(), ConfigError> {
-    if !(1..=16).contains(&config.usage.refresh_concurrency) {
-        return Err(ConfigError::RefreshConcurrencyOutOfRange {
-            value: config.usage.refresh_concurrency,
-        });
+/// Refuses `value` outside `min..=max` as `key`'s `OutOfRange`.
+fn within(key: &'static str, value: u64, min: u64, max: u64) -> Result<(), ConfigError> {
+    if (min..=max).contains(&value) {
+        Ok(())
+    } else {
+        Err(ConfigError::OutOfRange {
+            key,
+            min,
+            max,
+            value,
+        })
     }
+}
+
+fn check_shape(config: &Config) -> Result<(), ConfigError> {
+    within(
+        "usage.refresh_concurrency",
+        config.usage.refresh_concurrency as u64,
+        1,
+        16,
+    )?;
     // The store creates the database under exactly this name, in the directory that holds it, so a path
     // that names one of the two and not the other is not a path it can honor.
     if config.storage.path.parent().is_none() || config.storage.path.file_name().is_none() {
@@ -374,11 +370,12 @@ fn check_shape(config: &Config) -> Result<(), ConfigError> {
     }
     let proxy = &config.proxy;
     // The upstream refuses a larger request itself, so a higher bound would only buffer what it turns away.
-    if !(1_024..=33_554_432).contains(&proxy.max_request_bytes) {
-        return Err(ConfigError::MaxRequestBytesOutOfRange {
-            value: proxy.max_request_bytes,
-        });
-    }
+    within(
+        "proxy.max_request_bytes",
+        proxy.max_request_bytes as u64,
+        1_024,
+        33_554_432,
+    )?;
     // A budget under one body at the per-body bound refuses a body the bound itself admits.
     if proxy.body_budget_bytes < proxy.max_request_bytes as u64 {
         return Err(ConfigError::BodyBudgetTooSmall {
@@ -394,75 +391,85 @@ fn check_shape(config: &Config) -> Result<(), ConfigError> {
     // Under the stream idle bound: a body that takes as long as the client's own ten minutes leaves no time to
     // answer it.
     let body_read_max = crate::app::IDLE_TIMEOUT.as_secs() - 1;
-    if !(1..=body_read_max).contains(&proxy.body_read_seconds) {
-        return Err(ConfigError::BodyReadOutOfRange {
-            max: body_read_max,
-            value: proxy.body_read_seconds,
-        });
-    }
-    if !(1..=4_096).contains(&proxy.key_body_reads) {
-        return Err(ConfigError::KeyBodyReadsOutOfRange {
-            value: proxy.key_body_reads,
-        });
-    }
+    within(
+        "proxy.body_read_seconds",
+        proxy.body_read_seconds,
+        1,
+        body_read_max,
+    )?;
+    within(
+        "proxy.key_body_reads",
+        u64::from(proxy.key_body_reads),
+        1,
+        4_096,
+    )?;
     if upstream_gzip(&proxy.upstream_gzip).is_none() {
         return Err(ConfigError::UpstreamGzipInvalid {
             value: proxy.upstream_gzip.clone(),
         });
     }
-    if !(1..=604_800).contains(&config.routing.model_rejection_seconds) {
-        return Err(ConfigError::ModelRejectionOutOfRange {
-            value: config.routing.model_rejection_seconds,
-        });
-    }
-    if !(1..=3600).contains(&config.routing.cooldown_fallback_seconds) {
-        return Err(ConfigError::CooldownFallbackOutOfRange {
-            value: config.routing.cooldown_fallback_seconds,
-        });
-    }
+    within(
+        "routing.model_rejection_seconds",
+        config.routing.model_rejection_seconds,
+        1,
+        604_800,
+    )?;
+    within(
+        "routing.cooldown_fallback_seconds",
+        config.routing.cooldown_fallback_seconds,
+        1,
+        3600,
+    )?;
     config.keepalive.validate(proxy.max_request_bytes)?;
-    if !(1..=60).contains(&config.routing.startup_fetch_seconds) {
-        return Err(ConfigError::StartupFetchOutOfRange {
-            value: config.routing.startup_fetch_seconds,
-        });
-    }
-    if !(60..=604_800).contains(&config.routing.catalog_refresh_seconds) {
-        return Err(ConfigError::CatalogRefreshOutOfRange {
-            value: config.routing.catalog_refresh_seconds,
-        });
-    }
+    within(
+        "routing.startup_fetch_seconds",
+        config.routing.startup_fetch_seconds,
+        1,
+        60,
+    )?;
+    within(
+        "routing.catalog_refresh_seconds",
+        config.routing.catalog_refresh_seconds,
+        60,
+        604_800,
+    )?;
     if config.sessions.expire_after_seconds < 60 {
         return Err(ConfigError::SessionExpiryTooShort);
     }
-    if !(60..=31_536_000).contains(&config.sessions.non_companion_idle_seconds) {
-        return Err(ConfigError::NonCompanionIdleOutOfRange {
-            value: config.sessions.non_companion_idle_seconds,
-        });
-    }
+    within(
+        "sessions.non_companion_idle_seconds",
+        config.sessions.non_companion_idle_seconds,
+        60,
+        31_536_000,
+    )?;
     // A million entries is a few hundred megabytes at the sizes `identity` and `facts` bound a record to, and
     // the most a host should be asked to hold for this; a zero cap would drop every entry on its next write.
-    if !(1..=1_048_576).contains(&config.sessions.memory_cap) {
-        return Err(ConfigError::MemoryCapOutOfRange {
-            value: config.sessions.memory_cap,
-        });
-    }
+    within(
+        "sessions.memory_cap",
+        config.sessions.memory_cap as u64,
+        1,
+        1_048_576,
+    )?;
     // Bounded above as well as below: the relay holds both as milliseconds in an i64, and a value near the
     // type's own ceiling wraps that arithmetic negative, after which every entry reads as idle at once.
-    if !(60..=31_536_000).contains(&config.sessions.memory_idle_seconds) {
-        return Err(ConfigError::MemoryIdleOutOfRange {
-            value: config.sessions.memory_idle_seconds,
-        });
-    }
-    if !(1..=3_650).contains(&config.sessions.memory_retention_days) {
-        return Err(ConfigError::MemoryRetentionOutOfRange {
-            value: config.sessions.memory_retention_days,
-        });
-    }
-    if !(1..=168).contains(&config.stats.body_capture_max_hours) {
-        return Err(ConfigError::BodyCaptureMaxOutOfRange {
-            value: config.stats.body_capture_max_hours,
-        });
-    }
+    within(
+        "sessions.memory_idle_seconds",
+        config.sessions.memory_idle_seconds,
+        60,
+        31_536_000,
+    )?;
+    within(
+        "sessions.memory_retention_days",
+        u64::from(config.sessions.memory_retention_days),
+        1,
+        3_650,
+    )?;
+    within(
+        "stats.body_capture_max_hours",
+        u64::from(config.stats.body_capture_max_hours),
+        1,
+        168,
+    )?;
     // Zero is "forever" on both keys; otherwise a rollup must outlive the rows it was folded from.
     let (raw, rollup) = (
         config.stats.retention_days,
@@ -818,7 +825,11 @@ mod tests {
                 "startup-zero",
                 "routing:\n  startup_fetch_seconds: 0\n"
             )),
-            Err(ConfigError::StartupFetchOutOfRange { value: 0 })
+            Err(ConfigError::OutOfRange {
+                key: "routing.startup_fetch_seconds",
+                value: 0,
+                ..
+            })
         ));
         assert!(matches!(
             load(&file(
@@ -826,7 +837,11 @@ mod tests {
                 "startup-too-long",
                 "routing:\n  startup_fetch_seconds: 61\n"
             )),
-            Err(ConfigError::StartupFetchOutOfRange { value: 61 })
+            Err(ConfigError::OutOfRange {
+                key: "routing.startup_fetch_seconds",
+                value: 61,
+                ..
+            })
         ));
         assert!(matches!(
             load(&file(
@@ -834,7 +849,11 @@ mod tests {
                 "refresh-too-short",
                 "routing:\n  catalog_refresh_seconds: 59\n"
             )),
-            Err(ConfigError::CatalogRefreshOutOfRange { value: 59 })
+            Err(ConfigError::OutOfRange {
+                key: "routing.catalog_refresh_seconds",
+                value: 59,
+                ..
+            })
         ));
         assert!(matches!(
             load(&file(
@@ -842,7 +861,11 @@ mod tests {
                 "refresh-too-long",
                 "routing:\n  catalog_refresh_seconds: 604801\n"
             )),
-            Err(ConfigError::CatalogRefreshOutOfRange { value: 604_801 })
+            Err(ConfigError::OutOfRange {
+                key: "routing.catalog_refresh_seconds",
+                value: 604_801,
+                ..
+            })
         ));
         assert!(matches!(
             load(&file(
@@ -850,7 +873,11 @@ mod tests {
                 "rejection-zero",
                 "routing:\n  model_rejection_seconds: 0\n"
             )),
-            Err(ConfigError::ModelRejectionOutOfRange { value: 0 })
+            Err(ConfigError::OutOfRange {
+                key: "routing.model_rejection_seconds",
+                value: 0,
+                ..
+            })
         ));
         assert!(matches!(
             load(&file(
@@ -858,7 +885,11 @@ mod tests {
                 "rejection-too-long",
                 "routing:\n  model_rejection_seconds: 604801\n"
             )),
-            Err(ConfigError::ModelRejectionOutOfRange { value: 604_801 })
+            Err(ConfigError::OutOfRange {
+                key: "routing.model_rejection_seconds",
+                value: 604_801,
+                ..
+            })
         ));
         assert!(matches!(
             load(&file(
@@ -866,7 +897,10 @@ mod tests {
                 "hours",
                 "stats:\n  body_capture_max_hours: 0\n"
             )),
-            Err(ConfigError::BodyCaptureMaxOutOfRange { .. })
+            Err(ConfigError::OutOfRange {
+                key: "stats.body_capture_max_hours",
+                ..
+            })
         ));
         assert!(matches!(
             load(&file(dir.path(), "unknown", "routing:\n  strategy: x\n")),
