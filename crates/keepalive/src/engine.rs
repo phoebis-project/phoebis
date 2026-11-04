@@ -3228,20 +3228,17 @@ impl Engine {
         agent.cache_started = observation.started;
         agent.expires = None;
         inner.set_reason(&key, &agent_id, Reason::AwaitingSelection);
-        let (policy, opted_out) = match snapshot.key(&key.0) {
+        let (policy, opted_out, pool_id) = match snapshot.key(&key.0) {
             Some(row) => (
                 snapshot
                     .pool(&row.pool_id)
                     .map(|p| KeepalivePolicy::from_json(&p.keepalive_json))
                     .unwrap_or_default(),
                 row.keepalive_opt_out,
+                row.pool_id.clone(),
             ),
-            None => (KeepalivePolicy::default(), true),
+            None => (KeepalivePolicy::default(), true, String::new()),
         };
-        let pool_id = snapshot
-            .key(&key.0)
-            .map(|k| k.pool_id.clone())
-            .unwrap_or_default();
         let refusal = if !policy.enabled {
             Some(Reason::KeepaliveOff)
         } else if opted_out {
