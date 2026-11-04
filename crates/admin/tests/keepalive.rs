@@ -942,6 +942,52 @@ async fn the_overview_answers_the_counts_beside_their_caps_and_each_pools_day_an
     );
 }
 
+/// The overview lists no row for an inference rollup row, and the day's expired count still takes its expiries.
+#[tokio::test]
+async fn the_overviews_expired_count_sums_every_row_of_the_day_the_inference_rows_included() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    // A serving attempt that names no miss reason and reads nothing back files one expiry. The two pools file two
+    // rows, the first holding two requests.
+    parts
+        .db
+        .write(|c| {
+            let tx = c.transaction()?;
+            for (id, pool) in [("r1", "main"), ("r2", "main"), ("r3", "night")] {
+                phoebis_ledger::fold_request(
+                    &tx,
+                    &phoebis_ledger::RequestRecord {
+                        id: id.into(),
+                        received_at: now,
+                        key_id: Some("desktop".into()),
+                        pool_id: Some(pool.into()),
+                        canonical_model: "claude-sonnet-5".into(),
+                        kind: "inference".into(),
+                        outcome: "succeeded".into(),
+                        status: Some(200),
+                        ..Default::default()
+                    },
+                    &[phoebis_ledger::AttemptRecord {
+                        request_id: id.into(),
+                        attempt: 1,
+                        account_id: "direct".into(),
+                        outcome: "succeeded".into(),
+                        cache_miss_reason: Some("none".into()),
+                        ..Default::default()
+                    }],
+                    None,
+                    &phoebis_ledger::PriceRevisions::shipped(),
+                )?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .unwrap();
+    let overview = json(get(&parts.app, "/admin/keepalive/overview", Some(&cookie)).await).await;
+    assert_eq!(overview["expired_between_turns_24h"].as_u64(), Some(3));
+}
+
 const DAY: i64 = 86_400_000;
 const MINUTE: i64 = 60_000;
 
