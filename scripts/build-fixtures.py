@@ -82,7 +82,8 @@ BILLING_STAMP = re.compile(rb"cch=[0-9a-f]{5};")
 LINE_STAMP = re.compile(r"cch=[0-9a-f]{5};")
 
 # The field the client writes where its native patch does not run. It claims no hash, and the relay passes such a body
-# unsigned (phoebis_cch::carries_only_the_placeholder), so the builder neither re-signs it nor grades it as drift.
+# unsigned (phoebis_cch::stamp reads it as Stamp::Placeholder), so the builder neither re-signs it nor grades it as
+# drift.
 UNPATCHED_STAMP = "cch=00000;"
 
 # The billing fields the relay restores on a reduced-shape request. Under THROUGH_ROUTER these are dropped outright
@@ -951,7 +952,7 @@ def _self_test_build_redacts() -> None:
 
 def _self_test_placeholder() -> None:
     """The unpatched placeholder is told from a stamp, from a body without one, and from a line that claims a hash in a
-    second cch= field, an escaped one included, as phoebis_cch::carries_only_the_placeholder tells them."""
+    second cch= field, an escaped one included, as phoebis_cch::stamp tells them (Stamp::Placeholder alone)."""
     cases = (
         (b"cc_version=2.1.269.517; cch=00000;", True),
         (b"cc_version=2.1.269.517; cch=4f1c2;", False),
@@ -2080,7 +2081,7 @@ def has_stamp(body: bytes) -> bool:
 
 def carries_only_the_placeholder(body: bytes) -> bool:
     """Whether the billing line's one and only cch= field is the unpatched placeholder, read the way
-    phoebis_cch::carries_only_the_placeholder reads it."""
+    phoebis_cch::stamp reads it (Stamp::Placeholder)."""
     line = billing_line(body)
     stamp = LINE_STAMP.search(line) if line is not None else None
     if stamp is None or stamp.group(0) != UNPATCHED_STAMP:
