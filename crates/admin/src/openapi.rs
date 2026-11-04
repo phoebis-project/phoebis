@@ -4,8 +4,8 @@
 use std::collections::BTreeMap;
 
 use axum::body::Bytes;
-use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, X_CONTENT_TYPE_OPTIONS};
-use axum::http::{HeaderName, HeaderValue, StatusCode};
+use axum::http::header::CONTENT_TYPE;
+use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use phoebis_guardrails::{Condition, ConditionWords};
 use serde::{Deserialize, Serialize};
@@ -920,18 +920,13 @@ pub(crate) fn build_value(build: &str) -> HeaderValue {
     HeaderValue::from_str(build).unwrap_or_else(|_| HeaderValue::from_static("unknown"))
 }
 
-/// The document's answer. The gate's middleware never runs on this route, so the headers every admin answer carries
-/// are set here. `no-store`, because the document changes with every binary and names the version, and a browser
-/// holding an old copy across an upgrade would list operations the new binary no longer serves.
-pub(crate) fn document(text: Bytes, build: &str) -> Response {
+/// The document's answer. The gate's middleware never runs on this route, and the layer outside both sets the headers
+/// every admin answer carries. Its `no-store` serves the document too, which changes with every binary and names the
+/// version, so a browser holding an old copy across an upgrade would list operations the new binary no longer serves.
+pub(crate) fn document(text: Bytes) -> Response {
     (
         StatusCode::OK,
-        [
-            (CONTENT_TYPE, HeaderValue::from_static("application/json")),
-            (CACHE_CONTROL, HeaderValue::from_static("no-store")),
-            (X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")),
-            (HeaderName::from_static(BUILD_HEADER), build_value(build)),
-        ],
+        [(CONTENT_TYPE, HeaderValue::from_static("application/json"))],
         text,
     )
         .into_response()

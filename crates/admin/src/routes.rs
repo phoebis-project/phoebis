@@ -12,7 +12,7 @@ use axum::http::header::{
     TRANSFER_ENCODING, X_CONTENT_TYPE_OPTIONS,
 };
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
-use axum::middleware::{from_fn_with_state, Next};
+use axum::middleware::{from_fn_with_state, map_response, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
 use axum::{Extension, Json, Router};
@@ -139,9 +139,12 @@ pub fn router(state: Arc<AdminState>) -> Router {
             openapi::DOCUMENT_PATH,
             get(move || {
                 let document = document.clone();
-                async move { openapi::document(document, build) }
+                async move { openapi::document(document) }
             }),
         )
+        .layer(map_response(move |response: Response| async move {
+            answer_headers(response, build)
+        }))
         .with_state(state)
 }
 
@@ -176,8 +179,8 @@ pub(crate) struct CreatedId(pub String);
 #[derive(Clone)]
 pub(crate) struct LoggedEntity(pub &'static str, pub String);
 
-/// Authentication, the origin check, `Cache-Control`, `X-Content-Type-Options`, `x-phoebis-build` and the mutation
-/// log for every route at once, so no handler can be added that quietly skips one of them.
+/// Authentication, the origin check and the mutation log for every route at once, so no handler can be added that
+/// quietly skips one of them.
 async fn gate(State(state): State<Arc<AdminState>>, mut request: Request, next: Next) -> Response {
     let method = request.method().clone();
     let mutation = is_mutation(&method);
@@ -187,7 +190,7 @@ async fn gate(State(state): State<Arc<AdminState>>, mut request: Request, next: 
         |m| m.as_str().to_string(),
     );
     let path = request.uri().path().to_string();
-    let (caller, mut response) = match admit(&state, &method, &path, &mut request) {
+    let (caller, response) = match admit(&state, &method, &path, &mut request) {
         None => {
             let caller = request.extensions().get::<Caller>().cloned();
             // Taken out before the handler runs, so the renewed token never reaches a handler.
@@ -203,15 +206,21 @@ async fn gate(State(state): State<Arc<AdminState>>, mut request: Request, next: 
     if mutation {
         log_mutation(&method, &route, &path, caller.as_ref(), &response);
     }
-    // An admin answer describes credentials and usage; a cache between the browser and this process has
-    // no business holding any of it, and a browser has no business reading a body as anything but its type.
+    response
+}
+
+/// The headers every admin answer carries, the gate's refusals and the document's answer among them, set by the
+/// layer outside both.
+fn answer_headers(mut response: Response, build: &str) -> Response {
+    // An admin answer describes credentials and usage, so a cache between the browser and this process has no
+    // business holding any of it, and a browser has no business reading a body as anything but its type.
     let headers = response.headers_mut();
     headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     // On refusals too, so a console that compares it to its own bundle's commit reads it before any login.
     headers.insert(
         HeaderName::from_static(openapi::BUILD_HEADER),
-        openapi::build_value(state.build),
+        openapi::build_value(build),
     );
     response
 }
