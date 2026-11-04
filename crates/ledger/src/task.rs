@@ -866,7 +866,7 @@ async fn hold(handles: &Handles, stopped: &mut watch::Receiver<bool>, held: Held
 }
 
 impl Handles {
-    /// One record per transaction. A record the database as a whole refuses is held with everything after it; one
+    /// One record per transaction. A record the database as a whole refuses is held with everything after it. One
     /// refused on its own row is a poison row, parked when it carries money and dropped with its gap otherwise.
     async fn replay(&self, held: Held) -> Retry {
         let snapshot = self.router.snapshot();
@@ -875,7 +875,7 @@ impl Handles {
             let error = match self.land(&snapshot, &held.records, one).await {
                 Landed::Written | Landed::Lost => continue,
                 // A full disk, an I/O error or a lock held past the timeout refuses every record after this one as
-                // well, so the rest of the batch waits with it; a constraint or a trigger refused this row alone.
+                // well, so the rest of the batch waits with it. A constraint or a trigger refused this row alone.
                 Landed::Refused {
                     database_wide: true,
                     ..
