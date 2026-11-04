@@ -116,12 +116,6 @@ fn stamp_in(body: &[u8], text: Option<(usize, usize)>) -> Stamp {
 /// The digits the client writes after `cch=` wherever its native patch does not run.
 const PLACEHOLDER: &[u8; LEN] = b"00000";
 
-/// Whether the billing line's one and only `cch=` field is the client's unsigned placeholder, which claims no
-/// hash to verify or re-sign.
-pub fn carries_only_the_placeholder(body: &[u8]) -> bool {
-    matches!(stamp(body), Stamp::Placeholder(_))
-}
-
 fn placeholder_alone(body: &[u8], location: &CchLocation) -> bool {
     if body[location.digits_start..location.digits_start + LEN] != *PLACEHOLDER {
         return false;
@@ -2001,7 +1995,7 @@ mod tests {
             1,
             "the raw line spells its second field with an escape"
         );
-        assert!(!carries_only_the_placeholder(body));
+        assert!(!matches!(stamp(body), Stamp::Placeholder(_)));
     }
 
     #[test]
@@ -2012,7 +2006,7 @@ mod tests {
             find_cch(body).is_some(),
             "the raw walk reads the placeholder"
         );
-        assert!(!carries_only_the_placeholder(body));
+        assert!(!matches!(stamp(body), Stamp::Placeholder(_)));
     }
 
     #[test]
