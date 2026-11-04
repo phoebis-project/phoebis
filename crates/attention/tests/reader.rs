@@ -1401,6 +1401,36 @@ async fn a_move_whose_destination_was_spent_within_the_hour_holds_the_condition_
 }
 
 #[tokio::test]
+async fn a_routing_condition_on_an_account_the_registry_no_longer_holds_opens_no_page_and_joins_no_card(
+) {
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    routing_event(
+        &rig,
+        NOW - 50 * MINUTE,
+        "pin_migrated",
+        "gone",
+        None,
+        json!({ "reason": "spent", "from_account": "direct", "fit": "fits" }),
+    );
+    routing_event(
+        &rig,
+        NOW - 10 * MINUTE,
+        "window_spent",
+        "gone",
+        None,
+        json!({ "window": "five_hour", "source": "head" }),
+    );
+    fold_at(&rig, NOW).await;
+    let conditions = read(&attention, NOW);
+    let held = find(&conditions, Kind::DestinationSpent, "gone").unwrap();
+    assert_eq!(
+        (held.holds, &held.subject, &held.pools, &held.link),
+        (true, &account_subject("gone"), &Vec::<String>::new(), &None)
+    );
+}
+
+#[tokio::test]
 async fn an_account_that_reached_its_wall_under_a_ceiling_holds_the_condition_with_the_projection_error(
 ) {
     let rig = rig().await;
