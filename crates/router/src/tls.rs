@@ -12,7 +12,7 @@ use boring::pkey::PKey;
 use boring::ssl::{select_next_proto, AlpnError, SslAcceptor, SslMethod};
 use boring::x509::X509;
 use phoebis_admin::{Reloaded, TlsReload};
-use phoebis_attention::TlsPairs;
+use phoebis_attention::{PairFacts, TlsPairs};
 use phoebis_relay::LiveAcceptor;
 
 use crate::config::ListenerTls;
@@ -385,19 +385,6 @@ struct Served {
     failed: Option<(i64, String)>,
 }
 
-/// What a reader outside the loops sees of a pair: the key, the paths, the loaded leaf's `not_after_ms`, the load's
-/// instant, and the failed reload if one stands. No day count: a reader computes the days left from `not_after_ms`
-/// and its own clock, so the figure never ages with the load.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PairFacts {
-    pub key: &'static str,
-    pub cert_file: PathBuf,
-    pub key_file: PathBuf,
-    pub not_after_ms: i64,
-    pub loaded_at: i64,
-    pub failed: Option<(i64, String)>,
-}
-
 impl Live {
     /// The pair `load` answered for `key`, loaded at `now`.
     pub fn new(key: &'static str, loaded: Loaded, now: i64) -> Live {
@@ -443,7 +430,7 @@ impl Live {
     pub fn facts(&self) -> PairFacts {
         let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         PairFacts {
-            key: self.key,
+            key: self.key.to_owned(),
             cert_file: self.cert_file.clone(),
             key_file: self.key_file.clone(),
             not_after_ms: state.leaf.not_after_ms,
@@ -525,18 +512,8 @@ impl TlsReload for LiveSet {
 }
 
 impl TlsPairs for LiveSet {
-    fn pairs(&self) -> Vec<phoebis_attention::PairFacts> {
+    fn pairs(&self) -> Vec<PairFacts> {
         self.facts()
-            .into_iter()
-            .map(|pair| phoebis_attention::PairFacts {
-                key: pair.key.to_owned(),
-                cert_file: pair.cert_file,
-                key_file: pair.key_file,
-                not_after_ms: pair.not_after_ms,
-                loaded_at: pair.loaded_at,
-                failed: pair.failed,
-            })
-            .collect()
     }
 }
 
@@ -595,7 +572,7 @@ mod tests {
         let acceptor = live.acceptor();
         let served = acceptor.current();
         let facts = |not_after: i64, loaded_at: i64, failed: Option<(i64, String)>| PairFacts {
-            key: "proxy.tls",
+            key: "proxy.tls".to_owned(),
             cert_file: cert.clone(),
             key_file: key.clone(),
             not_after_ms: not_after * 1_000,
@@ -666,7 +643,7 @@ mod tests {
         assert_eq!(
             facts
                 .iter()
-                .map(|pair| (pair.key, pair.loaded_at))
+                .map(|pair| (pair.key.as_str(), pair.loaded_at))
                 .collect::<Vec<_>>(),
             [("admin.tls", 2_000)]
         );
