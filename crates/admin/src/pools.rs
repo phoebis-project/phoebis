@@ -1334,8 +1334,6 @@ fn member_json(
 pub(crate) struct PoolContext {
     accounts: Vec<AccountRow>,
     ceilings: CeilingInputs,
-    /// The day's request totals per pool.
-    day: BTreeMap<String, phoebis_ledger::Totals>,
     guardrails: AttachmentIndex,
     keys: Vec<ApiKeyRow>,
     members: Vec<PoolMember>,
@@ -1352,8 +1350,8 @@ pub(crate) struct PoolContext {
     traffic: BTreeMap<String, Vec<phoebis_ledger::TrafficBucket>>,
 }
 
-/// One registry read for the pools, members, keys and accounts, one ledger read for the day's totals, the traffic
-/// of the pools it answers and every account's moves, and one ask of the router for each of its tables, in the shape
+/// One registry read for the pools, members, keys and accounts, one ledger read for the traffic of the pools it
+/// answers and every account's moves, and one ask of the router for each of its tables, in the shape
 /// of the account list's context. `pool` names the one pool a single-pool answer reads the traffic and the
 /// projections of, and `None` reads them for every pool.
 pub(crate) async fn pool_context(
@@ -1371,11 +1369,10 @@ pub(crate) async fn pool_context(
         Some(id) => vec![id.to_owned()],
         None => registry.pools.iter().map(|p| p.id.clone()).collect(),
     };
-    // The traffic starts at the hour the day's totals start at, so a pool's bars sum to its `requests_24h`: 25
-    // buckets, the current partial hour last.
+    // The day is 25 buckets, the current partial hour last, and a pool's day figures are their sums.
     let day_start = hour - 24 * 3_600;
     // A registry with no pool answers no row, so it reads nothing from the ledger.
-    let (day, traffic, moves) = if pool_ids.is_empty() {
+    let (traffic, moves) = if pool_ids.is_empty() {
         Default::default()
     } else {
         let ids = pool_ids.clone();
@@ -1384,15 +1381,6 @@ pub(crate) async fn pool_context(
             .db()
             .read(move |c| {
                 Ok((
-                    phoebis_ledger::request_totals(
-                        c,
-                        phoebis_ledger::TotalsBy::Pool,
-                        day_start,
-                        to,
-                        &prices,
-                        &tables,
-                        now,
-                    )?,
                     phoebis_ledger::pools_traffic(
                         c, &ids, day_start, to, 3_600, &prices, &tables, now,
                     )?,
@@ -1412,7 +1400,6 @@ pub(crate) async fn pool_context(
     Ok(PoolContext {
         accounts: registry.accounts,
         ceilings: state.keepalive.ceiling_inputs().await,
-        day,
         guardrails,
         keys: registry.keys,
         members: registry.members,
@@ -1476,8 +1463,19 @@ pub(crate) fn pool_json_from(state: &AdminState, context: &PoolContext, row: &Po
         })
         .collect();
     let now = context.now;
-    let day = &context.day;
     let traffic = context.traffic.get(&row.id).cloned().unwrap_or_default();
+    let day = traffic
+        .iter()
+        .fold(phoebis_ledger::Totals::default(), |mut day, bucket| {
+            day.add(&phoebis_ledger::Totals {
+                cost_usd: bucket.cost_usd,
+                requests: bucket.requests,
+                tokens: bucket.tokens,
+                billed_usd: bucket.billed_usd,
+                equivalent: bucket.equivalent,
+            });
+            day
+        });
     let mut moves: BTreeMap<String, u64> = BTreeMap::new();
     for member in &members {
         for (reason, count) in context.moves.get(&member.account_id).into_iter().flatten() {
@@ -1592,10 +1590,10 @@ pub(crate) fn pool_json_from(state: &AdminState, context: &PoolContext, row: &Po
             .collect(),
         keys,
         status: status.to_string(),
-        requests_24h: day.get(&row.id).map_or(0, |t| t.requests),
-        cost_24h: day.get(&row.id).map_or(0.0, |t| t.cost_usd),
-        billed_24h: day.get(&row.id).map_or(0.0, |t| t.billed_usd),
-        equivalent_24h: day.get(&row.id).map_or(Some(0.0), |t| t.equivalent),
+        requests_24h: day.requests,
+        cost_24h: day.cost_usd,
+        billed_24h: day.billed_usd,
+        equivalent_24h: day.equivalent,
         active_pins,
         traffic_24h: traffic,
         guardrails: context

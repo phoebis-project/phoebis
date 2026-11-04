@@ -11177,8 +11177,8 @@ export const FIXTURES: Record<string, Fixture> = {
           ],
           "status": "active",
           "requests_24h": 12,
-          "cost_24h": 0.04265,
-          "billed_24h": 0.014250000000000002,
+          "cost_24h": 0.04265000000000001,
+          "billed_24h": 0.014249999999999999,
           "equivalent_24h": null,
           "active_pins": 6,
           "traffic_24h": [
