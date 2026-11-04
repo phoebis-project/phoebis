@@ -33,7 +33,7 @@ pub use events::{
 };
 pub use probe::{ProbeOutcome, ProbeRecord, PROBE_DEADLINE};
 pub use recipe::{
-    make_recipe, request_ttl_ms, valid_id, valid_opaque, Recipe, RecipeRefusal, MAX_HEADER_BYTES,
+    make_recipe, request_ttl_ms, valid_opaque, Recipe, RecipeRefusal, MAX_HEADER_BYTES,
     MAX_HEADER_VALUE,
 };
 pub use routes::{keepalive_router, EVENTS_PATH, MAX_BODY_BYTES};

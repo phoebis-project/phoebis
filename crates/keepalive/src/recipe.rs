@@ -30,8 +30,6 @@ pub struct Recipe {
     pub fast: bool,
 }
 
-pub use phoebis_relay::is_valid_id as valid_id;
-
 pub fn valid_opaque(s: &str) -> bool {
     !s.trim().is_empty() && s.len() <= 1_024 && !s.chars().any(char::is_control)
 }
@@ -52,11 +50,14 @@ fn parse_unique(raw: &[u8]) -> Option<Value> {
         fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Value, A::Error> {
             let mut members = serde_json::Map::new();
             while let Some(key) = map.next_key::<String>()? {
-                if members.contains_key(&key) {
-                    return Err(A::Error::custom("duplicate key"));
+                match members.entry(key) {
+                    serde_json::map::Entry::Occupied(_) => {
+                        return Err(A::Error::custom("duplicate key"))
+                    }
+                    serde_json::map::Entry::Vacant(slot) => {
+                        slot.insert(map.next_value_seed(UniqueSeed)?);
+                    }
                 }
-                let value = map.next_value_seed(UniqueSeed)?;
-                members.insert(key, value);
             }
             Ok(Value::Object(members))
         }
@@ -119,23 +120,6 @@ pub enum RecipeRefusal {
     RequestTooLarge,
     StructuredOutput,
     UnsupportedShape,
-}
-
-impl RecipeRefusal {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            RecipeRefusal::EscapedKey => "escaped_key",
-            RecipeRefusal::FixedThinking => "fixed_thinking",
-            RecipeRefusal::ForcedTool => "forced_tool",
-            RecipeRefusal::HeadersTooLarge => "headers_too_large",
-            RecipeRefusal::InvalidCacheControl => "invalid_cache_control",
-            RecipeRefusal::InvalidModel => "invalid_model",
-            RecipeRefusal::InvalidRequest => "invalid_request",
-            RecipeRefusal::RequestTooLarge => "request_too_large",
-            RecipeRefusal::StructuredOutput => "structured_output",
-            RecipeRefusal::UnsupportedShape => "unsupported_shape",
-        }
-    }
 }
 
 pub fn make_recipe(
@@ -260,17 +244,12 @@ pub fn make_recipe(
     if client_hash {
         phoebis_cch::restamp_if_present(&mut edited).map_err(|_| RecipeRefusal::InvalidRequest)?;
     }
-    // Everything the bus published, in the order it published it: the denylist there is the one gate, so a
-    // header the client starts sending reaches the upstream on a probe as it does on the request. The relay's
-    // outbound builder places the account credential after `anthropic-version`, so this order is the wire's.
-    let mut kept: Vec<(String, String)> = Vec::new();
     // The budget is the retained bytes beyond the body, and the model name is among them.
     let mut header_bytes = model.len();
     for (name, value) in headers {
         if value.len() > MAX_HEADER_VALUE {
             return Err(RecipeRefusal::HeadersTooLarge);
         }
-        kept.push((name.clone(), value.clone()));
         header_bytes += name.len() + value.len();
         if header_bytes > MAX_HEADER_BYTES {
             return Err(RecipeRefusal::HeadersTooLarge);
@@ -279,7 +258,10 @@ pub fn make_recipe(
     let size = edited.len() + header_bytes;
     Ok(Recipe {
         body: edited.into(),
-        headers: kept,
+        // Everything the bus published, in the order it published it: the denylist there is the one gate, so a
+        // header the client starts sending reaches the upstream on a probe as it does on the request. The relay's
+        // outbound builder places the account credential after `anthropic-version`, so this order is the wire's.
+        headers: headers.to_vec(),
         model: model.to_string(),
         ttl_ms,
         longest_ttl_ms,

@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 
+use phoebis_relay::is_valid_id as valid_id;
 use phoebis_routing::RegistrySnapshot;
 
 use crate::config::LEASE_MS;
@@ -12,7 +13,6 @@ use crate::engine::{
     agent_mut, agent_ref, open_idle_episode, Agent, AgentState, Engine, Inner, ParkKind, Reason,
     Session, SessionKey, Wasted, AGENT_HELD, MAIN_AGENT,
 };
-use crate::recipe::valid_id;
 
 pub const PROTOCOL: u64 = 1;
 

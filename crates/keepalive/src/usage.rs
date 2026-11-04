@@ -43,21 +43,21 @@ impl ProbeUsage {
             return None;
         }
         let mut usage = ProbeUsage::default();
-        for (path, slot) in [
+        for (pointer, slot) in [
             (
-                &["cache_creation", "ephemeral_1h_input_tokens"][..],
+                "/cache_creation/ephemeral_1h_input_tokens",
                 &mut usage.one_hour,
             ),
             (
-                &["cache_creation", "ephemeral_5m_input_tokens"][..],
+                "/cache_creation/ephemeral_5m_input_tokens",
                 &mut usage.five_minutes,
             ),
-            (&["cache_creation_input_tokens"][..], &mut usage.write),
-            (&["cache_read_input_tokens"][..], &mut usage.read),
-            (&["input_tokens"][..], &mut usage.input),
-            (&["output_tokens"][..], &mut usage.output),
+            ("/cache_creation_input_tokens", &mut usage.write),
+            ("/cache_read_input_tokens", &mut usage.read),
+            ("/input_tokens", &mut usage.input),
+            ("/output_tokens", &mut usage.output),
         ] {
-            let Some(at) = path.iter().try_fold(node, |at, key| at.get(*key)) else {
+            let Some(at) = node.pointer(pointer) else {
                 continue;
             };
             let number = at.as_f64()?;

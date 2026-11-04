@@ -171,13 +171,6 @@ pub struct ProbeRecord {
     pub tier: Option<String>,
 }
 
-/// What the fenced half did with the result.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Applied {
-    Landed,
-    Orphaned,
-}
-
 /// How an upstream `Retry-After` bears on a rung's wait.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RetryWait {
@@ -337,7 +330,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, mut job: ProbeJob) {
     // plan the cost model does not price settles in dollars as an untiered account does. Read on a blocking worker
     // ahead of the engine's lock, since a save may hold the store's connection, and `apply_probe` fences a change that
     // lands meanwhile. A worker that panicked reads no tier, as a failed read does.
-    let tier = if default_unit == SavingsUnit::WindowShare {
+    record.tier = if default_unit == SavingsUnit::WindowShare {
         let store = engine.parts.store.clone();
         let account = record.account.clone();
         match tokio::task::spawn_blocking(move || store.subscription_term(&account)).await {
@@ -351,9 +344,10 @@ pub(crate) async fn run_job(engine: Arc<Engine>, mut job: ProbeJob) {
     } else {
         None
     };
-    record.tier = tier.clone();
     let snapshot = engine.parts.router.snapshot();
-    let priced_tier = snapshot.priced_tier(&record.account).and(tier.as_deref());
+    let priced_tier = snapshot
+        .priced_tier(&record.account)
+        .and(record.tier.as_deref());
     let unit = settled_unit(
         default_unit,
         &tables,
@@ -441,11 +435,7 @@ impl Inner {
             let counts = typed(usage);
             record.band = table.band_of(&job.canonical_model, counts.prompt_tokens());
         }
-        if result
-            .account
-            .as_deref()
-            .is_some_and(|served| served != job.account)
-        {
+        if record.account != job.account {
             record.outcome = ProbeOutcome::Migrated;
         }
         record
@@ -462,7 +452,7 @@ impl Inner {
         record: &ProbeRecord,
         covered_unit: Option<SavingsUnit>,
         now: i64,
-    ) -> Applied {
+    ) {
         let key = &job.key;
         let agent_id = job.agent_id.as_str();
         let charge = ProbeCharge {
@@ -513,10 +503,10 @@ impl Inner {
                 }
             };
             let Some(label) = label else {
-                return Applied::Orphaned;
+                return;
             };
             if record.outcome == ProbeOutcome::Held {
-                return Applied::Orphaned;
+                return;
             }
             // The idle limit keeps its probes pending until their entry lapses or a turn reads them, so a success
             // still in flight at the ceiling joins them by the entry it wrote, computed as the landing computes it.
@@ -544,7 +534,7 @@ impl Inner {
                             pending: Some(Wasted::IdleLimit),
                         });
                         self.touch_agent(key, agent_id);
-                        return Applied::Orphaned;
+                        return;
                     }
                 }
             }
@@ -556,41 +546,35 @@ impl Inner {
                 label,
                 charge,
             });
-            return Applied::Orphaned;
+            return;
         }
         let agent = agent_mut(&mut self.sessions, key, agent_id).expect(AGENT_HELD);
         let cold_limit = agent.timing.cold_probe_limit;
-        let result = match exchange {
-            Exchange::Canceled | Exchange::TimedOut => {
+        let answered = match exchange {
+            Exchange::Answered(result) => Some(result),
+            Exchange::Canceled | Exchange::TimedOut => None,
+        };
+        let result = match answered {
+            Some(result) if matches!(record.outcome, ProbeOutcome::Ok | ProbeOutcome::Migrated) => {
+                result
+            }
+            answered => {
                 self.probe_error(
                     key,
                     agent_id,
                     record.outcome,
-                    None,
+                    answered.as_ref(),
                     job.counted_idle_tick,
                     now,
                 );
-                return Applied::Landed;
+                return;
             }
-            Exchange::Answered(result) => result,
         };
-        if record.outcome != ProbeOutcome::Ok && record.outcome != ProbeOutcome::Migrated {
-            self.probe_error(
-                key,
-                agent_id,
-                record.outcome,
-                Some(&result),
-                job.counted_idle_tick,
-                now,
-            );
-            return Applied::Landed;
-        }
         // The upstream served this one and the pool was charged for it, so it goes on the recipe's own books
         // here, before any branch below pauses the recipe over what the answer said: the settlement a stop leaves
         // would otherwise disagree with the ledger. Every probe since the last real request is unanswered until one
         // arrives, a migrated one at its price like any other.
         let migrated = record.outcome == ProbeOutcome::Migrated;
-        let agent = agent_mut(&mut self.sessions, key, agent_id).expect(AGENT_HELD);
         // The end of the entry this probe wrote, computed once as the landing reads it, so a probe a check below
         // pauses still settles by its own entry.
         let previous_ms = agent.ttl_ms;
@@ -608,7 +592,7 @@ impl Inner {
         });
         let Some(account) = result.account.clone() else {
             self.pause(key, agent_id, Reason::MissingAccount);
-            return Applied::Landed;
+            return;
         };
         let body = result.body.unwrap_or_default();
         let root: Option<Value> = serde_json::from_slice(&body).ok();
@@ -624,15 +608,13 @@ impl Inner {
         let (Some(usage), true, Some(content)) = (ProbeUsage::parse(&body), output_known, content)
         else {
             self.pause(key, agent_id, Reason::InvalidProbeUsage);
-            return Applied::Landed;
+            return;
         };
-        let agent = agent_mut(&mut self.sessions, key, agent_id).expect(AGENT_HELD);
         agent.usage.add(usage);
         if usage.output != 0 || !content.is_empty() {
             self.pause(key, agent_id, Reason::UnexpectedOutput);
-            return Applied::Landed;
+            return;
         }
-        let agent = agent_mut(&mut self.sessions, key, agent_id).expect(AGENT_HELD);
         if migrated {
             agent.account = Some(account.clone());
             agent.migrations += 1;
@@ -653,7 +635,7 @@ impl Inner {
         let cold = agent.cold;
         if cold >= cold_limit {
             self.pause(key, agent_id, Reason::RepeatedColdProbe);
-            return Applied::Landed;
+            return;
         }
         if usage.evidence() == 0 {
             self.retry(
@@ -663,15 +645,14 @@ impl Inner {
                 now,
                 RetryWait::Step,
             );
-            return Applied::Landed;
+            return;
         }
         // A probe that read part of the prefix and rebuilt the rest never warmed the whole entry; one that
         // read none of it rebuilt the entry, which the cold streak counts instead.
         if usage.evidence() < job.expected || (usage.read > 0 && !covered) {
             self.pause(key, agent_id, Reason::PartialCacheCoverage);
-            return Applied::Landed;
+            return;
         }
-        let agent = agent_mut(&mut self.sessions, key, agent_id).expect(AGENT_HELD);
         agent.failures = 0;
         agent.retry_at = None;
         agent.ttl_ms = ttl;
@@ -699,7 +680,6 @@ impl Inner {
         {
             self.retry(key, agent_id, Reason::SlowProbe, now, RetryWait::Step);
         }
-        Applied::Landed
     }
 
     pub(crate) fn pause(&mut self, key: &SessionKey, agent_id: &str, reason: Reason) {
@@ -744,7 +724,9 @@ impl Inner {
             .map(seconds_ms);
         // Read before the obstacles, which never meet it: a 429 classifies as rate limited and never as exhausted,
         // and the budget's timed answer carries `accounts_exhausted`.
-        if status == 429 && error_code == Some(phoebis_relay::ACCOUNTS_AT_CAP) {
+        if outcome == ProbeOutcome::RateLimited
+            && error_code == Some(phoebis_relay::ACCOUNTS_AT_CAP)
+        {
             // The pool is momentarily full and a slot frees up in seconds, so `RetryableProbeError` ("retrying") is
             // the honest label.
             self.retry(
@@ -787,7 +769,7 @@ impl Inner {
                 self.pause(key, agent_id, Reason::ProbeAuthenticationError);
                 return;
             }
-            (_, Some(ProbeObstacle::Budget)) if status == 429 => {
+            (_, Some(ProbeObstacle::Budget)) if outcome == ProbeOutcome::RateLimited => {
                 // The pinned member reached its spend budget between the gate's read and the selection. A pause
                 // would outlive the budget (nothing but a real request undoes one), and the reason alone leaves
                 // the schedule armed, so the gate re-reads the spend on the next poll and releases the probe
@@ -809,7 +791,7 @@ impl Inner {
             | (_, Some(ProbeObstacle::Budget))
             | (_, None) => {}
         }
-        if status == 503 && error_code == Some(phoebis_relay::LEDGER_BEHIND) {
+        if outcome == ProbeOutcome::Held {
             // The router's own standing, not the account's: no failure is counted, so the cold-probe limit never
             // pauses a recipe for a ledger that is catching up, and the entry's own lapse bounds the re-sends.
             let agent = agent_mut(&mut self.sessions, key, agent_id).expect(AGENT_HELD);
@@ -825,7 +807,7 @@ impl Inner {
             return;
         }
         let (reason, wait) = match status {
-            429 => (
+            _ if outcome == ProbeOutcome::RateLimited => (
                 Reason::ProbeQuotaExhausted,
                 retry_after_ms.map_or(RetryWait::Step, RetryWait::AtLeast),
             ),
@@ -1070,8 +1052,7 @@ mod tests {
                 2_000,
             );
             assert_eq!(record.outcome, ProbeOutcome::Held, "{orphaned_by}");
-            let applied = inner.apply_probe(&job, exchange, &record, None, 2_000);
-            assert_eq!(applied, Applied::Orphaned, "{orphaned_by}");
+            inner.apply_probe(&job, exchange, &record, None, 2_000);
             assert!(
                 inner.settlements.is_empty(),
                 "{orphaned_by}: the held probe settles under no label"

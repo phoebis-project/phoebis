@@ -213,9 +213,8 @@ fn an_escaped_safeguards_spelling_is_not_retained() {
             "routing-alias",
             1 << 20
         )
-        .unwrap_err()
-        .as_str(),
-        "invalid_request"
+        .unwrap_err(),
+        RecipeRefusal::InvalidRequest
     );
     let twice = spliced.replacen(r#""stream":"#, r#""safeg\u0075ards":[],"stream":"#, 1);
     assert_eq!(
@@ -225,8 +224,8 @@ fn an_escaped_safeguards_spelling_is_not_retained() {
             "routing-alias",
             1 << 20
         )
-        .unwrap_err().as_str(),
-        "invalid_request",
+        .unwrap_err(),
+        RecipeRefusal::InvalidRequest,
         "a second spelling beside the one the cut finds, which the decoded duplicate-key walk refuses before the cut runs"
     );
 }
@@ -246,9 +245,8 @@ fn a_member_the_replays_edits_cannot_reach_is_not_retained() {
         let body = raw.replacen(key, escaped, 1);
         assert!(serde_json::from_str::<Value>(&body).is_ok(), "{body}");
         assert_eq!(
-            make_recipe(&headers(), body.as_bytes(), "routing-alias", 1 << 20)
-                .map_err(RecipeRefusal::as_str),
-            Err("escaped_key"),
+            make_recipe(&headers(), body.as_bytes(), "routing-alias", 1 << 20),
+            Err(RecipeRefusal::EscapedKey),
             "{escaped}"
         );
     }
@@ -257,43 +255,51 @@ fn a_member_the_replays_edits_cannot_reach_is_not_retained() {
 #[test]
 fn unsupported_shapes_are_named() {
     for (path, value, reason) in [
-        ("messages", json!([]), "unsupported_shape"),
-        ("max_tokens", json!(0), "unsupported_shape"),
+        ("messages", json!([]), RecipeRefusal::UnsupportedShape),
+        ("max_tokens", json!(0), RecipeRefusal::UnsupportedShape),
         (
             "output_config",
             json!({"format": {"type": "json_schema"}}),
-            "structured_output",
+            RecipeRefusal::StructuredOutput,
         ),
         (
             "thinking",
             json!({"type": "enabled", "budget_tokens": 1024}),
-            "fixed_thinking",
+            RecipeRefusal::FixedThinking,
         ),
-        ("thinking", json!("adaptive"), "unsupported_shape"),
-        ("tool_choice", json!({"type": "any"}), "forced_tool"),
+        (
+            "thinking",
+            json!("adaptive"),
+            RecipeRefusal::UnsupportedShape,
+        ),
+        (
+            "tool_choice",
+            json!({"type": "any"}),
+            RecipeRefusal::ForcedTool,
+        ),
         (
             "output_format",
             json!({"type": "json"}),
-            "structured_output",
+            RecipeRefusal::StructuredOutput,
         ),
         (
             "tools",
             json!([{"name": "t", "strict": true}]),
-            "structured_output",
+            RecipeRefusal::StructuredOutput,
         ),
         (
             "system",
             json!([{"type": "text", "text": "x", "cache_control": {"type": "persistent"}}]),
-            "invalid_cache_control",
+            RecipeRefusal::InvalidCacheControl,
         ),
         (
             "system",
             json!([{"type": "text", "text": "x", "cache_control": {"type": "ephemeral", "ttl": "2h"}}]),
-            "invalid_cache_control",
+            RecipeRefusal::InvalidCacheControl,
         ),
     ] {
         let result = make_recipe(&headers(), &with(path, value), "routing-alias", 1 << 20);
-        assert_eq!(result.unwrap_err().as_str(), reason, "{path}");
+        assert_eq!(result.unwrap_err(), reason, "{path}");
     }
     assert!(
         make_recipe(
@@ -306,41 +312,29 @@ fn unsupported_shapes_are_named() {
         "an auto tool_choice is accepted"
     );
     assert_eq!(
-        make_recipe(&headers(), &vec![b'x'; 1_025], "m", 1_024)
-            .unwrap_err()
-            .as_str(),
-        "request_too_large"
+        make_recipe(&headers(), &vec![b'x'; 1_025], "m", 1_024).unwrap_err(),
+        RecipeRefusal::RequestTooLarge
     );
     assert_eq!(
-        make_recipe(&headers(), b"{", "m", 1 << 20)
-            .unwrap_err()
-            .as_str(),
-        "invalid_request"
+        make_recipe(&headers(), b"{", "m", 1 << 20).unwrap_err(),
+        RecipeRefusal::InvalidRequest
     );
     assert_eq!(
-        make_recipe(&headers(), b"[]", "m", 1 << 20)
-            .unwrap_err()
-            .as_str(),
-        "invalid_request"
+        make_recipe(&headers(), b"[]", "m", 1 << 20).unwrap_err(),
+        RecipeRefusal::InvalidRequest
     );
     assert_eq!(
-        make_recipe(&headers(), BODY.as_bytes(), "", 1 << 20)
-            .unwrap_err()
-            .as_str(),
-        "invalid_model"
+        make_recipe(&headers(), BODY.as_bytes(), "", 1 << 20).unwrap_err(),
+        RecipeRefusal::InvalidModel
     );
     assert_eq!(
-        make_recipe(&headers(), BODY.as_bytes(), "bad\u{7}model", 1 << 20)
-            .unwrap_err()
-            .as_str(),
-        "invalid_model"
+        make_recipe(&headers(), BODY.as_bytes(), "bad\u{7}model", 1 << 20).unwrap_err(),
+        RecipeRefusal::InvalidModel
     );
     let long = vec![("anthropic-beta".to_string(), "x".repeat(8_193))];
     assert_eq!(
-        make_recipe(&long, BODY.as_bytes(), "routing-alias", 1 << 20)
-            .unwrap_err()
-            .as_str(),
-        "headers_too_large"
+        make_recipe(&long, BODY.as_bytes(), "routing-alias", 1 << 20).unwrap_err(),
+        RecipeRefusal::HeadersTooLarge
     );
     let many: Vec<(String, String)> = (0..3)
         .map(|i| {
@@ -351,10 +345,8 @@ fn unsupported_shapes_are_named() {
         })
         .collect();
     assert_eq!(
-        make_recipe(&many, BODY.as_bytes(), "routing-alias", 1 << 20)
-            .unwrap_err()
-            .as_str(),
-        "headers_too_large"
+        make_recipe(&many, BODY.as_bytes(), "routing-alias", 1 << 20).unwrap_err(),
+        RecipeRefusal::HeadersTooLarge
     );
     // The model's length is part of the budget: 16,375 header bytes pass under a one-byte model and fail under
     // a fifteen-byte one.
@@ -366,10 +358,8 @@ fn unsupported_shapes_are_named() {
     assert_eq!(header_bytes(&near), 16_375);
     assert!(make_recipe(&near, BODY.as_bytes(), "m", 1 << 20).is_ok());
     assert_eq!(
-        make_recipe(&near, BODY.as_bytes(), "routing-alias-x", 1 << 20)
-            .unwrap_err()
-            .as_str(),
-        "headers_too_large"
+        make_recipe(&near, BODY.as_bytes(), "routing-alias-x", 1 << 20).unwrap_err(),
+        RecipeRefusal::HeadersTooLarge
     );
     // The bus denylist is the one gate: a recipe replays what the bus published, so the credential, the
     // forwarding headers, and the relay's own framing never reach one in the first place.
@@ -388,26 +378,20 @@ fn duplicate_output_controls_are_rejected() {
     let body =
         br#"{"max_tokens":1,"max_tokens":10000,"messages":[{"role":"user","content":"test"}]}"#;
     assert_eq!(
-        make_recipe(&headers(), body, "m", 1 << 20)
-            .unwrap_err()
-            .as_str(),
-        "invalid_request",
+        make_recipe(&headers(), body, "m", 1 << 20).unwrap_err(),
+        RecipeRefusal::InvalidRequest,
         "an ambiguous output limit"
     );
     let body = br#"{"max_tokens":1,"thinking":{"type":"adaptive","type":"enabled"},"messages":[{"role":"user","content":"test"}]}"#;
     assert_eq!(
-        make_recipe(&headers(), body, "m", 1 << 20)
-            .unwrap_err()
-            .as_str(),
-        "invalid_request",
+        make_recipe(&headers(), body, "m", 1 << 20).unwrap_err(),
+        RecipeRefusal::InvalidRequest,
         "an ambiguous thinking block"
     );
     let body = br#"{"max_tokens":1,"cache_control":{"type":"ephemeral","type":"ephemeral"},"messages":[{"role":"user","content":"test"}]}"#;
     assert_eq!(
-        make_recipe(&headers(), body, "m", 1 << 20)
-            .unwrap_err()
-            .as_str(),
-        "invalid_request",
+        make_recipe(&headers(), body, "m", 1 << 20).unwrap_err(),
+        RecipeRefusal::InvalidRequest,
         "a repeated key inside a nested object"
     );
 }
@@ -636,10 +620,8 @@ fn a_body_bound_to_its_account_is_refused() {
         ("a server-side tool result", with("messages", server_tool)),
     ] {
         assert_eq!(
-            make_recipe(&headers(), &body, "routing-alias", 1 << 20)
-                .unwrap_err()
-                .as_str(),
-            "unsupported_shape",
+            make_recipe(&headers(), &body, "routing-alias", 1 << 20).unwrap_err(),
+            RecipeRefusal::UnsupportedShape,
             "{label}"
         );
     }
@@ -686,5 +668,5 @@ fn a_marker_inside_a_tool_results_content_that_is_not_ephemeral_refuses_the_body
         "routing-alias",
         1 << 20,
     );
-    assert_eq!(result.unwrap_err().as_str(), "invalid_cache_control");
+    assert_eq!(result.unwrap_err(), RecipeRefusal::InvalidCacheControl);
 }
