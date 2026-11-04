@@ -28,7 +28,7 @@ use phoebis_guardrails::{evaluate_all, Evaluation, HeaderLookup, Lookup, Request
 use phoebis_oauth::{AccessToken, AcquireError, Clock, CredentialManager};
 use phoebis_routing::{
     cohort_hold, latest_full_reset, resolve, AccountTicket, ChainFacts, ClientClass, CohortHold,
-    ConversationLookup, EvidenceSource, Exhaustion, HoldFacts, KeyPermit, KeyRefusal, LaneFacts,
+    ConversationLookup, EvidenceSource, Exhaustion, HoldFacts, KeyPermit, LaneFacts,
     OverageEvidence, PinRef, PinnedObstacle, PredecessorQuery, Presented, Refusal, RefusalFacts,
     RefusedRequest, Report, RequestFlags, ResolveError, RouterHandle, SelectRequest, SelectResult,
     Selection, SelectionTrace, BUDGET_WINDOW, MAIN_AGENT,
@@ -1248,42 +1248,29 @@ impl Relay {
         // registry, and a write that lands mid-request is seen by the next request.
         let snapshot = self.router.snapshot();
         let (key, presented) = match &probe {
-            // Before the body, as for a caller: an unauthenticated probe never holds the request limit either.
-            Some(probe) => match snapshot.authenticate_id(&probe.key_id, received_at) {
-                // A recipe retained under an earlier key of this id is that key's; its probe never runs in
-                // the replacement's pool.
-                Ok(key) if key.created_at != probe.key_generation => {
-                    let refusal = KeyRefusal::Replaced;
-                    tracing::debug!(%refusal, key = %probe.key_id, "a probe's key was refused");
-                    return self
-                        .refused_before_body(
-                            &trace,
-                            None,
-                            &parts.headers,
-                            0,
-                            false,
-                            key_refusal(&refusal),
-                            None,
-                        )
-                        .await;
+            // Before the body, as for a caller: an unauthenticated probe never holds the request limit either. A
+            // recipe retained under an earlier key of this id is that key's, so its probe never runs in the
+            // replacement's pool.
+            Some(probe) => {
+                match snapshot.authenticate_id(&probe.key_id, probe.key_generation, received_at) {
+                    // A probe authenticates by key id, never by secret, so it never presents a retired one.
+                    Ok(key) => (key.clone(), Presented::Live),
+                    Err(refusal) => {
+                        tracing::debug!(%refusal, key = %probe.key_id, "a probe's key was refused");
+                        return self
+                            .refused_before_body(
+                                &trace,
+                                None,
+                                &parts.headers,
+                                0,
+                                false,
+                                key_refusal(&refusal),
+                                None,
+                            )
+                            .await;
+                    }
                 }
-                // A probe authenticates by key id, never by secret, so it never presents a retired one.
-                Ok(key) => (key.clone(), Presented::Live),
-                Err(refusal) => {
-                    tracing::debug!(%refusal, key = %probe.key_id, "a probe's key was refused");
-                    return self
-                        .refused_before_body(
-                            &trace,
-                            None,
-                            &parts.headers,
-                            0,
-                            false,
-                            key_refusal(&refusal),
-                            None,
-                        )
-                        .await;
-                }
-            },
+            }
             None => {
                 let presented = match presented_key(&parts.headers) {
                     Ok(presented) => presented,

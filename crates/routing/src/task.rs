@@ -27,20 +27,18 @@ use crate::record::{
 use crate::select::{
     decide, obstacle, pace_of, passes_reset, projection_of, projections_of, release_reasons,
     routed_agent, BurnRead, Decided, FailedOver, Obstacle, Refusal, SelectRequest, SelectResult,
-    RATE_LIMIT_REASON,
+    MAIN_AGENT, RATE_LIMIT_REASON,
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, burn_folded, ceiling, default_burn_average_ms,
     effort_of, entrypoint_of, is_plan_window, latest_full_reset, mark_holds, plan_windows,
-    round_in_dwell, shed_dwell_ms, slow_down_hold_ms, spend_reset_estimate, wait_until,
-    AccountTicket, BurnUnit, CreditsState, EvidenceSource, InFlight, MemberSpend, OverageEvidence,
-    PinRef, PinUsage, RateTable, Recorded, RoutingState, SharePricer, SlowDownEdge, SpendWindow,
-    StateWrite, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY,
-    SEVEN_DAY_FABLE,
+    round_in_dwell, shed_dwell_ms, slow_down_hold_ms, spend_reset_estimate, standing_mark,
+    wait_until, AccountTicket, BurnUnit, CreditsState, EvidenceSource, InFlight, MemberSpend,
+    OverageEvidence, PinRef, PinUsage, RateTable, Recorded, RoutingState, SharePricer,
+    SlowDownEdge, SpendWindow, StateWrite, UtilizationSample, WindowReading, WindowSource,
+    FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
-use crate::{
-    model_week, resolve, term, window_length_ms, Candidate, KeyRefusal, Presented, RegistrySnapshot,
-};
+use crate::{model_week, resolve, term, window_length_ms, Candidate, Presented, RegistrySnapshot};
 
 /// The router loop's command queue size, which `/admin/system` reports. A report that finds the queue full waits for a
 /// slot; one the closed queue refuses at shutdown is dropped and counted under its kind.
@@ -87,6 +85,11 @@ struct Invalidated {
 /// the poll in milliseconds, so the two sources disagree about one reset by under a second, while a window's next
 /// reset lands hours after the last.
 pub const RESET_SLACK_MS: i64 = 60_000;
+
+/// Whether two readings' resets name one reset.
+pub fn same_reset(a: i64, b: i64) -> bool {
+    a.abs_diff(b) <= RESET_SLACK_MS.unsigned_abs()
+}
 
 /// How far under 1.0 a reading may land over a stored reading at the wall and still read the wall. A poll reads the
 /// endpoint's whole percent and a head the utilization's float, so near a wall a head lands up to a point under the
@@ -379,6 +382,33 @@ impl RouterEvent {
             model: key.model.clone(),
             account_id: account_id.to_string(),
             reasons,
+            at,
+        }
+    }
+
+    fn pin_migrated(
+        key: &PinKey,
+        from_account: String,
+        to: &PinRow,
+        reason: &'static str,
+        record: &DecisionRecord,
+        cause: Option<MoveCause>,
+        at: i64,
+    ) -> RouterEvent {
+        let (fit, runway_ms, binding) = destination_fit(record, &to.account_id);
+        RouterEvent::PinMigrated {
+            key_id: key.key_id.clone(),
+            session_id: key.session_id.clone(),
+            agent_id: key.agent_id.clone(),
+            model: key.model.clone(),
+            from_account,
+            to_account: to.account_id.clone(),
+            epoch: to.epoch,
+            reason: reason.into(),
+            fit,
+            runway_ms,
+            binding,
+            cause,
             at,
         }
     }
@@ -1269,10 +1299,7 @@ pub struct RouterHandle {
 
 impl RouterHandle {
     pub fn snapshot(&self) -> Arc<RegistrySnapshot> {
-        self.snapshot
-            .read()
-            .expect("snapshot lock poisoned")
-            .clone()
+        current(&self.snapshot)
     }
 
     /// The shared in-flight table: a key permit reserved after authentication and before selection, held across
@@ -1845,21 +1872,18 @@ pub fn spawn(
     let registry = store.load_registry()?;
     // Built here as well as on each reload, else no guardrail would run between the start and the first reload.
     let guardrails = crate::CompiledGuardrails::build(&registry);
-    let snapshot = Arc::new(RwLock::new(Arc::new(
+    let initial = Arc::new(
         RegistrySnapshot::from_load(registry, store.digest_key(), now, 1)
             .with_guardrails(guardrails),
-    )));
+    );
     // Here and never in the load, which a reader may take while a failover's landing is a selection away and the
     // session holds no pin.
     store.sweep_first_seen()?;
     let load = store.load_routing()?;
-    let load_counts = LoadCounts::of(
-        &load,
-        &snapshot.read().expect("snapshot lock poisoned"),
-        now,
-    );
+    let load_counts = LoadCounts::of(&load, &initial, now);
     let mut state = RoutingState::from_load(load);
-    state.drop_usage_based_overage(&snapshot.read().expect("snapshot lock poisoned"));
+    state.drop_usage_based_overage(&initial);
+    let snapshot = Arc::new(RwLock::new(initial));
     // A restored wall keeps the anchor its stored pair gives it: without the seed every within-margin head after a
     // restart would move the clamp's anchor onto its own instant and hold the account spent past the window's length.
     let spent_announced: HashMap<(String, String), (Option<i64>, i64)> = state
@@ -2043,7 +2067,7 @@ pub fn spawn(
                 _ = purge.tick(), if !task.purge_held => task.purge(),
                 // A slot the writer frees takes the backlog at the top of the next turn, so a store that recovers
                 // clears `degraded` without waiting on a command or the purge tick.
-                _ = task.writer_room(), if task.has_deferred() => {}
+                _ = task.writer_room(), if !task.deferred.is_empty() => {}
             }
         }
     });
@@ -2489,7 +2513,7 @@ fn cache_map_written(report: &AffinityReport, rows: &[AffinityRow]) -> RouterEve
 /// The `mark_cleared` of a pin that left its account without a move, when its mark stood: a release, an expiry, a
 /// fail-over's invalidation or a rekey's merge the row lost. `None` for an unmarked pin.
 fn released_mark(row: &PinRow, at: i64) -> Option<RouterEvent> {
-    let mark = row.mark.as_ref().filter(|_| mark_holds(row))?;
+    let mark = standing_mark(row)?;
     Some(RouterEvent::MarkCleared {
         account_id: row.account_id.clone(),
         key_id: row.key_id.clone(),
@@ -2538,9 +2562,7 @@ fn same_cycle(announced: (Option<i64>, i64), reset: Option<i64>, now: i64, windo
     let open_until = at.saturating_add(window_length_ms(window));
     let bound = open_until.saturating_add(RESET_SLACK_MS);
     match (announced_reset, reset) {
-        (Some(announced), Some(reset)) => {
-            announced.abs_diff(reset) <= RESET_SLACK_MS.unsigned_abs()
-        }
+        (Some(announced), Some(reset)) => same_reset(announced, reset),
         (None, Some(reset)) => at <= reset && reset <= bound,
         (None, None) => now <= bound,
         (Some(announced), None) => now <= announced.saturating_add(RESET_SLACK_MS),
@@ -2711,7 +2733,7 @@ fn pins_standing(state: &RoutingState, snapshot: &RegistrySnapshot, now: i64) ->
             let auxiliary_only = state.auxiliary_only(&pin.key());
             let effort = effort_of(&pin).map(String::from);
             let first_seen_at = state.first_seen(&pin.key_id, &pin.session_id, &pin.agent_id);
-            let session_first_seen_at = state.first_seen(&pin.key_id, &pin.session_id, "main");
+            let session_first_seen_at = state.first_seen(&pin.key_id, &pin.session_id, MAIN_AGENT);
             PinStanding {
                 pin: decayed(pin, now, average_ms),
                 runway_ms,
@@ -2810,10 +2832,7 @@ fn standing_runway(
 
 impl Task {
     fn snapshot(&self) -> Arc<RegistrySnapshot> {
-        self.snapshot
-            .read()
-            .expect("snapshot lock poisoned")
-            .clone()
+        current(&self.snapshot)
     }
 
     /// A send with no receiver is an error and means nothing: the loop must never depend on anyone listening.
@@ -2906,8 +2925,8 @@ impl Task {
     /// Dropping the sender ends the writer's loop; waiting on `writer_done` is what makes an acknowledged pin or
     /// cooldown durable before the process exits.
     async fn drain_writer(&mut self) {
-        let backlog = (!self.deferred.is_empty()).then(|| self.deferred.take());
-        if let Some(backlog) = backlog {
+        if !self.deferred.is_empty() {
+            let backlog = self.deferred.take();
             // Awaited: the channel is bounded and the writer is still draining it, so the backlog takes the next
             // slot it frees, and a shutdown after a full channel still lands every acknowledged pin and cooldown.
             self.writer_status.depth.fetch_add(1, Ordering::Relaxed);
@@ -3038,23 +3057,15 @@ impl Task {
                                 // entry it left behind names the account the request left.
                                 record.outcome.from_account_id = Some(from.clone());
                                 summary.rule = Some(reason);
-                                let (fit, runway_ms, binding) =
-                                    destination_fit(&record, &new.account_id);
-                                pin_events.push(RouterEvent::PinMigrated {
-                                    key_id: pin_key.key_id.clone(),
-                                    session_id: pin_key.session_id.clone(),
-                                    agent_id: pin_key.agent_id.clone(),
-                                    model: pin_key.model.clone(),
-                                    from_account: from,
-                                    to_account: new.account_id.clone(),
-                                    epoch: new.epoch,
-                                    reason: reason.into(),
-                                    fit,
-                                    runway_ms,
-                                    binding,
-                                    cause: record.outcome.cause.clone(),
-                                    at: now,
-                                });
+                                pin_events.push(RouterEvent::pin_migrated(
+                                    &pin_key,
+                                    from,
+                                    new,
+                                    reason,
+                                    &record,
+                                    record.outcome.cause.clone(),
+                                    now,
+                                ));
                             }
                             None => pin_events.push(RouterEvent::pin_created(
                                 &pin_key,
@@ -3081,25 +3092,15 @@ impl Task {
                                         now,
                                     ));
                                 }
-                                Some(reason) => {
-                                    let (fit, runway_ms, binding) =
-                                        destination_fit(&record, &new.account_id);
-                                    pin_events.push(RouterEvent::PinMigrated {
-                                        key_id: pin_key.key_id.clone(),
-                                        session_id: pin_key.session_id.clone(),
-                                        agent_id: pin_key.agent_id.clone(),
-                                        model: pin_key.model.clone(),
-                                        from_account: old.account_id.clone(),
-                                        to_account: new.account_id.clone(),
-                                        epoch: new.epoch,
-                                        reason: reason.as_str().into(),
-                                        fit,
-                                        runway_ms,
-                                        binding,
-                                        cause: None,
-                                        at: now,
-                                    });
-                                }
+                                Some(reason) => pin_events.push(RouterEvent::pin_migrated(
+                                    &pin_key,
+                                    old.account_id.clone(),
+                                    new,
+                                    reason.as_str(),
+                                    &record,
+                                    None,
+                                    now,
+                                )),
                             }
                         }
                     }
@@ -3595,8 +3596,7 @@ impl Task {
                     writes.push(StateWrite::UpsertCooldown(row));
                 }
                 if let Some(mut pin) = pin {
-                    pin.model = self.state.canonical(&pin.model).to_string();
-                    let key = pin.key();
+                    let key = self.canonical_pin(&mut pin);
                     // A fast-lane row refuses the fast lane alone: once a later turn moved the pin to another
                     // lane, the session no longer asks for what the row refuses, so a late refusal leaves it.
                     let left_lane = fast_lane
@@ -3640,7 +3640,8 @@ impl Task {
                 mut state,
                 incarnation,
             } => {
-                if self.moved_past(&account_id, incarnation) {
+                let snapshot = self.snapshot();
+                if holder(&snapshot, &account_id, incarnation).is_none() {
                     return;
                 }
                 state.incarnation = incarnation;
@@ -3650,7 +3651,6 @@ impl Task {
                 // Read before the fold replaces it, and the holder's own: another holder's state is no edge. The edge's
                 // before is the state the selector read at this clock, a lapsed spend share included.
                 let before = self.state.credits_of(&account_id, incarnation).cloned();
-                let snapshot = self.snapshot();
                 let blocked_before = self
                     .state
                     .credits_blocked(&snapshot, &account_id, (self.clock)())
@@ -3707,12 +3707,13 @@ impl Task {
                 mut evidence,
                 incarnation,
             } => {
-                if self.moved_past(&account_id, incarnation) {
+                let snapshot = self.snapshot();
+                if holder(&snapshot, &account_id, incarnation).is_none() {
                     return;
                 }
                 // A usage-based seat's overage family is its spend window, which `Report::SpendHead` carries. A leg
                 // that read its snapshot before the class landed still reports it here, and it records nothing.
-                if self.snapshot().usage_based(&account_id) {
+                if snapshot.usage_based(&account_id) {
                     return;
                 }
                 evidence.incarnation = incarnation;
@@ -3812,8 +3813,7 @@ impl Task {
                 ) {
                     return;
                 }
-                pin.model = self.state.canonical(&pin.model).to_string();
-                let key = pin.key();
+                let key = self.canonical_pin(&mut pin);
                 if let Some(row) = self.state.invalidate_pin(&pin, &account_id) {
                     let now = (self.clock)();
                     if let Some(event) = released_mark(&row, now) {
@@ -3843,8 +3843,7 @@ impl Task {
                 lifecycle_generation,
                 credential_generation,
             } => {
-                pin.model = self.state.canonical(&pin.model).to_string();
-                let key = pin.key();
+                let key = self.canonical_pin(&mut pin);
                 // The request that created the pin has ended, so a mark its landing set waits for nothing: the
                 // backstop for a `Head` the closed mailbox refused.
                 if self
@@ -3903,8 +3902,7 @@ impl Task {
                 classifier,
                 turn,
             } => {
-                pin.model = self.state.canonical(&pin.model).to_string();
-                let key = pin.key();
+                let key = self.canonical_pin(&mut pin);
                 if let Some(current) = self.state.pin(&key) {
                     let same_epoch = current.epoch == pin.epoch;
                     // A probe's renewal is the refresh of the cache it read, which is another cache once the session
@@ -3923,25 +3921,6 @@ impl Task {
                             "a probe renewal from a lane the pin has left leaves the pin"
                         );
                     }
-                    // Read before the row is borrowed to change it, since both read the snapshot or the row. Every
-                    // copy folds whatever the account's kind and nothing is priced here: the reader prices the copies
-                    // its funding selects on the account the pin sits on when it reads, so leaving overage or moving
-                    // between tiers needs no reset.
-                    let fold = usage
-                        .filter(|_| same_epoch && !left_lane && !keepalive)
-                        .map(|usage| {
-                            let window_ms = self.burn_window_ms(&pin.key_id);
-                            // The meter charges a request inside the peak band more, by its own regime's factor, so
-                            // the banded copy weighs it by the band of the row's regime at the renewal, the row's
-                            // entrypoint as the renewal leaves it. Dollars cost the same at every hour.
-                            let band = self.config.band.at(
-                                FIVE_HOUR,
-                                Some(pin.entrypoint.as_str())
-                                    .filter(|entrypoint| !entrypoint.is_empty()),
-                                now,
-                            );
-                            (usage, window_ms, band)
-                        });
                     // A request of the standing row reached its stream's end: a mark is set at a placement and a
                     // placement takes a new epoch, so a renewal of the same epoch belongs to the marked row, and
                     // clearing early only shortens a hold. The backstop for a `Head` the closed mailbox refused.
@@ -3954,12 +3933,6 @@ impl Task {
                     if let Some(renewed) = renewed {
                         renewed.last_used_at = now;
                         renewed.cache_ttl_ms = cache_ttl_ms;
-                        // A probe replays another request's headers and body, so the row keeps its entrypoint and its
-                        // effort as it keeps its lane.
-                        if !keepalive {
-                            renewed.entrypoint = pin.entrypoint.clone();
-                            renewed.effort = pin.effort.clone().unwrap_or_default();
-                        }
                         // A turn's stream end with its usage is the turn's end a classifier call that follows judges:
                         // `latest_turn_pin` reads it ahead of the pins' stamps. A probe (which replays a turn's class),
                         // an auxiliary call on the agent's turn pin (the subagent summary fork among them), a
@@ -3970,42 +3943,66 @@ impl Task {
                             // renewal is the refresh it wrote. Its usage is the keepalive's cost, never the
                             // session's burn.
                             renewed.last_refresh_at = now;
-                        } else if let Some((usage, window_ms, band)) = fold {
-                            let at = renewed.burn_at;
-                            let prompt = usage.prompt_tokens();
-                            // Every copy decays from the same `burn_at`, so a copy this renewal adds nothing to
-                            // folds at weight 0 and keeps step with the others.
-                            let folded = |copy: PinBurn, weight: f64| {
-                                let fold = |rate: f64, tokens: u64| {
-                                    burn_folded(rate, at, now, window_ms, tokens as f64 * weight)
+                        } else {
+                            // A probe replays another request's headers and body, so the row keeps its entrypoint
+                            // and its effort as it keeps its lane.
+                            renewed.entrypoint = pin.entrypoint.clone();
+                            renewed.effort = pin.effort.clone().unwrap_or_default();
+                            if let Some(usage) = usage {
+                                // Every copy folds whatever the account's kind and nothing is priced here: the
+                                // reader prices the copies its funding selects on the account the pin sits on when
+                                // it reads, so leaving overage or moving between tiers needs no reset.
+                                let window_ms =
+                                    burn_window_ms(&self::current(&self.snapshot), &pin.key_id);
+                                // The meter charges a request inside the peak band more, by its own regime's
+                                // factor, so the banded copy weighs it by the band of the row's regime at the
+                                // renewal, the row's entrypoint as the renewal leaves it. Dollars cost the same at
+                                // every hour.
+                                let band =
+                                    self.config.band.at(FIVE_HOUR, entrypoint_of(renewed), now);
+                                let at = renewed.burn_at;
+                                let prompt = usage.prompt_tokens();
+                                // Every copy decays from the same `burn_at`, so a copy this renewal adds nothing
+                                // to folds at weight 0 and keeps step with the others.
+                                let folded = |copy: PinBurn, weight: f64| {
+                                    let fold = |rate: f64, tokens: u64| {
+                                        burn_folded(
+                                            rate,
+                                            at,
+                                            now,
+                                            window_ms,
+                                            tokens as f64 * weight,
+                                        )
+                                    };
+                                    PinBurn {
+                                        cache_read: fold(copy.cache_read, usage.cache_read),
+                                        input: fold(copy.input, usage.input),
+                                        output: fold(copy.output, usage.output),
+                                        write_1h: fold(copy.write_1h, usage.write_1h),
+                                        write_5m: fold(copy.write_5m, usage.write_5m),
+                                    }
                                 };
-                                PinBurn {
-                                    cache_read: fold(copy.cache_read, usage.cache_read),
-                                    input: fold(copy.input, usage.input),
-                                    output: fold(copy.output, usage.output),
-                                    write_1h: fold(copy.write_1h, usage.write_1h),
-                                    write_5m: fold(copy.write_5m, usage.write_5m),
-                                }
-                            };
-                            // A fast answer is usage credits: its tokens land in the row's fast copy, priced later
-                            // through the fast table (`BurnRates::fast`). The client's classifier call takes no
-                            // share of a plan window, so its tokens land in the unmetered copy alone, priced in
-                            // dollars and never under the window share. A standard answer folds into the plain and
-                            // banded copies, the banded one weighed by the band. Every copy an answer does not land
-                            // in only decays.
-                            let (plain, fast_weight, unmetered_weight) = match (classifier, fast) {
-                                (true, _) => (0.0, 0.0, 1.0),
-                                (false, true) => (0.0, 1.0, 0.0),
-                                (false, false) => (1.0, 0.0, 0.0),
-                            };
-                            renewed.burn = folded(renewed.burn, plain);
-                            renewed.burn_banded = folded(renewed.burn_banded, plain * band);
-                            renewed.burn_fast = folded(renewed.burn_fast, fast_weight);
-                            renewed.burn_unmetered =
-                                folded(renewed.burn_unmetered, unmetered_weight);
-                            renewed.burn_at = Some(now);
-                            renewed.last_input_tokens = prompt;
-                            renewed.last_classifier = classifier;
+                                // A fast answer is usage credits: its tokens land in the row's fast copy, priced
+                                // later through the fast table (`BurnRates::fast`). The client's classifier call
+                                // takes no share of a plan window, so its tokens land in the unmetered copy alone,
+                                // priced in dollars and never under the window share. A standard answer folds into
+                                // the plain and banded copies, the banded one weighed by the band. Every copy an
+                                // answer does not land in only decays.
+                                let (plain, fast_weight, unmetered_weight) =
+                                    match (classifier, fast) {
+                                        (true, _) => (0.0, 0.0, 1.0),
+                                        (false, true) => (0.0, 1.0, 0.0),
+                                        (false, false) => (1.0, 0.0, 0.0),
+                                    };
+                                renewed.burn = folded(renewed.burn, plain);
+                                renewed.burn_banded = folded(renewed.burn_banded, plain * band);
+                                renewed.burn_fast = folded(renewed.burn_fast, fast_weight);
+                                renewed.burn_unmetered =
+                                    folded(renewed.burn_unmetered, unmetered_weight);
+                                renewed.burn_at = Some(now);
+                                renewed.last_input_tokens = prompt;
+                                renewed.last_classifier = classifier;
+                            }
                         }
                         let row = renewed.clone();
                         self.state.mark_renewed(&key);
@@ -4022,12 +4019,12 @@ impl Task {
                 incarnation,
                 source_request_id,
             } => {
-                if self.moved_past(&account_id, incarnation) {
+                let snapshot = self.snapshot();
+                if holder(&snapshot, &account_id, incarnation).is_none() {
                     return;
                 }
                 // Neither the poll nor a head knows the account's plan, and the pair is the one the account holds as
                 // the reading lands: a later profile read moves the readings after it and leaves this week's alone.
-                let snapshot = self.snapshot();
                 let (plan, tier) = (snapshot.plan(&account_id), snapshot.tier(&account_id));
                 for reading in sample.windows.values_mut() {
                     reading.plan = plan.map(String::from);
@@ -4166,17 +4163,19 @@ impl Task {
                 // The usage replaces the booking, on every path below: a request that holds none (a renewal, a
                 // request from before a restart, one whose booking the purge expired) still charges its account.
                 self.state.release_reservation(&request_id);
+                let snapshot = self.snapshot();
+                let Some(account) = holder(&snapshot, &account_id, incarnation) else {
+                    return;
+                };
                 // A fast completion draws usage credits, and the client's classifier call takes no share of a plan
                 // window, so neither charges one.
-                if self.moved_past(&account_id, incarnation) || fast || classifier {
+                if fast || classifier {
                     return;
                 }
-                let snapshot = self.snapshot();
                 // An api_key account bills its tokens and a usage-based seat its spend window, so neither has a plan
                 // window to charge, whatever tier the seat's profile names, and an account whose tier the profile has
                 // not named yet or whose plan the cost model does not price has no factor to price through.
-                if snapshot.account(&account_id).map(|a| a.kind)
-                    != Some(phoebis_store::AccountKind::Oauth)
+                if account.kind != phoebis_store::AccountKind::Oauth
                     || snapshot.usage_based(&account_id)
                 {
                     return;
@@ -4195,24 +4194,20 @@ impl Task {
                         at,
                     )
                 };
+                // A model week the table does not measure is priced as the 7-day share once, until the cost table
+                // measures it. The share pricer says which.
+                if let Some(own) =
+                    model_week(&canonical_model).filter(|own| !self.config.share.measured(own))
+                {
+                    tracing::debug!(window = own, "a model window is priced unmeasured");
+                }
                 // A 5-hour window the account's set lacks takes no charge, so `predicted_spent` announces no wall
                 // on it.
-                let mut shares = Vec::new();
-                if self.state.has_window(&account_id, FIVE_HOUR) {
-                    shares.push((FIVE_HOUR, price(FIVE_HOUR)));
-                }
-                shares.push((SEVEN_DAY, price(SEVEN_DAY)));
-                if let Some(own) = model_week(&canonical_model) {
-                    // A model week the table does not measure is priced as the 7-day share once, until the cost
-                    // table measures it; the share pricer says which.
-                    if !self.config.share.measured(own) {
-                        tracing::debug!(window = own, "a model window is priced unmeasured");
-                    }
-                    shares.push((own, price(own)));
-                }
-                let shares: Vec<(&str, f64)> = shares
-                    .into_iter()
-                    .filter_map(|(w, s)| s.map(|s| (w, s)))
+                let shares: Vec<(&str, f64)> = plan_windows(&canonical_model)
+                    .filter(|window| {
+                        *window != FIVE_HOUR || self.state.has_window(&account_id, FIVE_HOUR)
+                    })
+                    .filter_map(|window| price(window).map(|share| (window, share)))
                     .collect();
                 let before: Vec<(&str, f64)> = shares
                     .iter()
@@ -4356,6 +4351,12 @@ impl Task {
         holder(&snapshot, account_id, incarnation).is_none()
     }
 
+    /// A pin report is keyed on the model the state holds the pin under, whichever spelling the report named.
+    fn canonical_pin(&self, pin: &mut PinRef) -> PinKey {
+        pin.model = self.state.canonical(&pin.model).to_string();
+        pin.key()
+    }
+
     /// Starts the one registry load, which answers every reload waiting now. Off the loop: a selection is answered
     /// while the load runs, and a burst of reloads costs two loads at most (the one running, and one more for the
     /// writes that may postdate its read transaction).
@@ -4417,11 +4418,11 @@ impl Task {
         // and so do those of a holder deleted and created again under its id since the previous snapshot.
         // Samples and charges are keyed by id alone, so a moved holder's go here, before the purge.
         for account in previous.accounts() {
-            let moved = next.holder(&account.id, account.incarnation).is_none();
-            let present = !moved
-                && next.account(&account.id).is_some_and(|a| {
-                    !matches!(a.state, AccountState::Disconnected | AccountState::Unpaired)
-                });
+            let held = next.holder(&account.id, account.incarnation);
+            let moved = held.is_none();
+            let present = held.is_some_and(|a| {
+                !matches!(a.state, AccountState::Disconnected | AccountState::Unpaired)
+            });
             if !present {
                 if let Some(token) = self.cancel.remove(&account.id) {
                     token.cancel();
@@ -4439,15 +4440,6 @@ impl Task {
         // not one of them: `select` step 1 decides that per request, since a non-portable request keeps such
         // a pin by design.
         self.purge();
-    }
-
-    /// The burn window of the pool the key routes through; the default preset's for a key the snapshot no
-    /// longer holds, whose pin the next purge drops anyway.
-    fn burn_window_ms(&self, key_id: &str) -> i64 {
-        let snapshot = self.snapshot();
-        snapshot
-            .key_pool(key_id)
-            .map_or_else(default_burn_average_ms, burn_average_ms)
     }
 
     fn token(&mut self, account_id: &str) -> &CancellationToken {
@@ -4643,9 +4635,7 @@ impl Task {
                     .spent_announced
                     .get(&key)
                     .is_some_and(|(announced, _)| {
-                        announced.is_some_and(|announced| {
-                            announced.abs_diff(reset_at) <= RESET_SLACK_MS.unsigned_abs()
-                        })
+                        announced.is_some_and(|announced| same_reset(announced, reset_at))
                     })
             {
                 self.spent_announced.insert(key, (reading.reset, now));
@@ -4815,7 +4805,7 @@ impl Task {
         if self
             .reset_announced
             .get(&key)
-            .is_some_and(|announced| announced.abs_diff(reset_at) <= RESET_SLACK_MS.unsigned_abs())
+            .is_some_and(|&announced| same_reset(announced, reset_at))
         {
             return false;
         }
@@ -4871,9 +4861,9 @@ impl Task {
                     continue;
                 };
                 // A canceled term past its end still reads as winding down. Its account has ended, which is no start.
-                let Some(ends_at) = term::end_of(term, now)
-                    .filter(|_| term::winding_down(term, now, minutes) && !term::ended(term, now))
-                else {
+                let Some(ends_at) = term::end_of(term, now).filter(|&end| {
+                    now >= term::wind_down_start(end, minutes) && !term::ended(term, now)
+                }) else {
                     continue;
                 };
                 let key = (pool.id.clone(), member.account_id.clone());
@@ -4944,34 +4934,30 @@ impl Task {
         }
         // Nothing passes the backlog: a slot that frees between the backlog's offer and a newer write would let
         // the newer write land first, and a pin's upsert behind its own delete puts a released pin back.
-        if !self.deferred.is_empty() {
-            self.deferred.fold(writes);
-            self.writer_status
-                .deferred
-                .store(self.deferred.len(), Ordering::Relaxed);
-            return;
-        }
-        match self.writer.try_reserve() {
-            Ok(permit) => {
-                // Counted in before the send, so the writer never counts out a batch this has not counted in.
-                self.writer_status.depth.fetch_add(1, Ordering::Relaxed);
-                permit.send(writes);
-            }
-            Err(mpsc::error::TrySendError::Full(())) => {
-                self.deferred.fold(writes);
-                self.writer_status
-                    .deferred
-                    .store(self.deferred.len(), Ordering::Relaxed);
-                if !self.writer_status.degraded.swap(true, Ordering::Relaxed) {
-                    tracing::warn!(
-                        depth = WRITER_DEPTH,
-                        "the routing state writer is behind, so writes wait in memory, one per row"
-                    );
+        if self.deferred.is_empty() {
+            match self.writer.try_reserve() {
+                Ok(permit) => {
+                    // Counted in before the send, so the writer never counts out a batch this has not counted in.
+                    self.writer_status.depth.fetch_add(1, Ordering::Relaxed);
+                    permit.send(writes);
+                    return;
                 }
+                Err(mpsc::error::TrySendError::Full(())) => {
+                    if !self.writer_status.degraded.swap(true, Ordering::Relaxed) {
+                        tracing::warn!(
+                            depth = WRITER_DEPTH,
+                            "the routing state writer is behind, so writes wait in memory, one per row"
+                        );
+                    }
+                }
+                // Only after `drain_writer`, which has landed everything acknowledged before it.
+                Err(mpsc::error::TrySendError::Closed(())) => return,
             }
-            // Only after `drain_writer`, which has landed everything acknowledged before it.
-            Err(mpsc::error::TrySendError::Closed(())) => {}
         }
+        self.deferred.fold(writes);
+        self.writer_status
+            .deferred
+            .store(self.deferred.len(), Ordering::Relaxed);
     }
 
     /// Hands the backlog to the channel as one batch once a slot is free.
@@ -5001,10 +4987,6 @@ impl Task {
                 );
             }
         }
-    }
-
-    fn has_deferred(&self) -> bool {
-        !self.deferred.is_empty()
     }
 
     /// Resolves once the writer's channel has a free slot, which the next turn's offer takes.
@@ -5176,16 +5158,14 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
                 )
             })
             .collect()),
-        StateWrite::DeleteCooldown(account_id, scope) => one(
+        StateWrite::DeleteCooldown(ref account_id, ref scope) => one(
             DeferredKey::Cooldown {
                 account_id: account_id.clone(),
                 scope: scope.clone(),
             },
-            StateWrite::DeleteCooldown(account_id, scope),
+            write,
         ),
-        StateWrite::DeletePin(key) => {
-            one(DeferredKey::Pin(key.clone()), StateWrite::DeletePin(key))
-        }
+        StateWrite::DeletePin(ref key) => one(DeferredKey::Pin(key.clone()), write),
         StateWrite::DeleteWindow {
             ref account_id,
             ref window,
@@ -5223,22 +5203,16 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
             .chain(session_end)
             .collect())
         }
-        StateWrite::InsertFirstSeen(row) => one(
+        StateWrite::InsertFirstSeen(ref row) => one(
             DeferredKey::FirstSeen(
                 row.key_id.clone(),
                 row.session_id.clone(),
                 row.agent_id.clone(),
             ),
-            StateWrite::InsertFirstSeen(row),
+            write,
         ),
-        StateWrite::PurgeShedRounds { before } => one(
-            DeferredKey::PurgeShedRounds,
-            StateWrite::PurgeShedRounds { before },
-        ),
-        StateWrite::PurgeStaleWindows => one(
-            DeferredKey::PurgeStaleWindows,
-            StateWrite::PurgeStaleWindows,
-        ),
+        StateWrite::PurgeShedRounds { .. } => one(DeferredKey::PurgeShedRounds, write),
+        StateWrite::PurgeStaleWindows => one(DeferredKey::PurgeStaleWindows, write),
         StateWrite::Rekey(rekey) => Err(Box::new(rekey)),
         StateWrite::ShedRound {
             ref pool_id,
@@ -5260,34 +5234,32 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
                 )
             })
             .collect()),
-        StateWrite::UpsertCooldown(row) => one(
+        StateWrite::UpsertCooldown(ref row) => one(
             DeferredKey::Cooldown {
                 account_id: row.account_id.clone(),
                 scope: row.scope.clone(),
             },
-            StateWrite::UpsertCooldown(row),
+            write,
         ),
-        StateWrite::UpsertCredits(row) => one(
-            DeferredKey::Credits(row.account_id.clone()),
-            StateWrite::UpsertCredits(row),
-        ),
-        StateWrite::UpsertOverage(row) => one(
-            DeferredKey::Overage(row.account_id.clone()),
-            StateWrite::UpsertOverage(row),
-        ),
-        StateWrite::UpsertPin(row) => one(DeferredKey::Pin(row.key()), StateWrite::UpsertPin(row)),
-        StateWrite::UpsertWindow(row) => one(
+        StateWrite::UpsertCredits(ref row) => {
+            one(DeferredKey::Credits(row.account_id.clone()), write)
+        }
+        StateWrite::UpsertOverage(ref row) => {
+            one(DeferredKey::Overage(row.account_id.clone()), write)
+        }
+        StateWrite::UpsertPin(ref row) => one(DeferredKey::Pin(row.key()), write),
+        StateWrite::UpsertWindow(ref row) => one(
             DeferredKey::Window {
                 account_id: row.account_id.clone(),
                 window: row.window.clone(),
             },
-            StateWrite::UpsertWindow(row),
+            write,
         ),
-        StateWrite::UpsertWindowSet(row) => one(
+        StateWrite::UpsertWindowSet(ref row) => one(
             DeferredKey::WindowSet {
                 account_id: row.account_id.clone(),
             },
-            StateWrite::UpsertWindowSet(row),
+            write,
         ),
     }
 }
@@ -5299,13 +5271,8 @@ fn rederived(
     now: i64,
 ) -> Result<Vec<Candidate>, Refusal> {
     let key = snapshot
-        .authenticate_id(&request.key_id, now)
+        .authenticate_id(&request.key_id, request.key_generation, now)
         .map_err(Refusal::Key)?;
-    // The id is reusable, so the lifetime is the identity: a key created again under the id since admission is
-    // another key, and the request is refused as a refused id is.
-    if key.created_at != request.key_generation {
-        return Err(Refusal::Key(KeyRefusal::Replaced));
-    }
     resolve(
         snapshot,
         key,
@@ -5328,6 +5295,18 @@ fn holder<'a>(
         tracing::debug!(account = %account_id, "a report named a holder the id has moved past");
     }
     account
+}
+
+fn current(shared: &RwLock<Arc<RegistrySnapshot>>) -> Arc<RegistrySnapshot> {
+    shared.read().expect("snapshot lock poisoned").clone()
+}
+
+/// The burn window of the pool the key routes through, or the default preset's for a key the snapshot no longer
+/// holds, whose pin the next purge drops anyway.
+fn burn_window_ms(snapshot: &RegistrySnapshot, key_id: &str) -> i64 {
+    snapshot
+        .key_pool(key_id)
+        .map_or_else(default_burn_average_ms, burn_average_ms)
 }
 
 /// The poll's extra-usage state, its utilization a fraction as the windows read; `None` when the snapshot carries
@@ -5376,31 +5355,24 @@ pub fn sample_from_usage(
             );
         }
     }
-    let overage = match (
-        sample.reading(FIVE_HOUR).map(|r| r.utilization),
-        sample.reading(SEVEN_DAY).map(|r| r.utilization),
-    ) {
-        (None, None) => None,
-        (five, seven) => {
-            let enabled = snapshot.extra_usage.as_ref().is_some_and(|e| e.is_enabled);
-            let full = five.unwrap_or(0.0) >= 1.0 || seven.unwrap_or(0.0) >= 1.0;
-            let reset = latest_full_reset([FIVE_HOUR, SEVEN_DAY].map(|name| {
-                let reading = sample.reading(name);
-                (
-                    reading.as_ref().map(|r| r.utilization),
-                    reading.and_then(|r| r.reset),
-                )
-            }));
-            Some(OverageEvidence {
-                in_use: enabled && full,
-                since: None,
-                reset,
-                observed_at: snapshot.fetched_at,
-                source: EvidenceSource::Sample,
-                incarnation,
-            })
-        }
-    };
+    let read = [FIVE_HOUR, SEVEN_DAY]
+        .map(|name| sample.windows.get(name).map(|r| (r.utilization, r.reset)));
+    let overage = read.iter().any(Option::is_some).then(|| OverageEvidence {
+        in_use: snapshot.extra_usage.as_ref().is_some_and(|e| e.is_enabled)
+            && read
+                .iter()
+                .flatten()
+                .any(|&(utilization, _)| utilization >= 1.0),
+        since: None,
+        reset: latest_full_reset(
+            read.iter()
+                .flatten()
+                .map(|&(utilization, reset)| (Some(utilization), reset)),
+        ),
+        observed_at: snapshot.fetched_at,
+        source: EvidenceSource::Sample,
+        incarnation,
+    });
     (sample, overage)
 }
 

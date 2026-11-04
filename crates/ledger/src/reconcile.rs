@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use phoebis_routing::{
-    window_for, FIVE_HOUR, HOUR_MS, RESET_SLACK_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
+    same_reset, window_for, FIVE_HOUR, HOUR_MS, RESET_SLACK_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, Row, Transaction};
@@ -187,7 +187,7 @@ fn runs(readings: &[Reading]) -> Vec<Run> {
     let mut out: Vec<Run> = Vec::new();
     for reading in readings {
         match out.last_mut() {
-            Some(run) if (reading.reset - run.first().reset).abs() <= RESET_SLACK_MS => {
+            Some(run) if same_reset(reading.reset, run.first().reset) => {
                 run.push(*reading);
             }
             // A window's reset only moves forward: a reading naming an earlier one is a stale answer.

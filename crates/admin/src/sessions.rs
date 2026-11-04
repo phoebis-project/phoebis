@@ -7,7 +7,9 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use phoebis_routing::{entrypoint_of, BurnRates, BurnUnit, PinStanding, FIVE_HOUR, SEVEN_DAY};
+use phoebis_routing::{
+    entrypoint_of, BurnRates, BurnUnit, PinStanding, FIVE_HOUR, MAIN_AGENT, SEVEN_DAY,
+};
 use serde_json::{json, Value};
 use utoipa::ToSchema;
 
@@ -314,7 +316,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         if standing.auxiliary_only {
             continue;
         }
-        let is_main = p.agent_id == "main";
+        let is_main = p.agent_id == MAIN_AGENT;
         agent_pins
             .entry(key.clone())
             .or_default()
@@ -323,7 +325,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         // exists (replaced only by a newer one of its own), else whichever the caller used last.
         let keep = rows.get(&key).is_none_or(|held| {
             let newer = held["last_used_at"].as_i64().unwrap_or(0) < p.last_used_at;
-            if held["agent_id"] == "main" {
+            if held["agent_id"] == MAIN_AGENT {
                 is_main && newer
             } else {
                 is_main || newer
@@ -497,8 +499,8 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             .collect();
         lines.sort_by(|a, b| {
             let (a, b) = (&a.pin, &b.pin);
-            (a.agent_id != "main", &a.agent_id, &a.model).cmp(&(
-                b.agent_id != "main",
+            (a.agent_id != MAIN_AGENT, &a.agent_id, &a.model).cmp(&(
+                b.agent_id != MAIN_AGENT,
                 &b.agent_id,
                 &b.model,
             ))

@@ -1332,9 +1332,12 @@ impl Drop for AccountTicket {
 /// Whether the pin's mark stands: made on its current account. A row carrying a mark made on another account was
 /// moved by a write that kept the members, and that mark no longer stands.
 pub(crate) fn mark_holds(pin: &PinRow) -> bool {
-    pin.mark
-        .as_ref()
-        .is_some_and(|mark| mark.on == pin.account_id)
+    standing_mark(pin).is_some()
+}
+
+/// The pin's mark while it stands, as `mark_holds` reads it.
+pub(crate) fn standing_mark(pin: &PinRow) -> Option<&PinMark> {
+    pin.mark.as_ref().filter(|mark| mark.on == pin.account_id)
 }
 
 /// The loaded rounds by pool and account: each row's time, what the dwell between rounds reads.

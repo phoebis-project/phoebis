@@ -178,10 +178,21 @@ impl RegistrySnapshot {
         self.live(key, now).map(|k| (k, Presented::Retired))
     }
 
-    /// The liveness half of `authenticate` for a key the relay already matched under an older snapshot.
-    pub fn authenticate_id(&self, key_id: &str, now: i64) -> Result<&ApiKeyRow, KeyRefusal> {
+    /// The liveness half of `authenticate` for a key the relay already matched under an older snapshot, created at
+    /// `key_generation`. The id is reusable, so the lifetime is the identity: a key created again under the id since
+    /// the caller matched it is another key, refused with `Replaced` as a refused id is.
+    pub fn authenticate_id(
+        &self,
+        key_id: &str,
+        key_generation: i64,
+        now: i64,
+    ) -> Result<&ApiKeyRow, KeyRefusal> {
         let key = self.keys.get(key_id).ok_or(KeyRefusal::Unknown)?;
-        self.live(key, now)
+        let key = self.live(key, now)?;
+        if key.created_at != key_generation {
+            return Err(KeyRefusal::Replaced);
+        }
+        Ok(key)
     }
 
     fn live<'a>(&'a self, key: &'a ApiKeyRow, now: i64) -> Result<&'a ApiKeyRow, KeyRefusal> {

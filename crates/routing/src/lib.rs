@@ -56,8 +56,8 @@ pub use state::{
     SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
 pub use task::{
-    credits_from_usage, sample_from_usage, spawn, AccountProjection, AccountSlowDown, BandWeight,
-    BurnRates, LoadCounts, PinStanding, RegimeRates, ReloadError, Report, RouterConfig,
+    credits_from_usage, same_reset, sample_from_usage, spawn, AccountProjection, AccountSlowDown,
+    BandWeight, BurnRates, LoadCounts, PinStanding, RegimeRates, ReloadError, Report, RouterConfig,
     RouterEvent, RouterGone, RouterHandle, SelectAnswer, WindowProjection, WriterStatus, COMMANDS,
     RESET_SLACK_MS, SPENT_MARGIN, UNATTRIBUTED_POOL, WRITER_DEPTH,
 };

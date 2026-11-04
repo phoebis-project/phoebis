@@ -27,9 +27,9 @@ use crate::state::{
     all_plan_windows, budget_reached, burn_average_ms, burn_decayed, ceiling, effort_of,
     entrypoint_of, keeps_off, load_shedding, mark_holds, plan_windows, return_to_plan_dwell_ms,
     round_in_dwell, shed_cap, shed_dwell_ms, slow_down, slow_down_hold_ms, slow_down_stretch_ms,
-    warm, BandSegment, BurnUnit, MemberSpend, PinPace, PinRef, PinUsage, Reservation, RoutingState,
-    StateWrite, Tier, WindowReading, FAST_INPUT, FAST_OUTPUT, FIVE_HOUR, HOUR_MS,
-    IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
+    standing_mark, warm, BandSegment, BurnUnit, MemberSpend, PinPace, PinRef, PinUsage,
+    Reservation, RoutingState, StateWrite, Tier, WindowReading, FAST_INPUT, FAST_OUTPUT, FIVE_HOUR,
+    HOUR_MS, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
 use crate::windows::{window_for, MODEL_WINDOWS};
 use crate::{paid_source, term, Candidate, KeyRefusal, RegistrySnapshot, ResolveError};
@@ -1824,11 +1824,8 @@ fn run(
                 // last prompt. No move reason names a credit or a judged turn, so the write reads `created`.
                 state.remove_pin(&current_key);
                 writes.push(StateWrite::DeletePin(current_key.clone()));
-                if mark_holds(&current) {
-                    rec.mark_cleared = current
-                        .mark
-                        .as_ref()
-                        .map(|mark| mark_cleared_of(mark, "moved", None));
+                if let Some(mark) = standing_mark(&current) {
+                    rec.mark_cleared = Some(mark_cleared_of(mark, "moved", None));
                 }
                 moving = Some(current.clone());
                 moved_off = true;
@@ -1910,11 +1907,8 @@ fn run(
                     state.remove_pin(&current_key);
                     writes.push(StateWrite::DeletePin(current_key.clone()));
                     // The mark leaves with the row the move takes off the account it was made on.
-                    if mark_holds(&current) {
-                        rec.mark_cleared = current
-                            .mark
-                            .as_ref()
-                            .map(|mark| mark_cleared_of(mark, "moved", None));
+                    if let Some(mark) = standing_mark(&current) {
+                        rec.mark_cleared = Some(mark_cleared_of(mark, "moved", None));
                     }
                     if reason == MigrateReason::Shed {
                         shed_from = Some(current.account_id.clone());
