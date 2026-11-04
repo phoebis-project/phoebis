@@ -818,7 +818,7 @@ async fn usage_latest(State(state): State<Arc<AdminState>>, Path(id): Path<Strin
         }),
     };
     // The usage answer carries no lead, so it reads no term for one.
-    let answer = compose_usage(&id, latest, held, None, (state.clock)());
+    let answer = compose_usage(&id, latest, held.as_ref(), None, (state.clock)());
     Json(usage_json(
         &id,
         answer.as_ref().ok_or(unread),
@@ -2674,7 +2674,8 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         }
     }
     let windows = one_per_id;
-    let fast_lane = ctx.held.get(&row.id).and_then(fast_lane_json);
+    let held = ctx.held.get(&row.id);
+    let fast_lane = held.and_then(fast_lane_json);
     // The router may hold an entry for a mark whose write landed nowhere, so the registry's state decides.
     let funding_retry_at = (row.state == AccountState::FundingRequired)
         .then(|| ctx.funding_retries.get(&row.id).copied())
@@ -2683,21 +2684,8 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
     // list read carries every account's standing. The poll never reads an API-key account.
     let usage = (row.kind == AccountKind::Oauth).then(|| {
         let (poll, unread) = poll_standing(state, row);
-        let latest = state.usage.latest_for(row);
-        let held = match &latest {
-            Some(snapshot) if has_windows(snapshot) => None,
-            _ => ctx.held.get(&row.id).cloned(),
-        };
-        let answer = compose_usage(&row.id, latest, held, end, now);
-        UsageStanding {
-            error: answer
-                .as_ref()
-                .map_or(Some(unread), |s| s.error.as_deref())
-                .map(str::to_string),
-            fetched_at: answer.as_ref().map(|s| s.fetched_at),
-            held_until: held_until(poll.as_ref()),
-            poll: poll.as_ref().map(poll_json),
-        }
+        let answer = compose_usage(&row.id, state.usage.latest_for(row), held, end, now);
+        usage_standing(answer.as_ref().ok_or(unread), poll.as_ref())
     });
     Account {
         id: row.id.clone(),
@@ -2914,14 +2902,14 @@ fn fast_lane_json(sample: &UtilizationSample) -> Option<FastLane> {
 fn compose_usage(
     id: &str,
     latest: Option<UsageSnapshot>,
-    held: Option<UtilizationSample>,
+    held: Option<&UtilizationSample>,
     end: Option<i64>,
     now: i64,
 ) -> Option<UsageSnapshot> {
-    if let Some(snapshot) = latest.as_ref().filter(|s| has_windows(s)) {
-        return Some(UsageSnapshot {
+    if latest.as_ref().is_some_and(has_windows) {
+        return latest.map(|snapshot| UsageSnapshot {
             error: None,
-            ..snapshot.clone()
+            ..snapshot
         });
     }
     // The router reads a utilization as a fraction; the endpoint's windows carry a percentage.
@@ -2931,7 +2919,7 @@ fn compose_usage(
         resets_at: reading.reset,
     };
     let held = held.and_then(|sample| {
-        let readings = held_windows(&sample, end, now);
+        let readings = held_windows(sample, end, now);
         let observed_at = readings
             .iter()
             .map(|(_, reading, _)| reading.observed_at)
@@ -2988,31 +2976,49 @@ fn held_until(poll: Option<&PollStatus>) -> Option<i64> {
     poll.and_then(|p| p.next_attempt_at)
 }
 
+/// The standing the usage `GET` and every account row answer: `snapshot` is the answer, or the error that stands in
+/// for it when there is none.
+fn usage_standing(
+    snapshot: Result<&UsageSnapshot, &str>,
+    poll: Option<&PollStatus>,
+) -> UsageStanding {
+    UsageStanding {
+        error: match snapshot {
+            Ok(snapshot) => snapshot.error.clone(),
+            Err(error) => Some(error.to_string()),
+        },
+        fetched_at: snapshot.ok().map(|snapshot| snapshot.fetched_at),
+        held_until: held_until(poll),
+        poll: poll.map(poll_json),
+    }
+}
+
 /// `snapshot` is the answer, or the error that stands in for it when there is none.
 fn usage_json(
     id: &str,
     snapshot: Result<&UsageSnapshot, &str>,
     poll: Option<&PollStatus>,
 ) -> Usage {
-    let held_until = held_until(poll);
-    let poll = poll.map(poll_json);
-    let snapshot = match snapshot {
-        Ok(snapshot) => snapshot,
+    let UsageStanding {
+        error,
+        fetched_at,
+        held_until,
+        poll,
+    } = usage_standing(snapshot, poll);
+    let Ok(snapshot) = snapshot else {
         // Zero is the unstamped generation, as the ledger stamps a row it has no identity for.
-        Err(error) => {
-            return Usage {
-                account_id: id.to_string(),
-                error: Some(error.to_string()),
-                extra_usage: None,
-                fable_window: None,
-                fetched_at: None,
-                held_until,
-                identity_generation: 0,
-                poll,
-                raw_keys: vec![],
-                windows: vec![],
-            };
-        }
+        return Usage {
+            account_id: id.to_string(),
+            error,
+            extra_usage: None,
+            fable_window: None,
+            fetched_at,
+            held_until,
+            identity_generation: 0,
+            poll,
+            raw_keys: vec![],
+            windows: vec![],
+        };
     };
     let window = |window: &UsageWindow| UsageWindowView {
         key: window.key.clone(),
@@ -3021,7 +3027,7 @@ fn usage_json(
     };
     Usage {
         account_id: snapshot.account_id.clone(),
-        error: snapshot.error.clone(),
+        error,
         extra_usage: snapshot.extra_usage.as_ref().map(|extra| UsageExtra {
             currency: extra.currency.clone(),
             disabled_reason: extra.disabled_reason.clone(),
@@ -3031,7 +3037,7 @@ fn usage_json(
             utilization: extra.utilization,
         }),
         fable_window: snapshot.fable_window.as_ref().map(window),
-        fetched_at: Some(snapshot.fetched_at),
+        fetched_at,
         held_until,
         identity_generation: snapshot.identity_generation,
         poll,
