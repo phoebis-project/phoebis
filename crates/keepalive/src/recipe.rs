@@ -132,8 +132,9 @@ pub fn make_recipe(
         > usize::from(matches!(stamp, Stamp::Placeholder(_) | Stamp::Hash(_)));
     let stream_hidden = decoded("stream")?
         > usize::from(phoebis_cch::bool_member_span(body, &["stream"]).is_some());
-    let max_tokens_hidden = decoded("max_tokens")?
-        > usize::from(phoebis_cch::number_member_span(body, &["max_tokens"]).is_some());
+    // Read off the client's bytes, which the copy edited below still holds unchanged when the span is used.
+    let max_tokens = phoebis_cch::number_member_span(body, &["max_tokens"]);
+    let max_tokens_hidden = decoded("max_tokens")? > usize::from(max_tokens.is_some());
     if stamp_hidden || stream_hidden || max_tokens_hidden {
         return Err("escaped_key");
     }
@@ -184,8 +185,7 @@ pub fn make_recipe(
     // The relay's own rule for what counts as a client hash, so a probe is re-signed exactly where its request was.
     let client_hash = matches!(stamp, Stamp::Hash(_));
     let mut edited = body.to_vec();
-    let (start, end) =
-        phoebis_cch::number_member_span(&edited, &["max_tokens"]).ok_or("invalid_request")?;
+    let (start, end) = max_tokens.ok_or("invalid_request")?;
     edited.splice(start..end, b"0".iter().copied());
     match phoebis_cch::bool_member_span(&edited, &["stream"]) {
         Some((start, end)) => {
