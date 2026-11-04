@@ -40,62 +40,73 @@ pub fn valid_opaque(s: &str) -> bool {
     !s.trim().is_empty() && s.len() <= 1_024 && !s.chars().any(char::is_control)
 }
 
-/// Whether every object in the document, at any depth, names each key once. A parsed tree keeps the last value
-/// of a repeated key and cannot show the repeat, so this walks the raw bytes once; the upstream reads one of
-/// the two values and the replay might edit the other, which is why an ambiguous body is refused whole.
-fn unique_keys_deep(raw: &[u8]) -> bool {
-    use serde::de::{DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
+/// The document's tree, `None` when it is not one JSON value or when an object, at any depth, names a key twice. A
+/// parsed tree keeps the last value of a repeated key and cannot show the repeat, so the visitor builds the tree
+/// itself and refuses the repeat it meets: the upstream reads one of the two values and the replay might edit the
+/// other, which is why an ambiguous body is refused whole. The scalars are built as serde_json's own visitor builds
+/// them, and a map keeps its members in their order, so the tree is the one `serde_json::from_slice` gives.
+fn parse_unique(raw: &[u8]) -> Option<Value> {
+    use serde::de::{DeserializeSeed, Deserializer, Error, MapAccess, SeqAccess, Visitor};
     struct Unique;
     impl<'de> Visitor<'de> for Unique {
-        type Value = ();
+        type Value = Value;
         fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
             f.write_str("a document whose objects name each key once")
         }
-        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
-            let mut keys = std::collections::HashSet::new();
+        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Value, A::Error> {
+            let mut members = serde_json::Map::new();
             while let Some(key) = map.next_key::<String>()? {
-                if !keys.insert(key) {
-                    return Err(serde::de::Error::custom("duplicate key"));
+                if members.contains_key(&key) {
+                    return Err(A::Error::custom("duplicate key"));
                 }
-                map.next_value_seed(UniqueSeed)?;
+                let value = map.next_value_seed(UniqueSeed)?;
+                members.insert(key, value);
             }
-            Ok(())
+            Ok(Value::Object(members))
         }
-        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
-            while seq.next_element_seed(UniqueSeed)?.is_some() {}
-            Ok(())
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Value, A::Error> {
+            let mut items = Vec::new();
+            while let Some(item) = seq.next_element_seed(UniqueSeed)? {
+                items.push(item);
+            }
+            Ok(Value::Array(items))
         }
-        fn visit_bool<E>(self, _: bool) -> Result<(), E> {
-            Ok(())
+        fn visit_bool<E>(self, value: bool) -> Result<Value, E> {
+            Ok(Value::Bool(value))
         }
-        fn visit_i64<E>(self, _: i64) -> Result<(), E> {
-            Ok(())
+        fn visit_i64<E>(self, value: i64) -> Result<Value, E> {
+            Ok(Value::Number(value.into()))
         }
-        fn visit_u64<E>(self, _: u64) -> Result<(), E> {
-            Ok(())
+        fn visit_u64<E>(self, value: u64) -> Result<Value, E> {
+            Ok(Value::Number(value.into()))
         }
-        fn visit_f64<E>(self, _: f64) -> Result<(), E> {
-            Ok(())
+        fn visit_f64<E>(self, value: f64) -> Result<Value, E> {
+            Ok(serde_json::Number::from_f64(value).map_or(Value::Null, Value::Number))
         }
-        fn visit_str<E>(self, _: &str) -> Result<(), E> {
-            Ok(())
+        fn visit_str<E>(self, value: &str) -> Result<Value, E> {
+            Ok(Value::String(value.to_owned()))
         }
-        fn visit_unit<E>(self) -> Result<(), E> {
-            Ok(())
+        fn visit_string<E>(self, value: String) -> Result<Value, E> {
+            Ok(Value::String(value))
         }
-        fn visit_none<E>(self) -> Result<(), E> {
-            Ok(())
+        fn visit_unit<E>(self) -> Result<Value, E> {
+            Ok(Value::Null)
+        }
+        fn visit_none<E>(self) -> Result<Value, E> {
+            Ok(Value::Null)
         }
     }
     struct UniqueSeed;
     impl<'de> DeserializeSeed<'de> for UniqueSeed {
-        type Value = ();
-        fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<(), D::Error> {
+        type Value = Value;
+        fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<Value, D::Error> {
             d.deserialize_any(Unique)
         }
     }
     let mut de = serde_json::Deserializer::from_slice(raw);
-    UniqueSeed.deserialize(&mut de).is_ok() && de.end().is_ok()
+    let root = UniqueSeed.deserialize(&mut de).ok()?;
+    de.end().ok()?;
+    Some(root)
 }
 
 pub fn make_recipe(
@@ -107,12 +118,11 @@ pub fn make_recipe(
     if body.len() > limit {
         return Err("request_too_large");
     }
-    let root: Value = serde_json::from_slice(body).map_err(|_| "invalid_request")?;
-    // One raw walk for repeated keys at every depth, which covers the top level and the four output-control
+    // The one parse refuses a repeated key at every depth, which covers the top level and the four output-control
     // objects the Go engine checked one by one.
-    if !root.is_object() || !unique_keys_deep(body) {
-        return Err("invalid_request");
-    }
+    let root = parse_unique(body)
+        .filter(Value::is_object)
+        .ok_or("invalid_request")?;
     let messages = root.get("messages").and_then(Value::as_array);
     if messages.is_none_or(|m| m.is_empty())
         || root.get("max_tokens").and_then(Value::as_u64).unwrap_or(0) == 0
@@ -279,4 +289,33 @@ fn marker_ttls(root: &Value) -> Option<(i64, i64)> {
         longest = longest.max(this);
     }
     Some((shortest, longest))
+}
+
+#[cfg(test)]
+mod tests {
+    use phoebis_profile::fixtures::{body, BodyFixture};
+
+    use super::*;
+
+    /// The client's captured bodies, and one that holds each scalar the visitor builds by hand, its members out of
+    /// alphabetical order: a negative and a past-`i64` integer, a float with no fraction, a string with escapes, a
+    /// boolean and a null in an array.
+    #[test]
+    fn the_unique_parse_builds_the_tree_serde_json_builds() {
+        let scalars =
+            br#"{"z":-7,"b":18446744073709551615,"a":[2.0,0.25,true,null],"m":"q\"\u00e9","e":{}}"#;
+        for raw in [
+            body(BodyFixture::FirstParty),
+            body(BodyFixture::Oauth),
+            body(BodyFixture::ApiKey),
+            &scalars[..],
+        ] {
+            assert_eq!(
+                parse_unique(raw),
+                Some(serde_json::from_slice::<Value>(raw).unwrap()),
+                "{}",
+                String::from_utf8_lossy(raw)
+            );
+        }
+    }
 }
