@@ -789,10 +789,7 @@ impl Agent {
             let jitter = (self.timing.jitter_ms(self.ttl_ms) as f64 * self.jitter_frac) as i64;
             expires - self.timing.lead_ms(self.ttl_ms) - jitter
         });
-        match (from_expiry, self.retry_at) {
-            (None, None) => None,
-            (a, b) => Some(a.unwrap_or(i64::MIN).max(b.unwrap_or(i64::MIN))),
-        }
+        from_expiry.max(self.retry_at)
     }
 
     /// The due time a reader is shown: none while the recipe sits under one of the two holds placed ahead of the
