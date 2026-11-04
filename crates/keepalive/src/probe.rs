@@ -18,8 +18,8 @@ use serde_json::Value;
 
 use crate::breakeven::Ceilings;
 use crate::engine::{
-    agent_mut, agent_ref, Agent, AgentState, Engine, Funding, Inner, Kept, ParkKind, ProbeCharge,
-    Reason, SavingsUnit, SessionKey, UnansweredProbe, Verdict, Wasted, AGENT_HELD, MAIN_AGENT,
+    agent_mut, agent_ref, Agent, AgentState, Engine, Inner, Kept, ParkKind, ProbeCharge, Reason,
+    SavingsUnit, SessionKey, UnansweredProbe, Verdict, Wasted, AGENT_HELD, MAIN_AGENT,
 };
 use crate::recipe::Recipe;
 use crate::savings::{answered_speed, probe_cost, settlement_unit, typed, unpriced_reason};
@@ -335,17 +335,14 @@ pub(crate) async fn run_job(engine: Arc<Engine>, mut job: ProbeJob) {
     // The serving account's kind decides the unit this probe's cost settles in. It rides the relay's answer, so a
     // registry write mid-exchange never changes which account this probe is charged against, and an answer the relay
     // never built names no account: its probe settles in dollars and the credit path never matches it.
-    let in_overage = record.in_overage;
-    let funding = record
-        .kind
-        .map(|kind| Funding::of(kind, record.usage_based, in_overage));
     // A fast answer draws usage credits whatever the account's funding, so it settles in dollars. The answer's speed
     // decides rather than the recipe's: a fast recipe answered at standard speed spent the plan, as its request row
     // files it.
-    let default_unit = if answered_speed(record.usage) == Speed::Fast {
-        SavingsUnit::Usd
-    } else {
-        funding.map(Funding::unit).unwrap_or(SavingsUnit::Usd)
+    let default_unit = match record.kind {
+        Some(kind) if answered_speed(record.usage) != Speed::Fast => {
+            SavingsUnit::of(kind, record.usage_based, record.in_overage)
+        }
+        _ => SavingsUnit::Usd,
     };
     // The tier the router prices the account by, as the store's term resolves it now: a share is of the window the
     // account has at this settlement, and the record keeps that tier as the key its rows file under, as the request row
@@ -380,7 +377,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, mut job: ProbeJob) {
         record.usage,
         at,
     );
-    let covered_unit = funding.map(|_| unit);
+    let covered_unit = record.kind.map(|_| unit);
     engine
         .lock()
         .apply_probe(&job, exchange, &record, covered_unit, now);

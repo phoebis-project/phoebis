@@ -426,15 +426,6 @@ impl Funding {
             (AccountKind::Oauth, false, false) => Funding::Plan,
         }
     }
-
-    /// `Plan` is the share of the account's 7-day window, the window every plan keeps, the other three dollars:
-    /// `BurnUnit::of`'s rule.
-    pub fn unit(self) -> SavingsUnit {
-        match self {
-            Funding::Plan => SavingsUnit::WindowShare,
-            Funding::ApiKey | Funding::Overage | Funding::UsageBased => SavingsUnit::Usd,
-        }
-    }
 }
 
 /// The fundings a pool's members bring to its ceilings, from each member's kind and usage-based class with no
@@ -4501,20 +4492,6 @@ mod tests {
                 Funding::of(AccountKind::Oauth, false, true)
             ),
             (Funding::Plan, Funding::Overage)
-        );
-        assert_eq!(
-            [
-                Funding::UsageBased.unit(),
-                Funding::ApiKey.unit(),
-                Funding::Overage.unit(),
-                Funding::Plan.unit()
-            ],
-            [
-                SavingsUnit::Usd,
-                SavingsUnit::Usd,
-                SavingsUnit::Usd,
-                SavingsUnit::WindowShare
-            ]
         );
     }
 
