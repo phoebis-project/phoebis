@@ -4675,7 +4675,6 @@ fn a_record_discarded_twice_leaves_one_lifetime_after_its_first_discard() {
         "owner",
         0,
         common::NOW + 600_000,
-        common::NOW,
         None,
     );
     vault.discard("pairing", common::NOW);

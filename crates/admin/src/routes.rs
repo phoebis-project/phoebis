@@ -1145,7 +1145,6 @@ async fn pairing_start(
         &caller.session_id,
         lifecycle_generation,
         session.deadline,
-        now,
         new_account,
     );
     let url = authorization_url(
@@ -1303,7 +1302,7 @@ async fn pairing_callback(
     }
     if !state
         .vault
-        .record_exchange(&id, identity.clone(), bundle, profile, now)
+        .record_exchange(&id, identity.clone(), bundle, profile)
     {
         return failure(
             StatusCode::CONFLICT,
@@ -1548,7 +1547,6 @@ async fn pairing_confirm(
         }
     }
     state.usage.invalidate(&row.id);
-    state.vault.mark_confirmed(&id, now);
     // The credential just committed replaces whatever a slot under this id answered before, so the cached
     // list (if any) is stale from this instant; the next read fetches fresh with the new one.
     state.catalog.evict(&row.id);
