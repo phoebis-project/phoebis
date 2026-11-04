@@ -963,6 +963,11 @@ mod tests {
         let pending = PendingReports::default();
         pending.record("k", 0, "s1", 10, 0);
         assert_eq!(pending.pending("k", 0, "s1", 0), Some(10));
+        assert_eq!(
+            pending.pending("k", 0, "s2", 0),
+            None,
+            "another conversation's request waits on no report of this one"
+        );
         // A second response of the conversation lands while the next turn waits on the first one's report.
         pending.record("k", 0, "s1", 11, 0);
         pending.remove_if("k", 0, "s1", 10);
