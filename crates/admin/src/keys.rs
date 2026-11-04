@@ -755,8 +755,9 @@ fn key_json(
     sessions_on_retired_secret: usize,
     index: &AttachmentIndex,
 ) -> Key {
-    let week = week.get(&row.id);
-    let lifetime = lifetime.get(&row.id);
+    let none = phoebis_ledger::Totals::default();
+    let week = week.get(&row.id).unwrap_or(&none);
+    let lifetime = lifetime.get(&row.id).unwrap_or(&none);
     Key {
         id: row.id.clone(),
         label: row.label.clone(),
@@ -784,17 +785,17 @@ fn key_json(
         guardrails: index.refs_for(&AttachmentSubject::Key(row.id.clone())),
         pool_guardrails: index.refs_for(&AttachmentSubject::Pool(row.pool_id.clone())),
         usage_7d: KeyUsage {
-            billed_usd: week.map_or(0.0, |t| t.billed_usd),
-            cost_usd: week.map_or(0.0, |t| t.cost_usd),
-            equivalent: week.map_or(Some(0.0), |t| t.equivalent),
-            requests: week.map_or(0, |t| t.requests),
-            tokens: week.map_or(0, |t| t.tokens),
+            billed_usd: week.billed_usd,
+            cost_usd: week.cost_usd,
+            equivalent: week.equivalent,
+            requests: week.requests,
+            tokens: week.tokens,
         },
         lifetime: KeyLifetime {
-            billed_usd: lifetime.map_or(0.0, |t| t.billed_usd),
-            cost_usd: lifetime.map_or(0.0, |t| t.cost_usd),
-            equivalent: lifetime.map_or(Some(0.0), |t| t.equivalent),
-            requests: lifetime.map_or(0, |t| t.requests),
+            billed_usd: lifetime.billed_usd,
+            cost_usd: lifetime.cost_usd,
+            equivalent: lifetime.equivalent,
+            requests: lifetime.requests,
         },
     }
 }
