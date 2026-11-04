@@ -107,7 +107,7 @@ pub(crate) struct PersistedAgent {
     /// request names one.
     #[serde(default)]
     pub entrypoint: Option<String>,
-    pub reason: String,
+    pub reason: Reason,
     pub last_guard: Option<Guard>,
     pub hold_counted: bool,
     pub paused: bool,
@@ -281,7 +281,7 @@ pub(crate) struct PersistedKept {
     /// Absent from a payload the earlier build wrote, which priced in the 5-hour window and reads so.
     #[serde(default)]
     pub window: Option<String>,
-    pub pending: Option<String>,
+    pub pending: Option<Wasted>,
 }
 
 /// A float as the text `f64`'s `Display` writes, which `str::parse` reads back to the same bits. serde_json's own float
@@ -360,20 +360,6 @@ fn window_of(window: Option<String>) -> Option<&'static str> {
         Some("seven_day") => Some(SEVEN_DAY),
         Some(_) => None,
     }
-}
-
-fn wasted_of(word: &str) -> Option<Wasted> {
-    Wasted::ALL
-        .iter()
-        .copied()
-        .find(|label| label.as_str() == word)
-}
-
-fn reason_of(word: &str) -> Option<Reason> {
-    Reason::ALL
-        .iter()
-        .copied()
-        .find(|reason| reason.as_str() == word)
 }
 
 impl PersistedSession {
@@ -484,7 +470,7 @@ impl PersistedAgent {
             pool_id: agent.pool_id.clone(),
             canonical_model: agent.canonical_model.clone(),
             entrypoint: agent.entrypoint.clone(),
-            reason: agent.reason.as_str().to_string(),
+            reason: agent.reason,
             last_guard: agent.last_guard,
             hold_counted: agent.hold_counted,
             paused: agent.paused,
@@ -532,7 +518,7 @@ impl PersistedAgent {
                     covered: kept.covered,
                     unit: kept.unit.map(unit_word),
                     window: Some(kept.window.to_string()),
-                    pending: kept.pending.map(|label| label.as_str().to_string()),
+                    pending: kept.pending,
                 })
                 .collect(),
             last_real_at: agent.last_real_at,
@@ -589,7 +575,7 @@ impl PersistedAgent {
         agent.account = self.account;
         agent.pool_id = self.pool_id;
         agent.canonical_model = self.canonical_model;
-        agent.reason = reason_of(&self.reason)?;
+        agent.reason = self.reason;
         agent.last_guard = self.last_guard;
         agent.entrypoint = self.entrypoint;
         agent.hold_counted = self.hold_counted;
@@ -645,7 +631,7 @@ impl PersistedAgent {
                     covered: kept.covered,
                     unit: optional(kept.unit, unit_of)?,
                     window: window_of(kept.window)?,
-                    pending: optional(kept.pending, wasted_of)?,
+                    pending: kept.pending,
                 })
             })
             .collect::<Option<_>>()?;

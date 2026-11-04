@@ -223,6 +223,18 @@ impl serde::Serialize for Reason {
     }
 }
 
+/// A stored word reads back as its cause, and a word this build does not know refuses the payload.
+impl<'de> serde::Deserialize<'de> for Reason {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Reason, D::Error> {
+        let word = String::deserialize(deserializer)?;
+        Reason::ALL
+            .iter()
+            .copied()
+            .find(|reason| reason.as_str() == word)
+            .ok_or_else(|| serde::de::Error::custom(format!("unknown reason {word}")))
+    }
+}
+
 /// The share of the previous main prompt a completion must read from the cache, under a chain that holds neither
 /// anchor boundary, for the engine to read a contradiction between its chain model and the upstream's.
 pub const CHAIN_CONTRADICTION_COVERAGE: f64 = 0.9;
