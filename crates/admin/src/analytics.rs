@@ -7,6 +7,7 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use indexmap::IndexMap;
 use phoebis_ledger::{
     breakdown_paged, bucket_seconds, burn_groups_paged, guardrail_counts, held_series, hour_ceil,
     hour_of, hourly_window_samples, lead_over_pace, moves_by_reason_and_fit, names_one_account,
@@ -16,7 +17,6 @@ use phoebis_ledger::{
 };
 use phoebis_routing::{term, UtilizationSample, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
 use phoebis_store::{AccountKind, SubscriptionTerm};
-use serde_json::{Map, Value};
 use utoipa::ToSchema;
 
 use crate::openapi::{ErrorBody, LedgerFailure, RouterUnavailable};
@@ -574,10 +574,10 @@ pub(crate) async fn placements(
 
 /// The three windows the router reads, each null until an hour's sample fills it, so the console reads the keys
 /// whatever the hour holds. Any other window id the samples carry joins the hours that hold one alone.
-fn base_windows() -> Map<String, Value> {
+fn base_windows() -> IndexMap<String, Option<WindowSample>> {
     [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE]
         .into_iter()
-        .map(|w| (w.to_string(), Value::Null))
+        .map(|w| (w.to_string(), None))
         .collect()
 }
 
@@ -652,7 +652,7 @@ pub(crate) struct RollupHour {
     // A map in insertion order, since the three base windows lead and the others follow as the samples add them,
     // which a sorted map would not keep. Its schema is `windows_schema`'s.
     #[schema(schema_with = windows_schema)]
-    pub windows: Map<String, Value>,
+    pub windows: IndexMap<String, Option<WindowSample>>,
 }
 
 /// An hour's `windows`: each value a `WindowSample` or null.
@@ -730,7 +730,7 @@ pub(crate) async fn accounts(
         Ok(read) => read,
         Err(e) => return ledger_failure(e),
     };
-    type Hour = (AccountRollupRow, Map<String, Value>);
+    type Hour = (AccountRollupRow, IndexMap<String, Option<WindowSample>>);
     let snapshot = state.router.snapshot();
     let mut by_account: BTreeMap<String, (AccountRollupRow, BTreeMap<i64, Hour>)> = BTreeMap::new();
     let empty = |account_id: &str| {
@@ -766,11 +766,8 @@ pub(crate) async fn accounts(
                 base_windows(),
             )
         });
-        windows.insert(
-            s.window.clone(),
-            serde_json::to_value(window_json(&s, snapshot.term(&s.account_id)))
-                .expect("a window sample serializes"),
-        );
+        let sample = window_json(&s, snapshot.term(&s.account_id));
+        windows.insert(s.window, Some(sample));
     }
     let accounts = by_account
         .into_iter()
