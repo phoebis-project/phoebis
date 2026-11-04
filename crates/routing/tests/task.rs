@@ -7811,6 +7811,52 @@ async fn a_renewal_inside_the_band_folds_a_heavier_banded_copy_and_the_same_plai
 }
 
 #[tokio::test]
+async fn a_renewal_weighs_its_banded_copy_by_the_band_of_the_entrypoint_its_own_request_named() {
+    let band = BandWeight::new(
+        |_, entrypoint: Option<&str>, _| {
+            if entrypoint == Some("desk") {
+                1.5
+            } else {
+                1.0
+            }
+        },
+    );
+    let store = averaged(seeded(&["a"]));
+    let now = Arc::new(AtomicI64::new(1_000));
+    let config = RouterConfig {
+        band,
+        ..RouterConfig::default()
+    };
+    let handle = spawn(store, clock(&now), config).unwrap();
+    let desk = selected_pin(
+        handle
+            .select(SelectRequest {
+                entrypoint: Some("desk".into()),
+                ..request(&handle, Some("s1"), 1_000)
+            })
+            .await
+            .unwrap(),
+    );
+    // The session's next request, from no entrypoint, renews the pin before the first request's renewal lands.
+    selected_pin(
+        handle
+            .select(request(&handle, Some("s1"), 1_500))
+            .await
+            .unwrap(),
+    );
+    let usage = PinUsage {
+        input: 600,
+        ..PinUsage::default()
+    };
+    handle
+        .report(renewal(desk, 2_000, usage, false, 300_000))
+        .await;
+    let pin = handle.pins().await.unwrap().remove(0);
+    // 600 input tokens over the pool's 600 s burn average fold a rate of 1, weighed 1.5 in the banded copy.
+    assert_eq!((pin.burn.input, pin.burn_banded.input), (1.0, 1.5));
+}
+
+#[tokio::test]
 async fn a_reports_affinity_rows_reach_the_store_and_a_restart_reloads_them() {
     let store = seeded(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
