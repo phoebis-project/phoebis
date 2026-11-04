@@ -28,6 +28,7 @@ pub(crate) const ACTOR: &str = "admin";
 
 pub(crate) const DUPLICATE_ID: &str = "an account with this id exists";
 
+/// The message of the 409 a stale account edit answers, in the shape a stale key, pool or guardrail edit answers.
 const STALE_EDIT: &str = "the account changed while the edit was being saved";
 
 /// The account to create. A member the route does not name is ignored.
