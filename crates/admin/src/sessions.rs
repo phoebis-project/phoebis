@@ -202,10 +202,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
     // of its key id alone, and taking this snapshot before that await keeps a key deleted and recreated during
     // it from stamping this request's pins with the replacement's generation.
     let snapshot = state.router.snapshot();
-    let live: std::collections::BTreeMap<String, i64> = snapshot
-        .keys()
-        .map(|k| (k.id.clone(), k.created_at))
-        .collect();
+    let live = phoebis_ledger::LiveKeys::from_snapshot(&snapshot).0;
     // `delete_api_key` deletes the key's pins, so a pin always names the live generation of its id.
     let pin_key = |p: &phoebis_store::PinRow| {
         Some((
