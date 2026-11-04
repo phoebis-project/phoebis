@@ -354,22 +354,13 @@ fn run_recover_key(config_path: &Path, args: &RecoverKeyArgs) -> ! {
 /// `phoebis status`. It never returns: the result is printed and the process exits while the runtime is still alive,
 /// since dropping the runtime would wait for a name lookup the deadline abandoned.
 fn run_status(config_path: &Path, args: &StatusArgs) -> ! {
-    let client = AdminClient::from_flags(&args.common, config_path).unwrap_or_else(|error| {
-        eprintln!("{error}");
-        std::process::exit(1)
-    });
-    // `from_flags` read the file unless `--url` and `--secret-env` stand in for it; the listeners line and the probe
-    // come from the same file, and without one only the admin URL is known.
-    let file = if args.common.url.is_some() && args.common.secret_env.is_some() {
-        None
-    } else {
-        Some(
-            phoebis_router::config::load_unresolved(config_path).unwrap_or_else(|error| {
-                eprintln!("{error}");
-                std::process::exit(1)
-            }),
-        )
-    };
+    // The listeners line and the probe come from the file the client read, and without one only the admin URL is
+    // known.
+    let (client, file) = AdminClient::from_flags_with_file(&args.common, config_path)
+        .unwrap_or_else(|error| {
+            eprintln!("{error}");
+            std::process::exit(1)
+        });
     let called = client.url();
     let listeners = match &file {
         Some(config) => Listeners {

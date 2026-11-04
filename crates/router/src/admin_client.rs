@@ -18,7 +18,7 @@ use phoebis_store::Secret;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 
-use crate::config::{self, ConfigError};
+use crate::config::{self, Config, ConfigError};
 use crate::{health, tls};
 
 /// The flags every subcommand over the admin API shares, `status` included.
@@ -115,8 +115,16 @@ impl AdminClient {
     /// The client from the flags and, unless `--url` and `--secret-env` are both given, the configuration file
     /// through `load_unresolved`; the secret is read from the variable and refused unset with the loader's line.
     pub fn from_flags(common: &Common, config_path: &Path) -> Result<AdminClient, ClientError> {
-        let (url, ca, secret_env) = match (&common.url, &common.secret_env) {
-            (Some(url), Some(secret_env)) => (url.clone(), common.ca.clone(), secret_env.clone()),
+        Self::from_flags_with_file(common, config_path).map(|(client, _)| client)
+    }
+
+    /// `from_flags` with the configuration it read, `None` when `--url` and `--secret-env` stood in for the file.
+    pub fn from_flags_with_file(
+        common: &Common,
+        config_path: &Path,
+    ) -> Result<(AdminClient, Option<Config>), ClientError> {
+        let (url, secret_env, file) = match (&common.url, &common.secret_env) {
+            (Some(url), Some(secret_env)) => (url.clone(), secret_env.clone(), None),
             _ => {
                 let config = config::load_unresolved(config_path)?;
                 let url = common.url.clone().unwrap_or_else(|| {
@@ -126,23 +134,23 @@ impl AdminClient {
                         health::target(config.admin.listen)
                     )
                 });
-                let ca = common.ca.clone();
                 let secret_env = common
                     .secret_env
                     .clone()
                     .unwrap_or_else(|| config.admin.secret_env.clone());
-                (url, ca, secret_env)
+                (url, secret_env, Some(config))
             }
         };
         let base = base_of(&url)?;
         let secret = config::from_env(&secret_env)?;
-        Ok(AdminClient {
+        let client = AdminClient {
             base,
-            ca,
+            ca: common.ca.clone(),
             connector: OnceLock::new(),
             secret,
             timeout: Duration::from_secs(common.timeout),
-        })
+        };
+        Ok((client, file))
     }
 
     pub fn base(&self) -> &Uri {
