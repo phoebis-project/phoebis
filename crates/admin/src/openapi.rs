@@ -945,10 +945,11 @@ pub(crate) mod round_trip {
 
     /// The committed body of a route fixture.
     pub(crate) fn fixture(stem: &str) -> Value {
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../web/test/fixtures")
-            .join(format!("{stem}.json"));
-        let file: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let (_, _, text) = super::FIXTURES
+            .iter()
+            .find(|(name, ..)| *name == stem)
+            .unwrap_or_else(|| panic!("{stem}.json is not among the embedded fixtures"));
+        let file: Value = serde_json::from_str(text).unwrap();
         file["body"].clone()
     }
 
