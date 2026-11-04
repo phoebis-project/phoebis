@@ -18,8 +18,8 @@ use serde_json::Value;
 
 use crate::breakeven::Ceilings;
 use crate::engine::{
-    Agent, AgentState, Engine, Funding, Inner, Kept, ParkKind, ProbeCharge, Reason, SavingsUnit,
-    SessionKey, UnansweredProbe, Verdict, Wasted, MAIN_AGENT,
+    agent_mut, agent_ref, Agent, AgentState, Engine, Funding, Inner, Kept, ParkKind, ProbeCharge,
+    Reason, SavingsUnit, SessionKey, UnansweredProbe, Verdict, Wasted, AGENT_HELD, MAIN_AGENT,
 };
 use crate::recipe::Recipe;
 use crate::savings::{answered_speed, probe_cost, settlement_unit, typed, unpriced_reason};
@@ -494,27 +494,19 @@ impl Inner {
         // The worker slot comes back to the record the probe started on whatever the fence says. A result
         // orphaned on a record that is still alive, by a superseding request or by a discard, would otherwise
         // leave `in_flight` set, and `step` skips an agent that has a probe in flight for good.
-        if let Some(agent) = self
-            .sessions
-            .get_mut(key)
-            .and_then(|s| s.agents.get_mut(agent_id))
+        if let Some(agent) = agent_mut(&mut self.sessions, key, agent_id)
             .filter(|agent| agent.incarnation == job.incarnation)
         {
             agent.in_flight = false;
         }
-        let fenced = self
-            .sessions
-            .get(key)
-            .and_then(|s| s.agents.get(agent_id))
-            .is_some_and(|agent| {
-                agent.incarnation == job.incarnation
-                    && agent.generation == job.generation
-                    && agent
-                        .current
-                        .as_ref()
-                        .is_some_and(|o| o.id == job.observation_id && o.attempt == job.attempt)
-            })
-            && self.live(key, agent_id);
+        let fenced = agent_ref(&self.sessions, key, agent_id).is_some_and(|agent| {
+            agent.incarnation == job.incarnation
+                && agent.generation == job.generation
+                && agent
+                    .current
+                    .as_ref()
+                    .is_some_and(|o| o.id == job.observation_id && o.attempt == job.attempt)
+        }) && self.live(key, agent_id);
         if !fenced {
             // A record still on the incarnation the probe started on, carrying no stop label, was superseded by
             // a real request rather than stopped: the request the probe was paying for arrived, so the probe is
@@ -548,10 +540,7 @@ impl Inner {
                 && matches!(record.outcome, ProbeOutcome::Ok | ProbeOutcome::Migrated)
             {
                 if let Exchange::Answered(result) = &exchange {
-                    if let Some(agent) = self
-                        .sessions
-                        .get_mut(key)
-                        .and_then(|s| s.agents.get_mut(agent_id))
+                    if let Some(agent) = agent_mut(&mut self.sessions, key, agent_id)
                         .filter(|agent| agent.incarnation == job.incarnation)
                     {
                         let requested_ms = result.cache_ttl_ms.unwrap_or(job.recipe.ttl_ms);
@@ -586,13 +575,7 @@ impl Inner {
             });
             return Applied::Orphaned;
         }
-        let agent = self
-            .sessions
-            .get_mut(key)
-            .unwrap()
-            .agents
-            .get_mut(agent_id)
-            .unwrap();
+        let agent = agent_mut(&mut self.sessions, key, agent_id).expect(AGENT_HELD);
         let cold_limit = agent.timing.cold_probe_limit;
         let result = match exchange {
             Exchange::Canceled | Exchange::TimedOut => {
@@ -631,13 +614,7 @@ impl Inner {
         // would otherwise disagree with the ledger. Every probe since the last real request is unanswered until one
         // arrives, a migrated one at its price like any other.
         let migrated = record.outcome == ProbeOutcome::Migrated;
-        let agent = self
-            .sessions
-            .get_mut(key)
-            .unwrap()
-            .agents
-            .get_mut(agent_id)
-            .unwrap();
+        let agent = agent_mut(&mut self.sessions, key, agent_id).expect(AGENT_HELD);
         // The end of the entry this probe wrote, computed once as the landing reads it, so a probe a check below
         // pauses still settles by its own entry.
         let previous_ms = agent.ttl_ms;
@@ -673,25 +650,13 @@ impl Inner {
             self.pause(key, agent_id, Reason::InvalidProbeUsage);
             return Applied::Landed { covered: false };
         };
-        let agent = self
-            .sessions
-            .get_mut(key)
-            .unwrap()
-            .agents
-            .get_mut(agent_id)
-            .unwrap();
+        let agent = agent_mut(&mut self.sessions, key, agent_id).expect(AGENT_HELD);
         agent.usage.add(usage);
         if usage.output != 0 || !content.is_empty() {
             self.pause(key, agent_id, Reason::UnexpectedOutput);
             return Applied::Landed { covered: false };
         }
-        let agent = self
-            .sessions
-            .get_mut(key)
-            .unwrap()
-            .agents
-            .get_mut(agent_id)
-            .unwrap();
+        let agent = agent_mut(&mut self.sessions, key, agent_id).expect(AGENT_HELD);
         if migrated {
             agent.account = Some(account.clone());
             agent.migrations += 1;
@@ -730,13 +695,7 @@ impl Inner {
             self.pause(key, agent_id, Reason::PartialCacheCoverage);
             return Applied::Landed { covered: false };
         }
-        let agent = self
-            .sessions
-            .get_mut(key)
-            .unwrap()
-            .agents
-            .get_mut(agent_id)
-            .unwrap();
+        let agent = agent_mut(&mut self.sessions, key, agent_id).expect(AGENT_HELD);
         agent.failures = 0;
         agent.retry_at = None;
         agent.ttl_ms = ttl;
@@ -769,11 +728,7 @@ impl Inner {
 
     pub(crate) fn pause(&mut self, key: &SessionKey, agent_id: &str, reason: Reason) {
         self.set_reason(key, agent_id, reason);
-        if let Some(agent) = self
-            .sessions
-            .get_mut(key)
-            .and_then(|s| s.agents.get_mut(agent_id))
-        {
+        if let Some(agent) = agent_mut(&mut self.sessions, key, agent_id) {
             agent.pause();
         }
     }
@@ -882,13 +837,7 @@ impl Inner {
         if status == 503 && error_code == Some(phoebis_relay::LEDGER_BEHIND) {
             // The router's own standing, not the account's: no failure is counted, so the cold-probe limit never
             // pauses a recipe for a ledger that is catching up, and the entry's own lapse bounds the re-sends.
-            let agent = self
-                .sessions
-                .get_mut(key)
-                .unwrap()
-                .agents
-                .get_mut(agent_id)
-                .unwrap();
+            let agent = agent_mut(&mut self.sessions, key, agent_id).expect(AGENT_HELD);
             let wait_ms = retry_after_ms.unwrap_or(agent.timing.retry_ms);
             agent.retry_at = Some(now.saturating_add(wait_ms));
             // A hold costs no tick: `idle_ticks` counts served or failed probes, so the tick this probe's dispatch
@@ -937,13 +886,7 @@ impl Inner {
         now: i64,
         wait: RetryWait,
     ) {
-        let agent = self
-            .sessions
-            .get_mut(key)
-            .unwrap()
-            .agents
-            .get_mut(agent_id)
-            .unwrap();
+        let agent = agent_mut(&mut self.sessions, key, agent_id).expect(AGENT_HELD);
         agent.failures += 1;
         let exponent = (agent.failures - 1).min(4);
         let step = (agent.timing.retry_ms << exponent).min(agent.timing.retry_max_ms);
@@ -1123,13 +1066,7 @@ mod tests {
             let job = job_on(&key);
             match orphaned_by {
                 "release" => {
-                    let agent = inner
-                        .sessions
-                        .get_mut(&key)
-                        .unwrap()
-                        .agents
-                        .get_mut("main")
-                        .unwrap();
+                    let agent = agent_mut(&mut inner.sessions, &key, "main").expect(AGENT_HELD);
                     agent.generation = 1;
                     agent.last_stop = Some(Wasted::Released);
                 }
@@ -1370,13 +1307,8 @@ mod tests {
     fn ledger_behind_answers_in_a_row_never_reach_the_retry_limit() {
         let (mut inner, key) = one_agent_inner();
         // An hour of entry ahead, so the ladder's deadline would pause a hold that counted a failure.
-        inner
-            .sessions
-            .get_mut(&key)
-            .unwrap()
-            .agents
-            .get_mut("main")
-            .unwrap()
+        agent_mut(&mut inner.sessions, &key, "main")
+            .expect(AGENT_HELD)
             .expires = Some(1_000 + crate::ONE_HOUR_MS);
         let answers = 6;
         for answer in 0..answers {

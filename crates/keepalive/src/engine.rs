@@ -1019,6 +1019,29 @@ struct Credit {
     client: Option<String>,
 }
 
+/// What a walk whose caller just read the agent under the same lock expects of it.
+pub(crate) const AGENT_HELD: &str =
+    "an agent the caller read under the lock is still in its session";
+
+/// The agent `agent_id` of the session `key`, borrowing the session map alone, so a caller may write another field of
+/// `Inner` while it holds the agent.
+pub(crate) fn agent_mut<'a>(
+    sessions: &'a mut BTreeMap<SessionKey, Session>,
+    key: &SessionKey,
+    agent_id: &str,
+) -> Option<&'a mut Agent> {
+    sessions.get_mut(key)?.agents.get_mut(agent_id)
+}
+
+/// `agent_mut`'s shared twin.
+pub(crate) fn agent_ref<'a>(
+    sessions: &'a BTreeMap<SessionKey, Session>,
+    key: &SessionKey,
+    agent_id: &str,
+) -> Option<&'a Agent> {
+    sessions.get(key)?.agents.get(agent_id)
+}
+
 /// Drops the agent's observation, with the pending entry it follows and the bytes its recipe held.
 fn drop_current(
     agent: &mut Agent,
@@ -1648,11 +1671,7 @@ impl Inner {
     /// The one writer of an agent's reason, so the counter behind the views never disagrees with the reason
     /// they show. Nearly every change to a recipe writes a reason, so this is where most of them become dirty.
     pub(crate) fn set_reason(&mut self, key: &SessionKey, agent_id: &str, reason: Reason) {
-        if let Some(agent) = self
-            .sessions
-            .get_mut(key)
-            .and_then(|s| s.agents.get_mut(agent_id))
-        {
+        if let Some(agent) = agent_mut(&mut self.sessions, key, agent_id) {
             agent.reason = reason;
         }
         *self.reasons.entry(reason).or_default() += 1;
@@ -1696,10 +1715,7 @@ impl Inner {
     /// end through the discard. An older recipe set aside over a completion the engine missed leaves through the
     /// discard.
     pub(crate) fn set_aside(&mut self, key: &SessionKey, agent_id: &str, now: i64) {
-        let aside = self
-            .sessions
-            .get_mut(key)
-            .and_then(|s| s.agents.get_mut(agent_id))
+        let aside = agent_mut(&mut self.sessions, key, agent_id)
             .filter(|agent| !agent.paused && agent.expires.is_some_and(|expires| expires > now))
             .and_then(|agent| {
                 let observation = agent.current.take()?;
@@ -1722,11 +1738,7 @@ impl Inner {
             self.pending.remove(&aside.observation.id);
         }
         self.discard_keeping_unanswered(key, agent_id, Reason::AwaitingSelection);
-        if let Some(agent) = self
-            .sessions
-            .get_mut(key)
-            .and_then(|s| s.agents.get_mut(agent_id))
-        {
+        if let Some(agent) = agent_mut(&mut self.sessions, key, agent_id) {
             agent.aside = aside;
         }
     }
@@ -1753,10 +1765,7 @@ impl Inner {
         aside: AsideRecipe,
         now: i64,
     ) -> bool {
-        let agent = self
-            .sessions
-            .get_mut(key)
-            .and_then(|s| s.agents.get_mut(agent_id))
+        let agent = agent_mut(&mut self.sessions, key, agent_id)
             .filter(|_| aside.expires.is_some_and(|expires| expires > now));
         let Some(agent) = agent else {
             self.retained -= aside.observation.recipe.size;
@@ -1822,11 +1831,7 @@ impl Inner {
     /// request read kept nothing it read. The model is the probe's as resolutions followed it. A probe sent while the
     /// request was open is not among them: it pays for the request after this one.
     pub(crate) fn decide_unanswered(&mut self, key: &SessionKey, agent_id: &str, read: u64) {
-        let Some(agent) = self
-            .sessions
-            .get_mut(key)
-            .and_then(|s| s.agents.get_mut(agent_id))
-        else {
+        let Some(agent) = agent_mut(&mut self.sessions, key, agent_id) else {
             return;
         };
         let answer = Answer {
@@ -1893,11 +1898,7 @@ impl Inner {
         // Whatever ends the observation leaves nothing for a recipe set aside to wait for, so its body leaves memory
         // with it.
         self.drop_aside(key, agent_id);
-        let Some(agent) = self
-            .sessions
-            .get_mut(key)
-            .and_then(|s| s.agents.get_mut(agent_id))
-        else {
+        let Some(agent) = agent_mut(&mut self.sessions, key, agent_id) else {
             return;
         };
         drop_current(agent, &mut self.pending, &mut self.retained);
@@ -1932,11 +1933,8 @@ impl Inner {
     /// Ends the compaction open on the agent as a failed one: it leaves the agent and the map, settles nothing and
     /// leaves the recipe as it stood, so its later events miss both maps as an unknown request's do.
     pub(crate) fn end_compaction(&mut self, key: &SessionKey, agent_id: &str) {
-        let Some(open) = self
-            .sessions
-            .get_mut(key)
-            .and_then(|s| s.agents.get_mut(agent_id))
-            .and_then(|agent| agent.compaction.take())
+        let Some(open) =
+            agent_mut(&mut self.sessions, key, agent_id).and_then(|agent| agent.compaction.take())
         else {
             return;
         };
@@ -2006,11 +2004,7 @@ impl Inner {
     /// skip waits for the due time to pass. The due time is read after the policy refresh, so the pool's current
     /// policy decides whether a probe was due, and a probe already in flight was not withheld.
     pub(crate) fn hold(&mut self, key: &SessionKey, agent_id: &str, reason: Reason, now: i64) {
-        let Some(agent) = self
-            .sessions
-            .get_mut(key)
-            .and_then(|s| s.agents.get_mut(agent_id))
-        else {
+        let Some(agent) = agent_mut(&mut self.sessions, key, agent_id) else {
             return;
         };
         let began = agent.reason != reason;
@@ -2034,11 +2028,7 @@ impl Inner {
     /// The probes sent since the last real request, settled under `label` the way a discard settles them, with the
     /// recipe kept: a hold that retains the prompt still writes off what it paid for.
     pub(crate) fn settle_unanswered(&mut self, key: &SessionKey, agent_id: &str, label: Wasted) {
-        let Some(agent) = self
-            .sessions
-            .get_mut(key)
-            .and_then(|s| s.agents.get_mut(agent_id))
-        else {
+        let Some(agent) = agent_mut(&mut self.sessions, key, agent_id) else {
             return;
         };
         let probes = std::mem::take(&mut agent.unanswered);
@@ -2115,11 +2105,7 @@ impl Inner {
     /// is ledgered.
     fn drop_paused_prompt(&mut self, key: &SessionKey, agent_id: &str, now: i64) {
         self.touch_agent(key, agent_id);
-        let Some(agent) = self
-            .sessions
-            .get_mut(key)
-            .and_then(|s| s.agents.get_mut(agent_id))
-        else {
+        let Some(agent) = agent_mut(&mut self.sessions, key, agent_id) else {
             return;
         };
         drop_current(agent, &mut self.pending, &mut self.retained);
@@ -2134,11 +2120,7 @@ impl Inner {
     /// inside it to read. The recipe a failed turn restored can lapse while a probe the failed turn's own recipe sent
     /// keeps the chain alive past it.
     fn lapse_probes(&mut self, key: &SessionKey, agent_id: &str, now: i64) {
-        let Some(agent) = self
-            .sessions
-            .get_mut(key)
-            .and_then(|s| s.agents.get_mut(agent_id))
-        else {
+        let Some(agent) = agent_mut(&mut self.sessions, key, agent_id) else {
             return;
         };
         let unanswered = std::mem::take(&mut agent.unanswered);
@@ -2167,11 +2149,7 @@ impl Inner {
     /// heartbeat sees it first, and whichever comes first records it. Main's end is the engine's own move out of
     /// parked, which no report repeats.
     pub(crate) fn end_passed_park(&mut self, key: &SessionKey, agent_id: &str, now: i64) {
-        let Some(agent) = self
-            .sessions
-            .get_mut(key)
-            .and_then(|s| s.agents.get_mut(agent_id))
-        else {
+        let Some(agent) = agent_mut(&mut self.sessions, key, agent_id) else {
             return;
         };
         let park = (agent.park_kind, agent.deadline, agent.wake_at);
@@ -2286,11 +2264,7 @@ impl Inner {
     /// pass before the request arrives.
     pub(crate) fn end_idle_episode(&mut self, key: &SessionKey, boundaries: &[String], now: i64) {
         self.roll_idle_returns_day(now);
-        let Some(main) = self
-            .sessions
-            .get_mut(key)
-            .and_then(|s| s.agents.get_mut(MAIN_AGENT))
-        else {
+        let Some(main) = agent_mut(&mut self.sessions, key, MAIN_AGENT) else {
             return;
         };
         let Some(episode) = main.close_idle_episode() else {
@@ -2349,11 +2323,7 @@ impl Inner {
         {
             return;
         }
-        let Some(main) = self
-            .sessions
-            .get(key)
-            .and_then(|s| s.agents.get(MAIN_AGENT))
-        else {
+        let Some(main) = agent_ref(&self.sessions, key, MAIN_AGENT) else {
             return;
         };
         let (Some(anchor), Some(previous_prompt)) =
@@ -2501,11 +2471,7 @@ impl Inner {
         now: i64,
         snapshot: &RegistrySnapshot,
     ) {
-        let Some(agent) = self
-            .sessions
-            .get_mut(key)
-            .and_then(|s| s.agents.get_mut(agent_id))
-        else {
+        let Some(agent) = agent_mut(&mut self.sessions, key, agent_id) else {
             return;
         };
         // A pool the snapshot no longer holds, or none for a record that never sent a request, reads the default
@@ -2750,11 +2716,7 @@ impl Engine {
         for (key, agent_id) in open {
             // The lost events may have been this turn's completion, so it counts as the turn that answered, as a
             // missed one does at the next arrival.
-            if let Some(agent) = inner
-                .sessions
-                .get_mut(&key)
-                .and_then(|s| s.agents.get_mut(&agent_id))
-            {
+            if let Some(agent) = agent_mut(&mut inner.sessions, &key, &agent_id) {
                 if let Some(started) = agent.current.as_ref().map(|o| o.started) {
                     agent.last_answered_at = Some(started);
                 }
@@ -2943,13 +2905,8 @@ impl Engine {
             recipe_hashes,
             model_matches,
         );
-        inner
-            .sessions
-            .get_mut(&key)
-            .unwrap()
-            .agents
-            .get_mut(&agent_id)
-            .unwrap()
+        agent_mut(&mut inner.sessions, &key, &agent_id)
+            .expect(AGENT_HELD)
             .last_guard = Some(verdict);
         // One touch for everything below: the lock is held to the end, so the flush reads the agent as this request
         // leaves it.
@@ -2991,13 +2948,8 @@ impl Engine {
                 resolved.insert(held, dated);
             }
         }
-        inner
-            .sessions
-            .get_mut(&key)
-            .unwrap()
-            .agents
-            .get_mut(&agent_id)
-            .unwrap()
+        agent_mut(&mut inner.sessions, &key, &agent_id)
+            .expect(AGENT_HELD)
             .follow_resolutions(&resolved);
         if verdict == Guard::Compaction {
             // The recipe, its schedule and its probes wait as they stood, so a compaction that fails leaves the old
@@ -3021,13 +2973,8 @@ impl Engine {
                 prior: prior_coverage(agent, now),
                 client_label: observed.client.class.clone(),
             };
-            inner
-                .sessions
-                .get_mut(&key)
-                .unwrap()
-                .agents
-                .get_mut(&agent_id)
-                .unwrap()
+            agent_mut(&mut inner.sessions, &key, &agent_id)
+                .expect(AGENT_HELD)
                 .compaction = Some(compaction);
             inner
                 .compactions
@@ -3037,13 +2984,8 @@ impl Engine {
         // Apart from the recipe, which keepalive off, an opt-out or a refused body leaves unretained: the next idle
         // window judges a return against this request's prefix either way. A request without both hashes leaves none.
         if agent_id == MAIN_AGENT {
-            inner
-                .sessions
-                .get_mut(&key)
-                .unwrap()
-                .agents
-                .get_mut(&agent_id)
-                .unwrap()
+            agent_mut(&mut inner.sessions, &key, &agent_id)
+                .expect(AGENT_HELD)
                 .last_prefix = observed
                 .static_hash
                 .clone()
@@ -3068,13 +3010,8 @@ impl Engine {
             .filter(|observation| inner.pending.contains_key(&observation.id))
             .map(|observation| observation.started);
         if let Some(started) = missed {
-            inner
-                .sessions
-                .get_mut(&key)
-                .unwrap()
-                .agents
-                .get_mut(&agent_id)
-                .unwrap()
+            agent_mut(&mut inner.sessions, &key, &agent_id)
+                .expect(AGENT_HELD)
                 .last_answered_at = Some(started);
         }
         // Taken before anything below overwrites it and consumed with the observation.
@@ -3085,13 +3022,7 @@ impl Engine {
         inner.set_aside(&key, &agent_id, now);
         inner.sessions.get_mut(&key).unwrap().last_real_at = Some(now);
         inner.touch_session(&key);
-        let agent = inner
-            .sessions
-            .get_mut(&key)
-            .unwrap()
-            .agents
-            .get_mut(&agent_id)
-            .unwrap();
+        let agent = agent_mut(&mut inner.sessions, &key, &agent_id).expect(AGENT_HELD);
         if agent.state == AgentState::Unknown {
             inner.drop_aside(&key, &agent_id);
             inner.set_reason(&key, &agent_id, Reason::AgentUnknown);
@@ -3149,13 +3080,7 @@ impl Engine {
             return;
         }
         inner.retained += recipe.size;
-        let agent = inner
-            .sessions
-            .get_mut(&key)
-            .unwrap()
-            .agents
-            .get_mut(&agent_id)
-            .unwrap();
+        let agent = agent_mut(&mut inner.sessions, &key, &agent_id).expect(AGENT_HELD);
         // The probe replays this request's headers, so it meters under the entrypoint they carry.
         agent.entrypoint =
             phoebis_ledger::entrypoint_of_client(&observed.client.class).map(String::from);
@@ -3218,13 +3143,7 @@ impl Engine {
         if !inner.live(&key, &agent_id) {
             return;
         }
-        let agent = inner
-            .sessions
-            .get_mut(&key)
-            .unwrap()
-            .agents
-            .get_mut(&agent_id)
-            .unwrap();
+        let agent = agent_mut(&mut inner.sessions, &key, &agent_id).expect(AGENT_HELD);
         let Some(observation) = agent.current.as_mut() else {
             return;
         };
@@ -3263,13 +3182,7 @@ impl Engine {
             inner.set_reason(&key, &agent_id, reason);
             return;
         }
-        let agent = inner
-            .sessions
-            .get_mut(&key)
-            .unwrap()
-            .agents
-            .get_mut(&agent_id)
-            .unwrap();
+        let agent = agent_mut(&mut inner.sessions, &key, &agent_id).expect(AGENT_HELD);
         if let Some(observation) = agent.current.as_mut() {
             // A poisoned observation never becomes ready, so no evidence of this request can arm a schedule.
             observation.ready = !observation.poisoned;
@@ -3312,13 +3225,7 @@ impl Engine {
         if !inner.live(&key, &agent_id) {
             return;
         }
-        let agent = inner
-            .sessions
-            .get_mut(&key)
-            .unwrap()
-            .agents
-            .get_mut(&agent_id)
-            .unwrap();
+        let agent = agent_mut(&mut inner.sessions, &key, &agent_id).expect(AGENT_HELD);
         if let Some(observation) = agent.current.as_mut() {
             if observation.attempt == head.attempt {
                 let in_overage = phoebis_relay::UnifiedHeaders::parse_list(&head.headers)
@@ -3410,11 +3317,7 @@ impl Engine {
         inner.touch_agent(&key, &agent_id);
         if agent_id == MAIN_AGENT {
             if let Some(prompt) = reported_prompt(complete.usage.as_ref()) {
-                if let Some(main) = inner
-                    .sessions
-                    .get_mut(&key)
-                    .and_then(|s| s.agents.get_mut(MAIN_AGENT))
-                {
+                if let Some(main) = agent_mut(&mut inner.sessions, &key, MAIN_AGENT) {
                     main.last_prompt_tokens = Some(prompt);
                 }
             }
@@ -3446,11 +3349,7 @@ impl Engine {
             // carries none takes `expired`, which the lapse sweep settles it under when its chain's last entry ends if
             // no turn reads it first, as its recipe's own lapse would have. The sweep reads that chain through the
             // restored recipe's probes, so a kept probe whose entry they read back waits for the turn that reads them.
-            if let Some(agent) = inner
-                .sessions
-                .get_mut(&key)
-                .and_then(|s| s.agents.get_mut(&agent_id))
-            {
+            if let Some(agent) = agent_mut(&mut inner.sessions, &key, &agent_id) {
                 for kept in agent.kept.iter_mut().filter(|kept| kept.pending.is_none()) {
                     kept.pending = Some(Wasted::Expired);
                 }
@@ -3502,11 +3401,7 @@ impl Engine {
         };
         // Set once the credit has read its gap from the turn before, so the next request's gap runs from this one.
         if (200..300).contains(&complete.status) {
-            if let Some(agent) = inner
-                .sessions
-                .get_mut(&key)
-                .and_then(|s| s.agents.get_mut(&agent_id))
-            {
+            if let Some(agent) = agent_mut(&mut inner.sessions, &key, &agent_id) {
                 if let Some(request_started) = agent.current.as_ref().map(|o| o.started) {
                     agent.last_answered_at = Some(request_started);
                 }
@@ -3566,11 +3461,7 @@ impl Engine {
             }
         }
         if credited.is_some() {
-            if let Some(agent) = inner
-                .sessions
-                .get_mut(&key)
-                .and_then(|s| s.agents.get_mut(&agent_id))
-            {
+            if let Some(agent) = agent_mut(&mut inner.sessions, &key, &agent_id) {
                 agent.count_credit(now);
             }
         }
@@ -3646,11 +3537,7 @@ impl Engine {
             return;
         }
         if let Some(prompt) = reported_prompt(complete.usage.as_ref()) {
-            if let Some(main) = inner
-                .sessions
-                .get_mut(&mark.session)
-                .and_then(|s| s.agents.get_mut(MAIN_AGENT))
-            {
+            if let Some(main) = agent_mut(&mut inner.sessions, &mark.session, MAIN_AGENT) {
                 main.last_prompt_tokens = Some(prompt);
             }
             inner.touch_agent(&mark.session, MAIN_AGENT);
@@ -3740,7 +3627,7 @@ impl Inner {
     fn complete_compaction(&mut self, complete: &RequestComplete, now: i64) -> Option<Credit> {
         let (key, agent_id) = self.compactions.remove(&complete.request_id)?;
         let live = self.live(&key, &agent_id);
-        let agent = self.sessions.get_mut(&key)?.agents.get_mut(&agent_id)?;
+        let agent = agent_mut(&mut self.sessions, &key, &agent_id)?;
         let compaction = agent
             .compaction
             .take_if(|compaction| compaction.request_id == complete.request_id)?;
@@ -3843,13 +3730,7 @@ impl Inner {
     /// The Go `observeLocked`: evidence from a ready attempt arms the schedule at the entry's expiry, the pool's
     /// lead and this schedule's jitter taken off by `due_at`. A retry already pending stays in force.
     pub(crate) fn observe_usage(&mut self, key: &SessionKey, agent_id: &str, usage: ProbeUsage) {
-        let agent = self
-            .sessions
-            .get_mut(key)
-            .unwrap()
-            .agents
-            .get_mut(agent_id)
-            .unwrap();
+        let agent = agent_mut(&mut self.sessions, key, agent_id).expect(AGENT_HELD);
         let Some(observation) = agent.current.as_mut() else {
             return;
         };
@@ -3981,13 +3862,7 @@ impl Engine {
                 // ceilings below read the pool's policy as it stands now, so a horizon raised in the console
                 // reopens the hold and an opt-out discards the prompt the hold retained.
                 let refreshed = {
-                    let agent = inner
-                        .sessions
-                        .get_mut(&key)
-                        .unwrap()
-                        .agents
-                        .get_mut(&agent_id)
-                        .unwrap();
+                    let agent = agent_mut(&mut inner.sessions, &key, &agent_id).expect(AGENT_HELD);
                     refresh_policy(&view, agent)
                 };
                 let refreshed = match refreshed {
@@ -4091,13 +3966,7 @@ impl Engine {
                     continue;
                 }
                 let (held, moved) = {
-                    let agent = inner
-                        .sessions
-                        .get_mut(&key)
-                        .unwrap()
-                        .agents
-                        .get_mut(&agent_id)
-                        .unwrap();
+                    let agent = agent_mut(&mut inner.sessions, &key, &agent_id).expect(AGENT_HELD);
                     let before = agent.account.clone();
                     let held = gate(&view, agent, &key.1, pool, &policy);
                     (held, before != agent.account)
@@ -4135,13 +4004,7 @@ impl Engine {
                 let idle = agent_id == MAIN_AGENT
                     && inner.sessions[&key].agents[&agent_id].state == AgentState::Idle
                     || !inner.sessions[&key].attended;
-                let agent = inner
-                    .sessions
-                    .get_mut(&key)
-                    .unwrap()
-                    .agents
-                    .get_mut(&agent_id)
-                    .unwrap();
+                let agent = agent_mut(&mut inner.sessions, &key, &agent_id).expect(AGENT_HELD);
                 let observation = agent.current.as_ref().unwrap();
                 let job = ProbeJob {
                     key: key.clone(),

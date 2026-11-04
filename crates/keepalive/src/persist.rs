@@ -18,9 +18,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{KeepaliveTiming, LEASE_MS};
 use crate::engine::{
-    Agent, AgentState, Engine, Guard, IdleEpisode, IdleReturnBucket, Inner, Kept, Observation,
-    ParkKind, PrefixAnchor, PriorCoverage, ProbeCharge, Reason, SavingsUnit, Session, SessionKey,
-    Settlement, UnansweredProbe, Wasted, MAIN_AGENT,
+    agent_mut, Agent, AgentState, Engine, Guard, IdleEpisode, IdleReturnBucket, Inner, Kept,
+    Observation, ParkKind, PrefixAnchor, PriorCoverage, ProbeCharge, Reason, SavingsUnit, Session,
+    SessionKey, Settlement, UnansweredProbe, Wasted, MAIN_AGENT,
 };
 use crate::recipe::Recipe;
 use crate::usage::ProbeUsage;
@@ -1060,11 +1060,7 @@ impl Inner {
     ) {
         let generation = self.sessions[key].agents[agent_id].generation;
         self.discard(key, agent_id, reason, wasted);
-        if let Some(agent) = self
-            .sessions
-            .get_mut(key)
-            .and_then(|s| s.agents.get_mut(agent_id))
-        {
+        if let Some(agent) = agent_mut(&mut self.sessions, key, agent_id) {
             agent.generation = generation;
         }
     }
@@ -1256,10 +1252,7 @@ impl Inner {
         for (_, key, agent_id, observation) in held {
             let size = observation.recipe.size;
             self.retained += size;
-            let agent = self
-                .sessions
-                .get_mut(&key)
-                .and_then(|s| s.agents.get_mut(&agent_id))
+            let agent = agent_mut(&mut self.sessions, &key, &agent_id)
                 .expect("the agent the load just restored");
             let expires = agent.expires;
             agent.current = Some(observation);

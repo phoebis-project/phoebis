@@ -9,8 +9,8 @@ use phoebis_routing::RegistrySnapshot;
 
 use crate::config::LEASE_MS;
 use crate::engine::{
-    open_idle_episode, Agent, AgentState, Engine, Inner, ParkKind, Reason, Session, SessionKey,
-    Wasted, MAIN_AGENT,
+    agent_mut, open_idle_episode, Agent, AgentState, Engine, Inner, ParkKind, Reason, Session,
+    SessionKey, Wasted, AGENT_HELD, MAIN_AGENT,
 };
 use crate::recipe::valid_id;
 
@@ -444,13 +444,7 @@ impl Inner {
                         Reason::SessionEnded,
                         Some(Wasted::SessionEnded),
                     );
-                    let agent = self
-                        .sessions
-                        .get_mut(&key)
-                        .unwrap()
-                        .agents
-                        .get_mut(agent_id)
-                        .unwrap();
+                    let agent = agent_mut(&mut self.sessions, &key, agent_id).expect(AGENT_HELD);
                     agent.set_state(AgentState::Released);
                     // A session's end is no return, so main's window ends with it.
                     agent.close_idle_episode();
@@ -481,13 +475,8 @@ impl Inner {
                         }
                         let released = self.sessions[&key].agents[&agent_id].last_stop;
                         self.discard(&key, &agent_id, Reason::AwaitingRequest, None);
-                        let agent = self
-                            .sessions
-                            .get_mut(&key)
-                            .unwrap()
-                            .agents
-                            .get_mut(&agent_id)
-                            .unwrap();
+                        let agent =
+                            agent_mut(&mut self.sessions, &key, &agent_id).expect(AGENT_HELD);
                         // The release's label stays until the late result lands, so a probe the release orphaned
                         // settles under it rather than under nothing.
                         agent.last_stop = released;
@@ -518,13 +507,7 @@ impl Inner {
                 ..
             } => {
                 self.reported_agent(&key, &agent_id, *request_generation)?;
-                let agent = self
-                    .sessions
-                    .get_mut(&key)
-                    .unwrap()
-                    .agents
-                    .get_mut(&agent_id)
-                    .unwrap();
+                let agent = agent_mut(&mut self.sessions, &key, &agent_id).expect(AGENT_HELD);
                 // A person at the terminal says nothing about the agent's work, so presence moves the idle clock
                 // alone.
                 if *presence {
@@ -556,13 +539,7 @@ impl Inner {
             } => {
                 let was = self.reported_agent(&key, &agent_id, *request_generation)?;
                 let (state, park_kind) = (*state, *park_kind);
-                let agent = self
-                    .sessions
-                    .get_mut(&key)
-                    .unwrap()
-                    .agents
-                    .get_mut(&agent_id)
-                    .unwrap();
+                let agent = agent_mut(&mut self.sessions, &key, &agent_id).expect(AGENT_HELD);
                 if state == AgentState::Parked {
                     // A repeated `parked` of the same kind moves the wake or the deadline and keeps the park's
                     // start, which the parked ceiling counts from.
@@ -624,11 +601,7 @@ impl Inner {
         // The window opens with the report that moves main to idle or parked, so a prompt inside the same second
         // still ends a window the tick would have opened later.
         if matches!(report.event, Reported::State { .. }) && agent_id == MAIN_AGENT {
-            if let Some(main) = self
-                .sessions
-                .get_mut(&key)
-                .and_then(|s| s.agents.get_mut(MAIN_AGENT))
-            {
+            if let Some(main) = agent_mut(&mut self.sessions, &key, MAIN_AGENT) {
                 open_idle_episode(main, snapshot);
             }
         }
