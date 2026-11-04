@@ -300,42 +300,21 @@ pub(crate) struct ModelTtlInput {
     pub subagent: String,
 }
 
-/// A PATCH's `keepalive` names only the fields the operator touched, and the struct fills the rest with
-/// defaults on parse; overlaying it on the row's stored policy first keeps every untouched field at its
-/// current value instead of resetting it. A non-object `incoming` is passed through unchanged so `parse`'s own
-/// shape check rejects it.
-fn merged_keepalive(row: &PoolRow, incoming: &Value) -> Value {
+/// A PATCH's policy names only the fields the operator touched, and the struct fills the rest with defaults on parse,
+/// so overlaying it on the row's stored policy first keeps every untouched field at its current value. A `nested`
+/// field merges one level deeper: a PATCH naming `{"metered": {"main": "5m"}}` overlays that field alone and leaves the
+/// set's other three where they stood rather than falling back to the set's own defaults. A non-object `incoming` is
+/// passed through unchanged so `parse`'s own shape check rejects it.
+fn overlay(stored: Value, incoming: &Value, nested: &[&str]) -> Value {
     let Value::Object(patch) = incoming else {
         return incoming.clone();
     };
-    let mut merged = serde_json::to_value(KeepalivePolicy::from_json(&row.keepalive_json))
-        .unwrap_or_else(|_| json!({}));
+    let mut merged = stored;
     if let Value::Object(base) = &mut merged {
         for (key, value) in patch {
-            base.insert(key.clone(), value.clone());
-        }
-    }
-    merged
-}
-
-/// Mirrors `merged_keepalive`, except `plan` and `metered` merge one level deeper: a PATCH naming
-/// `{"metered": {"main": "5m"}}` overlays that field alone, leaving the set's other three where they stood
-/// rather than falling back to the set's own defaults.
-fn merged_cache_ttl(row: &PoolRow, incoming: &Value) -> Value {
-    let Value::Object(patch) = incoming else {
-        return incoming.clone();
-    };
-    let mut merged = serde_json::to_value(CacheTtlPolicy::from_json(&row.cache_ttl_json))
-        .unwrap_or_else(|_| json!({}));
-    if let Value::Object(base) = &mut merged {
-        for (key, value) in patch {
-            if let (true, Value::Object(set_patch)) =
-                (matches!(key.as_str(), "metered" | "plan"), value)
-            {
+            if let (true, Value::Object(set_patch)) = (nested.contains(&key.as_str()), value) {
                 if let Some(Value::Object(set_base)) = base.get_mut(key) {
-                    for (field, field_value) in set_patch {
-                        set_base.insert(field.clone(), field_value.clone());
-                    }
+                    set_base.extend(set_patch.clone());
                     continue;
                 }
             }
@@ -399,7 +378,9 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
         row.model_rules = parse_rules(list)?;
     }
     if let Some(keepalive) = &input.keepalive {
-        let merged = merged_keepalive(row, keepalive);
+        let stored = serde_json::to_value(KeepalivePolicy::from_json(&row.keepalive_json))
+            .unwrap_or_else(|_| json!({}));
+        let merged = overlay(stored, keepalive, &[]);
         let policy = KeepalivePolicy::parse(&merged)
             .map_err(|error| failure(StatusCode::BAD_REQUEST, &error.to_string()))?;
         // The stored text stays where it reads as the same policy, so a save naming the values a pool holds writes no
@@ -409,7 +390,9 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
         }
     }
     if let Some(cache_ttl) = &input.cache_ttl {
-        let mut merged = merged_cache_ttl(row, cache_ttl);
+        let stored = serde_json::to_value(CacheTtlPolicy::from_json(&row.cache_ttl_json))
+            .unwrap_or_else(|_| json!({}));
+        let mut merged = overlay(stored, cache_ttl, &["metered", "plan"]);
         for set in ["metered", "plan"] {
             if let Some(models) = merged
                 .get_mut(set)
