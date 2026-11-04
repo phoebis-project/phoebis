@@ -7403,7 +7403,8 @@ fn a_lifetime_total_prices_every_row_as_a_read_from_the_earliest_hour_does() {
 }
 
 /// The account list reads its request counts apart from the priced totals, so the counts keep the totals' rule on
-/// probes themselves: a probe served beside a request of one account counts the request alone.
+/// probes themselves: a probe served beside two requests of one account counts the two requests alone. With two
+/// requests the count differs from the probe's row alone and from all three rows.
 #[test]
 fn the_account_request_counts_leave_the_probe_rows_out() {
     let db = LedgerDb::open_in_memory().unwrap();
@@ -7419,10 +7420,20 @@ fn the_account_request_counts_leave_the_probe_rows_out() {
         1_000,
     );
     plant_spend(&db, "r2", "p", "a", "claude-sonnet-5", "probe", at, 1_000);
+    plant_spend(
+        &db,
+        "r3",
+        "p",
+        "a",
+        "claude-sonnet-5",
+        "inference",
+        at,
+        1_000,
+    );
     let counts = db
         .read_blocking(|c| account_request_counts(c, i64::MIN, hour_of(at) + 3_600))
         .unwrap();
-    assert_eq!(counts, BTreeMap::from([("a".to_string(), 1)]));
+    assert_eq!(counts, BTreeMap::from([("a".to_string(), 2)]));
 }
 
 /// The totals price each group at its own hour, so a cost revision that takes effect inside one price revision's
