@@ -399,20 +399,15 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
     for a in activity {
         let key = activity_key(&a);
         let created_at = created.get(&key).copied();
-        let entry = rows
-            .entry(key)
-            .or_insert_with(|| {
-                json!({
-                    "key_id": a.key_id, "key_generation": a.key_generation, "session_id": a.session_id, "agent_id": null, "model": a.model, "account_id": null, "epoch": null,
-                    "created_at": created_at, "last_used_at": null, "last_request_at": null, "requests": 0, "pinned": false,
-                    "burn": null, "burn_unit": null, "burn_window": null, "burn_equivalent": null,
-                    "burn_at": null, "runway_ms": null,
-                    "runway_bounded": null, "cache_ttl_ms": null, "last_input_tokens": null, "effort": null,
-                    "speed": null,
-                    "cycle_ms": null,
-                    "last_refresh_at": null, "shed_from": null, "shed_reason": null,
-                })
-            });
+        let entry = rows.entry(key).or_insert_with(|| {
+            unpinned_row(
+                &a.key_id,
+                a.key_generation,
+                &a.session_id,
+                Some(&a.model),
+                created_at,
+            )
+        });
         entry["last_request_at"] = json!(a.last_request_at);
         entry["requests"] = json!(a.requests);
         if entry["account_id"].is_null() {
@@ -422,16 +417,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
     }
     for (key, view) in &engine {
         let entry = rows.entry(key.clone()).or_insert_with(|| {
-            json!({
-                "key_id": key.0, "key_generation": key.1, "session_id": key.2, "agent_id": null, "model": null, "account_id": null, "epoch": null,
-                "created_at": created.get(key), "last_used_at": null, "last_request_at": null, "requests": 0, "pinned": false,
-                "burn": null, "burn_unit": null, "burn_window": null, "burn_equivalent": null,
-                "burn_at": null, "runway_ms": null,
-                "runway_bounded": null, "cache_ttl_ms": null, "last_input_tokens": null, "effort": null,
-                "speed": null,
-                "cycle_ms": null,
-                "last_refresh_at": null, "shed_from": null, "shed_reason": null,
-            })
+            unpinned_row(&key.0, key.1, &key.2, None, created.get(key).copied())
         });
         entry["companion"] = json!(view.companion);
         entry["companion_since"] = json!(view.companion_since);
@@ -589,6 +575,26 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
 /// files it under.
 fn activity_key(a: &phoebis_ledger::SessionActivity) -> (String, i64, String) {
     (a.key_id.clone(), a.key_generation, a.session_id.clone())
+}
+
+/// The row of a session no pin stands for, the model the ledger's activity names where it names one.
+fn unpinned_row(
+    key_id: &str,
+    key_generation: i64,
+    session_id: &str,
+    model: Option<&str>,
+    created_at: Option<i64>,
+) -> Value {
+    json!({
+        "key_id": key_id, "key_generation": key_generation, "session_id": session_id, "agent_id": null, "model": model, "account_id": null, "epoch": null,
+        "created_at": created_at, "last_used_at": null, "last_request_at": null, "requests": 0, "pinned": false,
+        "burn": null, "burn_unit": null, "burn_window": null, "burn_equivalent": null,
+        "burn_at": null, "runway_ms": null,
+        "runway_bounded": null, "cache_ttl_ms": null, "last_input_tokens": null, "effort": null,
+        "speed": null,
+        "cycle_ms": null,
+        "last_refresh_at": null, "shed_from": null, "shed_reason": null,
+    })
 }
 
 /// Read the per-model cost card.
