@@ -16,7 +16,7 @@ use phoebis_store::keepalive::BodyWrite;
 use phoebis_store::{IdleReturnsRow, KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow};
 use serde::{Deserialize, Serialize};
 
-use crate::config::{KeepaliveLimits, KeepaliveTiming, LEASE_MS};
+use crate::config::{KeepaliveTiming, LEASE_MS};
 use crate::engine::{
     Agent, AgentState, Engine, Guard, IdleEpisode, IdleReturnBucket, Inner, Kept, Observation,
     ParkKind, PrefixAnchor, PriorCoverage, ProbeCharge, Reason, SavingsUnit, Session, SessionKey,
@@ -1074,13 +1074,8 @@ impl Inner {
     /// of what was restored newest first while the retained bytes allow. What does not fit is disposed, its rows
     /// filed for deletion and each recipe among them counted as evicted. Agents without a session row, ended sessions,
     /// released records whose leave has passed, rows of an older version and rows this build cannot read go too.
-    fn restore_persisted(
-        &mut self,
-        (sessions, agents, counters): Loaded,
-        now: i64,
-        limits: &KeepaliveLimits,
-        timing: KeepaliveTiming,
-    ) {
+    fn restore_persisted(&mut self, (sessions, agents, counters): Loaded, now: i64) {
+        let (limits, timing) = (self.limits.clone(), self.timing);
         for row in counters {
             let counters = self
                 .idle_returns
@@ -1350,7 +1345,7 @@ impl Engine {
             if !inner.sessions.is_empty() {
                 return;
             }
-            inner.restore_persisted(loaded, now, &self.parts.limits, self.parts.timing);
+            inner.restore_persisted(loaded, now);
             // The registry first, then the ledger: the settlements wait for the save that carries each ended recipe's
             // agent without the probes they settle, so a failed save sends nothing and a crash between the save and
             // the ledger's write leaves a wasted probe unwritten rather than written again by the next load.

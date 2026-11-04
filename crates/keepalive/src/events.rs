@@ -367,9 +367,6 @@ impl Engine {
         report: EventReport,
     ) -> Result<Ack, EventError> {
         let now = self.now();
-        let expiry = self.parts.session_expiry.as_millis() as i64;
-        let lease = LEASE_MS;
-        let limits = self.parts.limits.clone();
         // The pool an idle window a report opens counts under, read as the tick reads it.
         let snapshot = self.parts.router.snapshot();
         let acked = {
@@ -378,17 +375,8 @@ impl Engine {
                 inner.late_updates += 1;
                 return Err(err("quiesced", 503));
             }
-            inner.expire(now, expiry);
-            inner.apply(
-                key_id,
-                key_generation,
-                report,
-                now,
-                lease,
-                limits.max_sessions,
-                limits.max_agents,
-                &snapshot,
-            )
+            inner.expire(now);
+            inner.apply(key_id, key_generation, report, now, &snapshot)
         };
         self.flush();
         acked
@@ -396,16 +384,12 @@ impl Engine {
 }
 
 impl Inner {
-    #[allow(clippy::too_many_arguments)]
     fn apply(
         &mut self,
         key_id: &str,
         key_generation: i64,
         report: EventReport,
         now: i64,
-        lease_ms: i64,
-        max_sessions: usize,
-        max_agents: usize,
         snapshot: &RegistrySnapshot,
     ) -> Result<Ack, EventError> {
         let key: SessionKey = (key_id.to_string(), report.session_id.clone());
@@ -448,9 +432,6 @@ impl Inner {
                     owner_id.as_deref(),
                     previous_instance_id.as_deref(),
                     now,
-                    lease_ms,
-                    max_sessions,
-                    max_agents,
                 );
             }
             Reported::Heartbeat => {}
@@ -518,7 +499,7 @@ impl Inner {
                         agent.idle_window_floor = None;
                     }
                     None => {
-                        if self.agents >= max_agents {
+                        if self.agents >= self.limits.max_agents {
                             return Err(err("agent_limit", 429));
                         }
                         let incarnation = self.incarnation();
@@ -631,7 +612,7 @@ impl Inner {
         let session = self.sessions.get_mut(&key).unwrap();
         session.sequence = report.sequence;
         if renews_lease {
-            session.lease = now + lease_ms;
+            session.lease = now + LEASE_MS;
         }
         session.attended = true;
         session.last_report_at = now;
@@ -681,7 +662,6 @@ impl Inner {
         Ok(agent.state)
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn start(
         &mut self,
         key: SessionKey,
@@ -690,9 +670,6 @@ impl Inner {
         owner_id: Option<&str>,
         previous_instance_id: Option<&str>,
         now: i64,
-        lease_ms: i64,
-        max_sessions: usize,
-        max_agents: usize,
     ) -> Result<Ack, EventError> {
         // What a previous holder of this key id left under the same session id is not this caller's to
         // re-adopt or to conflict with; the start below replaces it whole, as it replaces an instance.
@@ -706,7 +683,7 @@ impl Inner {
         let becomes_live = self.sessions.get(&key).is_none_or(|s| s.ended);
         if becomes_live {
             let live = self.sessions.values().filter(|s| !s.ended).count();
-            if live >= max_sessions {
+            if live >= self.limits.max_sessions {
                 return Err(err("session_limit", 429));
             }
         }
@@ -724,11 +701,11 @@ impl Inner {
                 // A main the revival registers anew takes a slot as any new record does, and a refusal leaves the
                 // session as its end left it.
                 let registers_main = revived && !session.agents.contains_key(MAIN_AGENT);
-                if registers_main && self.agents >= max_agents {
+                if registers_main && self.agents >= self.limits.max_agents {
                     return Err(err("agent_limit", 429));
                 }
                 session.sequence = report.sequence;
-                session.lease = now + lease_ms;
+                session.lease = now + LEASE_MS;
                 session.attended = true;
                 // The registration's own standing outranks the one the load restored.
                 session.restored_until = None;
@@ -780,7 +757,7 @@ impl Inner {
             return Err(err("unknown_previous_instance", 409));
         }
         let held = self.sessions.get(&key).map(|s| s.agents.len()).unwrap_or(0);
-        if self.agents - held >= max_agents {
+        if self.agents - held >= self.limits.max_agents {
             return Err(err("agent_limit", 429));
         }
         if let Some(previous) = self.sessions.get(&key) {
@@ -819,7 +796,7 @@ impl Inner {
                 session_id: key.1.clone(),
                 instance: report.instance_id.clone(),
                 sequence: report.sequence,
-                lease: now + lease_ms,
+                lease: now + LEASE_MS,
                 attended: true,
                 ended: false,
                 owner_id: owner_id.map(str::to_owned),

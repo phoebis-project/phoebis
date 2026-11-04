@@ -1348,6 +1348,10 @@ pub(crate) struct Inner {
     pub next_incarnation: u64,
     /// The engine's timing, copied onto every agent it creates.
     pub timing: KeepaliveTiming,
+    /// The engine's fixed bounds and its session expiry in milliseconds, held beside the timing so the state machine
+    /// reads them where it applies them.
+    pub limits: KeepaliveLimits,
+    pub session_expiry_ms: i64,
     /// The idle-age counters by pool id and UTC day. A day older than the timing's `idle_return_retention_days` leaves
     /// at the day roll. Nothing prunes by pool: a pool that leaves keeps its days until they age out, since a range the
     /// overview reads may still cover them.
@@ -1412,7 +1416,11 @@ impl Engine {
             }
         }
         Arc::new(Engine {
-            inner: Mutex::new(Inner::empty(parts.timing)),
+            inner: Mutex::new(Inner::empty(
+                parts.timing,
+                parts.limits.clone(),
+                parts.session_expiry.as_millis() as i64,
+            )),
             parts,
             cancel: CancellationToken::new(),
             idle: Notify::new(),
@@ -1574,10 +1582,9 @@ impl Engine {
     /// its lease by a caller that happened to arrive before the ticker.
     pub fn expire(&self) {
         let now = self.now();
-        let expiry = self.parts.session_expiry.as_millis() as i64;
         {
             let mut inner = self.lock();
-            inner.expire(now, expiry);
+            inner.expire(now);
         }
         self.flush();
     }
@@ -1604,7 +1611,11 @@ impl Engine {
 impl Inner {
     /// A fresh engine's own state, and the fixture a unit test builds one agent onto: the one place every field
     /// is named, so a field this struct gains needs no second literal to keep in step.
-    pub(crate) fn empty(timing: KeepaliveTiming) -> Inner {
+    pub(crate) fn empty(
+        timing: KeepaliveTiming,
+        limits: KeepaliveLimits,
+        session_expiry_ms: i64,
+    ) -> Inner {
         Inner {
             sessions: BTreeMap::new(),
             pending: HashMap::new(),
@@ -1622,6 +1633,8 @@ impl Inner {
             bus_gaps: 0,
             next_incarnation: 0,
             timing,
+            limits,
+            session_expiry_ms,
             idle_returns: BTreeMap::new(),
             idle_returns_day: i64::MIN,
             purge_counters_before: None,
@@ -2505,7 +2518,7 @@ impl Inner {
         self.touch_agent(key, agent_id);
     }
 
-    pub(crate) fn expire(&mut self, now: i64, expiry_ms: i64) {
+    pub(crate) fn expire(&mut self, now: i64) {
         // A record whose probe is still in flight waits for the result, which settles under the release's label, and
         // the next sweep takes it.
         let leaving: Vec<(SessionKey, String)> = self
@@ -2557,7 +2570,9 @@ impl Inner {
         let expired: Vec<SessionKey> = self
             .sessions
             .iter()
-            .filter(|(_, s)| now - s.last_real_at.unwrap_or(0).max(s.last_report_at) >= expiry_ms)
+            .filter(|(_, s)| {
+                now - s.last_real_at.unwrap_or(0).max(s.last_report_at) >= self.session_expiry_ms
+            })
             .map(|(k, _)| k.clone())
             .collect();
         for key in expired {
@@ -2815,8 +2830,6 @@ impl Engine {
             return;
         };
         let now = self.now();
-        let expiry = self.parts.session_expiry.as_millis() as i64;
-        let limits = self.parts.limits.clone();
         let key: SessionKey = (key_id, session_id);
         // The body's parse and edits run apart from the lock, which the bus observer, the tick and the companion route
         // all take, for a request on an agent the engine holds and of a class that can arm a recipe: a compaction stores
@@ -2850,7 +2863,7 @@ impl Engine {
             }
             return;
         }
-        inner.expire(now, expiry);
+        inner.expire(now);
         let Some(session) = inner.sessions.get(&key) else {
             return;
         };
@@ -3098,7 +3111,7 @@ impl Engine {
         agent.last_real_at = Some(now);
         agent.canonical_model = observed.canonical_model.clone();
         agent.key_generation = observed.key_generation;
-        if inner.pending.len() >= limits.max_agents {
+        if inner.pending.len() >= inner.limits.max_agents {
             inner.drop_aside(&key, &agent_id);
             inner.set_reason(&key, &agent_id, Reason::RequestLimit);
             return;
@@ -3125,11 +3138,12 @@ impl Engine {
         recipe.tail_hash = observed.boundaries.last().cloned();
         // The agent's own aside recipe yields first, so the bound reads as it would with that recipe ended, and the
         // eviction never reaches it: an agent with a request open is no candidate.
-        if inner.retained + recipe.size > limits.max_retained_bytes {
+        let max_retained_bytes = inner.limits.max_retained_bytes;
+        if inner.retained + recipe.size > max_retained_bytes {
             inner.drop_aside(&key, &agent_id);
         }
-        if inner.retained + recipe.size > limits.max_retained_bytes
-            && !inner.evict_for(limits.max_retained_bytes, recipe.size)
+        if inner.retained + recipe.size > max_retained_bytes
+            && !inner.evict_for(max_retained_bytes, recipe.size)
         {
             inner.set_reason(&key, &agent_id, Reason::StorageLimit);
             return;
@@ -3905,7 +3919,6 @@ impl Engine {
     /// the tests directly.
     pub async fn step(self: &Arc<Self>) {
         let now = self.now();
-        let expiry = self.parts.session_expiry.as_millis() as i64;
         // The five asks behind `router_view` (canonicals, pins, cooldowns, overages, member spends) are a round
         // trip apiece, and a tick with nothing due pays none of them. `drop_sessions_of_dead_keys` reads the snapshot
         // alone, which `RouterHandle::snapshot` answers without a command.
@@ -3919,7 +3932,7 @@ impl Engine {
             if inner.closed {
                 return;
             }
-            inner.expire(now, expiry);
+            inner.expire(now);
             inner.drop_sessions_of_dead_keys(&snapshot);
             inner.advance_idle_episodes(&snapshot, now);
             // A probe the ceiling wrote off keeps its entry alive for a turn that may still read it, so the write-off
