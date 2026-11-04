@@ -576,6 +576,7 @@ pub async fn run_until(
         proxy_acceptor,
     ));
     let mut admin_server = tokio::spawn(listen::serve(
+        "admin",
         admin_listener,
         admin_app,
         stop_rx.clone(),
@@ -588,6 +589,7 @@ pub async fn run_until(
         admin_acceptor,
     ));
     let mut metrics_server = tokio::spawn(listen::serve(
+        "metrics",
         metrics_listener,
         metrics_router(
             metrics.clone(),

@@ -66,8 +66,7 @@ pub use ratelimit::{
     FAST_OUTPUT,
 };
 pub use serve::{
-    handshake, serve, stopped, Accepted, HandshakeError, Limits as ListenLimits, LiveAcceptor,
-    ACCEPT_BACKOFF,
+    accept_loop, handshake, serve, Accepted, HandshakeError, Limits as ListenLimits, LiveAcceptor,
 };
 pub use sse::{SseEvent, SseParser};
 

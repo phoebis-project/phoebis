@@ -1,9 +1,10 @@
-//! The proxy listener's accept loop.
+//! The accept loop the proxy, admin and metrics listeners share, and the proxy listener's connections on it.
 //!
 //! The relayed surface is served through hyper directly rather than through `axum::serve` so every accepted
 //! stream can be wrapped in a [`HeadRecorder`]: the caller's original header spelling and order exist nowhere
 //! else by the time a handler runs.
 
+use std::future::Future;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
@@ -12,7 +13,7 @@ use axum::http::Request;
 use axum::Router;
 use boring::ssl::SslAcceptor;
 use hyper_util::rt::{TokioIo, TokioTimer};
-use hyper_util::server::graceful::GracefulShutdown;
+use hyper_util::server::graceful::{GracefulShutdown, Watcher};
 use hyper_util::service::TowerToHyperService;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{watch, Semaphore};
@@ -25,20 +26,19 @@ use crate::messages::{router, Relay, ShutdownMark};
 
 /// How long the loop waits out a listener error. An accept that fails for a reason the process cannot fix,
 /// such as a descriptor limit, fails again immediately, so the pause is what keeps the loop off the CPU.
-pub const ACCEPT_BACKOFF: Duration = Duration::from_millis(50);
+const ACCEPT_BACKOFF: Duration = Duration::from_millis(50);
 
 /// What bounds a connection before a request exists on it: the wait for its head, how many the listener holds
 /// at once, and how long a graceful shutdown waits before it cuts what is still running. The bounds are compiled
-/// in and the router names the values. The shutdown mark beside them bounds nothing, and the proxy listener alone
-/// reads it.
+/// in and the router names the values. The shutdown mark beside them bounds nothing, and the router hands it to
+/// the proxy listener alone.
 #[derive(Clone, Debug)]
 pub struct Limits {
     pub drain_timeout: Duration,
     pub header_read_timeout: Duration,
     pub max_connections: usize,
     /// The relay's shutdown mark, set before the drain deadline's cut so the ends it causes book the router's own
-    /// shutdown. Only the proxy listener's `serve` reads it, so a `Some` handed to the admin or the metrics listener
-    /// sets nothing, as `None` does.
+    /// shutdown. The admin and the metrics listeners serve no relayed stream, so their limits carry `None`.
     pub shutdown_mark: Option<ShutdownMark>,
 }
 
@@ -104,7 +104,7 @@ pub async fn serve(
     listener: TcpListener,
     relay: Arc<Relay>,
     extra: Router,
-    mut stop: watch::Receiver<bool>,
+    stop: watch::Receiver<bool>,
     limits: Limits,
     acceptor: Option<Arc<LiveAcceptor>>,
 ) -> std::io::Result<()> {
@@ -121,13 +121,52 @@ pub async fn serve(
     builder
         .timer(TokioTimer::new())
         .header_read_timeout(limits.header_read_timeout);
+    accept_loop(
+        "proxy",
+        listener,
+        stop,
+        limits,
+        acceptor,
+        move |stream, watcher| {
+            let queue = head_queue();
+            let io = TokioIo::new(HeadRecorder::new(stream, queue.clone()));
+            let service = WithOriginalHead {
+                inner: TowerToHyperService::new(app.clone()),
+                queue,
+            };
+            // No upgrades: no route on the relayed surface switches protocols.
+            watcher.watch(builder.serve_connection(io, service))
+        },
+    )
+    .await
+}
+
+/// Accepts on `listener` until `stop` flips, then waits for the connections already accepted, up to the drain
+/// deadline. With `acceptor` set, every connection completes a TLS handshake under the header read timeout, on the
+/// acceptor current when it was accepted. `connect` then builds the connection's hyper connection inside its task
+/// and runs it under the watcher it is handed, so the stop asks every connection to finish what it holds. `name`
+/// labels the loop's log lines, since the proxy, admin and metrics listeners each run one.
+pub async fn accept_loop<C, F, E>(
+    name: &'static str,
+    listener: TcpListener,
+    mut stop: watch::Receiver<bool>,
+    limits: Limits,
+    acceptor: Option<Arc<LiveAcceptor>>,
+    connect: C,
+) -> std::io::Result<()>
+where
+    C: Fn(Accepted, Watcher) -> F + Send + Sync + 'static,
+    F: Future<Output = Result<(), E>> + Send + 'static,
+    E: std::fmt::Display,
+{
+    let connect = Arc::new(connect);
     let slots = Arc::new(Semaphore::new(limits.max_connections));
     let graceful = GracefulShutdown::new();
     let mut tasks = JoinSet::new();
     loop {
         while tasks.try_join_next().is_some() {}
         // A permit is taken before the accept so a full listener leaves connections in the kernel's backlog
-        // rather than holding a task and a buffer for each; the permit rides with the connection task.
+        // rather than holding a task and a buffer for each. The permit rides with the connection task.
         let permit = tokio::select! {
             permit = slots.clone().acquire_owned() => permit.expect("the listener's semaphore is never closed"),
             _ = stopped(&mut stop) => break,
@@ -136,7 +175,7 @@ pub async fn serve(
             accepted = listener.accept() => match accepted {
                 Ok(accepted) => accepted,
                 Err(error) => {
-                    tracing::debug!(%error, "the proxy listener could not accept a connection");
+                    tracing::debug!(listener = name, %error, "the listener could not accept a connection");
                     tokio::time::sleep(ACCEPT_BACKOFF).await;
                     continue;
                 }
@@ -147,12 +186,11 @@ pub async fn serve(
         // follows would only add a round trip's worth of latency.
         let _ = stream.set_nodelay(true);
         let watcher = graceful.watcher();
-        let builder = builder.clone();
         let acceptor = acceptor.as_ref().map(|live| live.current());
-        let app = app.clone();
+        let connect = Arc::clone(&connect);
         let mut drain = stop.clone();
         // The handshake runs here rather than in the accept loop, so a slow peer holds its own slot and not the
-        // loop; the permit is dropped with the task, so a failed handshake releases it.
+        // loop. The permit is dropped with the task, so a failed handshake releases it.
         tasks.spawn(async move {
             let _slot = permit;
             let handshaken = tokio::select! {
@@ -167,33 +205,26 @@ pub async fn serve(
             let stream = match handshaken {
                 Ok(stream) => stream,
                 Err(error) => {
-                    // A plain-HTTP request on a TLS port lands here too; the bytes are never logged.
-                    tracing::debug!(%peer, %error, "a relayed connection ended at the handshake");
+                    // A plain-HTTP request on a TLS port lands here too. The bytes are never logged.
+                    tracing::debug!(listener = name, %peer, %error, "a connection ended at the handshake");
                     return;
                 }
             };
-            let queue = head_queue();
-            let io = TokioIo::new(HeadRecorder::new(stream, queue.clone()));
-            let service = WithOriginalHead {
-                inner: TowerToHyperService::new(app),
-                queue,
-            };
-            // No upgrades: no route on the relayed surface switches protocols.
-            if let Err(error) = watcher.watch(builder.serve_connection(io, service)).await {
-                tracing::debug!(%error, "a relayed connection ended early");
+            if let Err(error) = connect(stream, watcher).await {
+                tracing::debug!(listener = name, %error, "a connection ended early");
             }
         });
     }
     // Dropped before the wait so the port is free the moment the drain starts rather than when it ends.
     drop(listener);
-    // The graceful wait lets in-flight requests finish; the deadline is the operator's promise that a
-    // shutdown ends within it, so what is still running then is cut rather than left to commit after the
-    // final flush.
+    // The graceful wait lets in-flight requests finish. The deadline is the operator's promise that a shutdown
+    // ends within it, so what is still running then is cut rather than left to commit after the final flush.
     if tokio::time::timeout(limits.drain_timeout, graceful.shutdown())
         .await
         .is_err()
     {
         tracing::warn!(
+            listener = name,
             seconds = limits.drain_timeout.as_secs(),
             "connections still open at the drain deadline were cut"
         );
@@ -212,7 +243,7 @@ pub async fn serve(
 
 /// Resolves once the stop flag is set. The borrowed guard `wait_for` yields is not `Send`, so it is dropped
 /// here rather than becoming part of the accept loop's future.
-pub async fn stopped(stop: &mut watch::Receiver<bool>) {
+async fn stopped(stop: &mut watch::Receiver<bool>) {
     let _ = stop.wait_for(|stop| *stop).await;
 }
 

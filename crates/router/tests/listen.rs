@@ -22,6 +22,7 @@ async fn listening(
     let addr = listener.local_addr().unwrap();
     let (stop, stop_rx) = tokio::sync::watch::channel(false);
     tokio::spawn(phoebis_router::listen::serve(
+        "admin",
         listener,
         app(),
         stop_rx,
@@ -172,6 +173,7 @@ async fn a_stop_ends_a_silent_handshake_well_before_its_bound() {
     let addr = listener.local_addr().unwrap();
     let (stop, stop_rx) = tokio::sync::watch::channel(false);
     let server = tokio::spawn(phoebis_router::listen::serve(
+        "admin",
         listener,
         app(),
         stop_rx,
@@ -215,6 +217,7 @@ async fn a_stop_ends_an_idle_keep_alive_connection_well_before_the_drain_deadlin
     let addr = listener.local_addr().unwrap();
     let (stop, stop_rx) = tokio::sync::watch::channel(false);
     let server = tokio::spawn(phoebis_router::listen::serve(
+        "admin",
         listener,
         app(),
         stop_rx,
