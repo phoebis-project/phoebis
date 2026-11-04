@@ -459,11 +459,7 @@ fn fills(plan: &Plan) -> Vec<Fill> {
             path(&tables.join("subscription_costs.yaml")),
         ),
         value_fill("storage", "encryption_key_file", path(&key_file)),
-        value_fill(
-            "storage",
-            "path",
-            path(&plan.data_dir.join(REGISTRY_FILE)),
-        ),
+        value_fill("storage", "path", path(&plan.data_dir.join(REGISTRY_FILE))),
     ];
     if plan.container {
         fills.push(value_fill(
