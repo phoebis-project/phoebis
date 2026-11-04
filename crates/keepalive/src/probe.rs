@@ -679,8 +679,7 @@ impl Inner {
             covered: false,
         });
         let Some(account) = result.account.clone() else {
-            self.set_reason(key, agent_id, Reason::MissingAccount);
-            self.pause(key, agent_id);
+            self.pause(key, agent_id, Reason::MissingAccount);
             return Applied::Landed { covered: false };
         };
         let body = result.body.unwrap_or_default();
@@ -696,8 +695,7 @@ impl Inner {
             .cloned();
         let (Some(usage), true, Some(content)) = (ProbeUsage::parse(&body), output_known, content)
         else {
-            self.set_reason(key, agent_id, Reason::InvalidProbeUsage);
-            self.pause(key, agent_id);
+            self.pause(key, agent_id, Reason::InvalidProbeUsage);
             return Applied::Landed { covered: false };
         };
         let agent = self
@@ -709,8 +707,7 @@ impl Inner {
             .unwrap();
         agent.usage.add(usage);
         if usage.output != 0 || !content.is_empty() {
-            self.set_reason(key, agent_id, Reason::UnexpectedOutput);
-            self.pause(key, agent_id);
+            self.pause(key, agent_id, Reason::UnexpectedOutput);
             return Applied::Landed { covered: false };
         }
         let agent = self
@@ -739,8 +736,7 @@ impl Inner {
         }
         let cold = agent.cold;
         if cold >= cold_limit {
-            self.set_reason(key, agent_id, Reason::RepeatedColdProbe);
-            self.pause(key, agent_id);
+            self.pause(key, agent_id, Reason::RepeatedColdProbe);
             return Applied::Landed { covered: false };
         }
         if usage.evidence() == 0 {
@@ -756,8 +752,7 @@ impl Inner {
         // A probe that read part of the prefix and rebuilt the rest never warmed the whole entry; one that
         // read none of it rebuilt the entry, which the cold streak counts instead.
         if usage.evidence() < job.expected || (usage.read > 0 && !covered) {
-            self.set_reason(key, agent_id, Reason::PartialCacheCoverage);
-            self.pause(key, agent_id);
+            self.pause(key, agent_id, Reason::PartialCacheCoverage);
             return Applied::Landed { covered: false };
         }
         let agent = self
@@ -797,7 +792,8 @@ impl Inner {
         Applied::Landed { covered }
     }
 
-    pub(crate) fn pause(&mut self, key: &SessionKey, agent_id: &str) {
+    pub(crate) fn pause(&mut self, key: &SessionKey, agent_id: &str, reason: Reason) {
+        self.set_reason(key, agent_id, reason);
         if let Some(agent) = self
             .sessions
             .get_mut(key)
@@ -858,13 +854,11 @@ impl Inner {
         // Every obstacle is named, so one added later fails to build here until it is given its hold.
         match (exhausted, obstacle) {
             (true, Some(ProbeObstacle::Operator)) => {
-                self.set_reason(key, agent_id, Reason::Paused);
-                self.pause(key, agent_id);
+                self.pause(key, agent_id, Reason::Paused);
                 return;
             }
             (true, Some(ProbeObstacle::SubscriptionEnded)) => {
-                self.set_reason(key, agent_id, Reason::IneligibleCredential);
-                self.pause(key, agent_id);
+                self.pause(key, agent_id, Reason::IneligibleCredential);
                 return;
             }
             // A moved key's next probe admits under its new pool.
@@ -885,8 +879,7 @@ impl Inner {
                 )
             }
             (true, Some(ProbeObstacle::ReauthRequired)) => {
-                self.set_reason(key, agent_id, Reason::ProbeAuthenticationError);
-                self.pause(key, agent_id);
+                self.pause(key, agent_id, Reason::ProbeAuthenticationError);
                 return;
             }
             (_, Some(ProbeObstacle::Budget)) if status == 429 => {
@@ -941,18 +934,15 @@ impl Inner {
             500..=599 => (Reason::RetryableProbeError, RetryWait::Step),
             // Under these codes the relay's 403 refuses the probe's own request shape, not the credential.
             _ if matches!(error_code, Some("client_contract") | Some("client_drift")) => {
-                self.set_reason(key, agent_id, Reason::UnsupportedProbe);
-                self.pause(key, agent_id);
+                self.pause(key, agent_id, Reason::UnsupportedProbe);
                 return;
             }
             401 | 403 => {
-                self.set_reason(key, agent_id, Reason::ProbeAuthenticationError);
-                self.pause(key, agent_id);
+                self.pause(key, agent_id, Reason::ProbeAuthenticationError);
                 return;
             }
             400..=499 => {
-                self.set_reason(key, agent_id, Reason::UnsupportedProbe);
-                self.pause(key, agent_id);
+                self.pause(key, agent_id, Reason::UnsupportedProbe);
                 return;
             }
             _ => (Reason::ProbeTransportError, RetryWait::Step),
@@ -989,8 +979,7 @@ impl Inner {
         }
         .min(agent.timing.retry_max_ms);
         if agent.expires.is_some_and(|expires| now + delay >= expires) {
-            self.set_reason(key, agent_id, Reason::ProbeRetryLimit);
-            self.pause(key, agent_id);
+            self.pause(key, agent_id, Reason::ProbeRetryLimit);
             return;
         }
         agent.retry_at = Some(now + delay);
