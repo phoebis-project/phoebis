@@ -3538,8 +3538,10 @@ impl Task {
                 row.scope = self.state.canonical_scope(&row.scope);
                 // A fast-lane row moves the session for fast mode alone; the name tells the drawer it was no
                 // rate limit on the account's standard traffic.
-                let fast_lane =
-                    matches!(row.scope, CooldownScope::Fast | CooldownScope::FastCredits);
+                let fast_lane = match row.scope {
+                    CooldownScope::Fast | CooldownScope::FastCredits => true,
+                    CooldownScope::Account | CooldownScope::Model(_) => false,
+                };
                 let moved = if fast_lane { "fast_lane" } else { "cooldown" };
                 let cause = MoveCause::Cooldown {
                     scope: row.scope.to_string(),
