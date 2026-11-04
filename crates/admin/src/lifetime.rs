@@ -49,7 +49,11 @@ impl<V: Clone> OldPart<V> {
             return Ok(part.clone());
         }
         let part = read().await?;
-        *cached = Some((key, part.clone()));
+        // A poll that read its clock before the hour turned can take the lock after one that read it after, so an
+        // older hour answers its own read and leaves the newer entry for the polls that follow.
+        if cached.as_ref().is_none_or(|(at, _)| at.0 <= key.0) {
+            *cached = Some((key, part.clone()));
+        }
         Ok(part)
     }
 }
