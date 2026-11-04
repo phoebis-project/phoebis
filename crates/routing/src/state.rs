@@ -1055,9 +1055,6 @@ pub struct HeadMark {
     pub at: i64,
 }
 
-/// The `window_ceiling` a pool is created with.
-pub const DEFAULT_WINDOW_CEILING: f64 = 0.95;
-
 /// The utilization of `window` on `pool` above which no move or placement lands and a round fires on the window. The
 /// row holds one fraction for every plan window, read through this one function, so a ceiling per window is one
 /// column and one arm here.

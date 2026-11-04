@@ -7,7 +7,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_routing::{pattern, rules};
-use phoebis_store::{CooldownRow, CooldownScope};
+use phoebis_store::CooldownRow;
 use utoipa::ToSchema;
 
 use crate::openapi::{ErrorBody, RouterUnavailable, StorageFailure};
@@ -63,14 +63,6 @@ fn cooldown_json(row: &CooldownRow) -> ModelCooldown {
     }
 }
 
-/// The model a `model:`-scoped row cools, or `None` for an account-wide row.
-fn model_of(scope: &CooldownScope) -> Option<&str> {
-    match scope {
-        CooldownScope::Model(model) => Some(model),
-        CooldownScope::Account | CooldownScope::Fast | CooldownScope::FastCredits => None,
-    }
-}
-
 /// Read the key's processed model rules.
 #[utoipa::path(
     get,
@@ -113,7 +105,7 @@ pub(crate) async fn key_models(
     let mut live: Vec<(&CooldownRow, &str)> = cooldowns
         .iter()
         .filter(|c| c.until > now && members.iter().any(|m| m.account_id == c.account_id))
-        .filter_map(|c| model_of(&c.scope).map(|model| (c, model)))
+        .filter_map(|c| c.scope.model().map(|model| (c, model)))
         .collect();
     live.sort_by(|(a, _), (b, _)| a.account_id.cmp(&b.account_id));
     let processed = rules::process(&key.model_rules, key.model_rules_mode, &pool.model_rules);

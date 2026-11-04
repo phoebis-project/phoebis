@@ -179,7 +179,7 @@ fn row_to_account(row: &Row<'_>) -> rusqlite::Result<AccountRow> {
     })
 }
 
-pub(crate) fn identity_json(row: &AccountRow) -> Result<Option<String>, StoreError> {
+fn identity_json(row: &AccountRow) -> Result<Option<String>, StoreError> {
     Ok(row
         .identity
         .as_ref()
@@ -187,12 +187,14 @@ pub(crate) fn identity_json(row: &AccountRow) -> Result<Option<String>, StoreErr
         .transpose()?)
 }
 
-/// The account row under the incarnation one past its id's tombstone, stamped `at`.
+/// The account row under the incarnation one past its id's tombstone, stamped `at`. Answers the incarnation it took.
 pub(crate) fn insert_account_row(
     tx: &rusqlite::Transaction<'_>,
     row: &AccountRow,
     at: i64,
-) -> Result<(), StoreError> {
+) -> Result<u64, StoreError> {
+    let identity_json = identity_json(row)?;
+    let incarnation = next_incarnation_in(tx, Tombstones::Account, &row.id)?;
     tx.execute(
         "INSERT INTO accounts (id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, state, state_cause, created_at, updated_at) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?10, ?9, ?9)",
@@ -201,15 +203,39 @@ pub(crate) fn insert_account_row(
             row.kind,
             row.label,
             row.enabled,
-            identity_json(row)?,
-            next_incarnation(tx, &row.id)? as i64,
+            identity_json,
+            incarnation as i64,
             row.lifecycle_generation as i64,
             row.state,
             at,
             row.state_cause,
         ],
     )?;
-    Ok(())
+    Ok(incarnation)
+}
+
+/// `Store::set_profile`'s statement on the caller's connection, stamped `at`, so a create writes the profile columns
+/// as a poll does. Answers how many rows it wrote.
+pub(crate) fn write_profile_in(
+    conn: &rusqlite::Connection,
+    id: &str,
+    json: &str,
+    subscription: &SubscriptionRow,
+    at: i64,
+) -> Result<usize, StoreError> {
+    Ok(conn.execute(
+        "UPDATE accounts SET profile_json = ?2, subscription_plan = ?3, subscription_tier = ?4, \
+         subscription_since = ?5, trial_ends_at = ?6, updated_at = ?7 WHERE id = ?1",
+        params![
+            id,
+            json,
+            subscription.plan,
+            subscription.tier,
+            subscription.since,
+            subscription.trial_ends_at,
+            at,
+        ],
+    )?)
 }
 
 // The columns `row_to_account` reads, in its order.
@@ -437,22 +463,15 @@ impl Store {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let now = self.now_ms();
-        let incarnation: Option<i64> = tx
-            .query_row(
-                "SELECT incarnation FROM accounts WHERE id = ?1",
-                params![id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let incarnation = incarnation.ok_or_else(|| StoreError::AccountNotFound(id.to_string()))?;
-        tx.execute("DELETE FROM accounts WHERE id = ?1", params![id])?;
+        if !delete_and_bury(&tx, "accounts", Tombstones::Account, id)? {
+            return Err(StoreError::AccountNotFound(id.to_string()));
+        }
         // An open attempt is the deleted holder's, and left standing it would block the next holder's first
         // refresh or quarantine it at the next start. A settled one stays as history under its incarnation.
         tx.execute(
             &format!("DELETE FROM refresh_attempts WHERE account_id = ?1 AND ({PENDING_WHERE})"),
             params![id],
         )?;
-        bury_in(&tx, Tombstones::Account, id, incarnation)?;
         crate::registry::record_change(&tx, now, actor, "account_deleted", id, "{}")?;
         tx.commit()?;
         Ok(())
@@ -483,20 +502,7 @@ impl Store {
         subscription: &SubscriptionRow,
     ) -> Result<(), StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
-        if conn.execute(
-            "UPDATE accounts SET profile_json = ?2, subscription_plan = ?3, subscription_tier = ?4, \
-             subscription_since = ?5, trial_ends_at = ?6, updated_at = ?7 WHERE id = ?1",
-            params![
-                id,
-                json,
-                subscription.plan,
-                subscription.tier,
-                subscription.since,
-                subscription.trial_ends_at,
-                self.now_ms(),
-            ],
-        )? == 0
-        {
+        if write_profile_in(&conn, id, json, subscription, self.now_ms())? == 0 {
             return Err(StoreError::AccountNotFound(id.to_string()));
         }
         Ok(())
@@ -720,12 +726,6 @@ pub struct SubscriptionRow {
     pub trial_ends_at: Option<i64>,
 }
 
-/// The incarnation a fresh row under `id` takes: one past the tombstone of whatever held that id before,
-/// and 1 when the id is new.
-pub(crate) fn next_incarnation(conn: &rusqlite::Connection, id: &str) -> Result<u64, StoreError> {
-    next_incarnation_in(conn, Tombstones::Account, id)
-}
-
 /// The tables that keep a deleted id's incarnation, one per kind of row a later row can take the id of.
 #[derive(Clone, Copy)]
 pub(crate) enum Tombstones {
@@ -763,6 +763,29 @@ pub(crate) fn bury_in(
         params![id, incarnation],
     )?;
     Ok(())
+}
+
+/// Deletes the row under `id` from `table` and buries its incarnation in `tombstones`, answering `false` when no row
+/// stands under the id.
+pub(crate) fn delete_and_bury(
+    conn: &rusqlite::Connection,
+    table: &str,
+    tombstones: Tombstones,
+    id: &str,
+) -> Result<bool, StoreError> {
+    let incarnation: Option<i64> = conn
+        .query_row(
+            &format!("SELECT incarnation FROM {table} WHERE id = ?1"),
+            params![id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(incarnation) = incarnation else {
+        return Ok(false);
+    };
+    conn.execute(&format!("DELETE FROM {table} WHERE id = ?1"), params![id])?;
+    bury_in(conn, tombstones, id, incarnation)?;
+    Ok(true)
 }
 
 /// The incarnation a fresh row under `id` takes in the `tombstones` table: one past what held the id before,

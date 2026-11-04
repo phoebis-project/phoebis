@@ -2,13 +2,14 @@
 //! change log every write appends to.
 
 use std::collections::BTreeSet;
+use std::sync::LazyLock;
 
 use phoebis_guardrails::{Condition, GuardrailAction, GuardrailMode};
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
 use rusqlite::{params, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 
-use crate::accounts::Tombstones;
+use crate::accounts::{delete_and_bury, Tombstones};
 use crate::credentials::store_api_key_secret;
 use crate::{
     AccountRow, AccountState, NewBundle, Secret, StateCause, Store, StoreError, SubscriptionRow,
@@ -232,6 +233,10 @@ impl Default for Affinity {
     }
 }
 
+/// The `window_ceiling` a pool is created with: a margin below every window's wall for a stale reading or a large
+/// turn, while a session rarely moves off a window it would have finished warm.
+pub const DEFAULT_WINDOW_CEILING: f64 = 0.95;
+
 #[derive(Clone, Debug)]
 pub struct PoolRow {
     pub id: String,
@@ -276,8 +281,7 @@ impl PoolRow {
             strategy: Strategy::Pace,
             affinity_ttl_seconds: 3600,
             overage_policy: OveragePolicy::PreferPlan,
-            // The routing crate's `DEFAULT_WINDOW_CEILING`, which the store cannot name.
-            window_ceiling: 0.95,
+            window_ceiling: DEFAULT_WINDOW_CEILING,
             model_rules: Vec::new(),
             keepalive_json: "{}".into(),
             body_capture_hours: 0,
@@ -443,6 +447,13 @@ impl SubjectKind {
         match self {
             SubjectKind::Key => StoreError::KeyNotFound(id),
             SubjectKind::Pool => StoreError::PoolNotFound(id),
+        }
+    }
+
+    fn subject(self, id: String) -> AttachmentSubject {
+        match self {
+            SubjectKind::Key => AttachmentSubject::Key(id),
+            SubjectKind::Pool => AttachmentSubject::Pool(id),
         }
     }
 }
@@ -695,20 +706,23 @@ pub(crate) fn is_constraint(error: &rusqlite::Error) -> bool {
 }
 
 /// A create's refused insert as its caller reads it: `IdTaken` when a constraint refused the row and a row stands
-/// under its id, since the route's own check reads outside the transaction and another create can land between.
+/// under its id, since the route's own check reads outside the transaction and another create can land between, and
+/// `unclaimed`'s answer when no row does. Any other error, a read's before the insert among them, passes through as
+/// it came.
 fn create_failure(
     tx: &Transaction<'_>,
     table: &str,
     id: &str,
-    error: rusqlite::Error,
+    error: StoreError,
+    unclaimed: impl FnOnce(rusqlite::Error) -> StoreError,
 ) -> StoreError {
-    if !is_constraint(&error) {
-        return error.into();
-    }
-    match row_exists(tx, table, id) {
-        Ok(true) => StoreError::IdTaken(id.to_string()),
-        Ok(false) => error.into(),
-        Err(probe) => probe,
+    match error {
+        StoreError::Sqlite(error) if is_constraint(&error) => match row_exists(tx, table, id) {
+            Ok(true) => StoreError::IdTaken(id.to_string()),
+            Ok(false) => unclaimed(error),
+            Err(probe) => probe,
+        },
+        other => other,
     }
 }
 
@@ -737,6 +751,38 @@ fn json_column<T: serde::de::DeserializeOwned>(
     serde_json::from_str(&raw).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(idx, rusqlite::types::Type::Text, Box::new(e))
     })
+}
+
+/// The 33 pool columns the insert and the update write, in the order `pool_params!` binds them. `POOL_SELECT` reads
+/// them in this order too, so `row_to_pool` indexes each column by its bind.
+macro_rules! pool_columns {
+    () => {
+        "id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, window_ceiling, model_rules_json, \
+         keepalive_json, body_capture_hours, prefer_subscription, shed_cap, burn_average_seconds, shed_dwell_seconds, \
+         load_shedding, migrate_when_spent, warm_sessions, retry_in_place_seconds, in_flight_cap, \
+         overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics, affinity_mode, \
+         subagent_placement, session_placement, min_shared_prefix_tokens, auto_mode_server, slow_down, \
+         slow_down_stretch_seconds, slow_down_hold_seconds, return_to_plan, return_to_plan_dwell_seconds"
+    };
+}
+
+/// The binds `?1` to `?9` the guardrail insert and the guardrail update share, in their column order, then each
+/// statement's own tail.
+macro_rules! guardrail_params {
+    ($row:ident, $($tail:expr),+ $(,)?) => {
+        params![
+            $row.id,
+            $row.name,
+            $row.description,
+            $row.enabled,
+            $row.mode.as_str(),
+            $row.action.as_str(),
+            serde_json::to_string(&$row.conditions)?,
+            $row.preset.as_ref().map(|preset| preset.id.as_str()),
+            $row.preset.as_ref().map(|preset| preset.version),
+            $($tail),+
+        ]
+    };
 }
 
 /// The binds `?1` to `?33` the pool insert and the pool update share, in their column order, then each statement's
@@ -842,14 +888,7 @@ impl Store {
         let mut labels = Vec::new();
         for kind in [SubjectKind::Pool, SubjectKind::Key] {
             let mut stmt = tx.prepare(&format!("SELECT id, label FROM {}", kind.table()))?;
-            let rows = stmt.query_map([], |r| {
-                let id = r.get(0)?;
-                let subject = match kind {
-                    SubjectKind::Key => AttachmentSubject::Key(id),
-                    SubjectKind::Pool => AttachmentSubject::Pool(id),
-                };
-                Ok((subject, r.get(1)?))
-            })?;
+            let rows = stmt.query_map([], |r| Ok((kind.subject(r.get(0)?), r.get(1)?)))?;
             labels.extend(rows.collect::<rusqlite::Result<Vec<_>>>()?);
         }
         let index = GuardrailIndex {
@@ -902,12 +941,23 @@ impl Store {
         let now = self.now_ms();
         let incarnation = crate::accounts::next_incarnation_in(&tx, Tombstones::Pool, &row.id)?;
         tx.execute(
-            "INSERT INTO pools (id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, window_ceiling, model_rules_json, keepalive_json, body_capture_hours, prefer_subscription, shed_cap, burn_average_seconds, shed_dwell_seconds, load_shedding, migrate_when_spent, warm_sessions, retry_in_place_seconds, in_flight_cap, overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics, affinity_mode, subagent_placement, session_placement, min_shared_prefix_tokens, auto_mode_server, slow_down, slow_down_stretch_seconds, slow_down_hold_seconds, return_to_plan, return_to_plan_dwell_seconds, created_at, updated_at, incarnation) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?34, ?35)",
+            concat!(
+                "INSERT INTO pools (",
+                pool_columns!(),
+                ", created_at, updated_at, incarnation) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?34, ?35)"
+            ),
             pool_params!(row, now, incarnation as i64),
         )
-        .map_err(|error| create_failure(&tx, "pools", &row.id, error))?;
-        record_change(&tx, now, actor, "pool_created", &row.id, &pool_diff(row))?;
+        .map_err(|error| create_failure(&tx, "pools", &row.id, error.into(), StoreError::from))?;
+        record_change(
+            &tx,
+            now,
+            actor,
+            "pool_created",
+            &row.id,
+            &pool_fields(row).to_string(),
+        )?;
         if let Some(members) = members {
             set_pool_members_in(&tx, &row.id, members, now, actor)?;
         }
@@ -971,12 +1021,9 @@ impl Store {
             )
             .optional()?
             .ok_or_else(|| StoreError::PoolNotFound(row.id.clone()))?;
-        let held = match guardrails {
-            Some(_) => subject_guardrails(&tx, SubjectKind::Pool, &row.id)?,
-            None => Vec::new(),
-        };
-        let mut pairs = pool_pairs(&before, row);
+        let mut pairs = changed(&pool_fields(&before), &pool_fields(row));
         if let Some(ids) = guardrails {
+            let held = subject_guardrails(&tx, SubjectKind::Pool, &row.id)?;
             with_guardrails_change(&mut pairs, &held, ids);
         }
         let pairs_changed = !pairs.is_empty();
@@ -997,7 +1044,7 @@ impl Store {
         }
         let at = stamp_past(self.now_ms(), expected_updated_at);
         let updated = tx.execute(
-            "UPDATE pools SET label = ?2, enabled = ?3, strategy = ?4, affinity_ttl_seconds = ?5, overage_policy = ?6, window_ceiling = ?7, model_rules_json = ?8, keepalive_json = ?9, body_capture_hours = ?10, prefer_subscription = ?11, shed_cap = ?12, burn_average_seconds = ?13, shed_dwell_seconds = ?14, load_shedding = ?15, migrate_when_spent = ?16, warm_sessions = ?17, retry_in_place_seconds = ?18, in_flight_cap = ?19, overage_move_grace_minutes = ?20, wind_down_minutes = ?21, cache_ttl_json = ?22, cache_diagnostics = ?23, affinity_mode = ?24, subagent_placement = ?25, session_placement = ?26, min_shared_prefix_tokens = ?27, auto_mode_server = ?28, slow_down = ?29, slow_down_stretch_seconds = ?30, slow_down_hold_seconds = ?31, return_to_plan = ?32, return_to_plan_dwell_seconds = ?33, updated_at = ?34 WHERE id = ?1 AND updated_at = ?35 AND incarnation = ?36",
+            &POOL_UPDATE,
             pool_params!(row, at, expected_updated_at, row.incarnation as i64),
         )?;
         // The row stands, read above, so a fence that matched nothing means another write moved it.
@@ -1032,20 +1079,13 @@ impl Store {
         if keys > 0 {
             return Err(StoreError::PoolInUse(id.to_string()));
         }
-        let incarnation: Option<i64> = tx
-            .query_row(
-                "SELECT incarnation FROM pools WHERE id = ?1",
-                params![id],
-                |r| r.get(0),
-            )
-            .optional()?;
-        let incarnation = incarnation.ok_or_else(|| StoreError::PoolNotFound(id.to_string()))?;
-        tx.execute("DELETE FROM pools WHERE id = ?1", params![id])?;
+        if !delete_and_bury(&tx, "pools", Tombstones::Pool, id)? {
+            return Err(StoreError::PoolNotFound(id.to_string()));
+        }
         tx.execute(
             "DELETE FROM guardrail_attachments WHERE subject_kind = ?1 AND subject_id = ?2",
             params![SubjectKind::Pool, id],
         )?;
-        crate::accounts::bury_in(&tx, Tombstones::Pool, id, incarnation)?;
         record_change(&tx, self.now_ms(), actor, "pool_deleted", id, "{}")?;
         tx.commit()?;
         Ok(())
@@ -1053,8 +1093,9 @@ impl Store {
 
     pub fn pool_members(&self, pool_id: &str) -> Result<Vec<PoolMember>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
-        let mut stmt =
-            conn.prepare("SELECT pool_id, account_id, priority, budget_daily_usd, budget_monthly_usd FROM pool_members WHERE pool_id = ?1 ORDER BY priority, account_id")?;
+        let mut stmt = conn.prepare(&format!(
+            "{MEMBER_SELECT} WHERE pool_id = ?1 ORDER BY priority, account_id"
+        ))?;
         let rows = stmt.query_map(params![pool_id], row_to_member)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(StoreError::from)
@@ -1148,8 +1189,15 @@ impl Store {
                 incarnation as i64
             ],
         )
-        .map_err(|error| create_failure(&tx, "api_keys", &row.id, error))?;
-        record_change(&tx, now, actor, "key_created", &row.id, &key_diff(row))?;
+        .map_err(|error| create_failure(&tx, "api_keys", &row.id, error.into(), StoreError::from))?;
+        record_change(
+            &tx,
+            now,
+            actor,
+            "key_created",
+            &row.id,
+            &key_fields(row).to_string(),
+        )?;
         let written = tx.query_row(
             &format!("{KEY_SELECT} WHERE id = ?1"),
             params![row.id],
@@ -1194,7 +1242,6 @@ impl Store {
             .query_row(&key_row, params![row.id], row_to_key)
             .optional()?
             .ok_or_else(|| StoreError::KeyNotFound(row.id.clone()))?;
-        let held = subject_guardrails(&tx, SubjectKind::Key, &row.id)?;
         let at = stamp_past(self.now_ms(), expected_updated_at);
         let updated = tx.execute(
             "UPDATE api_keys SET label = ?2, notes = ?3, pool_id = ?4, enabled = ?5, expires_at = ?6, model_rules_json = ?7, model_rules_mode = ?8, long_context_twins = ?9, keepalive_opt_out = ?10, body_capture_hours = ?11, auto_mode_server = ?12, updated_at = ?13 WHERE id = ?1 AND updated_at = ?14 AND incarnation = ?15",
@@ -1222,8 +1269,9 @@ impl Store {
         }
         // Read back rather than taken from `row`: the edit leaves the display prefix, which the pairs name too.
         let after = tx.query_row(&key_row, params![row.id], row_to_key)?;
-        let mut pairs = key_pairs(&before, &after);
+        let mut pairs = changed(&key_fields(&before), &key_fields(&after));
         if let Some(ids) = guardrails {
+            let held = subject_guardrails(&tx, SubjectKind::Key, &row.id)?;
             with_guardrails_change(&mut pairs, &held, ids);
         }
         let diff = serde_json::Value::Object(pairs).to_string();
@@ -1308,20 +1356,13 @@ impl Store {
     pub fn delete_api_key(&self, id: &str, actor: &str) -> Result<(), StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let incarnation: Option<i64> = tx
-            .query_row(
-                "SELECT incarnation FROM api_keys WHERE id = ?1",
-                params![id],
-                |r| r.get(0),
-            )
-            .optional()?;
-        let incarnation = incarnation.ok_or_else(|| StoreError::KeyNotFound(id.to_string()))?;
-        tx.execute("DELETE FROM api_keys WHERE id = ?1", params![id])?;
+        if !delete_and_bury(&tx, "api_keys", Tombstones::ApiKey, id)? {
+            return Err(StoreError::KeyNotFound(id.to_string()));
+        }
         tx.execute(
             "DELETE FROM guardrail_attachments WHERE subject_kind = ?1 AND subject_id = ?2",
             params![SubjectKind::Key, id],
         )?;
-        crate::accounts::bury_in(&tx, Tombstones::ApiKey, id, incarnation)?;
         tx.execute("DELETE FROM pins WHERE key_id = ?1", params![id])?;
         tx.execute(
             "DELETE FROM session_first_seen WHERE key_id = ?1",
@@ -1366,11 +1407,8 @@ impl Store {
     ) -> Result<(), StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        // `create_failure` answers any error but a constraint's as it came, so the row's own reads pass through.
-        crate::accounts::insert_account_row(&tx, row, at).map_err(|error| match error {
-            StoreError::Sqlite(error) => create_failure(&tx, "accounts", &row.id, error),
-            other => other,
-        })?;
+        crate::accounts::insert_account_row(&tx, row, at)
+            .map_err(|error| create_failure(&tx, "accounts", &row.id, error, StoreError::from))?;
         if let Some(secret) = secret {
             store_api_key_secret(&tx, &self.key, &row.id, secret)?;
         }
@@ -1402,38 +1440,13 @@ impl Store {
         self.fail_injected_commit()?;
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let identity_json = crate::accounts::identity_json(row)?;
-        let incarnation = crate::accounts::next_incarnation(&tx, &row.id)?;
-        let inserted = tx.execute(
-            "INSERT INTO accounts (id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, \
-             state, state_cause, profile_json, subscription_plan, subscription_tier, subscription_since, trial_ends_at, \
-             created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15)",
-            params![
-                row.id,
-                row.kind,
-                row.label,
-                row.enabled,
-                identity_json,
-                incarnation as i64,
-                row.lifecycle_generation as i64,
-                row.state,
-                row.state_cause,
-                profile_json,
-                subscription.plan,
-                subscription.tier,
-                subscription.since,
-                subscription.trial_ends_at,
-                at,
-            ],
-        );
-        if let Err(error) = inserted {
-            return Err(match create_failure(&tx, "accounts", &row.id, error) {
-                // The primary key or the identity index, and with no row under the id it is the identity's.
-                StoreError::Sqlite(error) if is_constraint(&error) => StoreError::IdentityTaken,
-                other => other,
-            });
-        }
+        let incarnation = crate::accounts::insert_account_row(&tx, row, at).map_err(|error| {
+            // The primary key or the identity index, and with no row under the id it is the identity's.
+            create_failure(&tx, "accounts", &row.id, error, |_| {
+                StoreError::IdentityTaken
+            })
+        })?;
+        crate::accounts::write_profile_in(&tx, &row.id, profile_json, subscription, at)?;
         let generation = self.commit_credentials_in(
             &tx,
             &row.id,
@@ -1588,30 +1601,20 @@ impl Store {
         tx.execute(
             "INSERT INTO guardrails (id, name, description, enabled, mode, action, conditions_json, preset_id, preset_version, incarnation, created_at, updated_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
-            params![
-                row.id,
-                row.name,
-                row.description,
-                row.enabled,
-                row.mode.as_str(),
-                row.action.as_str(),
-                serde_json::to_string(&row.conditions)?,
-                row.preset.as_ref().map(|preset| preset.id.as_str()),
-                row.preset.as_ref().map(|preset| preset.version),
-                incarnation as i64,
-                now
-            ],
+            guardrail_params!(row, incarnation as i64, now),
         )?;
         set_guardrail_subjects_in(&tx, &row.id, SubjectKind::Pool, pools, now)?;
         set_guardrail_subjects_in(&tx, &row.id, SubjectKind::Key, keys, now)?;
         check_guardrail_bounds(&tx, &bound_pools(&tx, Some(pools), Some(keys))?)?;
         // Read back rather than taken from the caller, so the lists sit in the order the update logs them.
-        let diff = guardrail_diff(
-            row,
-            &guardrail_subjects(&tx, &row.id, SubjectKind::Pool)?,
-            &guardrail_subjects(&tx, &row.id, SubjectKind::Key)?,
-        );
-        record_change(&tx, now, actor, "guardrail_created", &row.id, &diff)?;
+        record_change(
+            &tx,
+            now,
+            actor,
+            "guardrail_created",
+            &row.id,
+            &guardrail_fields(&tx, row)?.to_string(),
+        )?;
         let written = tx.query_row(
             &format!("{GUARDRAIL_SELECT} WHERE id = ?1"),
             params![row.id],
@@ -1642,28 +1645,11 @@ impl Store {
             )
             .optional()?
             .ok_or_else(|| StoreError::GuardrailNotFound(row.id.clone()))?;
-        let before = guardrail_fields(
-            &before,
-            &guardrail_subjects(&tx, &row.id, SubjectKind::Pool)?,
-            &guardrail_subjects(&tx, &row.id, SubjectKind::Key)?,
-        );
+        let before = guardrail_fields(&tx, &before)?;
         let at = stamp_past(self.now_ms(), expected_updated_at);
         let updated = tx.execute(
             "UPDATE guardrails SET name = ?2, description = ?3, enabled = ?4, mode = ?5, action = ?6, conditions_json = ?7, preset_id = ?8, preset_version = ?9, updated_at = ?10 WHERE id = ?1 AND updated_at = ?11 AND incarnation = ?12",
-            params![
-                row.id,
-                row.name,
-                row.description,
-                row.enabled,
-                row.mode.as_str(),
-                row.action.as_str(),
-                serde_json::to_string(&row.conditions)?,
-                row.preset.as_ref().map(|preset| preset.id.as_str()),
-                row.preset.as_ref().map(|preset| preset.version),
-                at,
-                expected_updated_at,
-                row.incarnation as i64
-            ],
+            guardrail_params!(row, at, expected_updated_at, row.incarnation as i64),
         )?;
         // The row stands, read above, so a fence that matched nothing means another write moved it.
         if updated == 0 {
@@ -1676,11 +1662,7 @@ impl Store {
             set_guardrail_subjects_in(&tx, &row.id, SubjectKind::Key, keys, at)?;
         }
         check_guardrail_bounds(&tx, &bound_pools(&tx, pools, keys)?)?;
-        let after = guardrail_fields(
-            row,
-            &guardrail_subjects(&tx, &row.id, SubjectKind::Pool)?,
-            &guardrail_subjects(&tx, &row.id, SubjectKind::Key)?,
-        );
+        let after = guardrail_fields(&tx, row)?;
         let diff = serde_json::Value::Object(changed(&before, &after)).to_string();
         record_change(&tx, at, actor, "guardrail_updated", &row.id, &diff)?;
         tx.commit()?;
@@ -1693,26 +1675,14 @@ impl Store {
     pub fn delete_guardrail(&self, id: &str, actor: &str) -> Result<(), StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let incarnation: Option<i64> = tx
-            .query_row(
-                "SELECT incarnation FROM guardrails WHERE id = ?1",
-                params![id],
-                |r| r.get(0),
-            )
-            .optional()?;
-        let incarnation =
-            incarnation.ok_or_else(|| StoreError::GuardrailNotFound(id.to_string()))?;
         let now = self.now_ms();
-        let subjects = [SubjectKind::Pool, SubjectKind::Key]
-            .map(|kind| Ok((kind.table(), guardrail_subjects(&tx, id, kind)?)))
-            .into_iter()
-            .collect::<Result<Vec<_>, StoreError>>()?;
-        tx.execute("DELETE FROM guardrails WHERE id = ?1", params![id])?;
-        crate::accounts::bury_in(&tx, Tombstones::Guardrail, id, incarnation)?;
-        for (table, subject_ids) in &subjects {
-            for subject_id in subject_ids {
-                stamp_subject(&tx, table, subject_id, now)?;
+        for kind in [SubjectKind::Pool, SubjectKind::Key] {
+            for subject_id in guardrail_subjects(&tx, id, kind)? {
+                stamp_subject(&tx, kind.table(), &subject_id, now)?;
             }
+        }
+        if !delete_and_bury(&tx, "guardrails", Tombstones::Guardrail, id)? {
+            return Err(StoreError::GuardrailNotFound(id.to_string()));
         }
         record_change(&tx, now, actor, "guardrail_deleted", id, "{}")?;
         tx.commit()?;
@@ -1823,12 +1793,30 @@ fn subject_guardrails(
         .map_err(StoreError::from)
 }
 
-/// By id, so a refusal names the same first key over the bound on every run.
-fn pool_key_ids(tx: &Transaction<'_>, pool_id: &str) -> Result<Vec<String>, StoreError> {
-    let mut stmt = tx.prepare("SELECT id FROM api_keys WHERE pool_id = ?1 ORDER BY id")?;
-    let rows = stmt.query_map(params![pool_id], |r| r.get(0))?;
-    rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(StoreError::from)
+/// Each key of the pool by id with its own guardrails, off one read, so a refusal names the same first key over the
+/// bound on every run.
+fn pool_key_lists(
+    tx: &Transaction<'_>,
+    pool_id: &str,
+) -> Result<Vec<(String, Vec<String>)>, StoreError> {
+    let mut stmt = tx.prepare(
+        "SELECT k.id, a.guardrail_id FROM api_keys k \
+         LEFT JOIN guardrail_attachments a ON a.subject_kind = ?2 AND a.subject_id = k.id \
+         WHERE k.pool_id = ?1 ORDER BY k.id",
+    )?;
+    let mut rows = stmt.query(params![pool_id, SubjectKind::Key])?;
+    let mut keys: Vec<(String, Vec<String>)> = Vec::new();
+    while let Some(row) = rows.next()? {
+        let key_id: String = row.get(0)?;
+        if keys.last().is_none_or(|(id, _)| *id != key_id) {
+            keys.push((key_id, Vec::new()));
+        }
+        keys.last_mut()
+            .expect("pushed above")
+            .1
+            .extend(row.get::<_, Option<String>>(1)?);
+    }
+    Ok(keys)
 }
 
 /// The pools a write from the guardrail's side reaches: each pool it names and the pool of each key it names.
@@ -1854,46 +1842,29 @@ fn bound_pools(
 
 /// The bound over the lists a write leaves, read after its subject writes and before its commit, so it counts the
 /// lists the transaction commits and a stale stamp, a missing id or a refused member answers before it. A refusal
-/// drops the transaction uncommitted, so it leaves nothing behind.
+/// drops the transaction uncommitted, so it leaves nothing behind. Per pool it answers `PoolGuardrailBound` for the
+/// pool's own list, then `KeyGuardrailBound` for the first key whose union is over the bound. The count runs under
+/// the same lock and transaction as the rows it guards, so two writes cannot each read 63 and commit 65 together.
 fn check_guardrail_bounds(
     tx: &Transaction<'_>,
     pools: &BTreeSet<String>,
 ) -> Result<(), StoreError> {
     for pool_id in pools {
         let pool_list = subject_guardrails(tx, SubjectKind::Pool, pool_id)?;
-        let keys = pool_key_ids(tx, pool_id)?
-            .into_iter()
-            .map(|key_id| {
-                let own = subject_guardrails(tx, SubjectKind::Key, &key_id)?;
-                Ok((key_id, own))
-            })
-            .collect::<Result<Vec<_>, StoreError>>()?;
-        check_guardrail_bound(pool_id, &pool_list, &keys)?;
-    }
-    Ok(())
-}
-
-/// The bound over one pool's lists: `pool_list` is the pool's own list, `keys` each key of the pool with its own list.
-/// Answers `PoolGuardrailBound` for the pool, then `KeyGuardrailBound` for the first key whose union is over the bound.
-/// The count runs under the same lock and transaction as the rows it guards, so two writes cannot each read 63 and
-/// commit 65 together.
-fn check_guardrail_bound(
-    pool_id: &str,
-    pool_list: &[String],
-    keys: &[(String, Vec<String>)],
-) -> Result<(), StoreError> {
-    let pool: std::collections::HashSet<&str> = pool_list.iter().map(String::as_str).collect();
-    if pool.len() > GUARDRAIL_BOUND {
-        return Err(StoreError::PoolGuardrailBound(pool_id.to_string()));
-    }
-    for (key_id, own) in keys {
-        let union: std::collections::HashSet<&str> = own
-            .iter()
-            .map(String::as_str)
-            .chain(pool.iter().copied())
-            .collect();
-        if union.len() > GUARDRAIL_BOUND {
-            return Err(StoreError::KeyGuardrailBound(key_id.clone()));
+        let keys = pool_key_lists(tx, pool_id)?;
+        let pool: std::collections::HashSet<&str> = pool_list.iter().map(String::as_str).collect();
+        if pool.len() > GUARDRAIL_BOUND {
+            return Err(StoreError::PoolGuardrailBound(pool_id.to_string()));
+        }
+        for (key_id, own) in keys {
+            let union: std::collections::HashSet<&str> = own
+                .iter()
+                .map(String::as_str)
+                .chain(pool.iter().copied())
+                .collect();
+            if union.len() > GUARDRAIL_BOUND {
+                return Err(StoreError::KeyGuardrailBound(key_id));
+            }
         }
     }
     Ok(())
@@ -1995,7 +1966,29 @@ fn set_pool_members_in(
     Ok(true)
 }
 
-const POOL_SELECT: &str = "SELECT id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, window_ceiling, model_rules_json, keepalive_json, body_capture_hours, created_at, updated_at, prefer_subscription, shed_cap, burn_average_seconds, shed_dwell_seconds, load_shedding, migrate_when_spent, warm_sessions, retry_in_place_seconds, in_flight_cap, overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics, affinity_mode, subagent_placement, session_placement, min_shared_prefix_tokens, auto_mode_server, incarnation, slow_down, slow_down_stretch_seconds, slow_down_hold_seconds, return_to_plan, return_to_plan_dwell_seconds FROM pools";
+const POOL_SELECT: &str = concat!(
+    "SELECT ",
+    pool_columns!(),
+    ", created_at, updated_at, incarnation FROM pools"
+);
+
+/// Built from `pool_columns!`, so each column after `id` takes the number `pool_params!` binds it at, from `?2`.
+static POOL_UPDATE: LazyLock<String> = LazyLock::new(|| {
+    let set = pool_columns!()
+        .split(',')
+        .map(str::trim)
+        .skip(1)
+        .zip(2..)
+        .map(|(column, bind)| format!("{column} = ?{bind}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "UPDATE pools SET {set}, updated_at = ?34 WHERE id = ?1 AND updated_at = ?35 AND incarnation = ?36"
+    )
+});
+
+const MEMBER_SELECT: &str =
+    "SELECT pool_id, account_id, priority, budget_daily_usd, budget_monthly_usd FROM pool_members";
 const GUARDRAIL_SELECT: &str = "SELECT id, name, description, enabled, mode, action, conditions_json, preset_id, preset_version, incarnation, created_at, updated_at FROM guardrails";
 const KEY_SELECT: &str = "SELECT id, label, notes, pool_id, enabled, revoked_at, expires_at, keepalive_opt_out, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at, retired_secret_last_used_at, model_rules_json, model_rules_mode, long_context_twins, auto_mode_server, updated_at, incarnation FROM api_keys";
 
@@ -2021,10 +2014,7 @@ fn all_guardrail_attachments(
     )?;
     let rows = stmt.query_map([], |r| {
         let subject_id: String = r.get(2)?;
-        let subject = match r.get::<_, SubjectKind>(1)? {
-            SubjectKind::Key => AttachmentSubject::Key(subject_id),
-            SubjectKind::Pool => AttachmentSubject::Pool(subject_id),
-        };
+        let subject = r.get::<_, SubjectKind>(1)?.subject(subject_id);
         Ok(GuardrailAttachment {
             guardrail_id: r.get(0)?,
             subject,
@@ -2036,10 +2026,7 @@ fn all_guardrail_attachments(
 }
 
 fn all_members(conn: &rusqlite::Connection) -> Result<Vec<PoolMember>, StoreError> {
-    let mut stmt = conn.prepare(
-        "SELECT pool_id, account_id, priority, budget_daily_usd, budget_monthly_usd FROM pool_members \
-         ORDER BY pool_id, account_id",
-    )?;
+    let mut stmt = conn.prepare(&format!("{MEMBER_SELECT} ORDER BY pool_id, account_id"))?;
     let rows = stmt.query_map([], row_to_member)?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(StoreError::from)
@@ -2064,40 +2051,40 @@ fn row_to_pool(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolRow> {
         model_rules: json_column(r, 7)?,
         keepalive_json: r.get(8)?,
         body_capture_hours: r.get(9)?,
-        created_at: r.get(10)?,
-        updated_at: r.get(11)?,
-        prefer_subscription: r.get(12)?,
+        created_at: r.get(33)?,
+        updated_at: r.get(34)?,
+        prefer_subscription: r.get(10)?,
         shedding: Shedding {
-            shed_cap: r.get(13)?,
-            burn_average_seconds: r.get::<_, i64>(14)? as u64,
-            shed_dwell_seconds: r.get::<_, i64>(15)? as u64,
-            load_shedding: r.get(16)?,
-            migrate_when_spent: r.get(17)?,
-            warm_sessions: r.get(18)?,
+            shed_cap: r.get(11)?,
+            burn_average_seconds: r.get::<_, i64>(12)? as u64,
+            shed_dwell_seconds: r.get::<_, i64>(13)? as u64,
+            load_shedding: r.get(14)?,
+            migrate_when_spent: r.get(15)?,
+            warm_sessions: r.get(16)?,
         },
         failover: Failover {
-            retry_in_place_seconds: r.get::<_, i64>(19)? as u64,
-            in_flight_cap: r.get(20)?,
-            overage_move_grace_minutes: r.get(21)?,
-            wind_down_minutes: r.get(22)?,
-            return_to_plan: r.get(34)?,
-            return_to_plan_dwell_seconds: r.get(35)?,
+            retry_in_place_seconds: r.get::<_, i64>(17)? as u64,
+            in_flight_cap: r.get(18)?,
+            overage_move_grace_minutes: r.get(19)?,
+            wind_down_minutes: r.get(20)?,
+            return_to_plan: r.get(31)?,
+            return_to_plan_dwell_seconds: r.get(32)?,
         },
         slow_down: SlowDown {
-            slow_down: r.get(31)?,
-            slow_down_stretch_seconds: r.get(32)?,
-            slow_down_hold_seconds: r.get(33)?,
+            slow_down: r.get(28)?,
+            slow_down_stretch_seconds: r.get(29)?,
+            slow_down_hold_seconds: r.get(30)?,
         },
-        cache_ttl_json: r.get(23)?,
-        cache_diagnostics: r.get::<_, bool>(24)?,
+        cache_ttl_json: r.get(21)?,
+        cache_diagnostics: r.get::<_, bool>(22)?,
         affinity: Affinity {
-            mode: r.get(25)?,
-            subagent_placement: r.get(26)?,
-            session_placement: r.get(27)?,
-            min_shared_prefix_tokens: r.get::<_, i64>(28)? as u64,
+            mode: r.get(23)?,
+            subagent_placement: r.get(24)?,
+            session_placement: r.get(25)?,
+            min_shared_prefix_tokens: r.get::<_, i64>(26)? as u64,
         },
-        auto_mode_server: r.get(29)?,
-        incarnation: r.get::<_, i64>(30)? as u64,
+        auto_mode_server: r.get(27)?,
+        incarnation: r.get::<_, i64>(35)? as u64,
     })
 }
 
@@ -2176,16 +2163,6 @@ fn account_created_diff(row: &AccountRow) -> String {
     .to_string()
 }
 
-fn pool_diff(row: &PoolRow) -> String {
-    pool_fields(row).to_string()
-}
-
-/// The pairs of the fields whose value differs between `before` and `after`, over the fields `pool_diff` names,
-/// empty when none does.
-fn pool_pairs(before: &PoolRow, after: &PoolRow) -> serde_json::Map<String, serde_json::Value> {
-    changed(&pool_fields(before), &pool_fields(after))
-}
-
 /// The pool's fields the change rows name, with each member of the stored keepalive policy under
 /// `keepalive.<member>`, so a policy edit records the member it moved.
 fn pool_fields(row: &PoolRow) -> serde_json::Value {
@@ -2234,14 +2211,6 @@ fn pool_fields(row: &PoolRow) -> serde_json::Value {
 
 fn parsed(text: &str) -> Option<serde_json::Value> {
     serde_json::from_str(text).ok()
-}
-
-fn key_diff(row: &ApiKeyRow) -> String {
-    key_fields(row).to_string()
-}
-
-fn key_pairs(before: &ApiKeyRow, after: &ApiKeyRow) -> serde_json::Map<String, serde_json::Value> {
-    changed(&key_fields(before), &key_fields(after))
 }
 
 /// Never the digest: the change log is read by the ledger and the UI.
@@ -2313,12 +2282,13 @@ fn changed(
         .collect()
 }
 
-fn guardrail_diff(row: &GuardrailRow, pools: &[String], keys: &[String]) -> String {
-    guardrail_fields(row, pools, keys).to_string()
-}
-
-fn guardrail_fields(row: &GuardrailRow, pools: &[String], keys: &[String]) -> serde_json::Value {
-    serde_json::json!({
+fn guardrail_fields(
+    tx: &Transaction<'_>,
+    row: &GuardrailRow,
+) -> Result<serde_json::Value, StoreError> {
+    let pools = guardrail_subjects(tx, &row.id, SubjectKind::Pool)?;
+    let keys = guardrail_subjects(tx, &row.id, SubjectKind::Key)?;
+    Ok(serde_json::json!({
         "name": row.name,
         "description": row.description,
         "enabled": row.enabled,
@@ -2329,5 +2299,5 @@ fn guardrail_fields(row: &GuardrailRow, pools: &[String], keys: &[String]) -> se
         "preset_version": row.preset.as_ref().map(|preset| preset.version),
         "pools": pools,
         "keys": keys,
-    })
+    }))
 }

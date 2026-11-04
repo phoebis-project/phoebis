@@ -140,6 +140,14 @@ impl CooldownScope {
                 .map(|model| CooldownScope::Model(model.to_string())),
         }
     }
+
+    /// The model a `model:`-scoped row cools, `None` for an account-wide or a fast-lane row.
+    pub fn model(&self) -> Option<&str> {
+        match self {
+            CooldownScope::Model(model) => Some(model),
+            CooldownScope::Account | CooldownScope::Fast | CooldownScope::FastCredits => None,
+        }
+    }
 }
 
 impl fmt::Display for CooldownScope {
@@ -459,7 +467,15 @@ impl Store {
         #[cfg(any(test, feature = "debug-hooks"))]
         self.park_on_routing_hold();
         let clock = self.clock.lock().expect(LOCK_POISONED).clone();
-        self.routing_commit(|conn| in_transaction(conn, |tx| f(&mut RoutingTx { clock, tx })))
+        self.routing_transaction(|tx| f(&mut RoutingTx { clock, tx }))
+    }
+
+    /// One `BEGIN IMMEDIATE` transaction under `routing_commit`, which an error from `f` rolls back.
+    fn routing_transaction<T>(
+        &self,
+        f: impl FnOnce(&Transaction<'_>) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        self.routing_commit(|conn| in_transaction(conn, f))
     }
 
     /// One routing commit under the lock, at `synchronous = NORMAL` while every other write of the connection runs
@@ -494,7 +510,7 @@ impl Store {
     /// Deletes the first-seen rows of a session with no pin (an account's cascade, a lapsed failover), called by
     /// `spawn` ahead of `load_routing`, never inside it.
     pub fn sweep_first_seen(&self) -> Result<usize, StoreError> {
-        self.routing_commit(|conn| in_transaction(conn, |tx| sweep_first_seen_on(tx)))
+        self.routing_transaction(|tx| sweep_first_seen_on(tx))
     }
 
     pub fn purge_cooldowns_before(&self, now: i64) -> Result<usize, StoreError> {
@@ -505,13 +521,13 @@ impl Store {
     /// Drops every window, window set and credits row whose incarnation is not its account's. The router's purge
     /// tick calls it.
     pub fn purge_stale_windows(&self) -> Result<usize, StoreError> {
-        self.routing_commit(|conn| in_transaction(conn, |tx| purge_stale_windows_on(tx)))
+        self.routing_transaction(|tx| purge_stale_windows_on(tx))
     }
 
     /// All or nothing: a crash or a failed statement part way through would leave rows under the dated id with no
     /// spelling row to find them by after a restart, or a row deleted under the spelling and never re-inserted.
     pub fn rekey_resolution(&self, rekey: &RekeyWrite) -> Result<(), StoreError> {
-        self.routing_commit(|conn| in_transaction(conn, |tx| rekey_resolution_on(tx, rekey)))
+        self.routing_transaction(|tx| rekey_resolution_on(tx, rekey))
     }
 
     /// The persisted map on its own: the accessor seeds the catalog cache's published map at start.
@@ -526,31 +542,29 @@ impl Store {
 #[cfg(any(test, feature = "test-support"))]
 impl Store {
     pub fn upsert_pin(&self, pin: &PinRow) -> Result<(), StoreError> {
-        self.routing_commit(|conn| in_transaction(conn, |tx| upsert_pin_on(tx, pin)))
+        self.routing_transaction(|tx| upsert_pin_on(tx, pin))
     }
 
     /// One transaction, as `upsert_pin` takes.
     pub fn delete_pin(&self, key: &PinKey) -> Result<bool, StoreError> {
-        self.routing_commit(|conn| in_transaction(conn, |tx| delete_pin_on(tx, key, None)))
+        self.routing_transaction(|tx| delete_pin_on(tx, key, None))
     }
 
     /// `delete_pin` for a pin that leaves for good, one transaction.
     pub fn end_pin(&self, key: &PinKey, ended: Option<i64>) -> Result<bool, StoreError> {
-        self.routing_commit(|conn| in_transaction(conn, |tx| delete_pin_on(tx, key, ended)))
+        self.routing_transaction(|tx| delete_pin_on(tx, key, ended))
     }
 
     /// `INSERT OR REPLACE`: the router writes a record's row only when it creates the record, so a second write under
     /// a key, session and agent follows a terminal removal whose cascade a deferred write's fold may have dropped,
     /// and the new instant wins.
     pub fn insert_first_seen(&self, row: &FirstSeenRow) -> Result<(), StoreError> {
-        self.routing_commit(|conn| in_transaction(conn, |tx| insert_first_seen_on(tx, row)))
+        self.routing_transaction(|tx| insert_first_seen_on(tx, row))
     }
 
     /// Every agent's row of the session, answering how many left.
     pub fn delete_first_seen(&self, key_id: &str, session_id: &str) -> Result<usize, StoreError> {
-        self.routing_commit(|conn| {
-            in_transaction(conn, |tx| delete_first_seen_on(tx, key_id, session_id))
-        })
+        self.routing_transaction(|tx| delete_first_seen_on(tx, key_id, session_id))
     }
 
     /// A session's end alone, one transaction: its rows written at or before `ended`, the pins untouched, answering
@@ -561,19 +575,17 @@ impl Store {
         session_id: &str,
         ended: i64,
     ) -> Result<usize, StoreError> {
-        self.routing_commit(|conn| {
-            in_transaction(conn, |tx| end_first_seen_on(tx, key_id, session_id, ended))
-        })
+        self.routing_transaction(|tx| end_first_seen_on(tx, key_id, session_id, ended))
     }
 
     /// Every row lands or none does; a row under an existing (model, hash) replaces it.
     pub fn upsert_affinity(&self, rows: &[AffinityRow]) -> Result<(), StoreError> {
-        self.routing_commit(|conn| in_transaction(conn, |tx| upsert_affinity_on(tx, rows)))
+        self.routing_transaction(|tx| upsert_affinity_on(tx, rows))
     }
 
     /// One transaction for the whole batch, as `upsert_affinity` takes, so a large purge costs one commit.
     pub fn delete_affinity(&self, keys: &[(String, String)]) -> Result<usize, StoreError> {
-        self.routing_commit(|conn| in_transaction(conn, |tx| delete_affinity_on(tx, keys)))
+        self.routing_transaction(|tx| delete_affinity_on(tx, keys))
     }
 
     /// The later deadline always wins: a short `Retry-After` arriving after a long unified reset must not
@@ -632,17 +644,13 @@ impl Store {
         incarnation: u64,
         round_at: i64,
     ) -> Result<(), StoreError> {
-        self.routing_commit(|conn| {
-            in_transaction(conn, |tx| {
-                replace_shed_round_on(tx, pool_id, account_id, incarnation, round_at)
-            })
+        self.routing_transaction(|tx| {
+            replace_shed_round_on(tx, pool_id, account_id, incarnation, round_at)
         })
     }
 
     pub fn purge_shed_rounds_before(&self, before: i64) -> Result<usize, StoreError> {
-        self.routing_commit(|conn| {
-            in_transaction(conn, |tx| purge_shed_rounds_before_on(tx, before))
-        })
+        self.routing_transaction(|tx| purge_shed_rounds_before_on(tx, before))
     }
 }
 
@@ -848,34 +856,31 @@ fn mark_from(r: &rusqlite::Row<'_>, first: usize) -> rusqlite::Result<Option<Pin
     )
 }
 
-static UPSERT_PIN: LazyLock<String> = LazyLock::new(|| {
+/// The upsert of `columns` into `table`, bound `?1` to `?N` in the columns' order. On a conflict over `key`, every
+/// other column takes the inserted value, so a column added to the list is renewed with the rest.
+fn upsert_sql(table: &str, columns: &str, key: &[&str]) -> String {
+    let names: Vec<&str> = columns.split(',').map(str::trim).collect();
+    let values = (1..=names.len())
+        .map(|bind| format!("?{bind}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let set = names
+        .iter()
+        .filter(|name| !key.contains(name))
+        .map(|name| format!("{name} = excluded.{name}"))
+        .collect::<Vec<_>>()
+        .join(", ");
     format!(
-        "INSERT INTO pins ({PIN_COLUMNS}) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47) \
-         ON CONFLICT(key_id, session_id, agent_id, model) DO UPDATE SET \
-           account_id = excluded.account_id, epoch = excluded.epoch, created_at = excluded.created_at, \
-           last_used_at = excluded.last_used_at, key_generation = excluded.key_generation, \
-           incarnation = excluded.incarnation, burn_at = excluded.burn_at, \
-           last_input_tokens = excluded.last_input_tokens, last_refresh_at = excluded.last_refresh_at, \
-           cache_ttl_ms = excluded.cache_ttl_ms, shed_from = excluded.shed_from, shed_at = excluded.shed_at, \
-           static_hash = excluded.static_hash, tail_hash = excluded.tail_hash, lane = excluded.lane, \
-           burn_cache_read = excluded.burn_cache_read, burn_input = excluded.burn_input, \
-           burn_output = excluded.burn_output, burn_write_1h = excluded.burn_write_1h, \
-           burn_write_5m = excluded.burn_write_5m, burn_banded_cache_read = excluded.burn_banded_cache_read, \
-           burn_banded_input = excluded.burn_banded_input, burn_banded_output = excluded.burn_banded_output, \
-           burn_banded_write_1h = excluded.burn_banded_write_1h, burn_banded_write_5m = excluded.burn_banded_write_5m, \
-           burn_fast_cache_read = excluded.burn_fast_cache_read, burn_fast_input = excluded.burn_fast_input, \
-           burn_fast_output = excluded.burn_fast_output, burn_fast_write_1h = excluded.burn_fast_write_1h, \
-           burn_fast_write_5m = excluded.burn_fast_write_5m, \
-           burn_unmetered_cache_read = excluded.burn_unmetered_cache_read, \
-           burn_unmetered_input = excluded.burn_unmetered_input, \
-           burn_unmetered_output = excluded.burn_unmetered_output, \
-           burn_unmetered_write_1h = excluded.burn_unmetered_write_1h, \
-           burn_unmetered_write_5m = excluded.burn_unmetered_write_5m, marked_at = excluded.marked_at, \
-           marked_on = excluded.marked_on, marked_window = excluded.marked_window, \
-           entrypoint = excluded.entrypoint, last_classifier = excluded.last_classifier, \
-           shed_reason = excluded.shed_reason, auxiliary_only = excluded.auxiliary_only, \
-           effort = excluded.effort"
+        "INSERT INTO {table} ({columns}) VALUES ({values}) ON CONFLICT({}) DO UPDATE SET {set}",
+        key.join(", ")
+    )
+}
+
+static UPSERT_PIN: LazyLock<String> = LazyLock::new(|| {
+    upsert_sql(
+        "pins",
+        PIN_COLUMNS,
+        &["key_id", "session_id", "agent_id", "model"],
     )
 });
 
@@ -1014,16 +1019,8 @@ fn delete_cooldown_on(
         > 0)
 }
 
-static UPSERT_AFFINITY: LazyLock<String> = LazyLock::new(|| {
-    format!(
-        "INSERT INTO affinity ({AFFINITY_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14) \
-         ON CONFLICT(model, hash) DO UPDATE SET \
-           chain = excluded.chain, account_id = excluded.account_id, incarnation = excluded.incarnation, \
-           written_at = excluded.written_at, ttl_ms = excluded.ttl_ms, prefix_tokens = excluded.prefix_tokens, \
-           key_id = excluded.key_id, key_generation = excluded.key_generation, root = excluded.root, \
-           lane = excluded.lane, depth = excluded.depth, message_id = excluded.message_id"
-    )
-});
+static UPSERT_AFFINITY: LazyLock<String> =
+    LazyLock::new(|| upsert_sql("affinity", AFFINITY_COLUMNS, &["model", "hash"]));
 
 fn upsert_affinity_on(conn: &Connection, rows: &[AffinityRow]) -> Result<(), StoreError> {
     let mut stmt = conn.prepare_cached(&UPSERT_AFFINITY)?;
@@ -1140,13 +1137,16 @@ fn upsert_credits_on(conn: &Connection, row: &CreditsRow) -> Result<bool, StoreE
 }
 
 fn purge_stale_windows_on(conn: &Connection) -> Result<usize, StoreError> {
-    let windows = conn.prepare_cached("DELETE FROM usage_windows WHERE NOT EXISTS (SELECT 1 FROM accounts \
-         WHERE accounts.id = usage_windows.account_id AND accounts.incarnation = usage_windows.incarnation)")?.execute([])?;
-    let credits = conn.prepare_cached("DELETE FROM usage_credits WHERE NOT EXISTS (SELECT 1 FROM accounts \
-         WHERE accounts.id = usage_credits.account_id AND accounts.incarnation = usage_credits.incarnation)")?.execute([])?;
-    let sets = conn.prepare_cached("DELETE FROM usage_window_sets WHERE NOT EXISTS (SELECT 1 FROM accounts \
-         WHERE accounts.id = usage_window_sets.account_id AND accounts.incarnation = usage_window_sets.incarnation)")?.execute([])?;
-    Ok(windows + credits + sets)
+    let mut purged = 0;
+    for table in ["usage_windows", "usage_credits", "usage_window_sets"] {
+        purged += conn
+            .prepare_cached(&format!(
+                "DELETE FROM {table} WHERE NOT EXISTS (SELECT 1 FROM accounts \
+                 WHERE accounts.id = {table}.account_id AND accounts.incarnation = {table}.incarnation)"
+            ))?
+            .execute([])?;
+    }
+    Ok(purged)
 }
 
 fn replace_shed_round_on(

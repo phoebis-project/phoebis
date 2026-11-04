@@ -9,7 +9,9 @@ use std::time::Duration;
 use phoebis_oauth::{BackoffEdge, Clock, PollFault};
 use phoebis_relay::CatalogChange;
 use phoebis_routing::{term, CreditsState, RouterEvent, RouterHandle};
-use phoebis_store::{AccountRow, AccountState, ResolvedAttempt, Settled, StateCause, Store};
+use phoebis_store::{
+    AccountRow, AccountState, CooldownScope, ResolvedAttempt, Settled, StateCause, Store,
+};
 use serde_json::json;
 use tokio::sync::broadcast::error::RecvError;
 
@@ -33,7 +35,12 @@ const MIRROR_BATCH: usize = 500;
 /// the mirror maps to the ledger's own records, and an `AccountStateChanged`, a transition the mirror's account watch
 /// reads from the registry.
 pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
-    let model_of = |scope: &str| scope.strip_prefix("model:").map(str::to_string);
+    let model_of = |scope: &str| {
+        CooldownScope::parse(scope)
+            .as_ref()
+            .and_then(CooldownScope::model)
+            .map(str::to_string)
+    };
     let row = match event {
         RouterEvent::CooldownCleared {
             account_id,

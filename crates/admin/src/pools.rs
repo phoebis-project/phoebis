@@ -651,7 +651,6 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         // Stored whole, so the create's change row names each member of the policy the pool starts with.
         keepalive_json: serde_json::to_string(&KeepalivePolicy::default())
             .unwrap_or_else(|_| "{}".into()),
-        window_ceiling: phoebis_routing::DEFAULT_WINDOW_CEILING,
         ..PoolRow::new(id)
     };
     if let Err(refusal) = apply(&state, &mut row, &input) {
