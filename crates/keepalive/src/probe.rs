@@ -1021,9 +1021,7 @@ pub(crate) fn ceiling(
     }
     let main = agent.id == MAIN_AGENT;
     if main {
-        let since = agent
-            .park_ended_at
-            .map_or(agent.last_activity, |ended| ended.max(agent.last_activity));
+        let since = agent.idle_window_start();
         if now - since < ceilings.idle_ms {
             return Verdict::Probe;
         }
