@@ -3515,10 +3515,9 @@ impl TotalsBy {
 }
 
 /// Request, token, and cost totals per pool or account over `[since_hour, to_hour)`, probe rows left out. One
-/// aggregate query per span of `revision_spans` rather than a rollup read, because the account list asks three times
-/// per call. Grouped by the column, the price columns and the hour, each group priced in Rust at its own hour. A
-/// lifetime caller passes `i64::MIN` as `since_hour`, which the first span's `at` clamps. `now` is the read's
-/// instant, whose anchor row divides the Pro-week figure.
+/// aggregate query per span of `revision_spans` rather than a rollup read. Grouped by the column, the price columns
+/// and the hour, each group priced in Rust at its own hour. A lifetime caller passes `i64::MIN` as `since_hour`,
+/// which the first span's `at` clamps. `now` is the read's instant, whose anchor row divides the Pro-week figure.
 pub fn request_totals(
     conn: &Connection,
     by: TotalsBy,
@@ -3599,6 +3598,24 @@ fn grouped_totals(
         }
     }
     Ok(out)
+}
+
+/// The requests per account over `[since_hour, to_hour)`, probe rows left out: the `requests` that `request_totals`
+/// answers per account, summed in one statement with no pricing for a caller that reads the counts alone. A lifetime
+/// caller passes `i64::MIN` as `since_hour`.
+pub fn account_request_counts(
+    conn: &Connection,
+    since_hour: i64,
+    to_hour: i64,
+) -> Result<BTreeMap<String, u64>, LedgerError> {
+    let mut stmt = conn.prepare(
+        "SELECT account_id, SUM(requests) FROM rollups_hourly \
+         WHERE kind != 'probe' AND hour >= ?1 AND hour < ?2 GROUP BY account_id",
+    )?;
+    let rows = stmt.query_map(params![since_hour, to_hour], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?.max(0) as u64))
+    })?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
 #[derive(Clone, Debug, PartialEq)]

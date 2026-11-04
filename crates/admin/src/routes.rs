@@ -1981,7 +1981,7 @@ pub(crate) fn account(state: &AdminState, id: &str) -> Result<AccountRow, Respon
 /// What every account row reads from the ledger and the registry, fetched once per list call.
 pub(crate) struct AccountContext {
     pub cooldowns: Vec<CooldownRow>,
-    pub day: BTreeMap<String, phoebis_ledger::Totals>,
+    pub day: BTreeMap<String, u64>,
     pub extra: Vec<phoebis_ledger::ExtraUsageSampleRecord>,
     /// The newest polled extra-usage row per account, the one that carries the amounts a later head row lacks.
     pub extra_polled: Vec<phoebis_ledger::ExtraUsageSampleRecord>,
@@ -1993,7 +1993,7 @@ pub(crate) struct AccountContext {
     pub funding_retries: BTreeMap<String, i64>,
     /// The router's windows per account, predicted at its clock, as the usage `GET` reads them.
     pub held: BTreeMap<String, UtilizationSample>,
-    pub lifetime: BTreeMap<String, phoebis_ledger::Totals>,
+    pub lifetime: BTreeMap<String, u64>,
     pub members: Vec<PoolMember>,
     pub overages: BTreeMap<String, OverageEvidence>,
     /// The router's projections per account under its pool's settings, absent for an account in no pool.
@@ -2004,7 +2004,7 @@ pub(crate) struct AccountContext {
     pub reported: BTreeMap<String, UtilizationSample>,
     /// The router's spend window per usage-based account, at its clock.
     pub spend_windows: BTreeMap<String, SpendWindow>,
-    pub week: BTreeMap<String, phoebis_ledger::Totals>,
+    pub week: BTreeMap<String, u64>,
 }
 
 /// The shared windows `account`'s set lacks as the router holds it now, which a route strips from an own-window share
@@ -2108,8 +2108,6 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
     let to = crate::analytics::hour_end(hour);
     let week_start = crate::lifetime::week_start(hour);
     let day_start = hour - 24 * 3_600;
-    let prices = state.pricing.revisions();
-    let tables = state.tables.clone();
     // The projections ask each member's pool, so the registry is read before the join.
     let members = state.store.all_pool_members().unwrap_or_default();
     let extras = state.store.account_extras().unwrap_or_default();
@@ -2118,18 +2116,10 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
             .old_totals
             .accounts
             .get((week_start, BTreeMap::new()), || {
-                let (prices, tables) = (prices.clone(), tables.clone());
-                state.ledger.db().read(move |c| {
-                    phoebis_ledger::request_totals(
-                        c,
-                        phoebis_ledger::TotalsBy::Account,
-                        i64::MIN,
-                        week_start,
-                        &prices,
-                        &tables,
-                        now,
-                    )
-                })
+                state
+                    .ledger
+                    .db()
+                    .read(move |c| phoebis_ledger::account_request_counts(c, i64::MIN, week_start))
             })
             .await?;
         let read = state
@@ -2141,24 +2131,8 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
                     phoebis_ledger::latest_extra_usage(c, now)?,
                     phoebis_ledger::latest_extra_usage_polled(c, now)?,
                     phoebis_ledger::latest_extra_usage_share(c, now)?,
-                    phoebis_ledger::request_totals(
-                        c,
-                        phoebis_ledger::TotalsBy::Account,
-                        day_start,
-                        to,
-                        &prices,
-                        &tables,
-                        now,
-                    )?,
-                    phoebis_ledger::request_totals(
-                        c,
-                        phoebis_ledger::TotalsBy::Account,
-                        week_start,
-                        day_start,
-                        &prices,
-                        &tables,
-                        now,
-                    )?,
+                    phoebis_ledger::account_request_counts(c, day_start, to)?,
+                    phoebis_ledger::account_request_counts(c, week_start, day_start)?,
                 ))
             })
             .await?;
@@ -2183,7 +2157,7 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
         }
     };
     // The read takes the six days before the day, so the day's rows are read once, and the week joins the two here:
-    // only the request counts reach the answer, and integer sums add exactly in any split.
+    // integer sums add exactly in any split.
     let week = crate::lifetime::lifetime_of(six_days, &day);
     let lifetime = crate::lifetime::lifetime_of(old, &week);
     AccountContext {
@@ -2833,9 +2807,9 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
                 priority: m.priority,
             }),
         requests: RequestCounts {
-            last_24h: ctx.day.get(&row.id).map_or(0, |t| t.requests),
-            last_7d: ctx.week.get(&row.id).map_or(0, |t| t.requests),
-            lifetime: ctx.lifetime.get(&row.id).map_or(0, |t| t.requests),
+            last_24h: ctx.day.get(&row.id).copied().unwrap_or(0),
+            last_7d: ctx.week.get(&row.id).copied().unwrap_or(0),
+            lifetime: ctx.lifetime.get(&row.id).copied().unwrap_or(0),
         },
         usage,
         usage_based: term.usage_based,

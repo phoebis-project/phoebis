@@ -27,17 +27,22 @@ pub fn week_start(hour: i64) -> i64 {
 /// on the lock rather than read again. An error caches nothing, so the next poll reads again. A route reads it from
 /// `i64::MIN`, which sits at or below the earliest hour the rollups can hold, so every row older than the week clears
 /// it.
-#[derive(Default)]
-pub struct OldPart(tokio::sync::Mutex<Option<(OldKey, BTreeMap<String, Totals>)>>);
+pub struct OldPart<V>(tokio::sync::Mutex<Option<(OldKey, BTreeMap<String, V>)>>);
 
-impl OldPart {
+impl<V> Default for OldPart<V> {
+    fn default() -> Self {
+        OldPart(tokio::sync::Mutex::new(None))
+    }
+}
+
+impl<V: Clone> OldPart<V> {
     pub async fn get<F>(
         &self,
         key: OldKey,
         read: impl FnOnce() -> F,
-    ) -> Result<BTreeMap<String, Totals>, LedgerError>
+    ) -> Result<BTreeMap<String, V>, LedgerError>
     where
-        F: Future<Output = Result<BTreeMap<String, Totals>, LedgerError>>,
+        F: Future<Output = Result<BTreeMap<String, V>, LedgerError>>,
     {
         let mut cached = self.0.lock().await;
         if let Some((_, part)) = cached.as_ref().filter(|(at, _)| *at == key) {
@@ -49,21 +54,40 @@ impl OldPart {
     }
 }
 
-/// The older parts of the two polled routes that answer a lifetime total.
+/// The older parts of the two polled routes that answer a lifetime total: the accounts route reads its request
+/// counts alone, the keys route its priced totals.
 #[derive(Default)]
 pub struct OldTotals {
-    pub accounts: OldPart,
-    pub keys: OldPart,
+    pub accounts: OldPart<u64>,
+    pub keys: OldPart<Totals>,
 }
 
-/// `old` and `week` added per group through `Totals::add`: every field of `Totals` is a sum, and `equivalent` reads
-/// null when a part is unpriced, so the two parts add to the figure one walk over every row answers.
-pub fn lifetime_of(
-    mut old: BTreeMap<String, Totals>,
-    week: &BTreeMap<String, Totals>,
-) -> BTreeMap<String, Totals> {
-    for (group, totals) in week {
-        old.entry(group.clone()).or_default().add(totals);
+/// A group's figure as both parts hold it, every field of it a sum, so the older part and the week add to the figure
+/// one walk over every row answers.
+pub trait Summed: Default {
+    fn add(&mut self, other: &Self);
+}
+
+/// `equivalent` reads null when a part is unpriced, as `Totals::add` keeps it.
+impl Summed for Totals {
+    fn add(&mut self, other: &Self) {
+        Totals::add(self, other);
+    }
+}
+
+impl Summed for u64 {
+    fn add(&mut self, other: &Self) {
+        *self += other;
+    }
+}
+
+/// `old` and `week` added per group.
+pub fn lifetime_of<V: Summed>(
+    mut old: BTreeMap<String, V>,
+    week: &BTreeMap<String, V>,
+) -> BTreeMap<String, V> {
+    for (group, figure) in week {
+        Summed::add(old.entry(group.clone()).or_default(), figure);
     }
     old
 }

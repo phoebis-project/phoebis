@@ -4,15 +4,15 @@ use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 use phoebis_ledger::{
-    apply_filter, breakdown, breakdown_paged, bucket_index, bucket_seconds, burn_groups_paged,
-    burn_rows, burn_series, burn_series_over, deltas_of, fold_account, fold_event, fold_keepalive,
-    held_series, hour_ceil, hour_of, key_request_totals, list_requests, member_spends,
-    moves_by_reason, placements, pool_traffic, pools_traffic, price_equivalent, price_shares,
-    read_account_rollups, read_rollups, refusal_categories, request_totals, rewrite_series,
-    run_retention_blocking, series, series_paged, session_identities, AttemptRecord,
-    BudgetedMember, CostRevisions, EventRecord, FundingFilter, GroupBy, GroupRow, Histogram,
-    KeepaliveDelta, LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow, Patterns, PlanTables,
-    PriceRevisions, PriceTable, RequestFilter, RequestRecord, RollupFilter, RollupRow,
+    account_request_counts, apply_filter, breakdown, breakdown_paged, bucket_index, bucket_seconds,
+    burn_groups_paged, burn_rows, burn_series, burn_series_over, deltas_of, fold_account,
+    fold_event, fold_keepalive, held_series, hour_ceil, hour_of, key_request_totals, list_requests,
+    member_spends, moves_by_reason, placements, pool_traffic, pools_traffic, price_equivalent,
+    price_shares, read_account_rollups, read_rollups, refusal_categories, request_totals,
+    rewrite_series, run_retention_blocking, series, series_paged, session_identities,
+    AttemptRecord, BudgetedMember, CostRevisions, EventRecord, FundingFilter, GroupBy, GroupRow,
+    Histogram, KeepaliveDelta, LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow, Patterns,
+    PlanTables, PriceRevisions, PriceTable, RequestFilter, RequestRecord, RollupFilter, RollupRow,
     RollupSelect, SeriesFilter, Speed, TotalsBy, WindowShares, BILLED_FUNDING, FAST_FUNDING,
     NO_CLASS, OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED, USAGE_BASED_FUNDING,
 };
@@ -7400,6 +7400,29 @@ fn a_lifetime_total_prices_every_row_as_a_read_from_the_earliest_hour_does() {
     assert_eq!(lifetime, since);
     assert_eq!(key_lifetime, key_since);
     assert_eq!(key_lifetime["desktop"], lifetime["a"]);
+}
+
+/// The account list reads its request counts apart from the priced totals, so the counts keep the totals' rule on
+/// probes themselves: a probe served beside a request of one account counts the request alone.
+#[test]
+fn the_account_request_counts_leave_the_probe_rows_out() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let at = ms(2026, 1, 10, 3, 0);
+    plant_spend(
+        &db,
+        "r1",
+        "p",
+        "a",
+        "claude-sonnet-5",
+        "inference",
+        at,
+        1_000,
+    );
+    plant_spend(&db, "r2", "p", "a", "claude-sonnet-5", "probe", at, 1_000);
+    let counts = db
+        .read_blocking(|c| account_request_counts(c, i64::MIN, hour_of(at) + 3_600))
+        .unwrap();
+    assert_eq!(counts, BTreeMap::from([("a".to_string(), 1)]));
 }
 
 /// The totals price each group at its own hour, so a cost revision that takes effect inside one price revision's

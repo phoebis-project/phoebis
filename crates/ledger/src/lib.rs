@@ -60,10 +60,9 @@ pub use pricing::{
 pub use query::{apply_filter, breakdown, burn_rows, burn_series, series};
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_tables;
-pub use query::{agent_models, AgentModel};
 pub use query::{
-    breakdown_paged, bucket_seconds, burn_groups_paged, burn_series_over, dashboard_on,
-    decision_record, guardrail_counts, held_series, hour_ceil, hourly_window_samples,
+    account_request_counts, breakdown_paged, bucket_seconds, burn_groups_paged, burn_series_over,
+    dashboard_on, decision_record, guardrail_counts, held_series, hour_ceil, hourly_window_samples,
     key_request_totals, latest_extra_usage, latest_extra_usage_polled, latest_extra_usage_share,
     latest_quota, list_requests, list_routing_log, member_spends, moves_by_reason,
     moves_by_reason_and_fit, names_one_account, parked_count, parked_summary, parse_range,
@@ -79,6 +78,7 @@ pub use query::{
     EVENT_KINDS, GROUP_BYS, GUARDRAIL_BLOCKED_BYTES_SQL, GUARDRAIL_COUNTS_SQL, MAX_POINTS,
     MAX_RANGE_MS, PROBE_KIND,
 };
+pub use query::{agent_models, AgentModel};
 pub use query::{guardrail_sample_page, request_body, SampleRow, SampleSubject};
 pub use query::{list_request_page, refusal_categories, RequestPage};
 pub use quota::{
