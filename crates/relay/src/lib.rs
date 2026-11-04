@@ -33,8 +33,8 @@ mod stream;
 pub use auth::{authenticated_key, is_json};
 pub use billing::is_entrypoint_token;
 pub use body::{
-    schema_cache_controls, BodyEdits, CACHE_DIAGNOSIS_BETA, CLASSIFIER_BETA,
-    DANGEROUS_TOOL_USE_BETA, EXTENDED_TTL_BETA,
+    schema_cache_controls, CACHE_DIAGNOSIS_BETA, CLASSIFIER_BETA, DANGEROUS_TOOL_USE_BETA,
+    EXTENDED_TTL_BETA,
 };
 pub use cache_ttl::{CacheTtl, CacheTtlPolicy, ModelTtl, TtlBranch};
 pub use casing::OriginalHead;
@@ -63,7 +63,7 @@ pub use serve::{
 };
 pub use sse::SseEvent;
 
-pub(crate) use body::{edit_body, BodyMember, Markerless, NativeEdit, SafeguardsEdit};
+pub(crate) use body::{edit_body, BodyEdits, BodyMember, Markerless, NativeEdit, SafeguardsEdit};
 
 #[cfg(feature = "debug-hooks")]
 impl Relay {

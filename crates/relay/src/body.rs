@@ -10,8 +10,6 @@ use crate::{CacheTtl, DriftKind, RelayError};
 
 #[derive(Debug)]
 pub struct BodyEdits {
-    pub account_uuid_replaced: bool,
-    pub model_replaced: bool,
     pub cch_restamped: bool,
     pub restored: Vec<Injected>,
     pub cache_ttl_edited: bool,
@@ -247,8 +245,8 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
             Cut::Unreachable => return Err(RelayError::BodyShape(BodyMember::Safeguards)),
         }
     }
-    let account_uuid_replaced = match edit.account_uuid {
-        AccountUuidEdit::Keep => false,
+    match edit.account_uuid {
+        AccountUuidEdit::Keep => {}
         AccountUuidEdit::Splice(uuid) => {
             // The uuid is spliced into an escaped JSON string, so a value needing escaping would corrupt the
             // body rather than identify the account.
@@ -260,18 +258,18 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
                 // keepalive probe replays a recipe taken from an admitted inference request, so this arm guards that
                 // invariant rather than answering a client: a body here carries the member.
                 Spliced::Absent => return Err(RelayError::BodyShape(BodyMember::MetadataUserId)),
-                Spliced::Replaced => true,
-                Spliced::Unchanged => false,
+                Spliced::Replaced | Spliced::Unchanged => {}
             }
         }
         // An API-key account binds no identity, so the value is blanked where the member is present.
-        AccountUuidEdit::Blank => matches!(replace_account_uuid(body, ""), Spliced::Replaced),
-    };
-    let model_replaced = match replace_model(body, edit.upstream_model) {
+        AccountUuidEdit::Blank => {
+            replace_account_uuid(body, "");
+        }
+    }
+    match replace_model(body, edit.upstream_model) {
         Spliced::Absent => return Err(RelayError::BodyShape(BodyMember::Model)),
-        Spliced::Replaced => true,
-        Spliced::Unchanged => false,
-    };
+        Spliced::Replaced | Spliced::Unchanged => {}
+    }
     let mut restored = match &edit.restore {
         Some(restore) => restore_billing_line(body, restore)?,
         None => Vec::new(),
@@ -302,8 +300,6 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
             false
         };
     Ok(BodyEdits {
-        account_uuid_replaced,
-        model_replaced,
         cch_restamped,
         restored,
         cache_ttl_edited,
@@ -739,8 +735,6 @@ mod tests {
             },
         )
         .expect("a JSON object is editable");
-        assert!(!edits.account_uuid_replaced);
-        assert!(!edits.model_replaced);
         assert!(!edits.cch_restamped);
         assert_eq!(body, before);
     }
@@ -794,7 +788,7 @@ mod tests {
     #[test]
     fn the_uuid_and_the_model_are_spliced_in_place() {
         let mut body = br#"{"model":"claude-sonnet-4-5[1m]","metadata":{"user_id":"{\"account_uuid\":\"\",\"session_id\":\"s-1\"}"}}"#.to_vec();
-        let edits = edit_body(
+        edit_body(
             &mut body,
             &NativeEdit {
                 account_uuid: AccountUuidEdit::Splice("acct-uuid"),
@@ -802,7 +796,6 @@ mod tests {
             },
         )
         .expect("a JSON object is editable");
-        assert!(edits.account_uuid_replaced && edits.model_replaced);
         assert_eq!(
             String::from_utf8(body).unwrap(),
             r#"{"model":"claude-sonnet-4-5","metadata":{"user_id":"{\"account_uuid\":\"acct-uuid\",\"session_id\":\"s-1\"}"}}"#
@@ -1291,7 +1284,6 @@ mod tests {
         assert_eq!(after["account_uuid"], "", "the uuid is blanked");
         assert_eq!(after["device_id"], before["device_id"]);
         assert_eq!(after["session_id"], before["session_id"]);
-        assert!(edits.account_uuid_replaced);
         assert!(edits.cch_restamped);
         assert_eq!(
             phoebis_cch::sign(&body).unwrap(),
@@ -1314,7 +1306,6 @@ mod tests {
         );
         let mut body = sent.to_vec();
         let edits = edit_body(&mut body, &blank_edit()).expect("an unsigned body is editable");
-        assert!(!edits.account_uuid_replaced);
         assert!(!edits.cch_restamped);
         assert!(body == sent, "no byte moved");
     }
@@ -1326,9 +1317,8 @@ mod tests {
             br#"{"model":"claude-sonnet-4-5","metadata":{"user_id":"{\"device_id\":\"d-1\",\"session_id\":\"s-1\"}"},"messages":[]}"#.as_slice(),
         ] {
             let mut body = sent.to_vec();
-            let edits = edit_body(&mut body, &blank_edit())
+            edit_body(&mut body, &blank_edit())
                 .expect("an API-key leg sends a body without the member");
-            assert!(!edits.account_uuid_replaced);
             assert_eq!(body, sent);
         }
     }
@@ -1340,7 +1330,7 @@ mod tests {
         let sent = br#"{"model":"claude-sonnet-4-5","metadata":{"user_id":"{\"account_uuid\":\"abc\\"},"messages":[]}"#;
         serde_json::from_slice::<serde_json::Value>(sent).expect("the body as sent parses");
         let mut body = sent.to_vec();
-        let edits = edit_body(&mut body, &blank_edit())
+        edit_body(&mut body, &blank_edit())
             .expect("an API-key leg sends a body whose uuid it cannot find");
         serde_json::from_slice::<serde_json::Value>(&body).unwrap_or_else(|e| {
             panic!(
@@ -1348,7 +1338,6 @@ mod tests {
                 String::from_utf8_lossy(&body)
             )
         });
-        assert!(!edits.account_uuid_replaced);
         assert_eq!(body, sent);
     }
 
