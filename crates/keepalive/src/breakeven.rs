@@ -7,7 +7,7 @@ use std::sync::LazyLock;
 use phoebis_ledger::{PlanTables, PriceRevisions, PriceTable};
 use phoebis_relay::{CacheTtl, CacheTtlPolicy, TtlBranch};
 use phoebis_routing::rules::{allows, process, RulesMode};
-use phoebis_routing::{listing::row_for, LongContextRates, Rates, SEVEN_DAY};
+use phoebis_routing::{listing::row_for, seconds_ms, LongContextRates, Rates, SEVEN_DAY};
 use phoebis_store::{canonical_id, ModelRule};
 
 use crate::config::{KeepalivePolicy, KeepaliveTiming, FIVE_MINUTES_MS, ONE_HOUR_MS};
@@ -274,15 +274,11 @@ pub fn resolve(
     timing: &KeepaliveTiming,
 ) -> Option<Ceilings> {
     let break_even = break_even_ms(factors, ttl_ms, timing)?;
-    let ms = |seconds: u64| {
-        i64::try_from(seconds)
-            .unwrap_or(i64::MAX)
-            .saturating_mul(1_000)
-    };
-    let capped = |seconds: Option<u64>| seconds.map_or(break_even, |s| ms(s).min(break_even));
+    let capped =
+        |seconds: Option<u64>| seconds.map_or(break_even, |s| seconds_ms(s).min(break_even));
     let idle_ms = match policy.max_idle_seconds {
         0 => break_even,
-        seconds => ms(seconds),
+        seconds => seconds_ms(seconds),
     };
     let idle_share =
         timing.cadence_per_hour(ttl_ms) * (idle_ms as f64 / ONE_HOUR_MS as f64) * factors.read

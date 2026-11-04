@@ -11,7 +11,7 @@ use axum::http::{header, Request};
 use bytes::Bytes;
 use phoebis_ledger::{Band, PlanTables, PriceTable, Speed};
 use phoebis_relay::{ProbeObstacle, RelayOutcome};
-use phoebis_routing::SEVEN_DAY;
+use phoebis_routing::{seconds_ms, SEVEN_DAY};
 use phoebis_store::AccountKind;
 use serde_json::Value;
 
@@ -741,11 +741,7 @@ impl Inner {
         let exhausted = outcome == ProbeOutcome::Exhausted;
         let retry_after_ms = result
             .and_then(|result| result.retry_after_secs)
-            .map(|secs| {
-                i64::try_from(secs)
-                    .unwrap_or(i64::MAX)
-                    .saturating_mul(1_000)
-            });
+            .map(seconds_ms);
         // Read before the obstacles, which never meet it: a 429 classifies as rate limited and never as exhausted,
         // and the budget's timed answer carries `accounts_exhausted`.
         if status == 429 && error_code == Some("accounts_at_cap") {
