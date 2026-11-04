@@ -77,7 +77,7 @@ pub(crate) struct RungWalk<'a> {
 /// The prompt cache's default lifetime in milliseconds.
 pub const FIVE_MINUTES_MS: i64 = 300_000;
 /// The hour in milliseconds a cache marker can ask for in place of the default lifetime.
-pub const ONE_HOUR_MS: i64 = 3_600_000;
+pub const ONE_HOUR_MS: i64 = crate::state::HOUR_MS;
 
 /// What a completed inference or probe answer reports: its conversation's links always, and the cache facts
 /// per tier when the response carries any.
@@ -300,7 +300,6 @@ impl AffinityMap {
     pub fn record(&mut self, report: &AffinityReport) -> Vec<AffinityRow> {
         let canonical_model = self.canonical(&report.canonical_model).to_string();
         let lane = self.canonical_lane(&report.lane);
-        let root = report.root.as_str();
         // The upstream's own TTL beats the marker's for the boundaries the response wrote, when every marker of the
         // request carried one TTL and the split says the cache wrote at the other: the markers are what the request
         // asked, the split is what the cache holds. A request with markers at both TTLs keeps each tier's marker,
@@ -342,7 +341,6 @@ impl AffinityMap {
                 ordinal(index),
                 &lane,
                 report,
-                root,
                 message_warmth,
                 message_id,
             ) {
@@ -359,7 +357,6 @@ impl AffinityMap {
                     ordinal(index),
                     &lane,
                     report,
-                    root,
                     static_ttl_ms.map(|ttl| (ttl, size)),
                     None,
                 ) {
@@ -452,10 +449,10 @@ impl AffinityMap {
         depth: u32,
         lane: &str,
         report: &AffinityReport,
-        root: &str,
         warmth: Option<(i64, u64)>,
         message_id: Option<&str>,
     ) -> Option<AffinityRow> {
+        let root = report.root.as_str();
         let existing = self
             .entries
             .get_mut(model)

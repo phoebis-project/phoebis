@@ -78,6 +78,11 @@ pub fn entrypoint_of(pin: &PinRow) -> Option<&str> {
     Some(pin.entrypoint.as_str()).filter(|entrypoint| !entrypoint.is_empty())
 }
 
+/// The pin's effort, `None` for a pin that carries none.
+pub(crate) fn effort_of(pin: &PinRow) -> Option<&str> {
+    Some(pin.effort.as_str()).filter(|effort| !effort.is_empty())
+}
+
 /// Where a window's reading came from: a response head, the usage poll, the registry at start (which keeps no
 /// origin), or the router's own prediction once a charge or a passed reset moved the stored reading.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
@@ -241,7 +246,7 @@ pub fn is_plan_window(window: &str) -> bool {
 }
 
 /// The plan windows a model's requests draw: both shared windows, and the model's own week where it has one.
-pub(crate) fn plan_windows(canonical_model: &str) -> impl Iterator<Item = &'static str> {
+pub fn plan_windows(canonical_model: &str) -> impl Iterator<Item = &'static str> {
     [FIVE_HOUR, SEVEN_DAY]
         .into_iter()
         .chain(model_week(canonical_model))
@@ -929,7 +934,7 @@ pub fn warm(pin: &PinRow, auxiliary_only: bool, now: i64) -> bool {
 /// Past this age a permit or a ticket is a guard whose drop never reached the table: the relay bounds a
 /// stream's silence, not its length, so a request older than the longest turn a client runs is one the table
 /// gives up waiting on.
-pub const IN_FLIGHT_RECLAIM_MS: i64 = 3_600_000;
+pub const IN_FLIGHT_RECLAIM_MS: i64 = HOUR_MS;
 
 /// The gaps a cycle averages over. Eight arrivals read a change of pace within a few minutes of 30 s turns, under
 /// any burn average, and let one long gap under the span fade from the cycle by an eighth with each later turn.
@@ -1247,7 +1252,7 @@ impl InFlight {
     pub async fn wait_for_slot(&self, account_id: &str, cap: u32, deadline: Instant) -> bool {
         wait_until(
             &self.0.freed,
-            deadline,
+            Some(deadline),
             || self.account(account_id) < cap,
             || {},
         )
@@ -1255,11 +1260,11 @@ impl InFlight {
     }
 }
 
-/// Resolves true once `ready` reads true, else at `deadline` with its last read. `on_wait` runs after each read
-/// that found it false, before the wait.
-pub(crate) async fn wait_until(
+/// Resolves true once `ready` reads true, else at `deadline` with its last read. `None` waits with no timer, for a
+/// runtime that may not drive one. `on_wait` runs after each read that found it false, before the wait.
+pub async fn wait_until(
     notify: &Notify,
-    deadline: Instant,
+    deadline: Option<Instant>,
     ready: impl Fn() -> bool,
     on_wait: impl Fn(),
 ) -> bool {
@@ -1273,8 +1278,13 @@ pub(crate) async fn wait_until(
             return true;
         }
         on_wait();
-        if tokio::time::timeout_at(deadline, woken).await.is_err() {
-            return ready();
+        match deadline {
+            Some(deadline) => {
+                if tokio::time::timeout_at(deadline, woken).await.is_err() {
+                    return ready();
+                }
+            }
+            None => woken.await,
         }
     }
 }
@@ -1663,9 +1673,10 @@ impl RoutingState {
         self.pin(key).is_some_and(|pin| pin.auxiliary_only)
     }
 
-    /// The pin's warmth under its own flag, the read every selector path takes.
+    /// The pin's warmth under its own flag, the read every selector path takes. `pin` is a row read from this state, so
+    /// its flag is the stored one.
     pub fn pin_warm(&self, pin: &PinRow, now: i64) -> bool {
-        warm(pin, self.auxiliary_only(&pin.key()), now)
+        warm(pin, pin.auxiliary_only, now)
     }
 
     pub(crate) fn remove_pin(&mut self, key: &PinKey) -> Option<PinRow> {
@@ -1859,24 +1870,23 @@ impl RoutingState {
         }
         let canonical_model = self.canonical(canonical_model);
         let mut held: Option<&CooldownRow> = None;
+        let mut key = (account_id.to_string(), CooldownScope::Account);
         // An earlier scope wins a tie, so the scopes are probed in this order.
-        let mut probe = |key: &(String, CooldownScope)| {
-            if let Some(row) = self.cooldowns.get(key).filter(|row| {
+        for scope in [
+            CooldownScope::Account,
+            CooldownScope::Fast,
+            CooldownScope::FastCredits,
+            CooldownScope::Model(canonical_model.to_string()),
+        ] {
+            key.1 = scope;
+            if let Some(row) = self.cooldowns.get(&key).filter(|row| {
                 row.until > now && cooldown_holds(&row.scope, &row.window, canonical_model, fast)
             }) {
                 if held.is_none_or(|held| held.until < row.until) {
                     held = Some(row);
                 }
             }
-        };
-        let mut key = (account_id.to_string(), CooldownScope::Account);
-        probe(&key);
-        key.1 = CooldownScope::Fast;
-        probe(&key);
-        key.1 = CooldownScope::FastCredits;
-        probe(&key);
-        key.1 = CooldownScope::Model(canonical_model.to_string());
-        probe(&key);
+        }
         held
     }
 
@@ -2611,12 +2621,6 @@ impl RoutingState {
 
     pub(crate) fn set_in_flight(&mut self, in_flight: InFlight) {
         self.in_flight = in_flight;
-    }
-
-    /// The tables a usd shedding round prices each pin's burn through. A window-share round orders its pins by its
-    /// own walk's figure.
-    pub fn rates(&self) -> &BurnRates {
-        &self.rates
     }
 
     /// Set by the task at spawn from its config, and by a test that prices a selection through its own closures.
@@ -3639,6 +3643,12 @@ impl RoutingState {
     /// Every pin's key id, in no order: the per-pool count reads these and skips the clone and sort `pins()` pays.
     pub(crate) fn pin_key_ids(&self) -> impl Iterator<Item = &str> + '_ {
         self.pins.values().map(|p| p.key_id.as_str())
+    }
+
+    /// Every pin, in no order: a reader that keeps a few rows clones those alone and skips the clone and sort `pins()`
+    /// pays.
+    pub(crate) fn pin_rows(&self) -> impl Iterator<Item = &PinRow> + '_ {
+        self.pins.values()
     }
 
     /// Every pin of one key, session and model, under any agent: the cohort-aware hold's own lookup, which

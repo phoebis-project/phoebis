@@ -890,7 +890,7 @@ impl DecisionRecord {
             ),
             pin: None,
             pin_reason: Some("not_looked_up"),
-            settings: key.zip(pool).map(|(_, pool)| settings_of(pool)),
+            settings: pool.map(settings_of),
             candidates: Vec::new(),
             walk: vec![
                 WalkStep {

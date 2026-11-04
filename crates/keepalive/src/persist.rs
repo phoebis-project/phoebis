@@ -1431,9 +1431,12 @@ impl Engine {
     /// drive. Compiled only under `debug-hooks`.
     #[cfg(any(test, feature = "debug-hooks"))]
     pub async fn persist_reached(&self, entries: u64, snapshots: u64) {
-        crate::engine::wait_until(&self.persist_progress, || {
-            self.persist_entries() >= entries && self.persist_snapshots() >= snapshots
-        })
+        phoebis_routing::wait_until(
+            &self.persist_progress,
+            None,
+            || self.persist_entries() >= entries && self.persist_snapshots() >= snapshots,
+            || {},
+        )
         .await;
     }
 

@@ -1030,21 +1030,6 @@ pub(crate) fn agent_ref<'a>(
     sessions.get(key)?.agents.get(agent_id)
 }
 
-/// Resolves once `ready` holds, read again each time `notify` wakes.
-pub(crate) async fn wait_until(notify: &Notify, ready: impl Fn() -> bool) {
-    loop {
-        let notified = notify.notified();
-        tokio::pin!(notified);
-        // Registered before the condition is read, so a change that lands between the two wakes this waiter instead
-        // of notifying nobody.
-        notified.as_mut().enable();
-        if ready() {
-            return;
-        }
-        notified.await;
-    }
-}
-
 /// Drops the agent's observation, with the pending entry it follows and the bytes its recipe held.
 fn drop_current(
     agent: &mut Agent,
@@ -4014,7 +3999,7 @@ impl Engine {
 
     /// Resolves once no probe is in flight; the tests drive `step` and then wait here.
     pub async fn wait_idle(&self) {
-        wait_until(&self.idle, || self.lock().running == 0).await;
+        phoebis_routing::wait_until(&self.idle, None, || self.lock().running == 0, || {}).await;
     }
 
     /// Quiesces, waits for the probes the quiesce canceled, saves, and only then clears: the last save carries

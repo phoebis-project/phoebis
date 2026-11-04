@@ -6,9 +6,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, AffinityMode, ApiKeyRow, BudgetPeriod, CooldownRow,
-    CooldownScope, OveragePolicy, PinBurn, PinKey, PinMark, PinRow, PoolMember, PoolRow,
-    ReturnToPlan, SessionPlacement, ShedStamp, Strategy, SubagentPlacement, WarmSessions,
+    AccountKind, AccountRow, AccountState, AffinityMode, BudgetPeriod, CooldownRow, CooldownScope,
+    OveragePolicy, PinBurn, PinKey, PinMark, PinRow, PoolMember, PoolRow, ReturnToPlan,
+    SessionPlacement, ShedStamp, Strategy, SubagentPlacement, WarmSessions,
 };
 use rand::{Rng, RngExt};
 
@@ -24,12 +24,12 @@ use crate::record::{
     WalkStep, WarmthFacts, WindowFacts, RECORD_VERSION, WALK_STEPS,
 };
 use crate::state::{
-    all_plan_windows, budget_reached, burn_average_ms, burn_decayed, ceiling, entrypoint_of,
-    keeps_off, load_shedding, mark_holds, plan_windows, return_to_plan_dwell_ms, round_in_dwell,
-    shed_cap, shed_dwell_ms, slow_down, slow_down_hold_ms, slow_down_stretch_ms, warm, BandSegment,
-    BurnUnit, MemberSpend, PinPace, PinRef, PinUsage, Reservation, RoutingState, StateWrite, Tier,
-    WindowReading, FAST_INPUT, FAST_OUTPUT, FIVE_HOUR, HOUR_MS, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY,
-    SEVEN_DAY_FABLE, WEEK_MS,
+    all_plan_windows, budget_reached, burn_average_ms, burn_decayed, ceiling, effort_of,
+    entrypoint_of, keeps_off, load_shedding, mark_holds, plan_windows, return_to_plan_dwell_ms,
+    round_in_dwell, shed_cap, shed_dwell_ms, slow_down, slow_down_hold_ms, slow_down_stretch_ms,
+    warm, BandSegment, BurnUnit, MemberSpend, PinPace, PinRef, PinUsage, Reservation, RoutingState,
+    StateWrite, Tier, WindowReading, FAST_INPUT, FAST_OUTPUT, FIVE_HOUR, HOUR_MS,
+    IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
 use crate::windows::{window_for, MODEL_WINDOWS};
 use crate::{paid_source, term, Candidate, KeyRefusal, RegistrySnapshot, ResolveError};
@@ -744,7 +744,7 @@ pub enum Obstacle {
 
 /// The step-2 name `release_reasons` and the trace report for an obstacle: `attempted`, `budget`,
 /// `budget_unknown`, `cooldown`, `credits`, `operator`, `overage`, `spent`, or `subscription_ended`.
-pub fn obstacle_name(obstacle: &Obstacle) -> &'static str {
+fn obstacle_name(obstacle: &Obstacle) -> &'static str {
     match obstacle {
         Obstacle::Attempted => "attempted",
         Obstacle::Budget { .. } => "budget",
@@ -962,7 +962,8 @@ impl<'a> Figures<'a> {
 
 /// A fresh session's prior: the warm pins the pool keeps on its members at `now`, each priced per window by
 /// `pin_figures`. The key-to-pool filter of `in_pool` leaves out a pin a former pool left on a member, as the
-/// projections leave it out of the standing burn, so another pool's sessions shape no placement of this one.
+/// projections leave it out of the standing burn, so another pool's sessions shape no placement of this one. The rows
+/// come in no order, since `median` sorts the rates it reads.
 fn fresh_prior(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -976,9 +977,9 @@ fn fresh_prior(
         .collect();
     let kept = in_pool(snapshot, pool);
     state
-        .pins()
-        .into_iter()
+        .pin_rows()
         .filter(|p| members.contains(p.account_id.as_str()) && kept(p) && state.pin_warm(p, now))
+        .cloned()
         .collect()
 }
 
@@ -1162,10 +1163,7 @@ pub fn release_reasons(
             }
         }
     }
-    if snapshot
-        .term(&pin.account_id)
-        .is_some_and(|term| term::ended(term, request.now))
-    {
+    if subscription_ended(snapshot, &pin.account_id, request.now) {
         reasons.push("subscription_ended");
     }
     if let Some(row) = state.blocking_cooldown(
@@ -1274,7 +1272,13 @@ pub fn decide(
             account.map(account_fact).into_iter().collect(),
         );
     }
-    let (record, summary, shed_round) = finish(rec, request, key, pool, &result);
+    let (record, summary, shed_round) = finish(
+        rec,
+        request,
+        key.map_or("", |k| k.pool_id.as_str()),
+        pool,
+        &result,
+    );
     Decided {
         result,
         writes,
@@ -1793,9 +1797,7 @@ fn run(
     let mut reads: Vec<(String, FitRead)> = Vec::new();
     if let Some((mut current, current_key)) = pin.take() {
         let mut moved_off = false;
-        let ended = snapshot
-            .term(&current.account_id)
-            .is_some_and(|term| term::ended(term, request.now));
+        let ended = subscription_ended(snapshot, &current.account_id, request.now);
         if request.count || ended {
             let reason = if request.count {
                 "count"
@@ -1980,12 +1982,18 @@ fn run(
     // The candidates placement may choose among, before any of step 6's own partitions: judged on the account
     // itself, never on whether a preference below narrowed the wider set around it.
     let allowed: Vec<&Candidate> = selection_set.clone();
+    // The allowance and fit reads below, each by account, which the placement's rungs start from rather than reading
+    // the same state again.
+    let mut allowances: Vec<(&str, bool)> = Vec::new();
+    let mut verdicts: Vec<(&str, &'static str)> = Vec::new();
     let mut partitions = Vec::with_capacity(4);
     if window != SEVEN_DAY {
         let mut left: Vec<&Candidate> = Vec::new();
         let mut dropped = 0;
         for c in selection_set.iter().copied() {
-            if holds_allowance(state, snapshot, &c.account_id, window, request.now) {
+            let holds = holds_allowance(state, snapshot, &c.account_id, window, request.now);
+            allowances.push((&c.account_id, holds));
+            if holds {
                 left.push(c);
                 continue;
             }
@@ -2069,10 +2077,14 @@ fn run(
     // takes the `rewrite_only` rung, and the strategy alone picks on the `least_bad` and `every` rungs. The rung that
     // kept the set is the `ladder` fact.
     let mut ladder = None;
+    // Built once for the fit below, the placement's rung 4 and the booking, since nothing between them changes a pin.
+    let prior = match moving {
+        Some(_) => Vec::new(),
+        None => fresh_prior(state, snapshot, pool, request.now),
+    };
     let fitting: Vec<&Candidate> = if moving.is_some() {
         selection_set.clone()
     } else {
-        let prior = fresh_prior(state, snapshot, pool, request.now);
         let mut fitting = Vec::with_capacity(selection_set.len());
         let mut rewrite_only: Vec<(&Candidate, FitRead)> = Vec::new();
         let mut least_bad: Vec<&Candidate> = Vec::new();
@@ -2097,6 +2109,7 @@ fn run(
             if read.verdict != "ending" {
                 least_bad.push(c);
             }
+            verdicts.push((&c.account_id, read.verdict));
             match read.verdict {
                 "fits" => {
                     fitting.push(c);
@@ -2167,10 +2180,13 @@ fn run(
             pool,
             request,
             moving.as_ref(),
+            &prior,
             &affinity_guard,
             &allowed,
             window,
             own_key.as_ref(),
+            &allowances,
+            &verdicts,
             rec,
         ),
     };
@@ -2312,10 +2328,6 @@ fn run(
     state.release_reservation(&request.request_id);
     if !(request.count || request.probe || request.fast || request.classifier) {
         if let Some(tier) = snapshot.priced_tier(&chosen.account_id) {
-            let prior = match moving {
-                Some(_) => Vec::new(),
-                None => fresh_prior(state, snapshot, pool, request.now),
-            };
             let (rewrite, burn, regime) = pin_figures(
                 state,
                 pool,
@@ -2574,7 +2586,7 @@ pub fn seconds_ms(seconds: u64) -> i64 {
         .unwrap_or(i64::MAX)
 }
 
-pub(crate) const FIVE_HOUR_MS: i64 = 5 * 3_600_000;
+pub(crate) const FIVE_HOUR_MS: i64 = 5 * HOUR_MS;
 
 /// The safety wait: the stretch has to read over the threshold at a pinned selection and still read over it at one
 /// this much later before the round fires, so one large turn's charge does not fire a round on its own.
@@ -3620,22 +3632,28 @@ fn move_of<'a>(
     // A fast request draws usage credits and no plan window, so neither a spent window nor plan overage is a
     // reason to move its session.
     if request.fast {
-        rec.step(
-            MigrateReason::Spent.step(),
+        rule_line(
+            rec,
+            MigrateReason::Spent,
             "no",
             vec![Fact::bool("fast", true)],
+            &slow_down_facts,
         );
     } else if !pool.shedding.migrate_when_spent {
-        rec.step(
-            MigrateReason::Spent.step(),
+        rule_line(
+            rec,
+            MigrateReason::Spent,
             "no",
             vec![Fact::bool("migrate_when_spent", false)],
+            &slow_down_facts,
         );
     } else if holds_allowance(state, snapshot, &current.account_id, window, now) {
-        rec.step(
-            MigrateReason::Spent.step(),
+        rule_line(
+            rec,
+            MigrateReason::Spent,
             "no",
             vec![Fact::bool("holds_allowance", true)],
+            &slow_down_facts,
         );
     } else {
         // A reset inside the retry bound costs less than a cold rewrite: the request waits for it in place and the
@@ -3702,10 +3720,9 @@ fn move_of<'a>(
             rec,
         );
         let facts = vec![Fact::bool("holds_allowance", false)];
-        if !gate.set.is_empty() {
-            return fired(rec, MigrateReason::Spent, facts, gate, &slow_down_facts);
+        if let Some(moved) = concluded(rec, MigrateReason::Spent, facts, gate, &slow_down_facts) {
+            return moved;
         }
-        no_destination(rec, MigrateReason::Spent, facts, gate, &slow_down_facts);
     }
 
     // A subscription account in overage hands the session back to plan quota, warm or cold, onto a plan-funded
@@ -3714,28 +3731,36 @@ fn move_of<'a>(
     // account is about to get its plan back, and moving now would move it twice.
     let current_kind = kind(&current.account_id);
     if request.fast {
-        rec.step(
-            MigrateReason::Overage.step(),
+        rule_line(
+            rec,
+            MigrateReason::Overage,
             "no",
             vec![Fact::bool("fast", true)],
+            &slow_down_facts,
         );
     } else if !prefer_plan {
-        rec.step(
-            MigrateReason::Overage.step(),
+        rule_line(
+            rec,
+            MigrateReason::Overage,
             "no",
             vec![Fact::text("overage_policy", pool.overage_policy.as_str())],
+            &slow_down_facts,
         );
     } else if current_kind != Some(AccountKind::Oauth) {
-        rec.step(
-            MigrateReason::Overage.step(),
+        rule_line(
+            rec,
+            MigrateReason::Overage,
             "no",
             vec![kind_fact(current_kind)],
+            &slow_down_facts,
         );
     } else if !state.in_overage(&current.account_id, now, fallback_ms) {
-        rec.step(
-            MigrateReason::Overage.step(),
+        rule_line(
+            rec,
+            MigrateReason::Overage,
             "no",
             vec![Fact::bool("in_overage", false)],
+            &slow_down_facts,
         );
     } else {
         let grace_ms = i64::from(pool.failover.overage_move_grace_minutes) * 60_000;
@@ -3745,7 +3770,7 @@ fn move_of<'a>(
             Some(reset) => {
                 facts.push(Fact::int("reset_in_grace", reset - now).unit("ms"));
                 facts.push(Fact::int("grace_ms", grace_ms).unit("ms"));
-                rec.step(MigrateReason::Overage.step(), "no", facts);
+                rule_line(rec, MigrateReason::Overage, "no", facts, &slow_down_facts);
             }
             None => {
                 let gate = gate(
@@ -3760,10 +3785,11 @@ fn move_of<'a>(
                     false,
                     rec,
                 );
-                if !gate.set.is_empty() {
-                    return fired(rec, MigrateReason::Overage, facts, gate, &slow_down_facts);
+                if let Some(moved) =
+                    concluded(rec, MigrateReason::Overage, facts, gate, &slow_down_facts)
+                {
+                    return moved;
                 }
-                no_destination(rec, MigrateReason::Overage, facts, gate, &slow_down_facts);
             }
         }
     }
@@ -3775,10 +3801,12 @@ fn move_of<'a>(
     let dwell_age_ms = now - current.created_at;
     let mode = pool.failover.return_to_plan;
     if !paid_source(snapshot, &current.account_id) {
-        rec.step(
-            MigrateReason::ReturnToPlan.step(),
+        rule_line(
+            rec,
+            MigrateReason::ReturnToPlan,
             "no",
             vec![kind_fact(current_kind), Fact::text("mode", mode.as_str())],
+            &slow_down_facts,
         );
     } else {
         let (facts, returns) = match mode {
@@ -3805,7 +3833,13 @@ fn move_of<'a>(
             }
         };
         if !returns {
-            rec.step(MigrateReason::ReturnToPlan.step(), "no", facts);
+            rule_line(
+                rec,
+                MigrateReason::ReturnToPlan,
+                "no",
+                facts,
+                &slow_down_facts,
+            );
         } else {
             let gate = gate(
                 state,
@@ -3819,38 +3853,35 @@ fn move_of<'a>(
                 false,
                 rec,
             );
-            if !gate.set.is_empty() {
-                return fired(
-                    rec,
-                    MigrateReason::ReturnToPlan,
-                    facts,
-                    gate,
-                    &slow_down_facts,
-                );
-            }
-            no_destination(
+            if let Some(moved) = concluded(
                 rec,
                 MigrateReason::ReturnToPlan,
                 facts,
                 gate,
                 &slow_down_facts,
-            );
+            ) {
+                return moved;
+            }
         }
     }
 
     // A cold pin costs nothing to move off an account about to end. A warm one stays: past the end the
     // `subscription_ended` exclusion releases it and the upstream refuses the dead token.
     if !cold {
-        rec.step(
-            MigrateReason::Drain.step(),
+        rule_line(
+            rec,
+            MigrateReason::Drain,
             "no",
             vec![Fact::bool("cold", false)],
+            &slow_down_facts,
         );
     } else if !winding_down(snapshot, pool, &current.account_id, now) {
-        rec.step(
-            MigrateReason::Drain.step(),
+        rule_line(
+            rec,
+            MigrateReason::Drain,
             "no",
             vec![Fact::bool("winding_down", false)],
+            &slow_down_facts,
         );
     } else {
         let gate = gate(
@@ -3866,10 +3897,9 @@ fn move_of<'a>(
             rec,
         );
         let facts = vec![Fact::bool("cold", true), Fact::bool("winding_down", true)];
-        if !gate.set.is_empty() {
-            return fired(rec, MigrateReason::Drain, facts, gate, &slow_down_facts);
+        if let Some(moved) = concluded(rec, MigrateReason::Drain, facts, gate, &slow_down_facts) {
+            return moved;
         }
-        no_destination(rec, MigrateReason::Drain, facts, gate, &slow_down_facts);
     }
 
     // The switch turns the round off and nothing else: the rules above, the fit gate and the reservations ran as they
@@ -4077,11 +4107,23 @@ fn move_of<'a>(
         true,
         rec,
     );
+    concluded(rec, MigrateReason::Shed, facts, gate, &slow_down_facts).unwrap_or(MoveVerdict::Stay)
+}
+
+/// The end of a rule whose reason held: the move where its gate found a destination, else its `no_destination` line
+/// and `None`, so the next rule runs.
+fn concluded<'a>(
+    rec: &mut Recorder,
+    rule: MigrateReason,
+    facts: Vec<Fact>,
+    gate: Gate<'a>,
+    slow_down_facts: &[Fact],
+) -> Option<MoveVerdict<'a>> {
     if gate.set.is_empty() {
-        no_destination(rec, MigrateReason::Shed, facts, gate, &slow_down_facts);
-        return MoveVerdict::Stay;
+        no_destination(rec, rule, facts, gate, slow_down_facts);
+        return None;
     }
-    fired(rec, MigrateReason::Shed, facts, gate, &slow_down_facts)
+    Some(fired(rec, rule, facts, gate, slow_down_facts))
 }
 
 /// A rule that moves the pin: its line with the destinations, the rules after it `not_run`, then the fit table the
@@ -5268,10 +5310,7 @@ pub(crate) fn obstacle(
     if unready(state, account, now).is_some() {
         return Some(Obstacle::Unready);
     }
-    if snapshot
-        .term(account_id)
-        .is_some_and(|term| term::ended(term, now))
-    {
+    if subscription_ended(snapshot, account_id, now) {
         return Some(Obstacle::Ended);
     }
     let cooldown = |row: &CooldownRow| Obstacle::Cooldown {
@@ -5459,7 +5498,7 @@ fn pin_ref(row: &PinRow) -> PinRef {
         epoch: row.epoch,
         lane: row.lane.clone(),
         entrypoint: row.entrypoint.clone(),
-        effort: Some(row.effort.clone()).filter(|effort| !effort.is_empty()),
+        effort: effort_of(row).map(String::from),
     }
 }
 
@@ -5553,7 +5592,9 @@ fn entry_refusal(
 /// post-partition selection set: under the cap, and a fit for the request (the moving `pin`'s figures, or the fresh
 /// prior with none) as the `no_fit` partition reads it, whose first arm reads a winding-down account as `ending`.
 /// Answers the first gate that blocks it: `at_cap` or `no_fit`. The fit leaves the row under `own` out, as the
-/// partition's does.
+/// partition's does. `verdict` is the fit the partition already read for the account, `None` to read it here. The cap
+/// is read here even beside a `verdict`, since the relay moves the in-flight counts from other threads.
+#[allow(clippy::too_many_arguments)]
 fn blocked(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -5562,29 +5603,39 @@ fn blocked(
     figures: Figures<'_>,
     account_id: &str,
     own: Option<&PinKey>,
+    verdict: Option<&'static str>,
 ) -> Option<&'static str> {
     let now = request.now;
     if !under_cap(state, pool, account_id) {
         Some("at_cap")
-    } else if fit_of(
-        state,
-        snapshot,
-        pool,
-        request,
-        figures,
-        account_id,
-        &[],
-        now,
-        Judge::Placement,
-        own,
-    )
-    .verdict
-        != "fits"
+    } else if verdict.unwrap_or_else(|| {
+        fit_of(
+            state,
+            snapshot,
+            pool,
+            request,
+            figures,
+            account_id,
+            &[],
+            now,
+            Judge::Placement,
+            own,
+        )
+        .verdict
+    }) != "fits"
     {
         Some("no_fit")
     } else {
         None
     }
+}
+
+/// The read `reads` holds for `account_id`, `None` for an account it does not hold.
+fn read_of<T: Copy>(reads: &[(&str, T)], account_id: &str) -> Option<T> {
+    reads
+        .iter()
+        .find(|(id, _)| *id == account_id)
+        .map(|(_, read)| *read)
 }
 
 /// Whether `account_id` holds a slot under the pool's in-flight cap.
@@ -5597,6 +5648,13 @@ fn winding_down(snapshot: &RegistrySnapshot, pool: &PoolRow, account_id: &str, n
     snapshot
         .term(account_id)
         .is_some_and(|term| term::winding_down(term, now, pool.failover.wind_down_minutes))
+}
+
+/// Whether `account_id`'s subscription has ended, as `term::ended` judges it.
+fn subscription_ended(snapshot: &RegistrySnapshot, account_id: &str, now: i64) -> bool {
+    snapshot
+        .term(account_id)
+        .is_some_and(|term| term::ended(term, now))
 }
 
 /// The candidate a fallback credit token places the request on: the issuer `credit_account` names, among the eligible
@@ -5614,10 +5672,8 @@ fn credit_candidate<'a>(
     if request.count || request.probe || !request.portable {
         return None;
     }
-    let candidate = eligible
-        .iter()
-        .copied()
-        .find(|c| c.account_id == credit.account_id && c.incarnation == credit.incarnation)?;
+    let candidate = candidate_in(eligible, &credit.account_id)
+        .filter(|c| c.incarnation == credit.incarnation)?;
     let renews = pinned == Some(candidate.account_id.as_str());
     (renews || under_cap(state, pool, &candidate.account_id)).then_some(candidate)
 }
@@ -5686,7 +5742,9 @@ fn judged_candidate<'a>(
 /// placement it would not have won on its own account. `moving` is the pin a move takes off its source, whose figures
 /// the blocker's fit reads, and `None` for a fresh placement. A token count is never placed: it reads no cache, so a
 /// warm prefix would only lift it past the cap and promise its trace a read it can never make. `own` is the request's
-/// pin key, whose row the blocker's fit leaves out.
+/// pin key, whose row the blocker's fit leaves out. `prior` is the fresh prior step 6 built, empty for a move.
+/// `allowances` and `verdicts` are step 6's allowance and fit reads by account, which the rungs reuse where they hold
+/// the account: the state is the same, and step 6 reads the fit of a fresh placement alone.
 #[allow(clippy::too_many_arguments)]
 fn placement_of<'a>(
     state: &RoutingState,
@@ -5694,10 +5752,13 @@ fn placement_of<'a>(
     pool: &PoolRow,
     request: &SelectRequest,
     moving: Option<&PinRow>,
+    prior: &[PinRow],
     affinity: &AffinityMap,
     allowed: &[&'a Candidate],
     window: &str,
     own: Option<&PinKey>,
+    allowances: &[(&str, bool)],
+    verdicts: &[(&str, &'static str)],
     rec: &mut Recorder,
 ) -> Option<(&'a Candidate, Placement)> {
     let none = |rec: &mut Recorder, rung: &'static str, reason: &'static str| {
@@ -5713,7 +5774,10 @@ fn placement_of<'a>(
     // One verdict per allowed account across the walks, since `state` stays borrowed immutably for the whole
     // placement and an account's allowance and its rung 4 blocker read the same at every entry of it.
     let index_of = |account_id: &str| allowed.iter().position(|c| c.account_id == account_id);
-    let admitted_at: Vec<OnceCell<bool>> = allowed.iter().map(|_| OnceCell::new()).collect();
+    let admitted_at: Vec<OnceCell<bool>> = allowed
+        .iter()
+        .map(|c| read_of(allowances, &c.account_id).map_or_else(OnceCell::new, OnceCell::from))
+        .collect();
     let admitted = |account_id: &str| {
         index_of(account_id).is_some_and(|i| {
             *admitted_at[i]
@@ -5831,10 +5895,6 @@ fn placement_of<'a>(
         entry.prefix_tokens > 0
             && (is_subagent || entry.prefix_tokens >= pool.affinity.min_shared_prefix_tokens)
     };
-    let prior = match moving {
-        Some(_) => Vec::new(),
-        None => fresh_prior(state, snapshot, pool, now),
-    };
     let blocked_at: Vec<OnceCell<Option<&'static str>>> =
         allowed.iter().map(|_| OnceCell::new()).collect();
     let walk = affinity.walk(&request.canonical_model, &request.static_boundaries, |e| {
@@ -5847,9 +5907,10 @@ fn placement_of<'a>(
                         snapshot,
                         pool,
                         request,
-                        Figures::of(moving, &prior),
+                        Figures::of(moving, prior),
                         &e.account_id,
                         own,
+                        read_of(verdicts, &e.account_id),
                     )
                 };
                 index_of(&e.account_id).map_or_else(judge, |i| *blocked_at[i].get_or_init(judge))
@@ -6035,7 +6096,7 @@ pub(crate) fn pace_of(
     let end = account_end(snapshot, &candidate.account_id, now);
     let deadline = reset.into_iter().chain(end).min();
     let hours = deadline
-        .map(|d| ((d - now) as f64 / 3_600_000.0).max(1.0 / 60.0))
+        .map(|d| ((d - now) as f64 / HOUR_MS as f64).max(1.0 / 60.0))
         .unwrap_or(WEEK_HOURS);
     // A slowed account's calm is its holds' work, so the score reads what its sessions would spend unslowed.
     let burn = snapshot
@@ -6533,6 +6594,7 @@ fn pin_facts(
     now: i64,
     pace: Option<&PinPace>,
 ) -> PinFacts {
+    let mark = row.and_then(|p| p.mark.as_ref());
     PinFacts {
         found,
         account_id: row.map(|p| p.account_id.clone()),
@@ -6556,13 +6618,9 @@ fn pin_facts(
         warmth: None,
         warmth_cause: None,
         released: Vec::new(),
-        marked_at: row.and_then(|p| p.mark.as_ref()).map(|mark| mark.at),
-        marked_on: row
-            .and_then(|p| p.mark.as_ref())
-            .map(|mark| mark.on.clone()),
-        marked_window: row
-            .and_then(|p| p.mark.as_ref())
-            .map(|mark| mark.window.clone()),
+        marked_at: mark.map(|m| m.at),
+        marked_on: mark.map(|m| m.on.clone()),
+        marked_window: mark.map(|m| m.window.clone()),
         cycle_ms: pace
             .and_then(|p| p.cycle_ms)
             .map(|cycle| cycle.round() as i64),
@@ -6802,7 +6860,7 @@ fn candidate_facts(
         trial_ends_at: t.trial_ends_at,
         canceled: t.canceled,
         ends_at: t.ends_at,
-        winding_down: winding_down(snapshot, pool, id, now),
+        winding_down: term::winding_down(t, now, pool.failover.wind_down_minutes),
         ended: term::ended(t, now),
     });
     CandidateFacts {
@@ -6910,7 +6968,7 @@ fn request_facts(request: &SelectRequest, pool_id: String) -> RequestFacts {
 fn finish(
     rec: Recorder,
     request: &SelectRequest,
-    key: Option<&ApiKeyRow>,
+    pool_id: &str,
     pool: Option<&PoolRow>,
     result: &SelectResult,
 ) -> (DecisionRecord, DecisionSummary, Option<ShedRoundRecord>) {
@@ -6933,7 +6991,7 @@ fn finish(
         slow_down,
         hold_plan,
     } = rec;
-    let settings = pool.zip(key).map(|(pool, _)| settings_of(pool));
+    let settings = pool.map(settings_of);
     let mut outcome = Outcome {
         kind: "placed",
         account_id: None,
@@ -7090,13 +7148,9 @@ fn finish(
         refusal: outcome.refusal.clone(),
         fast: request.fast,
     };
-    let pool_id = pool
-        .map(|p| p.id.clone())
-        .or_else(|| key.map(|k| k.pool_id.clone()))
-        .unwrap_or_default();
     let record = DecisionRecord {
         version: RECORD_VERSION,
-        request: request_facts(request, pool_id),
+        request: request_facts(request, pool_id.to_string()),
         pin,
         pin_reason,
         settings,

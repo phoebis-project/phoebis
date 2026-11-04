@@ -31,11 +31,12 @@ use crate::select::{
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, burn_folded, ceiling, default_burn_average_ms,
-    entrypoint_of, is_plan_window, latest_full_reset, mark_holds, plan_windows, round_in_dwell,
-    shed_dwell_ms, slow_down_hold_ms, spend_reset_estimate, wait_until, AccountTicket, BurnUnit,
-    CreditsState, EvidenceSource, InFlight, MemberSpend, OverageEvidence, PinRef, PinUsage,
-    RateTable, Recorded, RoutingState, SharePricer, SlowDownEdge, SpendWindow, StateWrite,
-    UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
+    effort_of, entrypoint_of, is_plan_window, latest_full_reset, mark_holds, plan_windows,
+    round_in_dwell, shed_dwell_ms, slow_down_hold_ms, spend_reset_estimate, wait_until,
+    AccountTicket, BurnUnit, CreditsState, EvidenceSource, InFlight, MemberSpend, OverageEvidence,
+    PinRef, PinUsage, RateTable, Recorded, RoutingState, SharePricer, SlowDownEdge, SpendWindow,
+    StateWrite, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY,
+    SEVEN_DAY_FABLE,
 };
 use crate::{
     model_week, resolve, term, window_length_ms, Candidate, KeyRefusal, Presented, RegistrySnapshot,
@@ -1468,7 +1469,7 @@ impl RouterHandle {
     pub async fn wait_for_report(&self, seq: u64, deadline: Instant) -> bool {
         wait_until(
             &self.reports.applied_notify,
-            deadline,
+            Some(deadline),
             || self.applied_report() >= seq,
             || {
                 #[cfg(any(test, feature = "debug-hooks"))]
@@ -2708,7 +2709,7 @@ fn pins_standing(state: &RoutingState, snapshot: &RegistrySnapshot, now: i64) ->
                 .map(|entry| entry.factor);
             let cycle_ms = state.pin_pace(&pin.key()).and_then(|pace| pace.cycle_ms);
             let auxiliary_only = state.auxiliary_only(&pin.key());
-            let effort = Some(pin.effort.clone()).filter(|effort| !effort.is_empty());
+            let effort = effort_of(&pin).map(String::from);
             let first_seen_at = state.first_seen(&pin.key_id, &pin.session_id, &pin.agent_id);
             let session_first_seen_at = state.first_seen(&pin.key_id, &pin.session_id, "main");
             PinStanding {
