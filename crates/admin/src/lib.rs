@@ -106,6 +106,21 @@ pub struct AdminState {
     pub readiness: Arc<Readiness>,
 }
 
+impl AdminState {
+    /// Drops what the process still holds of the account's identity once the store has deleted its row or bumped its
+    /// lifecycle: the manager's bundle, the catalog's listing, the usage entry and the vault's pairings, each pairing
+    /// session canceled with it.
+    pub(crate) fn forget_account(&self, id: &str, now: i64) {
+        // The store's write took the bundle outside the manager, so the copy it keeps goes with it.
+        self.manager.invalidate(id);
+        self.catalog.evict(id);
+        self.usage.invalidate(id);
+        for (session_id, owner) in self.vault.discard_for_account(id, now) {
+            let _ = self.pairing.cancel(&session_id, &owner, now);
+        }
+    }
+}
+
 /// The running configuration an operator reads back from the admin API. Every secret is left out, and so is
 /// the name of the variable each one is read from: a console that shows this view must not be able to point
 /// at where a credential lives.

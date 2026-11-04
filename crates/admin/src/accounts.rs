@@ -416,14 +416,7 @@ pub(crate) async fn remove(
         }
         Err(error) => return store_failure(error),
     }
-    // The delete took the bundle outside the manager, so the copy it keeps goes with it.
-    state.manager.invalidate(&id);
-    state.catalog.evict(&id);
-    state.usage.invalidate(&id);
-    let now = (state.clock)();
-    for (session_id, owner) in state.vault.discard_for_account(&id, now) {
-        let _ = state.pairing.cancel(&session_id, &owner, now);
-    }
+    state.forget_account(&id, (state.clock)());
     if let Err(refusal) = reload_or_refuse(&state).await {
         return refusal;
     }

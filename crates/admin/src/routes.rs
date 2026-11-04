@@ -728,9 +728,8 @@ async fn disconnect(State(state): State<Arc<AdminState>>, Path(id): Path<String>
         }
         Err(error) => return store_failure(error),
     }
-    // The bump deleted the bundle outside the manager, so the copy it keeps goes with it.
-    state.manager.invalidate(&id);
-    state.catalog.evict(&id);
+    // The bump deleted both credential kinds, so the old identity's state goes whatever the state write below answers.
+    state.forget_account(&id, (state.clock)());
     // The bump leaves the slot `disconnected`, which an OAuth slot leaves again by pairing. An API-key slot
     // has no pairing to run, so it rests where a slot that never had a key rests.
     if row.kind == AccountKind::ApiKey {
@@ -740,11 +739,6 @@ async fn disconnect(State(state): State<Arc<AdminState>>, Path(id): Path<String>
         {
             return store_failure(error);
         }
-    }
-    state.usage.invalidate(&id);
-    let now = (state.clock)();
-    for (session_id, owner) in state.vault.discard_for_account(&id, now) {
-        let _ = state.pairing.cancel(&session_id, &owner, now);
     }
     if let Err(refusal) = reload_or_refuse(&state).await {
         return refusal;
