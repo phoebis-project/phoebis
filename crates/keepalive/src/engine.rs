@@ -17,7 +17,9 @@ use phoebis_relay::{CacheTtl, CacheTtlPolicy, Relay};
 use phoebis_routing::{
     budget_deadline, listing, MemberSpend, RegistrySnapshot, RouterHandle, DAY_MS, SEVEN_DAY,
 };
-use phoebis_store::{AccountKind, AccountState, CooldownScope, ModelRule, OveragePolicy, Store};
+use phoebis_store::{
+    AccountKind, AccountState, CooldownScope, ModelRule, OveragePolicy, PoolRow, Store,
+};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -3928,7 +3930,7 @@ impl Engine {
                 // Before any hold can short-circuit: a recipe held under `horizon` never reaches the gate, and the
                 // ceilings below read the pool's policy as it stands now, so a horizon raised in the console
                 // reopens the hold and an opt-out discards the prompt the hold retained.
-                let (refreshed, moved) = {
+                let refreshed = {
                     let agent = inner
                         .sessions
                         .get_mut(&key)
@@ -3936,35 +3938,39 @@ impl Engine {
                         .agents
                         .get_mut(&agent_id)
                         .unwrap();
-                    let before = (agent.policy.clone(), agent.pool_id.clone());
-                    let refreshed = refresh_policy(&view, agent);
-                    (
-                        refreshed,
-                        before != (agent.policy.clone(), agent.pool_id.clone()),
-                    )
+                    refresh_policy(&view, agent)
                 };
-                // Read at every tick, so only a change is written.
-                if moved {
-                    inner.touch_agent(&key, &agent_id);
-                }
-                if let Err(Gate::Drop(reason, label)) = refreshed {
-                    inner.discard(&key, &agent_id, reason, Some(label));
-                    continue;
-                }
+                let refreshed = match refreshed {
+                    Ok((pool, moved)) => {
+                        // Read at every tick, so only a change is written.
+                        if moved {
+                            inner.touch_agent(&key, &agent_id);
+                        }
+                        Ok(pool)
+                    }
+                    Err(Gate::Drop(reason, label)) => {
+                        inner.discard(&key, &agent_id, reason, Some(label));
+                        continue;
+                    }
+                    Err(Gate::Hold(reason)) => Err(reason),
+                };
                 // Ahead of the refresh's hold, so a deadline or a wake that passes while the pool is disabled is
                 // recorded when it passes.
                 inner.end_passed_park(&key, &agent_id, now);
-                if let Err(Gate::Hold(reason)) = refreshed {
-                    if inner.lapse(&key, &agent_id, now, &mut lapsed) {
+                let pool = match refreshed {
+                    Ok(pool) => pool,
+                    Err(reason) => {
+                        if inner.lapse(&key, &agent_id, now, &mut lapsed) {
+                            continue;
+                        }
+                        // A paused recipe keeps its own reason, as under the ceilings' hold below: the pause already
+                        // withholds every probe until the next real request.
+                        if !inner.sessions[&key].agents[&agent_id].paused {
+                            inner.hold(&key, &agent_id, reason, now);
+                        }
                         continue;
                     }
-                    // A paused recipe keeps its own reason, as under the ceilings' hold below: the pause already
-                    // withholds every probe until the next real request.
-                    if !inner.sessions[&key].agents[&agent_id].paused {
-                        inner.hold(&key, &agent_id, reason, now);
-                    }
-                    continue;
-                }
+                };
                 // The refresh's own hold ends at the first tick that finds the pool enabled again, as the probe verdict
                 // below ends `horizon`: nothing else rewrites it before the next probe, and until then an armed recipe
                 // would read held with no next probe. A recipe whose request has not brought its evidence yet goes
@@ -4041,18 +4047,9 @@ impl Engine {
                         .agents
                         .get_mut(&agent_id)
                         .unwrap();
-                    let before = (
-                        agent.policy.clone(),
-                        agent.pool_id.clone(),
-                        agent.account.clone(),
-                    );
-                    let held = gate(&view, agent, &key.1);
-                    let after = (
-                        agent.policy.clone(),
-                        agent.pool_id.clone(),
-                        agent.account.clone(),
-                    );
-                    (held, before != after)
+                    let before = agent.account.clone();
+                    let held = gate(&view, agent, &key.1, pool);
+                    (held, before != agent.account)
                 };
                 if moved {
                     inner.touch_agent(&key, &agent_id);
@@ -4071,8 +4068,6 @@ impl Engine {
                 if !ready || inner.sessions[&key].agents[&agent_id].in_flight {
                     continue;
                 }
-                // The gate may have refreshed the agent's policy from the pool, so the due time here reads
-                // whatever tuning edit just landed rather than the one this tick started with.
                 let Some(at) = inner.sessions[&key].agents[&agent_id].due_at() else {
                     continue;
                 };
@@ -4302,11 +4297,14 @@ impl Engine {
     }
 }
 
-/// The head of `gate` as one function both the gate and the step's ceilings call: the key's opt-out drops the
-/// recipe, a disabled pool holds it, and the pool's current policy and id land on the agent, so a horizon raised in
-/// the console reaches a held recipe at the next tick and an opt-out discards a held prompt rather than leaving it
-/// retained.
-pub(crate) fn refresh_policy(view: &RouterView, agent: &mut Agent) -> Result<(), Gate> {
+/// The key's opt-out drops the recipe, a disabled pool holds it, and the pool's current policy and id land on the
+/// agent, so a horizon raised in the console reaches a held recipe at the next tick and an opt-out discards a held
+/// prompt rather than leaving it retained. Answers the key's pool, which the gate reads, and whether the agent's
+/// policy or pool moved.
+pub(crate) fn refresh_policy<'v>(
+    view: &'v RouterView,
+    agent: &mut Agent,
+) -> Result<(&'v PoolRow, bool), Gate> {
     // The operator's opt-out reaches an idle session here, not only at its next request: the recipe is dropped
     // rather than held, because nothing on that key may be probed again until the flag is cleared.
     let Some(key) = view
@@ -4322,9 +4320,11 @@ pub(crate) fn refresh_policy(view: &RouterView, agent: &mut Agent) -> Result<(),
     // The pool's policy may have changed since admission, and an admin may have moved the key to another pool
     // without a request following. The ceilings, the budget and the probe's own delta all read the pool the key
     // belongs to now.
-    agent.policy = KeepalivePolicy::from_json(&pool.keepalive_json);
+    let policy = KeepalivePolicy::from_json(&pool.keepalive_json);
+    let moved = agent.policy != policy || agent.pool_id != key.pool_id;
+    agent.policy = policy;
     agent.pool_id = key.pool_id.clone();
-    Ok(())
+    Ok((pool, moved))
 }
 
 /// The ceilings of one agent at a tick: its policy, the factors of its model under its account's funding (dollars
@@ -4374,14 +4374,15 @@ pub(crate) fn ceilings_for(
     })
 }
 
-/// The spec's "Scheduling against router state" row, in its order. `Err` names why the due probe waits, or why
-/// the recipe goes; `Ok` lets the probe run.
-pub(crate) fn gate(view: &RouterView, agent: &mut Agent, session_id: &str) -> Result<(), Gate> {
-    refresh_policy(view, agent)?;
+/// The spec's "Scheduling against router state" row, in its order, after `refresh_policy` answered `pool`. `Err`
+/// names why the due probe waits, or why the recipe goes; `Ok` lets the probe run.
+pub(crate) fn gate(
+    view: &RouterView,
+    agent: &mut Agent,
+    session_id: &str,
+    pool: &PoolRow,
+) -> Result<(), Gate> {
     let key_id = agent.key_id.clone();
-    let Some(pool) = view.snapshot.pool(&agent.pool_id) else {
-        return Err(Gate::Hold(Reason::PoolDisabled));
-    };
     // A probe keeps the session on the account it warmed only while the pin outlives the probe's due time:
     // the recipe's own TTL less the lead, so a five-minute recipe needs about four minutes of pin and a
     // one-hour one about fifty-four. The save-time floor of 300 s stays the one hard refusal.
@@ -4741,7 +4742,9 @@ mod tests {
         agent.account = Some(account.into());
         agent.canonical_model = "claude-opus-5-5".into();
         agent.current = Some(observation(fast));
-        gate(view, &mut agent, "s").err()
+        refresh_policy(view, &mut agent)
+            .and_then(|(pool, _)| gate(view, &mut agent, "s", pool))
+            .err()
     }
 
     /// A recipe's ceilings read the price set its prompt selects, its length the tokens the cache evidence counted: the
