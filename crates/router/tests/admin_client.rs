@@ -333,7 +333,6 @@ async fn a_refused_secret_is_one_line_with_no_secret_in_it() {
     .unwrap();
     let error = refused(client.expect(Method::GET, "/admin/system", None).await);
     assert!(matches!(error, ClientError::Refused401), "{error}");
-    assert_eq!(error.exit_code(), 1);
     let line = error.to_string();
     assert_eq!(line, "the admin secret was refused");
     let debug = format!("{error:?}");
@@ -364,7 +363,6 @@ async fn a_port_nothing_listens_on_names_the_url() {
     let error = refused(client.expect(Method::GET, "/admin/system", None).await);
     let line = error.to_string();
     assert!(matches!(error, ClientError::Transport { .. }), "{line}");
-    assert_eq!(error.exit_code(), 1);
     assert!(
         line.starts_with(&format!(
             "the admin listener did not answer on http://127.0.0.1:{port}: "

@@ -76,13 +76,6 @@ pub enum ClientError {
     Url,
 }
 
-impl ClientError {
-    /// 1 for every variant; the subcommand prints the Display and exits with it.
-    pub fn exit_code(&self) -> i32 {
-        1
-    }
-}
-
 /// Builds the runtime a subcommand runs on: one current-thread tokio runtime, since one call at a time is made.
 ///
 /// A subcommand ends with `std::process::exit(code)` once it has printed its result, never by dropping this runtime: a

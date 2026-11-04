@@ -356,7 +356,7 @@ fn run_recover_key(config_path: &Path, args: &RecoverKeyArgs) -> ! {
 fn run_status(config_path: &Path, args: &StatusArgs) -> ! {
     let client = AdminClient::from_flags(&args.common, config_path).unwrap_or_else(|error| {
         eprintln!("{error}");
-        std::process::exit(error.exit_code())
+        std::process::exit(1)
     });
     // `from_flags` read the file unless `--url` and `--secret-env` stand in for it; the listeners line and the probe
     // come from the same file, and without one only the admin URL is known.
@@ -436,7 +436,7 @@ fn run_status(config_path: &Path, args: &StatusArgs) -> ! {
 fn run_tls_reload(config_path: &Path, args: &TlsReloadArgs) -> ! {
     let client = AdminClient::from_flags(&args.common, config_path).unwrap_or_else(|error| {
         eprintln!("{error}");
-        std::process::exit(error.exit_code())
+        std::process::exit(1)
     });
     let runtime = admin_client::runtime().unwrap_or_else(|error| {
         eprintln!("cannot start the runtime: {error}");
@@ -446,7 +446,7 @@ fn run_tls_reload(config_path: &Path, args: &TlsReloadArgs) -> ! {
         .block_on(tls_reload::read(&client))
         .unwrap_or_else(|error| {
             eprintln!("{error}");
-            std::process::exit(error.exit_code())
+            std::process::exit(1)
         });
     let printed = if args.common.json {
         serde_json::to_string_pretty(&body)
