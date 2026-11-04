@@ -8,8 +8,7 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{header, Request};
-use bytes::{Bytes, BytesMut};
-use http_body_util::BodyExt;
+use bytes::Bytes;
 use phoebis_ledger::{Band, PlanTables, PriceTable, Speed};
 use phoebis_relay::{ProbeObstacle, RelayOutcome};
 use phoebis_routing::SEVEN_DAY;
@@ -230,23 +229,6 @@ fn retry_after_secs(headers: &axum::http::HeaderMap) -> Option<u64> {
         .and_then(|v| v.parse::<u64>().ok())
 }
 
-/// The body read frame by frame with a running total, so a response that keeps sending never grows past the
-/// usage bound in memory: the first frame past it ends the read, and the response is dropped with it.
-async fn read_bounded(body: Body) -> Option<Bytes> {
-    let mut body = body;
-    let mut out = BytesMut::new();
-    while let Some(frame) = body.frame().await {
-        let frame = frame.ok()?;
-        if let Ok(data) = frame.into_data() {
-            if out.len() + data.len() > MAX_USAGE_BYTES {
-                return None;
-            }
-            out.extend_from_slice(&data);
-        }
-    }
-    Some(out.freeze())
-}
-
 fn classify_status(status: u16, error_code: Option<&str>) -> ProbeOutcome {
     let exhausted = matches!(
         error_code,
@@ -288,7 +270,11 @@ pub(crate) async fn run_job(engine: Arc<Engine>, mut job: ProbeJob) {
                 let status = response.status().as_u16();
                 let outcome = response.extensions().get::<RelayOutcome>().cloned();
                 let retry_after_secs = retry_after_secs(response.headers());
-                let body = read_bounded(response.into_body()).await;
+                // A response that keeps sending stops at the usage bound: the first frame past it ends the read, and
+                // the response is dropped with it.
+                let body = axum::body::to_bytes(response.into_body(), MAX_USAGE_BYTES)
+                    .await
+                    .ok();
                 match outcome {
                     Some(o) => ProbeResult {
                         status,

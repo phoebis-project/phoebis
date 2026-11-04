@@ -14,7 +14,6 @@ debug-hooks = []
 [dependencies]
 axum = { workspace = true }
 bytes = { workspace = true }
-http-body-util = { workspace = true }
 phoebis-bus = { path = "../bus" }
 phoebis-cch = { path = "../cch" }
 phoebis-ledger = { path = "../ledger" }
@@ -33,6 +32,7 @@ tracing = { workspace = true }
 [dev-dependencies]
 boring = { workspace = true }
 fake-upstream = { path = "../../tests/fake_upstream" }
+http-body-util = { workspace = true }
 # An integration test builds the library without `cfg(test)`, so the counter it reads needs the feature on.
 phoebis-keepalive = { path = ".", features = ["debug-hooks"] }
 # The test tables, kept off the dependency above so a release build carries none.
