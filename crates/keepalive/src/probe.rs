@@ -106,22 +106,6 @@ pub enum ProbeOutcome {
     TimedOut,
 }
 
-impl ProbeOutcome {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            ProbeOutcome::Canceled => "canceled",
-            ProbeOutcome::Exhausted => "exhausted",
-            ProbeOutcome::Failed => "failed",
-            ProbeOutcome::Held => "held",
-            ProbeOutcome::Migrated => "migrated",
-            ProbeOutcome::Ok => "ok",
-            ProbeOutcome::RateLimited => "rate_limited",
-            ProbeOutcome::Rejected => "rejected",
-            ProbeOutcome::TimedOut => "timed_out",
-        }
-    }
-}
-
 /// The word the probe counter files a probe under: a served probe landed when it read its prefix back and was cold
 /// otherwise, and every other outcome is one the upstream did not serve. Every outcome is named, so one added later
 /// fails to build here rather than counting as `failed` unread.
@@ -1341,7 +1325,6 @@ mod tests {
             ProbeOutcome::Held,
             "the router's own refusal is its own outcome"
         );
-        assert_eq!(ProbeOutcome::Held.as_str(), "held");
         assert_eq!(
             classify_status(503, None),
             ProbeOutcome::Failed,

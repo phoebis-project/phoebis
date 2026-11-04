@@ -58,16 +58,6 @@ pub enum AgentState {
 }
 
 impl AgentState {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            AgentState::Busy => "busy",
-            AgentState::Idle => "idle",
-            AgentState::Parked => "parked",
-            AgentState::Released => "released",
-            AgentState::Unknown => "unknown",
-        }
-    }
-
     pub fn parse(s: &str) -> Option<AgentState> {
         Some(match s {
             "busy" => AgentState::Busy,
@@ -97,14 +87,6 @@ impl ParkKind {
             "scheduled" => ParkKind::Scheduled,
             _ => return None,
         })
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            ParkKind::Background => "background",
-            ParkKind::Both => "both",
-            ParkKind::Scheduled => "scheduled",
-        }
     }
 }
 
