@@ -18,8 +18,8 @@ use crate::accounts::{check_slug, within_text_bound, ACTOR};
 use crate::guardrails::{attachment_refusal, distinct_ids, AttachmentIndex, GuardrailRef};
 use crate::openapi::{ErrorBody, RegistryUnavailable, StorageFailure};
 use crate::routes::{
-    double_option, failure, fence_token, parse_object, present, reload_or_refuse, stale_edit,
-    store_failure, CreatedId,
+    api_key, double_option, failure, fence_token, parse_object, pool, present, reload_or_refuse,
+    stale_edit, store_failure, CreatedId,
 };
 use crate::rules::{parse_mode, parse_rules, RuleInput};
 use crate::AdminState;
@@ -227,11 +227,8 @@ fn apply(state: &AdminState, row: &mut ApiKeyRow, input: &KeyInput) -> Result<()
         row.notes = notes.clone();
     }
     if let Some(pool_id) = &input.pool_id {
-        match state.store.pool(pool_id) {
-            Ok(Some(_)) => row.pool_id = pool_id.clone(),
-            Ok(None) => return Err(failure(StatusCode::NOT_FOUND, "pool not found")),
-            Err(e) => return Err(store_failure(e)),
-        }
+        pool(state, pool_id)?;
+        row.pool_id = pool_id.clone();
     }
     if let Some(enabled) = input.enabled {
         if enabled && row.revoked_at.is_some() {
@@ -550,10 +547,9 @@ pub(crate) async fn patch(
         Ok(input) => input,
         Err(response) => return response,
     };
-    let mut row = match state.store.api_key(&id) {
-        Ok(Some(row)) => row,
-        Ok(None) => return failure(StatusCode::NOT_FOUND, "key not found"),
-        Err(e) => return store_failure(e),
+    let mut row = match api_key(&state, &id) {
+        Ok(row) => row,
+        Err(refusal) => return refusal,
     };
     let read_at = match fence_token(
         input.expected_revision.as_ref(),
@@ -623,10 +619,9 @@ pub(crate) async fn rotate(
     State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
 ) -> Response {
-    let row = match state.store.api_key(&id) {
-        Ok(Some(row)) => row,
-        Ok(None) => return failure(StatusCode::NOT_FOUND, "key not found"),
-        Err(e) => return store_failure(e),
+    let row = match api_key(&state, &id) {
+        Ok(row) => row,
+        Err(refusal) => return refusal,
     };
     if row.revoked_at.is_some() {
         return failure(StatusCode::CONFLICT, "a revoked key cannot be rotated");
@@ -645,21 +640,19 @@ pub(crate) async fn rotate(
     if let Err(refusal) = reload_or_refuse(&state).await {
         return refusal;
     }
-    match state.store.api_key(&id) {
-        Ok(Some(row)) => {
-            let (_, index) = match AttachmentIndex::read(&state.store) {
-                Ok(read) => read,
-                Err(response) => return response,
-            };
-            Json(with_secret(
-                key_view(&state, &row, &index, now).await,
-                &secret,
-            ))
-            .into_response()
-        }
-        Ok(None) => failure(StatusCode::NOT_FOUND, "key not found"),
-        Err(e) => store_failure(e),
-    }
+    let row = match api_key(&state, &id) {
+        Ok(row) => row,
+        Err(refusal) => return refusal,
+    };
+    let (_, index) = match AttachmentIndex::read(&state.store) {
+        Ok(read) => read,
+        Err(response) => return response,
+    };
+    Json(with_secret(
+        key_view(&state, &row, &index, now).await,
+        &secret,
+    ))
+    .into_response()
 }
 
 /// Revoke a key.

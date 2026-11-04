@@ -30,8 +30,9 @@ use phoebis_routing::{
     SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
-    answers_stamp_token, stamp_token, AccountKind, AccountRow, AccountState, CooldownRow,
-    CredentialStanding, Identity, NewBundle, PoolMember, Settled, StateCause, StoreError,
+    answers_stamp_token, stamp_token, AccountKind, AccountRow, AccountState, ApiKeyRow,
+    CooldownRow, CredentialStanding, Identity, NewBundle, PoolMember, PoolRow, Settled, StateCause,
+    StoreError,
 };
 use phoebis_transport::response::ResponseHead;
 use serde::Deserialize;
@@ -1950,6 +1951,26 @@ pub(crate) fn account(state: &AdminState, id: &str) -> Result<AccountRow, Respon
     match state.store.account(id) {
         Ok(Some(row)) => Ok(row),
         Ok(None) => Err(failure(StatusCode::NOT_FOUND, "account not found")),
+        Err(error) => Err(store_failure(error)),
+    }
+}
+
+// The error is a rendered HTTP response, as `account`'s is.
+#[allow(clippy::result_large_err)]
+pub(crate) fn api_key(state: &AdminState, id: &str) -> Result<ApiKeyRow, Response> {
+    match state.store.api_key(id) {
+        Ok(Some(row)) => Ok(row),
+        Ok(None) => Err(failure(StatusCode::NOT_FOUND, "key not found")),
+        Err(error) => Err(store_failure(error)),
+    }
+}
+
+// The error is a rendered HTTP response, as `account`'s is.
+#[allow(clippy::result_large_err)]
+pub(crate) fn pool(state: &AdminState, id: &str) -> Result<PoolRow, Response> {
+    match state.store.pool(id) {
+        Ok(Some(row)) => Ok(row),
+        Ok(None) => Err(failure(StatusCode::NOT_FOUND, "pool not found")),
         Err(error) => Err(store_failure(error)),
     }
 }

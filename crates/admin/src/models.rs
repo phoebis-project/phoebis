@@ -11,7 +11,7 @@ use phoebis_store::{CooldownRow, CooldownScope};
 use utoipa::ToSchema;
 
 use crate::openapi::{ErrorBody, RouterUnavailable, StorageFailure};
-use crate::routes::{failure, router_unavailable, store_failure};
+use crate::routes::{api_key, failure, router_unavailable, store_failure};
 use crate::AdminState;
 
 /// The processed rule list a key is judged by, in the order it applies.
@@ -89,10 +89,9 @@ pub(crate) async fn key_models(
     State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
 ) -> Response {
-    let key = match state.store.api_key(&id) {
-        Ok(Some(row)) => row,
-        Ok(None) => return failure(StatusCode::NOT_FOUND, "key not found"),
-        Err(e) => return store_failure(e),
+    let key = match api_key(&state, &id) {
+        Ok(row) => row,
+        Err(refusal) => return refusal,
     };
     // A key's pool is a foreign key the store enforces (a pool with keys refuses deletion), so a missing pool
     // here would be the same broken reference a missing key already answers.

@@ -23,7 +23,7 @@ use crate::accounts::{check_slug, ACTOR};
 use crate::guardrails::{attachment_refusal, distinct_ids, AttachmentIndex, GuardrailRef};
 use crate::openapi::{ErrorBody, RegistryUnavailable, StorageFailure};
 use crate::routes::{
-    double_option, failure, fence_token, parse_object, present, reload_or_refuse, stale_edit,
+    double_option, failure, fence_token, parse_object, pool, present, reload_or_refuse, stale_edit,
     store_failure, CreatedId,
 };
 use crate::rules::{parse_rules, RuleInput};
@@ -798,10 +798,9 @@ pub(crate) async fn patch(
         Ok(input) => input,
         Err(response) => return response,
     };
-    let mut row = match state.store.pool(&id) {
-        Ok(Some(row)) => row,
-        Ok(None) => return failure(StatusCode::NOT_FOUND, "pool not found"),
-        Err(e) => return store_failure(e),
+    let mut row = match pool(&state, &id) {
+        Ok(row) => row,
+        Err(refusal) => return refusal,
     };
     let read_at = match fence_token(
         input.expected_revision.as_ref(),
@@ -929,10 +928,9 @@ pub(crate) async fn set_members(
     let Ok(input) = serde_json::from_slice::<MembersInput>(&body) else {
         return failure(StatusCode::BAD_REQUEST, "body must be a JSON object");
     };
-    let mut row = match state.store.pool(&id) {
-        Ok(Some(row)) => row,
-        Ok(None) => return failure(StatusCode::NOT_FOUND, "pool not found"),
-        Err(e) => return store_failure(e),
+    let mut row = match pool(&state, &id) {
+        Ok(row) => row,
+        Err(refusal) => return refusal,
     };
     let writes = match member_writes(&input.members) {
         Ok(writes) => writes,
@@ -1632,10 +1630,8 @@ pub(crate) async fn traffic(
     Path(id): Path<String>,
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
-    match state.store.pool(&id) {
-        Ok(Some(_)) => {}
-        Ok(None) => return failure(StatusCode::NOT_FOUND, "pool not found"),
-        Err(e) => return store_failure(e),
+    if let Err(refusal) = pool(&state, &id) {
+        return refusal;
     }
     let now = (state.clock)();
     let (from, to) = match phoebis_ledger::parse_range(q.get("range").map(String::as_str), now) {
