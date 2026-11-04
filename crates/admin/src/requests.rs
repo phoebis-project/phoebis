@@ -15,7 +15,7 @@ use phoebis_ledger::{
     LiveKeys, PlanTables, PriceRevisions, RequestCursor, RequestFilter, RequestRecord, Speed,
     WindowShares, SHARE_REASON_CLIENT_CLASSIFIER,
 };
-use phoebis_routing::{UtilizationSample, SEVEN_DAY_OVERAGE_INCLUDED};
+use phoebis_routing::{UtilizationSample, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_OVERAGE_INCLUDED};
 use serde_json::Value;
 use utoipa::ToSchema;
 
@@ -757,16 +757,8 @@ fn attempt_json(a: &AttemptRecord, r: &RequestRecord, prices: &PriceRevisions) -
     // The attempt's columns hold the head's `5h`, `7d` and `7d_oi`, answered under the usage endpoint's keys as
     // the quota samples are.
     let windows: Vec<AttemptWindow> = [
-        window(
-            "five_hour",
-            a.ratelimit_5h_utilization,
-            a.ratelimit_5h_reset,
-        ),
-        window(
-            "seven_day",
-            a.ratelimit_7d_utilization,
-            a.ratelimit_7d_reset,
-        ),
+        window(FIVE_HOUR, a.ratelimit_5h_utilization, a.ratelimit_5h_reset),
+        window(SEVEN_DAY, a.ratelimit_7d_utilization, a.ratelimit_7d_reset),
         window(
             SEVEN_DAY_OVERAGE_INCLUDED,
             a.ratelimit_7d_oi_utilization,
