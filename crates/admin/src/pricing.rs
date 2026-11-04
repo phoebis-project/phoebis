@@ -6,35 +6,31 @@ use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_ledger::{ModelRow, PlanTables, PriceRevisions, PriceTable, SubscriptionCosts, Unit};
-use serde_json::{json, Value};
 use utoipa::ToSchema;
 
+use crate::openapi::{FastCells, LongContextCells};
 use crate::AdminState;
 
-/// The fast cells under their `*_per_m` names, null on a model that serves no fast mode.
-pub(crate) fn fast_json(row: &ModelRow) -> Value {
-    row.fast.as_ref().map_or(Value::Null, |p| {
-        json!({
-            "input_per_m": p.input,
-            "cache_write_5m_per_m": p.cache_write_5m,
-            "cache_write_1h_per_m": p.cache_write_1h,
-            "cache_read_per_m": p.cache_read,
-            "output_per_m": p.output,
-        })
+/// The fast cells under their `*_per_m` names, `None` on a model that serves no fast mode.
+pub(crate) fn fast_json(row: &ModelRow) -> Option<FastCells> {
+    row.fast.as_ref().map(|p| FastCells {
+        input_per_m: p.input,
+        cache_write_5m_per_m: p.cache_write_5m,
+        cache_write_1h_per_m: p.cache_write_1h,
+        cache_read_per_m: p.cache_read,
+        output_per_m: p.output,
     })
 }
 
-/// The long-context set under the `*_per_m` names with its `over`, null on a model priced one way.
-pub(crate) fn long_context_json(row: &ModelRow) -> Value {
-    row.long_context.as_ref().map_or(Value::Null, |l| {
-        json!({
-            "over": l.over,
-            "input_per_m": l.cells.input,
-            "cache_write_5m_per_m": l.cells.cache_write_5m,
-            "cache_write_1h_per_m": l.cells.cache_write_1h,
-            "cache_read_per_m": l.cells.cache_read,
-            "output_per_m": l.cells.output,
-        })
+/// The long-context set under the `*_per_m` names with its `over`, `None` on a model priced one way.
+pub(crate) fn long_context_json(row: &ModelRow) -> Option<LongContextCells> {
+    row.long_context.as_ref().map(|l| LongContextCells {
+        over: l.over,
+        input_per_m: l.cells.input,
+        cache_write_5m_per_m: l.cells.cache_write_5m,
+        cache_write_1h_per_m: l.cells.cache_write_1h,
+        cache_read_per_m: l.cells.cache_read,
+        output_per_m: l.cells.output,
     })
 }
 

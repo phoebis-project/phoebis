@@ -167,11 +167,9 @@ pub(crate) struct CostRow {
     /// `cache_write_5m` divided by `cache_read` when `cache_read` is positive, else null.
     pub reads_per_write_5m: Option<f64>,
     /// The fast-mode cells under the same five `*_per_m` names, null on a model that serves no fast mode.
-    #[schema(value_type = Option<crate::openapi::FastCells>)]
-    pub fast: Value,
+    pub fast: Option<crate::openapi::FastCells>,
     /// `over` and the five `*_per_m` cells, null on a model priced one way.
-    #[schema(value_type = Option<crate::openapi::LongContextCells>)]
-    pub long_context: Value,
+    pub long_context: Option<crate::openapi::LongContextCells>,
 }
 
 /// List the sessions.
