@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use fake_upstream::{FakeUpstream, Respond, Rule};
+use fake_upstream::{install, Captured, FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_bus::{Bus, Delivery, DiagnosticsSource, Event, RequestComplete, Subscriber};
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
@@ -2135,7 +2135,7 @@ fn stamped(suffix: &str, resumed: bool) -> Vec<u8> {
 /// decision's reason and nothing dialled, and answers the client's message with the drift warning's line.
 async fn drift_refusal(native: &[u8], kind: &str) -> (String, String) {
     let captured = Captured::default();
-    let _log = captured.install();
+    let _log = install(&captured);
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: ok_with_id("msg_01"),

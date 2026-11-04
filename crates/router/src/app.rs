@@ -1637,35 +1637,12 @@ mod tests {
         );
     }
 
-    /// The formatter's output kept in memory, so a case reads back the lines a function logged.
-    #[derive(Clone, Default)]
-    struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
-
-    impl std::io::Write for Captured {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
-        type Writer = Captured;
-
-        fn make_writer(&'a self) -> Self::Writer {
-            self.clone()
-        }
-    }
-
     /// The start log names the price list's entry in force and its revision count, and a held entry's date only while
     /// one is held, so an operator reads in the log what a restart changes. A lone entry dated after the start is
     /// already in force, so nothing is held.
     #[test]
     fn the_start_log_names_the_price_revisions_and_a_held_entrys_date_only_while_one_is_held() {
-        let captured = Captured::default();
+        let captured = fake_upstream::Captured::default();
         let subscriber = tracing_subscriber::fmt()
             .with_ansi(false)
             .without_time()
@@ -1687,7 +1664,7 @@ mod tests {
             log_ledger_opened(std::path::Path::new("ledger.sqlite"), &alone, START);
             log_ledger_opened(std::path::Path::new("ledger.sqlite"), &ahead, START);
         });
-        let text = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+        let text = captured.text();
         assert_eq!(
             text.lines().map(str::trim).collect::<Vec<_>>(),
             [

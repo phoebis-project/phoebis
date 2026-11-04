@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use common::*;
-use fake_upstream::Respond;
+use fake_upstream::{install_at, Captured, Respond};
 use phoebis_bus::{Event as BusEvent, Outcome, Usage};
 use phoebis_keepalive::{
     Ack, AgentState, CompanionState, Engine, Event, EventError, EventReport, KeepaliveLimits,
@@ -1803,7 +1803,7 @@ async fn dropped_at_the_load_with_one_line(r: Rig, version: u32, kept: serde_jso
     let captured = Captured::default();
     let second = r.restart().await;
     {
-        let _guard = captured.install_at(tracing::Level::INFO);
+        let _guard = install_at(&captured, tracing::Level::INFO);
         second.load_persisted().await;
     }
     let stats = second.stats();

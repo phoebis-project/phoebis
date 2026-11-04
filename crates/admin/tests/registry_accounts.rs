@@ -3,10 +3,8 @@ use phoebis_store::{AccountKind, CooldownScope};
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::{
-    backing_off_parts, delete, get, json, login, patch, post, succeed_token_requests, Captured,
-};
-use fake_upstream::Respond;
+use common::{backing_off_parts, delete, get, json, login, patch, post, succeed_token_requests};
+use fake_upstream::{Captured, Respond};
 
 const HOUR: i64 = 3_600_000;
 

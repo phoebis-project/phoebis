@@ -10,7 +10,8 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::Request;
-use common::{get, json, login, post, Captured};
+use common::{get, json, login, post};
+use fake_upstream::Captured;
 use http_body_util::BodyExt;
 use phoebis_attention::{PairFacts, TlsPairs};
 use phoebis_bus::{

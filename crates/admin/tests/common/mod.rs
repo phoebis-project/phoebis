@@ -1415,32 +1415,3 @@ fn as_account(body: &[u8], uuid: &str) -> Vec<u8> {
         .replace(ACCOUNT_UUID, uuid)
         .into_bytes()
 }
-
-/// The formatter's output, kept in memory so the test reads back exactly what the host's journal would hold.
-#[derive(Clone, Default)]
-pub struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
-
-impl std::io::Write for Captured {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().unwrap().extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
-    type Writer = Captured;
-
-    fn make_writer(&'a self) -> Self::Writer {
-        self.clone()
-    }
-}
-
-impl Captured {
-    pub fn text(&self) -> String {
-        String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
-    }
-}

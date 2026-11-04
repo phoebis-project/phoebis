@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use common::*;
+use fake_upstream::{install, Captured};
 use phoebis_bus::{
     AttemptOutcome, Event as BusEvent, Kind, Outcome, Phase, ResponseChunk, ResponseHead, Usage,
 };
@@ -361,7 +362,7 @@ async fn a_sessions_first_owner_mismatch_logs_one_warning_naming_the_session_and
     r.event(registered_by("session", "owner-1")).unwrap();
     r.event(registered_by("other", "owner-1")).unwrap();
     let captured = Captured::default();
-    let _guard = captured.install();
+    let _guard = install(&captured);
     for (id, session) in [("r-1", "session"), ("r-2", "session"), ("r-3", "other")] {
         r.engine.observe(owned(&r, id, session, "owner-2"));
     }

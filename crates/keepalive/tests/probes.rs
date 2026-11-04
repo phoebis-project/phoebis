@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use common::*;
-use fake_upstream::{Respond, SseEvent};
+use fake_upstream::{install, install_at, Captured, Respond, SseEvent};
 use phoebis_bus::Outcome;
 use phoebis_keepalive::{
     CompanionState, Event, KeepalivePolicy, KeepaliveTiming, Reason, RecipeState, FIVE_MINUTES_MS,
@@ -2080,7 +2080,7 @@ async fn shorter_stream_evidence_recomputes_from_the_last_refresh() {
 #[tokio::test]
 async fn a_running_total_without_the_split_keeps_the_hour() {
     let captured = Captured::default();
-    let _guard = captured.install_at(tracing::Level::DEBUG);
+    let _guard = install_at(&captured, tracing::Level::DEBUG);
     let mut r = rig(RigSpec::default()).await;
     let body = BODY.replace(
         r#""cache_control":{"type":"ephemeral"}"#,
@@ -2447,7 +2447,7 @@ async fn a_fast_recipe_served_fast_settles_its_waste_in_dollars_at_the_fast_cell
 #[tokio::test]
 async fn a_failed_tier_read_warns_once_and_settles_the_probe_in_dollars() {
     let captured = Captured::default();
-    let _guard = captured.install();
+    let _guard = install(&captured);
     // The rig's model weighed in the cost model, so a readable tier would settle the probe in the share.
     let mut weighted = phoebis_ledger::CostRevisions::shipped().latest().clone();
     weighted

@@ -1,7 +1,7 @@
 //! The binary from the outside: one fixture request relayed through a configured API-key account, and the
 //! bootstrap rules that refuse a configuration nobody should be able to start.
 
-use fake_upstream::{FakeUpstream, Respond, Rule};
+use fake_upstream::{Captured, FakeUpstream, Respond, Rule};
 use phoebis_profile::fixtures::{
     body, control_response, inference_head, with_dangerous_tool_use_beta, with_safeguards,
     BodyFixture, ControlFixture, FixtureKind, SAFEGUARDS_MEMBER,
@@ -498,35 +498,6 @@ usage:
         "acknowledged routing state survives shutdown"
     );
     up.shutdown().await;
-}
-
-/// The formatter's output kept in memory, so a case reads back the lines the binary logged on its thread.
-#[derive(Clone, Default)]
-struct Captured(std::sync::Arc<Mutex<Vec<u8>>>);
-
-impl std::io::Write for Captured {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().unwrap().extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
-    type Writer = Captured;
-
-    fn make_writer(&'a self) -> Self::Writer {
-        self.clone()
-    }
-}
-
-impl Captured {
-    fn text(&self) -> String {
-        String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
-    }
 }
 
 #[tokio::test]

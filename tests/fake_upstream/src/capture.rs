@@ -1,4 +1,5 @@
-//! A tracing capture for the suites that assert on what the router logs.
+//! The tracing captures for the suites that assert on what the router logs: the captured targets' fields through
+//! `capture_tracing`, or the formatter's lines through `Captured`.
 
 use std::sync::{Arc, Mutex};
 
@@ -94,4 +95,62 @@ pub fn capture_tracing() -> (Arc<Mutex<Vec<String>>>, impl Drop) {
         }
     }
     (lines, ClearSink)
+}
+
+/// The formatter's output, kept in memory so a case reads back exactly what the host's journal would hold.
+#[derive(Clone, Default)]
+pub struct Captured(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for Captured {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
+    type Writer = Captured;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+impl Captured {
+    pub fn text(&self) -> String {
+        String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+    }
+}
+
+/// Makes `captured` this thread's subscriber until the guard drops. A `#[tokio::test]` polls the relay, the engine
+/// and the tasks they spawn on the case's own thread, so every line the case drives lands there. A case that reads a
+/// debug line captures at `Level::DEBUG`.
+pub fn install_at(captured: &Captured, level: tracing::Level) -> tracing::subscriber::DefaultGuard {
+    // While tracing-core knows one dispatcher, it caches a new callsite's interest from the registering thread's
+    // subscriber alone, so a parallel case without a capture that reaches a shared callsite first turns it off here
+    // too. A second dispatcher kept for the process rules that out, and its OFF filter leaves the max level alone.
+    static SECOND: std::sync::OnceLock<tracing::Dispatch> = std::sync::OnceLock::new();
+    SECOND.get_or_init(|| {
+        tracing::Dispatch::new(
+            tracing_subscriber::fmt()
+                .with_max_level(tracing_subscriber::filter::LevelFilter::OFF)
+                .finish(),
+        )
+    });
+    tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_max_level(level)
+            .with_writer(captured.clone())
+            .finish(),
+    )
+}
+
+/// `install_at` at INFO, the level the warning cases read.
+pub fn install(captured: &Captured) -> tracing::subscriber::DefaultGuard {
+    install_at(captured, tracing::Level::INFO)
 }

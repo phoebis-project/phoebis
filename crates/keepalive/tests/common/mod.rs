@@ -841,53 +841,6 @@ pub async fn plant_spend(r: &Rig, id: &str, usd: f64) {
     .await;
 }
 
-/// The formatter's output, kept in memory so a case reads back exactly what the host's journal would hold.
-#[derive(Clone, Default)]
-pub struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
-
-impl std::io::Write for Captured {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().unwrap().extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
-    type Writer = Captured;
-
-    fn make_writer(&'a self) -> Self::Writer {
-        self.clone()
-    }
-}
-
-impl Captured {
-    /// Makes the capture this thread's subscriber until the guard drops. A `#[tokio::test]` polls the engine, the
-    /// relay and the probes on the case's own thread, so every line the case drives lands here. A case that reads a
-    /// debug line captures at `Level::DEBUG`.
-    pub fn install_at(&self, level: tracing::Level) -> tracing::subscriber::DefaultGuard {
-        tracing::subscriber::set_default(
-            tracing_subscriber::fmt()
-                .with_ansi(false)
-                .with_max_level(level)
-                .with_writer(self.clone())
-                .finish(),
-        )
-    }
-
-    /// `install_at` at INFO, the level the warning cases read.
-    pub fn install(&self) -> tracing::subscriber::DefaultGuard {
-        self.install_at(tracing::Level::INFO)
-    }
-
-    pub fn text(&self) -> String {
-        String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
-    }
-}
-
 /// The probe dollars and the wasted dollars a reader answers over `rows`, each row's counts priced on the rig's list:
 /// a probe's cost is its own request row's counts, and a settlement's waste the probe's counts it carries.
 pub fn read_dollars(r: &Rig, rows: &[phoebis_ledger::RollupRow]) -> (f64, f64) {

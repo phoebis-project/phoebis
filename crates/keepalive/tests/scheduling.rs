@@ -2,6 +2,7 @@
 //! clears. The due time follows the entry's expiry, and the idle limits follow the pool's policy.
 mod common;
 use common::*;
+use fake_upstream::{install, Captured};
 use phoebis_keepalive::{Event, KeepalivePolicy, KeepaliveTiming, Reason, LEASE_MS};
 use phoebis_ledger::{
     hour_of, member_spends, read_rollups, BudgetedMember, PriceRevisions, RollupSelect,
@@ -1811,7 +1812,7 @@ async fn an_account_deleted_while_nothing_is_retained_leaves_its_tier_streak_too
 async fn deleted_during_a_failing_tier_streak(session_ended: bool) {
     const OAUTH_SECRET: &str = "sk-ant-oat01-OOOO";
     let captured = Captured::default();
-    let _guard = captured.install();
+    let _guard = install(&captured);
     let mut r = rig(RigSpec {
         accounts: vec![oauth("o", OAUTH_SECRET, 0)],
         on_disk: true,

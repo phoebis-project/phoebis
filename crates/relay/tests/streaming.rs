@@ -1,7 +1,7 @@
 use axum::body::Body;
 use axum::http::Request;
 use bytes::Bytes;
-use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
+use fake_upstream::{install, install_at, Captured, FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
 use std::time::{Duration, Instant};
 use tower::ServiceExt;
@@ -399,8 +399,8 @@ async fn a_request_refused_on_both_connects_answers_502_after_one_wait() {
     // The listener is bound and dropped before the request, so both connects are refused. An API-key account, so
     // the relay calls no control plane on the dead address. The relay logs one debug line right before each connect
     // wait, so the count of that line is the count of waits.
-    let captured = common::Captured::default();
-    let _log = captured.install_at(tracing::Level::DEBUG);
+    let captured = Captured::default();
+    let _log = install_at(&captured, tracing::Level::DEBUG);
     let up = FakeUpstream::start(Vec::new()).await;
     let app = common::relay_with(phoebis_store::AccountKind::ApiKey, &up).await;
     up.shutdown().await;
@@ -437,8 +437,8 @@ async fn the_accounts_removal_during_the_connect_wait_answers_account_canceled_w
     // Every connection is closed at accept, so the first dial fails its handshake and the wait starts. The relay's
     // debug line right before the wait is the signal to remove the account, and the removal and the reload take
     // milliseconds on this harness, well inside the one-second wait.
-    let captured = common::Captured::default();
-    let _log = captured.install_at(tracing::Level::DEBUG);
+    let captured = Captured::default();
+    let _log = install_at(&captured, tracing::Level::DEBUG);
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: Respond::CloseImmediately,
@@ -1203,8 +1203,8 @@ async fn a_stream_closed_cleanly_after_message_start_without_message_stop_reads_
 #[tokio::test]
 async fn a_stream_closed_cleanly_before_its_stop_is_warned_of_nothing_and_carries_no_interruption()
 {
-    let captured = common::Captured::default();
-    let _log = captured.install();
+    let captured = Captured::default();
+    let _log = install(&captured);
     let (status, cut, complete) = one_stream(
         Respond::Sse {
             status: 200,
@@ -1346,8 +1346,8 @@ fn assert_cut_warned(log: &str, complete: &phoebis_bus::RequestComplete, code: &
 
 #[tokio::test]
 async fn a_stream_cut_after_its_head_warns_once_and_carries_the_transport_errors_words() {
-    let captured = common::Captured::default();
-    let _log = captured.install();
+    let captured = Captured::default();
+    let _log = install(&captured);
     let (status, cut, complete) = one_stream(
         Respond::SseCut {
             status: 200,
@@ -1378,8 +1378,8 @@ fn committed_then_gated() -> Respond {
 
 #[tokio::test]
 async fn a_stream_its_accounts_removal_ends_after_the_head_warns_once_with_account_canceled() {
-    let captured = common::Captured::default();
-    let _log = captured.install();
+    let captured = Captured::default();
+    let _log = install(&captured);
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: committed_then_gated(),
@@ -1416,8 +1416,8 @@ async fn a_stream_its_accounts_removal_ends_after_the_head_warns_once_with_accou
 
 #[tokio::test]
 async fn a_client_that_leaves_mid_stream_is_warned_of_nothing_and_carries_no_interruption() {
-    let captured = common::Captured::default();
-    let _log = captured.install();
+    let captured = Captured::default();
+    let _log = install(&captured);
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: committed_then_gated(),
@@ -1450,8 +1450,8 @@ async fn a_client_that_leaves_mid_stream_is_warned_of_nothing_and_carries_no_int
 #[tokio::test]
 async fn a_stream_the_router_s_shutdown_cuts_after_the_head_carries_router_shutdown_and_no_interruption(
 ) {
-    let captured = common::Captured::default();
-    let _log = captured.install();
+    let captured = Captured::default();
+    let _log = install(&captured);
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: committed_then_gated(),
@@ -1646,8 +1646,8 @@ async fn a_stream_silent_past_the_idle_bound_reads_stream_stalled() {
 
 #[tokio::test]
 async fn a_stream_stalled_after_its_head_warns_once_with_no_chunk_for_the_idle_bound() {
-    let captured = common::Captured::default();
-    let _log = captured.install();
+    let captured = Captured::default();
+    let _log = install(&captured);
     let (status, cut, complete) = one_stream(
         Respond::Stall {
             status: 200,
@@ -1998,8 +1998,8 @@ async fn a_rejection_whose_gzip_body_does_not_inflate_answers_502_upstream_undec
 
 #[tokio::test]
 async fn a_streamed_answer_undecodable_after_its_head_warns_once_with_the_decoders_words() {
-    let captured = common::Captured::default();
-    let _log = captured.install();
+    let captured = Captured::default();
+    let _log = install(&captured);
     let events = [
         message_start_event(),
         text_delta_event("hi"),

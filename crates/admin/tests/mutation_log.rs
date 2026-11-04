@@ -6,18 +6,17 @@ use axum::body::Body;
 use axum::http::Response;
 use common::{
     admin_app, admin_parts, delete, exchanged_session_for_new, get, json, login, patch, post, put,
-    Captured,
 };
+use fake_upstream::Captured;
 
-impl Captured {
-    /// The fields of every mutation line, in the order the lines were written.
-    fn mutations(&self) -> Vec<String> {
-        const MARK: &str = " INFO phoebis_admin::routes: admin mutation ";
-        self.text()
-            .lines()
-            .filter_map(|line| line.split_once(MARK).map(|(_, fields)| fields.to_string()))
-            .collect()
-    }
+/// The fields of every mutation line `captured` holds, in the order the lines were written.
+fn mutations(captured: &Captured) -> Vec<String> {
+    const MARK: &str = " INFO phoebis_admin::routes: admin mutation ";
+    captured
+        .text()
+        .lines()
+        .filter_map(|line| line.split_once(MARK).map(|(_, fields)| fields.to_string()))
+        .collect()
 }
 
 fn status(response: &Response<Body>) -> u16 {
@@ -86,7 +85,7 @@ async fn every_admin_mutation_writes_one_line_with_its_route_entity_and_session_
 
     let admitted = format!("credential=session session={session}");
     assert_eq!(
-        captured.mutations(),
+        mutations(&captured),
         vec![
             "method=POST route=/admin/session status=204 entity=admin_session id=- credential=none"
                 .to_string(),
@@ -168,7 +167,7 @@ async fn a_create_refused_after_its_row_committed_logs_the_created_id() {
 
     let admitted = format!("credential=session session={session}");
     assert_eq!(
-        captured.mutations(),
+        mutations(&captured),
         vec![
             "method=POST route=/admin/session status=204 entity=admin_session id=- credential=none"
                 .to_string(),
@@ -210,7 +209,7 @@ async fn a_confirm_of_a_pairing_started_with_new_names_the_created_account() {
 
     let admitted = format!("credential=session session={session}");
     assert_eq!(
-        captured.mutations(),
+        mutations(&captured),
         vec![
             "method=POST route=/admin/session status=204 entity=admin_session id=- credential=none"
                 .to_string(),
@@ -263,7 +262,7 @@ async fn a_confirm_refused_after_its_row_committed_logs_the_created_account() {
 
     let admitted = format!("credential=session session={session}");
     assert_eq!(
-        captured.mutations().last(),
+        mutations(&captured).last(),
         Some(&format!(
             "method=POST route=/admin/oauth/sessions/{{id}}/confirm status=503 entity=account id=fresh \
              {admitted}"
@@ -292,7 +291,7 @@ async fn a_bearer_mutation_names_the_bearer_credential_and_no_secret() {
     assert_eq!(status(&paused), 204);
 
     assert_eq!(
-        captured.mutations(),
+        mutations(&captured),
         vec![
             "method=POST route=/admin/accounts/{id}/pause status=204 entity=account id=business \
              credential=bearer session=bearer"

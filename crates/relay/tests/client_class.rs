@@ -6,7 +6,7 @@ mod common;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use common::*;
-use fake_upstream::{FakeUpstream, Respond, Rule};
+use fake_upstream::{install, Captured, FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_bus::{Bus, Delivery, Event, Outcome, RequestShape, OTHER_CLIENT};
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
@@ -64,7 +64,7 @@ fn identity_less_request(agent: &str) -> Request<Body> {
 #[tokio::test]
 async fn a_client_outside_claude_code_is_refused_before_the_body_is_read() {
     let captured = Captured::default();
-    let _guard = captured.install();
+    let _guard = install(&captured);
     let up = FakeUpstream::start(vec![ok()]).await;
     let bus = Bus::new();
     let mut sub = bus.subscribe("test", Delivery::Durable);

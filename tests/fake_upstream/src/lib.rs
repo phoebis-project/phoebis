@@ -4,7 +4,7 @@
 
 mod capture;
 
-pub use capture::capture_tracing;
+pub use capture::{capture_tracing, install, install_at, Captured};
 
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;

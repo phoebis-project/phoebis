@@ -7,6 +7,7 @@ mod common;
 use std::collections::{BTreeMap, BTreeSet};
 
 use common::*;
+use fake_upstream::{install, Captured};
 use phoebis_bus::{ClientFacts, Event as BusEvent, Outcome, Usage};
 use phoebis_keepalive::{
     continues_prefix, idle_age_bucket, AgentState, Event, Guard, IdleReturns, KeepalivePolicy,
@@ -1013,7 +1014,7 @@ async fn a_refreshing_request_whose_chain_holds_neither_boundary_and_whose_answe
 ) {
     let r = rig(RigSpec::default()).await;
     let captured = Captured::default();
-    let _log = captured.install();
+    let _log = install(&captured);
     first_turn(&r);
     r.advance(MINUTE);
     arrive(&r, "moved", "main", &conversation(1), |_| {});
@@ -1035,7 +1036,7 @@ async fn a_refreshing_request_whose_chain_holds_neither_boundary_and_whose_answe
 async fn a_second_contradiction_within_the_hour_under_the_same_version_is_counted_without_a_line() {
     let r = rig(RigSpec::default()).await;
     let captured = Captured::default();
-    let _log = captured.install();
+    let _log = install(&captured);
     first_turn(&r);
     r.advance(MINUTE);
     arrive(&r, "moved", "main", &conversation(1), |_| {});
@@ -1052,7 +1053,7 @@ async fn a_second_contradiction_within_the_hour_under_the_same_version_is_counte
 async fn another_client_version_logs_its_own_contradiction() {
     let r = rig(RigSpec::default()).await;
     let captured = Captured::default();
-    let _log = captured.install();
+    let _log = install(&captured);
     first_turn(&r);
     r.advance(MINUTE);
     arrive(&r, "moved", "main", &conversation(1), |_| {});
@@ -1090,7 +1091,7 @@ async fn a_marked_request_whose_recipe_the_engine_refuses_still_reaches_the_watc
 async fn a_compactions_first_request_logs_no_contradiction() {
     let r = rig(RigSpec::default()).await;
     let captured = Captured::default();
-    let _log = captured.install();
+    let _log = install(&captured);
     first_turn(&r);
     r.advance(MINUTE);
     arrive(&r, "compaction", "compaction", &conversation(1), |facts| {
@@ -1109,7 +1110,7 @@ async fn a_compactions_first_request_logs_no_contradiction() {
 async fn a_completion_under_nine_tenths_of_the_previous_prompt_logs_no_contradiction() {
     let r = rig(RigSpec::default()).await;
     let captured = Captured::default();
-    let _log = captured.install();
+    let _log = install(&captured);
     first_turn(&r);
     r.advance(MINUTE);
     arrive(&r, "moved", "main", &conversation(1), |_| {});
@@ -1122,7 +1123,7 @@ async fn a_completion_under_nine_tenths_of_the_previous_prompt_logs_no_contradic
 async fn the_contradiction_line_names_no_hash() {
     let r = rig(RigSpec::default()).await;
     let captured = Captured::default();
-    let _log = captured.install();
+    let _log = install(&captured);
     first_turn(&r);
     r.advance(MINUTE);
     arrive(&r, "moved", "main", &conversation(1), |_| {});
