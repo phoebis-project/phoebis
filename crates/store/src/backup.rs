@@ -17,8 +17,6 @@ pub const RETRY_PAUSE: Duration = Duration::from_millis(50);
 #[derive(Debug)]
 pub struct Snapshot {
     pub bytes: u64,
-    /// `PRAGMA quick_check`'s first row on the copy, `ok` for a sound file.
-    pub quick_check: String,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -50,7 +48,8 @@ pub enum BackupError {
 /// `Done` alone; `Busy` and `Locked` (the source held by another connection's exclusive lock) are retried every
 /// `RETRY_PAUSE` until `contention` has passed, after which the destination is removed and the error names the wait.
 /// The source keeps serving: both files run in WAL mode, so the writer's commits during the copy land after the
-/// snapshot, not in it. Any error after the destination was created removes it, so no partial copy outlives the call.
+/// snapshot, not in it. A copy whose `PRAGMA quick_check` answers anything but `ok` is refused as `NotOk`. Any error
+/// after the destination was created removes it, so no partial copy outlives the call.
 pub fn snapshot(
     source_path: &Path,
     destination: &Path,
@@ -110,14 +109,20 @@ fn copy(
     destination
         .pragma_update(None, "journal_mode", "DELETE")
         .map_err(sqlite(destination_path))?;
-    let quick_check: String = destination
+    let answer: String = destination
         .query_row("PRAGMA quick_check", [], |row| row.get(0))
         .map_err(sqlite(destination_path))?;
     drop(destination);
+    if answer != "ok" {
+        return Err(BackupError::NotOk {
+            path: destination_path.to_path_buf(),
+            answer,
+        });
+    }
     let file = File::open(destination_path).map_err(io(destination_path))?;
     file.sync_all().map_err(io(destination_path))?;
     let bytes = file.metadata().map_err(io(destination_path))?.len();
-    Ok(Snapshot { bytes, quick_check })
+    Ok(Snapshot { bytes })
 }
 
 fn sqlite(path: &Path) -> impl Fn(rusqlite::Error) -> BackupError + '_ {
@@ -194,7 +199,6 @@ mod tests {
         let snapshot = snapshot(&source, &copy, Duration::from_secs(5)).unwrap();
         reader.execute_batch("COMMIT").unwrap();
 
-        assert_eq!(snapshot.quick_check, "ok");
         assert_eq!(snapshot.bytes, std::fs::metadata(&copy).unwrap().len());
         drop(store);
         let restored = Store::open(&copy, &key).unwrap();
@@ -288,10 +292,9 @@ mod tests {
         held.recv().unwrap();
         let copy = dir.path().join("copy.sqlite");
 
-        let snapshot = snapshot(&source, &copy, Duration::from_secs(5)).unwrap();
+        snapshot(&source, &copy, Duration::from_secs(5)).unwrap();
 
         writer.join().unwrap();
-        assert_eq!(snapshot.quick_check, "ok");
         assert_eq!(rows(&copy), 3);
     }
 

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use phoebis_ledger::LedgerDb;
-use phoebis_store::{permissions, BackupError, Store};
+use phoebis_store::{permissions, Store};
 
 use crate::config::{self, ConfigError};
 use crate::private_dirs;
@@ -242,17 +242,10 @@ fn copy(
     written: &mut Vec<PathBuf>,
     lines: &mut Vec<String>,
 ) -> Result<Copied, String> {
-    // A failed snapshot has removed its own destination.
+    // A failed snapshot has removed its own destination, a copy `quick_check` refused among them.
     let snapshot = phoebis_store::snapshot(source, destination, contention)
         .map_err(|error| error.to_string())?;
     written.push(destination.to_path_buf());
-    if snapshot.quick_check != "ok" {
-        return Err(BackupError::NotOk {
-            path: destination.to_path_buf(),
-            answer: snapshot.quick_check,
-        }
-        .to_string());
-    }
     let sha256 =
         sha256_of(destination).map_err(|error| format!("{}: {error}", destination.display()))?;
     lines.push(format!(
