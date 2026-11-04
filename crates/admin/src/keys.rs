@@ -9,8 +9,6 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use base64::Engine;
 use phoebis_routing::RegistrySnapshot;
 use phoebis_store::{stamp_token, ApiKeyRow, AttachmentSubject, StoreError, ROTATION_GRACE_MS};
 use serde_json::{json, Value};
@@ -209,12 +207,10 @@ pub(crate) struct KeyCreated {
 }
 
 fn new_secret() -> String {
-    let mut bytes = [0u8; 32];
-    phoebis_oauth::random::fill(&mut bytes);
     format!(
         "{}{}",
         phoebis_store::KEY_SECRET_PREFIX,
-        URL_SAFE_NO_PAD.encode(bytes)
+        phoebis_oauth::generate_state()
     )
 }
 
