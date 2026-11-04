@@ -23,6 +23,10 @@ pub type Acceptor = Option<Arc<LiveAcceptor>>;
 /// A leaf this close to `not_after` earns a warning in `check-config` and a line in `status`, and starts.
 pub const EXPIRY_WARNING_DAYS: i32 = phoebis_attention::CERTIFICATE_WARNING_DAYS as i32;
 
+/// `http/1.1` in ALPN's wire form, a length byte (`\x08`) and the name: the one protocol the router's listeners serve
+/// and its own clients of them offer.
+pub(crate) const ALPN_HTTP1: &[u8] = b"\x08http/1.1";
+
 /// A loaded listener: the acceptor, and the leaf's facts the start logs and `check-config` prints.
 pub struct Loaded {
     /// The listener key `load_pair` read the pair under, so a warning or a reload names its own pair.
@@ -121,7 +125,7 @@ pub fn load_pair(key: &'static str, cert_file: &Path, key_file: &Path) -> Result
     // Both loops serve HTTP/1 only; a client that offers h2 is steered at the handshake rather than failing after
     // it. The server side selects, so this is the select callback and not `set_alpn_protos`.
     builder.set_alpn_select_callback(|_, offered| {
-        select_next_proto(b"\x08http/1.1", offered).ok_or(AlpnError::NOACK)
+        select_next_proto(ALPN_HTTP1, offered).ok_or(AlpnError::NOACK)
     });
 
     let leaf = leaf_facts(key, cert_file, &leaf)?;

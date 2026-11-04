@@ -44,7 +44,7 @@ pub fn probe(listen: SocketAddr, tls: bool, timeout: Duration) -> Result<SocketA
         let mut builder = SslConnector::builder(SslMethod::tls()).map_err(connector_error)?;
         builder.set_verify(SslVerifyMode::NONE);
         builder
-            .set_alpn_protos(b"\x08http/1.1")
+            .set_alpn_protos(crate::tls::ALPN_HTTP1)
             .map_err(connector_error)?;
         let mut config = builder.build().configure().map_err(connector_error)?;
         config.set_verify_hostname(false);

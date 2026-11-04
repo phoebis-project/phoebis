@@ -317,7 +317,7 @@ fn connector(ca: Option<&Path>) -> Result<SslConnector, Failure> {
         }
         builder.set_cert_store(store.build());
     }
-    builder.set_alpn_protos(b"\x08http/1.1")?;
+    builder.set_alpn_protos(tls::ALPN_HTTP1)?;
     Ok(builder.build())
 }
 
