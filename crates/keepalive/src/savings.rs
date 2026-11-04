@@ -5,9 +5,8 @@ use std::collections::BTreeMap;
 
 use phoebis_ledger::{Band, KeepaliveDelta, PlanTables, Record, Speed, UNATTRIBUTED};
 use phoebis_routing::{PinUsage, SEVEN_DAY};
-use phoebis_store::AccountKind;
 
-use crate::engine::{Engine, SavingsUnit, SessionKey, Settlement, Skipped};
+use crate::engine::{Credit, Engine, SavingsUnit, SessionKey, Settlement, Skipped};
 use crate::probe::{Applied, ProbeOutcome, ProbeRecord};
 use crate::usage::ProbeUsage;
 
@@ -162,59 +161,41 @@ impl Engine {
         self.parts.ledger.record(Record::Keepalive(d));
     }
 
-    /// One request the previous recipe kept warm. The caller reads every part of the key off the agent under
-    /// the lock and hands them over, so nothing here needs the lock back. `kind`, `usage_based` and `in_overage` are
-    /// the credited request's serving attempt's, so the credit files under the funding word its request row took, and
-    /// `tier` and `band` its request row's, so the credit prices at the cells and the windows that row does. `at` is
-    /// the request's receipt, the instant its row files under, so the credit sits in that row's hour and revision
-    /// whenever the answer completes. `ttl_ms` is the TTL the request's observation settled on, the TTL its own write
-    /// would have taken. `client` is the request's client label as the relay observed it, so the credit prices under
-    /// that client's regime as its request row does.
-    #[allow(clippy::too_many_arguments)]
+    /// One request the previous recipe kept warm, its keys read off the agent under the lock into `credit`, so nothing
+    /// here needs the lock back. `tier` and `band` are its request row's, so the credit prices at the cells and the
+    /// windows that row does.
     pub(crate) fn record_kept_warm(
         &self,
-        at: i64,
-        key: &SessionKey,
-        key_generation: i64,
-        pool_id: &str,
-        account: Option<&str>,
-        canonical_model: &str,
+        credit: &Credit,
         request_id: &str,
-        tokens: u64,
-        ttl_ms: i64,
         tier: Option<String>,
         band: Band,
-        fast: bool,
-        kind: Option<AccountKind>,
-        usage_based: bool,
-        in_overage: bool,
-        client: Option<&str>,
     ) {
         let mut d = delta(
-            at,
-            key,
-            key_generation,
-            pool_id,
-            account,
-            canonical_model,
+            credit.at,
+            &credit.key,
+            credit.key_generation,
+            &credit.pool_id,
+            credit.account.as_deref(),
+            &credit.model,
             "inference",
-            fast,
+            credit.fast,
         );
-        if let Some(client) = client {
-            d.client = client.to_string();
+        if let Some(client) = &credit.client {
+            d.client = client.clone();
         }
         d.kept_warm_request_id = Some(request_id.to_string());
         d.kept_warm_requests = 1;
-        if ttl_ms == crate::config::ONE_HOUR_MS {
-            d.kept_warm_1h_tokens = tokens;
+        if credit.ttl_ms == crate::config::ONE_HOUR_MS {
+            d.kept_warm_1h_tokens = credit.read;
         } else {
-            d.kept_warm_5m_tokens = tokens;
+            d.kept_warm_5m_tokens = credit.read;
         }
         d.tier = tier;
         d.band = band;
-        d.account_kind = kind;
-        d.usage_based = usage_based;
-        d.overage_in_use = in_overage;
+        d.account_kind = credit.kind;
+        d.usage_based = credit.usage_based;
+        d.overage_in_use = credit.in_overage;
         self.parts.ledger.record(Record::Keepalive(d));
     }
 

@@ -1002,21 +1002,24 @@ struct Answer {
 }
 
 /// A kept-warm credit a completion earned, its keys read under the lock and recorded once the lock is released. `at` is
-/// the credited request's receipt and `ttl_ms` the TTL its own write would have taken.
-struct Credit {
-    at: i64,
-    key: SessionKey,
-    key_generation: i64,
-    pool_id: String,
-    account: Option<String>,
-    model: String,
-    read: u64,
-    ttl_ms: i64,
-    fast: bool,
-    kind: Option<AccountKind>,
-    usage_based: bool,
-    in_overage: bool,
-    client: Option<String>,
+/// the credited request's receipt, the instant its row files under, so the credit sits in that row's hour and revision
+/// whenever the answer completes, and `ttl_ms` the TTL its own write would have taken. `kind`, `usage_based` and
+/// `in_overage` are its serving attempt's, so the credit files under the funding word its request row took, and
+/// `client` its client label as the relay observed it, so the credit prices under that client's regime.
+pub(crate) struct Credit {
+    pub(crate) at: i64,
+    pub(crate) key: SessionKey,
+    pub(crate) key_generation: i64,
+    pub(crate) pool_id: String,
+    pub(crate) account: Option<String>,
+    pub(crate) model: String,
+    pub(crate) read: u64,
+    pub(crate) ttl_ms: i64,
+    pub(crate) fast: bool,
+    pub(crate) kind: Option<AccountKind>,
+    pub(crate) usage_based: bool,
+    pub(crate) in_overage: bool,
+    pub(crate) client: Option<String>,
 }
 
 /// What a walk whose caller just read the agent under the same lock expects of it.
@@ -3345,7 +3348,7 @@ impl Engine {
         inner.drop_aside(&key, &agent_id);
         // Read from the observation's own snapshot of what the previous recipe had proved: a probe that ran
         // while this request was open, or a TTL this request's evidence shortens below, cannot reach into it.
-        let credited = {
+        let mut credit = {
             let agent = &inner.sessions[&key].agents[&agent_id];
             let fast = agent.current.as_ref().is_some_and(|o| o.recipe.fast);
             agent
@@ -3363,18 +3366,24 @@ impl Engine {
                 })
                 .map(|_| {
                     let served = agent.current.as_ref();
-                    (
+                    Credit {
+                        // Its receipt picks the hour the credit files in and the revision its band and its saving
+                        // price at, as its own request row's does, though the answer may land past either boundary.
+                        at: served.map_or(now, |o| o.received_at),
+                        key: key.clone(),
+                        key_generation: agent.key_generation,
+                        pool_id: agent.pool_id.clone(),
+                        account: agent.account.clone(),
+                        model: agent.canonical_model.clone(),
                         read,
-                        agent.key_generation,
-                        agent.pool_id.clone(),
-                        agent.account.clone(),
-                        agent.canonical_model.clone(),
+                        // Set below, once this request's own evidence has settled the TTL.
+                        ttl_ms: 0,
                         fast,
-                        served.and_then(|o| o.kind),
-                        served.is_some_and(|o| o.usage_based),
-                        served.is_some_and(|o| o.in_overage),
-                        agent.client_label.clone(),
-                    )
+                        kind: served.and_then(|o| o.kind),
+                        usage_based: served.is_some_and(|o| o.usage_based),
+                        in_overage: served.is_some_and(|o| o.in_overage),
+                        client: agent.client_label.clone(),
+                    }
                 })
         };
         // Set once the credit has read its gap from the turn before, so the next request's gap runs from this one.
@@ -3408,13 +3417,14 @@ impl Engine {
             .is_some_and(|o| o.ready && o.expected > 0);
         // The TTL this request's own evidence settled on, set at a stream's first event or, for an answer without a
         // stream, by the reading just above. The write a credited request avoided would have taken it, and a discard
-        // below clears the observation. Its receipt picks the hour the credit files in and the revision its band and
-        // its saving price at, as its own request row's does, though the answer may land past either boundary.
-        let (observed_ttl, request_received) = inner.sessions[&key]
-            .agents
-            .get(&agent_id)
-            .and_then(|a| a.current.as_ref())
-            .map_or((0, now), |o| (o.ttl_ms, o.received_at));
+        // below clears the observation.
+        if let Some(credit) = credit.as_mut() {
+            credit.ttl_ms = inner.sessions[&key]
+                .agents
+                .get(&agent_id)
+                .and_then(|a| a.current.as_ref())
+                .map_or(0, |o| o.ttl_ms);
+        }
         if !proved {
             let poisoned = inner.sessions[&key]
                 .agents
@@ -3438,41 +3448,11 @@ impl Engine {
                 }
             }
         }
-        if credited.is_some() {
+        if credit.is_some() {
             if let Some(agent) = agent_mut(&mut inner.sessions, &key, &agent_id) {
                 agent.count_credit(now);
             }
         }
-        let credit = credited.map(
-            |(
-                read,
-                key_generation,
-                pool_id,
-                account,
-                model,
-                fast,
-                kind,
-                usage_based,
-                in_overage,
-                client,
-            )| {
-                Credit {
-                    at: request_received,
-                    key,
-                    key_generation,
-                    pool_id,
-                    account,
-                    model,
-                    read,
-                    ttl_ms: observed_ttl,
-                    fast,
-                    kind,
-                    usage_based,
-                    in_overage,
-                    client,
-                }
-            },
-        );
         self.book_credit(inner, credit, &complete);
     }
 
@@ -3555,24 +3535,7 @@ impl Engine {
                 ),
             )
         });
-        self.record_kept_warm(
-            credit.at,
-            &credit.key,
-            credit.key_generation,
-            &credit.pool_id,
-            credit.account.as_deref(),
-            &credit.model,
-            &complete.request_id,
-            credit.read,
-            credit.ttl_ms,
-            tier,
-            band,
-            credit.fast,
-            credit.kind,
-            credit.usage_based,
-            credit.in_overage,
-            credit.client.as_deref(),
-        );
+        self.record_kept_warm(&credit, &complete.request_id, tier, band);
     }
 }
 
