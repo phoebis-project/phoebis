@@ -18,16 +18,14 @@ use phoebis_routing::{
     budget_deadline, listing, MemberSpend, RegistrySnapshot, RouterHandle, DAY_MS, SEVEN_DAY,
 };
 use phoebis_store::{
-    AccountKind, AccountState, CooldownScope, ModelRule, OveragePolicy, PoolRow, Store, StoreError,
+    AccountKind, AccountState, CooldownScope, OveragePolicy, PoolRow, Store, StoreError,
     SubscriptionTerm,
 };
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use crate::breakeven::{
-    resolve_or_shipped, resolve_pool, CeilingInputs, Ceilings, FactorRows, ResolvedCeilings,
-};
+use crate::breakeven::{resolve_or_shipped, CeilingInputs, Ceilings, FactorRows};
 use crate::config::{
     floor_ttl_ms, KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, FIVE_MINUTES_MS, MAX_WORKERS,
     ONE_HOUR_MS,
@@ -256,6 +254,20 @@ pub enum Guard {
     Restart,
 }
 
+/// The guard of a request that names its class: one answer for `guard`, the chain mark and the prebuild, so a class
+/// added to `REFRESHING_CLASSES` reaches all three.
+fn class_guard(class: &str) -> Guard {
+    // A compaction reads the old prefix to write a context the next turn starts from, so a recipe armed from it
+    // would keep warm a body no turn reads again.
+    if class == "compaction" {
+        Guard::Compaction
+    } else if phoebis_routing::REFRESHING_CLASSES.contains(&class) {
+        Guard::Rearm
+    } else {
+        Guard::Auxiliary
+    }
+}
+
 /// The hijack guard: a class names the turn directly; without one, the request's own chain against the armed
 /// recipe's two hashes decides, the same fallback the routing crate's `warmth_of` applies when a request
 /// carries no chain at all. `recipe` is the armed recipe's `(static_hash, tail_hash)`, `None` for a first
@@ -268,16 +280,7 @@ pub fn guard(
     model_matches: bool,
 ) -> Guard {
     if let Some(class) = request_class {
-        // A compaction reads the old prefix to write a context the next turn starts from, so a recipe armed from it
-        // would keep warm a body no turn reads again.
-        if class == "compaction" {
-            return Guard::Compaction;
-        }
-        return if phoebis_routing::REFRESHING_CLASSES.contains(&class) {
-            Guard::Rearm
-        } else {
-            Guard::Auxiliary
-        };
+        return class_guard(class);
     }
     let Some((recipe_static, recipe_tail)) = recipe else {
         return Guard::Rearm;
@@ -734,17 +737,20 @@ impl Agent {
     /// Every probe the agent paid for that no request answered, the unanswered ones and then the kept ones, settled
     /// under `label`.
     pub(crate) fn settle_all(&mut self, key: &SessionKey, label: Wasted) -> Vec<Settlement> {
+        self.take_unanswered()
+            .into_iter()
+            .chain(std::mem::take(&mut self.kept))
+            .map(|kept| kept.settle(key, label))
+            .collect()
+    }
+
+    /// The unanswered probes, taken off the agent as kept ones.
+    pub(crate) fn take_unanswered(&mut self) -> Vec<Kept> {
         let unanswered = std::mem::take(&mut self.unanswered);
-        let mut settled: Vec<Settlement> = unanswered
+        unanswered
             .iter()
-            .map(|probe| Kept::of(self, probe).settle(key, label))
-            .collect();
-        settled.extend(
-            std::mem::take(&mut self.kept)
-                .into_iter()
-                .map(|kept| kept.settle(key, label)),
-        );
-        settled
+            .map(|probe| Kept::of(self, probe))
+            .collect()
     }
 
     /// The names `follow_resolutions` reads on an agent with no compaction open, as an arrival leaves it once
@@ -1552,7 +1558,11 @@ impl Engine {
             .map(str::to_string)
             .collect();
         let dated = self.dated_names(undated).await;
-        CeilingInputs { rows, dated, now }
+        CeilingInputs {
+            rows,
+            dated,
+            timing: self.parts.timing,
+        }
     }
 
     /// Each of `models` the router's catalog resolves to another name, with that name. A router that cannot answer
@@ -1570,28 +1580,6 @@ impl Engine {
                     .collect()
             })
             .unwrap_or_default()
-    }
-
-    /// The pool's ceilings resolved over its members' fundings (`pool_fundings`), its main TTLs and its models, and
-    /// `None` for a pool with no funding, which a pool with no member brings.
-    pub fn resolve_pool_ceilings_with(
-        &self,
-        inputs: &CeilingInputs,
-        keepalive: &KeepalivePolicy,
-        cache_ttl: &CacheTtlPolicy,
-        model_rules: &[ModelRule],
-        fundings: &[Funding],
-    ) -> Option<ResolvedCeilings> {
-        resolve_pool(
-            keepalive,
-            cache_ttl,
-            model_rules,
-            fundings,
-            &inputs.rows,
-            &inputs.dated,
-            &self.parts.timing,
-            inputs.now,
-        )
     }
 
     /// The lease and expiry sweep. Every entry point runs it first, so a session is never read as live past
@@ -1764,12 +1752,7 @@ impl Inner {
     /// The recipe the arrival set aside, taken out for the completion to restore, its body still counted in
     /// `retained`.
     pub(crate) fn take_aside(&mut self, key: &SessionKey, agent_id: &str) -> Option<AsideRecipe> {
-        self.sessions
-            .get_mut(key)?
-            .agents
-            .get_mut(agent_id)?
-            .aside
-            .take()
+        agent_mut(&mut self.sessions, key, agent_id)?.aside.take()
     }
 
     /// Puts the recipe `take_aside` took back into `current` with the schedule, the error count and the model and
@@ -1931,15 +1914,11 @@ impl Inner {
                 // A row apiece: a request whose completion never came leaves its probes for the next one, which may
                 // keep probes paid under other keys, and each settles by its chain's last entry. A ceiling's label
                 // rides along, for the lapse sweep to settle under when no turn reads them first.
-                let probes = std::mem::take(&mut agent.unanswered);
-                let kept: Vec<Kept> = probes
-                    .iter()
-                    .map(|probe| Kept {
-                        pending: wasted,
-                        ..Kept::of(agent, probe)
-                    })
-                    .collect();
-                agent.kept.extend(kept);
+                let probes = agent.take_unanswered();
+                agent.kept.extend(probes.into_iter().map(|kept| Kept {
+                    pending: wasted,
+                    ..kept
+                }));
             }
             (Unanswered::Settle, Some(label)) => {
                 self.settlements.extend(agent.settle_all(key, label));
@@ -2049,14 +2028,12 @@ impl Inner {
         let Some(agent) = agent_mut(&mut self.sessions, key, agent_id) else {
             return;
         };
-        let probes = std::mem::take(&mut agent.unanswered);
+        let probes = agent.take_unanswered();
         if probes.is_empty() {
             return;
         }
-        for probe in &probes {
-            self.settlements
-                .push(Kept::of(agent, probe).settle(key, label));
-        }
+        self.settlements
+            .extend(probes.into_iter().map(|kept| kept.settle(key, label)));
         self.touch_agent(key, agent_id);
     }
 
@@ -2141,10 +2118,10 @@ impl Inner {
         let Some(agent) = agent_mut(&mut self.sessions, key, agent_id) else {
             return;
         };
-        let unanswered = std::mem::take(&mut agent.unanswered);
+        let unanswered = agent.take_unanswered();
         let probes: Vec<Kept> = std::mem::take(&mut agent.kept)
             .into_iter()
-            .chain(unanswered.iter().map(|probe| Kept::of(agent, probe)))
+            .chain(unanswered)
             .collect();
         let chain_ends: Vec<i64> = probes
             .iter()
@@ -2332,9 +2309,7 @@ impl Inner {
             .client
             .request_class
             .as_deref()
-            .is_some_and(|class| {
-                class != "compaction" && phoebis_routing::REFRESHING_CLASSES.contains(&class)
-            });
+            .is_some_and(|class| class_guard(class) == Guard::Rearm);
         if !refreshing
             || observed.client.compaction.is_some()
             || observed.client.context_compacted.is_some()
@@ -2732,11 +2707,11 @@ impl Engine {
         agent_id: &str,
     ) -> Option<AgentStatus> {
         let inner = self.lock();
-        let agent = inner
-            .sessions
-            .get(&(key_id.to_string(), session_id.to_string()))?
-            .agents
-            .get(agent_id)?;
+        let agent = agent_ref(
+            &inner.sessions,
+            &(key_id.to_string(), session_id.to_string()),
+            agent_id,
+        )?;
         Some(AgentStatus {
             account_id: agent.account.clone(),
             agent_id: agent.id.clone(),
@@ -2789,25 +2764,23 @@ impl Engine {
         // none was built here.
         let held = {
             let inner = self.lock();
-            !inner.closed
-                && inner
-                    .sessions
-                    .get(&key)
-                    .is_some_and(|session| session.agents.contains_key(&agent_id))
+            !inner.closed && agent_ref(&inner.sessions, &key, &agent_id).is_some()
         };
-        let prebuilt = (held
-            && matches!(
-                observed.client.request_class.as_deref(),
-                None | Some("main") | Some("subagent")
-            ))
-        .then(|| {
+        let build = || {
             make_recipe(
                 &observed.headers,
                 &observed.body,
                 &observed.model,
                 self.parts.max_request_bytes,
             )
-        });
+        };
+        let prebuilt = (held
+            && observed
+                .client
+                .request_class
+                .as_deref()
+                .is_none_or(|class| class_guard(class) == Guard::Rearm))
+        .then(build);
         let mut inner = self.lock();
         if inner.closed {
             // A request on a session the engine holds is one the last save can no longer carry.
@@ -3038,14 +3011,7 @@ impl Engine {
             inner.set_reason(&key, &agent_id, Reason::RequestLimit);
             return;
         }
-        let built = prebuilt.unwrap_or_else(|| {
-            make_recipe(
-                &observed.headers,
-                &observed.body,
-                &observed.model,
-                self.parts.max_request_bytes,
-            )
-        });
+        let built = prebuilt.unwrap_or_else(build);
         let mut recipe = match built {
             Ok(recipe) => recipe,
             Err(reason) => {
@@ -3382,9 +3348,7 @@ impl Engine {
             }
         }
         inner.decide_unanswered(&key, &agent_id, read);
-        let (ready, armed) = inner.sessions[&key]
-            .agents
-            .get(&agent_id)
+        let (ready, armed) = agent_ref(&inner.sessions, &key, &agent_id)
             .map(|a| {
                 (
                     a.current.as_ref().is_some_and(|o| o.ready),
@@ -3397,28 +3361,23 @@ impl Engine {
                 inner.observe_usage(&key, &agent_id, usage);
             }
         }
-        let proved = inner.sessions[&key]
-            .agents
-            .get(&agent_id)
-            .and_then(|a| a.current.as_ref())
-            .is_some_and(|o| o.ready && o.expected > 0);
+        let (proved, observed_ttl, poisoned, current) = agent_ref(&inner.sessions, &key, &agent_id)
+            .map_or((false, 0, false, None), |a| {
+                let o = a.current.as_ref();
+                (
+                    o.is_some_and(|o| o.ready && o.expected > 0),
+                    o.map_or(0, |o| o.ttl_ms),
+                    o.is_some_and(|o| o.poisoned),
+                    Some(a.reason),
+                )
+            });
         // The TTL this request's own evidence settled on, set at a stream's first event or, for an answer without a
         // stream, by the reading just above. The write a credited request avoided would have taken it, and a discard
         // below clears the observation.
         if let Some(credit) = credit.as_mut() {
-            credit.ttl_ms = inner.sessions[&key]
-                .agents
-                .get(&agent_id)
-                .and_then(|a| a.current.as_ref())
-                .map_or(0, |o| o.ttl_ms);
+            credit.ttl_ms = observed_ttl;
         }
         if !proved {
-            let poisoned = inner.sessions[&key]
-                .agents
-                .get(&agent_id)
-                .and_then(|a| a.current.as_ref())
-                .is_some_and(|o| o.poisoned);
-            let current = inner.sessions[&key].agents.get(&agent_id).map(|a| a.reason);
             if poisoned {
                 // The gap that poisoned it is what this request proved nothing under.
                 inner.discard(&key, &agent_id, Reason::BusGap, None);
@@ -3547,16 +3506,12 @@ impl Inner {
         if !self.live(&key, &agent_id) {
             return None;
         }
-        self.sessions
-            .get_mut(&key)?
-            .agents
-            .get_mut(&agent_id)
-            .filter(|agent| {
-                agent
-                    .compaction
-                    .as_ref()
-                    .is_some_and(|compaction| compaction.request_id == request_id)
-            })
+        agent_mut(&mut self.sessions, &key, &agent_id).filter(|agent| {
+            agent
+                .compaction
+                .as_ref()
+                .is_some_and(|compaction| compaction.request_id == request_id)
+        })
     }
 
     /// The completion of an open compaction. Only a complete answer (`Outcome::Succeeded`) decides anything: every
@@ -3585,8 +3540,7 @@ impl Inner {
             ProbeUsage::from_bus(usage).ttl_ms(compaction.ttl_ms, 0)
         });
         let mut probes = std::mem::take(&mut agent.kept);
-        let unanswered = std::mem::take(&mut agent.unanswered);
-        probes.extend(unanswered.iter().map(|probe| Kept::of(agent, probe)));
+        probes.extend(agent.take_unanswered());
         let credit = compaction
             .prior
             .as_ref()
@@ -3855,8 +3809,7 @@ impl Engine {
                 let verdict = {
                     let session = &inner.sessions[&key];
                     let agent = &session.agents[&agent_id];
-                    let ceilings =
-                        ceilings_for(agent, &policy, &view, &rows, &self.parts.timing, now);
+                    let ceilings = ceilings_for(agent, &policy, &view, &rows, &self.parts.timing);
                     ceiling(
                         agent,
                         session.attended_at(now),
@@ -4193,22 +4146,20 @@ pub(crate) fn ceilings_for(
     view: &RouterView,
     rows: &FactorRows,
     timing: &KeepaliveTiming,
-    now: i64,
 ) -> Ceilings {
     let fast = agent.current.as_ref().is_some_and(|o| o.recipe.fast);
-    let funding = match agent
+    let funding = agent
         .account
         .as_deref()
         .and_then(|id| view.snapshot.account(id))
-    {
-        Some(account) if !fast => funding_of(
-            Some(account.kind),
-            view.snapshot.usage_based(&account.id),
-            Some(view.overage.contains(&account.id)),
-            Speed::Standard,
-        ),
-        _ => Funding::ApiKey,
-    };
+        .map_or(Funding::ApiKey, |account| {
+            funding_of(
+                Some(account.kind),
+                view.snapshot.usage_based(&account.id),
+                Some(view.overage.contains(&account.id)),
+                Speed::Standard,
+            )
+        });
     resolve_or_shipped(
         policy,
         rows.factors(
@@ -4220,7 +4171,7 @@ pub(crate) fn ceilings_for(
         floor_ttl_ms(agent.ttl_ms),
         timing,
         fast,
-        now,
+        rows,
     )
     .unwrap_or(Ceilings {
         idle_ms: 0,
@@ -4637,7 +4588,7 @@ revisions:
         agent.current = Some(observation(false));
         let policy = KeepalivePolicy::default();
         let break_even = |agent: &Agent| {
-            ceilings_for(agent, &policy, &pool_view(false), &rows, &timing, 0).break_even_ms
+            ceilings_for(agent, &policy, &pool_view(false), &rows, &timing).break_even_ms
         };
         assert_eq!(
             break_even(&agent),

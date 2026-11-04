@@ -3,10 +3,9 @@
 
 use std::sync::Arc;
 
-use axum::body::Body;
 use axum::extract::State;
 use axum::http::header::{ACCEPT, CONTENT_SECURITY_POLICY, CONTENT_TYPE, X_CONTENT_TYPE_OPTIONS};
-use axum::http::{Request, StatusCode};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
@@ -194,12 +193,16 @@ pub fn usage_router(
         }))
 }
 
-async fn usage(State(state): State<Arc<UsageState>>, request: Request<Body>) -> Response {
+async fn usage(State(state): State<Arc<UsageState>>, headers: HeaderMap) -> Response {
+    no_store(usage_answer(&state, &headers).await)
+}
+
+async fn usage_answer(state: &UsageState, headers: &HeaderMap) -> Response {
     let request_id = new_request_id();
     let now = (state.clock)();
-    let html = wants_html(request.headers().get(ACCEPT).and_then(|v| v.to_str().ok()));
+    let html = wants_html(headers.get(ACCEPT).and_then(|v| v.to_str().ok()));
     let snapshot = state.router.snapshot();
-    let row = match authenticated_key(&snapshot, request.headers(), now, &request_id) {
+    let row = match authenticated_key(&snapshot, headers, now, &request_id) {
         Ok(row) => row,
         Err(refused) => return refused,
     };
@@ -221,13 +224,13 @@ async fn usage(State(state): State<Arc<UsageState>>, request: Request<Body>) -> 
             tracing::warn!(%error, "the usage route could not read the ledger");
             // The relay's own shape, so this answer carries the request id and the error code header every
             // other refusal on the proxy listener carries.
-            return no_store(anthropic_error(
+            return anthropic_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "api_error",
                 "usage_unavailable",
                 "the usage ledger could not be read",
                 &request_id,
-            ));
+            );
         }
     };
     let answer = UsageAnswer {
@@ -236,33 +239,29 @@ async fn usage(State(state): State<Arc<UsageState>>, request: Request<Body>) -> 
         windows: Windows { day, week },
     };
     if html {
-        return no_store(
-            (
-                StatusCode::OK,
-                [
-                    (CONTENT_TYPE, "text/html; charset=utf-8"),
-                    (
-                        CONTENT_SECURITY_POLICY,
-                        "default-src 'none'; style-src 'unsafe-inline'",
-                    ),
-                    (X_CONTENT_TYPE_OPTIONS, "nosniff"),
-                ],
-                render_html(&answer),
-            )
-                .into_response(),
-        );
-    }
-    no_store(
-        (
+        return (
             StatusCode::OK,
             [
-                (CONTENT_TYPE, "application/json"),
+                (CONTENT_TYPE, "text/html; charset=utf-8"),
+                (
+                    CONTENT_SECURITY_POLICY,
+                    "default-src 'none'; style-src 'unsafe-inline'",
+                ),
                 (X_CONTENT_TYPE_OPTIONS, "nosniff"),
             ],
-            serde_json::to_string(&answer).unwrap_or_else(|_| "{}".into()),
+            render_html(&answer),
         )
-            .into_response(),
+            .into_response();
+    }
+    (
+        StatusCode::OK,
+        [
+            (CONTENT_TYPE, "application/json"),
+            (X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        ],
+        serde_json::to_string(&answer).unwrap_or_else(|_| "{}".into()),
     )
+        .into_response()
 }
 
 /// Whether the caller asked for the page rather than the document. The header is read as media ranges with

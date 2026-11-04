@@ -25,8 +25,7 @@ async fn pool_ceilings(
             .iter()
             .map(|a| (a.kind, snapshot.usage_based(&a.id))),
     );
-    rig.engine.resolve_pool_ceilings_with(
-        &inputs,
+    inputs.resolve_pool(
         &KeepalivePolicy::from_json(&pool.keepalive_json),
         &CacheTtlPolicy::from_json(&pool.cache_ttl_json),
         &pool.model_rules,

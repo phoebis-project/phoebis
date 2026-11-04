@@ -18,9 +18,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{KeepaliveTiming, LEASE_MS};
 use crate::engine::{
-    agent_mut, Agent, AgentState, Engine, Guard, IdleEpisode, IdleReturnBucket, Inner, Kept,
-    Observation, ParkKind, PrefixAnchor, PriorCoverage, ProbeCharge, Reason, SavingsUnit, Session,
-    SessionKey, Settlement, UnansweredProbe, Wasted, MAIN_AGENT,
+    agent_mut, agent_ref, Agent, AgentState, Engine, Guard, IdleEpisode, IdleReturnBucket, Inner,
+    Kept, Observation, ParkKind, PrefixAnchor, PriorCoverage, ProbeCharge, Reason, SavingsUnit,
+    Session, SessionKey, Settlement, UnansweredProbe, Wasted, MAIN_AGENT,
 };
 use crate::recipe::Recipe;
 use crate::usage::ProbeUsage;
@@ -827,10 +827,7 @@ impl Inner {
 
     /// The agent's row is dirty under its session's generation now.
     pub(crate) fn touch_agent(&mut self, key: &SessionKey, agent_id: &str) {
-        let held = self
-            .sessions
-            .get(key)
-            .is_some_and(|session| session.agents.contains_key(agent_id));
+        let held = agent_ref(&self.sessions, key, agent_id).is_some();
         let Some(row) = self.persist_key(key).filter(|_| held) else {
             return;
         };

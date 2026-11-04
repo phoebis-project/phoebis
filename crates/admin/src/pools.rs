@@ -608,7 +608,7 @@ pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
     };
     let mut out = Vec::with_capacity(context.pools.len());
     for row in &context.pools {
-        out.push(pool_json_from(&state, &context, row));
+        out.push(pool_json_from(&context, row));
     }
     Json(PoolList { pools: out }).into_response()
 }
@@ -1345,12 +1345,12 @@ fn member_word(projection: Option<&AccountProjection>) -> &'static str {
 /// One pool over a context built for it alone, for the routes that answer a single pool.
 pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Pool, StoreError> {
     let context = pool_context(state, Some(&row.id)).await?;
-    Ok(pool_json_from(state, &context, row))
+    Ok(pool_json_from(&context, row))
 }
 
 /// One pool row from the shared context, whose one read carries every pool's traffic and moves and whose ceiling
 /// inputs price every pool alike, so a row takes no ledger read, no store lock and no ask of the router.
-pub(crate) fn pool_json_from(state: &AdminState, context: &PoolContext, row: &PoolRow) -> Pool {
+pub(crate) fn pool_json_from(context: &PoolContext, row: &PoolRow) -> Pool {
     let mut members: Vec<PoolMember> = context
         .members
         .iter()
@@ -1437,13 +1437,10 @@ pub(crate) fn pool_json_from(state: &AdminState, context: &PoolContext, row: &Po
             .filter(|a| members.iter().any(|m| m.account_id == a.id))
             .map(|a| (a.kind, snapshot.usage_based(&a.id))),
     );
-    let keepalive_resolved = state.keepalive.resolve_pool_ceilings_with(
-        &context.ceilings,
-        &keepalive,
-        &cache_ttl,
-        &row.model_rules,
-        &fundings,
-    );
+    let keepalive_resolved =
+        context
+            .ceilings
+            .resolve_pool(&keepalive, &cache_ttl, &row.model_rules, &fundings);
     Pool {
         id: row.id.clone(),
         label: row.label.clone(),

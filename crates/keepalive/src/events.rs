@@ -9,8 +9,8 @@ use phoebis_routing::RegistrySnapshot;
 
 use crate::config::LEASE_MS;
 use crate::engine::{
-    agent_mut, open_idle_episode, Agent, AgentState, Engine, Inner, ParkKind, Reason, Session,
-    SessionKey, Wasted, AGENT_HELD, MAIN_AGENT,
+    agent_mut, agent_ref, open_idle_episode, Agent, AgentState, Engine, Inner, ParkKind, Reason,
+    Session, SessionKey, Wasted, AGENT_HELD, MAIN_AGENT,
 };
 use crate::recipe::valid_id;
 
@@ -468,10 +468,8 @@ impl Inner {
             Reported::AgentStart {
                 request_generation, ..
             } => {
-                let existing = self.sessions[&key]
-                    .agents
-                    .get(&agent_id)
-                    .map(|a| (a.state, a.generation));
+                let existing =
+                    agent_ref(&self.sessions, &key, &agent_id).map(|a| (a.state, a.generation));
                 match existing {
                     Some((state, generation)) => {
                         if state != AgentState::Released || *request_generation != Some(generation)
@@ -510,8 +508,7 @@ impl Inner {
                 request_generation,
                 ..
             } => {
-                self.reported_agent(&key, &agent_id, *request_generation)?;
-                let agent = agent_mut(&mut self.sessions, &key, &agent_id).expect(AGENT_HELD);
+                let agent = self.reported_agent(&key, &agent_id, *request_generation)?;
                 // A person at the terminal says nothing about the agent's work, so presence moves the idle clock
                 // alone.
                 if *presence {
@@ -541,9 +538,9 @@ impl Inner {
                 wake_at,
                 ..
             } => {
-                let was = self.reported_agent(&key, &agent_id, *request_generation)?;
+                let agent = self.reported_agent(&key, &agent_id, *request_generation)?;
+                let was = agent.state;
                 let (state, park_kind) = (*state, *park_kind);
-                let agent = agent_mut(&mut self.sessions, &key, &agent_id).expect(AGENT_HELD);
                 if state == AgentState::Parked {
                     // A repeated `parked` of the same kind moves the wake or the deadline and keeps the park's
                     // start, which the parked ceiling counts from.
@@ -618,14 +615,14 @@ impl Inner {
     }
 
     /// The checks an `activity` or a `state` report passes on the agent it names: a known agent, the generation the
-    /// report carries, and a record not released. Answers the agent's state before the report.
+    /// report carries, and a record not released. Answers the agent for the report to write.
     fn reported_agent(
-        &self,
+        &mut self,
         key: &SessionKey,
         agent_id: &str,
         request_generation: Option<u64>,
-    ) -> Result<AgentState, EventError> {
-        let Some(agent) = self.sessions[key].agents.get(agent_id) else {
+    ) -> Result<&mut Agent, EventError> {
+        let Some(agent) = agent_mut(&mut self.sessions, key, agent_id) else {
             return Err(err("unknown_agent", 409));
         };
         if request_generation != Some(agent.generation) {
@@ -637,7 +634,7 @@ impl Inner {
         if agent.state == AgentState::Released {
             return Err(err_for_generation("agent_released", agent.generation));
         }
-        Ok(agent.state)
+        Ok(agent)
     }
 
     fn start(

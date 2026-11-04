@@ -2,7 +2,7 @@
 //! default every ceiling of the policy resolves to and the cap its parked and horizon numbers stay under.
 
 use std::collections::HashMap;
-use std::sync::LazyLock;
+use std::sync::{LazyLock, OnceLock};
 
 use phoebis_ledger::{PlanTables, PriceRevisions, PriceTable, SubscriptionCosts, TypeMultiplier};
 use phoebis_relay::{CacheTtlPolicy, TtlBranch};
@@ -88,13 +88,13 @@ pub fn factors_for(
     FactorRows::of(pricing, tables, at).factors(funding, canonical_model, fast, prompt_tokens)
 }
 
-/// What every pool's ceilings read beside the pool's own policies, rules and fundings: the price rows in force at
-/// `now` and the dated id the router's catalog names for each undated dollar row. A pool list builds them once, so
-/// every pool of one answer is priced at one instant on one `canonicals` answer.
+/// What every pool's ceilings read beside the pool's own policies, rules and fundings: the price rows in force at one
+/// instant, the dated id the router's catalog names for each undated dollar row and the engine's timing. A pool list
+/// builds them once, so every pool of one answer is priced at one instant on one `canonicals` answer.
 pub struct CeilingInputs {
     pub(crate) rows: FactorRows,
     pub(crate) dated: HashMap<String, String>,
-    pub(crate) now: i64,
+    pub(crate) timing: KeepaliveTiming,
 }
 
 /// The rows `factors_for` reads, built once so a tick that resolves every retained recipe builds each table's rows
@@ -113,6 +113,12 @@ pub(crate) struct FactorRows {
     costs: SubscriptionCosts,
     tightest: BreakEvenFactors,
     tightest_fast: BreakEvenFactors,
+    /// The instant the rows were built at, whose shipped revision the fallback reads.
+    at: i64,
+    /// The shipped revision's tightest rows at `at`, built on the first recipe that falls back, so a tick builds them
+    /// once whatever number of recipes fall back and not at all while the tables give a break-even.
+    shipped_standard: OnceLock<BreakEvenFactors>,
+    shipped_fast: OnceLock<BreakEvenFactors>,
 }
 
 impl FactorRows {
@@ -131,6 +137,9 @@ impl FactorRows {
             costs: tables.revisions.in_force(at).clone(),
             tightest,
             tightest_fast,
+            at,
+            shipped_standard: OnceLock::new(),
+            shipped_fast: OnceLock::new(),
         }
     }
 
@@ -145,27 +154,23 @@ impl FactorRows {
         fast: bool,
         prompt_tokens: u64,
     ) -> BreakEvenFactors {
+        if !fast && funding == Funding::Plan {
+            return BreakEvenFactors::of_multipliers(&self.costs.multipliers(canonical_model));
+        }
         let (dollars, long) = if fast {
             (&self.fast, &self.fast_long)
         } else {
             (&self.dollars, &self.dollars_long)
         };
-        match funding {
-            Funding::Plan => Some(BreakEvenFactors::of_multipliers(
-                &self.costs.multipliers(canonical_model),
-            )),
-            Funding::ApiKey | Funding::Fast | Funding::Overage | Funding::UsageBased => {
-                // One key for both maps, so a dated row without the set never reads its undated row's.
-                row_for(canonical_model, |k| {
-                    dollars.get_key_value(k).map(|(key, _)| key)
-                })
-                .and_then(|key| match long.get(key) {
-                    Some(long) if prompt_tokens > long.over => Some(&long.rates),
-                    _ => dollars.get(key),
-                })
-                .and_then(BreakEvenFactors::of)
-            }
-        }
+        // One key for both maps, so a dated row without the set never reads its undated row's.
+        row_for(canonical_model, |k| {
+            dollars.get_key_value(k).map(|(key, _)| key)
+        })
+        .and_then(|key| match long.get(key) {
+            Some(long) if prompt_tokens > long.over => Some(&long.rates),
+            _ => dollars.get(key),
+        })
+        .and_then(BreakEvenFactors::of)
         .unwrap_or_else(|| self.priced_nowhere(funding, fast))
     }
 
@@ -174,25 +179,33 @@ impl FactorRows {
         self.dollars.keys().map(String::as_str)
     }
 
-    /// A model no row and no override names: the plan's shared multipliers, or the tightest dollar row at the recipe's
-    /// speed.
+    /// A model no row and no override names: the tightest fast row for a fast recipe whatever funds it, and otherwise
+    /// the plan's shared multipliers or the tightest dollar row.
     pub(crate) fn priced_nowhere(&self, funding: Funding, fast: bool) -> BreakEvenFactors {
-        match funding {
-            Funding::Plan => BreakEvenFactors::of_multipliers(&self.costs.type_multiplier),
-            Funding::ApiKey | Funding::Fast | Funding::Overage | Funding::UsageBased if fast => {
-                self.tightest_fast
-            }
-            Funding::ApiKey | Funding::Fast | Funding::Overage | Funding::UsageBased => {
-                self.tightest
-            }
+        if fast {
+            self.tightest_fast
+        } else if funding == Funding::Plan {
+            BreakEvenFactors::of_multipliers(&self.costs.type_multiplier)
+        } else {
+            self.tightest
         }
+    }
+
+    /// The shipped tightest row at the recipe's speed, in force at the rows' instant.
+    fn shipped(&self, fast: bool) -> BreakEvenFactors {
+        let cell = if fast {
+            &self.shipped_fast
+        } else {
+            &self.shipped_standard
+        };
+        *cell.get_or_init(|| shipped_tightest(fast, self.at))
     }
 }
 
-/// The shipped price list, parsed once: the fallback below runs per retained recipe on every tick whose tables give no
-/// break-even. The list is held rather than the factors, since it never changes and each call still reads the revision
-/// in force at its own instant, where factors held from the first call would keep that call's revision past the date
-/// the next one takes over.
+/// The shipped price list, parsed once: the fallback below runs on every tick whose tables give no break-even. The
+/// list is held rather than the factors, since it never changes and each call still reads the revision in force at
+/// its own instant, where factors held from the first call would keep that call's revision past the date the next one
+/// takes over.
 static SHIPPED_PRICES: LazyLock<PriceRevisions> = LazyLock::new(PriceRevisions::shipped);
 
 fn shipped_in_force(now: i64) -> &'static PriceTable {
@@ -279,17 +292,18 @@ pub fn resolve(
 }
 
 /// `resolve` on `factors`, or on the shipped price table's tightest row at the recipe's speed where the tables in force
-/// give no break-even (no priced row, or a free read), so a ceiling is never unbounded.
+/// give no break-even (no priced row, or a free read), so a ceiling is never unbounded. The shipped row is the one in
+/// force at the instant `rows` were built at.
 pub(crate) fn resolve_or_shipped(
     policy: &KeepalivePolicy,
     factors: BreakEvenFactors,
     ttl_ms: i64,
     timing: &KeepaliveTiming,
     fast: bool,
-    now: i64,
+    rows: &FactorRows,
 ) -> Option<Ceilings> {
     resolve(policy, factors, ttl_ms, timing)
-        .or_else(|| resolve(policy, shipped_tightest(fast, now), ttl_ms, timing))
+        .or_else(|| resolve(policy, rows.shipped(fast), ttl_ms, timing))
 }
 
 /// The lowest and the highest figure a pool's combinations resolve to, equal when every combination agrees.
@@ -326,96 +340,105 @@ pub struct ResolvedCeilings {
     pub parked_seconds: Range,
 }
 
-/// `resolve` over every combination of `fundings`, the main agent's TTL for each under `cache_ttl` (both TTLs when
-/// the policy leaves the markers as sent) and the models `rules` allow, each at standard speed and on a prompt under
-/// any long-context threshold, the one the dialog's figures describe. The models are the dollar table's rows and the
-/// ids the TTL sets and the rules' wildcard-free entries name, and each is folded, judged, priced and given its TTL as
-/// a request on it would be. A row keyed undated that `dated` maps to the catalog's dated id is judged under that id,
-/// which is what a request on it runs under, so a deny entry naming the dated id drops the row. Rules that allow none
-/// of them leave a model priced nowhere. Tables that give no break-even fall back to the shipped tightest row
-/// (`resolve_or_shipped`). `None` with no funding.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn resolve_pool(
-    policy: &KeepalivePolicy,
-    cache_ttl: &CacheTtlPolicy,
-    rules: &[ModelRule],
-    fundings: &[Funding],
-    rows: &FactorRows,
-    dated: &HashMap<String, String>,
-    timing: &KeepaliveTiming,
-    now: i64,
-) -> Option<ResolvedCeilings> {
-    let processed = process(&[], RulesMode::Extend, rules);
-    let named = cache_ttl
-        .plan
-        .models
-        .iter()
-        .chain(&cache_ttl.metered.models)
-        .map(|m| m.model.as_str())
-        .chain(
-            rules
-                .iter()
-                .map(|r| r.pattern.as_str())
-                .filter(|p| !p.contains(['*', '?', '\\'])),
-        )
-        // A request's model reaches the rows lowercased and without its `[1m]` suffix, so a name spelled otherwise
-        // would miss every row and add a combination no request runs.
-        .map(canonical_id);
-    let mut models: Vec<String> = rows
-        .dollars
-        .keys()
-        .cloned()
-        .chain(named)
-        .filter(|model| allows(&processed, dated.get(model).unwrap_or(model)))
-        .collect();
-    models.sort_unstable();
-    models.dedup();
-    let mut resolved: Option<ResolvedCeilings> = None;
-    for &funding in fundings {
-        let metered = funding != Funding::Plan;
-        let picks: Vec<(BreakEvenFactors, &str)> = if models.is_empty() {
-            vec![(rows.priced_nowhere(funding, false), "")]
-        } else {
-            models
-                .iter()
-                .map(|model| (rows.factors(funding, model, false, 0), model.as_str()))
-                .collect()
-        };
-        for (factors, model) in picks {
-            let ttls = match cache_ttl.ttl_for(model, TtlBranch::Main, metered) {
-                Some(ttl) => vec![ttl.ms()],
-                None => vec![FIVE_MINUTES_MS, ONE_HOUR_MS],
+impl CeilingInputs {
+    /// `resolve` over every combination of `fundings` (`pool_fundings`), the main agent's TTL for each under
+    /// `cache_ttl` (both TTLs when the policy leaves the markers as sent) and the models `model_rules` allow, each at
+    /// standard speed and on a prompt under any long-context threshold, the one the dialog's figures describe. The
+    /// models are the dollar table's rows and the ids the TTL sets and the rules' wildcard-free entries name, and each
+    /// is folded, judged, priced and given its TTL as a request on it would be. A row keyed undated that `dated` maps
+    /// to the catalog's dated id is judged under that id, which is what a request on it runs under, so a deny entry
+    /// naming the dated id drops the row. Rules that allow none of them leave a model priced nowhere. Tables that give
+    /// no break-even fall back to the shipped tightest row (`resolve_or_shipped`). `None` with no funding, which a
+    /// pool with no member brings.
+    pub fn resolve_pool(
+        &self,
+        keepalive: &KeepalivePolicy,
+        cache_ttl: &CacheTtlPolicy,
+        model_rules: &[ModelRule],
+        fundings: &[Funding],
+    ) -> Option<ResolvedCeilings> {
+        let processed = process(&[], RulesMode::Extend, model_rules);
+        let named = cache_ttl
+            .plan
+            .models
+            .iter()
+            .chain(&cache_ttl.metered.models)
+            .map(|m| m.model.as_str())
+            .chain(
+                model_rules
+                    .iter()
+                    .map(|r| r.pattern.as_str())
+                    .filter(|p| !p.contains(['*', '?', '\\'])),
+            )
+            // A request's model reaches the rows lowercased and without its `[1m]` suffix, so a name spelled otherwise
+            // would miss every row and add a combination no request runs.
+            .map(canonical_id);
+        let mut models: Vec<String> = self
+            .rows
+            .dollars
+            .keys()
+            .cloned()
+            .chain(named)
+            .filter(|model| allows(&processed, self.dated.get(model).unwrap_or(model)))
+            .collect();
+        models.sort_unstable();
+        models.dedup();
+        let mut resolved: Option<ResolvedCeilings> = None;
+        for &funding in fundings {
+            let metered = funding != Funding::Plan;
+            let picks: Vec<(BreakEvenFactors, &str)> = if models.is_empty() {
+                vec![(self.rows.priced_nowhere(funding, false), "")]
+            } else {
+                models
+                    .iter()
+                    .map(|model| (self.rows.factors(funding, model, false, 0), model.as_str()))
+                    .collect()
             };
-            for ttl in ttls {
-                let Some(ceilings) = resolve_or_shipped(policy, factors, ttl, timing, false, now)
-                else {
-                    continue;
+            for (factors, model) in picks {
+                let ttls = match cache_ttl.ttl_for(model, TtlBranch::Main, metered) {
+                    Some(ttl) => vec![ttl.ms()],
+                    None => vec![FIVE_MINUTES_MS, ONE_HOUR_MS],
                 };
-                let seconds = |ms: i64| ms as f64 / 1_000.0;
-                let previous = resolved.as_ref();
-                resolved = Some(ResolvedCeilings {
-                    break_even_seconds: Range::widen(
-                        previous.map(|r| r.break_even_seconds),
-                        seconds(ceilings.break_even_ms),
-                    ),
-                    horizon_seconds: Range::widen(
-                        previous.map(|r| r.horizon_seconds),
-                        seconds(ceilings.horizon_ms),
-                    ),
-                    idle_seconds: Range::widen(
-                        previous.map(|r| r.idle_seconds),
-                        seconds(ceilings.idle_ms),
-                    ),
-                    idle_share: Range::widen(previous.map(|r| r.idle_share), ceilings.idle_share),
-                    parked_seconds: Range::widen(
-                        previous.map(|r| r.parked_seconds),
-                        seconds(ceilings.parked_ms),
-                    ),
-                });
+                for ttl in ttls {
+                    let Some(ceilings) = resolve_or_shipped(
+                        keepalive,
+                        factors,
+                        ttl,
+                        &self.timing,
+                        false,
+                        &self.rows,
+                    ) else {
+                        continue;
+                    };
+                    let seconds = |ms: i64| ms as f64 / 1_000.0;
+                    let previous = resolved.as_ref();
+                    resolved = Some(ResolvedCeilings {
+                        break_even_seconds: Range::widen(
+                            previous.map(|r| r.break_even_seconds),
+                            seconds(ceilings.break_even_ms),
+                        ),
+                        horizon_seconds: Range::widen(
+                            previous.map(|r| r.horizon_seconds),
+                            seconds(ceilings.horizon_ms),
+                        ),
+                        idle_seconds: Range::widen(
+                            previous.map(|r| r.idle_seconds),
+                            seconds(ceilings.idle_ms),
+                        ),
+                        idle_share: Range::widen(
+                            previous.map(|r| r.idle_share),
+                            ceilings.idle_share,
+                        ),
+                        parked_seconds: Range::widen(
+                            previous.map(|r| r.parked_seconds),
+                            seconds(ceilings.parked_ms),
+                        ),
+                    });
+                }
             }
         }
+        resolved
     }
-    resolved
 }
 
 #[cfg(test)]
