@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use phoebis_bus::Bus;
 use phoebis_ledger::Ledger;
-pub use phoebis_relay::ReadinessSource;
 use phoebis_routing::RouterHandle;
 use phoebis_store::Store;
 

@@ -46,7 +46,7 @@ use phoebis_transport::control::ControlClient;
 pub use guardrails::SAMPLE_PAGE;
 pub use lifetime::OldTotals;
 pub use pricing::table_envelopes;
-pub use readiness::{Readiness, ReadinessSource};
+pub use readiness::Readiness;
 pub use routes::path_count;
 pub use routes::router;
 pub use session::{AdminSecrets, LoginError, Sessions};
@@ -110,7 +110,6 @@ pub struct AdminState {
 /// The running configuration an operator reads back from the admin API. Every secret is left out, and so is
 /// the name of the variable each one is read from: a console that shows this view must not be able to point
 /// at where a credential lives.
-#[derive(Clone, Debug, serde::Serialize)]
 pub struct SettingsView {
     pub api_prices_path: Option<String>,
     pub body_capture_max_hours: u32,
