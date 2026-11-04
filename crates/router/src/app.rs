@@ -21,7 +21,7 @@ use phoebis_relay::{
     Accounting, CatalogService, Limits, ListenLimits, Relay, ShutdownMark, UpstreamGzip,
     REFRESH_TICK,
 };
-use phoebis_store::{Secret, StorageKey, Store};
+use phoebis_store::{StorageKey, Store};
 use phoebis_transport::control::{ControlClient, ResolveFuture, Resolver};
 use phoebis_transport::pool::Pool;
 use phoebis_transport::{connector_builder, trust_extra_ca, Plane};
@@ -103,6 +103,9 @@ pub async fn run_until(
     deadline: &ShutdownDeadline,
 ) -> anyhow::Result<()> {
     init_tracing();
+    // Read here rather than carried on `Config`, so a configuration read without the service's environment holds no
+    // stand-in secret a start could serve under.
+    let admin_secret = crate::config::from_env(&config.admin.secret_env)?;
     let profile = phoebis_profile::claude_code_2_1_310_linux_x64();
 
     let key = StorageKey::from_file(&config.storage.encryption_key_file).with_context(|| {
@@ -395,13 +398,8 @@ pub async fn run_until(
     let vault = Arc::new(PairingVault::new());
     let pairing = Arc::new(PairingSessions::new());
     let sessions = Arc::new(
-        Sessions::new(
-            SESSION_IDLE,
-            SESSION_ABSOLUTE,
-            Secret::new(config.admin.secret.expose()),
-            store.clone(),
-        )
-        .context("reading the admin session epoch from the store")?,
+        Sessions::new(SESSION_IDLE, SESSION_ABSOLUTE, admin_secret, store.clone())
+            .context("reading the admin session epoch from the store")?,
     );
     // The admin state takes the manager; the shutdown drains its refreshes after the admin listener is gone.
     let refreshes = manager.clone();

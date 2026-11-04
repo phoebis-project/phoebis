@@ -2,7 +2,7 @@
 //! refuse a configuration nobody should be able to start.
 //!
 //! The admin secret is named here, never written here: the file holds the name of the environment variable
-//! that `load` resolves, so a configuration file can be read by anyone who may read the deployment.
+//! that `load` checks and the start reads, so a configuration file can be read by anyone who may read the deployment.
 
 use std::fmt;
 use std::net::SocketAddr;
@@ -35,12 +35,10 @@ pub struct Config {
     pub usage: UsageConfig,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AdminConfig {
     pub listen: SocketAddr,
-    #[serde(default = "unresolved", skip)]
-    pub secret: Secret,
     pub secret_env: String,
     #[serde(default, deserialize_with = "present_tls")]
     pub tls: Option<ListenerTls>,
@@ -313,15 +311,15 @@ pub enum ConfigError {
     UpstreamGzipInvalid { value: String },
 }
 
-/// Reads, parses, and validates the bootstrap file, resolving the admin secret from the environment.
+/// Reads, parses, and validates the bootstrap file, and refuses an admin secret variable the start would refuse.
 pub fn load(path: &Path) -> Result<Config, ConfigError> {
-    let mut config = load_unresolved(path)?;
-    resolve_secrets(&mut config)?;
+    let config = load_unresolved(path)?;
+    from_env(&config.admin.secret_env)?;
     Ok(config)
 }
 
-/// Reads, parses and validates the bootstrap file and leaves the admin secret unresolved, for a command that reads the
-/// file without the environment the service gets from its unit.
+/// Reads, parses and validates the bootstrap file and leaves the admin secret's variable unchecked, for a command that
+/// reads the file without the environment the service gets from its unit.
 pub fn load_unresolved(path: &Path) -> Result<Config, ConfigError> {
     let text = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
         path: path.to_path_buf(),
@@ -330,17 +328,6 @@ pub fn load_unresolved(path: &Path) -> Result<Config, ConfigError> {
     let config: Config = serde_norway::from_str(&text)?;
     check_shape(&config)?;
     Ok(config)
-}
-
-impl fmt::Debug for AdminConfig {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AdminConfig")
-            .field("listen", &self.listen)
-            .field("secret", &"***")
-            .field("secret_env", &self.secret_env)
-            .field("tls", &self.tls)
-            .finish()
-    }
 }
 
 impl Default for RoutingConfig {
@@ -555,13 +542,7 @@ fn same_file(left: &Path, right: &Path) -> bool {
     }
 }
 
-/// The step `load` runs after `load_unresolved`, exposed so `check-config` can warn instead of refuse.
-pub fn resolve_secrets(config: &mut Config) -> Result<(), ConfigError> {
-    config.admin.secret = from_env(&config.admin.secret_env)?;
-    Ok(())
-}
-
-/// Whether `name` is a variable `resolve_secrets` would refuse as unset, so `check-config` warns about exactly the
+/// Whether `name` is a variable `from_env` would refuse as unset, so `check-config` warns about exactly the
 /// variables the start would find missing.
 pub fn secret_is_unset(name: &str) -> bool {
     matches!(from_env(name), Err(ConfigError::MissingSecret { .. }))
@@ -571,7 +552,8 @@ pub fn secret_is_unset(name: &str) -> bool {
 /// refuses to start rather than run with a secret every reader of the repository already knows.
 const PLACEHOLDER_ADMIN_SECRET: &str = "replace-with-a-long-random-string";
 
-pub(crate) fn from_env(name: &str) -> Result<Secret, ConfigError> {
+/// The admin secret the variable `name` holds, or the refusal the start answers for it.
+pub fn from_env(name: &str) -> Result<Secret, ConfigError> {
     let value = match std::env::var_os(name) {
         // The value is never part of the error: a variable set to something unusable still holds a secret. A byte
         // that is not UTF-8 reads as U+FFFD, so the shape check below refuses it rather than calling it unset.
@@ -694,12 +676,6 @@ fn default_memory_idle() -> u64 {
 
 fn default_memory_retention() -> u32 {
     30
-}
-
-/// Stands in for a secret until `load` resolves it. `load` is the only way to obtain a `Config`, and it
-/// replaces every one of these before it returns.
-fn unresolved() -> Secret {
-    Secret::new("")
 }
 
 #[cfg(test)]

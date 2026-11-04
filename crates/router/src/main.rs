@@ -73,7 +73,7 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         Some(Command::Backup(args)) => run_backup(&cli.config, &args),
         Some(Command::CheckConfig) => {
-            let mut config = phoebis_router::config::load_unresolved(&cli.config)?;
+            let config = phoebis_router::config::load_unresolved(&cli.config)?;
             // Read before the first line, so a pair the start would refuse is the one line the check prints.
             let proxy_tls = tls::load("proxy.tls", &config.proxy.tls)?;
             let admin_tls = tls::load("admin.tls", &config.admin.tls)?;
@@ -231,10 +231,10 @@ fn main() -> anyhow::Result<()> {
             if phoebis_router::config::secret_is_unset(name) {
                 println!("warning: environment variable {name} is unset or empty");
             }
-            match phoebis_router::config::resolve_secrets(&mut config) {
+            match phoebis_router::config::from_env(name) {
                 // An unset variable was warned about above: the file is checked without the unit's environment.
                 // A set one the start refuses (too short, the example's placeholder) is the same finding here.
-                Ok(()) | Err(phoebis_router::config::ConfigError::MissingSecret { .. }) => {}
+                Ok(_) | Err(phoebis_router::config::ConfigError::MissingSecret { .. }) => {}
                 Err(error) => return Err(error.into()),
             }
             let data_dir = phoebis_store::permissions::data_dir_of(&config.storage.path);
