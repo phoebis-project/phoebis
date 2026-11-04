@@ -11,8 +11,8 @@ use axum::http::{header, Request};
 use bytes::{Bytes, BytesMut};
 use http_body_util::BodyExt;
 use phoebis_ledger::{Band, PlanTables, PriceTable, Speed};
-use phoebis_relay::RelayOutcome;
-use phoebis_routing::{BUDGET_WINDOW, SEVEN_DAY};
+use phoebis_relay::{ProbeObstacle, RelayOutcome};
+use phoebis_routing::SEVEN_DAY;
 use phoebis_store::AccountKind;
 use serde_json::Value;
 
@@ -82,10 +82,9 @@ pub(crate) struct ProbeResult {
     pub usage_based: bool,
     /// The `Retry-After` header's seconds, on a pool-at-its-cap 429; `None` otherwise.
     pub retry_after_secs: Option<u64>,
-    /// The relay's `RelayOutcome::obstacle`: `budget` for a probe the selector refused on the pinned member's
-    /// spend, `operator`, `subscription_ended` or `attempted` for one it answered on the pinned member's standing,
-    /// `reauth_required` for one whose leg marked the account for re-authentication.
-    pub obstacle: Option<&'static str>,
+    /// The relay's `RelayOutcome::obstacle`, the standing the agent holds on rather than pausing as an exhausted
+    /// pool.
+    pub obstacle: Option<ProbeObstacle>,
 }
 
 pub(crate) enum Exchange {
@@ -847,7 +846,7 @@ impl Inner {
         agent_id: &str,
         status: u16,
         error_code: Option<&str>,
-        obstacle: Option<&str>,
+        obstacle: Option<ProbeObstacle>,
         retry_after_secs: Option<u64>,
         exhausted: bool,
         counted_idle_tick: bool,
@@ -858,34 +857,8 @@ impl Inner {
                 .unwrap_or(i64::MAX)
                 .saturating_mul(1_000)
         });
-        match (exhausted, obstacle) {
-            (true, Some("operator")) => {
-                self.set_reason(key, agent_id, Reason::Paused);
-                self.pause(key, agent_id);
-                return;
-            }
-            (true, Some("subscription_ended")) => {
-                self.set_reason(key, agent_id, Reason::IneligibleCredential);
-                self.pause(key, agent_id);
-                return;
-            }
-            // A moved key's next probe admits under its new pool.
-            (true, Some("attempted" | "budget_unknown" | "pool_moved")) => {
-                return self.retry(
-                    key,
-                    agent_id,
-                    Reason::RetryableProbeError,
-                    now,
-                    RetryWait::Step,
-                )
-            }
-            (true, Some("reauth_required")) => {
-                self.set_reason(key, agent_id, Reason::ProbeAuthenticationError);
-                self.pause(key, agent_id);
-                return;
-            }
-            _ => {}
-        }
+        // Read before the obstacles, which never meet it: a 429 classifies as rate limited and never as exhausted,
+        // and the budget's timed answer carries `accounts_exhausted`.
         if status == 429 && error_code == Some("accounts_at_cap") {
             // The pool is momentarily full and a slot frees up in seconds, so `RetryableProbeError` ("retrying") is
             // the honest label.
@@ -898,13 +871,61 @@ impl Inner {
             );
             return;
         }
-        if status == 429 && obstacle == Some(BUDGET_WINDOW) {
-            // The pinned member reached its spend budget between the gate's read and the selection. A pause
-            // would outlive the budget (nothing but a real request undoes one); the reason alone leaves the
-            // schedule armed, so the gate re-reads the spend on the next poll and releases the probe itself
-            // when the period ends or the budget is raised.
-            self.set_reason(key, agent_id, Reason::Budget);
-            return;
+        // Every obstacle is named, so one added later fails to build here until it is given its hold.
+        match (exhausted, obstacle) {
+            (true, Some(ProbeObstacle::Operator)) => {
+                self.set_reason(key, agent_id, Reason::Paused);
+                self.pause(key, agent_id);
+                return;
+            }
+            (true, Some(ProbeObstacle::SubscriptionEnded)) => {
+                self.set_reason(key, agent_id, Reason::IneligibleCredential);
+                self.pause(key, agent_id);
+                return;
+            }
+            // A moved key's next probe admits under its new pool.
+            (
+                true,
+                Some(
+                    ProbeObstacle::Attempted
+                    | ProbeObstacle::BudgetUnknown
+                    | ProbeObstacle::PoolMoved,
+                ),
+            ) => {
+                return self.retry(
+                    key,
+                    agent_id,
+                    Reason::RetryableProbeError,
+                    now,
+                    RetryWait::Step,
+                )
+            }
+            (true, Some(ProbeObstacle::ReauthRequired)) => {
+                self.set_reason(key, agent_id, Reason::ProbeAuthenticationError);
+                self.pause(key, agent_id);
+                return;
+            }
+            (_, Some(ProbeObstacle::Budget)) if status == 429 => {
+                // The pinned member reached its spend budget between the gate's read and the selection. A pause
+                // would outlive the budget (nothing but a real request undoes one), and the reason alone leaves
+                // the schedule armed, so the gate re-reads the spend on the next poll and releases the probe
+                // itself when the period ends or the budget is raised.
+                self.set_reason(key, agent_id, Reason::Budget);
+                return;
+            }
+            (
+                false,
+                Some(
+                    ProbeObstacle::Attempted
+                    | ProbeObstacle::BudgetUnknown
+                    | ProbeObstacle::Operator
+                    | ProbeObstacle::PoolMoved
+                    | ProbeObstacle::ReauthRequired
+                    | ProbeObstacle::SubscriptionEnded,
+                ),
+            )
+            | (_, Some(ProbeObstacle::Budget))
+            | (_, None) => {}
         }
         if status == 503 && error_code == Some(phoebis_relay::LEDGER_BEHIND) {
             // The router's own standing, not the account's: no failure is counted, so the cold-probe limit never
@@ -1196,9 +1217,13 @@ mod tests {
     #[test]
     fn a_pinned_answer_holds_the_agent_under_its_obstacle() {
         for (obstacle, reason, paused) in [
-            ("operator", Reason::Paused, true),
-            ("subscription_ended", Reason::IneligibleCredential, true),
-            ("attempted", Reason::RetryableProbeError, false),
+            (ProbeObstacle::Operator, Reason::Paused, true),
+            (
+                ProbeObstacle::SubscriptionEnded,
+                Reason::IneligibleCredential,
+                true,
+            ),
+            (ProbeObstacle::Attempted, Reason::RetryableProbeError, false),
         ] {
             let (mut inner, key) = one_agent_inner();
             inner.probe_error(
@@ -1216,7 +1241,7 @@ mod tests {
             assert_eq!(
                 (agent.reason, agent.paused),
                 (reason, paused),
-                "the {obstacle} answer holds the agent under its own standing, not the exhausted pool"
+                "the {obstacle:?} answer holds the agent under its own standing, not the exhausted pool"
             );
         }
     }
@@ -1230,7 +1255,7 @@ mod tests {
             "main",
             503,
             Some("accounts_unavailable"),
-            Some("pool_moved"),
+            Some(ProbeObstacle::PoolMoved),
             Some(1),
             true,
             false,

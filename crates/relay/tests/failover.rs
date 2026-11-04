@@ -7,6 +7,7 @@ use http_body_util::BodyExt;
 use phoebis_bus::{Bus, Delivery};
 use phoebis_ledger::{Assembler, Record};
 use phoebis_oauth::AcquireError;
+use phoebis_relay::ProbeObstacle;
 use phoebis_routing::{
     FactValue, MoveCause, Report, RouterConfig, RouterEvent, SharePricer, UtilizationSample,
     WindowReading, WindowSource, FIVE_HOUR,
@@ -2885,7 +2886,7 @@ fn probe_of(h: &Harness) -> phoebis_relay::Probe {
 /// The probe's answer as the keepalive reads it: the status, the code and the obstacle.
 fn probe_answer(
     resp: &axum::http::Response<axum::body::Body>,
-) -> (u16, String, Option<&'static str>) {
+) -> (u16, String, Option<ProbeObstacle>) {
     let o = outcome(resp);
     (
         resp.status().as_u16(),
@@ -2920,7 +2921,11 @@ async fn a_probe_whose_leg_marks_its_pinned_account_names_the_mark_though_a_sibl
         .await;
     assert_eq!(
         probe_answer(&probed),
-        (503, "accounts_unavailable".into(), Some("reauth_required")),
+        (
+            503,
+            "accounts_unavailable".into(),
+            Some(ProbeObstacle::ReauthRequired)
+        ),
         "the probe that tried its pinned member is answered under the mark its own leg set"
     );
     assert_eq!(
@@ -2978,7 +2983,11 @@ async fn a_probe_whose_refresh_answers_invalid_grant_names_the_mark() {
         .await;
     assert_eq!(
         probe_answer(&probed),
-        (503, "accounts_unavailable".into(), Some("reauth_required")),
+        (
+            503,
+            "accounts_unavailable".into(),
+            Some(ProbeObstacle::ReauthRequired)
+        ),
         "the refresh's own mark reaches the probe's answer"
     );
     up.shutdown().await;
@@ -3015,7 +3024,11 @@ async fn a_probe_whose_dispatch_refresh_answers_invalid_grant_names_the_mark() {
         .await;
     assert_eq!(
         probe_answer(&probed),
-        (503, "accounts_unavailable".into(), Some("reauth_required")),
+        (
+            503,
+            "accounts_unavailable".into(),
+            Some(ProbeObstacle::ReauthRequired)
+        ),
         "the dispatch's own mark reaches the probe's answer"
     );
     assert_eq!(token_posts(&up), 1);
@@ -3043,7 +3056,11 @@ async fn a_non_portable_probe_whose_leg_marks_its_account_names_the_mark() {
         .await;
     assert_eq!(
         probe_answer(&probed),
-        (503, "accounts_unavailable".into(), Some("reauth_required")),
+        (
+            503,
+            "accounts_unavailable".into(),
+            Some(ProbeObstacle::ReauthRequired)
+        ),
         "a probe bound to its account names the mark on its own answer"
     );
     assert_eq!(outcome(&probed).account_id, "a");

@@ -29,9 +29,9 @@ use phoebis_oauth::{AccessToken, AcquireError, Clock, CredentialManager};
 use phoebis_routing::{
     cohort_hold, latest_full_reset, resolve, AccountTicket, ChainFacts, ClientClass, CohortHold,
     ConversationLookup, EvidenceSource, Exhaustion, HoldFacts, KeyPermit, KeyRefusal, LaneFacts,
-    OverageEvidence, PinRef, PredecessorQuery, Presented, Refusal, RefusalFacts, RefusedRequest,
-    Report, RequestFlags, ResolveError, RouterHandle, SelectRequest, SelectResult, Selection,
-    SelectionTrace, BUDGET_WINDOW, MAIN_AGENT,
+    OverageEvidence, PinRef, PinnedObstacle, PredecessorQuery, Presented, Refusal, RefusalFacts,
+    RefusedRequest, Report, RequestFlags, ResolveError, RouterHandle, SelectRequest, SelectResult,
+    Selection, SelectionTrace, BUDGET_WINDOW, MAIN_AGENT,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, CooldownScope, MemoryStore,
@@ -212,23 +212,56 @@ pub struct RelayOutcome {
     /// Whether that member's `previous_message_id` named a message. A null `diagnostics` member in the answer reads
     /// `none` only then, since a member that named no message gave the upstream nothing to compare.
     pub diagnostics_named: bool,
-    /// `budget` when the selector answered a probe pinned to a member at its spend budget, `operator`,
-    /// `subscription_ended` or `attempted` when it answered one on its pinned member's standing
-    /// (`Exhaustion::Pinned`), `reauth_required` when a leg of the probe marked its account for re-authentication
-    /// (`REAUTH_OBSTACLE`), `pool_moved` when the request's key moved to another pool between its admission and its
-    /// selection: the obstacles the keepalive holds on rather than pauses as an exhausted pool; `None` otherwise.
-    pub obstacle: Option<&'static str>,
+    /// The obstacle the keepalive holds a probe's agent on rather than pausing it as an exhausted pool, `None`
+    /// otherwise.
+    pub obstacle: Option<ProbeObstacle>,
     /// The holds this request waited through, the summary `phoebis_routing::cohort_hold` gives; `None` for none.
     pub held: Option<CohortHold>,
 }
 
-/// On `RelayOutcome`: the obstacle a probe's exhaustion carries when a leg of the request marked the pinned
-/// account `reauth_required`; the keepalive pauses under `ProbeAuthenticationError` on it.
-pub const REAUTH_OBSTACLE: &str = "reauth_required";
+/// The obstacle `RelayOutcome` names for a probe the keepalive holds on rather than pausing as an exhausted pool.
+/// The selector's pinned standings (`PinnedObstacle`) keep their words: `attempted`, `budget_unknown`, `operator`
+/// and `subscription_ended`, each answered untimed since no wait clears it. The relay adds three of its own:
+/// `budget` for a probe the selector answered with the pinned member's spend budget window, `pool_moved` for a
+/// request whose key moved to another pool between its admission and its selection, which the keepalive retries
+/// since the next probe admits under the new pool, and `reauth_required` for a probe whose leg marked its account for
+/// re-authentication, which the keepalive pauses under its authentication reason.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProbeObstacle {
+    Attempted,
+    Budget,
+    BudgetUnknown,
+    Operator,
+    PoolMoved,
+    ReauthRequired,
+    SubscriptionEnded,
+}
 
-/// On `RelayOutcome`: the obstacle of a request refused because its key moved to another pool between its admission
-/// and its selection; the keepalive retries a probe on it, since the next one admits under the new pool.
-const POOL_MOVED: &str = "pool_moved";
+impl ProbeObstacle {
+    /// The obstacle's word, as the relay's log lines name it.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            ProbeObstacle::Attempted => "attempted",
+            ProbeObstacle::Budget => "budget",
+            ProbeObstacle::BudgetUnknown => "budget_unknown",
+            ProbeObstacle::Operator => "operator",
+            ProbeObstacle::PoolMoved => "pool_moved",
+            ProbeObstacle::ReauthRequired => "reauth_required",
+            ProbeObstacle::SubscriptionEnded => "subscription_ended",
+        }
+    }
+}
+
+impl From<PinnedObstacle> for ProbeObstacle {
+    fn from(obstacle: PinnedObstacle) -> ProbeObstacle {
+        match obstacle {
+            PinnedObstacle::Attempted => ProbeObstacle::Attempted,
+            PinnedObstacle::BudgetUnknown => ProbeObstacle::BudgetUnknown,
+            PinnedObstacle::Operator => ProbeObstacle::Operator,
+            PinnedObstacle::SubscriptionEnded => ProbeObstacle::SubscriptionEnded,
+        }
+    }
+}
 
 /// Which side funded the account a request served under at its selection, on the response's extensions beside
 /// `RelayOutcome`. The selection's own fact: a probe's request row and its credit file under the answer's
@@ -2348,11 +2381,11 @@ impl Relay {
         );
         if let Exhaustion::Timed { window, .. } = exhaustion {
             if window == BUDGET_WINDOW {
-                outcome.obstacle = Some(BUDGET_WINDOW);
+                outcome.obstacle = Some(ProbeObstacle::Budget);
             }
         }
         if let Exhaustion::Pinned { obstacle } = exhaustion {
-            outcome.obstacle = Some(*obstacle);
+            outcome.obstacle = Some((*obstacle).into());
         }
         // Read last, so it overrides `attempted` alone: a probe that tried its marked member is not one to retry,
         // and no wait clears the mark. A timed answer keeps the quota pause its 429 gets, a budget hold stays
@@ -2362,9 +2395,9 @@ impl Relay {
             && code == exhaustion_code(&Exhaustion::Untimed)
             && outcome
                 .obstacle
-                .is_none_or(|obstacle| obstacle == "attempted")
+                .is_none_or(|obstacle| obstacle == ProbeObstacle::Attempted)
         {
-            outcome.obstacle = Some(REAUTH_OBSTACLE);
+            outcome.obstacle = Some(ProbeObstacle::ReauthRequired);
         }
         self.answer(admitted.trace, response, outcome).await
     }
@@ -2404,7 +2437,7 @@ impl Relay {
                 key = %admitted.key.id,
                 admitted_pool = ?admitted.pool_id,
                 selected_pool = %selection.pool_id,
-                obstacle = POOL_MOVED,
+                obstacle = ProbeObstacle::PoolMoved.as_str(),
                 "the key moved between pools after admission, so the request is refused"
             );
             let mut outcome = self.outcome(
@@ -2422,7 +2455,7 @@ impl Relay {
             );
             // `outcome_of` files an `accounts_unavailable` that carries an obstacle as rejected, so the pool's
             // exhaustion gauge and rollups never count a moved key as the pool's.
-            outcome.obstacle = Some(POOL_MOVED);
+            outcome.obstacle = Some(ProbeObstacle::PoolMoved);
             ending(end_guard, REFUSED);
             return Leg::Respond(
                 self.answer(
@@ -3609,7 +3642,7 @@ impl Relay {
         outcome.error_code = Some(exhaustion_code(&Exhaustion::Untimed).to_string());
         // A probe bound to its account never reaches the selector's exhaustion, so its own answer names the mark.
         if ctx.admitted.trace.kind == Kind::Probe && ctx.auth_marked {
-            outcome.obstacle = Some(REAUTH_OBSTACLE);
+            outcome.obstacle = Some(ProbeObstacle::ReauthRequired);
         }
         let response = self
             .answer(

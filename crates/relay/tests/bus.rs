@@ -13,7 +13,7 @@ use phoebis_bus::{
     RequestComplete, ResponseChunk, Subscriber,
 };
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
-use phoebis_relay::{Limits, MemoryKey};
+use phoebis_relay::{Limits, MemoryKey, ProbeObstacle};
 use tower::ServiceExt;
 
 const A: &str = "sk-ant-oat01-AAAA";
@@ -2044,7 +2044,7 @@ async fn a_probe_held_on_its_pinned_members_pause_completes_rejected_beside_a_si
             resp.headers()["x-phoebis-error-code"].to_str().unwrap(),
             outcome(&resp).obstacle,
         ),
-        (503, "accounts_unavailable", Some("operator")),
+        (503, "accounts_unavailable", Some(ProbeObstacle::Operator)),
         "the probe is answered on its pin's pause, with the obstacle for the keepalive"
     );
     resp.into_body().collect().await.unwrap();

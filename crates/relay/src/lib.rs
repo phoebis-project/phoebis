@@ -56,8 +56,8 @@ pub use hold::INSPECT_BUFFER;
 pub use identity::identifier_byte;
 pub use memory::{MemoryKey, Previous, MEMORY_CAP, MEMORY_IDLE_MS};
 pub use messages::{
-    new_request_id, router, Accounting, AccountingSource, Limits, Probe, ReadinessSource, Relay,
-    RelayOutcome, ServedUnder, ShutdownMark, MEMORY_FLUSH_INTERVAL,
+    new_request_id, router, Accounting, AccountingSource, Limits, Probe, ProbeObstacle,
+    ReadinessSource, Relay, RelayOutcome, ServedUnder, ShutdownMark, MEMORY_FLUSH_INTERVAL,
 };
 pub use portability::portable_of;
 pub use ratelimit::{

@@ -850,7 +850,7 @@ mod tests {
             (Exhaustion::ModelRejected, 404),
             (
                 Exhaustion::Pinned {
-                    obstacle: "attempted",
+                    obstacle: phoebis_routing::PinnedObstacle::Attempted,
                 },
                 503,
             ),

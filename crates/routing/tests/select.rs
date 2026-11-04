@@ -5,8 +5,8 @@ use phoebis_routing::{
     CandidateFacts, ChainFacts, ClientClass, CohortHold, CreditAccount, CreditsState, Decided,
     DecisionRecord, EvidenceSource, Exhaustion, FactEntity, FactValue, FailedOver, HeadMark,
     HoldFacts, HoldOutcome, HoldWait, LaneFacts, LongContextRates, MemberSpend, MigrateReason,
-    MoveCause, OverageEvidence, PinKeyFacts, PinRef, PinShed, Placement, RateTable, Rates,
-    RefusalFacts, RefusedRequest, RegimeRates, RegistrySnapshot, RequestFlags, Reservation,
+    MoveCause, OverageEvidence, PinKeyFacts, PinRef, PinShed, PinnedObstacle, Placement, RateTable,
+    Rates, RefusalFacts, RefusedRequest, RegimeRates, RegistrySnapshot, RequestFlags, Reservation,
     RoutingState, SelectRequest, SelectResult, SharePricer, SlowDownEdge, SlowDownRead,
     SlowDownState, StateWrite, UtilizationSample, WalkStep, Warmth, WarmthCause, WindowFacts,
     WindowReading, WindowSource, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR,
@@ -4692,7 +4692,7 @@ fn a_probe_on_a_pin_whose_member_spend_is_unknown_answers_the_obstacle_and_moves
     assert_eq!(
         result,
         SelectResult::Exhausted(Exhaustion::Pinned {
-            obstacle: "budget_unknown",
+            obstacle: PinnedObstacle::BudgetUnknown,
         }),
         "the probe answers the untimed obstacle rather than a budget's deadline or a sibling"
     );
@@ -4756,7 +4756,7 @@ fn a_probe_on_a_pin_whose_account_the_operator_paused_answers_the_obstacle_and_m
     assert_eq!(
         result,
         SelectResult::Exhausted(Exhaustion::Pinned {
-            obstacle: "operator"
+            obstacle: PinnedObstacle::Operator
         }),
         "the probe answers the pause rather than moving to a sibling"
     );
@@ -4791,7 +4791,7 @@ fn a_probe_on_a_pin_whose_subscription_ended_answers_the_obstacle_and_moves_noth
     assert_eq!(
         result,
         SelectResult::Exhausted(Exhaustion::Pinned {
-            obstacle: "subscription_ended"
+            obstacle: PinnedObstacle::SubscriptionEnded
         }),
         "the probe answers the ended subscription rather than moving to a sibling"
     );
@@ -4813,7 +4813,7 @@ fn a_probe_that_already_tried_its_pinned_account_answers_attempted_and_moves_not
     assert_eq!(
         result,
         SelectResult::Exhausted(Exhaustion::Pinned {
-            obstacle: "attempted"
+            obstacle: PinnedObstacle::Attempted
         }),
         "the probe answers its own attempt rather than moving to a sibling"
     );
@@ -4837,7 +4837,7 @@ fn a_probe_whose_attempt_marked_its_pinned_account_answers_attempted_and_moves_n
     assert_eq!(
         result,
         SelectResult::Exhausted(Exhaustion::Pinned {
-            obstacle: "attempted"
+            obstacle: PinnedObstacle::Attempted
         }),
         "the probe answers its own attempt rather than moving to the free sibling"
     );

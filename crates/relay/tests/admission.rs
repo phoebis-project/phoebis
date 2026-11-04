@@ -16,7 +16,7 @@ use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_bus::{Bus, Delivery, Event, Outcome, ResponseChunk, QUEUE_DEPTH};
-use phoebis_relay::{Accounting, AccountingSource, Limits, Probe};
+use phoebis_relay::{Accounting, AccountingSource, Limits, Probe, ProbeObstacle};
 use tower::ServiceExt;
 
 const A: &str = "sk-ant-oat01-AAAA";
@@ -379,7 +379,7 @@ async fn a_key_moved_between_pools_mid_flight_is_refused_and_the_next_request_ad
         ),
         (503, Some("1".into()), Some("accounts_unavailable".into()))
     );
-    assert_eq!(outcome(&response).obstacle, Some("pool_moved"));
+    assert_eq!(outcome(&response).obstacle, Some(ProbeObstacle::PoolMoved));
     let text = text_of(response).await;
     assert!(
         text.contains("no account in this pool can serve requests"),
