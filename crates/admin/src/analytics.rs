@@ -63,16 +63,20 @@ pub(crate) fn hour_end(hour: i64) -> i64 {
     hour + 3_600
 }
 
-fn filter_of(q: &HashMap<String, String>) -> Result<RollupFilter, &'static str> {
+/// The filter both rollup reads take, or the 400 a pattern list past the bounds answers.
+// The error is the rendered 400, as `selection`'s is.
+#[allow(clippy::result_large_err)]
+fn filter_of(q: &HashMap<String, String>) -> Result<RollupFilter, Response> {
+    let patterns = |name| agent_list(q, name).map_err(|m| failure(StatusCode::BAD_REQUEST, m));
     Ok(RollupFilter {
         keys: list(q, "keys"),
         pools: list(q, "pools"),
         accounts: list(q, "accounts"),
         models: list(q, "models"),
         kinds: list(q, "kinds"),
-        user_agents: agent_list(q, "user_agents")?,
-        user_agent_groups: agent_list(q, "user_agent_groups")?,
-        clients: agent_list(q, "clients")?,
+        user_agents: patterns("user_agents")?,
+        user_agent_groups: patterns("user_agent_groups")?,
+        clients: patterns("clients")?,
         include_probes: flag(q, "include_probes"),
         // Read by `selection` alone: `placements` builds its filter here and never takes the parameter.
         funding: None,
@@ -97,7 +101,7 @@ async fn selection(state: &AdminState, q: &HashMap<String, String>) -> Result<Se
             "group_by is account, all, classifier, client, effort, key, kind, model, pool, request_class, speed, or user_agent",
         )
     })?;
-    let mut filter = filter_of(q).map_err(|m| failure(StatusCode::BAD_REQUEST, m))?;
+    let mut filter = filter_of(q)?;
     filter.funding = match q.get("funding").map(String::as_str) {
         None => None,
         Some("billed") => Some(FundingFilter::Billed),
@@ -545,7 +549,7 @@ pub(crate) async fn placements(
     };
     let filter = match filter_of(&q) {
         Ok(filter) => filter,
-        Err(m) => return failure(StatusCode::BAD_REQUEST, m),
+        Err(refusal) => return refusal,
     };
     let live = LiveKeys::from_snapshot(&state.router.snapshot());
     let rows = match state
