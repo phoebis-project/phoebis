@@ -8,8 +8,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use phoebis_router::admin_client::{self, AdminClient};
+use phoebis_router::admin_client::{self, AdminClient, Common};
 use phoebis_router::backup::{self, BackupArgs};
+use phoebis_router::config::Config;
 use phoebis_router::recover_key::{self, RecoverKeyArgs};
 use phoebis_router::status::{self, Listeners, StatusArgs};
 use phoebis_router::tls_reload::{self, TlsReloadArgs};
@@ -322,14 +323,7 @@ fn run_backup(config_path: &Path, args: &BackupArgs) -> ! {
     match taken {
         Ok((manifest, _)) => {
             if args.json {
-                let printed = serde_json::to_string_pretty(&manifest)
-                    .map(|json| format!("{json}\n"))
-                    .unwrap_or_default();
-                let mut stdout = std::io::stdout().lock();
-                // The manifest on disk is the backup's record; a reader that went away does not undo it.
-                let _ = stdout
-                    .write_all(printed.as_bytes())
-                    .and_then(|()| stdout.flush());
+                print(&pretty(&manifest));
             }
             std::process::exit(0)
         }
@@ -356,11 +350,7 @@ fn run_recover_key(config_path: &Path, args: &RecoverKeyArgs) -> ! {
 fn run_status(config_path: &Path, args: &StatusArgs) -> ! {
     // The listeners line and the probe come from the file the client read, and without one only the admin URL is
     // known.
-    let (client, file) = AdminClient::from_flags_with_file(&args.common, config_path)
-        .unwrap_or_else(|error| {
-            eprintln!("{error}");
-            std::process::exit(1)
-        });
+    let (client, file) = client(&args.common, config_path);
     let called = client.url();
     let listeners = match &file {
         Some(config) => Listeners {
@@ -395,15 +385,10 @@ fn run_status(config_path: &Path, args: &StatusArgs) -> ! {
         .map(|config| (config.proxy.listen, config.proxy.tls.is_some()));
     // Bound to a local that outlives the exit below: a temporary runtime would drop at the end of its statement and
     // wait there for every blocking thread.
-    let runtime = admin_client::runtime().unwrap_or_else(|error| {
-        eprintln!("cannot start the runtime: {error}");
-        std::process::exit(1)
-    });
+    let runtime = runtime();
     let reads = runtime.block_on(status::read(&client, proxy));
     let printed = if args.common.json {
-        serde_json::to_string_pretty(&status::render_json(&reads))
-            .map(|json| format!("{json}\n"))
-            .unwrap_or_default()
+        pretty(&status::render_json(&reads))
     } else {
         status::render(
             &reads,
@@ -415,24 +400,14 @@ fn run_status(config_path: &Path, args: &StatusArgs) -> ! {
             args.all,
         )
     };
-    let mut stdout = std::io::stdout().lock();
-    // A reader that went away (`| head`) is not a failure of the read, so the exit code stays the readiness answer.
-    let _ = stdout
-        .write_all(printed.as_bytes())
-        .and_then(|()| stdout.flush());
+    print(&printed);
     std::process::exit(status::exit_code(&reads))
 }
 
 /// `phoebis tls reload`. It never returns, for the reason `run_status` gives.
 fn run_tls_reload(config_path: &Path, args: &TlsReloadArgs) -> ! {
-    let client = AdminClient::from_flags(&args.common, config_path).unwrap_or_else(|error| {
-        eprintln!("{error}");
-        std::process::exit(1)
-    });
-    let runtime = admin_client::runtime().unwrap_or_else(|error| {
-        eprintln!("cannot start the runtime: {error}");
-        std::process::exit(1)
-    });
+    let (client, _) = client(&args.common, config_path);
+    let runtime = runtime();
     let body = runtime
         .block_on(tls_reload::read(&client))
         .unwrap_or_else(|error| {
@@ -440,18 +415,44 @@ fn run_tls_reload(config_path: &Path, args: &TlsReloadArgs) -> ! {
             std::process::exit(1)
         });
     let printed = if args.common.json {
-        serde_json::to_string_pretty(&body)
-            .map(|json| format!("{json}\n"))
-            .unwrap_or_default()
+        pretty(&body)
     } else {
         tls_reload::render(&body)
     };
-    let mut stdout = std::io::stdout().lock();
-    // The router has reloaded by now, and a reader that went away does not undo it.
-    let _ = stdout
-        .write_all(printed.as_bytes())
-        .and_then(|()| stdout.flush());
+    print(&printed);
     std::process::exit(tls_reload::exit_code(&body))
+}
+
+/// The admin client and the configuration file it read, or the client's line and exit 1.
+fn client(common: &Common, config_path: &Path) -> (AdminClient, Option<Config>) {
+    AdminClient::from_flags_with_file(common, config_path).unwrap_or_else(|error| {
+        eprintln!("{error}");
+        std::process::exit(1)
+    })
+}
+
+/// The subcommand's runtime, or the line and exit 1 when it cannot start.
+fn runtime() -> tokio::runtime::Runtime {
+    admin_client::runtime().unwrap_or_else(|error| {
+        eprintln!("cannot start the runtime: {error}");
+        std::process::exit(1)
+    })
+}
+
+/// A `--json` answer as printed: pretty, with a closing newline.
+fn pretty(value: &impl serde::Serialize) -> String {
+    serde_json::to_string_pretty(value)
+        .map(|json| format!("{json}\n"))
+        .unwrap_or_default()
+}
+
+/// Writes `text` to stdout through one lock. A reader that went away (`| head`) undoes nothing the command did, so a
+/// failed write is dropped and the command exits with its own answer.
+fn print(text: &str) {
+    let mut stdout = std::io::stdout().lock();
+    let _ = stdout
+        .write_all(text.as_bytes())
+        .and_then(|()| stdout.flush());
 }
 
 /// One table's `check-config` line: the file read, or the built-in list with the configured path it found nothing
