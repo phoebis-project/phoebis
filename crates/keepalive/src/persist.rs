@@ -342,12 +342,12 @@ fn unit_of(word: &str) -> Option<SavingsUnit> {
     }
 }
 
-/// A word the payload carries for an optional unit: `None` reads as none, and a word this build does not know
-/// refuses the row.
-fn optional_unit(word: Option<String>) -> Option<Option<SavingsUnit>> {
+/// A word the payload carries for an optional value: `None` reads as none, and a word `parse` does not know refuses
+/// the row.
+fn optional<T>(word: Option<String>, parse: impl FnOnce(&str) -> Option<T>) -> Option<Option<T>> {
     match word {
         None => Some(None),
-        Some(word) => unit_of(&word).map(Some),
+        Some(word) => parse(&word).map(Some),
     }
 }
 
@@ -361,26 +361,11 @@ fn window_of(window: Option<String>) -> Option<&'static str> {
     }
 }
 
-/// A word the payload carries for an optional account kind: `None` reads as none, and a word this build does not know
-/// refuses the row.
-fn optional_kind(word: Option<String>) -> Option<Option<phoebis_store::AccountKind>> {
-    match word {
-        None => Some(None),
-        Some(word) => phoebis_store::AccountKind::parse(&word).map(Some),
-    }
-}
-
-/// A word the payload carries for an optional wasted label: `None` reads as none, and a word this build does not know
-/// refuses the row.
-fn optional_wasted(word: Option<String>) -> Option<Option<Wasted>> {
-    match word {
-        None => Some(None),
-        Some(word) => Wasted::ALL
-            .iter()
-            .copied()
-            .find(|label| label.as_str() == word)
-            .map(Some),
-    }
+fn wasted_of(word: &str) -> Option<Wasted> {
+    Wasted::ALL
+        .iter()
+        .copied()
+        .find(|label| label.as_str() == word)
 }
 
 fn reason_of(word: &str) -> Option<Reason> {
@@ -624,12 +609,12 @@ impl PersistedAgent {
                         at: probe.at,
                         band: Band::of_rollup(&probe.band),
                         in_overage: probe.in_overage,
-                        kind: optional_kind(probe.kind)?,
+                        kind: optional(probe.kind, phoebis_store::AccountKind::parse)?,
                         tier: probe.tier,
                         usage: probe_usage(probe.usage),
                         usage_based: probe.usage_based,
                     },
-                    unit: optional_unit(probe.unit)?,
+                    unit: optional(probe.unit, unit_of)?,
                     window: window_of(probe.window)?,
                     fast: probe.fast,
                     model: probe.model,
@@ -651,7 +636,7 @@ impl PersistedAgent {
                         at: kept.at,
                         band: Band::of_rollup(&kept.band),
                         in_overage: kept.in_overage,
-                        kind: optional_kind(kept.kind)?,
+                        kind: optional(kept.kind, phoebis_store::AccountKind::parse)?,
                         tier: kept.tier,
                         usage: probe_usage(kept.usage),
                         usage_based: kept.usage_based,
@@ -659,9 +644,9 @@ impl PersistedAgent {
                     fast: kept.fast,
                     entry_expires: kept.entry_expires,
                     covered: kept.covered,
-                    unit: optional_unit(kept.unit)?,
+                    unit: optional(kept.unit, unit_of)?,
                     window: window_of(kept.window)?,
-                    pending: optional_wasted(kept.pending)?,
+                    pending: optional(kept.pending, wasted_of)?,
                 })
             })
             .collect::<Option<_>>()?;
@@ -687,7 +672,7 @@ impl PersistedObservation {
             Some(prior) => Some(PriorCoverage {
                 account: prior.account,
                 covered: prior.covered,
-                unit: optional_unit(prior.unit)?,
+                unit: optional(prior.unit, unit_of)?,
                 window: window_of(prior.window)?,
                 model: prior.model,
                 fast: prior.fast,
@@ -719,7 +704,7 @@ impl PersistedObservation {
             prior,
             poisoned: false,
             dispatched_ms: row.dispatched_ms,
-            kind: optional_kind(self.kind)?,
+            kind: optional(self.kind, phoebis_store::AccountKind::parse)?,
             usage_based: self.usage_based,
             in_overage: self.in_overage,
         })
