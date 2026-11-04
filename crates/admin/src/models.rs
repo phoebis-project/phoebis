@@ -112,30 +112,31 @@ pub(crate) async fn key_models(
         Err(_) => return failure(StatusCode::SERVICE_UNAVAILABLE, ROUTER_UNAVAILABLE),
     };
     let now = (state.clock)();
+    // Sorted once and stably, so each entry's filter keeps the order a filter and then a stable sort would give it.
+    let mut live: Vec<(&CooldownRow, &str)> = cooldowns
+        .iter()
+        .filter(|c| c.until > now && members.iter().any(|m| m.account_id == c.account_id))
+        .filter_map(|c| model_of(&c.scope).map(|model| (c, model)))
+        .collect();
+    live.sort_by(|(a, _), (b, _)| a.account_id.cmp(&b.account_id));
     let processed = rules::process(&key.model_rules, key.model_rules_mode, &pool.model_rules);
     let rule_rows: Vec<RuleEntry> = processed
         .iter()
         .map(|entry| {
             // A denied model is never routed, so its cooldowns say nothing about the key.
-            let mut matching: Vec<&CooldownRow> = if entry.rule.not {
+            let matching = if entry.rule.not {
                 Vec::new()
             } else {
-                cooldowns
-                    .iter()
-                    .filter(|c| {
-                        c.until > now
-                            && members.iter().any(|m| m.account_id == c.account_id)
-                            && model_of(&c.scope)
-                                .is_some_and(|model| pattern::matches(&entry.rule.pattern, model))
-                    })
+                live.iter()
+                    .filter(|(_, model)| pattern::matches(&entry.rule.pattern, model))
+                    .map(|(c, _)| cooldown_json(c))
                     .collect()
             };
-            matching.sort_by(|a, b| a.account_id.cmp(&b.account_id));
             RuleEntry {
                 level: entry.level.as_str().to_string(),
                 pattern: entry.rule.pattern.clone(),
                 not: entry.rule.not,
-                cooldowns: matching.into_iter().map(cooldown_json).collect(),
+                cooldowns: matching,
             }
         })
         .collect();
