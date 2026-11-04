@@ -30,11 +30,7 @@ pub struct Recipe {
     pub fast: bool,
 }
 
-pub fn valid_id(s: &str) -> bool {
-    (1..=256).contains(&s.len())
-        && s.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b':' | b'/'))
-}
+pub use phoebis_relay::is_valid_id as valid_id;
 
 pub fn valid_opaque(s: &str) -> bool {
     !s.trim().is_empty() && s.len() <= 1_024 && !s.chars().any(char::is_control)

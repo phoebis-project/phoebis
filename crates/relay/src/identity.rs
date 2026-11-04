@@ -333,7 +333,10 @@ pub fn identifier_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'/' | b':' | b'_')
 }
 
-pub(crate) fn is_valid_id(value: &str) -> bool {
+/// Whether `value` is an identifier the relay reads off a header: at least one byte and at most `MAX_ID_LEN`, each an
+/// `identifier_byte`. The keepalive checks the ids a companion reports through it, so a report and a request name one
+/// session alike.
+pub fn is_valid_id(value: &str) -> bool {
     (1..=MAX_ID_LEN).contains(&value.len()) && value.bytes().all(identifier_byte)
 }
 
