@@ -1,8 +1,6 @@
 //! `phoebis tls reload`: one `POST /admin/tls/reload` through the admin client, printed as one line per public
 //! listener or as the route's body.
 
-use std::time::Duration;
-
 use hyper::Method;
 use serde_json::Value;
 
@@ -15,19 +13,11 @@ pub struct TlsReloadArgs {
 }
 
 /// One POST through the admin client under `--timeout`, the route's body.
-pub async fn read(client: &AdminClient, deadline: Duration) -> Result<Value, ClientError> {
-    match tokio::time::timeout(
-        deadline,
-        client.expect(Method::POST, "/admin/tls/reload", None),
-    )
-    .await
-    {
-        Ok(answer) => answer.map(|answer| answer.body),
-        Err(_) => Err(ClientError::Transport {
-            url: client.url(),
-            reason: format!("the call did not finish within {deadline:?}"),
-        }),
-    }
+pub async fn read(client: &AdminClient) -> Result<Value, ClientError> {
+    client
+        .expect(Method::POST, "/admin/tls/reload", None)
+        .await
+        .map(|answer| answer.body)
 }
 
 /// One line per listener: `proxy: reloaded, certificate {path} expires {date}`, `proxy: not reloaded, {the loader's

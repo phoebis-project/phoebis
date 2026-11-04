@@ -5,7 +5,6 @@
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
@@ -409,11 +408,7 @@ fn run_status(config_path: &Path, args: &StatusArgs) -> ! {
         eprintln!("cannot start the runtime: {error}");
         std::process::exit(1)
     });
-    let reads = runtime.block_on(status::read(
-        &client,
-        proxy,
-        Duration::from_secs(args.common.timeout),
-    ));
+    let reads = runtime.block_on(status::read(&client, proxy));
     let printed = if args.common.json {
         serde_json::to_string_pretty(&status::render_json(&reads))
             .map(|json| format!("{json}\n"))
@@ -448,10 +443,7 @@ fn run_tls_reload(config_path: &Path, args: &TlsReloadArgs) -> ! {
         std::process::exit(1)
     });
     let body = runtime
-        .block_on(tls_reload::read(
-            &client,
-            Duration::from_secs(args.common.timeout),
-        ))
+        .block_on(tls_reload::read(&client))
         .unwrap_or_else(|error| {
             match &error {
                 ClientError::Transport { url, reason } => {

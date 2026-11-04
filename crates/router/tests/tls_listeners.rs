@@ -299,7 +299,7 @@ async fn attention(admin_port: u16, config: &Path) -> (Vec<serde_json::Value>, V
         .await
         .unwrap_or_else(|error| panic!("the attention call failed: {error}"));
     assert_eq!(answer.status, 200, "{}", answer.body);
-    let reads = status::read(&client, None, SETTLE).await;
+    let reads = status::read(&client, None).await;
     let listeners = status::Listeners {
         admin: format!("http://127.0.0.1:{admin_port}"),
         certificates: Vec::new(),

@@ -385,7 +385,7 @@ async fn a_route_that_never_answers_ends_each_read_at_the_deadline() {
                 ca: None,
                 json: false,
                 secret_env: Some("TEST_STATUS_SILENT".to_owned()),
-                timeout: 10,
+                timeout: 2,
                 url: Some(format!("http://127.0.0.1:{port}")),
             },
             Path::new("absent.yaml"),
@@ -394,7 +394,7 @@ async fn a_route_that_never_answers_ends_each_read_at_the_deadline() {
     };
 
     let started = tokio::time::Instant::now();
-    let reads = status::read(&client, None, Duration::from_secs(2)).await;
+    let reads = status::read(&client, None).await;
     let spent = started.elapsed();
 
     let line = format!(
@@ -412,7 +412,7 @@ async fn a_route_that_never_answers_ends_each_read_at_the_deadline() {
     assert!(reads.health.is_none());
     assert!(
         spent >= Duration::from_secs(10) && spent < Duration::from_secs(11),
-        "five reads at two seconds each, not the client's ten: {spent:?}"
+        "five reads at the client's two seconds each: {spent:?}"
     );
     assert_eq!(status::exit_code(&reads), 1);
     drop(silent);
@@ -489,7 +489,7 @@ async fn a_refused_secret_or_a_throttled_login_is_asked_once_and_named_in_every_
             )
             .unwrap()
         };
-        let reads = status::read(&client, None, Duration::from_secs(10)).await;
+        let reads = status::read(&client, None).await;
         for (name, read) in [
             ("system", &reads.system),
             ("attention", &reads.attention),
@@ -525,7 +525,7 @@ async fn a_listener_that_answers_something_else_is_named_as_answering() {
         )
         .unwrap()
     };
-    let reads = status::read(&client, None, Duration::from_secs(10)).await;
+    let reads = status::read(&client, None).await;
     let line = format!("http://127.0.0.1:{port}: answered 200 with a body that is not JSON");
     for (name, read) in [
         ("system", &reads.system),

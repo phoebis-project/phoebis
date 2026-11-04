@@ -153,6 +153,11 @@ impl AdminClient {
         &self.base
     }
 
+    /// The whole call's deadline, which also caps the budget of `status`'s probe.
+    pub fn timeout(&self) -> Duration {
+        self.timeout
+    }
+
     /// One request on one connection, `Connection: close`, under the deadline; a JSON body is sent as
     /// `application/json`. The answer's body is parsed as JSON when it has one.
     pub async fn call(

@@ -3,7 +3,6 @@
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
-use std::time::Duration;
 
 use hyper::Method;
 use jiff::tz::TimeZone;
@@ -84,17 +83,13 @@ const SESSION_CHARS: usize = 12;
 /// Where a wrapped line carries on.
 const CARRY: &str = "    ";
 
-/// The probe (blocking, on a worker) and the five GETs, in the spec's order, each under `deadline`.
-pub async fn read(
-    client: &AdminClient,
-    proxy: Option<(SocketAddr, bool)>,
-    deadline: Duration,
-) -> Reads {
+/// The probe (blocking, on a worker) and the five GETs, in the spec's order, each under the client's deadline.
+pub async fn read(client: &AdminClient, proxy: Option<(SocketAddr, bool)>) -> Reads {
     let health = match proxy {
         // The probe keeps its own three-second budget, so `health` and `status` read the listener the same way, and
         // a shorter `--timeout` shortens it too.
         Some((listen, tls)) => {
-            let budget = health::TIMEOUT.min(deadline);
+            let budget = health::TIMEOUT.min(client.timeout());
             Some(
                 tokio::task::spawn_blocking(move || health::probe(listen, tls, budget))
                     .await
@@ -107,7 +102,6 @@ pub async fn read(
     };
     let mut reader = Reader {
         client,
-        deadline,
         refused: None,
     };
     let system = reader.get("/admin/system").await;
@@ -125,10 +119,9 @@ pub async fn read(
     }
 }
 
-/// The five GETs one after another, each under `deadline`.
+/// The five GETs one after another, each under the client's deadline.
 struct Reader<'a> {
     client: &'a AdminClient,
-    deadline: Duration,
     /// The line of a refused secret or a throttled login, once one answers. The admin listener counts every refused
     /// bearer as a failed login and refuses every login after five in a minute, so the reads after a refusal print
     /// its line rather than send the bearer again: one run with a stale secret spends one failure, not five.
@@ -141,29 +134,24 @@ impl Reader<'_> {
         if let Some(line) = &self.refused {
             return Err(line.clone());
         }
-        let deadline = self.deadline;
-        match tokio::time::timeout(deadline, self.client.expect(Method::GET, path, None)).await {
-            Ok(Ok(answer)) => Ok(answer.body),
-            Ok(Err(ClientError::Transport { url, reason })) => Err(format!(
+        match self.client.expect(Method::GET, path, None).await {
+            Ok(answer) => Ok(answer.body),
+            Err(ClientError::Transport { url, reason }) => Err(format!(
                 "the admin listener did not answer on {url}: {reason}"
             )),
-            Ok(Err(ClientError::Refused { status, message })) => {
+            Err(ClientError::Refused { status, message }) => {
                 let line = format!("the admin listener answered {status} {message}");
                 if status == 429 {
                     self.refused = Some(line.clone());
                 }
                 Err(line)
             }
-            Ok(Err(error @ ClientError::Refused401)) => {
+            Err(error @ ClientError::Refused401) => {
                 let line = error.to_string();
                 self.refused = Some(line.clone());
                 Err(line)
             }
-            Ok(Err(error)) => Err(error.to_string()),
-            Err(_) => Err(format!(
-                "the admin listener did not answer on {}: the call did not finish within {deadline:?}",
-                self.client.url()
-            )),
+            Err(error) => Err(error.to_string()),
         }
     }
 }
