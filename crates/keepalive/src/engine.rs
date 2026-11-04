@@ -603,8 +603,6 @@ pub(crate) struct Agent {
     pub jitter_frac: f64,
     /// An outstanding backoff after a failed probe; the due time is the later of it and the expiry's.
     pub retry_at: Option<i64>,
-    /// The pool's policy as of the last admission or tick, so the ceilings never need the registry.
-    pub policy: KeepalivePolicy,
     /// The engine's timing, held here so a due time and a retry never need the engine.
     pub timing: KeepaliveTiming,
     pub last_activity: i64,
@@ -699,7 +697,6 @@ impl Agent {
             leaves_at: None,
             jitter_frac: 0.0,
             retry_at: None,
-            policy: KeepalivePolicy::default(),
             timing,
             last_activity: now,
             cache_started: now,
@@ -3207,7 +3204,6 @@ impl Engine {
         }
         agent.account = Some(selected.account_id);
         agent.pool_id = pool_id;
-        agent.policy = policy;
         inner.set_reason(&key, &agent_id, Reason::AwaitingCacheEvidence);
     }
 
@@ -3941,12 +3937,12 @@ impl Engine {
                     refresh_policy(&view, agent)
                 };
                 let refreshed = match refreshed {
-                    Ok((pool, moved)) => {
+                    Ok((pool, policy, moved)) => {
                         // Read at every tick, so only a change is written.
                         if moved {
                             inner.touch_agent(&key, &agent_id);
                         }
-                        Ok(pool)
+                        Ok((pool, policy))
                     }
                     Err(Gate::Drop(reason, label)) => {
                         inner.discard(&key, &agent_id, reason, Some(label));
@@ -3957,8 +3953,8 @@ impl Engine {
                 // Ahead of the refresh's hold, so a deadline or a wake that passes while the pool is disabled is
                 // recorded when it passes.
                 inner.end_passed_park(&key, &agent_id, now);
-                let pool = match refreshed {
-                    Ok(pool) => pool,
+                let (pool, policy) = match refreshed {
+                    Ok(refreshed) => refreshed,
                     Err(reason) => {
                         if inner.lapse(&key, &agent_id, now, &mut lapsed) {
                             continue;
@@ -3986,7 +3982,8 @@ impl Engine {
                 let verdict = {
                     let session = &inner.sessions[&key];
                     let agent = &session.agents[&agent_id];
-                    let ceilings = ceilings_for(agent, &view, &rows, &self.parts.timing, now);
+                    let ceilings =
+                        ceilings_for(agent, &policy, &view, &rows, &self.parts.timing, now);
                     ceiling(
                         agent,
                         session.attended_at(now),
@@ -4048,7 +4045,7 @@ impl Engine {
                         .get_mut(&agent_id)
                         .unwrap();
                     let before = agent.account.clone();
-                    let held = gate(&view, agent, &key.1, pool);
+                    let held = gate(&view, agent, &key.1, pool, &policy);
                     (held, before != agent.account)
                 };
                 if moved {
@@ -4297,14 +4294,14 @@ impl Engine {
     }
 }
 
-/// The key's opt-out drops the recipe, a disabled pool holds it, and the pool's current policy and id land on the
-/// agent, so a horizon raised in the console reaches a held recipe at the next tick and an opt-out discards a held
-/// prompt rather than leaving it retained. Answers the key's pool, which the gate reads, and whether the agent's
-/// policy or pool moved.
+/// The key's opt-out drops the recipe, a disabled pool holds it, and the pool's current id lands on the agent. Answers
+/// the key's pool and its current policy, which the ceilings and the gate read, so a horizon raised in the console
+/// reaches a held recipe at the next tick and an opt-out discards a held prompt rather than leaving it retained, and
+/// whether the agent's pool moved.
 pub(crate) fn refresh_policy<'v>(
     view: &'v RouterView,
     agent: &mut Agent,
-) -> Result<(&'v PoolRow, bool), Gate> {
+) -> Result<(&'v PoolRow, KeepalivePolicy, bool), Gate> {
     // The operator's opt-out reaches an idle session here, not only at its next request: the recipe is dropped
     // rather than held, because nothing on that key may be probed again until the flag is cleared.
     let Some(key) = view
@@ -4320,11 +4317,13 @@ pub(crate) fn refresh_policy<'v>(
     // The pool's policy may have changed since admission, and an admin may have moved the key to another pool
     // without a request following. The ceilings, the budget and the probe's own delta all read the pool the key
     // belongs to now.
-    let policy = KeepalivePolicy::from_json(&pool.keepalive_json);
-    let moved = agent.policy != policy || agent.pool_id != key.pool_id;
-    agent.policy = policy;
+    let moved = agent.pool_id != key.pool_id;
     agent.pool_id = key.pool_id.clone();
-    Ok((pool, moved))
+    Ok((
+        pool,
+        KeepalivePolicy::from_json(&pool.keepalive_json),
+        moved,
+    ))
 }
 
 /// The ceilings of one agent at a tick: its policy, the factors of its model under its account's funding (dollars
@@ -4334,6 +4333,7 @@ pub(crate) fn refresh_policy<'v>(
 /// leaves no probe interval, and nothing is probed.
 pub(crate) fn ceilings_for(
     agent: &Agent,
+    policy: &KeepalivePolicy,
     view: &RouterView,
     rows: &FactorRows,
     timing: &KeepaliveTiming,
@@ -4354,7 +4354,7 @@ pub(crate) fn ceilings_for(
     };
     let ttl_ms = agent.ttl_ms.max(FIVE_MINUTES_MS);
     resolve(
-        &agent.policy,
+        policy,
         rows.factors(
             funding,
             &agent.canonical_model,
@@ -4364,7 +4364,7 @@ pub(crate) fn ceilings_for(
         ttl_ms,
         timing,
     )
-    .or_else(|| resolve(&agent.policy, shipped_tightest(fast, now), ttl_ms, timing))
+    .or_else(|| resolve(policy, shipped_tightest(fast, now), ttl_ms, timing))
     .unwrap_or(Ceilings {
         idle_ms: 0,
         parked_ms: 0,
@@ -4381,6 +4381,7 @@ pub(crate) fn gate(
     agent: &mut Agent,
     session_id: &str,
     pool: &PoolRow,
+    policy: &KeepalivePolicy,
 ) -> Result<(), Gate> {
     let key_id = agent.key_id.clone();
     // A probe keeps the session on the account it warmed only while the pin outlives the probe's due time:
@@ -4390,7 +4391,7 @@ pub(crate) fn gate(
     if (pool.affinity_ttl_seconds as i64).saturating_mul(1_000) < due_after_ms {
         return Err(Gate::Hold(Reason::AffinityTooShort));
     }
-    if !agent.policy.enabled {
+    if !policy.enabled {
         return Err(Gate::Hold(Reason::KeepaliveOff));
     }
     // The pin is what the probe will follow, so the pin's account is the one to gate: the router may have moved
@@ -4743,7 +4744,7 @@ mod tests {
         agent.canonical_model = "claude-opus-5-5".into();
         agent.current = Some(observation(fast));
         refresh_policy(view, &mut agent)
-            .and_then(|(pool, _)| gate(view, &mut agent, "s", pool))
+            .and_then(|(pool, policy, _)| gate(view, &mut agent, "s", pool, &policy))
             .err()
     }
 
@@ -4773,8 +4774,10 @@ revisions:
         agent.account = Some("a".into());
         agent.canonical_model = "claude-opus-5-5".into();
         agent.current = Some(observation(false));
-        let break_even =
-            |agent: &Agent| ceilings_for(agent, &pool_view(false), &rows, &timing, 0).break_even_ms;
+        let policy = KeepalivePolicy::default();
+        let break_even = |agent: &Agent| {
+            ceilings_for(agent, &policy, &pool_view(false), &rows, &timing, 0).break_even_ms
+        };
         assert_eq!(
             break_even(&agent),
             960_000,

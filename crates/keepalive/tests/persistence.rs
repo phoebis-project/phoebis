@@ -613,38 +613,6 @@ async fn a_return_of_a_window_loaded_without_its_buckets_day_counts_nothing() {
     );
 }
 
-/// A guard: an agent row saved before the timing carried the idle-return retention loads with its agent, since the
-/// member reads its default.
-#[tokio::test]
-async fn an_agent_row_whose_timing_lacks_the_idle_return_retention_loads_with_its_agent() {
-    let mut r = rig(on_disk()).await;
-    r.observe("main").await;
-    r.engine.flush_persisted().await;
-    let conn = registry(&r);
-    let payload: String = conn
-        .query_row(
-            "SELECT payload FROM keepalive_agents WHERE agent_id = 'main'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    let mut payload: serde_json::Value = serde_json::from_str(&payload).unwrap();
-    payload["timing"]
-        .as_object_mut()
-        .unwrap()
-        .remove("idle_return_retention_days");
-    let rewritten = conn
-        .execute(
-            "UPDATE keepalive_agents SET payload = ?1 WHERE agent_id = 'main'",
-            [payload.to_string()],
-        )
-        .unwrap();
-    assert_eq!(rewritten, 1);
-    let second = r.restart().await;
-    second.load_persisted().await;
-    assert_eq!((second.stats().sessions, second.stats().agents), (1, 1));
-}
-
 /// Main's request on two messages, so its prefix holds a boundary before the last.
 fn two_messages() -> String {
     BODY.replace(

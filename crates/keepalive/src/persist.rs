@@ -15,7 +15,7 @@ use phoebis_store::keepalive::BodyWrite;
 use phoebis_store::{IdleReturnsRow, KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow};
 use serde::{Deserialize, Serialize};
 
-use crate::config::{KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, LEASE_MS};
+use crate::config::{KeepaliveLimits, KeepaliveTiming, LEASE_MS};
 use crate::engine::{
     Agent, AgentState, Engine, Guard, IdleEpisode, IdleReturnBucket, Inner, Kept, Observation,
     ParkKind, PrefixAnchor, PriorCoverage, ProbeCharge, Reason, SavingsUnit, Session, SessionKey,
@@ -93,8 +93,6 @@ pub(crate) struct PersistedAgent {
     #[serde(with = "exact")]
     pub jitter_frac: f64,
     pub retry_at: Option<i64>,
-    pub policy: KeepalivePolicy,
-    pub timing: KeepaliveTiming,
     pub last_activity: i64,
     pub cache_started: i64,
     pub ttl_ms: i64,
@@ -492,8 +490,6 @@ impl PersistedAgent {
             leaves_at: agent.leaves_at,
             jitter_frac: agent.jitter_frac,
             retry_at: agent.retry_at,
-            policy: agent.policy.clone(),
-            timing: agent.timing,
             last_activity: agent.last_activity,
             cache_started: agent.cache_started,
             ttl_ms: agent.ttl_ms,
@@ -568,8 +564,8 @@ impl PersistedAgent {
 
     /// The agent the payload describes, without its observation, and the observation's own fields apart, since the
     /// recipe they ride on comes from the row's columns. `None` when a word in the payload is one this build does not
-    /// know. The timing is the engine's rather than the payload's: it is the binary's fixed numbers, which the build a
-    /// restart brings may have changed.
+    /// know. The timing is the engine's, the binary's fixed numbers, which the build a restart brings may have
+    /// changed.
     fn restore(self, timing: KeepaliveTiming) -> Option<(Agent, Option<PersistedObservation>)> {
         let mut agent = Agent::new(
             &self.id,
@@ -601,7 +597,6 @@ impl PersistedAgent {
         agent.leaves_at = self.leaves_at;
         agent.jitter_frac = self.jitter_frac;
         agent.retry_at = self.retry_at;
-        agent.policy = self.policy;
         agent.cache_started = self.cache_started;
         agent.ttl_ms = self.ttl_ms;
         agent.idle_ticks = self.idle_ticks;

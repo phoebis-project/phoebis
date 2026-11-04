@@ -208,7 +208,7 @@ impl KeepalivePolicy {
 }
 
 /// The schedule's fixed numbers: not an operator's setting, and read by the binary through `for_start`.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct KeepaliveTiming {
     /// A probe lands with a minute to spare on a five-minute entry.
     pub lead_5m_ms: i64,
@@ -225,14 +225,8 @@ pub struct KeepaliveTiming {
     /// Caps the doubling and an upstream `Retry-After` so one wait stays inside a one-hour entry's six-minute lead.
     pub retry_max_ms: i64,
     /// The UTC days of idle-return counters the engine keeps, the current day among them, 0 keeping every day. The
-    /// overview's longest range is 30 days, so the default covers it. Defaulted on a read, since each saved agent's
-    /// payload carries the timing and one saved before the member must still load.
-    #[serde(default = "default_idle_return_retention_days")]
+    /// overview's longest range is 30 days, so the default covers it.
     pub idle_return_retention_days: u32,
-}
-
-fn default_idle_return_retention_days() -> u32 {
-    KeepaliveTiming::default().idle_return_retention_days
 }
 
 impl Default for KeepaliveTiming {
