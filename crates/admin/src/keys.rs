@@ -374,20 +374,18 @@ fn sessions_on_retired_secret(
     activity: &[phoebis_ledger::SessionActivity],
     now: i64,
 ) -> usize {
-    row.rotated_at
-        .filter(|at| now < at + ROTATION_GRACE_MS)
-        .map(|rotated_at| {
-            activity
-                .iter()
-                .filter(|s| {
-                    s.key_id == row.id
-                        && s.key_generation == row.created_at
-                        && s.on_retired_secret
-                        && s.rotation_at == Some(rotated_at)
-                })
-                .count()
+    if !in_rotation_grace(row, now) {
+        return 0;
+    }
+    activity
+        .iter()
+        .filter(|s| {
+            s.key_id == row.id
+                && s.key_generation == row.created_at
+                && s.on_retired_secret
+                && s.rotation_at == row.rotated_at
         })
-        .unwrap_or(0)
+        .count()
 }
 
 /// List the keys.
