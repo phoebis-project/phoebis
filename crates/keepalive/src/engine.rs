@@ -3518,18 +3518,11 @@ impl Engine {
             )
         });
         // The band the request's own row keys, read off its prompt as the ledger reads the serving attempt's.
-        let band = complete.usage.as_ref().map_or(Band::Standard, |usage| {
-            let counts = crate::savings::typed(ProbeUsage::from_bus(usage));
-            self.parts.pricing.revisions().in_force(credit.at).band_of(
-                &credit.model,
-                phoebis_ledger::prompt_tokens(
-                    counts.input,
-                    counts.cache_read,
-                    counts.write_5m,
-                    counts.write_1h,
-                ),
-            )
-        });
+        // A completion with no usage reads as a prompt of 0, which every row bands as standard.
+        let band = self.parts.pricing.revisions().in_force(credit.at).band_of(
+            &credit.model,
+            reported_prompt(complete.usage.as_ref()).unwrap_or(0),
+        );
         self.record_kept_warm(&credit, &complete.request_id, tier, band);
     }
 }
