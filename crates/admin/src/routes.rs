@@ -362,13 +362,7 @@ fn admit(state: &AdminState, request: &mut Request) -> Option<Response> {
                 });
                 None
             }
-            Err(LoginError::Throttled) => Some(failure(
-                StatusCode::TOO_MANY_REQUESTS,
-                "too many failed logins, try again in a minute",
-            )),
-            Err(LoginError::Invalid) => {
-                Some(failure(StatusCode::UNAUTHORIZED, "secret does not match"))
-            }
+            Err(error) => Some(login_refusal(error)),
         };
     }
 
@@ -555,11 +549,7 @@ async fn login(State(state): State<Arc<AdminState>>, headers: HeaderMap, body: B
     };
     match login {
         Ok(attributes) => set_cookie(StatusCode::NO_CONTENT, &attributes),
-        Err(LoginError::Throttled) => failure(
-            StatusCode::TOO_MANY_REQUESTS,
-            "too many failed logins, try again in a minute",
-        ),
-        Err(LoginError::Invalid) => failure(StatusCode::UNAUTHORIZED, "secret does not match"),
+        Err(error) => login_refusal(error),
     }
 }
 
@@ -3131,6 +3121,18 @@ pub(crate) fn store_failure(error: StoreError) -> Response {
 
 pub(crate) fn failure(status: StatusCode, message: &str) -> Response {
     (status, Json(json!({ "error": message }))).into_response()
+}
+
+/// The bearer check's and the login's refusal. `LoginError`'s own text leaves out the throttle's retry hint, so the
+/// answers spell theirs here.
+fn login_refusal(error: LoginError) -> Response {
+    match error {
+        LoginError::Throttled => failure(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many failed logins, try again in a minute",
+        ),
+        LoginError::Invalid => failure(StatusCode::UNAUTHORIZED, "secret does not match"),
+    }
 }
 
 /// A JSON array deserializes into a struct whose members all default, so a route would answer `id is required` to
