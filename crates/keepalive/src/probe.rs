@@ -276,14 +276,15 @@ fn classify_status(status: u16, error_code: Option<&str>) -> ProbeOutcome {
     }
 }
 
-pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
+pub(crate) async fn run_job(engine: Arc<Engine>, mut job: ProbeJob) {
     let mut request = Request::builder().method("POST").uri("/v1/messages");
     for (name, value) in &job.recipe.headers {
         request = request.header(name.as_str(), value.as_str());
     }
+    // The job is read for its recipe's speed and TTL alone past here, so the body moves into the request.
     let request = request
         .header(header::CONTENT_LENGTH, job.recipe.body.len())
-        .body(Body::from(job.recipe.body.clone()));
+        .body(Body::from(std::mem::take(&mut job.recipe.body)));
     let marker = crate::probe_marker(&job.key.0, job.key_generation);
     // Read before the send, so an exchange the relay never answered keys the instant the relay would have received it.
     let sent = engine.now();
