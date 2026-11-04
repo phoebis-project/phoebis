@@ -27,8 +27,10 @@ use crate::AdminState;
 /// The same list, split on newlines instead of commas: a pattern of the wildcard grammar carries no newline, and the
 /// request log's raw agents carry a comma (`claude-cli/2.1.269 (external, sdk-cli)`) that a pattern written against
 /// them keeps.
-/// `PATTERNS_TOO_LONG` for a list past the bounds, the route's 400.
-fn agent_list(q: &HashMap<String, String>, name: &str) -> Result<Patterns, &'static str> {
+/// The route's 400 with `PATTERNS_TOO_LONG` for a list past the bounds.
+// The error is the rendered 400, as `selection`'s is.
+#[allow(clippy::result_large_err)]
+fn agent_list(q: &HashMap<String, String>, name: &str) -> Result<Patterns, Response> {
     Patterns::new(
         q.get(name)
             .map(|v| {
@@ -39,6 +41,7 @@ fn agent_list(q: &HashMap<String, String>, name: &str) -> Result<Patterns, &'sta
             })
             .unwrap_or_default(),
     )
+    .map_err(|m| failure(StatusCode::BAD_REQUEST, m))
 }
 
 /// The end of the hour that starts at `hour`, where a read up to the current hour ends rather than at
@@ -52,18 +55,18 @@ pub(crate) fn hour_end(hour: i64) -> i64 {
 // The error is the rendered 400, as `selection`'s is.
 #[allow(clippy::result_large_err)]
 fn filter_of(q: &HashMap<String, String>) -> Result<RollupFilter, Response> {
-    let patterns = |name| agent_list(q, name).map_err(|m| failure(StatusCode::BAD_REQUEST, m));
     Ok(RollupFilter {
         keys: list(q, "keys"),
         pools: list(q, "pools"),
         accounts: list(q, "accounts"),
         models: list(q, "models"),
         kinds: list(q, "kinds"),
-        user_agents: patterns("user_agents")?,
-        user_agent_groups: patterns("user_agent_groups")?,
-        clients: patterns("clients")?,
+        user_agents: agent_list(q, "user_agents")?,
+        user_agent_groups: agent_list(q, "user_agent_groups")?,
+        clients: agent_list(q, "clients")?,
         include_probes: flag(q, "include_probes"),
-        // Read by `selection` alone: `placements` builds its filter here and never takes the parameter.
+        // Read by `selection` alone: `placements` and `refusal_categories` build their filters here and never take
+        // the parameter.
         funding: None,
     })
 }
@@ -254,6 +257,15 @@ pub(crate) fn ledger_failure(error: phoebis_ledger::LedgerError) -> Response {
     failure(StatusCode::INTERNAL_SERVER_ERROR, "ledger failure")
 }
 
+/// A series read's failure: the range's own refusal, raised before any read, answers the caller's 400 with the
+/// ledger's message, and any other error is a ledger failure.
+pub(crate) fn series_failure(error: LedgerError) -> Response {
+    match error {
+        LedgerError::Range(_) => failure(StatusCode::BAD_REQUEST, &error.to_string()),
+        error => ledger_failure(error),
+    }
+}
+
 /// The series bucketed to the range. Under `group_by=key` a point's `groups` entries carry `key` in the same form
 /// as the breakdown route's key row. Each entry carries the breakdown row's `cost_shares`, `plan_requests` and
 /// `plan_output_tokens` under the same rules, summed over the bucket's rows.
@@ -308,9 +320,7 @@ pub(crate) async fn series(
     .await
     {
         Ok(p) => p,
-        // The range's own refusal, raised before any read.
-        Err(e @ LedgerError::Range(_)) => return failure(StatusCode::BAD_REQUEST, &e.to_string()),
-        Err(e) => return ledger_failure(e),
+        Err(e) => return series_failure(e),
     };
     let reported = reported_samples(&state).await;
     for point in &mut points {
@@ -898,7 +908,7 @@ pub(crate) async fn burn(
     };
     let agent_groups = match agent_list(&q, "user_agent_groups") {
         Ok(groups) => groups,
-        Err(m) => return failure(StatusCode::BAD_REQUEST, m),
+        Err(refusal) => return refusal,
     };
     // One snapshot names the live keys the read groups by and each group's account kind. The account write routes
     // reload the registry before they answer, so the kind agrees with the store's.
@@ -941,9 +951,7 @@ pub(crate) async fn burn(
     };
     let series = match read {
         Ok(s) => s,
-        // The range's own refusal, raised before any read.
-        Err(e @ LedgerError::Range(_)) => return failure(StatusCode::BAD_REQUEST, &e.to_string()),
-        Err(e) => return ledger_failure(e),
+        Err(e) => return series_failure(e),
     };
     let reported = reported_samples(&state).await;
     let points = series
@@ -1125,25 +1133,19 @@ pub(crate) async fn refusal_categories(
     };
     // The groups partition the series' rows, a row no pattern matches falling under `other`, so they narrow no count:
     // the route holds them to the bound and reads nothing more of them, as `placements` does.
-    let (user_agents, clients) = match (
-        agent_list(&q, "user_agents"),
-        agent_list(&q, "clients"),
-        agent_list(&q, "user_agent_groups"),
-    ) {
-        (Ok(user_agents), Ok(clients), Ok(_)) => (user_agents, clients),
-        (Err(m), _, _) | (_, Err(m), _) | (_, _, Err(m)) => {
-            return failure(StatusCode::BAD_REQUEST, m)
-        }
+    let rollup = match filter_of(&q) {
+        Ok(filter) => filter,
+        Err(refusal) => return refusal,
     };
     let filter = RequestFilter {
-        keys: list(&q, "keys"),
-        pools: list(&q, "pools"),
-        accounts: list(&q, "accounts"),
-        models: list(&q, "models"),
-        kinds: list(&q, "kinds"),
-        user_agents,
-        clients,
-        include_probes: flag(&q, "include_probes"),
+        keys: rollup.keys,
+        pools: rollup.pools,
+        accounts: rollup.accounts,
+        models: rollup.models,
+        kinds: rollup.kinds,
+        user_agents: rollup.user_agents,
+        clients: rollup.clients,
+        include_probes: rollup.include_probes,
         ..Default::default()
     };
     let live = LiveKeys::from_snapshot(&state.router.snapshot());

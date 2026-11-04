@@ -18,7 +18,7 @@ use utoipa::ToSchema;
 
 use crate::analytics::ledger_failure;
 use crate::openapi::{ErrorBody, LedgerFailure};
-use crate::requests::list_param;
+use crate::requests::{list_param, text_param};
 use crate::routes::failure;
 use crate::AdminState;
 
@@ -540,10 +540,9 @@ pub(crate) async fn list(
     let filter = RoutingLogFilter {
         from,
         to,
-        // An emptied field in the view's bar narrows nothing, as an absent one.
-        request: q.get("request").filter(|r| !r.is_empty()).cloned(),
-        session: q.get("session").filter(|s| !s.is_empty()).cloned(),
-        agent_id: q.get("agent_id").filter(|a| !a.is_empty()).cloned(),
+        request: text_param(&q, "request"),
+        session: text_param(&q, "session"),
+        agent_id: text_param(&q, "agent_id"),
         keys: list_param(&q, "keys"),
         pools: list_param(&q, "pools"),
         accounts: list_param(&q, "accounts"),

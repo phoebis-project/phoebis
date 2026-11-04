@@ -80,7 +80,7 @@ pub use query::{
     GUARDRAIL_COUNTS_SQL, MAX_POINTS, MAX_RANGE_MS, PROBE_KIND,
 };
 pub use query::{agent_models, AgentModel};
-pub use query::{guardrail_sample_page, request_body, SampleRow, SampleSubject};
+pub use query::{guardrail_sample_page, request_body, request_body_held, SampleRow};
 pub use query::{list_request_page, refusal_categories, RequestPage};
 pub use quota::{
     lead_over_pace, polled, samples_from_poll, QuotaPoll, Sampled, POLL_INTERVAL,

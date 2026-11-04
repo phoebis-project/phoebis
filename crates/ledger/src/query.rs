@@ -10,7 +10,7 @@ use phoebis_relay::EFFORT_LEVELS;
 use phoebis_routing::{
     model_week, MemberSpend, PinUsage, DAY_MS, FIVE_HOUR, HOUR_MS, REFRESHING_CLASSES, SEVEN_DAY,
 };
-use phoebis_store::{canonical_id, AccountKind, BudgetPeriod};
+use phoebis_store::{canonical_id, AccountKind, AttachmentSubject, BudgetPeriod};
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -778,13 +778,6 @@ pub fn guardrail_counts(
     Ok(rows)
 }
 
-/// Whose rows a dry run's sample walks, by id: one key's, or every key's of a pool.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SampleSubject<'a> {
-    Key(&'a str),
-    Pool(&'a str),
-}
-
 /// The columns the dry run reads off a request row: the facts subjects and the five hints the row keeps.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SampleRow {
@@ -816,18 +809,18 @@ pub const GUARDRAIL_SAMPLE_ORDER_SQL: &str = " ORDER BY r.received_at DESC, r.id
 /// for a key.
 pub fn guardrail_sample_page(
     conn: &Connection,
-    subject: SampleSubject<'_>,
+    subject: &AttachmentSubject,
     since: i64,
     cursor: Option<&RequestCursor>,
     limit: usize,
 ) -> Result<(Vec<SampleRow>, Option<RequestCursor>), LedgerError> {
     // The pool's walk takes `requests_received` and the key's `requests_key`, both bounded below by the capture
     // window, so a pool or a key whose capture is off scans no months of rows before it answers an empty page.
-    let (base, id) = match subject {
-        SampleSubject::Key(id) => (GUARDRAIL_SAMPLE_KEY_SQL, id),
-        SampleSubject::Pool(id) => (GUARDRAIL_SAMPLE_POOL_SQL, id),
+    let base = match subject {
+        AttachmentSubject::Key(_) => GUARDRAIL_SAMPLE_KEY_SQL,
+        AttachmentSubject::Pool(_) => GUARDRAIL_SAMPLE_POOL_SQL,
     };
-    let mut args: Vec<rusqlite::types::Value> = vec![id.to_string().into(), since.into()];
+    let mut args: Vec<rusqlite::types::Value> = vec![subject.id().to_string().into(), since.into()];
     let mut after = "";
     if let Some(cursor) = cursor {
         args.push(cursor.received_at.into());
@@ -870,6 +863,18 @@ pub fn request_body(conn: &Connection, id: &str, now: i64) -> Result<Option<Vec<
             |r| r.get(0),
         )
         .optional()?)
+}
+
+/// Whether `request_body` would answer a body, without copying it out: the same row under the same expiry.
+pub fn request_body_held(conn: &Connection, id: &str, now: i64) -> Result<bool, LedgerError> {
+    Ok(conn
+        .query_row(
+            "SELECT 1 FROM bodies WHERE request_id = ?1 AND expires_at > ?2",
+            params![id, now],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
 }
 
 /// The events of the request's window under its own session, the one its pin is keyed by, and every event that
@@ -3442,6 +3447,13 @@ impl Totals {
         self.tokens += o.tokens;
         self.billed_usd += o.billed_usd;
         self.equivalent = add_figures(self.equivalent, o.equivalent);
+    }
+}
+
+/// `equivalent` reads null when a part is unpriced, as `Totals::add` keeps it.
+impl std::ops::AddAssign<&Totals> for Totals {
+    fn add_assign(&mut self, other: &Totals) {
+        Totals::add(self, other);
     }
 }
 

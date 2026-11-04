@@ -708,12 +708,13 @@ fn windows_json(shares: &WindowShares) -> BTreeMap<String, Option<f64>> {
 
 fn usage_json(last: Option<&AttemptRecord>) -> RequestUsage {
     let tokens = |f: fn(&AttemptRecord) -> Option<u64>| last.and_then(f).unwrap_or(0);
+    let usage = last.map(AttemptRecord::usage).unwrap_or_default();
     RequestUsage {
-        cache_read: tokens(|a| a.cache_read_tokens),
-        cache_write_1h: tokens(|a| a.cache_write_1h_tokens),
-        cache_write_5m: tokens(|a| a.cache_write_5m_tokens),
-        input: tokens(|a| a.input_tokens),
-        output: tokens(|a| a.output_tokens),
+        cache_read: usage.cache_read,
+        cache_write_1h: usage.write_1h,
+        cache_write_5m: usage.write_5m,
+        input: usage.input,
+        output: usage.output,
         thinking: tokens(|a| a.thinking_tokens),
         web_fetch: tokens(|a| a.web_fetch_requests),
         web_search: tokens(|a| a.web_search_requests),
@@ -805,6 +806,11 @@ pub(crate) fn list_param(q: &HashMap<String, String>, name: &str) -> Vec<String>
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// An emptied field in the view's bar narrows nothing, as an absent one.
+pub(crate) fn text_param(q: &HashMap<String, String>, name: &str) -> Option<String> {
+    q.get(name).filter(|v| !v.is_empty()).cloned()
 }
 
 pub(crate) fn flag(q: &HashMap<String, String>, name: &str) -> bool {
@@ -927,25 +933,18 @@ pub(crate) async fn list(
     let Ok(statuses) = statuses else {
         return failure(StatusCode::BAD_REQUEST, "statuses are numbers");
     };
-    let single = |value: Option<&String>| {
-        Patterns::new(
-            value
-                .filter(|v| !v.is_empty())
-                .cloned()
-                .into_iter()
-                .collect(),
-        )
-    };
-    let (Ok(user_agent), Ok(client)) = (single(q.get("user_agent")), single(q.get("client")))
-    else {
+    let single = |value: Option<String>| Patterns::new(value.into_iter().collect());
+    let (Ok(user_agent), Ok(client)) = (
+        single(text_param(&q, "user_agent")),
+        single(text_param(&q, "client")),
+    ) else {
         return failure(StatusCode::BAD_REQUEST, phoebis_ledger::PATTERNS_TOO_LONG);
     };
     let filter = RequestFilter {
-        // An emptied field in the view's bar narrows nothing, as an absent one.
-        text: q.get("text").filter(|v| !v.is_empty()).cloned(),
-        request: q.get("request").filter(|v| !v.is_empty()).cloned(),
-        session: q.get("session").filter(|v| !v.is_empty()).cloned(),
-        agent_id: q.get("agent_id").filter(|v| !v.is_empty()).cloned(),
+        text: text_param(&q, "text"),
+        request: text_param(&q, "request"),
+        session: text_param(&q, "session"),
+        agent_id: text_param(&q, "agent_id"),
         landed_after,
         keys: list_param(&q, "keys"),
         pools: list_param(&q, "pools"),

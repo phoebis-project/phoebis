@@ -299,6 +299,7 @@ fn reader_names(source: &str) -> BTreeSet<String> {
         "flag(&q, \"",
         "flag(q, \"",
         "list_param(&q, \"",
+        "text_param(&q, \"",
         "time(&q, \"",
         "number(\"",
     ];

@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::ops::AddAssign;
 
 use phoebis_ledger::{LedgerError, Totals};
 
@@ -64,32 +65,14 @@ pub struct OldTotals {
     pub keys: OldPart<BTreeMap<i64, Totals>>,
 }
 
-/// A group's figure as both parts hold it, every field of it a sum, so the older part and the week add to the figure
-/// one walk over every row answers.
-pub trait Summed: Default {
-    fn add(&mut self, other: &Self);
-}
-
-/// `equivalent` reads null when a part is unpriced, as `Totals::add` keeps it.
-impl Summed for Totals {
-    fn add(&mut self, other: &Self) {
-        Totals::add(self, other);
-    }
-}
-
-impl Summed for u64 {
-    fn add(&mut self, other: &Self) {
-        *self += other;
-    }
-}
-
-/// `old` and `week` added per group.
-pub fn lifetime_of<V: Summed>(
+/// `old` and `week` added per group. Every field of a group's figure is a sum, so the older part and the week add to
+/// the figure one walk over every row answers.
+pub fn lifetime_of<V: Default + for<'a> AddAssign<&'a V>>(
     mut old: BTreeMap<String, V>,
     week: &BTreeMap<String, V>,
 ) -> BTreeMap<String, V> {
     for (group, figure) in week {
-        Summed::add(old.entry(group.clone()).or_default(), figure);
+        *old.entry(group.clone()).or_default() += figure;
     }
     old
 }

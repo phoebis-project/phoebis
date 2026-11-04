@@ -15,7 +15,7 @@ use phoebis_guardrails::{
     GuardrailAction, GuardrailMode, HintLookup, Preset, RequestFacts, Subject, Verdict,
     MAX_CONDITIONS,
 };
-use phoebis_ledger::{guardrail_sample_page, request_body, RequestCursor, SampleSubject};
+use phoebis_ledger::{guardrail_sample_page, request_body, request_body_held, RequestCursor};
 use phoebis_store::{
     stamp_token, AttachmentSubject, GuardrailAttachment, GuardrailRow, PresetStamp, RegistryLoad,
     Store, StoreError, SubjectKind, GUARDRAIL_BOUND,
@@ -833,7 +833,8 @@ pub(crate) async fn test(State(state): State<Arc<AdminState>>, body: Bytes) -> R
         }
         Err(error) => return store_failure(error),
     }
-    // A definition with no body or message condition reads no body, so its sample parses none.
+    // A definition with no body or message condition reads no body, so its sample asks only whether each body is
+    // held and copies none out.
     let reads_body = compiled
         .conditions
         .iter()
@@ -858,13 +859,7 @@ pub(crate) async fn test(State(state): State<Arc<AdminState>>, body: Bytes) -> R
             .ledger
             .db()
             .read(move |c| {
-                let (rows, next) = guardrail_sample_page(
-                    c,
-                    sample_subject(&subject),
-                    since,
-                    after.as_ref(),
-                    page,
-                )?;
+                let (rows, next) = guardrail_sample_page(c, &subject, since, after.as_ref(), page)?;
                 let mut out = Vec::with_capacity(rows.len().min(room));
                 for row in &rows {
                     if out.len() == room {
@@ -872,10 +867,17 @@ pub(crate) async fn test(State(state): State<Arc<AdminState>>, body: Bytes) -> R
                     }
                     // The body aged out, or its own key's capture window ended before the purge reached it, so the
                     // row answers nothing and takes no place in the sample.
-                    let Some(body) = request_body(c, &row.id, now)? else {
-                        continue;
+                    let tree = if reads_body {
+                        let Some(body) = request_body(c, &row.id, now)? else {
+                            continue;
+                        };
+                        parse_body(&body)
+                    } else {
+                        if !request_body_held(c, &row.id, now)? {
+                            continue;
+                        }
+                        None
                     };
-                    let tree = if reads_body { parse_body(&body) } else { None };
                     let hints = HintLookup {
                         request_class: row.request_class.as_deref(),
                         agent_type: row.agent_type.as_deref(),
@@ -956,15 +958,6 @@ pub(crate) async fn test(State(state): State<Arc<AdminState>>, body: Bytes) -> R
         requests,
     })
     .into_response()
-}
-
-/// The ledger's sample subject for the pool or key a dry run samples, which each page's closure carries onto the
-/// blocking worker as an owned clone.
-fn sample_subject(subject: &AttachmentSubject) -> SampleSubject<'_> {
-    match subject {
-        AttachmentSubject::Key(id) => SampleSubject::Key(id),
-        AttachmentSubject::Pool(id) => SampleSubject::Pool(id),
-    }
 }
 
 /// Read a guardrail.

@@ -14,9 +14,10 @@ use phoebis_bus::{
 use phoebis_ledger::{
     guardrail_counts, guardrail_sample_page, list_requests, request_body, request_by_id,
     run_retention, BodyRecord, GuardrailCountRow, GuardrailMatchRecord, LedgerConfig, LedgerDb,
-    LiveKeys, RequestCursor, RequestFilter, RequestRecord, SampleRow, SampleSubject,
-    GUARDRAIL_BLOCKED_BYTES_SQL, GUARDRAIL_COUNTS_SQL,
+    LiveKeys, RequestCursor, RequestFilter, RequestRecord, SampleRow, GUARDRAIL_BLOCKED_BYTES_SQL,
+    GUARDRAIL_COUNTS_SQL,
 };
+use phoebis_store::AttachmentSubject;
 
 const DAY_MS: i64 = 86_400_000;
 const HOUR_MS: i64 = 3_600_000;
@@ -430,7 +431,7 @@ fn sampled(id: &str, at: i64, key: &str, captured: bool, kind: &str) -> RequestR
 /// The ids of one sample page and its next cursor.
 fn sample_ids(
     db: &LedgerDb,
-    subject: SampleSubject<'_>,
+    subject: &AttachmentSubject,
     since: i64,
     cursor: Option<&str>,
     limit: usize,
@@ -481,9 +482,9 @@ fn the_sample_page_walks_the_newest_captured_rows_of_a_pool_or_a_key_and_skips_p
         db.insert_request(&row, &[], None).unwrap();
     }
     let since = now - 72 * HOUR_MS;
-    let pool = SampleSubject::Pool("main");
+    let pool = AttachmentSubject::Pool("main".into());
     assert_eq!(
-        sample_ids(&db, pool, since, None, 10),
+        sample_ids(&db, &pool, since, None, 10),
         (
             vec!["a".into(), "b".into(), "e".into(), "f".into(), "g".into()],
             None
@@ -491,33 +492,33 @@ fn the_sample_page_walks_the_newest_captured_rows_of_a_pool_or_a_key_and_skips_p
         "both keys of the pool, newest first"
     );
     assert_eq!(
-        sample_ids(&db, SampleSubject::Key("k1"), since, None, 10),
+        sample_ids(&db, &AttachmentSubject::Key("k1".into()), since, None, 10),
         (vec!["a".into(), "e".into(), "g".into()], None)
     );
     assert_eq!(
-        sample_ids(&db, SampleSubject::Key("k2"), since, None, 10),
+        sample_ids(&db, &AttachmentSubject::Key("k2".into()), since, None, 10),
         (vec!["b".into(), "f".into()], None)
     );
     assert_eq!(
-        sample_ids(&db, pool, 0, None, 10).0,
+        sample_ids(&db, &pool, 0, None, 10).0,
         ["a", "b", "e", "f", "g", "old"],
         "the window alone leaves the old row out"
     );
 
-    let (first, next) = sample_ids(&db, pool, since, None, 2);
+    let (first, next) = sample_ids(&db, &pool, since, None, 2);
     let cursor = format!("{}:b", now - 1_000);
     assert_eq!(
         (first, next.as_deref()),
         (vec!["a".into(), "b".into()], Some(cursor.as_str()))
     );
     assert_eq!(
-        sample_ids(&db, pool, since, next.as_deref(), 3),
+        sample_ids(&db, &pool, since, next.as_deref(), 3),
         (vec!["e".into(), "f".into(), "g".into()], None),
         "a last page of exactly the limit offers no cursor"
     );
 
     let (rows, _) = db
-        .read_blocking(|c| guardrail_sample_page(c, pool, since, None, 1))
+        .read_blocking(|c| guardrail_sample_page(c, &pool, since, None, 1))
         .unwrap();
     assert_eq!(
         rows,
@@ -551,9 +552,9 @@ fn two_rows_at_one_instant_are_walked_in_id_order_across_a_page_boundary() {
     ] {
         db.insert_request(&row, &[], None).unwrap();
     }
-    let pool = SampleSubject::Pool("main");
+    let pool = AttachmentSubject::Pool("main".into());
     let since = now - 72 * HOUR_MS;
-    let (first, next) = sample_ids(&db, pool, since, None, 2);
+    let (first, next) = sample_ids(&db, &pool, since, None, 2);
     let cursor = format!("{}:t2", now - 1_000);
     assert_eq!(
         (first, next.as_deref()),
@@ -561,7 +562,7 @@ fn two_rows_at_one_instant_are_walked_in_id_order_across_a_page_boundary() {
         "the higher id first at the shared instant"
     );
     assert_eq!(
-        sample_ids(&db, pool, since, next.as_deref(), 2),
+        sample_ids(&db, &pool, since, next.as_deref(), 2),
         (vec!["t1".into(), "z".into()], None),
         "the other row at that instant opens the next page"
     );

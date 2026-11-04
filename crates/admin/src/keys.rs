@@ -335,8 +335,16 @@ async fn totals(
 }
 
 /// The (key, generation) sessions the ledger has seen inside the console's own session window, read once
-/// rather than once per key row.
-async fn recent_activity(state: &AdminState, now: i64) -> Vec<phoebis_ledger::SessionActivity> {
+/// rather than once per key row, and only while one of the rows is inside its rotation's grace.
+async fn recent_activity(
+    state: &AdminState,
+    rows: &[ApiKeyRow],
+    now: i64,
+) -> Vec<phoebis_ledger::SessionActivity> {
+    // Every count is 0 without a key inside its grace, so the grouped read is worth running only then.
+    if !rows.iter().any(|row| in_rotation_grace(row, now)) {
+        return Vec::new();
+    }
     let cutoff = now - state.session_expiry.as_millis() as i64;
     match state
         .ledger
@@ -394,30 +402,32 @@ fn sessions_on_retired_secret(
     ),
 )]
 pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
-    match state.store.api_keys() {
-        Ok(rows) => {
-            let (_, index) = match AttachmentIndex::read(&state.store) {
-                Ok(read) => read,
-                Err(response) => return response,
-            };
-            let (week, lifetime) = totals(&state).await;
-            let now = (state.clock)();
-            // Every count is 0 without a key inside its grace, so the grouped read is worth running only then.
-            let activity = if rows.iter().any(|row| in_rotation_grace(row, now)) {
-                recent_activity(&state, now).await
-            } else {
-                Vec::new()
-            };
-            let snapshot = state.router.snapshot();
-            let mut out = Vec::new();
-            for row in rows {
-                let count = sessions_on_retired_secret(&row, &activity, now);
-                out.push(key_json(&snapshot, &row, &week, &lifetime, count, &index));
-            }
-            Json(KeyList { keys: out }).into_response()
-        }
-        Err(error) => store_failure(error),
-    }
+    let rows = match state.store.api_keys() {
+        Ok(rows) => rows,
+        Err(error) => return store_failure(error),
+    };
+    let (_, index) = match AttachmentIndex::read(&state.store) {
+        Ok(read) => read,
+        Err(response) => return response,
+    };
+    let (week, lifetime) = totals(&state).await;
+    let now = (state.clock)();
+    let activity = recent_activity(&state, &rows, now).await;
+    let snapshot = state.router.snapshot();
+    let keys = rows
+        .iter()
+        .map(|row| {
+            key_json(
+                &snapshot,
+                row,
+                &week,
+                &lifetime,
+                sessions_on_retired_secret(row, &activity, now),
+                &index,
+            )
+        })
+        .collect();
+    Json(KeyList { keys }).into_response()
 }
 
 /// Create a key.
@@ -500,11 +510,8 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     // The row exists from here on, so every answer, a refusal included, names it to the mutation log.
     let mut response = match reload_or_refuse(&state).await {
         Err(refusal) => refusal,
-        Ok(()) => match AttachmentIndex::read(&state.store) {
-            Ok((_, index)) => {
-                let key = key_view(&state, &row, &index, now).await;
-                (StatusCode::CREATED, Json(with_secret(key, &secret))).into_response()
-            }
+        Ok(()) => match key_view(&state, &row, now).await {
+            Ok(key) => (StatusCode::CREATED, Json(with_secret(key, &secret))).into_response(),
             Err(response) => response,
         },
     };
@@ -588,11 +595,10 @@ pub(crate) async fn patch(
     if let Err(refusal) = reload_or_refuse(&state).await {
         return refusal;
     }
-    let (_, index) = match AttachmentIndex::read(&state.store) {
-        Ok(read) => read,
-        Err(response) => return response,
-    };
-    Json(key_view(&state, &row, &index, (state.clock)()).await).into_response()
+    match key_view(&state, &row, (state.clock)()).await {
+        Ok(key) => Json(key).into_response(),
+        Err(refusal) => refusal,
+    }
 }
 
 /// Rotate a key's secret.
@@ -639,15 +645,10 @@ pub(crate) async fn rotate(
         Ok(row) => row,
         Err(refusal) => return refusal,
     };
-    let (_, index) = match AttachmentIndex::read(&state.store) {
-        Ok(read) => read,
-        Err(response) => return response,
-    };
-    Json(with_secret(
-        key_view(&state, &row, &index, now).await,
-        &secret,
-    ))
-    .into_response()
+    match key_view(&state, &row, now).await {
+        Ok(key) => Json(with_secret(key, &secret)).into_response(),
+        Err(refusal) => refusal,
+    }
 }
 
 /// Revoke a key.
@@ -705,23 +706,21 @@ async fn answer_key_write(state: &AdminState, written: Result<(), StoreError>) -
     }
 }
 
-/// One key's answer after a write: the shared totals, and the sessions on its retired secret, which the activity
-/// read answers only while the rotation's grace lasts, so it runs only then, as the list's does.
-async fn key_view(state: &AdminState, row: &ApiKeyRow, index: &AttachmentIndex, now: i64) -> Key {
+/// One key's answer after a write: its guardrails, the shared totals and the sessions on its retired secret. The
+/// store read goes first, so a refusal from it answers before any ledger read runs.
+#[allow(clippy::result_large_err)]
+async fn key_view(state: &AdminState, row: &ApiKeyRow, now: i64) -> Result<Key, Response> {
+    let (_, index) = AttachmentIndex::read(&state.store)?;
     let (week, lifetime) = totals(state).await;
-    let count = if in_rotation_grace(row, now) {
-        sessions_on_retired_secret(row, &recent_activity(state, now).await, now)
-    } else {
-        0
-    };
-    key_json(
+    let activity = recent_activity(state, std::slice::from_ref(row), now).await;
+    Ok(key_json(
         &state.router.snapshot(),
         row,
         &week,
         &lifetime,
-        count,
-        index,
-    )
+        sessions_on_retired_secret(row, &activity, now),
+        &index,
+    ))
 }
 
 /// A created or rotated key's answer: the key with its new secret last, the one answer that carries it.

@@ -608,11 +608,12 @@ pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
         Ok(context) => context,
         Err(error) => return store_failure(error),
     };
-    let mut out = Vec::with_capacity(context.pools.len());
-    for row in &context.pools {
-        out.push(pool_json_from(&context, row));
-    }
-    Json(PoolList { pools: out }).into_response()
+    let pools = context
+        .pools
+        .iter()
+        .map(|row| pool_json_from(&context, row))
+        .collect();
+    Json(PoolList { pools }).into_response()
 }
 
 /// Create a pool.
@@ -1594,11 +1595,7 @@ pub(crate) async fn traffic(
             buckets,
         })
         .into_response(),
-        // The range's own refusal, raised before any read.
-        Err(e @ phoebis_ledger::LedgerError::Range(_)) => {
-            failure(StatusCode::BAD_REQUEST, &e.to_string())
-        }
-        Err(e) => crate::analytics::ledger_failure(e),
+        Err(e) => crate::analytics::series_failure(e),
     }
 }
 
