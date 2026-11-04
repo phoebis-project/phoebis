@@ -3,9 +3,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::query::hour_ceil;
-use crate::rollup::{
-    delete_rollup, read_rollup, read_rollups_of_key_generation, write_rollup, RollupRow,
-};
+use crate::rollup::{delete_rollup, fold_delta, read_rollups_of_key_generation, RollupRow};
 use crate::{LedgerDb, LedgerError};
 
 /// The `meta` key that says the generation-0 rows were stamped once.
@@ -62,18 +60,13 @@ pub fn reconcile_key_generations(
                 for (_, row) in &page {
                     // Folded rather than updated in place: the new binary may already have filed a row under
                     // the live generation with the same other parts, and the primary key admits no second.
-                    let stamped = RollupRow {
-                        key_generation: key.created_at,
-                        ..row.clone()
-                    };
-                    let target = match read_rollup(&tx, &stamped)? {
-                        Some(mut existing) => {
-                            existing.add(row);
-                            existing
-                        }
-                        None => stamped,
-                    };
-                    write_rollup(&tx, &target)?;
+                    fold_delta(
+                        &tx,
+                        &RollupRow {
+                            key_generation: key.created_at,
+                            ..row.clone()
+                        },
+                    )?;
                     delete_rollup(&tx, row)?;
                     moved += 1;
                 }

@@ -3807,11 +3807,17 @@ pub(crate) fn session_identities_statement(
     let values: Vec<String> = sessions
         .iter()
         .map(|(key_id, key_generation, session_id)| {
-            binds.push(rusqlite::types::Value::Text(key_id.clone()));
-            binds.push(rusqlite::types::Value::Integer(*key_generation));
-            binds.push(rusqlite::types::Value::Text(session_id.clone()));
-            let n = binds.len();
-            format!("(?{}, ?{}, ?{n})", n - 2, n - 1)
+            format!(
+                "({})",
+                bind_all(
+                    &[
+                        rusqlite::types::Value::Text(key_id.clone()),
+                        rusqlite::types::Value::Integer(*key_generation),
+                        rusqlite::types::Value::Text(session_id.clone()),
+                    ],
+                    &mut binds,
+                )
+            )
         })
         .collect();
     // The client's quota probe is an `inference` row ahead of the session's first main request and names no

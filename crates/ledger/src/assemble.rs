@@ -253,25 +253,18 @@ impl Assembler {
                 {
                     entry.rejected_by.push(attempt.account_id.clone());
                     let observed = &entry.observed;
-                    records.push(Record::Event(EventRecord {
-                        at: head.observed_at,
-                        kind: MODEL_REJECTED.into(),
-                        account_id: Some(attempt.account_id.clone()),
-                        key_id: observed.key_id.clone(),
-                        session_id: observed.session_id.clone(),
-                        model: Some(observed.canonical_model.clone()),
-                        detail: Some(
-                            json!({
-                                "attempt": head.attempt,
-                                "request_id": attempt.upstream_request_id,
-                                "source_request_id": head.request_id,
-                                "wire_model": observed.wire_model,
-                            })
-                            .to_string(),
-                        ),
-                        request_id: Some(head.request_id.clone()),
-                        ..Default::default()
-                    }));
+                    records.push(request_event(
+                        observed,
+                        MODEL_REJECTED,
+                        head.observed_at,
+                        Some(attempt.account_id.clone()),
+                        json!({
+                            "attempt": head.attempt,
+                            "request_id": attempt.upstream_request_id,
+                            "source_request_id": head.request_id,
+                            "wire_model": observed.wire_model,
+                        }),
+                    ));
                 }
                 if attempt.account_kind == AccountKind::Oauth {
                     if let Some(unified) = parsed {
@@ -373,6 +366,26 @@ pub(crate) fn gap(request_id: &str, reason: &str, at: i64) -> Record {
         kind: LEDGER_GAP.into(),
         detail: Some(json!({ "request_id": request_id, "reason": reason }).to_string()),
         request_id: Some(request_id.into()),
+        ..Default::default()
+    })
+}
+
+fn request_event(
+    observed: &RequestObserved,
+    kind: &str,
+    at: i64,
+    account_id: Option<String>,
+    detail: serde_json::Value,
+) -> Record {
+    Record::Event(EventRecord {
+        at,
+        kind: kind.into(),
+        account_id,
+        key_id: observed.key_id.clone(),
+        session_id: observed.session_id.clone(),
+        model: Some(observed.canonical_model.clone()),
+        detail: Some(detail.to_string()),
+        request_id: Some(observed.request_id.clone()),
         ..Default::default()
     })
 }
@@ -531,54 +544,40 @@ fn finish(entry: InFlight, mut complete: RequestComplete, now: i64) -> Vec<Recor
             }
         }
         if last.outcome == "succeeded" && !rejected_by.is_empty() {
-            records.push(Record::Event(EventRecord {
-                at: complete.finished_at,
-                kind: MODEL_PERMITTED.into(),
-                account_id: Some(last.account_id.clone()),
-                key_id: observed.key_id.clone(),
-                session_id: observed.session_id.clone(),
-                model: Some(observed.canonical_model.clone()),
-                detail: Some(
-                    json!({
-                        "attempt": complete.attempt,
-                        "rejected_by": rejected_by,
-                        "request_id": last.upstream_request_id,
-                        "source_request_id": observed.request_id,
-                        "wire_model": observed.wire_model,
-                    })
-                    .to_string(),
-                ),
-                request_id: Some(observed.request_id.clone()),
-                ..Default::default()
-            }));
+            records.push(request_event(
+                &observed,
+                MODEL_PERMITTED,
+                complete.finished_at,
+                Some(last.account_id.clone()),
+                json!({
+                    "attempt": complete.attempt,
+                    "rejected_by": rejected_by,
+                    "request_id": last.upstream_request_id,
+                    "source_request_id": observed.request_id,
+                    "wire_model": observed.wire_model,
+                }),
+            ));
         }
     }
     // Apart from the serving block: a completion whose trail lost its selection still lands its cut, under the
     // completion's account and with no upstream request id.
     if let Some(interruption) = &complete.interruption {
         let serving = serving.map(|i| &attempts[i]);
-        records.push(Record::Event(EventRecord {
-            at: complete.finished_at,
-            kind: STREAM_INTERRUPTED.into(),
-            account_id: serving
+        records.push(request_event(
+            &observed,
+            STREAM_INTERRUPTED,
+            complete.finished_at,
+            serving
                 .map(|a| a.account_id.clone())
                 .or_else(|| complete.account_id.clone()),
-            key_id: observed.key_id.clone(),
-            session_id: observed.session_id.clone(),
-            model: Some(observed.canonical_model.clone()),
-            detail: Some(
-                json!({
-                    "code": interruption.code,
-                    "text": interruption.text,
-                    "bytes_relayed": interruption.bytes_relayed,
-                    "upstream_request_id": serving.and_then(|a| a.upstream_request_id.as_deref()),
-                    "attempt": complete.attempt,
-                })
-                .to_string(),
-            ),
-            request_id: Some(observed.request_id.clone()),
-            ..Default::default()
-        }));
+            json!({
+                "code": interruption.code,
+                "text": interruption.text,
+                "bytes_relayed": interruption.bytes_relayed,
+                "upstream_request_id": serving.and_then(|a| a.upstream_request_id.as_deref()),
+                "attempt": complete.attempt,
+            }),
+        ));
     }
     for attempt in &mut attempts {
         attempt.client_drift = complete.client_drift.clone();

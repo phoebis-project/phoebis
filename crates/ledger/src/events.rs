@@ -676,6 +676,17 @@ impl AccountWatch {
             return;
         }
         let to = observed.state;
+        let opened = || {
+            record_transition(
+                ledger,
+                &account_id,
+                AccountState::Unpaired,
+                to,
+                cause,
+                detail,
+                at,
+            )
+        };
         match held {
             Some(held) if held.incarnation == observed.incarnation && held.state == to => {}
             Some(held) if held.incarnation == observed.incarnation => {
@@ -685,42 +696,50 @@ impl AccountWatch {
             Some(held) => {
                 record_deletion(ledger, &account_id, held.state, at);
                 if to == AccountState::ReauthRequired {
-                    record_transition(
-                        ledger,
-                        &account_id,
-                        AccountState::Unpaired,
-                        AccountState::ReauthRequired,
-                        cause,
-                        detail,
-                        at,
-                    );
+                    opened();
                 }
             }
             // A holder the mirror never saw: the registry's own row says it was created. One born marked records its
             // move from `unpaired`, as the row born paired below does, so its history opens the same way.
-            None if to == AccountState::ReauthRequired => record_transition(
-                ledger,
-                &account_id,
-                AccountState::Unpaired,
-                AccountState::ReauthRequired,
-                cause,
-                detail,
-                at,
-            ),
+            None if to == AccountState::ReauthRequired => opened(),
             // A row born paired skipped `unpaired`: the transition a pairing on an existing row records is recorded for
             // it too, so the account's history opens the same way.
-            None if to == AccountState::Ready && cause == StateCause::Paired => record_transition(
-                ledger,
-                &account_id,
-                AccountState::Unpaired,
-                AccountState::Ready,
-                cause,
-                detail,
-                at,
-            ),
+            None if to == AccountState::Ready && cause == StateCause::Paired => opened(),
             None => {}
         }
         self.states.insert(account_id, observed);
+    }
+
+    /// `observe` for the routing loop's event, dropped when it is about a holder the tick already wrote deleted.
+    fn observe_event(
+        &mut self,
+        ledger: &Ledger,
+        account_id: String,
+        observed: Observed,
+        cause: StateCause,
+        detail: Option<&str>,
+        at: i64,
+    ) {
+        let about_gone = self
+            .gone
+            .get(&account_id)
+            .is_some_and(|&buried| observed.incarnation <= buried);
+        if !about_gone {
+            self.observe(ledger, account_id, observed, cause, detail, at);
+        }
+    }
+
+    /// A held account `carried` no longer names was deleted: its last row, and the id forgotten so a replacement under
+    /// it is a holder the mirror never saw.
+    fn sweep(&mut self, ledger: &Ledger, carried: &HashSet<String>, now: i64) {
+        self.states.retain(|id, held| {
+            let kept = carried.contains(id);
+            if !kept {
+                record_deletion(ledger, id, held.state, now);
+                self.gone.insert(id.clone(), held.incarnation);
+            }
+            kept
+        });
     }
 }
 
@@ -928,11 +947,8 @@ pub fn spawn_event_mirror(
                         ledger.record(Record::CacheMap(CacheMapWrite { request_id, seq, attempt, entries, at }));
                     }
                     Ok(RouterEvent::AccountStateChanged { account_id, to, incarnation, revision, cause, detail, at }) => {
-                        let about_gone = watch.gone.get(&account_id).is_some_and(|&buried| incarnation <= buried);
-                        if !about_gone {
-                            let observed = Observed { state: to, incarnation, revision };
-                            watch.observe(&ledger, account_id, observed, cause, detail.as_deref(), at);
-                        }
+                        let observed = Observed { state: to, incarnation, revision };
+                        watch.observe_event(&ledger, account_id, observed, cause, detail.as_deref(), at);
                     }
                     Ok(event) => {
                         if announced_before(&event, down_since) {
@@ -994,16 +1010,7 @@ pub fn spawn_event_mirror(
                             let observed = Observed::from(&account);
                             watch.observe(&ledger, account.id, observed, account.state_cause, None, now);
                         }
-                        // A held account the rows no longer carry was deleted: its last row, and the id forgotten so a
-                        // replacement under it is a holder the mirror never saw.
-                        watch.states.retain(|id, held| {
-                            let kept = carried.contains(id);
-                            if !kept {
-                                record_deletion(&ledger, id, held.state, now);
-                                watch.gone.insert(id.clone(), held.incarnation);
-                            }
-                            kept
-                        });
+                        watch.sweep(&ledger, &carried, now);
                     }
                 }
             }

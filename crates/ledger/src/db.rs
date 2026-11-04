@@ -18,7 +18,7 @@ use rusqlite::{
 };
 
 use crate::pricing::PriceRevisions;
-use crate::query::{request_by_id, RequestWithAttempts};
+use crate::query::{bind_all, request_by_id, RequestWithAttempts};
 use crate::record::{
     AttemptRecord, BodyRecord, CacheMapWrite, DecisionRow, EventRecord, ExtraUsageSampleRecord,
     GuardrailMatchRecord, QuotaSampleRecord, RequestRecord, SampleSource,
@@ -726,6 +726,25 @@ pub(crate) fn parked_rows(conn: &Connection) -> Result<Vec<ParkedRow>, LedgerErr
     Ok(rows)
 }
 
+macro_rules! quota_sample_insert {
+    ($verb:literal) => {
+        concat!(
+            $verb,
+            " INTO quota_samples (account_id, bucket, window, utilization, reset_at, source, observed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
+        )
+    };
+}
+
+macro_rules! extra_usage_sample_insert {
+    ($verb:literal, $tail:literal) => {
+        concat!(
+            $verb,
+            " INTO extra_usage_samples (account_id, bucket, is_enabled, in_use, monthly_limit, used_credits, utilization, currency, disabled_reason, overage_reset, source, spend_limit_minor, spend_used_minor, spend_percent, spend_currency, spend_exponent) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            $tail
+        )
+    };
+}
+
 pub(crate) fn insert_samples_in(
     conn: &Connection,
     quota: &[QuotaSampleRecord],
@@ -734,8 +753,8 @@ pub(crate) fn insert_samples_in(
     for q in quota {
         // A head sample is the newest truth for its bucket, and a poll only fills a bucket nothing else wrote.
         let sql = match q.source {
-            SampleSource::Head => "INSERT OR REPLACE INTO quota_samples (account_id, bucket, window, utilization, reset_at, source, observed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            SampleSource::Poll => "INSERT OR IGNORE INTO quota_samples (account_id, bucket, window, utilization, reset_at, source, observed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            SampleSource::Head => quota_sample_insert!("INSERT OR REPLACE"),
+            SampleSource::Poll => quota_sample_insert!("INSERT OR IGNORE"),
         };
         conn.prepare_cached(sql)?.execute(params![
             q.account_id,
@@ -752,8 +771,11 @@ pub(crate) fn insert_samples_in(
         // neither hides the other. A head that names the share or the reset alone keeps the other one the row holds,
         // since each header is its own reading: the row carries the bucket's last share and last reset.
         let sql = match e.source {
-            SampleSource::Head => "INSERT INTO extra_usage_samples (account_id, bucket, is_enabled, in_use, monthly_limit, used_credits, utilization, currency, disabled_reason, overage_reset, source, spend_limit_minor, spend_used_minor, spend_percent, spend_currency, spend_exponent) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16) ON CONFLICT (account_id, bucket, source) DO UPDATE SET is_enabled = excluded.is_enabled, in_use = excluded.in_use, utilization = COALESCE(excluded.utilization, utilization), disabled_reason = excluded.disabled_reason, overage_reset = COALESCE(excluded.overage_reset, overage_reset)",
-            SampleSource::Poll => "INSERT OR IGNORE INTO extra_usage_samples (account_id, bucket, is_enabled, in_use, monthly_limit, used_credits, utilization, currency, disabled_reason, overage_reset, source, spend_limit_minor, spend_used_minor, spend_percent, spend_currency, spend_exponent) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            SampleSource::Head => extra_usage_sample_insert!(
+                "INSERT",
+                " ON CONFLICT (account_id, bucket, source) DO UPDATE SET is_enabled = excluded.is_enabled, in_use = excluded.in_use, utilization = COALESCE(excluded.utilization, utilization), disabled_reason = excluded.disabled_reason, overage_reset = COALESCE(excluded.overage_reset, overage_reset)"
+            ),
+            SampleSource::Poll => extra_usage_sample_insert!("INSERT OR IGNORE", ""),
         };
         conn.prepare_cached(sql)?.execute(params![
             e.account_id,
@@ -1071,18 +1093,14 @@ pub(crate) fn with_attempts(
     if requests.is_empty() {
         return Ok(Vec::new());
     }
-    let marks = (1..=requests.len())
-        .map(|n| format!("?{n}"))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let ids: Vec<String> = requests.iter().map(|r| r.id.clone()).collect();
+    let mut args: Vec<rusqlite::types::Value> = Vec::with_capacity(ids.len());
+    let marks = bind_all(&ids, &mut args);
     let mut stmt = conn.prepare(&format!(
         "{ATTEMPT_SELECT} WHERE request_id IN ({marks}) ORDER BY request_id, attempt"
     ))?;
     let mut filed: HashMap<String, Vec<AttemptRecord>> = HashMap::new();
-    for attempt in stmt.query_map(
-        params_from_iter(requests.iter().map(|r| &r.id)),
-        row_to_attempt,
-    )? {
+    for attempt in stmt.query_map(params_from_iter(args), row_to_attempt)? {
         let attempt = attempt?;
         filed
             .entry(attempt.request_id.clone())

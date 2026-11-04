@@ -18,7 +18,7 @@ pub(crate) fn push_literal(out: &mut String, c: char) {
 }
 
 /// `text` with `\`, `%` and `_` escaped for `LIKE .. ESCAPE '\'`, so every typed character matches itself.
-pub fn literal_like(text: &str) -> String {
+pub(crate) fn literal_like(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
         push_literal(&mut out, c);
