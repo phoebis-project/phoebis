@@ -30,33 +30,21 @@ const DEFAULT_SECRET_ENV: &str = "PHOEBIS_ADMIN_SECRET";
 const LEDGER_FILE: &str = "ledger.sqlite";
 const REGISTRY_FILE: &str = "router.sqlite";
 
-/// One public listener's name, its default addresses, and the words its prompts and refusals use.
+/// One public listener's name, which its prompts and refusals use, and its default addresses.
 struct Side {
     name: &'static str,
-    asked_address: &'static str,
-    asked_choice: &'static str,
-    asked_cert: &'static str,
-    asked_key: &'static str,
     loopback: SocketAddr,
     container: SocketAddr,
 }
 
 const PROXY: Side = Side {
     name: "proxy",
-    asked_address: "the proxy address",
-    asked_choice: "the proxy TLS choice",
-    asked_cert: "the proxy certificate file",
-    asked_key: "the proxy key file",
     loopback: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8317),
     container: SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 8317),
 };
 
 const ADMIN: Side = Side {
     name: "admin",
-    asked_address: "the admin address",
-    asked_choice: "the admin TLS choice",
-    asked_cert: "the admin certificate file",
-    asked_key: "the admin key file",
     loopback: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
     container: SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 8081),
 };
@@ -139,7 +127,7 @@ pub enum InitError {
     #[error("{path} already exists, and init never overwrites an environment file")]
     EnvExists { path: PathBuf },
     #[error("input ended before {asked} was answered")]
-    InputEnded { asked: &'static str },
+    InputEnded { asked: String },
     #[error("{what}: {error}")]
     Io { what: String, error: std::io::Error },
     #[error(
@@ -216,7 +204,7 @@ fn ask_address(
             output,
             &format!("{} listen address [{default}]: ", side.name),
         )?;
-        let answer = answer(input, output, side.asked_address)?;
+        let answer = answer(input, output, &format!("the {} address", side.name))?;
         if answer.is_empty() {
             return Ok(default);
         }
@@ -242,18 +230,18 @@ fn ask_tls(
                 side.name
             ),
         )?;
-        match answer(input, output, side.asked_choice)?.as_str() {
+        match answer(input, output, &format!("the {} TLS choice", side.name))?.as_str() {
             "" | "none" => return Ok(None),
             "files" => {
                 let cert_file = ask_path(
                     &format!("{} certificate file, PEM, leaf first: ", side.name),
-                    side.asked_cert,
+                    &format!("the {} certificate file", side.name),
                     input,
                     output,
                 )?;
                 let key_file = ask_path(
                     &format!("{} key file, PEM: ", side.name),
-                    side.asked_key,
+                    &format!("the {} key file", side.name),
                     input,
                     output,
                 )?;
@@ -269,7 +257,7 @@ fn ask_tls(
 
 fn ask_path(
     text: &str,
-    asked: &'static str,
+    asked: &str,
     input: &mut dyn BufRead,
     output: &mut dyn Write,
 ) -> Result<PathBuf, InitError> {
@@ -297,7 +285,7 @@ fn say(output: &mut dyn Write, line: &str) -> Result<(), InitError> {
 fn answer(
     input: &mut dyn BufRead,
     output: &mut dyn Write,
-    asked: &'static str,
+    asked: &str,
 ) -> Result<String, InitError> {
     let mut line = String::new();
     let read = input
@@ -306,7 +294,9 @@ fn answer(
     if read == 0 {
         // The prompt leaves the cursor after its text, so the refusal that follows starts on a line of its own.
         say(output, "")?;
-        return Err(InitError::InputEnded { asked });
+        return Err(InitError::InputEnded {
+            asked: asked.to_owned(),
+        });
     }
     Ok(line.trim().to_string())
 }
@@ -1175,7 +1165,7 @@ mod tests {
         for (input, expected) in [("", "the proxy address"), ("\n", "the admin address")] {
             let error = ask(&flags, &defaults, &mut input.as_bytes(), &mut Vec::new()).unwrap_err();
             assert!(
-                matches!(error, InitError::InputEnded { asked } if asked == expected),
+                matches!(&error, InitError::InputEnded { asked } if asked == expected),
                 "{input:?}: {error}"
             );
         }
