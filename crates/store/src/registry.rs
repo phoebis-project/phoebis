@@ -255,13 +255,13 @@ pub struct PoolRow {
 }
 
 impl PoolRow {
-    /// The shipped defaults with `id` and `label` set: a test overrides the fields its case is about, so a field
-    /// added to or removed from the row touches this one site.
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn for_tests(id: &str) -> PoolRow {
+    /// The shipped defaults the store can name, under `id` with an empty label, incarnation 1 and the zero stamps
+    /// the insert replaces: a caller sets the fields it names, so a field added to or removed from the row touches
+    /// this one site.
+    pub fn new(id: &str) -> PoolRow {
         PoolRow {
             id: id.into(),
-            label: id.into(),
+            label: String::new(),
             enabled: true,
             strategy: Strategy::Pace,
             affinity_ttl_seconds: 3600,
@@ -282,6 +282,15 @@ impl PoolRow {
             incarnation: 1,
             created_at: 0,
             updated_at: 0,
+        }
+    }
+
+    /// `new`'s row with the label set to `id`, for a test that overrides the fields its case is about.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn for_tests(id: &str) -> PoolRow {
+        PoolRow {
+            label: id.into(),
+            ..PoolRow::new(id)
         }
     }
 }

@@ -12,9 +12,9 @@ use phoebis_keepalive::{pool_fundings, CeilingInputs, KeepalivePolicy};
 use phoebis_relay::{CacheTtl, CacheTtlPolicy};
 use phoebis_routing::{AccountProjection, MemberSpend, Obstacle, RegistrySnapshot};
 use phoebis_store::{
-    stamp_token, AccountRow, Affinity, AffinityMode, ApiKeyRow, AttachmentSubject, Failover,
-    MemberWrite, OveragePolicy, PinRow, PoolMember, PoolRow, ReturnToPlan, SessionPlacement,
-    Shedding, SlowDown, StoreError, Strategy, SubagentPlacement, WarmSessions,
+    stamp_token, AccountRow, AffinityMode, ApiKeyRow, AttachmentSubject, MemberWrite,
+    OveragePolicy, PinRow, PoolMember, PoolRow, ReturnToPlan, SessionPlacement, StoreError,
+    Strategy, SubagentPlacement, WarmSessions,
 };
 use serde_json::{json, Value};
 use utoipa::ToSchema;
@@ -647,31 +647,12 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     if let Ok(Some(_)) = state.store.pool(id) {
         return failure(StatusCode::CONFLICT, "a pool with this id exists");
     }
-    let now = (state.clock)();
     let mut row = PoolRow {
-        id: id.clone(),
-        label: String::new(),
-        enabled: true,
-        strategy: Strategy::Pace,
-        affinity_ttl_seconds: 3600,
-        overage_policy: OveragePolicy::PreferPlan,
-        window_ceiling: phoebis_routing::DEFAULT_WINDOW_CEILING,
-        model_rules: Vec::new(),
         // Stored whole, so the create's change row names each member of the policy the pool starts with.
         keepalive_json: serde_json::to_string(&KeepalivePolicy::default())
             .unwrap_or_else(|_| "{}".into()),
-        body_capture_hours: 0,
-        prefer_subscription: true,
-        shedding: Shedding::default(),
-        failover: Failover::default(),
-        slow_down: SlowDown::default(),
-        cache_ttl_json: "{}".into(),
-        cache_diagnostics: false,
-        auto_mode_server: true,
-        affinity: Affinity::default(),
-        incarnation: 1,
-        created_at: now,
-        updated_at: now,
+        window_ceiling: phoebis_routing::DEFAULT_WINDOW_CEILING,
+        ..PoolRow::new(id)
     };
     if let Err(refusal) = apply(&state, &mut row, &input) {
         return refusal;
