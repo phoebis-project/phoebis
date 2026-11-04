@@ -26,6 +26,10 @@ const CONTAINER_METRICS_LISTEN: SocketAddr =
 
 const DEFAULT_SECRET_ENV: &str = "PHOEBIS_ADMIN_SECRET";
 
+/// The two databases' file names, shared by the fills and the refusal so the refusal guards the files the fills name.
+const LEDGER_FILE: &str = "ledger.sqlite";
+const REGISTRY_FILE: &str = "router.sqlite";
+
 /// One public listener's name, its default addresses, and the words its prompts and refusals use.
 struct Side {
     name: &'static str,
@@ -447,7 +451,7 @@ fn fills(plan: &Plan) -> Vec<Fill> {
         value_fill(
             "stats",
             "ledger_path",
-            path(&plan.data_dir.join("ledger.sqlite")),
+            path(&plan.data_dir.join(LEDGER_FILE)),
         ),
         value_fill(
             "stats",
@@ -458,7 +462,7 @@ fn fills(plan: &Plan) -> Vec<Fill> {
         value_fill(
             "storage",
             "path",
-            path(&plan.data_dir.join("router.sqlite")),
+            path(&plan.data_dir.join(REGISTRY_FILE)),
         ),
     ];
     if plan.container {
@@ -635,7 +639,7 @@ fn refuse_existing(plan: &Plan) -> Result<(), InitError> {
     // hand; a new key over it would only make every sealed row unreadable for good. The container's data directory
     // is the volume's path inside the image, which the host does not have.
     if !plan.container {
-        for name in ["router.sqlite", "ledger.sqlite"] {
+        for name in [REGISTRY_FILE, LEDGER_FILE] {
             let path = plan.data_dir.join(name);
             if exists(&path)? {
                 return Err(InitError::DatabaseExists { path });
