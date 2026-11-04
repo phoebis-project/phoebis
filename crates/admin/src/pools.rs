@@ -1484,9 +1484,12 @@ pub(crate) fn pool_json_from(state: &AdminState, context: &PoolContext, row: &Po
     }
     let pins = &context.pins;
     let key_ids: Vec<String> = keys.iter().map(|k| k.id.clone()).collect();
-    let active_pins = pins.iter().filter(|p| key_ids.contains(&p.key_id)).count();
+    let mut active_pins = 0;
+    let mut pins_by_account: HashMap<&str, usize> = HashMap::new();
     let mut cohorts: HashMap<(&str, &str), HashSet<&str>> = HashMap::new();
     for pin in pins.iter().filter(|p| key_ids.contains(&p.key_id)) {
+        active_pins += 1;
+        *pins_by_account.entry(pin.account_id.as_str()).or_default() += 1;
         cohorts
             .entry((pin.key_id.as_str(), pin.session_id.as_str()))
             .or_default()
@@ -1496,18 +1499,25 @@ pub(crate) fn pool_json_from(state: &AdminState, context: &PoolContext, row: &Po
     let accounts = &context.accounts;
     let spends = &context.spends;
     let snapshot = &context.snapshot;
-    let projection_of = |m: &PoolMember| {
-        context
-            .projections
-            .get(&row.id)
-            .and_then(|members| members.iter().find(|p| p.account_id == m.account_id))
-    };
-    let eligible = |m: &PoolMember| member_word(projection_of(m)) == "eligible";
+    let projections = context.projections.get(&row.id);
+    let verdicts: Vec<(Option<&AccountProjection>, &str)> = members
+        .iter()
+        .map(|m| {
+            let projection = projections
+                .and_then(|members| members.iter().find(|p| p.account_id == m.account_id));
+            (projection, member_word(projection))
+        })
+        .collect();
+    let ineligible = verdicts
+        .iter()
+        .filter(|(_, word)| *word != "eligible")
+        .count();
+    // A pool with no member has none to route to, so it reads exhausted as one whose every member is skipped.
     let status = if !row.enabled {
         "disabled"
-    } else if members.is_empty() || !members.iter().any(eligible) {
+    } else if ineligible == verdicts.len() {
         "exhausted"
-    } else if !members.iter().all(eligible) {
+    } else if ineligible > 0 {
         "degraded"
     } else {
         "active"
@@ -1571,21 +1581,13 @@ pub(crate) fn pool_json_from(state: &AdminState, context: &PoolContext, row: &Po
         revision: stamp_token(row.incarnation, row.updated_at),
         members: members
             .iter()
-            .map(|m| {
-                let active_pins = pins
-                    .iter()
-                    .filter(|p| key_ids.contains(&p.key_id) && p.account_id == m.account_id)
-                    .count();
-                let projection = projection_of(m);
-                member_json(
-                    m,
-                    accounts,
-                    spends,
-                    member_word(projection),
-                    now,
-                    active_pins,
-                    projection,
-                )
+            .zip(&verdicts)
+            .map(|(m, (projection, word))| {
+                let active_pins = pins_by_account
+                    .get(m.account_id.as_str())
+                    .copied()
+                    .unwrap_or(0);
+                member_json(m, accounts, spends, word, now, active_pins, *projection)
             })
             .collect(),
         keys,
