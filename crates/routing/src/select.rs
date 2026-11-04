@@ -25,9 +25,9 @@ use crate::record::{
 };
 use crate::state::{
     all_plan_windows, budget_reached, burn_average_ms, burn_decayed, ceiling, entrypoint_of,
-    load_shedding, mark_holds, plan_windows, return_to_plan_dwell_ms, round_in_dwell, shed_cap,
-    shed_dwell_ms, slow_down, slow_down_hold_ms, slow_down_stretch_ms, warm, BandSegment, BurnUnit,
-    MemberSpend, PinPace, PinRef, PinUsage, Reservation, RoutingState, StateWrite, Tier,
+    keeps_off, load_shedding, mark_holds, plan_windows, return_to_plan_dwell_ms, round_in_dwell,
+    shed_cap, shed_dwell_ms, slow_down, slow_down_hold_ms, slow_down_stretch_ms, warm, BandSegment,
+    BurnUnit, MemberSpend, PinPace, PinRef, PinUsage, Reservation, RoutingState, StateWrite, Tier,
     WindowReading, FAST_INPUT, FAST_OUTPUT, FIVE_HOUR, HOUR_MS, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY,
     SEVEN_DAY_FABLE, WEEK_MS,
 };
@@ -144,12 +144,12 @@ pub struct SelectRequest {
 impl SelectRequest {
     /// The key of the pin the request's session holds for its agent and model.
     pub(crate) fn pin_key(&self) -> PinKey {
-        PinKey {
-            key_id: self.key_id.clone(),
-            session_id: self.session_id.clone(),
-            agent_id: self.agent_id.clone(),
-            model: self.canonical_model.clone(),
-        }
+        PinKey::new(
+            &self.key_id,
+            &self.session_id,
+            &self.agent_id,
+            &self.canonical_model,
+        )
     }
 }
 
@@ -187,6 +187,20 @@ pub fn lane_key(model: &str, speed: &str, thinking: &str, effort: &str) -> Strin
 pub(crate) fn lane_parts(lane: &str) -> [Option<&str>; 4] {
     let mut parts = lane.rsplitn(4, '|');
     [parts.next(), parts.next(), parts.next(), parts.next()]
+}
+
+/// `lane` with its model part, the one ahead of its last three, replaced by what `model` answers for it. A lane too
+/// short to hold a model comes back as it was.
+pub(crate) fn lane_with_model<'a>(lane: &'a str, model: impl FnOnce(&'a str) -> &'a str) -> String {
+    match lane_parts(lane)[3] {
+        Some(part) => format!("{}{}", model(part), &lane[part.len()..]),
+        None => lane.to_string(),
+    }
+}
+
+/// The dated id `model` resolved to in `resolutions`, else `model` itself.
+pub(crate) fn resolved<'a>(resolutions: &'a HashMap<String, String>, model: &'a str) -> &'a str {
+    resolutions.get(model).map(String::as_str).unwrap_or(model)
 }
 
 /// Whether a pin or an entry stored on `stored` holds the cache a request on `lane` writes to. A row written
@@ -1171,7 +1185,9 @@ pub fn release_reasons(
     if request.fast
         && !reasons.contains(&FAST_CREDITS_REASON)
         && (fast_credits_row(state, &pin.account_id, request.now).is_some()
-            || holder_credits_blocked(state, snapshot, &pin.account_id, request.now).is_some())
+            || state
+                .credits_blocked(snapshot, &pin.account_id, request.now)
+                .is_some())
     {
         reasons.push(FAST_CREDITS_REASON);
     }
@@ -1284,12 +1300,7 @@ fn round_write(
         round_at: at,
     }];
     for mark in &round.facts.marks {
-        let key = PinKey {
-            key_id: mark.key_id.clone(),
-            session_id: mark.session_id.clone(),
-            agent_id: mark.agent_id.clone(),
-            model: mark.model.clone(),
-        };
+        let key = PinKey::new(&mark.key_id, &mark.session_id, &mark.agent_id, &mark.model);
         if let Some(row) = state.pin(&key) {
             writes.push(StateWrite::UpsertPin(row.clone()));
         }
@@ -1511,6 +1522,8 @@ fn run(
                     }
                 }
             }
+            // The row's own key, never `key`: the pace and the head mark read a key as the row spells it.
+            let current_key = current.key();
             // A turn of a held class folds its arrival into the pin's cycle under the live row's key, which a move
             // and a failover's landing write their row under again. A request carrying a hold, whatever held it, is
             // a second selection whose arrival the first folded, and its gap of zero would drag the cycle toward zero.
@@ -1521,7 +1534,7 @@ fn run(
                 )
                 && request.holds.is_empty()
             {
-                state.fold_pace(&current.key(), request.received_at, burn_average_ms(pool));
+                state.fold_pace(&current_key, request.received_at, burn_average_ms(pool));
             } else if found == "live"
                 && request
                     .holds
@@ -1530,17 +1543,17 @@ fn run(
             {
                 // The head released the wait where it came, not at the bound, so the dispatch is this selection's
                 // instant and the pin's next gap is measured from it.
-                state.pace_held_until(&current.key(), request.now);
+                state.pace_held_until(&current_key, request.now);
             }
             rec.pin = Some(pin_facts(
                 found,
                 Some(&current),
                 marked,
                 request.now,
-                state.pin_pace(&current.key()),
+                state.pin_pace(&current_key),
             ));
             if found == "live" {
-                pin = Some(current);
+                pin = Some((current, current_key));
             } else {
                 // The row stands until the placement replaces it: that placement may be held for a slot first, and
                 // the selection after the wait reads the account the session left from this row.
@@ -1559,12 +1572,12 @@ fn run(
     }
 
     // The fast answer names the pinned account's credits reason first, whatever becomes of the pin below.
-    let pinned_account = pin.as_ref().map(|p| p.account_id.clone());
+    let pinned_account = pin.as_ref().map(|(p, _)| p.account_id.clone());
 
     // What the request says about the pin's cache, judged once where the pin is: every rule below that reads
     // warmth reads this, so a compacted or restarted request is cold on the request that carries the fact.
     // Judged for a live pin alone, so the arms below that hold the pin hold its warmth too.
-    let warmth = pin.as_ref().map(|current| {
+    let warmth = pin.as_ref().map(|(current, _)| {
         warmth_of(
             current,
             request,
@@ -1649,11 +1662,18 @@ fn run(
     let credit = credit_candidate(
         request,
         &eligible,
-        pin.as_ref().map(|current| current.account_id.as_str()),
+        pin.as_ref().map(|(current, _)| current.account_id.as_str()),
         state,
         pool,
     );
-    let judged = judged_candidate(state, snapshot, request, pin.as_ref(), &eligible, window);
+    let judged = judged_candidate(
+        state,
+        snapshot,
+        request,
+        pin.as_ref().map(|(current, _)| current),
+        &eligible,
+        window,
+    );
     let directed = credit
         .map(|c| (c, CREDIT_WORDS))
         .or(judged.map(|c| (c, JUDGED_WORDS)));
@@ -1667,7 +1687,7 @@ fn run(
     // and moves nothing; the keepalive reads the obstacle's name off the answer.
     if request.probe {
         let mut facts = Vec::new();
-        if let Some(current) = pin.as_ref() {
+        if let Some((current, _)) = pin.as_ref() {
             let pinned = obstacles.iter().find(|(id, _)| id == &current.account_id);
             let tried = request.attempted.contains(&current.account_id);
             if let Some((_, o)) = pinned {
@@ -1726,9 +1746,11 @@ fn run(
     }
 
     // Step 3: a non-portable request is bound to its pin.
-    if let (false, Some((current, warmth))) = (request.portable, pin.as_ref().zip(warmth)) {
+    if let (false, Some(((current, current_key), warmth))) =
+        (request.portable, pin.as_ref().zip(warmth))
+    {
         if let Some(candidate) = candidate_in(&eligible, &current.account_id) {
-            if let Some(hold) = rewrite_answer(state, pool, request, current) {
+            if let Some(hold) = rewrite_answer(state, pool, request, current, current_key) {
                 return (SelectResult::Held(hold), writes);
             }
             rec.step("bound", "renewed", vec![account_fact(&current.account_id)]);
@@ -1738,6 +1760,7 @@ fn run(
                     snapshot,
                     pool,
                     current,
+                    current_key,
                     candidate,
                     request,
                     warmth,
@@ -1768,7 +1791,7 @@ fn run(
     // `no_fit` partition, which keeps the reads of the candidates that fit. `choose` reads them for a move or a
     // failed-over request, never for a fresh session.
     let mut reads: Vec<(String, FitRead)> = Vec::new();
-    if let Some(mut current) = pin.take() {
+    if let Some((mut current, current_key)) = pin.take() {
         let mut moved_off = false;
         let ended = snapshot
             .term(&current.account_id)
@@ -1797,8 +1820,8 @@ fn run(
             } else {
                 // Handed to the placement as a fired move hands its source, so the new row carries its burn and its
                 // last prompt. No move reason names a credit or a judged turn, so the write reads `created`.
-                state.remove_pin(&current.key());
-                writes.push(StateWrite::DeletePin(current.key()));
+                state.remove_pin(&current_key);
+                writes.push(StateWrite::DeletePin(current_key.clone()));
                 if mark_holds(&current) {
                     rec.mark_cleared = current
                         .mark
@@ -1818,7 +1841,7 @@ fn run(
             };
             let cold = !warm_on(
                 &current,
-                state.auxiliary_only(&current.key()),
+                state.auxiliary_only(&current_key),
                 verdict,
                 request.now,
             );
@@ -1835,6 +1858,7 @@ fn run(
                 pool,
                 request,
                 &current,
+                &current_key,
                 &eligible,
                 window,
                 cold,
@@ -1845,7 +1869,7 @@ fn run(
             // A round marks the state's rows, the request's own among them, so the row the renewal writes back or
             // the move takes off the account is read again with its mark.
             if rec.shed_round.is_some() {
-                if let Some(fresh) = state.pin(&current.key()).cloned() {
+                if let Some(fresh) = state.pin(&current_key).cloned() {
                     current = fresh;
                 }
             }
@@ -1858,7 +1882,7 @@ fn run(
             // nothing, the relay waits to the later of the reset and the cooldown's end and selects again, and the
             // pin renews in place then.
             if let MoveVerdict::Wait { until } = moved {
-                state.pace_held_until(&current.key(), until);
+                state.pace_held_until(&current_key, until);
                 let hold = hold_facts(request, &current.account_id, "reset", Some(until), None);
                 return (SelectResult::Held(hold), writes);
             }
@@ -1881,8 +1905,8 @@ fn run(
                         .collect(),
                 );
                 if open {
-                    state.remove_pin(&current.key());
-                    writes.push(StateWrite::DeletePin(current.key()));
+                    state.remove_pin(&current_key);
+                    writes.push(StateWrite::DeletePin(current_key.clone()));
                     // The mark leaves with the row the move takes off the account it was made on.
                     if mark_holds(&current) {
                         rec.mark_cleared = current
@@ -1905,19 +1929,21 @@ fn run(
             }
         }
         if !moved_off {
-            pin = Some(current);
+            pin = Some((current, current_key));
         }
     }
 
     // Step 5: a live pin whose account is eligible is renewed; stickiness wins over priority.
     // A slowed pin waits before it renews. A pin whose account left the set takes the placement path below, whatever
     // deadline stands on it.
-    if let Some((current, warmth)) = pin.as_ref().zip(warmth) {
+    if let Some(((current, current_key), warmth)) = pin.as_ref().zip(warmth) {
         if let Some(candidate) = candidate_in(&eligible, &current.account_id) {
-            if let Some(hold) = rewrite_answer(state, pool, request, current) {
+            if let Some(hold) = rewrite_answer(state, pool, request, current, current_key) {
                 return (SelectResult::Held(hold), writes);
             }
-            if let Some(hold) = slow_down_answer(state, snapshot, pool, request, current, rec) {
+            if let Some(hold) =
+                slow_down_answer(state, snapshot, pool, request, current, current_key, rec)
+            {
                 return (SelectResult::Held(hold), writes);
             }
             return (
@@ -1926,6 +1952,7 @@ fn run(
                     snapshot,
                     pool,
                     current,
+                    current_key,
                     candidate,
                     request,
                     warmth,
@@ -1976,7 +2003,9 @@ fn run(
             // Extra usage funds every model, so under `allow` a spent window goes on in overage unless the poll read
             // the account's extra usage as blocked. A state the poll has not read is no refusal.
             let funded = pool.overage_policy == OveragePolicy::Allow
-                && holder_credits_blocked(state, snapshot, &c.account_id, request.now).is_none();
+                && state
+                    .credits_blocked(snapshot, &c.account_id, request.now)
+                    .is_none();
             if funded {
                 spent_model.push(c.account_id.clone());
                 left.push(c);
@@ -2589,15 +2618,11 @@ fn in_pool_without<'a>(
     pool: &'a PoolRow,
     own: Option<&'a PinKey>,
 ) -> impl Fn(&PinRow) -> bool + 'a {
-    // The own row is matched member by member, since `PinRow::key` clones four strings for every pin the sums walk.
     move |p: &PinRow| {
         snapshot
             .key(&p.key_id)
             .is_some_and(|k| k.pool_id == pool.id)
-            && own.is_none_or(|own| {
-                (&p.key_id, &p.session_id, &p.agent_id, &p.model)
-                    != (&own.key_id, &own.session_id, &own.agent_id, &own.model)
-            })
+            && own.is_none_or(|own| p.key_parts() != own.parts())
     }
 }
 
@@ -3559,6 +3584,7 @@ fn move_of<'a>(
     pool: &PoolRow,
     request: &SelectRequest,
     current: &PinRow,
+    key: &PinKey,
     eligible: &[&'a Candidate],
     window: &str,
     cold: bool,
@@ -3992,7 +4018,7 @@ fn move_of<'a>(
             }
             rec.shed_round = Some(ShedRoundRecord {
                 account_id: source.to_string(),
-                pin: pin_key_facts(&current.key()),
+                pin: pin_key_facts(key),
                 facts: round.facts,
             });
             state.record_shed(&pool.id, source, now);
@@ -4022,7 +4048,7 @@ fn move_of<'a>(
     // A pin moves only when its session asks, so an unmarked pin never moves for utilization and a marked one
     // moves at its next request. A plan-quota round sheds window share, which a fast request does not draw, so
     // its mark moves a standard request alone; a dollar round's mark moves a fast one too.
-    let marked = state.shed_marked(&current.key());
+    let marked = state.shed_marked(key);
     facts.push(Fact::bool("marked", marked));
     if !marked {
         rule_line(rec, MigrateReason::Shed, "no", facts, &slow_down_facts);
@@ -4047,12 +4073,7 @@ fn move_of<'a>(
         current,
         eligible,
         window,
-        &|c| {
-            !current
-                .shed
-                .as_ref()
-                .is_some_and(|shed| shed.from == c.account_id && now - shed.at < dwell_ms)
-        },
+        &|c| !keeps_off(current, &c.account_id, pool, now),
         true,
         rec,
     );
@@ -4183,13 +4204,8 @@ struct HoldPlan {
 /// selection that queued adds nothing to it. Writes no speed. `None` when the pin has no part in the plan, its hold
 /// reads under `SLOW_DOWN_MIN_HOLD_MS`, or its end is already past, as for a selection that queued longer than its
 /// own hold.
-fn slow_down_hold(
-    request: &SelectRequest,
-    current: &PinRow,
-    read: &SlowDownRead,
-) -> Option<HoldPlan> {
-    let key = current.key();
-    let part = read.plan.iter().find(|part| part.key == key)?;
+fn slow_down_hold(request: &SelectRequest, key: &PinKey, read: &SlowDownRead) -> Option<HoldPlan> {
+    let part = read.plan.iter().find(|part| part.key == *key)?;
     let until = request.received_at.saturating_add(part.hold_ms);
     (part.hold_ms >= SLOW_DOWN_MIN_HOLD_MS && until > request.now).then_some(HoldPlan {
         until,
@@ -4213,12 +4229,13 @@ fn rewrite_answer(
     pool: &PoolRow,
     request: &SelectRequest,
     current: &PinRow,
+    key: &PinKey,
 ) -> Option<HoldFacts> {
     if request.count || !request.holds.is_empty() {
         return None;
     }
     let mark = state
-        .head_mark(&current.key())
+        .head_mark(key)
         .filter(|mark| mark.request_id != request.request_id)?;
     let until = mark.at + slow_down_hold_ms(pool);
     if until - request.now < SLOW_DOWN_MIN_HOLD_MS {
@@ -4245,14 +4262,14 @@ fn slow_down_answer(
     pool: &PoolRow,
     request: &SelectRequest,
     current: &PinRow,
+    key: &PinKey,
     rec: &mut Recorder,
 ) -> Option<HoldFacts> {
     let kind = snapshot.account(&current.account_id).map(|a| a.kind);
     if !slowable(request, kind) || !request.holds.is_empty() {
         return None;
     }
-    let key = current.key();
-    let pace = state.pin_pace(&key)?;
+    let pace = state.pin_pace(key)?;
     let standing = pace.deadline.filter(|deadline| *deadline > request.now);
     let plan = match standing {
         Some(deadline) => HoldPlan {
@@ -4262,8 +4279,8 @@ fn slow_down_answer(
         },
         None => {
             let read = rec.slow_down.as_ref().filter(|read| read.factor < 1.0)?;
-            let plan = slow_down_hold(request, current, read)?;
-            state.stand_slow_down_deadline(&key, plan.until);
+            let plan = slow_down_hold(request, key, read)?;
+            state.stand_slow_down_deadline(key, plan.until);
             state.add_slow_down_held(&pool.id, &current.account_id, plan.hold_ms);
             plan
         }
@@ -4464,14 +4481,13 @@ pub(crate) struct Trigger {
     pub speed: Option<f64>,
 }
 
-/// A mark the round made: the pin and the destination the round found for it.
+/// A mark the round made: the key of the pin it marked.
 pub(crate) struct Mark {
     pub key: PinKey,
-    pub planned: String,
 }
 
 /// What a round made of one pin: its skip word, or the figures it read on the destination it planned.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct PinRead {
     skip: Option<&'static str>,
     cost: Option<f64>,
@@ -4735,7 +4751,6 @@ fn destination_of(
     pin: &PinRow,
     planned: &[Reservation],
     now: i64,
-    dwell_ms: i64,
     fallback_ms: i64,
 ) -> Option<(String, FitRead)> {
     let window = window_for(&pin.model);
@@ -4743,11 +4758,7 @@ fn destination_of(
         .iter()
         .copied()
         .filter(|c| c.account_id != pin.account_id)
-        .filter(|c| {
-            !pin.shed
-                .as_ref()
-                .is_some_and(|shed| shed.from == c.account_id && now - shed.at < dwell_ms)
-        })
+        .filter(|c| !keeps_off(pin, &c.account_id, pool, now))
         .filter(|c| {
             window == SEVEN_DAY || holds_allowance(state, snapshot, &c.account_id, window, now)
         })
@@ -4835,11 +4846,7 @@ fn shed_round(
                 .0
         }
     };
-    // A pin compares member by member, since `PinRow::key` clones four strings for every comparison.
-    let is_pin = |p: &PinRow, key: &PinKey| {
-        (&p.key_id, &p.session_id, &p.agent_id, &p.model)
-            == (&key.key_id, &key.session_id, &key.agent_id, &key.model)
-    };
+    let is_pin = |p: &PinRow, key: &PinKey| p.key_parts() == key.parts();
     let current_key = current.key();
     let is_current = |p: &PinRow| is_pin(p, &current_key);
     let is_cold = |p: &PinRow| {
@@ -4977,7 +4984,9 @@ fn shed_round(
         .sum();
     let mut marks: Vec<Mark> = Vec::new();
     let mut planned: Vec<Reservation> = Vec::new();
-    let mut reads: HashMap<PinKey, PinRead> = HashMap::new();
+    // By position in `ordered`: each pin's read and the destination its mark planned.
+    let mut reads = vec![PinRead::default(); ordered.len()];
+    let mut destinations: Vec<Option<String>> = vec![None; ordered.len()];
     let past_the_cold =
         |index: usize| pool.shedding.warm_sessions == WarmSessions::Never && index >= cold_count;
     // The destination `p`'s own move would take beside the round's earlier marks, the figures the record shows of it,
@@ -4994,7 +5003,6 @@ fn shed_round(
             p,
             planned,
             now,
-            dwell_ms,
             fallback_ms,
         ) else {
             read.skip = Some("no_runway");
@@ -5052,11 +5060,11 @@ fn shed_round(
         }
     };
     let mut met = false;
-    let mut cheapest: Option<PinKey> = None;
+    let mut cheapest: Option<usize> = None;
     for (index, walked) in ordered.iter().enumerate() {
         let p = &walked.row;
         // A covering pin the pick read at an earlier position keeps what its gate found there.
-        let mut read = reads.remove(&p.key()).unwrap_or_default();
+        let mut read = std::mem::take(&mut reads[index]);
         if mark_holds(p) {
             read.skip = Some("standing");
         } else if met || removed >= target || past_the_cold(index) {
@@ -5071,7 +5079,7 @@ fn shed_round(
             // this position on covers the rest, the walk marks, among the covering pins the gate finds a destination
             // for, the one whose move costs the least, the first in the order among equals, and the target is met.
             let rest = target - removed;
-            let mut pick: Option<(f64, &PinRow, f64, Reservation)> = None;
+            let mut pick: Option<(f64, usize, &PinRow, f64, Reservation)> = None;
             for (offset, q) in ordered[index..].iter().enumerate() {
                 let Some(covers) = q.share.filter(|covers| *covers >= rest) else {
                     continue;
@@ -5084,20 +5092,18 @@ fn shed_round(
                 let cost = cost_of(q, &q_read);
                 if let Some(booking) = booking {
                     if pick.as_ref().is_none_or(|(least, ..)| cost < *least) {
-                        pick = Some((cost, q, covers, booking));
+                        pick = Some((cost, index + offset, q, covers, booking));
                     }
                 }
-                reads.insert(q.key(), q_read);
+                reads[index + offset] = q_read;
             }
-            read = reads.remove(&p.key()).unwrap_or_default();
-            if let Some((_, q, covers, booking)) = pick {
-                marks.push(Mark {
-                    key: q.key(),
-                    planned: booking.account_id.clone(),
-                });
+            read = std::mem::take(&mut reads[index]);
+            if let Some((_, position, q, covers, booking)) = pick {
+                marks.push(Mark { key: q.key() });
+                destinations[position] = Some(booking.account_id.clone());
                 removed += covers;
                 planned.push(booking);
-                cheapest = Some(q.key());
+                cheapest = Some(position);
                 met = true;
             } else if burn < rest {
                 // No covering pin has a destination, so the order marks this pin where its own gate finds one. A
@@ -5105,10 +5111,8 @@ fn shed_round(
                 let (own, booking) = plan_of(p, &planned);
                 read = own;
                 if let Some(booking) = booking {
-                    marks.push(Mark {
-                        key: p.key(),
-                        planned: booking.account_id.clone(),
-                    });
+                    marks.push(Mark { key: p.key() });
+                    destinations[index] = Some(booking.account_id.clone());
                     removed += burn;
                     planned.push(booking);
                 }
@@ -5118,14 +5122,14 @@ fn shed_round(
             // stays, and it still counts as one of the account's pins for the last-pin rule.
             read.skip = Some("unpriced");
         }
-        reads.insert(p.key(), read);
+        reads[index] = read;
     }
     let (outcome, reason) = if marks.is_empty() {
         // The deepest class in the order `no_runway`, `off_window`, `unpriced`, `last_pin`, `standing`: a walked pin's
         // skip, or `off_window` where no pin was walked and a pin left out was off the window that fired. `unpriced`
         // where neither names a class, since no priced burn was there to remove.
-        let mut skips: Vec<&'static str> = reads.values().filter_map(|read| read.skip).collect();
-        if reads.is_empty() && left_out.iter().any(|(_, word)| *word == "off_window") {
+        let mut skips: Vec<&'static str> = reads.iter().filter_map(|read| read.skip).collect();
+        if ordered.is_empty() && left_out.iter().any(|(_, word)| *word == "off_window") {
             skips.push("off_window");
         }
         let reason = [
@@ -5144,10 +5148,11 @@ fn shed_round(
     };
     // A left-out pin's row carries no share and no read, so its figures follow the partition's word and never what the
     // pricer answers for a model off the window.
-    let pin_facts = |p: &PinRow, walked: Option<&RoundPin>, left: Option<&'static str>| {
-        let read = left.is_none().then(|| reads.get(&p.key())).flatten();
-        let burn = walked.and_then(|w| w.share).map(per_hour);
-        let mark = marks.iter().find(|mark| is_pin(p, &mark.key));
+    let pin_facts = |p: &PinRow, walked: Option<(usize, &RoundPin)>, left: Option<&'static str>| {
+        let position = walked.map(|(i, _)| i);
+        let read = position.map(|i| &reads[i]);
+        let burn = walked.and_then(|(_, w)| w.share).map(per_hour);
+        let destination = position.and_then(|i| destinations[i].as_ref());
         ShedPinFacts {
             key_id: p.key_id.clone(),
             session_id: p.session_id.clone(),
@@ -5156,16 +5161,14 @@ fn shed_round(
             cold: is_cold(p),
             burn,
             last_input_tokens: p.last_input_tokens,
-            per_rewrite: walked.zip(burn).map(|(w, b)| b / w.prompt),
-            marked: mark.is_some() || mark_holds(p),
+            per_rewrite: walked.zip(burn).map(|((_, w), b)| b / w.prompt),
+            marked: destination.is_some() || mark_holds(p),
             rewrite: read.and_then(|read| read.rewrite),
             rewrite_window: read.and_then(|read| read.rewrite_window),
-            planned: mark
-                .filter(|_| left.is_none())
-                .map(|mark| mark.planned.clone()),
+            planned: destination.cloned(),
             runway_ms: read.and_then(|read| read.runway_ms),
             skip: left.or_else(|| read.and_then(|read| read.skip)),
-            note: if cheapest.as_ref().is_some_and(|key| is_pin(p, key)) {
+            note: if position.is_some_and(|i| cheapest == Some(i)) {
                 Some("cheapest")
             } else {
                 is_current(p).then_some("current")
@@ -5174,7 +5177,8 @@ fn shed_round(
     };
     let pins: Vec<ShedPinFacts> = ordered
         .iter()
-        .map(|p| pin_facts(&p.row, Some(p), None))
+        .enumerate()
+        .map(|(i, p)| pin_facts(&p.row, Some((i, p)), None))
         .chain(
             left_out
                 .iter()
@@ -5184,12 +5188,12 @@ fn shed_round(
     let skipped = pins
         .iter()
         .filter_map(|facts| {
-            let key = PinKey {
-                key_id: facts.key_id.clone(),
-                session_id: facts.session_id.clone(),
-                agent_id: facts.agent_id.clone(),
-                model: facts.model.clone(),
-            };
+            let key = PinKey::new(
+                &facts.key_id,
+                &facts.session_id,
+                &facts.agent_id,
+                &facts.model,
+            );
             facts
                 .skip
                 .map(|skip| format!("{}: {skip}", pin_key_text(&key)))
@@ -5286,8 +5290,7 @@ pub(crate) fn obstacle(
         if let Some(row) = fast_credits_row(state, account_id, now) {
             return Some(cooldown(row));
         }
-        if let Some(reason) = state.credits_blocked(snapshot, account_id, account.incarnation, now)
-        {
+        if let Some(reason) = state.credits_blocked(snapshot, account_id, now) {
             return Some(Obstacle::Credits {
                 reason: reason.into(),
             });
@@ -5342,17 +5345,6 @@ fn fast_credits_row<'a>(
         .find(|row| row.scope == CooldownScope::FastCredits)
 }
 
-/// The poll's credits block on the account's current holder, `None` for an account the snapshot does not hold.
-fn holder_credits_blocked<'a>(
-    state: &'a RoutingState,
-    snapshot: &RegistrySnapshot,
-    account_id: &str,
-    now: i64,
-) -> Option<&'a str> {
-    let account = snapshot.account(account_id)?;
-    state.credits_blocked(snapshot, account_id, account.incarnation, now)
-}
-
 /// Renews the pin and persists the request's verdict on it: a refreshing request stamps its refresh and its
 /// hashes, a cold one zeroes the refresh and stamps its hashes so the next continuation re-warms the pin, and
 /// a foreign one leaves both alone. A request that carries no chain has no hashes to stamp, so the pin keeps
@@ -5366,6 +5358,7 @@ fn renew(
     snapshot: &RegistrySnapshot,
     pool: &PoolRow,
     current: &PinRow,
+    key: &PinKey,
     candidate: &Candidate,
     request: &SelectRequest,
     (verdict, cause): (Warmth, WarmthCause),
@@ -5374,12 +5367,14 @@ fn renew(
     rec: &mut Recorder,
 ) -> Selection {
     let (now, fallback_ms) = (request.now, request.fallback_ms);
-    let mut renewed = PinRow {
-        last_used_at: now,
-        ..current.clone()
-    };
     let chained = request.static_hash.is_some() || !request.boundaries.is_empty();
-    let auxiliary_only = state.auxiliary_only(&current.key());
+    let auxiliary_only = state.auxiliary_only(key);
+    // The stored row is `current` itself: a move and a credit placed elsewhere take it off the state, and neither
+    // reaches a renewal.
+    let renewed = state
+        .pin_mut(key)
+        .expect("a renewed pin is the row its selection read from the state");
+    renewed.last_used_at = now;
     match verdict {
         Warmth::Refresh => {
             renewed.last_refresh_at = now;
@@ -5391,7 +5386,7 @@ fn renew(
     if verdict != Warmth::Untouched {
         renewed.lane.clone_from(&request.lane);
         if chained {
-            stamp_hashes(&mut renewed, request);
+            stamp_hashes(renewed, request);
         }
     }
     // A probe replays another request's headers and body, so the row keeps the entrypoint and the effort its own
@@ -5400,6 +5395,7 @@ fn renew(
         renewed.entrypoint = request.entrypoint.clone().unwrap_or_default();
         renewed.effort = request.effort.clone().unwrap_or_default();
     }
+    let renewed = renewed.clone();
     let handed = pin_ref(&renewed);
     let (refresh_stamped, hashes_stamped) = (
         verdict == Warmth::Refresh,
@@ -5427,8 +5423,7 @@ fn renew(
         refresh_stamped,
         hashes_stamped,
     });
-    state.put_pin(renewed.clone());
-    state.mark_renewed(&current.key());
+    state.mark_renewed(key);
     writes.push(StateWrite::UpsertPin(renewed));
     // A bound or a count request, a portable one whose move found every destination at its cap, and one on a pool
     // with load shedding off, renew without the shed rule's read.
@@ -5532,33 +5527,20 @@ fn candidate_in<'a>(set: &[&'a Candidate], account_id: &str) -> Option<&'a Candi
 }
 
 /// What keeps placement off an affinity entry, `None` for one it may land on: `lane` (written on another lane than
-/// the request's), then what `account_refusal` answers at the request's instant.
+/// the request's), `expired` (not live at the request's instant), `incarnation` (another holder of the id wrote it),
+/// `not_admitted` (the account admits no fresh placement, which `admitted` answers as `admits` does). Shared by every
+/// rung. Rung 4 adds its own blocker on top.
 fn entry_refusal(
     snapshot: &RegistrySnapshot,
     request: &SelectRequest,
     entry: &AffinityEntry,
     admitted: &dyn Fn(&str) -> bool,
 ) -> Option<&'static str> {
-    if same_lane(&entry.lane, &request.lane) {
-        account_refusal(snapshot, request.now, entry, admitted)
-    } else {
+    if !same_lane(&entry.lane, &request.lane) {
         Some("lane")
-    }
-}
-
-/// What keeps placement off an affinity entry's account, `None` for one it may land on: `expired` (not live),
-/// `incarnation` (another holder of the id wrote it), `not_admitted` (the account admits no fresh placement, which
-/// `admitted` answers as `admits` does). Shared by every rung. Rung 4 adds its own blocker on top.
-fn account_refusal(
-    snapshot: &RegistrySnapshot,
-    now: i64,
-    entry: &AffinityEntry,
-    admitted: &dyn Fn(&str) -> bool,
-) -> Option<&'static str> {
-    if !entry.live(now) {
+    } else if !entry.live(request.now) {
         Some("expired")
-    } else if snapshot.account(&entry.account_id).map(|a| a.incarnation) != Some(entry.incarnation)
-    {
+    } else if !entry.held(|id| snapshot.incarnation(id)) {
         Some("incarnation")
     } else if !admitted(&entry.account_id) {
         Some("not_admitted")
@@ -5683,7 +5665,9 @@ fn judged_candidate<'a>(
     let judged = state.latest_turn_pin(&request.key_id, &request.session_id)?;
     // The task routed the request as the judged agent ahead of this read (`routed_agent`), so the pin the call is held
     // under and the account it is directed to never disagree. A request still under another agent follows no one.
-    if judged.agent_id != request.agent_id || own.is_some_and(|own| own.key() == judged.key()) {
+    if judged.agent_id != request.agent_id
+        || own.is_some_and(|own| own.key_parts() == judged.key_parts())
+    {
         return None;
     }
     eligible
@@ -5775,13 +5759,11 @@ fn placement_of<'a>(
     } else {
         // The class knob places a subagent with its parent or not at all: the static rung never runs under it.
         let parent = state.pin(&PinKey {
-            key_id: request.key_id.clone(),
-            session_id: request.session_id.clone(),
             agent_id: request
                 .parent_agent_id
                 .clone()
                 .unwrap_or_else(|| MAIN_AGENT.to_string()),
-            model: request.canonical_model.clone(),
+            ..request.pin_key()
         });
         let Some(pin) = parent else {
             none(rec, "rung:with_main", "no_pin");
@@ -6804,17 +6786,17 @@ fn candidate_facts(
         })
         .collect();
     cooldowns.sort_by(|a, b| a.scope.cmp(&b.scope));
-    let credits = account.filter(|_| request.fast).and_then(|a| {
-        state.credits_of(id, a.incarnation).map(|c| CreditsFacts {
+    let credits = request
+        .fast
+        .then(|| state.holder_credits(snapshot, id))
+        .flatten()
+        .map(|c| CreditsFacts {
             enabled: c.enabled,
             disabled_reason: c.disabled_reason.clone(),
             utilization: c.utilization,
             observed_at: c.observed_at,
-            blocked: state
-                .credits_blocked(snapshot, id, a.incarnation, now)
-                .map(String::from),
-        })
-    });
+            blocked: state.credits_blocked(snapshot, id, now).map(String::from),
+        });
     let term = snapshot.term(id).map(|t| TermFacts {
         since: t.since,
         trial_ends_at: t.trial_ends_at,

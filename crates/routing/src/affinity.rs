@@ -47,6 +47,12 @@ impl AffinityEntry {
     pub fn live(&self, now: i64) -> bool {
         self.ttl_ms > 0 && now - self.written_at <= self.ttl_ms
     }
+
+    /// The entry's account still carries the incarnation that wrote it, as `incarnation_of` reads an id's current
+    /// one, `None` for an id the registry no longer holds.
+    pub fn held(&self, incarnation_of: impl Fn(&str) -> Option<u64>) -> bool {
+        incarnation_of(&self.account_id) == Some(self.incarnation)
+    }
 }
 
 /// One boundary the rung walk visited, deepest first: the gate's verdict beside the entry, so a record names each
@@ -218,20 +224,14 @@ impl AffinityMap {
     /// The name the map keys a model's rows on: the dated id `model` resolved to, else `model` itself, as
     /// `RoutingState::canonical` resolves it.
     fn canonical<'a>(&'a self, model: &'a str) -> &'a str {
-        self.resolutions
-            .get(model)
-            .map(String::as_str)
-            .unwrap_or(model)
+        crate::select::resolved(&self.resolutions, model)
     }
 
     /// `canonical` applied to a lane's model part, as `RoutingState::canonical_lane` applies it: the map files an
     /// entry under the resolved model, so its lane names that model too, and an answer selected before the
     /// resolution landed still reports the spelling admission read.
     fn canonical_lane(&self, lane: &str) -> String {
-        match crate::select::lane_parts(lane)[3] {
-            Some(model) => format!("{}{}", self.canonical(model), &lane[model.len()..]),
-            None => lane.to_string(),
-        }
+        crate::select::lane_with_model(lane, |model| self.canonical(model))
     }
 
     /// Learns a folded spelling's dated id, fed at load and when a resolution lands. Never rekeys an entry
@@ -382,7 +382,7 @@ impl AffinityMap {
         let mut gone = Vec::new();
         for (model, hashes) in &mut self.entries {
             hashes.retain(|hash, entry| {
-                let replaced = incarnation_of(&entry.account_id) != Some(entry.incarnation);
+                let replaced = !entry.held(&incarnation_of);
                 let expired = match ttl_of(&entry.key_id) {
                     None => true,
                     Some(ttl) => now - entry.written_at > ttl,
@@ -563,7 +563,7 @@ impl AffinityMap {
         let owns = |entry: &AffinityEntry| -> bool {
             entry.key_id == query.key_id
                 && entry.key_generation == query.key_generation
-                && incarnation_of(&entry.account_id) == Some(entry.incarnation)
+                && entry.held(&incarnation_of)
         };
         let (depth, entry) = self.deepest(query.canonical_model, query.message_boundaries, owns)?;
         Some(ConversationMatch {
@@ -584,7 +584,7 @@ impl AffinityMap {
         let names_an_answer = |entry: &AffinityEntry| -> bool {
             entry.message_id.is_some()
                 && entry.account_id == query.account_id
-                && incarnation_of(&entry.account_id) == Some(entry.incarnation)
+                && entry.held(&incarnation_of)
                 && entry.key_id == query.key_id
                 && entry.key_generation == query.key_generation
                 && query.roots.contains(&entry.root.as_str())

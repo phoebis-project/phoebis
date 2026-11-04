@@ -19,8 +19,8 @@ use tokio::time::Instant;
 use crate::affinity::{AffinityMap, PurgedEntry};
 use crate::listing::{row_for, snapshot_date};
 use crate::select::{
-    affinity_ttl_ms, lane_key, lane_parts, seconds_ms, Banded, SlowDownRead, RATE_LIMIT_REASON,
-    RETRY_AFTER_WINDOW, SLOW_DOWN_WAIT_MS,
+    affinity_ttl_ms, lane_with_model, resolved, seconds_ms, Banded, SlowDownRead,
+    RATE_LIMIT_REASON, RETRY_AFTER_WINDOW, SLOW_DOWN_WAIT_MS,
 };
 use crate::task::BurnRates;
 use crate::windows::{model_week, window_for, MODEL_WINDOWS};
@@ -57,12 +57,7 @@ pub struct PinRef {
 
 impl PinRef {
     pub fn key(&self) -> PinKey {
-        PinKey {
-            key_id: self.key_id.clone(),
-            session_id: self.session_id.clone(),
-            agent_id: self.agent_id.clone(),
-            model: self.model.clone(),
-        }
+        PinKey::new(&self.key_id, &self.session_id, &self.agent_id, &self.model)
     }
 }
 
@@ -1088,6 +1083,13 @@ pub(crate) fn round_in_dwell(pool: &PoolRow, round_at: i64, now: i64) -> bool {
     now - round_at < shed_dwell_ms(pool)
 }
 
+/// Whether `pin` keeps off `account_id`: the account shed it and the pool's dwell has not passed since.
+pub(crate) fn keeps_off(pin: &PinRow, account_id: &str, pool: &PoolRow, now: i64) -> bool {
+    pin.shed
+        .as_ref()
+        .is_some_and(|shed| shed.from == account_id && round_in_dwell(pool, shed.at, now))
+}
+
 /// Whether the pool runs shedding rounds. Off, the fit gate, the reservations, the projection and the move off a spent
 /// account still run, since the switch turns the round off and nothing else.
 pub fn load_shedding(pool: &PoolRow) -> bool {
@@ -1556,10 +1558,7 @@ impl RoutingState {
 
     /// The name the state keys a model's rows on: the dated id `model` resolved to, else `model` itself.
     pub fn canonical<'a>(&'a self, model: &'a str) -> &'a str {
-        self.resolutions
-            .get(model)
-            .map(String::as_str)
-            .unwrap_or(model)
+        resolved(&self.resolutions, model)
     }
 
     /// `canonical` applied to a cooldown scope: `model:{spelling}` becomes `model:{dated}`; `account` stays.
@@ -1575,10 +1574,7 @@ impl RoutingState {
     /// `canonical` applied to a lane's model part, the one ahead of its last three: a lane composed under a
     /// spelling before its resolution landed then names the model its pin and entries were relaned to.
     pub fn canonical_lane(&self, lane: &str) -> String {
-        match lane_parts(lane)[3] {
-            Some(model) => format!("{}{}", self.canonical(model), &lane[model.len()..]),
-            None => lane.to_string(),
-        }
+        lane_with_model(lane, |model| self.canonical(model))
     }
 
     /// `key` under the dated id its model resolved to. The lookups run on every selection and renewal, so a key is
@@ -1632,8 +1628,7 @@ impl RoutingState {
     /// Sets the held pin's fast usage in the state alone, for a test that prices a round over fast usage. A renewal
     /// folds its fast usage into the row the task both puts here and writes, so the stored row never lags the state.
     pub fn set_fast_burn(&mut self, key: &PinKey, burn: PinBurn) {
-        let key = self.canonical_key(key);
-        if let Some(pin) = self.pins.get_mut(&*key) {
+        if let Some(pin) = self.pin_mut(key) {
             pin.burn_fast = burn;
         }
     }
@@ -1909,6 +1904,17 @@ impl RoutingState {
             .filter(|state| state.incarnation == incarnation)
     }
 
+    /// `credits_of` the id's current holder in `snapshot`, `None` for an id the snapshot does not hold.
+    pub(crate) fn holder_credits(
+        &self,
+        snapshot: &RegistrySnapshot,
+        account_id: &str,
+    ) -> Option<&CreditsState> {
+        snapshot
+            .incarnation(account_id)
+            .and_then(|incarnation| self.credits_of(account_id, incarnation))
+    }
+
     /// The newest head's spend reset of a usage-based account with its observation, `None` until a head carried one.
     pub fn spend_head(&self, account_id: &str) -> Option<(i64, i64)> {
         self.spend_heads.get(account_id).copied()
@@ -2038,9 +2044,7 @@ impl RoutingState {
             Some((reset, _)) => (reset, SpendResetSource::Head),
             None => (spend_reset_estimate(now), SpendResetSource::Estimated),
         };
-        let held = snapshot
-            .account(account_id)
-            .and_then(|account| self.credits_of(account_id, account.incarnation));
+        let held = self.holder_credits(snapshot, account_id);
         let (utilization, share_source) = held.map_or((None, None), |state| {
             self.live_share(account_id, state, now)
         });
@@ -2059,18 +2063,17 @@ impl RoutingState {
         })
     }
 
-    /// The fast lane's credits read of the holder `incarnation`: `CreditsState::blocked_with_share` over the share
-    /// `spend_window` reads for a usage-based account, so the cap blocks nothing past the reset its share was read
-    /// under while the poll's reason and the disabled flag still do, and over the stored share for every other
-    /// account.
+    /// The fast lane's credits read of the id's current holder in `snapshot`, `None` for an id the snapshot does not
+    /// hold: `CreditsState::blocked_with_share` over the share `spend_window` reads for a usage-based account, so the
+    /// cap blocks nothing past the reset its share was read under while the poll's reason and the disabled flag still
+    /// do, and over the stored share for every other account.
     pub fn credits_blocked(
         &self,
         snapshot: &RegistrySnapshot,
         account_id: &str,
-        incarnation: u64,
         now: i64,
     ) -> Option<&str> {
-        let state = self.credits_of(account_id, incarnation)?;
+        let state = self.holder_credits(snapshot, account_id)?;
         let share = if snapshot.usage_based(account_id) {
             self.live_share(account_id, state, now).0
         } else {
@@ -3121,14 +3124,7 @@ impl RoutingState {
                 (p.clone(), burn)
             })
             .collect();
-        pins.sort_by(|a, b| {
-            (&a.0.key_id, &a.0.session_id, &a.0.agent_id, &a.0.model).cmp(&(
-                &b.0.key_id,
-                &b.0.session_id,
-                &b.0.agent_id,
-                &b.0.model,
-            ))
-        });
+        pins.sort_by(|a, b| a.0.key_parts().cmp(&b.0.key_parts()));
         let sum = pins.iter().filter_map(|(_, burn)| *burn).sum();
         (pins, sum)
     }
@@ -3286,18 +3282,16 @@ impl RoutingState {
         // once while its move is in flight. The booking is matched on the account and the pin row, never on the key
         // across accounts: a booking a request still in flight on the source holds there must not hide the live
         // row another request of the session moved onto the destination.
-        let reserved: HashSet<PinKey> = self
+        let reserved: HashSet<(&str, &str, &str, &str)> = self
             .live_bookings(account_id)
-            .filter_map(|reservation| reservation.pin.clone())
+            .filter_map(|reservation| reservation.pin.as_ref().map(PinKey::parts))
             .collect();
         for pin in self
             .pins
             .values()
             .filter(|pin| pin.account_id == account_id && keep(pin))
         {
-            // The key clones four strings per kept pin on the selection's hot path, and most selections hold no
-            // booking on the account.
-            if !reserved.is_empty() && reserved.contains(&pin.key()) {
+            if reserved.contains(&pin.key_parts()) {
                 continue;
             }
             for window in
@@ -3342,14 +3336,7 @@ impl RoutingState {
             .values()
             .filter(|p| p.account_id == account_id && keep(p))
             .collect();
-        pins.sort_by(|a, b| {
-            (&a.key_id, &a.session_id, &a.agent_id, &a.model).cmp(&(
-                &b.key_id,
-                &b.session_id,
-                &b.agent_id,
-                &b.model,
-            ))
-        });
+        pins.sort_by(|a, b| a.key_parts().cmp(&b.key_parts()));
         pins
     }
 
@@ -3645,14 +3632,7 @@ impl RoutingState {
 
     pub fn pins(&self) -> Vec<PinRow> {
         let mut v: Vec<_> = self.pins.values().cloned().collect();
-        v.sort_by(|a, b| {
-            (&a.key_id, &a.session_id, &a.agent_id, &a.model).cmp(&(
-                &b.key_id,
-                &b.session_id,
-                &b.agent_id,
-                &b.model,
-            ))
-        });
+        v.sort_by(|a, b| a.key_parts().cmp(&b.key_parts()));
         v
     }
 
@@ -3936,12 +3916,10 @@ impl RoutingState {
 /// A moved pin's lane under the dated id: the relay composes the next request's lane from the model it admits,
 /// which is the dated id from now on, so a lane still spelling the old model would read as another cache.
 fn relaned(lane: &str, spelling: &str, dated_id: &str) -> String {
-    match lane_parts(lane) {
-        [Some(effort), Some(thinking), Some(speed), Some(model)] if model == spelling => {
-            lane_key(dated_id, speed, thinking, effort)
-        }
-        _ => lane.to_string(),
-    }
+    lane_with_model(
+        lane,
+        |model| if model == spelling { dated_id } else { model },
+    )
 }
 
 /// Whether the snapshot's member for `(pool_id, account_id)` still carries a budget over `period`: a member the

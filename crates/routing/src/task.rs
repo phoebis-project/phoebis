@@ -2997,7 +2997,7 @@ impl Task {
                 // selection carries none.
                 let marked_here = writes.iter().rev().find_map(|write| match write {
                     StateWrite::UpsertPin(row)
-                        if row.key() == pin_key
+                        if row.key_parts() == pin_key.parts()
                             && mark_holds(row)
                             && before.as_ref().is_some_and(|old| old.epoch == row.epoch) =>
                     {
@@ -3652,7 +3652,7 @@ impl Task {
                 let snapshot = self.snapshot();
                 let blocked_before = self
                     .state
-                    .credits_blocked(&snapshot, &account_id, incarnation, (self.clock)())
+                    .credits_blocked(&snapshot, &account_id, (self.clock)())
                     .map(String::from);
                 let after = state.clone();
                 if !self.state.record_credits(&account_id, state) {

@@ -51,9 +51,7 @@ pub fn resolve(
         .iter()
         .map(|member| Candidate {
             account_id: member.account_id.clone(),
-            incarnation: snapshot
-                .account(&member.account_id)
-                .map_or(0, |account| account.incarnation),
+            incarnation: snapshot.incarnation(&member.account_id).unwrap_or(0),
             priority: member.priority,
             upstream_model: folded_model.to_string(),
         })

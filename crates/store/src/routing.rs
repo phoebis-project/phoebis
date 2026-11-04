@@ -18,6 +18,22 @@ pub struct PinKey {
     pub model: String,
 }
 
+impl PinKey {
+    pub fn new(key_id: &str, session_id: &str, agent_id: &str, model: &str) -> PinKey {
+        PinKey {
+            key_id: key_id.to_string(),
+            session_id: session_id.to_string(),
+            agent_id: agent_id.to_string(),
+            model: model.to_string(),
+        }
+    }
+
+    /// The four fields borrowed, in field order, as `PinRow::key_parts` lends a row's.
+    pub fn parts(&self) -> (&str, &str, &str, &str) {
+        (&self.key_id, &self.session_id, &self.agent_id, &self.model)
+    }
+}
+
 /// Tokens per second of each type, a pin's burn averaged over the pool's burn window and decayed from `burn_at`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PinBurn {
@@ -105,12 +121,13 @@ pub struct PinRow {
 
 impl PinRow {
     pub fn key(&self) -> PinKey {
-        PinKey {
-            key_id: self.key_id.clone(),
-            session_id: self.session_id.clone(),
-            agent_id: self.agent_id.clone(),
-            model: self.model.clone(),
-        }
+        PinKey::new(&self.key_id, &self.session_id, &self.agent_id, &self.model)
+    }
+
+    /// The key's fields borrowed, in `PinKey`'s field order: a compare or a sort of pins reads these, since `key`
+    /// clones four strings for every pin it walks.
+    pub fn key_parts(&self) -> (&str, &str, &str, &str) {
+        (&self.key_id, &self.session_id, &self.agent_id, &self.model)
     }
 }
 
