@@ -703,29 +703,34 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     {
         // The store takes the incarnation inside the insert, so the answer serializes the row it wrote.
         Ok(written) => row = written,
-        // The row and its members are one transaction, so a refused member leaves no pool to name.
-        Err(StoreError::AccountNotFound(id)) => {
-            return failure(StatusCode::NOT_FOUND, &format!("account {id} not found"))
-        }
-        Err(StoreError::AccountInPool {
-            account_id,
-            pool_id,
-        }) => {
-            return failure(
-                StatusCode::CONFLICT,
-                &format!("account {account_id} is a member of pool {pool_id}"),
-            )
-        }
         // The check above reads outside the insert, so a create that lost the race for the id arrives here.
         Err(StoreError::IdTaken(_)) => {
             return failure(StatusCode::CONFLICT, "a pool with this id exists")
         }
-        Err(error) => return store_failure(error),
+        // The row and its members are one transaction, so a refused member leaves no pool to name.
+        Err(error) => return membership_failure(error),
     }
     // The row exists from here on, so every answer, a refusal included, names it to the mutation log.
     let mut response = publish(&state, &row, StatusCode::CREATED).await;
     response.extensions_mut().insert(CreatedId(row.id));
     response
+}
+
+/// The refusals a membership write shares: a member account that does not exist, or one another pool holds.
+fn membership_failure(error: StoreError) -> Response {
+    match error {
+        StoreError::AccountNotFound(id) => {
+            failure(StatusCode::NOT_FOUND, &format!("account {id} not found"))
+        }
+        StoreError::AccountInPool {
+            account_id,
+            pool_id,
+        } => failure(
+            StatusCode::CONFLICT,
+            &format!("account {account_id} is a member of pool {pool_id}"),
+        ),
+        error => store_failure(error),
+    }
 }
 
 async fn publish(state: &AdminState, row: &PoolRow, status: StatusCode) -> Response {
@@ -814,19 +819,7 @@ pub(crate) async fn patch(
         Err(error @ (StoreError::PoolGuardrailBound(_) | StoreError::KeyGuardrailBound(_))) => {
             return attachment_refusal(error)
         }
-        Err(StoreError::AccountNotFound(id)) => {
-            return failure(StatusCode::NOT_FOUND, &format!("account {id} not found"))
-        }
-        Err(StoreError::AccountInPool {
-            account_id,
-            pool_id,
-        }) => {
-            return failure(
-                StatusCode::CONFLICT,
-                &format!("account {account_id} is a member of pool {pool_id}"),
-            )
-        }
-        Err(error) => return store_failure(error),
+        Err(error) => return membership_failure(error),
     }
     publish(&state, &row, StatusCode::OK).await
 }
@@ -905,19 +898,7 @@ pub(crate) async fn set_members(
     };
     match state.store.set_pool_members(&id, &writes, ACTOR) {
         Ok(at) => row.updated_at = at,
-        Err(StoreError::AccountNotFound(id)) => {
-            return failure(StatusCode::NOT_FOUND, &format!("account {id} not found"))
-        }
-        Err(StoreError::AccountInPool {
-            account_id,
-            pool_id,
-        }) => {
-            return failure(
-                StatusCode::CONFLICT,
-                &format!("account {account_id} is a member of pool {pool_id}"),
-            )
-        }
-        Err(error) => return store_failure(error),
+        Err(error) => return membership_failure(error),
     }
     publish(&state, &row, StatusCode::OK).await
 }
