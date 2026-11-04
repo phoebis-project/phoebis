@@ -1,6 +1,7 @@
 //! Hands out access tokens, refreshing at most one per account at a time.
 
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -9,8 +10,8 @@ use futures::future::{BoxFuture, FutureExt, Shared};
 use futures::stream::{FuturesUnordered, StreamExt};
 use phoebis_profile::Profile;
 use phoebis_store::{
-    AccountRow, AccountState, AttemptOutcome, CredentialBundle, Secret, StateCause, Store,
-    StoreError,
+    AccountRow, AccountState, AttemptOutcome, CredentialBundle, Identity, Secret, StateCause,
+    Store, StoreError,
 };
 use phoebis_transport::control::ControlClient;
 use phoebis_transport::response::ResponseHead;
@@ -19,7 +20,6 @@ use serde_json::Value;
 use tracing::Instrument;
 
 use crate::exchange::{control_request, parse_token_response, refresh_body, ControlKind};
-use crate::identity::identity_matches;
 use crate::usage::Refused;
 
 // A poisoned manager mutex means a prior panic happened while the refresh map was being mutated, so the
@@ -160,6 +160,78 @@ enum Armed {
     Uncertain,
 }
 
+/// Why a refresh attempt ended other than committed, holding the stored cause word and the detail sentence of each
+/// ending side by side, since the ledger's refresh rows read the word.
+enum RefreshCause {
+    CommitFailed,
+    IdentityMismatch,
+    NoRefreshToken,
+    QuarantinedAtStart,
+    Rejected { status: u16, code: Option<String> },
+    ResponseLost,
+    ResponseUnreadable,
+    StaleLifecycle,
+    Transport,
+}
+
+impl RefreshCause {
+    /// The cause the attempt stores, which for a rejection is the endpoint's code or else its status.
+    fn word(&self) -> String {
+        match self {
+            RefreshCause::CommitFailed => "commit_failed_after_a_rotated_response".into(),
+            RefreshCause::IdentityMismatch => "identity_mismatch".into(),
+            RefreshCause::NoRefreshToken => "no_refresh_token".into(),
+            RefreshCause::QuarantinedAtStart => "quarantined_at_start".into(),
+            RefreshCause::Rejected { status, code } => {
+                code.clone().unwrap_or_else(|| status.to_string())
+            }
+            RefreshCause::ResponseLost => "refresh_response_lost".into(),
+            RefreshCause::ResponseUnreadable => "refresh_response_could_not_be_read".into(),
+            RefreshCause::StaleLifecycle => "stale_lifecycle".into(),
+            RefreshCause::Transport => "transport".into(),
+        }
+    }
+
+    /// The attempt's detail sentence, with the error that ended it where there is one.
+    fn detail(&self, error: Option<&dyn Display>) -> String {
+        let sentence: String = match self {
+            RefreshCause::CommitFailed => "commit failed after a rotated response".into(),
+            RefreshCause::IdentityMismatch => "identity mismatch".into(),
+            RefreshCause::NoRefreshToken => "no refresh token".into(),
+            RefreshCause::QuarantinedAtStart => "quarantined at start".into(),
+            RefreshCause::Rejected {
+                status,
+                code: Some(code),
+            } => format!("refresh rejected with status {status} ({code})"),
+            RefreshCause::Rejected { status, code: None } => {
+                format!("refresh rejected with status {status}")
+            }
+            RefreshCause::ResponseLost => "refresh response lost".into(),
+            RefreshCause::ResponseUnreadable => "refresh response could not be read".into(),
+            RefreshCause::StaleLifecycle => "stale lifecycle".into(),
+            RefreshCause::Transport => "transport".into(),
+        };
+        match error {
+            Some(error) => format!("{sentence}: {error}"),
+            None => sentence,
+        }
+    }
+
+    fn failed(self, error: Option<&dyn Display>) -> AttemptOutcome {
+        AttemptOutcome::Failed {
+            cause: self.word(),
+            detail: self.detail(error),
+        }
+    }
+
+    fn uncertain(self, error: Option<&dyn Display>) -> AttemptOutcome {
+        AttemptOutcome::Uncertain {
+            cause: self.word(),
+            detail: self.detail(error),
+        }
+    }
+}
+
 /// Where an acquisition takes the store reads a cache miss costs.
 #[derive(Clone, Copy)]
 enum Read {
@@ -171,36 +243,26 @@ enum Read {
     Inline,
 }
 
-/// Where a bundle stands in the registry: the holder's incarnation and lifecycle generation beside the bundle's own
-/// generation, since a recreated id and a reconnected slot both restart the generation at 1 and a figure read alone
-/// would match the old holder's bundle.
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct Lineage {
-    incarnation: u64,
-    lifecycle_generation: u64,
-    generation: u64,
-}
-
-impl Lineage {
-    /// The row's holder and slot at the bundle generation `generation`.
-    fn of(account: &AccountRow, generation: u64) -> Lineage {
-        Lineage {
-            incarnation: account.incarnation,
-            lifecycle_generation: account.lifecycle_generation,
-            generation,
+impl Read {
+    /// Runs `op` on the store where the read says. The join error of a blocking run is the caller's to handle.
+    async fn run<T, F>(self, store: &Arc<Store>, op: F) -> Result<T, tokio::task::JoinError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&Store) -> T + Send + 'static,
+    {
+        match self {
+            Read::Blocking => {
+                let store = store.clone();
+                tokio::task::spawn_blocking(move || op(&store)).await
+            }
+            Read::Inline => Ok(op(store)),
         }
-    }
-
-    /// Whether the lineage is the row's holder and slot, at whatever generation.
-    fn of_row(&self, account: &AccountRow) -> bool {
-        self.incarnation == account.incarnation
-            && self.lifecycle_generation == account.lifecycle_generation
     }
 }
 
 /// A bundle the manager read or committed, under its lineage.
 struct BundleEntry {
-    lineage: Lineage,
+    lineage: Refused,
     bundle: Arc<CredentialBundle>,
 }
 
@@ -216,7 +278,7 @@ struct CacheSlot {
     /// reload, while the rows the legs carry still read `ready`, and the bundle stored under the lineage is the one
     /// the mark is about: a miss on it is refused rather than read. A credential committed past it, by a pairing or a
     /// disconnect, ends the refusal.
-    refused: Option<Lineage>,
+    refused: Option<Refused>,
 }
 
 impl CacheSlot {
@@ -225,7 +287,7 @@ impl CacheSlot {
     fn refuses(&self, account: &AccountRow, expected: Option<u64>) -> bool {
         self.refused.is_some_and(|refused| {
             refused.of_row(account)
-                && expected.is_none_or(|expected| expected <= refused.generation)
+                && expected.is_none_or(|expected| expected <= refused.credential_generation)
         })
     }
 
@@ -352,27 +414,20 @@ impl CredentialManager {
                     AcquireError::Unavailable(detail) => detail.clone(),
                     other => other.to_string(),
                 };
-                match read {
-                    // The read and the write wait on the store's connection, which a leg's worker must not, and the
-                    // warning keeps the caller's span.
-                    Read::Blocking => {
-                        let store = self.inner.store.clone();
-                        let id = account_id.to_string();
-                        let incarnation = account.incarnation;
-                        let span = tracing::Span::current();
-                        let recorded = tokio::task::spawn_blocking(move || {
-                            let _entered = span.enter();
-                            record_failure(&store, &id, incarnation, &message);
-                        })
-                        .await;
-                        if let Err(error) = recorded {
-                            if error.is_panic() {
-                                std::panic::resume_unwind(error.into_panic());
-                            }
-                        }
-                    }
-                    Read::Inline => {
-                        record_failure(&self.inner.store, account_id, account.incarnation, &message)
+                let id = account_id.to_string();
+                let incarnation = account.incarnation;
+                // The record reads and writes the store, so it runs where `read` says. The span is entered inside the
+                // closure, so the warning keeps the caller's span on a blocking thread too.
+                let span = tracing::Span::current();
+                let recorded = read
+                    .run(&self.inner.store, move |store| {
+                        let _entered = span.enter();
+                        record_failure(store, &id, incarnation, &message);
+                    })
+                    .await;
+                if let Err(error) = recorded {
+                    if error.is_panic() {
+                        std::panic::resume_unwind(error.into_panic());
                     }
                 }
                 Err(failure)
@@ -418,7 +473,7 @@ impl CredentialManager {
         if !superseded {
             self.inner.refuse(
                 &account.id,
-                Lineage::of(account, credential_generation),
+                Refused::of(account, credential_generation),
                 Some(epoch),
             );
         }
@@ -502,10 +557,7 @@ impl CredentialManager {
             self.inner.store.resolve_refresh_attempt(
                 attempt.id,
                 incarnation,
-                AttemptOutcome::Failed {
-                    cause: "quarantined_at_start".into(),
-                    detail: "quarantined at start".into(),
-                },
+                RefreshCause::QuarantinedAtStart.failed(None),
             )?;
             if !recovered.contains(&attempt.account_id) {
                 recovered.push(attempt.account_id);
@@ -551,15 +603,8 @@ impl CredentialManager {
     /// `mark_reauth`'s conditional write under `StateCause::AuthFailed`, fenced on `refused`: a refresh or a re-pair
     /// that moved a generation since the fetch lands nothing.
     pub fn mark_auth_failed(&self, account_id: &str, refused: Refused) -> Option<LandedMark> {
-        self.inner.mark_reauth(
-            account_id,
-            StateCause::AuthFailed,
-            Lineage {
-                incarnation: refused.incarnation,
-                lifecycle_generation: refused.lifecycle_generation,
-                generation: refused.credential_generation,
-            },
-        )
+        self.inner
+            .mark_reauth(account_id, StateCause::AuthFailed, refused)
     }
 
     /// Exposes the store so services built on top of the manager, like the usage cache, can read lifecycle
@@ -671,20 +716,13 @@ impl Inner {
                 Lookup::Refused => return Err(AcquireError::ReauthRequired(None)),
                 Lookup::Miss => {}
             }
-            let stored = match read {
-                Read::Blocking => {
-                    let store = self.store.clone();
-                    let id = account.id.clone();
-                    tokio::task::spawn_blocking(move || store.credentials(&id))
-                        .await
-                        .map_err(|error| {
-                            AcquireError::Unavailable(format!(
-                                "the credential read failed: {error}"
-                            ))
-                        })??
-                }
-                Read::Inline => self.store.credentials(&account.id)?,
-            };
+            let id = account.id.clone();
+            let stored = read
+                .run(&self.store, move |store| store.credentials(&id))
+                .await
+                .map_err(|error| {
+                    AcquireError::Unavailable(format!("the credential read failed: {error}"))
+                })??;
             let bundle = Arc::new(stored.ok_or(AcquireError::Unpaired)?);
             if self.remember(account, bundle.clone(), epoch) {
                 return Ok(bundle);
@@ -714,7 +752,8 @@ impl Inner {
             .as_ref()
             .filter(|entry| {
                 entry.lineage.of_row(account)
-                    && expected.is_none_or(|expected| entry.lineage.generation >= expected)
+                    && expected
+                        .is_none_or(|expected| entry.lineage.credential_generation >= expected)
             })
             .map(|entry| entry.bundle.clone());
         let found = match hit {
@@ -751,15 +790,16 @@ impl Inner {
         if bundle.lifecycle_generation != account.lifecycle_generation {
             return true;
         }
-        let lineage = Lineage::of(account, bundle.generation);
+        let lineage = Refused::of(account, bundle.generation);
         if let Some(refused) = slot.refused.filter(|refused| refused.of_row(account)) {
-            if lineage.generation <= refused.generation {
+            if lineage.credential_generation <= refused.credential_generation {
                 return false;
             }
             slot.refused = None;
         }
         let newer = slot.entry.as_ref().is_some_and(|entry| {
-            entry.lineage.of_row(account) && entry.lineage.generation > lineage.generation
+            entry.lineage.of_row(account)
+                && entry.lineage.credential_generation > lineage.credential_generation
         });
         if !newer {
             slot.entry = Some(BundleEntry { lineage, bundle });
@@ -888,8 +928,8 @@ impl Inner {
                 attempt,
                 &account,
                 &bundle,
-                "no_refresh_token".into(),
-                "no refresh token".into(),
+                RefreshCause::NoRefreshToken,
+                None,
             ));
         };
         let scopes = if bundle.scopes.is_empty() {
@@ -909,10 +949,7 @@ impl Inner {
                 self.resolve(
                     attempt,
                     account.incarnation,
-                    AttemptOutcome::Failed {
-                        cause: "transport".into(),
-                        detail: format!("transport: {error}"),
-                    },
+                    RefreshCause::Transport.failed(Some(&error)),
                 );
                 self.arm_backoff(account_id, TRANSIENT_BACKOFF_MS, Armed::Refused);
                 return self.stored_or(
@@ -930,8 +967,8 @@ impl Inner {
                     attempt,
                     &account,
                     &bundle,
-                    "refresh_response_lost".into(),
-                    format!("refresh response lost: {error}"),
+                    RefreshCause::ResponseLost,
+                    Some(&error),
                 );
             }
         };
@@ -939,16 +976,15 @@ impl Inner {
         tracing::debug!(status = head.status, code, "refresh response status read");
 
         if head.status != 200 {
-            let detail = match &code {
-                Some(code) => format!("refresh rejected with status {} ({code})", head.status),
-                None => format!("refresh rejected with status {}", head.status),
+            let cause = RefreshCause::Rejected {
+                status: head.status,
+                code: code.clone(),
             };
-            let cause = code.clone().unwrap_or_else(|| head.status.to_string());
             // The refresh token is gone, and no retry brings it back; only re-pairing does.
             if head.status == 401
                 || (head.status == 400 && code.as_deref() == Some("invalid_grant"))
             {
-                return Err(self.refused_for_good(attempt, &account, &bundle, cause, detail));
+                return Err(self.refused_for_good(attempt, &account, &bundle, cause, None));
             }
             // A rejected request never got far enough to rotate anything, so the stored refresh token is
             // still the live one and the only thing to do is wait. A 5xx is the one status where that is not
@@ -957,14 +993,8 @@ impl Inner {
             // out every account that reaches its margin while it lasts; the accepted cost is that a rotation
             // hidden behind a 5xx is found later through invalid_grant, which ends in re-pairing either way,
             // and the minute of backoff bounds how fast the dead token can be spent in the meantime.
-            self.resolve(
-                attempt,
-                account.incarnation,
-                AttemptOutcome::Failed {
-                    cause,
-                    detail: detail.clone(),
-                },
-            );
+            let detail = cause.detail(None);
+            self.resolve(attempt, account.incarnation, cause.failed(None));
             let asked = retry_after_ms(&head, (self.clock)(), MAX_NOT_BEFORE_MS);
             self.arm_backoff(
                 account_id,
@@ -986,8 +1016,8 @@ impl Inner {
                     attempt,
                     &account,
                     &bundle,
-                    "refresh_response_could_not_be_read".into(),
-                    "refresh response could not be read".into(),
+                    RefreshCause::ResponseUnreadable,
+                    None,
                 );
             }
         };
@@ -1000,8 +1030,8 @@ impl Inner {
                     attempt,
                     &account,
                     &bundle,
-                    "identity_mismatch".into(),
-                    "identity mismatch".into(),
+                    RefreshCause::IdentityMismatch,
+                    None,
                 ));
             }
         }
@@ -1046,10 +1076,7 @@ impl Inner {
                 self.resolve(
                     attempt,
                     account.incarnation,
-                    AttemptOutcome::Failed {
-                        cause: "stale_lifecycle".into(),
-                        detail: "stale lifecycle".into(),
-                    },
+                    RefreshCause::StaleLifecycle.failed(None),
                 );
                 Err(RefreshFailure::Disconnected)
             }
@@ -1060,8 +1087,8 @@ impl Inner {
                 attempt,
                 &account,
                 &bundle,
-                "commit_failed_after_a_rotated_response".into(),
-                format!("commit failed after a rotated response: {error}"),
+                RefreshCause::CommitFailed,
+                Some(&error),
             ),
         }
     }
@@ -1073,18 +1100,14 @@ impl Inner {
         attempt: u64,
         account: &AccountRow,
         bundle: &CredentialBundle,
-        cause: String,
-        detail: String,
+        cause: RefreshCause,
+        error: Option<&dyn Display>,
     ) -> RefreshFailure {
-        self.resolve(
-            attempt,
-            account.incarnation,
-            AttemptOutcome::Failed { cause, detail },
-        );
+        self.resolve(attempt, account.incarnation, cause.failed(error));
         let mark = self.mark_reauth(
             &account.id,
             StateCause::RefreshFailed,
-            Lineage::of(account, bundle.generation),
+            Refused::of(account, bundle.generation),
         );
         RefreshFailure::ReauthRequired(mark)
     }
@@ -1096,14 +1119,10 @@ impl Inner {
         attempt: u64,
         account: &AccountRow,
         bundle: &CredentialBundle,
-        cause: String,
-        detail: String,
+        cause: RefreshCause,
+        error: Option<&dyn Display>,
     ) -> Result<AccessToken, RefreshFailure> {
-        self.resolve(
-            attempt,
-            account.incarnation,
-            AttemptOutcome::Uncertain { cause, detail },
-        );
+        self.resolve(attempt, account.incarnation, cause.uncertain(error));
         self.arm_backoff(&account.id, SERVER_ERROR_BACKOFF_MS, Armed::Uncertain);
         self.stored_or(account, bundle, RefreshFailure::Quarantined)
     }
@@ -1183,7 +1202,7 @@ impl Inner {
         &self,
         account_id: &str,
         cause: StateCause,
-        fence: Lineage,
+        fence: Refused,
     ) -> Option<LandedMark> {
         let landed = self
             .store
@@ -1193,7 +1212,7 @@ impl Inner {
                 cause,
                 fence.incarnation,
                 fence.lifecycle_generation,
-                fence.generation,
+                fence.credential_generation,
             )
             .is_ok_and(|landed| landed.is_some());
         if !landed {
@@ -1206,14 +1225,14 @@ impl Inner {
             cause,
             incarnation: fence.incarnation,
             lifecycle_generation: fence.lifecycle_generation,
-            credential_generation: fence.generation,
+            credential_generation: fence.credential_generation,
         })
     }
 
     /// Drops the account's cached bundle and refuses `lineage`, so a miss on it answers the refusal rather than reading
     /// the refused bundle back from the store. With `since`, the epoch a caller read before its own store read, an
     /// invalidation that moved the epoch meanwhile leaves the slot as it is.
-    fn refuse(&self, account_id: &str, lineage: Lineage, since: Option<u64>) {
+    fn refuse(&self, account_id: &str, lineage: Refused, since: Option<u64>) {
         let mut bundles = self.bundles.lock().expect(LOCK_POISONED);
         let slot = bundles.entry(account_id.to_string()).or_default();
         if since.is_some_and(|epoch| epoch != slot.epoch) {
@@ -1252,6 +1271,17 @@ fn refuse_unusable(account: &AccountRow) -> Result<(), AcquireError> {
         AccountState::Unpaired => Err(AcquireError::Unpaired),
         _ => Ok(()),
     }
+}
+
+/// Whether a bundle whose token names the upstream account `account_uuid` may be committed against the paired
+/// identity. `account_uuid` is optional because a refresh response may omit the whole `account` object.
+///
+/// Only the account uuid decides. An email address and an organization can both change while the paired
+/// upstream account stays the same, so comparing them would quarantine accounts over a rename or an org
+/// move. The uuid is the one stable identifier of the pairing. A token that names no account cannot
+/// contradict it and is accepted.
+fn identity_matches(stored: &Identity, account_uuid: Option<&str>) -> bool {
+    account_uuid.is_none_or(|uuid| uuid == stored.account_uuid)
 }
 
 fn access_token(account: &AccountRow, bundle: &CredentialBundle) -> AccessToken {
@@ -1529,10 +1559,10 @@ mod tests {
             )
             .unwrap();
         let account = store.account("a").unwrap().unwrap();
-        let refused = Lineage {
+        let refused = Refused {
             incarnation: account.incarnation,
             lifecycle_generation: account.lifecycle_generation,
-            generation,
+            credential_generation: generation,
         };
         let epoch = {
             let mut bundles = manager.inner.bundles.lock().unwrap();

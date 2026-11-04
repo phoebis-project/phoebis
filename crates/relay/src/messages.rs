@@ -21,7 +21,7 @@ use phoebis_bus::{
     AccountSelected, AttemptOutcome, AutoMode, Bus, Classifier, ClientFacts, CooldownSet,
     DiagnosticsSource, Event, Fork, GuardrailMatch, Interruption, Kind, Origin, Outcome,
     RequestComplete, RequestObserved, RequestShape, ResponseChunk, ResponseFacts,
-    ResponseHead as BusHead, Usage, ACCOUNT_CANCELED_CODE, CLIENT_GONE_CODE, ROUTER_SHUTDOWN_CODE,
+    ResponseHead as BusHead, Usage,
 };
 use phoebis_cch::Stamp;
 use phoebis_guardrails::{evaluate_all, Evaluation, HeaderLookup, Lookup, RequestFacts};
@@ -62,8 +62,9 @@ use crate::credit::CreditStore;
 use crate::dispatch::{self, until_canceled, AttemptFailure, Sent};
 use crate::errors::{
     accounts_at_cap, auth_failure, body_budget_exhausted, key_body_reads, key_refusal,
-    relay_failure, Failure, ACCOUNTS_AT_CAP, ACCOUNT_CANCELED, METHOD_NOT_ALLOWED,
-    MODEL_NOT_ALLOWED, NOT_FOUND, ROUTER_UNAVAILABLE, UPSTREAM_UNREACHABLE,
+    relay_failure, Failure, ACCOUNTS_AT_CAP, ACCOUNT_CANCELED, ACCOUNT_CANCELED_CODE,
+    CLIENT_GONE_CODE, METHOD_NOT_ALLOWED, MODEL_NOT_ALLOWED, NOT_FOUND, ROUTER_SHUTDOWN_CODE,
+    ROUTER_UNAVAILABLE, UPSTREAM_UNREACHABLE,
 };
 use crate::exhaustion::{exhaustion_code, exhaustion_response, pool_moved_response};
 use crate::facts::{BodyFacts, ClientHints};

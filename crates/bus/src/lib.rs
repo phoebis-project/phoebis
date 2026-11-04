@@ -15,9 +15,8 @@ pub use event::{
     header_published, user_agent_cut, user_agent_of, AccountSelected, AttemptOutcome, AutoMode,
     Classifier, ClientFacts, CooldownSet, DiagnosticsSource, Event, Fork, GuardrailMatch,
     Interruption, Kind, Origin, Outcome, Phase, RequestComplete, RequestObserved, RequestShape,
-    ResponseChunk, ResponseFacts, ResponseHead, Usage, ACCOUNT_CANCELED_CODE,
-    BODY_SHAPE_ERROR_CODE, CLIENT_GONE_CODE, HEADER_DENYLIST, NEVER_COPIED, OTHER_CLIENT,
-    ROUTER_SHUTDOWN_CODE, USER_AGENT_MAX_BYTES,
+    ResponseChunk, ResponseFacts, ResponseHead, Usage, BODY_SHAPE_ERROR_CODE, NEVER_COPIED,
+    OTHER_CLIENT, USER_AGENT_MAX_BYTES,
 };
 
 /// Deep enough to hold a whole streamed answer's chunks behind a consumer that is busy for a moment; a
@@ -25,6 +24,8 @@ pub use event::{
 pub const QUEUE_DEPTH: usize = 4_096;
 
 const LOCK_POISONED: &str = "bus subscriber list poisoned by a prior panic";
+
+const EVENT_TAKEN: &str = "only the last slot takes the published event";
 
 #[derive(Debug, Default)]
 pub struct SubscriberStats {
@@ -91,11 +92,20 @@ impl Bus {
         }
     }
 
-    /// Never waits: one clone per live subscriber, `try_send`, and a drop counted where the queue is full.
+    /// Never waits: a clone for each live subscriber but the last, which takes the event itself, `try_send`, and a
+    /// drop counted where the queue is full.
     pub fn publish(&self, event: Event) {
         let mut slots = self.slots.lock().expect(LOCK_POISONED);
+        let mut left = slots.len();
+        let mut event = Some(event);
         slots.retain(|slot| {
-            let open = offer(slot, event.clone());
+            left -= 1;
+            let copy = if left == 0 {
+                event.take()
+            } else {
+                event.clone()
+            };
+            let open = offer(slot, copy.expect(EVENT_TAKEN));
             if !open {
                 tracing::debug!(subscriber = slot.name, "a bus subscriber went away");
             }
@@ -114,11 +124,19 @@ impl Bus {
     pub async fn publish_fact(&self, event: Event) {
         // Cloned out of the lock, so no await holds it.
         let slots: Vec<Slot> = self.slots.lock().expect(LOCK_POISONED).clone();
+        let last = slots.len().saturating_sub(1);
+        let mut event = Some(event);
         let mut closed = Vec::new();
-        for slot in slots {
+        for (index, slot) in slots.into_iter().enumerate() {
+            let copy = if index == last {
+                event.take()
+            } else {
+                event.clone()
+            };
+            let copy = copy.expect(EVENT_TAKEN);
             let gone = match slot.delivery {
-                Delivery::Durable => slot.events.send(event.clone()).await.is_err(),
-                Delivery::BestEffort => !offer(&slot, event.clone()),
+                Delivery::Durable => slot.events.send(copy).await.is_err(),
+                Delivery::BestEffort => !offer(&slot, copy),
             };
             if gone {
                 closed.push(slot.name);

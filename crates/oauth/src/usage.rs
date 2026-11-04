@@ -216,13 +216,32 @@ impl PollFault {
     }
 }
 
-/// The credential a usage 401 refused, the fence the re-pair mark's conditional write compares: the account's lineage
-/// at the fetch's start and the acquired token's generation.
+/// Where a bundle stands in the registry: the holder's incarnation and lifecycle generation beside the bundle's own
+/// generation, since a recreated id and a reconnected slot both restart the generation at 1 and a figure read alone
+/// would match the old holder's bundle. A usage 401 answers it as the credential it refused, the fence the re-pair
+/// mark's conditional write compares: the account's lineage at the fetch's start and the acquired token's generation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Refused {
     pub incarnation: u64,
     pub lifecycle_generation: u64,
     pub credential_generation: u64,
+}
+
+impl Refused {
+    /// The row's holder and slot at the bundle generation `credential_generation`.
+    pub(crate) fn of(account: &AccountRow, credential_generation: u64) -> Refused {
+        Refused {
+            incarnation: account.incarnation,
+            lifecycle_generation: account.lifecycle_generation,
+            credential_generation,
+        }
+    }
+
+    /// Whether the lineage is the row's holder and slot, at whatever generation.
+    pub(crate) fn of_row(&self, account: &AccountRow) -> bool {
+        self.incarnation == account.incarnation
+            && self.lifecycle_generation == account.lifecycle_generation
+    }
 }
 
 /// What a poll's fetch found beyond its snapshot, handed to the caller that started the fetch alone, so one fetch
@@ -237,6 +256,16 @@ pub enum PollIssue {
         code: String,
     },
     Unauthorized(Refused),
+}
+
+impl PollIssue {
+    /// The error text the snapshot records for the issue.
+    fn text(&self) -> String {
+        match self {
+            PollIssue::Fault(fault) | PollIssue::PlanRefused { fault, .. } => fault.text.clone(),
+            PollIssue::Unauthorized(_) => status_fault(USAGE_ENDPOINT, 401).text,
+        }
+    }
 }
 
 /// Reads every top-level object with a `utilization` member as a window, keeping its key. `extra_usage`
@@ -375,12 +404,7 @@ enum FetchFailure {
         received_at: i64,
         retry_after: Option<i64>,
     },
-    Fault(PollFault),
-    PlanRefused {
-        fault: PollFault,
-        code: String,
-    },
-    Unauthorized(Refused),
+    Issue(PollIssue),
 }
 
 /// Whose reading a fetch or a cache entry is. A deleted id created again draws a new incarnation but starts
@@ -389,6 +413,23 @@ enum FetchFailure {
 struct Identity {
     incarnation: u64,
     lifecycle_generation: u64,
+}
+
+impl Identity {
+    fn of(account: &AccountRow) -> Identity {
+        Identity {
+            incarnation: account.incarnation,
+            lifecycle_generation: account.lifecycle_generation,
+        }
+    }
+
+    fn at(self, credential_generation: u64) -> Refused {
+        Refused {
+            incarnation: self.incarnation,
+            lifecycle_generation: self.lifecycle_generation,
+            credential_generation,
+        }
+    }
 }
 
 /// The snapshot cached for a first-ever fetch that failed: no windows to fall back on, but a real snapshot
@@ -506,15 +547,15 @@ fn status_fault(endpoint: &'static str, status: u16) -> PollFault {
 /// names an organization's refusal, and every other status a passing fault.
 fn usage_refusal(status: u16, body: &[u8], fence: Refused) -> FetchFailure {
     if status == 401 {
-        return FetchFailure::Unauthorized(fence);
+        return FetchFailure::Issue(PollIssue::Unauthorized(fence));
     }
     let fault = status_fault(USAGE_ENDPOINT, status);
-    match error_code(body) {
+    FetchFailure::Issue(match error_code(body) {
         Some(code) if status == 403 && code == PLAN_REFUSED_CODE => {
-            FetchFailure::PlanRefused { fault, code }
+            PollIssue::PlanRefused { fault, code }
         }
-        _ => FetchFailure::Fault(fault),
-    }
+        _ => PollIssue::Fault(fault),
+    })
 }
 
 /// An error body's `error.details.error_code`, `None` for a body that is no JSON or names none.
@@ -704,10 +745,7 @@ impl UsageService {
     /// under the id that no route invalidated), so no caller shows the old holder's windows as the new one's. The
     /// holder is the row the caller holds, so the answer is for the account its response shows.
     pub fn latest_for(&self, account: &AccountRow) -> Option<UsageSnapshot> {
-        let identity = Identity {
-            incarnation: account.incarnation,
-            lifecycle_generation: account.lifecycle_generation,
-        };
+        let identity = Identity::of(account);
         self.inner
             .cache
             .lock()
@@ -865,10 +903,7 @@ impl Inner {
             .account(account_id)
             .ok()
             .flatten()
-            .map(|account| Identity {
-                incarnation: account.incarnation,
-                lifecycle_generation: account.lifecycle_generation,
-            })
+            .map(|account| Identity::of(&account))
     }
 
     /// The held answer while the account waits out its hold at `now`.
@@ -929,11 +964,7 @@ impl Inner {
             .await
             .expect("usage semaphore is never closed");
         let sent_at = (self.clock)();
-        let fence = Refused {
-            incarnation: lineage.incarnation,
-            lifecycle_generation: lineage.lifecycle_generation,
-            credential_generation: token.generation,
-        };
+        let fence = lineage.at(token.generation);
         let result = self
             .request_usage(token.secret.expose(), fence, permit)
             .await;
@@ -951,7 +982,10 @@ impl Inner {
         let sent = self.control.send(req, host, FETCH_TIMEOUT).await;
         drop(permit);
         let (head, body) = sent.map_err(|error| {
-            FetchFailure::Fault(transport_fault(USAGE_ENDPOINT, &error.to_string()))
+            FetchFailure::Issue(PollIssue::Fault(transport_fault(
+                USAGE_ENDPOINT,
+                &error.to_string(),
+            )))
         })?;
         if head.status == 429 {
             let received_at = (self.clock)();
@@ -1092,19 +1126,7 @@ impl Inner {
                         Some((received_at, retry_after)),
                         None,
                     ),
-                    FetchFailure::Fault(fault) => {
-                        (fault.text.clone(), None, Some(PollIssue::Fault(fault)))
-                    }
-                    FetchFailure::PlanRefused { fault, code } => (
-                        fault.text.clone(),
-                        None,
-                        Some(PollIssue::PlanRefused { fault, code }),
-                    ),
-                    FetchFailure::Unauthorized(refused) => (
-                        status_fault(USAGE_ENDPOINT, 401).text,
-                        None,
-                        Some(PollIssue::Unauthorized(refused)),
-                    ),
+                    FetchFailure::Issue(issue) => (issue.text(), None, Some(issue)),
                 };
                 let last_error = Some(message.clone());
                 let snapshot = match previous {

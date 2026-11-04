@@ -7,8 +7,7 @@ use std::collections::HashMap;
 use bytes::Bytes;
 use phoebis_bus::{
     user_agent_of, AccountSelected, AutoMode, Event, Outcome, Phase, RequestComplete,
-    RequestObserved, ResponseChunk, ResponseHead, ACCOUNT_CANCELED_CODE, BODY_SHAPE_ERROR_CODE,
-    CLIENT_GONE_CODE, ROUTER_SHUTDOWN_CODE,
+    RequestObserved, ResponseChunk, ResponseHead, BODY_SHAPE_ERROR_CODE,
 };
 use phoebis_oauth::Clock;
 use phoebis_relay::UnifiedHeaders;
@@ -514,14 +513,9 @@ fn finish(entry: InFlight, mut complete: RequestComplete, now: i64) -> Vec<Recor
         last.cleared_input_tokens = response.cleared_input_tokens;
         last.refusal_category = response.refusal_category;
         last.refusal_recommended_model = response.refusal_recommended_model;
-        // No transport failed a headless attempt that the account's removal, the client's leaving or the router's
-        // shutdown cut short, so it files as canceled over its row's `transport_error` default.
-        if last.upstream_status.is_none()
-            && matches!(
-                complete.error_code.as_deref(),
-                Some(ACCOUNT_CANCELED_CODE | CLIENT_GONE_CODE | ROUTER_SHUTDOWN_CODE)
-            )
-        {
+        // No transport failed a headless attempt of a request that ended canceled, so it files as canceled over its
+        // row's `transport_error` default.
+        if last.upstream_status.is_none() && complete.outcome == Outcome::Canceled {
             last.outcome = "canceled".into();
         }
         // Only the committed answer has a message; an earlier attempt of the request never carries one.

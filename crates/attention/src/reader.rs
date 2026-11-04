@@ -8,9 +8,9 @@ use std::collections::{HashMap, HashSet};
 
 use phoebis_bus::{Event, Kind as RequestKind, Origin, Outcome};
 use phoebis_ledger::{
-    polled, ParkedSummary, RoutingCondition, UnpricedModel, CEILING_SETTING,
-    DESTINATION_SPENT_KIND, IN_FLIGHT_TTL_MS, METER_DRIFT_KIND, SHED_NO_RUNWAY_KIND,
-    SLOWED_LONG_KIND, SLOW_SETTINGS, WALL_REACHED_KIND, WALL_SETTINGS,
+    polled, ParkedSummary, RoutingCondition, RoutingKind, UnpricedModel, CEILING_SETTING,
+    IN_FLIGHT_TTL_MS, SHED_CAP_SETTING, SLOW_DOWN_STRETCH_SETTING, SLOW_SETTINGS, WALL_SETTINGS,
+    WINDOW_CEILING_SETTING,
 };
 use phoebis_oauth::UsageService;
 use phoebis_routing::{shed_cap, RegistrySnapshot, RouterHandle, DAY_MS};
@@ -93,12 +93,18 @@ impl Kind {
             Kind::LedgerRecordParked => "ledger_record_parked",
             Kind::PollBackoff => "poll_backoff",
             Kind::ModelUnpriced => "model_unpriced",
-            Kind::MeterDrift => METER_DRIFT_KIND,
-            Kind::WallReached => WALL_REACHED_KIND,
-            Kind::DestinationSpent => DESTINATION_SPENT_KIND,
-            Kind::ShedNoRunway => SHED_NO_RUNWAY_KIND,
-            Kind::SlowedLong => SLOWED_LONG_KIND,
+            Kind::MeterDrift => RoutingKind::MeterDrift.as_str(),
+            Kind::WallReached => RoutingKind::WallReached.as_str(),
+            Kind::DestinationSpent => RoutingKind::DestinationSpent.as_str(),
+            Kind::ShedNoRunway => RoutingKind::ShedNoRunway.as_str(),
+            Kind::SlowedLong => RoutingKind::SlowedLong.as_str(),
         }
+    }
+
+    /// The ledger's kind for a condition its hourly fold writes, read off the word, so `as_str` alone pairs the two.
+    /// `None` for a kind the reader derives itself.
+    fn routing(self) -> Option<RoutingKind> {
+        RoutingKind::parse(self.as_str())
     }
 }
 
@@ -136,6 +142,10 @@ pub struct Subject {
 }
 
 impl Subject {
+    fn new(kind: SubjectKind, id: String, label: String) -> Subject {
+        Subject { kind, id, label }
+    }
+
     fn account(account: &AccountRow) -> Subject {
         Subject {
             kind: SubjectKind::Account,
@@ -222,6 +232,12 @@ struct InFlight {
     seen_at: i64,
 }
 
+impl InFlight {
+    fn fresh(&self, now: i64) -> bool {
+        now - self.seen_at < IN_FLIGHT_TTL_MS
+    }
+}
+
 struct Exhausted {
     key: Option<String>,
     since: i64,
@@ -241,9 +257,7 @@ struct Drift {
 /// drift refusal activates its version until a client inference from that version succeeds.
 pub(crate) fn observe(state: &mut ReaderState, event: &Event, now: i64) {
     if now - state.swept_at >= IN_FLIGHT_TTL_MS {
-        state
-            .in_flight
-            .retain(|_, e| now - e.seen_at < IN_FLIGHT_TTL_MS);
+        state.in_flight.retain(|_, e| e.fresh(now));
         state.swept_at = now;
     }
     match event {
@@ -261,19 +275,22 @@ pub(crate) fn observe(state: &mut ReaderState, event: &Event, now: i64) {
         }
         Event::ResponseChunk(c) => {
             // The TTL asks whether a request went silent, so a stream still sending is not idle.
-            if let Some(e) = state.in_flight.get_mut(&c.request_id) {
-                if now - e.seen_at < IN_FLIGHT_TTL_MS {
-                    e.seen_at = now;
-                }
+            if let Some(e) = state
+                .in_flight
+                .get_mut(&c.request_id)
+                .filter(|e| e.fresh(now))
+            {
+                e.seen_at = now;
             }
         }
         Event::RequestComplete(c) => {
-            let Some(e) = state.in_flight.remove(&c.request_id) else {
+            let Some(e) = state
+                .in_flight
+                .remove(&c.request_id)
+                .filter(|e| e.fresh(now))
+            else {
                 return;
             };
-            if now - e.seen_at >= IN_FLIGHT_TTL_MS {
-                return;
-            }
             if let Some(pool) = &e.pool {
                 match c.outcome {
                     Outcome::Exhausted => {
@@ -380,6 +397,32 @@ fn condition_for(
     }
 }
 
+/// A condition about an account, which joins its pools' cards and opens the account while the registry holds it
+/// (`live`): one whose account the registry no longer holds belongs to no card and opens nothing.
+fn account_condition(
+    kind: Kind,
+    subject: Subject,
+    pools: &[String],
+    live: bool,
+    holds: bool,
+    since: Option<i64>,
+    detail: serde_json::Value,
+) -> Condition {
+    let link = live.then(|| Link {
+        page: "accounts",
+        id: subject.id.clone(),
+    });
+    Condition {
+        kind,
+        subject,
+        holds,
+        since,
+        pools: if live { pools.to_vec() } else { Vec::new() },
+        link,
+        detail,
+    }
+}
+
 /// When a state its source records no time for started: the first read that saw it hold. The entry joins `seen`, so
 /// the prune at the end of the read keeps it for as long as the state holds.
 fn since_of(
@@ -415,28 +458,16 @@ fn with_orphans<'a>(
     subjects
 }
 
-/// A condition whose subject the registry no longer holds belongs to no card and opens nothing.
-fn detached(mut condition: Condition, live: bool) -> Condition {
-    if !live {
-        condition.link = None;
-        condition.pools.clear();
-    }
-    condition
-}
-
-/// Each account's pools, sorted, from one walk of the snapshot's memberships. An account no pool holds has no entry.
+/// Each account's pools, from one walk of the snapshot's memberships. An account no pool holds has no entry.
 fn account_pools(snapshot: &RegistrySnapshot) -> HashMap<String, Vec<String>> {
     let mut pools: HashMap<String, Vec<String>> = HashMap::new();
     for pool in snapshot.pools() {
         for member in snapshot.members(&pool.id).iter() {
-            let ids = pools.entry(member.account_id.clone()).or_default();
-            if ids.last() != Some(&pool.id) {
-                ids.push(pool.id.clone());
-            }
+            pools
+                .entry(member.account_id.clone())
+                .or_default()
+                .push(pool.id.clone());
         }
-    }
-    for ids in pools.values_mut() {
-        ids.sort();
     }
     pools
 }
@@ -572,11 +603,7 @@ pub(crate) fn conditions(
                 .find(|p| p.pool_id.as_deref() == Some(pool_id.as_str()));
             out.push(condition_for(
                 Kind::LedgerRecordParked,
-                Subject {
-                    kind: SubjectKind::Pool,
-                    id: pool_id.clone(),
-                    label,
-                },
+                Subject::new(SubjectKind::Pool, pool_id.clone(), label),
                 live.then_some(pool_id.as_str()),
                 row.is_some(),
                 row.map(|r| r.oldest_at),
@@ -622,19 +649,17 @@ pub(crate) fn conditions(
             .get(&account.id)
             .map(Vec::as_slice)
             .unwrap_or_default();
-        let condition =
-            |kind: Kind, holds: bool, since: Option<i64>, detail: serde_json::Value| Condition {
+        let condition = |kind: Kind, holds: bool, since: Option<i64>, detail: serde_json::Value| {
+            account_condition(
                 kind,
-                subject: Subject::account(account),
+                Subject::account(account),
+                pools,
+                true,
                 holds,
                 since,
-                pools: pools.to_vec(),
-                link: Some(Link {
-                    page: "accounts",
-                    id: account.id.clone(),
-                }),
                 detail,
-            };
+            )
+        };
         // Every account carries the re-auth series, since the relay marks an API key the upstream refuses the
         // same way as an OAuth login; only an API key runs out of funding. The registry records no time for a
         // state change, so the first read that sees the state dates it.
@@ -739,13 +764,13 @@ fn routing_conditions(
     rows: &[RoutingCondition],
 ) -> Vec<Condition> {
     // The first row per kind and subject answers, as a scan in order finds it.
-    let mut by_subject: HashMap<(&str, &str), &RoutingCondition> = HashMap::new();
+    let mut by_subject: HashMap<(RoutingKind, &str), &RoutingCondition> = HashMap::new();
     for r in rows {
         by_subject
-            .entry((r.kind.as_str(), r.subject_id.as_str()))
+            .entry((r.kind, r.subject_id.as_str()))
             .or_insert(r);
     }
-    let row = |kind: Kind, id: &str| by_subject.get(&(kind.as_str(), id)).copied();
+    let row = |kind: RoutingKind, id: &str| by_subject.get(&(kind, id)).copied();
     let detail_of = |row: Option<&RoutingCondition>, cleared: serde_json::Value| {
         let Some(row) = row else {
             return cleared;
@@ -759,11 +784,11 @@ fn routing_conditions(
                 .filter_map(|name| {
                     let name = name.as_str()?;
                     let value = match name {
-                        "shed_cap" => json!(shed_cap(pool)),
-                        "slow_down_stretch_seconds" => {
+                        SHED_CAP_SETTING => json!(shed_cap(pool)),
+                        SLOW_DOWN_STRETCH_SETTING => {
                             json!(pool.slow_down.slow_down_stretch_seconds)
                         }
-                        "window_ceiling" => json!(pool.window_ceiling),
+                        WINDOW_CEILING_SETTING => json!(pool.window_ceiling),
                         _ => return None,
                     };
                     Some((name.to_string(), value))
@@ -779,18 +804,14 @@ fn routing_conditions(
             .pools()
             .map(|pool| (pool.id.clone(), pool.label.clone())),
         rows.iter()
-            .filter(|r| r.kind == Kind::ShedNoRunway.as_str())
+            .filter(|r| r.kind == RoutingKind::ShedNoRunway)
             .map(|r| r.subject_id.as_str()),
     );
     for (pool_id, label, live) in pools {
-        let held = row(Kind::ShedNoRunway, &pool_id);
+        let held = row(RoutingKind::ShedNoRunway, &pool_id);
         out.push(condition_for(
             Kind::ShedNoRunway,
-            Subject {
-                kind: SubjectKind::Pool,
-                id: pool_id.clone(),
-                label,
-            },
+            Subject::new(SubjectKind::Pool, pool_id.clone(), label),
             live.then_some(pool_id.as_str()),
             held.is_some(),
             held.map(|r| r.since),
@@ -830,7 +851,8 @@ fn routing_conditions(
                 "spans": 0,
             }),
         ),
-    ];
+    ]
+    .map(|(kind, cleared)| (kind, kind.routing(), cleared));
     let subjects = with_orphans(
         accounts
             .iter()
@@ -840,7 +862,7 @@ fn routing_conditions(
             .filter(|r| {
                 account_kinds
                     .iter()
-                    .any(|(kind, _)| r.kind == kind.as_str())
+                    .any(|(_, routing, _)| *routing == Some(r.kind))
             })
             .map(|r| r.subject_id.as_str()),
     );
@@ -849,25 +871,17 @@ fn routing_conditions(
             .get(&account_id)
             .map(Vec::as_slice)
             .unwrap_or_default();
-        for (kind, cleared) in &account_kinds {
-            let held = row(*kind, &account_id);
-            let condition = Condition {
-                kind: *kind,
-                subject: Subject {
-                    kind: SubjectKind::Account,
-                    id: account_id.clone(),
-                    label: label.clone(),
-                },
-                holds: held.is_some(),
-                since: held.map(|r| r.since),
-                pools: pools.to_vec(),
-                link: Some(Link {
-                    page: "accounts",
-                    id: account_id.clone(),
-                }),
-                detail: detail_of(held, cleared.clone()),
-            };
-            out.push(detached(condition, live));
+        for (kind, routing, cleared) in &account_kinds {
+            let held = routing.and_then(|routing| row(routing, &account_id));
+            out.push(account_condition(
+                *kind,
+                Subject::new(SubjectKind::Account, account_id.clone(), label.clone()),
+                pools,
+                live,
+                held.is_some(),
+                held.map(|r| r.since),
+                detail_of(held, cleared.clone()),
+            ));
         }
     }
     out

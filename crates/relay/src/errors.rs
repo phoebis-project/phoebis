@@ -441,12 +441,19 @@ pub fn no_store(mut response: Response) -> Response {
     response
 }
 
+/// The error code for a request the bound account's removal cut short.
+pub(crate) const ACCOUNT_CANCELED_CODE: &str = "account_canceled";
+/// The error code for a request the client's leaving cut short.
+pub(crate) const CLIENT_GONE_CODE: &str = "client_gone";
+/// The error code for a request the router's shutdown cut short.
+pub(crate) const ROUTER_SHUTDOWN_CODE: &str = "router_shutdown";
+
 /// The account the request was bound to went away while it was in flight, so its credential is gone and no
 /// answer about it can be trusted.
 pub(crate) const ACCOUNT_CANCELED: Failure = Failure {
     status: StatusCode::SERVICE_UNAVAILABLE,
     error_type: "api_error",
-    code: phoebis_bus::ACCOUNT_CANCELED_CODE,
+    code: ACCOUNT_CANCELED_CODE,
     message: Cow::Borrowed("the bound account was disconnected while the request was in flight"),
     retry_after: None,
     no_retry: false,

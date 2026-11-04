@@ -374,7 +374,7 @@ pub async fn seed_conditions(parts: &Full, rows: &[phoebis_ledger::RoutingCondit
                     "INSERT INTO routing_conditions (kind, subject_kind, subject_id, pool_id, since, count, \
                      detail_json, computed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                     rusqlite::params![
-                        row.kind,
+                        row.kind.as_str(),
                         row.subject_kind,
                         row.subject_id,
                         row.pool_id,

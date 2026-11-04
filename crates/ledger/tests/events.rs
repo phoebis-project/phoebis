@@ -1078,7 +1078,7 @@ fn a_window_cleared_after_a_spent_window_ends_its_reach_so_the_move_before_it_ho
         .unwrap();
     let held = |kind: &str| {
         rows.iter()
-            .filter(|r| r.kind == kind)
+            .filter(|r| r.kind.as_str() == kind)
             .map(|r| r.subject_id.as_str())
             .collect::<Vec<_>>()
     };
@@ -1144,7 +1144,7 @@ fn a_weekly_wall_reads_no_projection_error_from_a_round_on_the_five_hour_window(
         .unwrap();
     let wall = rows
         .iter()
-        .find(|r| r.kind == "wall_reached" && r.subject_id == "a")
+        .find(|r| r.kind.as_str() == "wall_reached" && r.subject_id == "a")
         .unwrap_or_else(|| panic!("no wall on a: {rows:?}"));
     assert_eq!(
         wall.detail["projection_error"],
@@ -1153,7 +1153,7 @@ fn a_weekly_wall_reads_no_projection_error_from_a_round_on_the_five_hour_window(
     );
     let drift = rows
         .iter()
-        .find(|r| r.kind == "meter_drift" && r.subject_id == "a")
+        .find(|r| r.kind.as_str() == "meter_drift" && r.subject_id == "a")
         .unwrap_or_else(|| panic!("no drift on a: {rows:?}"));
     assert_eq!(
         (
@@ -1200,7 +1200,7 @@ fn the_drift_dates_from_its_oldest_off_windows_end_and_never_after_the_fold() {
         .unwrap();
     assert_eq!(
         rows.iter()
-            .filter(|r| r.kind == "meter_drift")
+            .filter(|r| r.kind.as_str() == "meter_drift")
             .map(|r| (r.subject_id.as_str(), r.since))
             .collect::<Vec<_>>(),
         [("ahead", t), ("ended", t - HOUR)],
@@ -1275,7 +1275,7 @@ fn a_wall_after_a_slow_down_round_reads_how_early_it_came_and_the_account_rollup
     let figures = |account: &str| {
         let wall = rows
             .iter()
-            .find(|r| r.kind == "wall_reached" && r.subject_id == account)
+            .find(|r| r.kind.as_str() == "wall_reached" && r.subject_id == account)
             .unwrap_or_else(|| panic!("no wall on {account}: {rows:?}"));
         (
             wall.detail["early_ms"].clone(),
@@ -1417,7 +1417,7 @@ fn slowed_long_at(
     db.read_blocking(phoebis_ledger::routing_conditions)
         .unwrap()
         .into_iter()
-        .filter(|r| r.kind == "slowed_long")
+        .filter(|r| r.kind.as_str() == "slowed_long")
         .collect()
 }
 
@@ -1431,7 +1431,7 @@ fn slowed_row(
     (spans, slowed_ms, bar_ms, open, factor_min): (u64, i64, i64, bool, f64),
 ) -> phoebis_ledger::RoutingCondition {
     phoebis_ledger::RoutingCondition {
-        kind: "slowed_long".into(),
+        kind: phoebis_ledger::RoutingKind::SlowedLong,
         subject_kind: "account".into(),
         subject_id: account.into(),
         pool_id: Some(pool.into()),
@@ -3516,7 +3516,7 @@ async fn the_start_fold_waits_for_the_start_row_so_a_span_the_previous_run_left_
         .read_blocking(phoebis_ledger::routing_conditions)
         .unwrap()
         .into_iter()
-        .filter(|r| r.kind == "slowed_long")
+        .filter(|r| r.kind.as_str() == "slowed_long")
         .collect();
     assert_eq!(
         rows,

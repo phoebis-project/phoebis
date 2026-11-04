@@ -92,15 +92,6 @@ impl DiagnosticsSource {
 /// record the `BodyShape` standing, so both crates read the one spelling rather than each writing its own.
 pub const BODY_SHAPE_ERROR_CODE: &str = "body_shape";
 
-// The ledger files a headless attempt that ends under one of these codes as canceled, so both crates read these
-// spellings.
-/// The relay's error code for a request the bound account's removal cut short.
-pub const ACCOUNT_CANCELED_CODE: &str = "account_canceled";
-/// The relay's error code for a request the client's leaving cut short.
-pub const CLIENT_GONE_CODE: &str = "client_gone";
-/// The relay's error code for a request the router's shutdown cut short.
-pub const ROUTER_SHUTDOWN_CODE: &str = "router_shutdown";
-
 /// Token counts as the upstream reported them. A field the upstream did not send stays `None`, never zero,
 /// so a missing usage block is told apart from an empty one.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -550,7 +541,7 @@ pub const NEVER_COPIED: &[&str] = &[
 ///
 /// `accept-encoding` is the one entry that is neither: a probe asks for an identity answer so its usage parser reads
 /// the body without a decode, and the probe's bytes toward the upstream stay as the recorded fixtures pin them.
-pub const HEADER_DENYLIST: &[&str] = &[
+const HEADER_DENYLIST: &[&str] = &[
     "accept-encoding",
     "authorization",
     "connection",

@@ -1220,23 +1220,59 @@ const CONDITION_SPAN_MS: i64 = 24 * 3_600_000;
 /// How soon after a move a spent window on its destination counts against the move.
 const SPENT_AFTER_MOVE_MS: i64 = 3_600_000;
 
+// The pool settings a condition names, each spelled once for the lists below and for the attention reader, which
+// adds a pool's value of each setting a row names.
+pub const SHED_CAP_SETTING: &str = "shed_cap";
+pub const SLOW_DOWN_STRETCH_SETTING: &str = "slow_down_stretch_seconds";
+pub const WINDOW_CEILING_SETTING: &str = "window_ceiling";
+
 /// The settings each condition names, the ones an operator reads the condition against. The attention reader fills
 /// a cleared condition's `setting` from the same lists.
-pub const CEILING_SETTING: &[&str] = &["window_ceiling"];
-pub const WALL_SETTINGS: &[&str] = &["shed_cap", "window_ceiling"];
-pub const SLOW_SETTINGS: &[&str] = &["slow_down_stretch_seconds"];
+pub const CEILING_SETTING: &[&str] = &[WINDOW_CEILING_SETTING];
+pub const WALL_SETTINGS: &[&str] = &[SHED_CAP_SETTING, WINDOW_CEILING_SETTING];
+pub const SLOW_SETTINGS: &[&str] = &[SLOW_DOWN_STRETCH_SETTING];
 
-// The kind words the fold writes, which the attention reader matches its own kinds against.
-/// The kind the fold writes for an account that read a window spent within the hour after a move landed on it.
-pub const DESTINATION_SPENT_KIND: &str = "destination_spent";
-/// The kind the fold writes for an account where the newest reconciled window of any kind reads off its priced share.
-pub const METER_DRIFT_KIND: &str = "meter_drift";
-/// The kind the fold writes for a pool whose shedding round marked nothing for want of a destination with runway.
-pub const SHED_NO_RUNWAY_KIND: &str = "shed_no_runway";
-/// The kind the fold writes for an account slowed in the day past twice its pool's stretch threshold, at least an hour.
-pub const SLOWED_LONG_KIND: &str = "slowed_long";
-/// The kind the fold writes for an account that read a window spent.
-pub const WALL_REACHED_KIND: &str = "wall_reached";
+/// The kind of a condition the fold writes, stored as its `as_str` word.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RoutingKind {
+    /// An account that read a window spent within the hour after a move landed on it.
+    DestinationSpent,
+    /// An account where the newest reconciled window of any kind reads off its priced share.
+    MeterDrift,
+    /// A pool whose shedding round marked nothing for want of a destination with runway.
+    ShedNoRunway,
+    /// An account slowed in the day past twice its pool's stretch threshold, at least an hour.
+    SlowedLong,
+    /// An account that read a window spent.
+    WallReached,
+}
+
+impl RoutingKind {
+    const EVERY: [RoutingKind; 5] = [
+        RoutingKind::DestinationSpent,
+        RoutingKind::MeterDrift,
+        RoutingKind::ShedNoRunway,
+        RoutingKind::SlowedLong,
+        RoutingKind::WallReached,
+    ];
+
+    /// The kind a stored word names, `None` for a word no kind writes.
+    pub fn parse(word: &str) -> Option<RoutingKind> {
+        RoutingKind::EVERY
+            .into_iter()
+            .find(|kind| kind.as_str() == word)
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            RoutingKind::DestinationSpent => "destination_spent",
+            RoutingKind::MeterDrift => "meter_drift",
+            RoutingKind::ShedNoRunway => "shed_no_runway",
+            RoutingKind::SlowedLong => "slowed_long",
+            RoutingKind::WallReached => "wall_reached",
+        }
+    }
+}
 
 /// How many stretch thresholds of slow-down in the trailing day raise `slowed_long`. The slow-down holds an account
 /// while its demand runs ahead of its window, and the threshold is how long the pool lets it hold before a round moves
@@ -1345,7 +1381,7 @@ pub fn fold_routing_conditions(
             },
         )?
         .collect::<Result<_, _>>()?;
-    let mut held: BTreeMap<(&'static str, &'static str, String), Held> = BTreeMap::new();
+    let mut held: BTreeMap<(RoutingKind, &'static str, String), Held> = BTreeMap::new();
     let setting = |names: &[&str]| serde_json::json!(names);
 
     let mut rounds: BTreeMap<&str, (i64, u64, BTreeSet<&str>)> = BTreeMap::new();
@@ -1361,7 +1397,7 @@ pub fn fold_routing_conditions(
     }
     for (pool, (since, count, accounts)) in rounds {
         held.insert(
-            (SHED_NO_RUNWAY_KIND, "pool", pool.to_string()),
+            (RoutingKind::ShedNoRunway, "pool", pool.to_string()),
             Held {
                 pool_id: Some(pool.to_string()),
                 since,
@@ -1432,7 +1468,11 @@ pub fn fold_routing_conditions(
     }
     for (account, (since, count, fits, windows)) in moves {
         held.insert(
-            (DESTINATION_SPENT_KIND, "account", account.to_string()),
+            (
+                RoutingKind::DestinationSpent,
+                "account",
+                account.to_string(),
+            ),
             Held {
                 pool_id: None,
                 since,
@@ -1474,7 +1514,7 @@ pub fn fold_routing_conditions(
             .filter(|round| round["trigger"] != "slow_down")
             .and_then(|round| round["projection"].as_f64());
         held.insert(
-            (WALL_REACHED_KIND, "account", account.to_string()),
+            (RoutingKind::WallReached, "account", account.to_string()),
             Held {
                 pool_id: None,
                 since,
@@ -1585,7 +1625,7 @@ pub fn fold_routing_conditions(
             continue;
         }
         held.insert(
-            (SLOWED_LONG_KIND, "account", account),
+            (RoutingKind::SlowedLong, "account", account),
             Held {
                 pool_id: Some(newest.pool.clone()),
                 since: oldest,
@@ -1627,7 +1667,7 @@ pub fn fold_routing_conditions(
             })
             .collect();
         held.insert(
-            (METER_DRIFT_KIND, "account", account),
+            (RoutingKind::MeterDrift, "account", account),
             Held {
                 pool_id: None,
                 since,
@@ -1647,7 +1687,7 @@ pub fn fold_routing_conditions(
             "INSERT INTO routing_conditions (kind, subject_kind, subject_id, pool_id, since, count, detail_json, \
              computed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
-                kind,
+                kind.as_str(),
                 subject_kind,
                 subject_id,
                 row.pool_id,

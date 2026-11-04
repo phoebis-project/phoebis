@@ -556,7 +556,7 @@ fn the_fold_holds_no_meter_drift_from_a_zero_the_next_reading_reverses() {
     let held = db.read_blocking(routing_conditions).unwrap();
     assert_eq!(
         held.iter()
-            .filter(|r| r.kind == "meter_drift")
+            .filter(|r| r.kind.as_str() == "meter_drift")
             .map(|r| r.subject_id.as_str())
             .collect::<Vec<_>>(),
         Vec::<&str>::new(),
@@ -795,7 +795,7 @@ fn a_drift_holds_only_where_the_rise_and_the_priced_share_both_reach_the_least_r
     let held = db.read_blocking(routing_conditions).unwrap();
     assert_eq!(
         held.iter()
-            .filter(|r| r.kind == "meter_drift")
+            .filter(|r| r.kind.as_str() == "meter_drift")
             .map(|r| r.subject_id.as_str())
             .collect::<Vec<_>>(),
         ["priced"],
@@ -1193,7 +1193,7 @@ fn the_drift_reads_the_windows_that_ended_inside_eight_days_while_the_route_keep
     let held = db.read_blocking(routing_conditions).unwrap();
     assert_eq!(
         held.iter()
-            .filter(|r| r.kind == "meter_drift")
+            .filter(|r| r.kind.as_str() == "meter_drift")
             .map(|r| r.subject_id.as_str())
             .collect::<Vec<_>>(),
         ["fresh"],

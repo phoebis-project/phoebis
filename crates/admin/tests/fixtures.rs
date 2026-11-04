@@ -1748,24 +1748,28 @@ async fn every_route_is_captured_and_holds_its_shape() {
     let window_end = now - 2 * 3_600_000;
     // One row of each routing condition, as the ledger's hourly fold writes them, so the attention capture carries the
     // four kinds beside the others, the drift naming the window above.
-    let condition =
-        |kind: &str, subject_kind: &str, subject: &str, pool: Option<&str>, since: i64, detail| {
-            phoebis_ledger::RoutingCondition {
-                kind: kind.into(),
-                subject_kind: subject_kind.into(),
-                subject_id: subject.into(),
-                pool_id: pool.map(String::from),
-                since,
-                count: 1,
-                detail,
-                computed_at: now,
-            }
-        };
+    let condition = |kind: phoebis_ledger::RoutingKind,
+                     subject_kind: &str,
+                     subject: &str,
+                     pool: Option<&str>,
+                     since: i64,
+                     detail| {
+        phoebis_ledger::RoutingCondition {
+            kind,
+            subject_kind: subject_kind.into(),
+            subject_id: subject.into(),
+            pool_id: pool.map(String::from),
+            since,
+            count: 1,
+            detail,
+            computed_at: now,
+        }
+    };
     common::seed_conditions(
         &parts,
         &[
             condition(
-                "wall_reached",
+                phoebis_ledger::RoutingKind::WallReached,
                 "account",
                 "business",
                 None,
@@ -1779,7 +1783,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 }),
             ),
             condition(
-                "destination_spent",
+                phoebis_ledger::RoutingKind::DestinationSpent,
                 "account",
                 "business",
                 None,
@@ -1792,7 +1796,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 }),
             ),
             condition(
-                "shed_no_runway",
+                phoebis_ledger::RoutingKind::ShedNoRunway,
                 "pool",
                 "main",
                 Some("main"),
@@ -1800,7 +1804,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 j!({ "accounts": ["business"], "rounds": 1, "setting": ["window_ceiling"] }),
             ),
             condition(
-                "meter_drift",
+                phoebis_ledger::RoutingKind::MeterDrift,
                 "account",
                 "business",
                 None,

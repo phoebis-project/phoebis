@@ -8,9 +8,7 @@ use std::time::Duration;
 use axum::body::Body;
 use bytes::{Bytes, BytesMut};
 use futures::future::BoxFuture;
-use phoebis_bus::{
-    Interruption, Outcome, Phase, ResponseChunk, ResponseFacts, Usage, ACCOUNT_CANCELED_CODE,
-};
+use phoebis_bus::{Interruption, Outcome, Phase, ResponseChunk, ResponseFacts, Usage};
 use phoebis_oauth::Clock;
 use phoebis_routing::{AffinityReport, PinRef, PinUsage, Report, RouterHandle};
 use phoebis_transport::decode::Decoder;
@@ -25,7 +23,9 @@ use tokio_util::task::TaskTracker;
 use crate::catalog::CatalogService;
 use crate::credit::CreditStore;
 use crate::dispatch::until_canceled;
-use crate::errors::{Failure, UPSTREAM_CUT, UPSTREAM_STALLED, UPSTREAM_UNDECODABLE};
+use crate::errors::{
+    Failure, ACCOUNT_CANCELED_CODE, UPSTREAM_CUT, UPSTREAM_STALLED, UPSTREAM_UNDECODABLE,
+};
 use crate::hold::INSPECT_BUFFER;
 use crate::identity::PendingReports;
 use crate::messages::{cut_code, Guards, RelayOutcome, Trace, CANCELED, REFUSED, TRANSPORT_ERROR};

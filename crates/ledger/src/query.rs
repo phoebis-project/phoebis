@@ -33,8 +33,8 @@ use crate::record::{
 use crate::rollup::{
     add_counts, detail_json, fold_identifier, fold_user_agent, hour_of, migration_reason,
     read_account_rollups, read_rollups_paged, visit_rollups, CostSplit, KeySelector, RollupRow,
-    RollupSelect, DIMENSION_MAX_BYTES, EXPIRED_BETWEEN_TURNS, NO_CLASS, NO_EFFORT, OTHER_DIMENSION,
-    UNATTRIBUTED,
+    RollupSelect, RoutingKind, DIMENSION_MAX_BYTES, EXPIRED_BETWEEN_TURNS, NO_CLASS, NO_EFFORT,
+    OTHER_DIMENSION, UNATTRIBUTED,
 };
 use crate::LedgerError;
 
@@ -4792,7 +4792,7 @@ pub fn moves_by_reason_and_fit(
 /// whose events name none.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RoutingCondition {
-    pub kind: String,
+    pub kind: RoutingKind,
     pub subject_kind: String,
     pub subject_id: String,
     pub pool_id: Option<String>,
@@ -4803,7 +4803,7 @@ pub struct RoutingCondition {
 }
 
 /// Every row of `routing_conditions`, by kind and subject: what the last fold found over its trailing day and in the
-/// newest reconciled windows.
+/// newest reconciled windows. A row whose word names no kind is skipped.
 pub fn routing_conditions(conn: &Connection) -> Result<Vec<RoutingCondition>, LedgerError> {
     let mut stmt = conn.prepare(
         "SELECT kind, subject_kind, subject_id, pool_id, since, count, detail_json, computed_at \
@@ -4811,8 +4811,11 @@ pub fn routing_conditions(conn: &Connection) -> Result<Vec<RoutingCondition>, Le
     )?;
     let rows = stmt
         .query_map([], |r| {
-            Ok(RoutingCondition {
-                kind: r.get(0)?,
+            let Some(kind) = RoutingKind::parse(&r.get::<_, String>(0)?) else {
+                return Ok(None);
+            };
+            Ok(Some(RoutingCondition {
+                kind,
                 subject_kind: r.get(1)?,
                 subject_id: r.get(2)?,
                 pool_id: r.get(3)?,
@@ -4820,8 +4823,9 @@ pub fn routing_conditions(conn: &Connection) -> Result<Vec<RoutingCondition>, Le
                 count: r.get::<_, i64>(5)?.max(0) as u64,
                 detail: serde_json::from_str(&r.get::<_, String>(6)?).unwrap_or(Value::Null),
                 computed_at: r.get(7)?,
-            })
+            }))
         })?
+        .filter_map(Result::transpose)
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }

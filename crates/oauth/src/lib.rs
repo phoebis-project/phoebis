@@ -2,7 +2,6 @@
 
 mod authorize;
 mod exchange;
-mod identity;
 mod manager;
 mod pkce;
 pub mod random;
@@ -14,7 +13,6 @@ pub use exchange::{
     control_request, exchange_body, parse_profile, parse_token_response, refresh_body, ControlKind,
     OauthError, ProfileResponse, TokenAccount, TokenOrg, TokenResponse,
 };
-pub use identity::identity_matches;
 pub use manager::{AccessToken, AcquireError, Backoff, Clock, CredentialManager, LandedMark};
 pub use manager::{SERVER_ERROR_BACKOFF_MS, TRANSIENT_BACKOFF_MS};
 pub use pkce::{generate_pkce, generate_state, Pkce};

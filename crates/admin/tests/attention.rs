@@ -168,9 +168,13 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
     common::park_unreadable(&parts.db, "main", "business", later - 1_000);
     // The four routing conditions as the ledger's fold writes them, each older than everything above, which they
     // still rank after: none of them stops traffic.
-    let condition = |kind: &str, subject_kind: &str, subject: &str, pool: Option<&str>, detail| {
+    let condition = |kind: phoebis_ledger::RoutingKind,
+                     subject_kind: &str,
+                     subject: &str,
+                     pool: Option<&str>,
+                     detail| {
         phoebis_ledger::RoutingCondition {
-            kind: kind.into(),
+            kind,
             subject_kind: subject_kind.into(),
             subject_id: subject.into(),
             pool_id: pool.map(String::from),
@@ -184,14 +188,14 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
         &parts,
         &[
             condition(
-                "shed_no_runway",
+                phoebis_ledger::RoutingKind::ShedNoRunway,
                 "pool",
                 "main",
                 Some("main"),
                 j!({ "accounts": ["business"], "rounds": 1, "setting": ["window_ceiling"] }),
             ),
             condition(
-                "destination_spent",
+                phoebis_ledger::RoutingKind::DestinationSpent,
                 "account",
                 "business",
                 None,
@@ -203,7 +207,7 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
                 }),
             ),
             condition(
-                "wall_reached",
+                phoebis_ledger::RoutingKind::WallReached,
                 "account",
                 "business",
                 None,
