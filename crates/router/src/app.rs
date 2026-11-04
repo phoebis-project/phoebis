@@ -634,8 +634,7 @@ pub async fn run_until(
     {
         Some(()) => ended
             .iter_mut()
-            .map(|slot| drained(slot.take().expect("every slot is filled by now")))
-            .collect::<anyhow::Result<()>>(),
+            .try_for_each(|slot| drained(slot.take().expect("every slot is filled by now"))),
         None => {
             tracing::warn!("requests were still in flight when the drain window closed");
             // Ahead of the abort, so every end it causes books the router's own cut.
