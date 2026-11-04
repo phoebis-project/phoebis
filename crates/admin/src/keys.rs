@@ -674,14 +674,11 @@ pub(crate) async fn revoke(
     State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
 ) -> Response {
-    match state.store.revoke_api_key(&id, (state.clock)(), ACTOR) {
-        Ok(()) => match reload_or_refuse(&state).await {
-            Ok(()) => StatusCode::NO_CONTENT.into_response(),
-            Err(refusal) => refusal,
-        },
-        Err(StoreError::KeyNotFound(_)) => failure(StatusCode::NOT_FOUND, "key not found"),
-        Err(error) => store_failure(error),
-    }
+    answer_key_write(
+        &state,
+        state.store.revoke_api_key(&id, (state.clock)(), ACTOR),
+    )
+    .await
 }
 
 /// Delete a key.
@@ -702,8 +699,13 @@ pub(crate) async fn remove(
     State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
 ) -> Response {
-    match state.store.delete_api_key(&id, ACTOR) {
-        Ok(()) => match reload_or_refuse(&state).await {
+    answer_key_write(&state, state.store.delete_api_key(&id, ACTOR)).await
+}
+
+/// The 204 a key's revoke or delete answers once the registry reloads, or the write's refusal.
+async fn answer_key_write(state: &AdminState, written: Result<(), StoreError>) -> Response {
+    match written {
+        Ok(()) => match reload_or_refuse(state).await {
             Ok(()) => StatusCode::NO_CONTENT.into_response(),
             Err(refusal) => refusal,
         },
