@@ -1431,16 +1431,10 @@ impl Engine {
     /// drive. Compiled only under `debug-hooks`.
     #[cfg(any(test, feature = "debug-hooks"))]
     pub async fn persist_reached(&self, entries: u64, snapshots: u64) {
-        loop {
-            let notified = self.persist_progress.notified();
-            tokio::pin!(notified);
-            // Registered before the counts are read, so a flush that raises one between the two wakes this waiter.
-            notified.as_mut().enable();
-            if self.persist_entries() >= entries && self.persist_snapshots() >= snapshots {
-                return;
-            }
-            notified.await;
-        }
+        crate::engine::wait_until(&self.persist_progress, || {
+            self.persist_entries() >= entries && self.persist_snapshots() >= snapshots
+        })
+        .await;
     }
 
     /// Every session and agent as the next save would write it, dirty or not, with each agent's prompt and body as a
