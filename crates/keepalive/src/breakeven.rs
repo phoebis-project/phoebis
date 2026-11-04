@@ -172,7 +172,7 @@ impl FactorRows {
             Funding::Plan => row_for(canonical_model, |k| self.plan.get(k))
                 .and_then(BreakEvenFactors::of)
                 .or_else(|| row_for(canonical_model, |k| self.plan_overrides.get(k)).copied()),
-            Funding::ApiKey | Funding::Overage | Funding::UsageBased => {
+            Funding::ApiKey | Funding::Fast | Funding::Overage | Funding::UsageBased => {
                 // One key for both maps, so a dated row without the set never reads its undated row's.
                 row_for(canonical_model, |k| {
                     dollars.get_key_value(k).map(|(key, _)| key)
@@ -197,8 +197,12 @@ impl FactorRows {
     pub(crate) fn priced_nowhere(&self, funding: Funding, fast: bool) -> BreakEvenFactors {
         match funding {
             Funding::Plan => self.plan_multipliers,
-            Funding::ApiKey | Funding::Overage | Funding::UsageBased if fast => self.tightest_fast,
-            Funding::ApiKey | Funding::Overage | Funding::UsageBased => self.tightest,
+            Funding::ApiKey | Funding::Fast | Funding::Overage | Funding::UsageBased if fast => {
+                self.tightest_fast
+            }
+            Funding::ApiKey | Funding::Fast | Funding::Overage | Funding::UsageBased => {
+                self.tightest
+            }
         }
     }
 }

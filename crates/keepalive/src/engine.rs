@@ -11,7 +11,7 @@ use phoebis_bus::{
     spawn_subscriber, AccountSelected, Bus, Delivery, Event as BusEvent, Outcome, Phase,
     RequestComplete, RequestObserved, ResponseChunk, ResponseHead,
 };
-use phoebis_ledger::{Band, Ledger, Metrics, PlanTables, Pricing};
+use phoebis_ledger::{funding_of, Band, Ledger, Metrics, PlanTables, Pricing, Speed};
 use phoebis_oauth::Clock;
 use phoebis_relay::{CacheTtl, CacheTtlPolicy, Relay};
 use phoebis_routing::{
@@ -419,26 +419,10 @@ pub(crate) fn open_idle_episode(main: &mut Agent, snapshot: &RegistrySnapshot) -
 /// The routing crate's unit selector, so the keepalive and the shedding round never disagree on a pin's unit.
 pub type SavingsUnit = phoebis_routing::BurnUnit;
 
-/// How the attempt that served a probe was paid for, captured when it was served.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Funding {
-    ApiKey,
-    Overage,
-    Plan,
-    /// A usage-based Enterprise seat: dollars at the API rates, as an API-key member's probe settles.
-    UsageBased,
-}
-
-impl Funding {
-    pub fn of(kind: AccountKind, usage_based: bool, in_overage: bool) -> Funding {
-        match (kind, usage_based, in_overage) {
-            (AccountKind::ApiKey, ..) => Funding::ApiKey,
-            (AccountKind::Oauth, true, _) => Funding::UsageBased,
-            (AccountKind::Oauth, false, true) => Funding::Overage,
-            (AccountKind::Oauth, false, false) => Funding::Plan,
-        }
-    }
-}
+/// How the attempt that served a probe was paid for, the ledger's own reading of an attempt's funding, so the
+/// break-even factors and the rows a probe files under follow one rule. The keepalive reads it at standard speed, since
+/// a fast recipe reads the fast cells whatever funds it.
+pub use phoebis_ledger::Funding;
 
 /// The fundings a pool's members bring to its ceilings, from each member's kind and usage-based class with no
 /// overage, each once in the members' order: an OAuth member brings the plan's factors, an API-key member the dollar
@@ -446,7 +430,7 @@ impl Funding {
 pub fn pool_fundings(members: impl IntoIterator<Item = (AccountKind, bool)>) -> Vec<Funding> {
     let mut fundings: Vec<Funding> = Vec::new();
     for (kind, usage_based) in members {
-        let funding = Funding::of(kind, usage_based, false);
+        let funding = funding_of(Some(kind), usage_based, Some(false), Speed::Standard);
         if !fundings.contains(&funding) {
             fundings.push(funding);
         }
@@ -4226,10 +4210,11 @@ pub(crate) fn ceilings_for(
         .as_deref()
         .and_then(|id| view.snapshot.account(id))
     {
-        Some(account) if !fast => Funding::of(
-            account.kind,
+        Some(account) if !fast => funding_of(
+            Some(account.kind),
             view.snapshot.usage_based(&account.id),
-            view.overage.contains(&account.id),
+            Some(view.overage.contains(&account.id)),
+            Speed::Standard,
         ),
         _ => Funding::ApiKey,
     };
@@ -4492,8 +4477,18 @@ mod tests {
         for in_overage in [false, true] {
             assert_eq!(
                 (
-                    Funding::of(AccountKind::Oauth, true, in_overage),
-                    Funding::of(AccountKind::ApiKey, false, in_overage)
+                    funding_of(
+                        Some(AccountKind::Oauth),
+                        true,
+                        Some(in_overage),
+                        Speed::Standard
+                    ),
+                    funding_of(
+                        Some(AccountKind::ApiKey),
+                        false,
+                        Some(in_overage),
+                        Speed::Standard
+                    )
                 ),
                 (Funding::UsageBased, Funding::ApiKey),
                 "overage flag {in_overage}"
@@ -4501,8 +4496,13 @@ mod tests {
         }
         assert_eq!(
             (
-                Funding::of(AccountKind::Oauth, false, false),
-                Funding::of(AccountKind::Oauth, false, true)
+                funding_of(
+                    Some(AccountKind::Oauth),
+                    false,
+                    Some(false),
+                    Speed::Standard
+                ),
+                funding_of(Some(AccountKind::Oauth), false, Some(true), Speed::Standard)
             ),
             (Funding::Plan, Funding::Overage)
         );
