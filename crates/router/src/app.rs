@@ -514,9 +514,9 @@ pub async fn run_until(
     };
     let (stop, stop_rx) = tokio::sync::watch::channel(false);
     let proxy_stop = stop_rx.clone();
-    // The relayed surface is served through the relay's own accept loop so every connection can be wrapped
-    // to preserve the caller's original header spelling; the admin and metrics listeners share a plainer
-    // loop with the same header read timeout and connection cap.
+    // The relayed surface wraps every connection to preserve the caller's original header spelling. The admin and
+    // metrics listeners serve a plain tower service on the same accept loop, under the same header read timeout and
+    // connection cap.
     let mut proxy = tokio::spawn(phoebis_relay::serve(
         proxy_listener,
         relay.clone(),
