@@ -11,7 +11,7 @@ use phoebis_bus::{
     spawn_subscriber, AccountSelected, Bus, Delivery, Event as BusEvent, Outcome, Phase,
     RequestComplete, RequestObserved, ResponseChunk, ResponseHead,
 };
-use phoebis_ledger::{Band, Ledger, Metrics, PlanTables, Pricing, Speed};
+use phoebis_ledger::{Band, Ledger, Metrics, PlanTables, Pricing};
 use phoebis_oauth::Clock;
 use phoebis_relay::{CacheTtl, CacheTtlPolicy, Relay};
 use phoebis_routing::{
@@ -1199,9 +1199,6 @@ pub(crate) struct Settlement {
     pub pool_id: String,
     pub canonical_model: String,
     pub label: Wasted,
-    /// The speed the probe's answer reported, `answered_speed` of its usage, so the waste prices at the cells and files
-    /// under the funding its own cost row took even when a fast recipe's answer came back at standard speed.
-    pub speed: Speed,
     pub charge: ProbeCharge,
 }
 
@@ -1312,7 +1309,6 @@ impl Kept {
             pool_id: self.pool_id,
             canonical_model: self.canonical_model,
             label,
-            speed: crate::savings::answered_speed(self.charge.usage),
             charge: self.charge,
         }
     }

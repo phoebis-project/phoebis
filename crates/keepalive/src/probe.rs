@@ -567,7 +567,6 @@ impl Inner {
                 pool_id: job.pool_id.clone(),
                 canonical_model: job.canonical_model.clone(),
                 label,
-                speed: answered_speed(record.usage),
                 charge,
             });
             return Applied::Orphaned;

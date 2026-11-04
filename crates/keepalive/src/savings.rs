@@ -213,7 +213,9 @@ impl Engine {
             charge.account.as_deref(),
             &settlement.canonical_model,
             "probe",
-            settlement.speed == Speed::Fast,
+            // The speed the probe's answer reported, so the waste prices at the cells and files under the funding its
+            // own cost row took even when a fast recipe's answer came back at standard speed.
+            answered_speed(charge.usage) == Speed::Fast,
         );
         let counts = typed(charge.usage);
         d.wasted_probes = 1;
