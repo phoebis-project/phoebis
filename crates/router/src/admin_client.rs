@@ -113,7 +113,7 @@ impl<E: Error + 'static> From<E> for Failure {
 
 impl AdminClient {
     /// The client from the flags and, unless `--url` and `--secret-env` are both given, the configuration file
-    /// through `load_unresolved`; the secret is read from the variable and refused unset with the loader's line.
+    /// through `load_unresolved`. The secret is read from the variable and refused unset with the loader's line.
     pub fn from_flags(common: &Common, config_path: &Path) -> Result<AdminClient, ClientError> {
         Self::from_flags_with_file(common, config_path).map(|(client, _)| client)
     }
