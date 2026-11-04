@@ -3,7 +3,7 @@
 //! it does I/O.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -1349,9 +1349,6 @@ pub(crate) struct Inner {
     pub skipped: Vec<Skipped>,
     /// Bus gaps seen by the observer; each one discarded every observation that was still pending.
     pub bus_gaps: u64,
-    /// Events a gap left queued behind it, counted down as they are applied. What arrives inside that
-    /// backlog cannot be trusted: the terminal event of any request among them may be one the gap dropped.
-    pub gap_backlog: usize,
     pub next_incarnation: u64,
     /// The engine's timing, copied onto every agent it creates.
     pub timing: KeepaliveTiming,
@@ -1395,6 +1392,10 @@ pub struct Engine {
     pub(crate) persist_snapshots: AtomicU64,
     /// Woken as either count rises, which is what a test's wait on them waits on.
     pub(crate) persist_progress: Notify,
+    /// Events a gap left queued behind it, counted down as they are applied. What arrives inside that backlog cannot
+    /// be trusted: the terminal event of any request among them may be one the gap dropped. Apart from the engine's
+    /// lock, so an event that takes no lock of its own counts down without one.
+    gap_backlog: AtomicUsize,
     /// The accounts whose last tier read failed, so a registry that stays unreadable is logged once per account and
     /// streak rather than at every probe it settles. Held in memory alone, so a restart starts each streak over, and
     /// behind its own lock, since the reads it follows run without the engine's.
@@ -1425,6 +1426,7 @@ impl Engine {
             persist_entries: AtomicU64::new(0),
             persist_snapshots: AtomicU64::new(0),
             persist_progress: Notify::new(),
+            gap_backlog: AtomicUsize::new(0),
             unreadable_tiers: Mutex::new(BTreeSet::new()),
         })
     }
@@ -1622,7 +1624,6 @@ impl Inner {
             settlements_after_save: Vec::new(),
             skipped: Vec::new(),
             bus_gaps: 0,
-            gap_backlog: 0,
             next_incarnation: 0,
             timing,
             idle_returns: BTreeMap::new(),
@@ -2703,20 +2704,37 @@ impl Engine {
         match event {
             BusEvent::RequestObserved(observed) => {
                 let catalog = self.parts.relay.catalog();
-                self.on_observed(observed, |spelling| catalog.lookup(spelling))
+                self.on_observed(observed, |spelling| catalog.lookup(spelling));
+                self.counted_down();
+                self.flush();
             }
-            BusEvent::AccountSelected(selected) => self.on_selected(selected),
-            BusEvent::ResponseHead(head) => self.on_head(head),
-            BusEvent::ResponseChunk(chunk) => self.on_chunk(chunk),
-            BusEvent::RequestComplete(complete) => self.on_complete(complete),
+            // These three push nothing to settle or to skip, so they flush nothing.
+            BusEvent::AccountSelected(selected) => {
+                self.on_selected(selected);
+                self.counted_down();
+            }
+            BusEvent::ResponseHead(head) => {
+                self.on_head(head);
+                self.counted_down();
+            }
+            BusEvent::ResponseChunk(chunk) => {
+                self.on_chunk(chunk);
+                self.counted_down();
+            }
+            BusEvent::RequestComplete(complete) => {
+                self.on_complete(complete);
+                self.counted_down();
+                self.flush();
+            }
         }
-        // One event of the backlog applied. The count is read before the arm above rather than after, so the
-        // event a gap was noticed on is itself inside its own backlog.
-        {
-            let mut inner = self.lock();
-            inner.gap_backlog = inner.gap_backlog.saturating_sub(1);
-        }
-        self.flush();
+    }
+
+    /// One event of the backlog applied. The count is read before the event's arm rather than after, so the event a
+    /// gap was noticed on is itself inside its own backlog.
+    fn counted_down(&self) {
+        let _ = self
+            .gap_backlog
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1));
     }
 
     /// Events were lost between the last one seen and this one. Whatever was still open cannot be completed
@@ -2725,7 +2743,7 @@ impl Engine {
     pub fn bus_gap(&self, dropped: u64, backlog: usize) {
         let mut inner = self.lock();
         inner.bus_gaps += 1;
-        inner.gap_backlog = backlog;
+        self.gap_backlog.store(backlog, Ordering::SeqCst);
         tracing::warn!(
             dropped,
             "the keepalive subscriber fell behind the bus, so the pending observations were discarded"
@@ -3041,7 +3059,7 @@ impl Engine {
         }
         // Taken before anything below overwrites it and consumed with the observation.
         let prior = prior_coverage(&inner.sessions[&key].agents[&agent_id], now);
-        let poisoned = inner.gap_backlog > 0;
+        let poisoned = self.gap_backlog.load(Ordering::SeqCst) > 0;
         // The recipe set aside waits for this request's completion, so each return below that takes no observation
         // drops it: nothing would complete to restore it.
         inner.set_aside(&key, &agent_id, now);
