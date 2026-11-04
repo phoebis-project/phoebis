@@ -260,7 +260,7 @@ pub fn render(
                         "{} {} since {}",
                         text(&item["kind"]),
                         named_or(&subject["label"], &subject["id"]),
-                        clock.time(&item["since"])
+                        clock.time(item["since"].as_i64())
                     )
                 })
                 .collect();
@@ -498,7 +498,7 @@ fn windows_cells(account: &Value, clock: &Clock, fable_column: bool) -> Vec<Stri
         };
         cells.push(format!(
             "until {} {scope}{}",
-            clock.time(&cooldown["until"]),
+            clock.time(cooldown["until"].as_i64()),
             text(&cooldown["reason"])
         ));
     } else if spend.is_object() {
@@ -507,7 +507,7 @@ fn windows_cells(account: &Value, clock: &Clock, fable_column: bool) -> Vec<Stri
         cells.push(if spend["reset_source"] == "estimated" {
             format!("resets {} est", utc_date(&spend["resets_at"]))
         } else {
-            format!("resets {}", clock.time(&spend["resets_at"]))
+            format!("resets {}", clock.time(spend["resets_at"].as_i64()))
         });
     } else if let Some(reset) = windows
         .values()
@@ -515,7 +515,7 @@ fn windows_cells(account: &Value, clock: &Clock, fable_column: bool) -> Vec<Stri
         .filter(|at| *at >= now)
         .min()
     {
-        cells.push(format!("resets {}", clock.time(&json!(reset))));
+        cells.push(format!("resets {}", clock.time(Some(reset))));
     }
     cells
 }
@@ -598,7 +598,7 @@ fn pins_block(screen: &mut Screen, answer: &Value, accounts: &Accounts, clock: &
             if !row["keepalive"]["next_probe_at"].is_null() {
                 keepalive.push_str(&format!(
                     " next probe {}",
-                    clock.time(&row["keepalive"]["next_probe_at"])
+                    clock.time(row["keepalive"]["next_probe_at"].as_i64())
                 ));
             }
         }
@@ -837,11 +837,8 @@ struct Clock<'a> {
 
 impl Clock<'_> {
     /// An epoch-millisecond instant as `HH:MM` in the zone, `MM-DD HH:MM` when it falls on another day than now.
-    fn time(&self, at: &Value) -> String {
-        let Some(at) = at
-            .as_i64()
-            .and_then(|ms| Timestamp::from_millisecond(ms).ok())
-        else {
+    fn time(&self, at: Option<i64>) -> String {
+        let Some(at) = at.and_then(|ms| Timestamp::from_millisecond(ms).ok()) else {
             return "-".to_owned();
         };
         let at = at.to_zoned(self.zone.clone());
