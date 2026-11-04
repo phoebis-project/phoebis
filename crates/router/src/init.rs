@@ -9,10 +9,8 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use base64::Engine;
 use phoebis_store::permissions::{create_private_dir, create_private_file};
 use phoebis_store::StorageKey;
-use rand::Rng;
 
 use crate::config::{ConfigError, ListenerTls};
 use crate::private_dirs;
@@ -584,7 +582,7 @@ pub fn run(
         Some(user) => Some(owner_ids(user)?),
         None => None,
     };
-    let secret = admin_secret();
+    let secret = phoebis_oauth::generate_state();
     let mut written = Vec::new();
     // The secret is printed and the summary written only once every file is in place, so an exit other than 0
     // leaves nothing behind and a printed secret always belongs to a configuration that landed.
@@ -845,12 +843,6 @@ fn summary(plan: &Plan, written: &[Landed]) -> String {
         ));
     }
     text
-}
-
-fn admin_secret() -> String {
-    let mut bytes = [0u8; 32];
-    rand::rng().fill_bytes(&mut bytes);
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
 /// `--owner`'s uid and primary gid, refused off root, for `init` and `recover-key` alike.

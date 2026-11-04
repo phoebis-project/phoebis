@@ -2021,7 +2021,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
- "base64",
  "boring",
  "clap",
  "fake-upstream",
@@ -2044,7 +2043,6 @@ dependencies = [
  "phoebis-store",
  "phoebis-transport",
  "phoebis-ui",
- "rand",
  "reqwest",
  "rusqlite",
  "serde",
