@@ -694,10 +694,7 @@ async fn set_enabled(state: &AdminState, id: &str, enabled: bool) -> Response {
     if let Err(error) = state.store.set_enabled(id, enabled) {
         return store_failure(error);
     }
-    if let Err(refusal) = reload_or_refuse(state).await {
-        return refusal;
-    }
-    StatusCode::NO_CONTENT.into_response()
+    reload_or_no_content(state).await
 }
 
 /// Disconnect the account's credential.
@@ -740,10 +737,7 @@ async fn disconnect(State(state): State<Arc<AdminState>>, Path(id): Path<String>
             return store_failure(error);
         }
     }
-    if let Err(refusal) = reload_or_refuse(&state).await {
-        return refusal;
-    }
-    StatusCode::NO_CONTENT.into_response()
+    reload_or_no_content(&state).await
 }
 
 /// The poll's standing on an account and the sentence that answers while nothing composes a snapshot. The poll never
@@ -2013,15 +2007,9 @@ async fn projections_by_account(
         .map(|m| (m.account_id.as_str(), m.pool_id.as_str()))
         .collect();
     let pools: std::collections::BTreeSet<&str> = pool_of.values().copied().collect();
-    let fallback_ms = phoebis_routing::seconds_ms(state.settings.cooldown_fallback_seconds);
     let mut out = BTreeMap::new();
     for pool_id in pools {
-        for projection in state
-            .router
-            .projections(pool_id, fallback_ms)
-            .await
-            .unwrap_or_default()
-        {
+        for projection in state.router.projections(pool_id).await.unwrap_or_default() {
             if pool_of.get(projection.account_id.as_str()) == Some(&pool_id) {
                 out.insert(projection.account_id.clone(), projection);
             }
@@ -3114,6 +3102,14 @@ pub(crate) async fn reload_or_refuse(state: &AdminState) -> Result<(), Response>
             Err(registry_unavailable())
         }
         Err(ReloadError::Gone(_)) => Err(router_unavailable()),
+    }
+}
+
+/// The 204 a registry write answers once the snapshot reloads, or the reload's refusal.
+pub(crate) async fn reload_or_no_content(state: &AdminState) -> Response {
+    match reload_or_refuse(state).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(refusal) => refusal,
     }
 }
 

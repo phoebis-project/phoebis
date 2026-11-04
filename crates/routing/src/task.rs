@@ -425,6 +425,9 @@ pub struct RouterConfig {
     /// The meter's peak band at a renewal's instant: a pin's banded copy folds its tokens times it, the plain
     /// copy does not.
     pub band: BandWeight,
+    /// Dates an overage whose evidence names no reset in a projections answer, as a selection's request carries its
+    /// own copy: the configuration's `routing.cooldown_fallback_seconds`.
+    pub cooldown_fallback: Duration,
     /// The wait before a `funding_required` account is tried again: the shorter of five minutes and the model
     /// rejection interval, which the router computes from its configuration.
     pub funding_retry: Duration,
@@ -448,6 +451,7 @@ impl Default for RouterConfig {
     fn default() -> Self {
         RouterConfig {
             band: BandWeight::default(),
+            cooldown_fallback: Duration::from_secs(60),
             funding_retry: Duration::from_secs(300),
             hold_first_purge: false,
             purge_interval: Duration::from_secs(60),
@@ -1051,7 +1055,6 @@ enum Command {
     },
     Projections {
         pool_id: String,
-        fallback_ms: i64,
         reply: oneshot::Sender<Vec<AccountProjection>>,
     },
     /// A request the relay refused before asking for a selection. The loop records it as the request's decision.
@@ -1589,19 +1592,10 @@ impl RouterHandle {
     /// Every member of `pool_id` with its projections, its Pace score, its slow-down entry in force and its obstacle
     /// under that pool's settings (the pins the pool keeps, its burn average, its ceiling), one ask, one instant, by
     /// account: an api_key account answers its score alone, and a pool the registry does not hold answers none.
-    /// `fallback_ms` dates an overage whose evidence names no reset, as a selection's request carries it.
-    pub async fn projections(
-        &self,
-        pool_id: &str,
-        fallback_ms: i64,
-    ) -> Result<Vec<AccountProjection>, RouterGone> {
+    pub async fn projections(&self, pool_id: &str) -> Result<Vec<AccountProjection>, RouterGone> {
         let pool_id = pool_id.to_string();
-        self.ask(|reply| Command::Projections {
-            pool_id,
-            fallback_ms,
-            reply,
-        })
-        .await
+        self.ask(|reply| Command::Projections { pool_id, reply })
+            .await
     }
     /// Each pin's fast usage by key, the row's own copy, for a test or a debug hook that reads a pin's burn apart
     /// from its row. A pin without fast usage has no entry. The fast-mode tests probe the copy through it and no
@@ -3365,12 +3359,10 @@ impl Task {
                 let snapshot = self.snapshot();
                 let _ = reply.send(pins_standing(&self.state, &snapshot, (self.clock)()));
             }
-            Command::Projections {
-                pool_id,
-                fallback_ms,
-                reply,
-            } => {
+            Command::Projections { pool_id, reply } => {
                 let snapshot = self.snapshot();
+                let fallback_ms =
+                    i64::try_from(self.config.cooldown_fallback.as_millis()).unwrap_or(i64::MAX);
                 let _ = reply.send(projections(
                     &self.state,
                     &snapshot,

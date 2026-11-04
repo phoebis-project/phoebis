@@ -20,7 +20,8 @@ use utoipa::ToSchema;
 use crate::openapi::{ErrorBody, RegistryUnavailable, RouterUnavailable, StorageFailure};
 use crate::routes::{
     account, account_json, double_option, failure, fence_revision, parse_object, present,
-    reload_or_refuse, router_unavailable, stale_edit, store_failure, CreatedId,
+    reload_or_no_content, reload_or_refuse, router_unavailable, stale_edit, store_failure,
+    CreatedId,
 };
 use crate::AdminState;
 
@@ -414,10 +415,7 @@ pub(crate) async fn remove(
         Err(error) => return store_failure(error),
     }
     state.forget_account(&id, (state.clock)());
-    if let Err(refusal) = reload_or_refuse(&state).await {
-        return refusal;
-    }
-    StatusCode::NO_CONTENT.into_response()
+    reload_or_no_content(&state).await
 }
 
 /// `GET /admin/accounts/{id}/catalog`'s query.
@@ -580,10 +578,7 @@ pub(crate) async fn clear_funding(
     {
         return store_failure(error);
     }
-    if let Err(refusal) = reload_or_refuse(&state).await {
-        return refusal;
-    }
-    StatusCode::NO_CONTENT.into_response()
+    reload_or_no_content(&state).await
 }
 
 /// `GET /admin/accounts/{id}/quota`'s query.

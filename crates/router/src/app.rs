@@ -730,6 +730,7 @@ fn router_config(
         .with_band_segments(move |window, entrypoint, from, to| {
             segment_tables.band_segments(window, entrypoint, from, to)
         }),
+        cooldown_fallback: Duration::from_secs(routing.cooldown_fallback_seconds),
         funding_retry: Duration::from_secs(300.min(routing.model_rejection_seconds)),
         // Released once the ledger's mirror subscribed and the start row is recorded, below.
         hold_first_purge: true,

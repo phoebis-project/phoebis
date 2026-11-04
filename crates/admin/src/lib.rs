@@ -137,8 +137,8 @@ impl AdminState {
 /// at where a credential lives.
 pub struct SettingsView {
     pub api_prices_path: Option<String>,
-    /// Not answered by the settings route: the pool and session routes read it to tell whether a cooldown the
-    /// upstream gave no length for still stands.
+    /// Not answered by the settings route: the session route reads it to tell whether a cooldown the upstream gave
+    /// no length for still stands.
     pub cooldown_fallback_seconds: u64,
     pub ledger_path: String,
     pub metrics_listen: String,

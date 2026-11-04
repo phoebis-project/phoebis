@@ -24,16 +24,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::ToSchema;
 
-use crate::accounts::{check_slug, within_text_bound};
+use crate::accounts::{check_slug, within_text_bound, ACTOR};
 use crate::analytics::ledger_failure;
 use crate::openapi::{ConditionView, ErrorBody, RegistryUnavailable, StorageFailure};
 use crate::routes::{
-    failure, fence_token, parse_object, present, reload_or_refuse, stale_edit, store_failure,
-    CreatedId,
+    failure, fence_token, parse_object, present, reload_or_no_content, reload_or_refuse,
+    stale_edit, store_failure, CreatedId,
 };
 use crate::AdminState;
 
-const ACTOR: &str = "admin";
 pub(crate) const STALE_EDIT: &str =
     "the guardrail changed while it was being edited, so reload and try again";
 
@@ -1099,10 +1098,7 @@ pub(crate) async fn remove(
     Path(id): Path<String>,
 ) -> Response {
     match state.store.delete_guardrail(&id, ACTOR) {
-        Ok(()) => match reload_or_refuse(&state).await {
-            Ok(()) => StatusCode::NO_CONTENT.into_response(),
-            Err(refusal) => refusal,
-        },
+        Ok(()) => reload_or_no_content(&state).await,
         Err(StoreError::GuardrailNotFound(_)) => {
             failure(StatusCode::NOT_FOUND, "guardrail not found")
         }

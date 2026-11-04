@@ -23,12 +23,13 @@ use crate::accounts::{check_slug, ACTOR};
 use crate::guardrails::{attachment_refusal, distinct_ids, AttachmentIndex, GuardrailRef};
 use crate::openapi::{ErrorBody, RegistryUnavailable, StorageFailure};
 use crate::routes::{
-    double_option, failure, fence_token, parse_object, pool, present, reload_or_refuse, stale_edit,
-    store_failure, CreatedId,
+    double_option, failure, fence_token, parse_object, pool, present, reload_or_no_content,
+    reload_or_refuse, stale_edit, store_failure, CreatedId,
 };
 use crate::rules::{parse_rules, RuleInput};
 use crate::AdminState;
 
+const DUPLICATE_ID: &str = "a pool with this id exists";
 const STALE_EDIT: &str = "the pool changed while it was being edited, so reload and try again";
 
 /// One member. On a subscription member a budget bounds its metered spend, overage and fast answers, and on a
@@ -305,11 +306,11 @@ pub(crate) struct ModelTtlInput {
 /// field merges one level deeper: a PATCH naming `{"metered": {"main": "5m"}}` overlays that field alone and leaves the
 /// set's other three where they stood rather than falling back to the set's own defaults. A non-object `incoming` is
 /// passed through unchanged so `parse`'s own shape check rejects it.
-fn overlay(stored: Value, incoming: &Value, nested: &[&str]) -> Value {
+fn overlay(stored: &impl serde::Serialize, incoming: &Value, nested: &[&str]) -> Value {
     let Value::Object(patch) = incoming else {
         return incoming.clone();
     };
-    let mut merged = stored;
+    let mut merged = serde_json::to_value(stored).unwrap_or_else(|_| json!({}));
     if let Value::Object(base) = &mut merged {
         for (key, value) in patch {
             if let (true, Value::Object(set_patch)) = (nested.contains(&key.as_str()), value) {
@@ -378,21 +379,22 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
         row.model_rules = parse_rules(list)?;
     }
     if let Some(keepalive) = &input.keepalive {
-        let stored = serde_json::to_value(KeepalivePolicy::from_json(&row.keepalive_json))
-            .unwrap_or_else(|_| json!({}));
-        let merged = overlay(stored, keepalive, &[]);
+        let stored = KeepalivePolicy::from_json(&row.keepalive_json);
+        let merged = overlay(&stored, keepalive, &[]);
         let policy = KeepalivePolicy::parse(&merged)
             .map_err(|error| failure(StatusCode::BAD_REQUEST, &error.to_string()))?;
         // The stored text stays where it reads as the same policy, so a save naming the values a pool holds writes no
         // change row whatever spelling the text was stored in.
-        if policy != KeepalivePolicy::from_json(&row.keepalive_json) {
+        if policy != stored {
             row.keepalive_json = serde_json::to_string(&policy).unwrap_or_else(|_| "{}".into());
         }
     }
     if let Some(cache_ttl) = &input.cache_ttl {
-        let stored = serde_json::to_value(CacheTtlPolicy::from_json(&row.cache_ttl_json))
-            .unwrap_or_else(|_| json!({}));
-        let mut merged = overlay(stored, cache_ttl, &["metered", "plan"]);
+        let mut merged = overlay(
+            &CacheTtlPolicy::from_json(&row.cache_ttl_json),
+            cache_ttl,
+            &["metered", "plan"],
+        );
         for set in ["metered", "plan"] {
             if let Some(models) = merged
                 .get_mut(set)
@@ -645,7 +647,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         return refusal;
     }
     if let Ok(Some(_)) = state.store.pool(id) {
-        return failure(StatusCode::CONFLICT, "a pool with this id exists");
+        return failure(StatusCode::CONFLICT, DUPLICATE_ID);
     }
     let mut row = PoolRow {
         // Stored whole, so the create's change row names each member of the policy the pool starts with.
@@ -667,9 +669,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         // The store takes the incarnation inside the insert, so the answer serializes the row it wrote.
         Ok(written) => row = written,
         // The check above reads outside the insert, so a create that lost the race for the id arrives here.
-        Err(StoreError::IdTaken(_)) => {
-            return failure(StatusCode::CONFLICT, "a pool with this id exists")
-        }
+        Err(StoreError::IdTaken(_)) => return failure(StatusCode::CONFLICT, DUPLICATE_ID),
         // The row and its members are one transaction, so a refused member leaves no pool to name.
         Err(error) => return membership_failure(error),
     }
@@ -700,8 +700,8 @@ async fn publish(state: &AdminState, row: &PoolRow, status: StatusCode) -> Respo
     if let Err(refusal) = reload_or_refuse(state).await {
         return refusal;
     }
-    match pool_json(state, row).await {
-        Ok(v) => (status, Json(v)).into_response(),
+    match pool_context(state, Some(&row.id)).await {
+        Ok(context) => (status, Json(pool_json_from(&context, row))).into_response(),
         Err(e) => store_failure(e),
     }
 }
@@ -807,10 +807,7 @@ pub(crate) async fn remove(
     Path(id): Path<String>,
 ) -> Response {
     match state.store.delete_pool(&id, ACTOR) {
-        Ok(()) => match reload_or_refuse(&state).await {
-            Ok(()) => StatusCode::NO_CONTENT.into_response(),
-            Err(refusal) => refusal,
-        },
+        Ok(()) => reload_or_no_content(&state).await,
         Err(StoreError::PoolInUse(_)) => failure(StatusCode::CONFLICT, "pool still has keys"),
         Err(StoreError::PoolNotFound(_)) => failure(StatusCode::NOT_FOUND, "pool not found"),
         Err(error) => store_failure(error),
@@ -991,14 +988,13 @@ pub(crate) struct PoolWarning {
 
 /// The checks of `row` that hold, sorted by code. `cohort` is the most agents of one session among the pins under the
 /// pool's keys, from the router's pins at read time.
-fn warnings_of(row: &PoolRow, cohort: usize) -> Vec<PoolWarning> {
+fn warnings_of(row: &PoolRow, cache_ttl: &CacheTtlPolicy, cohort: usize) -> Vec<PoolWarning> {
     let warning = |code: &str, fields: &[&str], text: String| PoolWarning {
         code: code.into(),
         fields: fields.iter().map(|f| f.to_string()).collect(),
         text,
     };
     let mut warnings = Vec::new();
-    let cache_ttl = CacheTtlPolicy::from_json(&row.cache_ttl_json);
     let longest_ttl = [
         cache_ttl.plan.main,
         cache_ttl.plan.subagent,
@@ -1290,20 +1286,23 @@ pub(crate) async fn pool_context(
                 .unwrap_or_default()
         }
     };
+    let projections = async {
+        let mut projections = BTreeMap::new();
+        for id in &pool_ids {
+            if let Ok(members) = state.router.projections(id).await {
+                projections.insert(id.clone(), members);
+            }
+        }
+        projections
+    };
     // Each read is a snapshot of its own, so they wait together and their order carries no meaning.
-    let ((traffic, moves), ceilings, pins, spends) = tokio::join!(
+    let ((traffic, moves), ceilings, pins, spends, projections) = tokio::join!(
         ledger,
         state.keepalive.ceiling_inputs(),
         state.router.pins(),
         state.router.member_spends(),
+        projections,
     );
-    let fallback_ms = phoebis_routing::seconds_ms(state.settings.cooldown_fallback_seconds);
-    let mut projections = BTreeMap::new();
-    for id in pool_ids {
-        if let Ok(members) = state.router.projections(&id, fallback_ms).await {
-            projections.insert(id, members);
-        }
-    }
     Ok(PoolContext {
         accounts: registry.accounts,
         ceilings,
@@ -1321,31 +1320,51 @@ pub(crate) async fn pool_context(
     })
 }
 
+/// A member's standing as `PoolMemberView::eligible` answers it.
+#[derive(Clone, Copy, PartialEq)]
+enum Eligibility {
+    Budget,
+    BudgetUnknown,
+    Cooldown,
+    Eligible,
+    Overage,
+    Spent,
+    Unavailable,
+}
+
+impl Eligibility {
+    fn as_str(self) -> &'static str {
+        match self {
+            Eligibility::Budget => "budget",
+            Eligibility::BudgetUnknown => "budget_unknown",
+            Eligibility::Cooldown => "cooldown",
+            Eligibility::Eligible => "eligible",
+            Eligibility::Overage => "overage",
+            Eligibility::Spent => "spent",
+            Eligibility::Unavailable => "unavailable",
+        }
+    }
+}
+
 /// The member word for the selector's obstacle on the member, as the router's projection of it answers.
-fn member_word(projection: Option<&AccountProjection>) -> &'static str {
+fn member_word(projection: Option<&AccountProjection>) -> Eligibility {
     // A member the router answers no projection for (the router gone, or a registry write it has not reloaded) is
     // routed nothing at that instant. No account is attempted and the fast lane is off for a projection, so the
     // attempted and credits obstacles never arise, and neither takes a member out of the pool's standard set.
     let Some(projection) = projection else {
-        return "unavailable";
+        return Eligibility::Unavailable;
     };
     match &projection.obstacle {
-        None | Some(Obstacle::Attempted | Obstacle::Credits { .. }) => "eligible",
-        Some(Obstacle::Budget { .. }) => "budget",
-        Some(Obstacle::BudgetUnknown) => "budget_unknown",
-        Some(Obstacle::Cooldown { .. }) => "cooldown",
+        None | Some(Obstacle::Attempted | Obstacle::Credits { .. }) => Eligibility::Eligible,
+        Some(Obstacle::Budget { .. }) => Eligibility::Budget,
+        Some(Obstacle::BudgetUnknown) => Eligibility::BudgetUnknown,
+        Some(Obstacle::Cooldown { .. }) => Eligibility::Cooldown,
         Some(Obstacle::Deleted | Obstacle::Ended | Obstacle::Paused | Obstacle::Unready) => {
-            "unavailable"
+            Eligibility::Unavailable
         }
-        Some(Obstacle::Overage { .. }) => "overage",
-        Some(Obstacle::Spent { .. }) => "spent",
+        Some(Obstacle::Overage { .. }) => Eligibility::Overage,
+        Some(Obstacle::Spent { .. }) => Eligibility::Spent,
     }
-}
-
-/// One pool over a context built for it alone, for the routes that answer a single pool.
-pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Pool, StoreError> {
-    let context = pool_context(state, Some(&row.id)).await?;
-    Ok(pool_json_from(&context, row))
 }
 
 /// One pool row from the shared context, whose one read carries every pool's traffic and moves and whose ceiling
@@ -1391,23 +1410,22 @@ pub(crate) fn pool_json_from(context: &PoolContext, row: &PoolRow) -> Pool {
     }
     let pins = &context.pins;
     let key_ids: Vec<String> = keys.iter().map(|k| k.id.clone()).collect();
-    let mut active_pins = 0;
     let mut pins_by_account: HashMap<&str, usize> = HashMap::new();
     let mut cohorts: HashMap<(&str, &str), HashSet<&str>> = HashMap::new();
     for pin in pins.iter().filter(|p| key_ids.contains(&p.key_id)) {
-        active_pins += 1;
         *pins_by_account.entry(pin.account_id.as_str()).or_default() += 1;
         cohorts
             .entry((pin.key_id.as_str(), pin.session_id.as_str()))
             .or_default()
             .insert(pin.agent_id.as_str());
     }
+    let active_pins: usize = pins_by_account.values().sum();
     let cohort = cohorts.values().map(HashSet::len).max().unwrap_or(0);
     let accounts = &context.accounts;
     let spends = &context.spends;
     let snapshot = &context.snapshot;
     let projections = context.projections.get(&row.id);
-    let verdicts: Vec<(Option<&AccountProjection>, &str)> = members
+    let verdicts: Vec<(Option<&AccountProjection>, Eligibility)> = members
         .iter()
         .map(|m| {
             let projection = projections
@@ -1417,7 +1435,7 @@ pub(crate) fn pool_json_from(context: &PoolContext, row: &PoolRow) -> Pool {
         .collect();
     let ineligible = verdicts
         .iter()
-        .filter(|(_, word)| *word != "eligible")
+        .filter(|(_, word)| *word != Eligibility::Eligible)
         .count();
     // A pool with no member has none to route to, so it reads exhausted as one whose every member is skipped.
     let status = if !row.enabled {
@@ -1441,6 +1459,7 @@ pub(crate) fn pool_json_from(context: &PoolContext, row: &PoolRow) -> Pool {
         context
             .ceilings
             .resolve_pool(&keepalive, &cache_ttl, &row.model_rules, &fundings);
+    let warnings = warnings_of(row, &cache_ttl, cohort);
     Pool {
         id: row.id.clone(),
         label: row.label.clone(),
@@ -1491,7 +1510,15 @@ pub(crate) fn pool_json_from(context: &PoolContext, row: &PoolRow) -> Pool {
                     .get(m.account_id.as_str())
                     .copied()
                     .unwrap_or(0);
-                member_json(m, accounts, spends, word, now, active_pins, *projection)
+                member_json(
+                    m,
+                    accounts,
+                    spends,
+                    word.as_str(),
+                    now,
+                    active_pins,
+                    *projection,
+                )
             })
             .collect(),
         keys,
@@ -1505,7 +1532,7 @@ pub(crate) fn pool_json_from(context: &PoolContext, row: &PoolRow) -> Pool {
         guardrails: context
             .guardrails
             .refs_for(&AttachmentSubject::Pool(row.id.clone())),
-        warnings: warnings_of(row, cohort),
+        warnings,
     }
 }
 

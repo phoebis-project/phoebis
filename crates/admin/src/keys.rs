@@ -18,12 +18,13 @@ use crate::accounts::{check_slug, within_text_bound, ACTOR};
 use crate::guardrails::{attachment_refusal, distinct_ids, AttachmentIndex, GuardrailRef};
 use crate::openapi::{ErrorBody, RegistryUnavailable, StorageFailure};
 use crate::routes::{
-    api_key, double_option, failure, fence_token, parse_object, pool, present, reload_or_refuse,
-    stale_edit, store_failure, CreatedId,
+    api_key, double_option, failure, fence_token, parse_object, pool, present,
+    reload_or_no_content, reload_or_refuse, stale_edit, store_failure, CreatedId,
 };
 use crate::rules::{parse_mode, parse_rules, RuleInput};
 use crate::AdminState;
 
+const DUPLICATE_ID: &str = "a key with this id exists";
 const STALE_EDIT: &str = "the key changed while it was being edited, so reload and try again";
 
 /// The key's fields. On a create `id`, `label` and `pool_id` are required. On an edit any subset but `id`. An unknown
@@ -454,7 +455,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         return refusal;
     }
     if let Ok(Some(_)) = state.store.api_key(id) {
-        return failure(StatusCode::CONFLICT, "a key with this id exists");
+        return failure(StatusCode::CONFLICT, DUPLICATE_ID);
     }
     let secret = new_secret();
     let now = (state.clock)();
@@ -493,9 +494,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
             return failure(StatusCode::NOT_FOUND, "pool not found")
         }
         // The check above reads outside the insert, so a create that lost the race for the id arrives here.
-        Err(StoreError::IdTaken(_)) => {
-            return failure(StatusCode::CONFLICT, "a key with this id exists")
-        }
+        Err(StoreError::IdTaken(_)) => return failure(StatusCode::CONFLICT, DUPLICATE_ID),
         Err(error) => return store_failure(error),
     }
     // The row exists from here on, so every answer, a refusal included, names it to the mutation log.
@@ -700,10 +699,7 @@ pub(crate) async fn remove(
 /// The 204 a key's revoke or delete answers once the registry reloads, or the write's refusal.
 async fn answer_key_write(state: &AdminState, written: Result<(), StoreError>) -> Response {
     match written {
-        Ok(()) => match reload_or_refuse(state).await {
-            Ok(()) => StatusCode::NO_CONTENT.into_response(),
-            Err(refusal) => refusal,
-        },
+        Ok(()) => reload_or_no_content(state).await,
         Err(StoreError::KeyNotFound(_)) => failure(StatusCode::NOT_FOUND, "key not found"),
         Err(error) => store_failure(error),
     }
