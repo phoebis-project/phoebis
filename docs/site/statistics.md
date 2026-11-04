@@ -148,10 +148,10 @@ read it. The extra-usage rows are keyed by the source too, so a head and a poll 
 share as a fraction from both sources, the poll's percent divided by a hundred as on its quota rows. A poll's row also
 carries the body's `spend` figures where the body has the object: the cap and the spend in minor units, the percent, the
 currency and its exponent. A usage-based seat's head row carries no in-use flag, since the seat's overage family is its
-spend window. The account view and the Dashboard answer the head's `seven_day_overage_included` and the poll's
-`seven_day_fable` under the one id `seven_day_fable`, the newest reading winning, while the ledger keeps the head's key
-as stored. The head's overage-included week is read as the 7-day Fable until a second model week arrives by head, since
-the upstream's name for it is generic.
+spend window. The account view answers the head's `seven_day_overage_included` and the poll's `seven_day_fable` under
+the one id `seven_day_fable`, the newest reading winning, while the ledger keeps the head's key as stored. The head's
+overage-included week is read as the 7-day Fable until a second model week arrives by head, since the upstream's name
+for it is generic.
 
 The usage endpoint is also read once at startup for every OAuth account with a credential, before the proxy listener
 accepts requests and bounded by `routing.startup_fetch_seconds`, so selection holds a sample per account from the first

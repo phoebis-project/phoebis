@@ -431,9 +431,9 @@ failed parse carries the parser's reason ([Quota samples](statistics.md#quota-sa
 file under the funding `usage_based`, priced in dollars at the API rates and kept by the `billed` filter ([The
 ledger](statistics.md#the-ledger), [Plan meter](statistics.md#plan-meter)). A usage-based seat's account view carries
 its spend window with the poll's amounts, the newest share and a reset estimated at 00:00 UTC on the first of the next
-month until a header names one ([Quota samples](statistics.md#quota-samples)). The account view and the Dashboard answer
-the 7-day Fable under the one id `seven_day_fable` ([Quota samples](statistics.md#quota-samples)). The quota history of
-an `oauth` account answers a head's sample and a poll's at one instant where both landed in one bucket ([Quota
+month until a header names one ([Quota samples](statistics.md#quota-samples)). The account view answers the 7-day Fable
+under the one id `seven_day_fable` ([Quota samples](statistics.md#quota-samples)). The quota history of an `oauth`
+account answers a head's sample and a poll's at one instant where both landed in one bucket ([Quota
 samples](statistics.md#quota-samples)). A request the router's own shutdown ends past the drain window is booked
 `canceled` under the code `router_shutdown`, apart from a caller that left on its own under `client_gone` ([The
 ledger](statistics.md#the-ledger)). The request log filters on the serving attempt's stop reason and refusal category,
