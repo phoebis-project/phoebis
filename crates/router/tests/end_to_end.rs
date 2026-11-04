@@ -1122,6 +1122,7 @@ async fn a_stream_held_past_the_proxy_listeners_own_drain_is_cut_there_and_booke
         text.lines()
             .any(|line| line.contains("phoebis_relay::serve")
                 && line.contains("connections still open at the drain deadline were cut")
+                && line.contains("listener=\"proxy\"")
                 && line.contains("seconds=2")),
         "the proxy listener cut the stream at its own deadline: {text}"
     );
