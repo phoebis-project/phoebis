@@ -5726,10 +5726,8 @@ fn judged_candidate<'a>(
     {
         return None;
     }
-    eligible
-        .iter()
-        .copied()
-        .find(|c| c.account_id == judged.account_id && c.incarnation == judged.incarnation)
+    candidate_in(eligible, &judged.account_id)
+        .filter(|c| c.incarnation == judged.incarnation)
         .filter(|c| holds_allowance(state, snapshot, &c.account_id, window, request.now))
 }
 
