@@ -2596,10 +2596,7 @@ pub(crate) fn longest_cache_ttl_ms(policy: &CacheTtlPolicy) -> i64 {
                 .into_iter()
                 .chain(rules.models.iter().flat_map(|m| [m.main, m.subagent]))
         })
-        .map(|ttl| match ttl {
-            CacheTtl::FiveMinutes => FIVE_MINUTES_MS,
-            CacheTtl::OneHour => ONE_HOUR_MS,
-        })
+        .map(CacheTtl::ms)
         .fold(FIVE_MINUTES_MS, i64::max)
 }
 

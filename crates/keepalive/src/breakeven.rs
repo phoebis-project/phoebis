@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use phoebis_ledger::{PlanTables, PriceRevisions, PriceTable};
-use phoebis_relay::{CacheTtl, CacheTtlPolicy, TtlBranch};
+use phoebis_relay::{CacheTtlPolicy, TtlBranch};
 use phoebis_routing::rules::{allows, process, RulesMode};
 use phoebis_routing::{listing::row_for, seconds_ms, LongContextRates, Rates, SEVEN_DAY};
 use phoebis_store::{canonical_id, ModelRule};
@@ -384,10 +384,6 @@ pub(crate) fn resolve_pool(
         .collect();
     models.sort_unstable();
     models.dedup();
-    let ttl_ms = |ttl: CacheTtl| match ttl {
-        CacheTtl::FiveMinutes => FIVE_MINUTES_MS,
-        CacheTtl::OneHour => ONE_HOUR_MS,
-    };
     let mut resolved: Option<ResolvedCeilings> = None;
     for &funding in fundings {
         let metered = funding != Funding::Plan;
@@ -401,7 +397,7 @@ pub(crate) fn resolve_pool(
         };
         for (factors, model) in picks {
             let ttls = match cache_ttl.ttl_for(model, TtlBranch::Main, metered) {
-                Some(ttl) => vec![ttl_ms(ttl)],
+                Some(ttl) => vec![ttl.ms()],
                 None => vec![FIVE_MINUTES_MS, ONE_HOUR_MS],
             };
             for ttl in ttls {
