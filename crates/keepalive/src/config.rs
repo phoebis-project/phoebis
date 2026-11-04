@@ -145,6 +145,11 @@ impl KeepalivePolicy {
     /// What the admin API accepts: the shape and every field bound. The affinity rule needs the pool row and is
     /// checked by `validate`.
     pub fn parse(raw: &serde_json::Value) -> Result<KeepalivePolicy, PolicyError> {
+        KeepalivePolicy::of_value(raw.clone())
+    }
+
+    /// `parse` over a value it may consume, so `read` hands over the members it kept without a copy.
+    fn of_value(raw: serde_json::Value) -> Result<KeepalivePolicy, PolicyError> {
         // The container-level `default` makes a JSON array deserialize element by element, filling anything
         // past the end from the default rather than erroring, so a non-object value has to be caught here.
         if !raw.is_object() {
@@ -153,7 +158,7 @@ impl KeepalivePolicy {
             ));
         }
         let policy: KeepalivePolicy =
-            serde_json::from_value(raw.clone()).map_err(|e| PolicyError::Shape(e.to_string()))?;
+            serde_json::from_value(raw).map_err(|e| PolicyError::Shape(e.to_string()))?;
         policy.validate_fields()?;
         Ok(policy)
     }
@@ -167,18 +172,12 @@ impl KeepalivePolicy {
 
     /// A stored row with the refusal that turns it off, for the one place that reports it.
     pub fn read(raw: &str) -> Result<KeepalivePolicy, PolicyError> {
-        let value: serde_json::Value =
+        let mut value: serde_json::Value =
             serde_json::from_str(raw).map_err(|e| PolicyError::Shape(e.to_string()))?;
-        let serde_json::Value::Object(mut members) = value else {
-            return Err(PolicyError::Shape(
-                "keepalive policy must be a JSON object".to_string(),
-            ));
-        };
-        members.retain(|name, _| POLICY_MEMBERS.contains(&name.as_str()));
-        let policy: KeepalivePolicy = serde_json::from_value(serde_json::Value::Object(members))
-            .map_err(|e| PolicyError::Shape(e.to_string()))?;
-        policy.validate_fields()?;
-        Ok(policy)
+        if let Some(members) = value.as_object_mut() {
+            members.retain(|name, _| POLICY_MEMBERS.contains(&name.as_str()));
+        }
+        KeepalivePolicy::of_value(value)
     }
 
     pub fn validate_fields(&self) -> Result<(), PolicyError> {
