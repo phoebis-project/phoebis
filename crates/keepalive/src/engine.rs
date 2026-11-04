@@ -746,6 +746,22 @@ impl Agent {
         moved
     }
 
+    /// Every probe the agent paid for that no request answered, the unanswered ones and then the kept ones, settled
+    /// under `label`.
+    pub(crate) fn settle_all(&mut self, key: &SessionKey, label: Wasted) -> Vec<Settlement> {
+        let unanswered = std::mem::take(&mut self.unanswered);
+        let mut settled: Vec<Settlement> = unanswered
+            .iter()
+            .map(|probe| Kept::of(self, probe).settle(key, label))
+            .collect();
+        settled.extend(
+            std::mem::take(&mut self.kept)
+                .into_iter()
+                .map(|kept| kept.settle(key, label)),
+        );
+        settled
+    }
+
     /// The names `follow_resolutions` reads on an agent with no compaction open, as an arrival leaves it once
     /// `end_compaction` ran: the ones the arrival looks up in the catalog's acknowledged resolution.
     pub(crate) fn held_models(&self) -> BTreeSet<String> {
@@ -1001,6 +1017,18 @@ struct Credit {
     usage_based: bool,
     in_overage: bool,
     client: Option<String>,
+}
+
+/// Drops the agent's observation, with the pending entry it follows and the bytes its recipe held.
+fn drop_current(
+    agent: &mut Agent,
+    pending: &mut HashMap<String, (SessionKey, String)>,
+    retained: &mut usize,
+) {
+    if let Some(observation) = agent.current.take() {
+        pending.remove(&observation.id);
+        *retained -= observation.recipe.size;
+    }
 }
 
 /// Whether a request the engine follows is open on `agent`: the turn its observation follows, while `pending` holds
@@ -1859,42 +1887,32 @@ impl Inner {
         else {
             return;
         };
-        if let Some(observation) = agent.current.take() {
-            self.pending.remove(&observation.id);
-            self.retained -= observation.recipe.size;
-        }
+        drop_current(agent, &mut self.pending, &mut self.retained);
         agent.expires = None;
         agent.retry_at = None;
         agent.generation += 1;
         agent.paused = false;
         agent.last_stop = wasted;
-        if unanswered == Unanswered::Leave {
-            return;
-        }
-        let probes = std::mem::take(&mut agent.unanswered);
-        if unanswered == Unanswered::Keep {
-            // A row apiece: a request whose completion never came leaves its probes for the next one, which may
-            // keep probes paid under other keys, and each settles by its chain's last entry. A ceiling's label rides
-            // along, for the lapse sweep to settle under when no turn reads them first.
-            let kept: Vec<Kept> = probes
-                .iter()
-                .map(|probe| Kept {
-                    pending: wasted,
-                    ..Kept::of(agent, probe)
-                })
-                .collect();
-            agent.kept.extend(kept);
-            return;
-        }
-        let Some(label) = wasted else {
-            return;
-        };
-        for probe in &probes {
-            self.settlements
-                .push(Kept::of(agent, probe).settle(key, label));
-        }
-        for kept in std::mem::take(&mut agent.kept) {
-            self.settlements.push(kept.settle(key, label));
+        match (unanswered, wasted) {
+            (Unanswered::Leave, _) => {}
+            (Unanswered::Keep, _) => {
+                // A row apiece: a request whose completion never came leaves its probes for the next one, which may
+                // keep probes paid under other keys, and each settles by its chain's last entry. A ceiling's label
+                // rides along, for the lapse sweep to settle under when no turn reads them first.
+                let probes = std::mem::take(&mut agent.unanswered);
+                let kept: Vec<Kept> = probes
+                    .iter()
+                    .map(|probe| Kept {
+                        pending: wasted,
+                        ..Kept::of(agent, probe)
+                    })
+                    .collect();
+                agent.kept.extend(kept);
+            }
+            (Unanswered::Settle, Some(label)) => {
+                self.settlements.extend(agent.settle_all(key, label));
+            }
+            (Unanswered::Settle, None) => agent.unanswered.clear(),
         }
     }
 
@@ -2091,10 +2109,7 @@ impl Inner {
         else {
             return;
         };
-        if let Some(observation) = agent.current.take() {
-            self.pending.remove(&observation.id);
-            self.retained -= observation.recipe.size;
-        }
+        drop_current(agent, &mut self.pending, &mut self.retained);
         agent.expires = None;
         agent.last_stop = Some(Wasted::Expired);
         self.lapse_probes(key, agent_id, now);

@@ -1044,13 +1044,8 @@ impl Inner {
         let Some((mut agent, _)) = decoded else {
             return;
         };
-        for probe in std::mem::take(&mut agent.unanswered) {
-            self.settlements
-                .push(Kept::of(&agent, &probe).settle(key, Wasted::Evicted));
-        }
-        for kept in std::mem::take(&mut agent.kept) {
-            self.settlements.push(kept.settle(key, Wasted::Evicted));
-        }
+        self.settlements
+            .extend(agent.settle_all(key, Wasted::Evicted));
     }
 
     /// `discard` for a recipe the load does not keep. The generation stays: nothing from before the restart can
