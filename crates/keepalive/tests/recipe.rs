@@ -621,3 +621,43 @@ fn a_body_bound_to_its_account_is_refused() {
         "a body that carries no such reference still builds"
     );
 }
+
+/// A user turn whose `tool_result` carries the marker on a block of its own content, the fifth position the
+/// Messages API reads a marker from.
+fn with_tool_result_marker(marker: Value) -> Vec<u8> {
+    with(
+        "messages",
+        json!([{"role": "user", "content": [{
+            "type": "tool_result",
+            "tool_use_id": "toolu_1",
+            "content": [{"type": "text", "text": "out", "cache_control": marker}]
+        }]}]),
+    )
+}
+
+#[test]
+fn a_one_hour_marker_inside_a_tool_results_content_lengthens_the_longest_ttl() {
+    let recipe = make_recipe(
+        &headers(),
+        &with_tool_result_marker(json!({"type": "ephemeral", "ttl": "1h"})),
+        "routing-alias",
+        1 << 20,
+    )
+    .unwrap();
+    assert_eq!(
+        (recipe.ttl_ms, recipe.longest_ttl_ms),
+        (FIVE_MINUTES_MS, ONE_HOUR_MS),
+        "the system's five-minute marker stays the shortest, and the tool result's hour is the longest"
+    );
+}
+
+#[test]
+fn a_marker_inside_a_tool_results_content_that_is_not_ephemeral_refuses_the_body() {
+    let result = make_recipe(
+        &headers(),
+        &with_tool_result_marker(json!({"type": "persistent"})),
+        "routing-alias",
+        1 << 20,
+    );
+    assert_eq!(result.unwrap_err(), "invalid_cache_control");
+}

@@ -328,6 +328,11 @@ A request whose `system`, `text`, `stream` or `max_tokens` member the replay's e
 is spelled with a JSON escape, is not retained and reads `not_retained` under `invalid_request`: a probe built from it
 would travel with a stale stamp or a doubled member.
 
+The engine reads a request's cache markers at the five positions the Messages API takes one from, a block inside a tool
+result's content among them: a marker that is not ephemeral or names a TTL other than `5m` or `1h` leaves the request
+`not_retained` under `invalid_cache_control` wherever it sits, and a readable one sets the TTLs the recipe's probes
+follow.
+
 ### The guard field
 
 Every request the recipe observes also updates `last_guard`, `null` before the first one: `rearm` or `restart` for a

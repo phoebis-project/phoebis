@@ -362,7 +362,7 @@ pub fn set_cache_ttl(
 /// Every `cache_control` member at the five positions the Messages API takes one from: the top level,
 /// `system[]`, `tools[]`, `messages[].content[]`, and the blocks inside a content block's own `content`. One
 /// object of that name anywhere else (a tool's input schema, a tool call's input) is the client's data.
-pub(crate) fn schema_cache_controls(
+pub fn schema_cache_controls(
     root: &serde_json::Map<String, serde_json::Value>,
 ) -> Vec<&serde_json::Value> {
     fn blocks(value: Option<&serde_json::Value>) -> impl Iterator<Item = &serde_json::Value> {

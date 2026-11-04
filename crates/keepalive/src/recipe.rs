@@ -256,56 +256,27 @@ pub fn request_ttl_ms(root: &Value) -> Option<i64> {
 }
 
 /// The shortest and the longest TTL the body's cache markers ask for, `Some((0, 0))` with none and `None` when a
-/// marker is not an ephemeral one with a known TTL.
+/// marker is not an ephemeral one with a known TTL. The markers are the ones the relay's TTL rewrite edits, so a
+/// recipe's TTLs and the rewrite read one set of positions.
 fn marker_ttls(root: &Value) -> Option<(i64, i64)> {
     let (mut shortest, mut longest) = (0i64, 0i64);
-    let mut visit = |marker: Option<&Value>| -> bool {
-        let Some(marker) = marker else { return true };
+    let markers = root
+        .as_object()
+        .map(phoebis_relay::schema_cache_controls)
+        .unwrap_or_default();
+    for marker in markers {
         if marker.get("type").and_then(Value::as_str) != Some("ephemeral") {
-            return false;
+            return None;
         }
         let this = match marker.get("ttl").and_then(Value::as_str).unwrap_or("") {
             "" | "5m" => FIVE_MINUTES_MS,
             "1h" => ONE_HOUR_MS,
-            _ => return false,
+            _ => return None,
         };
         if shortest == 0 || this < shortest {
             shortest = this;
         }
         longest = longest.max(this);
-        true
-    };
-    if !visit(root.get("cache_control")) {
-        return None;
-    }
-    for field in ["system", "tools"] {
-        for item in root
-            .get(field)
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            if !visit(item.get("cache_control")) {
-                return None;
-            }
-        }
-    }
-    for message in root
-        .get("messages")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        for block in message
-            .get("content")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            if !visit(block.get("cache_control")) {
-                return None;
-            }
-        }
     }
     Some((shortest, longest))
 }

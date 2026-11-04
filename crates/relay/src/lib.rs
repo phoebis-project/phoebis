@@ -33,8 +33,9 @@ mod stream;
 pub use auth::{authenticated_key, presented_key, AuthError};
 pub use billing::is_entrypoint_token;
 pub use body::{
-    edit_body, BodyEdits, BodyMember, Markerless, NativeEdit, RepeatedMember, SafeguardsEdit,
-    CACHE_DIAGNOSIS_BETA, CLASSIFIER_BETA, DANGEROUS_TOOL_USE_BETA, EXTENDED_TTL_BETA,
+    edit_body, schema_cache_controls, BodyEdits, BodyMember, Markerless, NativeEdit,
+    RepeatedMember, SafeguardsEdit, CACHE_DIAGNOSIS_BETA, CLASSIFIER_BETA, DANGEROUS_TOOL_USE_BETA,
+    EXTENDED_TTL_BETA,
 };
 pub use cache_ttl::{CacheTtl, CacheTtlError, CacheTtlPolicy, ModelTtl, TtlBranch, TtlRules};
 pub use casing::{head_queue, HeadQueue, HeadRecorder, OriginalHead};

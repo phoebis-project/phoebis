@@ -149,7 +149,10 @@ subagent the router named released unannounced when a later answer omits it, unt
 record's departure frees its slot ([The keepalive protocol](relay.md#the-keepalive-protocol)). The keepalive prices its
 probes, the savings and the break-even in the 7-day window of the account's tier, the window every plan keeps, and the
 console shows the probe cost and the saving in the chosen week ([The four fields](keepalive.md#the-four-fields), [What
-the ledger records](keepalive.md#what-the-ledger-records)).
+the ledger records](keepalive.md#what-the-ledger-records)). The keepalive reads a request's cache markers at the five
+positions the Messages API takes one from, a block inside a tool result's content among them, so a marker there that is
+not ephemeral or names an unknown TTL leaves the request not retained under `invalid_cache_control` ([The five
+states](keepalive.md#the-five-states)).
 
 The admin listener serves the web console behind a login with the admin secret, with the views in the sidebar's order,
 Dashboard, Quota, Accounts, Pools, Keys, Guardrails, Requests, Analytics, Sessions and Settings, and under them the
