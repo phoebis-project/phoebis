@@ -336,11 +336,9 @@ fn unit_word(unit: SavingsUnit) -> String {
 }
 
 fn unit_of(word: &str) -> Option<SavingsUnit> {
-    match word {
-        "usd" => Some(SavingsUnit::Usd),
-        "window_share" => Some(SavingsUnit::WindowShare),
-        _ => None,
-    }
+    [SavingsUnit::Usd, SavingsUnit::WindowShare]
+        .into_iter()
+        .find(|unit| unit.as_str() == word)
 }
 
 /// A word the payload carries for an optional value: `None` reads as none, and a word `parse` does not know refuses
@@ -356,8 +354,8 @@ fn optional<T>(word: Option<String>, parse: impl FnOnce(&str) -> Option<T>) -> O
 /// 5-hour window, so its settlement keeps that word, and a word this build does not know refuses the row.
 fn window_of(window: Option<String>) -> Option<&'static str> {
     match window.as_deref() {
-        None | Some("five_hour") => Some(FIVE_HOUR),
-        Some("seven_day") => Some(SEVEN_DAY),
+        None | Some(FIVE_HOUR) => Some(FIVE_HOUR),
+        Some(SEVEN_DAY) => Some(SEVEN_DAY),
         Some(_) => None,
     }
 }
