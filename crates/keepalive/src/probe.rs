@@ -744,7 +744,7 @@ impl Inner {
             .map(seconds_ms);
         // Read before the obstacles, which never meet it: a 429 classifies as rate limited and never as exhausted,
         // and the budget's timed answer carries `accounts_exhausted`.
-        if status == 429 && error_code == Some("accounts_at_cap") {
+        if status == 429 && error_code == Some(phoebis_relay::ACCOUNTS_AT_CAP) {
             // The pool is momentarily full and a slot frees up in seconds, so `RetryableProbeError` ("retrying") is
             // the honest label.
             self.retry(
