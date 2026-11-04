@@ -30,7 +30,7 @@ pub(crate) fn parse_rules(input: &[RuleInput]) -> Result<Vec<ModelRule>, Respons
     if input.len() > MAX_RULES {
         return Err(failure(
             StatusCode::BAD_REQUEST,
-            "model_rules holds at most 256 entries",
+            &format!("model_rules holds at most {MAX_RULES} entries"),
         ));
     }
     input
