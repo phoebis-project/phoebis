@@ -2834,8 +2834,32 @@ impl Engine {
         let now = self.now();
         let expiry = self.parts.session_expiry.as_millis() as i64;
         let limits = self.parts.limits.clone();
-        let mut inner = self.lock();
         let key: SessionKey = (key_id, session_id);
+        // The body's parse and edits run apart from the lock, which the bus observer, the tick and the companion route
+        // all take, for a request on an agent the engine holds and of a class that can arm a recipe: a compaction stores
+        // none. Every check below runs again under the lock, which builds the recipe itself where none was built here.
+        let held = {
+            let inner = self.lock();
+            !inner.closed
+                && inner
+                    .sessions
+                    .get(&key)
+                    .is_some_and(|session| session.agents.contains_key(&agent_id))
+        };
+        let prebuilt = (held
+            && matches!(
+                observed.client.request_class.as_deref(),
+                None | Some("main") | Some("subagent")
+            ))
+        .then(|| {
+            make_recipe(
+                &observed.headers,
+                &observed.body,
+                &observed.model,
+                self.parts.max_request_bytes,
+            )
+        });
+        let mut inner = self.lock();
         if inner.closed {
             // A request on a session the engine holds is one the last save can no longer carry.
             if inner.sessions.contains_key(&key) {
@@ -3096,12 +3120,15 @@ impl Engine {
             inner.set_reason(&key, &agent_id, Reason::RequestLimit);
             return;
         }
-        let mut recipe = match make_recipe(
-            &observed.headers,
-            &observed.body,
-            &observed.model,
-            self.parts.max_request_bytes,
-        ) {
+        let built = prebuilt.unwrap_or_else(|| {
+            make_recipe(
+                &observed.headers,
+                &observed.body,
+                &observed.model,
+                self.parts.max_request_bytes,
+            )
+        });
+        let mut recipe = match built {
             Ok(recipe) => recipe,
             Err(reason) => {
                 inner.drop_aside(&key, &agent_id);
