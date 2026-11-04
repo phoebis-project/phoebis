@@ -4492,9 +4492,11 @@ impl Task {
                 at: now,
             });
         }
+        let mut pin_ends = Vec::with_capacity(purged.pins.len());
         for (row, reason) in &purged.pins {
+            let key = row.key();
             self.emit(RouterEvent::pin_expired(
-                &row.key(),
+                &key,
                 &row.account_id,
                 vec![*reason],
                 now,
@@ -4502,6 +4504,11 @@ impl Task {
             if let Some(event) = released_mark(row, now) {
                 self.emit(event);
             }
+            let session = (row.key_id.clone(), row.session_id.clone());
+            pin_ends.push(StateWrite::EndPin(
+                key,
+                ended.contains(&session).then_some(now),
+            ));
         }
         let restored = !std::mem::replace(&mut self.purged, true);
         self.clock_resets(now, restored);
@@ -4512,10 +4519,7 @@ impl Task {
             .into_iter()
             .map(|(a, s)| StateWrite::DeleteCooldown(a, s))
             .collect();
-        writes.extend(purged.pins.into_iter().map(|(row, _)| {
-            let session = (row.key_id.clone(), row.session_id.clone());
-            StateWrite::EndPin(row.key(), ended.contains(&session).then_some(now))
-        }));
+        writes.extend(pin_ends);
         writes.extend(
             lapsed
                 .into_iter()
