@@ -234,28 +234,64 @@ pub(crate) struct PersistedUsage {
     pub speed: Option<String>,
 }
 
+/// A probe's charge, flattened into its unanswered and kept rows so a saved row keeps the member names it was written
+/// with.
 #[derive(Serialize, Deserialize)]
-pub(crate) struct PersistedUnanswered {
-    pub id: String,
-    pub usage: PersistedUsage,
-    pub tier: Option<String>,
+pub(crate) struct PersistedCharge {
+    pub account: Option<String>,
     pub at: i64,
     /// `Band::as_str`'s word.
     pub band: String,
-    pub unit: Option<String>,
+    pub in_overage: bool,
+    pub kind: Option<phoebis_store::AccountKind>,
+    pub tier: Option<String>,
+    pub usage: PersistedUsage,
+    /// Absent from a payload written before the class rode the probe, which reads false and settles as before.
+    #[serde(default)]
+    pub usage_based: bool,
+}
+
+impl PersistedCharge {
+    fn of(charge: &ProbeCharge) -> PersistedCharge {
+        PersistedCharge {
+            account: charge.account.clone(),
+            at: charge.at,
+            band: charge.band.as_str().to_string(),
+            in_overage: charge.in_overage,
+            kind: charge.kind,
+            tier: charge.tier.clone(),
+            usage: persisted_usage(&charge.usage),
+            usage_based: charge.usage_based,
+        }
+    }
+
+    fn restore(self) -> ProbeCharge {
+        ProbeCharge {
+            account: self.account,
+            at: self.at,
+            band: Band::of_rollup(&self.band),
+            in_overage: self.in_overage,
+            kind: self.kind,
+            tier: self.tier,
+            usage: probe_usage(self.usage),
+            usage_based: self.usage_based,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct PersistedUnanswered {
+    pub id: String,
+    #[serde(flatten)]
+    pub charge: PersistedCharge,
+    pub unit: Option<SavingsUnit>,
     /// Absent from a payload the earlier build wrote, which priced in the 5-hour window and reads so.
     #[serde(default)]
     pub window: Option<String>,
-    pub account: Option<String>,
     pub fast: bool,
     pub model: String,
     pub expires: i64,
     pub covered: bool,
-    pub kind: Option<String>,
-    /// Absent from a payload written before the class rode the probe, which reads false and settles as before.
-    #[serde(default)]
-    pub usage_based: bool,
-    pub in_overage: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -263,21 +299,12 @@ pub(crate) struct PersistedKept {
     pub key_generation: i64,
     pub pool_id: String,
     pub canonical_model: String,
-    pub account: Option<String>,
+    #[serde(flatten)]
+    pub charge: PersistedCharge,
     pub fast: bool,
-    pub usage: PersistedUsage,
-    pub tier: Option<String>,
-    pub at: i64,
-    /// `Band::as_str`'s word.
-    pub band: String,
     pub entry_expires: i64,
-    pub kind: Option<String>,
-    /// Absent from a payload written before the class rode the probe, which reads false and settles as before.
-    #[serde(default)]
-    pub usage_based: bool,
-    pub in_overage: bool,
     pub covered: bool,
-    pub unit: Option<String>,
+    pub unit: Option<SavingsUnit>,
     /// Absent from a payload the earlier build wrote, which priced in the 5-hour window and reads so.
     #[serde(default)]
     pub window: Option<String>,
@@ -309,13 +336,7 @@ fn persisted_usage(usage: &ProbeUsage) -> PersistedUsage {
         five_minutes: usage.five_minutes,
         one_hour: usage.one_hour,
         input: usage.input,
-        speed: usage.speed.map(|speed| {
-            match speed {
-                Speed::Fast => "fast",
-                Speed::Standard => "standard",
-            }
-            .to_string()
-        }),
+        speed: usage.speed.map(|speed| speed.as_str().to_string()),
     }
 }
 
@@ -480,20 +501,13 @@ impl PersistedAgent {
                 .iter()
                 .map(|probe| PersistedUnanswered {
                     id: probe.id.clone(),
-                    usage: persisted_usage(&probe.charge.usage),
-                    tier: probe.charge.tier.clone(),
-                    at: probe.charge.at,
-                    band: probe.charge.band.as_str().to_string(),
-                    unit: probe.unit.map(unit_word),
+                    charge: PersistedCharge::of(&probe.charge),
+                    unit: probe.unit,
                     window: Some(probe.window.to_string()),
-                    account: probe.charge.account.clone(),
                     fast: probe.fast,
                     model: probe.model.clone(),
                     expires: probe.expires,
                     covered: probe.covered,
-                    kind: probe.charge.kind.map(|kind| kind.as_str().to_string()),
-                    usage_based: probe.charge.usage_based,
-                    in_overage: probe.charge.in_overage,
                 })
                 .collect(),
             kept: agent
@@ -503,18 +517,11 @@ impl PersistedAgent {
                     key_generation: kept.key_generation,
                     pool_id: kept.pool_id.clone(),
                     canonical_model: kept.canonical_model.clone(),
-                    account: kept.charge.account.clone(),
+                    charge: PersistedCharge::of(&kept.charge),
                     fast: kept.fast,
-                    usage: persisted_usage(&kept.charge.usage),
-                    tier: kept.charge.tier.clone(),
-                    at: kept.charge.at,
-                    band: kept.charge.band.as_str().to_string(),
                     entry_expires: kept.entry_expires,
-                    kind: kept.charge.kind.map(|kind| kind.as_str().to_string()),
-                    usage_based: kept.charge.usage_based,
-                    in_overage: kept.charge.in_overage,
                     covered: kept.covered,
-                    unit: kept.unit.map(unit_word),
+                    unit: kept.unit,
                     window: Some(kept.window.to_string()),
                     pending: kept.pending,
                 })
@@ -587,17 +594,8 @@ impl PersistedAgent {
             .map(|probe| {
                 Some(UnansweredProbe {
                     id: probe.id,
-                    charge: ProbeCharge {
-                        account: probe.account,
-                        at: probe.at,
-                        band: Band::of_rollup(&probe.band),
-                        in_overage: probe.in_overage,
-                        kind: optional(probe.kind, phoebis_store::AccountKind::parse)?,
-                        tier: probe.tier,
-                        usage: probe_usage(probe.usage),
-                        usage_based: probe.usage_based,
-                    },
-                    unit: optional(probe.unit, unit_of)?,
+                    charge: probe.charge.restore(),
+                    unit: probe.unit,
                     window: window_of(probe.window)?,
                     fast: probe.fast,
                     model: probe.model,
@@ -614,20 +612,11 @@ impl PersistedAgent {
                     key_generation: kept.key_generation,
                     pool_id: kept.pool_id,
                     canonical_model: kept.canonical_model,
-                    charge: ProbeCharge {
-                        account: kept.account,
-                        at: kept.at,
-                        band: Band::of_rollup(&kept.band),
-                        in_overage: kept.in_overage,
-                        kind: optional(kept.kind, phoebis_store::AccountKind::parse)?,
-                        tier: kept.tier,
-                        usage: probe_usage(kept.usage),
-                        usage_based: kept.usage_based,
-                    },
+                    charge: kept.charge.restore(),
                     fast: kept.fast,
                     entry_expires: kept.entry_expires,
                     covered: kept.covered,
-                    unit: optional(kept.unit, unit_of)?,
+                    unit: kept.unit,
                     window: window_of(kept.window)?,
                     pending: kept.pending,
                 })
@@ -711,20 +700,23 @@ fn session_row(
 }
 
 /// One agent row as the store keeps it: the payload, the recipe's columns when one is retained, and its prompt only
-/// when the recipe changed since the last landed save that carried it.
+/// when the recipe changed since the last landed save that carried it. That prompt comes back as a handle beside the
+/// row, whose `Seal` holds an empty placeholder, so the copy of the body runs after the engine's lock is released.
 fn agent_row(
     key: &PersistKey,
     agent: &Agent,
     now: i64,
-) -> Result<KeepaliveAgentRow, serde_json::Error> {
+) -> Result<(KeepaliveAgentRow, Option<Bytes>), serde_json::Error> {
     let recipe = agent.current.as_ref().map(|o| &o.recipe);
     let no_headers: &[(String, String)] = &[];
-    let body_write = match recipe {
-        Some(recipe) if agent.body_dirty => BodyWrite::Seal(recipe.body.to_vec()),
-        None if agent.body_saved => BodyWrite::Clear,
-        _ => BodyWrite::Keep,
+    let (body_write, sealed_body) = match recipe {
+        Some(recipe) if agent.body_dirty => {
+            (BodyWrite::Seal(Vec::new()), Some(recipe.body.clone()))
+        }
+        None if agent.body_saved => (BodyWrite::Clear, None),
+        _ => (BodyWrite::Keep, None),
     };
-    Ok(KeepaliveAgentRow {
+    let row = KeepaliveAgentRow {
         key_id: key.0.clone(),
         key_generation: key.1,
         session_id: key.2.clone(),
@@ -738,7 +730,8 @@ fn agent_row(
         dispatched_ms: agent.current.as_ref().and_then(|o| o.dispatched_ms),
         fast: recipe.is_some_and(|r| r.fast),
         updated_at: now,
-    })
+    };
+    Ok((row, sealed_body))
 }
 
 /// What one flush carries, with the revision each row was read at, so the acknowledgment retires only those.
@@ -752,6 +745,9 @@ pub(crate) struct Snapshot {
     agents: Vec<((PersistKey, String), u64)>,
     /// The agent rows whose body this save seals (true) or clears (false), at the revision each was read at.
     bodies: Vec<((PersistKey, String), u64, bool)>,
+    /// The body each sealing row of `batch.agents` carries, by the row's index, copied into its placeholder once the
+    /// engine's lock is released.
+    seals: Vec<(usize, Bytes)>,
     removed_sessions: Vec<(PersistKey, u64)>,
     removed_agents: Vec<((PersistKey, String), u64)>,
     pools: Vec<(String, u64)>,
@@ -789,6 +785,10 @@ fn decode_agent(row: &KeepaliveAgentRow, timing: KeepaliveTiming) -> Option<Deco
         .and_then(|payload| payload.restore(timing))
 }
 
+fn persist_key_of(key: &SessionKey, session: &Session) -> PersistKey {
+    (key.0.clone(), session.key_generation, key.1.clone())
+}
+
 /// What the load left out to stay within the limits the file sets now, for the one line each limit logs.
 #[derive(Default)]
 struct Disposed {
@@ -806,7 +806,7 @@ impl Inner {
     fn persist_key(&self, key: &SessionKey) -> Option<PersistKey> {
         self.sessions
             .get(key)
-            .map(|session| (key.0.clone(), session.key_generation, key.1.clone()))
+            .map(|session| persist_key_of(key, session))
     }
 
     fn session_of(&self, key: &PersistKey) -> Option<&Session> {
@@ -903,7 +903,7 @@ impl Inner {
                 .and_then(|session| session.agents.get(agent_id))
             {
                 match agent_row(row, agent, now) {
-                    Ok(agent_row) => {
+                    Ok((agent_row, body)) => {
                         let sealed = match agent_row.body_write {
                             BodyWrite::Keep => None,
                             BodyWrite::Clear => Some(false),
@@ -915,6 +915,9 @@ impl Inner {
                                 *revision,
                                 sealed,
                             ));
+                        }
+                        if let Some(body) = body {
+                            snapshot.seals.push((snapshot.batch.agents.len(), body));
                         }
                         snapshot.batch.agents.push(agent_row);
                     }
@@ -1092,6 +1095,9 @@ impl Inner {
         let mut dropped = 0usize;
         let mut unopened: Vec<(SessionKey, String)> = Vec::new();
         let mut held: Vec<(i64, SessionKey, String, Observation)> = Vec::new();
+        // Raised at each insert, so it counts the agents of the session in the making before that session joins
+        // the map.
+        let mut agent_count = self.agent_count();
         for row in sessions {
             let stored: PersistKey = (
                 row.key_id.clone(),
@@ -1146,7 +1152,7 @@ impl Inner {
             }
             let over = if self.sessions.len() >= limits.max_sessions {
                 Some(&mut by_sessions)
-            } else if self.agent_count() >= limits.max_agents {
+            } else if agent_count >= limits.max_agents {
                 Some(&mut by_agents)
             } else {
                 None
@@ -1182,8 +1188,7 @@ impl Inner {
                 // Read off the row rather than the opened body, so a blob that no longer opens is cleared by the
                 // agent's next save.
                 agent.body_saved = agent_row.body_size > 0;
-                // The session in the making is not in the map yet, so its agents so far count beside the map's.
-                if self.agent_count() + session.agents.len() >= limits.max_agents {
+                if agent_count >= limits.max_agents {
                     self.dispose_loaded(
                         &key,
                         &agent_row,
@@ -1214,6 +1219,7 @@ impl Inner {
                     (Some(_), None) => unopened.push((key.clone(), agent_id.clone())),
                 }
                 session.agents.insert(agent_id, agent);
+                agent_count += 1;
             }
             self.sessions.insert(key, session);
         }
@@ -1363,6 +1369,9 @@ impl Engine {
             inner.release_settled(settled);
             return;
         }
+        for (index, body) in snapshot.seals.drain(..) {
+            snapshot.batch.agents[index].body_write = BodyWrite::Seal(body.to_vec());
+        }
         match self.parts.store.save_keepalive(&snapshot.batch) {
             Ok(()) => {
                 let mut inner = self.lock();
@@ -1447,13 +1456,15 @@ impl Engine {
         let mut sessions = Vec::new();
         let mut agents = Vec::new();
         for (key, session) in &inner.sessions {
-            let row: PersistKey = (key.0.clone(), session.key_generation, key.1.clone());
+            let row = persist_key_of(key, session);
             sessions.push(session_row(&row, session, now).expect("a session payload serializes"));
             for agent in session.agents.values() {
                 agents.push(KeepaliveAgentRow {
                     body: agent.current.as_ref().map(|o| o.recipe.body.to_vec()),
                     body_write: BodyWrite::Keep,
-                    ..agent_row(&row, agent, now).expect("an agent payload serializes")
+                    ..agent_row(&row, agent, now)
+                        .expect("an agent payload serializes")
+                        .0
                 });
             }
         }

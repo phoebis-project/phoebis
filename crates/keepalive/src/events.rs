@@ -98,27 +98,49 @@ fn err_for_generation(code: &'static str, generation: u64) -> EventError {
     }
 }
 
+enum EventKind {
+    Activity,
+    AgentStart,
+    Heartbeat,
+    SessionEnd,
+    SessionStart,
+    State,
+}
+
 /// The members each event takes beyond the five every report carries, each with whether it is required. A
 /// member on an event that does not take it is refused rather than ignored, so a report the mod got wrong never
 /// reads as one it got right.
-fn members(event: &str) -> Option<&'static [(&'static str, bool)]> {
-    let members: &'static [(&'static str, bool)] = match event {
-        "activity" => &[
-            ("agent_id", true),
-            ("kind", true),
-            ("request_generation", false),
-        ],
-        "agent_start" => &[("agent_id", true), ("request_generation", false)],
-        "heartbeat" | "session_end" => &[],
-        "session_start" => &[("owner_id", false), ("previous_instance_id", false)],
-        "state" => &[
-            ("agent_id", true),
-            ("deadline", false),
-            ("park_kind", false),
-            ("request_generation", false),
-            ("state", true),
-            ("wake_at", false),
-        ],
+fn members(event: &str) -> Option<(EventKind, &'static [(&'static str, bool)])> {
+    let members: (EventKind, &'static [(&'static str, bool)]) = match event {
+        "activity" => (
+            EventKind::Activity,
+            &[
+                ("agent_id", true),
+                ("kind", true),
+                ("request_generation", false),
+            ],
+        ),
+        "agent_start" => (
+            EventKind::AgentStart,
+            &[("agent_id", true), ("request_generation", false)],
+        ),
+        "heartbeat" => (EventKind::Heartbeat, &[]),
+        "session_end" => (EventKind::SessionEnd, &[]),
+        "session_start" => (
+            EventKind::SessionStart,
+            &[("owner_id", false), ("previous_instance_id", false)],
+        ),
+        "state" => (
+            EventKind::State,
+            &[
+                ("agent_id", true),
+                ("deadline", false),
+                ("park_kind", false),
+                ("request_generation", false),
+                ("state", true),
+                ("wake_at", false),
+            ],
+        ),
         _ => return None,
     };
     Some(members)
@@ -187,7 +209,7 @@ impl TryFrom<Event> for EventReport {
     type Error = EventError;
 
     fn try_from(event: Event) -> Result<EventReport, EventError> {
-        let Some(members) = members(&event.event) else {
+        let Some((event_kind, members)) = members(&event.event) else {
             return Err(err("unknown_event", 400));
         };
         let present: Vec<&str> = [
@@ -218,18 +240,11 @@ impl TryFrom<Event> for EventReport {
             Some("presence") => true,
             Some(_) => return Err(err("invalid_state", 400)),
         };
-        let mut park_kind = None;
-        let state = match event.state.as_deref() {
-            None => None,
+        let (state, park_kind) = match event.state.as_deref() {
+            None => (None, None),
             Some(word) => {
                 let state = AgentState::parse(word).ok_or(err("invalid_state", 400))?;
-                let park = event.park_kind.is_some()
-                    || event.wake_at.is_some()
-                    || event.deadline.is_some();
-                if state != AgentState::Parked && park {
-                    return Err(err("invalid_event", 400));
-                }
-                if state == AgentState::Parked {
+                let park_kind = if state == AgentState::Parked {
                     let kind = event
                         .park_kind
                         .as_deref()
@@ -238,15 +253,21 @@ impl TryFrom<Event> for EventReport {
                     if kind != ParkKind::Background && event.wake_at.is_none() {
                         return Err(err("invalid_event", 400));
                     }
-                    park_kind = Some(kind);
-                }
-                Some(state)
+                    Some(kind)
+                } else if event.park_kind.is_some()
+                    || event.wake_at.is_some()
+                    || event.deadline.is_some()
+                {
+                    return Err(err("invalid_event", 400));
+                } else {
+                    None
+                };
+                (Some(state), park_kind)
             }
         };
         let Event {
             agent_id,
             deadline,
-            event: word,
             instance_id,
             owner_id,
             previous_instance_id,
@@ -257,23 +278,23 @@ impl TryFrom<Event> for EventReport {
             ..
         } = validate(event)?;
         let required = || err("invalid_event", 400);
-        let event = match word.as_str() {
-            "activity" => Reported::Activity {
+        let event = match event_kind {
+            EventKind::Activity => Reported::Activity {
                 agent_id: agent_id.ok_or_else(required)?,
                 presence,
                 request_generation,
             },
-            "agent_start" => Reported::AgentStart {
+            EventKind::AgentStart => Reported::AgentStart {
                 agent_id: agent_id.ok_or_else(required)?,
                 request_generation,
             },
-            "heartbeat" => Reported::Heartbeat,
-            "session_end" => Reported::SessionEnd,
-            "session_start" => Reported::SessionStart {
+            EventKind::Heartbeat => Reported::Heartbeat,
+            EventKind::SessionEnd => Reported::SessionEnd,
+            EventKind::SessionStart => Reported::SessionStart {
                 owner_id,
                 previous_instance_id,
             },
-            "state" => Reported::State {
+            EventKind::State => Reported::State {
                 agent_id: agent_id.ok_or_else(required)?,
                 deadline,
                 park_kind,
@@ -281,7 +302,6 @@ impl TryFrom<Event> for EventReport {
                 state: state.ok_or_else(required)?,
                 wake_at,
             },
-            _ => return Err(err("unknown_event", 400)),
         };
         Ok(EventReport {
             session_id,

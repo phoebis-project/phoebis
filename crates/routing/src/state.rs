@@ -824,7 +824,7 @@ impl RateTable {
 /// Which figure a reader takes for a pin's burn: the share of the account's own window the burn is read on while a
 /// subscription account runs on its plan, dollars on an api_key account, a usage-based seat or a subscription account
 /// in overage. Serializes as `window_share` or `usd`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BurnUnit {
     Usd,

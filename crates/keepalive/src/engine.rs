@@ -15,7 +15,8 @@ use phoebis_ledger::{funding_of, Band, Ledger, Metrics, PlanTables, Pricing, Spe
 use phoebis_oauth::Clock;
 use phoebis_relay::{CacheTtl, CacheTtlPolicy, Relay};
 use phoebis_routing::{
-    budget_deadline, listing, MemberSpend, RegistrySnapshot, RouterHandle, DAY_MS, SEVEN_DAY,
+    budget_deadline, listing, MemberSpend, PinUsage, RegistrySnapshot, RouterHandle, DAY_MS,
+    SEVEN_DAY,
 };
 use phoebis_store::{
     AccountKind, AccountState, CooldownScope, OveragePolicy, PoolRow, Store, StoreError,
@@ -2630,31 +2631,24 @@ impl Engine {
         // Each arm takes the lock and gives it back before returning. The drain belongs here rather than in
         // the arms: an observation sweeps the lapsed sessions, and the settlements that sweep leaves have to
         // reach the ledger stamped with this event rather than with whatever call drains next.
+        // A chunk, a head and a selection push nothing to settle or to skip, so they flush nothing.
+        let flushes = matches!(
+            event,
+            BusEvent::RequestObserved(_) | BusEvent::RequestComplete(_)
+        );
         match event {
             BusEvent::RequestObserved(observed) => {
                 let catalog = self.parts.relay.catalog();
                 self.on_observed(observed, |spelling| catalog.lookup(spelling));
-                self.counted_down();
-                self.flush();
             }
-            // These three push nothing to settle or to skip, so they flush nothing.
-            BusEvent::AccountSelected(selected) => {
-                self.on_selected(selected);
-                self.counted_down();
-            }
-            BusEvent::ResponseHead(head) => {
-                self.on_head(head);
-                self.counted_down();
-            }
-            BusEvent::ResponseChunk(chunk) => {
-                self.on_chunk(chunk);
-                self.counted_down();
-            }
-            BusEvent::RequestComplete(complete) => {
-                self.on_complete(complete);
-                self.counted_down();
-                self.flush();
-            }
+            BusEvent::AccountSelected(selected) => self.on_selected(selected),
+            BusEvent::ResponseHead(head) => self.on_head(head),
+            BusEvent::ResponseChunk(chunk) => self.on_chunk(chunk),
+            BusEvent::RequestComplete(complete) => self.on_complete(complete),
+        }
+        self.counted_down();
+        if flushes {
+            self.flush();
         }
     }
 
@@ -3600,10 +3594,17 @@ fn reported_prompt(usage: Option<&phoebis_bus::Usage>) -> Option<u64> {
         usage.cache_write_5m_tokens,
         usage.cache_write_1h_tokens,
     ];
-    members
-        .iter()
-        .any(Option::is_some)
-        .then(|| members.iter().flatten().sum())
+    members.iter().any(Option::is_some).then(|| {
+        let [input, cache_read, write_5m, write_1h] = members.map(|m| m.unwrap_or(0));
+        PinUsage {
+            input,
+            cache_read,
+            write_5m,
+            write_1h,
+            output: 0,
+        }
+        .prompt_tokens()
+    })
 }
 
 impl From<RecipeRefusal> for Reason {
