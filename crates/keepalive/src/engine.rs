@@ -4050,7 +4050,22 @@ pub(crate) struct RouterView {
     /// `(key, session, agent, canonical model)` to the pinned account: the account a probe would actually run
     /// on, so a sibling's pin never overwrites an agent's own.
     pub pins: BTreeMap<(String, String, String, String), String>,
+    /// Each pool's keepalive policy, parsed once per tick rather than once per recipe.
+    pub policies: HashMap<String, KeepalivePolicy>,
     pub snapshot: Arc<RegistrySnapshot>,
+}
+
+/// Every pool's keepalive policy in `snapshot`, by pool id.
+pub(crate) fn pool_policies(snapshot: &RegistrySnapshot) -> HashMap<String, KeepalivePolicy> {
+    snapshot
+        .pools()
+        .map(|pool| {
+            (
+                pool.id.clone(),
+                KeepalivePolicy::from_json(&pool.keepalive_json),
+            )
+        })
+        .collect()
 }
 
 /// What the gate decided for a due recipe: wait with a reason, or drop it with the label its probes settle under.
@@ -4135,6 +4150,7 @@ impl Engine {
             cooled,
             overage,
             pins,
+            policies: pool_policies(&snapshot),
             snapshot,
         }
     }
@@ -4195,11 +4211,12 @@ pub(crate) fn refresh_policy<'v>(
     // belongs to now.
     let moved = agent.pool_id != key.pool_id;
     agent.pool_id = key.pool_id.clone();
-    Ok((
-        pool,
-        KeepalivePolicy::from_json(&pool.keepalive_json),
-        moved,
-    ))
+    let policy = view
+        .policies
+        .get(&pool.id)
+        .cloned()
+        .unwrap_or_else(|| KeepalivePolicy::from_json(&pool.keepalive_json));
+    Ok((pool, policy, moved))
 }
 
 /// The ceilings of one agent at a tick: its policy, the factors of its model under its account's funding (dollars
@@ -4560,6 +4577,7 @@ mod tests {
             }],
             ..phoebis_store::RegistryLoad::default()
         };
+        let snapshot = Arc::new(RegistrySnapshot::from_load(load, [0; 32], 0, 1));
         RouterView {
             budgets: BTreeSet::new(),
             canonical: HashMap::new(),
@@ -4570,7 +4588,8 @@ mod tests {
                 BTreeSet::new()
             },
             pins: BTreeMap::new(),
-            snapshot: Arc::new(RegistrySnapshot::from_load(load, [0; 32], 0, 1)),
+            policies: pool_policies(&snapshot),
+            snapshot,
         }
     }
 
