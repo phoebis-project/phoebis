@@ -526,7 +526,7 @@ pub(crate) const UPSTREAM_UNREACHABLE: Failure = Failure {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::RepeatedMember;
+    use crate::body::RepeatedMember;
 
     /// A drifted hash and a drifted version suffix are the same error code, but the message names which check
     /// failed, so an operator reads the right one off the response without a log line.

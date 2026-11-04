@@ -13,7 +13,7 @@ use phoebis_routing::{
 use phoebis_store::ApiKeyRow;
 
 use crate::billing::{entrypoint_of, restorable_version};
-use crate::facts::BodyFacts;
+use crate::facts::{AttributionLine, BodyFacts, ClientHints};
 use crate::RelayError;
 
 // The words of the contract's items, in the table's order: the refusal's reason, the request row's
@@ -75,6 +75,7 @@ pub struct RequestIdentity {
 pub fn identify(
     headers: &HeaderMap,
     members: &TopLevelMembers<'_>,
+    client: Client,
 ) -> Result<RequestIdentity, RelayError> {
     let model = string_member(members, &["model"]).ok_or(RelayError::NoModel)?;
     let folded_model = phoebis_store::canonical_id(&model);
@@ -86,7 +87,6 @@ pub fn identify(
     }
     // The header is the client's own statement of the session, and the climb starts from it.
     let session_id = header_id(headers, "x-claude-code-session-id");
-    let client = client_of(headers);
     Ok(RequestIdentity {
         session_id,
         agent_id: header_id(headers, "x-claude-code-agent-id")
@@ -120,21 +120,7 @@ pub fn climb(
     request_class: Option<&str>,
     lookup: &dyn ConversationLookup,
 ) {
-    let canonical_model = identity.canonical_model.clone();
-    let ask = |boundaries: &[String]| {
-        // A boundary-less call would answer nothing anyway, so the lookup is never asked over an empty slice.
-        if boundaries.is_empty() {
-            return None;
-        }
-        lookup.conversation(&ConversationQuery {
-            canonical_model: &canonical_model,
-            key_id: &key.id,
-            key_generation: key.created_at,
-            message_boundaries: boundaries,
-        })
-    };
-
-    let Some(session_id) = identity.session_id.clone() else {
+    let Some(session_id) = identity.session_id.as_deref() else {
         return;
     };
     // A session that has no pin of its own is new to the map, so its deepest own-key match names the
@@ -142,13 +128,21 @@ pub fn climb(
     // alone, which a template, a slash command's output or a repeated prompt shares across sessions, while depth
     // 2 includes the model's first answer and is a shared conversation. An auxiliary request names none: the
     // client's quota probe has one message every probe of the key shares.
-    if !is_auxiliary(request_class) {
-        if let Some(m) = ask(message_boundaries) {
-            if session_id != m.root && m.depth >= 2 {
-                identity.forked_from = Some(m.root);
-                identity.fork_depth = Some(m.depth);
-            }
-        }
+    // A boundary-less call would answer nothing anyway, so the lookup is never asked over an empty slice.
+    if is_auxiliary(request_class) || message_boundaries.is_empty() {
+        return;
+    }
+    let Some(m) = lookup.conversation(&ConversationQuery {
+        canonical_model: &identity.canonical_model,
+        key_id: &key.id,
+        key_generation: key.created_at,
+        message_boundaries,
+    }) else {
+        return;
+    };
+    if session_id != m.root && m.depth >= 2 {
+        identity.forked_from = Some(m.root);
+        identity.fork_depth = Some(m.depth);
     }
 }
 
@@ -211,11 +205,6 @@ impl PendingReports {
     }
 }
 
-/// The session id a request's wait consults: its own, nothing without one.
-pub(crate) fn waits_on(identity: &RequestIdentity) -> Option<&str> {
-    identity.session_id.as_deref()
-}
-
 /// Whether the class the request named is auxiliary for identity: a class outside `REFRESHING_CLASSES`, the
 /// client's quota probe among them. A request without the header is not, so the identity and the warmth read one
 /// notion of auxiliary.
@@ -233,23 +222,23 @@ pub(crate) fn contract_gap(
     headers: &HeaderMap,
     identity: &RequestIdentity,
     facts: &BodyFacts,
-    request_class: Option<&str>,
+    hints: &ClientHints,
     client_version: Option<&str>,
     kind: Kind,
 ) -> Option<&'static str> {
     if client_version.and_then(restorable_version).is_none() {
         return Some(ITEM_CLIENT_VERSION);
     }
-    if header_id(headers, "x-claude-code-session-id").is_none() {
+    if identity.session_id.is_none() {
         return Some(ITEM_SESSION_HEADER);
     }
     if kind != Kind::Inference {
         return None;
     }
-    let Some(class) = request_class else {
+    let Some(class) = hints.request_class.as_deref() else {
         return Some(ITEM_CLASS_HEADER);
     };
-    if facts.system_is_array && !facts.carries_line {
+    if facts.line == AttributionLine::Missing {
         return Some(ITEM_ATTRIBUTION_LINE);
     }
     if !identity.has_user_id {
@@ -260,8 +249,7 @@ pub(crate) fn contract_gap(
     {
         return Some(ITEM_AGENT_ID_HEADER);
     }
-    if class == "compaction" && header_id(headers, phoebis_guardrails::COMPACTION_HEADER).is_none()
-    {
+    if class == "compaction" && hints.compaction.is_none() {
         return Some(ITEM_COMPACTION_HEADER);
     }
     None
@@ -366,8 +354,12 @@ mod tests {
 
     #[test]
     fn the_model_suffix_is_folded_and_the_metadata_session_is_not_read() {
-        let identity = identify(&HeaderMap::new(), &TopLevelMembers::read(BODY))
-            .expect("the body has a model");
+        let identity = identify(
+            &HeaderMap::new(),
+            &TopLevelMembers::read(BODY),
+            client_of(&HeaderMap::new()),
+        )
+        .expect("the body has a model");
         assert_eq!(identity.session_id, None);
         assert_eq!(identity.agent_id, "main");
         assert_eq!(identity.folded_model, "claude-sonnet-4-5");
@@ -379,22 +371,38 @@ mod tests {
     fn a_model_outside_the_charset_or_over_the_bound_is_rejected() {
         let euro = br#"{"model":"claude-sonnet-4-5\u20ac\u20ac"}"#;
         assert!(matches!(
-            identify(&HeaderMap::new(), &TopLevelMembers::read(euro)),
+            identify(
+                &HeaderMap::new(),
+                &TopLevelMembers::read(euro),
+                client_of(&HeaderMap::new())
+            ),
             Err(RelayError::InvalidModel)
         ));
         let newline = br#"{"model":"claude\nsonnet"}"#;
         assert!(matches!(
-            identify(&HeaderMap::new(), &TopLevelMembers::read(newline)),
+            identify(
+                &HeaderMap::new(),
+                &TopLevelMembers::read(newline),
+                client_of(&HeaderMap::new())
+            ),
             Err(RelayError::InvalidModel)
         ));
         let long = format!(r#"{{"model":"{}"}}"#, "m".repeat(257));
         assert!(matches!(
-            identify(&HeaderMap::new(), &TopLevelMembers::read(long.as_bytes())),
+            identify(
+                &HeaderMap::new(),
+                &TopLevelMembers::read(long.as_bytes()),
+                client_of(&HeaderMap::new())
+            ),
             Err(RelayError::InvalidModel)
         ));
         let empty = br#"{"model":""}"#;
         assert!(matches!(
-            identify(&HeaderMap::new(), &TopLevelMembers::read(empty)),
+            identify(
+                &HeaderMap::new(),
+                &TopLevelMembers::read(empty),
+                client_of(&HeaderMap::new())
+            ),
             Err(RelayError::InvalidModel)
         ));
     }
@@ -404,12 +412,16 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("x-claude-code-agent-id", "bad id!".parse().unwrap());
         headers.insert("x-claude-code-session-id", "s-2".parse().unwrap());
-        let identity =
-            identify(&headers, &TopLevelMembers::read(BODY)).expect("the body has a model");
+        let identity = identify(&headers, &TopLevelMembers::read(BODY), client_of(&headers))
+            .expect("the body has a model");
         assert_eq!(identity.agent_id, "main");
         assert_eq!(identity.session_id.as_deref(), Some("s-2"));
         assert!(matches!(
-            identify(&headers, &TopLevelMembers::read(b"{\"messages\":[]}")),
+            identify(
+                &headers,
+                &TopLevelMembers::read(b"{\"messages\":[]}"),
+                client_of(&headers)
+            ),
             Err(RelayError::NoModel)
         ));
     }
@@ -422,7 +434,7 @@ mod tests {
             headers
         };
         let entrypoint = |headers: &HeaderMap| {
-            identify(headers, &TopLevelMembers::read(BODY))
+            identify(headers, &TopLevelMembers::read(BODY), client_of(headers))
                 .expect("the body has a model")
                 .entrypoint
         };
@@ -451,12 +463,16 @@ mod tests {
             axum::http::header::USER_AGENT,
             "claude-cli/2.1.269".parse().unwrap(),
         );
-        let identity =
-            identify(&headers, &TopLevelMembers::read(BODY)).expect("the body has a model");
+        let identity = identify(&headers, &TopLevelMembers::read(BODY), client_of(&headers))
+            .expect("the body has a model");
         assert_eq!(identity.class, ClientClass::ClaudeCode);
         assert_eq!(identity.client, "claude-code/cli");
-        let identity = identify(&HeaderMap::new(), &TopLevelMembers::read(BODY))
-            .expect("the body has a model");
+        let identity = identify(
+            &HeaderMap::new(),
+            &TopLevelMembers::read(BODY),
+            client_of(&HeaderMap::new()),
+        )
+        .expect("the body has a model");
         assert_eq!(identity.class, ClientClass::Other);
     }
 
@@ -502,22 +518,16 @@ mod tests {
     }
 
     /// The gap of a request of `kind` as `handle` reads it: the identity and the body facts off the one body, the
-    /// class through `header_id` and the version through `client_version`.
+    /// hints through `ClientHints::read` and the version through `client_version`.
     fn gap_of(headers: &HeaderMap, body: &serde_json::Value, kind: Kind) -> Option<&'static str> {
         let bytes = serde_json::to_vec(body).unwrap();
         let members = TopLevelMembers::read(&bytes);
-        let identity = identify(headers, &members).expect("the body has a model");
+        let identity =
+            identify(headers, &members, client_of(headers)).expect("the body has a model");
         let (facts, _) = crate::facts::BodyFacts::read_with_tree(&members);
-        let class = header_id(headers, "x-claude-code-request-class");
+        let hints = ClientHints::read(headers);
         let version = crate::drift::client_version(headers);
-        contract_gap(
-            headers,
-            &identity,
-            &facts,
-            class.as_deref(),
-            version.as_deref(),
-            kind,
-        )
+        contract_gap(headers, &identity, &facts, &hints, version.as_deref(), kind)
     }
 
     /// The gap of an inference request.
@@ -972,22 +982,6 @@ mod tests {
             pending.pending("k", 0, "s1", 0),
             None,
             "the lookup removed the entry the watermark had passed"
-        );
-    }
-
-    #[test]
-    fn a_request_waits_on_its_session_alone() {
-        assert_eq!(waits_on(&identity_of(Some("a"))), Some("a"));
-        assert_eq!(waits_on(&identity_of(None)), None);
-
-        let pending = PendingReports::default();
-        pending.record("k", 0, "a", 5, 0);
-        let other = identity_of(Some("b"));
-        let other_session = waits_on(&other).expect("the identity carries a session id");
-        assert_eq!(
-            pending.pending("k", 0, other_session, 0),
-            None,
-            "another session never waits on this session's report"
         );
     }
 }

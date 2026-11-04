@@ -1,6 +1,8 @@
 //! The cooldown classification table, partitioned by account kind, applied to every upstream head before any
 //! byte reaches the caller.
 
+use std::cell::OnceCell;
+
 use phoebis_routing::{
     FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, MODEL_REJECTED_REASON, RATE_LIMIT_REASON,
     RETRY_AFTER_WINDOW, SEVEN_DAY_OVERAGE_INCLUDED,
@@ -100,8 +102,8 @@ pub struct HeadContext<'a> {
     pub canonical_model: &'a str,
     pub now: i64,
     pub fallback_ms: i64,
-    /// The first SSE event's data, decoded: the caller decodes its inspection copy, so this is never compressed.
-    pub first_event: Option<&'a [u8]>,
+    /// The SSE event a held stream committed on names a `rate_limit_error`, as `is_rate_limit_event` reads it.
+    pub rate_limit_event: bool,
     /// The start of a non-streaming body, decoded: the caller decodes its inspection copy, so this is never
     /// compressed.
     pub body_prefix: Option<&'a [u8]>,
@@ -122,13 +124,19 @@ pub struct HeadContext<'a> {
 
 pub fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
     let unified = ctx.unified;
-    let sse_rate_limited = head.status == 200 && ctx.first_event.is_some_and(is_rate_limit_event);
+    let sse_rate_limited = head.status == 200 && ctx.rate_limit_event;
     let rate_limited = head.status == 429 || sse_rate_limited;
+    // Parsed by the first predicate that reads it, so a head none of them reaches parses nothing.
+    let parsed = OnceCell::new();
+    let error = || {
+        ctx.body_prefix
+            .map(|body| parsed.get_or_init(|| ErrorBody::read(body)))
+    };
     // Ahead of the per-kind table below, for either account kind: a 400 naming an item this leg added is a fact
     // about the request shape, not about the credential, and a name outside `injected` is the client's own to
     // handle.
     if ctx.can_strip {
-        let named = refused_injected(head.status, ctx.body_prefix, ctx.injected);
+        let named = injected_named(head.status, ctx.injected, error);
         if !named.is_empty() {
             return Verdict::StripInjected(named);
         }
@@ -137,8 +145,8 @@ pub fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
     // that it does not serve that model, a fact about the (account, model) pair alone. A 404 naming nothing, and
     // every 400 and 422, are the client's own to read and fall through to `Commit`.
     if head.status == 404
-        && ctx.body_prefix.is_some_and(|b| {
-            error_type(b).as_deref() == Some("not_found_error") && names_model(b, ctx.wire_model)
+        && error().is_some_and(|e| {
+            e.error_type.as_deref() == Some("not_found_error") && names_model(e, ctx.wire_model)
         })
     {
         return Verdict::FailOver {
@@ -157,7 +165,7 @@ pub fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
     if ctx.fast && rate_limited {
         let credits_refused = unified.is_some_and(|u| u.overage_disabled_reason.is_some());
         let plan_rejected = unified.is_some_and(plan_window_rejected)
-            || (ctx.kind == AccountKind::ApiKey && ctx.body_prefix.is_some_and(names_spend_limit));
+            || (ctx.kind == AccountKind::ApiKey && error().is_some_and(names_spend_limit));
         if credits_refused || !plan_rejected {
             return Verdict::FailOver {
                 cooldown: Some(fast_cooldown(head, unified, ctx)),
@@ -172,7 +180,7 @@ pub fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
                 mark: None,
             }
         }
-        AccountKind::ApiKey if rate_limited && ctx.body_prefix.is_some_and(names_spend_limit) => {
+        AccountKind::ApiKey if rate_limited && error().is_some_and(names_spend_limit) => {
             return Verdict::FailOver {
                 cooldown: Some(Cooldown::new(
                     Scope::Account,
@@ -191,10 +199,9 @@ pub fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
         }
         AccountKind::ApiKey
             if head.status == 400
-                && ctx.body_prefix.is_some_and(|b| {
-                    error_type(b).as_deref() == Some("invalid_request_error")
-                        && names_credit_balance(b)
-                }) =>
+                && error()
+                    .is_some_and(|e| e.error_type.as_deref() == Some("invalid_request_error"))
+                && ctx.body_prefix.is_some_and(names_credit_balance) =>
         {
             return Verdict::FailOver {
                 cooldown: None,
@@ -205,9 +212,7 @@ pub fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
     }
     let auth = head.status == 401
         || (head.status == 403
-            && ctx
-                .body_prefix
-                .is_some_and(|b| error_type(b).as_deref() == Some("authentication_error")));
+            && error().is_some_and(|e| e.error_type.as_deref() == Some("authentication_error")));
     if auth {
         return match ctx.kind {
             AccountKind::Oauth => Verdict::Refresh,
@@ -218,9 +223,7 @@ pub fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
         };
     }
     if head.status == 403
-        && ctx
-            .body_prefix
-            .is_some_and(|b| error_type(b).as_deref() == Some("permission_error"))
+        && error().is_some_and(|e| e.error_type.as_deref() == Some("permission_error"))
     {
         return Verdict::FailOver {
             cooldown: Some(Cooldown::new(
@@ -436,16 +439,52 @@ fn closing_quote(raw: &str) -> usize {
     raw.len()
 }
 
-/// The error body's member at `pointer`. A complete body parses directly, which is what keeps a `"type"` string
-/// that happens to appear inside an upstream `message` from being mistaken for the real member. A prefix cut
-/// mid-document fails to parse, so the member is then located textually by its `key` through `textual_member`.
-fn error_member(body: &[u8], pointer: &str, key: &str) -> Option<String> {
+/// The error body's member at each `(pointer, key)`, off one parse. A complete body parses directly, which is what
+/// keeps a `"type"` string that happens to appear inside an upstream `message` from being mistaken for the real
+/// member. A prefix cut mid-document fails to parse, so each member is then located textually by its `key` through
+/// `textual_member`.
+fn error_members<const N: usize>(body: &[u8], members: [(&str, &str); N]) -> [Option<String>; N] {
     match serde_json::from_slice::<Value>(body) {
-        Ok(value) => value
-            .pointer(pointer)
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        Err(_) => textual_member(valid_text(body), key).map(str::to_string),
+        Ok(value) => members.map(|(pointer, _)| {
+            value
+                .pointer(pointer)
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        }),
+        Err(_) => {
+            let text = valid_text(body);
+            members.map(|(_, key)| textual_member(text, key).map(str::to_string))
+        }
+    }
+}
+
+fn error_member(body: &[u8], pointer: &str, key: &str) -> Option<String> {
+    let [member] = error_members(body, [(pointer, key)]);
+    member
+}
+
+/// The error body's members the predicates read, off one parse.
+struct ErrorBody {
+    error_type: Option<String>,
+    message: Option<String>,
+    error_code: Option<String>,
+}
+
+impl ErrorBody {
+    fn read(body: &[u8]) -> ErrorBody {
+        let [error_type, message, error_code] = error_members(
+            body,
+            [
+                ("/error/type", "type"),
+                ("/error/message", "message"),
+                ("/error/details/error_code", "error_code"),
+            ],
+        );
+        ErrorBody {
+            error_type,
+            message,
+            error_code,
+        }
     }
 }
 
@@ -483,9 +522,8 @@ pub(crate) fn error_message(body: &[u8]) -> Option<String> {
 }
 
 /// Whether the body names the upstream's own monthly spend-cap code in `error.details.error_code`.
-fn names_spend_limit(body: &[u8]) -> bool {
-    error_member(body, "/error/details/error_code", "error_code").as_deref()
-        == Some("enforced_spend_limit_reached")
+fn names_spend_limit(error: &ErrorBody) -> bool {
+    error.error_code.as_deref() == Some("enforced_spend_limit_reached")
 }
 
 /// Whether `error.message` names `wire_model` as a whole token: the byte before and after each occurrence are
@@ -493,11 +531,11 @@ fn names_spend_limit(body: &[u8]) -> bool {
 /// nor `-` nor `.` (quotes, whitespace, `:`, `,`, and the rest of punctuation all bound). A cut message's end
 /// counts as its end, so a cut landing just past a shorter model name that prefixes the real one reads the shorter
 /// name. An empty `wire_model` never matches, since every message contains the empty string.
-fn names_model(body: &[u8], wire_model: &str) -> bool {
+fn names_model(error: &ErrorBody, wire_model: &str) -> bool {
     if wire_model.is_empty() {
         return false;
     }
-    let Some(message) = error_message(body).map(|message| message.to_ascii_lowercase()) else {
+    let Some(message) = error.message.as_deref().map(str::to_ascii_lowercase) else {
         return false;
     };
     let wire_model = wire_model.to_ascii_lowercase();
@@ -506,19 +544,31 @@ fn names_model(body: &[u8], wire_model: &str) -> bool {
     })
 }
 
-/// The items of `injected` an upstream 400 `invalid_request_error` names, the one gate the strip and the latch
-/// both read: a 400 of another kind that happens to spell an injected name in its message never strips or
-/// latches on the strength of a coincidence.
+/// `injected_named` over the body bytes the latch holds, parsed only past the gate.
 pub(crate) fn refused_injected(
     status: u16,
     body: Option<&[u8]>,
     injected: &[Injected],
 ) -> Vec<Injected> {
+    let parsed = OnceCell::new();
+    injected_named(status, injected, || {
+        body.map(|body| parsed.get_or_init(|| ErrorBody::read(body)))
+    })
+}
+
+/// The items of `injected` an upstream 400 `invalid_request_error` names, the one gate the strip and the latch
+/// both read: a 400 of another kind that happens to spell an injected name in its message never strips or
+/// latches on the strength of a coincidence. `error` is asked only past the status and the empty list.
+fn injected_named<'e>(
+    status: u16,
+    injected: &[Injected],
+    error: impl FnOnce() -> Option<&'e ErrorBody>,
+) -> Vec<Injected> {
     if status != 400 || injected.is_empty() {
         return Vec::new();
     }
-    match body.filter(|b| error_type(b).as_deref() == Some("invalid_request_error")) {
-        Some(body) => refused_names(body, injected),
+    match error().filter(|e| e.error_type.as_deref() == Some("invalid_request_error")) {
+        Some(error) => refused_names(error, injected),
         None => Vec::new(),
     }
 }
@@ -526,15 +576,15 @@ pub(crate) fn refused_injected(
 /// The names an upstream 400 refused, read off `error.message` alone (never the envelope, where a field such as
 /// `request_id` can spell any of these names by accident), each as a whole token: bounded on both sides by a
 /// character outside `[A-Za-z0-9_-]` or the string's edge.
-pub(crate) fn refused_names(body: &[u8], candidates: &[Injected]) -> Vec<Injected> {
-    let Some(message) = error_message(body) else {
+fn refused_names(error: &ErrorBody, candidates: &[Injected]) -> Vec<Injected> {
+    let Some(message) = error.message.as_deref() else {
         return Vec::new();
     };
     candidates
         .iter()
         .copied()
         .filter(|item| {
-            names_token(&message, item.wire_name(), |c| {
+            names_token(message, item.wire_name(), |c| {
                 c.is_ascii_alphanumeric() || c == '_' || c == '-'
             })
         })
@@ -575,7 +625,7 @@ mod tests {
             canonical_model: "claude-opus-5",
             now: NOW,
             fallback_ms: FALLBACK,
-            first_event: None,
+            rate_limit_event: false,
             body_prefix: None,
             injected: &[],
             can_strip: false,
@@ -683,21 +733,21 @@ mod tests {
         let code_end = code_at + CODE.len();
 
         // Cut right after the value's closing quote: the object never closes, so this is not complete JSON, and
-        // the textual scan is what `names_spend_limit` falls back to.
+        // the textual scan is what `ErrorBody::read` falls back to.
         let cut_after_value = &full[..code_end + 1];
         assert!(serde_json::from_slice::<Value>(cut_after_value).is_err());
-        assert!(names_spend_limit(cut_after_value));
+        assert!(names_spend_limit(&ErrorBody::read(cut_after_value)));
 
         // Cut mid-value: the code's own text is incomplete, so it must not match.
         let cut_mid_value = &full[..code_end - 5];
         assert!(serde_json::from_slice::<Value>(cut_mid_value).is_err());
-        assert!(!names_spend_limit(cut_mid_value));
+        assert!(!names_spend_limit(&ErrorBody::read(cut_mid_value)));
 
         // Cut before the key ever appears: absent entirely.
         let key_at = text.find(r#""error_code""#).unwrap();
         let cut_before_key = &full[..key_at];
         assert!(serde_json::from_slice::<Value>(cut_before_key).is_err());
-        assert!(!names_spend_limit(cut_before_key));
+        assert!(!names_spend_limit(&ErrorBody::read(cut_before_key)));
     }
 
     /// A rejection read up to the buffer bound can end inside a multi-byte character; what came before it still
@@ -712,7 +762,7 @@ mod tests {
         let mut cut = full[..full.len() - 2].to_vec();
         cut.extend_from_slice(&"\u{e9}".as_bytes()[..1]);
         assert!(std::str::from_utf8(&cut).is_err());
-        assert!(names_spend_limit(&cut));
+        assert!(names_spend_limit(&ErrorBody::read(&cut)));
     }
 
     #[test]
@@ -1012,8 +1062,9 @@ mod tests {
     #[test]
     fn the_first_sse_event_error_uses_the_partition_rows_and_a_credit_400_marks_funding() {
         let mut ctx = context(AccountKind::Oauth);
-        ctx.first_event =
-            Some(br#"{"type":"error","error":{"type":"rate_limit_error","message":"slow"}}"#);
+        ctx.rate_limit_event = is_rate_limit_event(
+            br#"{"type":"error","error":{"type":"rate_limit_error","message":"slow"}}"#,
+        );
         let h = head(
             200,
             &[
@@ -1024,8 +1075,9 @@ mod tests {
         );
         let c = cooldown_of(classify(&h, &ctx));
         assert_eq!((c.scope, c.window.as_str()), (Scope::Account, "seven_day"));
-        ctx.first_event =
-            Some(br#"{"type":"error","error":{"type":"overloaded_error","message":"x"}}"#);
+        ctx.rate_limit_event = is_rate_limit_event(
+            br#"{"type":"error","error":{"type":"overloaded_error","message":"x"}}"#,
+        );
         assert!(
             matches!(classify(&h, &ctx), Verdict::Commit),
             "any other pre-commit error commits"
@@ -1044,8 +1096,9 @@ mod tests {
     #[test]
     fn the_api_key_200_sse_first_event_error_is_model_scoped_with_retry_after() {
         let mut ctx = context(AccountKind::ApiKey);
-        ctx.first_event =
-            Some(br#"{"type":"error","error":{"type":"rate_limit_error","message":"slow"}}"#);
+        ctx.rate_limit_event = is_rate_limit_event(
+            br#"{"type":"error","error":{"type":"rate_limit_error","message":"slow"}}"#,
+        );
         let h = head(
             200,
             &[("content-type", "text/event-stream"), ("retry-after", "9")],
@@ -1278,8 +1331,9 @@ mod tests {
     #[test]
     fn a_fast_requests_first_sse_rate_limit_error_cools_the_fast_lane() {
         let mut ctx = fast_ctx(AccountKind::Oauth);
-        ctx.first_event =
-            Some(br#"{"type":"error","error":{"type":"rate_limit_error","message":"slow"}}"#);
+        ctx.rate_limit_event = is_rate_limit_event(
+            br#"{"type":"error","error":{"type":"rate_limit_error","message":"slow"}}"#,
+        );
         let h = head(
             200,
             &[("content-type", "text/event-stream"), ("retry-after", "9")],
@@ -1294,8 +1348,9 @@ mod tests {
                 NOW + 9_000 + MARGIN_MS
             )
         );
-        ctx.first_event =
-            Some(br#"{"type":"error","error":{"type":"overloaded_error","message":"x"}}"#);
+        ctx.rate_limit_event = is_rate_limit_event(
+            br#"{"type":"error","error":{"type":"overloaded_error","message":"x"}}"#,
+        );
         assert!(matches!(classify(&h, &ctx), Verdict::Commit));
     }
 
@@ -1439,13 +1494,13 @@ mod tests {
             r#"The model "claude-opus-5" does not exist, and so on"#,
         ));
         assert!(serde_json::from_slice::<Value>(&model).is_err());
-        assert!(names_model(&model, "claude-opus-5"));
+        assert!(names_model(&ErrorBody::read(&model), "claude-opus-5"));
         let refused = cut(refusal(
             "Unexpected value(s) `cache-diagnosis-2026-04-07` for the header, and so on",
         ));
         assert_eq!(
             refused_names(
-                &refused,
+                &ErrorBody::read(&refused),
                 &[Injected::CacheDiagnosisBeta, Injected::Diagnostics]
             ),
             vec![Injected::CacheDiagnosisBeta]
@@ -1458,21 +1513,27 @@ mod tests {
     #[test]
     fn refused_names_matches_whole_tokens_and_ignores_the_envelope() {
         let envelope = br#"{"type":"error","error":{"type":"invalid_request_error","message":"model not found"},"request_id":"req_cch_0001"}"#;
-        assert_eq!(refused_names(envelope, &[Injected::Cch]), Vec::new());
+        assert_eq!(
+            refused_names(&ErrorBody::read(envelope), &[Injected::Cch]),
+            Vec::new()
+        );
         let unrelated_field =
             br#"{"type":"error","error":{"type":"invalid_request_error","message":"`diagnostics_extra` is not a valid field"}}"#;
         assert_eq!(
-            refused_names(unrelated_field, &[Injected::Diagnostics]),
+            refused_names(&ErrorBody::read(unrelated_field), &[Injected::Diagnostics]),
             Vec::new()
         );
         let backtick_boundary = refusal("Unexpected value(s) `cache-diagnosis-2026-04-07`");
         assert_eq!(
-            refused_names(&backtick_boundary, &[Injected::CacheDiagnosisBeta]),
+            refused_names(
+                &ErrorBody::read(&backtick_boundary),
+                &[Injected::CacheDiagnosisBeta]
+            ),
             vec![Injected::CacheDiagnosisBeta]
         );
         let period_boundary = refusal("unknown field diagnostics.");
         assert_eq!(
-            refused_names(&period_boundary, &[Injected::Diagnostics]),
+            refused_names(&ErrorBody::read(&period_boundary), &[Injected::Diagnostics]),
             vec![Injected::Diagnostics]
         );
     }

@@ -30,42 +30,35 @@ mod serve;
 mod sse;
 mod stream;
 
-pub use auth::{authenticated_key, is_json, presented_key, AuthError};
+pub use auth::{authenticated_key, is_json};
 pub use billing::is_entrypoint_token;
 pub use body::{
-    edit_body, schema_cache_controls, BodyEdits, BodyMember, Markerless, NativeEdit,
-    RepeatedMember, SafeguardsEdit, CACHE_DIAGNOSIS_BETA, CLASSIFIER_BETA, DANGEROUS_TOOL_USE_BETA,
-    EXTENDED_TTL_BETA,
+    schema_cache_controls, BodyEdits, CACHE_DIAGNOSIS_BETA, CLASSIFIER_BETA,
+    DANGEROUS_TOOL_USE_BETA, EXTENDED_TTL_BETA,
 };
-pub use cache_ttl::{CacheTtl, CacheTtlError, CacheTtlPolicy, ModelTtl, TtlBranch, TtlRules};
-pub use casing::{head_queue, HeadQueue, HeadRecorder, OriginalHead};
+pub use cache_ttl::{CacheTtl, CacheTtlPolicy, ModelTtl, TtlBranch};
+pub use casing::OriginalHead;
 pub use catalog::{
-    Catalog, CatalogChange, CatalogHook, CatalogRow, CatalogService, DiscoveryError, Prefetched,
-    Warmth, EFFORT_LEVELS, ERROR_HOLD, MAX_BODY, REFRESH_TICK,
+    Catalog, CatalogChange, CatalogService, DiscoveryError, Warmth, EFFORT_LEVELS, ERROR_HOLD,
+    MAX_BODY, REFRESH_TICK,
 };
 pub use chains::Chains;
-pub use classify::{
-    classify, next_month_start, Cooldown, HeadContext, Scope, Verdict, SPEND_CAP_REASON,
-};
-pub use drift::DriftKind;
+pub use classify::{next_month_start, Cooldown, Verdict, SPEND_CAP_REASON};
 pub use errors::{anthropic_error, no_store, ACCOUNTS_AT_CAP, ERROR_CODE_HEADER, LEDGER_BEHIND};
-pub use headers::{outbound_headers, CredentialKind};
 pub use hold::INSPECT_BUFFER;
 pub use identity::{identifier_byte, is_valid_id};
-pub use memory::{MemoryKey, Previous, MEMORY_CAP, MEMORY_IDLE_MS};
+pub use memory::{MemoryKey, MEMORY_CAP, MEMORY_IDLE_MS};
 pub use messages::{
-    new_request_id, router, Accounting, AccountingSource, Limits, Probe, ProbeObstacle,
-    ReadinessSource, Relay, RelayOutcome, ServedUnder, ShutdownMark, MEMORY_FLUSH_INTERVAL,
+    new_request_id, router, Accounting, AccountingSource, Limits, Probe, ProbeObstacle, Relay,
+    RelayOutcome, ShutdownMark, MEMORY_FLUSH_INTERVAL,
 };
 pub use portability::portable_of;
-pub use ratelimit::{
-    head_sample, retry_after, upstream_date, Bucket, BucketHeaders, UnifiedHeaders, FAST_INPUT,
-    FAST_OUTPUT,
-};
-pub use serve::{
-    accept_loop, handshake, serve, Accepted, HandshakeError, Limits as ListenLimits, LiveAcceptor,
-};
-pub use sse::{SseEvent, SseParser};
+pub use ratelimit::{retry_after, UnifiedHeaders, FAST_INPUT, FAST_OUTPUT};
+pub use serve::{accept_loop, handshake, serve, Accepted, Limits as ListenLimits, LiveAcceptor};
+pub use sse::SseEvent;
+
+pub(crate) use body::{edit_body, BodyMember, Markerless, NativeEdit, SafeguardsEdit};
+pub(crate) use drift::DriftKind;
 
 #[cfg(feature = "debug-hooks")]
 impl Relay {

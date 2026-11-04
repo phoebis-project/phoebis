@@ -31,8 +31,7 @@ pub struct BodyFacts {
     /// the replacement character, so the version check reads a line a strict decoder refuses. `None` for a body
     /// without a line, a line that names none, and a body no reader parses.
     pub cc_version: Option<String>,
-    /// Whether `system[0]` is an attribution line at all, stamped or reduced: what the restoration fills.
-    pub carries_line: bool,
+    pub line: AttributionLine,
     pub shape: RequestShape,
     /// The top-level `output_config.effort` alone, whatever a control entry says: the lane of a request without
     /// the per-turn beta reads it, since a control entry left in the history sets no level there.
@@ -41,12 +40,20 @@ pub struct BodyFacts {
     pub chains: Option<Chains>,
     /// The largest `cache_control.ttl` at the API's marker positions, `None` without a marker there.
     pub markers_ttl_ms: Option<i64>,
-    /// `system` is an array: what the billing-line restoration needs to know before it reads the raw span.
-    pub system_is_array: bool,
     /// The body references no account-scoped state (`container`, `file_id`, a server-tool result).
     pub portable: bool,
     /// The digest of a top-level `fallback_credit_token` string, `None` without one.
     pub credit_digest: Option<CreditDigest>,
+}
+
+/// What `system[0]` holds of the attribution line, which the contract requires where `system` is an array alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttributionLine {
+    /// `system` is not an array, so the body has no slot for the line: the client's quota probe sends none.
+    NoSystemArray,
+    Missing,
+    /// An attribution line, stamped or reduced: what the restoration fills.
+    Present,
 }
 
 /// The gateway hint headers, each optional, read the way `identify` reads an identifier: bounded and
@@ -86,7 +93,7 @@ impl BodyFacts {
                 turn_origin: None,
                 entrypoint: None,
                 cc_version: None,
-                carries_line: false,
+                line: AttributionLine::NoSystemArray,
                 shape: RequestShape {
                     safeguards,
                     ..RequestShape::default()
@@ -94,7 +101,6 @@ impl BodyFacts {
                 top_level_effort: None,
                 chains: None,
                 markers_ttl_ms: None,
-                system_is_array: false,
                 // Fails open: a body no reader parses carries no reference the router could prove, and the upstream
                 // refuses it anyway. The keepalive reads `portable_of` on its own parsed tree and refuses such a body
                 // before it gets that far.
@@ -141,8 +147,15 @@ impl BodyFacts {
             .and_then(|blocks| blocks.first())
             .and_then(|block| block.get("text"))
             .and_then(Value::as_str);
-        let carries_line = first_system_text
-            .is_some_and(|text| text.starts_with(crate::billing::ATTRIBUTION_PREFIX));
+        let line = if !matches!(root.get("system"), Some(Value::Array(_))) {
+            AttributionLine::NoSystemArray
+        } else if first_system_text
+            .is_some_and(|text| text.starts_with(crate::billing::ATTRIBUTION_PREFIX))
+        {
+            AttributionLine::Present
+        } else {
+            AttributionLine::Missing
+        };
         let turn_origin = first_system_text
             .and_then(carried_turn_origin)
             .map(String::from);
@@ -189,12 +202,11 @@ impl BodyFacts {
             turn_origin,
             entrypoint,
             cc_version,
-            carries_line,
+            line,
             shape,
             top_level_effort,
             chains,
             markers_ttl_ms,
-            system_is_array: matches!(root.get("system"), Some(Value::Array(_))),
             portable: crate::portability::portable_of(&root),
             credit_digest: root
                 .get("fallback_credit_token")
@@ -559,18 +571,25 @@ mod tests {
     }
 
     #[test]
-    fn carries_line_is_true_for_an_attribution_line_and_false_otherwise() {
-        assert!(
+    fn the_line_is_present_for_an_attribution_line_and_not_otherwise() {
+        assert_eq!(
             BodyFacts::read(phoebis_profile::fixtures::body(
                 phoebis_profile::fixtures::BodyFixture::Oauth
             ))
-            .carries_line,
+            .line,
+            AttributionLine::Present,
             "the reduced shape still carries the block, unstamped"
         );
         let plain_first_block = br#"{"system":[{"type":"text","text":"be helpful"}]}"#;
-        assert!(!BodyFacts::read(plain_first_block).carries_line);
+        assert_ne!(
+            BodyFacts::read(plain_first_block).line,
+            AttributionLine::Present
+        );
         let string_system = br#"{"system":"be helpful"}"#;
-        assert!(!BodyFacts::read(string_system).carries_line);
+        assert_ne!(
+            BodyFacts::read(string_system).line,
+            AttributionLine::Present
+        );
     }
 
     #[test]
@@ -812,7 +831,7 @@ mod tests {
         let body = br#"{"model":"m","system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.269.517; cc_entrypoint=cli; cc_prompt_id=11111111-1111-4111-8111-111111111111;"}],"messages":[{"role":"user","content":[{"type":"text","text":"cut \ud83d","cache_control":{"type":"ephemeral","ttl":"1h"}}]}]}"#;
         assert!(serde_json::from_slice::<Value>(body).is_err());
         let facts = BodyFacts::read(body);
-        assert!(facts.carries_line);
+        assert_eq!(facts.line, AttributionLine::Present);
         assert!(facts.chains.is_some());
         assert_eq!(facts.markers_ttl_ms, Some(3_600_000));
         assert_eq!(facts.shape.message_count, 1);
@@ -832,7 +851,7 @@ mod tests {
         );
         assert!(serde_json::from_slice::<Value>(body.as_bytes()).is_err());
         let facts = BodyFacts::read(body.as_bytes());
-        assert!(facts.carries_line);
+        assert_eq!(facts.line, AttributionLine::Present);
         assert_eq!(
             facts.prompt_units,
             vec![[0xFFFD, u16::from(b'g'), u16::from(b't')]]
@@ -851,15 +870,25 @@ mod tests {
 
     #[test]
     fn whether_system_is_an_array_is_read_off_the_one_parse() {
-        assert!(BodyFacts::read(br#"{"system":[],"messages":[]}"#).system_is_array);
-        assert!(!BodyFacts::read(br#"{"system":"be brief","messages":[]}"#).system_is_array);
-        assert!(!BodyFacts::read(br#"{"messages":[]}"#).system_is_array);
-        // The parse reads the last spelling of a repeated key, so the flag says array while the billing line's
-        // scanner reads the first spelling, a string, and finds no line to fill. Admission refuses a repeated
+        assert_ne!(
+            BodyFacts::read(br#"{"system":[],"messages":[]}"#).line,
+            AttributionLine::NoSystemArray
+        );
+        assert_eq!(
+            BodyFacts::read(br#"{"system":"be brief","messages":[]}"#).line,
+            AttributionLine::NoSystemArray
+        );
+        assert_eq!(
+            BodyFacts::read(br#"{"messages":[]}"#).line,
+            AttributionLine::NoSystemArray
+        );
+        // The parse reads the last spelling of a repeated key, so the line reads as an array's while the billing
+        // line's scanner reads the first spelling, a string, and finds no line to fill. Admission refuses a repeated
         // `system` before either reads it.
-        assert!(
+        assert_ne!(
             BodyFacts::read(br#"{"model":"m","system":"be helpful","messages":[],"system":[]}"#)
-                .system_is_array
+                .line,
+            AttributionLine::NoSystemArray
         );
     }
 
@@ -877,7 +906,7 @@ mod tests {
         );
         let unread = BodyFacts::read(b"not json");
         assert!(unread.portable);
-        assert!(!unread.system_is_array);
+        assert_eq!(unread.line, AttributionLine::NoSystemArray);
     }
 
     #[test]

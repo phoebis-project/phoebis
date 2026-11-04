@@ -15,6 +15,8 @@ pub struct BodyEdits {
     pub cch_restamped: bool,
     pub restored: Vec<Injected>,
     pub cache_ttl_edited: bool,
+    /// The TTL rewrite found a `cache_control` marker the client sent, false when no TTL was coupled.
+    pub cache_ttl_marked: bool,
     /// A client-sent id was set to `null`, so a captured null can be told from one the client sent itself.
     pub diagnostics_detached: bool,
 }
@@ -286,9 +288,9 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
         }
     }
     let diagnostics_detached = edit.detach_diagnostics && detach_diagnostics(body);
-    let cache_ttl_edited = match edit.cache_ttl {
+    let (cache_ttl_edited, cache_ttl_marked) = match edit.cache_ttl {
         Some(ttl) => set_cache_ttl(body, ttl, edit.markerless)?,
-        None => false,
+        None => (false, false),
     };
     // A client hash is re-signed over the edited bytes it no longer covers. The placeholder, restored or sent by
     // the client, travels unsigned, as the client's unpatched paths send it and the server accepts it; the switch
@@ -305,6 +307,7 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
         cch_restamped,
         restored,
         cache_ttl_edited,
+        cache_ttl_marked,
         diagnostics_detached,
     })
 }
@@ -312,7 +315,7 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
 /// The rewrite with its fail-closed guard. The walk reads the client's own spelling of `cache_control` and a
 /// decoder reads it through its escapes, so a body spelling the key any other way carries a marker the rewrite
 /// never reaches: its hour would outlive a five-minute policy, unenforced and unreported. Where the two
-/// readings disagree the request is refused. Answers whether any byte moved.
+/// readings disagree the request is refused. Answers `rewrite_cache_ttl`'s pair.
 ///
 /// The decoder's count comes from a key-decoding walk over the same scanner, never a parse of the whole body: a
 /// strict parser refuses a body for a lone surrogate escape (a client emits one for a string cut mid-pair) that
@@ -321,8 +324,8 @@ pub fn set_cache_ttl(
     body: &mut Vec<u8>,
     ttl: CacheTtl,
     markerless: Markerless,
-) -> Result<bool, RelayError> {
-    let changed = rewrite_cache_ttl(body, ttl, markerless)?;
+) -> Result<(bool, bool), RelayError> {
+    let rewritten = rewrite_cache_ttl(body, ttl, markerless)?;
     let enforced = match (
         phoebis_cch::decoded_cache_control_count(body),
         phoebis_cch::cache_control_spans(body),
@@ -333,7 +336,7 @@ pub fn set_cache_ttl(
     if !enforced {
         return Err(RelayError::BodyShape(BodyMember::CacheControl));
     }
-    Ok(changed)
+    Ok(rewritten)
 }
 
 /// Every `cache_control` member at the five positions the Messages API takes one from: the top level,
@@ -376,7 +379,8 @@ pub fn schema_cache_controls(
 /// Rewrites every ephemeral marker to `ttl`: `1h` writes `"ttl":"1h"` right after `"type":"ephemeral"`, `5m`
 /// removes the `ttl` member, and every other member of the marker keeps its place. A marker whose `type` is not
 /// `ephemeral` is left as sent. A body with no marker anywhere gets the top-level `cache_control` member with
-/// the TTL, before `stream`, where `markerless` allows it. Returns whether any byte changed.
+/// the TTL, before `stream`, where `markerless` allows it. Returns whether any byte changed and whether the body
+/// carried a marker of its own.
 ///
 /// Every marker is read before any is written: one the parser cannot read (a number out of range, a value that
 /// is no object) would keep its own TTL beside rewritten ones, and the dispatch would report the policy's TTL for
@@ -385,14 +389,14 @@ fn rewrite_cache_ttl(
     body: &mut Vec<u8>,
     ttl: CacheTtl,
     markerless: Markerless,
-) -> Result<bool, RelayError> {
+) -> Result<(bool, bool), RelayError> {
     let spans = phoebis_cch::cache_control_spans(body)?;
     if spans.is_empty() {
         if markerless == Markerless::GoesAsSent {
-            return Ok(false);
+            return Ok((false, false));
         }
         add_top_level_cache_control(body, ttl);
-        return Ok(true);
+        return Ok((true, false));
     }
     let markers = spans
         .into_iter()
@@ -431,7 +435,7 @@ fn rewrite_cache_ttl(
             changed = true;
         }
     }
-    Ok(changed)
+    Ok((changed, true))
 }
 
 /// The top-level `cache_control` member for a body with no marker anywhere, placed as `insert_diagnostics` places
@@ -441,17 +445,23 @@ fn add_top_level_cache_control(body: &mut Vec<u8>, ttl: CacheTtl) {
         CacheTtl::OneHour => r#""cache_control":{"type":"ephemeral","ttl":"1h"}"#,
         CacheTtl::FiveMinutes => r#""cache_control":{"type":"ephemeral"}"#,
     };
+    let stream = phoebis_cch::object_member_span(body, &["stream"]);
     // The rewrite calls this only after the marker walk answered, and that walk fails unless the object closes.
-    let placed = insert_top_level_member(body, member);
+    let placed = insert_top_level_member(body, member, stream);
     assert!(placed, "checked to be an object");
 }
 
-/// Inserts a top-level `member` before `stream` when the body has one, so it lands where the measured client puts
-/// it, and last otherwise, answering whether it found a place. `starts_with_object` only checked the first byte
-/// and `edit_body` skips a full parse, so a body that opens with `{` and never closes reaches here. The upstream
-/// would refuse it either way, so nothing is inserted rather than guessing at a position that does not exist.
-fn insert_top_level_member(body: &mut Vec<u8>, member: &str) -> bool {
-    match phoebis_cch::object_member_span(body, &["stream"]) {
+/// Inserts a top-level `member` before the `stream` member spanning `stream` when the body has one, so it lands where
+/// the measured client puts it, and last otherwise, answering whether it found a place. `starts_with_object` only
+/// checked the first byte and `edit_body` skips a full parse, so a body that opens with `{` and never closes
+/// reaches here. The upstream would refuse it either way, so nothing is inserted rather than guessing at a
+/// position that does not exist.
+fn insert_top_level_member(
+    body: &mut Vec<u8>,
+    member: &str,
+    stream: Option<(usize, usize)>,
+) -> bool {
+    match stream {
         Some((start, _)) => {
             body.splice(start..start, format!("{member},").bytes());
             true
@@ -548,15 +558,17 @@ fn span_ttl_ms(body: &[u8], (start, end): (usize, usize)) -> i64 {
 
 /// Placed by `insert_top_level_member`. Never rewrites a member the client sent.
 fn insert_diagnostics(body: &mut Vec<u8>, previous: Option<&str>) -> bool {
-    if phoebis_cch::object_member_span(body, &["diagnostics"]).is_some() {
+    let members = TopLevelMembers::read(body);
+    if members.object_member_span("diagnostics").is_some() {
         return false;
     }
+    let stream = members.object_member_span("stream");
     let member = format!(
         r#""diagnostics":{{"previous_message_id":{}}}"#,
         previous.map_or("null".to_string(), |p| serde_json::to_string(p)
             .expect("a string encodes"))
     );
-    insert_top_level_member(body, &member)
+    insert_top_level_member(body, &member, stream)
 }
 
 /// Sets a client-sent `diagnostics.previous_message_id` that names a message to `null`. A member already `null`, a
@@ -920,7 +932,9 @@ mod tests {
     fn set_cache_ttl_rewrites_a_bare_marker_both_ways() {
         let mut to_hour = br#"{"cache_control":{"type":"ephemeral"}}"#.to_vec();
         assert!(
-            set_cache_ttl(&mut to_hour, CacheTtl::OneHour, Markerless::TakesTheMember).unwrap()
+            set_cache_ttl(&mut to_hour, CacheTtl::OneHour, Markerless::TakesTheMember)
+                .unwrap()
+                .0
         );
         assert_eq!(
             to_hour,
@@ -934,7 +948,8 @@ mod tests {
                 CacheTtl::FiveMinutes,
                 Markerless::TakesTheMember
             )
-            .unwrap(),
+            .unwrap()
+            .0,
             "already the requested shape"
         );
         assert_eq!(stays_five, br#"{"cache_control":{"type":"ephemeral"}}"#);
@@ -944,12 +959,15 @@ mod tests {
     fn set_cache_ttl_rewrites_an_hour_marker_both_ways_and_keeps_a_third_members_place() {
         let mut to_five =
             br#"{"cache_control":{"type":"ephemeral","ttl":"1h","scope":"global"}}"#.to_vec();
-        assert!(set_cache_ttl(
-            &mut to_five,
-            CacheTtl::FiveMinutes,
-            Markerless::TakesTheMember
-        )
-        .unwrap());
+        assert!(
+            set_cache_ttl(
+                &mut to_five,
+                CacheTtl::FiveMinutes,
+                Markerless::TakesTheMember
+            )
+            .unwrap()
+            .0
+        );
         assert_eq!(
             to_five, br#"{"cache_control":{"type":"ephemeral","scope":"global"}}"#,
             "ttl is dropped, scope keeps its place after type"
@@ -958,7 +976,9 @@ mod tests {
         let mut to_hour =
             br#"{"cache_control":{"type":"ephemeral","ttl":"1h","scope":"global"}}"#.to_vec();
         assert!(
-            !set_cache_ttl(&mut to_hour, CacheTtl::OneHour, Markerless::TakesTheMember).unwrap(),
+            !set_cache_ttl(&mut to_hour, CacheTtl::OneHour, Markerless::TakesTheMember)
+                .unwrap()
+                .0,
             "already an hour"
         );
     }
@@ -966,31 +986,41 @@ mod tests {
     #[test]
     fn set_cache_ttl_leaves_a_marker_of_another_type_as_sent() {
         let mut body = br#"{"cache_control":{"type":"persistent"}}"#.to_vec();
-        assert!(!set_cache_ttl(&mut body, CacheTtl::OneHour, Markerless::TakesTheMember).unwrap());
+        assert!(
+            !set_cache_ttl(&mut body, CacheTtl::OneHour, Markerless::TakesTheMember)
+                .unwrap()
+                .0
+        );
         assert_eq!(body, br#"{"cache_control":{"type":"persistent"}}"#);
     }
 
     #[test]
     fn set_cache_ttl_adds_the_top_level_member_before_stream_when_no_marker_is_present() {
         let mut with_stream = br#"{"model":"m","stream":true}"#.to_vec();
-        assert!(set_cache_ttl(
-            &mut with_stream,
-            CacheTtl::OneHour,
-            Markerless::TakesTheMember
-        )
-        .unwrap());
+        assert!(
+            set_cache_ttl(
+                &mut with_stream,
+                CacheTtl::OneHour,
+                Markerless::TakesTheMember
+            )
+            .unwrap()
+            .0
+        );
         assert_eq!(
             with_stream,
             br#"{"model":"m","cache_control":{"type":"ephemeral","ttl":"1h"},"stream":true}"#
         );
 
         let mut without_stream = br#"{"model":"m"}"#.to_vec();
-        assert!(set_cache_ttl(
-            &mut without_stream,
-            CacheTtl::FiveMinutes,
-            Markerless::TakesTheMember
-        )
-        .unwrap());
+        assert!(
+            set_cache_ttl(
+                &mut without_stream,
+                CacheTtl::FiveMinutes,
+                Markerless::TakesTheMember
+            )
+            .unwrap()
+            .0
+        );
         assert_eq!(
             without_stream,
             br#"{"model":"m","cache_control":{"type":"ephemeral"}}"#
@@ -1000,7 +1030,11 @@ mod tests {
     #[test]
     fn set_cache_ttl_leaves_a_body_with_no_marker_as_sent_where_the_member_is_not_accepted() {
         let mut body = br#"{"model":"m","messages":[],"tools":[]}"#.to_vec();
-        assert!(!set_cache_ttl(&mut body, CacheTtl::OneHour, Markerless::GoesAsSent).unwrap());
+        assert!(
+            !set_cache_ttl(&mut body, CacheTtl::OneHour, Markerless::GoesAsSent)
+                .unwrap()
+                .0
+        );
         assert_eq!(body, br#"{"model":"m","messages":[],"tools":[]}"#);
     }
 
@@ -1009,7 +1043,11 @@ mod tests {
         // No fixture body carries a marker inside `tools[]`; this synthetic body covers all three container
         // positions in one pass.
         let mut body = br#"{"system":[{"type":"text","cache_control":{"type":"ephemeral"}}],"tools":[{"name":"t","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":[{"type":"text","cache_control":{"type":"ephemeral"}}]}]}"#.to_vec();
-        assert!(set_cache_ttl(&mut body, CacheTtl::OneHour, Markerless::TakesTheMember).unwrap());
+        assert!(
+            set_cache_ttl(&mut body, CacheTtl::OneHour, Markerless::TakesTheMember)
+                .unwrap()
+                .0
+        );
         let spans = phoebis_cch::cache_control_spans(&body).unwrap();
         assert_eq!(spans.len(), 3, "the rewrite adds and removes no marker");
         for (start, end) in spans {
@@ -1058,7 +1096,9 @@ mod tests {
         );
         let mut body = surrogate.to_vec();
         assert!(
-            set_cache_ttl(&mut body, CacheTtl::FiveMinutes, Markerless::TakesTheMember).unwrap()
+            set_cache_ttl(&mut body, CacheTtl::FiveMinutes, Markerless::TakesTheMember)
+                .unwrap()
+                .0
         );
         let spans = phoebis_cch::cache_control_spans(&body).unwrap();
         assert_eq!(spans.len(), 2, "no marker added or refused");
@@ -1110,7 +1150,9 @@ mod tests {
     fn set_cache_ttl_places_both_plain_spellings_of_a_repeated_marker() {
         let mut body = br#"{"system":[{"type":"text","text":"s","cache_control":{"type":"ephemeral","ttl":"1h"},"cache_control":{"type":"ephemeral","ttl":"1h"}}],"messages":[]}"#.to_vec();
         assert!(
-            set_cache_ttl(&mut body, CacheTtl::FiveMinutes, Markerless::TakesTheMember).unwrap()
+            set_cache_ttl(&mut body, CacheTtl::FiveMinutes, Markerless::TakesTheMember)
+                .unwrap()
+                .0
         );
         assert_eq!(
             body,

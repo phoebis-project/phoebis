@@ -325,9 +325,7 @@ impl CatalogService {
         // the row is re-read and both the generation (bumped independently of a slot's existence, so a fill
         // that started before the account even had one still loses) and the holder it names must still match.
         let reread = self.store.account(&account.id).ok().flatten();
-        let still_current = reread
-            .as_ref()
-            .is_some_and(|row| row.incarnation == key.incarnation && row.revision == key.revision);
+        let still_current = reread.as_ref().is_some_and(|row| SlotKey::of(row) == key);
         let current_generation = self.generation(&key.account_id);
         if still_current && current_generation == generation {
             let change = catalog
@@ -420,17 +418,11 @@ impl CatalogService {
     /// Whether the account's current slot (keyed on its own incarnation and revision) is missing or has aged
     /// past `every`.
     fn slot_due(&self, account: &AccountRow, every: Duration, now: i64) -> bool {
-        let key = SlotKey::of(account);
-        let fetched_at = self
-            .slots
+        self.slots
             .lock()
             .expect(SLOTS_POISONED)
-            .get(&key)
-            .map(|catalog| catalog.fetched_at);
-        match fetched_at {
-            Some(fetched_at) => fetched_at + every.as_millis() as i64 <= now,
-            None => true,
-        }
+            .get(&SlotKey::of(account))
+            .is_none_or(|catalog| catalog.fetched_at + every.as_millis() as i64 <= now)
     }
 
     /// Whether another caller is between `fetch`'s two `fresh_slot` checks for this account's current slot key

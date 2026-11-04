@@ -67,12 +67,12 @@ use crate::errors::{
     MODEL_NOT_ALLOWED, NOT_FOUND, ROUTER_SHUTDOWN_CODE, ROUTER_UNAVAILABLE, UPSTREAM_UNREACHABLE,
 };
 use crate::exhaustion::{exhaustion_code, exhaustion_response, pool_moved_response};
-use crate::facts::{BodyFacts, ClientHints};
+use crate::facts::{AttributionLine, BodyFacts, ClientHints};
 use crate::headers::{outbound_headers, CredentialKind};
 use crate::hold::{hold, Commit, Held, Inspect, INSPECT_BUFFER};
 use crate::identity::{
-    client_of, climb, contract_gap, identify, restores_prev_req, waits_on, PendingReports,
-    RequestIdentity, PENDING_REPORT_WAIT,
+    client_of, climb, contract_gap, identify, restores_prev_req, PendingReports, RequestIdentity,
+    PENDING_REPORT_WAIT,
 };
 use crate::memory::{
     uuid_v4, Injected, MemoryKey, Previous, SessionMemory, MEMORY_CAP, MEMORY_IDLE_MS,
@@ -262,15 +262,6 @@ impl From<PinnedObstacle> for ProbeObstacle {
             PinnedObstacle::SubscriptionEnded => ProbeObstacle::SubscriptionEnded,
         }
     }
-}
-
-/// Which side funded the account a request served under at its selection, on the response's extensions beside
-/// `RelayOutcome`. The selection's own fact: a probe's request row and its credit file under the answer's
-/// `RelayOutcome::overage_in_use` instead, so the two rows never part over a window reset or an overage entry
-/// between the selection and the head.
-#[derive(Clone, Copy, Debug)]
-pub struct ServedUnder {
-    pub in_overage: bool,
 }
 
 /// Marks a request the keepalive engine sent on a session's behalf, and names the key it runs under. The
@@ -1292,7 +1283,8 @@ impl Relay {
         let retired = presented == Presented::Retired;
         // The class is read off the user agent alone, with no body read yet to justify: the router admits Claude
         // Code and refuses any other client before the bytes it would never use are even taken off the wire.
-        if client_of(&parts.headers).class != ClientClass::ClaudeCode {
+        let client = client_of(&parts.headers);
+        if client.class != ClientClass::ClaudeCode {
             tracing::warn!(
                 user_agent = %user_agent(&parts.headers),
                 key = %key.id,
@@ -1502,7 +1494,7 @@ impl Relay {
                 Err(error) => Some(RelayError::Cch(error)),
             }
         };
-        let identified = refusal.map_or_else(|| identify(&parts.headers, &members), Err);
+        let identified = refusal.map_or_else(|| identify(&parts.headers, &members, client), Err);
         let mut identity = match identified {
             Ok(identity) => identity,
             Err(error) => {
@@ -1550,7 +1542,7 @@ impl Relay {
             .as_ref()
             .map_or(&[][..], |c| &c.message_boundaries[..]);
         let applied = self.router.applied_report();
-        if let Some(session_id) = waits_on(&identity) {
+        if let Some(session_id) = identity.session_id.as_deref() {
             if let Some(seq) =
                 self.pending_reports
                     .pending(&key.id, key.created_at, session_id, applied)
@@ -1730,7 +1722,7 @@ impl Relay {
             &parts.headers,
             &identity,
             &facts,
-            hints.request_class.as_deref(),
+            &hints,
             client_version.as_deref(),
             trace.kind,
         ) {
@@ -1784,7 +1776,9 @@ impl Relay {
         // line to fill, and a body without the block is relayed as sent and gets no client request id either. The
         // contract admitted the version, so it lands in the line as the client spelled it.
         let restore = match client_version.as_deref() {
-            Some(version) if trace.kind == Kind::Inference && facts.carries_line => {
+            Some(version)
+                if trace.kind == Kind::Inference && facts.line == AttributionLine::Present =>
+            {
                 if let Some(key) = memory_key.as_ref() {
                     self.memory
                         .touch(key, hints.prompt_id.as_deref(), received_at);
@@ -2281,11 +2275,6 @@ impl Relay {
                     continue;
                 }
                 Leg::Respond(mut response) => {
-                    // Every kind rides this, not the probe path alone: a request's selection funding is a fact of
-                    // the request, not of who asked for it.
-                    response.extensions_mut().insert(ServedUnder {
-                        in_overage: selection.in_overage,
-                    });
                     // Stamped here rather than where the upstream's head is read, so an answer the relay built
                     // itself after the selection carries the attempt's account kind and class too, the facts the
                     // ledger files the attempt's funding from.
@@ -2514,16 +2503,13 @@ impl Relay {
                     t
                 }
             });
-            // Read ahead of every other edit, none of which add or remove a `cache_control` member, so this
-            // matches what the cache TTL rewrite itself will find. A leg that couples no TTL never reads it.
-            let carries_a_marker = ttl.is_some()
-                && phoebis_cch::cache_control_spans(&edited).is_ok_and(|spans| !spans.is_empty());
             // A marker-less body that went as sent claims no TTL, whether because it is a count, because the
             // toggle left it alone or because its class is auxiliary: no beta for it, none dropped for it, and
             // none reported. A body that already carried a marker claims the rewrite's TTL even where the marker
             // already read that way, so a leg does not lose its report to a rewrite that had nothing left to
             // change. A beta naming an hour the body does not carry would be the relay's to answer for on a 400.
-            let claims_its_ttl = |edits: &BodyEdits| carries_a_marker || edits.cache_ttl_edited;
+            let claims_its_ttl =
+                |edits: &BodyEdits| edits.cache_ttl_marked || edits.cache_ttl_edited;
             // Isolated per account, so a failover never carries one account's previous request id, or the
             // previous message id a diagnostics member names, into another account's memory.
             let previous = memory_key
@@ -3104,7 +3090,8 @@ impl Relay {
                 }
             }
         }
-        // Read once for the attempt's recorded outcome and for the rate-limit families a committed error keeps.
+        // Read once for the verdict, for the attempt's recorded outcome and for the rate-limit families a
+        // committed error keeps.
         let rate_limit_event = first_event.as_deref().is_some_and(is_rate_limit_event);
         // The commit's own arrival time: a held stream may have taken most of the hold timeout to commit.
         let arrived = (self.clock)();
@@ -3128,7 +3115,7 @@ impl Relay {
                 canonical_model: &ctx.admitted.identity.canonical_model,
                 now: arrived,
                 fallback_ms: ctx.admitted.fallback_ms,
-                first_event: first_event.as_deref(),
+                rate_limit_event,
                 body_prefix: text,
                 injected: ctx.injected,
                 can_strip: ctx.can_strip,
@@ -3386,7 +3373,7 @@ impl Relay {
                                     canonical_model: &canonical_model,
                                     now,
                                     fallback_ms,
-                                    first_event: Some(&data),
+                                    rate_limit_event: is_rate_limit_event(&data),
                                     body_prefix: None,
                                     // Nothing is stripped after a commit: this observer only records a
                                     // rate-limit cooldown, and a 400 (which alone can name an injected item)

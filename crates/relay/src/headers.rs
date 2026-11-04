@@ -1,6 +1,8 @@
 //! The outbound header sequence: the caller's own headers, in the caller's order and spelling, with the
 //! account's credential in place of the router's key and the framing the relay is about to write.
 
+use std::borrow::Cow;
+
 use axum::http::HeaderMap;
 use phoebis_bus::NEVER_COPIED;
 use phoebis_store::{AccountKind, Secret};
@@ -82,7 +84,7 @@ pub fn outbound_headers(
         .collect();
     let beta_list = match beta_lines.as_slice() {
         [] => None,
-        [only] => Some((*only).to_string()),
+        [only] => Some(Cow::Borrowed(*only)),
         lines => {
             let mut tokens: Vec<&str> = Vec::new();
             for token in lines.iter().flat_map(|line| line.split(',')).map(str::trim) {
@@ -90,14 +92,14 @@ pub fn outbound_headers(
                     tokens.push(token);
                 }
             }
-            Some(tokens.join(","))
+            Some(Cow::Owned(tokens.join(",")))
         }
     };
     // An operator's `x-app` replaces the caller's line, so the generated id has no caller line to follow and
     // takes the credential slot instead; a caller that wrote `x-app` twice gets the id after the first.
     let caller_has_app = sent.iter().any(|(n, _)| n.eq_ignore_ascii_case("x-app"));
     let generated = client_request_id.filter(|_| !caller_has_request_id);
-    let merged = beta_list.map(|value| betas(&value, kind, inject_betas, drop_betas));
+    let mut merged = beta_list.map(|value| betas(&value, kind, inject_betas, drop_betas));
     let mut out: Vec<(String, String)> = Vec::with_capacity(sent.len() + 3);
     let mut injected: Vec<Injected> = Vec::new();
     // A caller may write the same line twice: hyper keeps one value in its map, but the recorded head holds
@@ -126,11 +128,11 @@ pub fn outbound_headers(
                     saw_beta = true;
                     // A drop can empty a list whose only entry it removed; the caller's line then has
                     // nothing left to say, so the header is left out rather than sent empty.
-                    if let Some((line, added)) = &merged {
+                    if let Some((line, added)) = merged.take() {
                         if !line.is_empty() {
-                            out.push((name.into(), line.clone()));
+                            out.push((name.into(), line));
                         }
-                        injected.extend(added.iter().copied());
+                        injected.extend(added);
                     }
                 }
             }
@@ -190,7 +192,7 @@ pub fn outbound_headers(
     // No line at all to merge into, neither the caller's nor the account's, so nothing above ever ran `betas`;
     // an injected feature still needs a line of its own, but never the OAuth claim, which rides on a list the
     // caller or the operator wrote.
-    if merged.is_none() && !inject_betas.is_empty() {
+    if beta_lines.is_empty() && !inject_betas.is_empty() {
         let line = inject_betas
             .iter()
             .map(|item| item.wire_name())

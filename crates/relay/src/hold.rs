@@ -119,56 +119,37 @@ pub async fn hold<R: AsyncRead + Unpin>(
 ) -> Result<Held, TransportError> {
     let deadline = tokio::time::Instant::now() + timeout;
     let mut raw = BytesMut::new();
-    loop {
+    let commit = 'hold: loop {
         // Events are taken in stream order, so the first committing one decides and a later one is post-commit.
         while let Some(event) = inspect.next_event() {
             if let Some(commit) = committing(event) {
-                return Ok(Held {
-                    commit,
-                    bytes: raw.freeze(),
-                    inspect,
-                });
+                break 'hold commit;
             }
         }
         if raw.len() > HOLD_BUFFER {
-            return Ok(Held {
-                commit: Commit::Overflow,
-                bytes: raw.freeze(),
-                inspect,
-            });
+            break Commit::Overflow;
         }
-        let next = match tokio::time::timeout_at(deadline, reader.next_chunk()).await {
-            Err(_) => {
-                return Ok(Held {
-                    commit: Commit::Timeout,
-                    bytes: raw.freeze(),
-                    inspect,
-                })
-            }
-            Ok(next) => next?,
+        let Ok(next) = tokio::time::timeout_at(deadline, reader.next_chunk()).await else {
+            break Commit::Timeout;
         };
-        let Some(chunk) = next else {
+        let Some(chunk) = next? else {
             // A stream cut off after its last event never sent the empty line that would close it, so the
             // committing event can still be sitting in the parser's buffer.
-            let commit = inspect
+            break inspect
                 .finish()
                 .and_then(committing)
                 .unwrap_or(Commit::EndOfStream);
-            return Ok(Held {
-                commit,
-                bytes: raw.freeze(),
-                inspect,
-            });
         };
         raw.extend_from_slice(&chunk);
         if inspect.feed_raw(&chunk).is_err() {
-            return Ok(Held {
-                commit: Commit::Overflow,
-                bytes: raw.freeze(),
-                inspect,
-            });
+            break Commit::Overflow;
         }
-    }
+    };
+    Ok(Held {
+        commit,
+        bytes: raw.freeze(),
+        inspect,
+    })
 }
 
 #[cfg(test)]
