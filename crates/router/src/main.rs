@@ -237,25 +237,19 @@ fn main() -> anyhow::Result<()> {
                 Ok(()) | Err(phoebis_router::config::ConfigError::MissingSecret { .. }) => {}
                 Err(error) => return Err(error.into()),
             }
+            let data_dir = phoebis_store::permissions::data_dir_of(&config.storage.path);
             for warning in phoebis_store::permissions::check_private_file(
                 &config.storage.encryption_key_file,
                 0o600,
-            ) {
-                println!("warning: {warning}");
-            }
-            for warning in tls::warnings(&proxy_tls)
-                .into_iter()
-                .chain(tls::warnings(&admin_tls))
-            {
-                println!("warning: {warning}");
-            }
-            let data_dir = phoebis_store::permissions::data_dir_of(&config.storage.path);
-            for warning in phoebis_store::permissions::check_private_dir(data_dir) {
-                println!("warning: {warning}");
-            }
-            for warning in
-                phoebis_store::permissions::check_private_file(&config.storage.path, 0o600)
-            {
+            )
+            .into_iter()
+            .chain(tls::warnings(&proxy_tls))
+            .chain(tls::warnings(&admin_tls))
+            .chain(phoebis_store::permissions::check_private_dir(data_dir))
+            .chain(phoebis_store::permissions::check_private_file(
+                &config.storage.path,
+                0o600,
+            )) {
                 println!("warning: {warning}");
             }
             Ok(())
