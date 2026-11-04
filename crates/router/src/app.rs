@@ -683,7 +683,6 @@ pub async fn run_until(
             proxy.abort();
             admin_server.abort();
             metrics_server.abort();
-            attention_handles.abort();
             Ok(())
         }
     };
