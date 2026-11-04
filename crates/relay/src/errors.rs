@@ -137,6 +137,10 @@ pub(crate) fn key_body_reads() -> Failure {
 
 /// The error code of a pool whose every account was held at its in-flight cap until the hold ran out.
 pub const ACCOUNTS_AT_CAP: &str = "accounts_at_cap";
+/// The error code of a pool whose every account is rate limited until a known deadline.
+pub const ACCOUNTS_EXHAUSTED: &str = "accounts_exhausted";
+/// The error code of a pool with no account that can serve requests, and of a bound account that cannot.
+pub const ACCOUNTS_UNAVAILABLE: &str = "accounts_unavailable";
 
 /// The longest `Retry-After` the at-cap answer names. The client waits out a `Retry-After` under 20 seconds and
 /// treats a longer one as a block it does not retry, while a pool at its cap frees within seconds.
@@ -220,7 +224,7 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
         RelayError::AccountUuid => Failure {
             status: StatusCode::SERVICE_UNAVAILABLE,
             error_type: "api_error",
-            code: "accounts_unavailable",
+            code: ACCOUNTS_UNAVAILABLE,
             message: Cow::Borrowed("the bound account cannot serve requests"),
             retry_after: None,
             no_retry: false,
@@ -314,7 +318,7 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
         RelayError::ClientContract { item } => Failure {
             status: StatusCode::FORBIDDEN,
             error_type: "permission_error",
-            code: "client_contract",
+            code: CLIENT_CONTRACT,
             message: Cow::Borrowed(contract_message(item)),
             retry_after: None,
             // The fix is the client's environment, so a retry resends what was refused.
@@ -350,7 +354,7 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
         RelayError::ClientRefused => Failure {
             status: StatusCode::FORBIDDEN,
             error_type: "permission_error",
-            code: "client_not_allowed",
+            code: CLIENT_NOT_ALLOWED,
             message: Cow::Borrowed("the router admits Claude Code clients only"),
             retry_after: None,
             no_retry: true,
@@ -360,7 +364,7 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
         RelayError::GuardrailBlocked { .. } => Failure {
             status: StatusCode::FORBIDDEN,
             error_type: "permission_error",
-            code: "guardrail_blocked",
+            code: GUARDRAIL_BLOCKED,
             message: error.to_string().into(),
             retry_after: None,
             no_retry: true,
@@ -401,7 +405,7 @@ pub(crate) fn key_refusal(_: &KeyRefusal) -> Failure {
     Failure {
         status: StatusCode::UNAUTHORIZED,
         error_type: "authentication_error",
-        code: "auth_unknown",
+        code: AUTH_UNKNOWN,
         message: Cow::Borrowed("the presented key is not valid"),
         retry_after: None,
         // No registry refusal heals between resends, and the client's query loop stops at the first refusal it is
@@ -424,6 +428,19 @@ pub(crate) const ACCOUNT_CANCELED_CODE: &str = "account_canceled";
 pub(crate) const CLIENT_GONE_CODE: &str = "client_gone";
 /// The error code for a request the router's shutdown cut short.
 pub(crate) const ROUTER_SHUTDOWN_CODE: &str = "router_shutdown";
+
+/// The error code of a presented key the registry refused.
+pub(crate) const AUTH_UNKNOWN: &str = "auth_unknown";
+/// The error code of a Claude Code client that misses an item of the router's contract.
+pub(crate) const CLIENT_CONTRACT: &str = "client_contract";
+/// The error code of a client the router does not admit.
+pub(crate) const CLIENT_NOT_ALLOWED: &str = "client_not_allowed";
+/// The error code of a request a guardrail blocked.
+pub(crate) const GUARDRAIL_BLOCKED: &str = "guardrail_blocked";
+/// The error code of a model the key does not allow.
+pub(crate) const MODEL_NOT_ALLOWED_CODE: &str = "model_not_allowed";
+/// The error code of a model every account in the pool rejected.
+pub(crate) const MODEL_REJECTED_CODE: &str = "model_rejected";
 
 /// The account the request was bound to went away while it was in flight, so its credential is gone and no
 /// answer about it can be trusted.
@@ -448,7 +465,7 @@ pub(crate) const METHOD_NOT_ALLOWED: Failure = Failure {
 pub(crate) const MODEL_NOT_ALLOWED: Failure = Failure {
     status: StatusCode::NOT_FOUND,
     error_type: "not_found_error",
-    code: "model_not_allowed",
+    code: MODEL_NOT_ALLOWED_CODE,
     message: Cow::Borrowed("model not allowed for this key"),
     retry_after: None,
     no_retry: false,
@@ -457,7 +474,7 @@ pub(crate) const MODEL_NOT_ALLOWED: Failure = Failure {
 pub(crate) const MODEL_REJECTED: Failure = Failure {
     status: exhaustion_status_code(&Exhaustion::ModelRejected, false),
     error_type: "not_found_error",
-    code: "model_rejected",
+    code: MODEL_REJECTED_CODE,
     message: Cow::Borrowed("every account in this pool rejected the model"),
     retry_after: None,
     no_retry: false,

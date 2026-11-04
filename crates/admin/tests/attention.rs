@@ -47,7 +47,7 @@ fn observed(id: &str, key: &str, pool: &str) -> Event {
         body_capture_hours: 0,
         shape: RequestShape::default(),
         static_hash: None,
-        boundaries: Vec::new(),
+        boundaries: Vec::new().into(),
         client: ClientFacts::default(),
         auto_mode: None,
         fork: phoebis_bus::Fork::default(),

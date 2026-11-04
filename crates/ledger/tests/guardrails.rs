@@ -321,7 +321,7 @@ async fn a_blocked_request_with_a_body_keeps_its_body_row_under_the_keys_window(
         body_capture_hours: 24,
         shape: RequestShape::default(),
         static_hash: None,
-        boundaries: Vec::new(),
+        boundaries: Vec::new().into(),
         client: ClientFacts::default(),
         auto_mode: None,
         fork: phoebis_bus::Fork::default(),

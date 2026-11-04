@@ -217,6 +217,24 @@ impl FastHeaders {
     }
 }
 
+/// The unified and fast families and the date of one response head, parsed once by the caller for every reader of
+/// the head.
+pub(crate) struct HeadReading {
+    pub(crate) unified: Option<UnifiedHeaders>,
+    pub(crate) fast: Option<FastHeaders>,
+    pub(crate) date: Option<i64>,
+}
+
+impl HeadReading {
+    pub(crate) fn parse(head: &ResponseHead) -> HeadReading {
+        HeadReading {
+            unified: UnifiedHeaders::parse(head),
+            fast: FastHeaders::parse(head),
+            date: upstream_date(head),
+        }
+    }
+}
+
 /// One family of three headers, `<name>-limit`, `<name>-remaining` and `<name>-reset`: `None` when the limit does
 /// not parse to a nonzero value or the remaining does not parse, since a malformed header must not move a pin. A
 /// reset `reset_of` cannot read is absent rather than refusing the family.
@@ -258,11 +276,11 @@ fn rfc3339_millis(value: &str) -> Option<i64> {
 
 /// The selection sample a head implies: the unified windows for an OAuth account, the buckets under `rpm:`,
 /// `itpm:`, `otpm:` plus the canonical model for an api_key account, and for either kind the fast lane's two
-/// buckets under `FAST_INPUT` and `FAST_OUTPUT`, or `None` when the head carries none of them. `unified` is the
-/// head's own unified headers, parsed once by the caller.
+/// buckets under `FAST_INPUT` and `FAST_OUTPUT`, or `None` when the head carries none of them. `reading` is the
+/// head's own, parsed once by the caller.
 pub fn head_sample(
     head: &ResponseHead,
-    unified: Option<&UnifiedHeaders>,
+    reading: &HeadReading,
     kind: AccountKind,
     canonical_model: &str,
     observed_at: i64,
@@ -273,7 +291,7 @@ pub fn head_sample(
     };
     match kind {
         AccountKind::Oauth => {
-            if let Some(unified) = unified {
+            if let Some(unified) = &reading.unified {
                 for (name, window) in [
                     (FIVE_HOUR, &unified.five_hour),
                     (SEVEN_DAY, &unified.seven_day),
@@ -316,7 +334,7 @@ pub fn head_sample(
             }
         }
     }
-    if let Some(fast) = FastHeaders::parse(head) {
+    if let Some(fast) = &reading.fast {
         for (window, bucket) in [(FAST_INPUT, fast.input), (FAST_OUTPUT, fast.output)] {
             if let Some(b) = bucket {
                 sample
@@ -348,7 +366,8 @@ pub fn upstream_date(head: &ResponseHead) -> Option<i64> {
         .map(|t| t.as_millisecond())
 }
 
-pub fn retry_after(head: &ResponseHead, now: i64) -> Option<i64> {
+/// `date` is the head's own `Date`, against which a `Retry-After` date is read, else `now`.
+pub fn retry_after(head: &ResponseHead, date: Option<i64>, now: i64) -> Option<i64> {
     let value = head.get("retry-after")?.trim();
     if let Ok(seconds) = value.parse::<f64>() {
         if !seconds.is_finite() || seconds < 0.0 {
@@ -360,7 +379,7 @@ pub fn retry_after(head: &ResponseHead, now: i64) -> Option<i64> {
         .parse_timestamp(value)
         .ok()?
         .as_millisecond();
-    let base = upstream_date(head).unwrap_or(now);
+    let base = date.unwrap_or(now);
     let delay = at.saturating_sub(base);
     (delay >= 0).then_some(delay)
 }
@@ -370,8 +389,8 @@ mod tests {
     use super::*;
     use phoebis_transport::response::ResponseHead;
 
-    /// `head_sample` over the unified headers parsed off the head the case builds, the one parse the relay makes
-    /// of each head.
+    /// `head_sample` over the reading parsed off the head the case builds, the one parse the relay makes of each
+    /// head.
     fn head_sample(
         head: &ResponseHead,
         kind: AccountKind,
@@ -380,11 +399,16 @@ mod tests {
     ) -> Option<UtilizationSample> {
         super::head_sample(
             head,
-            UnifiedHeaders::parse(head).as_ref(),
+            &HeadReading::parse(head),
             kind,
             canonical_model,
             observed_at,
         )
+    }
+
+    /// `retry_after` against the date parsed off the head the case builds, as the relay reads it.
+    fn retry_after(head: &ResponseHead, now: i64) -> Option<i64> {
+        super::retry_after(head, upstream_date(head), now)
     }
 
     fn head(status: u16, headers: &[(&str, &str)]) -> ResponseHead {

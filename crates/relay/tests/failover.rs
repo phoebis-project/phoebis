@@ -1874,7 +1874,10 @@ async fn a_revoked_key_answers_401_at_once_and_a_newer_client_is_relayed_untagge
     assert_eq!(resp.status(), 200);
     let o = outcome(&resp);
     assert_eq!(
-        (o.client_drift.as_deref(), o.client_version.as_deref()),
+        (
+            o.client_drift.map(|kind| kind.as_str()),
+            o.client_version.as_deref()
+        ),
         (None, Some("2.1.300")),
         "a version the profile never measured is read for the ledger and tagged as nothing"
     );
@@ -3091,7 +3094,7 @@ async fn a_pre_selection_refusal_carries_the_client_version() {
     assert_eq!(
         (
             o.error_code.as_deref(),
-            o.client_drift.as_deref(),
+            o.client_drift.map(|kind| kind.as_str()),
             o.client_version.as_deref(),
             o.attempt
         ),
@@ -3428,7 +3431,11 @@ async fn a_drifted_stamp_is_refused_at_admission_before_any_account_is_selected(
         );
         let o = outcome(&resp);
         assert_eq!(
-            (o.account_id.as_str(), o.attempt, o.client_drift.as_deref()),
+            (
+                o.account_id.as_str(),
+                o.attempt,
+                o.client_drift.map(|kind| kind.as_str())
+            ),
             ("", 0, Some(trigger)),
             "no account was selected, so the refusal names none"
         );

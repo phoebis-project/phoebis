@@ -280,22 +280,19 @@ impl<'a> TopLevelMembers<'a> {
         Ok(count)
     }
 
-    /// The first of `names` whose decoded key appears more than once among the top-level members. A repeat read
-    /// ahead of the error that stopped the walk is the answer, so such a body is refused for its repeat.
-    pub fn repeated_top_level_member(
-        &self,
-        names: &[&'static str],
-    ) -> Result<Option<&'static str>, CchError> {
-        let mut seen: Vec<&'static str> = Vec::new();
+    /// The index in `names` of the first name whose decoded key appears more than once among the top-level members.
+    /// A repeat read ahead of the error that stopped the walk is the answer, so such a body is refused for its repeat.
+    pub fn repeated_top_level_member(&self, names: &[&str]) -> Result<Option<usize>, CchError> {
+        let mut seen: Vec<usize> = Vec::new();
         for key in self.decoded_keys() {
             let key = key?;
-            let Some(name) = names.iter().copied().find(|n| *n == key) else {
+            let Some(index) = names.iter().position(|n| *n == key) else {
                 continue;
             };
-            if seen.contains(&name) {
-                return Ok(Some(name));
+            if seen.contains(&index) {
+                return Ok(Some(index));
             }
-            seen.push(name);
+            seen.push(index);
         }
         self.decoded_end()?;
         Ok(None)
@@ -1863,7 +1860,7 @@ mod tests {
             TopLevelMembers::read(br#"{"safeguards":[1],"model":"m","safeguards":[2]}"#)
                 .repeated_top_level_member(&["safeguards"])
                 .unwrap(),
-            Some("safeguards")
+            Some(0)
         );
     }
 
@@ -2040,7 +2037,7 @@ mod tests {
             TopLevelMembers::read(body)
                 .repeated_top_level_member(&["metadata", "model", "stream"])
                 .unwrap(),
-            Some("model")
+            Some(1)
         );
     }
 

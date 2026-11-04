@@ -12,7 +12,7 @@ use phoebis_transport::response::ResponseHead;
 use serde_json::Value;
 
 use crate::memory::Injected;
-use crate::ratelimit::{retry_after, FastHeaders, UnifiedHeaders, UnifiedWindow, WindowStatus};
+use crate::ratelimit::{retry_after, HeadReading, UnifiedHeaders, UnifiedWindow, WindowStatus};
 
 /// Deadlines carry a second of margin so a request sent at the reset is not refused by a clock a hair behind.
 const MARGIN_MS: i64 = 1_000;
@@ -118,12 +118,12 @@ pub struct HeadContext<'a> {
     pub model_rejection_ms: i64,
     /// The request carried `speed: "fast"`.
     pub fast: bool,
-    /// The head's unified rate-limit headers, parsed once by the caller for every reader of the head.
-    pub unified: Option<&'a UnifiedHeaders>,
+    /// The head's rate-limit families and date, parsed once by the caller for every reader of the head.
+    pub reading: &'a HeadReading,
 }
 
 pub fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
-    let unified = ctx.unified;
+    let unified = ctx.reading.unified.as_ref();
     let sse_rate_limited = head.status == 200 && ctx.rate_limit_event;
     let rate_limited = head.status == 429 || sse_rate_limited;
     // Parsed by the first predicate that reads it, so a head none of them reaches parses nothing.
@@ -245,7 +245,9 @@ fn oauth_cooldown(
 ) -> Cooldown {
     let row = |scope: Scope, reset: Option<i64>| {
         let deadline = reset
-            .or_else(|| retry_after(head, ctx.now).map(|d| ctx.now.saturating_add(d)))
+            .or_else(|| {
+                retry_after(head, ctx.reading.date, ctx.now).map(|d| ctx.now.saturating_add(d))
+            })
             .unwrap_or(ctx.now.saturating_add(ctx.fallback_ms));
         Cooldown::new(
             scope,
@@ -318,8 +320,10 @@ fn fast_cooldown(
     }
     // The per-minute bucket's reset decides the normal case; a 429 with neither reset is more likely an
     // organization without fast access, and ten minutes bounds the dials wasted on it.
-    let fast_reset = FastHeaders::parse(head)
-        .into_iter()
+    let fast_reset = ctx
+        .reading
+        .fast
+        .iter()
         .flat_map(|f| {
             [
                 f.input.and_then(|b| b.reset),
@@ -328,7 +332,7 @@ fn fast_cooldown(
         })
         .flatten()
         .max();
-    let (until, window) = match (fast_reset, retry_after(head, ctx.now)) {
+    let (until, window) = match (fast_reset, retry_after(head, ctx.reading.date, ctx.now)) {
         (Some(reset), _) => (reset, "fast"),
         (None, Some(delay)) => (ctx.now.saturating_add(delay), RETRY_AFTER_WINDOW),
         (None, None) => (ctx.now.saturating_add(FAST_RATE_LIMIT_FALLBACK_MS), "fast"),
@@ -373,7 +377,7 @@ fn model_only(u: &UnifiedHeaders, canonical_model: &str) -> bool {
 }
 
 fn api_key_cooldown(head: &ResponseHead, ctx: &HeadContext<'_>) -> Cooldown {
-    let (scope, delay) = match retry_after(head, ctx.now) {
+    let (scope, delay) = match retry_after(head, ctx.reading.date, ctx.now) {
         Some(delay) => (Scope::Model, delay),
         None => (Scope::Account, ctx.fallback_ms),
     };
@@ -632,18 +636,23 @@ mod tests {
             wire_model: "claude-opus-5",
             model_rejection_ms: 3_600_000,
             fast: false,
-            unified: None,
+            reading: &NO_READING,
         }
     }
 
-    /// `classify` over the unified headers parsed off the head the case builds, the one parse the relay makes of
-    /// each head.
+    static NO_READING: HeadReading = HeadReading {
+        unified: None,
+        fast: None,
+        date: None,
+    };
+
+    /// `classify` over the reading parsed off the head the case builds, the one parse the relay makes of each head.
     fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
-        let unified = UnifiedHeaders::parse(head);
+        let reading = HeadReading::parse(head);
         super::classify(
             head,
             &HeadContext {
-                unified: unified.as_ref(),
+                reading: &reading,
                 ..*ctx
             },
         )

@@ -3,6 +3,7 @@
 //! completion, and a request that goes silent is aged out rather than kept forever.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use bytes::Bytes;
 use phoebis_bus::{
@@ -176,7 +177,7 @@ impl Assembler {
                 // The user agent is the one header the row reads and the assembler reads none of the other
                 // three, so an entry waiting on its completion holds none of them.
                 let user_agent = user_agent_of(&observed.headers);
-                observed.boundaries = Vec::new();
+                observed.boundaries = Arc::default();
                 observed.headers = Vec::new();
                 observed.owner_id = None;
                 observed.static_hash = None;
@@ -771,7 +772,7 @@ mod tests {
             body_capture_hours: capture_hours,
             shape: RequestShape::default(),
             static_hash: None,
-            boundaries: Vec::new(),
+            boundaries: Arc::default(),
             client: ClientFacts::default(),
             auto_mode: None,
             fork: Fork::default(),

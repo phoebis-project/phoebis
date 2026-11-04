@@ -443,10 +443,7 @@ async fn assert_refused_for_the_version(resp: axum::http::Response<Body>, up: &F
     assert_eq!(resp.status(), 403);
     assert_eq!(resp.headers()["x-phoebis-error-code"], "client_contract");
     assert_eq!(resp.headers()["x-should-retry"], "false");
-    assert_eq!(
-        outcome(&resp).client_contract.as_deref(),
-        Some("client_version")
-    );
+    assert_eq!(outcome(&resp).client_contract, Some("client_version"));
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let refusal: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(refusal["error"]["type"], "permission_error");

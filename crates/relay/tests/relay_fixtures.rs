@@ -458,7 +458,7 @@ async fn a_drifted_stamp_is_refused(drifted: Vec<u8>, kind: &str) {
         .get::<RelayOutcome>()
         .expect("a refused request carries its outcome")
         .clone();
-    assert_eq!(outcome.client_drift.as_deref(), Some(kind));
+    assert_eq!(outcome.client_drift.map(|kind| kind.as_str()), Some(kind));
     assert_eq!(outcome.attempt, 0);
     assert_eq!(
         resp.headers()

@@ -8,7 +8,9 @@ use axum::http::HeaderValue;
 use axum::response::Response;
 use phoebis_routing::{Exhaustion, BUDGET_WINDOW, FIVE_HOUR, RETRY_AFTER_WINDOW};
 
-use crate::errors::{exhaustion_status_code, Failure, MODEL_REJECTED};
+use crate::errors::{
+    exhaustion_status_code, Failure, ACCOUNTS_EXHAUSTED, ACCOUNTS_UNAVAILABLE, MODEL_REJECTED,
+};
 use crate::ratelimit::{
     UNIFIED_OVERAGE_DISABLED_REASON, UNIFIED_REPRESENTATIVE_CLAIM, UNIFIED_RESET, UNIFIED_STATUS,
 };
@@ -93,8 +95,8 @@ fn exhaustion_failure(exhaustion: &Exhaustion, now: i64) -> Failure {
 pub(crate) fn exhaustion_code(exhaustion: &Exhaustion) -> &'static str {
     match exhaustion {
         Exhaustion::ModelRejected => MODEL_REJECTED.code,
-        Exhaustion::Untimed | Exhaustion::Pinned { .. } => "accounts_unavailable",
-        Exhaustion::Timed { .. } => "accounts_exhausted",
+        Exhaustion::Untimed | Exhaustion::Pinned { .. } => ACCOUNTS_UNAVAILABLE,
+        Exhaustion::Timed { .. } => ACCOUNTS_EXHAUSTED,
         Exhaustion::FastLane { .. } => "fast_lane_exhausted",
         Exhaustion::FastCredits { .. } => "fast_credits_unavailable",
     }

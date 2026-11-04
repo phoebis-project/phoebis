@@ -213,7 +213,7 @@ mod tests {
             body_capture_hours: 0,
             shape: RequestShape::default(),
             static_hash: None,
-            boundaries: Vec::new(),
+            boundaries: Arc::default(),
             client: ClientFacts::default(),
             auto_mode: None,
             fork: Fork::default(),

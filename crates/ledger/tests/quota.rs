@@ -2971,7 +2971,7 @@ fn headed(
             body_capture_hours: 0,
             shape: phoebis_bus::RequestShape::default(),
             static_hash: None,
-            boundaries: Vec::new(),
+            boundaries: Vec::new().into(),
             client: phoebis_bus::ClientFacts::default(),
             auto_mode: None,
             fork: phoebis_bus::Fork::default(),

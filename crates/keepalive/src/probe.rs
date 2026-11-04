@@ -232,7 +232,7 @@ fn retry_after_secs(headers: &axum::http::HeaderMap) -> Option<u64> {
 fn classify_status(status: u16, error_code: Option<&str>) -> ProbeOutcome {
     let exhausted = matches!(
         error_code,
-        Some("accounts_exhausted") | Some("accounts_unavailable")
+        Some(phoebis_relay::ACCOUNTS_EXHAUSTED) | Some(phoebis_relay::ACCOUNTS_UNAVAILABLE)
     );
     match status {
         200..=299 => ProbeOutcome::Ok,

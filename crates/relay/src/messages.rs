@@ -63,8 +63,10 @@ use crate::credit::CreditStore;
 use crate::dispatch::{self, until_canceled, AttemptFailure, Sent};
 use crate::errors::{
     accounts_at_cap, body_budget_exhausted, key_body_reads, key_refusal, relay_failure, Failure,
-    ACCOUNTS_AT_CAP, ACCOUNT_CANCELED, ACCOUNT_CANCELED_CODE, CLIENT_GONE_CODE, METHOD_NOT_ALLOWED,
-    MODEL_NOT_ALLOWED, NOT_FOUND, ROUTER_SHUTDOWN_CODE, ROUTER_UNAVAILABLE, UPSTREAM_UNREACHABLE,
+    ACCOUNTS_AT_CAP, ACCOUNTS_EXHAUSTED, ACCOUNTS_UNAVAILABLE, ACCOUNT_CANCELED,
+    ACCOUNT_CANCELED_CODE, AUTH_UNKNOWN, CLIENT_CONTRACT, CLIENT_GONE_CODE, CLIENT_NOT_ALLOWED,
+    GUARDRAIL_BLOCKED, METHOD_NOT_ALLOWED, MODEL_NOT_ALLOWED, MODEL_NOT_ALLOWED_CODE,
+    MODEL_REJECTED_CODE, NOT_FOUND, ROUTER_SHUTDOWN_CODE, ROUTER_UNAVAILABLE, UPSTREAM_UNREACHABLE,
 };
 use crate::exhaustion::{exhaustion_code, exhaustion_response, pool_moved_response};
 use crate::facts::{AttributionLine, BodyFacts, ClientHints};
@@ -78,7 +80,7 @@ use crate::memory::{
     uuid_v4, Injected, MemoryKey, Previous, SessionMemory, MEMORY_CAP, MEMORY_IDLE_MS,
 };
 use crate::observe::{answer_from_json, published_headers, wants_stream};
-use crate::ratelimit::{head_sample, retry_after, upstream_date, UnifiedHeaders};
+use crate::ratelimit::{head_sample, retry_after, HeadReading, UnifiedHeaders};
 use crate::sse::SseParser;
 use crate::stream::{
     drain_bounded, relay_body, AffinityFacts, BodyRead, Checkin, Cut, Drained, HeldText, OnError,
@@ -179,12 +181,12 @@ pub struct RelayOutcome {
     /// Whether the request was written to the upstream in full, which is what decides if it may have been
     /// billed even when no response came back.
     pub written: bool,
-    /// `hash` when the caller stamped a billing hash this build cannot reproduce, `version_suffix` when its
+    /// `Hash` when the caller stamped a billing hash this build cannot reproduce, `VersionSuffix` when its
     /// `cc_version` suffix does not reproduce from the prompt and the user agent; in either case nothing was
     /// sent upstream.
-    pub client_drift: Option<String>,
+    pub client_drift: Option<DriftKind>,
     /// The item a `client_contract` refusal named, `None` for every other request.
-    pub client_contract: Option<String>,
+    pub client_contract: Option<&'static str>,
     pub client_version: Option<String>,
     pub error_code: Option<String>,
     pub pin_epoch: Option<u64>,
@@ -567,7 +569,6 @@ pub(crate) struct Trace {
     bus: Option<Bus>,
     pub request_id: String,
     pub received_at: i64,
-    origin: Origin,
     kind: Kind,
     probe_generation: Option<i64>,
     /// The holds waited through so far. Kept here rather than threaded to each outcome, because every answer
@@ -601,6 +602,13 @@ impl Trace {
 
     fn held(&self) -> Option<CohortHold> {
         self.held.lock().expect("hold lock poisoned").clone()
+    }
+
+    fn origin(&self) -> Origin {
+        match self.kind {
+            Kind::Probe => Origin::Keepalive,
+            Kind::CountTokens | Kind::Inference => Origin::Client,
+        }
     }
 
     fn publish(&self, event: Event) {
@@ -683,7 +691,7 @@ impl Trace {
         body_capture_hours: u32,
         shape: RequestShape,
         static_hash: Option<String>,
-        boundaries: Vec<String>,
+        boundaries: Arc<[String]>,
         client: ClientFacts,
         auto_mode: Option<AutoMode>,
         presented_retired: bool,
@@ -696,7 +704,7 @@ impl Trace {
         }
         self.publish_fact(Event::RequestObserved(RequestObserved {
             request_id: self.request_id.clone(),
-            origin: self.origin,
+            origin: self.origin(),
             kind: self.kind,
             key_id: key.map(|k| k.id.clone()),
             // A probe's row files under the generation its recipe was retained under, the same one its
@@ -829,8 +837,8 @@ impl Trace {
             ttfb_ms: outcome.head_at.map(|at| at - outcome.received_at),
             ttfc_ms,
             error_code,
-            client_drift: outcome.client_drift.clone(),
-            client_contract: outcome.client_contract.clone(),
+            client_drift: outcome.client_drift.map(|k| k.as_str().to_string()),
+            client_contract: outcome.client_contract.map(str::to_string),
             client_version: outcome.client_version.clone(),
             response_bytes,
             response_chunks,
@@ -931,15 +939,37 @@ impl Drop for CompletionGuard {
     }
 }
 
+/// The first member admission finds spelled twice: a top-level member, then the billing line's `text`, then
+/// `metadata.user_id`.
+fn repeated_member(
+    members: &phoebis_cch::TopLevelMembers<'_>,
+) -> Result<Option<RepeatedMember>, phoebis_cch::CchError> {
+    let top_level = [
+        RepeatedMember::Metadata,
+        RepeatedMember::Model,
+        RepeatedMember::Stream,
+        RepeatedMember::System,
+    ];
+    if let Some(index) = members.repeated_top_level_member(&top_level.map(RepeatedMember::path))? {
+        return Ok(Some(top_level[index]));
+    }
+    if members.first_system_block_member_count("text")? > 1 {
+        return Ok(Some(RepeatedMember::BillingLine));
+    }
+    Ok(members
+        .repeated_member_within("metadata", &["user_id"])?
+        .map(|_| RepeatedMember::MetadataUserId))
+}
+
 /// The class and hint facts `observed` publishes, built once per call: the class from the identity already
 /// derived it, or read fresh for a request refused before it had one; the turn origin from the body, once it was
 /// read.
 fn client_facts(
     headers: &HeaderMap,
+    hints: &ClientHints,
     identity: Option<&RequestIdentity>,
     facts: Option<&BodyFacts>,
 ) -> ClientFacts {
-    let hints = ClientHints::read(headers);
     let (class, label) = match identity {
         Some(identity) => (identity.class, identity.client.clone()),
         None => {
@@ -955,12 +985,12 @@ fn client_facts(
         .then_some(Classifier::Client);
     ClientFacts {
         class: label,
-        agent_type: hints.agent_type,
+        agent_type: hints.agent_type.clone(),
         classifier,
-        compaction: hints.compaction,
-        context_compacted: hints.context_compacted,
+        compaction: hints.compaction.clone(),
+        context_compacted: hints.context_compacted.clone(),
         prev_tool_ms: hints.prev_tool_ms,
-        request_class: hints.request_class,
+        request_class: hints.request_class.clone(),
         turn_origin: facts.and_then(|f| f.turn_origin.clone()),
     }
 }
@@ -1021,27 +1051,27 @@ fn outcome_of(outcome: &RelayOutcome) -> Outcome {
         // A probe answered on its pinned member's standing (`Exhaustion::Pinned`, the one untimed answer that
         // names an obstacle) is refused for the probe alone, whatever its siblings hold: conclusive, and no
         // exhaustion of the pool for the attention gauge or the rollups to count.
-        Some("accounts_unavailable") if outcome.obstacle.is_some() => Outcome::Rejected,
+        Some(ACCOUNTS_UNAVAILABLE) if outcome.obstacle.is_some() => Outcome::Rejected,
         // A pool whose every account is at its in-flight cap had nothing to place the request on either, and the
         // attention gauge and the rollups count it with the other exhaustions.
-        Some("accounts_exhausted") | Some("accounts_unavailable") | Some(ACCOUNTS_AT_CAP) => {
-            Outcome::Exhausted
-        }
+        Some(ACCOUNTS_EXHAUSTED | ACCOUNTS_UNAVAILABLE | ACCOUNTS_AT_CAP) => Outcome::Exhausted,
         // A model rejection is a refusal whether it is caught before any attempt (an obstacle at
         // selection) or after one, where a portable rejection fails over and ends at the selector's
         // exhaustion: the account that answered it is conclusive either way, not a transport or upstream
         // failure.
-        Some("model_rejected") => Outcome::Rejected,
+        Some(MODEL_REJECTED_CODE) => Outcome::Rejected,
         // A key's refusal of the key itself or of the model is conclusive whether it is caught at admission or at
         // the reselect after an attempt, so the ledger row reads rejected rather than failed. A guardrail's block is
         // conclusive too: it is answered at attempt 0, and naming it here keeps a later change to the attempt-count
         // rule below from moving it. The gate's refusal and the contract's are answered at attempt 0 and named here
         // for the same reason.
-        Some("auth_unknown")
-        | Some("client_contract")
-        | Some("client_not_allowed")
-        | Some("guardrail_blocked")
-        | Some("model_not_allowed") => Outcome::Rejected,
+        Some(
+            AUTH_UNKNOWN
+            | CLIENT_CONTRACT
+            | CLIENT_NOT_ALLOWED
+            | GUARDRAIL_BLOCKED
+            | MODEL_NOT_ALLOWED_CODE,
+        ) => Outcome::Rejected,
         Some(_) if outcome.attempt == 0 => Outcome::Rejected,
         Some(_) => Outcome::Failed,
         None if outcome.upstream_status < 400 => Outcome::Succeeded,
@@ -1216,11 +1246,6 @@ impl Relay {
             bus: self.bus.clone(),
             request_id: new_request_id(),
             received_at,
-            origin: if probe.is_some() {
-                Origin::Keepalive
-            } else {
-                Origin::Client
-            },
             kind: if probe.is_some() {
                 Kind::Probe
             } else if count_tokens {
@@ -1456,34 +1481,7 @@ impl Relay {
         // `metadata.user_id`, the one `metadata` member the relay reads and splices the account into. Refused
         // whole rather than repaired: the caller's body is not edited on its way through. A scan that could not
         // finish proves nothing about the members past where it stopped, so it refuses as well.
-        let top_level = [
-            RepeatedMember::Metadata,
-            RepeatedMember::Model,
-            RepeatedMember::Stream,
-            RepeatedMember::System,
-        ];
-        let repeated = members
-            .repeated_top_level_member(&top_level.map(RepeatedMember::path))
-            .map(|repeated| {
-                repeated.map(|name| {
-                    top_level
-                        .into_iter()
-                        .find(|member| member.path() == name)
-                        .expect("the scanner answers one of the names it was handed")
-                })
-            })
-            .and_then(|repeated| match repeated {
-                Some(member) => Ok(Some(member)),
-                None => members
-                    .first_system_block_member_count("text")
-                    .map(|texts| (texts > 1).then_some(RepeatedMember::BillingLine)),
-            })
-            .and_then(|repeated| match repeated {
-                Some(member) => Ok(Some(member)),
-                None => members
-                    .repeated_member_within("metadata", &["user_id"])
-                    .map(|repeated| repeated.map(|_| RepeatedMember::MetadataUserId)),
-            });
+        let repeated = repeated_member(&members);
         let refusal = if behind {
             Some(RelayError::LedgerBehind)
         } else {
@@ -1494,6 +1492,9 @@ impl Relay {
                 Err(error) => Some(RelayError::Cch(error)),
             }
         };
+        // Read once, for both observations and the climb that reads the request class, and reused on every attempt
+        // of this request.
+        let hints = ClientHints::read(&parts.headers);
         let identified = refusal.map_or_else(|| identify(&parts.headers, &members, client), Err);
         let mut identity = match identified {
             Ok(identity) => identity,
@@ -1510,8 +1511,8 @@ impl Relay {
                         capture_hours,
                         facts.shape.clone(),
                         None,
-                        Vec::new(),
-                        client_facts(&parts.headers, None, Some(&facts)),
+                        Arc::default(),
+                        client_facts(&parts.headers, &hints, None, Some(&facts)),
                         auto_mode,
                         retired,
                         key.rotated_at,
@@ -1554,8 +1555,6 @@ impl Relay {
                 }
             }
         }
-        // Read once, ahead of the climb that reads the request class, and reused on every attempt of this request.
-        let hints = ClientHints::read(&parts.headers);
         climb(
             &mut identity,
             &key,
@@ -1603,7 +1602,7 @@ impl Relay {
             })
             .collect();
         let guardrail_id = evaluation.blocked.map(|i| guardrails[i].id.clone());
-        let client = client_facts(&parts.headers, Some(&identity), Some(&facts));
+        let client = client_facts(&parts.headers, &hints, Some(&identity), Some(&facts));
         let classifier = client.classifier.is_some();
         let static_hash = facts
             .chains
@@ -1621,7 +1620,11 @@ impl Relay {
                 capture_hours,
                 facts.shape.clone(),
                 static_hash.clone(),
-                boundaries.to_vec(),
+                facts
+                    .chains
+                    .as_ref()
+                    .map(|c| c.message_boundaries.clone())
+                    .unwrap_or_default(),
                 client,
                 auto_mode,
                 retired,
@@ -1677,7 +1680,7 @@ impl Relay {
                 },
                 RefusalFacts {
                     kind: "guardrail",
-                    code: "guardrail_blocked",
+                    code: GUARDRAIL_BLOCKED,
                     reason: name.clone(),
                 },
             );
@@ -2056,14 +2059,7 @@ impl Relay {
                 Err(_) => {
                     ending(&mut end_guard, REFUSED);
                     return self
-                        .refused(
-                            &trace,
-                            attempt,
-                            ROUTER_UNAVAILABLE,
-                            Some(&key),
-                            Some(&identity),
-                            admitted.client_version.as_deref(),
-                        )
+                        .refused_admitted(&admitted, attempt, ROUTER_UNAVAILABLE)
                         .await;
                 }
             };
@@ -2076,14 +2072,7 @@ impl Relay {
                     tracing::debug!(%refusal, key = %key.id, "a request's key was refused after admission");
                     ending(&mut end_guard, REFUSED);
                     return self
-                        .refused(
-                            &trace,
-                            attempt,
-                            key_refusal(&refusal),
-                            Some(&key),
-                            Some(&identity),
-                            admitted.client_version.as_deref(),
-                        )
+                        .refused_admitted(&admitted, attempt, key_refusal(&refusal))
                         .await;
                 }
                 // The registry moved after admission and no longer admits this request; the answer is the one the
@@ -2091,14 +2080,7 @@ impl Relay {
                 SelectResult::Refused(Refusal::Resolve(ResolveError::ModelNotAllowed)) => {
                     ending(&mut end_guard, REFUSED);
                     return self
-                        .refused(
-                            &trace,
-                            attempt,
-                            MODEL_NOT_ALLOWED,
-                            Some(&key),
-                            Some(&identity),
-                            admitted.client_version.as_deref(),
-                        )
+                        .refused_admitted(&admitted, attempt, MODEL_NOT_ALLOWED)
                         .await;
                 }
                 SelectResult::Exhausted(exhaustion) => {
@@ -2312,39 +2294,22 @@ impl Relay {
                 exhaustion_response(exhaustion, now, &admitted.trace.request_id),
             ),
         };
-        let mut outcome = self.outcome(
-            admitted.trace,
-            Some(admitted.key),
-            Some(admitted.identity),
-            "",
-            0,
-            attempt,
-            false,
-            admitted.client_version.clone(),
-            Some(code),
-            None,
-            None,
-        );
-        if let Exhaustion::Timed { window, .. } = exhaustion {
-            if window == BUDGET_WINDOW {
-                outcome.obstacle = Some(ProbeObstacle::Budget);
+        let mut outcome = admitted.outcome("", 0, attempt, false, Some(code), None, None);
+        let reauth = admitted.trace.kind == Kind::Probe && auth_marked;
+        outcome.obstacle = match exhaustion {
+            Exhaustion::Timed { window, .. } if window == BUDGET_WINDOW => {
+                Some(ProbeObstacle::Budget)
             }
-        }
-        if let Exhaustion::Pinned { obstacle } = exhaustion {
-            outcome.obstacle = Some((*obstacle).into());
-        }
-        // Read last, so it overrides `attempted` alone: a probe that tried its marked member is not one to retry,
-        // and no wait clears the mark. A timed answer keeps the quota pause its 429 gets, a budget hold stays
-        // one, and a pinned member's other standings keep their own reasons.
-        if admitted.trace.kind == Kind::Probe
-            && auth_marked
-            && code == exhaustion_code(&Exhaustion::Untimed)
-            && outcome
-                .obstacle
-                .is_none_or(|obstacle| obstacle == ProbeObstacle::Attempted)
-        {
-            outcome.obstacle = Some(ProbeObstacle::ReauthRequired);
-        }
+            // A probe that tried its marked member is not one to retry, and no wait clears the mark. The
+            // re-authentication reason replaces `attempted` alone: a timed answer keeps the quota pause its 429 gets,
+            // a budget hold stays one, and a pinned member's other standings keep their own reasons.
+            Exhaustion::Untimed if reauth && !at_cap => Some(ProbeObstacle::ReauthRequired),
+            Exhaustion::Pinned {
+                obstacle: PinnedObstacle::Attempted,
+            } if reauth => Some(ProbeObstacle::ReauthRequired),
+            Exhaustion::Pinned { obstacle } => Some((*obstacle).into()),
+            _ => None,
+        };
         self.answer(admitted.trace, response, outcome).await
     }
 
@@ -2386,15 +2351,11 @@ impl Relay {
                 obstacle = ProbeObstacle::PoolMoved.as_str(),
                 "the key moved between pools after admission, so the request is refused"
             );
-            let mut outcome = self.outcome(
-                admitted.trace,
-                Some(admitted.key),
-                Some(admitted.identity),
+            let mut outcome = admitted.outcome(
                 "",
                 0,
                 *attempt,
                 false,
-                admitted.client_version.clone(),
                 Some(exhaustion_code(&Exhaustion::Untimed)),
                 None,
                 None,
@@ -2610,15 +2571,8 @@ impl Relay {
             Err(error) => {
                 ending(end_guard, REFUSED);
                 return Leg::Respond(
-                    self.refused(
-                        admitted.trace,
-                        *attempt,
-                        relay_failure(&error),
-                        Some(admitted.key),
-                        Some(admitted.identity),
-                        admitted.client_version.as_deref(),
-                    )
-                    .await,
+                    self.refused_admitted(admitted, *attempt, relay_failure(&error))
+                        .await,
                 );
             }
         };
@@ -2834,52 +2788,36 @@ impl Relay {
             let next = match dispatched {
                 Ok(next) => next,
                 Err(AttemptFailure::Canceled) => {
-                    let outcome = self.outcome(
-                        admitted.trace,
-                        Some(admitted.key),
-                        Some(admitted.identity),
+                    let outcome = admitted.outcome(
                         &account.id,
                         0,
                         *attempt,
                         false,
-                        admitted.client_version.clone(),
-                        Some(ACCOUNT_CANCELED_CODE),
+                        None,
                         pin_epoch,
                         cache_ttl_ms(ttl),
                     );
                     return Leg::Respond(
-                        self.answer(
-                            admitted.trace,
-                            ACCOUNT_CANCELED.response(&admitted.trace.request_id),
-                            outcome,
-                        )
-                        .await,
+                        self.answer_failure(admitted.trace, ACCOUNT_CANCELED, outcome)
+                            .await,
                     );
                 }
                 Err(failure) => {
                     let written = matches!(failure, AttemptFailure::Lost(_));
                     tracing::warn!(account = %account.id, %failure, "the upstream did not answer");
                     ending(end_guard, TRANSPORT_ERROR);
-                    let outcome = self.outcome(
-                        admitted.trace,
-                        Some(admitted.key),
-                        Some(admitted.identity),
+                    let outcome = admitted.outcome(
                         &account.id,
                         0,
                         *attempt,
                         written,
-                        admitted.client_version.clone(),
-                        Some(UPSTREAM_UNREACHABLE.code),
+                        None,
                         pin_epoch,
                         cache_ttl_ms(ttl),
                     );
                     return Leg::Respond(
-                        self.answer(
-                            admitted.trace,
-                            UPSTREAM_UNREACHABLE.response(&admitted.trace.request_id),
-                            outcome,
-                        )
-                        .await,
+                        self.answer_failure(admitted.trace, UPSTREAM_UNREACHABLE, outcome)
+                            .await,
                     );
                 }
             };
@@ -2910,26 +2848,18 @@ impl Relay {
                         .await
                         .is_none()
                     {
-                        let outcome = self.outcome(
-                            admitted.trace,
-                            Some(admitted.key),
-                            Some(admitted.identity),
+                        let outcome = admitted.outcome(
                             &account.id,
                             0,
                             *attempt,
                             true,
-                            admitted.client_version.clone(),
-                            Some(ACCOUNT_CANCELED_CODE),
+                            None,
                             pin_epoch,
                             cache_ttl_ms(ttl),
                         );
                         return Leg::Respond(
-                            self.answer(
-                                admitted.trace,
-                                ACCOUNT_CANCELED.response(&admitted.trace.request_id),
-                                outcome,
-                            )
-                            .await,
+                            self.answer_failure(admitted.trace, ACCOUNT_CANCELED, outcome)
+                                .await,
                         );
                     }
                     retried_in_place = true;
@@ -2953,15 +2883,8 @@ impl Relay {
                             tracing::error!(account = %account.id, %error, "a strip retry could not rebuild the body it just stripped from");
                             ending(end_guard, REFUSED);
                             return Leg::Respond(
-                                self.refused(
-                                    admitted.trace,
-                                    *attempt,
-                                    relay_failure(&error),
-                                    Some(admitted.key),
-                                    Some(admitted.identity),
-                                    admitted.client_version.as_deref(),
-                                )
-                                .await,
+                                self.refused_admitted(admitted, *attempt, relay_failure(&error))
+                                    .await,
                             );
                         }
                     }
@@ -2989,35 +2912,31 @@ impl Relay {
         // When the head arrived, which is what stamps the overage evidence below for an upstream that
         // sends no `Date` of its own.
         let head_at = (self.clock)();
-        let unified = UnifiedHeaders::parse(&head);
-        let observed_at = upstream_date(&head).unwrap_or(head_at);
+        let reading = HeadReading::parse(&head);
+        let observed_at = reading.date.unwrap_or(head_at);
         let framing = framing(&head);
         let reusable = keep_alive(&head, &framing);
         let mut reader = BodyReader::new(conn, leftover, framing);
-        let mut outcome = self.outcome(
-            ctx.admitted.trace,
-            Some(ctx.admitted.key),
-            Some(ctx.admitted.identity),
+        let mut outcome = ctx.admitted.outcome(
             &ctx.account.id,
             head.status,
             ctx.attempt,
             true,
-            ctx.admitted.client_version.clone(),
             None,
             ctx.pin_epoch,
             ctx.cache_ttl_ms,
         );
         outcome.head_at = Some(head_at);
         outcome.upstream_request_id = head.get("request-id").map(str::to_string);
-        outcome.overage_in_use = unified.as_ref().and_then(|u| u.overage_in_use);
+        outcome.overage_in_use = reading.unified.as_ref().and_then(|u| u.overage_in_use);
         outcome.diagnostics = ctx.diagnostics;
         outcome.diagnostics_named = ctx.diagnostics_named;
-        self.report_overage(ctx.account, unified.as_ref(), observed_at)
+        self.report_overage(ctx.account, reading.unified.as_ref(), observed_at)
             .await;
         self.report_head_sample(
             ctx.account,
             &head,
-            unified.as_ref(),
+            &reading,
             &ctx.admitted.identity.canonical_model,
             observed_at,
             &ctx.admitted.trace.request_id,
@@ -3122,7 +3041,7 @@ impl Relay {
                 wire_model: &ctx.admitted.identity.folded_model,
                 model_rejection_ms: self.limits.model_rejection.as_millis() as i64,
                 fast: ctx.admitted.fast,
-                unified: unified.as_ref(),
+                reading: &reading,
             },
         );
         let committing = match held.as_ref().map(|h| &h.commit) {
@@ -3365,7 +3284,6 @@ impl Relay {
                             // migrates; a non-portable request keeps its pin. The deadline is measured
                             // from the error's arrival, not from the selection.
                             let now = clock();
-                            let unified = UnifiedHeaders::parse(&head);
                             let verdict = classify(
                                 &head,
                                 &HeadContext {
@@ -3383,7 +3301,7 @@ impl Relay {
                                     wire_model: &wire_model,
                                     model_rejection_ms,
                                     fast,
-                                    unified: unified.as_ref(),
+                                    reading: &reading,
                                 },
                             );
                             if let Verdict::FailOver { cooldown, mark } = verdict {
@@ -3452,8 +3370,14 @@ impl Relay {
         if marked_state == Some(AccountState::ReauthRequired) {
             ctx.auth_marked = true;
         }
-        let retry_in_place =
-            self.retry_in_place(&ctx, &head, cooldown.as_ref(), marked_state, arrived);
+        let retry_in_place = self.retry_in_place(
+            &ctx,
+            &head,
+            reading.date,
+            cooldown.as_ref(),
+            marked_state,
+            arrived,
+        );
         // A non-portable request keeps its pin: the answer goes back to the client on the account that holds
         // its state, and only the cooldown is recorded. So does one about to retry in place: the row is there
         // for the siblings, and the pin stays where the retry lands.
@@ -3621,7 +3545,7 @@ impl Relay {
         ctx.pin.map(|pin| Renewal {
             router: self.router.clone(),
             pin: pin.clone(),
-            keepalive: ctx.admitted.trace.origin == Origin::Keepalive,
+            keepalive: ctx.admitted.trace.kind == Kind::Probe,
             cache_ttl_ms: ctx
                 .cache_ttl_ms
                 .or(ctx.admitted.markers_ttl_ms)
@@ -3705,6 +3629,7 @@ impl Relay {
         &self,
         ctx: &Responding<'_>,
         head: &ResponseHead,
+        date: Option<i64>,
         cooldown: Option<&Cooldown>,
         mark: Option<AccountState>,
         now: i64,
@@ -3714,7 +3639,7 @@ impl Relay {
             || mark.is_some()
             || !ctx.can_retry_in_place
             || cooldown.window != phoebis_routing::RETRY_AFTER_WINDOW
-            || retry_after(head, now).is_none()
+            || retry_after(head, date, now).is_none()
         {
             return None;
         }
@@ -3898,8 +3823,8 @@ impl Relay {
                 capture_hours,
                 RequestShape::default(),
                 None,
-                Vec::new(),
-                client_facts(headers, None, None),
+                Arc::default(),
+                client_facts(headers, &ClientHints::read(headers), None, None),
                 None,
                 presented_retired,
                 key.and_then(|k| k.rotated_at),
@@ -3925,7 +3850,7 @@ impl Relay {
             client_drift,
             client_contract,
         } = refusal.into();
-        let mut outcome = self.outcome(
+        let mut outcome = relay_outcome(
             trace,
             key,
             identity,
@@ -3934,12 +3859,40 @@ impl Relay {
             attempt,
             false,
             client_version.map(str::to_string),
-            Some(failure.code),
+            None,
             None,
             None,
         );
-        outcome.client_drift = client_drift.map(|kind| kind.as_str().to_string());
-        outcome.client_contract = client_contract.map(str::to_string);
+        outcome.client_drift = client_drift;
+        outcome.client_contract = client_contract;
+        self.answer_failure(trace, failure, outcome).await
+    }
+
+    async fn refused_admitted(
+        &self,
+        admitted: &Admitted<'_>,
+        attempt: u8,
+        refusal: impl Into<LocalRefusal>,
+    ) -> Response {
+        self.refused(
+            admitted.trace,
+            attempt,
+            refusal,
+            Some(admitted.key),
+            Some(admitted.identity),
+            admitted.client_version.as_deref(),
+        )
+        .await
+    }
+
+    /// A local failure's answer, the ledger filing the code of the same `Failure` the caller reads.
+    async fn answer_failure(
+        &self,
+        trace: &Trace,
+        failure: Failure,
+        mut outcome: RelayOutcome,
+    ) -> Response {
+        outcome.error_code = Some(failure.code.to_string());
         self.answer(trace, failure.response(&trace.request_id), outcome)
             .await
     }
@@ -4167,16 +4120,12 @@ impl Relay {
     /// completes `canceled` and the attempt keeps the outcome its head recorded, since a second head for the same
     /// attempt would overwrite that outcome in the ledger.
     async fn canceled_after_head(&self, ctx: &Responding<'_>, status: u16) -> Response {
-        let mut outcome = self.outcome(
-            ctx.admitted.trace,
-            Some(ctx.admitted.key),
-            Some(ctx.admitted.identity),
+        let mut outcome = ctx.admitted.outcome(
             &ctx.account.id,
             status,
             ctx.attempt,
             true,
-            ctx.admitted.client_version.clone(),
-            Some(ACCOUNT_CANCELED_CODE),
+            None,
             ctx.pin_epoch,
             ctx.cache_ttl_ms,
         );
@@ -4184,57 +4133,8 @@ impl Relay {
         // member's source as the head's outcome does.
         outcome.diagnostics = ctx.diagnostics;
         outcome.diagnostics_named = ctx.diagnostics_named;
-        self.answer(
-            ctx.admitted.trace,
-            ACCOUNT_CANCELED.response(&ctx.admitted.trace.request_id),
-            outcome,
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn outcome(
-        &self,
-        trace: &Trace,
-        key: Option<&ApiKeyRow>,
-        identity: Option<&RequestIdentity>,
-        account_id: &str,
-        upstream_status: u16,
-        attempt: u8,
-        written: bool,
-        client_version: Option<String>,
-        error_code: Option<&str>,
-        pin_epoch: Option<u64>,
-        cache_ttl_ms: Option<i64>,
-    ) -> RelayOutcome {
-        RelayOutcome {
-            request_id: trace.request_id.clone(),
-            key_id: key.map(|k| k.id.clone()),
-            pool_id: key.map(|k| k.pool_id.clone()),
-            // Matches `RequestObserved.session_id`: the client's own session.
-            session_id: identity.and_then(|i| i.session_id.clone()),
-            canonical_model: identity.map(|i| i.canonical_model.clone()),
-            account_id: account_id.to_string(),
-            upstream_status,
-            attempt,
-            written,
-            client_drift: None,
-            client_contract: None,
-            client_version,
-            error_code: error_code.map(str::to_string),
-            pin_epoch,
-            received_at: trace.received_at,
-            head_at: None,
-            upstream_request_id: None,
-            cache_ttl_ms,
-            overage_in_use: None,
-            account_kind: None,
-            usage_based: false,
-            diagnostics: None,
-            diagnostics_named: false,
-            obstacle: None,
-            held: trace.held(),
-        }
+        self.answer_failure(ctx.admitted.trace, ACCOUNT_CANCELED, outcome)
+            .await
     }
 
     /// A head that answers none of the three header families (the api_key buckets, the fast lane's buckets, the
@@ -4243,12 +4143,12 @@ impl Relay {
         &self,
         account: &AccountRow,
         head: &ResponseHead,
-        unified: Option<&UnifiedHeaders>,
+        reading: &HeadReading,
         canonical_model: &str,
         observed_at: i64,
         request_id: &str,
     ) {
-        let Some(sample) = head_sample(head, unified, account.kind, canonical_model, observed_at)
+        let Some(sample) = head_sample(head, reading, account.kind, canonical_model, observed_at)
         else {
             return;
         };
@@ -4340,7 +4240,7 @@ impl Relay {
             renewal,
             trace,
         } = forward;
-        let (builder, decoder) = match forward_head(head, rate_limit_event) {
+        let (builder, coding) = match forward_head(head, rate_limit_event) {
             Ok(parts) => parts,
             Err(error) => {
                 tracing::warn!(%error, "the upstream response cannot be forwarded");
@@ -4348,6 +4248,7 @@ impl Relay {
                 return self.unreadable(trace, &error, outcome).await;
             }
         };
+        let decoder = (!matches!(coding, Encoding::Identity)).then(|| decoder(coding));
         let event_stream = is_event_stream(head);
         // A held stream was decoded and parsed up to its commit by the hold, so the bus copy goes on from there
         // with the hold's parser.
@@ -5023,6 +4924,80 @@ struct Admitted<'a> {
     wait_bound: i64,
 }
 
+impl Admitted<'_> {
+    /// The outcome of this request on `account_id`, naming the trace, key, identity and client version it was
+    /// admitted with.
+    #[allow(clippy::too_many_arguments)]
+    fn outcome(
+        &self,
+        account_id: &str,
+        upstream_status: u16,
+        attempt: u8,
+        written: bool,
+        error_code: Option<&str>,
+        pin_epoch: Option<u64>,
+        cache_ttl_ms: Option<i64>,
+    ) -> RelayOutcome {
+        relay_outcome(
+            self.trace,
+            Some(self.key),
+            Some(self.identity),
+            account_id,
+            upstream_status,
+            attempt,
+            written,
+            self.client_version.clone(),
+            error_code,
+            pin_epoch,
+            cache_ttl_ms,
+        )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn relay_outcome(
+    trace: &Trace,
+    key: Option<&ApiKeyRow>,
+    identity: Option<&RequestIdentity>,
+    account_id: &str,
+    upstream_status: u16,
+    attempt: u8,
+    written: bool,
+    client_version: Option<String>,
+    error_code: Option<&str>,
+    pin_epoch: Option<u64>,
+    cache_ttl_ms: Option<i64>,
+) -> RelayOutcome {
+    RelayOutcome {
+        request_id: trace.request_id.clone(),
+        key_id: key.map(|k| k.id.clone()),
+        pool_id: key.map(|k| k.pool_id.clone()),
+        // Matches `RequestObserved.session_id`: the client's own session.
+        session_id: identity.and_then(|i| i.session_id.clone()),
+        canonical_model: identity.map(|i| i.canonical_model.clone()),
+        account_id: account_id.to_string(),
+        upstream_status,
+        attempt,
+        written,
+        client_drift: None,
+        client_contract: None,
+        client_version,
+        error_code: error_code.map(str::to_string),
+        pin_epoch,
+        received_at: trace.received_at,
+        head_at: None,
+        upstream_request_id: None,
+        cache_ttl_ms,
+        overage_in_use: None,
+        account_kind: None,
+        usage_based: false,
+        diagnostics: None,
+        diagnostics_named: false,
+        obstacle: None,
+        held: trace.held(),
+    }
+}
+
 /// What one selected account produced: an answer for the caller; nothing, in which case the loop selects the
 /// next account; or the end of the wire-submission index, which the loop answers as the pool's untimed
 /// exhaustion. The account is already in `attempted` in every case.
@@ -5131,7 +5106,7 @@ fn starts_with_ignoring_case(text: &str, prefix: &str) -> bool {
 fn forward_head(
     head: &ResponseHead,
     rate_limit_event: bool,
-) -> Result<(Builder, Option<Box<dyn Decoder>>), TransportError> {
+) -> Result<(Builder, Encoding), TransportError> {
     let upstream = encoding(head)?;
     let mut builder = Response::builder()
         .status(StatusCode::from_u16(head.status).unwrap_or(StatusCode::BAD_GATEWAY));
@@ -5160,8 +5135,7 @@ fn forward_head(
         };
         builder = builder.header(name, value);
     }
-    let identity = matches!(upstream, Encoding::Identity);
-    Ok((builder, (!identity).then(|| decoder(upstream))))
+    Ok((builder, upstream))
 }
 
 fn built(builder: Builder, body: Body) -> Response {

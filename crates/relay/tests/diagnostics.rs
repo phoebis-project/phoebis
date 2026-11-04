@@ -2160,7 +2160,11 @@ async fn drift_refusal(native: &[u8], kind: &str) -> (String, String) {
     );
     let o = outcome(&resp);
     assert_eq!(
-        (o.account_id.as_str(), o.attempt, o.client_drift.as_deref()),
+        (
+            o.account_id.as_str(),
+            o.attempt,
+            o.client_drift.map(|kind| kind.as_str())
+        ),
         ("", 0, Some(kind))
     );
     let refusal: serde_json::Value =

@@ -1,6 +1,8 @@
 //! The owned, serializable events the relay publishes. Nothing here borrows from the relay, so a consumer can
 //! keep an event for as long as it likes without holding a request open.
 
+use std::sync::Arc;
+
 use bytes::Bytes;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -367,7 +369,7 @@ pub struct RequestObserved {
     /// The static chain's last boundary, lowercase hex; `None` without a chain.
     pub static_hash: Option<String>,
     /// Every message boundary, lowercase hex; empty without a chain.
-    pub boundaries: Vec<String>,
+    pub boundaries: Arc<[String]>,
     /// The class and hint facts read at admission, structured; `headers` carries the same hint headers
     /// unstructured, as the caller spelled them.
     pub client: ClientFacts,
