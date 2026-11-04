@@ -136,8 +136,8 @@ impl FactorRows {
 
     /// The factors of `canonical_model` under `funding`, from the fast rows when `fast`: a fast recipe's probes draw
     /// usage credits at the fast cells, whatever funds the account. A dollar row's long-context rates stand in for its
-    /// own when `prompt_tokens` is above their threshold, as `RateTable::rates_for` selects them. The plan's rows carry
-    /// no such set.
+    /// own when `prompt_tokens` is above their threshold, as `RateTable::rates_for` selects them. The plan reads the
+    /// three factors off the cost model's multipliers for the model, whatever the prompt's size.
     pub(crate) fn factors(
         &self,
         funding: Funding,
