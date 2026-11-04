@@ -301,6 +301,16 @@ impl LedgerDb {
         Ok(Some(read_version(&conn)?).filter(|version| *version != 0))
     }
 
+    /// Refuses a ledger a newer build wrote with the start's own refusal, through a read-only connection taking no
+    /// lock and creating nothing. An absent file passes, since the next start creates it.
+    pub fn check_readable(path: &Path) -> Result<(), LedgerError> {
+        if !path.try_exists()? {
+            return Ok(());
+        }
+        let conn = open_read_only(path)?;
+        check_schema(&conn, path).map(|_| ())
+    }
+
     /// The newest schema this build reads, which `open` refuses a file past.
     pub fn supported_schema_version() -> u32 {
         latest_version()
@@ -1162,6 +1172,12 @@ pub(crate) fn row_to_extra_usage_sample(
 /// The store's rule: a file a newer build wrote is refused before the schema or a migration runs over it. Then
 /// `SCHEMA`, the baseline at version 1, and the steps above the stored version.
 fn prepare(conn: &mut Connection, path: &Path, steps: &[(u32, &str)]) -> Result<(), LedgerError> {
+    let current = check_schema(conn, path)?;
+    Ok(migrations::apply(conn, schema::SCHEMA, current, steps)?)
+}
+
+/// The refusal `prepare` makes before it writes anything, answering the stored version.
+fn check_schema(conn: &Connection, path: &Path) -> Result<u32, LedgerError> {
     let current = read_version(conn)?;
     let supported = latest_version();
     if current > supported {
@@ -1171,7 +1187,7 @@ fn prepare(conn: &mut Connection, path: &Path, steps: &[(u32, &str)]) -> Result<
             supported,
         });
     }
-    Ok(migrations::apply(conn, schema::SCHEMA, current, steps)?)
+    Ok(current)
 }
 
 fn latest_version() -> u32 {

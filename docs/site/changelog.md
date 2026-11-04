@@ -515,6 +515,9 @@ resolved admin secret, the release publishes `SHA256SUMS` alone, and `extra_ca_p
 named, while the status screen keeps the host's zone ([Is it up?](operations.md#is-it-up)).
 `recover-key` on a registry that has no canary but opens under the key seals the canary and exits 0 with a line naming
 the rows it opened, discarding nothing ([The storage key](operations.md#the-storage-key)).
+`phoebis check-config` refuses a registry or a ledger a newer build wrote with the start's own sentence and its restore
+advice, under `reading the registry at {path}` or `reading the ledger at {path}`
+([Upgrades and renewals](operations.md#upgrades)).
 
 Guardrails are named objects attached to pools and keys, each an ordered list of conditions over a request's headers,
 derived facts, body members and messages, which in observe mode record the requests they match and in enforce mode

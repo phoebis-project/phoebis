@@ -772,16 +772,18 @@ fn a_registry_a_newer_build_wrote_fails_check_config_naming_the_path_and_both_ve
         .unwrap();
     let out = check_config(&mut phoebis(), &config);
     assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(
-        String::from_utf8_lossy(&out.stderr).lines().next(),
-        Some(
-            format!(
-                "Error: the registry at {} is at schema 99, newer than the {} this build reads",
-                registry.display(),
-                phoebis_store::SCHEMA_VERSION
-            )
-            .as_str()
-        ),
+        stderr.lines().next(),
+        Some(format!("Error: reading the registry at {}", registry.display()).as_str()),
+        "{}",
+        printed(&out)
+    );
+    assert!(
+        stderr.contains(&format!(
+            "the registry's schema version 99 is newer than the {} this build opens",
+            phoebis_store::SCHEMA_VERSION
+        )),
         "{}",
         printed(&out)
     );
@@ -808,16 +810,18 @@ fn a_ledger_a_newer_build_wrote_fails_check_config_naming_the_path_and_both_vers
         .unwrap();
     let out = check_config(&mut phoebis(), &config);
     assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(
-        String::from_utf8_lossy(&out.stderr).lines().next(),
-        Some(
-            format!(
-                "Error: the ledger at {} is at schema 99, newer than the {} this build reads",
-                ledger.display(),
-                phoebis_ledger::LedgerDb::supported_schema_version()
-            )
-            .as_str()
-        ),
+        stderr.lines().next(),
+        Some(format!("Error: reading the ledger at {}", ledger.display()).as_str()),
+        "{}",
+        printed(&out)
+    );
+    assert!(
+        stderr.contains(&format!(
+            "the ledger's schema version 99 is newer than the {} this build opens",
+            phoebis_ledger::LedgerDb::supported_schema_version()
+        )),
         "{}",
         printed(&out)
     );

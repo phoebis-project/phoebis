@@ -7,7 +7,7 @@ use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{bail, Context};
+use anyhow::Context;
 use clap::{Parser, Subcommand};
 use phoebis_router::admin_client::{self, AdminClient, ClientError};
 use phoebis_router::backup::{self, BackupArgs};
@@ -220,27 +220,13 @@ fn main() -> anyhow::Result<()> {
                 ),
                 phoebis_store::CanaryRead::Absent | phoebis_store::CanaryRead::Matches => {}
             }
-            // The start refuses a file a newer build wrote; reading both versions here, read-only and taking no
-            // lock, finds that before anything starts.
-            let found = phoebis_store::Store::read_schema_version(registry)
+            // The start refuses a file a newer build wrote. Both checks run here read-only and take no lock, so the
+            // check finds that before anything starts, in the start's own words.
+            phoebis_store::Store::check_readable(registry)
                 .with_context(|| format!("reading the registry at {}", registry.display()))?;
-            if let Some(found) = found.filter(|found| *found > phoebis_store::SCHEMA_VERSION) {
-                bail!(
-                    "the registry at {} is at schema {found}, newer than the {} this build reads",
-                    registry.display(),
-                    phoebis_store::SCHEMA_VERSION
-                );
-            }
             let ledger = &config.stats.ledger_path;
-            let found = phoebis_ledger::LedgerDb::read_schema_version(ledger)
+            phoebis_ledger::LedgerDb::check_readable(ledger)
                 .with_context(|| format!("reading the ledger at {}", ledger.display()))?;
-            let supported = phoebis_ledger::LedgerDb::supported_schema_version();
-            if let Some(found) = found.filter(|found| *found > supported) {
-                bail!(
-                    "the ledger at {} is at schema {found}, newer than the {supported} this build reads",
-                    ledger.display()
-                );
-            }
             let name = &config.admin.secret_env;
             if phoebis_router::config::secret_is_unset(name) {
                 println!("warning: environment variable {name} is unset or empty");

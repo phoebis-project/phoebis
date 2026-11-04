@@ -264,9 +264,11 @@ than the router expects, and a certificate that expires within 30 days (`warning
 {n} days ({date})`). The router starts either way and logs the same warnings. A TLS key owned by root and readable by
 its group alone, such as `0640 root:phoebis`, earns no warning from a process that runs as root or holds that group.
 
-A registry or a ledger whose schema is newer than the binary reads fails the check with exit 1 and `the registry at
-{config.storage.path} is at schema {n}, newer than the {m} this build reads`, or the same line naming `the ledger at
-{config.stats.ledger_path}`, since the start refuses either file the same way.
+A registry or a ledger whose schema is newer than the binary reads fails the check with exit 1 and the start's own
+refusal under `reading the registry at {config.storage.path}`: `the registry's schema version {n} is newer than the {m}
+this build opens: restore the backup taken before the upgrade, or recreate a registry a pre-release build wrote with
+phoebis init`. A ledger fails the same way under `reading the ledger at {config.stats.ledger_path}`, with `ledger` in
+place of `registry`.
 
 A secret variable set to a value the start refuses fails the check with exit 1 and the start's line: `environment
 variable {name} holds a secret shorter than 16 characters`, `environment variable {name} still holds the example

@@ -547,6 +547,16 @@ impl Store {
         Ok(Some(read_version(&conn)?).filter(|version| *version != 0))
     }
 
+    /// Refuses a registry a newer build wrote with the start's own refusal, through a read-only connection taking no
+    /// lock. An absent file passes, since the next start creates it.
+    pub fn check_readable(db_path: &Path) -> Result<(), StoreError> {
+        if !db_path.try_exists()? {
+            return Ok(());
+        }
+        let conn = open_read_only(db_path, BUSY_TIMEOUT)?;
+        check_schema(&conn).map(|_| ())
+    }
+
     /// Resolved refresh attempts and registry changes older than `before_ms`, but for the rows their readers need
     /// whatever their age, in rowid slices of 1,000, one transaction per slice; the ledger's purge pass calls it
     /// once with the request cutoff.

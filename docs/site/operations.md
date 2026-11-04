@@ -408,10 +408,9 @@ rebuild a table, and a ledger migration can drop or rebuild one too. This build 
 ledger at schema 2. Both refuse to open a file a newer build wrote: the registry with `the registry's schema version
 {found} is newer than the {supported} this build opens: restore the backup taken before the upgrade, or recreate a
 registry a pre-release build wrote with phoebis init`, and the ledger with the same words, `ledger` in place of
-`registry`. `phoebis check-config` reads both versions read-only, taking no lock, and refuses first with `the registry
-at {path} is at schema {found}, newer than the {supported} this build reads` or `the ledger at {path} is at schema
-{found}, newer than the {supported} this build reads`. Returning to an older binary after an upgrade therefore means
-restoring from the backup, not downgrading the binary in place.
+`registry`. `phoebis check-config` reads both versions read-only, taking no lock, and refuses first with the same
+sentence under `reading the registry at {path}` or `reading the ledger at {path}`. Returning to an older binary after an
+upgrade therefore means restoring from the backup, not downgrading the binary in place.
 
 Every configuration block denies unknown keys, so a key the new build does not recognize refuses startup, and running
 `check-config` first catches that before the restart does.
