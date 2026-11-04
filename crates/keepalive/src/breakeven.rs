@@ -4,10 +4,10 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use phoebis_ledger::{PlanTables, PriceRevisions, PriceTable};
+use phoebis_ledger::{PlanTables, PriceRevisions, PriceTable, SubscriptionCosts, TypeMultiplier};
 use phoebis_relay::{CacheTtlPolicy, TtlBranch};
 use phoebis_routing::rules::{allows, process, RulesMode};
-use phoebis_routing::{listing::row_for, seconds_ms, LongContextRates, Rates, SEVEN_DAY};
+use phoebis_routing::{listing::row_for, seconds_ms, LongContextRates, Rates};
 use phoebis_store::{canonical_id, ModelRule};
 
 use crate::config::{KeepalivePolicy, KeepaliveTiming, FIVE_MINUTES_MS, ONE_HOUR_MS};
@@ -38,6 +38,15 @@ impl BreakEvenFactors {
             write_1h: rates.write_1h?,
         })
     }
+
+    /// The cost model's three cache multipliers.
+    fn of_multipliers(multipliers: &TypeMultiplier) -> BreakEvenFactors {
+        BreakEvenFactors {
+            read: multipliers.cache_read,
+            write_5m: multipliers.cache_write_5m,
+            write_1h: multipliers.cache_write_1h,
+        }
+    }
 }
 
 /// `(write - read) / (cadence * read)` in milliseconds for the entry's TTL, `None` when read is 0. Computed as
@@ -60,11 +69,9 @@ pub fn break_even_ms(
 }
 
 /// The factors for `canonical_model` under `funding`, at the fast cells when `fast`, on the cost model in force at
-/// `at`. Plan funding reads `tables.rate_table(SEVEN_DAY, None, at).rows` under the base regime, since the break-even
-/// ratio cancels a regime's capacity as it cancels the weight, so a regime's rows change nothing a recipe breaks even
-/// on. Any other model reads its type multipliers, the model's own override where it has one: a model without a
-/// weight prices nothing and breaks even where a weighted one does. A token costs the model's weight times the type's
-/// multiplier, so the weight cancels from read over write and every plan recipe breaks even alike.
+/// `at`. Plan funding reads the model's type multipliers, its own override over the shared ones type by type: a token
+/// costs the model's weight times the type's multiplier over the window's capacity, so the weight and a regime's
+/// capacity cancel from read over write, and a model without a weight breaks even where a weighted one does.
 /// Dollars read `pricing.rate_table().rows`, or `pricing.fast_rate_table().rows` for a fast recipe, whose probes draw
 /// usage credits at the fast cells, at a row's long-context rates when `prompt_tokens` is above their threshold, the
 /// set a probe's cost reads on the same prompt, and a model the price table prices nowhere takes the tightest row of
@@ -101,10 +108,9 @@ pub(crate) struct FactorRows {
     /// in place of the row's own. A row with fast cells has none in the fast set.
     dollars_long: HashMap<String, LongContextRates>,
     fast_long: HashMap<String, LongContextRates>,
-    plan: HashMap<String, Rates>,
-    /// The cost model's shared type multipliers, and the models that set their own.
-    plan_multipliers: BreakEvenFactors,
-    plan_overrides: HashMap<String, BreakEvenFactors>,
+    /// The cost model in force, whose type multipliers the plan's factors read. Held whole rather than borrowed, since
+    /// a pool list's inputs outlive the read of the tables.
+    costs: SubscriptionCosts,
     tightest: BreakEvenFactors,
     tightest_fast: BreakEvenFactors,
 }
@@ -117,36 +123,12 @@ impl FactorRows {
         let (fast, fast_long) = (fast_table.rows, fast_table.long_context);
         let tightest_fast = tightest(fast.values().filter_map(BreakEvenFactors::of));
         let tightest = tightest(dollars.values().filter_map(BreakEvenFactors::of));
-        let costs = tables.revisions.in_force(at);
-        let shared = &costs.type_multiplier;
-        let plan_multipliers = BreakEvenFactors {
-            read: shared.cache_read,
-            write_5m: shared.cache_write_5m,
-            write_1h: shared.cache_write_1h,
-        };
-        let plan_overrides = costs
-            .overrides
-            .iter()
-            .filter_map(|(model, row)| {
-                let own = row.type_multiplier.as_ref()?;
-                Some((
-                    model.clone(),
-                    BreakEvenFactors {
-                        read: own.cache_read.unwrap_or(plan_multipliers.read),
-                        write_5m: own.cache_write_5m.unwrap_or(plan_multipliers.write_5m),
-                        write_1h: own.cache_write_1h.unwrap_or(plan_multipliers.write_1h),
-                    },
-                ))
-            })
-            .collect();
         FactorRows {
             dollars,
             fast,
             dollars_long,
             fast_long,
-            plan: tables.rate_table(SEVEN_DAY, None, at).rows,
-            plan_multipliers,
-            plan_overrides,
+            costs: tables.revisions.in_force(at).clone(),
             tightest,
             tightest_fast,
         }
@@ -169,9 +151,9 @@ impl FactorRows {
             (&self.dollars, &self.dollars_long)
         };
         match funding {
-            Funding::Plan => row_for(canonical_model, |k| self.plan.get(k))
-                .and_then(BreakEvenFactors::of)
-                .or_else(|| row_for(canonical_model, |k| self.plan_overrides.get(k)).copied()),
+            Funding::Plan => Some(BreakEvenFactors::of_multipliers(
+                &self.costs.multipliers(canonical_model),
+            )),
             Funding::ApiKey | Funding::Fast | Funding::Overage | Funding::UsageBased => {
                 // One key for both maps, so a dated row without the set never reads its undated row's.
                 row_for(canonical_model, |k| {
@@ -196,7 +178,7 @@ impl FactorRows {
     /// speed.
     pub(crate) fn priced_nowhere(&self, funding: Funding, fast: bool) -> BreakEvenFactors {
         match funding {
-            Funding::Plan => self.plan_multipliers,
+            Funding::Plan => BreakEvenFactors::of_multipliers(&self.costs.type_multiplier),
             Funding::ApiKey | Funding::Fast | Funding::Overage | Funding::UsageBased if fast => {
                 self.tightest_fast
             }

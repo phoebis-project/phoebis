@@ -645,8 +645,9 @@ impl SubscriptionCosts {
             })
     }
 
-    /// `overrides[model].type_multiplier` over the shared `type_multiplier`, type by type.
-    fn multipliers(&self, canonical_model: &str) -> TypeMultiplier {
+    /// `overrides[model].type_multiplier` over the shared `type_multiplier`, type by type, the model read by its
+    /// canonical id and then by its undated base.
+    pub fn multipliers(&self, canonical_model: &str) -> TypeMultiplier {
         let shared = &self.type_multiplier;
         let own = self
             .override_of(canonical_model)
