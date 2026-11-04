@@ -267,11 +267,8 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
     };
     let mut rows: std::collections::BTreeMap<(String, i64, String), serde_json::Value> =
         std::collections::BTreeMap::new();
-    // Whether the pin currently held for a session is its main agent's, so a subagent's pin never displaces it
-    // and only a newer main pin can; the keepalive's own agent count answers `agents` when a session has an
-    // engine view, so every agent a pin names is counted here as the fallback where it does not.
-    let mut held_is_main: std::collections::BTreeMap<(String, i64, String), bool> =
-        std::collections::BTreeMap::new();
+    // The keepalive's own agent count answers `agents` when a session has an engine view, so every agent a pin names
+    // is counted here as the fallback where it does not.
     let mut agents_by_session: std::collections::BTreeMap<
         (String, i64, String),
         std::collections::BTreeSet<String>,
@@ -324,19 +321,17 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             .push(standing.clone());
         // A session holds a pin per agent and the row shows one of its conversation pins: the main agent's once one
         // exists (replaced only by a newer one of its own), else whichever the caller used last.
-        let keep = match (held_is_main.get(&key).copied(), rows.get(&key)) {
-            (Some(true), Some(held)) => {
-                is_main && held["last_used_at"].as_i64().unwrap_or(0) < p.last_used_at
+        let keep = rows.get(&key).is_none_or(|held| {
+            let newer = held["last_used_at"].as_i64().unwrap_or(0) < p.last_used_at;
+            if held["agent_id"] == "main" {
+                is_main && newer
+            } else {
+                is_main || newer
             }
-            (Some(false), Some(held)) => {
-                is_main || held["last_used_at"].as_i64().unwrap_or(0) < p.last_used_at
-            }
-            _ => true,
-        };
+        });
         if !keep {
             continue;
         }
-        held_is_main.insert(key.clone(), is_main);
         // The unit a reader takes for `burn`, the account's kind, its class and whether its overage evidence stands
         // now: the same predicate every reader of it applies, so this row never disagrees with the selector. A pin
         // whose account left the registry has no kind to pick a unit from, so both read null rather than
