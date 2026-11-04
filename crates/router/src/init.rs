@@ -26,7 +26,7 @@ const CONTAINER_METRICS_LISTEN: SocketAddr =
 
 const DEFAULT_SECRET_ENV: &str = "PHOEBIS_ADMIN_SECRET";
 
-/// The two databases' file names, shared by the fills and the refusal so the refusal guards the files the fills name.
+// The two databases' file names, shared by the fills and the refusal so the refusal guards the files the fills name.
 const LEDGER_FILE: &str = "ledger.sqlite";
 const REGISTRY_FILE: &str = "router.sqlite";
 
