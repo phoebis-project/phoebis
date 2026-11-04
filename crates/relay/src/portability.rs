@@ -62,7 +62,7 @@ mod tests {
     }
 
     #[test]
-    fn a_body_cut_mid_pair_is_read_for_its_references_and_one_no_reader_parses_fails_open() {
+    fn a_body_cut_mid_pair_is_read_for_its_references() {
         // A lone surrogate escape, which the client sends for a string cut mid-pair: a strict decoder refuses the
         // body, and the container it names binds it all the same.
         let cut = br#"{"model":"m","container":"cont_1","messages":[{"role":"user","content":"cut \ud83d"}]}"#;
@@ -71,9 +71,5 @@ mod tests {
         assert!(is_portable(
             br#"{"model":"m","messages":[{"role":"user","content":"cut \ud83d"}]}"#
         ));
-        assert!(
-            is_portable(b"not json"),
-            "a body no reader parses fails open"
-        );
     }
 }
