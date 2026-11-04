@@ -283,6 +283,8 @@ dropped ([API reference](api-reference.md), [Requests](console.md#requests)).
 A pool member's `eligible` word on `GET /admin/pools` reads `spent` for a usage-based seat at its spend cap and
 `budget_unknown` for a budgeted member while the ledger is degraded, each a reason the router skips the member ([API
 reference](api-reference.md)).
+`GET /admin/analytics/burn` and `GET /admin/sessions` read each account's kind from the routing snapshot and answer no
+`storage failure` ([API reference](api-reference.md)).
 On the Requests view a custom range's late row that lands below the rows shown draws
 on the next auto reload read ([Requests](console.md#requests)). On the Requests view and the Routing log the list's late
 answer replaces the page an auto reload poll stood in for it, and Next past an overrun under a preset reads to the
