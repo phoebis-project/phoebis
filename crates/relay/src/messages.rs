@@ -1446,7 +1446,7 @@ impl Relay {
                     .await;
             }
         };
-        // One walk of the top-level object serves every lookup admission makes on the raw body below.
+        // Each lookup below walks the raw body's top-level object itself and holds no table of its members.
         let members = phoebis_cch::TopLevelMembers::read(&raw);
         // The tree lives to the guardrail step and no further: the body budget does not count it, and it is
         // dropped before the observation waits on the bus.

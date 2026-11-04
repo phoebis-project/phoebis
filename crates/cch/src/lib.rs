@@ -208,18 +208,18 @@ fn scan_object(s: &mut Scanner<'_>, mut matches: impl FnMut(&[u8]) -> bool) -> O
     }
 }
 
-/// Each top-level member of a body in body order, read in one walk, so the lookups admission makes share one pass
-/// over a body of up to the request limit. A member is recorded once its key is read, its value's start once its
-/// colon is, and the walk ends where the object closes or at the error that stopped it. Each lookup reads the table
-/// under its own rule. The decoded lookups compare keys decoded, so an escaped spelling of a name counts as that name,
-/// as a parser upstream would read it. The raw lookups match a key's own bytes and stop at the first match, as the
-/// span helpers do on purpose (they edit what they find and never a decoded copy), and read the matched value with
-/// the reader the span helper of that name uses. Values are skipped by the scanner the span helpers walk, so a body a
-/// strict decoder refuses as a whole (a lone surrogate escape in a string value) is still read to its end.
+/// The top-level members of a body, each lookup walking the top-level object itself in body order. No table of the
+/// members is kept: a body at the request limit made of the shortest members holds millions of them, and a table
+/// of them would outgrow the bytes the body budget reserves for the body many times over, so a lookup holds one
+/// scanner and the member under it. A member is read once its key is, its value's start once its colon is, and a
+/// walk ends where the object closes or at the error that stopped it. The decoded lookups compare keys decoded, so
+/// an escaped spelling of a name counts as that name, as a parser upstream would read it. The raw lookups match a
+/// key's own bytes and stop at the first match, as the span helpers do on purpose (they edit what they find and
+/// never a decoded copy), and read the matched value with the reader the span helper of that name uses. Values are
+/// skipped by the scanner the span helpers walk, so a body a strict decoder refuses as a whole (a lone surrogate
+/// escape in a string value) is still read to its end.
 pub struct TopLevelMembers<'a> {
     body: &'a [u8],
-    members: Vec<TopLevelMember<'a>>,
-    end: TopLevelEnd,
 }
 
 struct TopLevelMember<'a> {
@@ -248,16 +248,7 @@ enum TopLevelEnd {
 
 impl<'a> TopLevelMembers<'a> {
     pub fn read(body: &'a [u8]) -> Self {
-        let mut s = Scanner::new(body);
-        let mut members = Vec::new();
-        s.ws();
-        let end = if s.eat(b'{') {
-            s.inside(|s| Ok(top_level_walk(s, &mut members)))
-                .unwrap_or_else(TopLevelEnd::Stopped)
-        } else {
-            TopLevelEnd::Stopped(CchError::Json(s.pos))
-        };
-        TopLevelMembers { body, members, end }
+        TopLevelMembers { body }
     }
 
     pub fn body(&self) -> &'a [u8] {
@@ -270,7 +261,6 @@ impl<'a> TopLevelMembers<'a> {
         for key in self.decoded_keys() {
             count += usize::from(key? == name);
         }
-        self.decoded_end()?;
         Ok(count)
     }
 
@@ -288,7 +278,6 @@ impl<'a> TopLevelMembers<'a> {
             }
             seen.push(index);
         }
-        self.decoded_end()?;
         Ok(None)
     }
 
@@ -336,7 +325,7 @@ impl<'a> TopLevelMembers<'a> {
         Ok(repeated)
     }
 
-    /// `string_member_span` off the table, the path's first segment naming a top-level member.
+    /// `string_member_span`, the path's first segment naming a top-level member.
     pub fn string_member_span(&self, path: &[&str]) -> Option<(usize, usize)> {
         let (name, rest) = path.split_first()?;
         let (_, mut s) = self.raw_value(name)?;
@@ -346,22 +335,22 @@ impl<'a> TopLevelMembers<'a> {
         string_at(s)
     }
 
-    /// `bool_member_span` off the table for the top-level member `name`.
+    /// `bool_member_span` for the top-level member `name`.
     pub fn bool_member_span(&self, name: &str) -> Option<(usize, usize)> {
         bool_at(self.raw_value(name)?.1)
     }
 
-    /// `number_member_span` off the table for the top-level member `name`.
+    /// `number_member_span` for the top-level member `name`.
     pub fn number_member_span(&self, name: &str) -> Option<(usize, usize)> {
         number_at(&self.raw_value(name)?.1)
     }
 
-    /// `stamp` off the table.
+    /// `stamp` of the body.
     pub fn stamp(&self) -> Stamp {
         stamp_in(self.body, self.string_member_span(&LINE_PATH))
     }
 
-    /// `decoded_stamp_count` off the table.
+    /// `decoded_stamp_count` of the body.
     pub fn decoded_stamp_count(&self) -> usize {
         let mut count = 0;
         for mut s in self.values_named("system") {
@@ -378,44 +367,46 @@ impl<'a> TopLevelMembers<'a> {
         count
     }
 
-    /// `object_member_span` off the table for the top-level member `name`.
+    /// `object_member_span` for the top-level member `name`.
     pub fn object_member_span(&self, name: &str) -> Option<(usize, usize)> {
         let member = self.raw_member(name)?;
         Some((member.key.0, member.value_end?))
     }
 
-    /// The decoded keys in body order, a key that does not decode answered as the error a decoder gives at it.
-    fn decoded_keys(&self) -> impl Iterator<Item = Result<&str, CchError>> + '_ {
-        self.members.iter().map(|member| {
-            member
-                .decoded
-                .as_deref()
-                .ok_or(CchError::Json(member.key.0))
-        })
+    /// A walk of the top-level members in body order.
+    fn members(&self) -> Members<'a> {
+        Members {
+            s: Scanner::new(self.body),
+            at: WalkAt::Start,
+        }
     }
 
-    /// The end as the decoded count and the repeat check read it.
-    fn decoded_end(&self) -> Result<(), CchError> {
-        match &self.end {
-            TopLevelEnd::Stopped(error) => Err(error.clone()),
-            TopLevelEnd::Closed | TopLevelEnd::ClosedAfterAComma(_) => Ok(()),
-        }
+    /// The decoded keys in body order, a key that does not decode answered as the error a decoder gives at it, and
+    /// after the last one the error that stopped the walk, where one did.
+    fn decoded_keys(&self) -> impl Iterator<Item = Result<Cow<'a, str>, CchError>> {
+        let mut walk = Some(self.members());
+        std::iter::from_fn(move || match walk.as_mut()?.next() {
+            Some(member) => Some(member.decoded.ok_or(CchError::Json(member.key.0))),
+            None => match walk.take()?.end() {
+                TopLevelEnd::Stopped(error) => Some(Err(error)),
+                TopLevelEnd::Closed | TopLevelEnd::ClosedAfterAComma(_) => None,
+            },
+        })
     }
 
     /// The end as a walk that reads into a member's value reads it.
     fn strict_end(&self) -> Result<(), CchError> {
-        match &self.end {
+        match self.members().end() {
             TopLevelEnd::Closed => Ok(()),
-            TopLevelEnd::ClosedAfterAComma(at) => Err(CchError::Json(*at)),
-            TopLevelEnd::Stopped(error) => Err(error.clone()),
+            TopLevelEnd::ClosedAfterAComma(at) => Err(CchError::Json(at)),
+            TopLevelEnd::Stopped(error) => Err(error),
         }
     }
 
     /// A scanner at the value of each top-level member whose decoded key is `name`. A key that does not decode
     /// names no member here.
     fn values_named<'s>(&'s self, name: &'s str) -> impl Iterator<Item = Scanner<'a>> + 's {
-        self.members
-            .iter()
+        self.members()
             .filter(move |member| member.decoded.as_deref() == Some(name))
             .filter_map(|member| member.value_start)
             .map(|pos| self.value_at(pos))
@@ -429,9 +420,8 @@ impl<'a> TopLevelMembers<'a> {
     }
 
     /// The first top-level member whose key's own bytes are `name`.
-    fn raw_member(&self, name: &str) -> Option<&TopLevelMember<'a>> {
-        self.members
-            .iter()
+    fn raw_member(&self, name: &str) -> Option<TopLevelMember<'a>> {
+        self.members()
             .find(|member| self.body[member.key.0 + 1..member.key.1 - 1] == *name.as_bytes())
     }
 
@@ -445,17 +435,52 @@ impl<'a> TopLevelMembers<'a> {
     }
 }
 
-/// The walk `TopLevelMembers::read` makes inside the top-level object, its `{` eaten.
-fn top_level_walk<'a>(s: &mut Scanner<'a>, members: &mut Vec<TopLevelMember<'a>>) -> TopLevelEnd {
-    s.ws();
-    if s.eat(b'}') {
-        return TopLevelEnd::Closed;
+/// A walk of the top-level object, one member per step, in body order.
+struct Members<'a> {
+    s: Scanner<'a>,
+    at: WalkAt,
+}
+
+/// Where a walk of the top-level object stands between two steps.
+enum WalkAt {
+    /// Ahead of the object's opening brace.
+    Start,
+    /// Past a member whose value was read to its end.
+    AfterMember,
+    /// Past the object's end or the error that stopped the walk.
+    Ended(TopLevelEnd),
+}
+
+impl Members<'_> {
+    /// Walks the members left and answers how the walk ended.
+    fn end(mut self) -> TopLevelEnd {
+        loop {
+            if let WalkAt::Ended(end) = self.at {
+                return end;
+            }
+            self.next();
+        }
     }
-    loop {
-        s.ws();
-        let (ks, ke) = match s.string() {
+}
+
+impl<'a> Iterator for Members<'a> {
+    type Item = TopLevelMember<'a>;
+
+    /// The next member. One whose value stops the walk is still answered, with no value end, and the stop is how the
+    /// walk ended, so a lookup reads every member ahead of the stop as the walk met it.
+    fn next(&mut self) -> Option<TopLevelMember<'a>> {
+        let at_start = match self.at {
+            WalkAt::Start => true,
+            WalkAt::AfterMember => false,
+            WalkAt::Ended(_) => return None,
+        };
+        let s = &mut self.s;
+        let (ks, ke) = match next_top_level_key(s, at_start) {
             Ok(key) => key,
-            Err(error) => return TopLevelEnd::Stopped(error),
+            Err(end) => {
+                self.at = WalkAt::Ended(end);
+                return None;
+            }
         };
         let decoded = decoded_key(s.body, ks, ke);
         s.ws();
@@ -467,28 +492,52 @@ fn top_level_walk<'a>(s: &mut Scanner<'a>, members: &mut Vec<TopLevelMember<'a>>
             Some(_) => s.value(false).map(|()| s.pos),
             None => Err(CchError::Json(s.pos)),
         };
-        members.push(TopLevelMember {
+        let value_end = match value_end {
+            Ok(end) => {
+                self.at = WalkAt::AfterMember;
+                Some(end)
+            }
+            Err(error) => {
+                self.at = WalkAt::Ended(TopLevelEnd::Stopped(error));
+                None
+            }
+        };
+        Some(TopLevelMember {
             key: (ks, ke),
             decoded,
             value_start,
-            value_end: value_end.as_ref().ok().copied(),
-        });
-        if let Err(error) = value_end {
-            return TopLevelEnd::Stopped(error);
-        }
-        s.ws();
-        if s.eat(b',') {
-            s.ws();
-            if s.body.get(s.pos) == Some(&b'}') {
-                return TopLevelEnd::ClosedAfterAComma(s.pos);
-            }
-            continue;
-        }
-        if s.eat(b'}') {
-            return TopLevelEnd::Closed;
-        }
-        return TopLevelEnd::Stopped(CchError::Json(s.pos));
+            value_end,
+        })
     }
+}
+
+/// Reads a walk of the top-level object up to its next key, from ahead of the object's `{` or from past a member,
+/// and answers the key's span, `Err` with how the walk ended where no key follows.
+fn next_top_level_key(s: &mut Scanner<'_>, at_start: bool) -> Result<(usize, usize), TopLevelEnd> {
+    s.ws();
+    if at_start {
+        if !s.eat(b'{') {
+            return Err(TopLevelEnd::Stopped(CchError::Json(s.pos)));
+        }
+        // Never left: the scanner stands inside the object for the walk's life, so a value counts toward the depth
+        // as it does inside any object.
+        s.enter().map_err(TopLevelEnd::Stopped)?;
+        s.ws();
+        if s.eat(b'}') {
+            return Err(TopLevelEnd::Closed);
+        }
+    } else if s.eat(b',') {
+        s.ws();
+        if s.body.get(s.pos) == Some(&b'}') {
+            return Err(TopLevelEnd::ClosedAfterAComma(s.pos));
+        }
+    } else if s.eat(b'}') {
+        return Err(TopLevelEnd::Closed);
+    } else {
+        return Err(TopLevelEnd::Stopped(CchError::Json(s.pos)));
+    }
+    s.ws();
+    s.string().map_err(TopLevelEnd::Stopped)
 }
 
 /// A key's decoded text, `None` where a decoder refuses it. A key with no escape and no control byte is its own
