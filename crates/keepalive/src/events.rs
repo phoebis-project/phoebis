@@ -733,17 +733,10 @@ impl Inner {
         if self.agents - held >= self.limits.max_agents {
             return Err(err("agent_limit", 429));
         }
-        if let Some(previous) = self.sessions.get(&key) {
-            let agents: Vec<String> = previous.agents.keys().cloned().collect();
-            for agent in &agents {
-                self.discard(
-                    &key,
-                    agent,
-                    Reason::InstanceReplaced,
-                    Some(Wasted::Replaced),
-                );
-            }
-            self.agents -= agents.len();
+        if self.sessions.contains_key(&key) {
+            let replaced =
+                self.discard_session(&key, Reason::InstanceReplaced, Some(Wasted::Replaced));
+            self.agents -= replaced;
             // Filed under the generation the replaced rows were saved under: a start under a new generation leaves
             // one removal for the old row and one write for the new, so a load never meets both.
             self.forget_session(&key);

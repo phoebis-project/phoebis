@@ -1617,10 +1617,7 @@ impl Engine {
         inner.closed = true;
         let keys: Vec<SessionKey> = inner.sessions.keys().cloned().collect();
         for key in keys {
-            let agents: Vec<String> = inner.sessions[&key].agents.keys().cloned().collect();
-            for agent in agents {
-                inner.discard(&key, &agent, Reason::Reset, None);
-            }
+            inner.discard_session(&key, Reason::Reset, None);
         }
         inner.sessions.clear();
         inner.pending.clear();
@@ -1680,6 +1677,34 @@ impl Inner {
 
     /// Drops the agent's recipe and everything following it, and moves the agent to a new generation so no
     /// late result about the old one lands. `wasted` labels the probes the recipe leaves unanswered.
+    /// Discards every agent of the session under `reason`, each one's probes settled under `wasted`, and answers how
+    /// many there were.
+    pub(crate) fn discard_session(
+        &mut self,
+        key: &SessionKey,
+        reason: Reason,
+        wasted: Option<Wasted>,
+    ) -> usize {
+        let agents: Vec<String> = self
+            .sessions
+            .get(key)
+            .map(|session| session.agents.keys().cloned().collect())
+            .unwrap_or_default();
+        for agent in &agents {
+            self.discard(key, agent, reason, wasted);
+        }
+        agents.len()
+    }
+
+    /// Ends the session under `reason`: its agents discarded, their probes settled as `session_ended`, its rows filed
+    /// for removal and its entry gone.
+    fn remove_session(&mut self, key: &SessionKey, reason: Reason) {
+        let removed = self.discard_session(key, reason, Some(Wasted::SessionEnded));
+        self.agents -= removed;
+        self.forget_session(key);
+        self.sessions.remove(key);
+    }
+
     pub(crate) fn discard(
         &mut self,
         key: &SessionKey,
@@ -2542,18 +2567,7 @@ impl Inner {
             .map(|(k, _)| k.clone())
             .collect();
         for key in expired {
-            let agents: Vec<String> = self.sessions[&key].agents.keys().cloned().collect();
-            for agent in &agents {
-                self.discard(
-                    &key,
-                    agent,
-                    Reason::SessionExpired,
-                    Some(Wasted::SessionEnded),
-                );
-            }
-            self.agents -= agents.len();
-            self.forget_session(&key);
-            self.sessions.remove(&key);
+            self.remove_session(&key, Reason::SessionExpired);
         }
     }
 
@@ -2570,18 +2584,7 @@ impl Inner {
             .map(|(k, _)| k.clone())
             .collect();
         for key in dead {
-            let agents: Vec<String> = self.sessions[&key].agents.keys().cloned().collect();
-            for agent in &agents {
-                self.discard(
-                    &key,
-                    agent,
-                    Reason::SessionEnded,
-                    Some(Wasted::SessionEnded),
-                );
-            }
-            self.agents -= agents.len();
-            self.forget_session(&key);
-            self.sessions.remove(&key);
+            self.remove_session(&key, Reason::SessionEnded);
         }
     }
 }

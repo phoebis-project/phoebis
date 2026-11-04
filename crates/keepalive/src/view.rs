@@ -275,18 +275,10 @@ impl Engine {
             if inner.closed {
                 return Err(err("quiesced", 503));
             }
-            let agents: Vec<String> = inner
-                .sessions
-                .get(&key)
-                .map(|s| s.agents.keys().cloned().collect())
-                .unwrap_or_default();
-            let held = agents
-                .iter()
-                .filter(|a| inner.sessions[&key].agents[*a].current.is_some())
-                .count();
-            for agent in &agents {
-                inner.discard(&key, agent, Reason::Released, Some(Wasted::Released));
-            }
+            let held = inner.sessions.get(&key).map_or(0, |s| {
+                s.agents.values().filter(|a| a.current.is_some()).count()
+            });
+            inner.discard_session(&key, Reason::Released, Some(Wasted::Released));
             held
         };
         self.flush();
