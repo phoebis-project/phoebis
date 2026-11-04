@@ -1,8 +1,8 @@
 //! The in-place body edits: the bound account's identity, the model the upstream is asked for, the billing hash
 //! that has to follow both, and the first-party fields a reduced-shape request lacks.
 
-use phoebis_cch::Stamp;
 pub(crate) use phoebis_cch::{find, BILLING_BLOCK};
+use phoebis_cch::{Cut, Stamp, TopLevelMembers};
 
 use crate::billing::{restore_billing_line, CarriedVersion, Restore};
 use crate::identity::is_valid_id;
@@ -245,7 +245,7 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
     }
     // Read before any edit moves the line: a client hash is checked and re-signed, the client's own placeholder
     // (its unpatched paths send `00000`, which the server accepts) is neither.
-    let client_hash = matches!(stamp_of(body)?, Stamp::Hash(_));
+    let client_hash = matches!(stamp_of(&TopLevelMembers::read(body))?, Stamp::Hash(_));
     // Judged at admission on the body the client sent; a leg never meets a drift.
     debug_assert!(
         matches!(drift(body), Ok(None)),
@@ -253,19 +253,16 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
     );
     if edit.safeguards == SafeguardsEdit::Drop {
         // A second spelling would reach the upstream after the first is cut and a last-wins parser would act
-        // on it; an escaped spelling is one the raw walk never finds. Both refuse rather than send a body
-        // the operator asked to have stripped. Presence is counted over decoded keys, not read from a parse of
-        // the whole body: a body a strict decoder refuses (a lone surrogate escape in a string value) is one
-        // the cut below still walks.
-        let spellings = phoebis_cch::top_level_member_count(body, "safeguards")?;
-        if spellings > 1 {
-            return Err(RelayError::BodyShape(BodyMember::Repeated(
-                RepeatedMember::Safeguards,
-            )));
-        }
-        let cut = phoebis_cch::remove_top_level_member(body, "safeguards").is_some();
-        if spellings == 1 && !cut {
-            return Err(RelayError::BodyShape(BodyMember::Safeguards));
+        // on it, and an escaped spelling is one the raw walk never finds. Both refuse rather than send a body
+        // the operator asked to have stripped.
+        match phoebis_cch::cut_sole_top_level_member(body, "safeguards")? {
+            Cut::Absent | Cut::Removed => {}
+            Cut::Repeated => {
+                return Err(RelayError::BodyShape(BodyMember::Repeated(
+                    RepeatedMember::Safeguards,
+                )));
+            }
+            Cut::Unreachable => return Err(RelayError::BodyShape(BodyMember::Safeguards)),
         }
     }
     let account_uuid_replaced = match edit.account_uuid {
@@ -505,7 +502,7 @@ pub(crate) struct MarkerTtls {
     pub uniform: Option<i64>,
 }
 
-/// Each marker's TTL is parsed once, and a body without a marker answers before the walks for its containers.
+/// Each marker's TTL is parsed once, and a body without a marker answers before the walk for its containers.
 pub(crate) fn marker_ttls(body: &[u8]) -> MarkerTtls {
     let spans = match phoebis_cch::cache_control_spans(body) {
         Ok(spans) if !spans.is_empty() => spans,
@@ -515,9 +512,10 @@ pub(crate) fn marker_ttls(body: &[u8]) -> MarkerTtls {
     // Every marker rather than the deepest per tier: two tiers whose deepest markers agree can still hold a
     // marker at the other TTL further up, and the cache writes that prefix at that TTL.
     let uniform = ttls.iter().all(|&ttl| ttl == ttls[0]).then_some(ttls[0]);
-    let tools = phoebis_cch::object_member_span(body, &["tools"]);
-    let system = phoebis_cch::object_member_span(body, &["system"]);
-    let messages = phoebis_cch::object_member_span(body, &["messages"]);
+    let members = TopLevelMembers::read(body);
+    let tools = members.object_member_span("tools");
+    let system = members.object_member_span("system");
+    let messages = members.object_member_span("messages");
     let within = |span: Option<(usize, usize)>, at: usize| {
         span.is_some_and(|(start, end)| (start..end).contains(&at))
     };
@@ -603,7 +601,7 @@ fn detach_diagnostics(body: &mut Vec<u8>) -> bool {
 /// cannot read at all, which counts as drift rather than as a body carrying no hash. Errs as `stamp_of` errs, on a
 /// stamp only the decoded walk reaches.
 pub(crate) fn drift(body: &[u8]) -> Result<Option<DriftKind>, RelayError> {
-    drift_of(body, stamp_of(body)?)
+    drift_of(body, stamp_of(&TopLevelMembers::read(body))?)
 }
 
 /// `drift` on the stamp `stamp_of` read, for admission, which reads the stamp once for this check and for the
@@ -615,9 +613,8 @@ pub(crate) fn drift_of(body: &[u8], stamp: Stamp) -> Result<Option<DriftKind>, R
         Stamp::Hash(location) => location,
     };
     let digits = location.digits_start..location.digits_start + CCH_DIGITS;
-    let mut signed = body.to_vec();
-    phoebis_cch::sign_at(&mut signed, &location)?;
-    Ok((signed[digits.clone()] != body[digits]).then_some(DriftKind::Hash))
+    let expected = phoebis_cch::expected_digits(body, &location)?;
+    Ok((expected[..] != body[digits]).then_some(DriftKind::Hash))
 }
 
 /// Whether the version suffix the client stamped reproduces from a text block of the body's first user message
@@ -650,9 +647,9 @@ pub(crate) fn version_drift(
 /// `Err(BodyShape(BillingStamp))` when the decoded walk, which sees a key spelled with an escape, finds a stamp
 /// the raw walk cannot reach: edited, such a body would carry the client's hash over bytes it was not computed
 /// for; unedited, a hash nothing verified.
-pub(crate) fn stamp_of(body: &[u8]) -> Result<Stamp, RelayError> {
-    let stamp = phoebis_cch::stamp(body);
-    if phoebis_cch::decoded_stamp_count(body) > usize::from(!matches!(stamp, Stamp::None)) {
+pub(crate) fn stamp_of(members: &TopLevelMembers<'_>) -> Result<Stamp, RelayError> {
+    let stamp = members.stamp();
+    if members.decoded_stamp_count() > usize::from(!matches!(stamp, Stamp::None)) {
         return Err(RelayError::BodyShape(BodyMember::BillingStamp));
     }
     Ok(stamp)
@@ -1520,7 +1517,7 @@ mod tests {
         );
         assert!(
             matches!(
-                stamp_of(&sent),
+                stamp_of(&TopLevelMembers::read(&sent)),
                 Err(RelayError::BodyShape(BodyMember::BillingStamp))
             ),
             "the decoded walk reads the stamp the raw walk misses"
@@ -1587,7 +1584,7 @@ mod tests {
         );
         assert!(
             matches!(
-                stamp_of(sent),
+                stamp_of(&TopLevelMembers::read(sent)),
                 Err(RelayError::BodyShape(BodyMember::BillingStamp))
             ),
             "the decoded walk reads the stamp beside the lone surrogate"

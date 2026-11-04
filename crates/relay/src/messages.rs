@@ -1843,7 +1843,7 @@ impl Relay {
         // meets them, and the refusal's row keeps the model, the session and the agent. The hash goes first, so a
         // stamp only the decoded walk reaches is refused before the suffix's stamp gate reads past it. Only a
         // stamped line is judged for its suffix; a reduced-shape line has its missing fields restored instead.
-        let (stamped, drifted) = match crate::body::stamp_of(&raw) {
+        let (stamped, drifted) = match crate::body::stamp_of(&members) {
             Ok(stamp) => (
                 !matches!(stamp, Stamp::None),
                 crate::body::drift_of(&raw, stamp),

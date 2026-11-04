@@ -2,7 +2,7 @@
 //! the bus published, and the TTL the body asks for. The output-control exclusions are the Go engine's.
 
 use bytes::Bytes;
-use phoebis_cch::Stamp;
+use phoebis_cch::{Cut, Stamp};
 use serde_json::Value;
 
 use crate::config::{FIVE_MINUTES_MS, ONE_HOUR_MS};
@@ -162,16 +162,19 @@ pub fn make_recipe(
     // cannot read (an escaped key, a stamp `find_cch` cannot parse, a `stream` that is no boolean) would gain a
     // second `stream` beside it or keep a stale hash, so such a body is refused rather than retained. Read after the
     // shape check, so a `max_tokens` that is no positive number stays an unsupported shape.
+    let members = phoebis_cch::TopLevelMembers::read(body);
     let decoded = |name: &str| {
-        phoebis_cch::top_level_member_count(body, name).map_err(|_| RecipeRefusal::InvalidRequest)
+        members
+            .top_level_member_count(name)
+            .map_err(|_| RecipeRefusal::InvalidRequest)
     };
-    let stamp = phoebis_cch::stamp(body);
-    let stamp_hidden = phoebis_cch::decoded_stamp_count(body)
+    let stamp = members.stamp();
+    let stamp_hidden = members.decoded_stamp_count()
         > usize::from(matches!(stamp, Stamp::Placeholder(_) | Stamp::Hash(_)));
-    let stream_hidden = decoded("stream")?
-        > usize::from(phoebis_cch::bool_member_span(body, &["stream"]).is_some());
+    let stream_hidden =
+        decoded("stream")? > usize::from(members.bool_member_span("stream").is_some());
     // Read off the client's bytes, which the copy edited below still holds unchanged when the span is used.
-    let max_tokens = phoebis_cch::number_member_span(body, &["max_tokens"]);
+    let max_tokens = members.number_member_span("max_tokens");
     let max_tokens_hidden = decoded("max_tokens")? > usize::from(max_tokens.is_some());
     if stamp_hidden || stream_hidden || max_tokens_hidden {
         return Err(RecipeRefusal::EscapedKey);
@@ -240,14 +243,12 @@ pub fn make_recipe(
         }
     }
     // A retained body carries the turn's own pending tool use in its `safeguards` member: a probe replaying it
-    // would ask for a verdict on an action already decided, whatever the pool's setting says. The decoded key
-    // count tells an absent member from one the raw walk cannot reach (an escaped spelling) or would leave behind
-    // (a second one), and neither is retained.
-    let spellings = phoebis_cch::top_level_member_count(&edited, "safeguards")
-        .map_err(|_| RecipeRefusal::InvalidRequest)?;
-    let cut = phoebis_cch::remove_top_level_member(&mut edited, "safeguards").is_some();
-    if spellings > 1 || (spellings == 1 && !cut) {
-        return Err(RecipeRefusal::InvalidRequest);
+    // would ask for a verdict on an action already decided, whatever the pool's setting says. The cut tells an
+    // absent member from one the raw walk cannot reach (an escaped spelling) or would leave behind (a second one),
+    // and neither is retained.
+    match phoebis_cch::cut_sole_top_level_member(&mut edited, "safeguards") {
+        Ok(Cut::Absent | Cut::Removed) => {}
+        Ok(Cut::Repeated | Cut::Unreachable) | Err(_) => return Err(RecipeRefusal::InvalidRequest),
     }
     // `stream` is inside the billing hash view and `max_tokens` outside it: a client-stamped body is re-signed
     // over the edited bytes, since the relay would refuse the client's hash as drift. The body is the one the bus

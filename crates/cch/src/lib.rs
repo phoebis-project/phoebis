@@ -52,17 +52,23 @@ pub enum Stamp {
 /// The span comes from the scanner, not from a search for the text: a tool-use input can carry its own `"system"`
 /// member holding a string that matches the billing header, and it can sit earlier in the body than the real one.
 pub fn find_cch(body: &[u8]) -> Option<CchLocation> {
-    let (line, digits_start) = billing_line(body)?;
+    let (line, digits_start) = billing_line(body, string_member_span(body, &LINE_PATH))?;
     Some(CchLocation {
         digits_start: digits_start?,
         line,
     })
 }
 
+/// Where the billing line sits, `system[0].text`.
+const LINE_PATH: [&str; 3] = ["system", "0", "text"];
+
 /// The billing line's span, quotes included, and where the digits of its first readable `cch=` field start, `None`
-/// where `system[0].text` is no billing line.
-fn billing_line(body: &[u8]) -> Option<((usize, usize), Option<usize>)> {
-    let (start, end) = string_member_span(body, &["system", "0", "text"])?;
+/// where `text`, the span of the string at `system[0].text`, is absent or no billing line.
+fn billing_line(
+    body: &[u8],
+    text: Option<(usize, usize)>,
+) -> Option<((usize, usize), Option<usize>)> {
+    let (start, end) = text?;
     let raw = &body[start..end];
     if !raw.starts_with(BILLING_BLOCK) {
         return None;
@@ -84,7 +90,12 @@ fn billing_line(body: &[u8]) -> Option<((usize, usize), Option<usize>)> {
 }
 
 pub fn stamp(body: &[u8]) -> Stamp {
-    let Some((line, digits_start)) = billing_line(body) else {
+    stamp_in(body, string_member_span(body, &LINE_PATH))
+}
+
+/// The stamp of the billing line at `text`, the span of the string at `system[0].text`.
+fn stamp_in(body: &[u8], text: Option<(usize, usize)>) -> Stamp {
+    let Some((line, digits_start)) = billing_line(body, text) else {
         return Stamp::None;
     };
     let Some(digits_start) = digits_start else {
@@ -224,6 +235,8 @@ struct TopLevelMember<'a> {
     decoded: Option<Cow<'a, str>>,
     /// Where the value starts, `None` where the walk stopped ahead of the member's colon.
     value_start: Option<usize>,
+    /// Where the value ends, `None` where the walk stopped ahead of the value's end.
+    value_end: Option<usize>,
 }
 
 /// Where the walk of the top-level object ended.
@@ -245,7 +258,8 @@ impl<'a> TopLevelMembers<'a> {
         let mut members = Vec::new();
         s.ws();
         let end = if s.eat(b'{') {
-            s.inside(|s| top_level_walk(s, &mut members))
+            s.inside(|s| Ok(top_level_walk(s, &mut members)))
+                .unwrap_or_else(TopLevelEnd::Stopped)
         } else {
             TopLevelEnd::Stopped(CchError::Json(s.pos))
         };
@@ -343,13 +357,40 @@ impl<'a> TopLevelMembers<'a> {
 
     /// `bool_member_span` off the table for the top-level member `name`.
     pub fn bool_member_span(&self, name: &str) -> Option<(usize, usize)> {
-        bool_at(&self.raw_value(name)?.1)
+        bool_at(self.raw_value(name)?.1)
+    }
+
+    /// `number_member_span` off the table for the top-level member `name`.
+    pub fn number_member_span(&self, name: &str) -> Option<(usize, usize)> {
+        number_at(&self.raw_value(name)?.1)
+    }
+
+    /// `stamp` off the table.
+    pub fn stamp(&self) -> Stamp {
+        stamp_in(self.body, self.string_member_span(&LINE_PATH))
+    }
+
+    /// `decoded_stamp_count` off the table.
+    pub fn decoded_stamp_count(&self) -> usize {
+        let mut count = 0;
+        for mut s in self.values_named("system") {
+            let _ = each_first_block_member(&mut s, |s, key| {
+                if key == b"text" && s.body.get(s.pos) == Some(&b'"') {
+                    let (start, end) = s.string()?;
+                    count += usize::from(reads_as_a_stamp(&s.body[start..end]));
+                    Ok(())
+                } else {
+                    s.value(false)
+                }
+            });
+        }
+        count
     }
 
     /// `object_member_span` off the table for the top-level member `name`.
     pub fn object_member_span(&self, name: &str) -> Option<(usize, usize)> {
-        let (member_start, s) = self.raw_value(name)?;
-        member_span(s, member_start)
+        let member = self.raw_member(name)?;
+        Some((member.key.0, member.value_end?))
     }
 
     /// The decoded keys in body order, a key that does not decode answered as the error a decoder gives at it.
@@ -380,7 +421,7 @@ impl<'a> TopLevelMembers<'a> {
     }
 
     /// A scanner at the value of each top-level member whose decoded key is `name`. A key that does not decode
-    /// names no member here, as `key_name` reads it.
+    /// names no member here.
     fn values_named<'s>(&'s self, name: &'s str) -> impl Iterator<Item = Scanner<'a>> + 's {
         self.members
             .iter()
@@ -392,11 +433,15 @@ impl<'a> TopLevelMembers<'a> {
     /// The key's opening quote and a scanner at the value of the first top-level member whose key's own bytes are
     /// `name`, `None` where the walk met no such member or stopped ahead of its colon.
     fn raw_value(&self, name: &str) -> Option<(usize, Scanner<'a>)> {
-        let member = self
-            .members
-            .iter()
-            .find(|member| self.body[member.key.0 + 1..member.key.1 - 1] == *name.as_bytes())?;
+        let member = self.raw_member(name)?;
         Some((member.key.0, self.value_at(member.value_start?)))
+    }
+
+    /// The first top-level member whose key's own bytes are `name`.
+    fn raw_member(&self, name: &str) -> Option<&TopLevelMember<'a>> {
+        self.members
+            .iter()
+            .find(|member| self.body[member.key.0 + 1..member.key.1 - 1] == *name.as_bytes())
     }
 
     /// A scanner at a top-level member's value, one level down, as a walk stands inside the top-level object.
@@ -427,15 +472,17 @@ fn top_level_walk<'a>(s: &mut Scanner<'a>, members: &mut Vec<TopLevelMember<'a>>
             s.ws();
             s.pos
         });
+        let value_end = match value_start {
+            Some(_) => s.value(false).map(|()| s.pos),
+            None => Err(CchError::Json(s.pos)),
+        };
         members.push(TopLevelMember {
             key: (ks, ke),
             decoded,
             value_start,
+            value_end: value_end.as_ref().ok().copied(),
         });
-        if value_start.is_none() {
-            return TopLevelEnd::Stopped(CchError::Json(s.pos));
-        }
-        if let Err(error) = s.value(false) {
+        if let Err(error) = value_end {
             return TopLevelEnd::Stopped(error);
         }
         s.ws();
@@ -487,30 +534,29 @@ fn string_at(mut s: Scanner<'_>) -> Option<(usize, usize)> {
 /// `string_member_span` does: a member of the same name inside a nested value is skipped with that value, so a
 /// tool schema cannot stand in for the request's own flag.
 pub fn bool_member_span(body: &[u8], path: &[&str]) -> Option<(usize, usize)> {
-    bool_at(&Scanner::at_path(body, path)?)
+    bool_at(Scanner::at_path(body, path)?)
 }
 
 /// The span of the `true` or `false` literal at `s`, a literal running into anything but a separator no boolean.
-fn bool_at(s: &Scanner<'_>) -> Option<(usize, usize)> {
-    let start = s.pos;
-    for literal in [&b"true"[..], &b"false"[..]] {
-        if s.body[start..].starts_with(literal) {
-            let end = start + literal.len();
-            let terminated = s
-                .body
-                .get(end)
-                .is_none_or(|c| matches!(c, b',' | b'}' | b']') || JSON_WS.contains(c));
-            return terminated.then_some((start, end));
-        }
+fn bool_at(mut s: Scanner<'_>) -> Option<(usize, usize)> {
+    // Only a literal is scanned, so a container value is never walked.
+    if !matches!(s.body.get(s.pos), Some(b't' | b'f')) {
+        return None;
     }
-    None
+    let start = s.pos;
+    s.value(false).ok()?;
+    matches!(&s.body[start..s.pos], b"true" | b"false").then_some((start, s.pos))
 }
 
 /// Raw span of the number literal at `path`, walked as `bool_member_span` walks. The keepalive replay edits
 /// `max_tokens` in place, and the hash view excludes that member, so the edit must not touch anything else.
 pub fn number_member_span(body: &[u8], path: &[&str]) -> Option<(usize, usize)> {
-    let s = Scanner::at_path(body, path)?;
-    let start = s.pos;
+    number_at(&Scanner::at_path(body, path)?)
+}
+
+/// The span of the number literal at `s`.
+fn number_at(s: &Scanner<'_>) -> Option<(usize, usize)> {
+    let (body, start) = (s.body, s.pos);
     let mut end = start;
     while end < body.len() && matches!(body[end], b'0'..=b'9' | b'-' | b'+' | b'.' | b'e' | b'E') {
         end += 1;
@@ -527,9 +573,7 @@ pub fn number_member_span(body: &[u8], path: &[&str]) -> Option<(usize, usize)> 
 pub fn array_member_span(body: &[u8], path: &[&str], index: usize) -> Option<(usize, usize)> {
     let mut s = Scanner::at_path(body, path)?;
     enter_element(&mut s, index)?;
-    let start = s.pos;
-    s.value(false).ok()?;
-    Some((start, s.pos))
+    s.value_span().ok()
 }
 
 /// The position of the closing `]` of the array at `path` when it holds no element, or `None` when it holds one,
@@ -558,8 +602,7 @@ pub fn object_member_span(body: &[u8], path: &[&str]) -> Option<(usize, usize)> 
 
 /// The member whose key's opening quote is `member_start` through the end of its value at `s`.
 fn member_span(mut s: Scanner<'_>, member_start: usize) -> Option<(usize, usize)> {
-    s.value(false).ok()?;
-    Some((member_start, s.pos))
+    Some((member_start, s.value_span().ok()?.1))
 }
 
 /// Cuts the top-level member `key` with one comma by the hash view's rules (the following comma when something
@@ -579,6 +622,38 @@ pub fn remove_top_level_member(body: &mut Vec<u8>, key: &str) -> Option<(usize, 
     };
     body.drain(cut_start..cut_end);
     Some((cut_start, cut_end))
+}
+
+/// What `cut_sole_top_level_member` did with the member it was asked to cut.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cut {
+    /// No top-level member carries the name, raw or escaped.
+    Absent,
+    /// The member's one spelling was cut.
+    Removed,
+    /// More than one top-level member carries the name, and nothing was cut: a second spelling would survive the
+    /// cut.
+    Repeated,
+    /// The member's one spelling is one the raw walk the cut edits through cannot reach, an escaped key.
+    Unreachable,
+}
+
+/// Cuts the top-level member `key` as `remove_top_level_member` cuts it where the body carries it once, and answers
+/// why it could not where the body carries it more than once or escaped. Presence is counted over decoded keys, not
+/// read from a parse of the whole body: a body a strict decoder refuses (a lone surrogate escape in a string value)
+/// is one the cut still walks.
+pub fn cut_sole_top_level_member(body: &mut Vec<u8>, key: &str) -> Result<Cut, CchError> {
+    let spellings = top_level_member_count(body, key)?;
+    if spellings > 1 {
+        return Ok(Cut::Repeated);
+    }
+    Ok(if remove_top_level_member(body, key).is_some() {
+        Cut::Removed
+    } else if spellings == 1 {
+        Cut::Unreachable
+    } else {
+        Cut::Absent
+    })
 }
 
 /// The offset of the first `needle` in `hay`.
@@ -616,12 +691,14 @@ enum Keys {
 /// A member key as `keys` reads it. A key that does not decode names none of the members a walk looks for, all
 /// plain ASCII, so it reads as no name at all.
 fn key_name(body: &[u8], ks: usize, ke: usize, keys: Keys) -> Cow<'_, [u8]> {
-    let raw = &body[ks + 1..ke - 1];
-    if keys == Keys::Raw || !raw.contains(&b'\\') {
-        return Cow::Borrowed(raw);
+    if keys == Keys::Raw {
+        return Cow::Borrowed(&body[ks + 1..ke - 1]);
     }
-    serde_json::from_slice::<String>(&body[ks..ke])
-        .map_or(Cow::Borrowed(&[][..]), |key| Cow::Owned(key.into_bytes()))
+    match decoded_key(body, ks, ke) {
+        Some(Cow::Borrowed(key)) => Cow::Borrowed(key.as_bytes()),
+        Some(Cow::Owned(key)) => Cow::Owned(key.into_bytes()),
+        None => Cow::Borrowed(&[][..]),
+    }
 }
 
 fn cache_control_walk(body: &[u8], keys: Keys) -> Result<Vec<(usize, usize)>, CchError> {
@@ -629,12 +706,7 @@ fn cache_control_walk(body: &[u8], keys: Keys) -> Result<Vec<(usize, usize)>, Cc
     let mut spans = Vec::new();
     s.ws();
     each_member(&mut s, keys, |s, key| match key {
-        b"cache_control" => {
-            let start = s.pos;
-            s.value(false)?;
-            spans.push((start, s.pos));
-            Ok(())
-        }
+        b"cache_control" => s.value_span().map(|span| spans.push(span)),
         b"system" | b"tools" => block_array(s, &mut spans, false, keys),
         b"messages" => message_array(s, &mut spans, keys),
         _ => s.value(false),
@@ -665,12 +737,7 @@ fn block_object(
     keys: Keys,
 ) -> Result<(), CchError> {
     each_member(s, keys, |s, key| match key {
-        b"cache_control" => {
-            let start = s.pos;
-            s.value(false)?;
-            spans.push((start, s.pos));
-            Ok(())
-        }
+        b"cache_control" => s.value_span().map(|span| spans.push(span)),
         // A `tool_result` is the one block the API gives a `content` array of blocks, and its `type` may
         // follow `content` in body order, so the member is read on its name alone and one level only.
         b"content" if !inner => block_array(s, spans, true, keys),
@@ -714,8 +781,7 @@ fn each_object_element<'a>(
     if s.body.get(s.pos) != Some(&b'[') {
         return s.value(false);
     }
-    s.enter()?;
-    let walked = (|| {
+    s.inside(|s| {
         s.pos += 1;
         s.ws();
         if s.eat(b']') {
@@ -737,9 +803,7 @@ fn each_object_element<'a>(
             }
             return Ok(());
         }
-    })();
-    s.leave();
-    walked
+    })
 }
 
 /// How many billing stamps sit where `find_cch` looks, `system[0].text` of the top-level object, once every key
@@ -749,24 +813,7 @@ fn each_object_element<'a>(
 /// the body is well formed and counts what it passed, as `string_member_span` finds a member ahead of a syntax
 /// error.
 pub fn decoded_stamp_count(body: &[u8]) -> usize {
-    let mut s = Scanner::new(body);
-    let mut count = 0;
-    s.ws();
-    let _ = each_member(&mut s, Keys::Decoded, |s, key| {
-        if key != b"system" {
-            return s.value(false);
-        }
-        each_first_block_member(s, |s, key| {
-            if key == b"text" && s.body.get(s.pos) == Some(&b'"') {
-                let (start, end) = s.string()?;
-                count += usize::from(reads_as_a_stamp(&s.body[start..end]));
-                Ok(())
-            } else {
-                s.value(false)
-            }
-        })
-    });
-    count
+    TopLevelMembers::read(body).decoded_stamp_count()
 }
 
 /// Walks the object at `s` (its `{` not yet eaten), handing `member` each member's key as `keys` reads it with `s` at
@@ -780,8 +827,7 @@ fn each_member<'a>(
     if s.body.get(s.pos) != Some(&b'{') {
         return Err(CchError::Json(s.pos));
     }
-    s.enter()?;
-    let walked = (|| {
+    s.inside(|s| {
         s.pos += 1;
         s.ws();
         if s.eat(b'}') {
@@ -806,9 +852,7 @@ fn each_member<'a>(
             }
             return Ok(());
         }
-    })();
-    s.leave();
-    walked
+    })
 }
 
 /// A `system` value: when it is an array whose first element is an object, `member` is handed each of that object's
@@ -850,10 +894,9 @@ fn each_first_block_member<'a>(
 /// an escaped header name or `cch=` beside one is decoded and counted. A token nothing can decode is read by its
 /// bytes, as `find_cch` reads every line, so this count never falls below the raw walk's.
 fn reads_as_a_stamp(token: &[u8]) -> bool {
-    const PREFIX: &str = "x-anthropic-billing-header:";
     match decode_tolerant::<String>(token) {
-        Some(line) => line.starts_with(PREFIX) && line.contains("cch="),
-        None => token[1..].starts_with(PREFIX.as_bytes()) && find(token, b"cch=").is_some(),
+        Some(line) => line.as_bytes().starts_with(&BILLING_BLOCK[1..]) && line.contains("cch="),
+        None => token.starts_with(BILLING_BLOCK) && find(token, b"cch=").is_some(),
     }
 }
 
@@ -871,7 +914,7 @@ pub fn decode_tolerant<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Option<T
 /// cannot walk it to its end. The client cuts a string between the two halves of a character and sends one half
 /// alone, which a strict decoder refuses: the copy is what the router reads such a body through, and never what
 /// it sends. The two escapes are the same length, so every offset in the copy is the body's own.
-pub fn lone_surrogates_mapped(body: &[u8]) -> Option<Vec<u8>> {
+fn lone_surrogates_mapped(body: &[u8]) -> Option<Vec<u8>> {
     let mut s = Scanner::new(body);
     let mut lone = Vec::new();
     each_string_token(&mut s, &mut |start, end| {
@@ -906,33 +949,33 @@ fn each_string_token(
         Some(b'[') => b']',
         _ => return s.value(false),
     };
-    s.enter()?;
-    s.pos += 1;
-    s.ws();
-    if !s.eat(close) {
-        loop {
-            if close == b'}' {
+    s.inside(|s| {
+        s.pos += 1;
+        s.ws();
+        if !s.eat(close) {
+            loop {
+                if close == b'}' {
+                    s.ws();
+                    let (start, end) = s.string()?;
+                    visit(start, end);
+                    s.ws();
+                    if !s.eat(b':') {
+                        return Err(CchError::Json(s.pos));
+                    }
+                }
+                each_string_token(s, visit)?;
                 s.ws();
-                let (start, end) = s.string()?;
-                visit(start, end);
-                s.ws();
-                if !s.eat(b':') {
+                if s.eat(b',') {
+                    continue;
+                }
+                if !s.eat(close) {
                     return Err(CchError::Json(s.pos));
                 }
+                break;
             }
-            each_string_token(s, visit)?;
-            s.ws();
-            if s.eat(b',') {
-                continue;
-            }
-            if !s.eat(close) {
-                return Err(CchError::Json(s.pos));
-            }
-            break;
         }
-    }
-    s.leave();
-    Ok(())
+        Ok(())
+    })
 }
 
 /// Pushes the offset, `offset` plus its place in `token`, of each `\u` escape in the string token that names a
@@ -980,24 +1023,31 @@ pub fn restamp_if_present(body: &mut [u8]) -> Result<bool, CchError> {
     Ok(true)
 }
 
-/// Signs the stamp at `location` in place. The digits are zeroed for the view and written back on an error, so a
-/// failed signing hands the caller the body it passed in.
+/// Signs the stamp at `location` in place. The body is written only once the digits are computed, so a failed
+/// signing hands the caller the body it passed in.
 pub fn sign_at(body: &mut [u8], location: &CchLocation) -> Result<(), CchError> {
-    let digits = location.digits_start..location.digits_start + LEN;
-    let mut kept = [0; LEN];
-    kept.copy_from_slice(&body[digits.clone()]);
-    body[digits.clone()].copy_from_slice(PLACEHOLDER);
-    match normalize(body) {
-        Ok(view) => {
-            let h = xxh64(&view, SEED) & 0xF_FFFF;
-            body[digits].copy_from_slice(format!("{h:05x}").as_bytes());
-            Ok(())
-        }
-        Err(error) => {
-            body[digits].copy_from_slice(&kept);
-            Err(error)
-        }
-    }
+    let digits = expected_digits(body, location)?;
+    body[location.digits_start..location.digits_start + LEN].copy_from_slice(&digits);
+    Ok(())
+}
+
+/// The digits `sign_at` writes at `location`, computed off the borrowed body so a check of the client's stamp needs
+/// no signed copy. No edit of the hash view reaches inside `system[0].text`, so the digits sit in the view shifted by
+/// the bytes the edits ahead of them cut, and the view's validation reads the same JSON whether the digits are the
+/// client's or the placeholder.
+pub fn expected_digits(body: &[u8], location: &CchLocation) -> Result<[u8; LEN], CchError> {
+    let (mut view, edits) = hash_view(body)?;
+    let cut: usize = edits
+        .iter()
+        .take_while(|e| e.start < location.digits_start)
+        .map(|e| e.end - e.start)
+        .sum();
+    let at = location.digits_start - cut;
+    view[at..at + LEN].copy_from_slice(PLACEHOLDER);
+    let h = xxh64(&view, SEED) & 0xF_FFFF;
+    let mut digits = [0; LEN];
+    digits.copy_from_slice(format!("{h:05x}").as_bytes());
+    Ok(digits)
 }
 
 struct Edit {
@@ -1028,6 +1078,11 @@ fn excluded_key(key: &[u8]) -> bool {
 
 /// Builds the hash view without re-serializing: model string values are emptied and dispatch-only members are cut.
 pub fn normalize(body: &[u8]) -> Result<Vec<u8>, CchError> {
+    hash_view(body).map(|(view, _)| view)
+}
+
+/// `normalize`'s view and the edits that built it, sorted by their start.
+fn hash_view(body: &[u8]) -> Result<(Vec<u8>, Vec<Edit>), CchError> {
     serde_json::from_slice::<serde::de::IgnoredAny>(body)
         .map_err(|e| CchError::Json(e.column()))?;
     let mut s = Scanner::new(body);
@@ -1047,7 +1102,7 @@ pub fn normalize(body: &[u8]) -> Result<Vec<u8>, CchError> {
         last = e.end;
     }
     out.extend_from_slice(&body[last..]);
-    Ok(out)
+    Ok((out, s.edits))
 }
 
 impl<'a> Scanner<'a> {
@@ -1091,12 +1146,15 @@ impl<'a> Scanner<'a> {
         self.depth -= 1;
     }
     /// Runs `walk` one level down, for a walker that eats a container's opening bracket itself rather than
-    /// entering it through `value`, so the container counts toward the depth `value` checks, and on every way out
-    /// the depth is back where it was.
-    fn inside<T>(&mut self, walk: impl FnOnce(&mut Self) -> T) -> T {
-        self.depth += 1;
+    /// entering it through `value`, so the container counts toward the depth `value` checks and is refused at the
+    /// bound `value` refuses it at, and on every way out the depth is back where it was.
+    fn inside<T>(
+        &mut self,
+        walk: impl FnOnce(&mut Self) -> Result<T, CchError>,
+    ) -> Result<T, CchError> {
+        self.enter()?;
         let walked = walk(self);
-        self.depth -= 1;
+        self.leave();
         walked
     }
     fn value(&mut self, collect: bool) -> Result<(), CchError> {
@@ -1104,16 +1162,13 @@ impl<'a> Scanner<'a> {
         match self.body.get(self.pos) {
             // The container counts for as long as the scanner stands inside it, arrays and objects alike, which
             // bounds the recursion for the collecting and the non-collecting walk.
-            Some(b'{') | Some(b'[') => {
-                self.enter()?;
-                let scanned = if self.body[self.pos] == b'{' {
-                    self.object(collect)
+            Some(b'{') | Some(b'[') => self.inside(|s| {
+                if s.body[s.pos] == b'{' {
+                    s.object(collect)
                 } else {
-                    self.array(collect)
-                };
-                self.leave();
-                scanned
-            }
+                    s.array(collect)
+                }
+            }),
             Some(b'"') => self.string().map(|_| ()),
             Some(_) => {
                 let start = self.pos;
@@ -1132,6 +1187,11 @@ impl<'a> Scanner<'a> {
             }
             None => Err(CchError::Json(self.pos)),
         }
+    }
+    fn value_span(&mut self) -> Result<(usize, usize), CchError> {
+        let start = self.pos;
+        self.value(false)?;
+        Ok((start, self.pos))
     }
     fn string(&mut self) -> Result<(usize, usize), CchError> {
         let start = self.pos;
