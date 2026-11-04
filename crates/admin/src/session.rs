@@ -121,12 +121,12 @@ impl Sessions {
     ) -> Result<String, LoginError> {
         let mut state = self.state.lock().expect(LOCK_POISONED);
         self.check(&mut state, presented, &secrets.admin, now)?;
-        let cookie = random_token();
+        let cookie = phoebis_oauth::generate_state();
         state.sessions.insert(
             cookie.clone(),
             SessionRec {
                 created_at: now,
-                id: random_token(),
+                id: phoebis_oauth::generate_state(),
                 last_seen: now,
             },
         );
@@ -233,13 +233,6 @@ impl Sessions {
         state.token_key = token_key(&self.secret, epoch);
         Ok(())
     }
-}
-
-/// 32 random bytes base64url, the same size the pairing sessions use for their own unguessable handles.
-fn random_token() -> String {
-    let mut bytes = [0u8; 32];
-    phoebis_oauth::random::fill(&mut bytes);
-    URL_SAFE_NO_PAD.encode(bytes)
 }
 
 fn token_key(secret: &Secret, epoch: u64) -> [u8; 32] {
