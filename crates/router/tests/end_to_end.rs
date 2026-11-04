@@ -4352,9 +4352,9 @@ async fn the_binary_retains_a_session_probes_it_and_serves_the_keepalive_views()
 }
 
 /// Polls an admin route until `ready` accepts its JSON, within the settle budget: the deadline for a route that
-/// answers but has not converged, the timeout for a poll still in flight when the budget ends. The two share one
-/// instant, so the timeout names the last answer read as the deadline does, and says the route gave no answer only
-/// where no poll returned.
+/// answers but has not converged, the timeout for a poll in flight or the pause between polls when the budget ends.
+/// The two share one instant, so the timeout names the last answer read as the deadline does, and says the route
+/// gave no answer only where no poll returned.
 async fn wait_json(
     client: &reqwest::Client,
     url: &str,
