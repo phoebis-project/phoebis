@@ -15,10 +15,6 @@ const IN_FLIGHT_WHERE: &str = "resolved_at IS NULL";
 // `PENDING_WHERE` as one term is the predicate of the partial index `refresh_attempts_pending`, so SQLite answers
 // this read from that index rather than the table. Named, since the planner otherwise prefers
 // `refresh_attempts_account`, which leads with both equality columns but holds every attempt the holder made.
-fn holder_pending_query() -> &'static str {
-    &HOLDER_PENDING
-}
-
 static HOLDER_PENDING: LazyLock<String> = LazyLock::new(|| {
     format!(
         "SELECT EXISTS(SELECT 1 FROM refresh_attempts INDEXED BY refresh_attempts_pending \
@@ -106,6 +102,8 @@ pub struct NewBundle {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AttemptOutcome {
     Committed,
+    /// An open attempt a disconnect settled, stored as a failure whose detail and class name the disconnect.
+    Disconnected,
     Failed {
         cause: String,
         detail: String,
@@ -125,7 +123,9 @@ impl AttemptOutcome {
     pub fn word(&self) -> &'static str {
         match self {
             AttemptOutcome::Committed => "committed",
-            AttemptOutcome::Failed { .. } | AttemptOutcome::Superseded => "failed",
+            AttemptOutcome::Disconnected
+            | AttemptOutcome::Failed { .. }
+            | AttemptOutcome::Superseded => "failed",
             AttemptOutcome::Uncertain { .. } => "uncertain",
         }
     }
@@ -133,6 +133,7 @@ impl AttemptOutcome {
     pub fn detail(&self) -> Option<&str> {
         match self {
             AttemptOutcome::Committed => None,
+            AttemptOutcome::Disconnected => Some(DISCONNECTED_DETAIL),
             AttemptOutcome::Superseded => Some(SUPERSEDED_DETAIL),
             AttemptOutcome::Failed { detail, .. } | AttemptOutcome::Uncertain { detail, .. } => {
                 Some(detail)
@@ -143,6 +144,7 @@ impl AttemptOutcome {
     pub fn cause(&self) -> Option<&str> {
         match self {
             AttemptOutcome::Committed => None,
+            AttemptOutcome::Disconnected => Some(DISCONNECTED_DETAIL),
             AttemptOutcome::Superseded => Some(SUPERSEDED_DETAIL),
             AttemptOutcome::Failed { cause, .. } | AttemptOutcome::Uncertain { cause, .. } => {
                 Some(cause)
@@ -151,9 +153,10 @@ impl AttemptOutcome {
     }
 }
 
-// The details a settlement writes beside its outcome word as markers, which `settled` reads back: a pairing's own
-// committed row, and an open attempt a commit closed because the bundle it waited on was replaced. A superseded row's
-// class is its marker word.
+// The details a settlement writes beside its outcome word. Two are markers that `settled` reads back: a pairing's own
+// committed row, and an open attempt a commit closed because the bundle it waited on was replaced. A superseded or
+// disconnected row's class is its detail word.
+const DISCONNECTED_DETAIL: &str = "disconnected";
 const PAIRING_DETAIL: &str = "pairing";
 const SUPERSEDED_DETAIL: &str = "superseded";
 
@@ -227,8 +230,8 @@ pub struct LastAttempt {
     pub detail: Option<String>,
 }
 
-/// One holder's credential standing as `credential_standings` reads it, each part the answer of the one-account read
-/// of its name, so a failed read leaves the other two parts standing.
+/// One holder's credential standing as `credential_standings` reads it, each part from a read of its own, so a failed
+/// read leaves the other two parts standing.
 #[derive(Debug)]
 pub struct CredentialStanding {
     pub metadata: Result<Option<CredentialMetadata>, StoreError>,
@@ -270,12 +273,14 @@ fn credential_metadata_in(
     Ok(metadata)
 }
 
+/// Whether the holder `incarnation` names has an attempt still open, which a restart quarantines the account for: one
+/// in flight, or one resolved uncertain that no later commit has superseded. A later retry that failed leaves it open.
 fn has_pending_refresh_attempt_in(
     conn: &Connection,
     account_id: &str,
     incarnation: u64,
 ) -> Result<bool, StoreError> {
-    let mut stmt = conn.prepare_cached(holder_pending_query())?;
+    let mut stmt = conn.prepare_cached(&HOLDER_PENDING)?;
     let pending = stmt.query_row(params![account_id, incarnation as i64], |row| row.get(0))?;
     Ok(pending)
 }
@@ -322,8 +327,18 @@ fn open_tokens(
     Ok(serde_json::from_slice(&plaintext)?)
 }
 
-// The columns `id, account_id, started_at, resolved_at, outcome, detail, lifecycle_generation,
-// credential_generation, cause` of `refresh_attempts`, in that order.
+// The columns `row_to_resolved_attempt` reads, in its order.
+const RESOLVED_ATTEMPT_SELECT: &str =
+    "SELECT id, account_id, started_at, resolved_at, outcome, detail, lifecycle_generation, \
+     credential_generation, cause FROM refresh_attempts";
+
+static HOLDER_NEWEST_RESOLVED: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "{RESOLVED_ATTEMPT_SELECT} WHERE account_id = ?1 AND incarnation = ?2 AND outcome IS NOT NULL \
+         ORDER BY resolved_at DESC, id DESC LIMIT ?3"
+    )
+});
+
 fn row_to_resolved_attempt(r: &rusqlite::Row<'_>) -> rusqlite::Result<ResolvedAttempt> {
     Ok(ResolvedAttempt {
         id: r.get::<_, i64>(0)? as u64,
@@ -461,7 +476,7 @@ impl Store {
         credential_metadata_in(&self.conn.lock().expect(LOCK_POISONED), account_id)
     }
 
-    /// `credential_metadata`, `last_refresh_attempt` and `has_pending_refresh_attempt` for each `(account_id,
+    /// The credential metadata, the newest attempt and whether an attempt is still open for each `(account_id,
     /// incarnation)`, in the order given, under one take of the connection, so a list of every account takes the
     /// store once for them rather than three times per account.
     pub fn credential_standings(&self, holders: &[(&str, u64)]) -> Vec<CredentialStanding> {
@@ -676,23 +691,39 @@ impl Store {
         // Whatever else was still open for this account was waiting on the bundle this commit replaces, so
         // it has its answer. Leaving one open would block every later refresh of the new credential and
         // quarantine the account at the next start.
+        let superseded = AttemptOutcome::Superseded;
         tx.execute(
             &format!(
-                "UPDATE refresh_attempts SET resolved_at = ?2, outcome = 'failed', detail = '{SUPERSEDED_DETAIL}', \
-                 cause = '{SUPERSEDED_DETAIL}' WHERE account_id = ?1 AND id IS NOT ?3 AND ({PENDING_WHERE})"
+                "UPDATE refresh_attempts SET resolved_at = ?2, outcome = ?4, detail = ?5, cause = ?6 \
+                 WHERE account_id = ?1 AND id IS NOT ?3 AND ({PENDING_WHERE})"
             ),
-            params![account_id, now, attempt_id.map(|id| id as i64)],
+            params![
+                account_id,
+                now,
+                attempt_id.map(|id| id as i64),
+                superseded.word(),
+                superseded.detail(),
+                superseded.cause()
+            ],
         )?;
 
         if let Some(id) = attempt_id {
             // Scoped by account_id, not just id: an attempt_id that belongs to another account must not
             // be resolved by this commit, even by accident.
+            let committed = AttemptOutcome::Committed;
             let updated = tx.execute(
                 &format!(
-                    "UPDATE refresh_attempts SET resolved_at = ?2, outcome = 'committed', detail = NULL, cause = NULL \
+                    "UPDATE refresh_attempts SET resolved_at = ?2, outcome = ?4, detail = ?5, cause = ?6 \
                      WHERE id = ?1 AND account_id = ?3 AND ({PENDING_WHERE})"
                 ),
-                params![id as i64, now, account_id],
+                params![
+                    id as i64,
+                    now,
+                    account_id,
+                    committed.word(),
+                    committed.detail(),
+                    committed.cause()
+                ],
             )?;
             // A row that exists but was already settled elsewhere, by a disconnect for instance, leaves the
             // commit alone: the tokens in hand were rotated upstream and losing them to a rollback would
@@ -797,12 +828,10 @@ impl Store {
         limit: usize,
     ) -> Result<Vec<ResolvedAttempt>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
-        let mut stmt = conn.prepare(
-            "SELECT id, account_id, started_at, resolved_at, outcome, detail, lifecycle_generation, \
-             credential_generation, cause FROM refresh_attempts \
-             WHERE (resolved_at > ?1 OR (resolved_at = ?1 AND id > ?2)) AND outcome IS NOT NULL \
-             ORDER BY resolved_at, id LIMIT ?3",
-        )?;
+        let mut stmt = conn.prepare(&format!(
+            "{RESOLVED_ATTEMPT_SELECT} WHERE (resolved_at > ?1 OR (resolved_at = ?1 AND id > ?2)) \
+             AND outcome IS NOT NULL ORDER BY resolved_at, id LIMIT ?3"
+        ))?;
         let rows = stmt.query_map(
             params![resolved_at, id as i64, limit as i64],
             row_to_resolved_attempt,
@@ -961,23 +990,9 @@ impl Store {
             .map_err(StoreError::from)
     }
 
-    /// Whether the holder `incarnation` names has an attempt still open, which a restart quarantines the account
-    /// for: one in flight, or one resolved uncertain that no later commit has superseded; a later retry that
-    /// failed leaves it open.
-    pub fn has_pending_refresh_attempt(
-        &self,
-        account_id: &str,
-        incarnation: u64,
-    ) -> Result<bool, StoreError> {
-        has_pending_refresh_attempt_in(
-            &self.conn.lock().expect(LOCK_POISONED),
-            account_id,
-            incarnation,
-        )
-    }
-
     /// The newest attempt of the holder `incarnation` names: a previous holder's history under the same id is
     /// not this one's.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn last_refresh_attempt(
         &self,
         account_id: &str,
@@ -1004,12 +1019,7 @@ impl Store {
             "injected refresh read failure",
         )?;
         let conn = self.conn.lock().expect(LOCK_POISONED);
-        let mut stmt = conn.prepare_cached(
-            "SELECT id, account_id, started_at, resolved_at, outcome, detail, lifecycle_generation, \
-             credential_generation, cause FROM refresh_attempts \
-             WHERE account_id = ?1 AND incarnation = ?2 AND outcome IS NOT NULL \
-             ORDER BY resolved_at DESC, id DESC LIMIT ?3",
-        )?;
+        let mut stmt = conn.prepare_cached(&HOLDER_NEWEST_RESOLVED)?;
         let rows = stmt.query_map(
             params![account_id, incarnation as i64, limit as i64],
             row_to_resolved_attempt,
@@ -1028,7 +1038,7 @@ mod tests {
         let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
         let conn = store.conn.lock().unwrap();
         let plan: Vec<String> = conn
-            .prepare(&format!("EXPLAIN QUERY PLAN {}", holder_pending_query()))
+            .prepare(&format!("EXPLAIN QUERY PLAN {}", HOLDER_PENDING.as_str()))
             .unwrap()
             .query_map(params!["a", 1], |row| row.get(3))
             .unwrap()

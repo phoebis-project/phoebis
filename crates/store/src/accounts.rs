@@ -1,13 +1,12 @@
 //! Account registry: rows, lifecycle state, and the lifecycle-generation bump that disconnects a slot.
 
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 
 use rusqlite::{params, OptionalExtension, Row};
 
-use crate::registry::{
-    organization_type_of, plan_of, usage_based_of, Cancellation, SubscriptionTerm,
-};
-use crate::{Store, StoreError, LOCK_POISONED, PENDING_WHERE};
+use crate::registry::{organization_type_of, plan_of, usage_based_of, SubscriptionTerm};
+use crate::{AttemptOutcome, Store, StoreError, LOCK_POISONED, PENDING_WHERE};
 
 text_enum! {
     #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -333,11 +332,7 @@ impl Store {
         );
         match written {
             Ok(_) => Ok(()),
-            Err(rusqlite::Error::SqliteFailure(error, _))
-                if error.code == rusqlite::ErrorCode::ConstraintViolation =>
-            {
-                Err(StoreError::IdentityTaken)
-            }
+            Err(error) if crate::registry::is_constraint(&error) => Err(StoreError::IdentityTaken),
             Err(error) => Err(error.into()),
         }
     }
@@ -417,12 +412,19 @@ impl Store {
         )?;
         // A disconnect settles every open attempt: one still in flight from before the disconnect would block
         // every refresh after re-pairing, and an uncertain one would quarantine the re-paired account at start.
+        let disconnected = AttemptOutcome::Disconnected;
         tx.execute(
             &format!(
-                "UPDATE refresh_attempts SET resolved_at = ?2, outcome = 'failed', detail = 'disconnected', \
-                 cause = 'disconnected' WHERE account_id = ?1 AND ({PENDING_WHERE})"
+                "UPDATE refresh_attempts SET resolved_at = ?2, outcome = ?3, detail = ?4, cause = ?5 \
+                 WHERE account_id = ?1 AND ({PENDING_WHERE})"
             ),
-            params![id, now],
+            params![
+                id,
+                now,
+                disconnected.word(),
+                disconnected.detail(),
+                disconnected.cause()
+            ],
         )?;
         tx.commit()?;
         Ok(new_generation as u64)
@@ -450,7 +452,7 @@ impl Store {
             &format!("DELETE FROM refresh_attempts WHERE account_id = ?1 AND ({PENDING_WHERE})"),
             params![id],
         )?;
-        bury_in(&tx, "account_tombstones", id, incarnation)?;
+        bury_in(&tx, Tombstones::Account, id, incarnation)?;
         crate::registry::record_change(&tx, now, actor, "account_deleted", id, "{}")?;
         tx.commit()?;
         Ok(())
@@ -536,18 +538,15 @@ impl Store {
 
     /// The operator's answer alone: the flag and the end together, the end dropped when the flag is off;
     /// bumps `revision` so the next reload publishes it.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn set_canceled(
         &self,
         id: &str,
         canceled: bool,
         ends_at: Option<i64>,
     ) -> Result<(), StoreError> {
-        let cancellation = if canceled {
-            Cancellation::On { ends_at }
-        } else {
-            Cancellation::Off
-        };
-        let (canceled, ends_at) = cancellation.stored_pair();
+        let (canceled, ends_at) =
+            crate::registry::Cancellation::from_flag(canceled, ends_at).stored_pair();
         let conn = self.conn.lock().expect(LOCK_POISONED);
         if conn.execute(
             "UPDATE accounts SET canceled = ?2, subscription_ends_at = ?3, \
@@ -565,32 +564,25 @@ impl Store {
         subscription_term_in(&conn, id)
     }
 
-    /// Every account's profile document, subscription row and term by account id, in one statement, so a list of
-    /// accounts reads them once where `profile_json`, `subscription` and `subscription_term` read one row each.
+    /// Every account's profile document and term by account id, in one statement, so a list of accounts reads them
+    /// once where `profile_json` and `subscription_term` read one row each.
     pub fn account_extras(&self) -> Result<BTreeMap<String, AccountExtras>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
-        let mut stmt = conn.prepare(&format!(
-            "SELECT {TERM_COLUMNS}, subscription_plan FROM accounts"
-        ))?;
+        let mut stmt = conn.prepare(&format!("SELECT {TERM_COLUMNS} FROM accounts"))?;
         let extras = stmt
-            .query_map([], |row| {
-                let term = row_to_term(row)?;
-                Ok((
-                    term.account_id.clone(),
-                    AccountExtras {
-                        profile_json: row.get(7)?,
-                        subscription: SubscriptionRow {
-                            plan: row.get(9)?,
-                            tier: row.get(5)?,
-                            since: row.get(1)?,
-                            trial_ends_at: row.get(2)?,
-                        },
-                        term,
-                    },
-                ))
-            })?
+            .query_map([], row_to_extras)?
             .collect::<rusqlite::Result<BTreeMap<_, _>>>()?;
         Ok(extras)
+    }
+
+    /// One account's `account_extras` entry, `None` for an unknown id, for a view of that account alone.
+    pub fn account_extras_of(&self, id: &str) -> Result<Option<AccountExtras>, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        let extras = conn
+            .prepare_cached(&TERM_BY_ID)?
+            .query_row(params![id], row_to_extras)
+            .optional()?;
+        Ok(extras.map(|(_, extras)| extras))
     }
 
     /// Flags the account's plan as ended at `at` unless a flag already stands, and answers whether this write set it.
@@ -638,31 +630,50 @@ pub(crate) fn subscription_term_in(
     conn: &rusqlite::Connection,
     id: &str,
 ) -> Result<Option<SubscriptionTerm>, StoreError> {
-    conn.query_row(
-        &format!("SELECT {TERM_COLUMNS} FROM accounts WHERE id = ?1"),
-        params![id],
-        row_to_term,
-    )
-    .optional()
-    .map_err(StoreError::from)
+    conn.prepare_cached(&TERM_BY_ID)?
+        .query_row(params![id], row_to_term)
+        .optional()
+        .map_err(StoreError::from)
 }
 
-// The columns `row_to_term` reads, in its order. `account_extras` reads the subscription row's plan after them.
+// The columns `row_to_term` reads, in its order.
 pub(crate) const TERM_COLUMNS: &str =
     "id, subscription_since, trial_ends_at, canceled, subscription_ends_at, \
      subscription_tier, kind, profile_json, plan_ended_at";
 
+static TERM_BY_ID: LazyLock<String> =
+    LazyLock::new(|| format!("SELECT {TERM_COLUMNS} FROM accounts WHERE id = ?1"));
+
 pub(crate) fn row_to_term(row: &Row<'_>) -> rusqlite::Result<SubscriptionTerm> {
-    let tier: Option<String> = row.get(5)?;
+    let profile = profile_of(row)?;
+    term_of(row, profile.as_ref())
+}
+
+fn row_to_extras(row: &Row<'_>) -> rusqlite::Result<(String, AccountExtras)> {
+    let profile = profile_of(row)?;
+    let term = term_of(row, profile.as_ref())?;
+    Ok((term.account_id.clone(), AccountExtras { profile, term }))
+}
+
+/// The profile document of a `TERM_COLUMNS` row, parsed once so the term's class, its plan and the extras share it. A
+/// document that does not parse reads as absent.
+fn profile_of(row: &Row<'_>) -> rusqlite::Result<Option<serde_json::Value>> {
     let profile_json: Option<String> = row.get(7)?;
+    Ok(profile_json
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok()))
+}
+
+/// `row_to_term` over the profile document the caller already parsed from the row.
+fn term_of(
+    row: &Row<'_>,
+    profile: Option<&serde_json::Value>,
+) -> rusqlite::Result<SubscriptionTerm> {
+    let tier: Option<String> = row.get(5)?;
     let usage_based = row.get::<_, AccountKind>(6)? == AccountKind::Oauth
-        && usage_based_of(tier.as_deref(), profile_json.as_deref());
-    let plan = plan_of(
-        organization_type_of(profile_json.as_deref()).as_deref(),
-        tier.as_deref(),
-        usage_based,
-    )
-    .map(String::from);
+        && usage_based_of(tier.as_deref(), profile);
+    let plan =
+        plan_of(organization_type_of(profile), tier.as_deref(), usage_based).map(String::from);
     Ok(SubscriptionTerm {
         account_id: row.get(0)?,
         since: row.get(1)?,
@@ -690,12 +701,12 @@ impl SubscriptionTerm {
     }
 }
 
-/// What `Store::account_extras` answers for one account: what `profile_json`, `subscription` and `subscription_term`
-/// answer for it.
+/// What `Store::account_extras` answers for one account: the document `profile_json` answers, parsed, and what
+/// `subscription_term` answers for it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccountExtras {
-    pub profile_json: Option<String>,
-    pub subscription: SubscriptionRow,
+    /// `None` without a stored document and for one that does not parse.
+    pub profile: Option<serde_json::Value>,
     pub term: SubscriptionTerm,
 }
 
@@ -712,21 +723,42 @@ pub struct SubscriptionRow {
 /// The incarnation a fresh row under `id` takes: one past the tombstone of whatever held that id before,
 /// and 1 when the id is new.
 pub(crate) fn next_incarnation(conn: &rusqlite::Connection, id: &str) -> Result<u64, StoreError> {
-    next_incarnation_in(conn, "account_tombstones", id)
+    next_incarnation_in(conn, Tombstones::Account, id)
+}
+
+/// The tables that keep a deleted id's incarnation, one per kind of row a later row can take the id of.
+#[derive(Clone, Copy)]
+pub(crate) enum Tombstones {
+    Account,
+    ApiKey,
+    Guardrail,
+    Pool,
+}
+
+impl Tombstones {
+    fn table(self) -> &'static str {
+        match self {
+            Tombstones::Account => "account_tombstones",
+            Tombstones::ApiKey => "api_key_tombstones",
+            Tombstones::Guardrail => "guardrail_tombstones",
+            Tombstones::Pool => "pool_tombstones",
+        }
+    }
 }
 
 /// Leaves the id's incarnation behind in `tombstones`, never lowering one a later holder left, so the next holder's
 /// incarnation from `next_incarnation_in` goes past every earlier one.
 pub(crate) fn bury_in(
     conn: &rusqlite::Connection,
-    tombstones: &str,
+    tombstones: Tombstones,
     id: &str,
     incarnation: i64,
 ) -> Result<(), StoreError> {
+    let table = tombstones.table();
     conn.execute(
         &format!(
-            "INSERT INTO {tombstones} (id, incarnation) VALUES (?1, ?2) \
-             ON CONFLICT(id) DO UPDATE SET incarnation = max({tombstones}.incarnation, excluded.incarnation)"
+            "INSERT INTO {table} (id, incarnation) VALUES (?1, ?2) \
+             ON CONFLICT(id) DO UPDATE SET incarnation = max({table}.incarnation, excluded.incarnation)"
         ),
         params![id, incarnation],
     )?;
@@ -737,12 +769,13 @@ pub(crate) fn bury_in(
 /// 1 when new.
 pub(crate) fn next_incarnation_in(
     conn: &rusqlite::Connection,
-    tombstones: &str,
+    tombstones: Tombstones,
     id: &str,
 ) -> Result<u64, StoreError> {
+    let table = tombstones.table();
     let buried: Option<i64> = conn
         .query_row(
-            &format!("SELECT incarnation FROM {tombstones} WHERE id = ?1"),
+            &format!("SELECT incarnation FROM {table} WHERE id = ?1"),
             params![id],
             |row| row.get(0),
         )

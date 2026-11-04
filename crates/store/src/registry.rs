@@ -8,6 +8,7 @@ use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, 
 use rusqlite::{params, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 
+use crate::accounts::Tombstones;
 use crate::credentials::store_api_key_secret;
 use crate::{
     AccountRow, AccountState, NewBundle, Secret, StateCause, Store, StoreError, SubscriptionRow,
@@ -193,6 +194,15 @@ pub enum Cancellation {
 }
 
 impl Cancellation {
+    /// The cancellation a flag and an end name: on with the end for a set flag, off otherwise, which drops the end.
+    pub fn from_flag(canceled: bool, ends_at: Option<i64>) -> Cancellation {
+        if canceled {
+            Cancellation::On { ends_at }
+        } else {
+            Cancellation::Off
+        }
+    }
+
     /// The `canceled` flag and the `subscription_ends_at` value the row stores for it.
     pub(crate) fn stored_pair(self) -> (bool, Option<i64>) {
         match self {
@@ -532,13 +542,11 @@ pub struct SubscriptionTerm {
 }
 
 /// The one derivation of the class, shared by the registry load and `Store::subscription_term`.
-pub fn usage_based_of(tier: Option<&str>, profile_json: Option<&str>) -> bool {
+pub fn usage_based_of(tier: Option<&str>, profile: Option<&serde_json::Value>) -> bool {
     tier == Some("default_claude_zero")
-        || profile_json
-            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
-            .is_some_and(|document| {
-                document["organization"]["seat_tier"] == "enterprise_usage_based"
-            })
+        || profile.is_some_and(|document| {
+            document["organization"]["seat_tier"] == "enterprise_usage_based"
+        })
 }
 
 /// The one resolution of the plan, shared by the registry load and `Store::subscription_term`: the usage-based class
@@ -573,14 +581,8 @@ pub fn plan_of(
 }
 
 /// The stored document's `organization.organization_type`, `None` without a document or the member.
-pub(crate) fn organization_type_of(profile_json: Option<&str>) -> Option<String> {
-    profile_json
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
-        .and_then(|document| {
-            document["organization"]["organization_type"]
-                .as_str()
-                .map(String::from)
-        })
+pub(crate) fn organization_type_of(profile: Option<&serde_json::Value>) -> Option<&str> {
+    profile.and_then(|document| document["organization"]["organization_type"].as_str())
 }
 
 #[derive(Clone, Debug, Default)]
@@ -688,9 +690,8 @@ fn row_exists(conn: &rusqlite::Connection, table: &str, id: &str) -> Result<bool
     )? > 0)
 }
 
-fn is_constraint(error: &rusqlite::Error) -> bool {
-    matches!(error, rusqlite::Error::SqliteFailure(failure, _)
-        if failure.code == rusqlite::ErrorCode::ConstraintViolation)
+pub(crate) fn is_constraint(error: &rusqlite::Error) -> bool {
+    error.sqlite_error_code() == Some(rusqlite::ErrorCode::ConstraintViolation)
 }
 
 /// A create's refused insert as its caller reads it: `IdTaken` when a constraint refused the row and a row stands
@@ -899,7 +900,7 @@ impl Store {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let now = self.now_ms();
-        let incarnation = crate::accounts::next_incarnation_in(&tx, "pool_tombstones", &row.id)?;
+        let incarnation = crate::accounts::next_incarnation_in(&tx, Tombstones::Pool, &row.id)?;
         tx.execute(
             "INSERT INTO pools (id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, window_ceiling, model_rules_json, keepalive_json, body_capture_hours, prefer_subscription, shed_cap, burn_average_seconds, shed_dwell_seconds, load_shedding, migrate_when_spent, warm_sessions, retry_in_place_seconds, in_flight_cap, overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics, affinity_mode, subagent_placement, session_placement, min_shared_prefix_tokens, auto_mode_server, slow_down, slow_down_stretch_seconds, slow_down_hold_seconds, return_to_plan, return_to_plan_dwell_seconds, created_at, updated_at, incarnation) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?34, ?35)",
@@ -1044,7 +1045,7 @@ impl Store {
             "DELETE FROM guardrail_attachments WHERE subject_kind = ?1 AND subject_id = ?2",
             params![SubjectKind::Pool, id],
         )?;
-        crate::accounts::bury_in(&tx, "pool_tombstones", id, incarnation)?;
+        crate::accounts::bury_in(&tx, Tombstones::Pool, id, incarnation)?;
         record_change(&tx, self.now_ms(), actor, "pool_deleted", id, "{}")?;
         tx.commit()?;
         Ok(())
@@ -1123,7 +1124,7 @@ impl Store {
         )?;
         let now = self.now_ms();
         let now = previous.map_or(now, |p| stamp_past(now, p));
-        let incarnation = crate::accounts::next_incarnation_in(&tx, "api_key_tombstones", &row.id)?;
+        let incarnation = crate::accounts::next_incarnation_in(&tx, Tombstones::ApiKey, &row.id)?;
         tx.execute(
             "INSERT INTO api_keys (id, label, notes, pool_id, enabled, revoked_at, expires_at, model_rules_json, model_rules_mode, long_context_twins, keepalive_opt_out, body_capture_hours, secret_digest, prefix, auto_mode_server, created_at, updated_at, rotated_at, last_used_at, retired_secret_last_used_at, incarnation) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16, NULL, NULL, NULL, ?17)",
@@ -1320,7 +1321,7 @@ impl Store {
             "DELETE FROM guardrail_attachments WHERE subject_kind = ?1 AND subject_id = ?2",
             params![SubjectKind::Key, id],
         )?;
-        crate::accounts::bury_in(&tx, "api_key_tombstones", id, incarnation)?;
+        crate::accounts::bury_in(&tx, Tombstones::ApiKey, id, incarnation)?;
         tx.execute("DELETE FROM pins WHERE key_id = ?1", params![id])?;
         tx.execute(
             "DELETE FROM session_first_seen WHERE key_id = ?1",
@@ -1583,7 +1584,7 @@ impl Store {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let now = self.now_ms();
         let incarnation =
-            crate::accounts::next_incarnation_in(&tx, "guardrail_tombstones", &row.id)?;
+            crate::accounts::next_incarnation_in(&tx, Tombstones::Guardrail, &row.id)?;
         tx.execute(
             "INSERT INTO guardrails (id, name, description, enabled, mode, action, conditions_json, preset_id, preset_version, incarnation, created_at, updated_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
@@ -1707,7 +1708,7 @@ impl Store {
             .into_iter()
             .collect::<Result<Vec<_>, StoreError>>()?;
         tx.execute("DELETE FROM guardrails WHERE id = ?1", params![id])?;
-        crate::accounts::bury_in(&tx, "guardrail_tombstones", id, incarnation)?;
+        crate::accounts::bury_in(&tx, Tombstones::Guardrail, id, incarnation)?;
         for (table, subject_ids) in &subjects {
             for subject_id in subject_ids {
                 stamp_subject(&tx, table, subject_id, now)?;

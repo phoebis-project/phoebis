@@ -323,11 +323,7 @@ pub(crate) async fn patch(
                 "canceled needs subscription_ends_at",
             );
         }
-        Some(if canceled {
-            Cancellation::On { ends_at }
-        } else {
-            Cancellation::Off
-        })
+        Some(Cancellation::from_flag(canceled, ends_at))
     } else {
         None
     };

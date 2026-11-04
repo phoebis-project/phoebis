@@ -32,7 +32,7 @@ use phoebis_routing::{
 use phoebis_store::{
     answers_stamp_token, stamp_token, AccountKind, AccountRow, AccountState, ApiKeyRow,
     CooldownRow, CredentialStanding, Identity, NewBundle, PoolMember, PoolRow, Settled, StateCause,
-    StoreError,
+    StoreError, SubscriptionRow,
 };
 use phoebis_transport::response::ResponseHead;
 use serde::Deserialize;
@@ -2109,7 +2109,16 @@ pub(crate) async fn account_context(state: &AdminState, rows: &[AccountRow]) -> 
     let day_start = hour - 24 * 3_600;
     // The projections ask each member's pool, so the registry is read before the join.
     let members = state.store.all_pool_members().unwrap_or_default();
-    let extras = state.store.account_extras().unwrap_or_default();
+    let extras = match rows {
+        [row] => state
+            .store
+            .account_extras_of(&row.id)
+            .unwrap_or_default()
+            .map(|extras| (row.id.clone(), extras))
+            .into_iter()
+            .collect(),
+        _ => state.store.account_extras().unwrap_or_default(),
+    };
     let holders: Vec<(&str, u64)> = rows
         .iter()
         .map(|row| (row.id.as_str(), row.incarnation))
@@ -2574,11 +2583,19 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         })
         .and_then(|attempt| attempt.resolved_at.map(|at| (at, attempt.detail.clone())));
     let extras = ctx.extras.get(&row.id);
+    let read_profile;
     let profile = match extras {
-        Some(extras) => extras.profile_json.clone(),
-        None => state.store.profile_json(&row.id).ok().flatten(),
+        Some(extras) => extras.profile.as_ref(),
+        None => {
+            read_profile = state
+                .store
+                .profile_json(&row.id)
+                .ok()
+                .flatten()
+                .and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
+            read_profile.as_ref()
+        }
     }
-    .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
     .map(|p| AccountProfile {
         billing_type: p["organization"]["billing_type"].clone(),
         display_name: p["account"]["display_name"].clone(),
@@ -2605,7 +2622,13 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
     // a canceled, unpaired OAuth row still has an end to report, so the flag joins `profile.is_some()` here.
     let subscription = (row.kind == AccountKind::Oauth && (profile.is_some() || term.canceled))
         .then(|| match extras {
-            Some(extras) => extras.subscription.clone(),
+            // The extras' term holds the tier, the start and the trial end of the same row.
+            Some(_) => SubscriptionRow {
+                plan: None,
+                tier: term.tier.clone(),
+                since: term.since,
+                trial_ends_at: term.trial_ends_at,
+            },
             None => match state.store.subscription(&row.id) {
                 Ok(subscription) => subscription.unwrap_or_default(),
                 Err(error) => {
