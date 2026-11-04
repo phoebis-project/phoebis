@@ -517,12 +517,8 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         Err(refusal) => refusal,
         Ok(()) => match AttachmentIndex::read(&state.store) {
             Ok((_, index)) => {
-                let (week, lifetime) = totals(&state).await;
-                // A key this route just created has never rotated, so no session can present a retired secret of it.
-                let key = key_json(&state.router.snapshot(), &row, &week, &lifetime, 0, &index);
-                let mut v = serde_json::to_value(key).expect("a key serializes");
-                v["secret"] = json!(secret);
-                (StatusCode::CREATED, Json(v)).into_response()
+                let key = key_view(&state, &row, &index, now).await;
+                (StatusCode::CREATED, Json(with_secret(key, &secret))).into_response()
             }
             Err(response) => response,
         },
@@ -614,19 +610,7 @@ pub(crate) async fn patch(
         Ok(read) => read,
         Err(response) => return response,
     };
-    let (week, lifetime) = totals(&state).await;
-    let now = (state.clock)();
-    let activity = recent_activity(&state, now).await;
-    let count = sessions_on_retired_secret(&row, &activity, now);
-    let key = key_json(
-        &state.router.snapshot(),
-        &row,
-        &week,
-        &lifetime,
-        count,
-        &index,
-    );
-    Json(key).into_response()
+    Json(key_view(&state, &row, &index, (state.clock)()).await).into_response()
 }
 
 /// Rotate a key's secret.
@@ -676,20 +660,11 @@ pub(crate) async fn rotate(
                 Ok(read) => read,
                 Err(response) => return response,
             };
-            let (week, lifetime) = totals(&state).await;
-            let activity = recent_activity(&state, now).await;
-            let count = sessions_on_retired_secret(&row, &activity, now);
-            let key = key_json(
-                &state.router.snapshot(),
-                &row,
-                &week,
-                &lifetime,
-                count,
-                &index,
-            );
-            let mut v = serde_json::to_value(key).expect("a key serializes");
-            v["secret"] = json!(secret);
-            Json(v).into_response()
+            Json(with_secret(
+                key_view(&state, &row, &index, now).await,
+                &secret,
+            ))
+            .into_response()
         }
         Ok(None) => failure(StatusCode::NOT_FOUND, "key not found"),
         Err(e) => store_failure(e),
@@ -750,6 +725,32 @@ pub(crate) async fn remove(
         Err(StoreError::KeyNotFound(_)) => failure(StatusCode::NOT_FOUND, "key not found"),
         Err(error) => store_failure(error),
     }
+}
+
+/// One key's answer after a write: the shared totals, and the sessions on its retired secret, which the activity
+/// read answers only while the rotation's grace lasts, so it runs only then, as the list's does.
+async fn key_view(state: &AdminState, row: &ApiKeyRow, index: &AttachmentIndex, now: i64) -> Key {
+    let (week, lifetime) = totals(state).await;
+    let count = if in_rotation_grace(row, now) {
+        sessions_on_retired_secret(row, &recent_activity(state, now).await, now)
+    } else {
+        0
+    };
+    key_json(
+        &state.router.snapshot(),
+        row,
+        &week,
+        &lifetime,
+        count,
+        index,
+    )
+}
+
+/// A created or rotated key's answer: the key with its new secret last, the one answer that carries it.
+fn with_secret(key: Key, secret: &str) -> Value {
+    let mut v = serde_json::to_value(key).expect("a key serializes");
+    v["secret"] = json!(secret);
+    v
 }
 
 /// Never the digest and never the secret.
