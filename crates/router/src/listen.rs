@@ -4,7 +4,6 @@
 use std::future::Future;
 use std::pin::{pin, Pin};
 use std::sync::Arc;
-use std::time::Duration;
 
 use axum::Router;
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
@@ -15,11 +14,7 @@ use tokio::sync::{watch, Semaphore};
 use tokio::task::JoinSet;
 
 pub use phoebis_relay::ListenLimits;
-use phoebis_relay::{handshake, LiveAcceptor};
-
-/// How long the loop waits out a listener error. An accept that fails for a reason the process cannot fix,
-/// such as a descriptor limit, fails again immediately, so the pause is what keeps the loop off the CPU.
-const ACCEPT_BACKOFF: Duration = Duration::from_millis(50);
+use phoebis_relay::{handshake, stopped, LiveAcceptor, ACCEPT_BACKOFF};
 
 /// Serves `app` until `stop` flips, then waits for the connections already accepted. With `acceptor` set, every
 /// connection completes a TLS handshake before hyper reads it, on the acceptor current when it was accepted.
@@ -133,10 +128,4 @@ where
     }
     graceful_shutdown(conn.as_mut());
     conn.await
-}
-
-/// Resolves once the stop flag is set. The borrowed guard `wait_for` yields is not `Send`, so it is dropped
-/// here rather than becoming part of the accept loop's future.
-async fn stopped(stop: &mut watch::Receiver<bool>) {
-    let _ = stop.wait_for(|stop| *stop).await;
 }

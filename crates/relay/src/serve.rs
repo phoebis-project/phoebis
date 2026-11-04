@@ -25,7 +25,7 @@ use crate::messages::{router, Relay, ShutdownMark};
 
 /// How long the loop waits out a listener error. An accept that fails for a reason the process cannot fix,
 /// such as a descriptor limit, fails again immediately, so the pause is what keeps the loop off the CPU.
-const ACCEPT_BACKOFF: Duration = Duration::from_millis(50);
+pub const ACCEPT_BACKOFF: Duration = Duration::from_millis(50);
 
 /// What bounds a connection before a request exists on it: the wait for its head, how many the listener holds
 /// at once, and how long a graceful shutdown waits before it cuts what is still running. The bounds are compiled
@@ -212,7 +212,7 @@ pub async fn serve(
 
 /// Resolves once the stop flag is set. The borrowed guard `wait_for` yields is not `Send`, so it is dropped
 /// here rather than becoming part of the accept loop's future.
-async fn stopped(stop: &mut watch::Receiver<bool>) {
+pub async fn stopped(stop: &mut watch::Receiver<bool>) {
     let _ = stop.wait_for(|stop| *stop).await;
 }
 
