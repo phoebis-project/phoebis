@@ -352,10 +352,7 @@ fn admit(
     }
 
     if let Some(bearer) = bearer {
-        return match state
-            .sessions
-            .bearer(&bearer, &state.secrets, (state.clock)())
-        {
+        return match state.sessions.bearer(&bearer, (state.clock)()) {
             Ok(()) => {
                 request.extensions_mut().insert(Caller {
                     session_id: BEARER_SESSION_ID.to_string(),
@@ -543,7 +540,7 @@ async fn login(State(state): State<Arc<AdminState>>, headers: HeaderMap, body: B
     } else {
         state
             .sessions
-            .login(&input.secret, &state.secrets, now)
+            .login(&input.secret, now)
             .map(|cookie| session_cookie(&cookie, None, secure))
     };
     match login {

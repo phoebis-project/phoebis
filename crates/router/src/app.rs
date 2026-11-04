@@ -8,9 +8,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context};
 use axum::Router;
-use phoebis_admin::{
-    AdminSecrets, AdminState, OldTotals, PairingVault, Readiness, Sessions, SettingsView,
-};
+use phoebis_admin::{AdminState, OldTotals, PairingVault, Readiness, Sessions, SettingsView};
 use phoebis_bus::Bus;
 use phoebis_keepalive::{
     keepalive_router, spawn_observer, Engine, EngineParts, KeepaliveTiming, PERSIST_INTERVAL,
@@ -418,9 +416,6 @@ pub async fn run_until(
         control,
         profile,
         sessions: sessions.clone(),
-        secrets: AdminSecrets {
-            admin: Secret::new(config.admin.secret.expose()),
-        },
         clock: clock.clone(),
         tls: config.admin.tls.is_some(),
         tls_reload: Some(tls_live.clone()),

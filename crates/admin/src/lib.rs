@@ -49,7 +49,7 @@ pub use pricing::table_envelopes;
 pub use readiness::Readiness;
 pub use routes::path_count;
 pub use routes::router;
-pub use session::{AdminSecrets, LoginError, Sessions};
+pub use session::{LoginError, Sessions};
 pub use tls::{Reloaded, TlsReload};
 
 // A poisoned vault mutex means a prior panic happened while a pending bundle was being moved, so what
@@ -64,7 +64,6 @@ pub struct AdminState {
     pub control: Arc<ControlClient>,
     pub profile: &'static Profile,
     pub sessions: Arc<Sessions>,
-    pub secrets: AdminSecrets,
     pub clock: Clock,
     /// Whether the admin listener terminates TLS, which decides the session cookie's `Secure` flag and makes a
     /// presented `Origin` need `https://`.

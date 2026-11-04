@@ -10,8 +10,7 @@ use axum::Router;
 use fake_upstream::{wait_for, FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_admin::{
-    router, AdminSecrets, AdminState, OldTotals, PairingVault, Readiness, Sessions, SettingsView,
-    TlsReload,
+    router, AdminState, OldTotals, PairingVault, Readiness, Sessions, SettingsView, TlsReload,
 };
 use phoebis_attention::{Attention, AttentionHandles, AttentionParts, TlsPairs};
 use phoebis_bus::Bus;
@@ -1259,9 +1258,6 @@ async fn build_app_bounded(
         control,
         profile: p,
         sessions: sessions.clone(),
-        secrets: AdminSecrets {
-            admin: Secret::new("admin-secret"),
-        },
         clock,
         tls,
         tls_reload,

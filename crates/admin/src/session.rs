@@ -31,10 +31,6 @@ const NONCE_LEN: usize = 16;
 const TAG_LEN: usize = 32;
 const SIGNED_LEN: usize = SESSION_ID_LEN + ISSUED_AT_LEN + NONCE_LEN;
 
-pub struct AdminSecrets {
-    pub admin: Secret,
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum LoginError {
     #[error("secret does not match")]
@@ -113,14 +109,9 @@ impl Sessions {
     }
 
     /// Returns the cookie value to hand the browser.
-    pub fn login(
-        &self,
-        presented: &str,
-        secrets: &AdminSecrets,
-        now: i64,
-    ) -> Result<String, LoginError> {
+    pub fn login(&self, presented: &str, now: i64) -> Result<String, LoginError> {
         let mut state = self.state.lock().expect(LOCK_POISONED);
-        self.check(&mut state, presented, &secrets.admin, now)?;
+        self.check(&mut state, presented, now)?;
         let cookie = phoebis_oauth::generate_state();
         state.sessions.insert(
             cookie.clone(),
@@ -138,7 +129,7 @@ impl Sessions {
     /// drawn here is kept by every renewal.
     pub fn login_persistent(&self, presented: &str, now: i64) -> Result<String, LoginError> {
         let mut state = self.state.lock().expect(LOCK_POISONED);
-        self.check(&mut state, presented, &self.secret, now)?;
+        self.check(&mut state, presented, now)?;
         let mut session_id = [0u8; SESSION_ID_LEN];
         phoebis_oauth::random::fill(&mut session_id);
         Ok(sign(&state.token_key, &session_id, now))
@@ -146,31 +137,20 @@ impl Sessions {
 
     /// A scripted caller's one-shot check: the same keyed, constant-time compare as `login`, the same failure
     /// vector and the same throttle, so a bearer costs a guesser what a login costs. Opens no session.
-    pub fn bearer(
-        &self,
-        presented: &str,
-        secrets: &AdminSecrets,
-        now: i64,
-    ) -> Result<(), LoginError> {
+    pub fn bearer(&self, presented: &str, now: i64) -> Result<(), LoginError> {
         let mut state = self.state.lock().expect(LOCK_POISONED);
-        self.check(&mut state, presented, &secrets.admin, now)
+        self.check(&mut state, presented, now)
     }
 
     /// The throttle and the compare `login`, `login_persistent` and `bearer` share, under the caller's lock so a
     /// failure lands in the window the next check reads.
-    fn check(
-        &self,
-        state: &mut State,
-        presented: &str,
-        admin: &Secret,
-        now: i64,
-    ) -> Result<(), LoginError> {
+    fn check(&self, state: &mut State, presented: &str, now: i64) -> Result<(), LoginError> {
         state.failures.retain(|at| now - *at < THROTTLE_WINDOW_MS);
         if state.failures.len() >= MAX_FAILURES {
             return Err(LoginError::Throttled);
         }
         // Digests of one length on both sides, so how long the compare runs says nothing about the secret's length.
-        let expected = digest_with(&self.compare_key, admin.expose().as_bytes());
+        let expected = digest_with(&self.compare_key, self.secret.expose().as_bytes());
         let offered = digest_with(&self.compare_key, presented.as_bytes());
         if !bool::from(expected.ct_eq(&offered)) {
             state.failures.push(now);
@@ -286,12 +266,6 @@ fn verified(key: &[u8; 32], cookie: &str, now: i64) -> Option<[u8; SESSION_ID_LE
 mod tests {
     use super::*;
 
-    fn secrets() -> AdminSecrets {
-        AdminSecrets {
-            admin: Secret::new("admin-secret"),
-        }
-    }
-
     fn store() -> Arc<Store> {
         Arc::new(Store::open_in_memory(&phoebis_store::StorageKey::generate()).unwrap())
     }
@@ -348,7 +322,7 @@ mod tests {
             Err(LoginError::Throttled)
         ));
         assert!(matches!(
-            sessions.login("admin-secret", &secrets(), 5),
+            sessions.login("admin-secret", 5),
             Err(LoginError::Throttled)
         ));
         assert!(sessions.login_persistent("admin-secret", 60_001).is_ok());
@@ -426,27 +400,27 @@ mod tests {
         let sessions = sessions();
         for at in 0..5 {
             assert!(matches!(
-                sessions.login("nope", &secrets(), at),
+                sessions.login("nope", at),
                 Err(LoginError::Invalid)
             ));
         }
         assert!(matches!(
-            sessions.login("admin-secret", &secrets(), 5),
+            sessions.login("admin-secret", 5),
             Err(LoginError::Throttled)
         ));
-        assert!(sessions.login("admin-secret", &secrets(), 60_001).is_ok());
+        assert!(sessions.login("admin-secret", 60_001).is_ok());
     }
 
     #[test]
     fn a_bearer_matches_as_a_login_does_and_opens_no_session() {
         let sessions = sessions();
-        assert!(sessions.bearer("admin-secret", &secrets(), 0).is_ok());
+        assert!(sessions.bearer("admin-secret", 0).is_ok());
         assert!(matches!(
-            sessions.bearer("admin-secre", &secrets(), 0),
+            sessions.bearer("admin-secre", 0),
             Err(LoginError::Invalid)
         ));
         assert!(matches!(
-            sessions.bearer("admin-secret-and-more", &secrets(), 0),
+            sessions.bearer("admin-secret-and-more", 0),
             Err(LoginError::Invalid)
         ));
         assert_eq!(
@@ -461,25 +435,25 @@ mod tests {
         let sessions = sessions();
         for at in 0..5 {
             assert!(matches!(
-                sessions.bearer("nope", &secrets(), at),
+                sessions.bearer("nope", at),
                 Err(LoginError::Invalid)
             ));
         }
         assert!(matches!(
-            sessions.login("admin-secret", &secrets(), 5),
+            sessions.login("admin-secret", 5),
             Err(LoginError::Throttled)
         ));
         assert!(matches!(
-            sessions.bearer("admin-secret", &secrets(), 5),
+            sessions.bearer("admin-secret", 5),
             Err(LoginError::Throttled)
         ));
-        assert!(sessions.bearer("admin-secret", &secrets(), 60_001).is_ok());
+        assert!(sessions.bearer("admin-secret", 60_001).is_ok());
     }
 
     #[test]
     fn a_session_expires_on_the_idle_and_the_absolute_deadline() {
         let sessions = sessions();
-        let cookie = sessions.login("admin-secret", &secrets(), 0).unwrap();
+        let cookie = sessions.login("admin-secret", 0).unwrap();
         let Some(Authenticated::Map { id }) = sessions.authenticate(&cookie, 900_000) else {
             panic!("a login without the flag resolves to a map session");
         };
@@ -502,10 +476,10 @@ mod tests {
             "the absolute deadline is not renewable"
         );
 
-        let cookie = sessions.login("admin-secret", &secrets(), 0).unwrap();
+        let cookie = sessions.login("admin-secret", 0).unwrap();
         assert!(sessions.authenticate(&cookie, 900_001).is_none());
 
-        let cookie = sessions.login("admin-secret", &secrets(), 0).unwrap();
+        let cookie = sessions.login("admin-secret", 0).unwrap();
         sessions.logout(&cookie);
         assert!(sessions.authenticate(&cookie, 1).is_none());
     }
@@ -513,8 +487,8 @@ mod tests {
     #[test]
     fn an_expired_admin_session_is_swept_rather_than_kept_until_presented() {
         let sessions = sessions();
-        let _idle = sessions.login("admin-secret", &secrets(), 0).unwrap();
-        let busy = sessions.login("admin-secret", &secrets(), 0).unwrap();
+        let _idle = sessions.login("admin-secret", 0).unwrap();
+        let busy = sessions.login("admin-secret", 0).unwrap();
         sessions.authenticate(&busy, 600_000).unwrap();
         assert_eq!(
             sessions.sweep(900_000),
