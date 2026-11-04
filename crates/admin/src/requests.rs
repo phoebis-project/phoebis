@@ -822,6 +822,10 @@ pub(crate) fn list_param(q: &HashMap<String, String>, name: &str) -> Vec<String>
         .unwrap_or_default()
 }
 
+pub(crate) fn flag(q: &HashMap<String, String>, name: &str) -> bool {
+    q.get(name).is_some_and(|v| v == "true" || v == "1")
+}
+
 /// `GET /admin/requests`'s query.
 // Declared for the document alone, since the handler reads the request by hand.
 #[allow(dead_code)]
@@ -959,12 +963,10 @@ pub(crate) async fn list(
         agent_types: list_param(&q, "agent_types"),
         turn_origins: list_param(&q, "turn_origins"),
         speeds: list_param(&q, "speeds"),
-        held: q.get("held").is_some_and(|v| v == "true" || v == "1"),
+        held: flag(&q, "held"),
         from,
         to,
-        include_probes: q
-            .get("include_probes")
-            .is_some_and(|v| v == "true" || v == "1"),
+        include_probes: flag(&q, "include_probes"),
         cache_miss_reasons: list_param(&q, "cache_miss_reasons"),
         efforts: list_param(&q, "efforts"),
         request_classes: list_param(&q, "request_classes"),
@@ -972,7 +974,7 @@ pub(crate) async fn list(
         guardrails: list_param(&q, "guardrails"),
         stop_reasons: list_param(&q, "stop_reasons"),
         refusal_categories: list_param(&q, "refusal_categories"),
-        fixed_end: q.get("fixed_end").is_some_and(|v| v == "true" || v == "1"),
+        fixed_end: flag(&q, "fixed_end"),
     };
     if !phoebis_ledger::patterns_within_bounds(filter.user_agent.as_slice())
         || !phoebis_ledger::patterns_within_bounds(filter.client.as_slice())

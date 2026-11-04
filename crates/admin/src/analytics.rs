@@ -20,20 +20,9 @@ use phoebis_store::{AccountKind, SubscriptionTerm};
 use utoipa::ToSchema;
 
 use crate::openapi::{ErrorBody, LedgerFailure, RouterUnavailable};
+use crate::requests::{flag, list_param as list};
 use crate::routes::{failure, reported_samples, router_unavailable, windows_lacked};
 use crate::AdminState;
-
-fn list(q: &HashMap<String, String>, name: &str) -> Vec<String> {
-    q.get(name)
-        .map(|v| {
-            v.split(',')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(String::from)
-                .collect()
-        })
-        .unwrap_or_default()
-}
 
 /// The same list, split on newlines instead of commas: a pattern of the wildcard grammar carries no newline, and the
 /// request log's raw agents carry a comma (`claude-cli/2.1.269 (external, sdk-cli)`) that a pattern written against
@@ -50,10 +39,6 @@ fn agent_list(q: &HashMap<String, String>, name: &str) -> Result<Patterns, &'sta
             })
             .unwrap_or_default(),
     )
-}
-
-fn flag(q: &HashMap<String, String>, name: &str) -> bool {
-    q.get(name).is_some_and(|v| v == "true" || v == "1")
 }
 
 /// The end of the hour that starts at `hour`, where a read up to the current hour ends rather than at
