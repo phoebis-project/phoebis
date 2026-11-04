@@ -3,6 +3,7 @@
 
 use std::error::Error;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use boring::ssl::{SslConnector, SslMethod};
@@ -44,6 +45,9 @@ pub struct Common {
 pub struct AdminClient {
     base: Uri,
     ca: Option<PathBuf>,
+    /// Built by the first TLS call, inside that call's deadline, and shared by the calls after it, since each build
+    /// loads the trust roots again. A refused `--ca` is kept as its line, so every call answers it.
+    connector: OnceLock<Result<SslConnector, String>>,
     secret: Secret,
     timeout: Duration,
 }
@@ -139,6 +143,7 @@ impl AdminClient {
         Ok(AdminClient {
             base,
             ca,
+            connector: OnceLock::new(),
             secret,
             timeout: Duration::from_secs(common.timeout),
         })
@@ -175,7 +180,10 @@ impl AdminClient {
         let mut driver: Option<tokio::task::JoinHandle<hyper::Result<()>>> = None;
         let outcome = tokio::time::timeout(self.timeout, async {
             let tls = if https {
-                Some(connector(self.ca.as_deref())?)
+                let built = self
+                    .connector
+                    .get_or_init(|| connector(self.ca.as_deref()).map_err(|Failure(line)| line));
+                Some(built.as_ref().map_err(|line| Failure(line.clone()))?)
             } else {
                 None
             };
