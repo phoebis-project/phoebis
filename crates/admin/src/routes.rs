@@ -52,6 +52,8 @@ const CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
 
 const COOKIE_NAME: &str = "phoebis_admin";
 
+const COOKIE_ATTRIBUTES: &str = "Path=/admin; HttpOnly; SameSite=Strict";
+
 const LOGIN_PATH: &str = "/admin/session";
 
 /// The route table and the document its registrations build, with no state bound, so the path count reads the
@@ -467,14 +469,18 @@ struct Renewal(HeaderValue);
 /// The login's attributes with the token's 30 days as `Max-Age`, so the browser keeps the cookie as long as the
 /// router would verify it.
 fn kept_cookie(token: &str, secure: bool) -> String {
-    let mut attributes = format!(
-        "{COOKIE_NAME}={token}; Path=/admin; HttpOnly; SameSite=Strict; Max-Age={}",
-        PERSISTENT_LIFE.as_secs()
-    );
-    if secure {
-        attributes.push_str("; Secure");
+    session_cookie(token, Some(PERSISTENT_LIFE.as_secs()), secure)
+}
+
+fn session_cookie(value: &str, max_age: Option<u64>, secure: bool) -> String {
+    let mut cookie = format!("{COOKIE_NAME}={value}; {COOKIE_ATTRIBUTES}");
+    if let Some(seconds) = max_age {
+        cookie.push_str(&format!("; Max-Age={seconds}"));
     }
-    attributes
+    if secure {
+        cookie.push_str("; Secure");
+    }
+    cookie
 }
 
 /// The login's body.
@@ -538,14 +544,7 @@ async fn login(State(state): State<Arc<AdminState>>, headers: HeaderMap, body: B
         state
             .sessions
             .login(&input.secret, &state.secrets, now)
-            .map(|cookie| {
-                let mut attributes =
-                    format!("{COOKIE_NAME}={cookie}; Path=/admin; HttpOnly; SameSite=Strict");
-                if secure {
-                    attributes.push_str("; Secure");
-                }
-                attributes
-            })
+            .map(|cookie| session_cookie(&cookie, None, secure))
     };
     match login {
         Ok(attributes) => set_cookie(StatusCode::NO_CONTENT, &attributes),
@@ -588,10 +587,7 @@ async fn logout(
     }
     // Clearing the browser's copy as well keeps a logged-out tab from presenting a cookie this process
     // would only reject.
-    set_cookie(
-        StatusCode::NO_CONTENT,
-        &format!("{COOKIE_NAME}=; Path=/admin; HttpOnly; SameSite=Strict; Max-Age=0"),
-    )
+    set_cookie(StatusCode::NO_CONTENT, &session_cookie("", Some(0), false))
 }
 
 /// Whether the cookie the console holds still names a session.
