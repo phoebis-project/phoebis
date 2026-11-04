@@ -753,17 +753,17 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         Err(error) => return store_failure(error),
     }
     // The row exists from here on, so every answer, a refusal included, names it to the mutation log.
-    let mut response = publish_created(&state, &row).await;
+    let mut response = publish(&state, &row, StatusCode::CREATED).await;
     response.extensions_mut().insert(CreatedId(row.id));
     response
 }
 
-async fn publish_created(state: &AdminState, row: &PoolRow) -> Response {
+async fn publish(state: &AdminState, row: &PoolRow, status: StatusCode) -> Response {
     if let Err(refusal) = reload_or_refuse(state).await {
         return refusal;
     }
     match pool_json(state, row).await {
-        Ok(v) => (StatusCode::CREATED, Json(v)).into_response(),
+        Ok(v) => (status, Json(v)).into_response(),
         Err(e) => store_failure(e),
     }
 }
@@ -864,13 +864,7 @@ pub(crate) async fn patch(
         }
         Err(error) => return store_failure(error),
     }
-    if let Err(refusal) = reload_or_refuse(&state).await {
-        return refusal;
-    }
-    match pool_json(&state, &row).await {
-        Ok(v) => Json(v).into_response(),
-        Err(e) => store_failure(e),
-    }
+    publish(&state, &row, StatusCode::OK).await
 }
 
 /// Delete a pool.
@@ -962,13 +956,7 @@ pub(crate) async fn set_members(
         }
         Err(error) => return store_failure(error),
     }
-    if let Err(refusal) = reload_or_refuse(&state).await {
-        return refusal;
-    }
-    match pool_json(&state, &row).await {
-        Ok(v) => Json(v).into_response(),
-        Err(e) => store_failure(e),
-    }
+    publish(&state, &row, StatusCode::OK).await
 }
 
 /// The pools, one row each.
