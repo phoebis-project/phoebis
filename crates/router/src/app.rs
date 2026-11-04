@@ -273,10 +273,7 @@ pub async fn run_until(
     // The first purge announces the downtime's clock resets and wind-downs: held until here, its rows reach the
     // mirror and land behind the start row, whose gap they would otherwise date.
     router_task.release_purge().await;
-    // Moved into the admin state below rather than kept here: a local holding its `Bus` clone to the end of
-    // `run` would keep the subscribers' queues open past the shutdown's `drop(bus)`.
     let readiness = Arc::new(Readiness {
-        bus: bus.clone(),
         ledger: ledger.clone(),
         router: router_task.clone(),
         store: store.clone(),

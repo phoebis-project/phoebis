@@ -1,34 +1,24 @@
 //! Readiness: whether the three components a request depends on past the listener are alive.
 
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use phoebis_bus::Bus;
 use phoebis_ledger::Ledger;
 use phoebis_routing::RouterHandle;
 use phoebis_store::Store;
 
 /// The three liveness reads behind `/api/ready` and `/admin/system`'s `ready` and `dead`.
 pub struct Readiness {
-    pub bus: Bus,
     pub ledger: Ledger,
     pub router: RouterHandle,
     pub store: Arc<Store>,
 }
 
 impl Readiness {
-    /// The dead components, `ledger`, `router`, `store` in that order; empty when the router is ready.
+    /// The dead components, `ledger`, `router`, `store` in that order; empty when the router is ready. The ledger
+    /// reports its own bus subscriber beside its writer.
     pub fn dead(&self) -> Vec<&'static str> {
-        // The writer's channel stays open while the assembler is gone, so the subscriber's panic counter is
-        // the only sign the bus's half of the consumer died. A subscriber that never attached is dead too.
-        let consumer = self
-            .bus
-            .stats()
-            .iter()
-            .find(|(name, _)| *name == "ledger")
-            .is_some_and(|(_, stats)| stats.panics.load(Ordering::Relaxed) == 0);
         dead_of(
-            consumer && self.ledger.is_alive(),
+            self.ledger.is_alive(),
             self.router.is_alive(),
             // Two point reads under the store's mutex: the route answers anyone who reaches the listener, so a
             // probe must not cost a scan of every account row.

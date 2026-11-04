@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use phoebis_bus::{spawn_subscriber, Bus, Classifier, Delivery, Subscriber};
+use phoebis_bus::{spawn_subscriber, Bus, Classifier, Delivery, Subscriber, SubscriberStats};
 use phoebis_oauth::Clock;
 use phoebis_routing::{MemberSpend, RegistrySnapshot, Report, RouterHandle, SEVEN_DAY};
 use phoebis_store::{AccountKind, BudgetPeriod, Store};
@@ -178,6 +178,8 @@ struct ReplayParked {
 pub struct Ledger {
     db: Arc<LedgerDb>,
     stats: Arc<LedgerStats>,
+    /// The counters of the bus subscriber that assembles the records the writer takes.
+    assembler: Arc<SubscriberStats>,
     unpriced: Unpriced,
     metrics: Arc<Metrics>,
     tx: mpsc::Sender<Record>,
@@ -238,9 +240,11 @@ impl Ledger {
         self.stats.parked_priced.load(Ordering::Relaxed)
     }
 
-    /// Whether the writer still takes records; false once it closed its receiver, at a shutdown or a panic.
+    /// Whether the writer still takes records and the bus subscriber that assembles them has not panicked: false once
+    /// the writer closed its receiver, at a shutdown or a panic, or once the assembler panicked. The writer's channel
+    /// stays open while the assembler is gone, so the subscriber's panic counter is the only sign of that half.
     pub fn is_alive(&self) -> bool {
-        !self.tx.is_closed()
+        !self.tx.is_closed() && self.assembler.panics.load(Ordering::Relaxed) == 0
     }
 
     /// Records waiting in the writer channel now. The batch the writer already took off the channel is not
@@ -374,9 +378,11 @@ pub fn spawn(
     let unpriced = Unpriced::default();
     let (done_tx, done_rx) = oneshot::channel();
     let (stop, stopped) = watch::channel(false);
+    let subscriber = bus.subscribe("ledger", Delivery::Durable);
     let ledger = Ledger {
         db: db.clone(),
         stats: stats.clone(),
+        assembler: subscriber.stats.clone(),
         unpriced: unpriced.clone(),
         metrics: metrics.clone(),
         tx,
@@ -410,7 +416,6 @@ pub fn spawn(
         config.mirror_baseline.take(),
     );
     ledger.track(mirror);
-    let subscriber = bus.subscribe("ledger", Delivery::Durable);
     let assembling = ledger.clone();
     let assembler_stop = stopped.clone();
     let expire_interval = config.expire_interval;
@@ -1889,6 +1894,7 @@ mod tests {
         let ledger = Ledger {
             db: Arc::new(LedgerDb::open_in_memory().unwrap()),
             stats: Arc::new(LedgerStats::default()),
+            assembler: Arc::default(),
             unpriced: Unpriced::default(),
             metrics: Arc::new(Metrics::new()),
             tx,

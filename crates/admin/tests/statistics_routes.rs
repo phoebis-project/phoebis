@@ -4,7 +4,6 @@ use std::time::Duration;
 
 use common::{delete, get, json, login, post, wait_json};
 use fake_upstream::{stays_for, wait_for};
-use phoebis_bus::Delivery;
 use phoebis_ledger::{AttemptRecord, EventRecord, ParkedRecord, Record, RequestRecord};
 use phoebis_store::{AccountKind, AccountRow, AccountState, ShedStamp, StateCause};
 
@@ -753,39 +752,33 @@ async fn a_store_whose_read_fails_reads_not_ready_on_the_system_document_until_i
 }
 
 #[tokio::test]
-async fn readiness_reads_the_ledger_dead_when_its_bus_subscriber_is_absent_or_panicked() {
+async fn readiness_reads_the_ledger_dead_once_its_assembler_panicked_while_its_writer_takes_records(
+) {
     let parts = common::admin_parts_full().await;
-    let readiness = |bus: phoebis_bus::Bus| phoebis_admin::Readiness {
-        bus,
+    let readiness = phoebis_admin::Readiness {
         ledger: parts.ledger.clone(),
         router: parts.router.clone(),
         store: parts.store.clone(),
     };
     assert_eq!(
-        readiness(parts.bus.clone()).dead(),
+        readiness.dead(),
         Vec::<&str>::new(),
-        "the harness's own bus carries the ledger's live subscriber"
+        "the harness's ledger with its assembler running"
     );
-    let bus = phoebis_bus::Bus::new();
-    let _live = bus.subscribe("live", Delivery::Durable);
+    let (_, assembler) = parts
+        .bus
+        .stats()
+        .into_iter()
+        .find(|(name, _)| *name == "ledger")
+        .expect("the ledger subscribes to the harness's bus");
+    // The count the bus's subscriber task keeps when the assembler panics, while the writer's channel stays open.
+    assembler
+        .panics
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     assert_eq!(
-        readiness(bus.clone()).dead(),
+        readiness.dead(),
         vec!["ledger"],
-        "a bus the ledger never subscribed to"
-    );
-    let assembler = bus.subscribe("ledger", Delivery::Durable);
-    assert_eq!(
-        readiness(bus.clone()).dead(),
-        Vec::<&str>::new(),
-        "a `ledger` subscriber with no panic counted"
-    );
-    phoebis_bus::spawn_subscriber(assembler, |_| async { panic!("the assembler died") })
-        .await
-        .unwrap();
-    assert_eq!(
-        readiness(bus).dead(),
-        vec!["ledger"],
-        "a `ledger` subscriber whose task panicked, while the writer's channel stays open"
+        "a ledger whose assembler panicked, its writer still taking records"
     );
 }
 

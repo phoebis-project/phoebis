@@ -1279,7 +1279,6 @@ async fn build_app_bounded(
         keepalive: keepalive.clone(),
         attention: attention.clone(),
         readiness: Arc::new(Readiness {
-            bus: bus.clone(),
             ledger: ledger.clone(),
             router: router_handle.clone(),
             store: store.clone(),
