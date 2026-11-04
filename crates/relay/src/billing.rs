@@ -3,7 +3,9 @@
 
 use std::borrow::Cow;
 
-use crate::body::{BodyMember, BILLING_BLOCK};
+use phoebis_cch::BILLING_BLOCK;
+
+use crate::body::BodyMember;
 use crate::memory::Injected;
 use crate::RelayError;
 
@@ -28,6 +30,15 @@ pub const FIELD_ORDER: [&str; 13] = [
 /// The attribution line's decoded text up to its first field. `BILLING_BLOCK` stops at the colon on the raw JSON
 /// token, the looser test the stamp checks use.
 pub(crate) const ATTRIBUTION_PREFIX: &str = "x-anthropic-billing-header: ";
+
+pub(crate) fn attribution_fields(text: &str) -> Option<std::str::Split<'_, &'static str>> {
+    text.strip_prefix(ATTRIBUTION_PREFIX)
+        .map(|rest| rest.trim_end_matches(';').split("; "))
+}
+
+pub(crate) fn field_value<'a>(field: &'a str, name: &str) -> Option<&'a str> {
+    field.strip_prefix(name)?.strip_prefix('=')
+}
 
 pub struct Restore<'a> {
     pub prompt_id: Option<&'a str>,
@@ -140,10 +151,9 @@ pub fn entrypoint_of(user_agent: &str) -> &str {
 pub fn is_entrypoint_token(candidate: &str) -> bool {
     // Bounded the same as `header_id`'s identifiers: a token running past this length reaches a log line and a
     // ledger key, so it reads as unknown rather than widening every row that names its class.
-    (1..=crate::identity::MAX_ID_LEN).contains(&candidate.len())
-        && candidate
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
+    crate::identity::bounded_token(candidate, |b| {
+        b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_'
+    })
 }
 
 /// Absent-field candidates in `FIELD_ORDER`'s relative order: `cch` before `cc_prev_req` before `cc_prompt_id`.
@@ -163,10 +173,7 @@ fn candidates<'r, 'a>(restore: &'r Restore<'a>) -> impl Iterator<Item = (Injecte
 /// Inserts `name=value` after the last field in `fields` that precedes `name` in `FIELD_ORDER`, or at the front
 /// when none does, and answers whether it did. A field already present is left untouched.
 fn insert_if_absent(fields: &mut Vec<Cow<'_, str>>, name: &str, value: &str) -> bool {
-    if fields.iter().any(|f| {
-        f.strip_prefix(name)
-            .is_some_and(|rest| rest.starts_with('='))
-    }) {
+    if fields.iter().any(|f| field_value(f, name).is_some()) {
         return false;
     }
     let order = FIELD_ORDER
@@ -200,14 +207,13 @@ fn patch_line(
     // The dispatch above matched `BILLING_BLOCK`, which stops right after the colon; a line that carries no
     // space after it, or nothing at all past the prefix, is not a shape this build ever writes, and splicing a
     // field into it under the assumption that it is would double the prefix or leave a stray separator behind.
-    let Some(rest) = decoded.strip_prefix(ATTRIBUTION_PREFIX) else {
+    let Some(fields) = attribution_fields(&decoded) else {
         return Ok(Vec::new());
     };
-    let rest = rest.trim_end_matches(';');
-    if rest.is_empty() {
+    let mut fields: Vec<Cow<'_, str>> = fields.map(Cow::Borrowed).collect();
+    if fields == [""] {
         return Ok(Vec::new());
     }
-    let mut fields: Vec<Cow<'_, str>> = rest.split("; ").map(Cow::Borrowed).collect();
     let mut injected = Vec::new();
     for (item, value) in candidates(restore) {
         if insert_if_absent(&mut fields, item.wire_name(), value) {

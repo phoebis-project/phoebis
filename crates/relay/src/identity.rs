@@ -322,10 +322,7 @@ pub(crate) fn user_agent_of(headers: &HeaderMap) -> Option<&str> {
 /// Brackets are allowed on top of the identifier charset because a client may name a tier with them, as the
 /// long-context suffix does.
 fn is_valid_model(value: &str) -> bool {
-    (1..=MAX_ID_LEN).contains(&value.len())
-        && value
-            .bytes()
-            .all(|b| identifier_byte(b) || matches!(b, b'[' | b']'))
+    bounded_token(value, |b| identifier_byte(b) || matches!(b, b'[' | b']'))
 }
 
 /// The bytes an identifier read off a header may hold: ASCII letters and digits and `-`, `.`, `/`, `:`, `_`.
@@ -337,7 +334,11 @@ pub fn identifier_byte(b: u8) -> bool {
 /// `identifier_byte`. The keepalive checks the ids a companion reports through it, so a report and a request name one
 /// session alike.
 pub fn is_valid_id(value: &str) -> bool {
-    (1..=MAX_ID_LEN).contains(&value.len()) && value.bytes().all(identifier_byte)
+    bounded_token(value, identifier_byte)
+}
+
+pub(crate) fn bounded_token(value: &str, allowed: impl Fn(u8) -> bool) -> bool {
+    (1..=MAX_ID_LEN).contains(&value.len()) && value.bytes().all(allowed)
 }
 
 /// A malformed identifier is treated as absent: it is a label, never an authorization decision, so a caller

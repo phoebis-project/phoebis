@@ -248,25 +248,27 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             status: StatusCode::BAD_REQUEST,
             error_type: "invalid_request_error",
             code: phoebis_bus::BODY_SHAPE_ERROR_CODE,
-            message: Cow::Borrowed(match member {
+            message: match member {
                 BodyMember::BillingLine => {
-                    "the request body carries a billing line the relay cannot decode"
+                    "the request body carries a billing line the relay cannot decode".into()
                 }
                 BodyMember::BillingStamp => {
-                    "the request body carries a billing stamp the relay can neither check nor restamp"
+                    "the request body carries a billing stamp the relay can neither check nor restamp".into()
                 }
                 BodyMember::CacheControl => {
-                    "the request body carries a cache_control marker the relay cannot place, so the pool's cache TTL policy cannot be applied to it"
+                    "the request body carries a cache_control marker the relay cannot place, so the pool's cache TTL policy cannot be applied to it".into()
                 }
                 BodyMember::MetadataUserId => {
-                    "the request body has no metadata.user_id the account can be bound to"
+                    "the request body has no metadata.user_id the account can be bound to".into()
                 }
-                BodyMember::Model => "the request body has no top-level model to resolve",
-                BodyMember::Repeated(member) => member.message(),
+                BodyMember::Model => "the request body has no top-level model to resolve".into(),
+                BodyMember::Repeated(member) => {
+                    Cow::Owned(format!("the request body {}", member.carried_twice()))
+                }
                 BodyMember::Safeguards => {
-                    "the request body carries a safeguards member the relay cannot place under this key's auto-mode setting"
+                    "the request body carries a safeguards member the relay cannot place under this key's auto-mode setting".into()
                 }
-            }),
+            },
             retry_after: None,
             no_retry: false,
         },
@@ -323,40 +325,25 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
         // operator re-pins rather than the relay guessing what the upstream now expects. A resumed conversation's
         // suffix already reproduces over the empty prompt the client stamps, so its refusal is a moved client too,
         // and the words name the resume apart so the client and the operator see which conversation it was.
-        RelayError::ClientDrift {
-            kind: DriftKind::VersionSuffix,
-            resumed: true,
-        } => Failure {
+        RelayError::ClientDrift { kind, resumed } => Failure {
             status: StatusCode::FORBIDDEN,
             error_type: "permission_error",
             code: "client_drift",
-            message: Cow::Borrowed("the conversation was resumed, and the client's version suffix does not reproduce \
-                      from the resume placeholder, the empty prompt or the user agent. Re-pin the router to this \
-                      client version"),
-            retry_after: None,
-            no_retry: true,
-        },
-        RelayError::ClientDrift {
-            kind: DriftKind::VersionSuffix,
-            resumed: false,
-        } => Failure {
-            status: StatusCode::FORBIDDEN,
-            error_type: "permission_error",
-            code: "client_drift",
-            message: Cow::Borrowed("the client's version suffix does not reproduce from the prompt and the user agent. \
-                      Re-pin the router to this client version"),
-            retry_after: None,
-            no_retry: true,
-        },
-        RelayError::ClientDrift {
-            kind: DriftKind::Hash,
-            ..
-        } => Failure {
-            status: StatusCode::FORBIDDEN,
-            error_type: "permission_error",
-            code: "client_drift",
-            message: Cow::Borrowed("the client's billing hash does not reproduce under the Claude Code release this \
-                      build is measured against. Re-pin the router to this client version"),
+            message: Cow::Borrowed(match (kind, resumed) {
+                (DriftKind::VersionSuffix, true) => {
+                    "the conversation was resumed, and the client's version suffix does not reproduce \
+                     from the resume placeholder, the empty prompt or the user agent. Re-pin the router to this \
+                     client version"
+                }
+                (DriftKind::VersionSuffix, false) => {
+                    "the client's version suffix does not reproduce from the prompt and the user agent. \
+                     Re-pin the router to this client version"
+                }
+                (DriftKind::Hash, _) => {
+                    "the client's billing hash does not reproduce under the Claude Code release this \
+                     build is measured against. Re-pin the router to this client version"
+                }
+            }),
             retry_after: None,
             no_retry: true,
         },
@@ -421,16 +408,6 @@ pub(crate) fn key_refusal(_: &KeyRefusal) -> Failure {
         // told not to resend.
         no_retry: true,
     }
-}
-
-/// The 401 `handle` answers a refused credential header with, for a route outside this crate that
-/// authenticates the same way and must answer the same way.
-pub fn auth_error_response(error: &AuthError, request_id: &str) -> Response {
-    auth_failure(error).response(request_id)
-}
-
-pub fn key_refusal_response(refusal: &KeyRefusal, request_id: &str) -> Response {
-    key_refusal(refusal).response(request_id)
 }
 
 /// Sets `Cache-Control: no-store`, which every answer of a side route behind a key carries, its refusals included.

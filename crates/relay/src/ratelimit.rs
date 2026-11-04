@@ -48,6 +48,13 @@ const PREFIX: &str = unified!("");
 pub(crate) const BUCKET_PREFIX: &str = bucket!("");
 pub(crate) const FAST_PREFIX: &str = fast!("");
 
+// Read from an upstream head here and written by the exhaustion answers, so the answer a client reads spells the
+// names the parser reads.
+pub(crate) const UNIFIED_OVERAGE_DISABLED_REASON: &str = unified!("overage-disabled-reason");
+pub(crate) const UNIFIED_REPRESENTATIVE_CLAIM: &str = unified!("representative-claim");
+pub(crate) const UNIFIED_RESET: &str = unified!("reset");
+pub(crate) const UNIFIED_STATUS: &str = unified!("status");
+
 /// A unified window's status word, read by exact match on the trimmed value: a word in another case reads as
 /// `Other`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -126,9 +133,9 @@ impl UnifiedHeaders {
             };
         }
         Some(UnifiedHeaders {
-            status: status(unified!("status")),
-            reset: secs(unified!("reset")),
-            representative_claim: text(unified!("representative-claim")).map(str::to_string),
+            status: status(UNIFIED_STATUS),
+            reset: secs(UNIFIED_RESET),
+            representative_claim: text(UNIFIED_REPRESENTATIVE_CLAIM).map(str::to_string),
             five_hour: window!("5h"),
             seven_day: window!("7d"),
             seven_day_oi: window!("7d_oi"),
@@ -136,7 +143,7 @@ impl UnifiedHeaders {
                 .map(|v| v.eq_ignore_ascii_case("true")),
             overage_utilization: float(unified!("overage-utilization")),
             overage_reset: secs(unified!("overage-reset")),
-            overage_disabled_reason: text(unified!("overage-disabled-reason")).map(str::to_string),
+            overage_disabled_reason: text(UNIFIED_OVERAGE_DISABLED_REASON).map(str::to_string),
         })
     }
 

@@ -48,6 +48,7 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
+use crate::auth::{resolve_key, KeyRefused};
 use crate::billing::Restore;
 use crate::body::{marker_ttls, AccountUuidEdit, RepeatedMember, VersionCheck};
 use crate::budget::{BodyBudget, BodyReads};
@@ -61,10 +62,9 @@ use crate::classify::{
 use crate::credit::CreditStore;
 use crate::dispatch::{self, until_canceled, AttemptFailure, Sent};
 use crate::errors::{
-    accounts_at_cap, auth_failure, body_budget_exhausted, key_body_reads, key_refusal,
-    relay_failure, Failure, ACCOUNTS_AT_CAP, ACCOUNT_CANCELED, ACCOUNT_CANCELED_CODE,
-    CLIENT_GONE_CODE, METHOD_NOT_ALLOWED, MODEL_NOT_ALLOWED, NOT_FOUND, ROUTER_SHUTDOWN_CODE,
-    ROUTER_UNAVAILABLE, UPSTREAM_UNREACHABLE,
+    accounts_at_cap, body_budget_exhausted, key_body_reads, key_refusal, relay_failure, Failure,
+    ACCOUNTS_AT_CAP, ACCOUNT_CANCELED, ACCOUNT_CANCELED_CODE, CLIENT_GONE_CODE, METHOD_NOT_ALLOWED,
+    MODEL_NOT_ALLOWED, NOT_FOUND, ROUTER_SHUTDOWN_CODE, ROUTER_UNAVAILABLE, UPSTREAM_UNREACHABLE,
 };
 use crate::exhaustion::{exhaustion_code, exhaustion_response, pool_moved_response};
 use crate::facts::{BodyFacts, ClientHints};
@@ -85,9 +85,9 @@ use crate::stream::{
     OnMessageId, Publish, Relayed, Renewal, Waiting, MAX_BUFFERED_BODY,
 };
 use crate::{
-    edit_body, presented_key, BodyEdits, BodyMember, CacheTtl, CacheTtlPolicy, DriftKind,
-    Markerless, NativeEdit, RelayError, SafeguardsEdit, TtlBranch, UpstreamGzip,
-    DANGEROUS_TOOL_USE_BETA, EXTENDED_TTL_BETA,
+    edit_body, BodyEdits, BodyMember, CacheTtl, CacheTtlPolicy, DriftKind, Markerless, NativeEdit,
+    RelayError, SafeguardsEdit, TtlBranch, UpstreamGzip, DANGEROUS_TOOL_USE_BETA,
+    EXTENDED_TTL_BETA,
 };
 
 /// How often the session memory's changes reach the store; a crash loses at most this much of it, and the
@@ -1208,7 +1208,10 @@ impl From<AccessToken> for Credential {
         Credential {
             account_uuid: (!account_uuid.is_empty()).then_some(account_uuid),
             generation,
-            kind: CredentialKind::Oauth { bearer: secret },
+            kind: CredentialKind {
+                kind: AccountKind::Oauth,
+                secret,
+            },
         }
     }
 }
@@ -1247,64 +1250,33 @@ impl Relay {
         // The snapshot is pinned for the whole request: the key, the pool, and the candidates all come from one
         // registry, and a write that lands mid-request is seen by the next request.
         let snapshot = self.router.snapshot();
-        let (key, presented) = match &probe {
+        let admitted = match &probe {
             // Before the body, as for a caller: an unauthenticated probe never holds the request limit either. A
             // recipe retained under an earlier key of this id is that key's, so its probe never runs in the
             // replacement's pool.
-            Some(probe) => {
-                match snapshot.authenticate_id(&probe.key_id, probe.key_generation, received_at) {
-                    // A probe authenticates by key id, never by secret, so it never presents a retired one.
-                    Ok(key) => (key.clone(), Presented::Live),
-                    Err(refusal) => {
-                        tracing::debug!(%refusal, key = %probe.key_id, "a probe's key was refused");
-                        return self
-                            .refused_before_body(
-                                &trace,
-                                None,
-                                &parts.headers,
-                                0,
-                                false,
-                                key_refusal(&refusal),
-                                None,
-                            )
-                            .await;
-                    }
-                }
-            }
-            None => {
-                let presented = match presented_key(&parts.headers) {
-                    Ok(presented) => presented,
-                    Err(error) => {
-                        return self
-                            .refused_before_body(
-                                &trace,
-                                None,
-                                &parts.headers,
-                                0,
-                                false,
-                                auth_failure(&error),
-                                None,
-                            )
-                            .await;
-                    }
-                };
-                match snapshot.authenticate(presented, received_at) {
-                    Ok((key, presented)) => (key.clone(), presented),
-                    Err(refusal) => {
+            Some(probe) => snapshot
+                .authenticate_id(&probe.key_id, probe.key_generation, received_at)
+                // A probe authenticates by key id, never by secret, so it never presents a retired one.
+                .map(|key| (key.clone(), Presented::Live))
+                .map_err(|refusal| {
+                    tracing::debug!(%refusal, key = %probe.key_id, "a probe's key was refused");
+                    key_refusal(&refusal)
+                }),
+            None => resolve_key(&snapshot, &parts.headers, received_at)
+                .map(|(key, presented)| (key.clone(), presented))
+                .map_err(|refused| {
+                    if let KeyRefused::Key(refusal) = &refused {
                         tracing::debug!(%refusal, "a presented key was refused");
-                        return self
-                            .refused_before_body(
-                                &trace,
-                                None,
-                                &parts.headers,
-                                0,
-                                false,
-                                key_refusal(&refusal),
-                                None,
-                            )
-                            .await;
                     }
-                }
+                    refused.failure()
+                }),
+        };
+        let (key, presented) = match admitted {
+            Ok(admitted) => admitted,
+            Err(failure) => {
+                return self
+                    .refused_before_body(&trace, None, &parts.headers, 0, false, failure, None)
+                    .await;
             }
         };
         // A probe is the router's own traffic; "used" in the key list means a client presented the key.
@@ -3800,7 +3772,10 @@ impl Relay {
                 Ok(Some((secret, generation))) => Credential {
                     account_uuid: None,
                     generation,
-                    kind: CredentialKind::ApiKey { secret },
+                    kind: CredentialKind {
+                        kind: AccountKind::ApiKey,
+                        secret,
+                    },
                 },
                 Ok(None) => {
                     tracing::warn!(account = %account.id, "the account has no API key stored");

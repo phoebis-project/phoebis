@@ -1,8 +1,7 @@
 //! The in-place body edits: the bound account's identity, the model the upstream is asked for, the billing hash
 //! that has to follow both, and the first-party fields a reduced-shape request lacks.
 
-pub(crate) use phoebis_cch::{find, BILLING_BLOCK};
-use phoebis_cch::{Cut, Stamp, TopLevelMembers};
+use phoebis_cch::{find, Cut, Stamp, TopLevelMembers};
 
 use crate::billing::{restore_billing_line, CarriedVersion, Restore};
 use crate::identity::is_valid_id;
@@ -142,31 +141,25 @@ impl RepeatedMember {
         }
     }
 
-    /// The refusal's message, which names the member the way the caller's body spells it.
-    pub(crate) fn message(self) -> &'static str {
-        match self {
-            RepeatedMember::BillingLine => {
-                "the request body carries the member \"system[0].text\" more than once"
-            }
-            RepeatedMember::Metadata => {
-                "the request body carries the top-level member \"metadata\" more than once"
-            }
-            RepeatedMember::MetadataUserId => {
-                "the request body carries the member \"metadata.user_id\" more than once"
-            }
-            RepeatedMember::Model => {
-                "the request body carries the top-level member \"model\" more than once"
-            }
-            RepeatedMember::Safeguards => {
-                "the request body carries the top-level member \"safeguards\" more than once"
-            }
-            RepeatedMember::Stream => {
-                "the request body carries the top-level member \"stream\" more than once"
-            }
-            RepeatedMember::System => {
-                "the request body carries the top-level member \"system\" more than once"
-            }
-        }
+    fn is_top_level(self) -> bool {
+        !matches!(
+            self,
+            RepeatedMember::BillingLine | RepeatedMember::MetadataUserId
+        )
+    }
+
+    /// The sentence the `Display` text and the refusal's message share, naming the member the way the caller's body
+    /// spells it.
+    pub(crate) fn carried_twice(self) -> String {
+        format!(
+            "carries the {} \"{}\" more than once",
+            if self.is_top_level() {
+                "top-level member"
+            } else {
+                "member"
+            },
+            self.path()
+        )
     }
 }
 
@@ -197,20 +190,7 @@ impl BodyMember {
             BodyMember::CacheControl => {
                 "request body carries a cache_control marker the router cannot place".into()
             }
-            BodyMember::Repeated(
-                member @ (RepeatedMember::BillingLine | RepeatedMember::MetadataUserId),
-            ) => {
-                format!(
-                    "request body carries the member \"{}\" more than once",
-                    member.path()
-                )
-            }
-            BodyMember::Repeated(member) => {
-                format!(
-                    "request body carries the top-level member \"{}\" more than once",
-                    member.path()
-                )
-            }
+            BodyMember::Repeated(member) => format!("request body {}", member.carried_twice()),
             BodyMember::Safeguards => {
                 "request body carries a safeguards member the router cannot place".into()
             }
@@ -434,7 +414,10 @@ fn rewrite_cache_ttl(
             serde_json::Value::String("ephemeral".into()),
         );
         if ttl == CacheTtl::OneHour {
-            rebuilt.insert("ttl".to_string(), serde_json::Value::String("1h".into()));
+            rebuilt.insert(
+                "ttl".to_string(),
+                serde_json::Value::String(ttl.as_str().into()),
+            );
         }
         for (key, value) in &marker {
             if key == "type" || key == "ttl" {
@@ -629,17 +612,17 @@ pub(crate) fn version_drift(
     cc_version: Option<&str>,
     check: VersionCheck<'_>,
 ) -> Option<DriftKind> {
-    let CarriedVersion::Suffixed(suffix) =
-        crate::billing::carried_version(cc_version?, check.client_version)
-    else {
+    let value = cc_version?;
+    if !matches!(
+        crate::billing::carried_version(value, check.client_version),
+        CarriedVersion::Suffixed(_)
+    ) {
         return None;
-    };
-    let reproduced = check.prompt_units.iter().any(|units| {
-        crate::billing::cc_version(check.client_version, *units)
-            .rsplit('.')
-            .next()
-            == Some(suffix)
-    });
+    }
+    let reproduced = check
+        .prompt_units
+        .iter()
+        .any(|units| crate::billing::cc_version(check.client_version, *units) == value);
     (!reproduced).then_some(DriftKind::VersionSuffix)
 }
 

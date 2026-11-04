@@ -214,7 +214,7 @@ impl BodyFacts {
 /// A marker without a `ttl` is the upstream's five-minute default; `1h` is the one other value it takes.
 pub(crate) fn marker_ttl_ms(marker: &Value) -> i64 {
     match marker.get("ttl").and_then(Value::as_str) {
-        Some("1h") => CacheTtl::OneHour.ms(),
+        Some(ttl) if ttl == CacheTtl::OneHour.as_str() => CacheTtl::OneHour.ms(),
         _ => CacheTtl::FiveMinutes.ms(),
     }
 }
@@ -284,12 +284,9 @@ fn tool_ms_sum(value: &str) -> Option<i64> {
 /// charset and bound its own field carries, since a separator let through by the wrong rule would become a
 /// field of its own once the value is restored onto a line this build later signs.
 pub(crate) fn carried_field<'a>(text: &'a str, name: &str) -> Option<&'a str> {
-    let value = text
-        .strip_prefix(crate::billing::ATTRIBUTION_PREFIX)?
-        .split("; ")
-        .find_map(|field| field.strip_prefix(name)?.strip_prefix('='))?
-        .trim_end_matches(';');
-    Some(value)
+    crate::billing::attribution_fields(text)?
+        .find_map(|field| crate::billing::field_value(field, name))
+        .map(|value| value.trim_end_matches(';'))
 }
 
 /// The `x-claude-code-prompt-id` header, read as the client's own spelling of a UUID alone: 36 bytes in the

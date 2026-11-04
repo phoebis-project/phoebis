@@ -11,7 +11,6 @@ use phoebis_oauth::Clock;
 use phoebis_transport::pool::{Conn, Pool, PoolKey};
 use phoebis_transport::request::{write_request, RawRequest, WriteProgress};
 use phoebis_transport::response::{read_head, ResponseHead};
-use phoebis_transport::TransportError;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::sync::CancellationToken;
 
@@ -92,20 +91,16 @@ pub(crate) async fn attempt(
         // whole head timeout, ten minutes, before the one retry on a fresh connection.
         let conn = tokio::time::timeout(relay.limits.connect_timeout, checkout)
             .await
-            .map_err(|_| AttemptFailure::Unsent {
-                detail: "timed out before a connection was ready".into(),
-                connect: true,
-            })??;
+            .map_err(|_| unsent("timed out before a connection was ready"))??;
         send_and_read(conn, request, &sending, &relay.clock).await
     };
     let work = tokio::time::timeout(relay.limits.head_timeout, once);
     tokio::select! {
         result = work => match result {
             Ok(result) => result,
-            Err(_) if !sending.load(Ordering::SeqCst) => Err(AttemptFailure::Unsent {
-                detail: "timed out before a connection was ready".into(),
-                connect: true,
-            }),
+            Err(_) if !sending.load(Ordering::SeqCst) => {
+                Err(unsent("timed out before a connection was ready"))
+            }
             Err(_) => Err(AttemptFailure::Lost(
                 "timed out sending the request or waiting for the response head".into(),
             )),
@@ -169,9 +164,9 @@ async fn checkout_fresh(
     }
 }
 
-fn unsent(error: TransportError) -> AttemptFailure {
+fn unsent(detail: impl ToString) -> AttemptFailure {
     AttemptFailure::Unsent {
-        detail: error.to_string(),
+        detail: detail.to_string(),
         connect: true,
     }
 }

@@ -48,10 +48,7 @@ pub use classify::{
     classify, next_month_start, Cooldown, HeadContext, Scope, Verdict, SPEND_CAP_REASON,
 };
 pub use drift::DriftKind;
-pub use errors::{
-    anthropic_error, auth_error_response, key_refusal_response, no_store, ACCOUNTS_AT_CAP,
-    ERROR_CODE_HEADER, LEDGER_BEHIND,
-};
+pub use errors::{anthropic_error, no_store, ACCOUNTS_AT_CAP, ERROR_CODE_HEADER, LEDGER_BEHIND};
 pub use headers::{outbound_headers, CredentialKind};
 pub use hold::INSPECT_BUFFER;
 pub use identity::{identifier_byte, is_valid_id};

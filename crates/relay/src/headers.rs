@@ -11,9 +11,9 @@ use crate::memory::Injected;
 /// The credential the relay presents upstream, which decides both the header the secret goes in and the beta
 /// list the account may claim.
 #[derive(Debug)]
-pub enum CredentialKind {
-    Oauth { bearer: Secret },
-    ApiKey { secret: Secret },
+pub struct CredentialKind {
+    pub kind: AccountKind,
+    pub secret: Secret,
 }
 
 /// Beta only an OAuth credential may claim; an API key that sends it is rejected upstream.
@@ -117,7 +117,7 @@ pub fn outbound_headers(
                         out.push(("x-client-request-id".into(), id.into()));
                         injected.push(Injected::ClientRequestId);
                     }
-                    out.push(credential(kind));
+                    out.push(credential_header(kind.kind, &kind.secret));
                 }
             }
             // Only a line no account header replaced reaches here, so the effective list is the caller's own.
@@ -185,7 +185,7 @@ pub fn outbound_headers(
             injected.push(Injected::ClientRequestId);
             at += 1;
         }
-        out.insert(at, credential(kind));
+        out.insert(at, credential_header(kind.kind, &kind.secret));
     }
     // No line at all to merge into, neither the caller's nor the account's, so nothing above ever ran `betas`;
     // an injected feature still needs a line of its own, but never the OAuth claim, which rides on a list the
@@ -222,13 +222,6 @@ pub fn outbound_headers(
     OutboundHead {
         headers: out,
         injected,
-    }
-}
-
-fn credential(kind: &CredentialKind) -> (String, String) {
-    match kind {
-        CredentialKind::ApiKey { secret } => credential_header(AccountKind::ApiKey, secret),
-        CredentialKind::Oauth { bearer } => credential_header(AccountKind::Oauth, bearer),
     }
 }
 
@@ -272,17 +265,17 @@ fn betas(
         injected.push(*item);
     }
     let claimed = || list.split(',').any(|entry| entry.trim() == OAUTH_BETA);
-    let list = match kind {
-        CredentialKind::ApiKey { .. } => list
+    let list = match kind.kind {
+        AccountKind::ApiKey => list
             .split(',')
             .filter(|entry| entry.trim() != OAUTH_BETA)
             .collect::<Vec<_>>()
             .join(","),
-        CredentialKind::Oauth { .. } if claimed() => list,
-        CredentialKind::Oauth { .. } if list.trim().is_empty() => OAUTH_BETA.into(),
+        AccountKind::Oauth if claimed() => list,
+        AccountKind::Oauth if list.trim().is_empty() => OAUTH_BETA.into(),
         // The beta is a claim about the credential rather than about the client's feature set, so it leads
         // the list and the caller's own entries keep their order behind it.
-        CredentialKind::Oauth { .. } => format!("{OAUTH_BETA},{list}"),
+        AccountKind::Oauth => format!("{OAUTH_BETA},{list}"),
     };
     (list, injected)
 }
@@ -302,14 +295,16 @@ mod tests {
     }
 
     fn api_key() -> CredentialKind {
-        CredentialKind::ApiKey {
+        CredentialKind {
+            kind: AccountKind::ApiKey,
             secret: Secret::new("sk-ant-api03-PLACEHOLDER"),
         }
     }
 
     fn oauth() -> CredentialKind {
-        CredentialKind::Oauth {
-            bearer: Secret::new("sk-ant-oat01-PLACEHOLDER"),
+        CredentialKind {
+            kind: AccountKind::Oauth,
+            secret: Secret::new("sk-ant-oat01-PLACEHOLDER"),
         }
     }
 
