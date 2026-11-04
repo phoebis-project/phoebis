@@ -1372,24 +1372,37 @@ pub(crate) async fn pool_context(
     // The day is 25 buckets, the current partial hour last, and a pool's day figures are their sums.
     let day_start = hour - 24 * 3_600;
     // A registry with no pool answers no row, so it reads nothing from the ledger.
-    let (traffic, moves) = if pool_ids.is_empty() {
-        Default::default()
-    } else {
-        let ids = pool_ids.clone();
-        state
-            .ledger
-            .db()
-            .read(move |c| {
-                Ok((
-                    phoebis_ledger::pools_traffic(
-                        c, &ids, day_start, to, 3_600, &prices, &tables, now,
-                    )?,
-                    phoebis_ledger::pin_migrations_by_account_and_reason(c, now - 3_600_000, now)?,
-                ))
-            })
-            .await
-            .unwrap_or_default()
+    let ledger = async {
+        if pool_ids.is_empty() {
+            Default::default()
+        } else {
+            let ids = pool_ids.clone();
+            state
+                .ledger
+                .db()
+                .read(move |c| {
+                    Ok((
+                        phoebis_ledger::pools_traffic(
+                            c, &ids, day_start, to, 3_600, &prices, &tables, now,
+                        )?,
+                        phoebis_ledger::pin_migrations_by_account_and_reason(
+                            c,
+                            now - 3_600_000,
+                            now,
+                        )?,
+                    ))
+                })
+                .await
+                .unwrap_or_default()
+        }
     };
+    // Each read is a snapshot of its own, so they wait together and their order carries no meaning.
+    let ((traffic, moves), ceilings, pins, spends) = tokio::join!(
+        ledger,
+        state.keepalive.ceiling_inputs(),
+        state.router.pins(),
+        state.router.member_spends(),
+    );
     let fallback_ms = phoebis_routing::seconds_ms(state.settings.cooldown_fallback_seconds);
     let mut projections = BTreeMap::new();
     for id in pool_ids {
@@ -1399,17 +1412,17 @@ pub(crate) async fn pool_context(
     }
     Ok(PoolContext {
         accounts: registry.accounts,
-        ceilings: state.keepalive.ceiling_inputs().await,
+        ceilings,
         guardrails,
         keys: registry.keys,
         members: registry.members,
         moves,
         now,
-        pins: state.router.pins().await.unwrap_or_default(),
+        pins: pins.unwrap_or_default(),
         pools: registry.pools,
         projections,
         snapshot: state.router.snapshot(),
-        spends: state.router.member_spends().await.unwrap_or_default(),
+        spends: spends.unwrap_or_default(),
         traffic,
     })
 }

@@ -215,8 +215,6 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         ))
     };
     let now = (state.clock)();
-    let overages = state.router.overages().await.unwrap_or_default();
-    let reported = crate::routes::reported_samples(state).await;
     let fallback_ms = phoebis_routing::seconds_ms(state.settings.cooldown_fallback_seconds);
     let cutoff = now - state.session_expiry.as_millis() as i64;
     let idle_bound = now
@@ -246,24 +244,27 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
     // the read, the activity's come from the read itself, and a row's fork facts come from the requests of its own
     // session whichever pass surfaced it. Only the sessions the retain below can keep are named: every engine
     // session, and one with a pin use or a request at or after `idle_bound`.
-    let (activity, identities) = match state
-        .ledger
-        .db()
-        .read(move |c| {
-            // Grouped by the client's own session, which the router keys pins under, so a request shows on the row
-            // of the pin it took.
-            let activity = phoebis_ledger::session_activity(c, cutoff)?;
-            candidates.extend(
-                activity
-                    .iter()
-                    .filter(|a| a.last_request_at >= idle_bound)
-                    .map(activity_key),
-            );
-            let keys: Vec<(String, i64, String)> = candidates.into_iter().collect();
-            Ok((activity, phoebis_ledger::session_identities(c, &keys)?))
-        })
-        .await
-    {
+    let read = state.ledger.db().read(move |c| {
+        // Grouped by the client's own session, which the router keys pins under, so a request shows on the row of
+        // the pin it took.
+        let activity = phoebis_ledger::session_activity(c, cutoff)?;
+        candidates.extend(
+            activity
+                .iter()
+                .filter(|a| a.last_request_at >= idle_bound)
+                .map(activity_key),
+        );
+        let keys: Vec<(String, i64, String)> = candidates.into_iter().collect();
+        Ok((activity, phoebis_ledger::session_identities(c, &keys)?))
+    });
+    // Each read is a snapshot of its own, so they wait together and their order carries no meaning.
+    let (overages, reported, read) = tokio::join!(
+        state.router.overages(),
+        crate::routes::reported_samples(state),
+        read,
+    );
+    let overages = overages.unwrap_or_default();
+    let (activity, identities) = match read {
         Ok(read) => read,
         Err(e) => return Err(crate::analytics::ledger_failure(e)),
     };
