@@ -6,6 +6,8 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
+pub use phoebis_store::EvidenceSource;
+
 use phoebis_store::{
     AccountKind, AccountState, AffinityRow, BudgetPeriod, CooldownRow, CooldownScope, CreditsRow,
     FirstSeenRow, OverageRow, PinBurn, PinKey, PinMark, PinRow, PoolMember, PoolRow, RekeyWrite,
@@ -80,8 +82,6 @@ pub fn latest_full_reset(
 pub fn entrypoint_of(pin: &PinRow) -> Option<&str> {
     Some(pin.entrypoint.as_str()).filter(|entrypoint| !entrypoint.is_empty())
 }
-
-pub use phoebis_store::EvidenceSource;
 
 /// Where a window's reading came from: a response head, the usage poll, the registry at start (which keeps no
 /// origin), or the router's own prediction once a charge or a passed reset moved the stored reading.
