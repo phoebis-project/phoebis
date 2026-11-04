@@ -16,10 +16,9 @@ use phoebis_store::{stamp_token, ApiKeyRow, AttachmentSubject, StoreError, ROTAT
 use serde_json::{json, Value};
 use utoipa::ToSchema;
 
-use crate::accounts::within_text_bound;
+use crate::accounts::{check_slug, within_text_bound};
 use crate::guardrails::{attachment_refusal, distinct_ids, AttachmentIndex, GuardrailRef};
 use crate::openapi::{ErrorBody, RegistryUnavailable, StorageFailure};
-use crate::pools::valid_slug;
 use crate::routes::{
     double_option, failure, failure_with_code, fence_token, parse_object, present,
     reload_or_refuse, store_failure, CreatedId,
@@ -460,11 +459,8 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
             "id, label, and pool_id are required",
         );
     };
-    if !valid_slug(id) {
-        return failure(
-            StatusCode::BAD_REQUEST,
-            "id must match [a-z0-9][a-z0-9-]{0,63}",
-        );
+    if let Err(refusal) = check_slug(id) {
+        return refusal;
     }
     if let Ok(Some(_)) = state.store.api_key(id) {
         return failure(StatusCode::CONFLICT, "a key with this id exists");

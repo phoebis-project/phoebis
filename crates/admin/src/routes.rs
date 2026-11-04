@@ -1076,11 +1076,8 @@ async fn pairing_start(
             (row.lifecycle_generation, None)
         }
         Some(new_account) => {
-            if !accounts::valid_slug(&new_account.id) {
-                return failure(
-                    StatusCode::BAD_REQUEST,
-                    "id must match [a-z0-9][a-z0-9-]{0,63}",
-                );
+            if let Err(refusal) = accounts::check_slug(&new_account.id) {
+                return refusal;
             }
             if let Err(refusal) = accounts::within_text_bound("label", Some(&new_account.label)) {
                 return refusal;

@@ -24,10 +24,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::ToSchema;
 
-use crate::accounts::within_text_bound;
+use crate::accounts::{check_slug, within_text_bound};
 use crate::analytics::ledger_failure;
 use crate::openapi::{ConditionView, ErrorBody, RegistryUnavailable, StorageFailure};
-use crate::pools::valid_slug;
 use crate::routes::{
     failure, failure_with_code, fence_token, parse_object, present, reload_or_refuse,
     store_failure, CreatedId,
@@ -650,11 +649,8 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     let Some(id) = &input.id else {
         return failure(StatusCode::BAD_REQUEST, "id is required");
     };
-    if !valid_slug(id) {
-        return failure(
-            StatusCode::BAD_REQUEST,
-            "id must match [a-z0-9][a-z0-9-]{0,63}",
-        );
+    if let Err(refusal) = check_slug(id) {
+        return refusal;
     }
     if RESERVED_IDS.contains(&id.as_str()) {
         return failure(StatusCode::BAD_REQUEST, "id is reserved");

@@ -19,6 +19,7 @@ use phoebis_store::{
 use serde_json::{json, Value};
 use utoipa::ToSchema;
 
+use crate::accounts::check_slug;
 use crate::guardrails::{attachment_refusal, distinct_ids, AttachmentIndex, GuardrailRef};
 use crate::openapi::{ErrorBody, RegistryUnavailable, StorageFailure};
 use crate::routes::{
@@ -343,14 +344,6 @@ fn merged_cache_ttl(row: &PoolRow, incoming: &Value) -> Value {
         }
     }
     merged
-}
-
-pub(crate) fn valid_slug(id: &str) -> bool {
-    (1..=64).contains(&id.len())
-        && id
-            .bytes()
-            .enumerate()
-            .all(|(i, b)| b.is_ascii_lowercase() || b.is_ascii_digit() || (b == b'-' && i > 0))
 }
 
 /// Applies `input` over `row`, refusing every value the spec's pool table rules out.
@@ -693,11 +686,8 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     let (Some(id), Some(_)) = (&input.id, &input.label) else {
         return failure(StatusCode::BAD_REQUEST, "id and label are required");
     };
-    if !valid_slug(id) {
-        return failure(
-            StatusCode::BAD_REQUEST,
-            "id must match [a-z0-9][a-z0-9-]{0,63}",
-        );
+    if let Err(refusal) = check_slug(id) {
+        return refusal;
     }
     if let Ok(Some(_)) = state.store.pool(id) {
         return failure(StatusCode::CONFLICT, "a pool with this id exists");

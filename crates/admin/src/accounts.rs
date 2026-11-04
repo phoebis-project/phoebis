@@ -95,7 +95,22 @@ pub(crate) fn within_text_bound(field: &str, value: Option<&str>) -> Result<(), 
     }
 }
 
-pub(crate) fn valid_slug(id: &str) -> bool {
+/// Refuses an id outside `[a-z0-9][a-z0-9-]{0,63}`, the one slug every created row's id takes.
+// The error is a rendered HTTP response, returned once per request and dropped. Boxing it would buy a
+// pointer chase and nothing else.
+#[allow(clippy::result_large_err)]
+pub(crate) fn check_slug(id: &str) -> Result<(), Response> {
+    if valid_slug(id) {
+        Ok(())
+    } else {
+        Err(failure(
+            StatusCode::BAD_REQUEST,
+            "id must match [a-z0-9][a-z0-9-]{0,63}",
+        ))
+    }
+}
+
+fn valid_slug(id: &str) -> bool {
     (1..=64).contains(&id.len())
         && id
             .bytes()
@@ -135,11 +150,8 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
             "body must carry id, kind, and label",
         );
     };
-    if !valid_slug(&input.id) {
-        return failure(
-            StatusCode::BAD_REQUEST,
-            "id must match [a-z0-9][a-z0-9-]{0,63}",
-        );
+    if let Err(refusal) = check_slug(&input.id) {
+        return refusal;
     }
     if let Err(refusal) = within_text_bound("label", Some(&input.label)) {
         return refusal;
