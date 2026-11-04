@@ -39,7 +39,8 @@ pub(crate) struct ProbeJob {
     pub generation: u64,
     pub attempt: u8,
     pub started: i64,
-    pub account: Option<String>,
+    /// The account the gate admitted the probe on, the one its pin names.
+    pub account: String,
     pub pool_id: String,
     pub canonical_model: String,
     /// The agent's entrypoint at dispatch, which the probe's headers carry, so the probe settles under the regime it
@@ -412,7 +413,7 @@ impl Inner {
         at: i64,
     ) -> ProbeRecord {
         let mut record = ProbeRecord {
-            account: job.account.clone().unwrap_or_else(|| "-".to_string()),
+            account: job.account.clone(),
             agent_id: job.agent_id.clone(),
             canonical_model: job.canonical_model.clone(),
             fast: job.recipe.fast,
@@ -457,7 +458,7 @@ impl Inner {
         if result
             .account
             .as_deref()
-            .is_some_and(|served| Some(served) != job.account.as_deref())
+            .is_some_and(|served| served != job.account)
         {
             record.outcome = ProbeOutcome::Migrated;
         }
@@ -1030,7 +1031,7 @@ mod tests {
             generation: 0,
             attempt: 1,
             started: 1_000,
-            account: Some("a".into()),
+            account: "a".into(),
             pool_id: "main".into(),
             canonical_model: "m".into(),
             entrypoint: None,

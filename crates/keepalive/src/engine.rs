@@ -3783,7 +3783,7 @@ impl Engine {
             }
             let mut lapsed: Vec<Skipped> = Vec::new();
             inner.follow_resolutions(&view.canonical);
-            let mut due: Vec<(i64, SessionKey, String)> = Vec::new();
+            let mut due: Vec<(i64, SessionKey, String, String)> = Vec::new();
             let candidates: Vec<(SessionKey, String)> = inner
                 .sessions
                 .iter()
@@ -3921,7 +3921,7 @@ impl Engine {
                 if moved {
                     inner.touch_agent(&key, &agent_id);
                 }
-                match held {
+                let account = match held {
                     Err(Gate::Drop(reason, label)) => {
                         inner.discard(&key, &agent_id, reason, Some(label));
                         continue;
@@ -3930,8 +3930,8 @@ impl Engine {
                         inner.hold(&key, &agent_id, reason, now);
                         continue;
                     }
-                    Ok(()) => {}
-                }
+                    Ok(account) => account,
+                };
                 if !ready || inner.sessions[&key].agents[&agent_id].in_flight {
                     continue;
                 }
@@ -3939,12 +3939,12 @@ impl Engine {
                     continue;
                 };
                 if at <= now {
-                    due.push((at, key, agent_id));
+                    due.push((at, key, agent_id, account));
                 }
             }
             due.sort_by(|a, b| (a.0, &a.1, &a.2).cmp(&(b.0, &b.1, &b.2)));
             let mut jobs = Vec::new();
-            for (_, key, agent_id) in due {
+            for (_, key, agent_id, account) in due {
                 if inner.running >= MAX_WORKERS {
                     break;
                 }
@@ -3962,7 +3962,7 @@ impl Engine {
                     generation: agent.generation,
                     attempt: observation.attempt,
                     started: now,
-                    account: agent.account.clone(),
+                    account,
                     pool_id: agent.pool_id.clone(),
                     canonical_model: agent.canonical_model.clone(),
                     entrypoint: agent.entrypoint.clone(),
@@ -4239,14 +4239,15 @@ pub(crate) fn ceilings_for(
 }
 
 /// The spec's "Scheduling against router state" row, in its order, after `refresh_policy` answered `pool`. `Err`
-/// names why the due probe waits, or why the recipe goes; `Ok` lets the probe run.
+/// names why the due probe waits, or why the recipe goes; `Ok` lets the probe run on the account it names, the one
+/// the snapshot holds.
 pub(crate) fn gate(
     view: &RouterView,
     agent: &mut Agent,
     session_id: &str,
     pool: &PoolRow,
     policy: &KeepalivePolicy,
-) -> Result<(), Gate> {
+) -> Result<String, Gate> {
     let key_id = agent.key_id.clone();
     // A probe keeps the session on the account it warmed only while the pin outlives the probe's due time:
     // the recipe's own TTL less the lead, so a five-minute recipe needs about four minutes of pin and a
@@ -4311,7 +4312,7 @@ pub(crate) fn gate(
     {
         return Err(Gate::Hold(Reason::Budget));
     }
-    Ok(())
+    Ok(account.id.clone())
 }
 
 #[cfg(test)]
