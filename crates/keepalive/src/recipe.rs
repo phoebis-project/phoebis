@@ -38,10 +38,6 @@ pub fn valid_opaque(s: &str) -> bool {
     !s.trim().is_empty() && s.len() <= 1_024 && !s.chars().any(char::is_control)
 }
 
-fn header_size(headers: &[(String, String)]) -> usize {
-    headers.iter().map(|(n, v)| n.len() + v.len()).sum()
-}
-
 /// Whether every object in the document, at any depth, names each key once. A parsed tree keeps the last value
 /// of a repeated key and cannot show the repeat, so this walks the raw bytes once; the upstream reads one of
 /// the two values and the replay might edit the other, which is why an ambiguous body is refused whole.
@@ -225,17 +221,19 @@ pub fn make_recipe(
     // header the client starts sending reaches the upstream on a probe as it does on the request. The relay's
     // outbound builder places the account credential after `anthropic-version`, so this order is the wire's.
     let mut kept: Vec<(String, String)> = Vec::new();
+    // The budget is the retained bytes beyond the body, and the model name is among them.
+    let mut header_bytes = model.len();
     for (name, value) in headers {
         if value.len() > MAX_HEADER_VALUE {
             return Err("headers_too_large");
         }
         kept.push((name.clone(), value.clone()));
-        // The budget is the retained bytes beyond the body, and the model name is among them.
-        if model.len() + header_size(&kept) > MAX_HEADER_BYTES {
+        header_bytes += name.len() + value.len();
+        if header_bytes > MAX_HEADER_BYTES {
             return Err("headers_too_large");
         }
     }
-    let size = edited.len() + model.len() + header_size(&kept);
+    let size = edited.len() + header_bytes;
     Ok(Recipe {
         body: edited,
         headers: kept,
