@@ -304,21 +304,26 @@ async fn totals(
         let old = state
             .old_totals
             .keys
-            .get((week_start, live.0.clone()), || {
-                let (live, prices, tables) = (live.clone(), prices.clone(), tables.clone());
+            .get(week_start, || {
+                let (prices, tables) = (prices.clone(), tables.clone());
                 state.ledger.db().read(move |c| {
-                    phoebis_ledger::key_request_totals(
+                    phoebis_ledger::key_request_totals_by_generation(
                         c,
                         i64::MIN,
                         week_start,
-                        &live,
                         &prices,
                         &tables,
                         now,
                     )
                 })
             })
-            .await?;
+            .await?
+            .into_iter()
+            .filter_map(|(id, mut generations)| {
+                let totals = generations.remove(live.0.get(&id)?)?;
+                Some((id, totals))
+            })
+            .collect();
         let week = state
             .ledger
             .db()

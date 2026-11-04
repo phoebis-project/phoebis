@@ -2108,7 +2108,7 @@ pub(crate) async fn account_context(state: &AdminState, rows: &[AccountRow]) -> 
         let old = state
             .old_totals
             .accounts
-            .get((week_start, BTreeMap::new()), || {
+            .get(week_start, || {
                 state
                     .ledger
                     .db()

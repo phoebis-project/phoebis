@@ -1370,8 +1370,8 @@ async fn the_key_lifetime_walks_the_older_rows_once_an_hour_and_a_key_created_ag
     assert_eq!(
         lifetime(&poll(cookie.clone()).await),
         Some(0),
-        "a key created again under a deleted id carries none of the earlier holder's rows, and the cache follows \
-         the live generations rather than the hour alone"
+        "a key created again under a deleted id carries none of the earlier holder's rows, since the cached older \
+         rows are kept per generation and the live one is read out of them"
     );
 }
 

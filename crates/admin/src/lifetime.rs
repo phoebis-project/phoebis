@@ -8,13 +8,11 @@ use std::future::Future;
 
 use phoebis_ledger::{LedgerError, Totals};
 
-/// The key a route's older part is cached under: the week-start hour the route derives from its clock, and the live
-/// generation of every key id where the route groups by key, so a key created again under a deleted id recomputes at
-/// once rather than carrying the earlier holder's rows for up to an hour. The accounts route passes an empty map. The
-/// hour also pins the cost revision in force at the poll's clock, whose anchor prices a row's Pro-week figure: a
-/// revision takes force at a UTC midnight, an hour boundary, and the tables hold for the process's life, so the
-/// revision in force moves only when the week-start hour does and the two parts add under one anchor.
-pub type OldKey = (i64, BTreeMap<String, i64>);
+/// The key a route's older part is cached under: the week-start hour the route derives from its clock. The hour also
+/// pins the cost revision in force at the poll's clock, whose anchor prices a row's Pro-week figure: a revision takes
+/// force at a UTC midnight, an hour boundary, and the tables hold for the process's life, so the revision in force
+/// moves only when the week-start hour does and the two parts add under one anchor.
+pub type OldKey = i64;
 
 /// The hour a lifetime splits at, seven days before the poll's hour: the week's part reads from it and the older part
 /// up to it.
@@ -51,7 +49,7 @@ impl<V: Clone> OldPart<V> {
         let part = read().await?;
         // A poll that read its clock before the hour turned can take the lock after one that read it after, so an
         // older hour answers its own read and leaves the newer entry for the polls that follow.
-        if cached.as_ref().is_none_or(|(at, _)| at.0 <= key.0) {
+        if cached.as_ref().is_none_or(|(at, _)| *at <= key) {
             *cached = Some((key, part.clone()));
         }
         Ok(part)
@@ -59,11 +57,11 @@ impl<V: Clone> OldPart<V> {
 }
 
 /// The older parts of the two polled routes that answer a lifetime total: the accounts route reads its request
-/// counts alone, the keys route its priced totals.
+/// counts alone, the keys route its priced totals per generation, which it filters to the live ones on each poll.
 #[derive(Default)]
 pub struct OldTotals {
     pub accounts: OldPart<u64>,
-    pub keys: OldPart<Totals>,
+    pub keys: OldPart<BTreeMap<i64, Totals>>,
 }
 
 /// A group's figure as both parts hold it, every field of it a sum, so the older part and the week add to the figure
