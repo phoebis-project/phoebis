@@ -676,22 +676,15 @@ fn default_memory_retention() -> u32 {
 mod tests {
     use super::*;
 
-    fn file(dir: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
-        let key = dir.join("storage.key");
-        std::fs::write(
-            &key,
-            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        )
-        .unwrap();
-        let yaml = format!("admin:\n  listen: 127.0.0.1:0\n  secret_env: TEST_CFG_ADMIN\nproxy:\n  listen: 127.0.0.1:0\nstorage:\n  encryption_key_file: {}\n  path: {}\n{body}", key.display(), dir.join("router.sqlite").display());
-        let path = dir.join(format!("{name}.yaml"));
-        std::fs::write(&path, yaml).unwrap();
-        path
-    }
-
-    /// `file`'s own template fixes the `proxy` block at `listen` alone; this one carries the caller's further keys
-    /// under it.
-    fn file_with_proxy(dir: &std::path::Path, name: &str, keys: &str) -> std::path::PathBuf {
+    /// The bootstrap file the helpers below write, beside its key file: `proxy_keys` under the `proxy` block's
+    /// `listen`, and `tail` after the `storage` block.
+    fn written(
+        dir: &std::path::Path,
+        name: &str,
+        secret_env: &str,
+        proxy_keys: &str,
+        tail: &str,
+    ) -> std::path::PathBuf {
         let key = dir.join("storage.key");
         std::fs::write(
             &key,
@@ -699,14 +692,23 @@ mod tests {
         )
         .unwrap();
         let yaml = format!(
-            "admin:\n  listen: 127.0.0.1:0\n  secret_env: TEST_CFG_ADMIN\n\
-             proxy:\n  listen: 127.0.0.1:0\n{keys}storage:\n  encryption_key_file: {}\n  path: {}\n",
+            "admin:\n  listen: 127.0.0.1:0\n  secret_env: {secret_env}\n\
+             proxy:\n  listen: 127.0.0.1:0\n{proxy_keys}storage:\n  encryption_key_file: {}\n  path: {}\n{tail}",
             key.display(),
             dir.join("router.sqlite").display()
         );
         let path = dir.join(format!("{name}.yaml"));
         std::fs::write(&path, yaml).unwrap();
         path
+    }
+
+    fn file(dir: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
+        written(dir, name, "TEST_CFG_ADMIN", "", body)
+    }
+
+    /// Carries the caller's further keys under `proxy`, which `file` fixes at `listen` alone.
+    fn file_with_proxy(dir: &std::path::Path, name: &str, keys: &str) -> std::path::PathBuf {
+        written(dir, name, "TEST_CFG_ADMIN", keys, "")
     }
 
     #[test]
@@ -1150,29 +1152,20 @@ mod tests {
         }
     }
 
-    /// `file`'s own template names `TEST_CFG_ADMIN`; this one takes the environment variable name as a
-    /// parameter, so a secret-length or placeholder test never races another test's value under that name.
+    /// Names the caller's environment variable where `file` names `TEST_CFG_ADMIN`, so a secret-length or placeholder
+    /// test never races another test's value under that name.
     fn file_with_secret_env(
         dir: &std::path::Path,
         name: &str,
         secret_env: &str,
     ) -> std::path::PathBuf {
-        let key = dir.join("storage.key");
-        std::fs::write(
-            &key,
-            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        written(
+            dir,
+            name,
+            secret_env,
+            "",
+            "usage:\n  refresh_concurrency: 2\n",
         )
-        .unwrap();
-        let yaml = format!(
-            "admin:\n  listen: 127.0.0.1:0\n  secret_env: {secret_env}\n\
-             proxy:\n  listen: 127.0.0.1:0\n\
-             storage:\n  encryption_key_file: {}\n  path: {}\nusage:\n  refresh_concurrency: 2\n",
-            key.display(),
-            dir.join("router.sqlite").display()
-        );
-        let path = dir.join(format!("{name}.yaml"));
-        std::fs::write(&path, yaml).unwrap();
-        path
     }
 
     #[test]
