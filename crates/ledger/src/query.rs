@@ -3552,14 +3552,13 @@ pub fn request_totals(
         prices,
         costs,
         now,
-        |r| r.get(0).map(Some),
+        |r| r.get(0),
     )
 }
 
-/// Request, token, and cost totals per live key over `[since_hour, to_hour)`, probe rows left out: the pair is
-/// grouped in SQL beside the price columns and the hour, one query per span of `revision_spans`, and only the live
-/// generation of each id is answered, so a key's row never carries an earlier holder's. `now` is the read's instant,
-/// whose anchor row divides the Pro-week figure.
+/// Request, token, and cost totals per live key over `[since_hour, to_hour)`, probe rows left out: the answer of
+/// `key_request_totals_by_generation` with only the live generation of each id kept, so a key's row never carries an
+/// earlier holder's. `now` is the read's instant, whose anchor row divides the Pro-week figure.
 pub fn key_request_totals(
     conn: &Connection,
     since_hour: i64,
@@ -3569,7 +3568,31 @@ pub fn key_request_totals(
     costs: &PlanTables,
     now: i64,
 ) -> Result<BTreeMap<String, Totals>, LedgerError> {
-    grouped_totals(
+    Ok(
+        key_request_totals_by_generation(conn, since_hour, to_hour, prices, costs, now)?
+            .into_iter()
+            .filter_map(|(id, mut generations)| {
+                let totals = generations.remove(live.0.get(&id)?)?;
+                Some((id, totals))
+            })
+            .collect(),
+    )
+}
+
+/// Request, token, and cost totals per key and generation over `[since_hour, to_hour)`, probe rows left out: the pair
+/// is grouped in SQL beside the price columns and the hour, one query per span of `revision_spans`. Every generation
+/// is answered, so a caller that keeps the answer across a key's creation or deletion filters the live generations
+/// itself, and a key created again under an id reads none of its earlier holder's rows. `now` is the read's instant,
+/// whose anchor row divides the Pro-week figure.
+pub fn key_request_totals_by_generation(
+    conn: &Connection,
+    since_hour: i64,
+    to_hour: i64,
+    prices: &PriceRevisions,
+    costs: &PlanTables,
+    now: i64,
+) -> Result<BTreeMap<String, BTreeMap<i64, Totals>>, LedgerError> {
+    let pairs = grouped_totals(
         conn,
         "key_id, key_generation",
         2,
@@ -3577,20 +3600,21 @@ pub fn key_request_totals(
         prices,
         costs,
         now,
-        |r| {
-            let id: String = r.get(0)?;
-            let generation: i64 = r.get(1)?;
-            Ok((live.0.get(&id) == Some(&generation)).then_some(id))
-        },
-    )
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
+    )?;
+    let mut out: BTreeMap<String, BTreeMap<i64, Totals>> = BTreeMap::new();
+    for ((id, generation), totals) in pairs {
+        out.entry(id).or_default().insert(generation, totals);
+    }
+    Ok(out)
 }
 
 /// The priced SQL sum of both totals reads over the hour range: grouped by `group_columns`, the price columns and the
-/// hour, one query per span of `revision_spans`, each group's price columns read from `offset`. `key_of` reads a
-/// group's key before `price_group` runs, so a group it answers `None` for is never priced. The statement orders the
-/// groups as it groups them, so a key adds its groups' figures in one order whichever plan SQLite picks.
+/// hour, one query per span of `revision_spans`, each group's price columns read from `offset` and its key by `key_of`.
+/// The statement orders the groups as it groups them, so a key adds its groups' figures in one order whichever plan
+/// SQLite picks.
 #[allow(clippy::too_many_arguments)]
-fn grouped_totals(
+fn grouped_totals<K: Ord>(
     conn: &Connection,
     group_columns: &str,
     offset: usize,
@@ -3598,20 +3622,17 @@ fn grouped_totals(
     prices: &PriceRevisions,
     costs: &PlanTables,
     now: i64,
-    key_of: impl Fn(&rusqlite::Row<'_>) -> rusqlite::Result<Option<String>>,
-) -> Result<BTreeMap<String, Totals>, LedgerError> {
+    key_of: impl Fn(&rusqlite::Row<'_>) -> rusqlite::Result<K>,
+) -> Result<BTreeMap<K, Totals>, LedgerError> {
     let mut stmt = conn.prepare(&format!("SELECT {group_columns}, {PRICE_GROUP_COLUMNS}, {PRICE_GROUP_SUMS} FROM rollups_hourly WHERE kind != 'probe' AND hour >= ?1 AND hour < ?2 GROUP BY {group_columns}, {PRICE_GROUP_COLUMNS} ORDER BY {group_columns}, {PRICE_GROUP_COLUMNS}"))?;
-    let mut out: BTreeMap<String, Totals> = BTreeMap::new();
+    let mut out: BTreeMap<K, Totals> = BTreeMap::new();
     for span in revision_spans(prices, Some(&costs.revisions), since_hour, to_hour) {
         let rows = stmt.query_map(params![span.from_hour, span.to_hour], |r| {
-            key_of(r)?
-                .map(|key| Ok((key, price_group(r, offset, prices, costs, now)?)))
-                .transpose()
+            Ok((key_of(r)?, price_group(r, offset, prices, costs, now)?))
         })?;
         for row in rows {
-            if let Some((key, totals)) = row? {
-                out.entry(key).or_default().add(&totals);
-            }
+            let (key, totals) = row?;
+            out.entry(key).or_default().add(&totals);
         }
     }
     Ok(out)
