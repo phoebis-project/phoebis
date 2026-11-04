@@ -7,7 +7,7 @@ use phoebis_ledger::{Band, KeepaliveDelta, PlanTables, Record, Speed, UNATTRIBUT
 use phoebis_routing::{PinUsage, SEVEN_DAY};
 
 use crate::engine::{Credit, Engine, SavingsUnit, SessionKey, Settlement, Skipped};
-use crate::probe::{Applied, ProbeOutcome, ProbeRecord};
+use crate::probe::{ProbeOutcome, ProbeRecord};
 use crate::usage::ProbeUsage;
 
 /// A probe's estimated cost as the share of the `tier`'s 7-day window at `at` (the band inside the price) under the
@@ -138,7 +138,7 @@ impl Engine {
     /// carries no dollar and no token, since the probe's own request row carries its counts, which a reader prices.
     /// The mark files at `now`, the probe's completion, while that request row files at the probe's receipt, so a probe
     /// answered past an hour's end leaves the two in different hours.
-    pub(crate) fn record_probe(&self, record: &ProbeRecord, _applied: Applied, now: i64) {
+    pub(crate) fn record_probe(&self, record: &ProbeRecord, now: i64) {
         // The migration is all the delta carries, so any other probe's would fold a row of zeros under the credit key,
         // which reads as an empty group of its own.
         if record.outcome != ProbeOutcome::Migrated {

@@ -174,7 +174,7 @@ pub struct ProbeRecord {
 /// What the fenced half did with the result.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Applied {
-    Landed { covered: bool },
+    Landed,
     Orphaned,
 }
 
@@ -381,10 +381,10 @@ pub(crate) async fn run_job(engine: Arc<Engine>, mut job: ProbeJob) {
         at,
     );
     let covered_unit = funding.map(|_| unit);
-    let applied = engine
+    engine
         .lock()
         .apply_probe(&job, exchange, &record, covered_unit, now);
-    engine.record_probe(&record, applied, now);
+    engine.record_probe(&record, now);
     // Read off the answer rather than off what the fenced half did with it, so a probe whose recipe moved on while it
     // was in flight, or paused on its answer, still counts as the upstream served it.
     let cache_read = covers(
@@ -590,7 +590,7 @@ impl Inner {
                     job.counted_idle_tick,
                     now,
                 );
-                return Applied::Landed { covered: false };
+                return Applied::Landed;
             }
             Exchange::Answered(result) => result,
         };
@@ -607,7 +607,7 @@ impl Inner {
                 job.counted_idle_tick,
                 now,
             );
-            return Applied::Landed { covered: false };
+            return Applied::Landed;
         }
         // The upstream served this one and the pool was charged for it, so it goes on the recipe's own books
         // here, before any branch below pauses the recipe over what the answer said: the settlement a stop leaves
@@ -632,7 +632,7 @@ impl Inner {
         });
         let Some(account) = result.account.clone() else {
             self.pause(key, agent_id, Reason::MissingAccount);
-            return Applied::Landed { covered: false };
+            return Applied::Landed;
         };
         let body = result.body.unwrap_or_default();
         let root: Option<Value> = serde_json::from_slice(&body).ok();
@@ -648,13 +648,13 @@ impl Inner {
         let (Some(usage), true, Some(content)) = (ProbeUsage::parse(&body), output_known, content)
         else {
             self.pause(key, agent_id, Reason::InvalidProbeUsage);
-            return Applied::Landed { covered: false };
+            return Applied::Landed;
         };
         let agent = agent_mut(&mut self.sessions, key, agent_id).expect(AGENT_HELD);
         agent.usage.add(usage);
         if usage.output != 0 || !content.is_empty() {
             self.pause(key, agent_id, Reason::UnexpectedOutput);
-            return Applied::Landed { covered: false };
+            return Applied::Landed;
         }
         let agent = agent_mut(&mut self.sessions, key, agent_id).expect(AGENT_HELD);
         if migrated {
@@ -677,7 +677,7 @@ impl Inner {
         let cold = agent.cold;
         if cold >= cold_limit {
             self.pause(key, agent_id, Reason::RepeatedColdProbe);
-            return Applied::Landed { covered: false };
+            return Applied::Landed;
         }
         if usage.evidence() == 0 {
             self.retry(
@@ -687,13 +687,13 @@ impl Inner {
                 now,
                 RetryWait::Step,
             );
-            return Applied::Landed { covered: false };
+            return Applied::Landed;
         }
         // A probe that read part of the prefix and rebuilt the rest never warmed the whole entry; one that
         // read none of it rebuilt the entry, which the cold streak counts instead.
         if usage.evidence() < job.expected || (usage.read > 0 && !covered) {
             self.pause(key, agent_id, Reason::PartialCacheCoverage);
-            return Applied::Landed { covered: false };
+            return Applied::Landed;
         }
         let agent = agent_mut(&mut self.sessions, key, agent_id).expect(AGENT_HELD);
         agent.failures = 0;
@@ -723,7 +723,7 @@ impl Inner {
         {
             self.retry(key, agent_id, Reason::SlowProbe, now, RetryWait::Step);
         }
-        Applied::Landed { covered }
+        Applied::Landed
     }
 
     pub(crate) fn pause(&mut self, key: &SessionKey, agent_id: &str, reason: Reason) {
