@@ -479,7 +479,7 @@ pub const FAMILIES: &[(&str, &str)] = &[
     ("phoebis_upstream_ttfb_seconds", "histogram"),
 ];
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 pub struct KeepaliveAgents {
     pub busy: u64,
     pub idle: u64,

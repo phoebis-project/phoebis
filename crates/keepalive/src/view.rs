@@ -136,12 +136,8 @@ pub struct SessionView {
     pub session_id: String,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
-pub struct AgentCounts {
-    pub busy: u64,
-    pub idle: u64,
-    pub parked: u64,
-}
+/// The ledger's record of the agent gauge, so the overview's counts and the scrape's are one type.
+pub type AgentCounts = KeepaliveAgents;
 
 fn holds_recipe(agent: &Agent) -> bool {
     agent.current.as_ref().is_some_and(|o| o.ready)
@@ -289,14 +285,7 @@ impl Engine {
     /// one: it reads the engine's own lock fresh each time rather than pushing a stale snapshot.
     pub fn gauge_source(self: &Arc<Self>) -> KeepaliveGaugeSource {
         let engine = self.clone();
-        Arc::new(move || {
-            let counts = engine.agent_counts();
-            KeepaliveAgents {
-                busy: counts.busy,
-                idle: counts.idle,
-                parked: counts.parked,
-            }
-        })
+        Arc::new(move || engine.agent_counts())
     }
 }
 
