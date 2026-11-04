@@ -1215,7 +1215,7 @@ impl Inner {
                     .then_with(|| a.agent_id.cmp(&b.agent_id))
             });
             let mut session = payload.restore(now);
-            for (agent_row, decoded) in agents {
+            for (mut agent_row, decoded) in agents {
                 let Some((mut agent, observation)) = decoded else {
                     self.file_removed_agent(stored.clone(), agent_row.agent_id);
                     continue;
@@ -1243,7 +1243,8 @@ impl Inner {
                 }
                 self.next_incarnation = self.next_incarnation.max(agent.incarnation);
                 let agent_id = agent_row.agent_id.clone();
-                match (observation, agent_row.body.clone()) {
+                // The observation's restore reads the row's other columns alone, so the opened prompt moves out.
+                match (observation, agent_row.body.take()) {
                     (None, _) => {}
                     (Some(observation), Some(body)) => {
                         match observation.restore(&agent_row, body) {
