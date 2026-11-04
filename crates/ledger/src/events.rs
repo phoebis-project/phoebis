@@ -955,10 +955,8 @@ pub fn spawn_event_mirror(
                                 detail: Some(json!({
                                     "kind": change.kind,
                                     "target": change.target,
-                                    // Old rows carry `diff_json` re-encoded as a JSON string; a row already parsed
-                                    // this task falls back to that string so both shapes read as a value here.
                                     "diff": serde_json::from_str::<serde_json::Value>(&change.diff_json)
-                                        .unwrap_or(serde_json::Value::String(change.diff_json.clone())),
+                                        .unwrap_or_default(),
                                 }).to_string()),
                                 ..Default::default()
                             }));

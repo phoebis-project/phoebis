@@ -18,7 +18,7 @@ use utoipa::ToSchema;
 
 use crate::analytics::ledger_failure;
 use crate::openapi::{ErrorBody, LedgerFailure};
-use crate::requests::{decode_diff, list_param};
+use crate::requests::list_param;
 use crate::routes::failure;
 use crate::AdminState;
 
@@ -602,8 +602,6 @@ fn decision_json(d: &DecisionListRow) -> Value {
 }
 
 fn event_json(e: &EventListRow) -> EventRow {
-    let mut detail = e.detail.clone();
-    decode_diff(&mut detail);
     EventRow {
         kind_of_row: "event".into(),
         id: e.id,
@@ -617,7 +615,7 @@ fn event_json(e: &EventListRow) -> EventRow {
         model: e.model.clone(),
         request_id: e.request_id.clone(),
         actor: e.actor.clone(),
-        detail,
+        detail: e.detail.clone(),
     }
 }
 
