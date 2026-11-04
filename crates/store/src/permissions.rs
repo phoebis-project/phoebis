@@ -53,15 +53,15 @@ pub fn create_private_file(path: &Path, mode: u32) -> std::io::Result<File> {
     Ok(file)
 }
 
-/// Creates `path` at `mode` when it is missing, before SQLite opens it: SQLite creates a new database file under the
+/// Creates `path` at 0600 when it is missing, before SQLite opens it: SQLite creates a new database file under the
 /// process umask, so a file it created could be readable by other local users, even briefly. An existing file is
 /// opened without truncation and left as it is, which `create_private_file`'s `create_new` would refuse.
-pub fn create_private_if_missing(path: &Path, mode: u32) -> std::io::Result<()> {
+pub fn create_private_if_missing(path: &Path) -> std::io::Result<()> {
     OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
-        .mode(mode)
+        .mode(0o600)
         .open(path)?;
     Ok(())
 }

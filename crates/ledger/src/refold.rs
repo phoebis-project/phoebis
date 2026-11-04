@@ -19,7 +19,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use indexmap::IndexMap;
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use rusqlite::{params, Connection, Transaction};
 use serde::{Deserialize, Serialize};
 
 use crate::bodies::{first_kept_hour, request_cutoff};
@@ -346,11 +346,7 @@ pub(crate) fn read_meta<T: for<'de> Deserialize<'de>>(
     conn: &Connection,
     key: &str,
 ) -> Result<Option<T>, LedgerError> {
-    let text: Option<String> = conn
-        .query_row("SELECT value FROM meta WHERE key = ?1", params![key], |r| {
-            r.get(0)
-        })
-        .optional()?;
+    let text = phoebis_store::migrations::meta_value(conn, key)?;
     Ok(text.map(|text| serde_json::from_str(&text)).transpose()?)
 }
 

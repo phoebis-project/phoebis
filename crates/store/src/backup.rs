@@ -14,11 +14,6 @@ use crate::permissions;
 /// answers within it and the loop owns the deadline.
 pub const RETRY_PAUSE: Duration = Duration::from_millis(50);
 
-#[derive(Debug)]
-pub struct Snapshot {
-    pub bytes: u64,
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum BackupError {
     #[error("{path}: another connection held the database locked for {waited:?}")]
@@ -49,12 +44,13 @@ pub enum BackupError {
 /// `RETRY_PAUSE` until `contention` has passed, after which the destination is removed and the error names the wait.
 /// The source keeps serving: both files run in WAL mode, so the writer's commits during the copy land after the
 /// snapshot, not in it. A copy whose `PRAGMA quick_check` answers anything but `ok` is refused as `NotOk`. Any error
-/// after the destination was created removes it, so no partial copy outlives the call.
+/// after the destination was created removes it, so no partial copy outlives the call. Answers the copy's size in
+/// bytes.
 pub fn snapshot(
     source_path: &Path,
     destination: &Path,
     contention: Duration,
-) -> Result<Snapshot, BackupError> {
+) -> Result<u64, BackupError> {
     let source = crate::open_read_only(source_path, RETRY_PAUSE).map_err(sqlite(source_path))?;
     permissions::create_private_file(destination, 0o600).map_err(io(destination))?;
     let copied = copy(&source, source_path, destination, contention);
@@ -70,7 +66,7 @@ fn copy(
     source_path: &Path,
     destination_path: &Path,
     contention: Duration,
-) -> Result<Snapshot, BackupError> {
+) -> Result<u64, BackupError> {
     let mut destination = Connection::open(destination_path).map_err(sqlite(destination_path))?;
     let started = Instant::now();
     let backup = Backup::new(source, &mut destination).map_err(sqlite(source_path))?;
@@ -121,8 +117,7 @@ fn copy(
     }
     let file = File::open(destination_path).map_err(io(destination_path))?;
     file.sync_all().map_err(io(destination_path))?;
-    let bytes = file.metadata().map_err(io(destination_path))?.len();
-    Ok(Snapshot { bytes })
+    Ok(file.metadata().map_err(io(destination_path))?.len())
 }
 
 fn sqlite(path: &Path) -> impl Fn(rusqlite::Error) -> BackupError + '_ {
@@ -196,10 +191,10 @@ mod tests {
         assert!(tables > 0);
 
         let copy = dir.path().join("out").join("router.sqlite");
-        let snapshot = snapshot(&source, &copy, Duration::from_secs(5)).unwrap();
+        let bytes = snapshot(&source, &copy, Duration::from_secs(5)).unwrap();
         reader.execute_batch("COMMIT").unwrap();
 
-        assert_eq!(snapshot.bytes, std::fs::metadata(&copy).unwrap().len());
+        assert_eq!(bytes, std::fs::metadata(&copy).unwrap().len());
         drop(store);
         let restored = Store::open(&copy, &key).unwrap();
         let pools: Vec<String> = restored

@@ -1,7 +1,10 @@
 //! SQLite registry and encrypted credentials.
 
 /// A closed set of words one text column stores. Each variant sits beside its one word, so the column's reader and
-/// its writer cannot drift apart, and a stored word outside the set fails the read.
+/// its writer cannot drift apart, and a stored word outside the set fails the read. Exported for the ledger's columns,
+/// whose expansion resolves the `rusqlite` paths against the ledger's own dependency.
+#[macro_export]
+#[doc(hidden)]
 macro_rules! text_enum {
     (
         $(#[$meta:meta])*
@@ -70,7 +73,7 @@ use std::time::Duration;
 use base64::Engine;
 use hmac::{Hmac, Mac};
 use rand::Rng;
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
+use rusqlite::{params, Connection, OpenFlags, TransactionBehavior};
 use sha2::Sha256;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
@@ -80,7 +83,7 @@ pub use accounts::{
     answers_stamp_token, stamp_token, AccountExtras, AccountKind, AccountRow, AccountState,
     Identity, StateCause, SubscriptionRow, INFERENCE_HOST,
 };
-pub use backup::{snapshot, BackupError, Snapshot, RETRY_PAUSE};
+pub use backup::{snapshot, BackupError, RETRY_PAUSE};
 pub use credentials::{
     AttemptOutcome, CredentialBundle, CredentialMetadata, CredentialStanding, LastAttempt,
     NewBundle, PendingAttempt, ResolvedAttempt, Secret, Settled,
@@ -219,6 +222,18 @@ pub enum StoreError {
     Sqlite(#[from] rusqlite::Error),
     #[error("lifecycle or credential generation is stale")]
     Stale,
+}
+
+impl From<migrations::VersionError> for StoreError {
+    fn from(error: migrations::VersionError) -> StoreError {
+        match error {
+            migrations::VersionError::Io(error) => StoreError::Io(error),
+            migrations::VersionError::Sqlite(error) => StoreError::Sqlite(error),
+            migrations::VersionError::TooNew { found, supported } => {
+                StoreError::SchemaTooNew { found, supported }
+            }
+        }
+    }
 }
 
 impl StoreError {
@@ -429,7 +444,7 @@ impl Store {
 
         if !db_path.exists() {
             // The file holds credentials, so it is private from its creation.
-            permissions::create_private_if_missing(db_path, 0o600)?;
+            permissions::create_private_if_missing(db_path)?;
         } else {
             for warning in permissions::check_private_file(db_path, 0o600) {
                 tracing::warn!("{warning}");
@@ -479,10 +494,7 @@ impl Store {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction()?;
         let epoch = read_admin_session_epoch(&tx)? + 1;
-        tx.execute(
-            "INSERT INTO meta (key, value) VALUES ('admin_session_epoch', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![epoch.to_string()],
-        )?;
+        migrations::set_meta_value(&tx, "admin_session_epoch", &epoch.to_string())?;
         tx.commit()?;
         Ok(epoch)
     }
@@ -530,31 +542,31 @@ impl Store {
     /// would refuse. `KeyMismatch` names `db_path`. Beside a stopped router SQLite leaves the `-wal` and `-shm`
     /// files a reader of a WAL database needs; the database file itself is never written.
     pub fn read_canary(db_path: &Path, key: &StorageKey) -> Result<CanaryRead, StoreError> {
-        if !db_path.try_exists()? {
+        let Some(conn) = migrations::open_existing(db_path, BUSY_TIMEOUT)? else {
             return Ok(CanaryRead::NoRegistry);
-        }
-        let conn = open_read_only(db_path, BUSY_TIMEOUT)?;
+        };
         prove_key(&conn, key, db_path)
     }
 
     /// The registry's `meta.schema_version` through a read-only connection, taking no lock, as `read_canary`
     /// reads; `None` for an absent file or one without the table, which the next start creates or migrates.
     pub fn read_schema_version(db_path: &Path) -> Result<Option<u32>, StoreError> {
-        if !db_path.try_exists()? {
-            return Ok(None);
-        }
-        let conn = open_read_only(db_path, BUSY_TIMEOUT)?;
-        Ok(Some(read_version(&conn)?).filter(|version| *version != 0))
+        Ok(migrations::file_version(
+            db_path,
+            VERSION_WITHOUT_ROW,
+            BUSY_TIMEOUT,
+        )?)
     }
 
     /// Refuses a registry a newer build wrote with the start's own refusal, through a read-only connection taking no
     /// lock. An absent file passes, since the next start creates it.
     pub fn check_readable(db_path: &Path) -> Result<(), StoreError> {
-        if !db_path.try_exists()? {
-            return Ok(());
-        }
-        let conn = open_read_only(db_path, BUSY_TIMEOUT)?;
-        check_schema(&conn).map(|_| ())
+        Ok(migrations::check_file(
+            db_path,
+            VERSION_WITHOUT_ROW,
+            schema::SCHEMA_VERSION,
+            BUSY_TIMEOUT,
+        )?)
     }
 
     /// Resolved refresh attempts and registry changes older than `before_ms`, but for the rows their readers need
@@ -592,7 +604,7 @@ impl Store {
     /// burst of batches behind one wake.
     #[cfg(any(test, feature = "debug-hooks"))]
     #[doc(hidden)]
-    pub fn debug_hold_next_routing_write(&self) -> RoutingWriteHold {
+    pub fn debug_hold_next_routing_write(&self) -> Hold {
         arm(&self.hooks.routing_hold)
     }
 
@@ -641,7 +653,7 @@ impl Store {
     /// `debug_hold_next_routing_write`, so a test can rotate and reload under an acquisition in flight.
     #[cfg(any(test, feature = "debug-hooks"))]
     #[doc(hidden)]
-    pub fn debug_hold_next_credential_read(&self) -> CredentialReadHold {
+    pub fn debug_hold_next_credential_read(&self) -> Hold {
         arm(&self.hooks.credential_hold)
     }
 
@@ -649,7 +661,7 @@ impl Store {
     /// hold drops: a commit and a reload the test lands under it postdate the credential the read answers.
     #[cfg(any(test, feature = "debug-hooks"))]
     #[doc(hidden)]
-    pub fn debug_hold_after_next_credential_read(&self) -> CredentialReadHold {
+    pub fn debug_hold_after_next_credential_read(&self) -> Hold {
         arm(&self.hooks.credential_after_hold)
     }
 
@@ -657,14 +669,14 @@ impl Store {
     /// between a handler's read and its write.
     #[cfg(any(test, feature = "debug-hooks"))]
     #[doc(hidden)]
-    pub fn debug_hold_next_pool_write(&self) -> FencedWriteHold {
+    pub fn debug_hold_next_pool_write(&self) -> Hold {
         arm(&self.hooks.pool_write_hold)
     }
 
     /// The key's counterpart of `debug_hold_next_pool_write`.
     #[cfg(any(test, feature = "debug-hooks"))]
     #[doc(hidden)]
-    pub fn debug_hold_next_key_write(&self) -> FencedWriteHold {
+    pub fn debug_hold_next_key_write(&self) -> Hold {
         arm(&self.hooks.key_write_hold)
     }
 
@@ -683,7 +695,7 @@ impl Store {
     /// something while a reload's load runs.
     #[cfg(any(test, feature = "debug-hooks"))]
     #[doc(hidden)]
-    pub fn debug_hold_next_load(&self) -> RegistryLoadHold {
+    pub fn debug_hold_next_load(&self) -> Hold {
         arm(&self.hooks.load_hold)
     }
 
@@ -772,21 +784,10 @@ pub struct HoldGate {
     opened: Condvar,
 }
 
-/// A test's hold on the next call its arming names: `RoutingWriteHold` from `Store::debug_hold_next_routing_write`,
-/// `CredentialReadHold` from the two credential read holds, `FencedWriteHold` from the pool and key write holds and
-/// `RegistryLoadHold` from `Store::debug_hold_next_load`.
+/// A test's hold on the next call its arming names.
 #[cfg(any(test, feature = "debug-hooks"))]
 #[doc(hidden)]
 pub struct Hold(Arc<HoldGate>);
-
-#[cfg(any(test, feature = "debug-hooks"))]
-pub type RoutingWriteHold = Hold;
-#[cfg(any(test, feature = "debug-hooks"))]
-pub type CredentialReadHold = Hold;
-#[cfg(any(test, feature = "debug-hooks"))]
-pub type FencedWriteHold = Hold;
-#[cfg(any(test, feature = "debug-hooks"))]
-pub type RegistryLoadHold = Hold;
 
 #[cfg(any(test, feature = "debug-hooks"))]
 impl Hold {
@@ -1058,13 +1059,7 @@ fn stored_canary(conn: &Connection) -> Result<Option<String>, StoreError> {
     if !has_table(conn, "meta")? {
         return Ok(None);
     }
-    Ok(conn
-        .query_row(
-            "SELECT value FROM meta WHERE key = 'storage_key_canary'",
-            [],
-            |row| row.get(0),
-        )
-        .optional()?)
+    Ok(migrations::meta_value(conn, "storage_key_canary")?)
 }
 
 fn canary_matches(key: &StorageKey, value: &str) -> bool {
@@ -1114,12 +1109,12 @@ fn sealed_rows_open_under(conn: &Connection, key: &StorageKey) -> Result<Option<
 /// not have yet holds nothing sealed rather than failing the read.
 fn leading_sealed_rows(conn: &Connection) -> Result<Vec<SealedRow>, StoreError> {
     let mut rows = Vec::new();
-    for (table, sql, row_of) in &SEALED_KINDS[..2] {
-        if !has_table(conn, table)? {
+    for kind in SEALED_KINDS.iter().filter(|kind| kind.sampled_at_start) {
+        if !has_table(conn, kind.table)? {
             continue;
         }
-        let mut statement = conn.prepare(&format!("{sql} ORDER BY rowid LIMIT ?1"))?;
-        let found = statement.query_map(params![PROOF_ROWS_PER_KIND], row_of)?;
+        let mut statement = conn.prepare(&format!("{} ORDER BY rowid LIMIT ?1", kind.sql))?;
+        let found = statement.query_map(params![PROOF_ROWS_PER_KIND], kind.row_of)?;
         rows.extend(found.collect::<rusqlite::Result<Vec<_>>>()?);
     }
     Ok(rows)
@@ -1127,25 +1122,37 @@ fn leading_sealed_rows(conn: &Connection) -> Result<Vec<SealedRow>, StoreError> 
 
 type RowOf = fn(&rusqlite::Row<'_>) -> rusqlite::Result<SealedRow>;
 
-/// Each kind of sealed row: its table, the statement over it and the mapper to the row with its associated data.
-/// The start's sample reads the first two kinds, a recovery all three.
-const SEALED_KINDS: [(&str, &str, RowOf); 3] = [
-    (
-        "credentials",
-        "SELECT account_id, generation, nonce, sealed FROM credentials",
-        credential_row,
-    ),
-    (
-        "api_key_secrets",
-        "SELECT account_id, nonce, sealed FROM api_key_secrets",
-        api_key_row,
-    ),
-    (
-        "keepalive_agents",
-        "SELECT key_id, key_generation, session_id, agent_id, body_nonce, body_sealed FROM keepalive_agents \
-         WHERE body_sealed IS NOT NULL AND body_nonce IS NOT NULL",
-        recipe_row,
-    ),
+/// One kind of sealed row: its table, the statement over it, the mapper to the row with its associated data, and
+/// whether the start's sample reads it.
+struct SealedKind {
+    table: &'static str,
+    sql: &'static str,
+    row_of: RowOf,
+    sampled_at_start: bool,
+}
+
+/// Each kind of sealed row. A recovery reads every kind, and `sampled_at_start` picks the kinds the start's sample
+/// reads.
+const SEALED_KINDS: [SealedKind; 3] = [
+    SealedKind {
+        table: "credentials",
+        sql: "SELECT account_id, generation, nonce, sealed FROM credentials",
+        row_of: credential_row,
+        sampled_at_start: true,
+    },
+    SealedKind {
+        table: "api_key_secrets",
+        sql: "SELECT account_id, nonce, sealed FROM api_key_secrets",
+        row_of: api_key_row,
+        sampled_at_start: true,
+    },
+    SealedKind {
+        table: "keepalive_agents",
+        sql: "SELECT key_id, key_generation, session_id, agent_id, body_nonce, body_sealed FROM keepalive_agents \
+              WHERE body_sealed IS NOT NULL AND body_nonce IS NOT NULL",
+        row_of: recipe_row,
+        sampled_at_start: false,
+    },
 ];
 
 fn credential_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SealedRow> {
@@ -1182,14 +1189,14 @@ fn recipe_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SealedRow> {
 /// start's sample. A table the registry does not have yet holds nothing sealed.
 fn readable_sealed_rows(conn: &Connection, key: &StorageKey) -> Result<u64, StoreError> {
     let mut readable = 0;
-    for (table, sql, row_of) in SEALED_KINDS {
-        if !has_table(conn, table)? {
+    for kind in &SEALED_KINDS {
+        if !has_table(conn, kind.table)? {
             continue;
         }
-        let mut statement = conn.prepare(sql)?;
+        let mut statement = conn.prepare(kind.sql)?;
         let mut rows = statement.query([])?;
         while let Some(row) = rows.next()? {
-            if row_of(row)?.opens_under(key) {
+            if (kind.row_of)(row)?.opens_under(key) {
                 readable += 1;
             }
         }
@@ -1198,8 +1205,8 @@ fn readable_sealed_rows(conn: &Connection, key: &StorageKey) -> Result<u64, Stor
 }
 
 /// A read-only connection to the file at `path` that takes no lock and writes nothing, waiting up to `busy_timeout`
-/// on another writer.
-pub(crate) fn open_read_only(path: &Path, busy_timeout: Duration) -> rusqlite::Result<Connection> {
+/// on another writer. The ledger opens its readers through it too, so the two files' read-only opens cannot drift.
+pub fn open_read_only(path: &Path, busy_timeout: Duration) -> rusqlite::Result<Connection> {
     let conn = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -1247,36 +1254,29 @@ fn prepare(conn: &mut Connection, on_disk: bool, steps: &[(u32, &str)]) -> Resul
     Ok(migrations::apply(conn, schema::SCHEMA, current, steps)?)
 }
 
+/// What a registry's `meta` without its `schema_version` row reads as: version 1, the baseline `schema::SCHEMA`
+/// creates.
+const VERSION_WITHOUT_ROW: u32 = 1;
+
 /// The refusal `prepare` makes before it writes anything, answering the stored version.
 fn check_schema(conn: &Connection) -> Result<u32, StoreError> {
-    let current = read_version(conn)?;
-    if current > schema::SCHEMA_VERSION {
-        return Err(StoreError::SchemaTooNew {
-            found: current,
-            supported: schema::SCHEMA_VERSION,
-        });
-    }
-    Ok(current)
+    Ok(migrations::check_version(
+        conn,
+        VERSION_WITHOUT_ROW,
+        schema::SCHEMA_VERSION,
+    )?)
 }
 
 /// A connection that has never run `prepare` has no `meta` table yet, which reads as version 0 so the check
-/// above runs before `schema::SCHEMA` creates it. A `meta` without a `schema_version` row reads as
-/// version 1, the baseline `schema::SCHEMA` creates.
+/// above runs before `schema::SCHEMA` creates it.
 fn read_version(conn: &Connection) -> Result<u32, StoreError> {
-    Ok(migrations::stored_version(conn, 1)?)
+    Ok(migrations::stored_version(conn, VERSION_WITHOUT_ROW)?)
 }
 
 /// A value that does not parse is refused rather than read as 0, which would let every token signed before the first
 /// persistent logout verify again.
 fn read_admin_session_epoch(conn: &Connection) -> Result<u64, StoreError> {
-    let stored: Option<String> = conn
-        .query_row(
-            "SELECT value FROM meta WHERE key = 'admin_session_epoch'",
-            [],
-            |row| row.get(0),
-        )
-        .optional()?;
-    let Some(stored) = stored else {
+    let Some(stored) = migrations::meta_value(conn, "admin_session_epoch")? else {
         return Ok(0);
     };
     stored.parse().map_err(|error| {

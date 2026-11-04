@@ -1,11 +1,27 @@
-//! The schema runner the registry and the ledger share, so a change to how a step commits, or to the crash case of
-//! the version row, lands in one place for both files.
+//! The schema runner the registry and the ledger share, so a change to how a step commits, to the crash case of the
+//! version row, or to the refusal of a file a newer build wrote, lands in one place for both files.
+
+use std::path::Path;
+use std::time::Duration;
 
 use rusqlite::{params, Connection, OptionalExtension};
 
+/// Why a file's version could not be read, or the refusal of a file a newer build wrote. Each crate maps it into its
+/// own error, the ledger naming its path in the refusal.
+#[derive(Debug, thiserror::Error)]
+pub enum VersionError {
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Sqlite(#[from] rusqlite::Error),
+    #[error("schema version {found} is newer than the {supported} this build opens")]
+    TooNew { found: u32, supported: u32 },
+}
+
 /// Runs `baseline`, the schema at version 1, then applies every step above `current` (read as at least 1) in order,
 /// each inside its own transaction with the version it reaches, so a crash or a failing step leaves the version at
-/// the last step that committed. The caller refuses a file a newer build wrote before it calls this.
+/// the last step that committed. The caller refuses a file a newer build wrote through `check_version` before it calls
+/// this.
 pub fn apply(
     conn: &mut Connection,
     baseline: &str,
@@ -41,10 +57,7 @@ pub fn apply(
         }
         let tx = conn.transaction()?;
         tx.execute_batch(sql)?;
-        tx.execute(
-            "INSERT INTO meta (key, value) VALUES ('schema_version', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![version.to_string()],
-        )?;
+        set_meta_value(&tx, "schema_version", &version.to_string())?;
         tx.commit()?;
     }
     Ok(())
@@ -57,14 +70,88 @@ pub fn stored_version(conn: &Connection, without_row: u32) -> rusqlite::Result<u
     if !has_table(conn, "meta")? {
         return Ok(0);
     }
-    let stored: Option<String> = conn
-        .query_row(
-            "SELECT value FROM meta WHERE key = 'schema_version'",
-            [],
-            |row| row.get(0),
-        )
-        .optional()?;
-    Ok(stored.and_then(|v| v.parse().ok()).unwrap_or(without_row))
+    Ok(meta_value(conn, "schema_version")?
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(without_row))
+}
+
+/// The text `meta` holds under `key`, `None` without the row.
+pub fn meta_value(conn: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
+    conn.query_row(
+        "SELECT value FROM meta WHERE key = ?1",
+        params![key],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
+/// Writes `value` under `key`, over the value a row already there holds.
+pub fn set_meta_value(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )?;
+    Ok(())
+}
+
+/// The refusal of a file stamped past `supported`, which runs before `apply` writes anything, answering the stored
+/// version.
+pub fn check_version(
+    conn: &Connection,
+    without_row: u32,
+    supported: u32,
+) -> Result<u32, VersionError> {
+    let found = stored_version(conn, without_row)?;
+    if found > supported {
+        return Err(VersionError::TooNew { found, supported });
+    }
+    Ok(found)
+}
+
+/// A read-only connection to the file at `path` through `open_read_only`, or `None` when no file stands there.
+pub fn open_existing(
+    path: &Path,
+    busy_timeout: Duration,
+) -> Result<Option<Connection>, VersionError> {
+    if !path.try_exists()? {
+        return Ok(None);
+    }
+    Ok(Some(crate::open_read_only(path, busy_timeout)?))
+}
+
+/// The stored version through a read-only connection, taking no lock and creating nothing. `None` for an absent file
+/// or one without `meta`, which the next start creates or migrates.
+pub fn file_version(
+    path: &Path,
+    without_row: u32,
+    busy_timeout: Duration,
+) -> Result<Option<u32>, VersionError> {
+    let Some(conn) = open_existing(path, busy_timeout)? else {
+        return Ok(None);
+    };
+    Ok(Some(stored_version(&conn, without_row)?).filter(|version| *version != 0))
+}
+
+/// `check_version` through a read-only connection, taking no lock and creating nothing. An absent file passes, since
+/// the next start creates it.
+pub fn check_file(
+    path: &Path,
+    without_row: u32,
+    supported: u32,
+    busy_timeout: Duration,
+) -> Result<(), VersionError> {
+    let Some(conn) = open_existing(path, busy_timeout)? else {
+        return Ok(());
+    };
+    check_version(&conn, without_row, supported).map(|_| ())
+}
+
+/// The version `apply` leaves a file at once it ran `steps`: the last step's, or the baseline's 1 for no step.
+pub const fn latest_version(steps: &[(u32, &str)]) -> u32 {
+    match steps.last() {
+        Some((version, _)) => *version,
+        None => 1,
+    }
 }
 
 pub(crate) fn has_table(conn: &Connection, name: &str) -> rusqlite::Result<bool> {

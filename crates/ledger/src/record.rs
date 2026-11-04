@@ -333,38 +333,15 @@ pub(crate) fn decode_record(
     Ok(serde_json::from_slice(&bytes)?)
 }
 
-/// The answer a sample came from. A response head truncates the window's percent and the usage poll rounds it. The
-/// column stores the word `as_str` answers, and a stored word outside the two fails the read.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum SampleSource {
-    Head,
-    /// A record that names no source lands as a poll, which fills only a bucket nothing else wrote.
-    #[default]
-    Poll,
-}
-
-impl SampleSource {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            SampleSource::Head => "head",
-            SampleSource::Poll => "poll",
-        }
-    }
-}
-
-impl rusqlite::types::FromSql for SampleSource {
-    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
-        match value.as_str()? {
-            "head" => Ok(SampleSource::Head),
-            "poll" => Ok(SampleSource::Poll),
-            _ => Err(rusqlite::types::FromSqlError::InvalidType),
-        }
-    }
-}
-
-impl rusqlite::types::ToSql for SampleSource {
-    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
-        Ok(self.as_str().into())
+phoebis_store::text_enum! {
+    /// The answer a sample came from. A response head truncates the window's percent and the usage poll rounds it. The
+    /// column stores the word `as_str` answers, and a stored word outside the two fails the read.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub enum SampleSource {
+        Head => "head",
+        /// A record that names no source lands as a poll, which fills only a bucket nothing else wrote.
+        #[default]
+        Poll => "poll",
     }
 }
 

@@ -243,21 +243,17 @@ fn copy(
     lines: &mut Vec<String>,
 ) -> Result<Copied, String> {
     // A failed snapshot has removed its own destination, a copy `quick_check` refused among them.
-    let snapshot = phoebis_store::snapshot(source, destination, contention)
+    let bytes = phoebis_store::snapshot(source, destination, contention)
         .map_err(|error| error.to_string())?;
     written.push(destination.to_path_buf());
     let sha256 =
         sha256_of(destination).map_err(|error| format!("{}: {error}", destination.display()))?;
-    lines.push(format!(
-        "wrote {} ({} bytes)",
-        destination.display(),
-        snapshot.bytes
-    ));
+    lines.push(format!("wrote {} ({bytes} bytes)", destination.display()));
     lines.push(format!("quick_check on {}: ok", destination.display()));
     Ok(Copied {
         source: source.to_path_buf(),
         schema_version: None,
-        bytes: snapshot.bytes,
+        bytes,
         sha256,
     })
 }

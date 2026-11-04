@@ -12,10 +12,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use phoebis_store::migrations;
+use phoebis_store::migrations::{self, VersionError};
 use rusqlite::{
-    params, params_from_iter, Connection, OpenFlags, OptionalExtension, Transaction,
-    TransactionBehavior,
+    params, params_from_iter, Connection, OptionalExtension, Transaction, TransactionBehavior,
 };
 
 use crate::pricing::PriceRevisions;
@@ -201,18 +200,8 @@ fn recovered<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 /// One pooled reader: read-only, no mutex, `BUSY_TIMEOUT`, `cache_size` at `-READER_CACHE_KIB`.
 fn open_reader(path: &Path) -> Result<Connection, LedgerError> {
-    let conn = open_read_only(path)?;
+    let conn = phoebis_store::open_read_only(path, BUSY_TIMEOUT)?;
     conn.pragma_update(None, "cache_size", -READER_CACHE_KIB)?;
-    Ok(conn)
-}
-
-/// The open a pooled reader shares with `read_schema_version`, whose one meta read sets no page cache.
-fn open_read_only(path: &Path) -> Result<Connection, LedgerError> {
-    let conn = Connection::open_with_flags(
-        path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )?;
-    conn.busy_timeout(BUSY_TIMEOUT)?;
     Ok(conn)
 }
 
@@ -240,7 +229,7 @@ impl LedgerDb {
         phoebis_store::permissions::create_private_dir(dir)?;
         if !path.exists() {
             // Captured bodies are prompts, so the file is private from its creation.
-            phoebis_store::permissions::create_private_if_missing(path, 0o600)?;
+            phoebis_store::permissions::create_private_if_missing(path)?;
         }
         let mut writer = Connection::open(path)?;
         writer.busy_timeout(BUSY_TIMEOUT)?;
@@ -294,21 +283,15 @@ impl LedgerDb {
     /// The ledger's `meta.schema_version` through a read-only connection, taking no lock and creating nothing;
     /// `None` for an absent file or one without the table, which the next start creates or migrates.
     pub fn read_schema_version(path: &Path) -> Result<Option<u32>, LedgerError> {
-        if !path.try_exists()? {
-            return Ok(None);
-        }
-        let conn = open_read_only(path)?;
-        Ok(Some(read_version(&conn)?).filter(|version| *version != 0))
+        migrations::file_version(path, VERSION_WITHOUT_ROW, BUSY_TIMEOUT)
+            .map_err(version_error(path))
     }
 
     /// Refuses a ledger a newer build wrote with the start's own refusal, through a read-only connection taking no
     /// lock and creating nothing. An absent file passes, since the next start creates it.
     pub fn check_readable(path: &Path) -> Result<(), LedgerError> {
-        if !path.try_exists()? {
-            return Ok(());
-        }
-        let conn = open_read_only(path)?;
-        check_schema(&conn, path).map(|_| ())
+        migrations::check_file(path, VERSION_WITHOUT_ROW, latest_version(), BUSY_TIMEOUT)
+            .map_err(version_error(path))
     }
 
     /// The newest schema this build reads, which `open` refuses a file past.
@@ -1176,28 +1159,36 @@ fn prepare(conn: &mut Connection, path: &Path, steps: &[(u32, &str)]) -> Result<
     Ok(migrations::apply(conn, schema::SCHEMA, current, steps)?)
 }
 
+/// What a ledger's `meta` without its `schema_version` row reads as: version 0, as a file without `meta` does.
+const VERSION_WITHOUT_ROW: u32 = 0;
+
 /// The refusal `prepare` makes before it writes anything, answering the stored version.
 fn check_schema(conn: &Connection, path: &Path) -> Result<u32, LedgerError> {
-    let current = read_version(conn)?;
-    let supported = latest_version();
-    if current > supported {
-        return Err(LedgerError::SchemaTooNew {
+    migrations::check_version(conn, VERSION_WITHOUT_ROW, latest_version())
+        .map_err(version_error(path))
+}
+
+/// A version read's failure as the ledger answers it, its refusal of a newer file naming `path`.
+fn version_error(path: &Path) -> impl FnOnce(VersionError) -> LedgerError + '_ {
+    move |error| match error {
+        VersionError::Io(error) => LedgerError::Io(error),
+        VersionError::Sqlite(error) => LedgerError::Sqlite(error),
+        VersionError::TooNew { found, supported } => LedgerError::SchemaTooNew {
             path: path.to_path_buf(),
-            found: current,
+            found,
             supported,
-        });
+        },
     }
-    Ok(current)
 }
 
 fn latest_version() -> u32 {
-    schema::MIGRATIONS.last().map_or(1, |(version, _)| *version)
+    migrations::latest_version(schema::MIGRATIONS)
 }
 
 /// A file that has never run `prepare` has no `meta` table yet, which reads as version 0, so the refusal of a
 /// newer file runs before `schema::SCHEMA` creates the table.
 pub(crate) fn read_version(conn: &Connection) -> Result<u32, LedgerError> {
-    Ok(migrations::stored_version(conn, 0)?)
+    Ok(migrations::stored_version(conn, VERSION_WITHOUT_ROW)?)
 }
 
 /// Shared by both opens, so an in-memory ledger analyzes at its open as a file does.

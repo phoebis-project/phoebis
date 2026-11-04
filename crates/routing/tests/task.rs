@@ -1453,7 +1453,7 @@ async fn a_burst_of_reports_queued_behind_one_wake_lands_in_one_commit() {
 async fn parked_writer(
     store: &Arc<Store>,
     now: &Arc<AtomicI64>,
-) -> (RouterHandle, phoebis_store::RoutingWriteHold) {
+) -> (RouterHandle, phoebis_store::Hold) {
     let hold = store.debug_hold_next_routing_write();
     let handle = spawn(store.clone(), clock(now), RouterConfig::default()).unwrap();
     wait_for(WRITTEN, || hold.is_parked().then_some(())).await;
@@ -1647,8 +1647,7 @@ async fn a_shutdown_with_a_full_writer_channel_lands_every_deferred_write() {
 
 /// `a_refused_rekey`'s shape with the writer parked on an earlier write before the resolution, so the refused
 /// rekey and whatever the test queues next share the wake after the release.
-async fn a_refused_rekey_behind_a_hold(
-) -> (Arc<Store>, RouterHandle, phoebis_store::RoutingWriteHold) {
+async fn a_refused_rekey_behind_a_hold() -> (Arc<Store>, RouterHandle, phoebis_store::Hold) {
     let store = seeded(&["a", "b"]);
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
