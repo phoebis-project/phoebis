@@ -623,22 +623,20 @@ pub async fn run_until(
         &mut ended,
     )
     .await;
-    if let Some(listener) = ended_early {
+    if let Some(index) = ended_early {
         tracing::error!(
-            listener,
+            listener = LISTENERS[index],
             "a listener ended on its own, so the process shuts down"
         );
     }
-    let early_error = ended_early.map(|listener| {
-        let index = match listener {
-            "proxy" => 0,
-            "admin" => 1,
-            _ => 2,
-        };
+    let early_error = ended_early.map(|index| {
         let result = ended[index]
             .as_ref()
             .expect("first_to_end filled the ended listener's slot");
-        anyhow!("the {listener} listener ended on its own: {result:?}")
+        anyhow!(
+            "the {} listener ended on its own: {result:?}",
+            LISTENERS[index]
+        )
     });
     tracing::info!("shutting down");
     let budget = deadline.start(budget_total);
@@ -669,13 +667,10 @@ pub async fn run_until(
         .bound_within("listeners", LISTENER_DRAIN, listeners)
         .await
     {
-        Some(()) => drained(ended[0].take().expect("every slot is filled by now"))
-            .and(drained(
-                ended[1].take().expect("every slot is filled by now"),
-            ))
-            .and(drained(
-                ended[2].take().expect("every slot is filled by now"),
-            )),
+        Some(()) => ended
+            .iter_mut()
+            .map(|slot| drained(slot.take().expect("every slot is filled by now")))
+            .collect::<anyhow::Result<()>>(),
         None => {
             tracing::warn!("requests were still in flight when the drain window closed");
             // Ahead of the abort, so every end it causes books the router's own cut.
@@ -864,6 +859,10 @@ fn acceptor(live: &Option<tls::Live>) -> tls::Acceptor {
     live.as_ref().map(tls::Live::acceptor)
 }
 
+/// The listeners in the order of their slots in `ended` and of `join_remaining`'s handles, so a slot's index names
+/// its listener.
+const LISTENERS: [&str; 3] = ["proxy", "admin", "metrics"];
+
 /// One listener's outcome: the task either panicked or the serve future itself failed.
 type Listened = Result<std::io::Result<()>, tokio::task::JoinError>;
 
@@ -871,20 +870,21 @@ fn drained(result: Listened) -> anyhow::Result<()> {
     Ok(result??)
 }
 
-/// Waits for the shutdown signal or the first listener to end; an ended listener's result goes into its slot.
+/// Waits for the shutdown signal or the first listener to end, and answers the slot the ended listener's result went
+/// into.
 async fn first_to_end(
     shutdown: impl Future<Output = ()>,
     proxy: &mut JoinHandle<std::io::Result<()>>,
     admin: &mut JoinHandle<std::io::Result<()>>,
     metrics: &mut JoinHandle<std::io::Result<()>>,
     ended: &mut [Option<Listened>; 3],
-) -> Option<&'static str> {
+) -> Option<usize> {
     tokio::pin!(shutdown);
     tokio::select! {
         _ = &mut shutdown => None,
-        result = proxy => { ended[0] = Some(result); Some("proxy") }
-        result = admin => { ended[1] = Some(result); Some("admin") }
-        result = metrics => { ended[2] = Some(result); Some("metrics") }
+        result = proxy => { ended[0] = Some(result); Some(0) }
+        result = admin => { ended[1] = Some(result); Some(1) }
+        result = metrics => { ended[2] = Some(result); Some(2) }
     }
 }
 
@@ -1805,7 +1805,7 @@ revisions:
             &mut ended,
         )
         .await;
-        assert_eq!(ended_early, Some("proxy"));
+        assert_eq!(ended_early, Some(0));
         assert!(ended[0].is_some());
         assert!(ended[1].is_none());
         assert!(ended[2].is_none());
