@@ -28,7 +28,9 @@ pub use engine::{
     ParkKind, PrefixAnchor, Reason, SavingsUnit, SessionKey, Wasted, IDLE_AGE_BOUNDS_SECONDS,
     MAIN_AGENT,
 };
-pub use events::{decode_json_event, Ack, AckAgent, Event, EventError, PROTOCOL};
+pub use events::{
+    decode_json_event, Ack, AckAgent, Event, EventError, EventReport, Reported, PROTOCOL,
+};
 pub use probe::{ProbeOutcome, ProbeRecord, PROBE_DEADLINE};
 pub use recipe::{
     make_recipe, request_ttl_ms, valid_id, valid_opaque, Recipe, MAX_HEADER_BYTES, MAX_HEADER_VALUE,

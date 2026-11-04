@@ -1259,7 +1259,9 @@ fn laptop(r: &Rig, sequence: &mut u64, event: Event) {
                 session_id: "laptop".into(),
                 instance_id: "laptop".into(),
                 ..event
-            },
+            }
+            .try_into()
+            .unwrap(),
         )
         .unwrap();
 }

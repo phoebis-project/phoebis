@@ -4893,7 +4893,9 @@ async fn one_held_probe() -> (common::Full, String) {
                 instance_id: "i1".into(),
                 sequence: 1,
                 ..Default::default()
-            },
+            }
+            .try_into()
+            .unwrap(),
         )
         .unwrap();
     phoebis_keepalive::spawn_observer(parts.keepalive.clone());

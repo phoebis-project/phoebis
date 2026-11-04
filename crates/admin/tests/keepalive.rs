@@ -383,7 +383,9 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
                 instance_id: "i1".into(),
                 sequence: 1,
                 ..Default::default()
-            },
+            }
+            .try_into()
+            .unwrap(),
         )
         .unwrap();
     let listed = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
@@ -709,7 +711,9 @@ async fn the_overview_answers_the_counts_beside_their_caps_and_each_pools_day_an
                 instance_id: "i1".into(),
                 sequence: 1,
                 ..Default::default()
-            },
+            }
+            .try_into()
+            .unwrap(),
         )
         .unwrap();
     let now = common::NOW;
@@ -775,7 +779,9 @@ async fn the_overview_answers_the_counts_beside_their_caps_and_each_pools_day_an
                 state: Some("idle".into()),
                 request_generation: Some(request_generation),
                 ..Default::default()
-            },
+            }
+            .try_into()
+            .unwrap(),
         )
         .unwrap();
     parts.keepalive.step().await;
@@ -922,7 +928,9 @@ async fn the_overview_answers_the_counts_beside_their_caps_and_each_pools_day_an
                     instance_id: "i2".into(),
                     sequence,
                     ..Default::default()
-                },
+                }
+                .try_into()
+                .unwrap(),
             )
             .unwrap();
     }
@@ -999,7 +1007,9 @@ impl<'a> Companion<'a> {
                     state: state.map(String::from),
                     request_generation,
                     ..Default::default()
-                },
+                }
+                .try_into()
+                .unwrap(),
             )
             .unwrap();
     }
@@ -1340,7 +1350,9 @@ async fn a_session_row_groups_by_key_generation_and_a_historical_row_is_read_onl
                 instance_id: "i1".into(),
                 sequence: 1,
                 ..Default::default()
-            },
+            }
+            .try_into()
+            .unwrap(),
         )
         .unwrap();
     parts.keepalive.observe(phoebis_bus::Event::RequestObserved(phoebis_bus::RequestObserved { request_id: "r3".into(), origin: phoebis_bus::Origin::Client, kind: phoebis_bus::Kind::Inference, key_id: Some("desktop".into()), key_generation: g, pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some("main".into()), parent_agent_id: None, owner_id: None, model: "claude-sonnet-5".into(), canonical_model: "claude-sonnet-5".into(), wire_model: "claude-sonnet-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: phoebis_bus::RequestShape::default(), static_hash: None, boundaries: Vec::new(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, guardrail_id: None, guardrails: Vec::new(), received_at: now }));
@@ -1610,7 +1622,9 @@ fn register_with_the_engine(parts: &common::Full, session: &str, agents: &[&str]
                     sequence,
                     agent_id: agent.map(String::from),
                     ..Default::default()
-                },
+                }
+                .try_into()
+                .unwrap(),
             )
             .unwrap();
     };
@@ -1859,7 +1873,9 @@ async fn a_deleted_keys_session_is_historical_with_no_companion_and_its_release_
                 instance_id: "i1".into(),
                 sequence: 1,
                 ..Default::default()
-            },
+            }
+            .try_into()
+            .unwrap(),
         )
         .unwrap();
     let listed = common::wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
@@ -1983,7 +1999,7 @@ async fn an_ended_session_is_listed_without_a_companion() {
         .apply_event(
             "desktop",
             common::generation(&parts.store, "desktop"),
-            start(1, "session_start"),
+            start(1, "session_start").try_into().unwrap(),
         )
         .unwrap();
     let listed = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
@@ -2002,7 +2018,7 @@ async fn an_ended_session_is_listed_without_a_companion() {
         .apply_event(
             "desktop",
             common::generation(&parts.store, "desktop"),
-            start(2, "session_end"),
+            start(2, "session_end").try_into().unwrap(),
         )
         .unwrap();
     let listed = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
@@ -2066,7 +2082,9 @@ async fn a_probe_leaves_the_keys_last_used_at_alone() {
                 instance_id: "i1".into(),
                 sequence: 1,
                 ..Default::default()
-            },
+            }
+            .try_into()
+            .unwrap(),
         )
         .unwrap();
     phoebis_keepalive::spawn_observer(parts.keepalive.clone());

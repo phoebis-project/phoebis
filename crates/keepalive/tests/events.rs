@@ -2,7 +2,8 @@
 mod common;
 use common::*;
 use phoebis_keepalive::{
-    AgentState, CompanionState, Event, EventError, KeepaliveLimits, ParkKind, Reason, RecipeState,
+    AgentState, CompanionState, Event, EventError, EventReport, KeepaliveLimits, ParkKind, Reason,
+    RecipeState,
 };
 
 #[tokio::test]
@@ -87,41 +88,33 @@ fn refusal(code: &'static str, status: u16) -> EventError {
     }
 }
 
-#[tokio::test]
-async fn the_engine_refuses_an_unknown_event_word_and_an_unknown_state_word() {
-    let r = rig(RigSpec::default()).await;
+/// The state machine takes a typed report alone, so the conversion is where a direct caller's report meets the
+/// protocol's refusals. The state report names its agent, so it passes the member check to reach its state word.
+#[test]
+fn the_conversion_refuses_an_unknown_event_word_and_an_unknown_state_word() {
     assert_eq!(
-        r.engine
-            .apply_event(
-                "desktop",
-                r.generation("desktop"),
-                Event {
-                    event: "bogus".into(),
-                    session_id: "session".into(),
-                    instance_id: "instance".into(),
-                    sequence: 105,
-                    ..Default::default()
-                }
-            )
-            .unwrap_err(),
+        EventReport::try_from(Event {
+            event: "bogus".into(),
+            session_id: "session".into(),
+            instance_id: "instance".into(),
+            sequence: 105,
+            ..Default::default()
+        })
+        .unwrap_err(),
         refusal("unknown_event", 400)
     );
     assert_eq!(
-        r.engine
-            .apply_event(
-                "desktop",
-                r.generation("desktop"),
-                Event {
-                    event: "state".into(),
-                    session_id: "session".into(),
-                    instance_id: "instance".into(),
-                    sequence: 106,
-                    state: Some("napping".into()),
-                    request_generation: Some(0),
-                    ..Default::default()
-                }
-            )
-            .unwrap_err(),
+        EventReport::try_from(Event {
+            event: "state".into(),
+            session_id: "session".into(),
+            instance_id: "instance".into(),
+            sequence: 106,
+            agent_id: Some("main".into()),
+            state: Some("napping".into()),
+            request_generation: Some(0),
+            ..Default::default()
+        })
+        .unwrap_err(),
         refusal("invalid_state", 400)
     );
 }
@@ -233,7 +226,9 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
                 sequence: 1,
                 previous_instance_id: Some("instance".into()),
                 ..Default::default()
-            },
+            }
+            .try_into()
+            .unwrap(),
         )
         .unwrap();
     assert_eq!(
@@ -269,7 +264,9 @@ async fn sessions_are_scoped_to_the_key_and_bounded_process_wide() {
                 instance_id: "elsewhere".into(),
                 sequence: 1,
                 ..Default::default()
-            },
+            }
+            .try_into()
+            .unwrap(),
         )
         .unwrap();
     assert_eq!(laptop.instance_id, "elsewhere");
@@ -293,6 +290,8 @@ async fn sessions_are_scoped_to_the_key_and_bounded_process_wide() {
                     sequence: 1,
                     ..Default::default()
                 }
+                .try_into()
+                .unwrap()
             )
             .unwrap_err(),
         refusal("session_limit", 429)

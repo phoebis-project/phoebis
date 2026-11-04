@@ -12,8 +12,8 @@ use common::*;
 use fake_upstream::Respond;
 use phoebis_bus::{Event as BusEvent, Outcome, Usage};
 use phoebis_keepalive::{
-    Ack, AgentState, CompanionState, Engine, Event, EventError, KeepaliveLimits, KeepalivePolicy,
-    KeepaliveTiming, Reason, LEASE_MS,
+    Ack, AgentState, CompanionState, Engine, Event, EventError, EventReport, KeepaliveLimits,
+    KeepalivePolicy, KeepaliveTiming, Reason, LEASE_MS,
 };
 use phoebis_ledger::{hour_of, read_rollups, KeepaliveDelta, Record, RollupSelect};
 use phoebis_store::{KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow};
@@ -107,7 +107,8 @@ fn report(r: &mut Rig, key_generation: i64, mut event: Event) -> Result<Ack, Eve
     if event.instance_id.is_empty() {
         event.instance_id = r.instance_of(&event.session_id);
     }
-    r.engine.apply_event("desktop", key_generation, event)
+    EventReport::try_from(event)
+        .and_then(|report| r.engine.apply_event("desktop", key_generation, report))
 }
 
 /// A `state` report for `agent` under its current generation.
@@ -259,7 +260,9 @@ async fn a_heartbeat_after_the_restart_answers_instance_ended_and_the_same_insta
             instance_id: "instance".into(),
             sequence,
             ..Default::default()
-        },
+        }
+        .try_into()
+        .unwrap(),
     );
     assert_eq!(
         stale.unwrap_err().code,
@@ -1908,7 +1911,9 @@ async fn a_start_under_a_new_key_generation_leaves_one_saved_row_for_the_session
                 instance_id: "later".into(),
                 sequence: 1,
                 ..Default::default()
-            },
+            }
+            .try_into()
+            .unwrap(),
         )
         .unwrap();
     r.engine.flush_persisted().await;

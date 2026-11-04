@@ -531,6 +531,8 @@ async fn a_lapsed_lease_keeps_probing_under_the_idle_limit_and_a_release_discard
                     sequence: 99,
                     ..Default::default()
                 }
+                .try_into()
+                .unwrap()
             )
             .unwrap_err()
             .code,
@@ -909,7 +911,9 @@ async fn a_replacement_registration_during_a_probe_keeps_the_new_agents_in_fligh
                 sequence: 1,
                 previous_instance_id: Some("instance".into()),
                 ..Default::default()
-            },
+            }
+            .try_into()
+            .unwrap(),
         )
         .unwrap();
     r.observe("main").await;

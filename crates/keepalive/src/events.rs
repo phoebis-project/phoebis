@@ -16,8 +16,8 @@ use crate::recipe::valid_id;
 
 pub const PROTOCOL: u64 = 1;
 
-/// An optional member added here is checked by hand twice, in `members()` and in the `present` list of
-/// `decode_json_event`, and both have to name it.
+/// An optional member added here is checked by hand twice, in `members()` and in the `present` list of the
+/// conversion to `EventReport`, and both have to name it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Event {
@@ -129,9 +129,172 @@ struct ProtocolOnly {
     protocol: Option<u64>,
 }
 
-/// One report as the mod sends it. The body bound is the route's, and everything else the protocol does not
-/// take is refused here, before the state machine sees it.
-pub fn decode_json_event(body: &[u8]) -> Result<Event, EventError> {
+/// A report the protocol takes, with its event and the event's own members typed, so the state machine reads no
+/// word the conversion from `Event` did not check.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EventReport {
+    pub session_id: String,
+    pub instance_id: String,
+    pub sequence: u64,
+    pub event: Reported,
+}
+
+/// One event with the members it takes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Reported {
+    /// A prompt, or the person's presence at the terminal, which moves the idle clock alone.
+    Activity {
+        agent_id: String,
+        presence: bool,
+        request_generation: Option<u64>,
+    },
+    AgentStart {
+        agent_id: String,
+        request_generation: Option<u64>,
+    },
+    Heartbeat,
+    SessionEnd,
+    SessionStart {
+        owner_id: Option<String>,
+        previous_instance_id: Option<String>,
+    },
+    /// A state, with the park kind, the wake and the deadline a `parked` state alone carries.
+    State {
+        agent_id: String,
+        deadline: Option<i64>,
+        park_kind: Option<ParkKind>,
+        request_generation: Option<u64>,
+        state: AgentState,
+        wake_at: Option<i64>,
+    },
+}
+
+impl Reported {
+    /// The agent an agent event reports. A session-level event names none.
+    fn agent_id(&self) -> Option<&str> {
+        match self {
+            Reported::Activity { agent_id, .. }
+            | Reported::AgentStart { agent_id, .. }
+            | Reported::State { agent_id, .. } => Some(agent_id),
+            Reported::Heartbeat | Reported::SessionEnd | Reported::SessionStart { .. } => None,
+        }
+    }
+}
+
+/// The one conversion a report takes on its way to the state machine: everything the protocol does not take is
+/// refused here, the body's own decoding aside.
+impl TryFrom<Event> for EventReport {
+    type Error = EventError;
+
+    fn try_from(event: Event) -> Result<EventReport, EventError> {
+        let Some(members) = members(&event.event) else {
+            return Err(err("unknown_event", 400));
+        };
+        let present: Vec<&str> = [
+            ("agent_id", event.agent_id.is_some()),
+            ("deadline", event.deadline.is_some()),
+            ("kind", event.kind.is_some()),
+            ("owner_id", event.owner_id.is_some()),
+            ("park_kind", event.park_kind.is_some()),
+            ("previous_instance_id", event.previous_instance_id.is_some()),
+            ("request_generation", event.request_generation.is_some()),
+            ("state", event.state.is_some()),
+            ("wake_at", event.wake_at.is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(name, there)| there.then_some(name))
+        .collect();
+        if present
+            .iter()
+            .any(|name| !members.iter().any(|(member, _)| member == name))
+            || members
+                .iter()
+                .any(|(member, required)| *required && !present.contains(member))
+        {
+            return Err(err("invalid_event", 400));
+        }
+        let presence = match event.kind.as_deref() {
+            None | Some("prompt") => false,
+            Some("presence") => true,
+            Some(_) => return Err(err("invalid_state", 400)),
+        };
+        let mut park_kind = None;
+        let state = match event.state.as_deref() {
+            None => None,
+            Some(word) => {
+                let state = AgentState::parse(word).ok_or(err("invalid_state", 400))?;
+                let park = event.park_kind.is_some()
+                    || event.wake_at.is_some()
+                    || event.deadline.is_some();
+                if state != AgentState::Parked && park {
+                    return Err(err("invalid_event", 400));
+                }
+                if state == AgentState::Parked {
+                    let kind = event
+                        .park_kind
+                        .as_deref()
+                        .ok_or(err("invalid_event", 400))?;
+                    let kind = ParkKind::parse(kind).ok_or(err("invalid_state", 400))?;
+                    if kind != ParkKind::Background && event.wake_at.is_none() {
+                        return Err(err("invalid_event", 400));
+                    }
+                    park_kind = Some(kind);
+                }
+                Some(state)
+            }
+        };
+        let Event {
+            agent_id,
+            deadline,
+            event: word,
+            instance_id,
+            owner_id,
+            previous_instance_id,
+            request_generation,
+            sequence,
+            session_id,
+            wake_at,
+            ..
+        } = validate(event)?;
+        let required = || err("invalid_event", 400);
+        let event = match word.as_str() {
+            "activity" => Reported::Activity {
+                agent_id: agent_id.ok_or_else(required)?,
+                presence,
+                request_generation,
+            },
+            "agent_start" => Reported::AgentStart {
+                agent_id: agent_id.ok_or_else(required)?,
+                request_generation,
+            },
+            "heartbeat" => Reported::Heartbeat,
+            "session_end" => Reported::SessionEnd,
+            "session_start" => Reported::SessionStart {
+                owner_id,
+                previous_instance_id,
+            },
+            "state" => Reported::State {
+                agent_id: agent_id.ok_or_else(required)?,
+                deadline,
+                park_kind,
+                request_generation,
+                state: state.ok_or_else(required)?,
+                wake_at,
+            },
+            _ => return Err(err("unknown_event", 400)),
+        };
+        Ok(EventReport {
+            session_id,
+            instance_id,
+            sequence,
+            event,
+        })
+    }
+}
+
+/// One report as the mod sends it. The body bound is the route's, the protocol is checked here, and the conversion
+/// refuses everything else the protocol does not take, before the state machine sees it.
+pub fn decode_json_event(body: &[u8]) -> Result<EventReport, EventError> {
     let event: Event = match serde_json::from_slice(body) {
         Ok(event) => event,
         // A newer protocol's body may carry members this one does not know, and the mod has to learn that the
@@ -150,59 +313,7 @@ pub fn decode_json_event(body: &[u8]) -> Result<Event, EventError> {
         Some(PROTOCOL) => {}
         Some(_) => return Err(err("unsupported_protocol", 400)),
     }
-    let Some(members) = members(&event.event) else {
-        return Err(err("unknown_event", 400));
-    };
-    let present: Vec<&str> = [
-        ("agent_id", event.agent_id.is_some()),
-        ("deadline", event.deadline.is_some()),
-        ("kind", event.kind.is_some()),
-        ("owner_id", event.owner_id.is_some()),
-        ("park_kind", event.park_kind.is_some()),
-        ("previous_instance_id", event.previous_instance_id.is_some()),
-        ("request_generation", event.request_generation.is_some()),
-        ("state", event.state.is_some()),
-        ("wake_at", event.wake_at.is_some()),
-    ]
-    .into_iter()
-    .filter_map(|(name, there)| there.then_some(name))
-    .collect();
-    if present
-        .iter()
-        .any(|name| !members.iter().any(|(member, _)| member == name))
-        || members
-            .iter()
-            .any(|(member, required)| *required && !present.contains(member))
-    {
-        return Err(err("invalid_event", 400));
-    }
-    if event
-        .kind
-        .as_deref()
-        .is_some_and(|kind| kind != "prompt" && kind != "presence")
-    {
-        return Err(err("invalid_state", 400));
-    }
-    if let Some(state) = event.state.as_deref() {
-        if AgentState::parse(state).is_none() {
-            return Err(err("invalid_state", 400));
-        }
-        let park = event.park_kind.is_some() || event.wake_at.is_some() || event.deadline.is_some();
-        if state != "parked" && park {
-            return Err(err("invalid_event", 400));
-        }
-        if state == "parked" {
-            let kind = event
-                .park_kind
-                .as_deref()
-                .ok_or(err("invalid_event", 400))?;
-            let kind = ParkKind::parse(kind).ok_or(err("invalid_state", 400))?;
-            if kind != ParkKind::Background && event.wake_at.is_none() {
-                return Err(err("invalid_event", 400));
-            }
-        }
-    }
-    validate(event)
+    EventReport::try_from(event)
 }
 
 fn validate(event: Event) -> Result<Event, EventError> {
@@ -253,7 +364,7 @@ impl Engine {
         &self,
         key_id: &str,
         key_generation: i64,
-        event: Event,
+        report: EventReport,
     ) -> Result<Ack, EventError> {
         let now = self.now();
         let expiry = self.parts.session_expiry.as_millis() as i64;
@@ -271,7 +382,7 @@ impl Engine {
             inner.apply(
                 key_id,
                 key_generation,
-                event,
+                report,
                 now,
                 lease,
                 limits.max_sessions,
@@ -290,55 +401,60 @@ impl Inner {
         &mut self,
         key_id: &str,
         key_generation: i64,
-        ev: Event,
+        report: EventReport,
         now: i64,
         lease_ms: i64,
         max_sessions: usize,
         max_agents: usize,
         snapshot: &RegistrySnapshot,
     ) -> Result<Ack, EventError> {
-        let key: SessionKey = (key_id.to_string(), ev.session_id.clone());
-        if ev.event == "session_start" {
-            return self.start(
-                key,
-                key_generation,
-                ev,
-                now,
-                lease_ms,
-                max_sessions,
-                max_agents,
-            );
+        let key: SessionKey = (key_id.to_string(), report.session_id.clone());
+        // A start registers the session every other report is checked against, so it takes none of the checks.
+        if !matches!(report.event, Reported::SessionStart { .. }) {
+            let Some(session) = self.sessions.get(&key) else {
+                return Err(err("unknown_instance", 409));
+            };
+            // A session the previous holder of this key id registered answers as one that was never registered, so
+            // a replacement holder learns nothing about it: not its instance, not its sequence, not its state.
+            if session.key_generation != key_generation {
+                return Err(err("unknown_instance", 409));
+            }
+            if session.instance != report.instance_id {
+                return Err(err("unknown_instance", 409));
+            }
+            // A lapsed lease reads as an ended instance to the companion, as the Go engine reported it: only a
+            // `session_start` can take the session back.
+            if session.ended || !session.attended {
+                return Err(err("instance_ended", 409));
+            }
+            if report.sequence <= session.sequence {
+                return Err(err("stale_sequence", 409));
+            }
         }
-        let Some(session) = self.sessions.get(&key) else {
-            return Err(err("unknown_instance", 409));
-        };
-        // A session the previous holder of this key id registered answers as one that was never registered, so
-        // a replacement holder learns nothing about it: not its instance, not its sequence, not its state.
-        if session.key_generation != key_generation {
-            return Err(err("unknown_instance", 409));
-        }
-        if session.instance != ev.instance_id {
-            return Err(err("unknown_instance", 409));
-        }
-        // A lapsed lease reads as an ended instance to the companion, as the Go engine reported it: only a
-        // `session_start` can take the session back.
-        if session.ended || !session.attended {
-            return Err(err("instance_ended", 409));
-        }
-        if ev.sequence <= session.sequence {
-            return Err(err("stale_sequence", 409));
-        }
-        let agent_id = ev
-            .agent_id
-            .clone()
-            .unwrap_or_else(|| MAIN_AGENT.to_string());
+        let agent_id = report.event.agent_id().unwrap_or(MAIN_AGENT).to_string();
         // Both `session_start` paths in `start`, the same-instance re-adoption and the new registration, set the
         // lease, and among the later reports a heartbeat alone renews it, as the Go engine had it. `activity`,
         // `agent_start` and `state` report the agent, not the companion's own liveness, so they leave it alone.
-        let renews_lease = ev.event == "heartbeat";
-        match ev.event.as_str() {
-            "heartbeat" => {}
-            "session_end" => {
+        let renews_lease = report.event == Reported::Heartbeat;
+        match &report.event {
+            Reported::SessionStart {
+                owner_id,
+                previous_instance_id,
+            } => {
+                return self.start(
+                    key,
+                    key_generation,
+                    &report,
+                    owner_id.as_deref(),
+                    previous_instance_id.as_deref(),
+                    now,
+                    lease_ms,
+                    max_sessions,
+                    max_agents,
+                );
+            }
+            Reported::Heartbeat => {}
+            Reported::SessionEnd => {
                 let agents: Vec<String> = self.sessions[&key].agents.keys().cloned().collect();
                 for agent_id in &agents {
                     self.discard(
@@ -364,20 +480,21 @@ impl Inner {
                 }
                 let session = self.sessions.get_mut(&key).unwrap();
                 session.ended = true;
-                session.sequence = ev.sequence;
+                session.sequence = report.sequence;
                 session.last_report_at = now;
                 self.touch_session(&key);
                 return Ok(acknowledge(&self.sessions[&key], None, None));
             }
-            "agent_start" => {
+            Reported::AgentStart {
+                request_generation, ..
+            } => {
                 let existing = self.sessions[&key]
                     .agents
                     .get(&agent_id)
                     .map(|a| (a.state, a.generation));
                 match existing {
                     Some((state, generation)) => {
-                        if state != AgentState::Released
-                            || ev.request_generation != Some(generation)
+                        if state != AgentState::Released || *request_generation != Some(generation)
                         {
                             return Err(err("agent_exists", 409));
                         }
@@ -414,117 +531,105 @@ impl Inner {
                     }
                 }
             }
-            "activity" | "state" => {
-                let Some(agent) = self.sessions[&key].agents.get(&agent_id) else {
-                    return Err(err("unknown_agent", 409));
-                };
-                if ev.request_generation != Some(agent.generation) {
-                    return Err(err_for_generation(
-                        "stale_request_generation",
-                        agent.generation,
-                    ));
+            Reported::Activity {
+                presence,
+                request_generation,
+                ..
+            } => {
+                self.reported_agent(&key, &agent_id, *request_generation)?;
+                let agent = self
+                    .sessions
+                    .get_mut(&key)
+                    .unwrap()
+                    .agents
+                    .get_mut(&agent_id)
+                    .unwrap();
+                // A person at the terminal says nothing about the agent's work, so presence moves the idle clock
+                // alone.
+                if *presence {
+                    // Presence restarts the window, so the one counted so far ends with no return, closed before
+                    // the start moves. The person's restart outranks the floor the close leaves: a clock that
+                    // stepped back would otherwise place the new start behind it.
+                    agent.close_idle_episode();
+                    agent.idle_window_floor = None;
+                    agent.last_presence_at = Some(now);
                 }
-                if agent.state == AgentState::Released {
-                    return Err(err_for_generation("agent_released", agent.generation));
-                }
-                let was = agent.state;
-                if ev.event == "activity" {
-                    let agent = self
-                        .sessions
-                        .get_mut(&key)
-                        .unwrap()
-                        .agents
-                        .get_mut(&agent_id)
-                        .unwrap();
-                    // A person at the terminal says nothing about the agent's work, so presence moves the idle
-                    // clock alone. Only the decoder requires the kind, so one a direct caller left out is a prompt.
-                    let presence = ev.kind.as_deref() == Some("presence");
-                    if presence {
-                        // Presence restarts the window, so the one counted so far ends with no return, closed
-                        // before the start moves. The person's restart outranks the floor the close leaves: a
-                        // clock that stepped back would otherwise place the new start behind it.
-                        agent.close_idle_episode();
-                        agent.idle_window_floor = None;
-                        agent.last_presence_at = Some(now);
+                agent.last_activity = now;
+                if !presence {
+                    // The request this prompt announces is judged at the window's age now, however many ticks
+                    // pass before it arrives. The window's start stays where it is.
+                    if let Some(episode) = agent.idle_episode.as_mut() {
+                        episode.prompt_at = Some(now);
                     }
-                    agent.last_activity = now;
-                    if !presence {
-                        // The request this prompt announces is judged at the window's age now, however many ticks
-                        // pass before it arrives. The window's start stays where it is.
-                        if let Some(episode) = agent.idle_episode.as_mut() {
-                            episode.prompt_at = Some(now);
-                        }
-                        agent.idle_ticks = 0;
-                        agent.set_state(AgentState::Busy);
-                    }
-                } else {
-                    let state = ev
-                        .state
-                        .as_deref()
-                        .and_then(AgentState::parse)
-                        .ok_or(err("invalid_state", 400))?;
-                    let park_kind = match ev.park_kind.as_deref() {
-                        None => None,
-                        Some(kind) => Some(ParkKind::parse(kind).ok_or(err("invalid_state", 400))?),
-                    };
-                    let parked = state == AgentState::Parked;
-                    let agent = self
-                        .sessions
-                        .get_mut(&key)
-                        .unwrap()
-                        .agents
-                        .get_mut(&agent_id)
-                        .unwrap();
-                    if parked {
-                        // A repeated `parked` of the same kind moves the wake or the deadline and keeps the park's
-                        // start, which the parked ceiling counts from.
-                        if was != AgentState::Parked || agent.park_kind != park_kind {
-                            agent.park_began = Some(now);
-                        }
-                        agent.set_state(state);
-                        agent.park_kind = park_kind;
-                        agent.wake_at = ev.wake_at;
-                        agent.deadline = ev.deadline;
-                    } else {
-                        // The mod's heartbeat closes a command past its deadline or sees the wake pass, and reports
-                        // idle before or after the router's tick does: a park that ended without a request, which
-                        // restarts the idle window. A request behind a busy report moves the window itself.
-                        if was == AgentState::Parked && state == AgentState::Idle {
-                            agent.close_idle_episode();
-                            agent.idle_window_floor = None;
-                            agent.park_ended_at = Some(now);
-                        } else if state == AgentState::Released {
-                            // A released main is the end of its session's window, as `session_end` is.
-                            agent.close_idle_episode();
-                        } else if state == AgentState::Idle {
-                            // A prompt that sent no request, such as a local command: the window goes on.
-                            if let Some(episode) = agent.idle_episode.as_mut() {
-                                episode.prompt_at = None;
-                            }
-                        }
-                        agent.set_state(state);
-                    }
-                    match state {
-                        AgentState::Released => {
-                            self.discard(
-                                &key,
-                                &agent_id,
-                                Reason::AgentReleased,
-                                Some(Wasted::Released),
-                            );
-                            self.release_record(&key, &agent_id, now, snapshot);
-                        }
-                        AgentState::Unknown => {
-                            self.discard(&key, &agent_id, Reason::AgentUnknown, None)
-                        }
-                        _ => {}
-                    }
+                    agent.idle_ticks = 0;
+                    agent.set_state(AgentState::Busy);
                 }
             }
-            _ => return Err(err("unknown_event", 400)),
+            Reported::State {
+                deadline,
+                park_kind,
+                request_generation,
+                state,
+                wake_at,
+                ..
+            } => {
+                let was = self.reported_agent(&key, &agent_id, *request_generation)?;
+                let (state, park_kind) = (*state, *park_kind);
+                let agent = self
+                    .sessions
+                    .get_mut(&key)
+                    .unwrap()
+                    .agents
+                    .get_mut(&agent_id)
+                    .unwrap();
+                if state == AgentState::Parked {
+                    // A repeated `parked` of the same kind moves the wake or the deadline and keeps the park's
+                    // start, which the parked ceiling counts from.
+                    if was != AgentState::Parked || agent.park_kind != park_kind {
+                        agent.park_began = Some(now);
+                    }
+                    agent.set_state(state);
+                    agent.park_kind = park_kind;
+                    agent.wake_at = *wake_at;
+                    agent.deadline = *deadline;
+                } else {
+                    // The mod's heartbeat closes a command past its deadline or sees the wake pass, and reports
+                    // idle before or after the router's tick does: a park that ended without a request, which
+                    // restarts the idle window. A request behind a busy report moves the window itself.
+                    if was == AgentState::Parked && state == AgentState::Idle {
+                        agent.close_idle_episode();
+                        agent.idle_window_floor = None;
+                        agent.park_ended_at = Some(now);
+                    } else if state == AgentState::Released {
+                        // A released main is the end of its session's window, as `session_end` is.
+                        agent.close_idle_episode();
+                    } else if state == AgentState::Idle {
+                        // A prompt that sent no request, such as a local command: the window goes on.
+                        if let Some(episode) = agent.idle_episode.as_mut() {
+                            episode.prompt_at = None;
+                        }
+                    }
+                    agent.set_state(state);
+                }
+                match state {
+                    AgentState::Released => {
+                        self.discard(
+                            &key,
+                            &agent_id,
+                            Reason::AgentReleased,
+                            Some(Wasted::Released),
+                        );
+                        self.release_record(&key, &agent_id, now, snapshot);
+                    }
+                    AgentState::Unknown => {
+                        self.discard(&key, &agent_id, Reason::AgentUnknown, None)
+                    }
+                    _ => {}
+                }
+            }
         }
         let session = self.sessions.get_mut(&key).unwrap();
-        session.sequence = ev.sequence;
+        session.sequence = report.sequence;
         if renews_lease {
             session.lease = now + lease_ms;
         }
@@ -537,7 +642,7 @@ impl Inner {
         }
         // The window opens with the report that moves main to idle or parked, so a prompt inside the same second
         // still ends a window the tick would have opened later.
-        if ev.event == "state" && agent_id == MAIN_AGENT {
+        if matches!(report.event, Reported::State { .. }) && agent_id == MAIN_AGENT {
             if let Some(main) = self
                 .sessions
                 .get_mut(&key)
@@ -548,9 +653,32 @@ impl Inner {
         }
         Ok(acknowledge(
             &self.sessions[&key],
-            ev.agent_id.as_deref(),
+            report.event.agent_id(),
             None,
         ))
+    }
+
+    /// The checks an `activity` or a `state` report passes on the agent it names: a known agent, the generation the
+    /// report carries, and a record not released. Answers the agent's state before the report.
+    fn reported_agent(
+        &self,
+        key: &SessionKey,
+        agent_id: &str,
+        request_generation: Option<u64>,
+    ) -> Result<AgentState, EventError> {
+        let Some(agent) = self.sessions[key].agents.get(agent_id) else {
+            return Err(err("unknown_agent", 409));
+        };
+        if request_generation != Some(agent.generation) {
+            return Err(err_for_generation(
+                "stale_request_generation",
+                agent.generation,
+            ));
+        }
+        if agent.state == AgentState::Released {
+            return Err(err_for_generation("agent_released", agent.generation));
+        }
+        Ok(agent.state)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -558,7 +686,9 @@ impl Inner {
         &mut self,
         key: SessionKey,
         key_generation: i64,
-        ev: Event,
+        report: &EventReport,
+        owner_id: Option<&str>,
+        previous_instance_id: Option<&str>,
         now: i64,
         lease_ms: i64,
         max_sessions: usize,
@@ -582,12 +712,12 @@ impl Inner {
         }
         if mine {
             let session = self.sessions.get_mut(&key).expect("the session just read");
-            if session.instance == ev.instance_id {
+            if session.instance == report.instance_id {
                 // A same-instance start after a lapse re-adopts the session: the mod may only have been silent,
                 // and the recipes it left are still the ones its next request needs. One after the session's end
                 // revives it: the mod's instance is its process's, so a /clear and then a /resume back to this
                 // id registers it again under the same instance, and a refusal would only draw the same start.
-                if ev.sequence <= session.sequence {
+                if report.sequence <= session.sequence {
                     return Err(err("stale_sequence", 409));
                 }
                 let revived = session.ended;
@@ -597,15 +727,15 @@ impl Inner {
                 if registers_main && self.agents >= max_agents {
                     return Err(err("agent_limit", 429));
                 }
-                session.sequence = ev.sequence;
+                session.sequence = report.sequence;
                 session.lease = now + lease_ms;
                 session.attended = true;
                 // The registration's own standing outranks the one the load restored.
                 session.restored_until = None;
                 session.ended = false;
                 session.last_report_at = now;
-                if ev.owner_id.is_some() {
-                    session.owner_id = ev.owner_id.clone();
+                if owner_id.is_some() {
+                    session.owner_id = owner_id.map(str::to_owned);
                 }
                 if revived {
                     // The end released every agent, and a real request arms nothing on a released one, so main
@@ -638,7 +768,7 @@ impl Inner {
                 let session = &self.sessions[&key];
                 return Ok(acknowledge(session, None, Some(agents_of(session))));
             }
-            if ev.previous_instance_id.as_deref() != Some(session.instance.as_str()) {
+            if previous_instance_id != Some(session.instance.as_str()) {
                 // An ended or silent holder is named so the mod can take over from it, and a live one is not.
                 return Err(if session.ended || !session.attended {
                     err_for_instance("instance_conflict", &session.instance)
@@ -646,7 +776,7 @@ impl Inner {
                     err("instance_conflict", 409)
                 });
             }
-        } else if ev.previous_instance_id.is_some() {
+        } else if previous_instance_id.is_some() {
             return Err(err("unknown_previous_instance", 409));
         }
         let held = self.sessions.get(&key).map(|s| s.agents.len()).unwrap_or(0);
@@ -687,12 +817,12 @@ impl Inner {
                 key_id: key.0.clone(),
                 key_generation,
                 session_id: key.1.clone(),
-                instance: ev.instance_id.clone(),
-                sequence: ev.sequence,
+                instance: report.instance_id.clone(),
+                sequence: report.sequence,
                 lease: now + lease_ms,
                 attended: true,
                 ended: false,
-                owner_id: ev.owner_id.clone(),
+                owner_id: owner_id.map(str::to_owned),
                 last_report_at: now,
                 last_real_at,
                 restored_until: None,

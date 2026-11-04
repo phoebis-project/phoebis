@@ -257,7 +257,9 @@ async fn a_replaced_registration_and_a_foreign_owner_header_are_not_retained() {
                 previous_instance_id: Some("instance".into()),
                 owner_id: Some("owner-2".into()),
                 ..Default::default()
-            },
+            }
+            .try_into()
+            .unwrap(),
         )
         .unwrap();
     assert_eq!(
@@ -477,10 +479,13 @@ async fn a_stale_lifecycle_report_cannot_override_a_new_request() {
             session_id: "session".into(),
             instance_id: "instance".into(),
             sequence: r.sequence + 1,
+            agent_id: Some("main".into()),
             state: Some("released".into()),
             request_generation: Some(old),
             ..Default::default()
-        },
+        }
+        .try_into()
+        .unwrap(),
     );
     assert!(stale.is_err());
     assert_eq!(r.status("main").state, AgentState::Busy);

@@ -1345,7 +1345,9 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 instance_id: "i1".into(),
                 sequence: 1,
                 ..Default::default()
-            },
+            }
+            .try_into()
+            .unwrap(),
         )
         .unwrap();
     // The companion session's main pin and a pin of each of its two agents, each placed under an effort word, renewed
@@ -1530,7 +1532,9 @@ async fn every_route_is_captured_and_holds_its_shape() {
                     sequence,
                     agent_id: Some(agent.into()),
                     ..Default::default()
-                },
+                }
+                .try_into()
+                .unwrap(),
             )
             .unwrap();
         let request_id = format!("k-{agent}");
@@ -1988,7 +1992,9 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 state: Some("idle".into()),
                 request_generation: Some(request_generation),
                 ..Default::default()
-            },
+            }
+            .try_into()
+            .unwrap(),
         )
         .unwrap();
     parts.keepalive.step().await;

@@ -20,7 +20,8 @@ use phoebis_bus::{
     RequestObserved, RequestShape, ResponseChunk, ResponseFacts, Subscriber, Usage,
 };
 use phoebis_keepalive::{
-    Ack, Engine, EngineParts, Event, EventError, KeepaliveLimits, KeepalivePolicy, KeepaliveTiming,
+    Ack, Engine, EngineParts, Event, EventError, EventReport, KeepaliveLimits, KeepalivePolicy,
+    KeepaliveTiming,
 };
 use phoebis_ledger::{
     spawn as spawn_ledger, AttemptRecord, Ledger, LedgerConfig, LedgerDb, Metrics, PlanTables,
@@ -411,9 +412,9 @@ impl Rig {
             event.instance_id = self.instance_of(&event.session_id);
         }
         let registers = event.event == "session_start";
-        let acked = self
-            .engine
-            .apply_event("desktop", self.generation("desktop"), event);
+        let generation = self.generation("desktop");
+        let acked = EventReport::try_from(event)
+            .and_then(|report| self.engine.apply_event("desktop", generation, report));
         // A refused start registered nothing, so the session keeps the instance the engine still holds.
         if let (true, Ok(ack)) = (registers, &acked) {
             self.instances

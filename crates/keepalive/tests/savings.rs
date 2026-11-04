@@ -3935,7 +3935,9 @@ async fn a_late_or_orphaned_probe_is_still_paid_for() {
                 sequence: 1,
                 previous_instance_id: Some("instance".into()),
                 ..Default::default()
-            },
+            }
+            .try_into()
+            .unwrap(),
         )
         .unwrap();
     let rows = served_probe_rows(&r).await;

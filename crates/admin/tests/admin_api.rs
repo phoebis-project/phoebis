@@ -7114,7 +7114,9 @@ fn register_companion(parts: &common::Full, session: &str, agents: &[&str], rele
                     state: state.map(String::from),
                     request_generation,
                     ..Default::default()
-                },
+                }
+                .try_into()
+                .unwrap(),
             )
             .unwrap();
     };
@@ -8236,7 +8238,9 @@ async fn an_ended_session_with_no_pin_and_no_request_leaves_once_its_end_is_olde
                         instance_id: "i1".into(),
                         sequence,
                         ..Default::default()
-                    },
+                    }
+                    .try_into()
+                    .unwrap(),
                 )
                 .unwrap();
         }
