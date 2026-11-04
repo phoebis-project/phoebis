@@ -253,37 +253,6 @@
         "tokens": 7200
       }
     ],
-    "accounts": [
-      {
-        "account_id": "business",
-        "windows": [
-          {
-            "id": "five_hour",
-            "utilization": 0.62,
-            "resets_at": 1791724600000,
-            "bucket": 1791720900000
-          },
-          {
-            "id": "seven_day",
-            "utilization": 0.41,
-            "resets_at": 1791807400000,
-            "bucket": 1791720900000
-          },
-          {
-            "id": "seven_day_fable",
-            "utilization": 0.12,
-            "resets_at": 1791807400000,
-            "bucket": 1791720900000
-          },
-          {
-            "id": "seven_day_opus",
-            "utilization": 0.03,
-            "resets_at": 1791807400000,
-            "bucket": 1791720900000
-          }
-        ]
-      }
-    ],
     "sessions": {
       "active_pins": 6
     }

@@ -2171,7 +2171,7 @@ async fn the_request_log_reads_a_key_selector_by_lifetime() {
 }
 
 #[tokio::test]
-async fn the_dashboard_reads_the_last_day_the_latest_quota_and_the_live_pins() {
+async fn the_dashboard_reads_the_last_day_and_the_live_pins_and_the_account_list_the_newest_sample() {
     let parts = common::admin_parts_full().await;
     let now = common::NOW;
     for i in 0..30 {
@@ -2252,11 +2252,13 @@ async fn the_dashboard_reads_the_last_day_the_latest_quota_and_the_live_pins() {
     assert!((dashboard["error_rate_24h"].as_f64().unwrap() - 5.0 / 24.0).abs() < 1e-9);
     assert_eq!(dashboard["top_error_code"].as_str(), Some("upstream_error"));
     assert_eq!(dashboard["hourly"].as_array().unwrap().len(), 24);
-    let business = dashboard["accounts"]
+    assert_eq!(dashboard["sessions"]["active_pins"].as_u64(), Some(0));
+    let list = json(get(&parts.app, "/admin/accounts", Some(&cookie)).await).await;
+    let business = list["accounts"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|a| a["account_id"] == "business")
+        .find(|a| a["id"] == "business")
         .unwrap();
     let five = business["windows"]
         .as_array()
@@ -2269,7 +2271,6 @@ async fn the_dashboard_reads_the_last_day_the_latest_quota_and_the_live_pins() {
         Some(0.6),
         "the newest sample per window"
     );
-    assert_eq!(dashboard["sessions"]["active_pins"].as_u64(), Some(0));
 }
 
 /// Two served requests and two guardrail blocks of the key `desktop` an hour before `now`, each block flagged with no

@@ -1,20 +1,19 @@
-//! The dashboard: the last day from the rollups, the newest quota sample per account and window, and the live pin
-//! count.
+//! The dashboard: the last day from the rollups and the live pin count.
 
 use std::sync::Arc;
 
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use phoebis_ledger::{dashboard_on, latest_quota};
+use phoebis_ledger::dashboard_on;
 use utoipa::ToSchema;
 
 use crate::analytics::ledger_failure;
 use crate::openapi::{HourPointView, LedgerFailure};
 use crate::AdminState;
 
-/// The ledger's dashboard rollup with the newest quota sample per account and window, and the live pin count. The
-/// rollup reads the last 24 hours up to the end of the current hour and leaves the probe rows out.
+/// The ledger's dashboard rollup and the live pin count. The rollup reads the last 24 hours up to the end of the
+/// current hour and leaves the probe rows out.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Dashboard {
@@ -46,24 +45,7 @@ pub(crate) struct Dashboard {
     /// `errors` (the requests that did not succeed), `refused` (the requests the router refused before any account
     /// was asked, not in `requests`), `requests` and `tokens`.
     pub hourly: Vec<HourPointView>,
-    pub accounts: Vec<AccountWindows>,
     pub sessions: DashboardSessions,
-}
-
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct AccountWindows {
-    pub account_id: String,
-    pub windows: Vec<DashboardWindow>,
-}
-
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct DashboardWindow {
-    pub id: String,
-    pub utilization: Option<f64>,
-    pub resets_at: Option<i64>,
-    pub bucket: i64,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
@@ -87,39 +69,15 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
     let now = (state.clock)();
     let prices = state.pricing.revisions();
     let tables = state.tables.clone();
-    let (board, quota) = match state
+    let board = match state
         .ledger
         .db()
-        .read(move |c| {
-            Ok((
-                dashboard_on(c, now, &prices, &tables)?,
-                latest_quota(c, now)?,
-            ))
-        })
+        .read(move |c| dashboard_on(c, now, &prices, &tables))
         .await
     {
-        Ok(read) => read,
+        Ok(board) => board,
         Err(e) => return ledger_failure(e),
     };
-    let mut accounts: std::collections::BTreeMap<String, Vec<DashboardWindow>> =
-        std::collections::BTreeMap::new();
-    for q in quota {
-        let window = DashboardWindow {
-            id: phoebis_routing::account_window_id(&q.window).to_string(),
-            utilization: q.utilization,
-            resets_at: q.reset_at,
-            bucket: q.bucket * 1_000,
-        };
-        let windows = accounts.entry(q.account_id.clone()).or_default();
-        // The Fable week arrives under the poll's key and the head's, so one row stands per id, the newest bucket's.
-        // The rows come by window name, the head's spelling after the poll's, so a bucket both share answers the
-        // head's, as the ledger ranks a head the newest truth of its bucket.
-        match windows.iter_mut().find(|kept| kept.id == window.id) {
-            Some(kept) if kept.bucket <= window.bucket => *kept = window,
-            Some(_) => {}
-            None => windows.push(window),
-        }
-    }
     let pins = state
         .router
         .pins_by_pool()
@@ -149,13 +107,6 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
                 refused: h.refused,
                 requests: h.requests,
                 tokens: h.tokens,
-            })
-            .collect(),
-        accounts: accounts
-            .into_iter()
-            .map(|(account_id, windows)| AccountWindows {
-                account_id,
-                windows,
             })
             .collect(),
         sessions: DashboardSessions { active_pins: pins },

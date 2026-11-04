@@ -187,6 +187,8 @@ reference](api-reference.md)). The account create and edit refuse a body that is
 `body must be a JSON object`, and the pool members route answers `body must carry a members list` to an object without
 one ([API reference](api-reference.md)). A key or pool create that loses the race for its id to another create answers
 the route's 409 for a taken id, as the account create and the pairing confirm do ([API reference](api-reference.md)).
+`GET /admin/dashboard` answers the last day's figures and the live pin count, and the account list carries each
+account's quota windows ([API reference](api-reference.md), [Dashboard](console.md#dashboard)).
 The Dashboard, Guardrails, Pools and Settings views fit a 360 px window with no
 horizontal scroll ([Dashboard](console.md#dashboard), [Guardrails](console.md#guardrails), [Pools](console.md#pools),
 [Settings](console.md#settings)). The Dashboard's account cards and the Accounts list read
