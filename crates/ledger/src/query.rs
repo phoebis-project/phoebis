@@ -2131,6 +2131,21 @@ impl LiveKeys {
         )
     }
 
+    /// The totals of each id's live generation out of an answer per key and generation, so a key's figures never
+    /// carry an earlier holder's. An id no live key holds, and a live key whose generation read no rows, are left out.
+    pub fn live_totals(
+        &self,
+        by_generation: BTreeMap<String, BTreeMap<i64, Totals>>,
+    ) -> BTreeMap<String, Totals> {
+        by_generation
+            .into_iter()
+            .filter_map(|(id, mut generations)| {
+                let totals = generations.remove(self.0.get(&id)?)?;
+                Some((id, totals))
+            })
+            .collect()
+    }
+
     /// The group a rollup row falls in under `group_by=key`: the id alone for the live generation,
     /// `<id>@<generation>` for any other, the reserved id as itself.
     pub fn key_of(&self, row: &RollupRow) -> String {
@@ -3568,15 +3583,9 @@ pub fn key_request_totals(
     costs: &PlanTables,
     now: i64,
 ) -> Result<BTreeMap<String, Totals>, LedgerError> {
-    Ok(
-        key_request_totals_by_generation(conn, since_hour, to_hour, prices, costs, now)?
-            .into_iter()
-            .filter_map(|(id, mut generations)| {
-                let totals = generations.remove(live.0.get(&id)?)?;
-                Some((id, totals))
-            })
-            .collect(),
-    )
+    Ok(live.live_totals(key_request_totals_by_generation(
+        conn, since_hour, to_hour, prices, costs, now,
+    )?))
 }
 
 /// Request, token, and cost totals per key and generation over `[since_hour, to_hour)`, probe rows left out: the pair

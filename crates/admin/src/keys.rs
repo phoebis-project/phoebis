@@ -294,7 +294,7 @@ async fn totals(
     let prices = state.pricing.revisions();
     let tables = state.tables.clone();
     let read = async {
-        let old = state
+        let by_generation = state
             .old_totals
             .keys
             .get(week_start, || {
@@ -310,13 +310,8 @@ async fn totals(
                     )
                 })
             })
-            .await?
-            .into_iter()
-            .filter_map(|(id, mut generations)| {
-                let totals = generations.remove(live.0.get(&id)?)?;
-                Some((id, totals))
-            })
-            .collect();
+            .await?;
+        let old = live.live_totals(by_generation);
         let week = state
             .ledger
             .db()
