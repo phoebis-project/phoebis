@@ -21,9 +21,9 @@ use crate::plan::{entrypoint_of_client, funding_of, Funding, PlanTables};
 use crate::price::RowKey;
 use crate::pricing::{Band, PriceRevisions, Speed};
 use crate::query::{
-    in_list, key_clause, pattern_any, pool_term, COOLDOWN_CLEARED, COOLDOWN_SET, OVERAGE_ENDED,
-    PIN_CREATED, PIN_MIGRATED, ROUTER_STARTED, SHEDDING_ROUND, SLOW_DOWN_ENDED, SLOW_DOWN_STARTED,
-    WINDOW_CLEARED, WINDOW_SPENT,
+    in_list, key_clause, pattern_any, pool_term, ProbeView, COOLDOWN_CLEARED, COOLDOWN_SET,
+    OVERAGE_ENDED, PIN_CREATED, PIN_MIGRATED, ROUTER_STARTED, SHEDDING_ROUND, SLOW_DOWN_ENDED,
+    SLOW_DOWN_STARTED, WINDOW_CLEARED, WINDOW_SPENT,
 };
 use crate::reconcile::{newest_rows, ReconciliationRow};
 use crate::record::{AttemptRecord, EventRecord, KeepaliveDelta, RequestRecord};
@@ -356,6 +356,21 @@ impl RollupRow {
     /// Who paid for the row, its funding word read as `Funding::of_rollup` reads it, so every reader takes one rule.
     pub(crate) fn funding_kind(&self) -> Funding {
         Funding::of_rollup(&self.funding)
+    }
+
+    pub fn probe_view(&self) -> ProbeView<'_> {
+        ProbeView {
+            exhausted: self.exhausted,
+            failed: self.failed,
+            funding: &self.funding,
+            incomplete: self.incomplete,
+            probe_migrated: self.probe_migrated,
+            probes_held: self.probes_held,
+            probes_skipped: self.probes_skipped,
+            rate_limited: self.rate_limited,
+            rejected: self.rejected,
+            succeeded: self.succeeded,
+        }
     }
 
     /// The account tier the row recorded, `None` for `UNATTRIBUTED`.

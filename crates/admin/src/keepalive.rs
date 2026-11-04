@@ -8,7 +8,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_keepalive::{IdleReturns, Wasted, IDLE_AGE_BOUNDS_SECONDS};
-use phoebis_ledger::{hour_of, read_rollups, Funding, RollupSelect, PROBE_KIND, UNATTRIBUTED};
+use phoebis_ledger::{hour_of, read_rollups, RollupSelect, PROBE_KIND, UNATTRIBUTED};
 use utoipa::ToSchema;
 
 use crate::analytics::ledger_failure;
@@ -167,11 +167,7 @@ pub(crate) async fn overview(
             .copied()
             .unwrap_or(0);
         if row.kind == PROBE_KIND {
-            let plan = Funding::of_rollup(&row.funding) == Funding::Plan;
-            probes.add(&phoebis_ledger::ProbeCounts {
-                plan_ok: if plan { row.succeeded } else { 0 },
-                ..phoebis_ledger::ProbeCounts::of(row)
-            });
+            probes.add_row(row.probe_view());
         }
         if row.kind != PROBE_KIND && row.kept_warm_requests == 0 {
             continue;

@@ -1774,22 +1774,42 @@ pub struct ProbeCounts {
     pub skipped: u64,
 }
 
+/// The part of one probe row the probe counts read: its outcome counters and its funding word. The ledger's group fold
+/// reads it off a `RollupRow` and the keepalive overview's fold off the narrower row it reads, so both take one rule.
+#[derive(Clone, Copy, Debug)]
+pub struct ProbeView<'a> {
+    pub exhausted: u64,
+    pub failed: u64,
+    pub funding: &'a str,
+    pub incomplete: u64,
+    pub probe_migrated: u64,
+    pub probes_held: u64,
+    pub probes_skipped: u64,
+    pub rate_limited: u64,
+    pub rejected: u64,
+    pub succeeded: u64,
+}
+
 impl ProbeCounts {
-    /// The counts of `probes`, summed probe rows, all but `plan_ok`, which reads each row's funding: a probe's own
-    /// request row carries its outcome, and the engine's deltas carry what never ran.
-    pub fn of(probes: &RollupRow) -> ProbeCounts {
+    /// The counts of one probe row: a probe's own request row carries its outcome, and the engine's deltas carry
+    /// what never ran. `plan_ok` reads the row's funding, which a sum of rows would no longer key.
+    pub fn of(row: ProbeView<'_>) -> ProbeCounts {
         ProbeCounts {
-            failed: probes.failed
-                + probes.rate_limited
-                + probes.exhausted
-                + probes.rejected
-                + probes.incomplete,
-            held: probes.probes_held,
-            migrated: probes.probe_migrated,
-            ok: probes.succeeded,
-            plan_ok: 0,
-            skipped: probes.probes_skipped,
+            failed: row.failed + row.rate_limited + row.exhausted + row.rejected + row.incomplete,
+            held: row.probes_held,
+            migrated: row.probe_migrated,
+            ok: row.succeeded,
+            plan_ok: if Funding::of_rollup(row.funding) == Funding::Plan {
+                row.succeeded
+            } else {
+                0
+            },
+            skipped: row.probes_skipped,
         }
+    }
+
+    pub fn add_row(&mut self, row: ProbeView<'_>) {
+        self.add(&ProbeCounts::of(row));
     }
 
     pub fn add(&mut self, o: &ProbeCounts) {
@@ -2296,6 +2316,7 @@ fn group_row(key: &str, group: GroupSum, label: String) -> GroupRow {
     let GroupSum {
         sum,
         probes,
+        probe_counts,
         dollars,
         shares,
         plan,
@@ -2364,11 +2385,7 @@ fn group_row(key: &str, group: GroupSum, label: String) -> GroupRow {
             plan_tokens_5m: plan.kept_warm_5m_tokens,
             plan_tokens_1h: plan.kept_warm_1h_tokens,
         },
-        // Derived from the group's probe rows alone.
-        probes: ProbeCounts {
-            plan_ok: plan.probes_ok,
-            ..ProbeCounts::of(&probes)
-        },
+        probes: probe_counts,
         // From the probe rows: what the cache cost to keep warm is not a request the filter can drop.
         probe_cost_usd: dollars.probe_usd,
         wasted_probes: probes.wasted_probes,
@@ -2650,7 +2667,7 @@ impl SplitSum {
 }
 
 /// A group's plan-funded side under every grouping: the counts the shares and the figure are summed over, the
-/// Pro-week figure and its split by token kind, and the kept-warm credits and answered probes the plan served.
+/// Pro-week figure and its split by token kind, and the kept-warm credits the plan served.
 #[derive(Default)]
 struct PlanSums {
     requests: u64,
@@ -2660,7 +2677,6 @@ struct PlanSums {
     kept_warm_requests: u64,
     kept_warm_5m_tokens: u64,
     kept_warm_1h_tokens: u64,
-    probes_ok: u64,
 }
 
 impl PlanSums {
@@ -2734,8 +2750,10 @@ struct GroupDollars {
 struct GroupSum {
     /// The request side, which a probe row joins only when probes count as requests.
     sum: RollupRow,
-    /// The probe rows on their own, which the derived probe counts, the probe cost and the wasted probes read.
+    /// The probe rows on their own, which the wasted probes read.
     probes: RollupRow,
+    /// The probe rows' counts, folded per row, since the plan-served count reads each row's funding.
+    probe_counts: ProbeCounts,
     dollars: GroupDollars,
     /// Whether a non-probe row ever joined: a keepalive credit carries a real kind but never adds to `requests`.
     saw_non_probe: bool,
@@ -2773,6 +2791,7 @@ impl GroupSums {
         let entry = self.0.entry(key).or_insert_with(|| GroupSum {
             sum: RollupRow::default(),
             probes: RollupRow::default(),
+            probe_counts: ProbeCounts::default(),
             dollars: GroupDollars::default(),
             saw_non_probe: false,
             shares: None,
@@ -2790,6 +2809,7 @@ impl GroupSums {
         let plan = own_key.funding == Funding::Plan;
         if row.kind == Kind::Probe.as_str() {
             entry.probes.add(row);
+            entry.probe_counts.add_row(row.probe_view());
             entry.dollars.probe_usd += usd.total();
         } else {
             entry.saw_non_probe = true;
@@ -2819,9 +2839,6 @@ impl GroupSums {
                 entry.plan.kept_warm_requests += row.kept_warm_requests;
                 entry.plan.kept_warm_5m_tokens += row.kept_warm_5m_tokens;
                 entry.plan.kept_warm_1h_tokens += row.kept_warm_1h_tokens;
-            }
-            if row.kind == Kind::Probe.as_str() {
-                entry.plan.probes_ok += row.succeeded;
             }
             entry
                 .plan
