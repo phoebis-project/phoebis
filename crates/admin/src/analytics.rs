@@ -91,7 +91,7 @@ type Selection = ((i64, i64), GroupBy, RollupFilter, LiveKeys, i64);
 // The error is a rendered HTTP response, returned once per request and dropped. Boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
-async fn selection(state: &AdminState, q: &HashMap<String, String>) -> Result<Selection, Response> {
+fn selection(state: &AdminState, q: &HashMap<String, String>) -> Result<Selection, Response> {
     let now = (state.clock)();
     let (from, to) = parse_range(q.get("range").map(String::as_str), now)
         .map_err(|m| failure(StatusCode::BAD_REQUEST, &m))?;
@@ -301,7 +301,7 @@ pub(crate) async fn series(
     State(state): State<Arc<AdminState>>,
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
-    let ((from, to), group_by, filter, live, now) = match selection(&state, &q).await {
+    let ((from, to), group_by, filter, live, now) = match selection(&state, &q) {
         Ok(x) => x,
         Err(r) => return r,
     };
@@ -370,7 +370,7 @@ pub(crate) async fn breakdown(
     State(state): State<Arc<AdminState>>,
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
-    let ((from, to), group_by, filter, live, now) = match selection(&state, &q).await {
+    let ((from, to), group_by, filter, live, now) = match selection(&state, &q) {
         Ok(x) => x,
         Err(r) => return r,
     };
