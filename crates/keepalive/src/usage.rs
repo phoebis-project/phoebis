@@ -57,20 +57,9 @@ impl ProbeUsage {
             (&["input_tokens"][..], &mut usage.input),
             (&["output_tokens"][..], &mut usage.output),
         ] {
-            let mut at = node;
-            let mut present = true;
-            for key in path {
-                match at.get(*key) {
-                    Some(next) => at = next,
-                    None => {
-                        present = false;
-                        break;
-                    }
-                }
-            }
-            if !present {
+            let Some(at) = path.iter().try_fold(node, |at, key| at.get(*key)) else {
                 continue;
-            }
+            };
             let number = at.as_f64()?;
             if !(0.0..=MAX_TOKENS).contains(&number) || number.fract() != 0.0 {
                 return None;
