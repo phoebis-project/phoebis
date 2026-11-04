@@ -14,7 +14,7 @@ pub struct Readiness {
 }
 
 impl Readiness {
-    /// The dead components, `ledger`, `router`, `store` in that order; empty when the router is ready. The ledger
+    /// The dead components, `ledger`, `router`, `store` in that order, and none when the router is ready. The ledger
     /// reports its own bus subscriber beside its writer.
     pub fn dead(&self) -> Vec<&'static str> {
         dead_of(
