@@ -52,6 +52,7 @@ pub(crate) struct ProbeJob {
     pub counted_idle_tick: bool,
 }
 
+#[derive(Default)]
 pub(crate) struct ProbeResult {
     pub status: u16,
     /// The relay's id of the exchange, which the probe's ledger request row carries. `None` for an answer the relay
@@ -273,20 +274,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, mut job: ProbeJob) {
     // Read before the send, so an exchange the relay never answered keys the instant the relay would have received it.
     let sent = engine.now();
     let exchange = match request {
-        Err(_) => Exchange::Answered(ProbeResult {
-            status: 0,
-            request_id: None,
-            received_at: None,
-            account: None,
-            error_code: None,
-            body: None,
-            cache_ttl_ms: None,
-            in_overage: false,
-            account_kind: None,
-            usage_based: false,
-            retry_after_secs: None,
-            obstacle: None,
-        }),
+        Err(_) => Exchange::Answered(ProbeResult::default()),
         Ok(request) => {
             let relay = engine.parts.relay.clone();
             // Through the relay, never around it: a probe has to take the same admission, selection, edit
@@ -300,24 +288,27 @@ pub(crate) async fn run_job(engine: Arc<Engine>, mut job: ProbeJob) {
                 let outcome = response.extensions().get::<RelayOutcome>().cloned();
                 let retry_after_secs = retry_after_secs(response.headers());
                 let body = read_bounded(response.into_body()).await;
-                ProbeResult {
-                    status,
-                    request_id: outcome.as_ref().map(|o| o.request_id.clone()),
-                    received_at: outcome.as_ref().map(|o| o.received_at),
-                    account: outcome
-                        .as_ref()
-                        .map(|o| o.account_id.clone())
-                        .filter(|a| !a.is_empty()),
-                    error_code: outcome.as_ref().and_then(|o| o.error_code.clone()),
-                    body,
-                    cache_ttl_ms: outcome.as_ref().and_then(|o| o.cache_ttl_ms),
-                    in_overage: outcome
-                        .as_ref()
-                        .is_some_and(|o| o.overage_in_use == Some(true)),
-                    account_kind: outcome.as_ref().and_then(|o| o.account_kind),
-                    usage_based: outcome.as_ref().is_some_and(|o| o.usage_based),
-                    retry_after_secs,
-                    obstacle: outcome.as_ref().and_then(|o| o.obstacle),
+                match outcome {
+                    Some(o) => ProbeResult {
+                        status,
+                        request_id: Some(o.request_id),
+                        received_at: Some(o.received_at),
+                        account: Some(o.account_id).filter(|a| !a.is_empty()),
+                        error_code: o.error_code,
+                        body,
+                        cache_ttl_ms: o.cache_ttl_ms,
+                        in_overage: o.overage_in_use == Some(true),
+                        account_kind: o.account_kind,
+                        usage_based: o.usage_based,
+                        retry_after_secs,
+                        obstacle: o.obstacle,
+                    },
+                    None => ProbeResult {
+                        status,
+                        body,
+                        retry_after_secs,
+                        ..ProbeResult::default()
+                    },
                 }
             };
             // The whole exchange, the head and the body, sits in one arm: a cancellation or the deadline ends
@@ -1117,15 +1108,9 @@ mod tests {
             status: 503,
             request_id: Some("p".into()),
             received_at: Some(2_000),
-            account: None,
             error_code: Some(phoebis_relay::LEDGER_BEHIND.into()),
-            body: None,
-            cache_ttl_ms: None,
-            in_overage: false,
-            account_kind: None,
-            usage_based: false,
             retry_after_secs: Some(5),
-            obstacle: None,
+            ..ProbeResult::default()
         })
     }
 
