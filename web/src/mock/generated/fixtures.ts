@@ -9732,7 +9732,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "chain": {
           "static_boundaries": 1,
           "boundaries": 0,
-          "static_hash": false
+          "static_hash": true
         },
         "attempted": [],
         "holds": [],
@@ -10121,7 +10121,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "epoch": 8,
           "lane": "claude-sonnet-5|standard|none|-",
           "refresh_stamped": true,
-          "hashes_stamped": false
+          "hashes_stamped": true
         },
         "pin_events": [
           {

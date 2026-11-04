@@ -1683,7 +1683,7 @@ test('a decision record decodes its six blocks and the completion', () => {
   assert.deepEqual([r.request.keyId, r.request.poolId, r.request.sessionId, r.request.canonicalModel], ['desktop', 'main', 's-static', 'claude-sonnet-5']);
   assert.deepEqual(r.request.lane, { effort: '-', speed: 'standard', thinking: 'none' });
   assert.equal(r.request.flags.marker, true);
-  assert.deepEqual(r.request.chain, { boundaries: 0, staticBoundaries: 1, staticHash: false });
+  assert.deepEqual(r.request.chain, { boundaries: 0, staticBoundaries: 1, staticHash: true });
   assert.deepEqual([r.pin.found, r.pin.accountId, r.pin.released], ['none', null, []]);
   assert.equal(r.pinReason, null, 'a record with a pin block names no reason');
   assert.ok('window_ceiling' in body.settings, 'the route names the ceiling as the pool row does');
@@ -1704,7 +1704,7 @@ test('a decision record decodes its six blocks and the completion', () => {
   assert.deepEqual(r.walk[5].facts[0], { accountId: null, key: 'depth', unit: 'count', value: 1 });
   assert.deepEqual(r.walk[1].facts[0], { accountId: 'business', key: 'standing', unit: null, value: 'eligible' });
   assert.deepEqual([r.outcome.kind, r.outcome.accountId, r.outcome.rung], ['placed', 'business', { depth: 1, prefixTokens: 31200, rung: 'static' }]);
-  assert.deepEqual(r.outcome.pinWritten, { action: 'created', epoch: 8, hashesStamped: false, lane: 'claude-sonnet-5|standard|none|-', refreshStamped: true });
+  assert.deepEqual(r.outcome.pinWritten, { action: 'created', epoch: 8, hashesStamped: true, lane: 'claude-sonnet-5|standard|none|-', refreshStamped: true });
   assert.deepEqual(r.outcome.pinEvents, [{ kind: 'pin_created', reason: null }]);
   assert.equal(r.outcome.completion.hit, true);
   assert.deepEqual(r.outcome.completion.cacheMapWritten, [{ accountId: 'business', depth: 1, prefixTokens: 31200, tier: 'message', ttlMs: 300_000 }]);
