@@ -1537,6 +1537,11 @@ impl Engine {
             .collect()
     }
 
+    /// The caps the bootstrap file's `keepalive` block sets, which the sessions overview answers beside its counts.
+    pub fn limits(&self) -> &KeepaliveLimits {
+        &self.parts.limits
+    }
+
     pub fn stats(&self) -> EngineStats {
         let inner = self.lock();
         EngineStats {

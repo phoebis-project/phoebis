@@ -225,7 +225,7 @@ pub(crate) async fn overview(
         })
         .collect();
     let stats = state.keepalive.stats();
-    let limits = &state.settings.keepalive;
+    let limits = state.keepalive.limits();
     Json(KeepaliveOverview {
         agents: state.keepalive.agent_counts(),
         bus_gaps: stats.bus_gaps,

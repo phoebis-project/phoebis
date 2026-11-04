@@ -32,7 +32,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use phoebis_bus::Bus;
-use phoebis_keepalive::{Engine, KeepaliveLimits};
+use phoebis_keepalive::Engine;
 use phoebis_ledger::{Ledger, Metrics, Pricing};
 use phoebis_oauth::{
     Clock, CredentialManager, PairingSessions, PendingIdentity, ProfileResponse, UsageService,
@@ -111,22 +111,16 @@ pub struct AdminState {
 /// at where a credential lives.
 pub struct SettingsView {
     pub api_prices_path: Option<String>,
-    pub body_capture_max_hours: u32,
     /// Not answered by the settings route: the pool and session routes read it to tell whether a cooldown the
     /// upstream gave no length for still stands.
     pub cooldown_fallback_seconds: u64,
-    /// Not answered by the settings route: the sessions overview reads it to answer each cap beside its count.
-    pub keepalive: KeepaliveLimits,
     pub ledger_path: String,
     pub metrics_listen: String,
-    pub profile: String,
     pub proxy_listen: String,
     /// Whether the proxy listener terminates TLS, the console's URL scheme.
     pub proxy_tls: bool,
     pub retention_days: u32,
     pub rollup_retention_days: u32,
-    pub session_expire_after_seconds: u64,
-    pub session_non_companion_idle_seconds: u64,
     pub storage_path: String,
     pub subscription_costs_path: Option<String>,
 }

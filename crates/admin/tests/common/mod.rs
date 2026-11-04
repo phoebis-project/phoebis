@@ -1224,18 +1224,13 @@ async fn build_app_bounded(
     });
     let settings = Arc::new(SettingsView {
         api_prices_path: None,
-        body_capture_max_hours: BODY_CAPTURE_MAX_HOURS,
         cooldown_fallback_seconds: 60,
-        keepalive: KeepaliveLimits::default(),
         ledger_path: "test".into(),
         metrics_listen: "127.0.0.1:9464".into(),
-        profile: p.name.into(),
         proxy_listen: "test".into(),
         proxy_tls: tls,
         retention_days: ledger_config.retention_days,
         rollup_retention_days: ledger_config.rollup_retention_days,
-        session_expire_after_seconds: session_expiry.as_secs(),
-        session_non_companion_idle_seconds: non_companion_idle.as_secs(),
         storage_path: "test".into(),
         subscription_costs_path: None,
     });

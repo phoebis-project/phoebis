@@ -103,7 +103,7 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
     Json(Settings {
         about: About {
             build: state.build.into(),
-            profile: s.profile.clone(),
+            profile: state.profile.name.into(),
             version: env!("CARGO_PKG_VERSION").into(),
         },
         access: Access {
@@ -116,13 +116,13 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
             proxy_tls: s.proxy_tls,
         },
         retention: Retention {
-            body_capture_max_hours: s.body_capture_max_hours,
+            body_capture_max_hours: state.body_capture_max_hours,
             retention_days: s.retention_days,
             rollup_retention_days: s.rollup_retention_days,
         },
         sessions: SessionsSettings {
-            expire_after_seconds: s.session_expire_after_seconds,
-            non_companion_idle_seconds: s.session_non_companion_idle_seconds,
+            expire_after_seconds: state.session_expiry.as_secs(),
+            non_companion_idle_seconds: state.non_companion_idle.as_secs(),
         },
         storage: Storage {
             api_prices_path: s.api_prices_path.clone(),

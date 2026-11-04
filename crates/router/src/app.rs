@@ -430,7 +430,7 @@ pub async fn run_until(
         metrics: metrics.clone(),
         pricing: pricing.clone(),
         tables: tables.clone(),
-        settings: Arc::new(settings_view(&config, profile)),
+        settings: Arc::new(settings_view(&config)),
         // Cloned rather than moved: the local binding still serves the companion router and the shutdown
         // sequence below.
         keepalive: keepalive.clone(),
@@ -827,25 +827,20 @@ fn log_ledger_opened(
     );
 }
 
-fn settings_view(config: &Config, profile: &phoebis_profile::Profile) -> SettingsView {
+fn settings_view(config: &Config) -> SettingsView {
     SettingsView {
         api_prices_path: config
             .stats
             .api_prices_path
             .as_ref()
             .map(|p| p.display().to_string()),
-        body_capture_max_hours: config.stats.body_capture_max_hours,
         cooldown_fallback_seconds: config.routing.cooldown_fallback_seconds,
-        keepalive: config.keepalive.clone(),
         ledger_path: config.stats.ledger_path.display().to_string(),
         metrics_listen: config.stats.metrics_listen.to_string(),
-        profile: profile.name.to_string(),
         proxy_listen: config.proxy.listen.to_string(),
         proxy_tls: config.proxy.tls.is_some(),
         retention_days: config.stats.retention_days,
         rollup_retention_days: config.stats.rollup_retention_days,
-        session_expire_after_seconds: config.sessions.expire_after_seconds,
-        session_non_companion_idle_seconds: config.sessions.non_companion_idle_seconds,
         storage_path: config.storage.path.display().to_string(),
         subscription_costs_path: config
             .stats
@@ -1745,12 +1740,10 @@ revisions:
             ))
             .unwrap()
         };
-        let profile = phoebis_profile::claude_code_2_1_310_linux_x64();
-        let plain = settings_view(&config(""), profile);
-        let paired = settings_view(
-            &config("  tls:\n    cert_file: cert.pem\n    key_file: key.pem\n"),
-            profile,
-        );
+        let plain = settings_view(&config(""));
+        let paired = settings_view(&config(
+            "  tls:\n    cert_file: cert.pem\n    key_file: key.pem\n",
+        ));
         assert_eq!((plain.proxy_tls, paired.proxy_tls), (false, true));
     }
 
@@ -1763,7 +1756,7 @@ revisions:
              storage:\n  encryption_key_file: storage.key\n  path: router.sqlite\n",
         )
         .unwrap();
-        let view = settings_view(&config, phoebis_profile::claude_code_2_1_310_linux_x64());
+        let view = settings_view(&config);
         assert_eq!((view.retention_days, view.rollup_retention_days), (30, 0));
     }
 
