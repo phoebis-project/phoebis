@@ -1167,7 +1167,7 @@ impl Inner {
             }
             let over = if self.sessions.len() >= limits.max_sessions {
                 Some(&mut by_sessions)
-            } else if self.agents >= limits.max_agents {
+            } else if self.agent_count() >= limits.max_agents {
                 Some(&mut by_agents)
             } else {
                 None
@@ -1203,7 +1203,8 @@ impl Inner {
                 // Read off the row rather than the opened body, so a blob that no longer opens is cleared by the
                 // agent's next save.
                 agent.body_saved = agent_row.body_size > 0;
-                if self.agents >= limits.max_agents {
+                // The session in the making is not in the map yet, so its agents so far count beside the map's.
+                if self.agent_count() + session.agents.len() >= limits.max_agents {
                     self.dispose_loaded(
                         &key,
                         &agent_row,
@@ -1234,7 +1235,6 @@ impl Inner {
                     (Some(_), None) => unopened.push((key.clone(), agent_id.clone())),
                 }
                 session.agents.insert(agent_id, agent);
-                self.agents += 1;
             }
             self.sessions.insert(key, session);
         }

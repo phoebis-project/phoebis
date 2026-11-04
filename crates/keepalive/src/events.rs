@@ -488,7 +488,7 @@ impl Inner {
                         agent.idle_window_floor = None;
                     }
                     None => {
-                        if self.agents >= self.limits.max_agents {
+                        if self.agent_count() >= self.limits.max_agents {
                             return Err(err("agent_limit", 429));
                         }
                         let incarnation = self.incarnation();
@@ -496,7 +496,6 @@ impl Inner {
                             agent_id.clone(),
                             Agent::new(&agent_id, &key.0, incarnation, now, self.timing),
                         );
-                        self.agents += 1;
                         self.set_reason(&key, &agent_id, Reason::AwaitingRequest);
                     }
                 }
@@ -661,6 +660,7 @@ impl Inner {
             }
         }
         if mine {
+            let full = self.agent_count() >= self.limits.max_agents;
             let session = self.sessions.get_mut(&key).expect("the session just read");
             if session.instance == report.instance_id {
                 // A same-instance start after a lapse re-adopts the session: the mod may only have been silent,
@@ -674,7 +674,7 @@ impl Inner {
                 // A main the revival registers anew takes a slot as any new record does, and a refusal leaves the
                 // session as its end left it.
                 let registers_main = revived && !session.agents.contains_key(MAIN_AGENT);
-                if registers_main && self.agents >= self.limits.max_agents {
+                if registers_main && full {
                     return Err(err("agent_limit", 429));
                 }
                 session.sequence = report.sequence;
@@ -710,7 +710,6 @@ impl Inner {
                                 MAIN_AGENT.to_string(),
                                 Agent::new(MAIN_AGENT, &key.0, incarnation, now, self.timing),
                             );
-                        self.agents += 1;
                     }
                     self.set_reason(&key, MAIN_AGENT, Reason::AwaitingRequest);
                 }
@@ -730,13 +729,11 @@ impl Inner {
             return Err(err("unknown_previous_instance", 409));
         }
         let held = self.sessions.get(&key).map(|s| s.agents.len()).unwrap_or(0);
-        if self.agents - held >= self.limits.max_agents {
+        if self.agent_count() - held >= self.limits.max_agents {
             return Err(err("agent_limit", 429));
         }
         if self.sessions.contains_key(&key) {
-            let replaced =
-                self.discard_session(&key, Reason::InstanceReplaced, Some(Wasted::Replaced));
-            self.agents -= replaced;
+            self.discard_session(&key, Reason::InstanceReplaced, Some(Wasted::Replaced));
             // Filed under the generation the replaced rows were saved under: a start under a new generation leaves
             // one removal for the old row and one write for the new, so a load never meets both.
             self.forget_session(&key);
@@ -773,7 +770,6 @@ impl Inner {
                 agents,
             },
         );
-        self.agents += 1;
         self.touch_session(&key);
         self.set_reason(&key, MAIN_AGENT, Reason::AwaitingRequest);
         let session = &self.sessions[&key];

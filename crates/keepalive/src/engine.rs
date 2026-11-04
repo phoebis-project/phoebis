@@ -1355,7 +1355,6 @@ pub(crate) struct Inner {
     /// Every body in memory, a recipe an arrival set aside beside the current ones, since `max_retained_bytes` bounds
     /// memory.
     pub retained: usize,
-    pub agents: usize,
     pub running: usize,
     pub closed: bool,
     pub settlements: Vec<Settlement>,
@@ -1542,7 +1541,7 @@ impl Engine {
     pub fn stats(&self) -> EngineStats {
         let inner = self.lock();
         EngineStats {
-            agents: inner.agents,
+            agents: inner.agent_count(),
             bus_gaps: inner.bus_gaps,
             late_updates: inner.late_updates,
             live_sessions: inner.sessions.values().filter(|s| !s.ended).count(),
@@ -1622,7 +1621,6 @@ impl Engine {
         inner.sessions.clear();
         inner.pending.clear();
         inner.compactions.clear();
-        inner.agents = 0;
         inner.retained = 0;
         self.cancel.cancel();
     }
@@ -1644,7 +1642,6 @@ impl Inner {
             chain_warned: HashMap::new(),
             reasons: BTreeMap::new(),
             retained: 0,
-            agents: 0,
             running: 0,
             closed: false,
             settlements: Vec::new(),
@@ -1677,14 +1674,18 @@ impl Inner {
 
     /// Drops the agent's recipe and everything following it, and moves the agent to a new generation so no
     /// late result about the old one lands. `wasted` labels the probes the recipe leaves unanswered.
-    /// Discards every agent of the session under `reason`, each one's probes settled under `wasted`, and answers how
-    /// many there were.
+    /// Every agent of every session, which `max_agents` bounds.
+    pub(crate) fn agent_count(&self) -> usize {
+        self.sessions.values().map(|s| s.agents.len()).sum()
+    }
+
+    /// Discards every agent of the session under `reason`, each one's probes settled under `wasted`.
     pub(crate) fn discard_session(
         &mut self,
         key: &SessionKey,
         reason: Reason,
         wasted: Option<Wasted>,
-    ) -> usize {
+    ) {
         let agents: Vec<String> = self
             .sessions
             .get(key)
@@ -1693,14 +1694,12 @@ impl Inner {
         for agent in &agents {
             self.discard(key, agent, reason, wasted);
         }
-        agents.len()
     }
 
     /// Ends the session under `reason`: its agents discarded, their probes settled as `session_ended`, its rows filed
     /// for removal and its entry gone.
     fn remove_session(&mut self, key: &SessionKey, reason: Reason) {
-        let removed = self.discard_session(key, reason, Some(Wasted::SessionEnded));
-        self.agents -= removed;
+        self.discard_session(key, reason, Some(Wasted::SessionEnded));
         self.forget_session(key);
         self.sessions.remove(key);
     }
@@ -2532,7 +2531,6 @@ impl Inner {
             if let Some(session) = self.sessions.get_mut(&key) {
                 session.agents.remove(&agent_id);
             }
-            self.agents -= 1;
             self.touch_session(&key);
         }
         let lapsed: Vec<SessionKey> = self

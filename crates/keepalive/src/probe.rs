@@ -991,7 +991,6 @@ mod tests {
             Agent::new("main", "k", 1, 0, KeepaliveTiming::default()),
         );
         let mut inner = Inner::empty(KeepaliveTiming::default(), KeepaliveLimits::default(), 0);
-        inner.agents = 1;
         inner.sessions.insert(
             key.clone(),
             Session {
