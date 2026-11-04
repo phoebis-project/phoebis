@@ -223,17 +223,18 @@ impl Engine {
     /// tier it ran under) rather than the settlement's clock, so a settlement filed hours or a day later prices its
     /// counts at the cells and the revision the probe ran at.
     pub(crate) fn record_settlement(&self, settlement: Settlement) {
+        let charge = settlement.charge;
         let mut d = delta(
-            settlement.at,
+            charge.at,
             &settlement.key,
             settlement.key_generation,
             &settlement.pool_id,
-            settlement.account.as_deref(),
+            charge.account.as_deref(),
             &settlement.canonical_model,
             "probe",
             settlement.speed == Speed::Fast,
         );
-        let counts = typed(settlement.usage);
+        let counts = typed(charge.usage);
         d.wasted_probes = 1;
         d.wasted_input_tokens = counts.input;
         d.wasted_cache_read_tokens = counts.cache_read;
@@ -241,11 +242,11 @@ impl Engine {
         d.wasted_cache_write_1h_tokens = counts.write_1h;
         d.wasted_output_tokens = counts.output;
         d.wasted_probe_reasons = BTreeMap::from([(settlement.label.as_str().to_string(), 1)]);
-        d.tier = settlement.tier;
-        d.band = settlement.band;
-        d.account_kind = settlement.kind;
-        d.usage_based = settlement.usage_based;
-        d.overage_in_use = settlement.in_overage;
+        d.tier = charge.tier;
+        d.band = charge.band;
+        d.account_kind = charge.kind;
+        d.usage_based = charge.usage_based;
+        d.overage_in_use = charge.in_overage;
         self.parts.ledger.record(Record::Keepalive(d));
     }
 

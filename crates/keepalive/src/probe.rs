@@ -18,8 +18,8 @@ use serde_json::Value;
 
 use crate::breakeven::Ceilings;
 use crate::engine::{
-    Agent, AgentState, Engine, Funding, Inner, Kept, ParkKind, Reason, SavingsUnit, SessionKey,
-    UnansweredProbe, Verdict, Wasted, MAIN_AGENT,
+    Agent, AgentState, Engine, Funding, Inner, Kept, ParkKind, ProbeCharge, Reason, SavingsUnit,
+    SessionKey, UnansweredProbe, Verdict, Wasted, MAIN_AGENT,
 };
 use crate::recipe::Recipe;
 use crate::savings::{answered_speed, probe_cost, settlement_unit, typed, unpriced_reason};
@@ -511,6 +511,16 @@ impl Inner {
     ) -> Applied {
         let key = &job.key;
         let agent_id = job.agent_id.as_str();
+        let charge = ProbeCharge {
+            account: Some(record.account.clone()),
+            at: record.at,
+            band: record.band,
+            in_overage: record.in_overage,
+            kind: record.kind,
+            tier: record.tier.clone(),
+            usage: record.usage,
+            usage_based: record.usage_based,
+        };
         // The worker slot comes back to the record the probe started on whatever the fence says. A result
         // orphaned on a record that is still alive, by a superseding request or by a discard, would otherwise
         // leave `in_flight` set, and `step` skips an agent that has a probe in flight for good.
@@ -580,16 +590,9 @@ impl Inner {
                             key_generation: job.key_generation,
                             pool_id: job.pool_id.clone(),
                             canonical_model: job.canonical_model.clone(),
-                            account: Some(record.account.clone()),
+                            charge,
                             fast: job.recipe.fast,
-                            usage: record.usage,
-                            tier: record.tier.clone(),
-                            at: record.at,
-                            band: record.band,
                             entry_expires: job.started + ttl,
-                            kind: record.kind,
-                            usage_based: record.usage_based,
-                            in_overage: record.in_overage,
                             // The landing's coverage checks never ran on this path, so the probe earns no credit,
                             // and a turn on its lineage that reads the cache leaves it unwasted.
                             covered: false,
@@ -607,16 +610,9 @@ impl Inner {
                 key_generation: job.key_generation,
                 pool_id: job.pool_id.clone(),
                 canonical_model: job.canonical_model.clone(),
-                account: Some(record.account.clone()),
                 label,
-                usage: record.usage,
-                tier: record.tier.clone(),
-                at: record.at,
-                band: record.band,
                 speed: answered_speed(record.usage),
-                kind: record.kind,
-                usage_based: record.usage_based,
-                in_overage: record.in_overage,
+                charge,
             });
             return Applied::Orphaned;
         }
@@ -679,20 +675,13 @@ impl Inner {
         let ttl = record.usage.ttl_ms(previous_ms, requested_ms);
         agent.unanswered.push(UnansweredProbe {
             id: result.request_id.clone().unwrap_or_default(),
-            usage: record.usage,
-            tier: record.tier.clone(),
-            at: record.at,
-            band: record.band,
+            charge,
             unit: covered_unit,
             window: SEVEN_DAY,
-            account: Some(record.account.clone()),
             fast: job.recipe.fast,
             model: agent.canonical_model.clone(),
             expires: job.started + ttl,
             covered: false,
-            kind: record.kind,
-            usage_based: record.usage_based,
-            in_overage: record.in_overage,
         });
         let Some(account) = result.account.clone() else {
             self.set_reason(key, agent_id, Reason::MissingAccount);

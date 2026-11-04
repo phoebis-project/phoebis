@@ -1070,7 +1070,7 @@ fn prior_coverage(agent: &Agent, now: i64) -> Option<PriorCoverage> {
         let ttl_ms = agent.ttl_ms;
         match (newest_unanswered, newest_kept) {
             (Some(probe), _) => PriorCoverage {
-                account: probe.account.clone(),
+                account: probe.charge.account.clone(),
                 covered: probe.covered,
                 unit: probe.unit,
                 window: probe.window,
@@ -1081,7 +1081,7 @@ fn prior_coverage(agent: &Agent, now: i64) -> Option<PriorCoverage> {
                 until: Some(probe.expires),
             },
             (None, Some(kept)) => PriorCoverage {
-                account: kept.account.clone(),
+                account: kept.charge.account.clone(),
                 covered: kept.covered,
                 unit: kept.unit,
                 window: kept.window,
@@ -1158,6 +1158,26 @@ pub(crate) struct AsideRecipe {
     pub key_generation: i64,
 }
 
+/// What one probe was charged under, off its `ProbeRecord`, carried whole by every copy of the probe so its
+/// settlement files where its own cost row did.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ProbeCharge {
+    pub account: Option<String>,
+    /// The probe's exchange instant and band, so a settlement filed a day later keys the probe's hour and prices its
+    /// counts at the cells and the revision the probe ran at.
+    pub at: i64,
+    pub band: Band,
+    /// The kind and the class the probe was served under and whether its answer reported overage, as the probe's own
+    /// cost row took them, so the waste files under the same funding word whatever the registry holds now.
+    pub in_overage: bool,
+    pub kind: Option<AccountKind>,
+    /// The account tier the settlement read, so the credit row keys the tier the probe ran under.
+    pub tier: Option<String>,
+    /// The probe's own usage, which the rollup carries as the wasted counts and prices when read.
+    pub usage: ProbeUsage,
+    pub usage_based: bool,
+}
+
 /// One unanswered probe with the label that settles it as wasted. Queued under the lock and written to the ledger by
 /// the engine once the lock is released.
 pub(crate) struct Settlement {
@@ -1165,24 +1185,11 @@ pub(crate) struct Settlement {
     pub key_generation: i64,
     pub pool_id: String,
     pub canonical_model: String,
-    pub account: Option<String>,
     pub label: Wasted,
-    /// The probe's own usage, which the rollup carries as the wasted counts and prices when read.
-    pub usage: ProbeUsage,
-    /// The account tier the settlement read, so the credit row keys the tier the probe ran under.
-    pub tier: Option<String>,
-    /// The probe's exchange instant and band, off its `ProbeRecord`, so a settlement filed a day later keys the
-    /// probe's hour and prices its counts at the cells and the revision the probe ran at.
-    pub at: i64,
-    pub band: Band,
     /// The speed the probe's answer reported, `answered_speed` of its usage, so the waste prices at the cells and files
     /// under the funding its own cost row took even when a fast recipe's answer came back at standard speed.
     pub speed: Speed,
-    /// The kind and the class the probe was served under and whether its answer reported overage, as the probe's own
-    /// cost row took them, so the waste files under the same funding word whatever the registry holds now.
-    pub kind: Option<AccountKind>,
-    pub usage_based: bool,
-    pub in_overage: bool,
+    pub charge: ProbeCharge,
 }
 
 /// A due probe a gate or a lapsed entry withheld, with the keys its skip row files under, read while the recipe still
@@ -1227,18 +1234,10 @@ pub(crate) struct UnansweredProbe {
     /// The relay's request id of the probe's exchange, which the probe's own ledger request row carries, so a
     /// settlement of this probe can be told from a repeat of it.
     pub id: String,
-    /// The probe's own usage, which the rollup carries as the wasted counts and prices when read.
-    pub usage: ProbeUsage,
-    /// The account tier the settlement read, so the credit row keys the tier the probe ran under.
-    pub tier: Option<String>,
-    /// The probe's exchange instant and band, off its `ProbeRecord`, so a settlement filed a day later keys the
-    /// probe's hour and prices its counts at the cells and the revision the probe ran at.
-    pub at: i64,
-    pub band: Band,
+    pub charge: ProbeCharge,
     pub unit: Option<SavingsUnit>,
     /// The window `unit` was priced in, as `PriorCoverage::window` reads it.
     pub window: &'static str,
-    pub account: Option<String>,
     pub fast: bool,
     pub model: String,
     /// `job.started + ttl_ms` as the landing computes the entry's end, for a probe that read the whole prefix and
@@ -1249,11 +1248,6 @@ pub(crate) struct UnansweredProbe {
     /// `NoProbeCacheEvidence`, an unexpected output or a missing account keeps false and is still paid for and
     /// settled, so the cost record and the coverage record never merge.
     pub covered: bool,
-    /// The kind and the class the probe was served under and whether its answer reported overage, off its
-    /// `ProbeRecord`, so its settlement files under the funding its cost row took.
-    pub kind: Option<AccountKind>,
-    pub usage_based: bool,
-    pub in_overage: bool,
 }
 
 /// One unanswered probe with the rollup keys it was paid under, which its settlement files under.
@@ -1262,22 +1256,11 @@ pub(crate) struct Kept {
     pub key_generation: i64,
     pub pool_id: String,
     pub canonical_model: String,
-    pub account: Option<String>,
+    pub charge: ProbeCharge,
     pub fast: bool,
-    /// The probe's own usage, which the rollup carries as the wasted counts and prices when read.
-    pub usage: ProbeUsage,
-    /// The account tier the settlement read, so the credit row keys the tier the probe ran under.
-    pub tier: Option<String>,
-    /// The probe's exchange instant and band, off its `ProbeRecord`, so a settlement filed a day later keys the
-    /// probe's hour and prices its counts at the cells and the revision the probe ran at.
-    pub at: i64,
-    pub band: Band,
     /// When the entry this probe wrote expires. A later probe of its chain that read the entry back extended it, so a
     /// settlement reads the chain's last entry (`chain_expires`).
     pub entry_expires: i64,
-    pub kind: Option<AccountKind>,
-    pub usage_based: bool,
-    pub in_overage: bool,
     /// What the probe proved, carried from its `UnansweredProbe` by `Kept::of`, so a turn that arrives after the
     /// ceiling moved the probe here reads the evidence the unanswered list held.
     pub covered: bool,
@@ -1299,16 +1282,9 @@ impl Kept {
             key_generation: agent.key_generation,
             pool_id: agent.pool_id.clone(),
             canonical_model: probe.model.clone(),
-            account: probe.account.clone(),
+            charge: probe.charge.clone(),
             fast: probe.fast,
-            usage: probe.usage,
-            tier: probe.tier.clone(),
-            at: probe.at,
-            band: probe.band,
             entry_expires: probe.expires,
-            kind: probe.kind,
-            usage_based: probe.usage_based,
-            in_overage: probe.in_overage,
             covered: probe.covered,
             unit: probe.unit,
             window: probe.window,
@@ -1322,16 +1298,9 @@ impl Kept {
             key_generation: self.key_generation,
             pool_id: self.pool_id,
             canonical_model: self.canonical_model,
-            account: self.account,
             label,
-            usage: self.usage,
-            tier: self.tier,
-            at: self.at,
-            band: self.band,
-            speed: crate::savings::answered_speed(self.usage),
-            kind: self.kind,
-            usage_based: self.usage_based,
-            in_overage: self.in_overage,
+            speed: crate::savings::answered_speed(self.charge.usage),
+            charge: self.charge,
         }
     }
 }
@@ -1784,16 +1753,16 @@ impl Inner {
         let mut later: Vec<&Kept> = kept
             .iter()
             .filter(|other| {
-                other.at > probe.at
+                other.charge.at > probe.charge.at
                     && other.canonical_model == probe.canonical_model
                     && other.fast == probe.fast
-                    && other.account == probe.account
+                    && other.charge.account == probe.charge.account
             })
             .collect();
-        later.sort_by_key(|other| other.at);
+        later.sort_by_key(|other| other.charge.at);
         later
             .into_iter()
-            .take_while(|other| other.usage.read > 0 && other.covered)
+            .take_while(|other| other.charge.usage.read > 0 && other.covered)
             .map(|other| other.entry_expires)
             .fold(probe.entry_expires, i64::max)
     }
@@ -1844,7 +1813,7 @@ impl Inner {
         for (kept, chain_end) in probes.into_iter().zip(chain_ends) {
             let lineage = kept.canonical_model == answer.model
                 && kept.fast == answer.fast
-                && kept.account == answer.account;
+                && kept.charge.account == answer.account;
             // A probe whose chain's last entry was gone when the request arrived kept nothing the request could read,
             // whatever it read: `expired` is its own label, so a credited request never sits beside a cold return it
             // contradicts.
