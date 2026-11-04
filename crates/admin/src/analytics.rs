@@ -15,7 +15,7 @@ use phoebis_ledger::{
     session_burn_series, AccountRollupRow, FundingFilter, GroupBy, GroupRow, HourlyWindowSample,
     LedgerError, LiveKeys, Patterns, RequestFilter, RollupFilter, SeriesFilter,
 };
-use phoebis_routing::{term, UtilizationSample, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
+use phoebis_routing::{term, BurnUnit, UtilizationSample, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
 use phoebis_store::{AccountKind, SubscriptionTerm};
 use utoipa::ToSchema;
 
@@ -972,11 +972,9 @@ pub(crate) async fn burn(
                 one_account.as_ref()
             };
             let unit = account.and_then(|account| {
-                snapshot.account(account).map(|a| match a.kind {
-                    AccountKind::Oauth if snapshot.usage_based(account) => "usd",
-                    AccountKind::Oauth => "window_share",
-                    AccountKind::ApiKey => "usd",
-                })
+                snapshot
+                    .account(account)
+                    .map(|a| BurnUnit::of(a.kind, snapshot.usage_based(account), false).as_str())
             });
             // The ledger prices the share by the tier each row recorded, so a 5-hour window the account's set no
             // longer holds is taken out here.
