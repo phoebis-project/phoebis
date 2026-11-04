@@ -3195,14 +3195,8 @@ pub(crate) fn fence_token(
     updated_at: i64,
     stale: &str,
 ) -> Result<i64, Response> {
-    let Some(value) = sent else {
+    let Some(token) = fence_revision(sent)? else {
         return Ok(updated_at);
-    };
-    let Some(token) = value.as_u64() else {
-        return Err(failure(
-            StatusCode::BAD_REQUEST,
-            "expected_revision is the revision the row was read at",
-        ));
     };
     // What the token carries above the incarnation's floor is its stamp only when its incarnation is the row's, which
     // `answers_stamp_token` confirms for the two parts together.
