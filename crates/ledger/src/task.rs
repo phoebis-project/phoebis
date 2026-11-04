@@ -317,7 +317,6 @@ impl Ledger {
     /// answers the landing's result, past the bound included (the reply arm of the `select!` reads first, `biased`, so
     /// a ready answer is never thrown away).
     pub async fn replay_parked(&self, now: i64, bound: Duration) -> Result<Replayed, LedgerError> {
-        let stopped = || LedgerError::Io(std::io::Error::other(LedgerGone));
         let deadline = (self.clock)() + bound.as_millis() as i64;
         let claimed = Arc::new(AtomicBool::new(false));
         let (reply, mut answer) = oneshot::channel();
@@ -329,13 +328,13 @@ impl Ledger {
         };
         tokio::select! {
             biased;
-            sent = self.control.send(message) => sent.map_err(|_| stopped())?,
+            sent = self.control.send(message) => sent.map_err(|_| LedgerGone)?,
             // The message is dropped with the send, so no writer turn can run it.
             () = sleep_until(Some(deadline), &self.clock) => return Err(LedgerError::WriterHeld),
         }
         tokio::select! {
             biased;
-            answered = &mut answer => return answered.map_err(|_| stopped())?,
+            answered = &mut answer => return answered.map_err(|_| LedgerGone)?,
             () = sleep_until(Some(deadline), &self.clock) => {}
         }
         if claimed
@@ -344,7 +343,7 @@ impl Ledger {
         {
             return Err(LedgerError::WriterHeld);
         }
-        answer.await.map_err(|_| stopped())?
+        answer.await.map_err(|_| LedgerGone)?
     }
 
     /// Asks the assembler to drain what the bus already delivered, then the writer to close the channel and
@@ -422,58 +421,6 @@ pub fn spawn(
     let assembler = spawn_subscriber(subscriber, move |subscriber| {
         assemble(subscriber, assembling, expire_interval, assembler_stop)
     });
-    // The purge has its own task and connection so a pass never takes the writer's lock or turn: the cut runs
-    // in slices, so a write waits behind one slice at most and never on a whole day's deletion.
-    let purging = ledger.clone();
-    let purge_router = router.clone();
-    let purge_config = config.clone();
-    let purge_pricing = pricing.clone();
-    let purge_tables = tables.clone();
-    let purge = tokio::spawn(async move {
-        let mut tick = tokio::time::interval(purge_config.purge_interval);
-        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        tick.tick().await;
-        // The conditions read the trailing day of events, so a start folds them at once rather than serving none
-        // until the first tick an hour on. The start row closes the slow-down spans the previous run left open, so
-        // the fold waits for its commit, at most one purge interval, since a writer held on a full disk must not keep
-        // the purge that frees room waiting.
-        let _ = tokio::time::timeout(purge_config.purge_interval, start_committed).await;
-        fold_conditions(
-            purging.db(),
-            &purge_pricing,
-            &purge_tables,
-            (purging.clock)(),
-        )
-        .await;
-        purging
-            .stats
-            .condition_folds
-            .fetch_add(1, Ordering::Relaxed);
-        loop {
-            tick.tick().await;
-            run_purge(
-                purging.db(),
-                &purge_store,
-                &purge_config,
-                &purge_router,
-                (purging.clock)(),
-            )
-            .await;
-            purging.stats.purge_passes.fetch_add(1, Ordering::Relaxed);
-            fold_conditions(
-                purging.db(),
-                &purge_pricing,
-                &purge_tables,
-                (purging.clock)(),
-            )
-            .await;
-            purging
-                .stats
-                .condition_folds
-                .fetch_add(1, Ordering::Relaxed);
-        }
-    });
-    ledger.track(purge);
     let handles = Handles {
         clock,
         db: db.clone(),
@@ -484,6 +431,44 @@ pub fn spawn(
         tables,
         unpriced,
     };
+    // The purge has its own task and connection so a pass never takes the writer's lock or turn: the cut runs
+    // in slices, so a write waits behind one slice at most and never on a whole day's deletion.
+    let purging = handles.clone();
+    let purge_config = config.clone();
+    let purge = tokio::spawn(async move {
+        let mut tick = tokio::time::interval(purge_config.purge_interval);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        tick.tick().await;
+        // The conditions read the trailing day of events, so a start folds them at once rather than serving none
+        // until the first tick an hour on. The start row closes the slow-down spans the previous run left open, so
+        // the fold waits for its commit, at most one purge interval, since a writer held on a full disk must not keep
+        // the purge that frees room waiting.
+        let _ = tokio::time::timeout(purge_config.purge_interval, start_committed).await;
+        loop {
+            fold_conditions(
+                &purging.db,
+                &purging.pricing,
+                &purging.tables,
+                (purging.clock)(),
+            )
+            .await;
+            purging
+                .stats
+                .condition_folds
+                .fetch_add(1, Ordering::Relaxed);
+            tick.tick().await;
+            run_purge(
+                &purging.db,
+                &purge_store,
+                &purge_config,
+                &purging.router,
+                (purging.clock)(),
+            )
+            .await;
+            purging.stats.purge_passes.fetch_add(1, Ordering::Relaxed);
+        }
+    });
+    ledger.track(purge);
     tokio::spawn(writer(
         handles,
         rx,
@@ -597,13 +582,13 @@ async fn writer(
     let mut spends = Spends {
         handles: handles.clone(),
         event_poll,
-        revision: router.snapshot().revision,
+        revision: 0,
         due: None,
         budgets: Budgets::default(),
         pending: Vec::new(),
     };
     // Ahead of the start's spend read, so a parked priced record that lands now is in the first report.
-    let _ = handles.land_parked(&router.snapshot(), clock()).await;
+    let _ = handles.land_parked(clock()).await;
     // The start's budget rows wait for the first batch and follow its records: the start row `spawn` recorded is the
     // channel's first record, and it dates the gap from the newest row before it, which must be the previous run's.
     spends.start().await;
@@ -612,21 +597,17 @@ async fn writer(
     let mut held: Option<Held> = None;
     loop {
         if let Some(batch) = held.take() {
-            let mut ctx = WriterCtx {
-                handles: &handles,
-                stopped: &mut stopped,
-            };
             let retry = if batch.retried {
-                hold(&mut ctx, batch).await
+                hold(&handles, &mut stopped, batch).await
             } else {
-                retry_held(&mut ctx, batch).await
+                retry_held(&handles, &mut stopped, batch).await
             };
             match retry {
                 Retry::Held(rest) => held = Some(rest),
                 // Back to the turn below once the drain's one try is done, so the stop arm and `ended` still close
                 // and drain the channel.
                 Retry::Stopped(rest) => {
-                    drain_held(&mut ctx, rest).await;
+                    handles.drain_held(rest).await;
                     stats.retrying.store(0, Ordering::Relaxed);
                 }
                 Retry::Settled => {
@@ -666,8 +647,8 @@ async fn writer(
                     let _ = reply.send(Err(LedgerError::WriterHeld));
                     continue;
                 }
-                let replayed = match handles.land_parked(&router.snapshot(), now).await {
-                    Ok((landed, _)) => {
+                let replayed = match handles.land_parked(now).await {
+                    Ok(landed) => {
                         // The spend read the start runs after its own pass: the landed money reaches the routing
                         // table before the caller hears the counts, so a selection after a replay that crossed a
                         // budget is refused. The budget rows it crosses wait for the next batch or flush, as the
@@ -824,13 +805,6 @@ enum Retry {
     Stopped(Held),
 }
 
-/// The writer's own handles, for the retries. The writer is what the `Ledger` handle sends to, so a record of its
-/// own (a poison row's gap) lands through `land`, as the gap report's does.
-struct WriterCtx<'a> {
-    handles: &'a Handles,
-    stopped: &'a mut watch::Receiver<bool>,
-}
-
 /// What the writer, its spend refresh and its landing passes read and report through, built once in `spawn`.
 #[derive(Clone)]
 struct Handles {
@@ -867,91 +841,90 @@ async fn wait_on_clock(
 
 /// A failed batch is retried in place, then replayed one record at a time. Nothing new is taken from the channel
 /// while this runs, so order holds and admission's mark fires behind the held batch.
-async fn retry_held(ctx: &mut WriterCtx<'_>, held: Held) -> Retry {
-    let snapshot = ctx.handles.router.snapshot();
+async fn retry_held(handles: &Handles, stopped: &mut watch::Receiver<bool>, held: Held) -> Retry {
+    let snapshot = handles.router.snapshot();
     for delay in BATCH_RETRY_DELAYS {
-        if wait_on_clock(delay, &ctx.handles.clock, ctx.stopped).await == Wait::Stopped {
+        if wait_on_clock(delay, &handles.clock, stopped).await == Wait::Stopped {
             return Retry::Stopped(held);
         }
         let rest = held.from..held.records.len();
-        match ctx.handles.land(&snapshot, &held.records, rest).await {
+        match handles.land(&snapshot, &held.records, rest).await {
             Landed::Written | Landed::Lost => return Retry::Settled,
             Landed::Refused { .. } => {}
         }
     }
-    replay(ctx, held).await
+    handles.replay(held).await
 }
 
 /// A batch the database as a whole refused is tried again every `BATCH_RETRY_HOLD`, one record at a time, until it
 /// lands or the process stops; it is never dropped.
-async fn hold(ctx: &mut WriterCtx<'_>, held: Held) -> Retry {
-    if wait_on_clock(BATCH_RETRY_HOLD, &ctx.handles.clock, ctx.stopped).await == Wait::Stopped {
+async fn hold(handles: &Handles, stopped: &mut watch::Receiver<bool>, held: Held) -> Retry {
+    if wait_on_clock(BATCH_RETRY_HOLD, &handles.clock, stopped).await == Wait::Stopped {
         return Retry::Stopped(held);
     }
-    replay(ctx, held).await
-}
-
-/// One record per transaction. A record the database as a whole refuses is held with everything after it; one
-/// refused on its own row is a poison row, parked when it carries money and dropped with its gap otherwise.
-async fn replay(ctx: &mut WriterCtx<'_>, held: Held) -> Retry {
-    let snapshot = ctx.handles.router.snapshot();
-    for index in held.from..held.records.len() {
-        let one = index..index + 1;
-        let error = match ctx.handles.land(&snapshot, &held.records, one).await {
-            Landed::Written | Landed::Lost => continue,
-            // A full disk, an I/O error or a lock held past the timeout refuses every record after this one as
-            // well, so the rest of the batch waits with it; a constraint or a trigger refused this row alone.
-            Landed::Refused {
-                database_wide: true,
-                ..
-            } => {
-                return Retry::Held(Held {
-                    records: held.records,
-                    from: index,
-                    retried: true,
-                })
-            }
-            Landed::Refused { error, .. } => error,
-        };
-        match &held.records[index] {
-            Record::Request {
-                request,
-                attempts,
-                bodies,
-            } if attempts.iter().any(AttemptRecord::has_usage) => {
-                // The parking table has no constraint a serialized record can violate, so a park the database
-                // refuses is the database's: the record stays held rather than lost.
-                if ctx
-                    .handles
-                    .park(request, attempts, bodies.is_some(), &error)
-                    .await
-                    .is_err()
-                {
-                    return Retry::Held(Held {
-                        records: held.records.clone(),
-                        from: index,
-                        retried: true,
-                    });
-                }
-            }
-            record @ Record::Request { request, .. } => {
-                ctx.handles.count_drop(table_of(record));
-                // The writer lands its own gap as a batch of one, as the gap report does: a send into its own
-                // channel would meet the queue it stopped draining.
-                let gap = Arc::new(vec![crate::assemble::gap(
-                    &request.id,
-                    "poison",
-                    (ctx.handles.clock)(),
-                )]);
-                let _ = ctx.handles.land(&snapshot, &gap, 0..1).await;
-            }
-            other => ctx.handles.count_drop(table_of(other)),
-        }
-    }
-    Retry::Settled
+    handles.replay(held).await
 }
 
 impl Handles {
+    /// One record per transaction. A record the database as a whole refuses is held with everything after it; one
+    /// refused on its own row is a poison row, parked when it carries money and dropped with its gap otherwise.
+    async fn replay(&self, held: Held) -> Retry {
+        let snapshot = self.router.snapshot();
+        for index in held.from..held.records.len() {
+            let one = index..index + 1;
+            let error = match self.land(&snapshot, &held.records, one).await {
+                Landed::Written | Landed::Lost => continue,
+                // A full disk, an I/O error or a lock held past the timeout refuses every record after this one as
+                // well, so the rest of the batch waits with it; a constraint or a trigger refused this row alone.
+                Landed::Refused {
+                    database_wide: true,
+                    ..
+                } => {
+                    return Retry::Held(Held {
+                        records: held.records,
+                        from: index,
+                        retried: true,
+                    })
+                }
+                Landed::Refused { error, .. } => error,
+            };
+            match &held.records[index] {
+                Record::Request {
+                    request,
+                    attempts,
+                    bodies,
+                } if attempts.iter().any(AttemptRecord::has_usage) => {
+                    // The parking table has no constraint a serialized record can violate, so a park the database
+                    // refuses is the database's: the record stays held rather than lost.
+                    if self
+                        .park(request, attempts, bodies.is_some(), &error)
+                        .await
+                        .is_err()
+                    {
+                        return Retry::Held(Held {
+                            records: held.records.clone(),
+                            from: index,
+                            retried: true,
+                        });
+                    }
+                }
+                record @ Record::Request { request, .. } => {
+                    self.count_drop(table_of(record));
+                    // The writer lands its own gap as a batch of one, as the gap report does: a send into its own
+                    // channel would meet the queue it stopped draining.
+                    let gap = Arc::new(vec![crate::assemble::gap(
+                        &request.id,
+                        "poison",
+                        (self.clock)(),
+                    )]);
+                    let _ = self.land(&snapshot, &gap, 0..1).await;
+                }
+                other => self.count_drop(table_of(other)),
+            }
+        }
+        Retry::Settled
+    }
+
     /// Parks a priced record the database refused on its own row: one `parked_records` row with the request row and
     /// its attempts and without the captured bodies, so the capture is lost and the money is not.
     async fn park(
@@ -997,36 +970,31 @@ impl Handles {
         }
         parked
     }
-}
 
-/// The stop's last try at a held batch: one replay, and what the database still refuses is lost and counted, the
-/// one thing a stop may lose.
-async fn drain_held(ctx: &mut WriterCtx<'_>, held: Held) {
-    let rest = match replay(ctx, held).await {
-        Retry::Held(rest) | Retry::Stopped(rest) => rest,
-        Retry::Settled => return,
-    };
-    let lost = &rest.records[rest.from..];
-    tracing::error!(
-        records = lost.len(),
-        "the ledger stopped with records it could not write, and they are lost"
-    );
-    for record in lost {
-        ctx.handles.count_drop(table_of(record));
+    /// The stop's last try at a held batch: one replay, and what the database still refuses is lost and counted, the
+    /// one thing a stop may lose.
+    async fn drain_held(&self, held: Held) {
+        let rest = match self.replay(held).await {
+            Retry::Held(rest) | Retry::Stopped(rest) => rest,
+            Retry::Settled => return,
+        };
+        let lost = &rest.records[rest.from..];
+        tracing::error!(
+            records = lost.len(),
+            "the ledger stopped with records it could not write, and they are lost"
+        );
+        for record in lost {
+            self.count_drop(table_of(record));
+        }
     }
-}
 
-impl Handles {
     /// Every parked record is tried once at start and on each replay, in the order it was parked, each in its own
     /// transaction, which deletes the parked row as it lands the record, so a replay is charged once however the
     /// process fares between the two: one that lands leaves the table and is observed as a landed record, and one that
-    /// fails keeps its row with the error it met this time. Answers how many landed and how many were kept, or the
-    /// error of a row read that failed, since a pass that never ran is not one that kept every row.
-    async fn land_parked(
-        &self,
-        snapshot: &RegistrySnapshot,
-        now: i64,
-    ) -> Result<(u64, u64), LedgerError> {
+    /// fails keeps its row with the error it met this time. Answers how many landed, or the error of a row read that
+    /// failed, since a pass that never ran is not one that kept every row.
+    async fn land_parked(&self, now: i64) -> Result<u64, LedgerError> {
+        let snapshot = self.router.snapshot();
         let db = &self.db;
         let rows = db
         .writer_read(WriterRead::ParkedRows, crate::db::parked_rows)
@@ -1035,7 +1003,7 @@ impl Handles {
             tracing::warn!(%error, "the parked records could not be read, so they wait for the next start or replay");
         })?;
         if rows.is_empty() {
-            return Ok((0, 0));
+            return Ok(0);
         }
         let (mut landed, mut kept) = (0u64, 0u64);
         for row in rows {
@@ -1051,7 +1019,7 @@ impl Handles {
                         attempts: parked.attempts,
                         bodies: None,
                     }]);
-                    self.land_acknowledging(snapshot, &batch, 0..1, Some(row.id))
+                    self.land_acknowledging(&snapshot, &batch, 0..1, Some(row.id))
                         .await
                 }
                 Err(error) => Landed::Refused {
@@ -1074,7 +1042,7 @@ impl Handles {
             }
         }
         tracing::info!(landed, kept, "the parked records were tried");
-        Ok((landed, kept))
+        Ok(landed)
     }
 }
 
@@ -1339,40 +1307,35 @@ impl Spends {
     /// so a read that succeeded and reached the router clears `degraded`. One that did not, while degraded, runs again
     /// one `event_poll` later rather than at the period's end, since every budgeted member waits on it. The budget
     /// rows the read crosses wait in `pending`.
+    ///
+    /// A failed read keeps the armed deadline while it is still ahead of `now` (a transient failure leaves an armed
+    /// tick where it was rather than disarming it), otherwise arms a retry at `now + event_poll`: a tick that had
+    /// already reached its deadline would otherwise re-fire at once on every following timer tick, repeating the
+    /// failing read and its warning for as long as the error lasts.
     async fn read(&mut self, priced: &[PricedAttempt]) {
         let now = (self.handles.clock)();
         let degraded = self.handles.stats.degraded.load(Ordering::Relaxed);
         let snapshot = self.handles.router.snapshot();
         self.revision = snapshot.revision;
-        let spend = refresh_member_spends(
-            &self.handles.db,
-            &self.handles.pricing,
-            &self.handles.router,
-            &snapshot,
-            now,
-            self.due,
-            self.event_poll,
-            degraded,
-            priced,
-        )
-        .await;
+        let spend = refresh_member_spends(&self.handles, &snapshot, now, degraded, priced).await;
+        let retry = now + self.event_poll.as_millis() as i64;
+        let due = if spend.rows.is_none() {
+            self.due.filter(|&at| at > now).or(Some(retry))
+        } else {
+            spend.due
+        };
         if let Some(rows) = spend.rows {
             let edges = self.budgets.edges(&snapshot, rows, now);
             self.pending.extend(edges);
         }
-        if spend.refreshed {
-            if self.handles.stats.degraded.swap(false, Ordering::Relaxed) {
-                tracing::info!("the ledger caught up, so budgeted members are placed on again");
-            }
-            self.due = spend.due;
-            return;
+        if spend.refreshed && self.handles.stats.degraded.swap(false, Ordering::Relaxed) {
+            tracing::info!("the ledger caught up, so budgeted members are placed on again");
         }
-        if !degraded {
-            self.due = spend.due;
-            return;
-        }
-        let retry = now + self.event_poll.as_millis() as i64;
-        self.due = Some(spend.due.map_or(retry, |due| due.min(retry)));
+        self.due = if spend.refreshed || !degraded {
+            due
+        } else {
+            Some(due.map_or(retry, |due| due.min(retry)))
+        };
     }
 
     /// `read`, then the pending budget rows landed.
@@ -1410,22 +1373,20 @@ impl Spends {
 /// Answers the earliest `period_end` among the rows read, to arm the next boundary tick; `None` while no member
 /// carries a budget, since a pool whose every member is excluded still refreshes on the revision and boundary arms
 /// alone, without traffic, and there is truly nothing to arm a tick for, and nothing to read is a read that
-/// succeeded. On a read error, keeps `current` while it is still ahead of `now` (a transient failure leaves an armed
-/// tick where it was rather than disarming it), otherwise arms a retry at `now + event_poll`: a tick that had already
-/// reached its deadline would otherwise re-fire at once on every following timer tick, repeating the failing read
-/// and its warning for as long as the error lasts.
-#[allow(clippy::too_many_arguments)]
+/// succeeded.
 async fn refresh_member_spends(
-    db: &Arc<LedgerDb>,
-    pricing: &Arc<Pricing>,
-    router: &RouterHandle,
+    handles: &Handles,
     snapshot: &RegistrySnapshot,
     now: i64,
-    current: Option<i64>,
-    event_poll: Duration,
     degraded: bool,
     priced: &[PricedAttempt],
 ) -> SpendRefresh {
+    let Handles {
+        db,
+        pricing,
+        router,
+        ..
+    } = handles;
     let members = budgeted_members(snapshot);
     if members.is_empty() {
         return SpendRefresh {
@@ -1473,12 +1434,8 @@ async fn refresh_member_spends(
         }
         Err(error) => {
             tracing::warn!(%error, "a member's spend could not be read, so the last report stands");
-            let due = match current {
-                Some(at) if at > now => current,
-                _ => Some(now + event_poll.as_millis() as i64),
-            };
             SpendRefresh {
-                due,
+                due: None,
                 refreshed: false,
                 rows: None,
             }
@@ -1747,9 +1704,8 @@ impl Handles {
             Err(error) => {
                 tracing::error!(%error, records = size, "the ledger writer panicked, so the batch is lost");
                 stats.write_failures.fetch_add(1, Ordering::Relaxed);
-                stats.dropped.fetch_add(size, Ordering::Relaxed);
                 for record in &batch[landed] {
-                    metrics.observe_drop(table_of(record));
+                    self.count_drop(table_of(record));
                 }
                 Landed::Lost
             }
@@ -1929,58 +1885,15 @@ mod tests {
         assert_eq!(ledger.dropped(), 0);
     }
 
-    /// A store carrying one pool, one account, and one budgeted member, and the router spawned over it: enough
-    /// for `refresh_member_spends` to find a member to read.
-    fn budgeted_router() -> RouterHandle {
-        let store =
-            Arc::new(Store::open_in_memory(&phoebis_store::StorageKey::generate()).unwrap());
-        store
-            .insert_account(&phoebis_store::AccountRow::for_tests(
-                "a",
-                AccountKind::Oauth,
-            ))
-            .unwrap();
-        store
-            .insert_pool(
-                &phoebis_store::PoolRow {
-                    strategy: phoebis_store::Strategy::Priority,
-                    prefer_subscription: false,
-                    ..phoebis_store::PoolRow::for_tests("p")
-                },
-                "test",
-            )
-            .unwrap();
-        store
-            .set_pool_members(
-                "p",
-                &[phoebis_store::MemberWrite {
-                    account_id: "a".into(),
-                    priority: 0,
-                    budget_daily_usd: None,
-                    budget_monthly_usd: Some(10.0),
-                }],
-                "test",
-            )
-            .unwrap();
-        let clock: Clock = Arc::new(|| 1_000);
-        phoebis_routing::spawn(store, clock, phoebis_routing::RouterConfig::default()).unwrap()
-    }
-
     #[tokio::test]
     async fn a_failed_spend_refresh_keeps_the_previous_boundary_armed() {
-        let router = budgeted_router();
-        let db = Arc::new(LedgerDb::open_in_memory().unwrap());
-        let pricing = Arc::new(Pricing::new(PriceRevisions::shipped()));
-        let event_poll = Duration::from_secs(5);
+        let clock = Arc::new(AtomicI64::new(1_000));
+        let (mut spends, _) = spends_over(&[("a", 10.0)], clock.clone());
 
         let first = refresh_member_spends(
-            &db,
-            &pricing,
-            &router,
-            &router.snapshot(),
+            &spends.handles,
+            &spends.handles.router.snapshot(),
             1_000,
-            None,
-            event_poll,
             false,
             &[],
         )
@@ -1990,67 +1903,59 @@ mod tests {
             first.refreshed,
             "and reports the read as one that succeeded"
         );
+        spends.due = first.due;
 
-        db.write(|c| {
-            c.execute("DROP TABLE rollups_hourly", [])?;
-            Ok(())
-        })
-        .unwrap();
+        spends
+            .handles
+            .db
+            .write(|c| {
+                c.execute("DROP TABLE rollups_hourly", [])?;
+                Ok(())
+            })
+            .unwrap();
 
         let after_failure = refresh_member_spends(
-            &db,
-            &pricing,
-            &router,
-            &router.snapshot(),
+            &spends.handles,
+            &spends.handles.router.snapshot(),
             2_000,
-            first.due,
-            event_poll,
             false,
             &[],
         )
         .await;
-        assert_eq!(
-            after_failure.due, first.due,
-            "a failed read keeps the previous boundary armed rather than disarming it"
-        );
         assert!(
             !after_failure.refreshed,
             "a failed read never reads as a refresh, so it cannot clear a degraded ledger"
+        );
+        clock.store(2_000, Ordering::SeqCst);
+        spends.read(&[]).await;
+        assert_eq!(
+            spends.due, first.due,
+            "a failed read keeps the previous boundary armed rather than disarming it"
         );
     }
 
     #[tokio::test]
     async fn a_failed_spend_refresh_past_its_deadline_retries_at_the_poll_cadence() {
-        let router = budgeted_router();
-        let db = Arc::new(LedgerDb::open_in_memory().unwrap());
-        let pricing = Arc::new(Pricing::new(PriceRevisions::shipped()));
-        let event_poll = Duration::from_secs(5);
+        let now = 1_000;
+        let (mut spends, _) = spends_over(&[("a", 10.0)], Arc::new(AtomicI64::new(now)));
 
-        db.write(|c| {
-            c.execute("DROP TABLE rollups_hourly", [])?;
-            Ok(())
-        })
-        .unwrap();
+        spends
+            .handles
+            .db
+            .write(|c| {
+                c.execute("DROP TABLE rollups_hourly", [])?;
+                Ok(())
+            })
+            .unwrap();
 
         // The boundary tick's own deadline already passed: keeping it would fire again at once on every
         // following timer tick, so the retry arms one poll interval out instead.
         let past_due = Some(500);
-        let now = 1_000;
-        let after_failure = refresh_member_spends(
-            &db,
-            &pricing,
-            &router,
-            &router.snapshot(),
-            now,
-            past_due,
-            event_poll,
-            false,
-            &[],
-        )
-        .await;
+        spends.due = past_due;
+        spends.read(&[]).await;
         assert_eq!(
-            after_failure.due,
-            Some(now + event_poll.as_millis() as i64),
+            spends.due,
+            Some(now + spends.event_poll.as_millis() as i64),
             "a past deadline retries at the poll cadence rather than at once"
         );
     }

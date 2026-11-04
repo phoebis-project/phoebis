@@ -127,6 +127,8 @@ pub enum LedgerError {
     #[error("the ledger writer is held, try again")]
     WriterHeld,
     #[error(transparent)]
+    WriterGone(#[from] LedgerGone),
+    #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
     #[error("plan table: {0}")]
     Plan(String),

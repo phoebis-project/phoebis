@@ -12,12 +12,12 @@ use axum::routing::get;
 use axum::Router;
 use phoebis_oauth::Clock;
 use phoebis_relay::{anthropic_error, authenticated_key, new_request_id, no_store};
-use phoebis_routing::{RouterHandle, DAY_MS};
+use phoebis_routing::{RouterHandle, DAY_MS, WEEK_MS};
 use rusqlite::Connection;
 use serde::Serialize;
 
 use crate::price::price_usd;
-use crate::query::{hour_ceil, PROBE_KIND};
+use crate::query::hour_ceil;
 use crate::rollup::{hour_of, read_rollups_for_key, RollupRow};
 use crate::{LedgerDb, LedgerError, PriceRevisions, Pricing};
 
@@ -85,13 +85,13 @@ pub fn key_usage_windows(
     prices: &PriceRevisions,
 ) -> Result<(KeyUsageWindow, KeyUsageWindow), LedgerError> {
     let day_hour = hour_of(now - DAY_MS);
-    let week_hour = hour_of(now - 7 * DAY_MS);
+    let week_hour = hour_of(now - WEEK_MS);
     let rows = read_rollups_for_key(conn, key_id, key_generation, week_hour, hour_ceil(now))?;
     let (mut day, mut week) = (
         WindowSum::new(day_hour, now),
         WindowSum::new(week_hour, now),
     );
-    for row in rows.iter().filter(|r| r.kind != PROBE_KIND) {
+    for row in &rows {
         let usd =
             price_usd(prices, &row.price_key(now), row.usage()).map_or(0.0, |usd| usd.total());
         week.add(row, usd);
@@ -128,12 +128,11 @@ impl WindowSum {
         out.incomplete += row.incomplete;
         out.cost_usd += usd;
         add(&mut out.tokens, row);
-        let model = row.canonical_model.clone();
         let entry = self
             .models
-            .entry(model.clone())
-            .or_insert_with(|| ModelUsage {
-                model,
+            .entry(row.canonical_model.clone())
+            .or_insert_with_key(|model| ModelUsage {
+                model: model.clone(),
                 ..ModelUsage::default()
             });
         entry.requests += row.requests;

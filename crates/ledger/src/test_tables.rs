@@ -20,12 +20,10 @@ pub const JANUARY_2026: i64 = 1_768_478_400_000;
 pub const FEBRUARY_2026: i64 = 1_771_156_800_000;
 
 pub fn subscription_costs() -> PlanTables {
-    PlanTables {
-        revisions: CostRevisions::from_yaml(SUBSCRIPTION_COSTS)
+    tables(
+        CostRevisions::from_yaml(SUBSCRIPTION_COSTS)
             .expect("the test subscription cost model parses"),
-        path: None,
-        source: "test".to_string(),
-    }
+    )
 }
 
 /// A test's own cost revisions as the tables a reader takes.
