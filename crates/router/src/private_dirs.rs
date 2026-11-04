@@ -79,7 +79,7 @@ mod tests {
         std::fs::create_dir(tmp.path().join("a")).unwrap();
         let mut created = Vec::new();
         create(&missing, &mut created).unwrap();
-        assert_eq!(created, [target.clone()]);
+        assert_eq!(created, std::slice::from_ref(&target));
         assert!(target.is_dir());
     }
 
