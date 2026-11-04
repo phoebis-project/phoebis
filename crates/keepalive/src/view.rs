@@ -187,8 +187,8 @@ impl Engine {
         let inner = self.lock();
         inner
             .sessions
-            .values()
-            .map(|s| {
+            .iter()
+            .map(|(key, s)| {
                 let main = s.agents.get(MAIN_AGENT).filter(|a| holds_recipe(a));
                 // An ended session keeps its tombstone for the lifecycle protocol, but its companion is
                 // gone: the engine refuses further events under that instance, and the lease sweep leaves an
@@ -207,7 +207,7 @@ impl Engine {
                     // the last report either way; a reporting companion has no such moment.
                     companion_since: (companion != CompanionState::Reporting)
                         .then_some(s.last_report_at),
-                    key_id: s.key_id.clone(),
+                    key_id: key.0.clone(),
                     key_generation: s.key_generation,
                     keepalive: KeepaliveSummary {
                         cause: main.map(|a| a.reason),
@@ -220,7 +220,7 @@ impl Engine {
                         .get(MAIN_AGENT)
                         .and_then(|a| a.last_presence_at)
                         .map(|at| (now - at).max(0) / 1_000),
-                    session_id: s.session_id.clone(),
+                    session_id: key.1.clone(),
                 }
             })
             .collect()
@@ -235,12 +235,12 @@ impl Engine {
         let inner = self.lock();
         inner
             .sessions
-            .values()
-            .flat_map(|s| {
+            .iter()
+            .flat_map(|(key, s)| {
                 s.agents
                     .values()
                     .filter(|a| a.last_real_at.is_some())
-                    .map(move |a| recipe_of(a, &s.key_id, &s.session_id, now))
+                    .map(move |a| recipe_of(a, &key.0, &key.1, now))
             })
             .collect()
     }

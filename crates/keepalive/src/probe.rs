@@ -990,9 +990,7 @@ mod tests {
         inner.sessions.insert(
             key.clone(),
             Session {
-                key_id: "k".into(),
                 key_generation: 0,
-                session_id: "s".into(),
                 instance: "i".into(),
                 sequence: 0,
                 lease: i64::MAX,

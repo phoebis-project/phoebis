@@ -344,7 +344,12 @@ fn agents_of(session: &Session) -> Vec<AckAgent> {
 
 /// `named` is the agent an agent event reports. A session-level event (a heartbeat, a `session_end`, a registration)
 /// names none and its answer carries main's generation, which the mod adopts for main.
-fn acknowledge(session: &Session, named: Option<&str>, agents: Option<Vec<AckAgent>>) -> Ack {
+fn acknowledge(
+    key: &SessionKey,
+    session: &Session,
+    named: Option<&str>,
+    agents: Option<Vec<AckAgent>>,
+) -> Ack {
     let agent = session.agents.get(named.unwrap_or(MAIN_AGENT));
     Ack {
         agent_id: named.and(agent).map(|a| a.id.clone()),
@@ -353,7 +358,7 @@ fn acknowledge(session: &Session, named: Option<&str>, agents: Option<Vec<AckAge
         lease_expires_ms: session.lease,
         request_generation: agent.map(|a| a.generation).unwrap_or(0),
         sequence: session.sequence,
-        session_id: session.session_id.clone(),
+        session_id: key.1.clone(),
     }
 }
 
@@ -458,7 +463,7 @@ impl Inner {
                 session.sequence = report.sequence;
                 session.last_report_at = now;
                 self.touch_session(&key);
-                return Ok(acknowledge(&self.sessions[&key], None, None));
+                return Ok(acknowledge(&key, &self.sessions[&key], None, None));
             }
             Reported::AgentStart {
                 request_generation, ..
@@ -605,6 +610,7 @@ impl Inner {
             }
         }
         Ok(acknowledge(
+            &key,
             &self.sessions[&key],
             report.event.agent_id(),
             None,
@@ -715,7 +721,7 @@ impl Inner {
                 }
                 self.touch_session(&key);
                 let session = &self.sessions[&key];
-                return Ok(acknowledge(session, None, Some(agents_of(session))));
+                return Ok(acknowledge(&key, session, None, Some(agents_of(session))));
             }
             if previous_instance_id != Some(session.instance.as_str()) {
                 // An ended or silent holder is named so the mod can take over from it, and a live one is not.
@@ -754,9 +760,7 @@ impl Inner {
         self.sessions.insert(
             key.clone(),
             Session {
-                key_id: key.0.clone(),
                 key_generation,
-                session_id: key.1.clone(),
                 instance: report.instance_id.clone(),
                 sequence: report.sequence,
                 lease: now + LEASE_MS,
@@ -773,6 +777,6 @@ impl Inner {
         self.touch_session(&key);
         self.set_reason(&key, MAIN_AGENT, Reason::AwaitingRequest);
         let session = &self.sessions[&key];
-        Ok(acknowledge(session, None, Some(agents_of(session))))
+        Ok(acknowledge(&key, session, None, Some(agents_of(session))))
     }
 }

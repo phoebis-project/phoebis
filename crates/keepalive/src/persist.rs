@@ -377,11 +377,11 @@ fn reason_of(word: &str) -> Option<Reason> {
 }
 
 impl PersistedSession {
-    fn of(session: &Session) -> PersistedSession {
+    fn of(key: &PersistKey, session: &Session) -> PersistedSession {
         PersistedSession {
-            key_id: session.key_id.clone(),
+            key_id: key.0.clone(),
             key_generation: session.key_generation,
-            session_id: session.session_id.clone(),
+            session_id: key.2.clone(),
             instance: session.instance.clone(),
             sequence: session.sequence,
             lease: session.lease,
@@ -399,9 +399,7 @@ impl PersistedSession {
     /// ceilings for one lease length from `now`, so the ticks before that registration discard no park as idle.
     fn restore(self, now: i64) -> Session {
         Session {
-            key_id: self.key_id,
             key_generation: self.key_generation,
-            session_id: self.session_id,
             instance: self.instance,
             sequence: self.sequence,
             lease: 0,
@@ -723,7 +721,7 @@ fn session_row(
         key_generation: key.1,
         session_id: key.2.clone(),
         record_version: RECORD_VERSION,
-        payload: serde_json::to_string(&PersistedSession::of(session))?,
+        payload: serde_json::to_string(&PersistedSession::of(key, session))?,
         updated_at: now,
     })
 }
@@ -1470,12 +1468,8 @@ impl Engine {
         let inner = self.lock();
         let mut sessions = Vec::new();
         let mut agents = Vec::new();
-        for session in inner.sessions.values() {
-            let row: PersistKey = (
-                session.key_id.clone(),
-                session.key_generation,
-                session.session_id.clone(),
-            );
+        for (key, session) in &inner.sessions {
+            let row: PersistKey = (key.0.clone(), session.key_generation, key.1.clone());
             sessions.push(session_row(&row, session, now).expect("a session payload serializes"));
             for agent in session.agents.values() {
                 agents.push(KeepaliveAgentRow {
