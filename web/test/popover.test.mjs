@@ -265,7 +265,7 @@ test('a filter chip draws its word and values spans inside the body under the fi
   assert.deepEqual([root.tagName, root.className, root.title], ['SPAN', 'chip chip--filter chip--removable', 'claude-opus-5, claude-sonnet-5']);
   const [body, x] = root.children;
   assert.deepEqual([body.tagName, body.className, body.getAttribute('type')], ['BUTTON', 'chip__body', 'button']);
-  assert.deepEqual([...body.children].map((el) => [el.className, el.textContent]), [['chip__word', 'model:'], ['chip__values mono', 'claude-opus-5, claude-sonnet-5']]);
+  assert.deepEqual([...body.children].map((el) => [el.className, el.textContent]), [['chip__word', 'model:'], ['chip__values ellipsis mono', 'claude-opus-5, claude-sonnet-5']]);
   assert.equal(body.textContent, 'model: claude-opus-5, claude-sonnet-5', "the body reads the chip's whole text");
   assert.deepEqual([x.tagName, x.getAttribute('aria-label'), x.querySelector('svg')?.getAttribute('width')], ['BUTTON', 'Remove model filter', '12']);
   click(body);
@@ -276,7 +276,7 @@ test('a filter chip draws its word and values spans inside the body under the fi
   assert.deepEqual([...flag.container.querySelector('.chip__body').children].map((el) => [el.className, el.textContent]), [['chip__word', 'held only']], 'a flag draws its word alone');
   act(() => roots.pop().unmount());
   const kinds = render(h(FilterChip, { chip: { field: 'kinds', label: 'kinds', mono: false, text: 'moved, held, placed +5', title: 'moved, held, placed, ...', values: 'moved, held, placed +5' }, onOpen() {}, onRemove() {} }));
-  assert.deepEqual([...kinds.container.querySelector('.chip__body').children].map((el) => [el.className, el.textContent]), [['chip__word', 'kinds:'], ['chip__values', 'moved, held, placed +5']], "the values come from the chip, whatever its text reads");
+  assert.deepEqual([...kinds.container.querySelector('.chip__body').children].map((el) => [el.className, el.textContent]), [['chip__word', 'kinds:'], ['chip__values ellipsis', 'moved, held, placed +5']], "the values come from the chip, whatever its text reads");
 });
 
 const chipOf = (word) => ({ field: word, label: word, mono: false, text: `${word}: x`, title: 'x', values: 'x' });
