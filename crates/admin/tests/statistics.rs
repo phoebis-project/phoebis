@@ -2171,7 +2171,7 @@ async fn the_request_log_reads_a_key_selector_by_lifetime() {
 }
 
 #[tokio::test]
-async fn the_dashboard_reads_the_last_day_and_the_live_pins_and_the_account_list_the_newest_sample() {
+async fn the_dashboard_reads_the_day_and_the_pins_and_the_account_list_the_newest_sample() {
     let parts = common::admin_parts_full().await;
     let now = common::NOW;
     for i in 0..30 {
