@@ -158,78 +158,61 @@ pub struct StorageConfig {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct UsageConfig {
     /// How many accounts' usage and profile fetches run at once.
-    #[serde(default = "default_refresh_concurrency")]
     pub refresh_concurrency: usize,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct RoutingConfig {
     /// How often every enabled account's model listing is read again, 60 to 604800.
-    #[serde(default = "default_catalog_refresh")]
     pub catalog_refresh_seconds: u64,
     /// How long an account is cooled when a rate limit's rejection names neither a reset nor a `retry-after` (for an
     /// `api_key` account, when it names no `retry-after`), and how long overage evidence that names no reset stands, 1
     /// to 3600.
-    #[serde(default = "default_cooldown_fallback")]
     pub cooldown_fallback_seconds: u64,
     /// How long an account is skipped for a model it answered 404 for.
-    #[serde(default = "default_model_rejection")]
     pub model_rejection_seconds: u64,
     /// How long the proxy listener waits at startup for the model listings and the usage snapshots, 1 to 60.
-    #[serde(default = "default_startup_fetch")]
     pub startup_fetch_seconds: u64,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct SessionsConfig {
-    #[serde(default = "default_session_expiry")]
     pub expire_after_seconds: u64,
     /// How long a session no companion reports stays listed past its newest pin use, its last request or its
     /// companion's end, and how long a line's pin stays listed on such a row past its last use. Bounded by
     /// `expire_after_seconds`.
-    #[serde(default = "default_non_companion_idle")]
     pub non_companion_idle_seconds: u64,
     /// Entries the in-process session memory holds at most; past it the least recently seen entry goes to
     /// disk and out of memory.
-    #[serde(default = "default_memory_cap")]
     pub memory_cap: usize,
     /// How long an entry may go unseen before the in-process memory drops it; the on-disk copy outlives it.
-    #[serde(default = "default_memory_idle")]
     pub memory_idle_seconds: u64,
     /// How long the on-disk copy of a session's memory is kept after its last request.
-    #[serde(default = "default_memory_retention")]
     pub memory_retention_days: u32,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct StatsConfig {
     /// A price table that overrides the shipped one; a missing file is not an error. Default `./api_prices.yaml`.
-    #[serde(default = "default_api_prices_path")]
     pub api_prices_path: Option<PathBuf>,
-    #[serde(default = "default_body_capture_max")]
     pub body_capture_max_hours: u32,
-    #[serde(default = "default_ledger_path")]
     pub ledger_path: PathBuf,
-    #[serde(default = "default_metrics_listen")]
     pub metrics_listen: SocketAddr,
     /// Days the requests with their attempts, the kept-warm marks, the events, the decisions, the quota and
     /// extra-usage samples, and the registry's settled refresh attempts and its change log are kept. 0 keeps them
     /// forever.
-    #[serde(default = "default_retention_days")]
     pub retention_days: u32,
     /// Days the hourly rollups and the account rollups are kept. 0 keeps them forever, and otherwise it is at least
     /// `retention_days`.
-    #[serde(default = "default_rollup_retention_days")]
     pub rollup_retention_days: u32,
     /// A subscription cost model that overrides the shipped one; a missing file is not an error. Default
     /// `./subscription_costs.yaml`.
-    #[serde(default = "default_subscription_costs_path")]
     pub subscription_costs_path: Option<PathBuf>,
 }
 
@@ -333,10 +316,10 @@ pub fn load_unresolved(path: &Path) -> Result<Config, ConfigError> {
 impl Default for RoutingConfig {
     fn default() -> Self {
         RoutingConfig {
-            catalog_refresh_seconds: default_catalog_refresh(),
-            cooldown_fallback_seconds: default_cooldown_fallback(),
-            model_rejection_seconds: default_model_rejection(),
-            startup_fetch_seconds: default_startup_fetch(),
+            catalog_refresh_seconds: 21_600,
+            cooldown_fallback_seconds: 60,
+            model_rejection_seconds: 3_600,
+            startup_fetch_seconds: 30,
         }
     }
 }
@@ -344,25 +327,26 @@ impl Default for RoutingConfig {
 impl Default for SessionsConfig {
     fn default() -> Self {
         SessionsConfig {
-            expire_after_seconds: default_session_expiry(),
-            non_companion_idle_seconds: default_non_companion_idle(),
-            memory_cap: default_memory_cap(),
-            memory_idle_seconds: default_memory_idle(),
-            memory_retention_days: default_memory_retention(),
+            expire_after_seconds: 86_400,
+            non_companion_idle_seconds: 3_600,
+            memory_cap: phoebis_relay::MEMORY_CAP,
+            memory_idle_seconds: (phoebis_relay::MEMORY_IDLE_MS / 1_000) as u64,
+            memory_retention_days: 30,
         }
     }
 }
 
 impl Default for StatsConfig {
     fn default() -> Self {
+        let ledger = phoebis_ledger::LedgerConfig::default();
         StatsConfig {
-            api_prices_path: default_api_prices_path(),
-            body_capture_max_hours: default_body_capture_max(),
-            ledger_path: default_ledger_path(),
-            metrics_listen: default_metrics_listen(),
-            retention_days: default_retention_days(),
-            rollup_retention_days: default_rollup_retention_days(),
-            subscription_costs_path: default_subscription_costs_path(),
+            api_prices_path: Some("./api_prices.yaml".into()),
+            body_capture_max_hours: 72,
+            ledger_path: "./data/ledger.sqlite".into(),
+            metrics_listen: ([127, 0, 0, 1], 9464).into(),
+            retention_days: ledger.retention_days,
+            rollup_retention_days: ledger.rollup_retention_days,
+            subscription_costs_path: Some("./subscription_costs.yaml".into()),
         }
     }
 }
@@ -370,7 +354,7 @@ impl Default for StatsConfig {
 impl Default for UsageConfig {
     fn default() -> UsageConfig {
         UsageConfig {
-            refresh_concurrency: default_refresh_concurrency(),
+            refresh_concurrency: 2,
         }
     }
 }
@@ -581,29 +565,13 @@ pub fn from_env(name: &str) -> Result<Secret, ConfigError> {
     Ok(Secret::new(&value))
 }
 
-fn default_api_prices_path() -> Option<PathBuf> {
-    Some("./api_prices.yaml".into())
-}
-
 /// Room for 512 one-MiB bodies at once, or sixteen at the per-body bound: a household whose keys carry agent tools
 /// that fan out.
 fn default_body_budget_bytes() -> u64 {
     512 << 20
 }
 
-fn default_body_capture_max() -> u32 {
-    72
-}
-
 fn default_body_read_seconds() -> u64 {
-    60
-}
-
-fn default_catalog_refresh() -> u64 {
-    21_600
-}
-
-fn default_cooldown_fallback() -> u64 {
     60
 }
 
@@ -611,49 +579,9 @@ fn default_key_body_reads() -> u32 {
     128
 }
 
-fn default_ledger_path() -> PathBuf {
-    "./data/ledger.sqlite".into()
-}
-
 /// The Messages API's own request limit, so the router never refuses a body the upstream would accept.
 fn default_max_request_bytes() -> usize {
     32 << 20
-}
-
-fn default_metrics_listen() -> SocketAddr {
-    ([127, 0, 0, 1], 9464).into()
-}
-
-fn default_model_rejection() -> u64 {
-    3_600
-}
-
-fn default_refresh_concurrency() -> usize {
-    2
-}
-
-fn default_retention_days() -> u32 {
-    phoebis_ledger::LedgerConfig::default().retention_days
-}
-
-fn default_rollup_retention_days() -> u32 {
-    phoebis_ledger::LedgerConfig::default().rollup_retention_days
-}
-
-fn default_session_expiry() -> u64 {
-    86_400
-}
-
-fn default_non_companion_idle() -> u64 {
-    3_600
-}
-
-fn default_startup_fetch() -> u64 {
-    30
-}
-
-fn default_subscription_costs_path() -> Option<PathBuf> {
-    Some("./subscription_costs.yaml".into())
 }
 
 /// `proxy.upstream_gzip`'s word as the relay's setting, `None` for a word the load refuses. The one list of the words,
@@ -669,18 +597,6 @@ pub fn upstream_gzip(word: &str) -> Option<phoebis_relay::UpstreamGzip> {
 
 fn default_upstream_gzip() -> String {
     "auto".into()
-}
-
-fn default_memory_cap() -> usize {
-    phoebis_relay::MEMORY_CAP
-}
-
-fn default_memory_idle() -> u64 {
-    (phoebis_relay::MEMORY_IDLE_MS / 1_000) as u64
-}
-
-fn default_memory_retention() -> u32 {
-    30
 }
 
 #[cfg(test)]
