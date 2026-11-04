@@ -1206,7 +1206,9 @@ async fn an_hour_with_an_unweighted_plan_row() -> (common::Full, String) {
             .ledger
             .record(record_at(id, now - ago * HOUR, model, "s1", generation));
     }
-    landed(&parts, &["early", "priced", "unweighted"]).await;
+    for id in ["early", "priced", "unweighted"] {
+        common::landed(&parts, id).await;
+    }
     (parts, cookie)
 }
 
@@ -1396,16 +1398,14 @@ async fn the_breakdown_counts_the_plan_served_credits_and_probes_and_nulls_the_p
         "direct",
         AccountKind::ApiKey,
     ));
-    landed(
-        &parts,
-        &[
-            "plain",
-            "probe-null-weight",
-            "probe-unweighted",
-            "probe-billed",
-        ],
-    )
-    .await;
+    for id in [
+        "plain",
+        "probe-null-weight",
+        "probe-unweighted",
+        "probe-billed",
+    ] {
+        common::landed(&parts, id).await;
+    }
     let body = json(
         get(
             &parts.app,
@@ -1692,7 +1692,7 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
     let burn_url = "/admin/analytics/burn?range=24h&group_by=account";
     // No tier on file yet: the upstream is a subscription whose window no table sizes, and its row records none.
     parts.ledger.record(opus("burn-0", now - 2 * HOUR));
-    landed(&parts, &["burn-0"]).await;
+    common::landed(&parts, "burn-0").await;
     let tierless = business(
         &json(get(&parts.app, burn_url, Some(&cookie)).await).await,
         now - 2 * HOUR,
@@ -1709,7 +1709,9 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
     parts
         .ledger
         .record(million("burn-fable", now - 3 * HOUR, "claude-fable-5-1"));
-    landed(&parts, &["burn-1", "burn-fable"]).await;
+    for id in ["burn-1", "burn-fable"] {
+        common::landed(&parts, id).await;
+    }
     let burn = json(get(&parts.app, burn_url, Some(&cookie)).await).await;
     let earlier = business(&burn, now - 2 * HOUR);
     assert!(
@@ -3092,7 +3094,7 @@ async fn a_usage_based_seats_burn_group_charts_in_dollars() {
         "claude-opus-5-5",
         "s1",
     ));
-    landed(&parts, &["burn-seat"]).await;
+    common::landed(&parts, "burn-seat").await;
     let burn = json(
         get(
             &parts.app,
@@ -3114,16 +3116,6 @@ async fn a_usage_based_seats_burn_group_charts_in_dollars() {
         std::collections::BTreeSet::from(["usd"]),
         "the seat's group charts in dollars: {burn}"
     );
-}
-
-/// Waits until every named request row has landed, so a read that follows sees all of their rollups.
-async fn landed(parts: &common::Full, ids: &[&str]) {
-    for id in ids {
-        fake_upstream::wait_for_async(Duration::from_secs(5), || async {
-            parts.db.request(id).await.unwrap()
-        })
-        .await;
-    }
 }
 
 /// A cached Sonnet 5.5 request and a probe on `business`, and a `direct` request, an hour ago.
@@ -3218,7 +3210,9 @@ async fn the_breakdown_answers_shares_for_an_oauth_group_under_the_account_group
     for row in share_rows() {
         parts.ledger.record(row);
     }
-    landed(&parts, &["share-cached", "share-probe", "share-direct"]).await;
+    for id in ["share-cached", "share-probe", "share-direct"] {
+        common::landed(&parts, id).await;
+    }
     let url = "/admin/analytics/breakdown?range=24h&group_by=account";
     let body = json(get(&parts.app, url, Some(&cookie)).await).await;
     let business = row_of(&body, "business");
@@ -3338,7 +3332,9 @@ async fn the_series_points_carry_the_same_shares_per_bucket() {
     for row in share_rows() {
         parts.ledger.record(row);
     }
-    landed(&parts, &["share-cached", "share-probe", "share-direct"]).await;
+    for id in ["share-cached", "share-probe", "share-direct"] {
+        common::landed(&parts, id).await;
+    }
     let breakdown = json(
         get(
             &parts.app,
@@ -3440,17 +3436,15 @@ async fn the_funding_partition_holds_when_an_api_key_account_is_deleted_and_its_
     for row in funded_rows() {
         parts.ledger.record(row);
     }
-    landed(
-        &parts,
-        &[
-            "fund-overage",
-            "fund-fast",
-            "fund-direct",
-            "fund-plan",
-            "fund-gone",
-        ],
-    )
-    .await;
+    for id in [
+        "fund-overage",
+        "fund-fast",
+        "fund-direct",
+        "fund-plan",
+        "fund-gone",
+    ] {
+        common::landed(&parts, id).await;
+    }
     let read = |funding: &str| {
         let url =
             format!("/admin/analytics/breakdown?range=24h&group_by=account&funding={funding}");
@@ -3751,7 +3745,9 @@ async fn the_burn_key_grouping_names_the_live_holder_by_its_id_and_an_earlier_on
         "s2",
         earlier,
     ));
-    landed(&parts, &["key-live", "key-earlier"]).await;
+    for id in ["key-live", "key-earlier"] {
+        common::landed(&parts, id).await;
+    }
     let burn = json(
         get(
             &parts.app,
@@ -3822,7 +3818,9 @@ async fn the_breakdown_and_the_series_label_an_earlier_key_deleted_and_the_empty
         attempts.clear();
     }
     parts.ledger.record(rejected);
-    landed(&parts, &["label-earlier", "label-rejected"]).await;
+    for id in ["label-earlier", "label-rejected"] {
+        common::landed(&parts, id).await;
+    }
     let earlier_key = format!("desktop@{earlier}");
     let group_in = |series: &serde_json::Value, key: &str| -> serde_json::Value {
         series["points"]
@@ -3917,7 +3915,9 @@ async fn the_burn_files_an_agent_under_the_user_agent_group_its_pattern_names() 
         .ledger
         .record(agent("agent-cli", "claude-cli/2.1.300 (external, cli)"));
     parts.ledger.record(agent("agent-curl", "curl/8.5.0"));
-    landed(&parts, &["agent-cli", "agent-curl"]).await;
+    for id in ["agent-cli", "agent-curl"] {
+        common::landed(&parts, id).await;
+    }
     let response = get(
         &parts.app,
         "/admin/analytics/burn?range=24h&group_by=user_agent&user_agent_groups=claude-cli%2F*",
