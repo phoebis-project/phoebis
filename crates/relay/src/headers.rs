@@ -238,6 +238,13 @@ pub(crate) fn credential_header(kind: AccountKind, secret: &Secret) -> (String, 
     }
 }
 
+/// Compared in place, so a header read per response allocates no lowercase copy.
+pub(crate) fn starts_with_ignoring_case(text: &str, prefix: &str) -> bool {
+    text.as_bytes()
+        .get(..prefix.len())
+        .is_some_and(|start| start.eq_ignore_ascii_case(prefix.as_bytes()))
+}
+
 /// Splits `value`, drops every `drop` entry, applies the OAuth claim (inserted for an OAuth account and
 /// stripped for an API key), then appends each `inject` item whose `wire_name` the list still lacks. Returns
 /// the merged line and exactly the items it appended, so a client-sent beta of the same name is never reported

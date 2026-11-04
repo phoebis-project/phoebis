@@ -70,7 +70,7 @@ use crate::errors::{
 };
 use crate::exhaustion::{exhaustion_code, exhaustion_response, pool_moved_response};
 use crate::facts::{AttributionLine, BodyFacts, ClientHints};
-use crate::headers::{outbound_headers, CredentialKind};
+use crate::headers::{outbound_headers, starts_with_ignoring_case, CredentialKind};
 use crate::hold::{hold, Commit, Held, Inspect, INSPECT_BUFFER};
 use crate::identity::{
     client_of, climb, contract_gap, identify, restores_prev_req, PendingReports, RequestIdentity,
@@ -240,21 +240,6 @@ pub enum ProbeObstacle {
     SubscriptionEnded,
 }
 
-impl ProbeObstacle {
-    /// The obstacle's word, as the relay's log lines name it.
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            ProbeObstacle::Attempted => "attempted",
-            ProbeObstacle::Budget => "budget",
-            ProbeObstacle::BudgetUnknown => "budget_unknown",
-            ProbeObstacle::Operator => "operator",
-            ProbeObstacle::PoolMoved => "pool_moved",
-            ProbeObstacle::ReauthRequired => "reauth_required",
-            ProbeObstacle::SubscriptionEnded => "subscription_ended",
-        }
-    }
-}
-
 impl From<PinnedObstacle> for ProbeObstacle {
     fn from(obstacle: PinnedObstacle) -> ProbeObstacle {
         match obstacle {
@@ -407,6 +392,10 @@ impl Relay {
 
     pub(crate) fn router(&self) -> &RouterHandle {
         &self.router
+    }
+
+    pub(crate) fn shutdown_mark(&self) -> Option<ShutdownMark> {
+        self.shutdown_mark.clone()
     }
 
     /// The live requests the head map holds an entry for, so a test can tell that none outlives its request.
@@ -1807,6 +1796,18 @@ impl Relay {
             ),
             Err(error) => (false, Err(error)),
         };
+        let drifted = drifted.map(|hash| {
+            hash.or_else(|| {
+                let context = restore.as_ref().filter(|_| stamped)?;
+                crate::body::version_drift(
+                    facts.cc_version.as_deref(),
+                    VersionCheck {
+                        client_version: &context.cli_version,
+                        prompt_units: &context.prompt_units,
+                    },
+                )
+            })
+        });
         let stamp = match drifted {
             Ok(None) => None,
             Ok(Some(kind)) => Some(self.drift_refusal(
@@ -1831,35 +1832,6 @@ impl Relay {
                     client_version.as_deref(),
                 )
                 .await;
-        }
-        if let Some(context) = &restore {
-            let check = VersionCheck {
-                client_version: &context.cli_version,
-                prompt_units: &context.prompt_units,
-            };
-            if stamped {
-                if let Some(kind) = crate::body::version_drift(facts.cc_version.as_deref(), check) {
-                    let refusal = self.drift_refusal(
-                        kind,
-                        facts.resumed,
-                        &parts.headers,
-                        &trace,
-                        &key,
-                        &identity,
-                        client_version.as_deref(),
-                    );
-                    return self
-                        .refused(
-                            &trace,
-                            0,
-                            refusal,
-                            Some(&key),
-                            Some(&identity),
-                            client_version.as_deref(),
-                        )
-                        .await;
-                }
-            }
         }
         // The pool's switch alone; a request with no pool reads off. A `count_tokens` request never gets it, since
         // its public schema has no slot for the beta or the member to land in.
@@ -2348,7 +2320,7 @@ impl Relay {
                 key = %admitted.key.id,
                 admitted_pool = ?admitted.pool_id,
                 selected_pool = %selection.pool_id,
-                obstacle = ProbeObstacle::PoolMoved.as_str(),
+                obstacle = "pool_moved",
                 "the key moved between pools after admission, so the request is refused"
             );
             let mut outcome = admitted.outcome(
@@ -5091,13 +5063,6 @@ fn decode_all(decoder: &mut dyn Decoder, raw: &[u8]) -> Result<Vec<u8>, Transpor
 fn is_event_stream(head: &ResponseHead) -> bool {
     head.get("content-type")
         .is_some_and(|v| starts_with_ignoring_case(v, "text/event-stream"))
-}
-
-/// Compared in place, so a header read per response allocates no lowercase copy.
-fn starts_with_ignoring_case(text: &str, prefix: &str) -> bool {
-    text.as_bytes()
-        .get(..prefix.len())
-        .is_some_and(|start| start.eq_ignore_ascii_case(prefix.as_bytes()))
 }
 
 /// Every coded body is decoded for the forward and `content-encoding` dropped, whatever the caller accepts, so the

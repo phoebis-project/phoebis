@@ -48,7 +48,6 @@ async fn a_connection_that_sends_no_head_is_closed_at_the_header_read_timeout() 
         drain_timeout: Duration::from_secs(30),
         header_read_timeout: Duration::from_millis(300),
         max_connections: 8,
-        shutdown_mark: None,
     };
     let (addr, up, _stop) = listening(limits, None).await;
     let mut idle = tokio::net::TcpStream::connect(addr).await.unwrap();
@@ -70,7 +69,6 @@ async fn a_tls_listener_drops_a_silent_peer_at_the_bound_and_serves_a_finished_h
         drain_timeout: Duration::from_secs(30),
         header_read_timeout: Duration::from_millis(200),
         max_connections: 1,
-        shutdown_mark: None,
     };
     let acceptor = LiveAcceptor::new(fake_upstream::acceptor_for(&pair));
     let (addr, up, _stop) = listening(limits, Some(Arc::new(acceptor))).await;
@@ -124,7 +122,6 @@ async fn a_stop_ends_a_silent_handshake_well_before_its_bound() {
         drain_timeout: Duration::from_secs(30),
         header_read_timeout: Duration::from_secs(30),
         max_connections: 8,
-        shutdown_mark: None,
     };
     let acceptor = LiveAcceptor::new(fake_upstream::acceptor_for(&pair));
     let serving = tokio::spawn(phoebis_relay::serve(
@@ -165,7 +162,6 @@ async fn the_connection_cap_holds_the_next_accept_until_a_slot_frees() {
         drain_timeout: Duration::from_secs(30),
         header_read_timeout: Duration::from_millis(500),
         max_connections: 2,
-        shutdown_mark: None,
     };
     let (addr, up, _stop) = listening(limits, None).await;
     let _first = tokio::net::TcpStream::connect(addr).await.unwrap();
@@ -213,7 +209,6 @@ async fn a_request_still_in_flight_at_the_drain_deadline_is_ended_before_serve_r
         header_read_timeout: Duration::from_secs(30),
         max_connections: 8,
         drain_timeout: Duration::from_millis(300),
-        shutdown_mark: None,
     };
     let serving = tokio::spawn(phoebis_relay::serve(
         listener,
@@ -300,7 +295,6 @@ async fn a_body_task_cut_at_the_deadline_publishes_its_completion_before_the_dra
         header_read_timeout: Duration::from_secs(30),
         max_connections: 8,
         drain_timeout: Duration::from_millis(300),
-        shutdown_mark: None,
     };
     let serving = tokio::spawn(phoebis_relay::serve(
         listener,
@@ -391,7 +385,6 @@ async fn serving_with_mark(
             drain_timeout,
             header_read_timeout: Duration::from_secs(30),
             max_connections: 8,
-            shutdown_mark: Some(mark.clone()),
         },
         None,
     ));

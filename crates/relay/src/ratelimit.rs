@@ -9,7 +9,9 @@ use phoebis_routing::{
 };
 pub use phoebis_routing::{FAST_INPUT, FAST_OUTPUT};
 use phoebis_store::AccountKind;
-use phoebis_transport::response::ResponseHead;
+use phoebis_transport::response::{header, ResponseHead};
+
+use crate::headers::starts_with_ignoring_case;
 
 /// A header name of the per-bucket family, spelled whole at compile time so a read builds no string.
 macro_rules! bucket {
@@ -103,19 +105,13 @@ impl UnifiedHeaders {
     /// The unified headers of a head given as its header list, for a reader that holds no transport head (the
     /// keepalive reads the bus's copy of it).
     pub fn parse_list(headers: &[(String, String)]) -> Option<UnifiedHeaders> {
-        if !headers.iter().any(|(n, _)| {
-            n.as_bytes()
-                .get(..PREFIX.len())
-                .is_some_and(|p| p.eq_ignore_ascii_case(PREFIX.as_bytes()))
-        }) {
+        if !headers
+            .iter()
+            .any(|(n, _)| starts_with_ignoring_case(n, PREFIX))
+        {
             return None;
         }
-        let text = |name: &str| {
-            headers
-                .iter()
-                .find(|(n, _)| n.eq_ignore_ascii_case(name))
-                .map(|(_, v)| v.trim())
-        };
+        let text = |name: &str| header(headers, name).map(str::trim);
         let status = |name: &str| text(name).map(WindowStatus::parse);
         let secs = |name: &str| text(name).and_then(epoch_millis);
         let float = |name: &str| {
@@ -304,14 +300,7 @@ pub fn head_sample(
                     if let Some(utilization) = window.utilization {
                         sample.windows.insert(
                             name.to_string(),
-                            WindowReading {
-                                utilization,
-                                reset: window.reset,
-                                observed_at,
-                                source: WindowSource::Head,
-                                plan: None,
-                                tier: None,
-                            },
+                            head_reading(utilization, window.reset, observed_at),
                         );
                     }
                 }
@@ -349,9 +338,14 @@ pub fn head_sample(
 /// A bucket's share used. `limit` is never 0 here (the family parse drops it), but `remaining` past `limit` is
 /// still a reading the provider could send; clamped rather than read negative.
 fn bucket_reading(bucket: Bucket, observed_at: i64) -> WindowReading {
+    let share = (1.0 - (bucket.remaining as f64 / bucket.limit as f64)).clamp(0.0, 1.0);
+    head_reading(share, bucket.reset, observed_at)
+}
+
+fn head_reading(utilization: f64, reset: Option<i64>, observed_at: i64) -> WindowReading {
     WindowReading {
-        utilization: (1.0 - (bucket.remaining as f64 / bucket.limit as f64)).clamp(0.0, 1.0),
-        reset: bucket.reset,
+        utilization,
+        reset,
         observed_at,
         source: WindowSource::Head,
         plan: None,

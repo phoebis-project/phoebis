@@ -508,11 +508,10 @@ pub async fn run_until(
     };
     let (stop, stop_rx) = tokio::sync::watch::channel(false);
     let proxy_stop = stop_rx.clone();
-    let limits = |max_connections, shutdown_mark| ListenLimits {
+    let limits = |max_connections| ListenLimits {
         drain_timeout,
         header_read_timeout: HEADER_READ_TIMEOUT,
         max_connections,
-        shutdown_mark,
     };
     // The relayed surface wraps every connection to preserve the caller's original header spelling. The admin and
     // metrics listeners serve a plain tower service on the same accept loop, under the same header read timeout and
@@ -527,7 +526,7 @@ pub async fn run_until(
             pricing.clone(),
         )),
         proxy_stop,
-        limits(PROXY_MAX_CONNECTIONS, Some(mark.clone())),
+        limits(PROXY_MAX_CONNECTIONS),
         proxy_acceptor,
     ));
     let mut admin_server = tokio::spawn(listen::serve(
@@ -535,7 +534,7 @@ pub async fn run_until(
         admin_listener,
         admin_app,
         stop_rx.clone(),
-        limits(ADMIN_MAX_CONNECTIONS, None),
+        limits(ADMIN_MAX_CONNECTIONS),
         admin_acceptor,
     ));
     let mut metrics_server = tokio::spawn(listen::serve(
@@ -553,7 +552,7 @@ pub async fn run_until(
             Some(ledger.clone()),
         ),
         stop_rx,
-        limits(METRICS_MAX_CONNECTIONS, None),
+        limits(METRICS_MAX_CONNECTIONS),
         None,
     ));
 

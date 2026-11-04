@@ -163,6 +163,12 @@ struct Latch {
     items: BTreeSet<Injected>,
 }
 
+impl Latch {
+    fn is_for(&self, account: &AccountRow) -> bool {
+        self.incarnation == account.incarnation && self.revision == account.revision
+    }
+}
+
 struct Inner {
     entries: HashMap<MemoryKey, Entry>,
     latches: HashMap<String, Latch>,
@@ -277,9 +283,7 @@ impl SessionMemory {
         }
     }
 
-    /// Reads the key through `restore` first: the key may have been evicted and its record saved while the
-    /// request was upstream, and a write that built a fresh entry, with no prompt id and none of the session's
-    /// other accounts, would have the next flush overwrite the saved record with it.
+    /// Reads a missed key through `restore` first, as `write_account` says.
     pub async fn record_request_id(
         &self,
         key: &MemoryKey,
@@ -287,15 +291,13 @@ impl SessionMemory {
         request_id: &str,
         now: i64,
     ) {
-        self.restore(key, now).await;
-        let mut inner = self.inner.lock().unwrap();
-        self.purge_held(&mut inner, now);
-        let account = self.account_entry(&mut inner, key, account_id, now);
-        account.request_id = Some(request_id.to_string());
-        self.mark_dirty(&mut inner, key);
+        self.write_account(key, account_id, now, |account| {
+            account.request_id = Some(request_id.to_string());
+        })
+        .await;
     }
 
-    /// Reads the key through `restore` first, as `record_request_id` does.
+    /// Reads a missed key through `restore` first, as `write_account` says.
     pub async fn record_message_id(
         &self,
         key: &MemoryKey,
@@ -304,13 +306,38 @@ impl SessionMemory {
         message_id: &str,
         now: i64,
     ) {
+        self.write_account(key, account_id, now, |account| {
+            account
+                .message_ids
+                .insert(canonical_model.to_string(), message_id.to_string());
+        })
+        .await;
+    }
+
+    /// A resident key is written under the lock that found it. A miss reads the key through `restore` first: the
+    /// key may have been evicted and its record saved while the request was upstream, and a write that built a
+    /// fresh entry, with no prompt id and none of the session's other accounts, would have the next flush
+    /// overwrite the saved record with it.
+    async fn write_account(
+        &self,
+        key: &MemoryKey,
+        account_id: &str,
+        now: i64,
+        write: impl FnOnce(&mut AccountMemory),
+    ) {
+        {
+            let mut inner = self.inner.lock().unwrap();
+            self.purge_held(&mut inner, now);
+            if inner.entries.contains_key(key) {
+                write(self.account_entry(&mut inner, key, account_id, now));
+                self.mark_dirty(&mut inner, key);
+                return;
+            }
+        }
         self.restore(key, now).await;
         let mut inner = self.inner.lock().unwrap();
         self.purge_held(&mut inner, now);
-        let account = self.account_entry(&mut inner, key, account_id, now);
-        account
-            .message_ids
-            .insert(canonical_model.to_string(), message_id.to_string());
+        write(self.account_entry(&mut inner, key, account_id, now));
         self.mark_dirty(&mut inner, key);
     }
 
@@ -330,7 +357,7 @@ impl SessionMemory {
             .latches
             .entry(account.id.clone())
             .or_insert_with(fresh);
-        if latch.incarnation != account.incarnation || latch.revision != account.revision {
+        if !latch.is_for(account) {
             *latch = fresh();
         }
         latch.items.insert(item);
@@ -344,9 +371,7 @@ impl SessionMemory {
         inner
             .latches
             .get(&account.id)
-            .filter(|latch| {
-                latch.incarnation == account.incarnation && latch.revision == account.revision
-            })
+            .filter(|latch| latch.is_for(account))
             .map(|latch| latch.items.clone())
             .unwrap_or_default()
     }
@@ -354,7 +379,20 @@ impl SessionMemory {
     /// Drops entries idle past the configured bound. Every write runs it on the lock it already holds, at most once
     /// a minute.
     fn purge_held(&self, inner: &mut Inner, now: i64) {
-        self.purge_locked(inner, now);
+        if now - inner.last_purge >= PURGE_INTERVAL_MS {
+            inner.last_purge = now;
+            let idle: Vec<MemoryKey> = inner
+                .entries
+                .iter()
+                .filter(|(k, e)| {
+                    now - e.last_seen >= self.idle_ms && !inner.loading.contains_key(*k)
+                })
+                .map(|(k, _)| k.clone())
+                .collect();
+            for key in idle {
+                self.retire(inner, key);
+            }
+        }
         self.ask_for_a_flush(inner);
     }
 
@@ -369,8 +407,7 @@ impl SessionMemory {
         if self.store.is_none() {
             return;
         }
-        inner.sequence += 1;
-        inner.dirty.insert(key.clone(), inner.sequence);
+        file_dirty(inner, key);
         self.ask_for_a_flush(inner);
     }
 
@@ -656,6 +693,11 @@ fn expired(last_seen: i64, now: i64, retention_ms: i64) -> bool {
     last_seen < now.saturating_sub(retention_ms)
 }
 
+fn file_dirty(inner: &mut Inner, key: &MemoryKey) {
+    inner.sequence += 1;
+    inner.dirty.insert(key.clone(), inner.sequence);
+}
+
 impl SessionMemory {
     /// The key's entry in the map, revived from the overlay or inserted fresh when absent, its `last_seen` raised
     /// to `now`. A revived entry keeps the prompt id its record carried. The revival runs ahead of the eviction,
@@ -664,12 +706,19 @@ impl SessionMemory {
     fn resident_entry<'a>(&self, inner: &'a mut Inner, key: &MemoryKey, now: i64) -> &'a mut Entry {
         if !inner.entries.contains_key(key) && !self.revive_pending(inner, key, now) {
             self.evict_if_full(inner);
+            inner.entries.insert(
+                key.clone(),
+                Entry {
+                    last_seen: now,
+                    prompt_id: None,
+                    accounts: HashMap::new(),
+                },
+            );
         }
-        let entry = inner.entries.entry(key.clone()).or_insert_with(|| Entry {
-            last_seen: now,
-            prompt_id: None,
-            accounts: HashMap::new(),
-        });
+        let entry = inner
+            .entries
+            .get_mut(key)
+            .expect("resident, revived or inserted above");
         // A hook stamped at the head can land after a later write. The newer time stands.
         entry.last_seen = entry.last_seen.max(now);
         entry
@@ -683,13 +732,19 @@ impl SessionMemory {
         account_id: &str,
         now: i64,
     ) -> &'a mut AccountMemory {
-        self.resident_entry(inner, key, now)
-            .accounts
-            .entry(account_id.to_string())
-            .or_insert_with(|| AccountMemory {
-                request_id: None,
-                message_ids: HashMap::new(),
-            })
+        let accounts = &mut self.resident_entry(inner, key, now).accounts;
+        if !accounts.contains_key(account_id) {
+            accounts.insert(
+                account_id.to_string(),
+                AccountMemory {
+                    request_id: None,
+                    message_ids: HashMap::new(),
+                },
+            );
+        }
+        accounts
+            .get_mut(account_id)
+            .expect("present or inserted above")
     }
 
     /// An overlay record for `key` back into the map, dirty under a fresh sequence so the next flush writes it
@@ -713,8 +768,7 @@ impl SessionMemory {
         inner.pending.remove(key);
         self.evict_if_full(inner);
         inner.entries.insert(key.clone(), entry);
-        inner.sequence += 1;
-        inner.dirty.insert(key.clone(), inner.sequence);
+        file_dirty(inner, key);
         true
     }
 
@@ -745,22 +799,6 @@ impl SessionMemory {
             return;
         };
         self.retire(inner, oldest);
-    }
-
-    fn purge_locked(&self, inner: &mut Inner, now: i64) {
-        if now - inner.last_purge < PURGE_INTERVAL_MS {
-            return;
-        }
-        inner.last_purge = now;
-        let idle: Vec<MemoryKey> = inner
-            .entries
-            .iter()
-            .filter(|(k, e)| now - e.last_seen >= self.idle_ms && !inner.loading.contains_key(*k))
-            .map(|(k, _)| k.clone())
-            .collect();
-        for key in idle {
-            self.retire(inner, key);
-        }
     }
 
     /// Takes a resident key out of the map. One with an unflushed change goes to the overlay under the sequence of

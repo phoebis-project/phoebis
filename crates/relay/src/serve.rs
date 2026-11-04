@@ -30,16 +30,12 @@ const ACCEPT_BACKOFF: Duration = Duration::from_millis(50);
 
 /// What bounds a connection before a request exists on it: the wait for its head, how many the listener holds
 /// at once, and how long a graceful shutdown waits before it cuts what is still running. The bounds are compiled
-/// in and the router names the values. The shutdown mark beside them bounds nothing, and the router hands it to
-/// the proxy listener alone.
+/// in and the router names the values.
 #[derive(Clone, Debug)]
 pub struct Limits {
     pub drain_timeout: Duration,
     pub header_read_timeout: Duration,
     pub max_connections: usize,
-    /// The relay's shutdown mark, set before the drain deadline's cut so the ends it causes book the router's own
-    /// shutdown. The admin and the metrics listeners serve no relayed stream, so their limits carry `None`.
-    pub shutdown_mark: Option<ShutdownMark>,
 }
 
 /// A TLS listener's acceptor, replaceable while the router runs. Each accepted connection takes the current one
@@ -108,6 +104,7 @@ pub async fn serve(
     limits: Limits,
     acceptor: Option<Arc<LiveAcceptor>>,
 ) -> std::io::Result<()> {
+    let shutdown_mark = relay.shutdown_mark();
     let app = router(relay).merge(extra);
     // HTTP/1 only. An h2c caller's head reaches the relay through hyper's own map, in hyper's own spelling,
     // which is the silently different outbound shape the pass-through exists to prevent; refusing the
@@ -126,6 +123,7 @@ pub async fn serve(
         listener,
         stop,
         limits,
+        shutdown_mark,
         acceptor,
         move |stream, watcher| {
             let queue = head_queue();
@@ -145,12 +143,15 @@ pub async fn serve(
 /// deadline. With `acceptor` set, every connection completes a TLS handshake under the header read timeout, on the
 /// acceptor current when it was accepted. `connect` then builds the connection's hyper connection inside its task
 /// and runs it under the watcher it is handed, so the stop asks every connection to finish what it holds. `name`
-/// labels the loop's log lines, since the proxy, admin and metrics listeners each run one.
+/// labels the loop's log lines, since the proxy, admin and metrics listeners each run one. `shutdown_mark` is the
+/// relay's own, set before the drain deadline's cut. The admin and the metrics listeners serve no relayed stream
+/// and pass `None`.
 pub async fn accept_loop<C, F, E>(
     name: &'static str,
     listener: TcpListener,
     mut stop: watch::Receiver<bool>,
     limits: Limits,
+    shutdown_mark: Option<ShutdownMark>,
     acceptor: Option<Arc<LiveAcceptor>>,
     connect: C,
 ) -> std::io::Result<()>
@@ -231,7 +232,7 @@ where
         // The router's own abort can come after this deadline, so this cut sets the mark too, ahead of the abort, and
         // every end it causes books the router's shutdown rather than a caller's leaving.
         if !tasks.is_empty() {
-            if let Some(mark) = &limits.shutdown_mark {
+            if let Some(mark) = &shutdown_mark {
                 mark.store(true, Ordering::SeqCst);
             }
         }

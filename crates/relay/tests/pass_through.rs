@@ -324,7 +324,6 @@ async fn listening(
             drain_timeout: Duration::from_secs(30),
             header_read_timeout: Duration::from_secs(30),
             max_connections: 64,
-            shutdown_mark: None,
         },
         acceptor,
     ));

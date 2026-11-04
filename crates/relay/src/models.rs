@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use axum::extract::{Path, Query, Request, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -107,9 +107,9 @@ async fn caller_listing(relay: &Relay, access: &Access) -> Vec<CatalogRow> {
 pub(crate) async fn list(
     State(relay): State<Arc<Relay>>,
     Query(query): Query<HashMap<String, String>>,
-    request: Request,
+    headers: HeaderMap,
 ) -> Response {
-    no_store(list_answer(&relay, &query, request.headers()).await)
+    no_store(list_answer(&relay, &query, &headers).await)
 }
 
 async fn list_answer(
@@ -133,24 +133,21 @@ async fn list_answer(
         query.get("after_id").map(String::as_str),
         query.get("before_id").map(String::as_str),
     );
-    (
-        StatusCode::OK,
-        Json(json!({
-            "data": paged.data.iter().map(row_json).collect::<Vec<_>>(),
-            "first_id": paged.first_id,
-            "last_id": paged.last_id,
-            "has_more": paged.has_more,
-        })),
-    )
-        .into_response()
+    Json(json!({
+        "data": paged.data.iter().map(row_json).collect::<Vec<_>>(),
+        "first_id": paged.first_id,
+        "last_id": paged.last_id,
+        "has_more": paged.has_more,
+    }))
+    .into_response()
 }
 
 pub(crate) async fn show(
     State(relay): State<Arc<Relay>>,
     Path(id): Path<String>,
-    request: Request,
+    headers: HeaderMap,
 ) -> Response {
-    no_store(show_answer(&relay, &id, request.headers()).await)
+    no_store(show_answer(&relay, &id, &headers).await)
 }
 
 async fn show_answer(relay: &Relay, id: &str, headers: &HeaderMap) -> Response {
@@ -161,7 +158,7 @@ async fn show_answer(relay: &Relay, id: &str, headers: &HeaderMap) -> Response {
     };
     let rows = caller_listing(relay, &access).await;
     match find(&rows, id) {
-        Some(row) => (StatusCode::OK, Json(row_json(row))).into_response(),
+        Some(row) => Json(row_json(row)).into_response(),
         None => anthropic_error(
             StatusCode::NOT_FOUND,
             "not_found_error",
