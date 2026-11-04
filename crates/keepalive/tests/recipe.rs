@@ -1,6 +1,7 @@
 //! The recipe builder's shape checks, the TTL evidence rules, and usage parsing; the Go recipe and usage suites.
 use phoebis_keepalive::{
-    make_recipe, request_ttl_ms, ProbeUsage, Recipe, FIVE_MINUTES_MS, MAX_USAGE_BYTES, ONE_HOUR_MS,
+    make_recipe, request_ttl_ms, ProbeUsage, Recipe, RecipeRefusal, FIVE_MINUTES_MS,
+    MAX_USAGE_BYTES, ONE_HOUR_MS,
 };
 use serde_json::{json, Value};
 
@@ -212,7 +213,8 @@ fn an_escaped_safeguards_spelling_is_not_retained() {
             "routing-alias",
             1 << 20
         )
-        .unwrap_err(),
+        .unwrap_err()
+        .as_str(),
         "invalid_request"
     );
     let twice = spliced.replacen(r#""stream":"#, r#""safeg\u0075ards":[],"stream":"#, 1);
@@ -223,7 +225,7 @@ fn an_escaped_safeguards_spelling_is_not_retained() {
             "routing-alias",
             1 << 20
         )
-        .unwrap_err(),
+        .unwrap_err().as_str(),
         "invalid_request",
         "a second spelling beside the one the cut finds, which the decoded duplicate-key walk refuses before the cut runs"
     );
@@ -244,7 +246,8 @@ fn a_member_the_replays_edits_cannot_reach_is_not_retained() {
         let body = raw.replacen(key, escaped, 1);
         assert!(serde_json::from_str::<Value>(&body).is_ok(), "{body}");
         assert_eq!(
-            make_recipe(&headers(), body.as_bytes(), "routing-alias", 1 << 20),
+            make_recipe(&headers(), body.as_bytes(), "routing-alias", 1 << 20)
+                .map_err(RecipeRefusal::as_str),
             Err("escaped_key"),
             "{escaped}"
         );
@@ -290,7 +293,7 @@ fn unsupported_shapes_are_named() {
         ),
     ] {
         let result = make_recipe(&headers(), &with(path, value), "routing-alias", 1 << 20);
-        assert_eq!(result.unwrap_err(), reason, "{path}");
+        assert_eq!(result.unwrap_err().as_str(), reason, "{path}");
     }
     assert!(
         make_recipe(
@@ -303,28 +306,40 @@ fn unsupported_shapes_are_named() {
         "an auto tool_choice is accepted"
     );
     assert_eq!(
-        make_recipe(&headers(), &vec![b'x'; 1_025], "m", 1_024).unwrap_err(),
+        make_recipe(&headers(), &vec![b'x'; 1_025], "m", 1_024)
+            .unwrap_err()
+            .as_str(),
         "request_too_large"
     );
     assert_eq!(
-        make_recipe(&headers(), b"{", "m", 1 << 20).unwrap_err(),
+        make_recipe(&headers(), b"{", "m", 1 << 20)
+            .unwrap_err()
+            .as_str(),
         "invalid_request"
     );
     assert_eq!(
-        make_recipe(&headers(), b"[]", "m", 1 << 20).unwrap_err(),
+        make_recipe(&headers(), b"[]", "m", 1 << 20)
+            .unwrap_err()
+            .as_str(),
         "invalid_request"
     );
     assert_eq!(
-        make_recipe(&headers(), BODY.as_bytes(), "", 1 << 20).unwrap_err(),
+        make_recipe(&headers(), BODY.as_bytes(), "", 1 << 20)
+            .unwrap_err()
+            .as_str(),
         "invalid_model"
     );
     assert_eq!(
-        make_recipe(&headers(), BODY.as_bytes(), "bad\u{7}model", 1 << 20).unwrap_err(),
+        make_recipe(&headers(), BODY.as_bytes(), "bad\u{7}model", 1 << 20)
+            .unwrap_err()
+            .as_str(),
         "invalid_model"
     );
     let long = vec![("anthropic-beta".to_string(), "x".repeat(8_193))];
     assert_eq!(
-        make_recipe(&long, BODY.as_bytes(), "routing-alias", 1 << 20).unwrap_err(),
+        make_recipe(&long, BODY.as_bytes(), "routing-alias", 1 << 20)
+            .unwrap_err()
+            .as_str(),
         "headers_too_large"
     );
     let many: Vec<(String, String)> = (0..3)
@@ -336,7 +351,9 @@ fn unsupported_shapes_are_named() {
         })
         .collect();
     assert_eq!(
-        make_recipe(&many, BODY.as_bytes(), "routing-alias", 1 << 20).unwrap_err(),
+        make_recipe(&many, BODY.as_bytes(), "routing-alias", 1 << 20)
+            .unwrap_err()
+            .as_str(),
         "headers_too_large"
     );
     // The model's length is part of the budget: 16,375 header bytes pass under a one-byte model and fail under
@@ -349,7 +366,9 @@ fn unsupported_shapes_are_named() {
     assert_eq!(header_bytes(&near), 16_375);
     assert!(make_recipe(&near, BODY.as_bytes(), "m", 1 << 20).is_ok());
     assert_eq!(
-        make_recipe(&near, BODY.as_bytes(), "routing-alias-x", 1 << 20).unwrap_err(),
+        make_recipe(&near, BODY.as_bytes(), "routing-alias-x", 1 << 20)
+            .unwrap_err()
+            .as_str(),
         "headers_too_large"
     );
     // The bus denylist is the one gate: a recipe replays what the bus published, so the credential, the
@@ -369,19 +388,25 @@ fn duplicate_output_controls_are_rejected() {
     let body =
         br#"{"max_tokens":1,"max_tokens":10000,"messages":[{"role":"user","content":"test"}]}"#;
     assert_eq!(
-        make_recipe(&headers(), body, "m", 1 << 20).unwrap_err(),
+        make_recipe(&headers(), body, "m", 1 << 20)
+            .unwrap_err()
+            .as_str(),
         "invalid_request",
         "an ambiguous output limit"
     );
     let body = br#"{"max_tokens":1,"thinking":{"type":"adaptive","type":"enabled"},"messages":[{"role":"user","content":"test"}]}"#;
     assert_eq!(
-        make_recipe(&headers(), body, "m", 1 << 20).unwrap_err(),
+        make_recipe(&headers(), body, "m", 1 << 20)
+            .unwrap_err()
+            .as_str(),
         "invalid_request",
         "an ambiguous thinking block"
     );
     let body = br#"{"max_tokens":1,"cache_control":{"type":"ephemeral","type":"ephemeral"},"messages":[{"role":"user","content":"test"}]}"#;
     assert_eq!(
-        make_recipe(&headers(), body, "m", 1 << 20).unwrap_err(),
+        make_recipe(&headers(), body, "m", 1 << 20)
+            .unwrap_err()
+            .as_str(),
         "invalid_request",
         "a repeated key inside a nested object"
     );
@@ -611,7 +636,9 @@ fn a_body_bound_to_its_account_is_refused() {
         ("a server-side tool result", with("messages", server_tool)),
     ] {
         assert_eq!(
-            make_recipe(&headers(), &body, "routing-alias", 1 << 20).unwrap_err(),
+            make_recipe(&headers(), &body, "routing-alias", 1 << 20)
+                .unwrap_err()
+                .as_str(),
             "unsupported_shape",
             "{label}"
         );
@@ -659,5 +686,5 @@ fn a_marker_inside_a_tool_results_content_that_is_not_ephemeral_refuses_the_body
         "routing-alias",
         1 << 20,
     );
-    assert_eq!(result.unwrap_err(), "invalid_cache_control");
+    assert_eq!(result.unwrap_err().as_str(), "invalid_cache_control");
 }

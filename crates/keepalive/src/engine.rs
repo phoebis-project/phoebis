@@ -34,7 +34,7 @@ use crate::config::{
 };
 use crate::persist::Dirty;
 use crate::probe::{ceiling, run_job, wasted_label, ProbeJob};
-use crate::recipe::{make_recipe, Recipe};
+use crate::recipe::{make_recipe, Recipe, RecipeRefusal};
 use crate::usage::ProbeUsage;
 use crate::view::{recipe_state, RecipeState};
 
@@ -3046,7 +3046,7 @@ impl Engine {
             Ok(recipe) => recipe,
             Err(reason) => {
                 inner.drop_aside(&key, &agent_id);
-                inner.set_reason(&key, &agent_id, recipe_reason(reason));
+                inner.set_reason(&key, &agent_id, Reason::from(reason));
                 return;
             }
         };
@@ -3655,18 +3655,21 @@ fn reported_prompt(usage: Option<&phoebis_bus::Usage>) -> Option<u64> {
         .then(|| members.iter().flatten().sum())
 }
 
-fn recipe_reason(reason: &str) -> Reason {
-    match reason {
-        "escaped_key" => Reason::InvalidRequest,
-        "fixed_thinking" => Reason::FixedThinking,
-        "forced_tool" => Reason::ForcedTool,
-        "headers_too_large" => Reason::HeadersTooLarge,
-        "invalid_cache_control" => Reason::InvalidCacheControl,
-        "invalid_model" => Reason::InvalidModel,
-        "request_too_large" => Reason::RequestTooLarge,
-        "structured_output" => Reason::StructuredOutput,
-        "unsupported_shape" => Reason::UnsupportedShape,
-        _ => Reason::InvalidRequest,
+impl From<RecipeRefusal> for Reason {
+    /// An escaped key reads as the invalid request it makes of the replay. Every refusal is named, so one added later
+    /// fails to build here until it is given its reason.
+    fn from(refusal: RecipeRefusal) -> Reason {
+        match refusal {
+            RecipeRefusal::EscapedKey | RecipeRefusal::InvalidRequest => Reason::InvalidRequest,
+            RecipeRefusal::FixedThinking => Reason::FixedThinking,
+            RecipeRefusal::ForcedTool => Reason::ForcedTool,
+            RecipeRefusal::HeadersTooLarge => Reason::HeadersTooLarge,
+            RecipeRefusal::InvalidCacheControl => Reason::InvalidCacheControl,
+            RecipeRefusal::InvalidModel => Reason::InvalidModel,
+            RecipeRefusal::RequestTooLarge => Reason::RequestTooLarge,
+            RecipeRefusal::StructuredOutput => Reason::StructuredOutput,
+            RecipeRefusal::UnsupportedShape => Reason::UnsupportedShape,
+        }
     }
 }
 
