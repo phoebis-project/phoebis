@@ -2223,6 +2223,120 @@ usage:
     up.shutdown().await;
 }
 
+/// The pool's projection dates an overage whose evidence names no reset at the head plus the configured
+/// `routing.cooldown_fallback_seconds`, so the member reads in overage for the 5 seconds the file sets, where the
+/// default would hold it for 60.
+#[tokio::test]
+async fn an_overage_with_no_reset_holds_its_pool_member_for_the_configured_cooldown_fallback() {
+    let up = FakeUpstream::start(vec![
+        // The flag alone names no reset and leaves no shared window full, so the evidence carries none.
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![(
+                    "anthropic-ratelimit-unified-overage-in-use".into(),
+                    "true".into(),
+                )],
+                body: b"{\"ok\":true}".to_vec(),
+            },
+        },
+        Rule {
+            path_prefix: "/v1/models".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: br#"{"data":[{"id":"claude-sonnet-4-5","type":"model"}]}"#.to_vec(),
+            },
+        },
+    ])
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let key_path = dir.path().join("storage.key");
+    std::fs::write(
+        &key_path,
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("ca.pem"), up.ca_pem()).unwrap();
+    let db_path = dir.path().join("phoebis.sqlite");
+    seed_oauth_account(&db_path, &key_path);
+    let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
+    let yaml = format!(
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_FALLBACK_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nrouting:\n  cooldown_fallback_seconds: 5\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  refresh_concurrency: 2\n",
+        ledger = dir.path().join("ledger.sqlite").display(),
+        key = key_path.display(),
+        db = db_path.display(),
+        addr = up.addr(),
+        ca = dir.path().join("ca.pem").display(),
+    );
+    let cfg_path = dir.path().join("config.yaml");
+    std::fs::write(&cfg_path, yaml).unwrap();
+    let config = {
+        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var("TEST_FALLBACK_ADMIN_SECRET", "admin-secret-001");
+        phoebis_router::config::load_unresolved(&cfg_path).unwrap()
+    };
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(phoebis_router::app::run(config, async {
+        let _ = stop_rx.await;
+    }));
+    let client = reqwest::Client::builder()
+        .cookie_store(true)
+        .build()
+        .unwrap();
+    let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
+    logged_in(&client, &admin("/session")).await;
+    assert_eq!(
+        client
+            .post(admin("/pools"))
+            .json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "priority", "overage_policy": "never", "members": [{ "account_id": "a", "priority": 0 }] }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        201
+    );
+    let key: serde_json::Value = client
+        .post(admin("/keys"))
+        .json(&serde_json::json!({ "id": "desktop", "label": "Desktop", "pool_id": "main" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let secret = key["secret"].as_str().unwrap().to_string();
+
+    let sent = std::time::Instant::now();
+    let resp = fixture_request(&client, proxy_port, &secret, "fallback-e2e")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    // Once the account view shows the flag, the router holds the evidence, so every pool read after it judges the
+    // overage.
+    wait_json(&client, &admin("/accounts/a"), |v| {
+        v["overage"]["in_use"] == true
+    })
+    .await;
+    wait_json(&client, &admin("/pools"), |v| {
+        v["pools"][0]["members"][0]["eligible"] == "eligible"
+    })
+    .await;
+    // The head lands after the send, so a deadline dated by the file's 5 seconds cannot pass sooner, and the
+    // default's would not pass for 60.
+    let ended = sent.elapsed();
+    assert!(
+        (std::time::Duration::from_secs(5)..std::time::Duration::from_secs(60)).contains(&ended),
+        "the member's overage ended {ended:?} after the request was sent"
+    );
+
+    let _ = stop_tx.send(());
+    server.await.unwrap().unwrap();
+    up.shutdown().await;
+}
+
 /// Writes a configuration built from the given admin block, and returns its path.
 fn config_with(dir: &std::path::Path, name: &str, admin: &str) -> std::path::PathBuf {
     let key = dir.join("storage.key");
