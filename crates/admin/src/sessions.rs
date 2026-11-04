@@ -11,7 +11,7 @@ use phoebis_routing::{entrypoint_of, BurnRates, BurnUnit, PinStanding, FIVE_HOUR
 use serde_json::{json, Value};
 use utoipa::ToSchema;
 
-use crate::openapi::{ErrorBody, RouterUnavailable};
+use crate::openapi::{ErrorBody, LedgerFailure, RouterUnavailable};
 use crate::routes::{failure, router_unavailable};
 use crate::AdminState;
 
@@ -180,7 +180,7 @@ pub(crate) struct CostRow {
     tag = "Sessions",
     responses(
         (status = 200, description = "The session rows.", body = SessionList),
-        (status = 500, description = "- `storage failure`\n- `ledger failure`", body = ErrorBody, example = json!({"error": "storage failure"})),
+        (status = 500, response = LedgerFailure),
         (status = 503, response = RouterUnavailable),
     ),
 )]
@@ -215,10 +215,6 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         ))
     };
     let now = (state.clock)();
-    let accounts = match state.store.accounts() {
-        Ok(accounts) => accounts,
-        Err(e) => return Err(crate::routes::store_failure(e)),
-    };
     let overages = state.router.overages().await.unwrap_or_default();
     let reported = crate::routes::reported_samples(state).await;
     let fallback_ms = phoebis_routing::seconds_ms(state.settings.cooldown_fallback_seconds);
@@ -347,16 +343,12 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         // now: the same predicate every reader of it applies, so this row never disagrees with the selector. A pin
         // whose account left the registry has no kind to pick a unit from, so both read null rather than
         // guessing one.
-        let unit = accounts
-            .iter()
-            .find(|a| a.id == p.account_id)
-            .map(|a| a.kind)
-            .map(|kind| {
-                let in_overage = overages
-                    .iter()
-                    .any(|(id, e)| *id == p.account_id && e.stands(now, fallback_ms));
-                BurnUnit::of(kind, snapshot.usage_based(&p.account_id), in_overage)
-            });
+        let unit = snapshot.account(&p.account_id).map(|a| a.kind).map(|kind| {
+            let in_overage = overages
+                .iter()
+                .any(|(id, e)| *id == p.account_id && e.stands(now, fallback_ms));
+            BurnUnit::of(kind, snapshot.usage_based(&p.account_id), in_overage)
+        });
         let window = if reported
             .get(&p.account_id)
             .is_none_or(|sample| sample.has_window(FIVE_HOUR))

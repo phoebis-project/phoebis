@@ -20,7 +20,7 @@ use serde_json::{Map, Value};
 use utoipa::ToSchema;
 
 use crate::openapi::{ErrorBody, LedgerFailure, RouterUnavailable};
-use crate::routes::{failure, reported_samples, router_unavailable, store_failure, windows_lacked};
+use crate::routes::{failure, reported_samples, router_unavailable, windows_lacked};
 use crate::AdminState;
 
 fn list(q: &HashMap<String, String>, name: &str) -> Vec<String> {
@@ -82,13 +82,6 @@ fn filter_of(q: &HashMap<String, String>) -> Result<RollupFilter, &'static str> 
 /// The range in Unix milliseconds, the group-by, the filter, the live keys' generations the key dimension is read
 /// against, and the clock the range was read at, whose anchor row divides the Pro-week figure.
 type Selection = ((i64, i64), GroupBy, RollupFilter, LiveKeys, i64);
-
-/// The registry's account kinds by id, which name a burn group's unit.
-#[allow(clippy::result_large_err)]
-fn kinds(state: &AdminState) -> Result<HashMap<String, AccountKind>, Response> {
-    let accounts = state.store.accounts().map_err(store_failure)?;
-    Ok(accounts.iter().map(|a| (a.id.clone(), a.kind)).collect())
-}
 
 /// Every analytics route starts here.
 // The error is a rendered HTTP response, returned once per request and dropped. Boxing it would buy a
@@ -884,7 +877,7 @@ pub(crate) struct BurnPoint {
     responses(
         (status = 200, description = "The points over the range.", body = Burn),
         (status = 400, description = "For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`\n\nFor a range the chart cannot carry, the ledger's own message: `the range needs {count} points, and the most a chart carries is 10000`.\n\nFor the other parameters:\n- `group_by is account, classifier, client, effort, key, kind, model, pool, request_class, session, speed, or user_agent`\n- `patterns are at most 256 characters, at most 32 of them`, for `user_agent_groups`", body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
-        (status = 500, description = "- `storage failure`\n- `ledger failure`", body = ErrorBody, example = json!({"error": "storage failure"})),
+        (status = 500, response = LedgerFailure),
     ),
 )]
 // The shares and `unit` are answered where each group holds one account's rows, the account grouping or a filter
@@ -925,10 +918,9 @@ pub(crate) async fn burn(
         Ok(groups) => groups,
         Err(m) => return failure(StatusCode::BAD_REQUEST, m),
     };
-    let kinds = match kinds(&state) {
-        Ok(kinds) => kinds,
-        Err(r) => return r,
-    };
+    // One snapshot names the live keys the read groups by and each group's account kind. The account write routes
+    // reload the registry before they answer, so the kind agrees with the store's.
+    let snapshot = state.router.snapshot();
     let accounts = list(&q, "accounts");
     let one_account = names_one_account(&accounts).then(|| accounts[0].clone());
     let tables = state.tables.clone();
@@ -958,7 +950,7 @@ pub(crate) async fn burn(
                 &prices,
                 &filter,
                 by,
-                &LiveKeys::from_snapshot(&state.router.snapshot()),
+                &LiveKeys::from_snapshot(&snapshot),
                 &agent_groups,
                 now,
             )
@@ -971,7 +963,6 @@ pub(crate) async fn burn(
         Err(e @ LedgerError::Range(_)) => return failure(StatusCode::BAD_REQUEST, &e.to_string()),
         Err(e) => return ledger_failure(e),
     };
-    let snapshot = state.router.snapshot();
     let reported = reported_samples(&state).await;
     let points = series
         .into_iter()
@@ -986,7 +977,7 @@ pub(crate) async fn burn(
                 one_account.as_ref()
             };
             let unit = account.and_then(|account| {
-                kinds.get(account).map(|kind| match kind {
+                snapshot.account(account).map(|a| match a.kind {
                     AccountKind::Oauth if snapshot.usage_based(account) => "usd",
                     AccountKind::Oauth => "window_share",
                     AccountKind::ApiKey => "usd",
