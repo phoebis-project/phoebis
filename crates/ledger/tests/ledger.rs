@@ -4085,7 +4085,17 @@ fn a_fast_attempt_prices_at_the_fast_cells_beside_a_standard_one() {
     let (input, output) = (1_000_000_u64, 100_000_u64);
     let estimate = |speed: Speed| {
         table
-            .estimate("claude-opus-5-5", speed, input, 0, 0, 0, output)
+            .estimate(
+                "claude-opus-5-5",
+                speed,
+                phoebis_routing::PinUsage {
+                    input,
+                    cache_read: 0,
+                    write_5m: 0,
+                    write_1h: 0,
+                    output,
+                },
+            )
             .expect("the shipped list carries the model")
             .total()
     };
@@ -8082,7 +8092,17 @@ fn a_request_with_two_answered_attempts_books_each_at_the_set_its_own_prompt_sel
     let attempts = vec![attempt(1, 1_000), attempt(2, 1_001)];
     let estimate = |input: u64| {
         table
-            .estimate("claude-haiku-5-5", Speed::Standard, input, 0, 0, 0, 100)
+            .estimate(
+                "claude-haiku-5-5",
+                Speed::Standard,
+                phoebis_routing::PinUsage {
+                    input,
+                    cache_read: 0,
+                    write_5m: 0,
+                    write_1h: 0,
+                    output: 100,
+                },
+            )
             .expect("the test list carries the model")
     };
     let close = |a: f64, b: f64| (a - b).abs() < 1e-12;

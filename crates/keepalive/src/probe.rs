@@ -162,8 +162,8 @@ pub struct ProbeRecord {
     /// keys the same hour and prices at the same revision whenever the answer lands. The instant the engine sent the
     /// request, on the same clock, where the relay built no answer.
     pub at: i64,
-    /// The probe's prompt-length band, `table.band_of(model, prompt_tokens(input, read, write_5m, write_1h))` on the
-    /// revision in force at `at`, read from the answer's counts.
+    /// The probe's prompt-length band: `table.band_of` on the prompt `PinUsage::prompt_tokens` reads from the answer's
+    /// counts, on the revision in force at `at`.
     pub band: Band,
     /// The account tier the settlement read at the exchange, which a probe settling in the window share reads from
     /// the store: its settlement's credit row keys the tier the probe ran under. `None` for a probe that settles in

@@ -732,18 +732,9 @@ fn attempt_usd(a: &AttemptRecord, r: &RequestRecord, prices: &PriceRevisions) ->
     if !a.has_usage() {
         return None;
     }
-    let usage = a.usage();
     prices
         .in_force(r.received_at)
-        .estimate(
-            &r.canonical_model,
-            Speed::of(a.speed.as_deref()),
-            usage.input,
-            usage.cache_read,
-            usage.write_5m,
-            usage.write_1h,
-            usage.output,
-        )
+        .estimate(&r.canonical_model, Speed::of(a.speed.as_deref()), a.usage())
         .map(|split| split.total())
 }
 

@@ -2319,7 +2319,17 @@ async fn fast_probe_served(served: &str, speed: phoebis_ledger::Speed) -> (Rig, 
     assert_eq!(r.status("main").probes, 1);
     let cost = phoebis_ledger::PriceRevisions::shipped()
         .in_force(r.now())
-        .estimate(FAST_PRICED, speed, 0, 2_000, 0, 0, 0)
+        .estimate(
+            FAST_PRICED,
+            speed,
+            phoebis_routing::PinUsage {
+                input: 0,
+                cache_read: 2_000,
+                write_5m: 0,
+                write_1h: 0,
+                output: 0,
+            },
+        )
         .expect("a priced model")
         .total();
     (r, cost)
@@ -2336,11 +2346,13 @@ async fn a_fast_recipes_probe_settles_in_dollars_at_the_fast_cells_on_a_plan_fun
         .estimate(
             FAST_PRICED,
             phoebis_ledger::Speed::Standard,
-            0,
-            2_000,
-            0,
-            0,
-            0,
+            phoebis_routing::PinUsage {
+                input: 0,
+                cache_read: 2_000,
+                write_5m: 0,
+                write_1h: 0,
+                output: 0,
+            },
         )
         .unwrap()
         .total();

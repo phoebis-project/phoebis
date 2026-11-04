@@ -11,7 +11,6 @@ use rusqlite::{params, params_from_iter, Connection, OptionalExtension, ToSql, T
 use phoebis_bus::{Classifier, Kind};
 use phoebis_relay::{identifier_byte, EFFORT_LEVELS};
 use phoebis_routing::{window_length_ms, PinUsage, WEEK_MS};
-use phoebis_store::AccountKind;
 
 use crate::db::LedgerDb;
 #[cfg(test)]
@@ -1033,15 +1032,15 @@ pub fn fold_keepalive(tx: &Transaction<'_>, delta: &KeepaliveDelta) -> Result<()
         NO_CLASS,
         delta.speed.as_str(),
         // A credit files beside its probe's request row, under the tier the router prices by as that row does (none
-        // for a free organization or a usage-based seat), and in the order `Funding::of` reads an attempt: `billed` on
+        // for a free organization or a usage-based seat), and in the order `funding_of` reads an attempt: `billed` on
         // an api_key account, `usage_based` on a usage-based seat, `fast` for a fast delta (a fast answer's request
         // row `deltas_of` keys `fast` whatever the overage flag), else the overage fact the probe's answer reported,
         // else `plan`.
-        Funding::of(
-            delta.account_kind == Some(AccountKind::ApiKey),
+        funding_of(
+            delta.account_kind,
             delta.usage_based,
-            delta.speed,
             Some(delta.overage_in_use),
+            delta.speed,
         )
         .rollup_word(),
         delta.band.as_str(),
@@ -2349,6 +2348,8 @@ pub fn read_account_rollups(
 
 #[cfg(test)]
 mod tests {
+    use phoebis_store::AccountKind;
+
     use super::*;
     use crate::pricing::Band;
     use crate::record::*;
@@ -3338,11 +3339,13 @@ mod tests {
             .estimate(
                 OPUS,
                 Speed::of(answered.speed.as_deref()),
-                1_000_000,
-                0,
-                0,
-                0,
-                0,
+                PinUsage {
+                    input: 1_000_000,
+                    cache_read: 0,
+                    write_5m: 0,
+                    write_1h: 0,
+                    output: 0,
+                },
             )
             .expect("the test list carries the model")
             .total();

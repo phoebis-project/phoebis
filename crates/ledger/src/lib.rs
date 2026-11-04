@@ -56,8 +56,8 @@ pub use plan::{
 };
 pub use price::{price_row, Priced, RowKey, SHARE_REASON_CLIENT_CLASSIFIER};
 pub use pricing::{
-    effective_instant, prompt_tokens, Band, LongContext, ModelPrice, ModelRow, PriceRevisions,
-    PriceTable, Pricing, Speed,
+    effective_instant, Band, LongContext, ModelPrice, ModelRow, PriceRevisions, PriceTable,
+    Pricing, Speed,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use query::{apply_filter, breakdown, burn_rows, burn_series, series};

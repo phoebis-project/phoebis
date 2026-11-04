@@ -134,25 +134,37 @@ impl<T> Revisions<T> {
     ) -> Result<Revisions<T>, LedgerError> {
         let dates: Vec<&str> = revisions.iter().map(effective).collect();
         let instants = sorted_instants(&dates).map_err(refuse)?;
-        let (instants, revisions) = by_instant(instants, revisions);
+        // The dates carry the order, and the file's own is not refused.
+        let mut pairs: Vec<(i64, T)> = instants.into_iter().zip(revisions).collect();
+        pairs.sort_by_key(|(instant, _)| *instant);
+        let (instants, revisions) = pairs.into_iter().unzip();
         Ok(Revisions {
             revisions,
             instants,
         })
     }
 
-    /// The last entry whose instant is at or before `at_ms`, else the first.
+    /// The last entry whose instant is at or before `at_ms`, else the first, since a blank history is worse than the
+    /// earliest known table.
     pub fn in_force(&self, at_ms: i64) -> &T {
-        &self.revisions[in_force_index(&self.instants, at_ms)]
+        &self.revisions[self
+            .instants
+            .partition_point(|instant| *instant <= at_ms)
+            .saturating_sub(1)]
     }
 
     pub fn latest(&self) -> &T {
         &self.revisions[self.revisions.len() - 1]
     }
 
-    /// The first entry dated after `now_ms` that `in_force` does not answer, held until its instant.
+    /// The first entry dated after `now_ms` that `in_force` does not answer, held until its instant: before the first
+    /// instant the first entry is in force, so the entry held then is the second.
     pub fn pending(&self, now_ms: i64) -> Option<&T> {
-        self.revisions.get(pending_index(&self.instants, now_ms))
+        self.revisions.get(
+            self.instants
+                .partition_point(|instant| *instant <= now_ms)
+                .max(1),
+        )
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &T> {
@@ -240,7 +252,7 @@ pub fn effective_instant(date: &str) -> Option<i64> {
 
 /// The instant of each entry's date, in the file's order: refuses an empty list, a date not in `YYYY-MM-DD` form and
 /// two entries dated the same, with the messages both revision files share.
-pub(crate) fn sorted_instants(dates: &[&str]) -> Result<Vec<i64>, String> {
+fn sorted_instants(dates: &[&str]) -> Result<Vec<i64>, String> {
     if dates.is_empty() {
         return Err("revisions: at least one entry".to_string());
     }
@@ -258,30 +270,6 @@ pub(crate) fn sorted_instants(dates: &[&str]) -> Result<Vec<i64>, String> {
             Ok(instant)
         })
         .collect()
-}
-
-/// The entries paired with their instants and sorted by them, since the dates carry the order and the file's own is
-/// not refused.
-pub(crate) fn by_instant<T>(instants: Vec<i64>, entries: Vec<T>) -> (Vec<i64>, Vec<T>) {
-    let mut pairs: Vec<(i64, T)> = instants.into_iter().zip(entries).collect();
-    pairs.sort_by_key(|(instant, _)| *instant);
-    pairs.into_iter().unzip()
-}
-
-/// The index of the last instant at or before `at_ms`, else 0: an instant before the first entry reads the first,
-/// since a blank history is worse than the earliest known table.
-pub(crate) fn in_force_index(instants: &[i64], at_ms: i64) -> usize {
-    instants
-        .partition_point(|instant| *instant <= at_ms)
-        .saturating_sub(1)
-}
-
-/// The index of the first instant after `now_ms` that `in_force_index` does not already answer, the list's length when
-/// none is: before the first instant the first entry is in force, so the entry held then is the second.
-pub(crate) fn pending_index(instants: &[i64], now_ms: i64) -> usize {
-    instants
-        .partition_point(|instant| *instant <= now_ms)
-        .max(1)
 }
 
 fn band_in(row: &ModelRow, prompt_tokens: u64) -> Band {
@@ -315,18 +303,6 @@ fn per_token(p: &ModelPrice) -> phoebis_routing::Rates {
         write_1h: Some(p.cache_write_1h / 1_000_000.0),
         output: Some(p.output / 1_000_000.0),
     }
-}
-
-/// `PinUsage::prompt_tokens` over loose counts, for the callers that hold no `PinUsage`.
-pub fn prompt_tokens(input: u64, cache_read: u64, write_5m: u64, write_1h: u64) -> u64 {
-    PinUsage {
-        input,
-        cache_read,
-        write_5m,
-        write_1h,
-        output: 0,
-    }
-    .prompt_tokens()
 }
 
 impl PriceTable {
@@ -493,25 +469,8 @@ impl PriceTable {
 
     /// The entry point for one attempt's counts: the band `band_of` reads from the prompt they sum to, then
     /// `estimate_banded`.
-    #[allow(clippy::too_many_arguments)]
-    pub fn estimate(
-        &self,
-        model: &str,
-        speed: Speed,
-        input: u64,
-        cache_read: u64,
-        write_5m: u64,
-        write_1h: u64,
-        output: u64,
-    ) -> Option<CostSplit> {
-        let band = self.band_of(model, prompt_tokens(input, cache_read, write_5m, write_1h));
-        let counts = phoebis_routing::PinUsage {
-            input,
-            cache_read,
-            write_5m,
-            write_1h,
-            output,
-        };
+    pub fn estimate(&self, model: &str, speed: Speed, counts: PinUsage) -> Option<CostSplit> {
+        let band = self.band_of(model, counts.prompt_tokens());
         self.estimate_banded(model, speed, band, counts)
     }
 }
@@ -533,10 +492,13 @@ pub(crate) fn split_of(
     }
 }
 
-/// The operator's file at `path`: `None` when nothing is there (`NotFound`), the I/O error for any other failure to
-/// read it, so a path that exists and cannot be read refuses the start rather than selecting the shipped table, the
-/// way `Path::exists` would by reading false whenever the metadata cannot be read.
-pub(crate) fn read_override(path: &Path) -> Result<Option<String>, LedgerError> {
+/// The operator's file at `path`: `None` when no path is given or nothing is there (`NotFound`), the I/O error for any
+/// other failure to read it, so a path that exists and cannot be read refuses the start rather than selecting the
+/// shipped table, the way `Path::exists` would by reading false whenever the metadata cannot be read.
+pub(crate) fn read_override(path: Option<&Path>) -> Result<Option<String>, LedgerError> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
     match std::fs::read_to_string(path) {
         Ok(text) => Ok(Some(text)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -560,7 +522,7 @@ impl Pricing {
     /// The operator's file when one is at the path, the shipped file when nothing is (`NotFound`), and the I/O
     /// error for any other failure to read it. The operator's file replaces the whole list.
     pub fn load(override_path: Option<&Path>) -> Result<Pricing, LedgerError> {
-        let text = override_path.map(read_override).transpose()?.flatten();
+        let text = read_override(override_path)?;
         Ok(Pricing::new(match text {
             Some(text) => PriceRevisions::from_yaml(&text, "file")?,
             None => PriceRevisions::shipped(),
@@ -871,11 +833,13 @@ mod tests {
             .estimate(
                 "claude-sonnet-5-5",
                 Speed::Standard,
-                1_000_000,
-                500_000,
-                100_000,
-                0,
-                10_000,
+                PinUsage {
+                    input: 1_000_000,
+                    cache_read: 500_000,
+                    write_5m: 100_000,
+                    write_1h: 0,
+                    output: 10_000,
+                },
             )
             .unwrap();
         let usd = split.total();
@@ -888,7 +852,17 @@ mod tests {
         );
         assert!((usd - 3.675).abs() < 1e-9, "{usd}");
         assert!(table
-            .estimate("gpt-5", Speed::Standard, 1, 0, 0, 0, 1)
+            .estimate(
+                "gpt-5",
+                Speed::Standard,
+                PinUsage {
+                    input: 1,
+                    cache_read: 0,
+                    write_5m: 0,
+                    write_1h: 0,
+                    output: 1,
+                },
+            )
             .is_none());
         assert_eq!(
             (
@@ -906,7 +880,17 @@ mod tests {
         let table = revisions.in_force(JANUARY_2026);
         let input = |model: &str, speed: Speed| {
             table
-                .estimate(model, speed, 1_000_000, 0, 0, 0, 0)
+                .estimate(
+                    model,
+                    speed,
+                    PinUsage {
+                        input: 1_000_000,
+                        cache_read: 0,
+                        write_5m: 0,
+                        write_1h: 0,
+                        output: 0,
+                    },
+                )
                 .unwrap()
                 .total()
         };
@@ -1030,11 +1014,13 @@ mod tests {
                 .estimate(
                     "claude-haiku-5-5",
                     Speed::Standard,
-                    input,
-                    250,
-                    250,
-                    250,
-                    100,
+                    PinUsage {
+                        input,
+                        cache_read: 250,
+                        write_5m: 250,
+                        write_1h: 250,
+                        output: 100,
+                    },
                 )
                 .unwrap()
         };
@@ -1060,7 +1046,6 @@ mod tests {
              {split:?}"
         );
         assert!(close(usd, 7_942.5e-6), "{usd}");
-        assert_eq!(prompt_tokens(1, 2, 3, 4), 10);
     }
 
     fn input(tokens: u64) -> phoebis_routing::PinUsage {

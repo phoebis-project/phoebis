@@ -2,6 +2,7 @@
 //! one histogram over the same 64 buckets the rollups use.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -47,12 +48,25 @@ impl Default for Series {
 
 #[derive(Default)]
 struct Registry {
-    counters: BTreeMap<&'static str, BTreeMap<Labels, f64>>,
+    counters: BTreeMap<Family, BTreeMap<Labels, f64>>,
     /// `phoebis_account_ratelimit_utilization` by account and window, in the order its labels render.
     utilization: BTreeMap<(String, String), f64>,
     /// The shared windows each account's newest clean poll carried, which bound what a head may set.
     polled_windows: BTreeMap<String, BTreeSet<&'static str>>,
     ttfb: BTreeMap<String, Series>,
+}
+
+impl Registry {
+    /// Before the process's first clean poll of an account no set is kept, so a head sets both shared windows, as the
+    /// router reads both until that poll.
+    fn poll_lacks(&self, account: &str, window: &str) -> bool {
+        if window != FIVE_HOUR && window != SEVEN_DAY {
+            return false;
+        }
+        self.polled_windows
+            .get(account)
+            .is_some_and(|shared| !shared.contains(window))
+    }
 }
 
 pub struct Metrics {
@@ -72,11 +86,11 @@ impl Metrics {
         }
     }
 
-    fn add(&self, name: &'static str, labels: Labels, by: f64) {
+    fn add(&self, family: Family, labels: Labels, by: f64) {
         let mut inner = self.inner.lock().expect(LOCK_POISONED);
         *inner
             .counters
-            .entry(name)
+            .entry(family)
             .or_default()
             .entry(labels)
             .or_default() += by;
@@ -96,7 +110,7 @@ impl Metrics {
         // and the attempt loop below sees none of it.
         if request.refused {
             self.add(
-                "phoebis_refusals_total",
+                Family::RefusalsTotal,
                 vec![
                     ("code", request.error_code.clone().unwrap_or_default()),
                     ("key", key),
@@ -107,7 +121,7 @@ impl Metrics {
             return;
         }
         self.add(
-            "phoebis_requests_total",
+            Family::RequestsTotal,
             vec![
                 ("key", key),
                 ("kind", request.kind.clone()),
@@ -118,7 +132,7 @@ impl Metrics {
         let model = table.model_label(&request.canonical_model).to_string();
         for a in attempts {
             self.add(
-                "phoebis_attempts_total",
+                Family::AttemptsTotal,
                 vec![
                     ("account", a.account_id.clone()),
                     ("model", model.clone()),
@@ -135,7 +149,7 @@ impl Metrics {
             ] {
                 if let Some(n) = tokens {
                     self.add(
-                        "phoebis_tokens_total",
+                        Family::TokensTotal,
                         vec![
                             ("account", a.account_id.clone()),
                             ("kind", kind.into()),
@@ -164,18 +178,19 @@ impl Metrics {
     /// series leaves with it. A head removes nothing, and it sets no shared window the account's newest clean poll
     /// lacked, so it cannot restore a series that poll removed.
     pub fn observe_samples(&self, quota: &[QuotaSampleRecord], poll: bool) {
+        let mut inner = self.inner.lock().expect(LOCK_POISONED);
         let mut carried: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
         for q in quota {
             if let Some(u) = q.utilization {
-                if !poll && self.poll_lacks(&q.account_id, &q.window) {
+                if !poll && inner.poll_lacks(&q.account_id, &q.window) {
                     continue;
                 }
-                self.inner
-                    .lock()
-                    .expect(LOCK_POISONED)
+                inner
                     .utilization
                     .insert((q.account_id.clone(), q.window.clone()), u);
-                carried.entry(&q.account_id).or_default().insert(&q.window);
+                if poll {
+                    carried.entry(&q.account_id).or_default().insert(&q.window);
+                }
             }
         }
         if !poll {
@@ -191,16 +206,10 @@ impl Metrics {
                 .into_iter()
                 .filter(|window| windows.contains(window))
                 .collect();
-            self.inner
-                .lock()
-                .expect(LOCK_POISONED)
-                .polled_windows
-                .insert(account.to_string(), shared);
+            inner.polled_windows.insert(account.to_string(), shared);
             for window in [FIVE_HOUR, SEVEN_DAY] {
                 if !windows.contains(window) {
-                    self.inner
-                        .lock()
-                        .expect(LOCK_POISONED)
+                    inner
                         .utilization
                         .remove(&(account.to_string(), window.to_string()));
                 }
@@ -208,22 +217,9 @@ impl Metrics {
         }
     }
 
-    /// Before the process's first clean poll of an account no set is kept, so a head sets both shared windows, as the
-    /// router reads both until that poll.
-    fn poll_lacks(&self, account: &str, window: &str) -> bool {
-        if window != FIVE_HOUR && window != SEVEN_DAY {
-            return false;
-        }
-        let inner = self.inner.lock().expect(LOCK_POISONED);
-        inner
-            .polled_windows
-            .get(account)
-            .is_some_and(|shared| !shared.contains(window))
-    }
-
     pub fn observe_drop(&self, table: &'static str) {
         self.add(
-            "phoebis_ledger_dropped_total",
+            Family::LedgerDroppedTotal,
             vec![("table", table.into())],
             1.0,
         );
@@ -231,7 +227,7 @@ impl Metrics {
 
     pub fn observe_probe(&self, pool: &str, outcome: &str) {
         self.add(
-            "phoebis_keepalive_probes_total",
+            Family::KeepaliveProbesTotal,
             vec![("outcome", outcome.into()), ("pool", pool.into())],
             1.0,
         );
@@ -239,7 +235,7 @@ impl Metrics {
 
     pub fn observe_skipped(&self, pool: &str, state: &str) {
         self.add(
-            "phoebis_keepalive_skipped_total",
+            Family::KeepaliveSkippedTotal,
             vec![("pool", pool.into()), ("state", state.into())],
             1.0,
         );
@@ -248,7 +244,7 @@ impl Metrics {
     /// One contradiction between the keepalive engine's chain model and the upstream's cache, per client version.
     pub fn observe_chain_contradiction(&self, client_version: &str) {
         self.add(
-            "phoebis_keepalive_chain_contradictions_total",
+            Family::KeepaliveChainContradictionsTotal,
             vec![("client_version", client_version.into())],
             1.0,
         );
@@ -262,111 +258,120 @@ impl Metrics {
     ) -> String {
         let inner = self.inner.lock().expect(LOCK_POISONED);
         let mut out = String::new();
-        for (name, kind) in FAMILIES.iter().copied() {
-            out.push_str(&format!("# TYPE {name} {kind}\n"));
-            let line = |value: u64| format!("{name} {value}\n");
-            match name {
-                "phoebis_attempts_total"
-                | "phoebis_keepalive_chain_contradictions_total"
-                | "phoebis_keepalive_probes_total"
-                | "phoebis_keepalive_skipped_total"
-                | "phoebis_ledger_dropped_total"
-                | "phoebis_refusals_total"
-                | "phoebis_requests_total"
-                | "phoebis_tokens_total" => {
-                    if let Some(series) = inner.counters.get(name) {
+        for family in Family::ALL.iter().copied() {
+            let name = family.name();
+            let _ = writeln!(out, "# TYPE {name} {}", family.kind());
+            let line = |out: &mut String, value: u64| {
+                let _ = writeln!(out, "{name} {value}");
+            };
+            match family {
+                Family::AttemptsTotal
+                | Family::KeepaliveChainContradictionsTotal
+                | Family::KeepaliveProbesTotal
+                | Family::KeepaliveSkippedTotal
+                | Family::LedgerDroppedTotal
+                | Family::RefusalsTotal
+                | Family::RequestsTotal
+                | Family::TokensTotal => {
+                    if let Some(series) = inner.counters.get(&family) {
                         for (labels, value) in series {
-                            out.push_str(&format!(
-                                "{name}{} {}\n",
+                            let _ = writeln!(
+                                out,
+                                "{name}{} {}",
                                 render_labels(labels),
                                 render_value(*value)
-                            ));
+                            );
                         }
                     }
                 }
-                "phoebis_ledger_behind_refusals_total" => {
-                    out.push_str(&line(gauges.ledger_behind_refusals));
+                Family::LedgerBehindRefusalsTotal => {
+                    line(&mut out, gauges.ledger_behind_refusals);
                 }
-                "phoebis_ledger_degraded" => {
-                    out.push_str(&line(u64::from(gauges.ledger_degraded)));
+                Family::LedgerDegraded => {
+                    line(&mut out, u64::from(gauges.ledger_degraded));
                 }
-                "phoebis_ledger_parked_priced_total" => {
-                    out.push_str(&line(gauges.ledger_parked_priced));
+                Family::LedgerParkedPricedTotal => {
+                    line(&mut out, gauges.ledger_parked_priced);
                 }
-                "phoebis_ledger_queued" => {
-                    out.push_str(&line(gauges.ledger_queued));
+                Family::LedgerQueued => {
+                    line(&mut out, gauges.ledger_queued);
                 }
-                "phoebis_pricing_unknown_model_total" => {
-                    out.push_str(&line(pricing_unknown));
+                Family::PricingUnknownModelTotal => {
+                    line(&mut out, pricing_unknown);
                 }
-                "phoebis_attention" => {
+                Family::Attention => {
                     // The kind is one of the reader's own static names, so only the subject needs escaping.
                     for (kind, subject, holds) in &gauges.attention.conditions {
-                        out.push_str(&format!(
-                            "{name}{{kind=\"{kind}\",subject=\"{}\"}} {}\n",
+                        let _ = writeln!(
+                            out,
+                            "{name}{{kind=\"{kind}\",subject=\"{}\"}} {}",
                             escape(subject),
                             u8::from(*holds)
-                        ));
+                        );
                     }
                 }
-                "phoebis_bus_dropped_total" | "phoebis_bus_subscriber_panics_total" => {
+                Family::BusDroppedTotal | Family::BusSubscriberPanicsTotal => {
                     for (subscriber, stats) in bus {
-                        let counter = match name {
-                            "phoebis_bus_dropped_total" => &stats.dropped,
+                        let counter = match family {
+                            Family::BusDroppedTotal => &stats.dropped,
                             _ => &stats.panics,
                         };
-                        out.push_str(&format!(
-                            "{name}{{subscriber=\"{}\"}} {}\n",
+                        let _ = writeln!(
+                            out,
+                            "{name}{{subscriber=\"{}\"}} {}",
                             escape(subscriber),
                             counter.load(std::sync::atomic::Ordering::Relaxed)
-                        ));
+                        );
                     }
                 }
-                "phoebis_router_dropped_reports_total" => {
+                Family::RouterDroppedReportsTotal => {
                     for (kind, dropped) in &gauges.dropped_reports {
-                        out.push_str(&format!("{name}{{kind=\"{kind}\"}} {dropped}\n"));
+                        let _ = writeln!(out, "{name}{{kind=\"{kind}\"}} {dropped}");
                     }
                 }
-                "phoebis_router_writer_degraded" => {
-                    out.push_str(&line(u64::from(gauges.writer.degraded)));
+                Family::RouterWriterDegraded => {
+                    line(&mut out, u64::from(gauges.writer.degraded));
                 }
-                "phoebis_router_writer_depth" => {
-                    out.push_str(&line(gauges.writer.depth as u64));
+                Family::RouterWriterDepth => {
+                    line(&mut out, gauges.writer.depth as u64);
                 }
-                "phoebis_account_cooldown_seconds" => {
+                Family::AccountCooldownSeconds => {
                     for (account, scope, seconds) in &gauges.cooldowns {
-                        out.push_str(&format!(
-                            "{name}{{account=\"{}\",scope=\"{}\"}} {seconds}\n",
+                        let _ = writeln!(
+                            out,
+                            "{name}{{account=\"{}\",scope=\"{}\"}} {seconds}",
                             escape(account),
                             escape(scope)
-                        ));
+                        );
                     }
                 }
-                "phoebis_account_overage_in_use" => {
+                Family::AccountOverageInUse => {
                     for (account, in_use) in &gauges.overage {
-                        out.push_str(&format!(
-                            "{name}{{account=\"{}\"}} {}\n",
+                        let _ = writeln!(
+                            out,
+                            "{name}{{account=\"{}\"}} {}",
                             escape(account),
                             u8::from(*in_use)
-                        ));
+                        );
                     }
                 }
-                "phoebis_account_ratelimit_utilization" => {
+                Family::AccountRatelimitUtilization => {
                     for ((account, window), value) in &inner.utilization {
                         // A deleted account's last reading would otherwise scrape forever. The registry is
                         // the list of accounts that exist.
                         if !gauges.live_accounts.contains(account) {
                             continue;
                         }
-                        out.push_str(&format!(
-                            "{name}{{account=\"{}\",window=\"{}\"}} {}\n",
+                        let _ = writeln!(
+                            out,
+                            "{name}{{account=\"{}\",window=\"{}\"}} {}",
                             escape(account),
                             escape(window),
                             render_value(*value)
-                        ));
+                        );
                     }
                 }
-                "phoebis_keepalive_agents" => {
+                Family::KeepaliveAgents => {
                     // Always the three series, so a scrape reads zero rather than absent when the engine
                     // retains nothing.
                     for (state, count) in [
@@ -374,44 +379,45 @@ impl Metrics {
                         ("idle", gauges.keepalive_agents.idle),
                         ("parked", gauges.keepalive_agents.parked),
                     ] {
-                        out.push_str(&format!("{name}{{state=\"{state}\"}} {count}\n"));
+                        let _ = writeln!(out, "{name}{{state=\"{state}\"}} {count}");
                     }
                 }
-                "phoebis_pins_active" => {
+                Family::PinsActive => {
                     for (pool, count) in &gauges.pins_by_pool {
-                        out.push_str(&format!("{name}{{pool=\"{}\"}} {count}\n", escape(pool)));
+                        let _ = writeln!(out, "{name}{{pool=\"{}\"}} {count}", escape(pool));
                     }
                 }
-                "phoebis_upstream_ttfb_seconds" => {
+                Family::UpstreamTtfbSeconds => {
                     let edges = bucket_edges();
+                    let bounds: Vec<String> = edges[1..]
+                        .iter()
+                        .map(|e| render_value(e / 1_000.0))
+                        .collect();
                     for (model, series) in &inner.ttfb {
+                        let model = escape(model);
                         let mut cumulative = 0u64;
                         for (i, n) in series.buckets.iter().enumerate() {
                             cumulative += n;
-                            out.push_str(&format!(
-                                "{name}_bucket{{model=\"{}\",le=\"{}\"}} {cumulative}\n",
-                                escape(model),
-                                render_value(edges[i + 1] / 1_000.0)
-                            ));
+                            let _ = writeln!(
+                                out,
+                                "{name}_bucket{{model=\"{model}\",le=\"{}\"}} {cumulative}",
+                                bounds[i]
+                            );
                         }
                         let total = cumulative + series.overflow;
                         // The only bound an observation past the last edge is under.
-                        out.push_str(&format!(
-                            "{name}_bucket{{model=\"{}\",le=\"+Inf\"}} {total}\n",
-                            escape(model),
-                        ));
-                        out.push_str(&format!(
-                            "{name}_sum{{model=\"{}\"}} {}\n",
-                            escape(model),
+                        let _ = writeln!(
+                            out,
+                            "{name}_bucket{{model=\"{model}\",le=\"+Inf\"}} {total}"
+                        );
+                        let _ = writeln!(
+                            out,
+                            "{name}_sum{{model=\"{model}\"}} {}",
                             render_value(series.sum)
-                        ));
-                        out.push_str(&format!(
-                            "{name}_count{{model=\"{}\"}} {total}\n",
-                            escape(model)
-                        ));
+                        );
+                        let _ = writeln!(out, "{name}_count{{model=\"{model}\"}} {total}");
                     }
                 }
-                _ => unreachable!("every family in FAMILIES has a renderer arm"),
             }
         }
         out
@@ -448,36 +454,65 @@ fn escape(v: &str) -> String {
         .replace('"', "\\\"")
 }
 
-/// Every family this renderer emits, in name order, with its type. The renderer walks this list for its TYPE
-/// lines and the test walks it against the text, so a family registered without a renderer arm, or rendered
-/// without a registration, fails there rather than vanishing from the scrape.
-pub const FAMILIES: &[(&str, &str)] = &[
-    ("phoebis_account_cooldown_seconds", "gauge"),
-    ("phoebis_account_overage_in_use", "gauge"),
-    ("phoebis_account_ratelimit_utilization", "gauge"),
-    ("phoebis_attempts_total", "counter"),
-    ("phoebis_attention", "gauge"),
-    ("phoebis_bus_dropped_total", "counter"),
-    ("phoebis_bus_subscriber_panics_total", "counter"),
-    ("phoebis_keepalive_agents", "gauge"),
-    ("phoebis_keepalive_chain_contradictions_total", "counter"),
-    ("phoebis_keepalive_probes_total", "counter"),
-    ("phoebis_keepalive_skipped_total", "counter"),
-    ("phoebis_ledger_behind_refusals_total", "counter"),
-    ("phoebis_ledger_degraded", "gauge"),
-    ("phoebis_ledger_dropped_total", "counter"),
-    ("phoebis_ledger_parked_priced_total", "counter"),
-    ("phoebis_ledger_queued", "gauge"),
-    ("phoebis_pins_active", "gauge"),
-    ("phoebis_pricing_unknown_model_total", "counter"),
-    ("phoebis_refusals_total", "counter"),
-    ("phoebis_requests_total", "counter"),
-    ("phoebis_router_dropped_reports_total", "counter"),
-    ("phoebis_router_writer_degraded", "gauge"),
-    ("phoebis_router_writer_depth", "gauge"),
-    ("phoebis_tokens_total", "counter"),
-    ("phoebis_upstream_ttfb_seconds", "histogram"),
-];
+// One invocation declares each family's variant, name and type, so a counter files its series under a variant the
+// renderer's exhaustive match reads, and the table the test walks lists the same families.
+macro_rules! metric_families {
+    ($($variant:ident => ($name:literal, $kind:literal)),* $(,)?) => {
+        /// A metric family, declared in name order, the order the scrape renders the families in.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+        enum Family {
+            $($variant),*
+        }
+
+        impl Family {
+            const ALL: &'static [Family] = &[$(Family::$variant),*];
+
+            fn name(self) -> &'static str {
+                match self {
+                    $(Family::$variant => $name),*
+                }
+            }
+
+            fn kind(self) -> &'static str {
+                match self {
+                    $(Family::$variant => $kind),*
+                }
+            }
+        }
+
+        /// Every family this renderer emits, in name order, with its type: the test walks it against the scrape's
+        /// TYPE lines.
+        pub const FAMILIES: &[(&str, &str)] = &[$(($name, $kind)),*];
+    };
+}
+
+metric_families! {
+    AccountCooldownSeconds => ("phoebis_account_cooldown_seconds", "gauge"),
+    AccountOverageInUse => ("phoebis_account_overage_in_use", "gauge"),
+    AccountRatelimitUtilization => ("phoebis_account_ratelimit_utilization", "gauge"),
+    AttemptsTotal => ("phoebis_attempts_total", "counter"),
+    Attention => ("phoebis_attention", "gauge"),
+    BusDroppedTotal => ("phoebis_bus_dropped_total", "counter"),
+    BusSubscriberPanicsTotal => ("phoebis_bus_subscriber_panics_total", "counter"),
+    KeepaliveAgents => ("phoebis_keepalive_agents", "gauge"),
+    KeepaliveChainContradictionsTotal => ("phoebis_keepalive_chain_contradictions_total", "counter"),
+    KeepaliveProbesTotal => ("phoebis_keepalive_probes_total", "counter"),
+    KeepaliveSkippedTotal => ("phoebis_keepalive_skipped_total", "counter"),
+    LedgerBehindRefusalsTotal => ("phoebis_ledger_behind_refusals_total", "counter"),
+    LedgerDegraded => ("phoebis_ledger_degraded", "gauge"),
+    LedgerDroppedTotal => ("phoebis_ledger_dropped_total", "counter"),
+    LedgerParkedPricedTotal => ("phoebis_ledger_parked_priced_total", "counter"),
+    LedgerQueued => ("phoebis_ledger_queued", "gauge"),
+    PinsActive => ("phoebis_pins_active", "gauge"),
+    PricingUnknownModelTotal => ("phoebis_pricing_unknown_model_total", "counter"),
+    RefusalsTotal => ("phoebis_refusals_total", "counter"),
+    RequestsTotal => ("phoebis_requests_total", "counter"),
+    RouterDroppedReportsTotal => ("phoebis_router_dropped_reports_total", "counter"),
+    RouterWriterDegraded => ("phoebis_router_writer_degraded", "gauge"),
+    RouterWriterDepth => ("phoebis_router_writer_depth", "gauge"),
+    TokensTotal => ("phoebis_tokens_total", "counter"),
+    UpstreamTtfbSeconds => ("phoebis_upstream_ttfb_seconds", "histogram"),
+}
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 pub struct KeepaliveAgents {
@@ -567,7 +602,9 @@ pub async fn gather(
         let mut coalesced: BTreeMap<(String, String), i64> = BTreeMap::new();
         for c in cooldowns {
             let scope = match &c.scope {
-                CooldownScope::Model(model) => format!("model:{}", table.model_label(model)),
+                CooldownScope::Model(model) => {
+                    CooldownScope::Model(table.model_label(model).to_string()).to_string()
+                }
                 other => other.to_string(),
             };
             let remaining = ((c.until - now) / 1_000).max(0);

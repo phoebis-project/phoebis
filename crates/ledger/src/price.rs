@@ -75,12 +75,11 @@ pub fn price_row(
             ..Priced::default()
         };
     }
+    let in_force = costs.revisions.in_force(key.at);
+    let sized = key.tier.filter(|tier| in_force.sizes(key.entrypoint, tier));
     if key.classifier {
         // A free call spends no window, so the Pro-week figure is zero too, and the dollars stay for the cost views.
-        let shares = key
-            .tier
-            .filter(|tier| costs.revisions.in_force(key.at).sizes(key.entrypoint, tier))
-            .map(|tier| free_shares(costs, key.entrypoint, tier, key.model, key.at));
+        let shares = sized.map(|tier| free_shares(costs, key.entrypoint, tier, key.model, key.at));
         return Priced {
             usd,
             shares,
@@ -91,23 +90,19 @@ pub fn price_row(
     let band_at = key.band_at.unwrap_or(key.at);
     // The account tier under the row's regime alone decides whether shares exist, so on a sized tier a window the
     // model cannot price stays `None` inside the map, which the readers tell apart from a tier with no window to share.
-    let shares = key
-        .tier
-        .filter(|tier| costs.revisions.in_force(key.at).sizes(key.entrypoint, tier))
-        .map(|tier| {
-            price_shares(
-                costs,
-                key.entrypoint,
-                tier,
-                key.model,
-                counts,
-                key.at,
-                band_at,
-            )
-        });
+    let shares = sized.map(|tier| {
+        price_shares(
+            costs,
+            key.entrypoint,
+            tier,
+            key.model,
+            counts,
+            key.at,
+            band_at,
+        )
+    });
     // On the unit's own tier under one revision at `at` and `now`, the 7-day share divides the same units by the same
     // anchor row in the figure's order, so it is the figure to the bit.
-    let in_force = costs.revisions.in_force(key.at);
     let unit_week = shares
         .as_ref()
         .filter(|_| {

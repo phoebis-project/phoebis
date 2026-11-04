@@ -1520,11 +1520,13 @@ mod tests {
             .estimate(
                 "claude-sonnet-5",
                 phoebis_ledger::Speed::Standard,
-                1_000,
-                10_000,
-                100,
-                200,
-                500,
+                phoebis_routing::PinUsage {
+                    input: 1_000,
+                    cache_read: 10_000,
+                    write_5m: 100,
+                    write_1h: 200,
+                    output: 500,
+                },
             )
             .unwrap()
             .total();
@@ -1543,11 +1545,13 @@ mod tests {
             .estimate(
                 "claude-opus-5-5",
                 phoebis_ledger::Speed::Fast,
-                1_000,
-                10_000,
-                100,
-                200,
-                500,
+                phoebis_routing::PinUsage {
+                    input: 1_000,
+                    cache_read: 10_000,
+                    write_5m: 100,
+                    write_1h: 200,
+                    output: 500,
+                },
             )
             .unwrap()
             .total();

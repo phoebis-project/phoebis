@@ -19,11 +19,7 @@ fn edge(i: usize) -> f64 {
 }
 
 pub fn bucket_edges() -> [f64; BUCKET_COUNT + 1] {
-    let mut edges = [0.0; BUCKET_COUNT + 1];
-    for (i, slot) in edges.iter_mut().enumerate() {
-        *slot = edge(i);
-    }
-    edges
+    std::array::from_fn(edge)
 }
 
 /// The mock's rule exactly: anything at or below the first edge lands in bucket 0, and nothing lands past the

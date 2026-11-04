@@ -68,15 +68,7 @@ fn usage(input: u64, output: u64) -> PinUsage {
 fn shipped_usd(at: i64, model: &str, speed: Speed, counts: PinUsage) -> f64 {
     PriceRevisions::shipped()
         .in_force(at)
-        .estimate(
-            model,
-            speed,
-            counts.input,
-            counts.cache_read,
-            counts.write_5m,
-            counts.write_1h,
-            counts.output,
-        )
+        .estimate(model, speed, counts)
         .expect("the shipped list carries the model")
         .total()
 }
@@ -8255,7 +8247,17 @@ fn a_members_spend_prices_every_group_from_its_band_rows_counts_exactly() {
     let input_usd = |prices: &PriceRevisions, model: &str, input: u64| {
         prices
             .in_force(phoebis_ledger::test_tables::JANUARY_2026)
-            .estimate(model, Speed::Standard, input, 0, 0, 0, 0)
+            .estimate(
+                model,
+                Speed::Standard,
+                PinUsage {
+                    input,
+                    cache_read: 0,
+                    write_5m: 0,
+                    write_1h: 0,
+                    output: 0,
+                },
+            )
             .expect("the test list carries the model")
             .total()
     };

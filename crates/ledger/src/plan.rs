@@ -232,6 +232,16 @@ impl TypeMultiplier {
             ("output", self.output),
         ]
     }
+
+    /// The five counts in the order input, cache read, 5-minute write, 1-hour write, output, each times `weight` and
+    /// its type's multiplier, summed in that order.
+    fn units(&self, weight: f64, [input, cache_read, write_5m, write_1h, output]: [f64; 5]) -> f64 {
+        input * weight * self.input
+            + cache_read * weight * self.cache_read
+            + write_5m * weight * self.cache_write_5m
+            + write_1h * weight * self.cache_write_1h
+            + output * weight * self.output
+    }
 }
 
 impl TypeOverride {
@@ -397,6 +407,27 @@ fn capacity_rules(
     Ok(())
 }
 
+/// What a row's share reads on every window it walks, resolved once: the tier's capacity row under the row's regime,
+/// the model's type multipliers, and the regime's band factors where the band covers the completion, `None` outside it.
+struct RowFacts<'a> {
+    band: Option<&'a PerWindow>,
+    canonical_model: &'a str,
+    capacity: Option<&'a Capacity>,
+    counts: [f64; 5],
+    multipliers: TypeMultiplier,
+}
+
+/// The five counts in the order `TypeMultiplier::units` sums them.
+fn counts_of(usage: PinUsage) -> [f64; 5] {
+    [
+        usage.input as f64,
+        usage.cache_read as f64,
+        usage.write_5m as f64,
+        usage.write_1h as f64,
+        usage.output as f64,
+    ]
+}
+
 impl SubscriptionCosts {
     /// The entry with its peak zone resolved and its rules checked, a refusal prefixed by the entry's date.
     fn resolved(mut self) -> Result<SubscriptionCosts, LedgerError> {
@@ -525,8 +556,7 @@ impl SubscriptionCosts {
             }
             for (window, weight) in row.weight_by_window.iter().flatten() {
                 let path = format!("overrides.{model}.weight_by_window.{window}");
-                if !matches!(window.as_str(), FIVE_HOUR | SEVEN_DAY)
-                    && !self.model_windows.contains_key(window)
+                if SharedWindow::parse(window).is_none() && !self.model_windows.contains_key(window)
                 {
                     return Err(format!(
                         "{path}: neither a shared window nor a model_windows key"
@@ -622,14 +652,13 @@ impl SubscriptionCosts {
     /// a `model_windows` key on its `of` window over its `capacity_factor`; any other window starting with
     /// `seven_day` as the 7-day share once, as the classifier's window claims allow; anything else prices nothing.
     fn priced_window(&self, window: &str) -> Option<(SharedWindow, f64)> {
-        match window {
-            FIVE_HOUR => Some((SharedWindow::FiveHour, 1.0)),
-            SEVEN_DAY => Some((SharedWindow::SevenDay, 1.0)),
-            w => match self.model_windows.get(w) {
-                Some(row) => Some((SharedWindow::parse(&row.of)?, row.capacity_factor)),
-                None if w.starts_with(SEVEN_DAY) => Some((SharedWindow::SevenDay, 1.0)),
-                None => None,
-            },
+        if let Some(shared) = SharedWindow::parse(window) {
+            return Some((shared, 1.0));
+        }
+        match self.model_windows.get(window) {
+            Some(row) => Some((SharedWindow::parse(&row.of)?, row.capacity_factor)),
+            None if window.starts_with(SEVEN_DAY) => Some((SharedWindow::SevenDay, 1.0)),
+            None => None,
         }
     }
 
@@ -672,22 +701,23 @@ impl SubscriptionCosts {
         if !self.peak.covers(at) {
             return 1.0;
         }
-        self.band_capacity_factor(priced, entrypoint)
+        self.band_factors(entrypoint).on(priced)
     }
 
-    /// The factor the band sets on `priced` under the regime the entrypoint names, else the base one.
-    fn band_capacity_factor(&self, priced: SharedWindow, entrypoint: Option<&str>) -> f64 {
-        let factors = self
-            .regime_of(entrypoint)
-            .map_or(&self.peak.capacity_factor, |r| &r.peak.capacity_factor);
-        factors.on(priced)
+    /// The factors the band sets under the regime the entrypoint names, else the base ones.
+    fn band_factors(&self, entrypoint: Option<&str>) -> &PerWindow {
+        self.regime_of(entrypoint)
+            .map_or(&self.peak.capacity_factor, |r| &r.peak.capacity_factor)
     }
 
     /// The anchor tier's capacity on `window` under the regime `entrypoint` names, in this revision: what one unit's
     /// whole is while this revision is in force. A model week reads its shared window's row, and a regime's table
     /// divides by its own anchor row so an interactive pin ranks at the rate the meter charges it.
     pub fn anchor_capacity(&self, window: &str, entrypoint: Option<&str>) -> Option<f64> {
-        let (priced, _) = self.priced_window(window)?;
+        self.anchor_on(self.priced_window(window)?.0, entrypoint)
+    }
+
+    fn anchor_on(&self, priced: SharedWindow, entrypoint: Option<&str>) -> Option<f64> {
         self.capacity_of(entrypoint, &self.unit.tier)?.on(priced)
     }
 
@@ -695,13 +725,9 @@ impl SubscriptionCosts {
     /// or capacity. `None` where the model has no weight on the window.
     fn weighted_units(&self, window: &str, canonical_model: &str, usage: PinUsage) -> Option<f64> {
         let weight = self.weight(canonical_model, window)?;
-        let m = self.multipliers(canonical_model);
         Some(
-            usage.input as f64 * weight * m.input
-                + usage.cache_read as f64 * weight * m.cache_read
-                + usage.write_5m as f64 * weight * m.cache_write_5m
-                + usage.write_1h as f64 * weight * m.cache_write_1h
-                + usage.output as f64 * weight * m.output,
+            self.multipliers(canonical_model)
+                .units(weight, counts_of(usage)),
         )
     }
 
@@ -718,10 +744,53 @@ impl SubscriptionCosts {
         usage: PinUsage,
         at: i64,
     ) -> Option<f64> {
+        self.share_on(
+            &self.row_facts(entrypoint, tier, canonical_model, usage, at),
+            window,
+        )
+    }
+
+    /// `share_at` on each window `plan_windows(canonical_model)` walks, with the row's facts read once for all of them.
+    fn shares(
+        &self,
+        entrypoint: Option<&str>,
+        tier: &str,
+        canonical_model: &str,
+        usage: PinUsage,
+        band_at: i64,
+    ) -> WindowShares {
+        let facts = self.row_facts(entrypoint, tier, canonical_model, usage, band_at);
+        priced_windows(canonical_model, |window| self.share_on(&facts, window))
+    }
+
+    fn row_facts<'a>(
+        &'a self,
+        entrypoint: Option<&str>,
+        tier: &str,
+        canonical_model: &'a str,
+        usage: PinUsage,
+        band_at: i64,
+    ) -> RowFacts<'a> {
+        RowFacts {
+            band: self
+                .peak
+                .covers(band_at)
+                .then(|| self.band_factors(entrypoint)),
+            canonical_model,
+            capacity: self.capacity_of(entrypoint, tier),
+            counts: counts_of(usage),
+            multipliers: self.multipliers(canonical_model),
+        }
+    }
+
+    /// The one share step `share_at` and `shares` both take, so a row's map and a single window divide in one order.
+    fn share_on(&self, facts: &RowFacts<'_>, window: &str) -> Option<f64> {
         let (priced, divisor) = self.priced_window(window)?;
-        let units = self.weighted_units(window, canonical_model, usage)?;
-        let capacity = self.capacity_of(entrypoint, tier)?.on(priced)?;
-        Some(units / capacity / self.factor_at(priced, entrypoint, at) / divisor)
+        let weight = self.weight(facts.canonical_model, window)?;
+        let units = facts.multipliers.units(weight, facts.counts);
+        let capacity = facts.capacity?.on(priced)?;
+        let factor = facts.band.map_or(1.0, |factors| factors.on(priced));
+        Some(units / capacity / factor / divisor)
     }
 
     /// The units `usage` costs on `window` in this revision: the model's weight on the window times each type's
@@ -755,12 +824,16 @@ impl SubscriptionCosts {
         let (priced, divisor) = self.priced_window(window)?;
         let weight = self.weight(canonical_model, window)?;
         let capacity = self.capacity_of(entrypoint, tier)?.on(priced)?;
-        let m = self.multipliers(canonical_model);
-        let units = burn.input * weight * m.input
-            + burn.cache_read * weight * m.cache_read
-            + burn.write_5m * weight * m.cache_write_5m
-            + burn.write_1h * weight * m.cache_write_1h
-            + burn.output * weight * m.output;
+        let units = self.multipliers(canonical_model).units(
+            weight,
+            [
+                burn.input,
+                burn.cache_read,
+                burn.write_5m,
+                burn.write_1h,
+                burn.output,
+            ],
+        );
         Some(units / capacity / self.factor_at(priced, entrypoint, at) / divisor)
     }
 
@@ -790,7 +863,7 @@ impl SubscriptionCosts {
         let Some((priced, _)) = self.priced_window(window) else {
             return one(1.0);
         };
-        let factor = self.band_capacity_factor(priced, entrypoint);
+        let factor = self.band_factors(entrypoint).on(priced);
         if factor == 1.0 {
             return one(1.0);
         }
@@ -838,7 +911,7 @@ impl SubscriptionCosts {
         };
         let Some((divisor, capacity)) = self
             .priced_window(window)
-            .and_then(|(_, divisor)| Some((divisor, self.anchor_capacity(window, entrypoint)?)))
+            .and_then(|(priced, divisor)| Some((divisor, self.anchor_on(priced, entrypoint)?)))
         else {
             return RateTable {
                 rows: HashMap::new(),
@@ -885,13 +958,13 @@ impl SubscriptionCosts {
     pub fn tier_factor(&self, tier: &str, window: &str, entrypoint: Option<&str>) -> Option<f64> {
         let (priced, _) = self.priced_window(window)?;
         let capacity = self.capacity_of(entrypoint, tier)?.on(priced)?;
-        Some(capacity / self.anchor_capacity(window, entrypoint)?)
+        Some(capacity / self.anchor_on(priced, entrypoint)?)
     }
 
     /// True for the two shared windows and every model week the file names; a week priced as the 7-day share for
     /// want of a row reads false.
     pub fn measured(&self, window: &str) -> bool {
-        matches!(window, FIVE_HOUR | SEVEN_DAY) || self.model_windows.contains_key(window)
+        SharedWindow::parse(window).is_some() || self.model_windows.contains_key(window)
     }
 
     /// Whether `share_at` answers a share for any usage: the model has a weight on the window and the tier a
@@ -1055,10 +1128,7 @@ impl PlanTables {
     /// The operator's file when one is at the path, the shipped model when nothing is (`NotFound`), and the I/O
     /// error for any other failure to read it; `source` and `path` set to match.
     pub fn load(override_path: Option<&Path>) -> Result<PlanTables, LedgerError> {
-        let text = override_path
-            .map(crate::pricing::read_override)
-            .transpose()?
-            .flatten();
+        let text = crate::pricing::read_override(override_path)?;
         let path = override_path.map(Path::to_path_buf);
         Ok(match text {
             Some(text) => PlanTables {
@@ -1253,32 +1323,16 @@ pub fn funding_of(
     overage_in_use: Option<bool>,
     speed: Speed,
 ) -> Funding {
-    Funding::of(
-        account_kind == Some(AccountKind::ApiKey),
-        usage_based,
-        speed,
-        overage_in_use,
-    )
+    match (account_kind, usage_based, speed, overage_in_use) {
+        (Some(AccountKind::ApiKey), ..) => Funding::ApiKey,
+        (_, true, ..) => Funding::UsageBased,
+        (_, _, Speed::Fast, _) => Funding::Fast,
+        (_, _, _, Some(true)) => Funding::Overage,
+        _ => Funding::Plan,
+    }
 }
 
 impl Funding {
-    /// The funding of four facts in `Funding`'s order: an api_key account, a usage-based seat, a fast answer, the
-    /// overage the head reported, else the plan. `funding_of` and the kept-warm fold both read through it.
-    pub fn of(
-        api_key: bool,
-        usage_based: bool,
-        speed: Speed,
-        overage_in_use: Option<bool>,
-    ) -> Funding {
-        match (api_key, usage_based, speed, overage_in_use) {
-            (true, ..) => Funding::ApiKey,
-            (_, true, ..) => Funding::UsageBased,
-            (_, _, Speed::Fast, _) => Funding::Fast,
-            (_, _, _, Some(true)) => Funding::Overage,
-            _ => Funding::Plan,
-        }
-    }
-
     /// A rollup row's funding from its key's word alone: the key carries the served attempt's funding whole, so the
     /// kind the registry holds for the account now has no say, and a deleted or recreated account moves no row.
     pub fn of_rollup(funding: &str) -> Funding {
@@ -1334,10 +1388,10 @@ pub fn price_shares(
     at: i64,
     band_at: i64,
 ) -> WindowShares {
-    let costs = tables.revisions.in_force(at);
-    priced_windows(canonical_model, |window| {
-        costs.share_at(window, entrypoint, tier, canonical_model, usage, band_at)
-    })
+    tables
+        .revisions
+        .in_force(at)
+        .shares(entrypoint, tier, canonical_model, usage, band_at)
 }
 
 /// The Pro-week figure: `PlanTables::equivalent_at(SEVEN_DAY, entrypoint, canonical_model, usage, at, band_at, now)`,
