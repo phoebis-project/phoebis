@@ -293,7 +293,7 @@ async fn the_row_carries_the_callers_user_agent_and_the_log_filters_on_it() {
     );
     let matched = |agent: &str| {
         let filter = phoebis_ledger::RequestFilter {
-            user_agent: Some(agent.into()),
+            user_agent: phoebis_ledger::Patterns::new(vec![agent.into()]).unwrap(),
             ..Default::default()
         };
         h.db.read_blocking(|c| {
@@ -426,7 +426,7 @@ async fn the_row_carries_the_client_class_the_hints_and_the_turn_origin_and_the_
     );
     let matched_client = |pattern: &str| {
         let filter = phoebis_ledger::RequestFilter {
-            client: Some(pattern.into()),
+            client: phoebis_ledger::Patterns::new(vec![pattern.into()]).unwrap(),
             ..Default::default()
         };
         h.db.read_blocking(|c| {
@@ -612,7 +612,7 @@ async fn a_request_with_no_user_agent_is_found_by_the_wildcard_and_the_exact_das
     assert_eq!(ledgered(&h, &id).await.0.user_agent, None);
     let matched = |agent: &str| {
         let filter = phoebis_ledger::RequestFilter {
-            user_agent: Some(agent.into()),
+            user_agent: phoebis_ledger::Patterns::new(vec![agent.into()]).unwrap(),
             ..Default::default()
         };
         h.db.read_blocking(|c| {

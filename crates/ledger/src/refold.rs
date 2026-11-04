@@ -25,9 +25,7 @@ use serde::{Deserialize, Serialize};
 use crate::bodies::{first_kept_hour, request_cutoff};
 use crate::db::{begin_write, row_to_request, with_attempts, LedgerDb, REQUEST_SELECT};
 use crate::generations::PAGE;
-use crate::pricing::{
-    effective_instant, LongContext, ModelPrice, ModelRow, PriceRevisions, PriceTable,
-};
+use crate::pricing::{LongContext, ModelPrice, ModelRow, PriceRevisions, PriceTable};
 use crate::record::{AttemptRecord, RequestRecord};
 use crate::rollup::{deltas_of, fold_delta, read_rollup, unfold, RollupRow};
 use crate::LedgerError;
@@ -293,9 +291,10 @@ fn revisions_of(list: &[Thresholds]) -> Result<PriceRevisions, LedgerError> {
 /// they agree from `floor` on.
 fn first_difference(old: &PriceRevisions, new: &PriceRevisions, floor: i64) -> Option<i64> {
     let mut instants: Vec<i64> = old
+        .instants()
         .iter()
-        .chain(new.iter())
-        .filter_map(|table| effective_instant(&table.effective))
+        .chain(new.instants())
+        .copied()
         .filter(|instant| *instant > floor)
         .chain(std::iter::once(floor))
         .collect();

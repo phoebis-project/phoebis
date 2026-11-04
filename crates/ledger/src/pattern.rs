@@ -56,7 +56,7 @@ pub const MAX_PATTERNS: usize = 32;
 /// The refusal a route answers for a pattern or a list past the bounds.
 pub const PATTERNS_TOO_LONG: &str = "patterns are at most 256 characters, at most 32 of them";
 
-pub fn within_bounds(patterns: &[String]) -> bool {
+fn within_bounds(patterns: &[String]) -> bool {
     patterns.len() <= MAX_PATTERNS
         && patterns
             .iter()
@@ -84,12 +84,6 @@ impl Deref for Patterns {
 
     fn deref(&self) -> &[String] {
         &self.0
-    }
-}
-
-impl From<Patterns> for Vec<String> {
-    fn from(patterns: Patterns) -> Vec<String> {
-        patterns.0
     }
 }
 

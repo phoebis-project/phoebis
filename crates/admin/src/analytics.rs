@@ -1139,8 +1139,8 @@ pub(crate) async fn refusal_categories(
         accounts: list(&q, "accounts"),
         models: list(&q, "models"),
         kinds: list(&q, "kinds"),
-        user_agents: user_agents.into(),
-        clients: clients.into(),
+        user_agents,
+        clients,
         include_probes: flag(&q, "include_probes"),
         ..Default::default()
     };

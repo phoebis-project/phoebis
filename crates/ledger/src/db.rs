@@ -14,7 +14,8 @@ use std::time::Duration;
 
 use phoebis_store::migrations::{self, VersionError};
 use rusqlite::{
-    params, params_from_iter, Connection, OptionalExtension, Transaction, TransactionBehavior,
+    params, params_from_iter, Connection, OptionalExtension, Statement, Transaction,
+    TransactionBehavior,
 };
 
 use crate::pricing::PriceRevisions;
@@ -641,10 +642,14 @@ impl LedgerDb {
         limit: usize,
     ) -> Result<Vec<EventRecord>, LedgerError> {
         self.read(move |conn| {
-            let mut stmt = conn.prepare("SELECT at, kind, account_id, key_id, session_id, model, actor, detail, pool_id, agent_id, request_id FROM events WHERE at >= ?1 AND at < ?2 ORDER BY at, rowid LIMIT ?3")?;
+            let mut stmt = conn.prepare(concat!(
+                event_select!(),
+                " WHERE at >= ?1 AND at < ?2 ORDER BY at, rowid LIMIT ?3"
+            ))?;
             let rows = stmt.query_map(params![from, to, limit as i64], row_to_event)?;
             Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-        }).await
+        })
+        .await
     }
 
     pub fn insert_samples(
@@ -1096,17 +1101,26 @@ pub(crate) fn with_attempts(
     let ids: Vec<String> = requests.iter().map(|r| r.id.clone()).collect();
     let mut args: Vec<rusqlite::types::Value> = Vec::with_capacity(ids.len());
     let marks = bind_all(&ids, &mut args);
-    let mut stmt = conn.prepare(&format!(
-        "{ATTEMPT_SELECT} WHERE request_id IN ({marks}) ORDER BY request_id, attempt"
-    ))?;
-    let mut filed: HashMap<String, Vec<AttemptRecord>> = HashMap::new();
-    for attempt in stmt.query_map(params_from_iter(args), row_to_attempt)? {
-        let attempt = attempt?;
-        filed
-            .entry(attempt.request_id.clone())
-            .or_default()
-            .push(attempt);
-    }
+    let sql =
+        format!("{ATTEMPT_SELECT} WHERE request_id IN ({marks}) ORDER BY request_id, attempt");
+    let file = |stmt: &mut Statement<'_>| -> Result<_, LedgerError> {
+        let mut filed: HashMap<String, Vec<AttemptRecord>> = HashMap::new();
+        for attempt in stmt.query_map(params_from_iter(&args), row_to_attempt)? {
+            let attempt = attempt?;
+            filed
+                .entry(attempt.request_id.clone())
+                .or_default()
+                .push(attempt);
+        }
+        Ok(filed)
+    };
+    // A read by id binds one id, whose text never changes, so it takes the statement from the cache. A page's text
+    // changes with its length, so it compiles apart rather than evicting the cached statements.
+    let mut filed = if ids.len() == 1 {
+        file(&mut *conn.prepare_cached(&sql)?)?
+    } else {
+        file(&mut conn.prepare(&sql)?)?
+    };
     Ok(requests
         .into_iter()
         .map(|request| {
@@ -1115,6 +1129,52 @@ pub(crate) fn with_attempts(
         })
         .collect())
 }
+
+/// Each request of `page` given its matches in evaluation order, through one statement over the page's ids rather
+/// than one per request.
+pub(crate) fn fill_guardrails(
+    conn: &Connection,
+    page: &mut [RequestWithAttempts],
+) -> Result<(), LedgerError> {
+    if page.is_empty() {
+        return Ok(());
+    }
+    let ids: Vec<String> = page.iter().map(|(r, _)| r.id.clone()).collect();
+    let mut args: Vec<rusqlite::types::Value> = Vec::with_capacity(ids.len());
+    let marks = bind_all(&ids, &mut args);
+    let mut stmt = conn.prepare(&format!(
+        "SELECT request_id, guardrail_id, position, blocked FROM request_guardrails WHERE request_id IN ({marks}) \
+         ORDER BY request_id, position"
+    ))?;
+    let mut filed: HashMap<String, Vec<GuardrailMatchRecord>> = HashMap::new();
+    let rows = stmt.query_map(params_from_iter(args), |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            GuardrailMatchRecord {
+                guardrail_id: r.get(1)?,
+                position: r.get(2)?,
+                blocked: r.get(3)?,
+            },
+        ))
+    })?;
+    for row in rows {
+        let (request_id, matched) = row?;
+        filed.entry(request_id).or_default().push(matched);
+    }
+    for (request, _) in page {
+        request.guardrails = filed.remove(&request.id).unwrap_or_default();
+    }
+    Ok(())
+}
+
+/// The select of the `events` columns in the order `row_to_event` reads them, a literal so a constant statement can
+/// `concat!` it.
+macro_rules! event_select {
+    () => {
+        "SELECT at, kind, account_id, key_id, session_id, model, actor, detail, pool_id, agent_id, request_id FROM events"
+    };
+}
+pub(crate) use event_select;
 
 /// An `events` row in the column order every reader of the table selects.
 pub(crate) fn row_to_event(r: &rusqlite::Row<'_>) -> rusqlite::Result<EventRecord> {

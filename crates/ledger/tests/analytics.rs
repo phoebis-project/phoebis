@@ -1378,7 +1378,8 @@ fn plant_callers(db: &LedgerDb) {
 
 /// The count over the planted range under the two pattern lists.
 fn count_under(db: &LedgerDb, clients: &[&str], user_agents: &[&str]) -> Vec<(String, u64)> {
-    let words = |list: &[&str]| list.iter().map(|w| w.to_string()).collect();
+    let words =
+        |list: &[&str]| Patterns::new(list.iter().map(|w| w.to_string()).collect()).unwrap();
     let filter = RequestFilter {
         clients: words(clients),
         user_agents: words(user_agents),

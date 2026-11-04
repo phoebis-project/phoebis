@@ -123,6 +123,32 @@ fn a_request_with_two_matches_round_trips_through_the_row_and_the_child_table() 
     );
 }
 
+/// The list reads a page's matches together, so each request of the page answers its own matches, the later one's
+/// kept beside the earlier one's.
+#[test]
+fn a_listed_page_answers_each_requests_own_matches() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let older = request(
+        "r1",
+        5_000,
+        "k",
+        vec![matched("zz-watch", 0, false), matched("aa-block", 1, true)],
+    );
+    let newer = request("r2", 6_000, "k", vec![matched("mm-watch", 0, false)]);
+    db.insert_request(&older, &[], None).unwrap();
+    db.insert_request(&newer, &[], None).unwrap();
+    let listed: Vec<RequestRecord> = db
+        .read_blocking(|c| {
+            list_requests(c, &RequestFilter::default(), &LiveKeys::default(), None, 10)
+        })
+        .unwrap()
+        .0
+        .into_iter()
+        .map(|(r, _)| r)
+        .collect();
+    assert_eq!(listed, [newer, older]);
+}
+
 /// A record written again under its id replaces its matches: the child rows it no longer names leave with the write.
 #[test]
 fn a_row_written_again_replaces_its_child_rows() {

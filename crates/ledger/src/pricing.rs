@@ -171,6 +171,11 @@ impl<T> Revisions<T> {
         self.revisions.iter()
     }
 
+    /// Each entry's instant, in the entries' order.
+    pub fn instants(&self) -> &[i64] {
+        &self.instants
+    }
+
     pub fn len(&self) -> usize {
         self.revisions.len()
     }

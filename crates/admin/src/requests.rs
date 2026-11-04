@@ -12,8 +12,8 @@ use phoebis_bus::Classifier;
 use phoebis_ledger::{
     entrypoint_of_client, free_equivalent, free_shares, funding_of, list_request_page,
     price_equivalent, price_shares, request_by_id, request_events, AttemptRecord, Funding,
-    LiveKeys, PlanTables, PriceRevisions, RequestCursor, RequestFilter, RequestRecord, Speed,
-    WindowShares, SHARE_REASON_CLIENT_CLASSIFIER,
+    LiveKeys, Patterns, PlanTables, PriceRevisions, RequestCursor, RequestFilter, RequestRecord,
+    Speed, WindowShares, SHARE_REASON_CLIENT_CLASSIFIER,
 };
 use phoebis_routing::{UtilizationSample, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_OVERAGE_INCLUDED};
 use serde_json::Value;
@@ -933,6 +933,19 @@ pub(crate) async fn list(
     let Ok(statuses) = statuses else {
         return failure(StatusCode::BAD_REQUEST, "statuses are numbers");
     };
+    let single = |value: Option<&String>| {
+        Patterns::new(
+            value
+                .filter(|v| !v.is_empty())
+                .cloned()
+                .into_iter()
+                .collect(),
+        )
+    };
+    let (Ok(user_agent), Ok(client)) = (single(q.get("user_agent")), single(q.get("client")))
+    else {
+        return failure(StatusCode::BAD_REQUEST, phoebis_ledger::PATTERNS_TOO_LONG);
+    };
     let filter = RequestFilter {
         // An emptied field in the view's bar narrows nothing, as an absent one.
         text: q.get("text").filter(|v| !v.is_empty()).cloned(),
@@ -947,10 +960,10 @@ pub(crate) async fn list(
         kinds: list_param(&q, "kinds"),
         statuses,
         outcomes: list_param(&q, "outcomes"),
-        user_agent: q.get("user_agent").filter(|v| !v.is_empty()).cloned(),
-        client: q.get("client").filter(|v| !v.is_empty()).cloned(),
-        clients: Vec::new(),
-        user_agents: Vec::new(),
+        user_agent,
+        client,
+        clients: Patterns::default(),
+        user_agents: Patterns::default(),
         agent_types: list_param(&q, "agent_types"),
         turn_origins: list_param(&q, "turn_origins"),
         speeds: list_param(&q, "speeds"),
@@ -967,11 +980,6 @@ pub(crate) async fn list(
         refusal_categories: list_param(&q, "refusal_categories"),
         fixed_end: flag(&q, "fixed_end"),
     };
-    if !phoebis_ledger::patterns_within_bounds(filter.user_agent.as_slice())
-        || !phoebis_ledger::patterns_within_bounds(filter.client.as_slice())
-    {
-        return failure(StatusCode::BAD_REQUEST, phoebis_ledger::PATTERNS_TOO_LONG);
-    }
     let limit = match q.get("limit") {
         None => DEFAULT_LIMIT,
         Some(raw) => match raw.parse::<usize>() {
