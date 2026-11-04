@@ -3114,8 +3114,7 @@ impl Engine {
         let snapshot = self.parts.router.snapshot();
         let mut inner = self.lock();
         if inner.compactions.contains_key(&selected.request_id) {
-            if inner.closed {
-                inner.late_updates += 1;
+            if inner.quiesced() {
                 return;
             }
             if let Some(agent) = inner.compaction_agent(&selected.request_id) {
@@ -3135,14 +3134,9 @@ impl Engine {
             }
             return;
         }
-        let Some((key, agent_id)) = inner.pending.get(&selected.request_id).cloned() else {
+        let Some((key, agent_id)) = inner.followed(&selected.request_id) else {
             return;
         };
-        // Refused after the quiesce as the completion is, and counted: `live` would refuse it uncounted.
-        if inner.closed {
-            inner.late_updates += 1;
-            return;
-        }
         if !inner.live(&key, &agent_id) {
             return;
         }
@@ -3202,8 +3196,7 @@ impl Engine {
     fn on_head(&self, head: ResponseHead) {
         let mut inner = self.lock();
         if inner.compactions.contains_key(&head.request_id) {
-            if inner.closed {
-                inner.late_updates += 1;
+            if inner.quiesced() {
                 return;
             }
             if let Some(compaction) = inner
@@ -3218,13 +3211,9 @@ impl Engine {
             }
             return;
         }
-        let Some((key, agent_id)) = inner.pending.get(&head.request_id).cloned() else {
+        let Some((key, agent_id)) = inner.followed(&head.request_id) else {
             return;
         };
-        if inner.closed {
-            inner.late_updates += 1;
-            return;
-        }
         if !inner.live(&key, &agent_id) {
             return;
         }
@@ -3256,8 +3245,7 @@ impl Engine {
         };
         let mut inner = self.lock();
         if inner.compactions.contains_key(&chunk.request_id) {
-            if inner.closed {
-                inner.late_updates += 1;
+            if inner.quiesced() {
                 return;
             }
             // A failed attempt's stream is no evidence about the cache, as for a turn.
@@ -3273,13 +3261,9 @@ impl Engine {
             }
             return;
         }
-        let Some((key, agent_id)) = inner.pending.get(&chunk.request_id).cloned() else {
+        let Some((key, agent_id)) = inner.followed(&chunk.request_id) else {
             return;
         };
-        if inner.closed {
-            inner.late_updates += 1;
-            return;
-        }
         if !inner.live(&key, &agent_id) {
             return;
         }
@@ -3297,8 +3281,7 @@ impl Engine {
         let now = self.now();
         let mut inner = self.lock();
         if inner.compactions.contains_key(&complete.request_id) {
-            if inner.closed {
-                inner.late_updates += 1;
+            if inner.quiesced() {
                 return;
             }
             let credit = inner.complete_compaction(&complete, now);
@@ -3308,15 +3291,9 @@ impl Engine {
         if let Some(mark) = inner.contradiction_marks.remove(&complete.request_id) {
             self.read_chain_mark(&mut inner, mark, &complete, now);
         }
-        let Some((key, agent_id)) = inner.pending.get(&complete.request_id).cloned() else {
+        let Some((key, agent_id)) = inner.followed(&complete.request_id) else {
             return;
         };
-        // After the quiesce the last save holds the agent as it stood then, so a completion that lands later earns no
-        // credit and arms nothing. The relay has already answered the client either way.
-        if inner.closed {
-            inner.late_updates += 1;
-            return;
-        }
         inner.touch_agent(&key, &agent_id);
         if agent_id == MAIN_AGENT {
             if let Some(prompt) = reported_prompt(complete.usage.as_ref()) {
@@ -3602,6 +3579,26 @@ impl Engine {
 }
 
 impl Inner {
+    /// Whether the engine is closed, counting the event that meets it as a late update.
+    fn quiesced(&mut self) -> bool {
+        if self.closed {
+            self.late_updates += 1;
+        }
+        self.closed
+    }
+
+    /// The agent following `request_id`, `None` for a request no agent follows and for any once the engine is
+    /// closed. After the quiesce the last save holds each agent as it stood then, so a later event is refused and
+    /// counted, where `live` would refuse it uncounted: a completion earns no credit and arms nothing, and the relay
+    /// has answered the client either way.
+    fn followed(&mut self, request_id: &str) -> Option<(SessionKey, String)> {
+        let followed = self.pending.get(request_id).cloned()?;
+        if self.quiesced() {
+            return None;
+        }
+        Some(followed)
+    }
+
     /// The agent holding the compaction `request_id` opened while it may still take a result, `None` for one its
     /// agent no longer holds, as for a request the engine never followed.
     fn compaction_agent(&mut self, request_id: &str) -> Option<&mut Agent> {
