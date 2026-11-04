@@ -8,6 +8,7 @@ use std::time::Duration;
 use hyper::Method;
 use jiff::tz::TimeZone;
 use jiff::Timestamp;
+use phoebis_routing::{FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
 use serde_json::{json, Value};
 
 use crate::admin_client::{AdminClient, ClientError, Common};
@@ -399,7 +400,7 @@ fn pools_block(screen: &mut Screen, answer: &Value, accounts: &Accounts, clock: 
         let fable = members.iter().any(|member| {
             accounts
                 .get(text(&member["account_id"]))
-                .is_some_and(|account| windows_of(account).contains_key("fable"))
+                .is_some_and(|account| windows_of(account).contains_key(SEVEN_DAY_FABLE))
         });
         // A seat's spend cells are wider than the window cells they stand in for, so its row prints them after its
         // eligibility word and outside the block's columns, which every other member's row keeps as it would without
@@ -468,13 +469,13 @@ fn windows_cells(account: &Value, clock: &Clock, fable_column: bool) -> Vec<Stri
         ]
     } else {
         vec![
-            format!("5h {}", percent("5h")),
-            format!("7d {}", percent("7d")),
+            format!("5h {}", percent(FIVE_HOUR)),
+            format!("7d {}", percent(SEVEN_DAY)),
         ]
     };
     if fable_column && !spend.is_object() {
-        cells.push(if windows.contains_key("fable") {
-            format!("fable {}", percent("fable"))
+        cells.push(if windows.contains_key(SEVEN_DAY_FABLE) {
+            format!("fable {}", percent(SEVEN_DAY_FABLE))
         } else {
             String::new()
         });
@@ -546,27 +547,20 @@ fn utc_date(at: &Value) -> String {
         })
 }
 
-/// The account's windows under the three ids the screen prints, mapped as the console maps the wire's spellings,
-/// the newest sample winning when two spellings name one window.
+/// The account's windows under the three ids the screen prints, each of which the accounts route answers once.
 fn windows_of(account: &Value) -> BTreeMap<&'static str, &Value> {
-    let mut windows: BTreeMap<&'static str, &Value> = BTreeMap::new();
-    for window in account["windows"].as_array().into_iter().flatten() {
-        let id = match text(&window["id"]) {
-            "5h" | "five_hour" => "5h",
-            "7d" | "seven_day" => "7d",
-            "7d_oi" | "fable" | "seven_day_fable" | phoebis_routing::SEVEN_DAY_OVERAGE_INCLUDED => {
-                "fable"
-            }
-            _ => continue,
-        };
-        let newer = windows
-            .get(id)
-            .is_none_or(|seen| window["observed_at"].as_i64() > seen["observed_at"].as_i64());
-        if newer {
-            windows.insert(id, window);
-        }
-    }
-    windows
+    account["windows"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|window| {
+            let id = text(&window["id"]);
+            let id = [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE]
+                .into_iter()
+                .find(|known| *known == id)?;
+            Some((id, window))
+        })
+        .collect()
 }
 
 /// `pins` as the sessions route answers them: one row per session, the main agent's pin when the session has one.
