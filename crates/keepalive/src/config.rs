@@ -7,6 +7,12 @@ use serde::{Deserialize, Serialize};
 
 pub use phoebis_routing::{FIVE_MINUTES_MS, ONE_HOUR_MS};
 
+/// An agent's TTL as its schedule, its ceilings and its credit read it: an entry whose TTL no evidence named yet, 0,
+/// lives the API's default five minutes.
+pub(crate) fn floor_ttl_ms(ttl_ms: i64) -> i64 {
+    ttl_ms.max(FIVE_MINUTES_MS)
+}
+
 /// A probe follows the session pin, and a pin shorter than the shortest cache TTL cannot keep the session on
 /// the account the probe warmed.
 pub const MIN_AFFINITY_SECONDS: u64 = 300;

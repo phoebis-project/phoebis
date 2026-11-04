@@ -29,7 +29,8 @@ use crate::breakeven::{
     resolve, resolve_pool, shipped_tightest, CeilingInputs, Ceilings, FactorRows, ResolvedCeilings,
 };
 use crate::config::{
-    KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, FIVE_MINUTES_MS, MAX_WORKERS, ONE_HOUR_MS,
+    floor_ttl_ms, KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, FIVE_MINUTES_MS, MAX_WORKERS,
+    ONE_HOUR_MS,
 };
 use crate::persist::Dirty;
 use crate::probe::{ceiling, run_job, wasted_label, ProbeJob};
@@ -950,7 +951,7 @@ impl PriorCoverage {
         account: Option<&str>,
         read: u64,
     ) -> bool {
-        let ttl = self.ttl_ms.max(crate::config::FIVE_MINUTES_MS);
+        let ttl = floor_ttl_ms(self.ttl_ms);
         let gap_exceeded = request_started - self.real_at > ttl;
         // The entry the probe kept has to be there when this request arrives, on the boundary the settlement and the
         // scheduler read (`answer.started` before `chain_end`, `now >= expires`): a request at or after the lapse read
@@ -4420,7 +4421,7 @@ pub(crate) fn ceilings_for(
         ),
         _ => Funding::ApiKey,
     };
-    let ttl_ms = agent.ttl_ms.max(FIVE_MINUTES_MS);
+    let ttl_ms = floor_ttl_ms(agent.ttl_ms);
     resolve(
         policy,
         rows.factors(
@@ -4455,7 +4456,7 @@ pub(crate) fn gate(
     // A probe keeps the session on the account it warmed only while the pin outlives the probe's due time:
     // the recipe's own TTL less the lead, so a five-minute recipe needs about four minutes of pin and a
     // one-hour one about fifty-four. The save-time floor of 300 s stays the one hard refusal.
-    let due_after_ms = agent.ttl_ms.max(FIVE_MINUTES_MS) - agent.timing.lead_ms(agent.ttl_ms);
+    let due_after_ms = floor_ttl_ms(agent.ttl_ms) - agent.timing.lead_ms(agent.ttl_ms);
     if (pool.affinity_ttl_seconds as i64).saturating_mul(1_000) < due_after_ms {
         return Err(Gate::Hold(Reason::AffinityTooShort));
     }
