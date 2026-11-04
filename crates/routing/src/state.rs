@@ -85,8 +85,7 @@ pub(crate) fn effort_of(pin: &PinRow) -> Option<&str> {
 
 /// Where a window's reading came from: a response head, the usage poll, the registry at start (which keeps no
 /// origin), or the router's own prediction once a charge or a passed reset moved the stored reading.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WindowSource {
     Head,
     Poll,
