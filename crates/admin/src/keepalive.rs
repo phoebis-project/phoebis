@@ -8,7 +8,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_keepalive::{IdleReturns, Wasted, IDLE_AGE_BOUNDS_SECONDS};
-use phoebis_ledger::{hour_of, read_rollups, RollupSelect, PROBE_KIND, UNATTRIBUTED};
+use phoebis_ledger::{hour_of, read_overview_rollups, PROBE_KIND, UNATTRIBUTED};
 use utoipa::ToSchema;
 
 use crate::analytics::ledger_failure;
@@ -151,7 +151,7 @@ pub(crate) async fn overview(
     let rows = match state
         .ledger
         .db()
-        .read(move |c| read_rollups(c, day, to, &RollupSelect::default()))
+        .read(move |c| read_overview_rollups(c, day, to))
         .await
     {
         Ok(rows) => rows,

@@ -746,6 +746,47 @@ fn slow_down_held_ms(held: Option<&str>) -> Option<u64> {
     (!slowed.is_empty()).then(|| slowed.iter().sum())
 }
 
+/// The 17 columns of a rollup row the keepalive overview folds, which `read_overview_rollups` answers. The overview
+/// reads a day of every row on each poll and holds a reader connection through the decode, so it reads these alone in
+/// place of all 58 a `RollupRow` decodes, the four histograms among them.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct OverviewRollupRow {
+    pub kind: String,
+    pub funding: String,
+    pub pool_id: String,
+    pub account_id: String,
+    pub succeeded: u64,
+    pub failed: u64,
+    pub rate_limited: u64,
+    pub exhausted: u64,
+    pub rejected: u64,
+    pub incomplete: u64,
+    pub probes_held: u64,
+    pub probe_migrated: u64,
+    pub probes_skipped: u64,
+    pub kept_warm_requests: u64,
+    pub wasted_probes: u64,
+    pub wasted_probe_reasons: BTreeMap<String, u64>,
+    pub cache_miss_reasons: BTreeMap<String, u64>,
+}
+
+impl OverviewRollupRow {
+    pub fn probe_view(&self) -> ProbeView<'_> {
+        ProbeView {
+            exhausted: self.exhausted,
+            failed: self.failed,
+            funding: &self.funding,
+            incomplete: self.incomplete,
+            probe_migrated: self.probe_migrated,
+            probes_held: self.probes_held,
+            probes_skipped: self.probes_skipped,
+            rate_limited: self.rate_limited,
+            rejected: self.rejected,
+            succeeded: self.succeeded,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AccountRollupRow {
     pub hour: i64,
@@ -2141,6 +2182,42 @@ pub(crate) fn visit_rollups(
         visit(row?);
     }
     Ok(())
+}
+
+/// The overview's rows of `[from_hour, to_hour)` in no order, since its fold only sums them.
+pub fn read_overview_rollups(
+    conn: &Connection,
+    from_hour: i64,
+    to_hour: i64,
+) -> Result<Vec<OverviewRollupRow>, LedgerError> {
+    let mut stmt = conn.prepare(
+        "SELECT kind, funding, pool_id, account_id, succeeded, failed, rate_limited, exhausted, rejected, \
+         incomplete, probes_held, probe_migrated, probes_skipped, kept_warm_requests, wasted_probes, \
+         wasted_probe_reasons_json, cache_miss_reasons_json FROM rollups_hourly WHERE hour >= ?1 AND hour < ?2",
+    )?;
+    let rows = stmt.query_map(params![from_hour, to_hour], |r| {
+        let u = |i: usize| -> rusqlite::Result<u64> { Ok(r.get::<_, i64>(i)? as u64) };
+        Ok(OverviewRollupRow {
+            kind: r.get(0)?,
+            funding: r.get(1)?,
+            pool_id: r.get(2)?,
+            account_id: r.get(3)?,
+            succeeded: u(4)?,
+            failed: u(5)?,
+            rate_limited: u(6)?,
+            exhausted: u(7)?,
+            rejected: u(8)?,
+            incomplete: u(9)?,
+            probes_held: u(10)?,
+            probe_migrated: u(11)?,
+            probes_skipped: u(12)?,
+            kept_warm_requests: u(13)?,
+            wasted_probes: u(14)?,
+            wasted_probe_reasons: counts_at(r, 15)?,
+            cache_miss_reasons: counts_at(r, 16)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
 /// The rows of `[from_hour, to_hour)` under `select`, one `PAGE_HOURS` page per `read`, handed to `visit` in the
