@@ -654,7 +654,7 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
     ),
 )]
 pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
-    let context = match pool_context(&state).await {
+    let context = match pool_context(&state, None).await {
         Ok(context) => context,
         Err(error) => return store_failure(error),
     };
@@ -1363,10 +1363,14 @@ pub(crate) struct PoolContext {
     traffic: BTreeMap<String, Vec<phoebis_ledger::TrafficBucket>>,
 }
 
-/// One registry read for the pools, members, keys and accounts, one ledger read for the day's totals, every pool's
-/// traffic and every account's moves, and one ask of the router for each of its tables, in the shape of the account
-/// list's context.
-pub(crate) async fn pool_context(state: &AdminState) -> Result<PoolContext, StoreError> {
+/// One registry read for the pools, members, keys and accounts, one ledger read for the day's totals, the traffic
+/// of the pools it answers and every account's moves, and one ask of the router for each of its tables, in the shape
+/// of the account list's context. `pool` names the one pool a single-pool answer reads the traffic and the
+/// projections of, and `None` reads them for every pool.
+pub(crate) async fn pool_context(
+    state: &AdminState,
+    pool: Option<&str>,
+) -> Result<PoolContext, StoreError> {
     let registry = state.store.load_registry()?;
     let guardrails = AttachmentIndex::from_load(&registry);
     let now = (state.clock)();
@@ -1374,36 +1378,45 @@ pub(crate) async fn pool_context(state: &AdminState) -> Result<PoolContext, Stor
     let to = crate::analytics::hour_end(hour);
     let prices = state.pricing.revisions();
     let tables = state.tables.clone();
-    let pool_ids: Vec<String> = registry.pools.iter().map(|p| p.id.clone()).collect();
+    let pool_ids: Vec<String> = match pool {
+        Some(id) => vec![id.to_owned()],
+        None => registry.pools.iter().map(|p| p.id.clone()).collect(),
+    };
     // The traffic starts at the hour the day's totals start at, so a pool's bars sum to its `requests_24h`: 25
     // buckets, the current partial hour last.
     let day_start = hour - 24 * 3_600;
-    let (day, traffic, moves) = state
-        .ledger
-        .db()
-        .read(move |c| {
-            Ok((
-                phoebis_ledger::request_totals(
-                    c,
-                    phoebis_ledger::TotalsBy::Pool,
-                    day_start,
-                    to,
-                    &prices,
-                    &tables,
-                    now,
-                )?,
-                phoebis_ledger::pools_traffic(
-                    c, &pool_ids, day_start, to, 3_600, &prices, &tables, now,
-                )?,
-                phoebis_ledger::pin_migrations_by_account_and_reason(c, now - 3_600_000, now)?,
-            ))
-        })
-        .await
-        .unwrap_or_default();
+    // A registry with no pool answers no row, so it reads nothing from the ledger.
+    let (day, traffic, moves) = if pool_ids.is_empty() {
+        Default::default()
+    } else {
+        let ids = pool_ids.clone();
+        state
+            .ledger
+            .db()
+            .read(move |c| {
+                Ok((
+                    phoebis_ledger::request_totals(
+                        c,
+                        phoebis_ledger::TotalsBy::Pool,
+                        day_start,
+                        to,
+                        &prices,
+                        &tables,
+                        now,
+                    )?,
+                    phoebis_ledger::pools_traffic(
+                        c, &ids, day_start, to, 3_600, &prices, &tables, now,
+                    )?,
+                    phoebis_ledger::pin_migrations_by_account_and_reason(c, now - 3_600_000, now)?,
+                ))
+            })
+            .await
+            .unwrap_or_default()
+    };
     let mut projections = BTreeMap::new();
-    for pool in &registry.pools {
-        if let Ok(members) = state.router.projections(&pool.id).await {
-            projections.insert(pool.id.clone(), members);
+    for id in pool_ids {
+        if let Ok(members) = state.router.projections(&id).await {
+            projections.insert(id, members);
         }
     }
     Ok(PoolContext {
@@ -1427,7 +1440,7 @@ pub(crate) async fn pool_context(state: &AdminState) -> Result<PoolContext, Stor
 
 /// One pool over a context built for it alone, for the routes that answer a single pool.
 pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Pool, StoreError> {
-    let context = pool_context(state).await?;
+    let context = pool_context(state, Some(&row.id)).await?;
     Ok(pool_json_from(state, &context, row).await)
 }
 
