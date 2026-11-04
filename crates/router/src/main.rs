@@ -14,7 +14,7 @@ use phoebis_router::backup::{self, BackupArgs};
 use phoebis_router::recover_key::{self, RecoverKeyArgs};
 use phoebis_router::status::{self, Listeners, StatusArgs};
 use phoebis_router::tls_reload::{self, TlsReloadArgs};
-use phoebis_router::{init, tls};
+use phoebis_router::{app, init, tls};
 
 #[derive(Parser)]
 #[command(
@@ -97,10 +97,7 @@ fn main() -> anyhow::Result<()> {
                 if config.proxy.sign_cch_placeholder { "on" } else { "off" },
                 config.proxy.upstream_gzip
             );
-            println!(
-                "profile {}",
-                phoebis_profile::claude_code_2_1_310_linux_x64().name
-            );
+            println!("profile {}", app::profile().name);
             println!(
                 "routing: cooldown_fallback {}s, model_rejection {}s, catalog refresh {}s, startup fetch {}s",
                 config.routing.cooldown_fallback_seconds,
@@ -110,18 +107,7 @@ fn main() -> anyhow::Result<()> {
             );
             println!("ledger at {}", config.stats.ledger_path.display());
             // The start refuses a price file or a cost model it cannot use, so the check reads both the same way.
-            let pricing = phoebis_ledger::Pricing::load(config.stats.api_prices_path.as_deref())
-                .with_context(|| {
-                    format!(
-                        "loading the price table from {}",
-                        config
-                            .stats
-                            .api_prices_path
-                            .as_deref()
-                            .map(|p| p.display().to_string())
-                            .unwrap_or_else(|| "the built-in table".to_string())
-                    )
-                })?;
+            let pricing = app::load_pricing(&config.stats)?;
             let now = jiff::Timestamp::now().as_millisecond();
             let revisions = pricing.revisions();
             let prices = revisions.in_force(now);
@@ -136,19 +122,7 @@ fn main() -> anyhow::Result<()> {
                     format!("{} models", prices.models.len())
                 )
             );
-            let tables =
-                phoebis_ledger::PlanTables::load(config.stats.subscription_costs_path.as_deref())
-                    .with_context(|| {
-                    format!(
-                        "loading the subscription cost model from {}",
-                        config
-                            .stats
-                            .subscription_costs_path
-                            .as_deref()
-                            .map(|p| p.display().to_string())
-                            .unwrap_or_else(|| "the built-in model".to_string())
-                    )
-                })?;
+            let tables = app::load_plan_tables(&config.stats)?;
             let costs = tables.revisions.in_force(now);
             let weighted = costs.weighted_model_count();
             let sized = costs.sized_tier_count();
@@ -195,10 +169,7 @@ fn main() -> anyhow::Result<()> {
                 config.keepalive.max_agents,
                 config.keepalive.max_retained_bytes >> 20
             );
-            let key_file = &config.storage.encryption_key_file;
-            let key = phoebis_store::StorageKey::from_file(key_file).with_context(|| {
-                format!("reading storage.encryption_key_file {}", key_file.display())
-            })?;
+            let key = app::load_storage_key(&config.storage)?;
             let registry = &config.storage.path;
             // The mismatch names the registry itself and is the whole finding; any other failure (an unreadable
             // directory, a file that is not a database) says nothing of which file it met.

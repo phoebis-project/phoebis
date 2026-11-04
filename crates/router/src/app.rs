@@ -27,7 +27,7 @@ use phoebis_transport::pool::Pool;
 use phoebis_transport::{connector_builder, trust_extra_ca, Plane};
 use tokio::task::JoinHandle;
 
-use crate::config::{Config, RoutingConfig, UpstreamConfig};
+use crate::config::{Config, RoutingConfig, StatsConfig, StorageConfig, UpstreamConfig};
 use crate::{listen, tls};
 
 /// The whole shutdown's budget: every bounded phase takes what remains of it in order, so a phase that overran
@@ -106,14 +106,9 @@ pub async fn run_until(
     // Read here rather than carried on `Config`, so a configuration read without the service's environment holds no
     // stand-in secret a start could serve under.
     let admin_secret = crate::config::from_env(&config.admin.secret_env)?;
-    let profile = phoebis_profile::claude_code_2_1_310_linux_x64();
+    let profile = profile();
 
-    let key = StorageKey::from_file(&config.storage.encryption_key_file).with_context(|| {
-        format!(
-            "reading storage.encryption_key_file {}",
-            config.storage.encryption_key_file.display()
-        )
-    })?;
+    let key = load_storage_key(&config.storage)?;
     let store = Arc::new(
         Store::open(&config.storage.path, &key)
             .with_context(|| format!("opening the store at {}", config.storage.path.display()))?,
@@ -171,35 +166,10 @@ pub async fn run_until(
         clock.clone(),
     ));
     // Loaded ahead of the routing task, which prices every burn through it from its first renewal on.
-    let pricing = Arc::new(
-        Pricing::load(config.stats.api_prices_path.as_deref()).with_context(|| {
-            format!(
-                "loading the price table from {}",
-                config
-                    .stats
-                    .api_prices_path
-                    .as_deref()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_else(|| "the built-in table".to_string())
-            )
-        })?,
-    );
+    let pricing = Arc::new(load_pricing(&config.stats)?);
     // One copy of the subscription cost model for every reader: the router's burn rates, band and share pricer, the
     // keepalive's settlements and the admin's session burn and settings echo.
-    let tables = Arc::new(
-        phoebis_ledger::PlanTables::load(config.stats.subscription_costs_path.as_deref())
-            .with_context(|| {
-                format!(
-                    "loading the subscription cost model from {}",
-                    config
-                        .stats
-                        .subscription_costs_path
-                        .as_deref()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_else(|| "the built-in model".to_string())
-                )
-            })?,
-    );
+    let tables = Arc::new(load_plan_tables(&config.stats)?);
     let revisions = pricing.revisions();
     let started = clock();
     let prices = revisions.in_force(started);
@@ -847,6 +817,50 @@ fn live_pair(serving: tls::Serving, now: i64) -> Option<tls::Live> {
         tls::Serving::Plain => None,
         tls::Serving::Tls(loaded) => Some(tls::Live::new(loaded, now)),
     }
+}
+
+/// The client build the router relays as, which the start serves and `check-config` names.
+pub fn profile() -> &'static phoebis_profile::Profile {
+    phoebis_profile::claude_code_2_1_310_linux_x64()
+}
+
+/// The storage key, refused under the line the start and `check-config` both print.
+pub fn load_storage_key(storage: &StorageConfig) -> anyhow::Result<StorageKey> {
+    StorageKey::from_file(&storage.encryption_key_file).with_context(|| {
+        format!(
+            "reading storage.encryption_key_file {}",
+            storage.encryption_key_file.display()
+        )
+    })
+}
+
+/// The price table, from `stats.api_prices_path` or built in, refused under the line the start and `check-config`
+/// both print.
+pub fn load_pricing(stats: &StatsConfig) -> anyhow::Result<Pricing> {
+    let path = stats.api_prices_path.as_deref();
+    Pricing::load(path).with_context(|| {
+        format!(
+            "loading the price table from {}",
+            file_or(path, "the built-in table")
+        )
+    })
+}
+
+/// The subscription cost model, from `stats.subscription_costs_path` or built in, refused under the line the start and
+/// `check-config` both print.
+pub fn load_plan_tables(stats: &StatsConfig) -> anyhow::Result<phoebis_ledger::PlanTables> {
+    let path = stats.subscription_costs_path.as_deref();
+    phoebis_ledger::PlanTables::load(path).with_context(|| {
+        format!(
+            "loading the subscription cost model from {}",
+            file_or(path, "the built-in model")
+        )
+    })
+}
+
+/// Where a table is loaded from, for a refusal's line: the file, or the built-in one's name.
+fn file_or(path: Option<&std::path::Path>, built_in: &str) -> String {
+    path.map_or_else(|| built_in.to_owned(), |path| path.display().to_string())
 }
 
 /// The accept loop's acceptor: the pair's own, so a reload reaches the loop.
