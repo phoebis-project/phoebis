@@ -6,11 +6,11 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::header::CONTENT_TYPE;
-use axum::http::{HeaderMap, Request, StatusCode};
+use axum::http::{Request, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::Router;
-use phoebis_relay::{authenticated_key, new_request_id, no_store};
+use phoebis_relay::{authenticated_key, is_json, new_request_id, no_store};
 
 use crate::engine::Engine;
 use crate::events::{decode_json_event, err, EventError};
@@ -43,14 +43,6 @@ fn json(status: StatusCode, body: String) -> Response {
 fn event_error(error: EventError) -> Response {
     let status = StatusCode::from_u16(error.status).unwrap_or(StatusCode::BAD_REQUEST);
     json(status, serde_json::to_string(&error).unwrap_or_default())
-}
-
-fn is_json(headers: &HeaderMap) -> bool {
-    headers
-        .get(CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(';').next())
-        .is_some_and(|essence| essence.trim().eq_ignore_ascii_case("application/json"))
 }
 
 async fn events(State(engine): State<Arc<Engine>>, request: Request<Body>) -> Response {

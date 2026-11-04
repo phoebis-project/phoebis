@@ -44,6 +44,16 @@ pub fn presented_key(headers: &HeaderMap) -> Result<&str, AuthError> {
     Ok(presented)
 }
 
+/// Whether the body's `Content-Type` names `application/json`, its parameters aside: the admin gate and the keepalive
+/// events route each hold a body-carrying write to it, and a missing or unreadable header reads as not JSON.
+pub fn is_json(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|essence| essence.trim().eq_ignore_ascii_case("application/json"))
+}
+
 /// The key the request presents, resolved exactly as `/v1/messages` resolves it, for a side route on the proxy
 /// listener: either refusal answers the relay's own 401 body, marked `no-store`, so a wrong key learns nothing there
 /// it would not learn on the messages route.

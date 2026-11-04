@@ -8,7 +8,7 @@ use std::time::Duration;
 use axum::body::Bytes;
 use axum::extract::{MatchedPath, Path, Request, State};
 use axum::http::header::{
-    AUTHORIZATION, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, HOST, ORIGIN, SET_COOKIE,
+    AUTHORIZATION, CACHE_CONTROL, CONTENT_LENGTH, COOKIE, HOST, ORIGIN, SET_COOKIE,
     TRANSFER_ENCODING, X_CONTENT_TYPE_OPTIONS,
 };
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
@@ -23,7 +23,7 @@ use phoebis_oauth::{
     PairingError, PairingSession, PairingStatus, PendingIdentity, PollOutcome, PollStatus,
     ProfileResponse, Started, UsageSnapshot, UsageWindow, FABLE_WINDOW_KEY,
 };
-use phoebis_relay::DiscoveryError;
+use phoebis_relay::{is_json, DiscoveryError};
 use phoebis_routing::{
     account_window_id, is_plan_window, AccountProjection, MemberSpend, OverageEvidence,
     ReloadError, SpendResetSource, SpendWindow, UtilizationSample, WindowReading, FIVE_HOUR,
@@ -326,25 +326,11 @@ fn admit(
     // body-carrying mutation makes every such write a preflighted one, which the browser refuses without
     // CORS headers. The login is a mutation too.
     let with_body = matches!(*method, Method::PATCH | Method::POST | Method::PUT);
-    if with_body && carries_body(request.headers()) {
-        let json = request
-            .headers()
-            .get(CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .map(|v| {
-                v.split(';')
-                    .next()
-                    .unwrap_or("")
-                    .trim()
-                    .eq_ignore_ascii_case("application/json")
-            })
-            .unwrap_or(false);
-        if !json {
-            return Some(failure(
-                StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                "content type must be application/json",
-            ));
-        }
+    if with_body && carries_body(request.headers()) && !is_json(request.headers()) {
+        return Some(failure(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "content type must be application/json",
+        ));
     }
 
     if login {
