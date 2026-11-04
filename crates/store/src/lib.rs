@@ -1967,6 +1967,17 @@ mod tests {
     }
 
     #[test]
+    fn an_open_on_a_fresh_path_creates_the_registry_file_at_mode_0600() {
+        let dir = tempfile::tempdir().unwrap();
+        on_disk(&dir);
+        let mode = std::fs::metadata(dir.path().join("router.sqlite"))
+            .unwrap()
+            .permissions();
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(mode.mode() & 0o777, 0o600);
+    }
+
+    #[test]
     fn a_log_lines_instant_prints_in_utc_with_the_zone_named_or_raw_when_out_of_range() {
         assert_eq!(utc_stamp(1_760_961_787_123), "2025-10-20 12:03:07 UTC");
         assert_eq!(utc_stamp(i64::MAX), i64::MAX.to_string());
