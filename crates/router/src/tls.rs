@@ -271,13 +271,18 @@ pub fn load(key: &'static str, tls: &Option<ListenerTls>) -> Result<Serving, Tls
     }
 }
 
-/// The scheme word for a `listening` line and a URL: `https` when the key names a pair, else `http`.
-pub fn scheme(tls: &Option<ListenerTls>) -> &'static str {
+/// The scheme word for a listener's URL: `https` when the key names a pair, else `http`.
+fn scheme(tls: &Option<ListenerTls>) -> &'static str {
     if tls.is_some() {
         "https"
     } else {
         "http"
     }
+}
+
+/// A listener's base URL, `{scheme}://{addr}`, for the `listening` line, `status` and the admin client's default.
+pub fn url(tls: &Option<ListenerTls>, addr: SocketAddr) -> String {
+    format!("{}://{addr}", scheme(tls))
 }
 
 /// The `check-config` line for one listener: `{listener} listens on {listen} over plain HTTP`, or `over TLS

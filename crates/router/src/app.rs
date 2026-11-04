@@ -477,8 +477,8 @@ pub async fn run_until(
             )
         })?;
     tracing::info!(
-        proxy = %format_args!("{}://{}", tls::scheme(&config.proxy.tls), config.proxy.listen),
-        admin = %format_args!("{}://{}", tls::scheme(&config.admin.tls), config.admin.listen),
+        proxy = %tls::url(&config.proxy.tls, config.proxy.listen),
+        admin = %tls::url(&config.admin.tls, config.admin.listen),
         metrics = %format_args!("http://{}", config.stats.metrics_listen),
         profile = profile.name,
         "listening"

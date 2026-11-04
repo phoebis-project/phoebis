@@ -360,18 +360,10 @@ fn run_status(config_path: &Path, args: &StatusArgs) -> ! {
             ]),
             admin: match args.common.url {
                 Some(_) => called,
-                None => format!(
-                    "{}://{}",
-                    tls::scheme(&config.admin.tls),
-                    config.admin.listen
-                ),
+                None => tls::url(&config.admin.tls, config.admin.listen),
             },
             metrics: Some(format!("http://{}", config.stats.metrics_listen)),
-            proxy: Some(format!(
-                "{}://{}",
-                tls::scheme(&config.proxy.tls),
-                config.proxy.listen
-            )),
+            proxy: Some(tls::url(&config.proxy.tls, config.proxy.listen)),
         },
         None => Listeners {
             admin: called,

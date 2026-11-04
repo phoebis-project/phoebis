@@ -128,11 +128,7 @@ impl AdminClient {
             _ => {
                 let config = config::load_unresolved(config_path)?;
                 let url = common.url.clone().unwrap_or_else(|| {
-                    format!(
-                        "{}://{}",
-                        tls::scheme(&config.admin.tls),
-                        health::target(config.admin.listen)
-                    )
+                    tls::url(&config.admin.tls, health::target(config.admin.listen))
                 });
                 let secret_env = common
                     .secret_env
