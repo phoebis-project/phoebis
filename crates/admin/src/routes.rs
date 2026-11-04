@@ -52,6 +52,9 @@ const CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
 
 const COOKIE_NAME: &str = "phoebis_admin";
 
+/// Only the admin API's routes need the session, so the browser sends it there alone. Page scripts cannot read it,
+/// and a request another site starts goes without it, so neither an injected script nor a cross-site page can use the
+/// login.
 const COOKIE_ATTRIBUTES: &str = "Path=/admin; HttpOnly; SameSite=Strict";
 
 const LOGIN_PATH: &str = "/admin/session";
