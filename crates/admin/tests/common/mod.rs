@@ -58,8 +58,9 @@ pub const NOW: i64 = 1_791_721_000_000;
 pub const FIXTURE_BUILD_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 
 /// The first instant of the UTC calendar month after the one `NOW` falls in, where a monthly budget's period ends.
+/// Spelled as a literal so the readers compare the relay's month arithmetic against a hand-computed instant.
 pub fn month_end() -> i64 {
-    phoebis_relay::next_month_start(NOW)
+    1_793_491_200_000
 }
 
 const BODY_CAPTURE_MAX_HOURS: u32 = 72;
