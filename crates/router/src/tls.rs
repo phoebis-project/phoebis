@@ -25,6 +25,8 @@ pub const EXPIRY_WARNING_DAYS: i32 = phoebis_attention::CERTIFICATE_WARNING_DAYS
 
 /// A loaded listener: the acceptor, and the leaf's facts the start logs and `check-config` prints.
 pub struct Loaded {
+    /// The listener key `load_pair` read the pair under, so a warning or a reload names its own pair.
+    pub key: &'static str,
     pub acceptor: SslAcceptor,
     /// The file the leaf was read from, which the expiry warning names.
     pub cert_file: PathBuf,
@@ -124,6 +126,7 @@ pub fn load_pair(key: &'static str, cert_file: &Path, key_file: &Path) -> Result
 
     let leaf = leaf_facts(key, cert_file, &leaf)?;
     Ok(Loaded {
+        key,
         acceptor: builder.build(),
         cert_file: cert_file.to_path_buf(),
         key_file: key_file.to_path_buf(),
@@ -292,12 +295,12 @@ pub fn describe(listener: &str, listen: SocketAddr, serving: &Serving) -> String
 
 /// The `warning:` lines for a loaded pair, without the `warning: ` prefix: `expiry_line`'s for the leaf, and
 /// `key_file_warnings`' for its key file.
-pub fn warnings(key: &'static str, serving: &Serving) -> Vec<String> {
+pub fn warnings(serving: &Serving) -> Vec<String> {
     let Serving::Tls(loaded) = serving else {
         return Vec::new();
     };
     let mut warnings = Vec::new();
-    warnings.extend(expiry_line(key, &loaded.cert_file, &loaded.leaf));
+    warnings.extend(expiry_line(loaded.key, &loaded.cert_file, &loaded.leaf));
     warnings.extend(key_file_warnings(&loaded.key_file));
     warnings
 }
@@ -386,10 +389,10 @@ struct Served {
 }
 
 impl Live {
-    /// The pair `load` answered for `key`, loaded at `now`.
-    pub fn new(key: &'static str, loaded: Loaded, now: i64) -> Live {
+    /// The pair `load` answered, loaded at `now`.
+    pub fn new(loaded: Loaded, now: i64) -> Live {
         Live {
-            key,
+            key: loaded.key,
             cert_file: loaded.cert_file,
             key_file: loaded.key_file,
             acceptor: Arc::new(LiveAcceptor::new(loaded.acceptor)),
@@ -564,11 +567,7 @@ mod tests {
         let first = jiff::Timestamp::now().as_second() + 90 * 86_400;
         let (cert, key) =
             generate_pair_valid_until(&["localhost"], first).write_to(dir.path(), "proxy");
-        let live = Live::new(
-            "proxy.tls",
-            load_pair("proxy.tls", &cert, &key).unwrap(),
-            1_000,
-        );
+        let live = Live::new(load_pair("proxy.tls", &cert, &key).unwrap(), 1_000);
         let acceptor = live.acceptor();
         let served = acceptor.current();
         let facts = |not_after: i64, loaded_at: i64, failed: Option<(i64, String)>| PairFacts {
@@ -623,7 +622,7 @@ mod tests {
         let loaded = load_pair("admin.tls", &cert, &key).unwrap();
         set.fill(vec![
             ("proxy", None),
-            ("admin", Some(Live::new("admin.tls", loaded, 1_000))),
+            ("admin", Some(Live::new(loaded, 1_000))),
         ]);
         assert_eq!(
             set.reload(2_000),
@@ -789,7 +788,7 @@ mod tests {
         let (cert, key) = pair.write_to(dir.path(), "proxy");
         let loaded = load_pair("proxy.tls", &cert, &key).unwrap();
         assert_eq!(loaded.leaf.days_left, 30, "{:?}", loaded.leaf);
-        let warned = warnings("proxy.tls", &Serving::Tls(loaded));
+        let warned = warnings(&Serving::Tls(loaded));
         let line = format!(
             "proxy.tls.cert_file {} expires in 30 days (",
             cert.display()
@@ -830,10 +829,7 @@ mod tests {
         let (cert, key) = generate_pair(&["localhost"]).write_to(dir.path(), "admin");
         std::fs::set_permissions(&key, std::os::unix::fs::PermissionsExt::from_mode(0o640))
             .unwrap();
-        let warned = warnings(
-            "admin.tls",
-            &Serving::Tls(load_pair("admin.tls", &cert, &key).unwrap()),
-        );
+        let warned = warnings(&Serving::Tls(load_pair("admin.tls", &cert, &key).unwrap()));
         assert!(
             warned
                 .iter()

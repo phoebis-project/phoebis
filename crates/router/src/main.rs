@@ -243,9 +243,9 @@ fn main() -> anyhow::Result<()> {
             ) {
                 println!("warning: {warning}");
             }
-            for warning in tls::warnings("proxy.tls", &proxy_tls)
+            for warning in tls::warnings(&proxy_tls)
                 .into_iter()
-                .chain(tls::warnings("admin.tls", &admin_tls))
+                .chain(tls::warnings(&admin_tls))
             {
                 println!("warning: {warning}");
             }

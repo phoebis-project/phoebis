@@ -480,20 +480,17 @@ pub async fn run_until(
     // Read before any bind, so a pair the start cannot serve refuses with its line and no port is taken.
     let proxy_tls = tls::load("proxy.tls", &config.proxy.tls)?;
     let admin_tls = tls::load("admin.tls", &config.admin.tls)?;
-    for (listener, key, serving) in [
-        ("proxy", "proxy.tls", &proxy_tls),
-        ("admin", "admin.tls", &admin_tls),
-    ] {
+    for (listener, serving) in [("proxy", &proxy_tls), ("admin", &admin_tls)] {
         if let tls::Serving::Tls(loaded) = serving {
             tracing::info!(listener, names = ?loaded.leaf.names, not_after = %loaded.leaf.not_after, "serving TLS");
         }
-        for warning in tls::warnings(key, serving) {
+        for warning in tls::warnings(serving) {
             tracing::warn!("{warning}");
         }
     }
     let loaded_at = clock();
-    let proxy_live = live_pair("proxy.tls", proxy_tls, loaded_at);
-    let admin_live = live_pair("admin.tls", admin_tls, loaded_at);
+    let proxy_live = live_pair(proxy_tls, loaded_at);
+    let admin_live = live_pair(admin_tls, loaded_at);
     let proxy_acceptor = acceptor(&proxy_live);
     let admin_acceptor = acceptor(&admin_live);
     tls_live.fill(vec![("proxy", proxy_live), ("admin", admin_live)]);
@@ -847,10 +844,10 @@ fn settings_view(config: &Config) -> SettingsView {
 }
 
 /// The listener's pair as the router serves it, for what `tls::load` answered: `None` is plain HTTP.
-fn live_pair(key: &'static str, serving: tls::Serving, now: i64) -> Option<tls::Live> {
+fn live_pair(serving: tls::Serving, now: i64) -> Option<tls::Live> {
     match serving {
         tls::Serving::Plain => None,
-        tls::Serving::Tls(loaded) => Some(tls::Live::new(key, loaded, now)),
+        tls::Serving::Tls(loaded) => Some(tls::Live::new(loaded, now)),
     }
 }
 
