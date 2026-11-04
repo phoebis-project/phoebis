@@ -400,10 +400,8 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
     }
     if let Some(keepalive) = &input.keepalive {
         let merged = merged_keepalive(row, keepalive);
-        let policy = match KeepalivePolicy::parse(&merged) {
-            Ok(policy) => policy,
-            Err(error) => return Err(failure(StatusCode::BAD_REQUEST, &error.to_string())),
-        };
+        let policy = KeepalivePolicy::parse(&merged)
+            .map_err(|error| failure(StatusCode::BAD_REQUEST, &error.to_string()))?;
         // The stored text stays where it reads as the same policy, so a save naming the values a pool holds writes no
         // change row whatever spelling the text was stored in.
         if policy != KeepalivePolicy::from_json(&row.keepalive_json) {
@@ -429,34 +427,26 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
                 }
             }
         }
-        let policy = match CacheTtlPolicy::parse(&merged) {
-            Ok(policy) => policy,
-            Err(error) => return Err(failure(StatusCode::BAD_REQUEST, &error.to_string())),
-        };
+        let policy = CacheTtlPolicy::parse(&merged)
+            .map_err(|error| failure(StatusCode::BAD_REQUEST, &error.to_string()))?;
         row.cache_ttl_json = serde_json::to_string(&policy).unwrap_or_else(|_| "{}".into());
     }
     if let Some(switch) = input.cache_diagnostics {
         // A null names neither state of the switch, so it is refused rather than read as one of them.
-        row.cache_diagnostics = match switch {
-            Some(on) => on,
-            None => {
-                return Err(failure(
-                    StatusCode::BAD_REQUEST,
-                    "cache_diagnostics must be true or false",
-                ))
-            }
-        };
+        row.cache_diagnostics = switch.ok_or_else(|| {
+            failure(
+                StatusCode::BAD_REQUEST,
+                "cache_diagnostics must be true or false",
+            )
+        })?;
     }
     if let Some(value) = &input.auto_mode_server {
-        row.auto_mode_server = match value {
-            Some(Value::Bool(on)) => *on,
-            _ => {
-                return Err(failure(
-                    StatusCode::BAD_REQUEST,
-                    "auto_mode_server must be true or false",
-                ))
-            }
-        };
+        row.auto_mode_server = value.as_ref().and_then(Value::as_bool).ok_or_else(|| {
+            failure(
+                StatusCode::BAD_REQUEST,
+                "auto_mode_server must be true or false",
+            )
+        })?;
     }
     if let Some(hours) = input.body_capture_hours {
         if hours > state.body_capture_max_hours {
@@ -501,15 +491,12 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
         row.shedding.migrate_when_spent = spent;
     }
     if let Some(mode) = &input.warm_sessions {
-        row.shedding.warm_sessions = match WarmSessions::parse(mode) {
-            Some(mode) => mode,
-            None => {
-                return Err(failure(
-                    StatusCode::BAD_REQUEST,
-                    "warm_sessions must be always, never, or when_needed",
-                ))
-            }
-        };
+        row.shedding.warm_sessions = WarmSessions::parse(mode).ok_or_else(|| {
+            failure(
+                StatusCode::BAD_REQUEST,
+                "warm_sessions must be always, never, or when_needed",
+            )
+        })?;
     }
     if let Some(seconds) = input.retry_in_place_seconds {
         if seconds > 300 {
@@ -569,15 +556,12 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
         row.slow_down.slow_down_hold_seconds = seconds;
     }
     if let Some(mode) = &input.return_to_plan {
-        row.failover.return_to_plan = match ReturnToPlan::parse(mode) {
-            Some(mode) => mode,
-            None => {
-                return Err(failure(
-                    StatusCode::BAD_REQUEST,
-                    "return_to_plan must be always, when_cold, or never",
-                ))
-            }
-        };
+        row.failover.return_to_plan = ReturnToPlan::parse(mode).ok_or_else(|| {
+            failure(
+                StatusCode::BAD_REQUEST,
+                "return_to_plan must be always, when_cold, or never",
+            )
+        })?;
     }
     if let Some(seconds) = input.return_to_plan_dwell_seconds {
         if seconds > 86_400 {
@@ -589,48 +573,37 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
         row.failover.return_to_plan_dwell_seconds = seconds;
     }
     if let Some(mode) = &input.affinity_mode {
-        row.affinity.mode = match AffinityMode::parse(mode) {
-            Some(mode) => mode,
-            None => {
-                return Err(failure(
-                    StatusCode::BAD_REQUEST,
-                    "affinity_mode must be always or when_cached",
-                ))
-            }
-        };
+        row.affinity.mode = AffinityMode::parse(mode).ok_or_else(|| {
+            failure(
+                StatusCode::BAD_REQUEST,
+                "affinity_mode must be always or when_cached",
+            )
+        })?;
     }
     if let Some(placement) = &input.subagent_placement {
-        row.affinity.subagent_placement = match SubagentPlacement::parse(placement) {
-            Some(placement) => placement,
-            None => {
-                return Err(failure(
-                    StatusCode::BAD_REQUEST,
-                    "subagent_placement must be by_cohort, by_strategy, or with_main",
-                ))
-            }
-        };
+        row.affinity.subagent_placement = SubagentPlacement::parse(placement).ok_or_else(|| {
+            failure(
+                StatusCode::BAD_REQUEST,
+                "subagent_placement must be by_cohort, by_strategy, or with_main",
+            )
+        })?;
     }
     if let Some(placement) = &input.session_placement {
-        row.affinity.session_placement = match SessionPlacement::parse(placement) {
-            Some(placement) => placement,
-            None => {
-                return Err(failure(
-                    StatusCode::BAD_REQUEST,
-                    "session_placement must be by_strategy or by_warm_prefix",
-                ))
-            }
-        };
+        row.affinity.session_placement = SessionPlacement::parse(placement).ok_or_else(|| {
+            failure(
+                StatusCode::BAD_REQUEST,
+                "session_placement must be by_strategy or by_warm_prefix",
+            )
+        })?;
     }
     if let Some(tokens) = input.min_shared_prefix_tokens {
         row.affinity.min_shared_prefix_tokens = tokens;
     }
     // Checked over the whole row rather than over the edited field alone, so lowering affinity under an
     // enabled policy is refused exactly as enabling under a short affinity is.
-    if let Err(error) =
-        KeepalivePolicy::from_json(&row.keepalive_json).validate(row.affinity_ttl_seconds)
-    {
-        return Err(failure(StatusCode::BAD_REQUEST, &error.to_string()));
-    }
+    KeepalivePolicy::from_json(&row.keepalive_json)
+        .validate(row.affinity_ttl_seconds)
+        .map_err(|error| failure(StatusCode::BAD_REQUEST, &error.to_string()))?;
     Ok(())
 }
 
@@ -720,12 +693,9 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     if let Err(refusal) = apply(&state, &mut row, &input) {
         return refusal;
     }
-    let writes = match &input.members {
-        Some(members) => match member_writes(members) {
-            Ok(writes) => Some(writes),
-            Err(refusal) => return refusal,
-        },
-        None => None,
+    let writes = match input.members.as_deref().map(member_writes).transpose() {
+        Ok(writes) => writes,
+        Err(refusal) => return refusal,
     };
     match state
         .store
@@ -814,12 +784,9 @@ pub(crate) async fn patch(
     if let Err(refusal) = apply(&state, &mut row, &input) {
         return refusal;
     }
-    let writes = match &input.members {
-        Some(members) => match member_writes(members) {
-            Ok(writes) => Some(writes),
-            Err(refusal) => return refusal,
-        },
-        None => None,
+    let writes = match input.members.as_deref().map(member_writes).transpose() {
+        Ok(writes) => writes,
+        Err(refusal) => return refusal,
     };
     if let Some(guardrails) = &input.guardrails {
         if let Err(refusal) = distinct_ids("guardrails", guardrails) {

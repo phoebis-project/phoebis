@@ -264,16 +264,17 @@ fn apply(state: &AdminState, row: &mut ApiKeyRow, input: &KeyInput) -> Result<()
         row.body_capture_hours = hours;
     }
     if let Some(value) = &input.auto_mode_server {
-        row.auto_mode_server = match value {
-            None => None,
-            Some(Value::Bool(on)) => Some(*on),
-            Some(_) => {
-                return Err(failure(
-                    StatusCode::BAD_REQUEST,
-                    "auto_mode_server must be true, false, or null",
-                ))
-            }
-        };
+        row.auto_mode_server = value
+            .as_ref()
+            .map(|v| {
+                v.as_bool().ok_or_else(|| {
+                    failure(
+                        StatusCode::BAD_REQUEST,
+                        "auto_mode_server must be true, false, or null",
+                    )
+                })
+            })
+            .transpose()?;
     }
     Ok(())
 }
