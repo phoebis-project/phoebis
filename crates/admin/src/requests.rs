@@ -497,6 +497,10 @@ pub(crate) fn request_summary(
 ) -> RequestSummary {
     let last = attempts.last();
     let plan = plan_figures(r, attempts, &shares.tables, shares.now);
+    let trail: Vec<Attempt> = attempts
+        .iter()
+        .map(|a| attempt_json(a, r, &shares.prices))
+        .collect();
     RequestSummary {
         id: r.id.clone(),
         at: r.received_at,
@@ -542,9 +546,9 @@ pub(crate) fn request_summary(
         usage: usage_json(last),
         // Folded onto a positive zero rather than summed: `Sum<f64>` starts at -0.0, so a request with no
         // priced attempt would put a signed zero on the wire and the UI would read "-$0.00".
-        cost_usd: attempts
+        cost_usd: trail
             .iter()
-            .filter_map(|a| attempt_usd(a, r, &shares.prices))
+            .filter_map(|a| a.estimated_usd)
             .fold(0.0, |a, b| a + b),
         cost_shares: plan.as_ref().map(cost_shares_json),
         cost_equivalent: plan.as_ref().and_then(|p| p.equivalent),
@@ -553,10 +557,7 @@ pub(crate) fn request_summary(
             .and_then(|p| p.share_reason.map(str::to_string)),
         tier: last.and_then(|a| a.tier.clone()),
         phases: phases_json(r, attempts),
-        attempts: attempts
-            .iter()
-            .map(|a| attempt_json(a, r, &shares.prices))
-            .collect(),
+        attempts: trail,
         // The request row's own facts rather than an attempt's: a hold that ended in an exhaustion has no attempt.
         held: r
             .held
