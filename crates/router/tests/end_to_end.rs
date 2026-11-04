@@ -301,7 +301,7 @@ usage:
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
-        phoebis_router::config::load(&cfg_path).unwrap()
+        phoebis_router::config::load_unresolved(&cfg_path).unwrap()
     };
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn(phoebis_router::app::run(config, async {
@@ -553,7 +553,7 @@ async fn every_new_upstream_connection_logs_its_host_and_its_dial_and_handshake_
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
-        phoebis_router::config::load(&cfg_path).unwrap()
+        phoebis_router::config::load_unresolved(&cfg_path).unwrap()
     };
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn(phoebis_router::app::run(config, async {
@@ -745,7 +745,7 @@ async fn a_shutdown_with_a_stalled_body_ends_inside_its_budget_with_both_flushes
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
-        phoebis_router::config::load(&cfg_path).unwrap()
+        phoebis_router::config::load_unresolved(&cfg_path).unwrap()
     };
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn(phoebis_router::app::run(config, async {
@@ -883,7 +883,7 @@ async fn a_shutdown_past_the_drain_window_books_the_cut_stream_and_the_headless_
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
-        phoebis_router::config::load(&cfg_path).unwrap()
+        phoebis_router::config::load_unresolved(&cfg_path).unwrap()
     };
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn(phoebis_router::app::run(config, async {
@@ -1052,7 +1052,7 @@ async fn a_stream_held_past_the_proxy_listeners_own_drain_is_cut_there_and_booke
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
-        phoebis_router::config::load(&cfg_path).unwrap()
+        phoebis_router::config::load_unresolved(&cfg_path).unwrap()
     };
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn(phoebis_router::app::run(config, async {
@@ -1177,7 +1177,7 @@ async fn a_key_set_off_through_the_admin_api_strips_the_next_request_and_set_bac
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
-        phoebis_router::config::load(&cfg_path).unwrap()
+        phoebis_router::config::load_unresolved(&cfg_path).unwrap()
     };
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn(phoebis_router::app::run(config, async {
@@ -1385,7 +1385,7 @@ usage:
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var("TEST_SHUTDOWN_ADMIN", "admin-secret-shutdown");
-        phoebis_router::config::load(&cfg_path).unwrap()
+        phoebis_router::config::load_unresolved(&cfg_path).unwrap()
     };
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn(phoebis_router::app::run(config, async {
@@ -1481,7 +1481,7 @@ usage:
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
-        phoebis_router::config::load(&cfg_path).unwrap()
+        phoebis_router::config::load_unresolved(&cfg_path).unwrap()
     };
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn(phoebis_router::app::run(config, async {
@@ -1685,7 +1685,7 @@ async fn a_fast_session_is_served_fast_walked_on_a_fast_429_and_refused_locally_
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var("TEST_FAST_ADMIN_SECRET", "admin-secret-001");
-        phoebis_router::config::load(&cfg_path).unwrap()
+        phoebis_router::config::load_unresolved(&cfg_path).unwrap()
     };
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn(phoebis_router::app::run(config, async {
@@ -1992,7 +1992,7 @@ usage:
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
-        phoebis_router::config::load(&cfg_path).unwrap()
+        phoebis_router::config::load_unresolved(&cfg_path).unwrap()
     };
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn(phoebis_router::app::run(config, async {
@@ -2251,7 +2251,7 @@ usage:
 
 #[test]
 fn a_rootless_storage_path_does_not_load() {
-    use phoebis_router::config::{load, ConfigError};
+    use phoebis_router::config::{load_unresolved, ConfigError};
     let dir = tempfile::tempdir().unwrap();
     let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
@@ -2269,14 +2269,14 @@ fn a_rootless_storage_path_does_not_load() {
     )
     .unwrap();
     assert!(matches!(
-        load(&rootless),
+        load_unresolved(&rootless),
         Err(ConfigError::StoragePath { .. })
     ));
 }
 
 #[test]
 fn stats_settings_are_validated_with_the_specs_bounds() {
-    use phoebis_router::config::{load, ConfigError};
+    use phoebis_router::config::{load_unresolved, ConfigError};
     let dir = tempfile::tempdir().unwrap();
     let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
@@ -2287,14 +2287,14 @@ fn stats_settings_are_validated_with_the_specs_bounds() {
         std::fs::write(&path, format!("{text}{extra}")).unwrap();
         path
     };
-    let config = load(&with("defaults", "")).unwrap();
+    let config = load_unresolved(&with("defaults", "")).unwrap();
     assert_eq!(config.stats.retention_days, 365);
     assert!(matches!(
-        load(&with("ledger", "stats:\n  ledger_path: /\n")),
+        load_unresolved(&with("ledger", "stats:\n  ledger_path: /\n")),
         Err(ConfigError::LedgerPath { .. })
     ));
     assert!(matches!(
-        load(&with(
+        load_unresolved(&with(
             "shared",
             &format!(
                 "stats:\n  ledger_path: {}\n",
@@ -2318,7 +2318,7 @@ fn stats_settings_are_validated_with_the_specs_bounds() {
             ),
         )
         .unwrap();
-        load(&path)
+        load_unresolved(&path)
     };
     let here = std::env::current_dir().unwrap();
     let cases = [
@@ -2377,7 +2377,7 @@ fn stats_settings_are_validated_with_the_specs_bounds() {
 
 #[test]
 fn keepalive_limits_are_validated_with_the_go_engines_bounds() {
-    use phoebis_router::config::load;
+    use phoebis_router::config::load_unresolved;
     let dir = tempfile::tempdir().unwrap();
     let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
@@ -2389,7 +2389,7 @@ fn keepalive_limits_are_validated_with_the_go_engines_bounds() {
         path
     };
     assert_eq!(
-        load(&with(
+        load_unresolved(&with(
             "retained",
             "keepalive:\n  max_retained_bytes: 33554431\n"
         ))
@@ -2434,7 +2434,7 @@ async fn the_binary_ledgers_serves_statistics_and_metrics_and_lands_the_ledger_o
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
-        phoebis_router::config::load(&cfg_path).unwrap()
+        phoebis_router::config::load_unresolved(&cfg_path).unwrap()
     };
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn(phoebis_router::app::run(config, async {
@@ -2733,7 +2733,7 @@ async fn a_start_after_a_band_threshold_moved_re_prices_the_hour_at_the_new_band
         let config = {
             let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
-            phoebis_router::config::load(&cfg_path).unwrap()
+            phoebis_router::config::load_unresolved(&cfg_path).unwrap()
         };
         (config, proxy_port, admin_port)
     };
@@ -2987,7 +2987,7 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var("TEST_BURN_ADMIN_SECRET", "admin-secret-001");
-        phoebis_router::config::load(&cfg_path).unwrap()
+        phoebis_router::config::load_unresolved(&cfg_path).unwrap()
     };
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn(phoebis_router::app::run(config, async {
@@ -3167,7 +3167,7 @@ async fn a_refresh_left_in_flight_is_quarantined_at_the_start_and_the_routing_lo
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var("TEST_QUARANTINE_ADMIN_SECRET", "admin-secret-001");
-        phoebis_router::config::load(&cfg_path).unwrap()
+        phoebis_router::config::load_unresolved(&cfg_path).unwrap()
     };
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn(phoebis_router::app::run(config, async {
@@ -3342,7 +3342,7 @@ async fn a_changed_listing_lands_a_catalog_row_and_the_released_first_purge_expi
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var("TEST_CATALOG_HOOK_ADMIN_SECRET", "admin-secret-001");
-        phoebis_router::config::load(&cfg_path).unwrap()
+        phoebis_router::config::load_unresolved(&cfg_path).unwrap()
     };
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn(phoebis_router::app::run(config, async {
@@ -3449,7 +3449,7 @@ async fn the_proxy_listener_binds_after_the_startup_fetch_or_its_bound_whichever
     let load = |cfg_path: &std::path::Path| {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var("TEST_STARTUP_ADMIN", "admin-secret-001");
-        phoebis_router::config::load(cfg_path).unwrap()
+        phoebis_router::config::load_unresolved(cfg_path).unwrap()
     };
     async fn first_success(proxy_port: u16) -> std::time::Duration {
         let client = reqwest::Client::new();
@@ -3871,7 +3871,7 @@ async fn a_startup_poll_the_endpoint_refuses_routes_the_first_request_from_the_p
         let config = {
             let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             std::env::set_var("TEST_PERSISTED_ADMIN", "admin-secret-001");
-            phoebis_router::config::load(&cfg_path).unwrap()
+            phoebis_router::config::load_unresolved(&cfg_path).unwrap()
         };
         let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
         let server = tokio::spawn(phoebis_router::app::run(config, async {
@@ -4061,7 +4061,7 @@ async fn the_binary_retains_a_session_probes_it_and_serves_the_keepalive_views()
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
-        phoebis_router::config::load(&cfg_path).unwrap()
+        phoebis_router::config::load_unresolved(&cfg_path).unwrap()
     };
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn(phoebis_router::app::run(config, async {
@@ -4308,7 +4308,7 @@ usage:
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
-        phoebis_router::config::load(&cfg_path).unwrap()
+        phoebis_router::config::load_unresolved(&cfg_path).unwrap()
     };
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn(phoebis_router::app::run(config, async {
@@ -4400,7 +4400,7 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
-        phoebis_router::config::load(&cfg_path).unwrap()
+        phoebis_router::config::load_unresolved(&cfg_path).unwrap()
     };
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn(phoebis_router::app::run(config, async {
@@ -4677,7 +4677,7 @@ async fn the_reference_page_and_its_document_are_served_by_the_merged_app() {
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
-        phoebis_router::config::load(&cfg_path).unwrap()
+        phoebis_router::config::load_unresolved(&cfg_path).unwrap()
     };
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn(phoebis_router::app::run(config, async {
@@ -4870,7 +4870,7 @@ usage:
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
-        phoebis_router::config::load(&cfg_path).unwrap()
+        phoebis_router::config::load_unresolved(&cfg_path).unwrap()
     };
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn(phoebis_router::app::run(config, async {

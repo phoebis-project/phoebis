@@ -2,7 +2,7 @@
 //! refuse a configuration nobody should be able to start.
 //!
 //! The admin secret is named here, never written here: the file holds the name of the environment variable
-//! that `load` checks and the start reads, so a configuration file can be read by anyone who may read the deployment.
+//! that the start reads, so a configuration file can be read by anyone who may read the deployment.
 
 use std::fmt;
 use std::net::SocketAddr;
@@ -275,15 +275,8 @@ pub enum ConfigError {
     UpstreamGzipInvalid { value: String },
 }
 
-/// Reads, parses, and validates the bootstrap file, and refuses an admin secret variable the start would refuse.
-pub fn load(path: &Path) -> Result<Config, ConfigError> {
-    let config = load_unresolved(path)?;
-    from_env(&config.admin.secret_env)?;
-    Ok(config)
-}
-
-/// Reads, parses and validates the bootstrap file and leaves the admin secret's variable unchecked, for a command that
-/// reads the file without the environment the service gets from its unit.
+/// Reads, parses and validates the bootstrap file and leaves the admin secret's variable unchecked: the start reads it
+/// in `run_until`, and a subcommand reads the file without the environment the service gets from its unit.
 pub fn load_unresolved(path: &Path) -> Result<Config, ConfigError> {
     let text = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
         path: path.to_path_buf(),
@@ -696,10 +689,10 @@ mod tests {
                 "proxy.upstream_gzip must be auto, on or off, not gzip",
             ),
         ] {
-            let error = load(&file_with_proxy(dir.path(), name, keys)).unwrap_err();
+            let error = load_unresolved(&file_with_proxy(dir.path(), name, keys)).unwrap_err();
             assert_eq!(error.to_string(), expected, "{name}");
         }
-        let edges = load(&file_with_proxy(
+        let edges = load_unresolved(&file_with_proxy(
             dir.path(),
             "edges",
             "  body_budget_bytes: 1099511627776\n  body_read_seconds: 599\n  key_body_reads: 4096\n  \
@@ -718,7 +711,7 @@ mod tests {
             ),
             (1 << 40, 599, 4_096, 1_024, true, "off")
         );
-        let low = load(&file_with_proxy(
+        let low = load_unresolved(&file_with_proxy(
             dir.path(),
             "low",
             "  body_budget_bytes: 1024\n  body_read_seconds: 1\n  key_body_reads: 1\n  \
@@ -811,7 +804,7 @@ mod tests {
     fn the_routing_and_sessions_blocks_default_validate_and_reject_unknown_fields() {
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");
-        let config = load(&file(dir.path(), "defaults", "")).unwrap();
+        let config = load_unresolved(&file(dir.path(), "defaults", "")).unwrap();
         assert_eq!(
             (
                 config.sessions.expire_after_seconds,
@@ -820,7 +813,7 @@ mod tests {
             (86_400, 72)
         );
         assert!(matches!(
-            load(&file(
+            load_unresolved(&file(
                 dir.path(),
                 "startup-zero",
                 "routing:\n  startup_fetch_seconds: 0\n"
@@ -832,7 +825,7 @@ mod tests {
             })
         ));
         assert!(matches!(
-            load(&file(
+            load_unresolved(&file(
                 dir.path(),
                 "startup-too-long",
                 "routing:\n  startup_fetch_seconds: 61\n"
@@ -844,7 +837,7 @@ mod tests {
             })
         ));
         assert!(matches!(
-            load(&file(
+            load_unresolved(&file(
                 dir.path(),
                 "refresh-too-short",
                 "routing:\n  catalog_refresh_seconds: 59\n"
@@ -856,7 +849,7 @@ mod tests {
             })
         ));
         assert!(matches!(
-            load(&file(
+            load_unresolved(&file(
                 dir.path(),
                 "refresh-too-long",
                 "routing:\n  catalog_refresh_seconds: 604801\n"
@@ -868,7 +861,7 @@ mod tests {
             })
         ));
         assert!(matches!(
-            load(&file(
+            load_unresolved(&file(
                 dir.path(),
                 "rejection-zero",
                 "routing:\n  model_rejection_seconds: 0\n"
@@ -880,7 +873,7 @@ mod tests {
             })
         ));
         assert!(matches!(
-            load(&file(
+            load_unresolved(&file(
                 dir.path(),
                 "rejection-too-long",
                 "routing:\n  model_rejection_seconds: 604801\n"
@@ -892,7 +885,7 @@ mod tests {
             })
         ));
         assert!(matches!(
-            load(&file(
+            load_unresolved(&file(
                 dir.path(),
                 "hours",
                 "stats:\n  body_capture_max_hours: 0\n"
@@ -903,19 +896,19 @@ mod tests {
             })
         ));
         assert!(matches!(
-            load(&file(dir.path(), "unknown", "routing:\n  strategy: x\n")),
+            load_unresolved(&file(dir.path(), "unknown", "routing:\n  strategy: x\n")),
             Err(ConfigError::Syntax(_))
         ));
         assert!(
             matches!(
-                load(&file(dir.path(), "legacy", "accounts: []\nroutes: []\n")),
+                load_unresolved(&file(dir.path(), "legacy", "accounts: []\nroutes: []\n")),
                 Err(ConfigError::Syntax(_))
             ),
             "the registry blocks left the file"
         );
         assert!(
             matches!(
-                load(&file(
+                load_unresolved(&file(
                     dir.path(),
                     "unknown-key",
                     "upstream:\n  resolver: 1\n"
@@ -931,7 +924,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");
         assert_eq!(
-            load(&file(
+            load_unresolved(&file(
                 dir.path(),
                 "sessions",
                 "sessions:\n  expire_after_seconds: 7200\n"
@@ -943,7 +936,7 @@ mod tests {
         );
         assert!(
             matches!(
-                load(&file(
+                load_unresolved(&file(
                     dir.path(),
                     "sessions-unknown",
                     "sessions:\n  expire_after_seconds: 7200\n  refresh_minutes: 5\n"
@@ -980,7 +973,7 @@ mod tests {
                 "usage.refresh_concurrency must be between 1 and 16, not 17",
             ),
         ] {
-            let error = load(&file(dir.path(), name, body)).unwrap_err();
+            let error = load_unresolved(&file(dir.path(), name, body)).unwrap_err();
             assert_eq!(error.to_string(), expected, "{name}");
         }
         for (name, body) in [
@@ -992,7 +985,10 @@ mod tests {
             ("concurrency-one", "usage:\n  refresh_concurrency: 1\n"),
             ("concurrency-sixteen", "usage:\n  refresh_concurrency: 16\n"),
         ] {
-            assert!(load(&file(dir.path(), name, body)).is_ok(), "{name}");
+            assert!(
+                load_unresolved(&file(dir.path(), name, body)).is_ok(),
+                "{name}"
+            );
         }
     }
 
@@ -1000,7 +996,7 @@ mod tests {
     fn the_session_memory_keys_default_to_the_constants_and_are_bounded() {
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");
-        let config = load(&file(dir.path(), "defaults", "")).unwrap();
+        let config = load_unresolved(&file(dir.path(), "defaults", "")).unwrap();
         assert_eq!(
             (
                 config.sessions.memory_cap,
@@ -1041,10 +1037,10 @@ mod tests {
                 "sessions.memory_retention_days must be between 1 and 3650, not 3651",
             ),
         ] {
-            let error = load(&file(dir.path(), name, body)).unwrap_err();
+            let error = load_unresolved(&file(dir.path(), name, body)).unwrap_err();
             assert_eq!(error.to_string(), expected, "{name}");
         }
-        let custom = load(&file(
+        let custom = load_unresolved(&file(
             dir.path(),
             "custom",
             "sessions:\n  memory_cap: 1024\n  memory_idle_seconds: 600\n  memory_retention_days: 7\n",
@@ -1063,7 +1059,7 @@ mod tests {
     fn a_file_naming_a_rollup_retention_alone_under_the_default_raw_window_is_refused() {
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");
-        let error = load(&file(
+        let error = load_unresolved(&file(
             dir.path(),
             "rollups-alone",
             "stats:\n  rollup_retention_days: 364\n",
@@ -1079,7 +1075,7 @@ mod tests {
     fn a_rollup_retention_under_the_raw_one_is_refused_unless_either_key_is_zero() {
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");
-        let error = load(&file(
+        let error = load_unresolved(&file(
             dir.path(),
             "rollups-short",
             "stats:\n  retention_days: 365\n  rollup_retention_days: 364\n",
@@ -1101,7 +1097,7 @@ mod tests {
                 (365, 0),
             ),
         ] {
-            let config = load(&file(dir.path(), name, body)).unwrap();
+            let config = load_unresolved(&file(dir.path(), name, body)).unwrap();
             assert_eq!(
                 (
                     config.stats.retention_days,
@@ -1113,40 +1109,18 @@ mod tests {
         }
     }
 
-    /// Names the caller's environment variable where `file` names `TEST_CFG_ADMIN`, so a secret-length or placeholder
-    /// test never races another test's value under that name.
-    fn file_with_secret_env(
-        dir: &std::path::Path,
-        name: &str,
-        secret_env: &str,
-    ) -> std::path::PathBuf {
-        written(
-            dir,
-            name,
-            secret_env,
-            "",
-            "usage:\n  refresh_concurrency: 2\n",
-        )
-    }
-
     #[test]
     fn a_fifteen_character_secret_with_one_multibyte_character_still_refuses_as_too_short() {
-        let dir = tempfile::tempdir().unwrap();
         // Fifteen characters, sixteen bytes: a byte count would wrongly read this as long enough.
         std::env::set_var("TEST_CFG_MULTIBYTE_SHORT", "fourteen-charsé");
         assert!(matches!(
-            load(&file_with_secret_env(
-                dir.path(),
-                "multibyte-short",
-                "TEST_CFG_MULTIBYTE_SHORT"
-            )),
+            from_env("TEST_CFG_MULTIBYTE_SHORT"),
             Err(ConfigError::SecretTooShort { name }) if name == "TEST_CFG_MULTIBYTE_SHORT"
         ));
     }
 
     #[test]
     fn a_secret_with_a_non_ascii_character_or_a_surrounding_space_refuses_with_secret_shape() {
-        let dir = tempfile::tempdir().unwrap();
         for (name, secret) in [
             ("TEST_CFG_SHAPE_NON_ASCII", "sixteen-chars-ok-é"),
             ("TEST_CFG_SHAPE_SPACES", " sixteen-chars-ok "),
@@ -1154,44 +1128,32 @@ mod tests {
             ("TEST_CFG_SHAPE_TRAILING", "sixteen-chars-ok "),
         ] {
             std::env::set_var(name, secret);
-            let refused = load(&file_with_secret_env(dir.path(), name, name));
+            let refused = from_env(name);
             assert!(
                 matches!(&refused, Err(ConfigError::SecretShape { name: named }) if named == name),
                 "{secret:?}: {refused:?}"
             );
         }
         std::env::set_var("TEST_CFG_SHAPE_OK", "sixteen-chars-ok");
-        assert!(load(&file_with_secret_env(
-            dir.path(),
-            "shape-ok",
-            "TEST_CFG_SHAPE_OK"
-        ))
-        .is_ok());
+        assert!(from_env("TEST_CFG_SHAPE_OK").is_ok());
     }
 
     #[test]
     fn a_base64url_secret_init_writes_passes_the_shape() {
-        let dir = tempfile::tempdir().unwrap();
         let secret = "VWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
         assert_eq!(secret.len(), 43);
         std::env::set_var("TEST_CFG_BASE64URL", secret);
-        assert!(load(&file_with_secret_env(
-            dir.path(),
-            "base64url",
-            "TEST_CFG_BASE64URL"
-        ))
-        .is_ok());
+        assert!(from_env("TEST_CFG_BASE64URL").is_ok());
     }
 
     #[test]
     fn the_example_files_placeholder_refuses_with_placeholder_secret() {
-        let dir = tempfile::tempdir().unwrap();
         std::env::set_var(
             "TEST_CFG_PLACEHOLDER_ADMIN",
             "replace-with-a-long-random-string",
         );
         assert!(matches!(
-            load(&file_with_secret_env(dir.path(), "placeholder-admin", "TEST_CFG_PLACEHOLDER_ADMIN")),
+            from_env("TEST_CFG_PLACEHOLDER_ADMIN"),
             Err(ConfigError::PlaceholderSecret { name }) if name == "TEST_CFG_PLACEHOLDER_ADMIN"
         ));
     }

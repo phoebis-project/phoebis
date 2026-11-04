@@ -58,7 +58,9 @@ pub use messages::{
 };
 pub use portability::portable_of;
 pub use ratelimit::{retry_after, UnifiedHeaders, FAST_INPUT, FAST_OUTPUT};
-pub use serve::{accept_loop, handshake, serve, Accepted, Limits as ListenLimits, LiveAcceptor};
+pub use serve::{
+    accept_loop, handshake, http1_builder, serve, Accepted, Limits as ListenLimits, LiveAcceptor,
+};
 pub use sse::SseEvent;
 
 pub(crate) use body::{edit_body, BodyMember, Markerless, NativeEdit, SafeguardsEdit};

@@ -145,6 +145,8 @@ pub enum InitError {
         removed: Vec<PathBuf>,
         kept: Vec<PathBuf>,
     },
+    #[error(transparent)]
+    Walk(#[from] private_dirs::WalkError),
     #[error("the written configuration does not load: {error}")]
     Written { error: ConfigError },
 }
@@ -604,18 +606,18 @@ pub fn refuse(plan: &Plan) -> Result<(), InitError> {
 }
 
 fn refuse_existing(plan: &Plan) -> Result<(), InitError> {
-    if exists(&plan.config_path)? {
+    if private_dirs::exists(&plan.config_path)? {
         return Err(InitError::ConfigExists {
             path: plan.config_path.clone(),
         });
     }
-    if exists(&plan.key_file)? {
+    if private_dirs::exists(&plan.key_file)? {
         return Err(InitError::KeyExists {
             path: plan.key_file.clone(),
         });
     }
     if let Some(env_file) = &plan.env_file {
-        if exists(env_file)? {
+        if private_dirs::exists(env_file)? {
             return Err(InitError::EnvExists {
                 path: env_file.clone(),
             });
@@ -627,24 +629,12 @@ fn refuse_existing(plan: &Plan) -> Result<(), InitError> {
     if !plan.container {
         for name in [REGISTRY_FILE, LEDGER_FILE] {
             let path = plan.data_dir.join(name);
-            if exists(&path)? {
+            if private_dirs::exists(&path)? {
                 return Err(InitError::DatabaseExists { path });
             }
         }
     }
     Ok(())
-}
-
-/// Whether anything sits at `path`, a dangling link included, since `create_new` refuses that too.
-fn exists(path: &Path) -> Result<bool, InitError> {
-    match std::fs::symlink_metadata(path) {
-        Ok(_) => Ok(true),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(InitError::Io {
-            what: format!("checking {}", path.display()),
-            error,
-        }),
-    }
 }
 
 fn write(
@@ -672,7 +662,7 @@ fn write(
         write_file(env_file, 0o600, &[lines.as_bytes()], written)?;
     }
     if !plan.container {
-        let existed = exists(&plan.data_dir)?;
+        let existed = private_dirs::exists(&plan.data_dir)?;
         create_private_dir(&plan.data_dir)
             .map_err(io_error(format!("creating {}", plan.data_dir.display())))?;
         if !existed {
@@ -700,10 +690,7 @@ fn create_missing(dir: &Path, written: &mut Vec<Landed>) -> Result<(), InitError
     let mut created = Vec::new();
     let walked = private_dirs::create_missing(dir, &mut created);
     written.extend(created.into_iter().map(|path| Landed { dir: true, path }));
-    walked.map_err(|walk| InitError::Io {
-        what: format!("{} {}", walk.step, walk.path.display()),
-        error: walk.error,
-    })
+    walked.map_err(InitError::from)
 }
 
 fn write_file(

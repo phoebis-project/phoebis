@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 /// Where the walk stopped: the path it was checking or creating, and the error it met there.
 #[derive(Debug, thiserror::Error)]
 #[error("{step} {}: {error}", path.display())]
-pub(crate) struct WalkError {
+pub struct WalkError {
     pub(crate) step: &'static str,
     pub(crate) path: PathBuf,
     pub(crate) error: std::io::Error,
@@ -23,24 +23,27 @@ pub(crate) fn create_missing(dir: &Path, created: &mut Vec<PathBuf>) -> Result<(
     create(&missing(dir)?, created)
 }
 
+/// Whether anything sits at `path`, a dangling link included, since `create_new` refuses that too.
+pub(crate) fn exists(path: &Path) -> Result<bool, WalkError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(WalkError {
+            step: "checking",
+            path: path.to_path_buf(),
+            error,
+        }),
+    }
+}
+
 /// `dir` and each parent of it that nothing stands at, from the top down.
 fn missing(dir: &Path) -> Result<Vec<&Path>, WalkError> {
     let mut missing = Vec::new();
     for path in dir.ancestors() {
-        if path.as_os_str().is_empty() {
+        if path.as_os_str().is_empty() || exists(path)? {
             break;
         }
-        match std::fs::symlink_metadata(path) {
-            Ok(_) => break,
-            Err(error) if error.kind() == ErrorKind::NotFound => missing.push(path),
-            Err(error) => {
-                return Err(WalkError {
-                    step: "checking",
-                    path: path.to_path_buf(),
-                    error,
-                })
-            }
-        }
+        missing.push(path);
     }
     missing.reverse();
     Ok(missing)

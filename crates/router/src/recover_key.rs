@@ -155,15 +155,13 @@ fn key_of(key_file: &Path, owner: Option<(u32, u32)>) -> Result<(StorageKey, Key
             key_file.display()
         )
     };
-    match std::fs::symlink_metadata(key_file) {
-        Ok(_) => Ok((
+    match private_dirs::exists(key_file) {
+        Ok(true) => Ok((
             StorageKey::from_file(key_file).map_err(|error| reading(&error))?,
             KeySource::Read,
         )),
-        Err(error) if error.kind() == ErrorKind::NotFound => {
-            Ok((StorageKey::generate(), KeySource::Generated { owner }))
-        }
-        Err(error) => Err(reading(&error)),
+        Ok(false) => Ok((StorageKey::generate(), KeySource::Generated { owner })),
+        Err(walk) => Err(reading(&walk.error)),
     }
 }
 

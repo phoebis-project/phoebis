@@ -24,10 +24,35 @@ pub type Acceptor = Option<Arc<LiveAcceptor>>;
 /// A leaf this close to `not_after` earns a warning in `check-config` and a line in `status`, and starts.
 pub const EXPIRY_WARNING_DAYS: i32 = phoebis_attention::CERTIFICATE_WARNING_DAYS as i32;
 
+/// A listener that can serve a pair, so its name and its `tls` key travel as one value.
+#[derive(Clone, Copy, Debug)]
+pub enum PublicListener {
+    Admin,
+    Proxy,
+}
+
+impl PublicListener {
+    /// The name the log lines and the reload's answer give the listener.
+    pub fn name(self) -> &'static str {
+        match self {
+            PublicListener::Admin => "admin",
+            PublicListener::Proxy => "proxy",
+        }
+    }
+
+    /// The configuration key that holds the listener's pair, the prefix of every refusal.
+    pub fn key(self) -> &'static str {
+        match self {
+            PublicListener::Admin => "admin.tls",
+            PublicListener::Proxy => "proxy.tls",
+        }
+    }
+}
+
 /// A loaded listener: the acceptor, and the leaf's facts the start logs and `check-config` prints.
 pub struct Loaded {
-    /// The listener key `load_pair` read the pair under, so a warning or a reload names its own pair.
-    pub key: &'static str,
+    /// The listener `load_pair` read the pair for, so a warning or a reload names its own pair.
+    pub listener: PublicListener,
     pub acceptor: SslAcceptor,
     /// The file the leaf was read from, which the expiry warning names.
     pub cert_file: PathBuf,
@@ -94,8 +119,13 @@ pub enum TlsError {
 
 /// Reads an operator's pair whole (`X509::stack_from_pem`, `PKey::private_key_from_pem`), sets the leaf, the chain
 /// and the key on a `mozilla_intermediate_v5` acceptor with ALPN fixed to `http/1.1`, and checks the key and the
-/// dates. `key` is `proxy.tls` or `admin.tls`, the prefix of every refusal.
-pub fn load_pair(key: &'static str, cert_file: &Path, key_file: &Path) -> Result<Loaded, TlsError> {
+/// dates.
+pub fn load_pair(
+    listener: PublicListener,
+    cert_file: &Path,
+    key_file: &Path,
+) -> Result<Loaded, TlsError> {
+    let key = listener.key();
     let (cert_pem, key_pem) = read_pair(key, cert_file, key_file)?;
     let (leaf, chain) = certificates(key, cert_file, &cert_pem)?;
     let pkey = PKey::private_key_from_pem(&key_pem).map_err(|_| TlsError::NoKey {
@@ -127,7 +157,7 @@ pub fn load_pair(key: &'static str, cert_file: &Path, key_file: &Path) -> Result
 
     let leaf = leaf_facts(key, cert_file, &leaf)?;
     Ok(Loaded {
-        key,
+        listener,
         acceptor: builder.build(),
         cert_file: cert_file.to_path_buf(),
         key_file: key_file.to_path_buf(),
@@ -137,7 +167,8 @@ pub fn load_pair(key: &'static str, cert_file: &Path, key_file: &Path) -> Result
 
 /// The leaf's facts from `cert_file` alone, refused as `load_pair` refuses the certificate file. `status` reads the
 /// leaf this way: it reports the leaf's dates, and the operator running it may not be able to read the key.
-pub fn read_leaf(key: &'static str, cert_file: &Path) -> Result<LeafFacts, TlsError> {
+pub fn read_leaf(listener: PublicListener, cert_file: &Path) -> Result<LeafFacts, TlsError> {
+    let key = listener.key();
     let cert_pem = read_file(key, "cert_file", cert_file, cert_file)?;
     let (leaf, _) = certificates(key, cert_file, &cert_pem)?;
     leaf_facts(key, cert_file, &leaf)
@@ -261,14 +292,14 @@ pub enum Serving {
     Tls(Loaded),
 }
 
-/// One call per listener: `Plain` for an absent key, `load_pair` for the pair. `key` is `proxy.tls` or `admin.tls`.
-pub fn load(key: &'static str, tls: &Option<ListenerTls>) -> Result<Serving, TlsError> {
+/// One call per listener: `Plain` for an absent key, `load_pair` for the pair.
+pub fn load(listener: PublicListener, tls: &Option<ListenerTls>) -> Result<Serving, TlsError> {
     match tls {
         None => Ok(Serving::Plain),
         Some(ListenerTls {
             cert_file,
             key_file,
-        }) => load_pair(key, cert_file, key_file).map(Serving::Tls),
+        }) => load_pair(listener, cert_file, key_file).map(Serving::Tls),
     }
 }
 
@@ -306,7 +337,11 @@ pub fn warnings(serving: &Serving) -> Vec<String> {
         return Vec::new();
     };
     let mut warnings = Vec::new();
-    warnings.extend(expiry_line(loaded.key, &loaded.cert_file, &loaded.leaf));
+    warnings.extend(expiry_line(
+        loaded.listener.key(),
+        &loaded.cert_file,
+        &loaded.leaf,
+    ));
     warnings.extend(key_file_warnings(&loaded.key_file));
     warnings
 }
@@ -375,11 +410,11 @@ fn process_groups() -> Vec<u32> {
     }
 }
 
-/// One listener with a pair, as the running router serves it: the key (`proxy.tls` or `admin.tls`), the two paths
-/// the file named at start, the acceptor the loop reads, the loaded leaf's facts and the instant of the last
-/// successful load, and the last failed reload (its instant and the loader's line) until a reload succeeds.
+/// One listener with a pair, as the running router serves it: the listener, the two paths the file named at start,
+/// the acceptor the loop reads, the loaded leaf's facts and the instant of the last successful load, and the last
+/// failed reload (its instant and the loader's line) until a reload succeeds.
 pub struct Live {
-    key: &'static str,
+    listener: PublicListener,
     cert_file: PathBuf,
     key_file: PathBuf,
     acceptor: Arc<LiveAcceptor>,
@@ -398,7 +433,7 @@ impl Live {
     /// The pair `load` answered, loaded at `now`.
     pub fn new(loaded: Loaded, now: i64) -> Live {
         Live {
-            key: loaded.key,
+            listener: loaded.listener,
             cert_file: loaded.cert_file,
             key_file: loaded.key_file,
             acceptor: Arc::new(LiveAcceptor::new(loaded.acceptor)),
@@ -420,7 +455,7 @@ impl Live {
     /// changes: the listener keeps serving the pair it had.
     pub fn reload(&self, now: i64) -> Result<LeafFacts, String> {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        match load_pair(self.key, &self.cert_file, &self.key_file) {
+        match load_pair(self.listener, &self.cert_file, &self.key_file) {
             Ok(loaded) => {
                 self.acceptor.replace(loaded.acceptor);
                 state.leaf = loaded.leaf.clone();
@@ -439,7 +474,7 @@ impl Live {
     pub fn facts(&self) -> PairFacts {
         let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         PairFacts {
-            key: self.key.to_owned(),
+            key: self.listener.key().to_owned(),
             cert_file: self.cert_file.clone(),
             key_file: self.key_file.clone(),
             not_after_ms: state.leaf.not_after_ms,
@@ -452,7 +487,7 @@ impl Live {
 /// The set the start shares with the admin state before the pairs load: created empty, filled once by `fill`, and
 /// read by the reload route (`TlsReload`) and by the attention reader (`TlsPairs`).
 pub struct LiveSet {
-    listeners: OnceLock<Vec<(&'static str, Option<Live>)>>,
+    listeners: OnceLock<Vec<(PublicListener, Option<Live>)>>,
 }
 
 impl LiveSet {
@@ -462,23 +497,15 @@ impl LiveSet {
         })
     }
 
-    /// The public listeners in their order, `("proxy", ..)` then `("admin", ..)`, each with its `Live` or `None` for
-    /// plain HTTP.
-    pub fn fill(&self, listeners: Vec<(&'static str, Option<Live>)>) {
+    /// The public listeners in their order, `(PublicListener::Proxy, ..)` then `(PublicListener::Admin, ..)`, each
+    /// with its `Live` or `None` for plain HTTP.
+    pub fn fill(&self, listeners: Vec<(PublicListener, Option<Live>)>) {
         let filled = self.listeners.set(listeners).is_ok();
         debug_assert!(filled, "the start fills the listeners' pairs once");
     }
 
-    /// The pairs alone, in the listeners' order.
-    pub fn facts(&self) -> Vec<PairFacts> {
-        self.listeners()
-            .iter()
-            .filter_map(|(_, live)| live.as_ref().map(Live::facts))
-            .collect()
-    }
-
     /// Empty until the start fills the set, which it does before any listener binds.
-    fn listeners(&self) -> &[(&'static str, Option<Live>)] {
+    fn listeners(&self) -> &[(PublicListener, Option<Live>)] {
         self.listeners.get().map_or(&[], Vec::as_slice)
     }
 }
@@ -489,13 +516,13 @@ impl TlsReload for LiveSet {
             .iter()
             .map(|(listener, live)| {
                 let Some(live) = live else {
-                    return (*listener, Reloaded::Plain);
+                    return (listener.name(), Reloaded::Plain);
                 };
                 let outcome = match live.reload(now) {
                     Ok(leaf) => {
                         tracing::info!(
                             "{}: certificate pair reloaded (certificate {}, expires {})",
-                            live.key,
+                            live.listener.key(),
                             live.cert_file.display(),
                             leaf.not_after
                         );
@@ -508,13 +535,13 @@ impl TlsReload for LiveSet {
                     Err(error) => {
                         tracing::warn!(
                             "{}: certificate pair not reloaded, serving the pair loaded at {}: {error}",
-                            live.key,
+                            live.listener.key(),
                             instant(live.facts().loaded_at)
                         );
                         Reloaded::Refused { error }
                     }
                 };
-                (*listener, outcome)
+                (listener.name(), outcome)
             })
             .collect()
     }
@@ -522,7 +549,10 @@ impl TlsReload for LiveSet {
 
 impl TlsPairs for LiveSet {
     fn pairs(&self) -> Vec<PairFacts> {
-        self.facts()
+        self.listeners()
+            .iter()
+            .filter_map(|(_, live)| live.as_ref().map(Live::facts))
+            .collect()
     }
 }
 
@@ -557,14 +587,17 @@ mod tests {
         let not_after = jiff::Timestamp::now().as_second() + 90 * 86_400 + 1_234;
         let (cert, key) =
             generate_pair_valid_until(&["localhost"], not_after).write_to(dir.path(), "proxy");
-        let loaded = load_pair("proxy.tls", &cert, &key).unwrap();
+        let loaded = load_pair(PublicListener::Proxy, &cert, &key).unwrap();
         assert_eq!(
             loaded.leaf.not_after_ms,
             not_after * 1_000,
             "{:?}",
             loaded.leaf
         );
-        assert_eq!(read_leaf("proxy.tls", &cert).unwrap(), loaded.leaf);
+        assert_eq!(
+            read_leaf(PublicListener::Proxy, &cert).unwrap(),
+            loaded.leaf
+        );
     }
 
     #[test]
@@ -573,7 +606,10 @@ mod tests {
         let first = jiff::Timestamp::now().as_second() + 90 * 86_400;
         let (cert, key) =
             generate_pair_valid_until(&["localhost"], first).write_to(dir.path(), "proxy");
-        let live = Live::new(load_pair("proxy.tls", &cert, &key).unwrap(), 1_000);
+        let live = Live::new(
+            load_pair(PublicListener::Proxy, &cert, &key).unwrap(),
+            1_000,
+        );
         let acceptor = live.acceptor();
         let served = acceptor.current();
         let facts = |not_after: i64, loaded_at: i64, failed: Option<(i64, String)>| PairFacts {
@@ -617,7 +653,7 @@ mod tests {
     fn the_set_reloads_every_listener_in_order_and_reads_facts_for_the_pairs_alone() {
         let set = LiveSet::new();
         assert!(
-            set.reload(0).is_empty() && set.facts().is_empty(),
+            set.reload(0).is_empty() && set.pairs().is_empty(),
             "nothing before the fill"
         );
 
@@ -625,10 +661,10 @@ mod tests {
         let not_after = jiff::Timestamp::now().as_second() + 90 * 86_400 + 3_600;
         let (cert, key) =
             generate_pair_valid_until(&["localhost"], not_after).write_to(dir.path(), "admin");
-        let loaded = load_pair("admin.tls", &cert, &key).unwrap();
+        let loaded = load_pair(PublicListener::Admin, &cert, &key).unwrap();
         set.fill(vec![
-            ("proxy", None),
-            ("admin", Some(Live::new(loaded, 1_000))),
+            (PublicListener::Proxy, None),
+            (PublicListener::Admin, Some(Live::new(loaded, 1_000))),
         ]);
         assert_eq!(
             set.reload(2_000),
@@ -644,7 +680,7 @@ mod tests {
                 ),
             ]
         );
-        let facts = set.facts();
+        let facts = set.pairs();
         assert_eq!(
             facts
                 .iter()
@@ -660,7 +696,7 @@ mod tests {
                 if error.starts_with(&format!("admin.tls.cert_file {}: ", cert.display()))),
             "{refused:?}"
         );
-        assert_eq!(set.facts()[0].loaded_at, 2_000);
+        assert_eq!(set.pairs()[0].loaded_at, 2_000);
     }
 
     #[test]
@@ -674,14 +710,14 @@ mod tests {
         let link = dir.path().join("live");
         std::os::unix::fs::symlink(&first, &link).unwrap();
         let (cert, key) = (link.join("proxy.pem"), link.join("proxy.key"));
-        let loaded = load_pair("proxy.tls", &cert, &key).unwrap();
+        let loaded = load_pair(PublicListener::Proxy, &cert, &key).unwrap();
         assert_eq!(loaded.leaf.names, ["localhost"]);
         assert_eq!((&loaded.cert_file, &loaded.key_file), (&cert, &key));
 
         let switched = dir.path().join("switched");
         std::os::unix::fs::symlink(&second, &switched).unwrap();
         std::fs::rename(&switched, &link).unwrap();
-        let reloaded = load_pair("proxy.tls", &cert, &key).unwrap();
+        let reloaded = load_pair(PublicListener::Proxy, &cert, &key).unwrap();
         assert_eq!(reloaded.leaf.names, ["127.0.0.1"]);
     }
 
@@ -690,7 +726,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let pair = generate_pair(&["localhost", "127.0.0.1", "::1"]);
         let (cert, key) = pair.write_to(dir.path(), "admin");
-        let loaded = load_pair("admin.tls", &cert, &key).unwrap();
+        let loaded = load_pair(PublicListener::Admin, &cert, &key).unwrap();
         assert_eq!(loaded.leaf.names, ["localhost", "127.0.0.1", "::1"]);
     }
 
@@ -699,7 +735,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (cert, _) = generate_pair(&["localhost"]).write_to(dir.path(), "proxy");
         let (_, other_key) = generate_pair(&["localhost"]).write_to(dir.path(), "other");
-        let error = load_pair("proxy.tls", &cert, &other_key).err().unwrap();
+        let error = load_pair(PublicListener::Proxy, &cert, &other_key)
+            .err()
+            .unwrap();
         assert!(
             matches!(&error, TlsError::KeyMismatch { key: "proxy.tls", path, cert: named }
                 if *path == other_key && *named == cert),
@@ -720,7 +758,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (_, key) = generate_pair(&["localhost"]).write_to(dir.path(), "proxy");
         let missing = dir.path().join("absent.pem");
-        let error = load_pair("proxy.tls", &missing, &key).err().unwrap();
+        let error = load_pair(PublicListener::Proxy, &missing, &key)
+            .err()
+            .unwrap();
         assert!(
             matches!(&error, TlsError::Unreadable { key: "proxy.tls", file: "cert_file", path, .. }
                 if *path == missing),
@@ -743,7 +783,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (cert, key) = generate_pair(&["localhost"]).write_to(dir.path(), "proxy");
         std::fs::write(&cert, "not a pem").unwrap();
-        let error = load_pair("proxy.tls", &cert, &key).err().unwrap();
+        let error = load_pair(PublicListener::Proxy, &cert, &key).err().unwrap();
         assert_eq!(
             error.to_string(),
             format!(
@@ -760,7 +800,7 @@ mod tests {
         let mut pem = std::fs::read_to_string(&cert).unwrap();
         pem.push_str("-----BEGIN CERTIFICATE-----\nZm9vYmFy\n-----END CERTIFICATE-----\n");
         std::fs::write(&cert, pem).unwrap();
-        let error = load_pair("proxy.tls", &cert, &key).err().unwrap();
+        let error = load_pair(PublicListener::Proxy, &cert, &key).err().unwrap();
         assert_eq!(
             error.to_string(),
             format!(
@@ -775,7 +815,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (cert, key) = generate_pair(&["localhost"]).write_to(dir.path(), "admin");
         std::fs::write(&key, "not a pem").unwrap();
-        let error = load_pair("admin.tls", &cert, &key).err().unwrap();
+        let error = load_pair(PublicListener::Admin, &cert, &key).err().unwrap();
         assert_eq!(
             error.to_string(),
             format!(
@@ -792,7 +832,7 @@ mod tests {
         let not_after = jiff::Timestamp::now().as_second() + 30 * 86_400 + 3_600;
         let pair = generate_pair_valid_until(&["localhost"], not_after);
         let (cert, key) = pair.write_to(dir.path(), "proxy");
-        let loaded = load_pair("proxy.tls", &cert, &key).unwrap();
+        let loaded = load_pair(PublicListener::Proxy, &cert, &key).unwrap();
         assert_eq!(loaded.leaf.days_left, 30, "{:?}", loaded.leaf);
         let warned = warnings(&Serving::Tls(loaded));
         let line = format!(
@@ -835,7 +875,9 @@ mod tests {
         let (cert, key) = generate_pair(&["localhost"]).write_to(dir.path(), "admin");
         std::fs::set_permissions(&key, std::os::unix::fs::PermissionsExt::from_mode(0o640))
             .unwrap();
-        let warned = warnings(&Serving::Tls(load_pair("admin.tls", &cert, &key).unwrap()));
+        let warned = warnings(&Serving::Tls(
+            load_pair(PublicListener::Admin, &cert, &key).unwrap(),
+        ));
         assert!(
             warned
                 .iter()

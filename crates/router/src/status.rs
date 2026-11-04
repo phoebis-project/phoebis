@@ -46,14 +46,14 @@ pub struct Listeners {
 /// One line per listener pair whose leaf needs a look: `tls::expiry_line`'s for a leaf within the expiry warning, or
 /// the refusal the loader prints for a certificate file the operator running this cannot read or a leaf past its
 /// dates. A running router read its pair at start and keeps serving it until `tls reload`. The file on disk is what
-/// the next reload or start meets. `pairs` are `(key, tls)`, `key` being `proxy.tls` or `admin.tls`.
-pub fn certificate_lines(pairs: &[(&'static str, &Option<ListenerTls>)]) -> Vec<String> {
+/// the next reload or start meets. `pairs` are `(listener, tls)`.
+pub fn certificate_lines(pairs: &[(tls::PublicListener, &Option<ListenerTls>)]) -> Vec<String> {
     pairs
         .iter()
-        .filter_map(|(key, tls)| {
+        .filter_map(|(listener, tls)| {
             let pair = tls.as_ref()?;
-            match tls::read_leaf(key, &pair.cert_file) {
-                Ok(leaf) => tls::expiry_line(key, &pair.cert_file, &leaf),
+            match tls::read_leaf(*listener, &pair.cert_file) {
+                Ok(leaf) => tls::expiry_line(listener.key(), &pair.cert_file, &leaf),
                 Err(error) => Some(error.to_string()),
             }
         })
@@ -991,14 +991,18 @@ mod tests {
             cert_file: cert,
             key_file: key,
         });
-        assert!(certificate_lines(&[("proxy.tls", &distant), ("admin.tls", &None)]).is_empty());
+        assert!(certificate_lines(&[
+            (tls::PublicListener::Proxy, &distant),
+            (tls::PublicListener::Admin, &None)
+        ])
+        .is_empty());
 
         let missing = dir.path().join("absent.pem");
         let unreadable = Some(ListenerTls {
             cert_file: missing.clone(),
             key_file: dir.path().join("absent.key"),
         });
-        let lines = certificate_lines(&[("admin.tls", &unreadable)]);
+        let lines = certificate_lines(&[(tls::PublicListener::Admin, &unreadable)]);
         assert_eq!(lines.len(), 1, "{lines:?}");
         assert!(
             lines[0].starts_with(&format!("admin.tls.cert_file {}: ", missing.display())),
@@ -1096,7 +1100,10 @@ mod tests {
             key_file: key,
         });
         let expiring = Listeners {
-            certificates: certificate_lines(&[("proxy.tls", &tls), ("admin.tls", &None)]),
+            certificates: certificate_lines(&[
+                (tls::PublicListener::Proxy, &tls),
+                (tls::PublicListener::Admin, &None),
+            ]),
             ..listeners()
         };
         let screen = render(

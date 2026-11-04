@@ -136,7 +136,7 @@ upstream:
     let loaded = {
         let _env = env_lock();
         std::env::set_var(secret_env, ADMIN_SECRET);
-        phoebis_router::config::load(&config).unwrap()
+        phoebis_router::config::load_unresolved(&config).unwrap()
     };
     let (stop, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let mut server = tokio::spawn(phoebis_router::app::run(loaded, async {

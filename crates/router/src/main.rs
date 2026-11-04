@@ -13,6 +13,7 @@ use phoebis_router::backup::{self, BackupArgs};
 use phoebis_router::config::Config;
 use phoebis_router::recover_key::{self, RecoverKeyArgs};
 use phoebis_router::status::{self, Listeners, StatusArgs};
+use phoebis_router::tls::PublicListener;
 use phoebis_router::tls_reload::{self, TlsReloadArgs};
 use phoebis_router::{app, init, tls};
 
@@ -75,8 +76,8 @@ fn main() -> anyhow::Result<()> {
         Some(Command::CheckConfig) => {
             let config = phoebis_router::config::load_unresolved(&cli.config)?;
             // Read before the first line, so a pair the start would refuse is the one line the check prints.
-            let proxy_tls = tls::load("proxy.tls", &config.proxy.tls)?;
-            let admin_tls = tls::load("admin.tls", &config.admin.tls)?;
+            let proxy_tls = tls::load(PublicListener::Proxy, &config.proxy.tls)?;
+            let admin_tls = tls::load(PublicListener::Admin, &config.admin.tls)?;
             println!("{} is valid", cli.config.display());
             println!(
                 "{}",
@@ -267,7 +268,7 @@ fn main() -> anyhow::Result<()> {
         Some(Command::Status(args)) => run_status(&cli.config, &args),
         Some(Command::Tls(TlsCommand::Reload(args))) => run_tls_reload(&cli.config, &args),
         None => {
-            let config = phoebis_router::config::load(&cli.config)?;
+            let config = phoebis_router::config::load_unresolved(&cli.config)?;
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()?;
@@ -355,14 +356,14 @@ fn run_status(config_path: &Path, args: &StatusArgs) -> ! {
     let listeners = match &file {
         Some(config) => Listeners {
             certificates: status::certificate_lines(&[
-                ("proxy.tls", &config.proxy.tls),
-                ("admin.tls", &config.admin.tls),
+                (PublicListener::Proxy, &config.proxy.tls),
+                (PublicListener::Admin, &config.admin.tls),
             ]),
             admin: match args.common.url {
                 Some(_) => called,
                 None => tls::url(&config.admin.tls, config.admin.listen),
             },
-            metrics: Some(format!("http://{}", config.stats.metrics_listen)),
+            metrics: Some(tls::url(&None, config.stats.metrics_listen)),
             proxy: Some(tls::url(&config.proxy.tls, config.proxy.listen)),
         },
         None => Listeners {

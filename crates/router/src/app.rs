@@ -27,6 +27,7 @@ use phoebis_transport::{connector_builder, trust_extra_ca, Plane};
 use tokio::task::JoinHandle;
 
 use crate::config::{Config, RoutingConfig, StatsConfig, StorageConfig, UpstreamConfig};
+use crate::tls::PublicListener;
 use crate::{listen, tls};
 
 /// The whole shutdown's budget: every bounded phase takes what remains of it in order, so a phase that overran
@@ -437,11 +438,14 @@ pub async fn run_until(
         REFRESH_TICK,
     );
     // Read before any bind, so a pair the start cannot serve refuses with its line and no port is taken.
-    let proxy_tls = tls::load("proxy.tls", &config.proxy.tls)?;
-    let admin_tls = tls::load("admin.tls", &config.admin.tls)?;
-    for (listener, serving) in [("proxy", &proxy_tls), ("admin", &admin_tls)] {
+    let proxy_tls = tls::load(PublicListener::Proxy, &config.proxy.tls)?;
+    let admin_tls = tls::load(PublicListener::Admin, &config.admin.tls)?;
+    for (listener, serving) in [
+        (PublicListener::Proxy, &proxy_tls),
+        (PublicListener::Admin, &admin_tls),
+    ] {
         if let tls::Serving::Tls(loaded) = serving {
-            tracing::info!(listener, names = ?loaded.leaf.names, not_after = %loaded.leaf.not_after, "serving TLS");
+            tracing::info!(listener = listener.name(), names = ?loaded.leaf.names, not_after = %loaded.leaf.not_after, "serving TLS");
         }
         for warning in tls::warnings(serving) {
             tracing::warn!("{warning}");
@@ -452,14 +456,17 @@ pub async fn run_until(
     let admin_live = live_pair(admin_tls, loaded_at);
     let proxy_acceptor = acceptor(&proxy_live);
     let admin_acceptor = acceptor(&admin_live);
-    tls_live.fill(vec![("proxy", proxy_live), ("admin", admin_live)]);
+    tls_live.fill(vec![
+        (PublicListener::Proxy, proxy_live),
+        (PublicListener::Admin, admin_live),
+    ]);
     let proxy_listener = bind("proxy.listen", config.proxy.listen).await?;
     let admin_listener = bind("admin.listen", config.admin.listen).await?;
     let metrics_listener = bind("stats.metrics_listen", config.stats.metrics_listen).await?;
     tracing::info!(
         proxy = %tls::url(&config.proxy.tls, config.proxy.listen),
         admin = %tls::url(&config.admin.tls, config.admin.listen),
-        metrics = %format_args!("http://{}", config.stats.metrics_listen),
+        metrics = %tls::url(&None, config.stats.metrics_listen),
         profile = profile.name,
         "listening"
     );
@@ -507,7 +514,7 @@ pub async fn run_until(
     // The relayed surface wraps every connection to preserve the caller's original header spelling. The admin and
     // metrics listeners serve a plain tower service on the same accept loop, under the same header read timeout and
     // connection cap.
-    let mut proxy = tokio::spawn(phoebis_relay::serve(
+    let proxy = tokio::spawn(phoebis_relay::serve(
         proxy_listener,
         relay.clone(),
         keepalive_router(keepalive.clone()).merge(usage_router(
@@ -520,7 +527,7 @@ pub async fn run_until(
         limits(PROXY_MAX_CONNECTIONS),
         proxy_acceptor,
     ));
-    let mut admin_server = tokio::spawn(listen::serve(
+    let admin_server = tokio::spawn(listen::serve(
         "admin",
         admin_listener,
         admin_app,
@@ -528,7 +535,7 @@ pub async fn run_until(
         limits(ADMIN_MAX_CONNECTIONS),
         admin_acceptor,
     ));
-    let mut metrics_server = tokio::spawn(listen::serve(
+    let metrics_server = tokio::spawn(listen::serve(
         "metrics",
         metrics_listener,
         metrics_router(
@@ -546,32 +553,22 @@ pub async fn run_until(
         limits(METRICS_MAX_CONNECTIONS),
         None,
     ));
+    let mut servers = [proxy, admin_server, metrics_server];
 
     // A listener that ends on its own is read here, once: a `JoinHandle` polled again after it completed
     // panics, so its result is kept in a slot and the join below skips that handle.
     let mut ended: [Option<Listened>; 3] = [None, None, None];
-    let ended_early = first_to_end(
-        shutdown,
-        &mut proxy,
-        &mut admin_server,
-        &mut metrics_server,
-        &mut ended,
-    )
-    .await;
-    if let Some(index) = ended_early {
+    let ended_early = first_to_end(shutdown, &mut servers, &mut ended).await;
+    let early_error = ended_early.map(|index| {
+        let listener = LISTENERS[index];
         tracing::error!(
-            listener = LISTENERS[index],
+            listener,
             "a listener ended on its own, so the process shuts down"
         );
-    }
-    let early_error = ended_early.map(|index| {
         let result = ended[index]
             .as_ref()
             .expect("first_to_end filled the ended listener's slot");
-        anyhow!(
-            "the {} listener ended on its own: {result:?}",
-            LISTENERS[index]
-        )
+        anyhow!("the {listener} listener ended on its own: {result:?}")
     });
     tracing::info!("shutting down");
     let budget = deadline.start(budget_total);
@@ -590,11 +587,7 @@ pub async fn run_until(
             tracing::warn!(%error, "the keepalive's flush task did not end cleanly");
         }
         tracing::info!("the keepalive's last flush ran");
-        join_remaining(
-            &mut ended,
-            [&mut proxy, &mut admin_server, &mut metrics_server],
-        )
-        .await;
+        join_remaining(&mut ended, &mut servers).await;
     };
     // The outer bound keeps the constant, longer than any test drain, so a listener's own cut is never the abort
     // path's.
@@ -609,9 +602,7 @@ pub async fn run_until(
             tracing::warn!("requests were still in flight when the drain window closed");
             // Ahead of the abort, so every end it causes books the router's own cut.
             mark.store(true, Ordering::SeqCst);
-            proxy.abort();
-            admin_server.abort();
-            metrics_server.abort();
+            servers.iter().for_each(JoinHandle::abort);
             Ok(())
         }
     };
@@ -845,8 +836,7 @@ fn acceptor(live: &Option<tls::Live>) -> tls::Acceptor {
     live.as_ref().map(tls::Live::acceptor)
 }
 
-/// The listeners in the order of their slots in `ended` and of `join_remaining`'s handles, so a slot's index names
-/// its listener.
+/// The listeners in the order of their slots in `ended` and of `servers`, so a slot's index names its listener.
 const LISTENERS: [&str; 3] = ["proxy", "admin", "metrics"];
 
 /// One listener's outcome: the task either panicked or the serve future itself failed.
@@ -860,12 +850,11 @@ fn drained(result: Listened) -> anyhow::Result<()> {
 /// into.
 async fn first_to_end(
     shutdown: impl Future<Output = ()>,
-    proxy: &mut JoinHandle<std::io::Result<()>>,
-    admin: &mut JoinHandle<std::io::Result<()>>,
-    metrics: &mut JoinHandle<std::io::Result<()>>,
+    servers: &mut [JoinHandle<std::io::Result<()>>; 3],
     ended: &mut [Option<Listened>; 3],
 ) -> Option<usize> {
     tokio::pin!(shutdown);
+    let [proxy, admin, metrics] = servers;
     tokio::select! {
         _ = &mut shutdown => None,
         result = proxy => { ended[0] = Some(result); Some(0) }
@@ -877,9 +866,9 @@ async fn first_to_end(
 /// Joins the listeners the early-exit select did not consume; the one it did is read from its slot.
 async fn join_remaining(
     ended: &mut [Option<Listened>; 3],
-    handles: [&mut JoinHandle<std::io::Result<()>>; 3],
+    handles: &mut [JoinHandle<std::io::Result<()>>; 3],
 ) {
-    for (slot, handle) in ended.iter_mut().zip(handles) {
+    for (slot, handle) in ended.iter_mut().zip(handles.iter_mut()) {
         if slot.is_none() {
             *slot = Some(handle.await);
         }
@@ -1753,32 +1742,26 @@ revisions:
     async fn a_listener_the_early_select_consumed_is_not_polled_again() {
         let (tx_admin, rx_admin) = tokio::sync::oneshot::channel::<()>();
         let (tx_metrics, rx_metrics) = tokio::sync::oneshot::channel::<()>();
-        let mut proxy: JoinHandle<std::io::Result<()>> =
+        let proxy: JoinHandle<std::io::Result<()>> =
             tokio::spawn(async { Err(std::io::Error::other("the proxy listener failed")) });
-        let mut admin: JoinHandle<std::io::Result<()>> = tokio::spawn(async move {
+        let admin: JoinHandle<std::io::Result<()>> = tokio::spawn(async move {
             let _ = rx_admin.await;
             Ok(())
         });
-        let mut metrics: JoinHandle<std::io::Result<()>> = tokio::spawn(async move {
+        let metrics: JoinHandle<std::io::Result<()>> = tokio::spawn(async move {
             let _ = rx_metrics.await;
             Ok(())
         });
+        let mut servers = [proxy, admin, metrics];
         let mut ended: [Option<Listened>; 3] = [None, None, None];
-        let ended_early = first_to_end(
-            std::future::pending(),
-            &mut proxy,
-            &mut admin,
-            &mut metrics,
-            &mut ended,
-        )
-        .await;
+        let ended_early = first_to_end(std::future::pending(), &mut servers, &mut ended).await;
         assert_eq!(ended_early, Some(0));
         assert!(ended[0].is_some());
         assert!(ended[1].is_none());
         assert!(ended[2].is_none());
         let _ = tx_admin.send(());
         let _ = tx_metrics.send(());
-        join_remaining(&mut ended, [&mut proxy, &mut admin, &mut metrics]).await;
+        join_remaining(&mut ended, &mut servers).await;
         assert!(ended.iter().all(Option::is_some), "{ended:?}");
     }
 

@@ -106,7 +106,7 @@ upstream:
     std::fs::write(&path, yaml).unwrap();
     let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
-    phoebis_router::config::load(&path).unwrap()
+    phoebis_router::config::load_unresolved(&path).unwrap()
 }
 
 #[tokio::test]

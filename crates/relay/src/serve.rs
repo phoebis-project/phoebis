@@ -112,12 +112,7 @@ pub async fn serve(
     //
     // Left at hyper's default parser configuration on purpose: the recorder ends a head where this builder's
     // `httparse` pass ends it, and a leniency option set here would have to be given to the recorder too.
-    let mut builder = hyper::server::conn::http1::Builder::new();
-    // hyper's own 30 second default is silently off until a timer is set; the timeout is named here so the
-    // listener's bound does not depend on a default that a timer-less builder discards.
-    builder
-        .timer(TokioTimer::new())
-        .header_read_timeout(limits.header_read_timeout);
+    let builder = http1_builder(limits.header_read_timeout);
     accept_loop(
         "proxy",
         listener,
@@ -137,6 +132,18 @@ pub async fn serve(
         },
     )
     .await
+}
+
+/// The HTTP/1 connection builder the proxy, admin and metrics listeners serve on, with `header_read_timeout` as the
+/// bound on the wait for a request head.
+pub fn http1_builder(header_read_timeout: Duration) -> hyper::server::conn::http1::Builder {
+    let mut builder = hyper::server::conn::http1::Builder::new();
+    // hyper's own 30 second default is silently off until a timer is set. The timeout is named here so the
+    // listener's bound does not depend on a default that a timer-less builder discards.
+    builder
+        .timer(TokioTimer::new())
+        .header_read_timeout(header_read_timeout);
+    builder
 }
 
 /// Accepts on `listener` until `stop` flips, then waits for the connections already accepted, up to the drain
