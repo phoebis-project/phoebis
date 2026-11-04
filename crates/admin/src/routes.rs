@@ -187,7 +187,7 @@ async fn gate(State(state): State<Arc<AdminState>>, mut request: Request, next: 
         |m| m.as_str().to_string(),
     );
     let path = request.uri().path().to_string();
-    let mut response = match admit(&state, &mut request) {
+    let (caller, mut response) = match admit(&state, &method, &path, &mut request) {
         None => {
             let caller = request.extensions().get::<Caller>().cloned();
             // Taken out before the handler runs, so the renewed token never reaches a handler.
@@ -196,18 +196,13 @@ async fn gate(State(state): State<Arc<AdminState>>, mut request: Request, next: 
             if let Some(Renewal(cookie)) = renewal {
                 response.headers_mut().append(SET_COOKIE, cookie);
             }
-            if mutation {
-                log_mutation(&method, &route, &path, caller.as_ref(), &response);
-            }
-            response
+            (caller, response)
         }
-        Some(refusal) => {
-            if mutation {
-                log_mutation(&method, &route, &path, None, &refusal);
-            }
-            refusal
-        }
+        Some(refusal) => (None, refusal),
     };
+    if mutation {
+        log_mutation(&method, &route, &path, caller.as_ref(), &response);
+    }
     // An admin answer describes credentials and usage; a cache between the browser and this process has
     // no business holding any of it, and a browser has no business reading a body as anything but its type.
     let headers = response.headers_mut();
@@ -290,15 +285,20 @@ fn entity_of(
 }
 
 /// `None` admits the request; anything else is the refusal to answer with.
-fn admit(state: &AdminState, request: &mut Request) -> Option<Response> {
-    let method = request.method().clone();
-    let path = request.uri().path().to_string();
-    let mutation = is_mutation(&method);
+fn admit(
+    state: &AdminState,
+    method: &Method,
+    path: &str,
+    request: &mut Request,
+) -> Option<Response> {
+    let mutation = is_mutation(method);
+    let login = *method == Method::POST && path == LOGIN_PATH;
+    let logout = *method == Method::DELETE && path == LOGIN_PATH;
 
     // A bearer is the operator's own hand: a browser cannot attach `Authorization` to a cross-site request without a
     // preflight the admin API never answers, so the Origin check is the cookie's and not the bearer's. The login
     // route stays the cookie's door and ignores a bearer on it.
-    let bearer = (!(method == Method::POST && path == LOGIN_PATH))
+    let bearer = (!login)
         .then(|| presented_bearer(request.headers()))
         .flatten();
     // A browser attaches `Origin` to every cross-site write. A presented `Origin` must name the request's own `Host`,
@@ -325,7 +325,7 @@ fn admit(state: &AdminState, request: &mut Request) -> Option<Response> {
     // A cross-site `fetch` may carry `text/plain` without a preflight; requiring the JSON media type on a
     // body-carrying mutation makes every such write a preflighted one, which the browser refuses without
     // CORS headers. The login is a mutation too.
-    let with_body = matches!(method, Method::PATCH | Method::POST | Method::PUT);
+    let with_body = matches!(*method, Method::PATCH | Method::POST | Method::PUT);
     if with_body && carries_body(request.headers()) {
         let json = request
             .headers()
@@ -347,7 +347,7 @@ fn admit(state: &AdminState, request: &mut Request) -> Option<Response> {
         }
     }
 
-    if method == Method::POST && path == LOGIN_PATH {
+    if login {
         return None;
     }
 
@@ -381,7 +381,7 @@ fn admit(state: &AdminState, request: &mut Request) -> Option<Response> {
         }
         Some(Authenticated::Persistent { id, renewed_cookie }) => {
             // The logout answers its clear alone: a renewal beside it would leave the browser a live token.
-            if !(method == Method::DELETE && path == LOGIN_PATH) {
+            if !logout {
                 let secure = state.tls || forwarded_https(request.headers());
                 // A base64url token and fixed attributes always make a header value. Were one ever refused, the
                 // answer would go without its renewal and the presented token would stay valid to its own end.
@@ -398,7 +398,7 @@ fn admit(state: &AdminState, request: &mut Request) -> Option<Response> {
         }
         // A tab holding a dead cookie still needs the browser's copy cleared, so the logout answers it rather
         // than the gate refusing it.
-        None if method == Method::DELETE && path == LOGIN_PATH => None,
+        None if logout => None,
         None => Some(failure(StatusCode::UNAUTHORIZED, "no admin session")),
     }
 }
