@@ -69,8 +69,11 @@ pub enum ClientError {
     /// The listener answered, with a body that is not JSON: something other than the admin API holds the address.
     #[error("{url}: answered {status} with a body that is not JSON")]
     NotJson { url: String, status: u16 },
-    #[error("{url}: {reason}")]
+    #[error("the admin listener did not answer on {url}: {reason}")]
     Transport { url: String, reason: String },
+    /// `--url` names more than a listener's base, or no listener.
+    #[error("--url: must be http:// or https:// and a host, with no credential, path or query")]
+    Url,
 }
 
 impl ClientError {
@@ -324,12 +327,7 @@ fn connector(ca: Option<&Path>) -> Result<SslConnector, Failure> {
 /// The base names the listener and nothing else. A credential in the URL would sit in the process list and in every
 /// `Transport` line, and a path or query has nowhere to go, since every route's path is absolute under `/admin`.
 fn base_of(url: &str) -> Result<Uri, ClientError> {
-    let refused = || ClientError::Transport {
-        url: "--url".to_owned(),
-        reason: "must be http:// or https:// and a host, with no credential, path or query"
-            .to_owned(),
-    };
-    let base: Uri = url.parse().map_err(|_| refused())?;
+    let base: Uri = url.parse().map_err(|_| ClientError::Url)?;
     let scheme = matches!(base.scheme_str(), Some("http" | "https"));
     let authority = base
         .authority()
@@ -338,7 +336,7 @@ fn base_of(url: &str) -> Result<Uri, ClientError> {
     if scheme && authority && bare {
         Ok(base)
     } else {
-        Err(refused())
+        Err(ClientError::Url)
     }
 }
 

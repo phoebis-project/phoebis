@@ -136,9 +136,6 @@ impl Reader<'_> {
         }
         match self.client.expect(Method::GET, path, None).await {
             Ok(answer) => Ok(answer.body),
-            Err(ClientError::Transport { url, reason }) => Err(format!(
-                "the admin listener did not answer on {url}: {reason}"
-            )),
             Err(ClientError::Refused { status, message }) => {
                 let line = format!("the admin listener answered {status} {message}");
                 if status == 429 {

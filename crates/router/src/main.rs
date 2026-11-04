@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use phoebis_router::admin_client::{self, AdminClient, ClientError};
+use phoebis_router::admin_client::{self, AdminClient};
 use phoebis_router::backup::{self, BackupArgs};
 use phoebis_router::recover_key::{self, RecoverKeyArgs};
 use phoebis_router::status::{self, Listeners, StatusArgs};
@@ -445,12 +445,7 @@ fn run_tls_reload(config_path: &Path, args: &TlsReloadArgs) -> ! {
     let body = runtime
         .block_on(tls_reload::read(&client))
         .unwrap_or_else(|error| {
-            match &error {
-                ClientError::Transport { url, reason } => {
-                    eprintln!("the admin listener did not answer on {url}: {reason}")
-                }
-                error => eprintln!("{error}"),
-            }
+            eprintln!("{error}");
             std::process::exit(error.exit_code())
         });
     let printed = if args.common.json {

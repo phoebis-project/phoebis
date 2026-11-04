@@ -253,8 +253,10 @@ async fn the_client_trusts_the_ca_named_by_ca_and_no_other() {
             "{ca:?}: {line}"
         );
         assert!(
-            line.starts_with(&format!("https://127.0.0.1:{}: ", running.admin))
-                && line.contains("verif"),
+            line.starts_with(&format!(
+                "the admin listener did not answer on https://127.0.0.1:{}: ",
+                running.admin
+            )) && line.contains("verif"),
             "{ca:?}: {line}"
         );
     }
@@ -307,7 +309,8 @@ async fn a_named_ca_replaces_the_system_roots() {
     let line = error.to_string();
     assert!(matches!(error, ClientError::Transport { .. }), "{line}");
     assert!(
-        line.starts_with(&format!("{url}: ")) && line.contains("verif"),
+        line.starts_with(&format!("the admin listener did not answer on {url}: "))
+            && line.contains("verif"),
         "{line}"
     );
     running.stop().await;
@@ -363,8 +366,9 @@ async fn a_port_nothing_listens_on_names_the_url() {
     assert!(matches!(error, ClientError::Transport { .. }), "{line}");
     assert_eq!(error.exit_code(), 1);
     assert!(
-        line.starts_with(&format!("http://127.0.0.1:{port}: "))
-            && line.to_lowercase().contains("connection refused"),
+        line.starts_with(&format!(
+            "the admin listener did not answer on http://127.0.0.1:{port}: "
+        )) && line.to_lowercase().contains("connection refused"),
         "{line}"
     );
     assert!(!line.contains(ADMIN_SECRET), "{line}");
@@ -453,8 +457,9 @@ async fn a_stalled_body_ends_the_call_at_the_deadline() {
     let line = error.to_string();
     assert!(matches!(error, ClientError::Transport { .. }), "{line}");
     assert!(
-        line.starts_with(&format!("http://127.0.0.1:{port}: "))
-            && line.ends_with("the call did not finish within 1s"),
+        line.starts_with(&format!(
+            "the admin listener did not answer on http://127.0.0.1:{port}: "
+        )) && line.ends_with("the call did not finish within 1s"),
         "{line}"
     );
     assert!(
