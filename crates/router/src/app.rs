@@ -185,30 +185,35 @@ pub async fn run_until(
         )
     })?);
     log_ledger_opened(&config.stats.ledger_path, &revisions, started);
-    // Rows from before the rollup key carried a generation are stamped with each live key's own, once; the
-    // ledger task must not write before this, or a fresh row could collide with a stamped one. An id that had
-    // a holder before this one starts at its own creation, so the earlier holder's rows stay unstamped.
-    let load = store
-        .load_registry()
-        .context("reading the keys for the ledger's generation stamp")?;
-    let reused: std::collections::HashSet<&str> =
-        load.reused_key_ids.iter().map(String::as_str).collect();
-    let live_keys: Vec<phoebis_ledger::LiveKeyLifetime> = load
-        .keys
-        .iter()
-        .map(|k| phoebis_ledger::LiveKeyLifetime {
-            id: k.id.clone(),
-            created_at: k.created_at,
-            reused: reused.contains(k.id.as_str()),
-        })
-        .collect();
-    let stamped = phoebis_ledger::reconcile_key_generations(&ledger_db, &live_keys)
-        .context("stamping key generations onto the ledger's earlier rows")?;
-    if stamped > 0 {
-        tracing::info!(
-            rows = stamped,
-            "stamped key generations onto rollup rows written before the column existed"
-        );
+    // Rows from before the rollup key carried a generation are stamped with each live key's own, once. The ledger
+    // task must not write before this, or a fresh row could collide with a stamped one. An id that had a holder
+    // before this one starts at its own creation, so the earlier holder's rows stay unstamped. A ledger stamped
+    // before skips the registry read, which only the stamp uses.
+    if !phoebis_ledger::key_generations_reconciled(&ledger_db)
+        .context("reading whether the ledger's key generations were stamped")?
+    {
+        let load = store
+            .load_registry()
+            .context("reading the keys for the ledger's generation stamp")?;
+        let reused: std::collections::HashSet<&str> =
+            load.reused_key_ids.iter().map(String::as_str).collect();
+        let live_keys: Vec<phoebis_ledger::LiveKeyLifetime> = load
+            .keys
+            .iter()
+            .map(|k| phoebis_ledger::LiveKeyLifetime {
+                id: k.id.clone(),
+                created_at: k.created_at,
+                reused: reused.contains(k.id.as_str()),
+            })
+            .collect();
+        let stamped = phoebis_ledger::reconcile_key_generations(&ledger_db, &live_keys)
+            .context("stamping key generations onto the ledger's earlier rows")?;
+        if stamped > 0 {
+            tracing::info!(
+                rows = stamped,
+                "stamped key generations onto rollup rows written before the column existed"
+            );
+        }
     }
     let refolded = phoebis_ledger::refold_bands(
         &ledger_db,

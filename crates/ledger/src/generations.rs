@@ -1,6 +1,6 @@
 //! The one-time stamp of live keys' generations onto rows written before the rollup key carried one.
 
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::query::hour_ceil;
 use crate::rollup::{
@@ -41,14 +41,7 @@ pub fn reconcile_key_generations(
     keys: &[LiveKeyLifetime],
 ) -> Result<usize, LedgerError> {
     db.write(|conn| {
-        let done: Option<String> = conn
-            .query_row(
-                "SELECT value FROM meta WHERE key = ?1",
-                params![GENERATIONS_RECONCILED_KEY],
-                |r| r.get(0),
-            )
-            .optional()?;
-        if done.is_some() {
+        if reconciled(conn)? {
             return Ok(0);
         }
         let mut moved = 0;
@@ -97,4 +90,22 @@ pub fn reconcile_key_generations(
         )?;
         Ok(moved)
     })
+}
+
+/// Whether the stamp already ran on this ledger, so a start skips reading the registry's keys for a stamp that would
+/// move nothing. Read on the writer, as the stamp reads it, since the start calls both before any reader runs.
+pub fn key_generations_reconciled(db: &LedgerDb) -> Result<bool, LedgerError> {
+    db.write(|conn| Ok(reconciled(conn)?))
+}
+
+/// The `meta` mark the stamp leaves after its last key.
+fn reconciled(conn: &Connection) -> rusqlite::Result<bool> {
+    let done: Option<String> = conn
+        .query_row(
+            "SELECT value FROM meta WHERE key = ?1",
+            params![GENERATIONS_RECONCILED_KEY],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(done.is_some())
 }

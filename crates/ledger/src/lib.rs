@@ -37,7 +37,10 @@ pub use db::{LedgerDb, WriterRead, READERS};
 pub use events::{
     catalog_changed, event_of, plan_ended, plan_restored, poll_backoff, poll_failed, MirrorBaseline,
 };
-pub use generations::{reconcile_key_generations, LiveKeyLifetime, GENERATIONS_RECONCILED_KEY};
+pub use generations::{
+    key_generations_reconciled, reconcile_key_generations, LiveKeyLifetime,
+    GENERATIONS_RECONCILED_KEY,
+};
 pub use histogram::{bucket_index, Histogram};
 pub use metrics::{
     gather, metrics_router, AttentionGaugeSource, AttentionGauges, KeepaliveAgents,
