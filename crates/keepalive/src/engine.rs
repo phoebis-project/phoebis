@@ -1676,8 +1676,6 @@ impl Inner {
         self.touch_agent(key, agent_id);
     }
 
-    /// Drops the agent's recipe and everything following it, and moves the agent to a new generation so no
-    /// late result about the old one lands. `wasted` labels the probes the recipe leaves unanswered.
     /// Every agent of every session, which `max_agents` bounds.
     pub(crate) fn agent_count(&self) -> usize {
         self.sessions.values().map(|s| s.agents.len()).sum()
@@ -1708,6 +1706,8 @@ impl Inner {
         self.sessions.remove(key);
     }
 
+    /// Drops the agent's recipe and everything following it, and moves the agent to a new generation so no
+    /// late result about the old one lands. `wasted` labels the probes the recipe leaves unanswered.
     pub(crate) fn discard(
         &mut self,
         key: &SessionKey,
