@@ -296,6 +296,20 @@ pub fn resolve(
     })
 }
 
+/// `resolve` on `factors`, or on the shipped price table's tightest row at the recipe's speed where the tables in force
+/// give no break-even (no priced row, or a free read), so a ceiling is never unbounded.
+pub(crate) fn resolve_or_shipped(
+    policy: &KeepalivePolicy,
+    factors: BreakEvenFactors,
+    ttl_ms: i64,
+    timing: &KeepaliveTiming,
+    fast: bool,
+    now: i64,
+) -> Option<Ceilings> {
+    resolve(policy, factors, ttl_ms, timing)
+        .or_else(|| resolve(policy, shipped_tightest(fast, now), ttl_ms, timing))
+}
+
 /// The lowest and the highest figure a pool's combinations resolve to, equal when every combination agrees.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct Range {
@@ -336,8 +350,8 @@ pub struct ResolvedCeilings {
 /// ids the TTL sets and the rules' wildcard-free entries name, and each is folded, judged, priced and given its TTL as
 /// a request on it would be. A row keyed undated that `dated` maps to the catalog's dated id is judged under that id,
 /// which is what a request on it runs under, so a deny entry naming the dated id drops the row. Rules that allow none
-/// of them leave a model priced nowhere. Tables that give no break-even fall back to the shipped tightest row, as
-/// `ceilings_for` does. `None` with no funding.
+/// of them leave a model priced nowhere. Tables that give no break-even fall back to the shipped tightest row
+/// (`resolve_or_shipped`). `None` with no funding.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_pool(
     policy: &KeepalivePolicy,
@@ -395,8 +409,7 @@ pub(crate) fn resolve_pool(
                 None => vec![FIVE_MINUTES_MS, ONE_HOUR_MS],
             };
             for ttl in ttls {
-                let Some(ceilings) = resolve(policy, factors, ttl, timing)
-                    .or_else(|| resolve(policy, shipped_tightest(false, now), ttl, timing))
+                let Some(ceilings) = resolve_or_shipped(policy, factors, ttl, timing, false, now)
                 else {
                     continue;
                 };

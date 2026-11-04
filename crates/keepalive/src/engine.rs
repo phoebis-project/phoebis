@@ -26,7 +26,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::breakeven::{
-    resolve, resolve_pool, shipped_tightest, CeilingInputs, Ceilings, FactorRows, ResolvedCeilings,
+    resolve_or_shipped, resolve_pool, CeilingInputs, Ceilings, FactorRows, ResolvedCeilings,
 };
 use crate::config::{
     floor_ttl_ms, KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, FIVE_MINUTES_MS, MAX_WORKERS,
@@ -4228,8 +4228,7 @@ pub(crate) fn ceilings_for(
         ),
         _ => Funding::ApiKey,
     };
-    let ttl_ms = floor_ttl_ms(agent.ttl_ms);
-    resolve(
+    resolve_or_shipped(
         policy,
         rows.factors(
             funding,
@@ -4237,10 +4236,11 @@ pub(crate) fn ceilings_for(
             fast,
             agent.current.as_ref().map_or(0, |o| o.expected),
         ),
-        ttl_ms,
+        floor_ttl_ms(agent.ttl_ms),
         timing,
+        fast,
+        now,
     )
-    .or_else(|| resolve(policy, shipped_tightest(fast, now), ttl_ms, timing))
     .unwrap_or(Ceilings {
         idle_ms: 0,
         parked_ms: 0,
