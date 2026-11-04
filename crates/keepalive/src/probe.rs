@@ -578,11 +578,8 @@ impl Inner {
                 self.probe_error(
                     key,
                     agent_id,
-                    0,
+                    record.outcome,
                     None,
-                    None,
-                    None,
-                    false,
                     job.counted_idle_tick,
                     now,
                 );
@@ -591,15 +588,11 @@ impl Inner {
             Exchange::Answered(result) => result,
         };
         if record.outcome != ProbeOutcome::Ok && record.outcome != ProbeOutcome::Migrated {
-            let exhausted = record.outcome == ProbeOutcome::Exhausted;
             self.probe_error(
                 key,
                 agent_id,
-                result.status,
-                result.error_code.as_deref(),
-                result.obstacle,
-                result.retry_after_secs,
-                exhausted,
+                record.outcome,
+                Some(&result),
                 job.counted_idle_tick,
                 now,
             );
@@ -745,24 +738,27 @@ impl Inner {
     /// under `client_contract` or `client_drift` refuses the probe's own request shape and pauses as an unsupported
     /// probe, any other 401 or 403 pauses under the authentication reason, any other 4xx is a shape the upstream
     /// refuses, and a canceled, timed-out, or lost exchange (status 0) retries as a transport error.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn probe_error(
         &mut self,
         key: &SessionKey,
         agent_id: &str,
-        status: u16,
-        error_code: Option<&str>,
-        obstacle: Option<ProbeObstacle>,
-        retry_after_secs: Option<u64>,
-        exhausted: bool,
+        outcome: ProbeOutcome,
+        result: Option<&ProbeResult>,
         counted_idle_tick: bool,
         now: i64,
     ) {
-        let retry_after_ms = retry_after_secs.map(|secs| {
-            i64::try_from(secs)
-                .unwrap_or(i64::MAX)
-                .saturating_mul(1_000)
-        });
+        // An exchange the relay never answered reads as status 0, with no code, obstacle or wait.
+        let status = result.map_or(0, |result| result.status);
+        let error_code = result.and_then(|result| result.error_code.as_deref());
+        let obstacle = result.and_then(|result| result.obstacle);
+        let exhausted = outcome == ProbeOutcome::Exhausted;
+        let retry_after_ms = result
+            .and_then(|result| result.retry_after_secs)
+            .map(|secs| {
+                i64::try_from(secs)
+                    .unwrap_or(i64::MAX)
+                    .saturating_mul(1_000)
+            });
         // Read before the obstacles, which never meet it: a 429 classifies as rate limited and never as exhausted,
         // and the budget's timed answer carries `accounts_exhausted`.
         if status == 429 && error_code == Some("accounts_at_cap") {
@@ -977,6 +973,22 @@ mod tests {
 
     use super::*;
 
+    /// The relay's answer to a probe, with the fields `probe_error` reads.
+    fn answered(
+        status: u16,
+        error_code: Option<&str>,
+        obstacle: Option<ProbeObstacle>,
+        retry_after_secs: Option<u64>,
+    ) -> ProbeResult {
+        ProbeResult {
+            status,
+            error_code: error_code.map(String::from),
+            obstacle,
+            retry_after_secs,
+            ..ProbeResult::default()
+        }
+    }
+
     /// One session holding one never-probed agent, the minimum `probe_error`/`retry` need, built onto the same
     /// `Inner::empty` a fresh engine starts from.
     fn one_agent_inner() -> (Inner, SessionKey) {
@@ -1099,11 +1111,13 @@ mod tests {
             inner.probe_error(
                 &key,
                 "main",
-                503,
-                Some("accounts_unavailable"),
-                Some(obstacle),
-                None,
-                true,
+                ProbeOutcome::Exhausted,
+                Some(&answered(
+                    503,
+                    Some("accounts_unavailable"),
+                    Some(obstacle),
+                    None,
+                )),
                 false,
                 1_000,
             );
@@ -1123,11 +1137,13 @@ mod tests {
         inner.probe_error(
             &key,
             "main",
-            503,
-            Some("accounts_unavailable"),
-            Some(ProbeObstacle::PoolMoved),
-            Some(1),
-            true,
+            ProbeOutcome::Exhausted,
+            Some(&answered(
+                503,
+                Some("accounts_unavailable"),
+                Some(ProbeObstacle::PoolMoved),
+                Some(1),
+            )),
             false,
             1_000,
         );
@@ -1145,11 +1161,8 @@ mod tests {
         inner.probe_error(
             &key,
             "main",
-            429,
-            Some("accounts_at_cap"),
-            None,
-            Some(3),
-            false,
+            ProbeOutcome::RateLimited,
+            Some(&answered(429, Some("accounts_at_cap"), None, Some(3))),
             false,
             1_000,
         );
@@ -1166,7 +1179,14 @@ mod tests {
     #[test]
     fn a_quota_429_retries_on_the_first_rung_under_probe_quota_exhausted() {
         let (mut inner, key) = one_agent_inner();
-        inner.probe_error(&key, "main", 429, None, None, None, false, false, 1_000);
+        inner.probe_error(
+            &key,
+            "main",
+            ProbeOutcome::RateLimited,
+            Some(&answered(429, None, None, None)),
+            false,
+            1_000,
+        );
         let agent = &inner.sessions[&key].agents["main"];
         assert_eq!(
             (agent.paused, agent.reason, agent.retry_at),
@@ -1197,11 +1217,8 @@ mod tests {
             inner.probe_error(
                 &key,
                 "main",
-                403,
-                Some(code),
-                None,
-                None,
-                false,
+                ProbeOutcome::Rejected,
+                Some(&answered(403, Some(code), None, None)),
                 false,
                 1_000,
             );
@@ -1220,11 +1237,8 @@ mod tests {
         inner.probe_error(
             &key,
             "main",
-            429,
-            Some("accounts_at_cap"),
-            None,
-            None,
-            false,
+            ProbeOutcome::RateLimited,
+            Some(&answered(429, Some("accounts_at_cap"), None, None)),
             false,
             1_000,
         );
@@ -1253,11 +1267,8 @@ mod tests {
         inner.probe_error(
             &key,
             "main",
-            503,
-            Some("ledger_behind"),
-            None,
-            Some(5),
-            false,
+            ProbeOutcome::Held,
+            Some(&answered(503, Some("ledger_behind"), None, Some(5))),
             false,
             1_000,
         );
@@ -1275,11 +1286,8 @@ mod tests {
         inner.probe_error(
             &key,
             "main",
-            503,
-            Some("ledger_behind"),
-            None,
-            None,
-            false,
+            ProbeOutcome::Held,
+            Some(&answered(503, Some("ledger_behind"), None, None)),
             false,
             1_000,
         );
@@ -1309,11 +1317,8 @@ mod tests {
             inner.probe_error(
                 &key,
                 "main",
-                503,
-                Some("ledger_behind"),
-                None,
-                Some(5),
-                false,
+                ProbeOutcome::Held,
+                Some(&answered(503, Some("ledger_behind"), None, Some(5))),
                 false,
                 now,
             );
@@ -1329,7 +1334,14 @@ mod tests {
     #[test]
     fn a_503_without_the_code_still_retries_under_backoff() {
         let (mut inner, key) = one_agent_inner();
-        inner.probe_error(&key, "main", 503, None, None, None, false, false, 1_000);
+        inner.probe_error(
+            &key,
+            "main",
+            ProbeOutcome::Failed,
+            Some(&answered(503, None, None, None)),
+            false,
+            1_000,
+        );
         let agent = &inner.sessions[&key].agents["main"];
         assert_eq!(
             (agent.paused, agent.failures, agent.reason),
