@@ -59,7 +59,8 @@ pub use task::{
     credits_from_usage, same_reset, sample_from_usage, spawn, AccountProjection, AccountSlowDown,
     BandWeight, BurnRates, LoadCounts, PinStanding, RegimeRates, ReloadError, Report, RouterConfig,
     RouterEvent, RouterGone, RouterHandle, SelectAnswer, WindowProjection, WriterStatus, COMMANDS,
-    RESET_SLACK_MS, SPENT_MARGIN, UNATTRIBUTED_POOL, WRITER_DEPTH,
+    PIN_CREATED, PIN_EXPIRED, PIN_MIGRATED, RESET_SLACK_MS, SPENT_MARGIN, UNATTRIBUTED_POOL,
+    WRITER_DEPTH,
 };
 #[cfg(any(test, feature = "debug-hooks"))]
 pub use task::{LoopPark, ReportHold};

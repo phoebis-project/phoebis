@@ -98,6 +98,12 @@ pub fn same_reset(a: i64, b: i64) -> bool {
 /// one point of room. It is a constant, measured on live samples.
 pub const SPENT_MARGIN: f64 = 0.02;
 
+/// The words a pin event's kind is named by, in a decision record's `pin_events` and in the ledger's events table
+/// alike, so the console reads one vocabulary in both.
+pub const PIN_CREATED: &str = "pin_created";
+pub const PIN_EXPIRED: &str = "pin_expired";
+pub const PIN_MIGRATED: &str = "pin_migrated";
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum RouterEvent {
     CooldownCleared {
@@ -2583,10 +2589,10 @@ fn reset_under(stored: Option<&WindowReading>, reading: &WindowReading) -> Optio
 /// against the pin.
 fn pin_event_facts(event: &RouterEvent) -> Option<PinEventFacts> {
     let (kind, reason) = match event {
-        RouterEvent::PinCreated { .. } => ("pin_created", None),
-        RouterEvent::PinMigrated { reason, .. } => ("pin_migrated", Some(reason.clone())),
+        RouterEvent::PinCreated { .. } => (PIN_CREATED, None),
+        RouterEvent::PinMigrated { reason, .. } => (PIN_MIGRATED, Some(reason.clone())),
         RouterEvent::PinExpired { reasons, .. } => {
-            ("pin_expired", reasons.first().map(|r| r.to_string()))
+            (PIN_EXPIRED, reasons.first().map(|r| r.to_string()))
         }
         _ => return None,
     };

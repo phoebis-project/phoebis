@@ -410,17 +410,14 @@ pub async fn run_until(
     // half bounds itself by the same clock, and what is still running at the bound finishes in the background.
     // The store and the usage service live in the admin state by now.
     let startup = Duration::from_secs(config.routing.startup_fetch_seconds);
-    let (prefetched, sampled) = tokio::join!(
-        catalog.prefetch(),
-        QuotaPoll::sample_all(
-            admin.store.clone(),
-            admin.usage.clone(),
-            ledger.clone(),
-            router_task.clone(),
-            tables.clone(),
-            startup,
-        ),
-    );
+    let quota = QuotaPoll {
+        ledger: ledger.clone(),
+        router: router_task.clone(),
+        store: admin.store.clone(),
+        tables: tables.clone(),
+        usage: admin.usage.clone(),
+    };
+    let (prefetched, sampled) = tokio::join!(catalog.prefetch(), quota.sample_all(startup));
     tracing::info!(
         catalogs_landed = prefetched.landed,
         catalogs_failed = prefetched.failed,
@@ -434,13 +431,7 @@ pub async fn run_until(
     );
     // Started only now: the startup step has just read every account, so the scheduler's first slots lie one
     // interval plus their phase from here. The ledger aborts it before its channel closes.
-    ledger.track(QuotaPoll::spawn(
-        admin.store.clone(),
-        admin.usage.clone(),
-        ledger.clone(),
-        router_task.clone(),
-        tables.clone(),
-    ));
+    ledger.track(quota.spawn());
     let refresh = catalog.spawn_refresh(
         Duration::from_secs(config.routing.catalog_refresh_seconds),
         REFRESH_TICK,

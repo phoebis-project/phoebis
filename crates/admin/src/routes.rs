@@ -855,29 +855,12 @@ async fn usage_refresh(State(state): State<Arc<AdminState>>, Path(id): Path<Stri
     // An account whose plan ended sends no usage request until a profile read finds a plan, so the button reads the
     // profile first and, with no plan back, answers the standing as the `GET` does.
     if QuotaPoll::plan_paused(&state.store, &id) {
-        QuotaPoll::refresh_profile(
-            &state.store,
-            &state.usage,
-            &state.tables,
-            &state.ledger,
-            &state.router,
-            &row,
-        )
-        .await;
+        state.quota_poll().refresh_profile(&row).await;
         if QuotaPoll::plan_paused(&state.store, &id) {
             return usage_latest(State(state), Path(id)).await;
         }
     }
-    match QuotaPoll::poll_account(
-        &state.store,
-        &state.usage,
-        &state.tables,
-        &state.ledger,
-        &state.router,
-        &row,
-    )
-    .await
-    {
+    match state.quota_poll().poll_account(&row).await {
         Ok(snapshot) => {
             let poll = state.usage.poll_status(&id);
             Json(usage_json(&id, Ok(&snapshot), poll.as_ref())).into_response()
@@ -1559,15 +1542,7 @@ async fn pairing_confirm(
             let handle = tokio::spawn(async move {
                 match polled.store.account(&account_id) {
                     Ok(Some(committed)) => {
-                        let _ = QuotaPoll::poll_account(
-                            &polled.store,
-                            &polled.usage,
-                            &polled.tables,
-                            &polled.ledger,
-                            &polled.router,
-                            &committed,
-                        )
-                        .await;
+                        let _ = polled.quota_poll().poll_account(&committed).await;
                     }
                     Ok(None) => {
                         tracing::debug!(account = %account_id, "the account was deleted before its first poll")

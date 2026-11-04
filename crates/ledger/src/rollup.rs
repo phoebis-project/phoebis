@@ -357,11 +357,11 @@ impl RollupRow {
         Funding::of_rollup(&self.funding)
     }
 
-    pub fn probe_view(&self) -> ProbeView<'_> {
+    pub fn probe_view(&self) -> ProbeView {
         ProbeView {
             exhausted: self.exhausted,
             failed: self.failed,
-            funding: &self.funding,
+            funding: self.funding_kind(),
             incomplete: self.incomplete,
             probe_migrated: self.probe_migrated,
             probes_held: self.probes_held,
@@ -770,11 +770,11 @@ pub struct OverviewRollupRow {
 }
 
 impl OverviewRollupRow {
-    pub fn probe_view(&self) -> ProbeView<'_> {
+    pub fn probe_view(&self) -> ProbeView {
         ProbeView {
             exhausted: self.exhausted,
             failed: self.failed,
-            funding: &self.funding,
+            funding: Funding::of_rollup(&self.funding),
             incomplete: self.incomplete,
             probe_migrated: self.probe_migrated,
             probes_held: self.probes_held,
@@ -1076,7 +1076,7 @@ pub fn fold_keepalive(tx: &Transaction<'_>, delta: &KeepaliveDelta) -> Result<()
 
 /// An event's stored detail decoded, `Null` for a detail that is absent or not JSON, so a reader of a member reads
 /// its fallback.
-pub(crate) fn detail_json(detail: Option<&str>) -> serde_json::Value {
+pub fn detail_json(detail: Option<&str>) -> serde_json::Value {
     detail
         .and_then(|d| serde_json::from_str(d).ok())
         .unwrap_or(serde_json::Value::Null)

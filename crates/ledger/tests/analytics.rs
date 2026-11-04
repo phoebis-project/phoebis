@@ -2091,10 +2091,18 @@ async fn a_dollar_read_and_a_shares_read_of_the_same_rows_answer_one_set_of_doll
             .await
             .unwrap()
     };
-    let traffic =
-        phoebis_ledger::pool_traffic(&db, "p", hour, hour + 3_600, 3_600, &prices, &costs, NOW)
-            .await
-            .unwrap();
+    let traffic = phoebis_ledger::pool_traffic(
+        &db,
+        "p",
+        hour,
+        hour + 3_600,
+        3_600,
+        std::sync::Arc::new(prices.clone()),
+        std::sync::Arc::new(costs.clone()),
+        NOW,
+    )
+    .await
+    .unwrap();
     let dollar_read = breakdown_paged(
         &db,
         &RollupFilter::default(),
@@ -2454,10 +2462,18 @@ async fn shared_sums(
         .find(|h| h.at == hour * 1_000)
         .expect("the planted hour")
         .equivalent;
-    let traffic =
-        phoebis_ledger::pool_traffic(db, "p", hour, hour + 3_600, 3_600, &PRICES, costs, NOW)
-            .await
-            .unwrap();
+    let traffic = phoebis_ledger::pool_traffic(
+        db,
+        "p",
+        hour,
+        hour + 3_600,
+        3_600,
+        std::sync::Arc::new(PRICES.clone()),
+        std::sync::Arc::new(costs.clone()),
+        NOW,
+    )
+    .await
+    .unwrap();
     let (pools, keys) = db
         .read_blocking(|c| {
             Ok((
@@ -6173,9 +6189,18 @@ async fn series_readers_over(
         ),
         (
             "pool_traffic",
-            pool_traffic(db, "p", from_hour, to_hour, SIX_HOURS, &PRICES, &COSTS, NOW)
-                .await
-                .map(drop),
+            pool_traffic(
+                db,
+                "p",
+                from_hour,
+                to_hour,
+                SIX_HOURS,
+                std::sync::Arc::new(PRICES.clone()),
+                std::sync::Arc::new(COSTS.clone()),
+                NOW,
+            )
+            .await
+            .map(drop),
         ),
         (
             "pools_traffic",
@@ -7688,10 +7713,18 @@ async fn the_dashboard_the_traffic_and_the_totals_split_the_billed_dollars_from_
         .find(|h| h.at == hour * 1_000)
         .expect("the planted hour");
     read(point.billed, point.equivalent, "the hour");
-    let traffic =
-        phoebis_ledger::pool_traffic(&db, "p", hour, hour + 3_600, 3_600, &PRICES, &COSTS, NOW)
-            .await
-            .unwrap();
+    let traffic = phoebis_ledger::pool_traffic(
+        &db,
+        "p",
+        hour,
+        hour + 3_600,
+        3_600,
+        std::sync::Arc::new(PRICES.clone()),
+        std::sync::Arc::new(COSTS.clone()),
+        NOW,
+    )
+    .await
+    .unwrap();
     read(
         traffic[0].billed_usd,
         traffic[0].equivalent,
@@ -7825,10 +7858,18 @@ async fn the_pool_traffic_and_the_key_totals_count_the_asked_requests_alone() {
     let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
     plant_asked_and_refused(&db);
     let hour = hour_of(WEEKDAY_OFF_PEAK - 60_000);
-    let traffic =
-        phoebis_ledger::pool_traffic(&db, "p", hour, hour + 3_600, 3_600, &PRICES, &COSTS, NOW)
-            .await
-            .unwrap();
+    let traffic = phoebis_ledger::pool_traffic(
+        &db,
+        "p",
+        hour,
+        hour + 3_600,
+        3_600,
+        std::sync::Arc::new(PRICES.clone()),
+        std::sync::Arc::new(COSTS.clone()),
+        NOW,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         (traffic[0].requests, traffic[0].failed),
         (3, 2),
@@ -7914,9 +7955,18 @@ async fn the_pool_traffic_buckets_sum_to_the_pools_grouped_totals_within_one_cen
         plant_share(&db, row);
     }
     let (from, to) = (hour_of(at), hour_of(at) + 4 * 3_600);
-    let traffic = pool_traffic(&db, "p", from, to, 3_600, &prices, &costs, NOW)
-        .await
-        .unwrap();
+    let traffic = pool_traffic(
+        &db,
+        "p",
+        from,
+        to,
+        3_600,
+        std::sync::Arc::new(prices.clone()),
+        std::sync::Arc::new(costs.clone()),
+        NOW,
+    )
+    .await
+    .unwrap();
     let pools = db
         .read_blocking(|c| {
             pools_traffic(c, &["p".to_string()], from, to, 3_600, &prices, &costs, NOW)
@@ -8022,9 +8072,18 @@ async fn pools_traffic_answers_every_asked_pool_and_adds_each_rows_figures_into_
         "a former member's row counts for the hour it was a member"
     );
     assert_eq!(requests("q", hour), Some(1));
-    let single = pool_traffic(&db, "p", hour, hour + 3_600, 3_600, &PRICES, &COSTS, NOW)
-        .await
-        .unwrap();
+    let single = pool_traffic(
+        &db,
+        "p",
+        hour,
+        hour + 3_600,
+        3_600,
+        std::sync::Arc::new(PRICES.clone()),
+        std::sync::Arc::new(COSTS.clone()),
+        NOW,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         single, traffic["p"],
         "the one-pool read answers the same buckets"

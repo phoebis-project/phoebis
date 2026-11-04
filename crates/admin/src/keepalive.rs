@@ -8,7 +8,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_keepalive::{IdleReturns, Wasted, IDLE_AGE_BOUNDS_SECONDS};
-use phoebis_ledger::{hour_of, read_overview_rollups, PROBE_KIND, UNATTRIBUTED};
+use phoebis_ledger::{hour_of, read_overview_rollups, UNATTRIBUTED};
 use utoipa::ToSchema;
 
 use crate::analytics::ledger_failure;
@@ -161,15 +161,15 @@ pub(crate) async fn overview(
     let mut probes = phoebis_ledger::ProbeCounts::default();
     let mut pools: BTreeMap<String, PoolDay> = BTreeMap::new();
     for row in &rows {
+        let probe = row.kind == phoebis_bus::Kind::Probe.as_str();
         expired += row
             .cache_miss_reasons
             .get(phoebis_ledger::EXPIRED_BETWEEN_TURNS)
             .copied()
             .unwrap_or(0);
-        if row.kind == PROBE_KIND {
+        if probe {
             probes.add_row(row.probe_view());
-        }
-        if row.kind != PROBE_KIND && row.kept_warm_requests == 0 {
+        } else if row.kept_warm_requests == 0 {
             continue;
         }
         // A row filed under no pool lists under its account, where the idle-age counters count that account's
@@ -181,7 +181,7 @@ pub(crate) async fn overview(
         };
         let entry = pools.entry(pool.clone()).or_default();
         entry.credited += row.kept_warm_requests;
-        if row.kind == PROBE_KIND {
+        if probe {
             entry.probes += row.succeeded;
         }
         entry.wasted += row.wasted_probes;

@@ -1075,11 +1075,7 @@ fn stream_cut(request_id: &str, events: &[phoebis_ledger::EventRecord]) -> Optio
 }
 
 pub(crate) fn event_json(e: &phoebis_ledger::EventRecord) -> Event {
-    let detail = e
-        .detail
-        .as_deref()
-        .and_then(|d| serde_json::from_str::<Value>(d).ok())
-        .unwrap_or(Value::Null);
+    let detail = phoebis_ledger::detail_json(e.detail.as_deref());
     Event {
         at: e.at,
         kind: e.kind.clone(),

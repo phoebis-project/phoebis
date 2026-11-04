@@ -25,7 +25,7 @@ use crate::plan::{
     entrypoint_of_client, free_equivalent, free_shares, funding_of, price_equivalent, price_shares,
     CostRevisions, Funding, PlanTables,
 };
-use crate::price::{price_row, Priced, RowKey};
+use crate::price::{price_row, price_usd, Priced, RowKey};
 use crate::pricing::{Band, PriceRevisions, Speed};
 use crate::record::{
     AttemptRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord, RequestRecord,
@@ -929,7 +929,7 @@ pub fn recent_gaps(
 // One invocation declares each kind's constant and the table, so a writer, a fold or a statement that names a kind
 // names one the admin's `kinds` filter accepts.
 macro_rules! event_kinds {
-    ($($name:ident => $word:literal),* $(,)?) => {
+    ($($name:ident => $word:expr),* $(,)?) => {
         $(pub const $name: &str = $word;)*
 
         /// Every event kind the ledger writes, alphabetical: the `kinds` key is validated against it and the decision
@@ -952,9 +952,9 @@ event_kinds! {
     MODEL_REJECTED => "model_rejected",
     OVERAGE_ENDED => "overage_ended",
     OVERAGE_STARTED => "overage_started",
-    PIN_CREATED => "pin_created",
-    PIN_EXPIRED => "pin_expired",
-    PIN_MIGRATED => "pin_migrated",
+    PIN_CREATED => phoebis_routing::PIN_CREATED,
+    PIN_EXPIRED => phoebis_routing::PIN_EXPIRED,
+    PIN_MIGRATED => phoebis_routing::PIN_MIGRATED,
     PIN_RELEASED => "pin_released",
     PLAN_ENDED => "plan_ended",
     PLAN_RESTORED => "plan_restored",
@@ -1621,23 +1621,21 @@ pub fn decision_record(
     let completion = if DISPATCHING_KINDS.contains(&kind.as_str()) {
         let summary: Value = serde_json::from_str(&summary)?;
         let cache = answered.cache(&summary);
-        let held: Option<Value> = held.as_deref().and_then(|h| serde_json::from_str(h).ok());
+        let held = detail_json(held.as_deref());
         // A wait that ran out puts its account among the attempted, so a dispatch to an account the request waited on
         // is the one its freed slot took.
-        let freed = held.as_ref().is_some_and(|h| {
-            h["waited_on"]
-                .as_array()
-                .is_some_and(|waited| waited.iter().any(|w| w.as_str() == account_id.as_deref()))
-        });
+        let freed = held["waited_on"]
+            .as_array()
+            .is_some_and(|waited| waited.iter().any(|w| w.as_str() == account_id.as_deref()));
         serde_json::json!({
             "status": answered.status,
             "cache_read_tokens": cache.as_ref().map(|c| c.read_tokens),
             "input_tokens": cache.as_ref().map(|c| c.input_tokens),
             "promised_tokens": summary["rung"]["prefix_tokens"].as_u64(),
             "hit": cache.as_ref().map(|c| c.hit),
-            "held_ms": held.as_ref().map_or(Value::Null, |h| h["held_ms"].clone()),
+            "held_ms": held["held_ms"].clone(),
             "freed": freed,
-            "cache_map_written": cache_map.as_deref().and_then(|m| serde_json::from_str::<Value>(m).ok()),
+            "cache_map_written": detail_json(cache_map.as_deref()),
             "completed_at": completed_at,
         })
     } else {
@@ -1764,13 +1762,13 @@ pub struct ProbeCounts {
     pub skipped: u64,
 }
 
-/// The part of one probe row the probe counts read: its outcome counters and its funding word. The ledger's group fold
+/// The part of one probe row the probe counts read: its outcome counters and its funding. The ledger's group fold
 /// reads it off a `RollupRow` and the keepalive overview's fold off the narrower row it reads, so both take one rule.
 #[derive(Clone, Copy, Debug)]
-pub struct ProbeView<'a> {
+pub struct ProbeView {
     pub exhausted: u64,
     pub failed: u64,
-    pub funding: &'a str,
+    pub funding: Funding,
     pub incomplete: u64,
     pub probe_migrated: u64,
     pub probes_held: u64,
@@ -1781,34 +1779,18 @@ pub struct ProbeView<'a> {
 }
 
 impl ProbeCounts {
-    /// The counts of one probe row: a probe's own request row carries its outcome, and the engine's deltas carry
-    /// what never ran. `plan_ok` reads the row's funding, which a sum of rows would no longer key.
-    pub fn of(row: ProbeView<'_>) -> ProbeCounts {
-        ProbeCounts {
-            failed: row.failed + row.rate_limited + row.exhausted + row.rejected + row.incomplete,
-            held: row.probes_held,
-            migrated: row.probe_migrated,
-            ok: row.succeeded,
-            plan_ok: if Funding::of_rollup(row.funding) == Funding::Plan {
-                row.succeeded
-            } else {
-                0
-            },
-            skipped: row.probes_skipped,
+    /// Folds in the counts of one probe row: a probe's own request row carries its outcome, and the engine's deltas
+    /// carry what never ran. `plan_ok` reads the row's funding, which a sum of rows would no longer key.
+    pub fn add_row(&mut self, row: ProbeView) {
+        self.failed +=
+            row.failed + row.rate_limited + row.exhausted + row.rejected + row.incomplete;
+        self.held += row.probes_held;
+        self.migrated += row.probe_migrated;
+        self.ok += row.succeeded;
+        if row.funding == Funding::Plan {
+            self.plan_ok += row.succeeded;
         }
-    }
-
-    pub fn add_row(&mut self, row: ProbeView<'_>) {
-        self.add(&ProbeCounts::of(row));
-    }
-
-    pub fn add(&mut self, o: &ProbeCounts) {
-        self.failed += o.failed;
-        self.held += o.held;
-        self.migrated += o.migrated;
-        self.ok += o.ok;
-        self.plan_ok += o.plan_ok;
-        self.skipped += o.skipped;
+        self.skipped += row.probes_skipped;
     }
 }
 
@@ -1842,27 +1824,21 @@ pub struct ProbeEquivalent {
 /// One Pro-week figure summed row by row: `None` once a plan row with tokens priced nothing, so a partial sum never
 /// reads as the whole, `Some(0.0)` while no plan row has been added.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(crate) struct EquivalentSum {
-    sum: f64,
-    unpriced: bool,
-}
+pub(crate) struct EquivalentSum(Latch);
 
 impl EquivalentSum {
-    /// A `None` latches the sum only on a plan-funded row with tokens: a billed row's figure is `None` too, since
-    /// dollars fund it, and adds nothing, as a row with no token charged nothing.
-    fn add(&mut self, figure: Option<f64>, funding: Funding, tokens: u64) {
-        if funding != Funding::Plan {
-            return;
-        }
-        match figure {
-            Some(figure) => self.sum += figure,
-            None if tokens > 0 => self.unpriced = true,
-            None => {}
+    /// A `None` latches the sum only on a row with tokens, as a row with no token charged nothing.
+    fn add(&mut self, figure: Option<f64>, tokens: u64) {
+        if figure.is_some() || tokens > 0 {
+            self.0.add(figure);
         }
     }
 
     pub(crate) fn figure(self) -> Option<f64> {
-        (!self.unpriced).then_some(self.sum)
+        match self.0 {
+            Latch::Idle => Some(0.0),
+            latch => latch.figure(),
+        }
     }
 }
 
@@ -1887,11 +1863,14 @@ fn shared_figures(
 }
 
 /// A priced usage's dollars, the billed part of them, and its Pro-week figure as a sum of one row, so a billed row
-/// reads zero and a plan row with tokens the cost model cannot price `None`.
+/// reads zero and a plan row with tokens the cost model cannot price `None`. A billed row's figure is `None` too,
+/// since dollars fund it, and adds nothing.
 fn shared_of(priced: &Priced, funding: Funding, usage: PinUsage) -> (f64, f64, Option<f64>) {
     let usd = priced.usd.as_ref().map_or(0.0, |usd| usd.total());
     let mut equivalent = EquivalentSum::default();
-    equivalent.add(priced.equivalent, funding, tokens_of(usage));
+    if funding == Funding::Plan {
+        equivalent.add(priced.equivalent, tokens_of(usage));
+    }
     let billed = if funding == Funding::Plan { 0.0 } else { usd };
     (usd, billed, equivalent.figure())
 }
@@ -2145,26 +2124,6 @@ impl LiveKeys {
         format!("{}@{}", row.key_id, row.key_generation)
     }
 
-    /// The label of a key group: the id for the live generation, `<id> (deleted)` for every generation no live key
-    /// holds, generation 0 included, and `unattributed` for the reserved id. Two earlier holders of one id share the
-    /// label, and `holder_of` answers each one's creation instant for a reader to print in its own zone.
-    pub fn label_of(&self, key: &str) -> String {
-        // A key id never carries `@` (the admin's slug rule), so the split is unambiguous.
-        match key.rsplit_once('@') {
-            Some((id, _)) => format!("{id} (deleted)"),
-            None => label_of(key, GroupBy::Key),
-        }
-    }
-
-    /// The holder a key group names beside its label, for a reader that prints the creation instant in its own
-    /// zone: the id, and an earlier holder's generation. The live key and the reserved id carry no generation.
-    pub fn holder_of(&self, key: &str) -> (String, Option<i64>) {
-        match key.rsplit_once('@') {
-            Some((id, generation)) => (id.into(), generation.parse().ok()),
-            None => (key.into(), None),
-        }
-    }
-
     /// The lifetime a `keys=` selector names: a bare id is `(id, the live generation)`, `<id>@<generation>` is
     /// that pair; `None` for a bare id no live key holds, a malformed generation, or the reserved id.
     pub fn lifetime_of<'s>(&self, selector: &'s str) -> Option<(&'s str, i64)> {
@@ -2233,27 +2192,43 @@ impl Grouping<'_> {
     /// A group's answered row under its label, the key dimension's row naming the holder its key names, for a reader
     /// that prints the holder's creation in its own zone.
     fn row_of(&self, key: &str, group: GroupSum) -> GroupRow {
-        if self.by != GroupBy::Key {
-            return group_row(key, group, label_of(key, self.by));
+        let mut row = group_row(key, group, label_of(key, self.by));
+        if self.by == GroupBy::Key {
+            let (key_id, key_created_at) = holder_of(key);
+            row.key_id = Some(key_id);
+            row.key_created_at = key_created_at;
         }
-        let mut row = group_row(key, group, self.live.label_of(key));
-        let (key_id, key_created_at) = self.live.holder_of(key);
-        row.key_id = Some(key_id);
-        row.key_created_at = key_created_at;
         row
     }
 }
 
-/// The label of a group under any dimension but the key: the group key itself, `none` for the classifier grouping's
-/// reserved id, the requests with no classifier call, as the Requests facet names them, `unattributed` for the
-/// reserved id under every other dimension, and "no model" for the model grouping's empty key, the requests the router
-/// rejected before routing. Each of these groups keeps its key, so a filter on it keeps working.
+/// The label of a group: the group key itself, `none` for the classifier grouping's reserved id, the requests with no
+/// classifier call, as the Requests facet names them, `unattributed` for the reserved id under every other dimension,
+/// and "no model" for the model grouping's empty key, the requests the router rejected before routing. Each of these
+/// groups keeps its key, so a filter on it keeps working. Under the key dimension, the live generation reads its id
+/// and every generation no live key holds, generation 0 included, reads `<id> (deleted)`. Two earlier holders of one id
+/// share the label, and `holder_of` answers each one's creation instant for a reader to print in its own zone.
 fn label_of(key: &str, by: GroupBy) -> String {
+    if by == GroupBy::Key {
+        // A key id never carries `@` (the admin's slug rule), so the split is unambiguous.
+        if let Some((id, _)) = key.rsplit_once('@') {
+            return format!("{id} (deleted)");
+        }
+    }
     match (key, by) {
         (UNATTRIBUTED, GroupBy::Classifier) => "none".into(),
         (UNATTRIBUTED, _) => "unattributed".into(),
         ("", GroupBy::Model) => "no model".into(),
         _ => key.into(),
+    }
+}
+
+/// The holder a key group names beside its label, for a reader that prints the creation instant in its own zone: the
+/// id, and an earlier holder's generation. The live key and the reserved id carry no generation.
+fn holder_of(key: &str) -> (String, Option<i64>) {
+    match key.rsplit_once('@') {
+        Some((id, generation)) => (id.into(), generation.parse().ok()),
+        None => (key.into(), None),
     }
 }
 
@@ -2329,13 +2304,8 @@ fn group_row(key: &str, group: GroupSum, label: String) -> GroupRow {
     } = group;
     let cost_shares = shares.map(ShareSums::finish);
     let equivalent = plan.equivalent.finish(plan.split);
-    let expired = sum
-        .cache_miss_reasons
-        .get(EXPIRED_BETWEEN_TURNS)
-        .copied()
-        .unwrap_or(0);
     let mut reasons = sum.cache_miss_reasons;
-    reasons.remove(EXPIRED_BETWEEN_TURNS);
+    let expired = reasons.remove(EXPIRED_BETWEEN_TURNS).unwrap_or(0);
     GroupRow {
         key: key.into(),
         label,
@@ -2410,23 +2380,6 @@ fn group_row(key: &str, group: GroupSum, label: String) -> GroupRow {
     }
 }
 
-/// One window's running share and whether a row a known tier holds could not be priced on it: a latched window is
-/// absent from the answered map, as `price_usage` nulls a bucket's, so a partial sum never reads as the share.
-#[derive(Default)]
-struct WindowSum {
-    sum: f64,
-    unpriced: bool,
-}
-
-impl WindowSum {
-    fn add(&mut self, share: Option<f64>) {
-        match share {
-            Some(share) => self.sum += share,
-            None => self.unpriced = true,
-        }
-    }
-}
-
 /// The five equivalent members of a `GroupRow`, folded from a group's `EquivalentSums` and its split.
 struct GroupEquivalent {
     cost: Option<f64>,
@@ -2441,7 +2394,7 @@ struct GroupEquivalent {
 /// the rows introduced them.
 #[derive(Default)]
 struct ShareSums {
-    cost: IndexMap<&'static str, WindowSum>,
+    cost: IndexMap<&'static str, Latch>,
 }
 
 impl ShareSums {
@@ -2477,15 +2430,19 @@ impl ShareSums {
             )
         };
         for (window, share) in shares {
-            self.cost.entry(window).or_default().add(share);
+            self.cost
+                .entry(window)
+                .or_insert(Latch::Sum(0.0))
+                .add(share);
         }
     }
 
+    /// A window a row a known tier holds could not be priced on is absent from the answered map, as `price_usage`
+    /// nulls a bucket's, so a partial sum never reads as the share.
     fn finish(self) -> IndexMap<&'static str, f64> {
         self.cost
             .into_iter()
-            .filter(|(_, s)| !s.unpriced)
-            .map(|(w, s)| (w, s.sum))
+            .filter_map(|(w, s)| s.figure().map(|sum| (w, sum)))
             .collect()
     }
 }
@@ -2508,27 +2465,8 @@ struct EquivalentSums {
 
 impl EquivalentSums {
     /// Folds one plan row in, its own usage at `whole`, the figure `price_row` answered on its counts, so only the
-    /// cache halves, the wasted counts and the kept-warm counts are priced again, at the row's hour and under the
-    /// regime its `client` names, against the anchor row in force at `now`. Answers the cache halves' figures where it
-    /// priced them, for a counted row with tokens.
-    fn add_equivalent(
-        &mut self,
-        row: &RollupRow,
-        key: &RowKey<'_>,
-        costs: &PlanTables,
-        counted: bool,
-        whole: Option<f64>,
-        now: i64,
-    ) -> Option<CacheHalves> {
-        self.add_priced(row, counted, whole, |usage| {
-            if key.classifier {
-                return Some(free_equivalent());
-            }
-            price_equivalent(costs, key.entrypoint, key.model, usage, key.at, key.at, now)
-        })
-    }
-
-    /// `add_equivalent` with the pricer passed in, so a test can count the pricings a row costs.
+    /// cache halves, the wasted counts and the kept-warm counts are priced again, through `price`. Answers the cache
+    /// halves' figures where it priced them, for a counted row with tokens.
     fn add_priced(
         &mut self,
         row: &RollupRow,
@@ -2540,8 +2478,7 @@ impl EquivalentSums {
         if row.kind == Kind::Probe.as_str() {
             let wasted = row.wasted_usage();
             if tokens_of(wasted) > 0 {
-                self.wasted
-                    .add(price(wasted), Funding::Plan, tokens_of(wasted));
+                self.wasted.add(price(wasted), tokens_of(wasted));
             }
         }
         // Priced ahead of the return below: a credit's row carries no request token, since it keys the reserved agent,
@@ -2552,7 +2489,6 @@ impl EquivalentSums {
             let (read, write) = (price(read), price(write));
             self.saving.add(
                 read.zip(write).map(|(read, write)| write - read),
-                Funding::Plan,
                 tokens_of(kept),
             );
         }
@@ -2563,16 +2499,16 @@ impl EquivalentSums {
             return None;
         }
         let halves = counted.then(|| {
-            self.cost.add(whole, Funding::Plan, tokens);
+            self.cost.add(whole, tokens);
             let (read, write) = cache_parts(usage);
             let halves = (price(read), price(write));
             // Both halves read the one model, so a row that priced nothing latches both, whatever tokens each carries.
-            self.cache_read.add(halves.0, Funding::Plan, tokens);
-            self.cache_write.add(halves.1, Funding::Plan, tokens);
+            self.cache_read.add(halves.0, tokens);
+            self.cache_write.add(halves.1, tokens);
             halves
         });
         if row.kind == Kind::Probe.as_str() {
-            self.probe_cost.add(whole, Funding::Plan, tokens);
+            self.probe_cost.add(whole, tokens);
         }
         halves
     }
@@ -2614,28 +2550,14 @@ struct SplitSum {
 }
 
 impl SplitSum {
-    /// `free` for a classifier call's row, whose every part reads zero with no pricing call, so a model the cost
-    /// model cannot price marks nothing unpriced for a charge of nothing. A rollup row keeps no completion, so its
-    /// hour `at` is its band instant too. The cache parts are the halves `EquivalentSums` priced for the row, which
-    /// carry the free path too, so only the input and output parts are priced here.
-    #[allow(clippy::too_many_arguments)]
+    /// The cache parts are the halves `EquivalentSums` priced for the row through the same `week`, so only the input
+    /// and output parts are priced here.
     fn add(
         &mut self,
-        free: bool,
-        costs: &PlanTables,
-        entrypoint: Option<&str>,
-        canonical_model: &str,
         usage: PinUsage,
         (read_part, write_part): CacheHalves,
-        at: i64,
-        now: i64,
+        week: impl Fn(PinUsage) -> Option<f64>,
     ) {
-        let week = |usage: PinUsage| {
-            if free {
-                return Some(0.0);
-            }
-            costs.equivalent_at(SEVEN_DAY, entrypoint, canonical_model, usage, at, at, now)
-        };
         let parts = [
             week(PinUsage {
                 input: usage.input,
@@ -2687,7 +2609,7 @@ struct PlanSums {
 impl PlanSums {
     /// Folds one plan-funded row in: its counts and its split when `counted`, as the request dollars take the row, and
     /// its figure as `EquivalentSums` folds it from the one `price_row` answered on its counts, against the anchor row
-    /// in force at `now`.
+    /// in force at the key's `now`.
     fn add(
         &mut self,
         row: &RollupRow,
@@ -2695,27 +2617,35 @@ impl PlanSums {
         priced: Priced,
         costs: &PlanTables,
         counted: bool,
-        now: i64,
     ) {
         if counted {
             self.requests += row.requests;
             self.output_tokens += row.output_tokens;
         }
-        let halves =
-            self.equivalent
-                .add_equivalent(row, key, costs, counted, priced.equivalent, now);
+        // A classifier call's every part reads zero with no pricing call, so a model the cost model cannot price marks
+        // nothing unpriced for a charge of nothing. A rollup row keeps no completion, so its hour is its band instant
+        // too, and each part prices under the regime the row's `client` names.
+        let price = |usage: PinUsage| {
+            if key.classifier {
+                Some(free_equivalent())
+            } else {
+                price_equivalent(
+                    costs,
+                    key.entrypoint,
+                    key.model,
+                    usage,
+                    key.at,
+                    key.at,
+                    key.now,
+                )
+            }
+        };
+        let halves = self
+            .equivalent
+            .add_priced(row, counted, priced.equivalent, price);
         // The halves are priced for a counted row with tokens alone, the rows the split takes.
         if let Some(halves) = halves {
-            self.split.add(
-                key.classifier,
-                costs,
-                key.entrypoint,
-                key.model,
-                row.usage(),
-                halves,
-                key.at,
-                now,
-            );
+            self.split.add(row.usage(), halves, price);
         }
     }
 }
@@ -2752,6 +2682,7 @@ struct GroupDollars {
 }
 
 /// One group's running sums. Rows join one at a time, so a paged read folds each page in as it arrives.
+#[derive(Default)]
 struct GroupSum {
     /// The request side, which a probe row joins only when probes count as requests.
     sum: RollupRow,
@@ -2818,15 +2749,7 @@ impl GroupSums {
             shares,
         } = *read;
         let key = grouping.group_of(row);
-        let entry = self.0.entry(key).or_insert_with(|| GroupSum {
-            sum: RollupRow::default(),
-            probes: RollupRow::default(),
-            probe_counts: ProbeCounts::default(),
-            dollars: GroupDollars::default(),
-            saw_non_probe: false,
-            shares: None,
-            plan: PlanSums::default(),
-        });
+        let entry = self.0.entry(key).or_default();
         let own_key = row.price_key(now);
         // Keyed as `priced` keys the row, since the group's shares come from `ShareSums::add` and a tier would price
         // share windows nothing reads.
@@ -2853,14 +2776,13 @@ impl GroupSums {
             }
         }
         if tokens_of(row.wasted_usage()) > 0 {
-            let wasted = price_row(prices, costs, &price_key, row.wasted_usage());
-            entry.dollars.wasted_usd += wasted.usd.map_or(0.0, |usd| usd.total());
+            let wasted = price_usd(prices, &price_key, row.wasted_usage());
+            entry.dollars.wasted_usd += wasted.map_or(0.0, |usd| usd.total());
         }
         if tokens_of(row.kept_warm_usage()) > 0 {
-            let kept = price_row(prices, costs, &price_key, row.kept_warm_usage());
-            entry.dollars.saving_usd += kept
-                .usd
-                .map_or(0.0, |usd| usd.cache_write_usd - usd.cache_read_usd);
+            let kept = price_usd(prices, &price_key, row.kept_warm_usage());
+            entry.dollars.saving_usd +=
+                kept.map_or(0.0, |usd| usd.cache_write_usd - usd.cache_read_usd);
         }
         if plan {
             // The summed rows `group_row` reads key no funding, so the plan-served counts fold here per row, the
@@ -2870,9 +2792,7 @@ impl GroupSums {
                 entry.plan.kept_warm_5m_tokens += row.kept_warm_5m_tokens;
                 entry.plan.kept_warm_1h_tokens += row.kept_warm_1h_tokens;
             }
-            entry
-                .plan
-                .add(row, &own_key, row_priced, costs, counted, now);
+            entry.plan.add(row, &own_key, row_priced, costs, counted);
         }
         // Each row prices under the account tier it recorded. A tier of `UNATTRIBUTED` (a profile not yet read, a row
         // folded before the tier was recorded, an api_key account's row) answers no share.
@@ -4128,12 +4048,11 @@ pub async fn pool_traffic(
     from_hour: i64,
     to_hour: i64,
     bucket_seconds: i64,
-    prices: &PriceRevisions,
-    costs: &PlanTables,
+    prices: Arc<PriceRevisions>,
+    costs: Arc<PlanTables>,
     now: i64,
 ) -> Result<Vec<TrafficBucket>, LedgerError> {
     let pool_ids = vec![pool_id.to_string()];
-    let (prices, costs) = (prices.clone(), costs.clone());
     let mut traffic = db
         .read(move |c| {
             pools_traffic(
@@ -4448,55 +4367,56 @@ pub(crate) fn price_usage(
         ..key
     };
     let tokens = tokens_of(usage);
+    // A failed request books a row with no token, and the cost model refuses a model it has no weight for before it
+    // reads the usage: such a row would null a priced hour for a charge of nothing.
+    if tokens == 0 {
+        return;
+    }
     let priced = price_row(prices, tables, &key, usage);
     let week = model_week(key.model);
     point.usd += match key.funding {
         Funding::Plan => 0.0,
         _ => priced.usd.as_ref().map_or(0.0, CostSplit::total),
     };
-    // A failed request books a row with no token, and the cost model refuses a model it has no weight for before it
-    // reads the usage: such a row would null a priced hour for a charge of nothing.
-    if tokens > 0 {
-        match key.funding {
-            Funding::Plan => {
-                if key.tier.is_some() {
-                    // A tier the cost revision does not size answers no map, and every window it would share reads
-                    // unpriced.
-                    let share = |window: &str| {
-                        priced
-                            .shares
-                            .as_ref()
-                            .and_then(|shares| shares.get(window).copied().flatten())
-                    };
-                    point.five_hour_share.add(share(FIVE_HOUR));
-                    point.seven_day_share.add(share(SEVEN_DAY));
-                    if let Some(week) = week {
-                        point.model_week_share.add(share(week));
-                    }
+    match key.funding {
+        Funding::Plan => {
+            if key.tier.is_some() {
+                // A tier the cost revision does not size answers no map, and every window it would share reads
+                // unpriced.
+                let share = |window: &str| {
+                    priced
+                        .shares
+                        .as_ref()
+                        .and_then(|shares| shares.get(window).copied().flatten())
+                };
+                point.five_hour_share.add(share(FIVE_HOUR));
+                point.seven_day_share.add(share(SEVEN_DAY));
+                if let Some(week) = week {
+                    point.model_week_share.add(share(week));
                 }
-                point.equivalent.add(priced.equivalent);
             }
-            funding => {
-                // Ahead of the model's weights: a dollar-billed row prices in dollars whatever the model weighs it
-                // at, so the zero share rests on the tier alone. An api_key account has no window to share.
-                if let Some(tier) = key.tier.filter(|_| funding != Funding::ApiKey) {
-                    let sized = |window: &str| {
-                        tables
-                            .tier_factor(tier, window, key.entrypoint, key.at)
-                            .is_some()
-                    };
-                    if sized(FIVE_HOUR) {
-                        point.five_hour_share.zero();
-                    }
-                    if sized(SEVEN_DAY) {
-                        point.seven_day_share.zero();
-                    }
-                    if week.is_some_and(sized) {
-                        point.model_week_share.zero();
-                    }
+            point.equivalent.add(priced.equivalent);
+        }
+        funding => {
+            // Ahead of the model's weights: a dollar-billed row prices in dollars whatever the model weighs it at, so
+            // the zero share rests on the tier alone. An api_key account has no window to share.
+            if let Some(tier) = key.tier.filter(|_| funding != Funding::ApiKey) {
+                let sized = |window: &str| {
+                    tables
+                        .tier_factor(tier, window, key.entrypoint, key.at)
+                        .is_some()
+                };
+                if sized(FIVE_HOUR) {
+                    point.five_hour_share.zero();
                 }
-                point.equivalent.zero();
+                if sized(SEVEN_DAY) {
+                    point.seven_day_share.zero();
+                }
+                if week.is_some_and(sized) {
+                    point.model_week_share.zero();
+                }
             }
+            point.equivalent.zero();
         }
     }
     point.cached_tokens += usage.cache_read;
@@ -4821,7 +4741,7 @@ pub fn routing_conditions(conn: &Connection) -> Result<Vec<RoutingCondition>, Le
                 pool_id: r.get(3)?,
                 since: r.get(4)?,
                 count: clamped_count(r, 5)?,
-                detail: serde_json::from_str(&r.get::<_, String>(6)?).unwrap_or(Value::Null),
+                detail: detail_json(Some(&r.get::<_, String>(6)?)),
                 computed_at: r.get(7)?,
             }))
         })?
@@ -5095,6 +5015,10 @@ pub fn session_burn_series(
         let Some(point) = bucket_slot(series, first, filter.bucket_seconds, bucket_at) else {
             continue;
         };
+        // `price_usage` leaves the point as it is for an attempt with no token, so its band is never read.
+        if tokens_of(a.priced.usage) == 0 {
+            continue;
+        }
         let (key, usage) = a.priced.usage(prices, now);
         price_usage(point, prices, tables, key, usage, shares);
     }
@@ -5506,7 +5430,6 @@ mod tests {
             },
             &costs,
             true,
-            at,
         );
         assert_eq!(
             plan.equivalent.cost.figure(),
@@ -5554,16 +5477,17 @@ mod tests {
             })
             .expect("a counted row with tokens prices its halves");
         let mut split = SplitSum::default();
-        split.add(
-            false,
-            &costs,
-            entrypoint_of_client(&row.client),
-            model,
-            row.usage(),
-            halves,
-            at,
-            at,
-        );
+        split.add(row.usage(), halves, |usage| {
+            price_equivalent(
+                &costs,
+                entrypoint_of_client(&row.client),
+                model,
+                usage,
+                at,
+                at,
+                at,
+            )
+        });
         let split = split.finish().expect("every part prices");
         assert_eq!((split["cache_read"], split["cache_write"]), (read, write));
     }

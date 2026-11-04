@@ -5,13 +5,13 @@
 //! listed cells sits inside it too: a probe that consumed quota must never read as free, and a reader filling the
 //! dollars in after the call would be the recomputation this function exists to prevent.
 
+use phoebis_bus::Kind;
 use phoebis_routing::{PinUsage, SEVEN_DAY};
 
 use crate::plan::{
     free_equivalent, free_shares, price_equivalent, price_shares, Funding, PlanTables, WindowShares,
 };
 use crate::pricing::{split_of, Band, PriceRevisions, Speed};
-use crate::query::PROBE_KIND;
 use crate::rollup::CostSplit;
 
 /// The share reason of a plan row priced at no share by rule: the client's own classifier call.
@@ -139,7 +139,7 @@ pub(crate) fn price_usd(
     prices
         .in_force(key.at)
         .estimate_banded(key.model, key.speed, key.band, counts)
-        .or_else(|| (key.kind == PROBE_KIND).then(|| dearest(prices, key.at, counts)))
+        .or_else(|| (key.kind == Kind::Probe.as_str()).then(|| dearest(prices, key.at, counts)))
 }
 
 /// The five counts at `fallback_rates(at)`, split through `split_of` as `estimate_banded` splits them.

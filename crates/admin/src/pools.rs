@@ -1556,8 +1556,8 @@ pub(crate) async fn traffic(
         phoebis_ledger::hour_of(from),
         phoebis_ledger::hour_ceil(to),
         bucket,
-        &state.pricing.revisions(),
-        &state.tables,
+        state.pricing.revisions(),
+        state.tables.clone(),
         now,
     )
     .await

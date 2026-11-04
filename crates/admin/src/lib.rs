@@ -33,7 +33,7 @@ use std::time::Duration;
 
 use phoebis_bus::Bus;
 use phoebis_keepalive::Engine;
-use phoebis_ledger::{Ledger, Metrics, Pricing};
+use phoebis_ledger::{Ledger, Metrics, Pricing, QuotaPoll};
 use phoebis_oauth::{
     Clock, CredentialManager, PairingSessions, PendingIdentity, ProfileResponse, UsageService,
 };
@@ -117,6 +117,17 @@ impl AdminState {
         self.usage.invalidate(id);
         for (session_id, owner) in self.vault.discard_for_account(id, now) {
             let _ = self.pairing.cancel(&session_id, &owner, now);
+        }
+    }
+
+    /// The quota poll over the handles this state holds, the ones the scheduler polls through.
+    pub(crate) fn quota_poll(&self) -> QuotaPoll {
+        QuotaPoll {
+            ledger: self.ledger.clone(),
+            router: self.router.clone(),
+            store: self.store.clone(),
+            tables: self.tables.clone(),
+            usage: self.usage.clone(),
         }
     }
 }

@@ -117,15 +117,19 @@ async fn start_polling(h: &Harness, up: &FakeUpstream) -> Paused {
         requests: up.requests().len(),
         seen: Cell::new(up.connections()),
     };
-    h.ledger.track(QuotaPoll::spawn(
-        h.store.clone(),
-        h.usage
-            .clone()
-            .expect("the harness was built with the poll"),
-        h.ledger.clone(),
-        h.router.clone(),
-        Arc::new(PlanTables::shipped()),
-    ));
+    h.ledger.track(
+        QuotaPoll {
+            ledger: h.ledger.clone(),
+            router: h.router.clone(),
+            store: h.store.clone(),
+            tables: Arc::new(PlanTables::shipped()),
+            usage: h
+                .usage
+                .clone()
+                .expect("the harness was built with the poll"),
+        }
+        .spawn(),
+    );
     for _ in 0..8 {
         tokio::task::yield_now().await;
     }
@@ -972,14 +976,14 @@ async fn the_scheduler_reaps_its_attempts_and_the_ledger_tracks_none_of_them() {
     )
     .await;
     let mirror = h.ledger.tracked();
-    let sampled = QuotaPoll::sample_all(
-        h.store.clone(),
-        h.usage.clone().unwrap(),
-        h.ledger.clone(),
-        h.router.clone(),
-        Arc::new(PlanTables::shipped()),
-        Duration::from_secs(2),
-    )
+    let sampled = QuotaPoll {
+        ledger: h.ledger.clone(),
+        router: h.router.clone(),
+        store: h.store.clone(),
+        tables: Arc::new(PlanTables::shipped()),
+        usage: h.usage.clone().unwrap(),
+    }
+    .sample_all(Duration::from_secs(2))
     .await;
     assert_eq!(sampled.reported, 2);
     assert_eq!(
@@ -1027,14 +1031,14 @@ async fn the_startup_step_counts_an_account_the_endpoint_refused_as_failed() {
         LedgerConfig::default(),
     )
     .await;
-    let sampled = QuotaPoll::sample_all(
-        h.store.clone(),
-        h.usage.clone().unwrap(),
-        h.ledger.clone(),
-        h.router.clone(),
-        Arc::new(PlanTables::shipped()),
-        Duration::from_secs(2),
-    )
+    let sampled = QuotaPoll {
+        ledger: h.ledger.clone(),
+        router: h.router.clone(),
+        store: h.store.clone(),
+        tables: Arc::new(PlanTables::shipped()),
+        usage: h.usage.clone().unwrap(),
+    }
+    .sample_all(Duration::from_secs(2))
     .await;
     assert_eq!(
         (sampled.reported, sampled.failed, sampled.pending),
@@ -1098,14 +1102,14 @@ async fn a_poll_whose_refresh_lands_a_reauth_mark_reports_it_to_routing_at_once(
     let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     due_for_refresh(&h.store, "a");
     let row = h.store.account("a").unwrap().unwrap();
-    let answer = QuotaPoll::poll_account(
-        &h.store,
-        h.usage.as_ref().unwrap(),
-        &PlanTables::shipped(),
-        &h.ledger,
-        &h.router,
-        &row,
-    )
+    let answer = QuotaPoll {
+        ledger: h.ledger.clone(),
+        router: h.router.clone(),
+        store: h.store.clone(),
+        tables: Arc::new(PlanTables::shipped()),
+        usage: h.usage.clone().unwrap(),
+    }
+    .poll_account(&row)
     .await
     .unwrap();
     assert!(answer.error.is_some(), "the poll read nothing");
@@ -1124,14 +1128,14 @@ async fn a_profile_refresh_whose_refresh_lands_a_reauth_mark_reports_it_to_routi
     let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     due_for_refresh(&h.store, "a");
     let row = h.store.account("a").unwrap().unwrap();
-    QuotaPoll::refresh_profile(
-        &h.store,
-        h.usage.as_ref().unwrap(),
-        &PlanTables::shipped(),
-        &h.ledger,
-        &h.router,
-        &row,
-    )
+    QuotaPoll {
+        ledger: h.ledger.clone(),
+        router: h.router.clone(),
+        store: h.store.clone(),
+        tables: Arc::new(PlanTables::shipped()),
+        usage: h.usage.clone().unwrap(),
+    }
+    .refresh_profile(&row)
     .await;
     assert_eq!(
         h.store.account("a").unwrap().unwrap().state,
@@ -1176,14 +1180,14 @@ async fn a_profile_refresh_whose_seat_tier_alone_moves_the_class_reloads_the_rou
         "a plan seat before the refresh"
     );
     let row = h.store.account("a").unwrap().unwrap();
-    QuotaPoll::refresh_profile(
-        &h.store,
-        h.usage.as_ref().unwrap(),
-        &PlanTables::shipped(),
-        &h.ledger,
-        &h.router,
-        &row,
-    )
+    QuotaPoll {
+        ledger: h.ledger.clone(),
+        router: h.router.clone(),
+        store: h.store.clone(),
+        tables: Arc::new(PlanTables::shipped()),
+        usage: h.usage.clone().unwrap(),
+    }
+    .refresh_profile(&row)
     .await;
     assert!(
         h.store.subscription_term("a").unwrap().unwrap().usage_based,
@@ -1231,14 +1235,14 @@ async fn a_profile_refresh_whose_organization_type_alone_moves_the_plan_reloads_
         "a Pro plan before the refresh"
     );
     let row = h.store.account("a").unwrap().unwrap();
-    QuotaPoll::refresh_profile(
-        &h.store,
-        h.usage.as_ref().unwrap(),
-        &PlanTables::shipped(),
-        &h.ledger,
-        &h.router,
-        &row,
-    )
+    QuotaPoll {
+        ledger: h.ledger.clone(),
+        router: h.router.clone(),
+        store: h.store.clone(),
+        tables: Arc::new(PlanTables::shipped()),
+        usage: h.usage.clone().unwrap(),
+    }
+    .refresh_profile(&row)
     .await;
     assert_eq!(
         h.store
@@ -1279,16 +1283,17 @@ async fn the_startup_step_records_and_reports_one_sample_per_polled_account() {
     .await;
     // A pause leaves the account polled: its quota is still the operator's to watch.
     h.store.set_enabled("a", false).unwrap();
-    let sampled = QuotaPoll::sample_all(
-        h.store.clone(),
-        h.usage
+    let sampled = QuotaPoll {
+        ledger: h.ledger.clone(),
+        router: h.router.clone(),
+        store: h.store.clone(),
+        tables: Arc::new(PlanTables::shipped()),
+        usage: h
+            .usage
             .clone()
             .expect("the harness was built with the poll"),
-        h.ledger.clone(),
-        h.router.clone(),
-        Arc::new(PlanTables::shipped()),
-        Duration::from_secs(2),
-    )
+    }
+    .sample_all(Duration::from_secs(2))
     .await;
     assert_eq!(
         sampled,
@@ -1357,16 +1362,17 @@ async fn a_usage_endpoint_that_hangs_ends_the_startup_step_at_its_bound() {
     let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     // The gated usage endpoint answers only after the release below, so the step can return only by leaving that
     // fetch pending at its bound.
-    let sampled = QuotaPoll::sample_all(
-        h.store.clone(),
-        h.usage
+    let sampled = QuotaPoll {
+        ledger: h.ledger.clone(),
+        router: h.router.clone(),
+        store: h.store.clone(),
+        tables: Arc::new(PlanTables::shipped()),
+        usage: h
+            .usage
             .clone()
             .expect("the harness was built with the poll"),
-        h.ledger.clone(),
-        h.router.clone(),
-        Arc::new(PlanTables::shipped()),
-        Duration::from_millis(300),
-    )
+    }
+    .sample_all(Duration::from_millis(300))
     .await;
     assert_eq!(
         sampled,
@@ -1394,16 +1400,17 @@ async fn a_profile_read_that_names_a_new_tier_reloads_the_router() {
     let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
     let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     assert_eq!(h.router.snapshot().tier("a"), None, "no profile read yet");
-    QuotaPoll::sample_all(
-        h.store.clone(),
-        h.usage
+    QuotaPoll {
+        ledger: h.ledger.clone(),
+        router: h.router.clone(),
+        store: h.store.clone(),
+        tables: Arc::new(PlanTables::shipped()),
+        usage: h
+            .usage
             .clone()
             .expect("the harness was built with the poll"),
-        h.ledger.clone(),
-        h.router.clone(),
-        Arc::new(PlanTables::shipped()),
-        Duration::from_secs(2),
-    )
+    }
+    .sample_all(Duration::from_secs(2))
     .await;
     let tier = wait_for(Duration::from_secs(2), || {
         h.router.snapshot().tier("a").map(str::to_string)
@@ -1420,16 +1427,17 @@ async fn a_profile_read_that_names_a_new_tier_reloads_the_router() {
 async fn a_profile_endpoint_that_hangs_holds_no_reported_sample_back() {
     let up = FakeUpstream::start(vec![usage_rule(), profile_gated()]).await;
     let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
-    let sampled = QuotaPoll::sample_all(
-        h.store.clone(),
-        h.usage
+    let sampled = QuotaPoll {
+        ledger: h.ledger.clone(),
+        router: h.router.clone(),
+        store: h.store.clone(),
+        tables: Arc::new(PlanTables::shipped()),
+        usage: h
+            .usage
             .clone()
             .expect("the harness was built with the poll"),
-        h.ledger.clone(),
-        h.router.clone(),
-        Arc::new(PlanTables::shipped()),
-        Duration::from_millis(300),
-    )
+    }
+    .sample_all(Duration::from_millis(300))
     .await;
     assert_eq!(
         sampled,
@@ -1455,16 +1463,17 @@ async fn a_stalled_startup_fetch_is_aborted_by_ledger_shutdown_and_makes_no_furt
     let up = FakeUpstream::start(vec![usage_gated(), profile_rule()]).await;
     let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     let tables = Arc::new(PlanTables::shipped());
-    let sampled = QuotaPoll::sample_all(
-        h.store.clone(),
-        h.usage
+    let sampled = QuotaPoll {
+        ledger: h.ledger.clone(),
+        router: h.router.clone(),
+        store: h.store.clone(),
+        tables: tables.clone(),
+        usage: h
+            .usage
             .clone()
             .expect("the harness was built with the poll"),
-        h.ledger.clone(),
-        h.router.clone(),
-        tables.clone(),
-        Duration::from_millis(300),
-    )
+    }
+    .sample_all(Duration::from_millis(300))
     .await;
     assert_eq!(
         sampled,
@@ -1870,14 +1879,14 @@ async fn a_profile_500_writes_poll_failed_naming_the_profile_endpoint_and_logs_o
     let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     let (lines, _sink) = capture_tracing();
     let row = h.store.account("a").unwrap().unwrap();
-    QuotaPoll::refresh_profile(
-        &h.store,
-        h.usage.as_ref().unwrap(),
-        &PlanTables::shipped(),
-        &h.ledger,
-        &h.router,
-        &row,
-    )
+    QuotaPoll {
+        ledger: h.ledger.clone(),
+        router: h.router.clone(),
+        store: h.store.clone(),
+        tables: Arc::new(PlanTables::shipped()),
+        usage: h.usage.clone().unwrap(),
+    }
+    .refresh_profile(&row)
     .await;
     let rows = wait_for_async(Duration::from_secs(5), || async {
         let rows = rows_of(&h, "poll_failed").await;
@@ -1920,14 +1929,14 @@ async fn a_usage_transport_failure_writes_poll_failed_with_transport_set_and_no_
     up.add_credential_rule(A, "/api/oauth/usage", Respond::CloseAfterRequest);
     let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     let row = h.store.account("a").unwrap().unwrap();
-    let answer = QuotaPoll::poll_account(
-        &h.store,
-        h.usage.as_ref().unwrap(),
-        &PlanTables::shipped(),
-        &h.ledger,
-        &h.router,
-        &row,
-    )
+    let answer = QuotaPoll {
+        ledger: h.ledger.clone(),
+        router: h.router.clone(),
+        store: h.store.clone(),
+        tables: Arc::new(PlanTables::shipped()),
+        usage: h.usage.clone().unwrap(),
+    }
+    .poll_account(&row)
     .await
     .unwrap();
     let text = answer.error.expect("the poll read nothing");
@@ -2014,14 +2023,14 @@ async fn a_profile_reporting_no_plan_flags_the_account_and_its_slots_read_the_pr
     h.router.reload().await.unwrap();
     let (lines, _sink) = capture_tracing();
     let row = h.store.account("a").unwrap().unwrap();
-    QuotaPoll::refresh_profile(
-        &h.store,
-        h.usage.as_ref().unwrap(),
-        &PlanTables::shipped(),
-        &h.ledger,
-        &h.router,
-        &row,
-    )
+    QuotaPoll {
+        ledger: h.ledger.clone(),
+        router: h.router.clone(),
+        store: h.store.clone(),
+        tables: Arc::new(PlanTables::shipped()),
+        usage: h.usage.clone().unwrap(),
+    }
+    .refresh_profile(&row)
     .await;
     assert_eq!(plan_ended_at(&h, "a"), Some(NOW), "the read's instant");
     let term = h.store.subscription_term("a").unwrap().unwrap();
@@ -2106,14 +2115,14 @@ async fn a_profile_reporting_no_plan_is_stored_before_the_flag_so_the_reload_rea
     store_max_20x(&h.store, "a");
     h.router.reload().await.unwrap();
     let row = h.store.account("a").unwrap().unwrap();
-    QuotaPoll::refresh_profile(
-        &h.store,
-        h.usage.as_ref().unwrap(),
-        &PlanTables::shipped(),
-        &h.ledger,
-        &h.router,
-        &row,
-    )
+    QuotaPoll {
+        ledger: h.ledger.clone(),
+        router: h.router.clone(),
+        store: h.store.clone(),
+        tables: Arc::new(PlanTables::shipped()),
+        usage: h.usage.clone().unwrap(),
+    }
+    .refresh_profile(&row)
     .await;
     let stored: serde_json::Value =
         serde_json::from_str(&h.store.profile_json("a").unwrap().unwrap()).unwrap();
@@ -2158,17 +2167,14 @@ async fn under_a_standing_flag_a_read_that_moves_the_stored_term_reloads_the_rou
     assert!(h.store.set_plan_ended("a", NOW - 60_000).unwrap());
     h.router.reload().await.unwrap();
     let row = h.store.account("a").unwrap().unwrap();
-    let tables = PlanTables::shipped();
-    let read = || {
-        QuotaPoll::refresh_profile(
-            &h.store,
-            h.usage.as_ref().unwrap(),
-            &tables,
-            &h.ledger,
-            &h.router,
-            &row,
-        )
+    let poll = QuotaPoll {
+        ledger: h.ledger.clone(),
+        router: h.router.clone(),
+        store: h.store.clone(),
+        tables: Arc::new(PlanTables::shipped()),
+        usage: h.usage.clone().unwrap(),
     };
+    let read = || poll.refresh_profile(&row);
     read().await;
     let moved = h.router.snapshot();
     assert_eq!(
@@ -2233,7 +2239,7 @@ async fn a_team_document_whose_tier_the_cost_model_lacks_warns_once_per_account_
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("subscription_costs.yaml");
     std::fs::write(&path, ONE_TIER_COSTS).unwrap();
-    let tables = PlanTables::load(Some(&path)).unwrap();
+    let tables = Arc::new(PlanTables::load(Some(&path)).unwrap());
     let team = |tier: &str| {
         organization_profile(&format!(
             r#"{{"uuid":"o","organization_type":"claude_team","rate_limit_tier":"{tier}"}}"#
@@ -2267,14 +2273,14 @@ async fn a_team_document_whose_tier_the_cost_model_lacks_warns_once_per_account_
         let (h, tables) = (&h, &tables);
         async move {
             let row = h.store.account(id).unwrap().unwrap();
-            QuotaPoll::refresh_profile(
-                &h.store,
-                h.usage.as_ref().unwrap(),
-                tables,
-                &h.ledger,
-                &h.router,
-                &row,
-            )
+            QuotaPoll {
+                ledger: h.ledger.clone(),
+                router: h.router.clone(),
+                store: h.store.clone(),
+                tables: tables.clone(),
+                usage: h.usage.clone().unwrap(),
+            }
+            .refresh_profile(&row)
             .await;
         }
     };
@@ -2408,14 +2414,14 @@ async fn a_usage_403_naming_the_refusal_reads_the_profile_in_the_same_poll_and_f
     up.add_credential_rule(A, "/api/oauth/profile", no_plan_profile());
     let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     let row = h.store.account("a").unwrap().unwrap();
-    QuotaPoll::poll_account(
-        &h.store,
-        h.usage.as_ref().unwrap(),
-        &PlanTables::shipped(),
-        &h.ledger,
-        &h.router,
-        &row,
-    )
+    QuotaPoll {
+        ledger: h.ledger.clone(),
+        router: h.router.clone(),
+        store: h.store.clone(),
+        tables: Arc::new(PlanTables::shipped()),
+        usage: h.usage.clone().unwrap(),
+    }
+    .poll_account(&row)
     .await
     .unwrap();
     assert_eq!(
@@ -2443,14 +2449,14 @@ async fn a_usage_403_naming_the_refusal_on_an_account_whose_profile_reports_a_pl
     up.add_credential_rule(A, "/api/oauth/usage", plan_refused());
     let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     let row = h.store.account("a").unwrap().unwrap();
-    QuotaPoll::poll_account(
-        &h.store,
-        h.usage.as_ref().unwrap(),
-        &PlanTables::shipped(),
-        &h.ledger,
-        &h.router,
-        &row,
-    )
+    QuotaPoll {
+        ledger: h.ledger.clone(),
+        router: h.router.clone(),
+        store: h.store.clone(),
+        tables: Arc::new(PlanTables::shipped()),
+        usage: h.usage.clone().unwrap(),
+    }
+    .poll_account(&row)
     .await
     .unwrap();
     assert_eq!(profile_asked(&up, A), 1, "the profile was read");
@@ -2479,14 +2485,14 @@ async fn a_profile_with_a_plan_clears_the_flag_stores_its_tier_and_the_next_slot
     assert!(h.store.set_plan_ended("a", NOW - 60_000).unwrap());
     h.router.reload().await.unwrap();
     let row = h.store.account("a").unwrap().unwrap();
-    QuotaPoll::refresh_profile(
-        &h.store,
-        h.usage.as_ref().unwrap(),
-        &PlanTables::shipped(),
-        &h.ledger,
-        &h.router,
-        &row,
-    )
+    QuotaPoll {
+        ledger: h.ledger.clone(),
+        router: h.router.clone(),
+        store: h.store.clone(),
+        tables: Arc::new(PlanTables::shipped()),
+        usage: h.usage.clone().unwrap(),
+    }
+    .refresh_profile(&row)
     .await;
     assert_eq!(plan_ended_at(&h, "a"), None, "the plan is back");
     assert_eq!(
@@ -2533,14 +2539,14 @@ async fn a_run_of_usage_429s_flags_nothing_and_writes_no_poll_failed_row() {
     let row = h.store.account("a").unwrap().unwrap();
     for step in 0..3 {
         h.clock.store(NOW + step * 900_000, Ordering::SeqCst);
-        QuotaPoll::poll_account(
-            &h.store,
-            usage,
-            &PlanTables::shipped(),
-            &h.ledger,
-            &h.router,
-            &row,
-        )
+        QuotaPoll {
+            ledger: h.ledger.clone(),
+            router: h.router.clone(),
+            store: h.store.clone(),
+            tables: Arc::new(PlanTables::shipped()),
+            usage: usage.clone(),
+        }
+        .poll_account(&row)
         .await
         .unwrap();
     }
@@ -2583,14 +2589,16 @@ async fn a_backoff_run_open_at_the_restore_closes_at_the_first_clean_poll() {
         "the flag holds the slot after the hold"
     );
     let row = h.store.account("a").unwrap().unwrap();
-    resumed(QuotaPoll::refresh_profile(
-        &h.store,
-        h.usage.as_ref().unwrap(),
-        &PlanTables::shipped(),
-        &h.ledger,
-        &h.router,
-        &row,
-    ))
+    resumed(
+        QuotaPoll {
+            ledger: h.ledger.clone(),
+            router: h.router.clone(),
+            store: h.store.clone(),
+            tables: Arc::new(PlanTables::shipped()),
+            usage: h.usage.clone().unwrap(),
+        }
+        .refresh_profile(&row),
+    )
     .await;
     assert_eq!(plan_ended_at(&h, "a"), None, "the profile reports the plan");
     // Read now and asserted with the end row, so one run shows both halves of the rule.
@@ -2643,14 +2651,14 @@ async fn the_startup_step_reads_a_flagged_accounts_profile_alone_and_counts_it_p
     )
     .await;
     assert!(h.store.set_plan_ended("a", NOW - 60_000).unwrap());
-    let sampled = QuotaPoll::sample_all(
-        h.store.clone(),
-        h.usage.clone().unwrap(),
-        h.ledger.clone(),
-        h.router.clone(),
-        Arc::new(PlanTables::shipped()),
-        Duration::from_secs(2),
-    )
+    let sampled = QuotaPoll {
+        ledger: h.ledger.clone(),
+        router: h.router.clone(),
+        store: h.store.clone(),
+        tables: Arc::new(PlanTables::shipped()),
+        usage: h.usage.clone().unwrap(),
+    }
+    .sample_all(Duration::from_secs(2))
     .await;
     assert_eq!(
         sampled,
@@ -2680,14 +2688,14 @@ async fn a_poll_whose_403_read_the_profile_reads_it_no_second_time() {
     up.add_credential_rule(A, "/api/oauth/usage", plan_refused());
     let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     // The startup step reads every account's profile, which is due as the 403 makes it due.
-    let sampled = QuotaPoll::sample_all(
-        h.store.clone(),
-        h.usage.clone().unwrap(),
-        h.ledger.clone(),
-        h.router.clone(),
-        Arc::new(PlanTables::shipped()),
-        Duration::from_secs(2),
-    )
+    let sampled = QuotaPoll {
+        ledger: h.ledger.clone(),
+        router: h.router.clone(),
+        store: h.store.clone(),
+        tables: Arc::new(PlanTables::shipped()),
+        usage: h.usage.clone().unwrap(),
+    }
+    .sample_all(Duration::from_secs(2))
     .await;
     assert_eq!(sampled.failed, 1);
     wait_for_async(Duration::from_secs(5), || async {
