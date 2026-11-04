@@ -649,6 +649,29 @@ fn recent_events_of_kind_answers_the_newest_first_and_stops_at_the_limit() {
 }
 
 #[test]
+fn a_model_scoped_cooldown_lands_with_its_model_in_the_model_column() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let set = event_of(&RouterEvent::CooldownSet {
+        account_id: "a".into(),
+        scope: "model:claude-sonnet-4-5".into(),
+        until: 2_000,
+        reason: "rate_limit".into(),
+        window: "five_hour".into(),
+        source_request_id: None,
+        at: 1_000,
+    })
+    .expect("a cooldown row");
+    db.insert_event(&set).unwrap();
+    let rows = db
+        .read_blocking(|c| recent_events_of_kind(c, "cooldown_set", 10))
+        .unwrap();
+    assert_eq!(
+        rows.iter().map(|e| e.model.as_deref()).collect::<Vec<_>>(),
+        [Some("claude-sonnet-4-5")]
+    );
+}
+
+#[test]
 fn a_pin_migrated_event_counts_under_its_reason_on_the_destination() {
     let db = LedgerDb::open_in_memory().unwrap();
     db.write(|c| {
