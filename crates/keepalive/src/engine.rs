@@ -2793,9 +2793,10 @@ impl Engine {
         };
         let now = self.now();
         let key: SessionKey = (key_id, session_id);
-        // The body's parse and edits run apart from the lock, which the bus observer, the tick and the companion route
-        // all take, for a request on an agent the engine holds and of a class that can arm a recipe: a compaction stores
-        // none. Every check below runs again under the lock, which builds the recipe itself where none was built here.
+        // The body's parse and edits run apart from the lock, which the bus observer, the tick and the companion
+        // route all take, for a request on an agent the engine holds and of a class that can arm a recipe: a
+        // compaction stores none. Every check below runs again under the lock, which builds the recipe itself where
+        // none was built here.
         let held = {
             let inner = self.lock();
             !inner.closed
@@ -4241,7 +4242,7 @@ pub(crate) fn ceilings_for(
 }
 
 /// The spec's "Scheduling against router state" row, in its order, after `refresh_policy` answered `pool`. `Err`
-/// names why the due probe waits, or why the recipe goes; `Ok` lets the probe run on the account it names, the one
+/// names why the due probe waits, or why the recipe goes. `Ok` lets the probe run on the account it names, the one
 /// the snapshot holds.
 pub(crate) fn gate(
     view: &RouterView,
