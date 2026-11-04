@@ -16,7 +16,7 @@ use phoebis_store::{stamp_token, ApiKeyRow, AttachmentSubject, StoreError, ROTAT
 use serde_json::{json, Value};
 use utoipa::ToSchema;
 
-use crate::accounts::{check_slug, within_text_bound};
+use crate::accounts::{check_slug, within_text_bound, ACTOR};
 use crate::guardrails::{attachment_refusal, distinct_ids, AttachmentIndex, GuardrailRef};
 use crate::openapi::{ErrorBody, RegistryUnavailable, StorageFailure};
 use crate::routes::{
@@ -26,7 +26,6 @@ use crate::routes::{
 use crate::rules::{parse_mode, parse_rules, RuleInput};
 use crate::AdminState;
 
-const ACTOR: &str = "admin";
 const STALE_EDIT: &str = "the key changed while it was being edited, so reload and try again";
 
 /// The key's fields. On a create `id`, `label` and `pool_id` are required. On an edit any subset but `id`. An unknown

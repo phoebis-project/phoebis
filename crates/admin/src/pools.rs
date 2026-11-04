@@ -19,7 +19,7 @@ use phoebis_store::{
 use serde_json::{json, Value};
 use utoipa::ToSchema;
 
-use crate::accounts::check_slug;
+use crate::accounts::{check_slug, ACTOR};
 use crate::guardrails::{attachment_refusal, distinct_ids, AttachmentIndex, GuardrailRef};
 use crate::openapi::{ErrorBody, RegistryUnavailable, StorageFailure};
 use crate::routes::{
@@ -29,7 +29,6 @@ use crate::routes::{
 use crate::rules::{parse_rules, RuleInput};
 use crate::AdminState;
 
-const ACTOR: &str = "admin";
 const STALE_EDIT: &str = "the pool changed while it was being edited, so reload and try again";
 
 /// One member. On a subscription member a budget bounds its metered spend, overage and fast answers, and on a
