@@ -276,11 +276,11 @@ allowed (`CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` unset) they carry `auto-mode-c
 the beta, as under the hint gate alone or under `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`, is an ordinary auxiliary
 request to the router and takes its model's share. The classifier bodies carry no `stream` and no `tools`, a
 security-monitor system block, and `stop_sequences` at stage 1. They carry the session's own id like any request, on
-the Sonnet default, and no agent header, so the router routes a marked call as a call of the agent whose turn ended last
-in the session and lands it on that turn's account where it can, under that agent's own pin on the Sonnet default
-([Clients](routing.md#clients)), because the upstream charges a classifier call that lands on another account than the
-turn it judges. The client also sends them under the on setting for a tool input a PreToolUse hook rewrote, since the
-server's verdict is bound to the input the model wrote.
+the Sonnet default, and no agent header, so the router routes a marked call, best effort, as a call of the agent whose
+turn ended last in the session and lands it on that turn's account where it can, under that agent's own pin on the
+Sonnet default ([Clients](routing.md#clients) names the cases the read misses), because the upstream charges a
+classifier call that lands on another account than the turn it judges. The client also sends them under the on setting
+for a tool input a PreToolUse hook rewrote, since the server's verdict is bound to the input the model wrote.
 
 **The notice.** The client can show a one-line notice that its classifier requests are billed because the gateway does
 not support the server-side check. A Pro, Max or Team login never sees it. A key or token login sees it once per process

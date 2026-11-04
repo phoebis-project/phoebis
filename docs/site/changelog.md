@@ -31,9 +31,9 @@ The router requires the session header, the class header, the attribution line, 
 compaction headers of a Claude Code request and refuses the rest `403` `client_contract`
 ([The required set](client.md#the-required-set)), restores `cc_prompt_id` from the client's prompt-id header and
 `cc_prev_req` by class, blanks the account uuid on an API-key leg, prices the client's auto-mode classifier calls
-that carry the classifier marker at no share of a plan window, and routes each of them as a call of the agent whose
-turn ended last in the session, onto that turn's account where it can, because the upstream charges a classifier call
-that lands on another account than the turn it judges
+that carry the classifier marker at no share of a plan window, and routes each of them, best effort, as a call of the
+agent whose turn ended last in the session, onto that turn's account where it can, because the upstream charges a
+classifier call that lands on another account than the turn it judges
 ([Auto mode behind the router](relay.md#auto-mode-behind-the-router)). Every caller-credential refusal
 (`auth_ambiguous`, `auth_malformed`, `auth_missing` and `auth_unknown`, the registry's key refusal among them) carries
 `x-should-retry: false` on every route that answers it, so the client does not resend it
