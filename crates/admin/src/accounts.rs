@@ -329,10 +329,7 @@ pub(crate) async fn patch(
         None
     };
     let label = input.label.as_deref().unwrap_or(&row.label);
-    let secret = match (row.kind, input.secret.as_deref()) {
-        (AccountKind::ApiKey, Some(secret)) => Some(Secret::new(secret)),
-        _ => None,
-    };
+    let secret = input.secret.as_deref().map(Secret::new);
     if let Some(secret) = &secret {
         // Staged, never written: the row the store holds is untouched until discovery has passed, and the
         // verification below has to see what the patch would land, not what is stored now.
