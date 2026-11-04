@@ -421,7 +421,7 @@ fn check_shape(config: &Config) -> Result<(), ConfigError> {
             value: proxy.key_body_reads,
         });
     }
-    if !matches!(proxy.upstream_gzip.as_str(), "auto" | "on" | "off") {
+    if upstream_gzip(&proxy.upstream_gzip).is_none() {
         return Err(ConfigError::UpstreamGzipInvalid {
             value: proxy.upstream_gzip.clone(),
         });
@@ -654,6 +654,17 @@ fn default_startup_fetch() -> u64 {
 
 fn default_subscription_costs_path() -> Option<PathBuf> {
     Some("./subscription_costs.yaml".into())
+}
+
+/// `proxy.upstream_gzip`'s word as the relay's setting, `None` for a word the load refuses. The one list of the words,
+/// since the relay's enum has no parser of its own.
+pub fn upstream_gzip(word: &str) -> Option<phoebis_relay::UpstreamGzip> {
+    match word {
+        "auto" => Some(phoebis_relay::UpstreamGzip::Auto),
+        "off" => Some(phoebis_relay::UpstreamGzip::Off),
+        "on" => Some(phoebis_relay::UpstreamGzip::On),
+        _ => None,
+    }
 }
 
 fn default_upstream_gzip() -> String {

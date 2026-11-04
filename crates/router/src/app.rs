@@ -18,8 +18,7 @@ use phoebis_ledger::{
 };
 use phoebis_oauth::{Clock, CredentialManager, PairingSessions, UsageService};
 use phoebis_relay::{
-    Accounting, CatalogService, Limits, ListenLimits, Relay, ShutdownMark, UpstreamGzip,
-    REFRESH_TICK,
+    Accounting, CatalogService, Limits, ListenLimits, Relay, ShutdownMark, REFRESH_TICK,
 };
 use phoebis_store::{StorageKey, Store};
 use phoebis_transport::control::{ControlClient, ResolveFuture, Resolver};
@@ -286,12 +285,8 @@ pub async fn run_until(
                 key_body_reads: config.proxy.key_body_reads,
                 max_request_bytes: config.proxy.max_request_bytes,
                 model_rejection: Duration::from_secs(config.routing.model_rejection_seconds),
-                // The load refused every other spelling, so anything past the two named is `auto`.
-                upstream_gzip: match config.proxy.upstream_gzip.as_str() {
-                    "off" => UpstreamGzip::Off,
-                    "on" => UpstreamGzip::On,
-                    _ => UpstreamGzip::Auto,
-                },
+                upstream_gzip: crate::config::upstream_gzip(&config.proxy.upstream_gzip)
+                    .expect("the load refuses any other word"),
             },
             catalog.clone(),
         )
