@@ -505,12 +505,7 @@ pub(crate) async fn list(
     State(state): State<Arc<AdminState>>,
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
-    let mut names: Vec<&String> = q.keys().collect();
-    names.sort();
-    if let Some(unknown) = names
-        .into_iter()
-        .find(|name| !KEYS.contains(&name.as_str()))
-    {
+    if let Some(unknown) = q.keys().filter(|name| !KEYS.contains(&name.as_str())).min() {
         return failure(
             StatusCode::BAD_REQUEST,
             &format!("unknown filter {unknown}"),
