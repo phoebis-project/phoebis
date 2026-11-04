@@ -4352,13 +4352,16 @@ async fn the_binary_retains_a_session_probes_it_and_serves_the_keepalive_views()
 }
 
 /// Polls an admin route until `ready` accepts its JSON, within the settle budget: the deadline for a route that
-/// answers but has not converged, the timeout for one that stops answering mid-request.
+/// answers but has not converged, the timeout for a poll still in flight when the budget ends. The two share one
+/// instant, so the timeout names the last answer read as the deadline does, and says the route gave no answer only
+/// where no poll returned.
 async fn wait_json(
     client: &reqwest::Client,
     url: &str,
     ready: impl Fn(&serde_json::Value) -> bool,
 ) -> serde_json::Value {
     let give_up = std::time::Instant::now() + SETTLE;
+    let last = Mutex::new(None);
     let polls = async {
         loop {
             let value: serde_json::Value =
@@ -4370,12 +4373,16 @@ async fn wait_json(
                 std::time::Instant::now() < give_up,
                 "{url} never settled: {value}"
             );
+            *last.lock().unwrap() = Some(value);
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
     };
     match tokio::time::timeout(SETTLE, polls).await {
         Ok(value) => value,
-        Err(_) => panic!("{url} stopped answering within {SETTLE:?}"),
+        Err(_) => match last.lock().unwrap().take() {
+            Some(value) => panic!("{url} never settled within {SETTLE:?}: {value}"),
+            None => panic!("{url} gave no answer within {SETTLE:?}"),
+        },
     }
 }
 
