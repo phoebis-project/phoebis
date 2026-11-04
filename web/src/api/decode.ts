@@ -330,7 +330,7 @@ export function decodeKey(v: unknown): ApiKey {
 
 export const AFFINITY_MODE_VALUES = ['always', 'when_cached'] as const satisfies readonly AffinityMode[];
 export const BUDGET_PERIOD_VALUES = ['day', 'month'] as const satisfies readonly BudgetPeriod[];
-export const ELIGIBILITY_VALUES = ['budget', 'cooldown', 'eligible', 'overage', 'unavailable'] as const satisfies readonly MemberEligibility[];
+export const ELIGIBILITY_VALUES = ['budget', 'budget_unknown', 'cooldown', 'eligible', 'overage', 'spent', 'unavailable'] as const satisfies readonly MemberEligibility[];
 export const SESSION_PLACEMENT_VALUES = ['by_strategy', 'by_warm_prefix'] as const satisfies readonly SessionPlacement[];
 export const SUBAGENT_PLACEMENT_VALUES = ['by_cohort', 'by_strategy', 'with_main'] as const satisfies readonly SubagentPlacement[];
 export const MODEL_RULES_MODE_VALUES = ['extend', 'replace'] as const satisfies readonly ModelRulesMode[];

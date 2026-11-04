@@ -10,11 +10,11 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_keepalive::{pool_fundings, CeilingInputs, KeepalivePolicy};
 use phoebis_relay::{CacheTtl, CacheTtlPolicy};
-use phoebis_routing::{MemberSpend, OverageEvidence, RegistrySnapshot};
+use phoebis_routing::{AccountProjection, MemberSpend, Obstacle, RegistrySnapshot};
 use phoebis_store::{
-    stamp_token, AccountRow, Affinity, AffinityMode, ApiKeyRow, AttachmentSubject, CooldownRow,
-    CooldownScope, Failover, MemberWrite, OveragePolicy, PinRow, PoolMember, PoolRow, ReturnToPlan,
-    SessionPlacement, Shedding, SlowDown, StoreError, Strategy, SubagentPlacement, WarmSessions,
+    stamp_token, AccountRow, Affinity, AffinityMode, ApiKeyRow, AttachmentSubject, Failover,
+    MemberWrite, OveragePolicy, PinRow, PoolMember, PoolRow, ReturnToPlan, SessionPlacement,
+    Shedding, SlowDown, StoreError, Strategy, SubagentPlacement, WarmSessions,
 };
 use serde_json::{json, Value};
 use utoipa::ToSchema;
@@ -1225,7 +1225,7 @@ fn warnings_of(row: &PoolRow, cohort: usize) -> Vec<PoolWarning> {
 pub(crate) struct PoolMemberView {
     pub account_id: String,
     pub priority: u32,
-    /// `budget`, `cooldown`, `eligible`, `overage`, or `unavailable`.
+    /// `budget`, `budget_unknown`, `cooldown`, `eligible`, `overage`, `spent`, or `unavailable`.
     #[schema(example = "budget")]
     pub eligible: String,
     /// The account's `oauth` or `api_key`.
@@ -1334,7 +1334,6 @@ fn member_json(
 pub(crate) struct PoolContext {
     accounts: Vec<AccountRow>,
     ceilings: CeilingInputs,
-    cooldowns: Vec<CooldownRow>,
     /// The day's request totals per pool.
     day: BTreeMap<String, phoebis_ledger::Totals>,
     guardrails: AttachmentIndex,
@@ -1343,7 +1342,6 @@ pub(crate) struct PoolContext {
     /// The last hour's moves by reason, by account.
     moves: BTreeMap<String, BTreeMap<String, u64>>,
     now: i64,
-    overages: Vec<(String, OverageEvidence)>,
     pins: Vec<PinRow>,
     pools: Vec<PoolRow>,
     /// The router's projections of each pool's members under that pool's settings, by pool.
@@ -1404,23 +1402,22 @@ pub(crate) async fn pool_context(
             .await
             .unwrap_or_default()
     };
+    let fallback_ms = phoebis_routing::seconds_ms(state.settings.cooldown_fallback_seconds);
     let mut projections = BTreeMap::new();
     for id in pool_ids {
-        if let Ok(members) = state.router.projections(&id).await {
+        if let Ok(members) = state.router.projections(&id, fallback_ms).await {
             projections.insert(id, members);
         }
     }
     Ok(PoolContext {
         accounts: registry.accounts,
         ceilings: state.keepalive.ceiling_inputs().await,
-        cooldowns: state.router.cooldowns().await.unwrap_or_default(),
         day,
         guardrails,
         keys: registry.keys,
         members: registry.members,
         moves,
         now,
-        overages: state.router.overages().await.unwrap_or_default(),
         pins: state.router.pins().await.unwrap_or_default(),
         pools: registry.pools,
         projections,
@@ -1428,6 +1425,27 @@ pub(crate) async fn pool_context(
         spends: state.router.member_spends().await.unwrap_or_default(),
         traffic,
     })
+}
+
+/// The member word for the selector's obstacle on the member, as the router's projection of it answers.
+fn member_word(projection: Option<&AccountProjection>) -> &'static str {
+    // A member the router answers no projection for (the router gone, or a registry write it has not reloaded) is
+    // routed nothing at that instant. No account is attempted and the fast lane is off for a projection, so the
+    // attempted and credits obstacles never arise, and neither takes a member out of the pool's standard set.
+    let Some(projection) = projection else {
+        return "unavailable";
+    };
+    match &projection.obstacle {
+        None | Some(Obstacle::Attempted | Obstacle::Credits { .. }) => "eligible",
+        Some(Obstacle::Budget { .. }) => "budget",
+        Some(Obstacle::BudgetUnknown) => "budget_unknown",
+        Some(Obstacle::Cooldown { .. }) => "cooldown",
+        Some(Obstacle::Deleted | Obstacle::Ended | Obstacle::Paused | Obstacle::Unready) => {
+            "unavailable"
+        }
+        Some(Obstacle::Overage { .. }) => "overage",
+        Some(Obstacle::Spent { .. }) => "spent",
+    }
 }
 
 /// One pool over a context built for it alone, for the routes that answer a single pool.
@@ -1466,7 +1484,7 @@ pub(crate) fn pool_json_from(state: &AdminState, context: &PoolContext, row: &Po
             *moves.entry(reason.clone()).or_default() += count;
         }
     }
-    let (cooldowns, overages, pins) = (&context.cooldowns, &context.overages, &context.pins);
+    let pins = &context.pins;
     let key_ids: Vec<String> = keys.iter().map(|k| k.id.clone()).collect();
     let active_pins = pins.iter().filter(|p| key_ids.contains(&p.key_id)).count();
     let mut cohorts: HashMap<(&str, &str), HashSet<&str>> = HashMap::new();
@@ -1480,41 +1498,13 @@ pub(crate) fn pool_json_from(state: &AdminState, context: &PoolContext, row: &Po
     let accounts = &context.accounts;
     let spends = &context.spends;
     let snapshot = &context.snapshot;
-    let fallback_ms = phoebis_routing::seconds_ms(state.settings.cooldown_fallback_seconds);
-    // Why routing would refuse a member, mirroring the selector's `obstacle` in the order it checks them: not
-    // enabled or not ready, a subscription past its saved end, an account-wide cooldown, a budget the member's
-    // own spend has reached, or overage the pool's policy admits no substitute for. `None` is eligible. An
-    // ended subscription reads `unavailable` as a paused account does: both stay skipped until an operator acts.
-    let ineligible = |m: &PoolMember| -> Option<&'static str> {
-        let ready = accounts
-            .iter()
-            .find(|a| a.id == m.account_id)
-            .is_some_and(|a| a.enabled && a.state == phoebis_store::AccountState::Ready);
-        let ended = snapshot
-            .term(&m.account_id)
-            .is_some_and(|term| phoebis_routing::term::ended(term, now));
-        if !ready || ended {
-            return Some("unavailable");
-        }
-        if cooldowns.iter().any(|c| {
-            c.account_id == m.account_id && c.scope == CooldownScope::Account && c.until > now
-        }) {
-            return Some("cooldown");
-        }
-        let rows = crate::routes::spend_rows(spends, &row.id, &m.account_id);
-        if phoebis_routing::budget_deadline(m, &rows, now).is_some() {
-            return Some("budget");
-        }
-        if row.overage_policy == OveragePolicy::Never
-            && overages
-                .iter()
-                .any(|(id, e)| *id == m.account_id && e.stands(now, fallback_ms))
-        {
-            return Some("overage");
-        }
-        None
+    let projection_of = |m: &PoolMember| {
+        context
+            .projections
+            .get(&row.id)
+            .and_then(|members| members.iter().find(|p| p.account_id == m.account_id))
     };
-    let eligible = |m: &PoolMember| ineligible(m).is_none();
+    let eligible = |m: &PoolMember| member_word(projection_of(m)) == "eligible";
     let status = if !row.enabled {
         "disabled"
     } else if members.is_empty() || !members.iter().any(eligible) {
@@ -1588,15 +1578,12 @@ pub(crate) fn pool_json_from(state: &AdminState, context: &PoolContext, row: &Po
                     .iter()
                     .filter(|p| key_ids.contains(&p.key_id) && p.account_id == m.account_id)
                     .count();
-                let projection = context
-                    .projections
-                    .get(&row.id)
-                    .and_then(|members| members.iter().find(|p| p.account_id == m.account_id));
+                let projection = projection_of(m);
                 member_json(
                     m,
                     accounts,
                     spends,
-                    ineligible(m).unwrap_or("eligible"),
+                    member_word(projection),
                     now,
                     active_pins,
                     projection,

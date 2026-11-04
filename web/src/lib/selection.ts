@@ -13,7 +13,7 @@ export const RULE_NOTE = 'A request for a Fable model is placed on the Fable win
 
 /** Why the router skips a member: its own verdict, as the pool view reports it. */
 export type Ineligible = Exclude<MemberEligibility, 'eligible'>;
-export const INELIGIBLE_LABEL: Record<Ineligible, string> = { budget: 'at budget', cooldown: 'in cooldown', overage: 'in overage', unavailable: 'not available' };
+export const INELIGIBLE_LABEL: Record<Ineligible, string> = { budget: 'at budget', budget_unknown: 'budget unknown', cooldown: 'in cooldown', overage: 'in overage', spent: 'spend cap reached', unavailable: 'not available' };
 
 /**
  * Why an eligible member takes a fresh session only once no other member can: its subscription end is inside the

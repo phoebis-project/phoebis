@@ -1424,6 +1424,54 @@ async fn a_member_past_its_saved_subscription_end_is_unavailable_and_its_pool_ex
     );
 }
 
+/// The selector passes over a usage-based seat whose spend reached its cap until the window resets, so the card reads
+/// the member spent and a pool of that member alone exhausted.
+#[tokio::test]
+async fn a_seat_at_its_spend_cap_reads_spent_and_its_lone_pool_reads_exhausted() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    parts
+        .store
+        .insert_account(&phoebis_store::AccountRow::for_tests(
+            "seat",
+            AccountKind::Oauth,
+        ))
+        .unwrap();
+    parts
+        .store
+        .set_profile(
+            "seat",
+            r#"{"organization":{"rate_limit_tier":"default_claude_zero","seat_tier":"enterprise_usage_based"}}"#,
+            &phoebis_store::SubscriptionRow {
+                tier: Some("default_claude_zero".into()),
+                ..phoebis_store::SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"seat","priority":0}]}"#, Some(&cookie)).await;
+    parts
+        .router
+        .report(phoebis_routing::Report::SpendHead {
+            account_id: "seat".into(),
+            utilization: Some(1.0),
+            reset: Some(common::NOW + HOUR),
+            observed_at: common::NOW,
+            incarnation: 1,
+        })
+        .await;
+    // A query queues behind the report, so the pool list reads the folded share.
+    parts.router.spend_windows().await.unwrap();
+    let pool = json(get(&parts.app, "/admin/pools", Some(&cookie)).await).await["pools"][0].clone();
+    assert_eq!(
+        (
+            pool["status"].as_str(),
+            pool["members"][0]["eligible"].as_str()
+        ),
+        (Some("exhausted"), Some("spent")),
+        "a seat at its spend cap is the selector's obstacle: {pool}"
+    );
+}
+
 #[tokio::test]
 async fn a_pool_under_never_reads_exhausted_when_its_only_member_is_in_overage() {
     let parts = common::admin_parts_full().await;

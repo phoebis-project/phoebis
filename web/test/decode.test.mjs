@@ -519,6 +519,11 @@ test('a pool decodes its policy, status, members, and traffic', () => {
   assert.equal(d.decodePool({ ...fixture('pools').pools[0], members: [{ account_id: 'business', priority: 0 }] }).members[0].eligible, 'unavailable', 'a member row without the field reads as not servable');
 });
 
+test('a pool member reads the spent and budget unknown words as the route answers them', () => {
+  const members = [{ account_id: 'business', priority: 0, eligible: 'spent' }, { account_id: 'direct', priority: 1, eligible: 'budget_unknown' }];
+  assert.deepEqual(d.decodePool({ ...fixture('pools').pools[0], members }).members.map((m) => m.eligible), ['spent', 'budget_unknown']);
+});
+
 test("a pool member reads the pins on its account under the pool's keys, and none where the route answers none", () => {
   const pool = fixture('pools').pools[0];
   const members = [{ account_id: 'business', active_pins: 3, priority: 0 }, { account_id: 'direct', priority: 1 }];

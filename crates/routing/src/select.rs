@@ -687,7 +687,8 @@ pub enum SelectResult {
 
 /// Why a candidate is out of the eligible set. Only a budget, a cooldown, an overage and a spent window carry a
 /// deadline the caller can wait for.
-enum Obstacle {
+#[derive(Clone, Debug, PartialEq)]
+pub enum Obstacle {
     Attempted,
     /// The member's spend reached one of its budgets; `until` is the latest end among the budgets reached and
     /// `period` the budget that end belongs to, the one the record names.
@@ -729,7 +730,7 @@ enum Obstacle {
 
 /// The step-2 name `release_reasons` and the trace report for an obstacle: `attempted`, `budget`,
 /// `budget_unknown`, `cooldown`, `credits`, `operator`, `overage`, `spent`, or `subscription_ended`.
-fn obstacle_name(obstacle: &Obstacle) -> &'static str {
+pub fn obstacle_name(obstacle: &Obstacle) -> &'static str {
     match obstacle {
         Obstacle::Attempted => "attempted",
         Obstacle::Budget { .. } => "budget",
@@ -5240,7 +5241,7 @@ fn pin_key_facts(key: &PinKey) -> PinKeyFacts {
 
 // The request's fields come one by one, so a caller that holds no request can judge an account as well.
 #[allow(clippy::too_many_arguments)]
-fn obstacle(
+pub(crate) fn obstacle(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
     pool: &PoolRow,

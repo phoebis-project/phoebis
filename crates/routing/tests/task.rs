@@ -13553,7 +13553,7 @@ async fn a_purge_after_the_reset_drops_the_slowed_entry_and_ends_its_span_at_the
     // entry of the old window, and its span ends at the reset.
     now.store(SLOWED_RESET + 60_000, Ordering::SeqCst);
     // Asked before the purge's end is awaited, so the answer holds whether or not the tick has dropped the entry yet.
-    let a = projection_of_account(&handle.projections("p").await.unwrap(), "a");
+    let a = projection_of_account(&handle.projections("p", 60_000).await.unwrap(), "a");
     assert_eq!(a.slow_down, None, "no entry answers after the reset");
     let five_hour = a.windows[FIVE_HOUR];
     assert_eq!(
@@ -13600,6 +13600,30 @@ fn projection_of_account(
 }
 
 #[tokio::test]
+async fn a_members_projection_answers_its_account_wide_cooldown_and_a_clean_member_none() {
+    use phoebis_routing::Obstacle;
+    let store = seeded(&["a", "b"]);
+    store.upsert_cooldown(&cooldown_row("a")).unwrap();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let projections = handle.projections("p", 60_000).await.unwrap();
+    assert_eq!(
+        (
+            projection_of_account(&projections, "a").obstacle,
+            projection_of_account(&projections, "b").obstacle
+        ),
+        (
+            Some(Obstacle::Cooldown {
+                reason: "rate_limit".into(),
+                until: 1_000 + 48 * HOUR,
+                window: "seven_day".into(),
+            }),
+            None
+        ),
+    );
+}
+
+#[tokio::test]
 async fn the_projections_ask_answers_the_slow_down_read_and_the_demand_beside_the_projection() {
     let now = Arc::new(AtomicI64::new(AT));
     let store = shedding_store(&["a"]);
@@ -13639,7 +13663,7 @@ async fn the_projections_ask_answers_the_slow_down_read_and_the_demand_beside_th
         .await;
     handle.samples().await.unwrap();
     assert_eq!(
-        projection_of_account(&handle.projections("p").await.unwrap(), "a").slow_down,
+        projection_of_account(&handle.projections("p", 60_000).await.unwrap(), "a").slow_down,
         None,
         "no pinned selection has read the account yet"
     );
@@ -13659,7 +13683,7 @@ async fn the_projections_ask_answers_the_slow_down_read_and_the_demand_beside_th
         .select(slowed_turn(&handle, "r-1", AT))
         .await
         .unwrap();
-    let first = handle.projections("p").await.unwrap();
+    let first = handle.projections("p", 60_000).await.unwrap();
     let a = projection_of_account(&first, "a");
     let entry = a.slow_down.expect("the pinned read wrote a's entry");
     assert!(entry.factor > 0.0 && entry.factor < 1.0, "{entry:?}");
@@ -13691,7 +13715,7 @@ async fn the_projections_ask_answers_the_slow_down_read_and_the_demand_beside_th
         .select(slowed_turn(&handle, "r-2", AT + 30_000))
         .await
         .unwrap();
-    let a = projection_of_account(&handle.projections("p").await.unwrap(), "a");
+    let a = projection_of_account(&handle.projections("p", 60_000).await.unwrap(), "a");
     let entry = a.slow_down.expect("the second read rewrote a's entry");
     assert!(entry.speed < 1.0, "{entry:?}");
     let five_hour = a.windows[FIVE_HOUR];
@@ -13703,7 +13727,7 @@ async fn the_projections_ask_answers_the_slow_down_read_and_the_demand_beside_th
     store.update_pool(&pool, pool.updated_at, "test").unwrap();
     handle.reload().await.unwrap();
     assert_eq!(
-        projection_of_account(&handle.projections("p").await.unwrap(), "a").slow_down,
+        projection_of_account(&handle.projections("p", 60_000).await.unwrap(), "a").slow_down,
         None,
         "a pool with the slow-down off answers no entry"
     );

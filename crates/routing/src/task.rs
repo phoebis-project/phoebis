@@ -25,8 +25,9 @@ use crate::record::{
     RefusedRequest, ShedRoundFacts,
 };
 use crate::select::{
-    decide, pace_of, passes_reset, projection_of, projections_of, release_reasons, routed_agent,
-    BurnRead, Decided, FailedOver, Refusal, SelectRequest, SelectResult, RATE_LIMIT_REASON,
+    decide, obstacle, pace_of, passes_reset, projection_of, projections_of, release_reasons,
+    routed_agent, BurnRead, Decided, FailedOver, Obstacle, Refusal, SelectRequest, SelectResult,
+    RATE_LIMIT_REASON,
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, burn_folded, ceiling, default_burn_average_ms,
@@ -1013,6 +1014,7 @@ enum Command {
     },
     Projections {
         pool_id: String,
+        fallback_ms: i64,
         reply: oneshot::Sender<Vec<AccountProjection>>,
     },
     /// A request the relay refused before asking for a selection. The loop records it as the request's decision.
@@ -1182,6 +1184,9 @@ pub struct AccountProjection {
     /// the entry was read before its window's passed reset, or no pinned selection has read it since the last purge or
     /// restart.
     pub slow_down: Option<AccountSlowDown>,
+    /// What the selector holds against the account for a request on no model in particular, with no account tried
+    /// and the fast lane off, `None` where it would place on the account at the ask's instant.
+    pub obstacle: Option<Obstacle>,
 }
 
 /// The slow-down entry an account's last pinned selection wrote, with the pool's hold cap: the figures the holds apply.
@@ -1547,13 +1552,22 @@ impl RouterHandle {
     pub async fn pins_standing(&self) -> Result<Vec<PinStanding>, RouterGone> {
         self.ask(|reply| Command::PinsStanding { reply }).await
     }
-    /// Every member of `pool_id` with its projections, its Pace score and its slow-down entry in force under that
-    /// pool's settings (the pins the pool keeps, its burn average, its ceiling), one ask, one instant, by account: an
-    /// api_key account answers its score alone, and a pool the registry does not hold answers none.
-    pub async fn projections(&self, pool_id: &str) -> Result<Vec<AccountProjection>, RouterGone> {
+    /// Every member of `pool_id` with its projections, its Pace score, its slow-down entry in force and its obstacle
+    /// under that pool's settings (the pins the pool keeps, its burn average, its ceiling), one ask, one instant, by
+    /// account: an api_key account answers its score alone, and a pool the registry does not hold answers none.
+    /// `fallback_ms` dates an overage whose evidence names no reset, as a selection's request carries it.
+    pub async fn projections(
+        &self,
+        pool_id: &str,
+        fallback_ms: i64,
+    ) -> Result<Vec<AccountProjection>, RouterGone> {
         let pool_id = pool_id.to_string();
-        self.ask(|reply| Command::Projections { pool_id, reply })
-            .await
+        self.ask(|reply| Command::Projections {
+            pool_id,
+            fallback_ms,
+            reply,
+        })
+        .await
     }
     /// Each pin's fast usage by key, the row's own copy, for a test or a debug hook that reads a pin's burn apart
     /// from its row. A pin without fast usage has no entry. The fast-mode tests probe the copy through it and no
@@ -2559,13 +2573,15 @@ fn pin_event_facts(event: &RouterEvent) -> Option<PinEventFacts> {
 /// The members of `pool_id` in account order, each with its projection per plan window and its Pace score at `now`
 /// under that pool's settings: the windows from one `projections_of` read on the achieved burn and one on the demand,
 /// so each window is built once per read, with `pace_of`'s spare rate on each, the score from `pace_of` on
-/// `seven_day`, the window Pace reads for a model without a week of its own, and the slow-down entry in force, which
-/// the last pinned selection on the account wrote. Empty for a pool the snapshot does not hold.
+/// `seven_day`, the window Pace reads for a model without a week of its own, the slow-down entry in force, which
+/// the last pinned selection on the account wrote, and the selector's obstacle on the account. Empty for a pool the
+/// snapshot does not hold.
 fn projections(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
     pool_id: &str,
     now: i64,
+    fallback_ms: i64,
 ) -> Vec<AccountProjection> {
     let Some(pool) = snapshot.pool(pool_id) else {
         return Vec::new();
@@ -2641,6 +2657,17 @@ fn projections(
                         threshold_ms: entry.threshold_ms,
                         hold_ms: slow_down_hold_ms(pool),
                     }),
+                obstacle: obstacle(
+                    state,
+                    snapshot,
+                    pool,
+                    account_id,
+                    state.blocking_cooldown(account_id, "", now, false),
+                    &[],
+                    now,
+                    fallback_ms,
+                    false,
+                ),
             }
         })
         .collect()
@@ -3330,13 +3357,18 @@ impl Task {
                 let snapshot = self.snapshot();
                 let _ = reply.send(pins_standing(&self.state, &snapshot, (self.clock)()));
             }
-            Command::Projections { pool_id, reply } => {
+            Command::Projections {
+                pool_id,
+                fallback_ms,
+                reply,
+            } => {
                 let snapshot = self.snapshot();
                 let _ = reply.send(projections(
                     &self.state,
                     &snapshot,
                     &pool_id,
                     (self.clock)(),
+                    fallback_ms,
                 ));
             }
             #[cfg(any(test, feature = "debug-hooks"))]
@@ -5969,7 +6001,7 @@ mod tests {
         );
         assert_eq!(state.slow_down_speed(pool, "a", T), 0.5);
 
-        let answer = projections(&state, &snapshot, "p", T);
+        let answer = projections(&state, &snapshot, "p", T, 60_000);
         let [account] = &answer[..] else {
             panic!("one member answers: {answer:?}");
         };

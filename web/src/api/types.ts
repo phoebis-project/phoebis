@@ -396,7 +396,7 @@ export interface TrafficBucket {
 }
 
 /** Why routing would refuse a pool member, or `eligible` when it would not. */
-export type MemberEligibility = 'budget' | 'cooldown' | 'eligible' | 'overage' | 'unavailable';
+export type MemberEligibility = 'budget' | 'budget_unknown' | 'cooldown' | 'eligible' | 'overage' | 'spent' | 'unavailable';
 
 /** Whether a session's pin is made for every request, or only for one whose body carries a cache marker. */
 export type AffinityMode = 'always' | 'when_cached';

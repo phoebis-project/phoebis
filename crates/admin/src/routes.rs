@@ -2023,9 +2023,15 @@ async fn projections_by_account(
         .map(|m| (m.account_id.as_str(), m.pool_id.as_str()))
         .collect();
     let pools: std::collections::BTreeSet<&str> = pool_of.values().copied().collect();
+    let fallback_ms = phoebis_routing::seconds_ms(state.settings.cooldown_fallback_seconds);
     let mut out = BTreeMap::new();
     for pool_id in pools {
-        for projection in state.router.projections(pool_id).await.unwrap_or_default() {
+        for projection in state
+            .router
+            .projections(pool_id, fallback_ms)
+            .await
+            .unwrap_or_default()
+        {
             if pool_of.get(projection.account_id.as_str()) == Some(&pool_id) {
                 out.insert(projection.account_id.clone(), projection);
             }
