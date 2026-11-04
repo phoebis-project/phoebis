@@ -1562,20 +1562,25 @@ impl Engine {
             .filter(|model| listing::undated(model).is_none())
             .map(str::to_string)
             .collect();
-        let dated: HashMap<String, String> = self
-            .parts
+        let dated = self.dated_names(undated).await;
+        CeilingInputs { rows, dated, now }
+    }
+
+    /// Each of `models` the router's catalog resolves to another name, with that name. A router that cannot answer
+    /// leaves every name as it is.
+    async fn dated_names(&self, models: Vec<String>) -> HashMap<String, String> {
+        self.parts
             .router
-            .canonicals(undated.clone())
+            .canonicals(models.clone())
             .await
             .map(|answered| {
-                undated
+                models
                     .into_iter()
                     .zip(answered)
                     .filter(|(model, dated)| model != dated)
                     .collect()
             })
-            .unwrap_or_default();
-        CeilingInputs { rows, dated, now }
+            .unwrap_or_default()
     }
 
     /// The pool's ceilings resolved over its members' fundings (`pool_fundings`), its main TTLs and its models, and
@@ -4072,19 +4077,7 @@ impl Engine {
         self.router_view_calls
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let snapshot = self.parts.router.snapshot();
-        let canonical = self
-            .parts
-            .router
-            .canonicals(retained_models.clone())
-            .await
-            .map(|answered| {
-                retained_models
-                    .into_iter()
-                    .zip(answered)
-                    .filter(|(retained, canonical)| retained != canonical)
-                    .collect()
-            })
-            .unwrap_or_default();
+        let canonical = self.dated_names(retained_models).await;
         let pins = self
             .parts
             .router
