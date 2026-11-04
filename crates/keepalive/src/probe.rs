@@ -38,7 +38,7 @@ pub(crate) struct ProbeJob {
     pub generation: u64,
     pub attempt: u8,
     pub started: i64,
-    /// The account the gate admitted the probe on, the one its pin names.
+    /// The account the gate admitted the probe on: the one its pin names, or the agent's own where no pin exists.
     pub account: String,
     pub pool_id: String,
     pub canonical_model: String,
