@@ -8,7 +8,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use phoebis_keepalive::KeepalivePolicy;
+use phoebis_keepalive::{pool_fundings, CeilingInputs, KeepalivePolicy};
 use phoebis_relay::{CacheTtl, CacheTtlPolicy};
 use phoebis_routing::{MemberSpend, OverageEvidence, RegistrySnapshot};
 use phoebis_store::{
@@ -660,7 +660,7 @@ pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
     };
     let mut out = Vec::with_capacity(context.pools.len());
     for row in &context.pools {
-        out.push(pool_json_from(&state, &context, row).await);
+        out.push(pool_json_from(&state, &context, row));
     }
     Json(PoolList { pools: out }).into_response()
 }
@@ -1343,6 +1343,7 @@ fn member_json(
 /// What every pool row reads from the registry, the ledger and the router, fetched once per list call.
 pub(crate) struct PoolContext {
     accounts: Vec<AccountRow>,
+    ceilings: CeilingInputs,
     cooldowns: Vec<CooldownRow>,
     /// The day's request totals per pool.
     day: BTreeMap<String, phoebis_ledger::Totals>,
@@ -1421,6 +1422,7 @@ pub(crate) async fn pool_context(
     }
     Ok(PoolContext {
         accounts: registry.accounts,
+        ceilings: state.keepalive.ceiling_inputs().await,
         cooldowns: state.router.cooldowns().await.unwrap_or_default(),
         day,
         guardrails,
@@ -1441,16 +1443,12 @@ pub(crate) async fn pool_context(
 /// One pool over a context built for it alone, for the routes that answer a single pool.
 pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Pool, StoreError> {
     let context = pool_context(state, Some(&row.id)).await?;
-    Ok(pool_json_from(state, &context, row).await)
+    Ok(pool_json_from(state, &context, row))
 }
 
-/// One pool row from the shared context, whose one read carries every pool's traffic and moves, so a row takes no
-/// ledger read and no store lock.
-pub(crate) async fn pool_json_from(
-    state: &AdminState,
-    context: &PoolContext,
-    row: &PoolRow,
-) -> Pool {
+/// One pool row from the shared context, whose one read carries every pool's traffic and moves and whose ceiling
+/// inputs price every pool alike, so a row takes no ledger read, no store lock and no ask of the router.
+pub(crate) fn pool_json_from(state: &AdminState, context: &PoolContext, row: &PoolRow) -> Pool {
     let mut members: Vec<PoolMember> = context
         .members
         .iter()
@@ -1527,11 +1525,6 @@ pub(crate) async fn pool_json_from(
         None
     };
     let eligible = |m: &PoolMember| ineligible(m).is_none();
-    let member_accounts: Vec<AccountRow> = accounts
-        .iter()
-        .filter(|a| members.iter().any(|m| m.account_id == a.id))
-        .cloned()
-        .collect();
     let status = if !row.enabled {
         "disabled"
     } else if members.is_empty() || !members.iter().any(eligible) {
@@ -1541,10 +1534,21 @@ pub(crate) async fn pool_json_from(
     } else {
         "active"
     };
-    let keepalive_resolved = state
-        .keepalive
-        .resolve_pool_ceilings(row, &member_accounts)
-        .await;
+    let keepalive = KeepalivePolicy::from_json(&row.keepalive_json);
+    let cache_ttl = CacheTtlPolicy::from_json(&row.cache_ttl_json);
+    let fundings = pool_fundings(
+        accounts
+            .iter()
+            .filter(|a| members.iter().any(|m| m.account_id == a.id))
+            .map(|a| (a.kind, snapshot.usage_based(&a.id))),
+    );
+    let keepalive_resolved = state.keepalive.resolve_pool_ceilings_with(
+        &context.ceilings,
+        &keepalive,
+        &cache_ttl,
+        &row.model_rules,
+        &fundings,
+    );
     Pool {
         id: row.id.clone(),
         label: row.label.clone(),
@@ -1578,9 +1582,9 @@ pub(crate) async fn pool_json_from(
             .iter()
             .map(|(reason, count)| (reason.clone(), *count as f64))
             .collect(),
-        keepalive: KeepalivePolicy::from_json(&row.keepalive_json),
+        keepalive,
         keepalive_resolved,
-        cache_ttl: CacheTtlPolicy::from_json(&row.cache_ttl_json),
+        cache_ttl,
         cache_diagnostics: row.cache_diagnostics,
         auto_mode_server: row.auto_mode_server,
         body_capture_hours: row.body_capture_hours,

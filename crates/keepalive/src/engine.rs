@@ -17,15 +17,13 @@ use phoebis_relay::{CacheTtl, CacheTtlPolicy, Relay};
 use phoebis_routing::{
     budget_deadline, listing, MemberSpend, RegistrySnapshot, RouterHandle, DAY_MS, SEVEN_DAY,
 };
-use phoebis_store::{
-    AccountKind, AccountRow, AccountState, CooldownScope, OveragePolicy, PoolRow, Store,
-};
+use phoebis_store::{AccountKind, AccountState, CooldownScope, ModelRule, OveragePolicy, Store};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::breakeven::{
-    resolve, resolve_pool, shipped_tightest, Ceilings, FactorRows, ResolvedCeilings,
+    resolve, resolve_pool, shipped_tightest, CeilingInputs, Ceilings, FactorRows, ResolvedCeilings,
 };
 use crate::config::{
     KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, FIVE_MINUTES_MS, MAX_WORKERS, ONE_HOUR_MS,
@@ -451,6 +449,20 @@ impl Funding {
             Funding::ApiKey | Funding::Overage | Funding::UsageBased => SavingsUnit::Usd,
         }
     }
+}
+
+/// The fundings a pool's members bring to its ceilings, from each member's kind and usage-based class with no
+/// overage, each once in the members' order: an OAuth member brings the plan's factors, an API-key member the dollar
+/// rows, and a usage-based seat the dollar rows too.
+pub fn pool_fundings(members: impl IntoIterator<Item = (AccountKind, bool)>) -> Vec<Funding> {
+    let mut fundings: Vec<Funding> = Vec::new();
+    for (kind, usage_based) in members {
+        let funding = Funding::of(kind, usage_based, false);
+        if !fundings.contains(&funding) {
+            fundings.push(funding);
+        }
+    }
+    fundings
 }
 
 pub struct EngineParts {
@@ -1505,24 +1517,9 @@ impl Engine {
         }
     }
 
-    /// The pool's ceilings resolved over its fundings, its main TTLs and its models, and `None` for a pool with no
-    /// member.
-    /// `accounts` are the pool's members' accounts: an OAuth member brings the plan's factors, an API-key
-    /// member the dollar rows, and a usage-based seat the dollar rows too. The router's catalog names the dated id each
-    /// undated dollar row resolves to, and a router that cannot answer leaves every row judged under its own id.
-    pub async fn resolve_pool_ceilings(
-        &self,
-        pool: &PoolRow,
-        accounts: &[AccountRow],
-    ) -> Option<ResolvedCeilings> {
-        let mut fundings: Vec<Funding> = Vec::new();
-        let snapshot = self.parts.router.snapshot();
-        for account in accounts {
-            let funding = Funding::of(account.kind, snapshot.usage_based(&account.id), false);
-            if !fundings.contains(&funding) {
-                fundings.push(funding);
-            }
-        }
+    /// The inputs every pool's ceilings read, at this instant. The router's catalog names the dated id each undated
+    /// dollar row resolves to, and a router that cannot answer leaves every row judged under its own id.
+    pub async fn ceiling_inputs(&self) -> CeilingInputs {
         let now = self.now();
         let revisions = self.parts.pricing.revisions();
         let rows = FactorRows::of(revisions.in_force(now), &self.parts.tables, now);
@@ -1544,15 +1541,28 @@ impl Engine {
                     .collect()
             })
             .unwrap_or_default();
+        CeilingInputs { rows, dated, now }
+    }
+
+    /// The pool's ceilings resolved over its members' fundings (`pool_fundings`), its main TTLs and its models, and
+    /// `None` for a pool with no funding, which a pool with no member brings.
+    pub fn resolve_pool_ceilings_with(
+        &self,
+        inputs: &CeilingInputs,
+        keepalive: &KeepalivePolicy,
+        cache_ttl: &CacheTtlPolicy,
+        model_rules: &[ModelRule],
+        fundings: &[Funding],
+    ) -> Option<ResolvedCeilings> {
         resolve_pool(
-            &KeepalivePolicy::from_json(&pool.keepalive_json),
-            &CacheTtlPolicy::from_json(&pool.cache_ttl_json),
-            &pool.model_rules,
-            &fundings,
-            &rows,
-            &dated,
+            keepalive,
+            cache_ttl,
+            model_rules,
+            fundings,
+            &inputs.rows,
+            &inputs.dated,
             &self.parts.timing,
-            now,
+            inputs.now,
         )
     }
 

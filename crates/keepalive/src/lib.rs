@@ -15,16 +15,18 @@ mod usage;
 mod view;
 
 pub use breakeven::{
-    break_even_ms, factors_for, resolve, BreakEvenFactors, Ceilings, Range, ResolvedCeilings,
+    break_even_ms, factors_for, resolve, BreakEvenFactors, CeilingInputs, Ceilings, Range,
+    ResolvedCeilings,
 };
 pub use config::{
     KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, LimitsError, PolicyError, FIVE_MINUTES_MS,
     LEASE_MS, LEASE_SECONDS, MAX_WORKERS, MIN_AFFINITY_SECONDS, ONE_HOUR_MS, PERSIST_INTERVAL,
 };
 pub use engine::{
-    continues_prefix, guard, idle_age_bucket, spawn_observer, AgentState, AgentStatus, Engine,
-    EngineParts, EngineStats, Funding, Guard, IdleReturnBucket, IdleReturns, ParkKind,
-    PrefixAnchor, Reason, SavingsUnit, SessionKey, Wasted, IDLE_AGE_BOUNDS_SECONDS, MAIN_AGENT,
+    continues_prefix, guard, idle_age_bucket, pool_fundings, spawn_observer, AgentState,
+    AgentStatus, Engine, EngineParts, EngineStats, Funding, Guard, IdleReturnBucket, IdleReturns,
+    ParkKind, PrefixAnchor, Reason, SavingsUnit, SessionKey, Wasted, IDLE_AGE_BOUNDS_SECONDS,
+    MAIN_AGENT,
 };
 pub use events::{decode_json_event, Ack, AckAgent, Event, EventError, PROTOCOL};
 pub use probe::{ProbeOutcome, ProbeRecord, PROBE_DEADLINE};

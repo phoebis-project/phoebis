@@ -4,11 +4,35 @@ mod common;
 
 use common::relay_common::test_account_row;
 use phoebis_keepalive::{
-    break_even_ms, factors_for, resolve, BreakEvenFactors, Funding, KeepalivePolicy,
-    KeepaliveTiming, Range, FIVE_MINUTES_MS, ONE_HOUR_MS,
+    break_even_ms, factors_for, pool_fundings, resolve, BreakEvenFactors, Funding, KeepalivePolicy,
+    KeepaliveTiming, Range, ResolvedCeilings, FIVE_MINUTES_MS, ONE_HOUR_MS,
 };
 use phoebis_ledger::{CostRevisions, PlanTables, PriceRevisions, PriceTable};
-use phoebis_store::{ModelRule, PoolRow};
+use phoebis_relay::CacheTtlPolicy;
+use phoebis_store::{AccountRow, ModelRule, PoolRow};
+
+/// A pool's ceilings as the pools list resolves them: the engine's inputs, the pool's two policies and its members'
+/// fundings, each member's class read off the router's snapshot.
+async fn pool_ceilings(
+    rig: &common::Rig,
+    pool: &PoolRow,
+    accounts: &[AccountRow],
+) -> Option<ResolvedCeilings> {
+    let inputs = rig.engine.ceiling_inputs().await;
+    let snapshot = rig.h.router.snapshot();
+    let fundings = pool_fundings(
+        accounts
+            .iter()
+            .map(|a| (a.kind, snapshot.usage_based(&a.id))),
+    );
+    rig.engine.resolve_pool_ceilings_with(
+        &inputs,
+        &KeepalivePolicy::from_json(&pool.keepalive_json),
+        &CacheTtlPolicy::from_json(&pool.cache_ttl_json),
+        &pool.model_rules,
+        &fundings,
+    )
+}
 
 fn factors(read: f64, write: f64) -> BreakEvenFactors {
     BreakEvenFactors {
@@ -416,12 +440,8 @@ async fn a_pool_resolves_its_ceilings_over_its_fundings_ttls_and_models() {
     let between = |min: f64, max: f64| Range { min, max };
     let one = |value: f64| between(value, value);
     let rewritten = r#"{"enabled":true}"#;
-    let figures = async |pool: &PoolRow, accounts: &[phoebis_store::AccountRow]| {
-        let resolved = rig
-            .engine
-            .resolve_pool_ceilings(pool, accounts)
-            .await
-            .unwrap();
+    let figures = async |pool: &PoolRow, accounts: &[AccountRow]| {
+        let resolved = pool_ceilings(&rig, pool, accounts).await.unwrap();
         (
             (
                 resolved.break_even_seconds,
@@ -560,9 +580,7 @@ async fn a_pool_resolves_its_ceilings_over_its_fundings_ttls_and_models() {
     }
 
     assert_eq!(
-        rig.engine
-            .resolve_pool_ceilings(&pool(rewritten, Vec::new()), &[])
-            .await,
+        pool_ceilings(&rig, &pool(rewritten, Vec::new()), &[]).await,
         None,
         "a pool with no member resolves nothing"
     );
@@ -603,9 +621,8 @@ async fn a_usage_based_seat_brings_the_dollar_rows_to_the_pools_ceilings_as_an_a
         ],
         ..PoolRow::for_tests("p")
     };
-    let break_even = async |account: &phoebis_store::AccountRow| {
-        rig.engine
-            .resolve_pool_ceilings(&pool, std::slice::from_ref(account))
+    let break_even = async |account: &AccountRow| {
+        pool_ceilings(&rig, &pool, std::slice::from_ref(account))
             .await
             .unwrap()
             .break_even_seconds
@@ -718,8 +735,7 @@ async fn a_deny_naming_the_dated_id_drops_the_undated_row_the_router_maps_to_it(
         ..PoolRow::for_tests("p")
     };
     let break_even = async || {
-        rig.engine
-            .resolve_pool_ceilings(&pool, std::slice::from_ref(&dollars))
+        pool_ceilings(&rig, &pool, std::slice::from_ref(&dollars))
             .await
             .unwrap()
             .break_even_seconds

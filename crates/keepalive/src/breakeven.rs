@@ -81,6 +81,15 @@ pub fn factors_for(
     FactorRows::of(pricing, tables, at).factors(funding, canonical_model, fast, prompt_tokens)
 }
 
+/// What every pool's ceilings read beside the pool's own policies, rules and fundings: the price rows in force at
+/// `now` and the dated id the router's catalog names for each undated dollar row. A pool list builds them once, so
+/// every pool of one answer is priced at one instant on one `canonicals` answer.
+pub struct CeilingInputs {
+    pub(crate) rows: FactorRows,
+    pub(crate) dated: HashMap<String, String>,
+    pub(crate) now: i64,
+}
+
 /// The rows `factors_for` reads, built once so a tick that resolves every retained recipe builds each table's rows
 /// and the tightest rows once rather than per recipe.
 pub(crate) struct FactorRows {
