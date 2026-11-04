@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use axum::http::StatusCode;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use phoebis_store::{digest_with, Secret, Store, StoreError};
@@ -35,8 +36,17 @@ const SIGNED_LEN: usize = SESSION_ID_LEN + ISSUED_AT_LEN + NONCE_LEN;
 pub enum LoginError {
     #[error("secret does not match")]
     Invalid,
-    #[error("too many failed logins")]
+    #[error("too many failed logins, try again in a minute")]
     Throttled,
+}
+
+impl LoginError {
+    pub fn status(&self) -> StatusCode {
+        match self {
+            LoginError::Invalid => StatusCode::UNAUTHORIZED,
+            LoginError::Throttled => StatusCode::TOO_MANY_REQUESTS,
+        }
+    }
 }
 
 struct SessionRec {
@@ -76,6 +86,8 @@ pub struct Sessions {
     /// Keys the digests the login and the bearer compare, drawn per process: the compare needs equal lengths, not a
     /// secret key.
     compare_key: [u8; 32],
+    /// The admin secret's digest under `compare_key`, taken once since neither changes for the life of the sessions.
+    expected: [u8; 32],
     idle: Duration,
     secret: Secret,
     state: Mutex<State>,
@@ -94,9 +106,11 @@ impl Sessions {
         let token_key = token_key(&secret, store.admin_session_epoch()?);
         let mut compare_key = [0u8; 32];
         phoebis_oauth::random::fill(&mut compare_key);
+        let expected = digest_with(&compare_key, secret.expose().as_bytes());
         Ok(Sessions {
             absolute,
             compare_key,
+            expected,
             idle,
             secret,
             state: Mutex::new(State {
@@ -150,9 +164,8 @@ impl Sessions {
             return Err(LoginError::Throttled);
         }
         // Digests of one length on both sides, so how long the compare runs says nothing about the secret's length.
-        let expected = digest_with(&self.compare_key, self.secret.expose().as_bytes());
         let offered = digest_with(&self.compare_key, presented.as_bytes());
-        if !bool::from(expected.ct_eq(&offered)) {
+        if !bool::from(self.expected.ct_eq(&offered)) {
             state.failures.push(now);
             return Err(LoginError::Invalid);
         }

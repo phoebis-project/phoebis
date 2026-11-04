@@ -50,13 +50,22 @@ fn time(q: &HashMap<String, String>, name: &'static str) -> Result<Option<i64>, 
 pub(crate) struct RoutingLog {
     /// At one `at`, the decisions before the events. Each row's `type` is `decision` or `event`.
     #[schema(value_type = Vec<Row>)]
-    pub rows: Vec<Value>,
+    rows: Vec<PageRow>,
     /// Set only while a row lies past the page. A page of exactly `limit` rows with none beyond answers null.
     pub next_cursor: Option<String>,
     /// The rows under the whole filter, past the page too. Answered under a `request` filter alone.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub counts: Option<Counts>,
+}
+
+/// One row of the page as the route answers it, so an event serializes straight from its typed row with no `Value`
+/// between.
+#[derive(serde::Serialize)]
+#[serde(untagged)]
+enum PageRow {
+    Decision(Value),
+    Event(Box<EventRow>),
 }
 
 /// One row of the page.
@@ -559,7 +568,7 @@ pub(crate) async fn list(
         Err(e) => return ledger_failure(e),
     };
     Json(RoutingLog {
-        rows: page.rows.iter().map(row_json).collect(),
+        rows: page.rows.into_iter().map(row_json).collect(),
         next_cursor: page.next_cursor,
         counts: page
             .counts
@@ -568,17 +577,15 @@ pub(crate) async fn list(
     .into_response()
 }
 
-fn row_json(row: &RoutingLogRow) -> Value {
+fn row_json(row: RoutingLogRow) -> PageRow {
     match row {
-        RoutingLogRow::Decision(d) => decision_json(d),
-        RoutingLogRow::Event(e) => {
-            serde_json::to_value(event_json(e)).expect("an event row serializes")
-        }
+        RoutingLogRow::Decision(d) => PageRow::Decision(decision_json(d)),
+        RoutingLogRow::Event(e) => PageRow::Event(Box::new(event_json(e))),
     }
 }
 
 /// The summary repeats the `kind` and `probe` columns. The columns' values stand, so no field is answered twice.
-fn decision_json(d: &DecisionListRow) -> Value {
+fn decision_json(d: DecisionListRow) -> Value {
     let mut row = Map::new();
     row.insert("type".into(), "decision".into());
     let columns = json!({
@@ -590,9 +597,9 @@ fn decision_json(d: &DecisionListRow) -> Value {
     if let Value::Object(columns) = columns {
         row.extend(columns);
     }
-    if let Value::Object(summary) = &d.summary {
+    if let Value::Object(summary) = d.summary {
         for (name, value) in summary {
-            row.entry(name.clone()).or_insert_with(|| value.clone());
+            row.entry(name).or_insert(value);
         }
     }
     row.insert("cache".into(), json!(d.cache));
@@ -600,21 +607,21 @@ fn decision_json(d: &DecisionListRow) -> Value {
     Value::Object(row)
 }
 
-fn event_json(e: &EventListRow) -> EventRow {
+fn event_json(e: EventListRow) -> EventRow {
     EventRow {
         kind_of_row: "event".into(),
         id: e.id,
         at: e.at,
-        kind: e.kind.clone(),
-        account_id: e.account_id.clone(),
-        key_id: e.key_id.clone(),
-        pool_id: e.pool_id.clone(),
-        session_id: e.session_id.clone(),
-        agent_id: e.agent_id.clone(),
-        model: e.model.clone(),
-        request_id: e.request_id.clone(),
-        actor: e.actor.clone(),
-        detail: e.detail.clone(),
+        kind: e.kind,
+        account_id: e.account_id,
+        key_id: e.key_id,
+        pool_id: e.pool_id,
+        session_id: e.session_id,
+        agent_id: e.agent_id,
+        model: e.model,
+        request_id: e.request_id,
+        actor: e.actor,
+        detail: e.detail,
     }
 }
 

@@ -188,6 +188,21 @@ pub struct UsageSnapshot {
     pub spend: Option<SpendReading>,
 }
 
+impl UsageSnapshot {
+    /// Whether the snapshot holds a window, the Fable week's included.
+    pub fn has_windows(&self) -> bool {
+        !self.windows.is_empty() || self.fable_window.is_some()
+    }
+}
+
+/// What an account's usage standing reads off its latest snapshot, answered without a copy of the snapshot.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LatestStanding {
+    pub error: Option<String>,
+    pub fetched_at: i64,
+    pub has_windows: bool,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum UsageError {
     #[error("{0}")]
@@ -523,6 +538,18 @@ impl CachedEntry {
     fn hold_message(&self) -> String {
         format!("the {} endpoint rate-limited the account", self.held_by)
     }
+
+    fn status(&self, now: i64) -> PollStatus {
+        PollStatus {
+            backoff_since: self.backoff_since,
+            last_attempt_at: self.fetched_at,
+            last_clean_at: self.last_clean_at,
+            last_error: self.last_error.clone(),
+            last_outcome: self.last_outcome,
+            next_attempt_at: (now < self.not_before).then_some(self.not_before),
+            rate_limited_in_a_row: self.rate_limited_in_a_row,
+        }
+    }
 }
 
 /// A transport failure of either endpoint, under the text the snapshot and the profile refresh record for one.
@@ -760,16 +787,27 @@ impl UsageService {
     pub fn poll_status(&self, account_id: &str) -> Option<PollStatus> {
         let now = (self.inner.clock)();
         let cache = self.inner.cache.lock().expect(LOCK_POISONED);
-        let entry = cache.get(account_id)?;
-        Some(PollStatus {
-            backoff_since: entry.backoff_since,
-            last_attempt_at: entry.fetched_at,
-            last_clean_at: entry.last_clean_at,
-            last_error: entry.last_error.clone(),
-            last_outcome: entry.last_outcome,
-            next_attempt_at: (now < entry.not_before).then_some(entry.not_before),
-            rate_limited_in_a_row: entry.rate_limited_in_a_row,
-        })
+        cache.get(account_id).map(|entry| entry.status(now))
+    }
+
+    /// `poll_status` of the account's id and the standing's reads of the snapshot `latest_for` answers for its row,
+    /// under one take of the cache and with no copy of the snapshot, for a caller that lists every account's standing.
+    pub fn standing_for(
+        &self,
+        account: &AccountRow,
+    ) -> (Option<PollStatus>, Option<LatestStanding>) {
+        let now = (self.inner.clock)();
+        let identity = Identity::of(account);
+        let cache = self.inner.cache.lock().expect(LOCK_POISONED);
+        let Some(entry) = cache.get(&account.id) else {
+            return (None, None);
+        };
+        let latest = (entry.identity == identity).then(|| LatestStanding {
+            error: entry.snapshot.error.clone(),
+            fetched_at: entry.snapshot.fetched_at,
+            has_windows: entry.snapshot.has_windows(),
+        });
+        (Some(entry.status(now)), latest)
     }
 
     /// The reauth mark the account's last failed acquisition landed, once: the poll and the profile refresh take it

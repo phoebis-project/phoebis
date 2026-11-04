@@ -3,7 +3,6 @@
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_routing::{pattern, rules};
@@ -11,7 +10,7 @@ use phoebis_store::CooldownRow;
 use utoipa::ToSchema;
 
 use crate::openapi::{ErrorBody, RouterUnavailable, StorageFailure};
-use crate::routes::{api_key, failure, router_unavailable, store_failure};
+use crate::routes::{api_key, found, router_unavailable, store_failure};
 use crate::AdminState;
 
 /// The processed rule list a key is judged by, in the order it applies.
@@ -87,10 +86,9 @@ pub(crate) async fn key_models(
     };
     // A key's pool is a foreign key the store enforces (a pool with keys refuses deletion), so a missing pool
     // here would be the same broken reference a missing key already answers.
-    let pool = match state.store.pool(&key.pool_id) {
-        Ok(Some(row)) => row,
-        Ok(None) => return failure(StatusCode::NOT_FOUND, "key not found"),
-        Err(e) => return store_failure(e),
+    let pool = match found(state.store.pool(&key.pool_id), "key not found") {
+        Ok(row) => row,
+        Err(refusal) => return refusal,
     };
     let members = match state.store.pool_members(&pool.id) {
         Ok(rows) => rows,

@@ -8,8 +8,8 @@ use std::time::Duration;
 use axum::body::Bytes;
 use axum::extract::{MatchedPath, Path, Request, State};
 use axum::http::header::{
-    AUTHORIZATION, CACHE_CONTROL, CONTENT_LENGTH, COOKIE, HOST, ORIGIN, SET_COOKIE,
-    TRANSFER_ENCODING, X_CONTENT_TYPE_OPTIONS,
+    AUTHORIZATION, CONTENT_LENGTH, COOKIE, HOST, ORIGIN, SET_COOKIE, TRANSFER_ENCODING,
+    X_CONTENT_TYPE_OPTIONS,
 };
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::{from_fn_with_state, map_response, Next};
@@ -26,8 +26,8 @@ use phoebis_oauth::{
 use phoebis_relay::{is_json, DiscoveryError};
 use phoebis_routing::{
     account_window_id, is_plan_window, AccountProjection, MemberSpend, OverageEvidence,
-    ReloadError, SpendResetSource, SpendWindow, UtilizationSample, WindowReading, FIVE_HOUR,
-    SEVEN_DAY, SEVEN_DAY_FABLE,
+    ReloadError, SpendResetSource, SpendWindow, UtilizationSample, WindowProjection, WindowReading,
+    FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
     answers_stamp_token, stamp_token, AccountKind, AccountRow, AccountState, ApiKeyRow,
@@ -136,7 +136,7 @@ pub(crate) fn parts() -> (Router<Arc<AdminState>>, utoipa::openapi::OpenApi) {
 pub fn router(state: Arc<AdminState>) -> Router {
     let (router, api) = parts();
     let document = Bytes::from(api.to_json().expect("the admin document serializes"));
-    let build = state.build;
+    let build = openapi::build_value(state.build);
     router
         .layer(from_fn_with_state(state.clone(), gate))
         .route(
@@ -146,8 +146,9 @@ pub fn router(state: Arc<AdminState>) -> Router {
                 async move { openapi::document(document) }
             }),
         )
-        .layer(map_response(move |response: Response| async move {
-            answer_headers(response, build)
+        .layer(map_response(move |response: Response| {
+            let build = build.clone();
+            async move { answer_headers(response, build) }
         }))
         .with_state(state)
 }
@@ -215,17 +216,14 @@ async fn gate(State(state): State<Arc<AdminState>>, mut request: Request, next: 
 
 /// The headers every admin answer carries, the gate's refusals and the document's answer among them, set by the
 /// layer outside both.
-fn answer_headers(mut response: Response, build: &str) -> Response {
+fn answer_headers(response: Response, build: HeaderValue) -> Response {
     // An admin answer describes credentials and usage, so a cache between the browser and this process has no
     // business holding any of it, and a browser has no business reading a body as anything but its type.
+    let mut response = phoebis_relay::no_store(response);
     let headers = response.headers_mut();
-    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     // On refusals too, so a console that compares it to its own bundle's commit reads it before any login.
-    headers.insert(
-        HeaderName::from_static(openapi::BUILD_HEADER),
-        openapi::build_value(build),
-    );
+    headers.insert(HeaderName::from_static(openapi::BUILD_HEADER), build);
     response
 }
 
@@ -740,10 +738,14 @@ async fn disconnect(State(state): State<Arc<AdminState>>, Path(id): Path<String>
     reload_or_no_content(&state).await
 }
 
-/// The poll's standing on an account and the sentence that answers while nothing composes a snapshot. The poll never
-/// asks an account without a credential, so no read is coming: the card says what the operator can do, and a
-/// standing left from before the credential went would describe nothing current.
-fn poll_standing(state: &AdminState, row: &AccountRow) -> (Option<PollStatus>, &'static str) {
+/// The poll's standing on an account, from the `status` the usage service holds for it, and the sentence that answers
+/// while nothing composes a snapshot. The poll never asks an account without a credential, so no read is coming: the
+/// card says what the operator can do, and a standing left from before the credential went would describe nothing
+/// current.
+fn poll_standing(
+    row: &AccountRow,
+    status: Option<PollStatus>,
+) -> (Option<PollStatus>, &'static str) {
     if matches!(
         row.state,
         AccountState::Disconnected | AccountState::Unpaired
@@ -753,10 +755,7 @@ fn poll_standing(state: &AdminState, row: &AccountRow) -> (Option<PollStatus>, &
             "no credential is stored for this account, so pair it to load quota",
         )
     } else {
-        (
-            state.usage.poll_status(&row.id),
-            "the poll has not read this account yet",
-        )
+        (status, "the poll has not read this account yet")
     }
 }
 
@@ -794,10 +793,10 @@ async fn usage_latest(State(state): State<Arc<AdminState>>, Path(id): Path<Strin
         Ok(row) => row,
         Err(refusal) => return refusal,
     };
-    let (poll, unread) = poll_standing(&state, &row);
+    let (poll, unread) = poll_standing(&row, state.usage.poll_status(&row.id));
     let latest = state.usage.latest_for(&row);
     let held = match &latest {
-        Some(snapshot) if has_windows(snapshot) => None,
+        Some(snapshot) if snapshot.has_windows() => None,
         _ => state.router.samples().await.ok().and_then(|samples| {
             samples
                 .into_iter()
@@ -1711,7 +1710,7 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
     let read = state
         .ledger
         .db()
-        .read(move |c| phoebis_ledger::recent_gaps(c, now - 86_400_000, 50))
+        .read(move |c| phoebis_ledger::recent_gaps(c, now - phoebis_routing::DAY_MS, 50))
         .await;
     let gaps = match read {
         Ok(gaps) => gaps,
@@ -1910,32 +1909,30 @@ async fn control_send(
 // The error is a rendered HTTP response, returned once per request and dropped. Boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
-pub(crate) fn account(state: &AdminState, id: &str) -> Result<AccountRow, Response> {
-    match state.store.account(id) {
+pub(crate) fn found<T>(read: Result<Option<T>, StoreError>, missing: &str) -> Result<T, Response> {
+    match read {
         Ok(Some(row)) => Ok(row),
-        Ok(None) => Err(failure(StatusCode::NOT_FOUND, "account not found")),
+        Ok(None) => Err(failure(StatusCode::NOT_FOUND, missing)),
         Err(error) => Err(store_failure(error)),
     }
 }
 
-// The error is a rendered HTTP response, as `account`'s is.
+// The error is a rendered HTTP response, as `found`'s is.
+#[allow(clippy::result_large_err)]
+pub(crate) fn account(state: &AdminState, id: &str) -> Result<AccountRow, Response> {
+    found(state.store.account(id), "account not found")
+}
+
+// The error is a rendered HTTP response, as `found`'s is.
 #[allow(clippy::result_large_err)]
 pub(crate) fn api_key(state: &AdminState, id: &str) -> Result<ApiKeyRow, Response> {
-    match state.store.api_key(id) {
-        Ok(Some(row)) => Ok(row),
-        Ok(None) => Err(failure(StatusCode::NOT_FOUND, "key not found")),
-        Err(error) => Err(store_failure(error)),
-    }
+    found(state.store.api_key(id), "key not found")
 }
 
-// The error is a rendered HTTP response, as `account`'s is.
+// The error is a rendered HTTP response, as `found`'s is.
 #[allow(clippy::result_large_err)]
 pub(crate) fn pool(state: &AdminState, id: &str) -> Result<PoolRow, Response> {
-    match state.store.pool(id) {
-        Ok(Some(row)) => Ok(row),
-        Ok(None) => Err(failure(StatusCode::NOT_FOUND, "pool not found")),
-        Err(error) => Err(store_failure(error)),
-    }
+    found(state.store.pool(id), "pool not found")
 }
 
 /// What every account row reads from the ledger and the registry, fetched once per list call.
@@ -2018,17 +2015,13 @@ async fn projections_by_account(
     out
 }
 
-/// The pins' demand on an account window as the router reads it, null where `window_projection` answers none.
-fn window_demand(ctx: &AccountContext, account_id: &str, id: &str) -> Option<f64> {
-    let window = if id == FABLE_WINDOW_KEY {
-        SEVEN_DAY_FABLE
-    } else {
-        id
-    };
-    ctx.projections
-        .get(account_id)
-        .and_then(|p| p.windows.get(window))
-        .map(|w| w.demand)
+/// The projection of an account window as the router reads it, none without one.
+fn projected_window<'a>(
+    ctx: &'a AccountContext,
+    account_id: &str,
+    id: &str,
+) -> Option<&'a WindowProjection> {
+    ctx.projections.get(account_id)?.windows.get(id)
 }
 
 /// The account's slow-down entry in force as its pool's `projections` ask answered it.
@@ -2042,26 +2035,6 @@ fn slow_down_view(ctx: &AccountContext, account_id: &str) -> Option<AccountSlowD
         threshold_ms: entry.threshold_ms,
         hold_ms: entry.hold_ms,
     })
-}
-
-/// The projection of an account window as the router reads it, its id mapped back to the routing name: `(projection,
-/// horizon, burn)`, all null without one.
-fn window_projection(
-    ctx: &AccountContext,
-    account_id: &str,
-    id: &str,
-) -> (Option<f64>, Option<i64>, Option<f64>) {
-    let window = if id == FABLE_WINDOW_KEY {
-        SEVEN_DAY_FABLE
-    } else {
-        id
-    };
-    ctx.projections
-        .get(account_id)
-        .and_then(|p| p.windows.get(window))
-        .map_or((None, None, None), |w| {
-            (Some(w.projection), Some(w.horizon), Some(w.burn))
-        })
 }
 
 pub(crate) async fn account_context(state: &AdminState, rows: &[AccountRow]) -> AccountContext {
@@ -2126,7 +2099,7 @@ pub(crate) async fn account_context(state: &AdminState, rows: &[AccountRow]) -> 
         state.router.samples(),
         projections_by_account(state, &members),
         state.router.overages(),
-        state.router.reported_samples(),
+        reported_samples(state),
         state.router.spend_windows(),
     );
     let (old, (quota, extra, extra_polled, extra_share, day, six_days)) = match ledger {
@@ -2155,7 +2128,7 @@ pub(crate) async fn account_context(state: &AdminState, rows: &[AccountRow]) -> 
         members,
         overages: overages.unwrap_or_default().into_iter().collect(),
         quota,
-        reported: reported.unwrap_or_default().into_iter().collect(),
+        reported,
         spend_windows: spend_windows.unwrap_or_default().into_iter().collect(),
         week,
     }
@@ -2175,8 +2148,8 @@ pub(crate) struct AccountList {
 pub(crate) struct Account {
     pub id: String,
     /// `api_key` or `oauth`.
-    #[schema(example = "api_key")]
-    pub kind: String,
+    #[schema(value_type = String, example = "api_key")]
+    pub kind: AccountKind,
     pub label: String,
     pub enabled: bool,
     /// Set only on an `oauth` account. An `api_key` account always reads false.
@@ -2188,8 +2161,8 @@ pub(crate) struct Account {
     /// `subscription.tier`), and a profile read that finds a plan, or a pairing confirm, clears it.
     pub plan_ended_at: Option<i64>,
     /// `disconnected`, `funding_required`, `reauth_required`, `ready` or `unpaired`.
-    #[schema(example = "disconnected")]
-    pub state: String,
+    #[schema(value_type = String, example = "disconnected")]
+    pub state: AccountState,
     /// Epoch milliseconds or null: the instant a `funding_required` account is next tried, null in any other state,
     /// and null after a restart until the first retry claims the account and stamps that request's instant.
     pub funding_retry_at: Option<i64>,
@@ -2523,18 +2496,12 @@ pub(crate) async fn account_json(state: &AdminState, row: &AccountRow) -> Accoun
 async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext) -> Account {
     let overage = ctx.overages.get(&row.id);
     let standing = ctx.credentials.get(&row.id);
-    let credential = standing
-        .and_then(|standing| standing.metadata.as_ref().ok())
-        .and_then(Option::as_ref);
-    let attempt = standing
-        .and_then(|standing| standing.last_attempt.as_ref().ok())
-        .and_then(Option::as_ref);
+    let credential = standing.and_then(|s| s.metadata.as_ref().ok()?.as_ref());
+    let attempt = standing.and_then(|s| s.last_attempt.as_ref().ok()?.as_ref());
     // Past the refresh manager's floor a retry opens beside an `uncertain` attempt, and a retry that fails leaves
     // that attempt open, so the flag reads every open attempt of this holder rather than the newest alone: any
     // one of them is what a restart quarantines the account for.
-    let quarantined = standing
-        .and_then(|standing| standing.pending.as_ref().ok())
-        .is_some_and(|pending| *pending);
+    let quarantined = standing.is_some_and(|s| matches!(s.pending, Ok(true)));
     // A failure that opened no attempt (a backoff or a quarantine) still updates the credential row, so
     // whichever of the two landed last is the one that answers `credential.last_error`.
     let attempt_error = attempt
@@ -2570,17 +2537,21 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
     });
     // The stored flag and end read through this alone, with no profile join, so a canceled account answers
     // them even before it ever pairs.
+    let read_term;
     let term = match extras {
-        Some(extras) => extras.term.clone(),
-        None => state
-            .store
-            .subscription_term(&row.id)
-            .ok()
-            .flatten()
-            .unwrap_or_default(),
+        Some(extras) => &extras.term,
+        None => {
+            read_term = state
+                .store
+                .subscription_term(&row.id)
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            &read_term
+        }
     };
     let now = (state.clock)();
-    let end = phoebis_routing::term::end_of(&term, now);
+    let end = phoebis_routing::term::end_of(term, now);
     // Null until the account has paired and a profile document exists, unless the operator has canceled it:
     // a canceled, unpaired OAuth row still has an end to report, so the flag joins `profile.is_some()` here.
     let subscription = (row.kind == AccountKind::Oauth && (profile.is_some() || term.canceled))
@@ -2631,18 +2602,17 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         .map(|sample| held_windows(sample, end, now))
         .unwrap_or_default()
         .into_iter()
-        .map(|(key, reading, lead)| {
-            let (projection, horizon, burn) = window_projection(ctx, &row.id, &key);
-            let demand = window_demand(ctx, &row.id, &key);
+        .map(|(name, reading, lead)| {
+            let projected = projected_window(ctx, &row.id, &name);
             AccountWindow {
-                id: account_window_id(&key).to_string(),
+                id: account_window_id(&name).to_string(),
                 utilization: Some(reading.utilization),
                 resets_at: reading.reset,
                 observed_at: reading.observed_at,
-                projection,
-                horizon,
-                burn,
-                demand,
+                projection: projected.map(|w| w.projection),
+                horizon: projected.map(|w| w.horizon),
+                burn: projected.map(|w| w.burn),
+                demand: projected.map(|w| w.demand),
                 lead: Some(lead),
             }
         })
@@ -2659,17 +2629,16 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
             .filter(|q| reported.is_none_or(|s| s.has_window(&q.window)))
             .map(|q| {
                 let id = account_window_id(&q.window);
-                let (projection, horizon, burn) = window_projection(ctx, &row.id, id);
-                let demand = window_demand(ctx, &row.id, id);
+                let projected = projected_window(ctx, &row.id, id);
                 AccountWindow {
                     id: id.to_string(),
                     utilization: q.utilization,
                     resets_at: q.reset_at,
                     observed_at: q.observed_at,
-                    projection,
-                    horizon,
-                    burn,
-                    demand,
+                    projection: projected.map(|w| w.projection),
+                    horizon: projected.map(|w| w.horizon),
+                    burn: projected.map(|w| w.burn),
+                    demand: projected.map(|w| w.demand),
                     lead: q
                         .utilization
                         .map(|u| lead_over_pace(&q.window, u, q.reset_at, end, now)),
@@ -2693,21 +2662,27 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
     let funding_retry_at = (row.state == AccountState::FundingRequired)
         .then(|| ctx.funding_retries.get(&row.id).copied())
         .flatten();
-    // Composed as the usage `GET` composes its answer, over the router's windows the list already read once, so one
-    // list read carries every account's standing. The poll never reads an API-key account.
+    // Chosen as the usage `GET` chooses its answer, over the router's windows the list already read once, so one list
+    // read carries every account's standing. The poll never reads an API-key account.
     let usage = (row.kind == AccountKind::Oauth).then(|| {
-        let (poll, unread) = poll_standing(state, row);
-        let answer = compose_usage(&row.id, state.usage.latest_for(row), held, end, now);
-        usage_standing(answer.as_ref().ok_or(unread), poll.as_ref())
+        let (status, latest) = state.usage.standing_for(row);
+        let (poll, unread) = poll_standing(row, status);
+        let answer = match usage_source(latest, |latest| latest.has_windows, held) {
+            Some(UsageSource::Latest(latest)) => Ok((None, latest.fetched_at)),
+            Some(UsageSource::Held { observed_at, .. }) => Ok((None, observed_at)),
+            Some(UsageSource::Stale(latest)) => Ok((latest.error, latest.fetched_at)),
+            None => Err(unread),
+        };
+        usage_standing(answer, poll.as_ref())
     });
     Account {
         id: row.id.clone(),
-        kind: row.kind.as_str().to_string(),
+        kind: row.kind,
         label: row.label.clone(),
         enabled: row.enabled,
         canceled: term.canceled,
         plan_ended_at: term.plan_ended_at,
-        state: row.state.as_str().to_string(),
+        state: row.state,
         funding_retry_at,
         identity: row.identity.as_ref().map(|identity| AccountIdentity {
             email: identity.email.clone(),
@@ -2862,33 +2837,21 @@ fn spend_view(ctx: &AccountContext, account_id: &str, now: i64) -> Spend {
     }
 }
 
-fn has_windows(snapshot: &UsageSnapshot) -> bool {
-    !snapshot.windows.is_empty() || snapshot.fable_window.is_some()
-}
-
-/// The router's plan windows under the keys the usage endpoint gives them, each with its lead over pace at `now`
-/// toward the earlier of its reset and the account's `end`: what both the usage `GET` and the account view show when
-/// they read the router's windows.
+/// The router's plan windows under its own names, each with its lead over pace at `now` toward the earlier of its reset
+/// and the account's `end`: what both the usage `GET` and the account view show when they read the router's windows.
 fn held_windows(
     sample: &UtilizationSample,
     end: Option<i64>,
     now: i64,
 ) -> Vec<(String, WindowReading, f64)> {
-    // The router names every plan window as the endpoint does, except the Fable week it reads from `limits`.
     sample
         .windows
         .iter()
         .filter(|(name, _)| is_plan_window(name))
         .map(|(name, reading)| {
-            // Paced off the router's own name, which says the Fable week is a week, before it takes the endpoint's key.
             let lead = reading.utilization
                 - phoebis_routing::elapsed_share_at(name, reading.reset, end, now);
-            let key = if name == SEVEN_DAY_FABLE {
-                FABLE_WINDOW_KEY
-            } else {
-                name.as_str()
-            };
-            (key.to_string(), reading.clone(), lead)
+            (name.clone(), reading.clone(), lead)
         })
         .collect()
 }
@@ -2910,6 +2873,50 @@ fn fast_lane_json(sample: &UtilizationSample) -> Option<FastLane> {
     (input.is_some() || output.is_some()).then_some(FastLane { input, output })
 }
 
+/// The reading that answers an account's usage, chosen by `usage_source` for the usage `GET`, which reads the whole
+/// snapshot, and for every account row, which reads only the standing's members of it.
+enum UsageSource<'a, T> {
+    /// The poll's latest snapshot holds windows, so it answers with no error.
+    Latest(T),
+    /// The router's plan windows answer beside the rest of `latest`, the newest of them read at `observed_at`.
+    Held {
+        latest: Option<T>,
+        sample: &'a UtilizationSample,
+        observed_at: i64,
+    },
+    /// Neither holds a window, so the latest snapshot answers as it stands, its error included.
+    Stale(T),
+}
+
+/// The poll's `latest` snapshot while it holds windows, else the router's `held` plan windows, else `latest` as it
+/// stands. `None` while neither holds anything, where the caller's unread sentence answers.
+fn usage_source<'a, T>(
+    latest: Option<T>,
+    has_windows: impl FnOnce(&T) -> bool,
+    held: Option<&'a UtilizationSample>,
+) -> Option<UsageSource<'a, T>> {
+    if latest.as_ref().is_some_and(has_windows) {
+        return latest.map(UsageSource::Latest);
+    }
+    let newest = held.and_then(|sample| {
+        let observed_at = sample
+            .windows
+            .iter()
+            .filter(|(name, _)| is_plan_window(name))
+            .map(|(_, reading)| reading.observed_at)
+            .max()?;
+        Some((sample, observed_at))
+    });
+    match newest {
+        Some((sample, observed_at)) => Some(UsageSource::Held {
+            latest,
+            sample,
+            observed_at,
+        }),
+        None => latest.map(UsageSource::Stale),
+    }
+}
+
 /// What the `GET` answers from the poll's `latest` snapshot and the router's `held` sample of the account, whose end
 /// is `end` at `now`.
 fn compose_usage(
@@ -2919,49 +2926,51 @@ fn compose_usage(
     end: Option<i64>,
     now: i64,
 ) -> Option<UsageSnapshot> {
-    if latest.as_ref().is_some_and(has_windows) {
-        return latest.map(|snapshot| UsageSnapshot {
+    let answer = match usage_source(latest, UsageSnapshot::has_windows, held)? {
+        UsageSource::Latest(snapshot) => UsageSnapshot {
             error: None,
             ..snapshot
-        });
-    }
-    // The router reads a utilization as a fraction; the endpoint's windows carry a percentage.
-    let window = |(key, reading, _): &(String, WindowReading, f64)| UsageWindow {
-        key: key.clone(),
-        utilization: Some(reading.utilization * 100.0),
-        resets_at: reading.reset,
+        },
+        UsageSource::Stale(snapshot) => snapshot,
+        UsageSource::Held {
+            latest,
+            sample,
+            observed_at,
+        } => {
+            // The router reads a utilization as a fraction, and the endpoint's windows carry a percentage.
+            let window = |(name, reading, _): &(String, WindowReading, f64)| UsageWindow {
+                key: if name == SEVEN_DAY_FABLE {
+                    FABLE_WINDOW_KEY.to_string()
+                } else {
+                    name.clone()
+                },
+                utilization: Some(reading.utilization * 100.0),
+                resets_at: reading.reset,
+            };
+            let readings = held_windows(sample, end, now);
+            let windows: Vec<UsageWindow> = readings
+                .iter()
+                .filter(|(name, _, _)| name != SEVEN_DAY_FABLE)
+                .map(window)
+                .collect();
+            let fable = readings
+                .iter()
+                .find(|(name, _, _)| name == SEVEN_DAY_FABLE)
+                .map(window);
+            UsageSnapshot {
+                account_id: id.to_string(),
+                identity_generation: latest.as_ref().map_or(0, |s| s.identity_generation),
+                fetched_at: observed_at,
+                windows,
+                fable_window: fable,
+                extra_usage: latest.as_ref().and_then(|s| s.extra_usage.clone()),
+                spend: latest.as_ref().and_then(|s| s.spend.clone()),
+                raw_keys: latest.map(|s| s.raw_keys).unwrap_or_default(),
+                error: None,
+            }
+        }
     };
-    let held = held.and_then(|sample| {
-        let readings = held_windows(sample, end, now);
-        let observed_at = readings
-            .iter()
-            .map(|(_, reading, _)| reading.observed_at)
-            .max()?;
-        let windows: Vec<UsageWindow> = readings
-            .iter()
-            .filter(|(key, _, _)| *key != FABLE_WINDOW_KEY)
-            .map(window)
-            .collect();
-        let fable = readings
-            .iter()
-            .find(|(key, _, _)| *key == FABLE_WINDOW_KEY)
-            .map(window);
-        Some((windows, fable, observed_at))
-    });
-    let Some((windows, fable, observed_at)) = held else {
-        return latest;
-    };
-    Some(UsageSnapshot {
-        account_id: id.to_string(),
-        identity_generation: latest.as_ref().map_or(0, |s| s.identity_generation),
-        fetched_at: observed_at,
-        windows,
-        fable_window: fable,
-        extra_usage: latest.as_ref().and_then(|s| s.extra_usage.clone()),
-        spend: latest.as_ref().and_then(|s| s.spend.clone()),
-        raw_keys: latest.map(|s| s.raw_keys).unwrap_or_default(),
-        error: None,
-    })
+    Some(answer)
 }
 
 /// The poll's standing as the usage `GET` and every account row answer it.
@@ -2977,25 +2986,21 @@ fn poll_json(status: &PollStatus) -> PollStatusView {
     }
 }
 
-/// The hold's deadline as the console prints it: the poll's next attempt while the account waits out a 429, null
-/// otherwise. Read off the poll status, where the service keeps the hold, so the usage GET and the account list agree.
-fn held_until(poll: Option<&PollStatus>) -> Option<i64> {
-    poll.and_then(|p| p.next_attempt_at)
-}
-
-/// The standing the usage `GET` and every account row answer: `snapshot` is the answer, or the error that stands in
-/// for it when there is none.
+/// The standing the usage `GET` and every account row answer: `answer` is the answer's error and instant, or the
+/// error that stands in for an answer when there is none.
 fn usage_standing(
-    snapshot: Result<&UsageSnapshot, &str>,
+    answer: Result<(Option<String>, i64), &str>,
     poll: Option<&PollStatus>,
 ) -> UsageStanding {
+    let (error, fetched_at) = match answer {
+        Ok((error, fetched_at)) => (error, Some(fetched_at)),
+        Err(error) => (Some(error.to_string()), None),
+    };
     UsageStanding {
-        error: match snapshot {
-            Ok(snapshot) => snapshot.error.clone(),
-            Err(error) => Some(error.to_string()),
-        },
-        fetched_at: snapshot.ok().map(|snapshot| snapshot.fetched_at),
-        held_until: held_until(poll),
+        error,
+        fetched_at,
+        // The hold lives in the poll status, so its next attempt is the hold's deadline.
+        held_until: poll.and_then(|p| p.next_attempt_at),
         poll: poll.map(poll_json),
     }
 }
@@ -3011,7 +3016,10 @@ fn usage_json(
         fetched_at,
         held_until,
         poll,
-    } = usage_standing(snapshot, poll);
+    } = usage_standing(
+        snapshot.map(|snapshot| (snapshot.error.clone(), snapshot.fetched_at)),
+        poll,
+    );
     let Ok(snapshot) = snapshot else {
         // Zero is the unstamped generation, as the ledger stamps a row it has no identity for.
         return Usage {
@@ -3140,16 +3148,8 @@ pub(crate) fn failure(status: StatusCode, message: &str) -> Response {
     (status, Json(json!({ "error": message }))).into_response()
 }
 
-/// The bearer check's and the login's refusal. `LoginError`'s own text leaves out the throttle's retry hint, so the
-/// answers spell theirs here.
 fn login_refusal(error: LoginError) -> Response {
-    match error {
-        LoginError::Throttled => failure(
-            StatusCode::TOO_MANY_REQUESTS,
-            "too many failed logins, try again in a minute",
-        ),
-        LoginError::Invalid => failure(StatusCode::UNAUTHORIZED, "secret does not match"),
-    }
+    failure(error.status(), &error.to_string())
 }
 
 /// A JSON array deserializes into a struct whose members all default, so a route would answer `id is required` to
