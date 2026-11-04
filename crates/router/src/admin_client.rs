@@ -15,6 +15,7 @@ use hyper::header::{HeaderValue, AUTHORIZATION, CONNECTION, CONTENT_TYPE, HOST};
 use hyper::{Method, Request, StatusCode, Uri};
 use hyper_util::rt::TokioIo;
 use phoebis_store::Secret;
+use phoebis_transport::ALPN_HTTP1;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 
@@ -317,7 +318,7 @@ fn connector(ca: Option<&Path>) -> Result<SslConnector, Failure> {
         }
         builder.set_cert_store(store.build());
     }
-    builder.set_alpn_protos(tls::ALPN_HTTP1)?;
+    builder.set_alpn_protos(ALPN_HTTP1)?;
     Ok(builder.build())
 }
 

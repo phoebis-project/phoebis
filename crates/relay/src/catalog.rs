@@ -908,19 +908,13 @@ async fn exchange<C: AsyncRead + AsyncWrite + Unpin>(
         .await
         .map_err(|e| DiscoveryError::Unreachable(e.to_string()))?
     {
-        out.extend(
-            decoder
-                .feed_bounded(&chunk, MAX_BODY - out.len())
-                .map_err(|e| e.at_bound(MAX_BODY))
-                .map_err(|e| DiscoveryError::Malformed(e.to_string()))?,
-        );
-    }
-    out.extend(
         decoder
-            .finish_bounded(MAX_BODY - out.len())
-            .map_err(|e| e.at_bound(MAX_BODY))
-            .map_err(|e| DiscoveryError::Malformed(e.to_string()))?,
-    );
+            .feed_into(&mut out, &chunk, MAX_BODY)
+            .map_err(|e| DiscoveryError::Malformed(e.to_string()))?;
+    }
+    decoder
+        .finish_into(&mut out, MAX_BODY)
+        .map_err(|e| DiscoveryError::Malformed(e.to_string()))?;
     Ok((head.status, out, reusable))
 }
 

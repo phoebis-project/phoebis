@@ -77,8 +77,7 @@ pub async fn read_head<R: AsyncRead + Unpin>(
                 if buf.len() > MAX_HEAD {
                     return Err(TransportError::Response("head too large".into()));
                 }
-                let n = r.read_buf(buf).await?;
-                if n == 0 {
+                if !refill(r, buf).await? {
                     return Err(TransportError::Response(
                         "connection closed before head".into(),
                     ));
@@ -124,7 +123,7 @@ pub fn keep_alive(head: &ResponseHead, framing: &Framing) -> bool {
             .unwrap_or(false)
 }
 
-/// Reads more of the body into `buf` and answers whether any bytes arrived. Free rather than a method, since
+/// Reads more into `buf` and answers whether any bytes arrived. Free rather than a method, since
 /// `next_chunk` calls it while it holds a borrow of the reader's framing.
 async fn refill<R: AsyncRead + Unpin>(
     r: &mut R,

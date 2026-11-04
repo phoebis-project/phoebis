@@ -1016,12 +1016,9 @@ fn inflate_request(raw: &[u8], bound: usize) -> Result<Vec<u8>, RelayError> {
         _ => RelayError::BodyNotGzip,
     };
     let mut decoder = decoder(Encoding::Gzip);
-    let mut plain = decoder.feed_bounded(raw, bound).map_err(refused)?;
-    plain.extend(
-        decoder
-            .finish_bounded(bound - plain.len())
-            .map_err(refused)?,
-    );
+    let mut plain = Vec::new();
+    decoder.feed_into(&mut plain, raw, bound).map_err(refused)?;
+    decoder.finish_into(&mut plain, bound).map_err(refused)?;
     Ok(plain)
 }
 
@@ -5158,17 +5155,9 @@ pub(crate) fn failover_reports(
 fn decode_all(decoder: &mut dyn Decoder, raw: &[u8]) -> Result<Vec<u8>, TransportError> {
     let mut out = Vec::new();
     for piece in raw.chunks(DECODE_PIECE) {
-        out.extend(
-            decoder
-                .feed_bounded(piece, MAX_BUFFERED_BODY - out.len())
-                .map_err(|e| e.at_bound(MAX_BUFFERED_BODY))?,
-        );
+        decoder.feed_into(&mut out, piece, MAX_BUFFERED_BODY)?;
     }
-    out.extend(
-        decoder
-            .finish_bounded(MAX_BUFFERED_BODY - out.len())
-            .map_err(|e| e.at_bound(MAX_BUFFERED_BODY))?,
-    );
+    decoder.finish_into(&mut out, MAX_BUFFERED_BODY)?;
     Ok(out)
 }
 
@@ -5259,9 +5248,11 @@ fn decode_drained(head: &ResponseHead, raw: &Bytes, cut: bool) -> Result<Bytes, 
 fn inspectable_prefix(decoder: &mut dyn Decoder, raw: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     for piece in raw.chunks(DECODE_PIECE) {
-        match decoder.feed_bounded(piece, MAX_BUFFERED_BODY - out.len()) {
-            Ok(text) => out.extend(text),
-            Err(_) => break,
+        if decoder
+            .feed_into(&mut out, piece, MAX_BUFFERED_BODY)
+            .is_err()
+        {
+            break;
         }
     }
     out

@@ -8,6 +8,10 @@ use tokio::net::TcpStream;
 
 use crate::TransportError;
 
+/// `http/1.1` in ALPN's wire form, a length byte (`\x08`) and the name: the one protocol the inference plane offers
+/// upstream, the router's listeners serve and the router's own clients of them offer.
+pub const ALPN_HTTP1: &[u8] = b"\x08http/1.1";
+
 pub fn connector_builder(
     profile: &'static Profile,
     plane: Plane,
@@ -24,7 +28,7 @@ pub fn connector_builder(
     b.set_permute_extensions(false);
     match plane {
         Plane::Inference => {
-            b.set_alpn_protos(b"\x08http/1.1")?;
+            b.set_alpn_protos(ALPN_HTTP1)?;
             b.enable_ocsp_stapling();
             b.enable_signed_cert_timestamps();
         }

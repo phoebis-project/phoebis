@@ -14,6 +14,7 @@ use boring::x509::X509;
 use phoebis_admin::{Reloaded, TlsReload};
 use phoebis_attention::{PairFacts, TlsPairs};
 use phoebis_relay::LiveAcceptor;
+use phoebis_transport::ALPN_HTTP1;
 
 use crate::config::ListenerTls;
 
@@ -22,10 +23,6 @@ pub type Acceptor = Option<Arc<LiveAcceptor>>;
 
 /// A leaf this close to `not_after` earns a warning in `check-config` and a line in `status`, and starts.
 pub const EXPIRY_WARNING_DAYS: i32 = phoebis_attention::CERTIFICATE_WARNING_DAYS as i32;
-
-/// `http/1.1` in ALPN's wire form, a length byte (`\x08`) and the name: the one protocol the router's listeners serve
-/// and its own clients of them offer.
-pub(crate) const ALPN_HTTP1: &[u8] = b"\x08http/1.1";
 
 /// A loaded listener: the acceptor, and the leaf's facts the start logs and `check-config` prints.
 pub struct Loaded {

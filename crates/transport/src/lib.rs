@@ -10,7 +10,7 @@ pub mod response;
 mod tls;
 
 pub use phoebis_profile::Plane;
-pub use tls::{connect_tls, connector, connector_builder, trust_extra_ca};
+pub use tls::{connect_tls, connector, connector_builder, trust_extra_ca, ALPN_HTTP1};
 
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {
@@ -36,15 +36,4 @@ pub enum TransportError {
     /// repeat a side effect rely on this distinction.
     #[error("upstream unreachable: {0}")]
     Unreachable(String),
-}
-
-impl TransportError {
-    /// The sink of a bounded decode reports the room left in the call it refused, and the caller's own bound is
-    /// the number worth telling.
-    pub fn at_bound(self, bound: usize) -> TransportError {
-        match self {
-            TransportError::TooLarge(_) => TransportError::TooLarge(bound),
-            other => other,
-        }
-    }
 }

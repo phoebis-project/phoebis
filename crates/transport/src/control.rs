@@ -56,11 +56,9 @@ impl ControlClient {
         let progress = ProgressCell::default();
         match tokio::time::timeout(timeout, self.send_once(req, host, addr, &progress)).await {
             Ok(result) => result,
-            Err(_) if progress.get() != WriteProgress::BodyWritten => {
-                Err(TransportError::Unreachable(format!(
-                    "timed out before the request to {host} was sent"
-                )))
-            }
+            Err(_) if !progress.body_written() => Err(TransportError::Unreachable(format!(
+                "timed out before the request to {host} was sent"
+            ))),
             Err(_) => Err(TransportError::Io(std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
                 "control request timed out",
@@ -112,13 +110,9 @@ impl ControlClient {
             body.extend_from_slice(&chunk);
         }
         let mut d = decoder(encoding(&head)?);
-        let mut out = d
-            .feed_bounded(&body, MAX_BODY)
-            .map_err(|e| e.at_bound(MAX_BODY))?;
-        out.extend(
-            d.finish_bounded(MAX_BODY - out.len())
-                .map_err(|e| e.at_bound(MAX_BODY))?,
-        );
+        let mut out = Vec::new();
+        d.feed_into(&mut out, &body, MAX_BODY)?;
+        d.finish_into(&mut out, MAX_BODY)?;
         Ok((head, Bytes::from(out)))
     }
 }
@@ -195,9 +189,8 @@ mod tests {
             outcome.is_err(),
             "the flush never resolves, so the call has to time out"
         );
-        assert_eq!(
-            progress.get(),
-            WriteProgress::BodyWritten,
+        assert!(
+            progress.body_written(),
             "the body was handed over before the stalled flush, not after it"
         );
     }
@@ -215,9 +208,8 @@ mod tests {
             outcome.is_err(),
             "the write never resolves, so the call has to time out"
         );
-        assert_ne!(
-            progress.get(),
-            WriteProgress::BodyWritten,
+        assert!(
+            !progress.body_written(),
             "the cell stays short of the body until the body has fully entered the writer"
         );
     }

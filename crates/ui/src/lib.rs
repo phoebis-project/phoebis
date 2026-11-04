@@ -77,16 +77,12 @@ async fn fallback(request: Request<Body>) -> Response {
     // The reference page answers at its directory and its index, and nothing else under the directory lands on
     // the console's shell: a typo there is a JSON 404, as a stale asset path is. The bare directory answers the
     // page rather than redirecting, since the page's URLs are absolute and nothing resolves against its location.
-    if let Some(rest) = path.strip_prefix(REFERENCE_PATH) {
-        if matches!(rest, "" | "/" | "/index.html") {
-            return match lookup(&format!("{REFERENCE_PATH}/index.html")) {
-                Some((bytes, mime)) => finish(file(bytes, &mime, head), NO_STORE),
-                None => finish(json_not_found(), NO_STORE),
-            };
+    match path.strip_prefix(REFERENCE_PATH) {
+        Some("" | "/" | "/index.html") => {
+            return page(&format!("{REFERENCE_PATH}/index.html"), head)
         }
-        if rest.starts_with('/') {
-            return finish(json_not_found(), NO_STORE);
-        }
+        Some(rest) if rest.starts_with('/') => return finish(json_not_found(), NO_STORE),
+        _ => {}
     }
     if let Some((bytes, mime)) = lookup(&path) {
         let cache = if path.starts_with("/assets/") {
@@ -105,7 +101,11 @@ async fn fallback(request: Request<Body>) -> Response {
     if path.starts_with("/assets/") || last_segment.contains('.') {
         return finish(json_not_found(), NO_STORE);
     }
-    match lookup("index.html") {
+    page("index.html", head)
+}
+
+fn page(path: &str, head: bool) -> Response {
+    match lookup(path) {
         Some((bytes, mime)) => finish(file(bytes, &mime, head), NO_STORE),
         None => finish(json_not_found(), NO_STORE),
     }

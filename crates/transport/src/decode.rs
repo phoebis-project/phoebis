@@ -132,9 +132,43 @@ impl BoundedSink {
 pub trait Decoder: Send {
     fn feed_bounded(&mut self, input: &[u8], budget: usize) -> Result<Vec<u8>, TransportError>;
     fn finish_bounded(&mut self, budget: usize) -> Result<Vec<u8>, TransportError>;
+
+    /// Decodes `input` onto the end of `out`, under what is left of `bound` once `out` is counted. A refusal names
+    /// `bound` itself and leaves `out` as it was.
+    fn feed_into(
+        &mut self,
+        out: &mut Vec<u8>,
+        input: &[u8],
+        bound: usize,
+    ) -> Result<(), TransportError> {
+        let piece = self
+            .feed_bounded(input, bound - out.len())
+            .map_err(|e| at_bound(e, bound))?;
+        out.extend(piece);
+        Ok(())
+    }
+
+    /// The finish under the accounting of `feed_into`.
+    fn finish_into(&mut self, out: &mut Vec<u8>, bound: usize) -> Result<(), TransportError> {
+        let tail = self
+            .finish_bounded(bound - out.len())
+            .map_err(|e| at_bound(e, bound))?;
+        out.extend(tail);
+        Ok(())
+    }
+
     /// The most the sink held at once, for the tests that check the bound held while decoding.
     #[cfg(test)]
-    fn retained(&self) -> usize;
+    fn retained(&mut self) -> usize;
+}
+
+/// The sink of a bounded decode reports the room left in the call it refused, and the caller's own bound is the
+/// number worth telling.
+fn at_bound(error: TransportError, bound: usize) -> TransportError {
+    match error {
+        TransportError::TooLarge(_) => TransportError::TooLarge(bound),
+        other => other,
+    }
 }
 
 pub fn decoder(e: Encoding) -> Box<dyn Decoder> {
@@ -173,7 +207,7 @@ impl Decoder for Identity {
     }
 
     #[cfg(test)]
-    fn retained(&self) -> usize {
+    fn retained(&mut self) -> usize {
         0
     }
 }
@@ -185,62 +219,26 @@ fn already_finished() -> TransportError {
 /// A library writer decoding into the sink. The codings differ only in the call that ends the stream.
 trait SinkWriter: Write + Send {
     fn sink(&mut self) -> &mut BoundedSink;
-    #[cfg(test)]
-    fn sink_ref(&self) -> &BoundedSink;
     fn end(&mut self) -> io::Result<()>;
 }
 
-impl SinkWriter for flate2::write::GzDecoder<BoundedSink> {
-    fn sink(&mut self) -> &mut BoundedSink {
-        self.get_mut()
-    }
-    #[cfg(test)]
-    fn sink_ref(&self) -> &BoundedSink {
-        self.get_ref()
-    }
-    fn end(&mut self) -> io::Result<()> {
-        self.try_finish()
-    }
+macro_rules! sink_writer {
+    ($writer:ty, $end:ident) => {
+        impl SinkWriter for $writer {
+            fn sink(&mut self) -> &mut BoundedSink {
+                self.get_mut()
+            }
+            fn end(&mut self) -> io::Result<()> {
+                self.$end()
+            }
+        }
+    };
 }
 
-impl SinkWriter for flate2::write::ZlibDecoder<BoundedSink> {
-    fn sink(&mut self) -> &mut BoundedSink {
-        self.get_mut()
-    }
-    #[cfg(test)]
-    fn sink_ref(&self) -> &BoundedSink {
-        self.get_ref()
-    }
-    fn end(&mut self) -> io::Result<()> {
-        self.try_finish()
-    }
-}
-
-impl SinkWriter for brotli::DecompressorWriter<BoundedSink> {
-    fn sink(&mut self) -> &mut BoundedSink {
-        self.get_mut()
-    }
-    #[cfg(test)]
-    fn sink_ref(&self) -> &BoundedSink {
-        self.get_ref()
-    }
-    fn end(&mut self) -> io::Result<()> {
-        self.close()
-    }
-}
-
-impl SinkWriter for zstd::stream::write::Decoder<'static, BoundedSink> {
-    fn sink(&mut self) -> &mut BoundedSink {
-        self.get_mut()
-    }
-    #[cfg(test)]
-    fn sink_ref(&self) -> &BoundedSink {
-        self.get_ref()
-    }
-    fn end(&mut self) -> io::Result<()> {
-        self.flush()
-    }
-}
+sink_writer!(flate2::write::GzDecoder<BoundedSink>, try_finish);
+sink_writer!(flate2::write::ZlibDecoder<BoundedSink>, try_finish);
+sink_writer!(brotli::DecompressorWriter<BoundedSink>, close);
+sink_writer!(zstd::stream::write::Decoder<'static, BoundedSink>, flush);
 
 /// `None` once `finish_bounded` ended the stream, so a later call is refused rather than written to a finished writer.
 struct Streaming<W>(Option<W>);
@@ -265,8 +263,8 @@ impl<W: SinkWriter> Decoder for Streaming<W> {
     }
 
     #[cfg(test)]
-    fn retained(&self) -> usize {
-        self.0.as_ref().map_or(0, |d| d.sink_ref().high_water)
+    fn retained(&mut self) -> usize {
+        self.0.as_mut().map_or(0, |d| d.sink().high_water)
     }
 }
 
