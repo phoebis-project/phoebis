@@ -21,7 +21,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_boring::SslStream;
 
-/// `load` reads the admin secret from the process environment, so each test holds this across its set-then-load
+/// `app::run` reads the admin secret from the process environment, so each test holds this across its set-then-run
 /// sequence.
 static ENV: Mutex<()> = Mutex::new(());
 

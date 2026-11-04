@@ -9,8 +9,8 @@ use phoebis_profile::fixtures::{
 use std::net::TcpListener;
 use std::sync::Mutex;
 
-/// `load` reads the admin secret from the process environment, and the tests in this binary set the same
-/// variables to different values, so each holds this across its whole set-then-load sequence.
+/// `app::run` reads the admin secret from the process environment, and the tests in this binary set the same
+/// variables to different values, so each holds this across its whole set-then-run sequence.
 static ENV: Mutex<()> = Mutex::new(());
 
 /// The binary reads the keepalive's debug timing once, at its start, so a test that waits for a probe a second

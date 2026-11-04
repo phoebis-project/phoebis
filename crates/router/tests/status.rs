@@ -12,8 +12,8 @@ use phoebis_router::admin_client::{AdminClient, Common};
 use phoebis_router::status;
 use tokio::net::TcpStream;
 
-/// `load` and `from_flags` read the admin secret from the process environment, so each test holds this across its
-/// set-then-read sequence.
+/// `app::run` and `from_flags` read the admin secret from the process environment, so each test holds this across
+/// its set-then-read sequence.
 static ENV: Mutex<()> = Mutex::new(());
 
 /// How long a boot may take to answer ready; generous because it is reached only when the boot never ends.
