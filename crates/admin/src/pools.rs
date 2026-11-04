@@ -99,7 +99,7 @@ fn member_writes(members: &[MemberInput]) -> Result<Vec<MemberWrite>, Response> 
 /// any subset but `id`, and `members`, when present, replaces the member list in the same call, as `PUT
 /// /admin/pools/{id}/members` does: the settings and the members are written in one transaction, so a refused
 /// member list writes neither. An unknown field in the body is refused.
-#[derive(serde::Deserialize, Default, ToSchema)]
+#[derive(serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PoolInput {
     /// `[a-z0-9][a-z0-9-]{0,63}`.

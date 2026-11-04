@@ -28,7 +28,7 @@ const STALE_EDIT: &str = "the key changed while it was being edited, so reload a
 
 /// The key's fields. On a create `id`, `label` and `pool_id` are required. On an edit any subset but `id`. An unknown
 /// field in the body is refused.
-#[derive(serde::Deserialize, Default, ToSchema)]
+#[derive(serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct KeyInput {
     /// `[a-z0-9][a-z0-9-]{0,63}`.
