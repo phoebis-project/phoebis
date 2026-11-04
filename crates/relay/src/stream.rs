@@ -30,7 +30,7 @@ use crate::hold::INSPECT_BUFFER;
 use crate::identity::PendingReports;
 use crate::messages::{cut_code, Guards, RelayOutcome, Trace, CANCELED, REFUSED, TRANSPORT_ERROR};
 use crate::observe::{answer_from_json, is_tool_use_delta, Answer};
-use crate::sse::{SseEvent, SseParser};
+use crate::sse::{SkippingParser, SseEvent};
 
 /// Chunks held between the upstream reader and the caller's socket. Deep enough that a caller pausing for a
 /// moment does not stall the read loop, shallow enough that a caller that stops reading still pushes back on
@@ -123,10 +123,14 @@ pub(crate) enum BodyRead {
     /// Parses an event stream for phases. The parser skips an event past its bound and keeps parsing, so an oversized
     /// event costs a bounded buffer and its own phase while the events after it still reach the completion. A held
     /// stream's is the hold's own, already past the held events.
-    Events(SseParser),
+    Events(SkippingParser),
     /// The decoded copy of a committed body that is not an event stream, kept up to the request bound so its usage
     /// block can be read at the end.
-    Json(Vec<u8>),
+    Json {
+        body: Vec<u8>,
+        /// `Limits.max_request_bytes`, so the usage of any answer the router would accept as a request is read.
+        bound: usize,
+    },
     /// Nothing is read: a rejection that is no event stream, or a JSON answer past the bound.
     Unread,
 }
@@ -152,8 +156,6 @@ pub(crate) struct Publish {
     pub held: Option<HeldText>,
     /// Fired once, on the first `error` event after the commit; `None` for a stream nothing watches.
     pub on_error: Option<OnError>,
-    /// `Limits.max_request_bytes`, so the usage of any answer the router would accept as a request is read.
-    pub json_bound: usize,
     pub usage: Usage,
     pub response: ResponseFacts,
     pub index: u32,
@@ -420,12 +422,12 @@ impl Publish {
     async fn chunk(&mut self, piece: &Bytes, waiting: &mut Waiting) {
         self.bytes += piece.len() as u64;
         let text = piece.clone();
-        if let BodyRead::Json(json) = &mut self.read {
-            if json.len() + text.len() > self.json_bound {
+        if let BodyRead::Json { body, bound } = &mut self.read {
+            if body.len() + text.len() > *bound {
                 // Past the bound nothing is read; the usage stays unknown rather than half parsed.
                 self.read = BodyRead::Unread;
             } else {
-                json.extend_from_slice(&text);
+                body.extend_from_slice(&text);
             }
         }
         let phases = self.phases(&text, waiting);
@@ -458,26 +460,23 @@ impl Publish {
         let BodyRead::Events(parser) = &mut self.read else {
             return Vec::new();
         };
-        // `stream` builds a skipping parser alone, and a skipping parser never answers `Overflow`.
-        let _ = parser.feed(text);
+        parser.feed(text);
         self.parsed(waiting)
     }
 
     /// The phases of the complete events the parser holds.
     fn parsed(&mut self, waiting: &mut Waiting) -> Vec<Phase> {
-        // Taken out while `phase_of` borrows the whole struct, and put back once the parser holds no complete event.
-        let mut parser = match std::mem::replace(&mut self.read, BodyRead::Unread) {
-            BodyRead::Events(parser) => parser,
-            other => {
-                self.read = other;
-                return Vec::new();
-            }
-        };
         let mut phases = Vec::new();
-        while let Some(event) = parser.next_event() {
+        loop {
+            let event = match &mut self.read {
+                BodyRead::Events(parser) => parser.next_event(),
+                BodyRead::Json { .. } | BodyRead::Unread => None,
+            };
+            let Some(event) = event else {
+                break;
+            };
             phases.extend(self.phase_of(&event, waiting));
         }
-        self.read = BodyRead::Events(parser);
         phases
     }
 
@@ -522,11 +521,9 @@ impl Publish {
             // Read before the piece that carries it goes out, so a late rate limit is acted on no later than the
             // client sees it; the bytes the client sees are untouched.
             Some(b"error") => {
-                if self.stream_error.is_none() {
-                    self.stream_error = Some(
-                        crate::classify::error_type(&event.data).unwrap_or_else(|| "error".into()),
-                    );
-                }
+                self.stream_error.get_or_insert_with(|| {
+                    crate::classify::error_type(&event.data).unwrap_or_else(|| "error".into())
+                });
                 if let Some(on_error) = self.on_error.take() {
                     on_error(event.data.clone(), waiting);
                 }
@@ -555,21 +552,31 @@ impl Publish {
 
     /// The answer's end reports go through `waiting`, ahead of the completion. Answers whether the usage went out.
     async fn finish(mut self, end: &BodyEnd, waiting: &mut Waiting) -> bool {
-        // A stream cut off after its last event never sent the empty line that would close it, so the event, an
-        // error among them, can still be sitting in the parser.
-        let last = match &mut self.read {
-            BodyRead::Events(parser) => parser.finish(),
-            BodyRead::Json(_) | BodyRead::Unread => None,
+        let (last, (skipped, largest), answer) = match &mut self.read {
+            BodyRead::Events(parser) => {
+                // A stream cut off after its last event never sent the empty line that would close it, so the
+                // event, an error among them, can still be sitting in the parser.
+                let last = parser.finish();
+                // Read after `finish`, which counts an event the stream ended inside while it was being discarded.
+                (last, parser.skipped(), None)
+            }
+            // Taken, so a copy up to `bound` is freed before the hook and the completion are awaited.
+            BodyRead::Json { body, .. } => (
+                None,
+                (0, 0),
+                Some(answer_from_json(
+                    &std::mem::take(body),
+                    &[],
+                    self.outcome.diagnostics_named,
+                )),
+            ),
+            BodyRead::Unread => (None, (0, 0), None),
         };
         if let Some(event) = last {
             if let Some(phase) = self.phase_of(&event, waiting) {
                 self.emit(Bytes::new(), Some(phase));
             }
         }
-        let (skipped, largest) = match &self.read {
-            BodyRead::Events(parser) => parser.skipped(),
-            BodyRead::Json(_) | BodyRead::Unread => (0, 0),
-        };
         if skipped > 0 {
             tracing::warn!(
                 request_id = %self.trace.request_id,
@@ -579,12 +586,6 @@ impl Publish {
                 "stream events past the parser's bound were skipped"
             );
         }
-        let answer = match &self.read {
-            BodyRead::Json(json) => {
-                Some(answer_from_json(json, &[], self.outcome.diagnostics_named))
-            }
-            BodyRead::Events(_) | BodyRead::Unread => None,
-        };
         if let Some(answer) = answer {
             self.usage.merge(&answer.usage);
             self.response.merge(&answer.response);
@@ -701,9 +702,7 @@ impl Publish {
     /// The id is handed off once, on first sight: `message_start` names it for a stream, the whole document for a
     /// JSON answer, and neither arrives twice. `chunk` and `finish` await the hook once `phase_of` returns.
     fn saw_message_id(&mut self, id: String) {
-        if self.message_id.is_none() {
-            self.message_id = Some(id);
-        }
+        self.message_id.get_or_insert(id);
     }
 
     /// Awaited from `chunk` and `finish` once `phase_of` has had its turn, so an id from either path fires the
@@ -767,18 +766,15 @@ pub(crate) fn relay_body(relayed: Relayed, tracker: &TaskTracker) -> Body {
         let mut waiting = Waiting::default();
         let end = 'body: {
             if !prefix.is_empty() {
-                match decode_piece(decoder.as_mut(), prefix) {
-                    Ok(piece) => {
-                        if let Some(publish) = publish.as_mut() {
-                            publish.prefix(&piece, &mut waiting).await;
-                        }
-                        if let Some(end) = send(&tx, &cancel, Ok(piece)).await {
-                            break 'body end;
-                        }
-                    }
-                    Err(error) => {
-                        break 'body decode_failure(&tx, &cancel, error).await;
-                    }
+                let piece = match decode_piece(decoder.as_mut(), prefix) {
+                    Ok(piece) => piece,
+                    Err(error) => break 'body failed(&tx, &cancel, error).await,
+                };
+                if let Some(publish) = publish.as_mut() {
+                    publish.prefix(&piece, &mut waiting).await;
+                }
+                if let Some(end) = send(&tx, &cancel, Ok(piece)).await {
+                    break 'body end;
                 }
             }
             loop {
@@ -793,21 +789,14 @@ pub(crate) fn relay_body(relayed: Relayed, tracker: &TaskTracker) -> Body {
                 };
                 let next = match read {
                     Err(_) => {
-                        let _ = send(&tx, &cancel, Err(stalled())).await;
+                        let _ = send(&tx, &cancel, Err(TransportError::Stalled)).await;
                         // In fractional seconds, since a bound under a second would read 0 in whole ones.
                         break 'body BodyEnd::Failed {
                             cut: Cut::Stalled,
                             text: format!("no chunk for {} s", idle_timeout.as_secs_f64()),
                         };
                     }
-                    Ok(Err(error)) => {
-                        let text = error.to_string();
-                        let _ = send(&tx, &cancel, Err(error)).await;
-                        break 'body BodyEnd::Failed {
-                            cut: Cut::Transport,
-                            text,
-                        };
-                    }
+                    Ok(Err(error)) => break 'body failed(&tx, &cancel, error).await,
                     Ok(Ok(next)) => next,
                 };
                 let Some(chunk) = next else {
@@ -816,7 +805,7 @@ pub(crate) fn relay_body(relayed: Relayed, tracker: &TaskTracker) -> Body {
                 let piece = match decode_piece(decoder.as_mut(), chunk) {
                     Ok(piece) => piece,
                     Err(error) => {
-                        break 'body decode_failure(&tx, &cancel, error).await;
+                        break 'body failed(&tx, &cancel, error).await;
                     }
                 };
                 // Published before the piece goes out, so a late rate-limit error is acted on no later than the
@@ -842,7 +831,7 @@ pub(crate) fn relay_body(relayed: Relayed, tracker: &TaskTracker) -> Body {
                         }
                     }
                     Err(error) => {
-                        break 'body decode_failure(&tx, &cancel, error).await;
+                        break 'body failed(&tx, &cancel, error).await;
                     }
                     Ok(_) => {}
                 }
@@ -943,12 +932,10 @@ impl Cut {
     /// The idle bound's stall, a decoder's refusal of the payload, and a cut for anything else, the per-chunk bound
     /// among them, so a streamed body and a buffered one file each error alike.
     pub(crate) fn of(error: &TransportError) -> Cut {
-        if is_stalled(error) {
-            Cut::Stalled
-        } else if is_undecodable(error) {
-            Cut::Undecodable
-        } else {
-            Cut::Transport
+        match error {
+            TransportError::Stalled => Cut::Stalled,
+            TransportError::Decode(_) => Cut::Undecodable,
+            _ => Cut::Transport,
         }
     }
 }
@@ -969,8 +956,8 @@ async fn send(
     }
 }
 
-/// A decoder's failure goes to the caller as the body's last item, and the end names its cause and its words.
-async fn decode_failure(
+/// A failure goes to the caller as the body's last item, and the end names its cause and its words.
+async fn failed(
     tx: &mpsc::Sender<Result<Bytes, TransportError>>,
     cancel: &CancellationToken,
     error: TransportError,
@@ -1008,7 +995,7 @@ pub(crate) async fn drain_bounded<C: AsyncRead + Unpin>(
     loop {
         let next = tokio::time::timeout(idle_timeout, reader.next_chunk())
             .await
-            .map_err(|_| stalled())??;
+            .map_err(|_| TransportError::Stalled)??;
         let Some(chunk) = next else {
             return Ok(Drained::Complete(out.freeze()));
         };
@@ -1036,19 +1023,4 @@ fn canceled() -> TransportError {
         io::ErrorKind::ConnectionAborted,
         "the bound account was disconnected",
     ))
-}
-
-/// The idle bound's error, a variant of its own so no other timeout reads as it.
-fn stalled() -> TransportError {
-    TransportError::Stalled
-}
-
-/// Whether `error` is the idle bound's: the upstream went silent past it.
-pub(crate) fn is_stalled(error: &TransportError) -> bool {
-    matches!(error, TransportError::Stalled)
-}
-
-/// Whether `error` is a decoder's refusal: a coding the relay cannot read, or a payload that does not decode.
-pub(crate) fn is_undecodable(error: &TransportError) -> bool {
-    matches!(error, TransportError::Decode(_))
 }

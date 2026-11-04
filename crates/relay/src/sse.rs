@@ -109,24 +109,14 @@ impl SseParser {
         }
     }
 
-    /// A parser that skips an event past `limit` rather than failing: it drops what it holds, discards up to and
-    /// including the next event boundary, counts the event with the bytes it discarded and parses on. The bus
-    /// copy's parser past the commit, so a stream's later events still reach the completion.
-    pub fn skipping(limit: usize) -> SseParser {
-        SseParser {
-            skip: Some(Skip::default()),
-            ..SseParser::new(limit)
-        }
-    }
-
     /// The same parser in the skipping mode, its buffered bytes kept: the hold's parser goes on as the bus copy's
     /// past the commit, where an oversized event must be skipped rather than fail the copy.
-    pub fn into_skipping(self, limit: usize) -> SseParser {
-        SseParser {
+    pub fn into_skipping(self, limit: usize) -> SkippingParser {
+        SkippingParser(SseParser {
             limit,
             skip: Some(Skip::default()),
             ..self
-        }
+        })
     }
 
     /// How many events were skipped and the largest one's size in bytes, both 0 on a parser that never skipped.
@@ -198,6 +188,38 @@ impl SseParser {
             at = next;
         }
         None
+    }
+}
+
+/// An `SseParser` in the skipping mode, which never answers `Overflow`, so its `feed` answers nothing.
+pub struct SkippingParser(SseParser);
+
+impl SkippingParser {
+    /// A parser that skips an event past `limit` rather than failing: it drops what it holds, discards up to and
+    /// including the next event boundary, counts the event with the bytes it discarded and parses on. The bus
+    /// copy's parser past the commit, so a stream's later events still reach the completion.
+    pub fn new(limit: usize) -> SkippingParser {
+        SkippingParser(SseParser {
+            skip: Some(Skip::default()),
+            ..SseParser::new(limit)
+        })
+    }
+
+    pub fn feed(&mut self, bytes: &[u8]) {
+        // Both constructors set the skip, so the inner parser drops an oversized event rather than answer `Overflow`.
+        let _ = self.0.feed(bytes);
+    }
+
+    pub fn next_event(&mut self) -> Option<SseEvent> {
+        self.0.next_event()
+    }
+
+    pub fn finish(&mut self) -> Option<SseEvent> {
+        self.0.finish()
+    }
+
+    pub fn skipped(&self) -> (u32, usize) {
+        self.0.skipped()
     }
 }
 
@@ -383,12 +405,10 @@ mod tests {
 
     /// The data of every event `parser` yields over `reads`, drained after each read as the bus copy drains its
     /// parser, so the buffer holds unread bytes alone when the next read lands.
-    fn yielded(parser: &mut SseParser, reads: &[Vec<u8>]) -> Vec<String> {
+    fn yielded(parser: &mut SkippingParser, reads: &[Vec<u8>]) -> Vec<String> {
         let mut out = Vec::new();
         for read in reads {
-            parser
-                .feed(read)
-                .expect("a skipping parser takes every read");
+            parser.feed(read);
             while let Some(event) = parser.next_event() {
                 out.push(String::from_utf8(event.data.to_vec()).unwrap());
             }
@@ -405,7 +425,7 @@ mod tests {
     fn a_skipping_parser_skips_an_event_past_its_limit_and_parses_on() {
         let stream = format!("{}data: a\n\ndata: b\n\n", oversized("\n\n"));
         for cuts in [&[][..], &[39]] {
-            let mut p = SseParser::skipping(16);
+            let mut p = SkippingParser::new(16);
             assert_eq!(
                 yielded(&mut p, &reads(stream.as_bytes(), cuts)),
                 ["a", "b"],
@@ -458,7 +478,7 @@ mod tests {
             ),
         ];
         for (name, stream, cut) in cases {
-            let mut p = SseParser::skipping(16);
+            let mut p = SkippingParser::new(16);
             assert_eq!(
                 yielded(&mut p, &reads(stream.as_bytes(), &[cut])),
                 ["a"],
@@ -481,7 +501,7 @@ mod tests {
         for (name, event, size) in cases {
             assert_eq!(event.len(), size, "{name}");
             let stream = format!("{event}data: a\n\n");
-            let mut p = SseParser::skipping(16);
+            let mut p = SkippingParser::new(16);
             assert_eq!(
                 yielded(&mut p, &reads(stream.as_bytes(), &[])),
                 ["a"],
@@ -498,7 +518,7 @@ mod tests {
         let event = format!("data: {}\r\n:ok\r\n\r\n", "x".repeat(25));
         assert_eq!((event.len(), &event[31..33]), (40, "\r\n"));
         let stream = format!("{event}data: a\n\n");
-        let mut p = SseParser::skipping(16);
+        let mut p = SkippingParser::new(16);
         assert_eq!(yielded(&mut p, &reads(stream.as_bytes(), &[38])), ["a"]);
         assert_eq!(p.skipped(), (1, 40));
     }
@@ -506,7 +526,7 @@ mod tests {
     #[test]
     fn a_stream_ending_inside_a_discarded_event_counts_it() {
         let cut_short = format!("data: {}", "x".repeat(26));
-        let mut p = SseParser::skipping(16);
+        let mut p = SkippingParser::new(16);
         assert!(yielded(&mut p, &reads(cut_short.as_bytes(), &[])).is_empty());
         assert!(
             p.finish().is_none(),
