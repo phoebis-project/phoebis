@@ -12,7 +12,7 @@ use phoebis_store::{
     permissions, KeyMatch, RecoveryStore, SealedCounts, StateCause, StorageKey, Store, StoreError,
 };
 
-use crate::{config, init};
+use crate::{config, init, private_dirs};
 
 #[derive(clap::Args, Debug)]
 pub struct RecoverKeyArgs {
@@ -299,18 +299,11 @@ fn write_key(
     key: &StorageKey,
     owner: Option<(u32, u32)>,
 ) -> Result<Vec<PathBuf>, String> {
-    let mut dirs: Vec<PathBuf> = permissions::data_dir_of(path)
-        .ancestors()
-        .take_while(|dir| {
-            !dir.as_os_str().is_empty()
-                && matches!(
-                    std::fs::symlink_metadata(dir),
-                    Err(error) if error.kind() == ErrorKind::NotFound
-                )
-        })
-        .map(Path::to_path_buf)
-        .collect();
-    dirs.reverse();
+    let mut dirs = Vec::new();
+    if let Err(error) = private_dirs::create_missing(permissions::data_dir_of(path), &mut dirs) {
+        let _ = remove_dirs(&dirs);
+        return Err(error.to_string());
+    }
     let mut file = match permissions::create_private_file(path, 0o600) {
         Ok(file) => file,
         Err(error) => {

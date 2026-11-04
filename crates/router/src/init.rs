@@ -3,10 +3,10 @@
 //! that fails part way removes what it wrote.
 
 use std::ffi::{CStr, CString};
-use std::fs::{DirBuilder, File};
+use std::fs::File;
 use std::io::{BufRead, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use base64::Engine;
@@ -15,6 +15,7 @@ use phoebis_store::StorageKey;
 use rand::Rng;
 
 use crate::config::{ConfigError, ListenerTls};
+use crate::private_dirs;
 
 /// The text the bootstrap file is filled from, embedded since the binary runs where no checkout exists.
 const EXAMPLE: &str = include_str!("../../../deploy/config.example.yaml");
@@ -708,24 +709,13 @@ fn write(
 }
 
 fn create_missing(dir: &Path, written: &mut Vec<Landed>) -> Result<(), InitError> {
-    let mut missing = Vec::new();
-    for ancestor in dir.ancestors() {
-        if exists(ancestor)? {
-            break;
-        }
-        missing.push(ancestor);
-    }
-    for dir in missing.into_iter().rev() {
-        DirBuilder::new()
-            .mode(0o700)
-            .create(dir)
-            .map_err(io_error(format!("creating {}", dir.display())))?;
-        written.push(Landed {
-            dir: true,
-            path: dir.to_path_buf(),
-        });
-    }
-    Ok(())
+    let mut created = Vec::new();
+    let walked = private_dirs::create_missing(dir, &mut created);
+    written.extend(created.into_iter().map(|path| Landed { dir: true, path }));
+    walked.map_err(|walk| InitError::Io {
+        what: format!("{} {}", walk.step, walk.path.display()),
+        error: walk.error,
+    })
 }
 
 fn write_file(

@@ -2,9 +2,9 @@
 //! names the key file and carries nothing derived from it. It takes no lock and opens no socket, so it runs beside a
 //! serving router as `check-config` does, and it loads the file without the admin secret.
 
-use std::fs::{DirBuilder, File};
+use std::fs::File;
 use std::io::{Read, Write};
-use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -12,6 +12,7 @@ use phoebis_ledger::LedgerDb;
 use phoebis_store::{permissions, BackupError, Store};
 
 use crate::config::{self, ConfigError};
+use crate::private_dirs;
 
 #[derive(clap::Args, Debug)]
 pub struct BackupArgs {
@@ -268,35 +269,11 @@ fn copy(
     })
 }
 
-/// Creates `dir` and every missing parent at 0700, one component at a time from the top, recording each.
+/// Creates `dir` and its missing parents, then syncs the directory holding each one the run created, so the entries
+/// outlive a power loss once the run answers.
 fn create_missing(dir: &Path, created: &mut Vec<PathBuf>) -> std::io::Result<()> {
-    create_dirs(&missing_dirs(dir)?, created)
-}
-
-/// `dir` and each parent of it that does not exist, from the top down.
-fn missing_dirs(dir: &Path) -> std::io::Result<Vec<&Path>> {
-    let mut missing = Vec::new();
-    let mut at = Some(dir);
-    while let Some(path) = at {
-        if path.as_os_str().is_empty() || path.try_exists()? {
-            break;
-        }
-        missing.push(path);
-        at = path.parent();
-    }
-    missing.reverse();
-    Ok(missing)
-}
-
-/// Creates each of `missing` at 0700 in order, recording each as it lands, then syncs the directory holding each, so
-/// the entries outlive a power loss once the run answers. Each create refuses an existing component: one another
-/// process made after the scan is not this run's, so it fails the run unrecorded and the cleanup leaves it alone.
-fn create_dirs(missing: &[&Path], created: &mut Vec<PathBuf>) -> std::io::Result<()> {
-    for path in missing {
-        DirBuilder::new().mode(0o700).create(path)?;
-        created.push(path.to_path_buf());
-    }
-    for path in missing {
+    private_dirs::create_missing(dir, created).map_err(|walk| walk.error)?;
+    for path in created.iter() {
         File::open(permissions::data_dir_of(path))?.sync_all()?;
     }
     Ok(())
@@ -351,21 +328,6 @@ fn default_dir(now: jiff::Timestamp) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_directory_another_process_creates_between_the_scan_and_the_create_fails_the_run_unrecorded(
-    ) {
-        let tmp = tempfile::tempdir().unwrap();
-        let target = tmp.path().join("a").join("b");
-        let missing = missing_dirs(&target).unwrap();
-        assert_eq!(missing, [tmp.path().join("a"), target.clone()]);
-        std::fs::create_dir(tmp.path().join("a")).unwrap();
-        let mut created = Vec::new();
-        let error = create_dirs(&missing, &mut created).unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists, "{error}");
-        assert!(created.is_empty(), "{created:?}");
-        assert!(!target.exists());
-    }
 
     #[test]
     fn a_directory_owned_by_another_uid_reads_as_refused() {
