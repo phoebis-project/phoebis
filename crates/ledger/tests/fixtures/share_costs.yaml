@@ -1,0 +1,25 @@
+unit: {tier: test_tier, window: seven_day}
+revisions:
+  - effective: 2026-01-01
+    capacity:
+      test_tier:   {five_hour: 100, seven_day: 1000}
+      narrow_tier: {five_hour: 100, seven_day: null}
+    peak:
+      zone: America/Los_Angeles
+      weekdays: true
+      from_hour: 5
+      to_hour: 11
+      capacity_factor: {five_hour: 0.5, seven_day: 1}
+    type_multiplier: {cache_read: 0.1, cache_write_1h: 2, cache_write_5m: 2, input: 1, output: 10}
+    model_weight:
+      claude-fable-5-1: 10
+      claude-sonnet-5-5: 1
+      claude-haiku-4-5: 0.5
+    model_windows:
+      seven_day_fable: {of: seven_day, capacity_factor: 0.5}
+    overrides: {}
+    tier_order: [fable, opus, sonnet, haiku]
+    model_tier:
+      claude-fable-5-1: fable
+      claude-sonnet-5-5: sonnet
+      claude-haiku-4-5: haiku

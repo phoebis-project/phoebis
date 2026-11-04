@@ -5516,43 +5516,12 @@ fn a_session_series_naming_one_account_ranks_that_account_s_sessions_alone() {
     );
 }
 
-/// A cost model in round numbers for the share cases: one Fable input token weighs 10 units, `test_tier` holds 100
-/// units on the 5-hour window and 1000 on the week, `narrow_tier` sizes the 5-hour window alone, and the Fable week
-/// is half the 7-day window.
-const SHARE_COSTS: &str = "\
-unit: {tier: test_tier, window: seven_day}
-revisions:
-  - effective: 2026-01-01
-    capacity:
-      test_tier:   {five_hour: 100, seven_day: 1000}
-      narrow_tier: {five_hour: 100, seven_day: null}
-    peak:
-      zone: America/Los_Angeles
-      weekdays: true
-      from_hour: 5
-      to_hour: 11
-      capacity_factor: {five_hour: 0.5, seven_day: 1}
-    type_multiplier: {cache_read: 0.1, cache_write_1h: 2, cache_write_5m: 2, input: 1, output: 10}
-    model_weight:
-      claude-fable-5-1: 10
-      claude-sonnet-5-5: 1
-      claude-haiku-4-5: 0.5
-    model_windows:
-      seven_day_fable: {of: seven_day, capacity_factor: 0.5}
-    overrides: {}
-    tier_order: [fable, opus, sonnet, haiku]
-    model_tier:
-      claude-fable-5-1: fable
-      claude-sonnet-5-5: sonnet
-      claude-haiku-4-5: haiku
-";
-
+/// The share cases' cost model.
 fn share_tables() -> PlanTables {
-    PlanTables {
-        revisions: CostRevisions::from_yaml(SHARE_COSTS).expect("the share cost model parses"),
-        path: None,
-        source: "test".to_string(),
-    }
+    phoebis_ledger::test_tables::tables(
+        CostRevisions::from_yaml(phoebis_ledger::test_tables::SHARE_COSTS)
+            .expect("the share cost model parses"),
+    )
 }
 
 /// One Sonnet request of `session` on the oauth account `a` on `test_tier` in the off-band hour, `overage` as its head

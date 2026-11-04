@@ -8,6 +8,11 @@ use crate::{CostRevisions, PlanTables, PriceRevisions};
 pub const SUBSCRIPTION_COSTS: &str = include_str!("../tests/fixtures/subscription_costs.yaml");
 pub const API_PRICES: &str = include_str!("../tests/fixtures/api_prices.yaml");
 
+/// A cost model in round numbers for the share cases: one Fable input token weighs 10 units, `test_tier` holds 100
+/// units on the 5-hour window and 1000 on the week, `narrow_tier` sizes the 5-hour window alone, and the Fable week
+/// is half the 7-day window.
+pub const SHARE_COSTS: &str = include_str!("../tests/fixtures/share_costs.yaml");
+
 /// An instant inside the fixtures' first entry, 2026-01-15 12:00 UTC, for a test that wants the first entry's figures.
 pub const JANUARY_2026: i64 = 1_768_478_400_000;
 
@@ -18,6 +23,15 @@ pub fn subscription_costs() -> PlanTables {
     PlanTables {
         revisions: CostRevisions::from_yaml(SUBSCRIPTION_COSTS)
             .expect("the test subscription cost model parses"),
+        path: None,
+        source: "test".to_string(),
+    }
+}
+
+/// A test's own cost revisions as the tables a reader takes.
+pub fn tables(revisions: CostRevisions) -> PlanTables {
+    PlanTables {
+        revisions,
         path: None,
         source: "test".to_string(),
     }
