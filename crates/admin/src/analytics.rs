@@ -471,8 +471,9 @@ pub(crate) async fn budgets(State(state): State<Arc<AdminState>>) -> Response {
     let Ok(spends) = state.router.member_spends().await else {
         return router_unavailable();
     };
-    // One row per budgeted period, so a member with both budgets reads twice, its day before its month.
-    let mut members: Vec<(String, String, phoebis_store::BudgetPeriod, BudgetMember)> = snapshot
+    // One row per budgeted period, so a member with both budgets reads twice, its day before its month as `budgets`
+    // yields them and the stable sort keeps them.
+    let mut members: Vec<BudgetMember> = snapshot
         .budgeted_members()
         .flat_map(|m| {
             let rows = crate::routes::spend_rows(&spends, &m.pool_id, &m.account_id);
@@ -480,7 +481,7 @@ pub(crate) async fn budgets(State(state): State<Arc<AdminState>>) -> Response {
             m.budgets()
                 .map(|(period, budget)| {
                     let spend = rows.iter().find(|s| s.period == period);
-                    let row = BudgetMember {
+                    BudgetMember {
                         pool_id: m.pool_id.clone(),
                         account_id: m.account_id.clone(),
                         kind: kind.map(String::from),
@@ -488,16 +489,12 @@ pub(crate) async fn budgets(State(state): State<Arc<AdminState>>) -> Response {
                         budget_period: period.as_str().into(),
                         spent_usd: spend.map(|s| s.spent_usd),
                         period_end: spend.map(|s| s.period_end),
-                    };
-                    (m.pool_id.clone(), m.account_id.clone(), period, row)
+                    }
                 })
                 .collect::<Vec<_>>()
         })
         .collect();
-    let month =
-        |period: &phoebis_store::BudgetPeriod| *period == phoebis_store::BudgetPeriod::Month;
-    members.sort_by(|a, b| (&a.0, &a.1, month(&a.2)).cmp(&(&b.0, &b.1, month(&b.2))));
-    let members = members.into_iter().map(|(.., row)| row).collect();
+    members.sort_by(|a, b| (&a.pool_id, &a.account_id).cmp(&(&b.pool_id, &b.account_id)));
     Json(Budgets { members }).into_response()
 }
 
