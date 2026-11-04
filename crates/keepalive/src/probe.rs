@@ -355,64 +355,59 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
     let revisions = engine.parts.pricing.revisions();
     let table = revisions.in_force(at);
     let tables = engine.parts.tables.clone();
-    let (record, applied) = {
-        let mut inner = engine.lock();
-        let mut record = inner.probe_record(&job, &exchange, table, at);
-        // The serving account's kind decides the unit this probe's cost settles in. It rides the relay's answer, so
-        // a registry write mid-exchange never changes which account this probe is charged against, and an answer the
-        // relay never built names no account: its probe settles in dollars and the credit path never matches it.
-        let in_overage = record.in_overage;
-        let funding = record
-            .kind
-            .map(|kind| Funding::of(kind, record.usage_based, in_overage));
-        // A fast answer draws usage credits whatever the account's funding, so it settles in dollars. The answer's
-        // speed decides rather than the recipe's: a fast recipe answered at standard speed spent the plan, as its
-        // request row files it.
-        let default_unit = if answered_speed(record.usage) == Speed::Fast {
-            SavingsUnit::Usd
-        } else {
-            funding.map(Funding::unit).unwrap_or(SavingsUnit::Usd)
-        };
-        // The tier the router prices the account by, as the store's term resolves it now: a share is of the window the
-        // account has at this settlement, and the record keeps that tier as the key its rows file under, as the
-        // request row keeps its own, none for a free organization. The unit reads it where the snapshot prices the
-        // account too, so a plan the cost model does not price settles in dollars as an untiered account does.
-        let tier = (default_unit == SavingsUnit::WindowShare)
-            .then(|| match engine.parts.store.subscription_term(&record.account) {
-                Ok(term) => {
-                    inner.unreadable_tiers.remove(&record.account);
-                    term
-                }
-                Err(error) => {
-                    if inner.unreadable_tiers.insert(record.account.clone()) {
-                        tracing::warn!(
-                            account = %record.account,
-                            %error,
-                            "the account's tier could not be read, so the settlement falls back to dollars"
-                        );
-                    }
-                    None
-                }
-            })
-            .flatten()
-            .and_then(|t| t.priced_tier().map(String::from));
-        record.tier = tier.clone();
-        let snapshot = engine.parts.router.snapshot();
-        let priced_tier = snapshot.priced_tier(&record.account).and(tier.as_deref());
-        let unit = settled_unit(
-            default_unit,
-            &tables,
-            job.entrypoint.as_deref(),
-            priced_tier,
-            &record.account,
-            &record.canonical_model,
-            record.usage,
-            at,
-        );
-        let covered_unit = funding.map(|_| unit);
-        let applied = inner.apply_probe(&job, exchange, &record, covered_unit, now);
-        (record, applied)
+    let mut record = Inner::probe_record(&job, &exchange, table, at);
+    // The serving account's kind decides the unit this probe's cost settles in. It rides the relay's answer, so a
+    // registry write mid-exchange never changes which account this probe is charged against, and an answer the relay
+    // never built names no account: its probe settles in dollars and the credit path never matches it.
+    let in_overage = record.in_overage;
+    let funding = record
+        .kind
+        .map(|kind| Funding::of(kind, record.usage_based, in_overage));
+    // A fast answer draws usage credits whatever the account's funding, so it settles in dollars. The answer's speed
+    // decides rather than the recipe's: a fast recipe answered at standard speed spent the plan, as its request row
+    // files it.
+    let default_unit = if answered_speed(record.usage) == Speed::Fast {
+        SavingsUnit::Usd
+    } else {
+        funding.map(Funding::unit).unwrap_or(SavingsUnit::Usd)
     };
+    // The tier the router prices the account by, as the store's term resolves it now: a share is of the window the
+    // account has at this settlement, and the record keeps that tier as the key its rows file under, as the request row
+    // keeps its own, none for a free organization. The unit reads it where the snapshot prices the account too, so a
+    // plan the cost model does not price settles in dollars as an untiered account does. Read on a blocking worker
+    // ahead of the engine's lock, since a save may hold the store's connection, and `apply_probe` fences a change that
+    // lands meanwhile. A worker that panicked reads no tier, as a failed read does.
+    let tier = if default_unit == SavingsUnit::WindowShare {
+        let store = engine.parts.store.clone();
+        let account = record.account.clone();
+        match tokio::task::spawn_blocking(move || store.subscription_term(&account)).await {
+            Ok(read) => engine.tier_from(
+                &record.account,
+                read,
+                "the settlement falls back to dollars",
+            ),
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+    record.tier = tier.clone();
+    let snapshot = engine.parts.router.snapshot();
+    let priced_tier = snapshot.priced_tier(&record.account).and(tier.as_deref());
+    let unit = settled_unit(
+        default_unit,
+        &tables,
+        job.entrypoint.as_deref(),
+        priced_tier,
+        &record.account,
+        &record.canonical_model,
+        record.usage,
+        at,
+    );
+    let covered_unit = funding.map(|_| unit);
+    let applied = engine
+        .lock()
+        .apply_probe(&job, exchange, &record, covered_unit, now);
     engine.record_probe(&record, applied, now);
     // Read off the answer rather than off what the fenced half did with it, so a probe whose recipe moved on while it
     // was in flight, or paused on its answer, still counts as the upstream served it.
@@ -438,7 +433,6 @@ impl Inner {
     /// A migrated probe is one the relay served on an account other than the job's; it is priced like any other
     /// and reported as migrated.
     pub(crate) fn probe_record(
-        &self,
         job: &ProbeJob,
         exchange: &Exchange,
         table: &PriceTable,
@@ -1187,7 +1181,7 @@ mod tests {
                 }
             }
             let exchange = held_answer();
-            let record = inner.probe_record(
+            let record = Inner::probe_record(
                 &job,
                 &exchange,
                 PriceRevisions::shipped().in_force(2_000),

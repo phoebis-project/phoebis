@@ -2384,3 +2384,71 @@ async fn a_lapsed_pending_probe_reaches_the_ledger_once_across_a_failed_save_and
         "one settlement, with the save that dropped the probe"
     );
 }
+
+// A tier read under the engine's lock would leave the completion's thread holding that lock behind the store and the
+// tick's thread waiting on it, so both run apart from the workers.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_kept_warm_credits_tier_read_behind_a_held_store_connection_leaves_the_tick_free() {
+    // Well inside the store's own five-second busy wait, which the held save sits in.
+    const TICK_BOUND: Duration = Duration::from_secs(2);
+    let mut r = rig(on_disk()).await;
+    r.observe("main").await;
+    r.advance_attended(270_000);
+    r.step().await;
+    r.advance_attended(40_000);
+    let read = Usage {
+        cache_read_tokens: Some(2_000),
+        ..Default::default()
+    };
+    r.engine.observe(r.observed("second", "main", BODY));
+    r.engine.observe(r.selected("second", "a"));
+    r.engine
+        .observe(BusEvent::ResponseChunk(phoebis_bus::ResponseChunk {
+            request_id: "second".into(),
+            attempt: 1,
+            index: 0,
+            body: Default::default(),
+            phase: Some(phoebis_bus::Phase::MessageStart {
+                usage: read.clone(),
+            }),
+        }));
+    let completion = r.complete("second", Outcome::Succeeded, Some(read));
+
+    // A save waiting out another writer holds the store's one connection, as the periodic flush does.
+    let (entries, snapshots) = (r.engine.persist_entries(), r.engine.persist_snapshots());
+    let held = registry(&r);
+    held.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let engine = r.engine.clone();
+    let save = on_own_thread(async move { engine.flush_persisted().await });
+    r.engine.persist_reached(entries + 1, snapshots + 1).await;
+
+    // The completion earns the credit, whose tier read waits on that connection. The tick's second section follows
+    // a round trip to the router, by which the completion has reached the read.
+    let engine = r.engine.clone();
+    let (started, credit_started) = std::sync::mpsc::channel();
+    let credit = on_own_thread(async move {
+        started.send(()).unwrap();
+        engine.observe(completion);
+    });
+    credit_started.recv().unwrap();
+    let engine = r.engine.clone();
+    let (ticked, tick_done) = std::sync::mpsc::channel();
+    let tick = on_own_thread(async move {
+        engine.step().await;
+        ticked.send(()).unwrap();
+    });
+    let free = tick_done.recv_timeout(TICK_BOUND).is_ok();
+    held.execute_batch("COMMIT").unwrap();
+    save.join().unwrap();
+    credit.join().unwrap();
+    tick.join().unwrap();
+    assert_eq!(
+        r.status("main").credited_today,
+        1,
+        "the completion earned the credit whose tier read the save held"
+    );
+    assert!(
+        free,
+        "the tick ran while the credit's tier read waited on the held connection"
+    );
+}

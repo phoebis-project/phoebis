@@ -18,7 +18,8 @@ use phoebis_routing::{
     budget_deadline, listing, MemberSpend, RegistrySnapshot, RouterHandle, DAY_MS, SEVEN_DAY,
 };
 use phoebis_store::{
-    AccountKind, AccountState, CooldownScope, ModelRule, OveragePolicy, PoolRow, Store,
+    AccountKind, AccountState, CooldownScope, ModelRule, OveragePolicy, PoolRow, Store, StoreError,
+    SubscriptionTerm,
 };
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -1369,9 +1370,6 @@ pub(crate) struct Inner {
     pub revision: u64,
     /// Whether the last save failed, so a failing registry is logged once per streak rather than every flush.
     pub persist_failing: bool,
-    /// The accounts whose last tier read failed, so a registry that stays unreadable is logged once per account and
-    /// streak rather than at every probe it settles. Held in memory alone, so a restart starts each streak over.
-    pub unreadable_tiers: BTreeSet<String>,
     /// The request events and reports refused after the quiesce.
     pub late_updates: u64,
 }
@@ -1397,6 +1395,10 @@ pub struct Engine {
     pub(crate) persist_snapshots: AtomicU64,
     /// Woken as either count rises, which is what a test's wait on them waits on.
     pub(crate) persist_progress: Notify,
+    /// The accounts whose last tier read failed, so a registry that stays unreadable is logged once per account and
+    /// streak rather than at every probe it settles. Held in memory alone, so a restart starts each streak over, and
+    /// behind its own lock, since the reads it follows run without the engine's.
+    unreadable_tiers: Mutex<BTreeSet<String>>,
 }
 
 impl Engine {
@@ -1423,7 +1425,43 @@ impl Engine {
             persist_entries: AtomicU64::new(0),
             persist_snapshots: AtomicU64::new(0),
             persist_progress: Notify::new(),
+            unreadable_tiers: Mutex::new(BTreeSet::new()),
         })
+    }
+
+    /// The tier the router prices `account` by, off `read`, the store's term for it: `None` for a free organization,
+    /// a usage-based seat or a read that failed. A failure is logged once per account and streak, naming `fallback`,
+    /// what the caller does without the tier. The read waits on the store's one connection, which a save holds
+    /// through its write, so a caller makes it without the engine's lock.
+    pub(crate) fn tier_from(
+        &self,
+        account: &str,
+        read: Result<Option<SubscriptionTerm>, StoreError>,
+        fallback: &str,
+    ) -> Option<String> {
+        match read {
+            Ok(term) => {
+                self.unreadable_tiers().remove(account);
+                term.and_then(|t| t.priced_tier().map(String::from))
+            }
+            Err(error) => {
+                if self.unreadable_tiers().insert(account.to_string()) {
+                    tracing::warn!(
+                        account = %account,
+                        %error,
+                        "the account's tier could not be read, so {fallback}"
+                    );
+                }
+                None
+            }
+        }
+    }
+
+    fn unreadable_tiers(&self) -> std::sync::MutexGuard<'_, BTreeSet<String>> {
+        // The set spaces out a warning and guards no invariant, so a panic that poisoned it leaves nothing to protect.
+        self.unreadable_tiers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Compiled only under the `debug-hooks` feature, which a dependent's dev-dependency turns on, so a
@@ -1594,7 +1632,6 @@ impl Inner {
             revision: 0,
             persist_failing: false,
             late_updates: 0,
-            unreadable_tiers: BTreeSet::new(),
         }
     }
 
@@ -3585,36 +3622,23 @@ impl Engine {
     /// Books the credit a completion earned and releases the lock on the way.
     fn book_credit(
         &self,
-        mut inner: std::sync::MutexGuard<'_, Inner>,
+        inner: std::sync::MutexGuard<'_, Inner>,
         credit: Option<Credit>,
         complete: &RequestComplete,
     ) {
-        // The tier the router prices the serving account by, as the store's term resolves it and a settlement reads it,
-        // so the credit files under the tier its request row does, none for a free organization or a usage-based
-        // seat. Read under the lock the once-only warning keeps its set behind.
-        let tier = credit
-            .as_ref()
-            .and_then(|credit| credit.account.as_deref())
-            .and_then(|account| match self.parts.store.subscription_term(account) {
-                Ok(term) => {
-                    inner.unreadable_tiers.remove(account);
-                    term.and_then(|t| t.priced_tier().map(String::from))
-                }
-                Err(error) => {
-                    if inner.unreadable_tiers.insert(account.to_string()) {
-                        tracing::warn!(
-                            account = %account,
-                            %error,
-                            "the account's tier could not be read, so the kept-warm credit files under no tier"
-                        );
-                    }
-                    None
-                }
-            });
         drop(inner);
         let Some(credit) = credit else {
             return;
         };
+        // The tier the router prices the serving account by, as a settlement reads it, so the credit files under the
+        // tier its request row does.
+        let tier = credit.account.as_deref().and_then(|account| {
+            self.tier_from(
+                account,
+                self.parts.store.subscription_term(account),
+                "the kept-warm credit files under no tier",
+            )
+        });
         // The band the request's own row keys, read off its prompt as the ledger reads the serving attempt's.
         let band = complete.usage.as_ref().map_or(Band::Standard, |usage| {
             let counts = crate::savings::typed(ProbeUsage::from_bus(usage));
@@ -3867,19 +3891,18 @@ impl Engine {
         // The five asks behind `router_view` (canonicals, pins, cooldowns, overages, member spends) are a round
         // trip apiece, and a tick with nothing due pays none of them. `drop_sessions_of_dead_keys` reads the snapshot
         // alone, which `RouterHandle::snapshot` answers without a command.
+        let snapshot = self.parts.router.snapshot();
+        // A deleted account's failing streak goes with it, so a later account under the same id warns afresh.
+        // Pruned on every tick, since a probe orphaned while nothing is retained still writes the set.
+        self.unreadable_tiers()
+            .retain(|id| snapshot.account(id).is_some());
         let retained_models = {
             let mut inner = self.lock();
             if inner.closed {
                 return;
             }
             inner.expire(now, expiry);
-            let snapshot = self.parts.router.snapshot();
             inner.drop_sessions_of_dead_keys(&snapshot);
-            // A deleted account's failing streak goes with it, so a later account under the same id warns afresh.
-            // Pruned on every tick, since a probe orphaned while nothing is retained still writes the set.
-            inner
-                .unreadable_tiers
-                .retain(|id| snapshot.account(id).is_some());
             inner.advance_idle_episodes(&snapshot, now);
             // A probe the ceiling wrote off keeps its entry alive for a turn that may still read it, so the write-off
             // waits for the entry's own end, whether or not any recipe is still retained.
