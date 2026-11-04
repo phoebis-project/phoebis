@@ -3899,14 +3899,9 @@ impl Task {
                             // The meter charges a request inside the peak band more, by its own regime's factor, so
                             // the banded copy weighs it by the band of the row's regime at the renewal, the row's
                             // entrypoint as the renewal leaves it. Dollars cost the same at every hour.
-                            let entrypoint = if keepalive {
-                                &current.entrypoint
-                            } else {
-                                &pin.entrypoint
-                            };
                             let band = self.config.band.at(
                                 FIVE_HOUR,
-                                Some(entrypoint.as_str())
+                                Some(pin.entrypoint.as_str())
                                     .filter(|entrypoint| !entrypoint.is_empty()),
                                 now,
                             );
