@@ -710,14 +710,14 @@ pub enum SelectResult {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Obstacle {
     Attempted,
-    /// The member's spend reached one of its budgets; `until` is the latest end among the budgets reached and
-    /// `period` the budget that end belongs to, the one the record names.
+    /// The member's spend reached one of its budgets. `until` is the latest end among the budgets reached and `period`
+    /// the budget that end belongs to, the one the record names.
     Budget {
         until: i64,
         period: BudgetPeriod,
     },
-    /// The ledger is degraded, so the member's spend rows may be stale; a budgeted member is not placed on until
-    /// the writer catches up and the spend is read afresh. Untimed: no deadline clears it.
+    /// The ledger is degraded, so the member's spend rows may be stale. A budgeted member is not placed on until the
+    /// writer catches up and the spend is read afresh. Untimed: no deadline clears it.
     BudgetUnknown,
     Cooldown {
         reason: String,
@@ -5299,8 +5299,8 @@ pub(crate) fn obstacle(
     fast: bool,
 ) -> Option<Obstacle> {
     let tried = attempted.iter().any(|a| a == account_id);
-    // A candidate the registry no longer holds was deleted after admission; it is nobody's to select, and a
-    // cooldown row it left behind must not date an exhaustion no wait can clear.
+    // A candidate the registry no longer holds was deleted after admission. It is nobody's to select, and a cooldown
+    // row it left behind must not date an exhaustion no wait can clear.
     let Some(account) = snapshot.account(account_id) else {
         return Some(Obstacle::Deleted);
     };
