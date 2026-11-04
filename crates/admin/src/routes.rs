@@ -2441,8 +2441,8 @@ pub(crate) struct PollStatusView {
     /// The message of the last attempt that was not clean, null after a clean one.
     pub last_error: Option<String>,
     /// `clean`, `failed`, or `rate_limited`.
-    #[schema(example = "clean")]
-    pub last_outcome: String,
+    #[schema(value_type = String, example = "clean")]
+    pub last_outcome: PollOutcome,
     pub next_attempt_at: Option<i64>,
     pub rate_limited_in_a_row: u32,
 }
@@ -2944,13 +2944,7 @@ fn poll_json(status: &PollStatus) -> PollStatusView {
         last_attempt_at: status.last_attempt_at,
         last_clean_at: status.last_clean_at,
         last_error: status.last_error.clone(),
-        // The words `PollOutcome`'s snake_case serialization writes.
-        last_outcome: match status.last_outcome {
-            PollOutcome::Clean => "clean",
-            PollOutcome::Failed => "failed",
-            PollOutcome::RateLimited => "rate_limited",
-        }
-        .to_string(),
+        last_outcome: status.last_outcome,
         next_attempt_at: status.next_attempt_at,
         rate_limited_in_a_row: status.rate_limited_in_a_row,
     }

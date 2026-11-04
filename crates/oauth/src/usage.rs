@@ -53,7 +53,7 @@ const FABLE_KEY_ALIASES: &[&str] = &["cinder_cove", "iguana_necktie"];
 pub const FABLE_WINDOW_KEY: &str = "fable";
 
 /// How an attempt at the usage or the profile endpoint ended.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PollOutcome {
     Clean,
