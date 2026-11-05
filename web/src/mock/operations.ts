@@ -31,12 +31,12 @@ interface WrittenFigures {
 
 /**
  * The five subagents the written session holds beyond its drawn pair, written so the session holds an agent in each
- * lifecycle word, three of them released, one by the session's end, which the view keeps listed, and an id of the
- * length Claude Code gives a subagent. The list's order (a released row first, the parked row before the idle one, and
- * the idle row's last request newer than the drawn busy row's) differs from the lifecycle order main, busy, idle,
- * parked, so lines drawn in the list's order read differently from lines sorted into it. Each released row's last probe
- * dates its release inside the pool's cache TTL, since the router lists a released record for one TTL after the
- * release and then not at all.
+ * lifecycle word, three of them released, one by the session's end, hidden with the other two unless the view lists
+ * released agents, and an id of the length Claude Code gives a subagent. The list's order (a released row first, the
+ * parked row before the idle one, and the idle row's last request newer than the drawn busy row's) differs from the
+ * lifecycle order main, busy, idle, parked, so lines drawn in the list's order read differently from lines sorted into
+ * it. Each released row's last probe dates its release inside the pool's cache TTL, since the router lists a released
+ * record for one TTL after the release and then not at all.
  */
 const WRITTEN_SUBAGENTS: Partial<KeepaliveRecipe>[] = [
   { agentId: 'e7c1', agentState: 'released', cause: 'agent_released', deadline: null, lastProbeAt: ago(4 * MINUTE), lastRequestAt: ago(9 * MINUTE), nextProbeAt: null, parkKind: null, state: 'ended', wakeAt: null },
