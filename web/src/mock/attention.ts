@@ -4,6 +4,7 @@ import { tokensTotal, undatedModel } from '@/lib/format';
 import { hoursOfKey } from '@/lib/windows';
 import { ACCOUNTS, accountById } from './accounts';
 import { RECONCILIATIONS } from './analytics';
+import { KEEPALIVE_OVERVIEW } from './operations';
 import { KEYS, POOLS, poolById } from './pools';
 import { REQUESTS, planPaid } from './requests';
 // The walls condition names its shedding round `round`, so the helper reads under another name here.
@@ -222,16 +223,18 @@ const CONDITIONS: AttentionItem[] = [
 ].sort((x, y) => CONDITION_ORDER.indexOf(x.kind) - CONDITION_ORDER.indexOf(y.kind) || Date.parse(x.since) - Date.parse(y.since) || x.subject.id.localeCompare(y.subject.id));
 
 /**
- * One item per kind but a failed certificate reload and a wall, which holds on two accounts, on the story's accounts,
- * pools, keys, proxy listener and models, in the route's order: jobs exhausted from the runner's first request after
- * its one member spent the day's budget, a client build refused on the laptop key, the routing state writer keeping
- * its writes in memory, legacy's lapsed credential, the Overflow workspace out of funding as its account reads,
- * legacy's refreshes failing, the proxy listener's certificate 12 days from its end, a priced record of the jobs pool's
- * one member parked in the ledger file, the backoff secondary's poll is in, Sonnet 4.5 priced nothing, nightly's
- * 5-hour window charged twice the table up to its 13:11 reset, nightly's wall at 12:01 and secondary's after the 11:00
- * round, nightly spent after the least-bad move onto it, the all pool's round that found no destination with runway,
- * and studio slowed in work for 2 h 8 min of the day. The meter drift reads the reconciled windows and the four routing
- * conditions the routing log's events, as the ledger folds them.
+ * One item per kind but a failed certificate reload, the expiries between turns, which the Dashboard reads as a figure,
+ * and a wall, which holds on two accounts, on the story's accounts, pools, keys, proxy listener, models and keepalive
+ * engine, in the route's order: jobs exhausted from the runner's first request after its one member spent the day's
+ * budget, a client build refused on the laptop key, the routing state writer keeping its writes in memory, legacy's
+ * lapsed credential, the Overflow workspace out of funding as its account reads, legacy's refreshes failing, the proxy
+ * listener's certificate 12 days from its end, a priced record of the jobs pool's one member parked in the ledger file,
+ * the keepalive engine's bus gaps, the backoff secondary's poll is in, Sonnet 4.5 priced nothing, nightly's 5-hour
+ * window charged twice the table up to its 13:11 reset, nightly's wall at 12:01 and secondary's after the 11:00 round,
+ * nightly spent after the least-bad move onto it, the all pool's round that found no destination with runway, studio
+ * slowed in work for 2 h 8 min of the day, and the engine's retained prompts at 92 percent of their cap. The meter
+ * drift reads the reconciled windows, the four routing conditions the routing log's events, as the ledger folds them,
+ * and the two keepalive items the overview's figures.
  */
 export const ATTENTION: AttentionItem[] = [
   ...(jobsExhausted
@@ -305,6 +308,15 @@ export const ATTENTION: AttentionItem[] = [
   },
   {
     ...ATTENTION_ITEM_SAMPLE,
+    detail: { gaps: KEEPALIVE_OVERVIEW.busGaps, last_at: ms(KEEPALIVE_OVERVIEW.lastBusGapAt) },
+    kind: 'keepalive_bus_gaps',
+    link: null,
+    pools: [],
+    since: ago(5 * HOUR + 40 * MINUTE),
+    subject: { id: 'keepalive', label: 'Keepalive', type: 'router' },
+  },
+  {
+    ...ATTENTION_ITEM_SAMPLE,
     ...ofAccount('secondary'),
     detail: { account: 'secondary', backoff_since: ms(secondaryPoll?.backoffSince), next_attempt_at: ms(secondaryPoll?.nextAttemptAt), rate_limited_in_a_row: secondaryPoll?.rateLimitedInARow ?? 0 },
     kind: 'poll_backoff',
@@ -323,4 +335,13 @@ export const ATTENTION: AttentionItem[] = [
       ]
     : []),
   ...CONDITIONS,
+  {
+    ...ATTENTION_ITEM_SAMPLE,
+    detail: { cap: 'retained', count: KEEPALIVE_OVERVIEW.limits.retainedBytes.count, max: KEEPALIVE_OVERVIEW.limits.retainedBytes.max, pct: 0.92 },
+    kind: 'keepalive_cap',
+    link: null,
+    pools: [],
+    since: ago(3 * HOUR + 15 * MINUTE),
+    subject: { id: 'keepalive.retained', label: 'Keepalive', type: 'router' },
+  },
 ];

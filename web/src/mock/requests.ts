@@ -54,7 +54,66 @@ export const SESSION_IDS = Array.from({ length: 14 }, () => rng.uuid());
 
 /** An earlier holder of `desktop`, created long before the live one. */
 export const DELETED_HOLDER_GENERATION = Date.parse(daysAgo(120));
-const AGENT_IDS = ['main', 'main', 'main', 'a7f3', 'c21e', 'e90b', '4d1a'];
+
+/**
+ * Each session story's subagents, by the story's index in `sessionSpec`, each with the type its rows carry, so the
+ * story's pins, its recipes and its request rows name one set. The first `agents - 1` entries are the subagents
+ * `RECIPES` pins, and an entry past them has rows and no pin, an earlier agent. A story whose main runs alone, and a
+ * fixed row, whose agents its figures write, hold none. Story 0 is the busy desktop session, story 4 carries an earlier
+ * agent beside its pin, story 9 is the written session, and story 15 is the session the mod released whole.
+ */
+export const STORY_AGENTS: readonly (readonly { id: string; type: string }[])[] = [
+  [
+    { id: 'c21e', type: 'fork' },
+    { id: 'e4b7', type: 'general-purpose' },
+  ],
+  [],
+  [{ id: 'a7f3', type: 'Plan' }],
+  [],
+  [
+    { id: 'e90b', type: 'general-purpose' },
+    { id: '0b7f', type: 'Explore' },
+  ],
+  [],
+  [],
+  [{ id: 'e90b', type: 'general-purpose' }],
+  [],
+  [
+    { id: '4d1a', type: 'teammate' },
+    { id: 'e7c1', type: 'general-purpose' },
+    { id: '4f0c2a9e7b61d3c58', type: 'general-purpose' },
+    { id: 'b2d8', type: 'general-purpose' },
+    { id: '91aa', type: 'general-purpose' },
+    { id: 'c3a9', type: 'general-purpose' },
+  ],
+  [],
+  [],
+  [],
+  [],
+  [],
+  [
+    { id: '2f9d', type: 'general-purpose' },
+    { id: '8c1a', type: 'Explore' },
+  ],
+  [],
+  [],
+  [],
+  [],
+  [],
+];
+/** A drawn row's agent slots: main on three of the seven, a subagent of the row's story on the other four. */
+const AGENT_SLOTS = [0, 1, 2, 3, 4, 5, 6];
+/**
+ * A drawn row's agent on its session's story, from one pick per row so every later roll stays: main on three slots of
+ * seven, else the story's subagent the slot names, main where the story holds none. `subagentSlot` is the slot's side,
+ * which the hint stream's draws follow.
+ */
+function storyAgent(sessionId: string): { id: string; subagentSlot: boolean; type: string | null } {
+  const slot = rng.pick(AGENT_SLOTS);
+  const agents = STORY_AGENTS[SESSION_IDS.indexOf(sessionId)] ?? [];
+  const agent = slot < 3 || agents.length === 0 ? null : agents[(slot - 3) % agents.length];
+  return { id: agent?.id ?? 'main', subagentSlot: slot >= 3, type: agent?.type ?? null };
+}
 
 /** One client per key, the way a machine runs one build of Claude Code and a runner its job on the Agent SDK. */
 export const USER_AGENTS: Record<string, string> = {
@@ -586,7 +645,10 @@ function buildRequests(): RequestLog[] {
     const ttftMs = ttfbMs === null || kind !== 'inference' || transport !== 'sse' ? ttfbMs : ttfbMs + Math.min(phaseRng.int(40, 600), Math.max(0, durationMs - STREAM_TAIL - ttfbMs));
     const id = `req_${rng.uuid().slice(0, 12)}`;
     const sessionId = rng.pick(SESSION_IDS);
-    const agentId = rng.pick(AGENT_IDS);
+    const agent = storyAgent(sessionId);
+    // The hint stream draws a type on every subagent slot and leaves it unused, the story naming the type, since the
+    // hints drawn after it read the stream from there.
+    if (agent.subagentSlot) hints.pick(AGENT_TYPES);
     rows.push({
       ...REQUEST_SAMPLE,
       guardrailId: null,
@@ -614,10 +676,10 @@ function buildRequests(): RequestLog[] {
       diagnosticsSource: sourceOf(attempts, lane.keyId),
       errorCode,
       sessionId,
-      agentId,
+      agentId: agent.id,
       userAgent: USER_AGENTS[lane.keyId] ?? null,
       client: CLIENTS[lane.keyId] ?? null,
-      agentType: agentId === 'main' ? null : hints.pick(AGENT_TYPES),
+      agentType: agent.type,
       compaction: hints.chance(0.04) ? 'auto' : null,
       contextCompacted: hints.chance(0.04) ? 'auto' : null,
       prevToolMs: hints.chance(0.5) ? hints.int(200, 90_000) : null,
@@ -992,6 +1054,8 @@ const FAILED_OVER_SESSION_ID = 'd6f1a3c8-2e94-4b07-8a5d-3c9e7f2b1a64';
 export const CLIENT_SESSION_ID = '7d3e1c20-5b4a-4e8f-9c61-0a2b3c4d5e6f';
 /** The desktop session the mod released whole after its one turn, written out as its row lists past the drawn ids. */
 export const RELEASED_SESSION_ID = '3c36d663-d074-42f6-8738-f54da7c9f026';
+/** The desktop session the mod ended on nightly, whose row writes its agents' figures out. */
+const FINISHED_SESSION_ID = '9b4e2f71-6c3d-4a85-b0e2-5d7f8a1c3e96';
 /** The contract seat's batch session on fleet. */
 export const FLEET_SESSION_ID = '8b1f4c2e-6a93-4d07-b5e2-3c9a7f1d4e68';
 /** The approved Ultra's session on bench, on the 7-day window and the Fable week alone. */
@@ -1446,6 +1510,14 @@ function storyRequests(): RequestLog[] {
     // week alone, since its poll names no 5-hour window. Last, so every seed above keeps the upstream ids it draws.
     { agentId: 'main', at: t(14, 16, 30), attempts: [{ accountId: 'workshop', at: t(14, 16, 30), ms: 9_800, status: 200 }], id: 'req_1c7e4a9d-f52', keyId: 'bench', model: 'claude-fable-5-1', requestClass: 'main', session: WORKSHOP_SESSION_ID, usage: { cacheWrite1h: 42_600, input: 2_100, output: 1_380 } },
     { agentId: 'main', at: t(14, 24, 10), attempts: [{ accountId: 'workshop', at: t(14, 24, 10), ms: 6_300, status: 200 }], id: 'req_9d3b6f2a-c81', keyId: 'bench', model: 'claude-sonnet-5-5', requestClass: 'main', session: WORKSHOP_SESSION_ID, usage: { cacheRead: 44_000, cacheWrite1h: 1_900, input: 1_600, output: 720 } },
+    // The last turns of the desktop session the mod ended, on nightly at the minutes its written figures date main's
+    // and its subagents' last requests, and the one turn of a subagent the mod never pinned there, before the others.
+    // Each reads a cached prefix, so none counts as a miss between turns. Last, so every seed above keeps the upstream
+    // ids it draws.
+    { agentId: 'main', at: NOW - 21 * MINUTE, attempts: [{ accountId: 'nightly', at: NOW - 21 * MINUTE, ms: 5_200, status: 200 }], id: 'req_4c8e2a17-b39', keyId: 'desktop', model: 'claude-opus-5', requestClass: 'main', session: FINISHED_SESSION_ID, usage: { cacheRead: 13_400, input: 800, output: 240 } },
+    { agentId: 'a7f3', at: NOW - 34 * MINUTE, attempts: [{ accountId: 'nightly', at: NOW - 34 * MINUTE, ms: 3_800, status: 200 }], id: 'req_7f3d1b95-e62', keyId: 'desktop', model: 'claude-opus-5', requestClass: 'subagent', session: FINISHED_SESSION_ID, usage: { cacheRead: 9_600, input: 700, output: 180 } },
+    { agentId: '5d0e', at: NOW - 47 * MINUTE, attempts: [{ accountId: 'nightly', at: NOW - 47 * MINUTE, ms: 4_100, status: 200 }], id: 'req_a2e9c6d4-f17', keyId: 'desktop', model: 'claude-opus-5', requestClass: 'subagent', session: FINISHED_SESSION_ID, usage: { cacheRead: 8_900, input: 600, output: 210 } },
+    { agentId: 'd41e', at: NOW - 60 * MINUTE, attempts: [{ accountId: 'nightly', at: NOW - 60 * MINUTE, ms: 3_300, status: 200 }], id: 'req_d41e5b80-c26', keyId: 'desktop', model: 'claude-opus-5', requestClass: 'subagent', session: FINISHED_SESSION_ID, usage: { cacheRead: 7_200, input: 500, output: 160 } },
   ];
   return seeds.map(storyRow);
 }

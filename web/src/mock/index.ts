@@ -937,6 +937,7 @@ export class MockApi implements Api {
     const pool: StoredPool = {
       ...POOL_SAMPLE,
       ...input,
+      billed24h: 0,
       cost24h: 0,
       id,
       // From the members' kinds, as the router composes them, and nothing for a pool with no member.
@@ -1296,7 +1297,9 @@ export class MockApi implements Api {
 
   listSessions() {
     if (sessionsFail()) return Promise.reject(new ApiError(503, 'store busy', null));
-    return latency(sessionsListedAt(NOW, this.registry().sessions, this.settings.sessions.nonCompanionIdleSeconds));
+    // The fold reads the rows the ledger has written by the mock's clock, the ones the request log lists.
+    const now = mockClock.now();
+    return latency(sessionsListedAt(NOW, this.registry().sessions, this.settings.sessions.nonCompanionIdleSeconds, REQUESTS.filter((r) => landedAt(r) <= now)));
   }
 
   login(secret: string, stayLoggedIn = false): Promise<SessionInfo> {

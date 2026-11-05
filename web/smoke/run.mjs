@@ -694,7 +694,7 @@ await forView('/', async () => {
     title
       .split('\n')
       .filter((l) => !l.startsWith('started ') && !l.startsWith('Opens the Routing log'))
-      .map((l) => l.replace(/^(backoff_since|expires|next_attempt_at): (?!\d+$).+$/, '$1: <instant>').replace(/ \((?!\d+\))[^()]+\)\. Replace the pair/, ' (<instant>). Replace the pair'));
+      .map((l) => l.replace(/^(backoff_since|expires|last_at|next_attempt_at): (?!\d+$).+$/, '$1: <instant>').replace(/ \((?!\d+\))[^()]+\)\. Replace the pair/, ' (<instant>). Replace the pair'));
   // The exhausted pool's badge opens the routing log on a range that ends now, which its own check reads; here the
   // address's path stands for it.
   const target = (href) => href?.split('?')[0] ?? null;
@@ -714,6 +714,14 @@ await forView('/', async () => {
     ['Credential refresh failed: legacy', 'badge--serious', '/accounts/legacy', ['5 refreshes failed in a row: refresh_token rejected: invalid_grant', 'account: legacy', 'failures: 5', 'last_error: refresh_token rejected: invalid_grant', 'outcome: failed']],
     ['Certificate expiring: proxy.tls', 'badge--warning', null, ["The proxy listener's certificate /etc/phoebis/proxy.pem expires in 12 days (<instant>). Replace the pair and run phoebis tls reload.", 'cert_file: /etc/phoebis/proxy.pem', 'days_left: 12', 'expires: <instant>']],
     ['Priced record parked: jobs', 'badge--serious', '/pools#jobs', ['accounts: ["research"]', 'count: 1', 'pool: jobs']],
+    // The keepalive engine's bus gaps rank after the parked record, a router subject that opens the Sessions view, read
+    // off the mock's keepalive overview: three gaps, the last two hours back.
+    [
+      'Keepalive bus gaps: 3 since the start',
+      'badge--serious',
+      '/sessions',
+      ["The keepalive subscriber fell behind the router's in-process request bus and discarded the observations it had open, the last time 2h ago. Opens the Sessions view.", 'gaps: 3', 'last_at: <instant>'],
+    ],
     ['Usage poll backing off: secondary', 'badge--warning', '/accounts/secondary', ['account: secondary', 'backoff_since: <instant>', 'next_attempt_at: <instant>', 'rate_limited_in_a_row: 6']],
     // The model's item ranks after the poll backoff and before the meter drift, the route's order of the kinds, in the
     // info tone, since an unpriced model costs nothing and asks for a weight in the cost model.
@@ -756,19 +764,21 @@ await forView('/', async () => {
       '/routing-log',
       ['bar_ms: 3600000', 'factor_min: 0.35', 'open: true', 'setting: ["slow_down_stretch_seconds"]', 'setting_values: {"slow_down_stretch_seconds":1800}', 'slowed_ms: 7700000', 'spans: 2'],
     ],
+    // The engine's retained prompts at 92 percent of their cap, the mock overview's retained bytes, rank last.
+    ['Keepalive cap at 92%: retained prompts', 'badge--warning', '/sessions', ['The engine is near its cap and will refuse new records at it. Opens the Sessions view.', 'cap: retained', 'count: 246960620', 'max: 268435456', 'pct: 0.92']],
   ];
   const ages = listed.map((b) => b.title.split('\n').find((l) => l.startsWith('started ')));
   results.push({
-    name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's and a routing condition's the routing log, and titled with its detail and age, its sentence first where no pool card draws it, read from the row and the list behind its \"+N more\" together, the row holding all seventeen while no layout folds it",
+    name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's and a routing condition's the routing log, and titled with its detail and age, its sentence first where no pool card draws it, read from the row and the list behind its \"+N more\" together, the row holding all nineteen while no layout folds it",
     ok:
-      lead() === '17 need attention' &&
+      lead() === '19 need attention' &&
       unpriced !== undefined &&
       drift !== undefined &&
       JSON.stringify(read) === JSON.stringify(want) &&
       /^started 1[34]m ago$/.test(ages[0] ?? '') &&
       ages[6] === 'started 18d ago' &&
       /^started 1h( 1m)? ago$/.test(ages[7] ?? '') &&
-      /^started 4[23]m ago$/.test(ages[8] ?? '') &&
+      /^started 4[23]m ago$/.test(ages[9] ?? '') &&
       ages.every((a) => /^started (\d+[dhm] ?)+ ago$/.test(a ?? '')) &&
       line()?.nextElementSibling?.classList.contains('stat-grid') === true,
     missing: [lead() ?? 'no lead', ...read.map((r) => JSON.stringify(r)), ...ages],
@@ -849,7 +859,7 @@ await forView('/', async () => {
   results.push({ name: '/ the window regaining focus reads the attention list again, and an answer clears the failure', ok: reads === 1 && quiet(), missing: [`reads ${reads}`, line()?.textContent ?? 'no line'] });
   localStorage.removeItem('phoebis.mockEmpty');
   await tick();
-  results.push({ name: '/ the story back, the next tick draws its seventeen items again', ok: lead() === '17 need attention', missing: [lead() ?? 'no lead'] });
+  results.push({ name: '/ the story back, the next tick draws its nineteen items again', ok: lead() === '19 need attention', missing: [lead() ?? 'no lead'] });
   dash.unmount();
 
   {
@@ -934,10 +944,10 @@ await forView('/', async () => {
     delete window.HTMLElement.prototype.clientWidth;
     const texts = want.map(([text]) => text);
     results.push({
-      name: "/ an attention line too narrow for its seventeen items shows the four that fit and folds the other thirteen behind \"+13 more\" titled with their words one per line, whose list holds all seventeen worst first with the row's tones and titles, closes on Escape with the focus back on the badge, and closes as one of its links opens its page",
+      name: "/ an attention line too narrow for its nineteen items shows the four that fit and folds the other fifteen behind \"+15 more\" titled with their words one per line, whose list holds all nineteen worst first with the row's tones and titles, closes on Escape with the focus back on the badge, and closes as one of its links opens its page",
       ok:
         JSON.stringify(shown) === JSON.stringify(texts.slice(0, 4)) &&
-        JSON.stringify(foldRead) === JSON.stringify(['+13 more', ['Folded:', ...texts.slice(4)].join('\n'), 'badge badge--neutral attention-line__more', 'dialog', 'false', null]) &&
+        JSON.stringify(foldRead) === JSON.stringify(['+15 more', ['Folded:', ...texts.slice(4)].join('\n'), 'badge badge--neutral attention-line__more', 'dialog', 'false', null]) &&
         JSON.stringify(listed) === JSON.stringify(want.map(([text, tone, href]) => [text, tone, href])) &&
         sameTitles &&
         JSON.stringify(opened) === JSON.stringify(['dialog', 'Needs attention', 'true', true, true]) &&
@@ -949,7 +959,7 @@ await forView('/', async () => {
       name: "/ the Replay button stands on the badges' row while the lead, the fold badge and the button fit beside each other, and takes a second row of its own where they do not",
       ok:
         JSON.stringify(oneRow) === JSON.stringify(['attention-line', 'attention-line__tail', 'Replay parked records']) &&
-        JSON.stringify(wrapped) === JSON.stringify(['attention-line is-wrapped', texts.slice(0, 1), '+16 more', ['Replay parked records']]),
+        JSON.stringify(wrapped) === JSON.stringify(['attention-line is-wrapped', texts.slice(0, 1), '+18 more', ['Replay parked records']]),
       missing: [JSON.stringify(oneRow), JSON.stringify(wrapped)],
     });
     results.push({
@@ -16749,8 +16759,10 @@ await forView('/routing-log', async () => {
     page.unmount();
   }
   {
-    // A placement beside the main conversation promised no size, so its cache read is weighed against the input.
-    const { card, page, record } = await story('req_52f62e67-839');
+    // A placement beside the main conversation promised no size, so its cache read is weighed against the input. The
+    // seed seats the drawer's placement beside main on the newest subagent turn that reads a cache, the a7f3 turn of
+    // the desktop session the mod ended.
+    const { card, page, record } = await story('req_7f3d1b95-e62');
     scan('with main placement', card);
     stripDrawn('with main placement', card, modelPairs(record), record);
     await popoversOpen('with main placement', page, card, record);
@@ -18280,8 +18292,8 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
   // revocation on ci, the three guardrail blocks on desktop, and the drift and the contract refusals on laptop. Each
   // key's Failed leaves them out, as the Traffic line does. Laptop's Failed and the line's errors count the two rows
   // the router's own stop cut, `req_7a2c4e91-d03` and `req_c58d1f3a-e67`, and the line's requests the tie's failover
-  // `req_8c41f2d7-a93`, which answered on its second attempt, the contract seat's three rows on fleet and the approved
-  // Ultra's two rows on bench, each answered.
+  // `req_8c41f2d7-a93`, which answered on its second attempt, the contract seat's three rows on fleet, the approved
+  // Ultra's two rows on bench and the four turns of the desktop session the mod ended, each answered.
   const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Refusals by code');
   const codes = [...(card?.querySelectorAll('.hbars li') ?? [])].map((li) => [li.querySelector('.mono')?.textContent?.trim(), li.querySelector('.num')?.firstChild?.textContent?.trim()]);
   const table = [...m.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Traffic by key');
@@ -18294,7 +18306,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
     ok:
       JSON.stringify(keys) === JSON.stringify([['desktop', '15', '3'], ['ci', '1', '3'], ['laptop', '6', '2']]) &&
       JSON.stringify(codes) === JSON.stringify([['guardrail_blocked', '3'], ['client_not_allowed', '2'], ['auth_unknown', '1'], ['client_contract', '1'], ['client_drift', '1']]) &&
-      line === '219 requests, 16.9% errors',
+      line === '223 requests, 16.6% errors',
     missing: [JSON.stringify(keys), JSON.stringify(codes), line ?? 'no line'],
   });
 }
@@ -21959,27 +21971,28 @@ await forView('/sessions', async () => {
   page.unmount();
 });
 await forView('/sessions', async () => {
-  // A gap discarded every observation the keepalive engine still had open, so any count warns.
+  // A gap discarded every observation the keepalive engine still had open, so any count warns. The mock's overview
+  // reads three gaps, so the quiet read answers none in its place.
   const read = (page) => {
     const tile = [...page.container.querySelectorAll('.stat-grid > .stat')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === 'Bus gaps');
     const value = tile?.querySelector('.stat__value');
     return { note: tile?.querySelector(':scope > .stat__note')?.textContent?.trim() ?? '', value: value?.textContent?.trim() ?? 'absent', warn: value?.classList.contains('is-warning') === true };
   };
   const overview = await api.getKeepaliveOverview();
-  const quietPage = await mount('/sessions');
-  await quietPage.settle();
-  const quiet = read(quietPage);
-  quietPage.unmount();
-  const { getKeepaliveOverview } = api;
-  api.getKeepaliveOverview = async () => ({ ...overview, busGaps: 2 });
   const gappedPage = await mount('/sessions');
   await gappedPage.settle();
   const gapped = read(gappedPage);
   gappedPage.unmount();
+  const { getKeepaliveOverview } = api;
+  api.getKeepaliveOverview = async () => ({ ...overview, busGaps: 0 });
+  const quietPage = await mount('/sessions');
+  await quietPage.settle();
+  const quiet = read(quietPage);
+  quietPage.unmount();
   api.getKeepaliveOverview = getKeepaliveOverview;
   results.push({
     name: '/sessions the bus gaps tile reads the overview\'s count and warns once the keepalive engine missed events',
-    ok: overview.busGaps === 0 && quiet.value === '0' && !quiet.warn && quiet.note === 'times the keepalive engine missed bus events' && gapped.value === '2' && gapped.warn,
+    ok: overview.busGaps === 3 && quiet.value === '0' && !quiet.warn && quiet.note === 'times the keepalive engine missed bus events' && gapped.value === '3' && gapped.warn,
     missing: [`mock ${overview.busGaps}`, JSON.stringify(quiet), JSON.stringify(gapped)],
   });
 });
@@ -23741,9 +23754,10 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const companions = [...m.container.querySelectorAll('tbody tr.srow')].filter((tr) => ['reporting', 'silent'].includes(sessionCell(m, tr, 'Companion')?.querySelector('.badge')?.textContent?.trim() ?? '')).length;
     const note = tile?.querySelector('.stat__note')?.textContent?.trim() ?? '';
     results.push({ name: '/sessions the tile counts the rows whose companion reports or went silent', ok: companions > 0 && note.startsWith(`${companions} with the keepalive mod,`), missing: [`${companions} rows`, note || 'no note'] });
-    // Twelve of the rows the default filters keep hold a recipe: the session the mod released whole is finished and
-    // hidden, and the row idle for two hours left the route's list under the non-companion timeout.
-    results.push({ name: '/sessions the tile counts the rows that hold a recipe, not every session', ok: (tile?.textContent ?? '').includes(', 12 with a recipe'), missing: [tile?.textContent ?? 'absent'] });
+    // Thirteen of the rows the default filters keep hold a recipe, the written auxiliary-only session's subagent's
+    // among them: the session the mod released whole is finished and hidden, and the row idle for two hours left the
+    // route's list under the non-companion timeout.
+    results.push({ name: '/sessions the tile counts the rows that hold a recipe, not every session', ok: (tile?.textContent ?? '').includes(', 13 with a recipe'), missing: [tile?.textContent ?? 'absent'] });
   }
   {
     // The Sessions and Agents figures count the rows the filters keep and the Retained figure reads the overview, each
@@ -23765,7 +23779,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const want = [
       ['Sessions', '24 of 128'],
       ['Agents', '33 of 1,024', '10 busy, 7 idle, 4 parked'],
-      ['Retained', '40 MiB of 256 MiB', 'prompts kept for probes'],
+      ['Retained', '235.5 MiB of 256 MiB', 'prompts kept for probes'],
     ];
     results.push({
       name: '/sessions the strip reads the sessions and the agents the filters keep, the agents by lifecycle word, and the retained bytes, each as a count of its cap',
@@ -23848,14 +23862,15 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     missing: [JSON.stringify(heads().slice(0, 2)), ...rows().slice(0, 3).map((r) => r.lastElementChild?.innerHTML ?? 'no cell')],
   });
   {
-    // The 24 rows the default filters keep at the story's instant, thirteen of them reading no recipe: the eleven no
+    // The 24 rows the default filters keep at the story's instant, twelve of them reading no recipe: the eleven no
     // recipe warms, the written fleet session no mod reports and the workshop session, whose pool keeps no cache warm,
-    // among them, the written auxiliary-only session, whose main holds none, and the silent row past its idle limit.
+    // among them, and the silent row past its idle limit. The written auxiliary-only session, whose main holds none,
+    // reads its subagent's recipe.
     const pinned = await mount('/sessions', { now: CLOCK_ORIGIN });
     const drawn = [...pinned.container.querySelectorAll('tbody tr.srow')];
     const unwarmed = drawn.filter((tr) => sessionCell(pinned, tr, 'Cache warming')?.textContent?.trim() === 'no recipe').length;
     pinned.unmount();
-    results.push({ name: '/sessions lists every session the default filters keep, not only warmed ones', ok: drawn.length === 24 && unwarmed === 13, missing: [`${drawn.length} rows, ${unwarmed} with no recipe`] });
+    results.push({ name: '/sessions lists every session the default filters keep, not only warmed ones', ok: drawn.length === 24 && unwarmed === 12, missing: [`${drawn.length} rows, ${unwarmed} with no recipe`] });
   }
   // The sessions the mod released whole are finished, so these read with the finished sessions shown.
   await m.navigate('/sessions?finished=1');

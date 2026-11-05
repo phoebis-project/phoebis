@@ -50,6 +50,11 @@ const lastUseOf = (r) => Math.max(...[r.lastRequestAt, r.lastProbeAt].flatMap((x
  * affinity window, since the mod's release ends the keepalive record and leaves the pin until the router expires it.
  */
 const pinnedRecipesOf = (s, recipes) => recipes.filter((r) => r.agentState !== 'released' || s.now - lastUseOf(r) <= affinityOf(s, r));
+/**
+ * Whether no recipe warms a pinned session's main, whose agents then hold one pin each beside the recipes' own. The
+ * session's summary reads a subagent's recipe where main holds none, so the recipes themselves are read.
+ */
+const mainUnwarmed = (recipes, x) => !recipes.some((r) => r.keyId === x.keyId && r.sessionId === x.sessionId && r.agentId === 'main');
 const TTL_MS = { '1h': HOUR, '5m': 5 * 60_000 };
 /**
  * The longest cache TTL of the pool a recipe's key routes through, the span the router lists a released record for
@@ -826,6 +831,38 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
   });
 
+  test(`every session the story seeds folds its spend from its own requests in the seed, and every agent entry names a line of the session or an earlier agent the seed holds, at ${at}`, async () => {
+    const s = await story;
+    const recipes = await s.api.listKeepaliveRecipes();
+    // The session expiry lists every row the story seeds, the ones past the non-companion timeout among them.
+    const seeded = s.lib.sessionsListedAt(s.now, undefined, s.settings.sessions.expireAfterSeconds);
+    const seed = [...s.lib.requestById.values()];
+    // The agents the seed gives requests on a session and no pin there, by the session's id.
+    const finished = '9b4e2f71-6c3d-4a85-b0e2-5d7f8a1c3e96';
+    const forks = '9e4c2b7a-5d31-4f86-a0b9-3c7e1d5f2a48';
+    const earlier = [
+      [finished, 'd41e'],
+      [s.lib.SESSION_IDS[4], '0b7f'],
+      [s.lib.SESSION_IDS[10], 'e90b'],
+      [s.lib.SESSION_IDS[11], '4d1a'],
+      [forks, 'a5e1'],
+      [forks, 'b7d3'],
+      [forks, 'd8f3'],
+    ];
+    for (const row of seeded) {
+      const name = `${row.keyId} ${row.sessionId}${row.historical ? ', the earlier holder' : ''}`;
+      const own = seed.filter((r) => !r.refused && r.keyId === row.keyId && r.keyGeneration === row.keyGeneration && r.sessionId === row.sessionId);
+      const clients = own.filter((r) => r.kind !== 'probe').length;
+      if (own.length === 0) assert.deepEqual([row.spend, row.requests], [null, 0], `${name} holds no request the router did not refuse`);
+      else assert.deepEqual([row.spend?.requests, row.requests], [clients, clients], `${name}'s client requests, its probes apart`);
+      const lines = new Set(['main', ...row.agentContexts.map((c) => c.agentId), ...recipes.filter((r) => r.keyId === row.keyId && r.sessionId === row.sessionId).map((r) => r.agentId)]);
+      for (const entry of row.agentRequests) {
+        const known = lines.has(entry.agentId) || earlier.some(([sessionId, agentId]) => sessionId === row.sessionId && agentId === entry.agentId);
+        assert.ok(known, `${name}: ${entry.agentId} on ${entry.model} names no line of the session and no earlier agent`);
+      }
+    }
+  });
+
   test(`a switched-off key was last used before its last write, and a pool's one member holds what its keys sent, at ${at}`, async () => {
     const s = await story;
     for (const k of s.keys.filter((x) => x.status === 'disabled' || x.status === 'revoked')) {
@@ -896,9 +933,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
   test(`each pool's active pins count one pin per key, session, agent and model under its keys, its members' sum and the pins on accounts outside them to it, and the dashboard's are their sum, at ${at}`, async () => {
     const s = await story;
     const poolOf = new Map(s.keys.map((k) => [k.id, k.poolId]));
-    const live = pinnedRecipesOf(s, await s.api.listKeepaliveRecipes());
-    // A pinned session no recipe warms holds one pin per agent all the same.
-    const unwarmed = (poolId, accountId) => sum(s.sessions.filter((x) => x.pinned && x.keepalive.state === null && poolOf.get(x.keyId) === poolId && (accountId === undefined || x.accountId === accountId)), (x) => x.agents);
+    const recipes = await s.api.listKeepaliveRecipes();
+    const live = pinnedRecipesOf(s, recipes);
+    // A pinned session whose main no recipe warms holds one pin per agent all the same.
+    const unwarmed = (poolId, accountId) => sum(s.sessions.filter((x) => x.pinned && mainUnwarmed(recipes, x) && poolOf.get(x.keyId) === poolId && (accountId === undefined || x.accountId === accountId)), (x) => x.agents);
     const pins = (poolId, accountId) => new Set(live.filter((r) => poolOf.get(r.keyId) === poolId && (accountId === undefined || r.accountId === accountId)).map(pinOf)).size + unwarmed(poolId, accountId);
     const above = {};
     for (const p of s.pools) {
@@ -1086,8 +1124,12 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       assert.deepEqual(row.agentContexts.map((c) => [c.agentId, c.model, c.accountId]), want, `${row.sessionId} lists its unreleased agents' pins`);
       const main = row.agentContexts.find((c) => c.agentId === 'main');
       if (main !== undefined) {
-        const read = (f) => [f.model, f.accountId, f.lastInputTokens, f.effort, f.cacheTtlMs, f.lastUsedAt, f.createdAt];
+        const read = (f) => [f.model, f.accountId, f.lastInputTokens, f.effort, f.cacheTtlMs, f.createdAt];
         assert.deepEqual(read(main), read(row), `${row.sessionId}: main's line reads the row's pin`);
+        // The row's last use is the newest across its pins, so main's own is the row's only where no subagent's is
+        // newer, and the row's warmth is main's pin's own.
+        const newest = row.agentContexts.reduce((at, c) => (Date.parse(c.lastUsedAt) > Date.parse(at) ? c.lastUsedAt : at), main.lastUsedAt);
+        assert.deepEqual([row.lastUsedAt, row.warm], [newest, main.warm], `${row.sessionId}: the row's last use is its newest pin's and its warmth main's`);
       }
     }
     assert.ok(companions.some((x) => x.agentContexts[0]?.agentId === 'main' && x.agentContexts.length >= 3), 'a companion session carries main and two subagents');
@@ -1131,10 +1173,11 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const aux = s.sessions.filter((x) => x.companion !== 'none' && x.pinned && x.agentId !== 'main');
     assert.equal(aux.length, 1, 'one companion row reads a subagent pin');
     const [row] = aux;
+    // Main holds no recipe, so the session's summary reads the subagent's.
     assert.deepEqual(
       [ownOf(row).map((r) => r.agentId), row.keepalive.state],
-      [[row.agentId], null],
-      'one subagent recipe and none of main',
+      [[row.agentId], ownOf(row)[0]?.agentState],
+      "one subagent recipe and none of main, the subagent's read by the summary",
     );
     const read = (f) => [f.agentId, f.model, f.accountId, f.lastInputTokens, f.effort];
     assert.deepEqual(row.agentContexts.map(read), [read(row)], "the subagent's line, the one the row reads");
@@ -1149,11 +1192,15 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const placed = (row) => row.pinned || (!row.historical && recipes.some((r) => r.keyId === row.keyId && r.sessionId === row.sessionId));
     // The rows the literal below reads. The other rows' first sightings are mostly draws, so their subagents' lines
     // are read against the requests seed: an inference request with an attempt places a pin, since a probe follows the
-    // request that placed its agent's pin and a count or a refusal before any attempt places none.
+    // request that placed its agent's pin and a count or a refusal before any attempt places none. An agent's request
+    // before its session's first sighting belongs to an earlier life of the session, which the router dated afresh
+    // once its last pin left.
     const written = ['5f8a3c1e-9d27-4b6e-8c04-2a7e9b3d1f65', 'b7e2d5a9-6c13-4f80-a4d2-9e1f3c7b0a68', '3e9b7c21-4d58-4a06-8f1e-6c2a9d0b5e74'];
     const seed = [...s.lib.requestById.values()].filter((r) => r.kind === 'inference' && r.attempts.length > 0);
     const firstRequestOf = (row, agentId) =>
-      seed.filter((r) => r.keyId === row.keyId && r.keyGeneration === row.keyGeneration && r.sessionId === row.sessionId && r.agentId === agentId).reduce((first, r) => (first === null || r.at < first ? r.at : first), null);
+      seed
+        .filter((r) => r.keyId === row.keyId && r.keyGeneration === row.keyGeneration && r.sessionId === row.sessionId && r.agentId === agentId && Date.parse(r.at) >= Date.parse(row.createdAt))
+        .reduce((first, r) => (first === null || r.at < first ? r.at : first), null);
     let laterPlaces = 0;
     for (const row of seeded) {
       const name = `${row.keyId} ${row.sessionId}${row.historical ? ', the earlier holder' : ''}`;
@@ -1231,8 +1278,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.equal(lines.length, 3, 'three released lines');
     for (const r of lines) assert.ok(inside(r), `${r.agentId}'s last use is inside its pool's window`);
     assert.ok(lines.some((r) => s.now - Date.parse(r.lastRequestAt) > affinityOf(s, r)), 'a line whose last request is past the window counts by its probe');
-    // A pinned session no recipe warms holds one pin per agent all the same.
-    const unwarmed = (poolId, accountId) => sum(s.sessions.filter((x) => x.pinned && x.keepalive.state === null && poolOf.get(x.keyId) === poolId && x.accountId === accountId), (x) => x.agents);
+    // A pinned session whose main no recipe warms holds one pin per agent all the same.
+    const unwarmed = (poolId, accountId) => sum(s.sessions.filter((x) => x.pinned && mainUnwarmed(recipes, x) && poolOf.get(x.keyId) === poolId && x.accountId === accountId), (x) => x.agents);
     for (const p of s.pools) {
       for (const m of p.members) {
         const own = recipes.filter((r) => poolOf.get(r.keyId) === p.id && r.accountId === m.accountId);
@@ -1255,7 +1302,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(line.lastProbeAt !== null && Date.parse(line.lastProbeAt) <= Date.parse(line.lastRequestAt), `probed at ${line.lastProbeAt}, before its last request at ${line.lastRequestAt}`);
     const poolId = s.keys.find((k) => k.id === line.keyId).poolId;
     const own = recipes.filter((r) => s.keys.find((k) => k.id === r.keyId)?.poolId === poolId && r.accountId === line.accountId);
-    const unwarmed = sum(s.sessions.filter((x) => x.pinned && x.keepalive.state === null && s.keys.find((k) => k.id === x.keyId)?.poolId === poolId && x.accountId === line.accountId), (x) => x.agents);
+    const unwarmed = sum(s.sessions.filter((x) => x.pinned && mainUnwarmed(recipes, x) && s.keys.find((k) => k.id === x.keyId)?.poolId === poolId && x.accountId === line.accountId), (x) => x.agents);
     const member = s.pools.find((p) => p.id === poolId).members.find((m) => m.accountId === line.accountId);
     assert.equal(member.activePins, new Set(pinnedRecipesOf(s, own).map(pinOf)).size + unwarmed, `${line.accountId}'s figure`);
     assert.ok(!pinnedRecipesOf(s, own).some((r) => pinOf(r) === pinOf(line)), 'the pin left with the window');
@@ -1263,7 +1310,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(row !== undefined && s.now - Date.parse(row.lastUsedAt) > affinityOf(s, line), "the session row reads its last use past the window too");
   });
 
-  test(`session 0's row reads its last use off its own newest request, as its main's line does, at ${at}`, async () => {
+  test(`session 0's main line reads its last use off the session's own newest request, as its recipe does, at ${at}`, async () => {
     const s = await story;
     const recipes = await s.api.listKeepaliveRecipes();
     // Session 0 is the busy desktop session whose main still awaits its cache evidence.
@@ -1274,7 +1321,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const own = s.requests.filter((r) => r.kind !== 'probe' && r.keyId === row.keyId && r.keyGeneration === row.keyGeneration && r.sessionId === row.sessionId);
     assert.ok(own.length > 0, 'the ledger holds its requests');
     const newest = own.reduce((a, b) => (Date.parse(b.at) > Date.parse(a.at) ? b : a));
-    assert.deepEqual([row.lastUsedAt, row.lastRequestAt, main.lastRequestAt], [newest.at, newest.at, newest.at]);
+    // The row's own last use is the newest across its pins, which its subagents' turns can move past main's.
+    const line = row.agentContexts.find((c) => c.agentId === 'main');
+    assert.deepEqual([line?.lastUsedAt, row.lastRequestAt, main.lastRequestAt], [newest.at, newest.at, newest.at]);
   });
 
   test(`no sample of legacy is newer than its last clean poll, at ${at}`, async () => {

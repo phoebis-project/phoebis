@@ -569,9 +569,9 @@ async function sidebarBrand(theme) {
 /**
  * The dashboard's attention line above the tiles: one 22 px row in every state, every badge it shows and its "+N more"
  * badge the 22 px and the 12 px type at weight 500 of the pool card's strip badges on the row's one top edge, none past
- * the content box, and the line on the tiles' left edge and clear of them. The mock pass draws the story's seventeen
- * items, more than the row holds at 1280 by 800: the badges shown and the fold's count add up to seventeen, the fold
- * badge draws its dashed border, and its list opens under it inside the window with all seventeen, closing on Escape
+ * the content box, and the line on the tiles' left edge and clear of them. The mock pass draws the story's nineteen
+ * items, more than the row holds at 1280 by 800: the badges shown and the fold's count add up to nineteen, the fold
+ * badge draws its dashed border, and its list opens under it inside the window with all nineteen, closing on Escape
  * with the focus back on the badge. The router pass seeds an exhaustion of its main pool, which any request the pool
  * serves later in the run (a keepalive probe among them) clears: the light pass, which reaches the dashboard first,
  * requires that item, so a route answering an empty list fails it, and the dark pass draws that item or the quiet line,
@@ -617,7 +617,7 @@ async function attentionLine(theme) {
   const texts = read.badges.map((b) => b.text);
   const folded = Number(/^\+(\d+) more$/.exec(read.more?.text ?? '')?.[1] ?? 0);
   if (mock) {
-    if (read.lead !== '17 need attention' || texts.length + folded !== 17 || folded === 0 || read.more?.border !== 'dashed') say(`reads ${read.lead} over ${JSON.stringify(texts)} and ${JSON.stringify(read.more?.text ?? null)}, not the story's seventeen items folded behind a dashed "+N more" at 1280 by 800`);
+    if (read.lead !== '19 need attention' || texts.length + folded !== 19 || folded === 0 || read.more?.border !== 'dashed') say(`reads ${read.lead} over ${JSON.stringify(texts)} and ${JSON.stringify(read.more?.text ?? null)}, not the story's nineteen items folded behind a dashed "+N more" at 1280 by 800`);
     else {
       await attentionList(theme);
       await attentionLineNarrow(theme);
@@ -691,7 +691,7 @@ async function attentionList(theme) {
   measurements.push(`${theme} / attention line list ${JSON.stringify(read)}`);
   if (!read) say('did not open');
   else {
-    if (read.badges !== 17 || read.rows !== 17 || !read.oneRowEach) say(`holds ${read.badges} badges over ${read.rows} rows, not the story's seventeen items one per row`);
+    if (read.badges !== 19 || read.rows !== 19 || !read.oneRowEach) say(`holds ${read.badges} badges over ${read.rows} rows, not the story's nineteen items one per row`);
     if (!read.inside) say('draws a badge past its box');
     if (read.role !== 'dialog' || read.label !== 'Needs attention' || read.expanded !== 'true') say(`is ${read.role} named ${JSON.stringify(read.label)} under a badge expanded ${read.expanded}`);
     if (read.gap !== 8) say(`stands ${read.gap} px under its badge, not 8`);
@@ -8618,62 +8618,69 @@ async function reasonLink(theme) {
  * placed from the count's box inside the viewport, so `.table-wrap`'s overflow clips none of it, and its last badge
  * ends inside it. The last row of two or more attempts on the page is scrolled to the viewport's bottom edge and its
  * count hovered. A fixed card stays where it was drawn while the page moves under it, so a scroll that moves the count
- * takes the card away rather than leaving it beside another row: the count is focused and the page scrolled. The mock
- * pass's alone: the router pass seeds one API key account in a one-member pool, so no row of it has two attempts.
+ * takes the card away rather than leaving it beside another row: the count is focused and the page scrolled. The log
+ * is read at 50 rows a page, where the story's last row of two or more attempts sits below the window's fold, and the
+ * bare log loads again after. The mock pass's alone: the router pass seeds one API key account in a one-member pool,
+ * so no row of it has two attempts.
  */
 async function attemptCardAtTheBottom(theme) {
   const say = (what) => failures.push(`${theme} /requests attempt card: ${what}`);
-  const counts = page.locator('.requests__table tbody .trail-count');
-  const n = await counts.count();
-  if (n === 0) {
-    say('no row of two or more attempts to hover');
-    return;
+  await loadRequests('?rows=50');
+  try {
+    const counts = page.locator('.requests__table tbody .trail-count');
+    const n = await counts.count();
+    if (n === 0) {
+      say('no row of two or more attempts to hover');
+      return;
+    }
+    const last = counts.nth(n - 1);
+    await last.evaluate((el) => el.closest('tr')?.scrollIntoView({ block: 'end' }));
+    await settle();
+    await last.hover();
+    await settle();
+    const read = await page.evaluate(() => {
+      const count = [...document.querySelectorAll('.requests__table tbody .trail-count')].pop();
+      const card = document.querySelector('body > .trail-pop');
+      const row = count?.closest('tr');
+      const at = { id: row?.querySelector('td .sub.mono')?.textContent ?? null, bottom: row ? Math.round(row.getBoundingClientRect().bottom) : null };
+      if (!card) return { card: null, row: at };
+      const r = card.getBoundingClientRect();
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      const badges = [...card.querySelectorAll('.trail__step')];
+      return {
+        card: { badgeBottom: badges.length ? Math.round(badges[badges.length - 1].getBoundingClientRect().bottom) : null, bottom: Math.round(r.bottom), height: Math.round(r.height), inside: hit !== null && card.contains(hit), right: Math.round(r.right), top: Math.round(r.top) },
+        row: at,
+        viewport: { height: window.innerHeight, width: window.innerWidth },
+      };
+    });
+    measurements.push(`${theme} /requests attempt card ${JSON.stringify(read)}`);
+    if (read.card === null) say(`the hover on the row ${read.row.id} drew no card`);
+    else {
+      const { card, viewport } = read;
+      if (card.top < 0) say(`the card's top is at ${card.top}px, above the viewport`);
+      if (card.bottom > viewport.height) say(`the card's bottom is at ${card.bottom}px, under the viewport's ${viewport.height}px`);
+      if (card.right > viewport.width) say(`the card's right edge is at ${card.right}px, past the viewport's ${viewport.width}px`);
+      if (card.badgeBottom === null) say('the card draws no badge');
+      else if (card.badgeBottom > card.bottom) say(`the card's last badge ends at ${card.badgeBottom}px, under the card's ${card.bottom}px`);
+      if (!card.inside) say('the card is covered at its center');
+    }
+    // The card leaves with the pointer, so the clicks that follow meet the rows alone.
+    await page.mouse.move(0, 0);
+    await settle();
+    await last.focus();
+    await settle();
+    const focused = await page.evaluate(() => document.querySelector('body > .trail-pop') !== null);
+    await page.evaluate(() => window.scrollBy(0, -60));
+    await settle();
+    const afterScroll = await page.evaluate(() => document.querySelector('body > .trail-pop') !== null);
+    await page.evaluate(() => (document.activeElement instanceof HTMLElement ? document.activeElement.blur() : undefined));
+    await settle();
+    measurements.push(`${theme} /requests attempt card on focus ${focused ? 'drawn' : 'absent'}, after a 60px scroll ${afterScroll ? 'still drawn' : 'gone'}`);
+    if (!focused) say('the focused count drew no card');
+    else if (afterScroll) say('the card stayed through a scroll that moved its count');
+  } finally {
+    await loadRequests();
   }
-  const last = counts.nth(n - 1);
-  await last.evaluate((el) => el.closest('tr')?.scrollIntoView({ block: 'end' }));
-  await settle();
-  await last.hover();
-  await settle();
-  const read = await page.evaluate(() => {
-    const count = [...document.querySelectorAll('.requests__table tbody .trail-count')].pop();
-    const card = document.querySelector('body > .trail-pop');
-    const row = count?.closest('tr');
-    const at = { id: row?.querySelector('td .sub.mono')?.textContent ?? null, bottom: row ? Math.round(row.getBoundingClientRect().bottom) : null };
-    if (!card) return { card: null, row: at };
-    const r = card.getBoundingClientRect();
-    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-    const badges = [...card.querySelectorAll('.trail__step')];
-    return {
-      card: { badgeBottom: badges.length ? Math.round(badges[badges.length - 1].getBoundingClientRect().bottom) : null, bottom: Math.round(r.bottom), height: Math.round(r.height), inside: hit !== null && card.contains(hit), right: Math.round(r.right), top: Math.round(r.top) },
-      row: at,
-      viewport: { height: window.innerHeight, width: window.innerWidth },
-    };
-  });
-  measurements.push(`${theme} /requests attempt card ${JSON.stringify(read)}`);
-  if (read.card === null) say(`the hover on the row ${read.row.id} drew no card`);
-  else {
-    const { card, viewport } = read;
-    if (card.top < 0) say(`the card's top is at ${card.top}px, above the viewport`);
-    if (card.bottom > viewport.height) say(`the card's bottom is at ${card.bottom}px, under the viewport's ${viewport.height}px`);
-    if (card.right > viewport.width) say(`the card's right edge is at ${card.right}px, past the viewport's ${viewport.width}px`);
-    if (card.badgeBottom === null) say('the card draws no badge');
-    else if (card.badgeBottom > card.bottom) say(`the card's last badge ends at ${card.badgeBottom}px, under the card's ${card.bottom}px`);
-    if (!card.inside) say('the card is covered at its center');
-  }
-  // The card leaves with the pointer, so the clicks that follow meet the rows alone.
-  await page.mouse.move(0, 0);
-  await settle();
-  await last.focus();
-  await settle();
-  const focused = await page.evaluate(() => document.querySelector('body > .trail-pop') !== null);
-  await page.evaluate(() => window.scrollBy(0, -60));
-  await settle();
-  const afterScroll = await page.evaluate(() => document.querySelector('body > .trail-pop') !== null);
-  await page.evaluate(() => (document.activeElement instanceof HTMLElement ? document.activeElement.blur() : undefined));
-  await settle();
-  measurements.push(`${theme} /requests attempt card on focus ${focused ? 'drawn' : 'absent'}, after a 60px scroll ${afterScroll ? 'still drawn' : 'gone'}`);
-  if (!focused) say('the focused count drew no card');
-  else if (afterScroll) say('the card stayed through a scroll that moved its count');
 }
 
 /**

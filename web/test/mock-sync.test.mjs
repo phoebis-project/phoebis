@@ -95,7 +95,9 @@ const SYNC = {
   requests: { decode: (b) => d.decodeRequestPage(b), mock: (api) => api.listRequests() },
   routing_log: { decode: (b) => byType(d.decodeRoutingLogPage(b)), mock: async (api) => byType(await api.listRoutingLog()) },
   session: { expect: (b) => Object.fromEntries(Object.keys(b).map((k) => [camel(k), 'any'])), mock: async (api) => { await api.login('admin'); return api.getSession(); } },
-  sessions: { decode: (b) => b.sessions.map(d.decodeSession), mock: (api) => api.listSessions() },
+  // A session's billed dollars are keyed by funding, its day's requests by class and its shares by account and then by
+  // window, data rather than schema on every level, which differ from one session's requests to another's.
+  sessions: { decode: (b) => b.sessions.map(d.decodeSession), mock: (api) => api.listSessions(), opaque: (path) => (/\.(billedUsd|shares)$/.test(path) || path.endsWith('.day.requests') ? ['object'] : false) },
   settings: { decode: (b) => d.decodeSettings(b), mock: (api) => api.getSettings() },
 };
 /** Fixtures no decoder and no `Api` method reads: captured for their route's shape, or read by a test of their own. */

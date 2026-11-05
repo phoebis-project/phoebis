@@ -165,7 +165,7 @@ test("the story's records give their stations, states, host and termini", async 
   assert.deepEqual(terminiOf(staticPlaced), THREE_TERMINI(['chosen', 'placed']));
 
   // A placement that booked nothing reaches Reserve past the idle Pick, so its Reserve stands idle too.
-  for (const [id, noFit, reserve] of [['req_e8b7eb13-060/2', '2 out', 'Reserve: booked (taken)'], ['req_52f62e67-839/1', '0 out', 'Reserve: none (idle)']]) {
+  for (const [id, noFit, reserve] of [['req_d4a518a7-cd0/1', '1 out', 'Reserve: booked (taken)'], ['req_7f3d1b95-e62/1', '0 out', 'Reserve: none (idle)']]) {
     const withMain = modelOf(await recordOf(id));
     assert.deepEqual(read(withMain), [...FRESH_LINE('none', 'match'), 'content: none (taken)', 'with main: match (taken)', 'static: not run (idle)', 'Pick: not run (idle)', reserve], id);
     assert.deepEqual([withMain.decisive, withMain.host, withMain.branch], ['rung:with_main', 'pick', { from: 'rung:with_main', kind: 'rung' }], id);
@@ -1116,7 +1116,7 @@ test('a rule a fired rule cut short reads the rules that did not run with its ow
   assert.equal(stationPlan(record, 'renew').block.text, d.SENTENCE.placeholder);
   const refusal = await recordOf('req_e0a4c6f2-118/1');
   assert.equal(stationPlan(refusal, 'selection').block.text, d.SENTENCE.rest);
-  const withMain = await recordOf('req_52f62e67-839/1');
+  const withMain = await recordOf('req_7f3d1b95-e62/1');
   assert.deepEqual([stationPlan(withMain, 'rung:static').block.text, stationPlan(withMain, 'pick').block.text], [d.SENTENCE.notRun, d.SENTENCE.placeholder]);
 });
 
