@@ -6,8 +6,9 @@ import type {
 import { bucketShare, keptWarmTokens } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
-import { anchorTier, inBand, modelWeeks, pricedWindow, shareIn, tierCapacity, weightOf, type Usage } from '@/lib/costs';
+import { equivalentIn, modelWeeks, pricedWindow, tierCapacity, type Usage } from '@/lib/costs';
 import { countOf, emptyCounts } from '@/lib/counts';
+import { servingResponse } from '@/lib/dimensions';
 import { byteOrder, earlierHolderLabel, placementHit } from '@/lib/format';
 import { mergeHistograms, quartet } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
@@ -16,7 +17,7 @@ import { WINDOW_KEY, hoursOfKey } from '@/lib/windows';
 import { accountById, sharedWindowsOf } from './accounts';
 import { earliest } from './lead';
 import { keyById } from './pools';
-import { requestsIn, sumOf, sumSplit, tokensIn } from './requests';
+import { bandAt, requestsIn, sumEach, sumOf, sumSplit, tokensIn } from './requests';
 import { createRng } from './rng';
 import { round } from './round';
 import type { EventSeed } from './routingLog';
@@ -175,9 +176,9 @@ const planRows = (list: HourlyRollup[]) => list.filter((r) => r.funding === 'pla
  * window any row prices null is left out, as the route answers it (a request row keeps such a window as a key with
  * null), and a row with no token prices nothing.
  */
-function costSharesOf(counted: HourlyRollup[]): Record<string, number> {
+function costSharesOf(plan: HourlyRollup[]): Record<string, number> {
   const sums = new Map<string, WindowSum>();
-  for (const r of planRows(counted)) {
+  for (const r of plan) {
     if (tokensIn(r) === 0) continue;
     for (const [window, share] of Object.entries(r.shares)) {
       const s = sums.get(window) ?? { sum: 0, unpriced: false };
@@ -214,8 +215,8 @@ function figuresOf(r: HourlyRollup): Record<keyof CostSplit | 'keptRead' | 'kept
   if (r.classifier === 'client') return { cacheRead: 0, cacheWrite: 0, input: 0, keptRead: 0, keptWrite: 0, output: 0 };
   const known = pricedRows.get(r);
   if (known) return known;
-  const inside = weightOf(TABLES, r.model, 'seven_day') !== null ? inBand(TABLES, Date.parse(r.hour)) : null;
-  const figure = (part: Usage) => (inside === null ? null : shareIn(TABLES, 'seven_day', anchorTier(TABLES), r.model, part, inside));
+  const inside = bandAt(r.model, Date.parse(r.hour));
+  const figure = (part: Usage) => (inside === null ? null : equivalentIn(TABLES, r.model, part, inside));
   const usage = usageOf(r);
   const kept = keptUsageOf(r);
   const figures = {
@@ -238,32 +239,32 @@ function figuresOf(r: HourlyRollup): Record<keyof CostSplit | 'keptRead' | 'kept
  * reads they paid. A plan row with tokens on a model without a weight nulls each figure it joins, as the route answers
  * it, and a row with no token prices nothing.
  */
-function equivalentsOfGroup(counted: HourlyRollup[], probeRows: HourlyRollup[]): Pick<AnalyticsGroup, 'cacheEquivalent' | 'costEquivalent' | 'equivalentSplit' | 'probeEquivalent' | 'savingEquivalent'> {
+function equivalentsOfGroup(countedPlan: HourlyRollup[], probePlan: HourlyRollup[]): Pick<AnalyticsGroup, 'cacheEquivalent' | 'costEquivalent' | 'equivalentSplit' | 'probeEquivalent' | 'savingEquivalent'> {
   let cost: number | null = 0;
   let read: number | null = 0;
   let write: number | null = 0;
+  let saving: number | null = 0;
   const split: CostSplit = { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 };
-  for (const r of planRows(counted)) {
-    if (tokensIn(r) === 0) continue;
-    cost = plus(cost, r.equivalent);
-    const figures = figuresOf(r);
-    read = plus(read, figures.cacheRead);
-    write = plus(write, figures.cacheWrite);
-    for (const kind of Object.keys(TOKEN_KINDS) as (keyof CostSplit)[]) split[kind] += figures[kind] ?? 0;
+  for (const r of countedPlan) {
+    if (tokensIn(r) > 0) {
+      cost = plus(cost, r.equivalent);
+      const figures = figuresOf(r);
+      read = plus(read, figures.cacheRead);
+      write = plus(write, figures.cacheWrite);
+      for (const kind of Object.keys(TOKEN_KINDS) as (keyof CostSplit)[]) split[kind] += figures[kind] ?? 0;
+    }
+    if (keptWarmTokens(r.keptWarm) > 0) {
+      const { keptRead, keptWrite } = figuresOf(r);
+      saving = keptRead === null || keptWrite === null ? null : plus(saving, keptWrite - keptRead);
+    }
   }
   let probe: number | null = 0;
   let probeUsd = 0;
   let wastedUsd = 0;
-  for (const r of planRows(probeRows)) {
+  for (const r of probePlan) {
     probeUsd += r.probeCostUsd;
     wastedUsd += r.wastedProbeUsd;
     if (tokensIn(r) > 0) probe = plus(probe, r.equivalent);
-  }
-  let saving: number | null = 0;
-  for (const r of planRows(counted)) {
-    if (keptWarmTokens(r.keptWarm) === 0) continue;
-    const { keptRead, keptWrite } = figuresOf(r);
-    saving = keptRead === null || keptWrite === null ? null : plus(saving, keptWrite - keptRead);
   }
   const ratio = probeUsd > 0 ? wastedUsd / probeUsd : 0;
   return {
@@ -281,6 +282,12 @@ function equivalentsOfGroup(counted: HourlyRollup[], probeRows: HourlyRollup[]):
  */
 const shareAccountOf = (key: string, groupBy: AnalyticsGroupBy | BurnGroup, accountIds: string[] | undefined): string | null => (groupBy === 'account' ? key : accountIds?.length === 1 ? accountIds[0] : null);
 
+// The zeros a group's member-wise sums start from, the token one in the key order the answer carries.
+const ZERO_KEPT: HourlyRollup['keptWarm'] = { requests: 0, tokens1h: 0, tokens5m: 0 };
+const ZERO_OUTCOMES: HourlyRollup['requests'] = { client_gone: 0, incomplete: 0, ok: 0, overloaded: 0, rate_limited: 0, router_shutdown: 0, undecodable: 0, upstream_error: 0 };
+const ZERO_PROBES: HourlyRollup['probes'] = { failed: 0, held: 0, ok: 0, skipped: 0 };
+const ZERO_TOKENS: HourlyRollup['tokens'] = { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, output: 0, thinking: 0, uncachedInput: 0, webFetch: 0, webSearch: 0 };
+
 /**
  * Two sums per group, the way the route splits them: the request side, which a probe row joins only when probes
  * count as requests, and the probe rows alone, which the probe counts, the probe cost and the wasted probes read.
@@ -292,8 +299,9 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
   const probeRows = rows.filter((r) => r.kind === 'probe');
   const account = shareAccountOf(key, groupBy, accountIds);
   const tier = account === null ? undefined : accountById.get(account)?.subscription?.rateLimitTier;
-  const costShares = account !== null && accountById.get(account)?.kind === 'oauth' && tier !== undefined ? costSharesOf(counted) : null;
   const countedPlan = planRows(counted);
+  const probePlan = planRows(probeRows);
+  const costShares = account !== null && accountById.get(account)?.kind === 'oauth' && tier !== undefined ? costSharesOf(countedPlan) : null;
   const billed = counted.filter((r) => r.funding !== 'plan');
 
   const cacheMissReasons = emptyCacheMissReasons();
@@ -307,29 +315,26 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
   const merged = (m: keyof LatencyHistograms) => mergeHistograms(counted.map((r) => r.histograms[m]));
   const histograms: LatencyHistograms = { durationMs: merged('durationMs'), outputTps: merged('outputTps'), ttfbMs: merged('ttfbMs'), ttftMs: merged('ttftMs') };
 
-  const rateLimited = sumOf(counted, (r) => r.requests.rate_limited);
-  const overloaded = sumOf(counted, (r) => r.requests.overloaded);
-  const upstreamError = sumOf(counted, (r) => r.requests.upstream_error);
-  const undecodable = sumOf(counted, (r) => r.requests.undecodable);
-  const clientGone = sumOf(counted, (r) => r.requests.client_gone);
-  const routerShutdown = sumOf(counted, (r) => r.requests.router_shutdown);
-  const incomplete = sumOf(counted, (r) => r.requests.incomplete);
-  const succeeded = sumOf(counted, (r) => r.requests.ok);
-  const requests = succeeded + rateLimited + overloaded + upstreamError + clientGone + routerShutdown + incomplete;
+  const outcomes = sumEach(counted.map((r) => r.requests), ZERO_OUTCOMES);
+  const requests = sumOf(counted, requestsIn);
   const failovers = sumOf(counted, (r) => r.failovers);
   const errors = emptyCounts();
-  if (rateLimited) errors.rate_limit_error = rateLimited;
-  if (overloaded) errors.overloaded_error = overloaded;
+  if (outcomes.rate_limited) errors.rate_limit_error = outcomes.rate_limited;
+  if (outcomes.overloaded) errors.overloaded_error = outcomes.overloaded;
   // A stream the relay could not decode counts under its own code, apart from the upstream's errors around it.
-  if (upstreamError - undecodable) errors.api_error = upstreamError - undecodable;
-  if (undecodable) errors.stream_undecodable = undecodable;
-  if (clientGone) errors.client_gone = clientGone;
-  if (routerShutdown) errors.router_shutdown = routerShutdown;
+  if (outcomes.upstream_error - outcomes.undecodable) errors.api_error = outcomes.upstream_error - outcomes.undecodable;
+  if (outcomes.undecodable) errors.stream_undecodable = outcomes.undecodable;
+  if (outcomes.client_gone) errors.client_gone = outcomes.client_gone;
+  if (outcomes.router_shutdown) errors.router_shutdown = outcomes.router_shutdown;
   // The ledger counts a request's own code beside its outcome, so an incomplete one files under the code it ended on.
   for (const r of counted) for (const [code, n] of Object.entries(r.incompleteCodes ?? {})) errors[code] = countOf(errors, code) + n;
 
+  const kept = sumEach(counted.map((r) => r.keptWarm), ZERO_KEPT);
+  const planKept = sumEach(countedPlan.map((r) => r.keptWarm), ZERO_KEPT);
+  const probes = sumEach(probeRows.map((r) => r.probes), ZERO_PROBES);
+
   return {
-    ...equivalentsOfGroup(counted, probeRows),
+    ...equivalentsOfGroup(countedPlan, probePlan),
     // Every attempt past the first on a request is a failover, so the two together are what the accounts saw.
     attempts: requests + failovers,
     billed: sumSplit(billed.map((r) => r.cost)),
@@ -345,19 +350,12 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
     // under Rejected.
     exhausted: 0,
     expiredBetweenTurns: sumOf(counted, (r) => r.expiredBetweenTurns),
-    failed: overloaded + upstreamError + clientGone + routerShutdown,
+    failed: outcomes.overloaded + outcomes.upstream_error + outcomes.client_gone + outcomes.router_shutdown,
     failovers,
     histograms,
-    incomplete,
+    incomplete: outcomes.incomplete,
     // A row's funding is its credited request's, so the plan-funded credits are the plan rows' own.
-    keptWarm: {
-      planRequests: sumOf(countedPlan, (r) => r.keptWarm.requests),
-      planTokens1h: sumOf(countedPlan, (r) => r.keptWarm.tokens1h),
-      planTokens5m: sumOf(countedPlan, (r) => r.keptWarm.tokens5m),
-      requests: sumOf(counted, (r) => r.keptWarm.requests),
-      tokens1h: sumOf(counted, (r) => r.keptWarm.tokens1h),
-      tokens5m: sumOf(counted, (r) => r.keptWarm.tokens5m),
-    },
+    keptWarm: { planRequests: planKept.requests, planTokens1h: planKept.tokens1h, planTokens5m: planKept.tokens5m, ...kept },
     key,
     keyCreatedAt: null,
     keyId: null,
@@ -366,18 +364,15 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
     planOutputTokens: sumOf(countedPlan, (r) => r.tokens.output),
     planRequests: sumOf(countedPlan, requestsIn),
     probeCostUsd: sumOf(probeRows, (r) => r.probeCostUsd),
-    probes: { failed: sumOf(probeRows, (r) => r.probes.failed), held: sumOf(probeRows, (r) => r.probes.held), migrated: sumOf(probeRows, (r) => r.probeMigrated), ok: sumOf(probeRows, (r) => r.probes.ok), planOk: sumOf(planRows(probeRows), (r) => r.probes.ok), skipped: sumOf(probeRows, (r) => r.probes.skipped) },
-    rateLimited,
+    probes: { failed: probes.failed, held: probes.held, migrated: sumOf(probeRows, (r) => r.probeMigrated), ok: probes.ok, planOk: sumOf(probePlan, (r) => r.probes.ok), skipped: probes.skipped },
+    rateLimited: outcomes.rate_limited,
     refusals,
     refused: Object.values(refusals).reduce((n, c) => n + c, 0),
     rejected: 0,
     requests,
     savingUsd: sumOf(counted, (r) => r.savingUsd),
-    succeeded,
-    tokens: {
-      cacheRead: sumOf(counted, (r) => r.tokens.cacheRead), cacheWrite1h: sumOf(counted, (r) => r.tokens.cacheWrite1h), cacheWrite5m: sumOf(counted, (r) => r.tokens.cacheWrite5m), output: sumOf(counted, (r) => r.tokens.output),
-      thinking: sumOf(counted, (r) => r.tokens.thinking), uncachedInput: sumOf(counted, (r) => r.tokens.uncachedInput), webFetch: sumOf(counted, (r) => r.tokens.webFetch), webSearch: sumOf(counted, (r) => r.tokens.webSearch),
-    },
+    succeeded: outcomes.ok,
+    tokens: sumEach(counted.map((r) => r.tokens), ZERO_TOKENS),
     uncached: sumOf(counted, (r) => r.uncached),
     wastedProbeReasons,
     wastedProbeUsd: sumOf(probeRows, (r) => r.wastedProbeUsd),
@@ -618,7 +613,7 @@ export function rewritesOf(rollups: AccountRollup[], requests: RequestLog[], ran
   const slowedMs = starts.map((): number[] => []);
   for (const r of requests) {
     const slowed = (r.held?.waits ?? []).filter((w) => w.reason === 'slow_down');
-    if (slowed.length > 0) slowedMs[slotOf(Date.parse(r.at))]?.push(slowed.reduce((n, w) => n + w.heldMs, 0));
+    if (slowed.length > 0) slowedMs[slotOf(Date.parse(r.at))]?.push(sumOf(slowed, (w) => w.heldMs));
   }
   const movesByReasonAndFit: Record<string, Record<string, number>> = {};
   const points = starts.map((at, i): RewritePoint => {
@@ -634,7 +629,7 @@ export function rewritesOf(rollups: AccountRollup[], requests: RequestLog[], ran
     return { at: iso(at), rewriteTokens };
   });
   const moves = Object.fromEntries(Object.entries(movesByReasonAndFit).map(([reason, fits]) => [reason, Object.values(fits).reduce((n, x) => n + x, 0)]));
-  const held = starts.map((at, i): HeldPoint => ({ at: iso(at), heldMs: slowedMs[i].reduce((n, x) => n + x, 0), requests: slowedMs[i].length }));
+  const held = starts.map((at, i): HeldPoint => ({ at: iso(at), heldMs: sumOf(slowedMs[i], (x) => x), requests: slowedMs[i].length }));
   return { held, moves, movesByReasonAndFit, points };
 }
 
@@ -692,7 +687,7 @@ export function refusalCategoriesOf(requests: RequestLog[], q: AnalyticsQuery): 
     if (r.kind === 'probe' && !q.includeProbes && !q.kinds?.includes('probe')) continue;
     if (q.userAgents?.length && !q.userAgents.some((p) => matchesPattern(p, agentTokenOf(r.userAgent)))) continue;
     if (q.clients?.length && !q.clients.some((p) => matchesPattern(p, r.client ?? '-'))) continue;
-    const answer = r.attempts[r.attempts.length - 1]?.response;
+    const answer = servingResponse(r);
     if (answer?.stopReason !== 'refusal') continue;
     const category = answer.refusalCategory ?? '-';
     counts.set(category, (counts.get(category) ?? 0) + 1);
@@ -831,7 +826,7 @@ const isWeekly = (window: string) => window === 'seven_day' || window.startsWith
  * The term's end the route reads at `at`: the saved end while canceled, else a trial end still ahead, and the
  * plan-ended flag where it comes first, so a trial end that passed while the plan carried on ends no week.
  */
-function termEndOf(a: Account, at: number): number | null {
+export function termEndOf(a: Account, at: number): number | null {
   const flagged = a.planEndedAt === null ? null : Date.parse(a.planEndedAt);
   return earliest(endOf(a, at), flagged);
 }

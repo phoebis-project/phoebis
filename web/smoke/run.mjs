@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandSentence, burnWords, CACHE_MISS_LABEL, CACHE_MISS_REASONS, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWeek, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, GuardrailDialog, inBand, Input, keyWord, leafName, MAX_BURN_LINES, minuteSpan, mismatchBuild, missLabel, missShort, MOCK_VERSION, mount, mountNode, NATIVE_SUBSET, nextLocalChange, PageLink, PeakBand, Pill, planLabel, PlanRates, projectionWords, React, recordedCalls, regimeNames, regimeTitle, regimeWord, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, shareHint, shareOf, shortModel, smallestTier, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierCapacity, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weekShort, WINDOW_ROWS, windowMultiple, WindowsByTier, withRegime, words } = await import('./dist/entry.js');
+const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandSentence, burnWords, CACHE_MISS_LABEL, CACHE_MISS_REASONS, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWeek, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, GuardrailDialog, inBand, Input, keyWord, leafName, MAX_BURN_LINES, minuteSpan, mismatchBuild, missLabel, missShort, MOCK_VERSION, mount, mountNode, NATIVE_SUBSET, nextLocalChange, PageLink, PeakBand, Pill, planLabel, PlanRates, projectionWords, React, recordedCalls, regimeNames, regimeTitle, regimeWord, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, shareHint, shareIn, shortModel, smallestTier, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierCapacity, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weekShort, WINDOW_ROWS, windowMultiple, WindowsByTier, withRegime, words } = await import('./dist/entry.js');
 
 /** The dash's title where a plan row priced nothing, the words a tile and its hover carry. */
 const UNPRICED_TITLE = 'No subscription request priced: its model has no weight in the cost model';
@@ -24925,7 +24925,7 @@ m.unmount();
   const fiveHourWeight = (model) => weightOf(costs, model, 'five_hour');
   const lightest = models.filter((model) => fiveHourWeight(model) !== null).reduce((low, model) => (low === null || fiveHourWeight(model) < fiveHourWeight(low) ? model : low), null);
   const shareText = (share) => (share === null ? '-' : fmtShare(share));
-  const expected = (model, tier, tokens, at, under) => WINDOWS.flatMap((w) => TYPES.map((t) => shareText(shareOf(under, w, tier, model, usage(t, tokens), at))));
+  const expected = (model, tier, tokens, at, under) => WINDOWS.flatMap((w) => TYPES.map((t) => shareText(shareIn(under, w, tier, model, usage(t, tokens), inBand(under, at)))));
   // `under` is the model the cells price through: the regime's overlay, or the base once Headless is pressed.
   const wrongCells = (tier, tokens, at, under) => models.filter((model) => JSON.stringify(cellsOf(rowOf(model))) !== JSON.stringify(expected(model, tier, tokens, at, under))).map((model) => `${model}: ${JSON.stringify(cellsOf(rowOf(model)))} against ${JSON.stringify(expected(model, tier, tokens, at, under))}`);
   const regimeButtons = () => [...(rates()?.querySelectorAll('[aria-label="Regime"] button') ?? [])];
@@ -25012,7 +25012,7 @@ m.unmount();
     await pressTier('Ultra');
     const week = subOf();
     const weekCells = [...(week?.children ?? [])].slice(2).map((td) => td.textContent?.trim());
-    const want = ultra === undefined ? null : [...TYPES.map(() => ''), ...TYPES.map((t) => fmtShare(shareOf(regimeCosts, 'seven_day_fable', ultra, 'claude-fable-5-1', usage(t, 1_000_000), OUT)))];
+    const want = ultra === undefined ? null : [...TYPES.map(() => ''), ...TYPES.map((t) => fmtShare(shareIn(regimeCosts, 'seven_day_fable', ultra, 'claude-fable-5-1', usage(t, 1_000_000), inBand(regimeCosts, OUT))))];
     await pressTier(planLabel(anchor));
     results.push({
       name: '/sessions plan rates carry a 7-day Fable row under Fable 5.1 on the Ultra plan, priced on its week alone, and none on the Pro plan',
@@ -25098,7 +25098,7 @@ m.unmount();
     const scaled = models.filter((model) => {
       const cells = cellsOf(rowOf(model));
       const five = TYPES.map((t) => {
-        const share = shareOf(costs, 'five_hour', anchor, model, usage(t, 10_000_000), OUT);
+        const share = shareIn(costs, 'five_hour', anchor, model, usage(t, 10_000_000), inBand(costs, OUT));
         return shareText(share === null ? null : share * factor);
       });
       return JSON.stringify(cells.slice(0, 5)) !== JSON.stringify(five);
@@ -25107,7 +25107,7 @@ m.unmount();
     const full = rates()?.querySelectorAll('td.is-full').length ?? 0;
     // A model week's cells count too, priced on the week its sub-row draws.
     const windowsOf = (model) => [...WINDOWS, ...(rowOf(model)?.nextElementSibling?.classList.contains('cost-ref__sub') ? ['seven_day_fable'] : [])];
-    const over = models.flatMap((model) => windowsOf(model).flatMap((w) => TYPES.map((t) => shareOf(costs, w, anchor, model, usage(t, 10_000_000), CLOCK_ORIGIN)))).filter((s) => s !== null && s >= 1).length;
+    const over = models.flatMap((model) => windowsOf(model).flatMap((w) => TYPES.map((t) => shareIn(costs, w, anchor, model, usage(t, 10_000_000), inBand(costs, CLOCK_ORIGIN))))).filter((s) => s !== null && s >= 1).length;
     results.push({
       name: '/sessions plan rates inside the band weigh the 5-hour cells by the band factor, name the band in the caption, and tint every cell past a full window',
       ok: factor > 1 && scaled.length === 0 && wrongCells(anchor, 10_000_000, CLOCK_ORIGIN, costs).length === 0 && caption() === `Share of a ${planLabel(anchor)} window per 10M tokens under ${HEADLESS_TITLE}, a request completing inside the peak band` && full === over && over > 0,

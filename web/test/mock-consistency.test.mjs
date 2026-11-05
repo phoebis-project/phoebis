@@ -1158,7 +1158,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (const row of seeded) {
       const name = `${row.keyId} ${row.sessionId}${row.historical ? ', the earlier holder' : ''}`;
       if (placed(row)) {
-        const lastUse = s.lib.lastUseOf(row);
+        const lastUse = s.lib.lastActivity(row);
         assert.ok(row.createdAt !== null && lastUse !== null && Date.parse(row.createdAt) <= Date.parse(lastUse), `${name} first seen at ${row.createdAt}, last used at ${lastUse}`);
       } else assert.equal(row.createdAt, null, `${name}: no pin ever placed it`);
       // An agent holds one first-seen time whatever models it is pinned on, so its place counts once.
@@ -3248,7 +3248,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       let out = 0;
       for (const r of rows) {
         if (tokensOf(r) === 0) continue;
-        const figure = r.classifier === 'client' ? 0 : ownWeight(s, r.model) ? s.lib.equivalentOf(costs, r.model, usage(r), Date.parse(r.hour)) : null;
+        const figure = r.classifier === 'client' ? 0 : ownWeight(s, r.model) ? s.lib.equivalentIn(costs, r.model, usage(r), s.lib.inBand(costs, Date.parse(r.hour))) : null;
         out = out === null || figure === null ? null : out + figure;
       }
       return out;

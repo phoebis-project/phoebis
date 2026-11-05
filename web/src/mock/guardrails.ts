@@ -185,10 +185,15 @@ function holds(c: Condition, fact: string | null): boolean {
  */
 export function dryRunVerdict(conditions: Condition[], r: RequestLog, matched: boolean): { condition: number | null; verdict: TestVerdict } {
   const order = conditions.map((c, i) => ({ c, i })).sort((a, b) => RANK[a.c.subject] - RANK[b.c.subject]);
+  const okOf = (c: Condition): boolean | null => {
+    if (c.subject === 'body' || c.subject === 'message') return matched;
+    if (c.subject !== 'header') return holds(c, FACT_OF[c.subject](r));
+    const read = KEPT_HEADERS[(c.name ?? '').toLowerCase()];
+    return read === undefined ? null : holds(c, read(r));
+  };
   let unknown: number | null = null;
   for (const { c, i } of order) {
-    const read = c.subject === 'header' ? KEPT_HEADERS[(c.name ?? '').toLowerCase()] : undefined;
-    const ok = c.subject === 'body' || c.subject === 'message' ? matched : c.subject === 'header' ? (read === undefined ? null : holds(c, read(r))) : holds(c, FACT_OF[c.subject](r));
+    const ok = okOf(c);
     if (ok === false) return { condition: i, verdict: 'unmatched' };
     if (ok === null && unknown === null) unknown = i;
   }

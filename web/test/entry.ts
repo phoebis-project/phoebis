@@ -71,7 +71,7 @@ export { ACCOUNTS } from '@/mock/accounts';
 export { burnOf, groupsOf, refusalCategoriesOf } from '@/mock/analytics';
 export { slowedLongOf } from '@/mock/attention';
 export { leadOf } from '@/mock/lead';
-export { burnEquivalentOf, insideSessionExpiry, lastUseOf, refusalOnlyRows, sessionsListedAt, withinNonCompanionTimeout } from '@/mock/operations';
+export { burnEquivalentOf, insideSessionExpiry, refusalOnlyRows, sessionsListedAt, withinNonCompanionTimeout } from '@/mock/operations';
 export { poolById } from '@/mock/pools';
 export { ALL_ROLLUPS, requestById, rollups } from '@/mock/requests';
 export { GUARDRAIL_STORY_IDS, NIGHTLY_CAP_RAISED, STORY_IDS } from '@/mock/requests';

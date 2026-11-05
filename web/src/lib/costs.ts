@@ -205,16 +205,9 @@ export const shareIn = (costs: SubscriptionCosts, window: string, tier: string, 
   return units * factorOf(costs, window, inside);
 };
 
-/** The share `usage` spends for a request completing at `at`; null where unpriced, and where the band's state at `at`
- *  cannot be read, since a share on an assumed state could read half what the ledger charges. */
-export const shareOf = (costs: SubscriptionCosts, window: string, tier: string, model: string, usage: Usage, at: number): number | null => {
-  const inside = inBand(costs, at);
-  return inside === null ? null : shareIn(costs, window, tier, model, usage, inside);
-};
-
-/** The Pro-week figure: the share of the anchor tier's 7-day window, so the figure adds across accounts. Null where
- *  the model has no weight on the window or the band's state at `at` cannot be read. */
-export const equivalentOf = (costs: SubscriptionCosts, model: string, usage: Usage, at: number): number | null => shareOf(costs, 'seven_day', anchorTier(costs), model, usage, at);
+/** The Pro-week figure: the share of the anchor tier's 7-day window, so the figure adds across accounts, for a request
+ *  completing inside the band or outside it. Null where the model has no weight on the window. */
+export const equivalentIn = (costs: SubscriptionCosts, model: string, usage: Usage, inside: boolean): number | null => shareIn(costs, 'seven_day', anchorTier(costs), model, usage, inside);
 
 /** The chosen week's figure per Pro-week figure: the anchor tier's 7-day capacity over the chosen tier's in the
  *  revision `costs` is (the one in force at the read), 1 under Pro with no table, null where either side is null. */

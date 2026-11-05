@@ -30,26 +30,19 @@ test("the rates are the weight times the type's multiplier over the tier's capac
   for (const [type, rate] of Object.entries(want)) close(rates[type], rate, type);
 });
 
-test("a share is the tokens' units over the tier's capacity, the 5-hour window's band factor applied inside the band", () => {
-  close(d.shareOf(costs, 'five_hour', MAX_20X, OPUS, usage({ input: 1 }), OUT), 0.02, 'Max 20x out of band, 2 / 100');
-  close(d.shareOf(costs, 'five_hour', MAX_20X, OPUS, usage({ input: 1 }), IN), 0.04, 'Max 20x in band, 2 / 100 / 0.5');
-  close(d.shareOf(costs, 'five_hour', MAX_20X, OPUS, usage({ input: 1 }), WEEKEND), 0.02, 'the band covers weekdays alone');
-  close(d.shareOf(costs, 'five_hour', 'default_claude_ai', OPUS, usage({ input: 1 }), OUT), 0.4, 'Pro, 2 / 5');
-  close(d.shareOf(costs, 'seven_day', MAX_20X, OPUS, usage({ input: 1 }), IN), 0.002, 'the week, whose factor of 1 leaves the band alone, 2 / 1000');
-  close(d.shareOf(costs, 'seven_day_fable', MAX_20X, OPUS, usage({ input: 1 }), OUT), 0.004, 'the 7-day Fable window, 2 / 1000 / 0.5');
-  close(d.shareOf(costs, 'five_hour', MAX_20X, OPUS, usage({ cacheRead: 10, input: 1, output: 1 }), OUT), 0.24, 'mixed usage, (10 x 0.2 + 2 + 20) / 100');
+test("a share is the tokens' units over the tier's capacity, each token type at its own rate", () => {
+  close(d.shareIn(costs, 'five_hour', MAX_20X, OPUS, usage({ cacheRead: 10, input: 1, output: 1 }), false), 0.24, 'mixed usage, (10 x 0.2 + 2 + 20) / 100');
 });
 
 test("an override replaces the multiplier and the window's weight it names and leaves the rest of the row alone", () => {
-  close(d.shareOf(costs, 'seven_day', MAX_20X, 'claude-haiku-4-5', usage({ cacheRead: 1 }), OUT), 0.0002, "Haiku's cache read on the week, 1 x 0.2 / 1000");
-  close(d.shareOf(costs, 'five_hour', MAX_20X, 'claude-haiku-4-5', usage({ input: 1 }), OUT), 0.005, "Haiku's input on the 5-hour window, 0.5 x 1 / 100");
+  close(d.shareIn(costs, 'seven_day', MAX_20X, 'claude-haiku-4-5', usage({ cacheRead: 1 }), false), 0.0002, "Haiku's cache read on the week, 1 x 0.2 / 1000");
+  close(d.shareIn(costs, 'five_hour', MAX_20X, 'claude-haiku-4-5', usage({ input: 1 }), false), 0.005, "Haiku's input on the 5-hour window, 0.5 x 1 / 100");
 });
 
-test('a model an override weighs on the week alone is weighted and prices the week at its own weight', () => {
+test('a model an override weighs on the week alone is weighted', () => {
   // The test table leaves Opus 5 at null; this copy weighs it 3 on the week through an override.
   const weekOnly = { ...costs, overrides: { ...costs.overrides, 'claude-opus-5': { weightByWindow: { seven_day: 3 } } } };
   assert.equal(d.isWeighted(weekOnly, 'claude-opus-5'), true, 'weighted through the override');
-  close(d.shareOf(weekOnly, 'seven_day', MAX_20X, 'claude-opus-5', usage({ input: 1 }), OUT), 0.003, 'the week, 3 x 1 / 1000');
 });
 
 test('a Fable model an override weighs on the 7-day Fable window alone is weighted, a dash on the shared windows and a share on its week', () => {
@@ -60,9 +53,8 @@ test('a Fable model an override weighs on the 7-day Fable window alone is weight
   assert.equal(d.isWeighted(weekOnly, FABLE), true, 'weighted through the override');
   // Fable 5.1 is the one Fable model of the test table, so its model tier has no weighed model to read.
   assert.equal(d.isWeighted({ ...weekOnly, overrides: costs.overrides }, FABLE), false, 'unweighted without the override');
-  assert.equal(d.shareOf(weekOnly, 'five_hour', MAX_20X, FABLE, usage({ input: 1 }), OUT), null, 'the 5-hour window');
-  assert.equal(d.shareOf(weekOnly, 'seven_day', MAX_20X, FABLE, usage({ input: 1 }), OUT), null, 'the 7-day window');
-  close(d.shareOf(weekOnly, 'seven_day_fable', MAX_20X, FABLE, usage({ input: 1 }), OUT), 0.02, 'the 7-day Fable window, 10 x 1 / 1000 / 0.5');
+  assert.equal(d.shareIn(weekOnly, 'five_hour', MAX_20X, FABLE, usage({ input: 1 }), false), null, 'the 5-hour window');
+  close(d.shareIn(weekOnly, 'seven_day_fable', MAX_20X, FABLE, usage({ input: 1 }), false), 0.02, 'the 7-day Fable window, 10 x 1 / 1000 / 0.5');
   assert.deepEqual(d.modelWeeks(weekOnly, FABLE), ['seven_day_fable'], 'a Fable model carries the 7-day Fable window');
   assert.deepEqual(d.modelWeeks(weekOnly, OPUS), [], 'an Opus model carries none');
   // Opus carries no 7-day Fable window, so a weight there prices nothing it sends.
@@ -70,22 +62,19 @@ test('a Fable model an override weighs on the 7-day Fable window alone is weight
   assert.deepEqual(d.weightedWindows(opusWeek, 'claude-opus-5'), [], 'a week the model does not carry weighs nothing');
 });
 
-test('a dated id reads its undated weight, and a model of no tier or an unsized tier prices no share', () => {
-  close(d.shareOf(costs, 'five_hour', MAX_20X, 'claude-opus-5-5-20260101', usage({ input: 1 }), OUT), 0.02, 'the dated id');
-  assert.equal(d.shareOf(costs, 'five_hour', MAX_20X, 'claude-unknown-1', usage({ input: 1 }), OUT), null, 'a model of no model tier');
-  assert.equal(d.shareOf(costs, 'seven_day', 'default_claude_team', OPUS, usage({ input: 1 }), OUT), null, "the Team week's null capacity");
-  assert.equal(d.shareOf(costs, 'five_hour', 'claude_enterprise', OPUS, usage({ input: 1 }), OUT), null, 'a tier the file does not list');
+test('a dated id reads its undated weight, and an unsized tier prices no share', () => {
+  close(d.shareIn(costs, 'five_hour', MAX_20X, 'claude-opus-5-5-20260101', usage({ input: 1 }), false), 0.02, 'the dated id');
+  assert.equal(d.shareIn(costs, 'seven_day', 'default_claude_team', OPUS, usage({ input: 1 }), false), null, "the Team week's null capacity");
   assert.equal(d.ratesOf(costs, 'five_hour_extra', MAX_20X, OPUS), null, 'a window the file does not price');
   assert.equal(d.weightOf(costs, 'claude-mystery-2', 'five_hour'), null, 'a model tier with no weighed model');
 });
 
 test("a model without a weight of its own prices nothing, though its model tier weighs another", () => {
   assert.equal(d.weightOf(costs, 'claude-opus-5', 'seven_day'), null, "Opus 5's null row, beside Opus 5.5's weight of 2");
-  assert.equal(d.equivalentOf(costs, 'claude-opus-5', usage({ input: 1 }), OUT), null, 'no Pro-week figure');
 });
 
 test("the Pro-week figure is the share of the anchor tier's 7-day window", () => {
-  close(d.equivalentOf(costs, OPUS, usage({ input: 1 }), OUT), 2 / 50, "Opus 5.5's input over Pro's week, 2 / 50");
+  close(d.equivalentIn(costs, OPUS, usage({ input: 1 }), false), 2 / 50, "Opus 5.5's input over Pro's week, 2 / 50");
 });
 
 test("the chosen week's scale is the anchor tier's 7-day capacity over the chosen tier's, and 1 under Pro without the cost model", () => {
@@ -123,7 +112,6 @@ test("the band factor is the reciprocal of the priced window's capacity factor i
 
 test('a week the file does not list prices as the 7-day share once', () => {
   assert.deepEqual(d.pricedWindow(costs, 'seven_day_other'), { divisor: 1, priced: 'seven_day' });
-  close(d.shareOf(costs, 'seven_day_other', MAX_20X, OPUS, usage({ input: 1 }), OUT), 0.002, 'the 7-day share, 2 / 1000');
 });
 
 test('a peak zone the browser cannot read leaves the band state unknown, so a share prices on a given state alone', () => {
@@ -132,7 +120,6 @@ test('a peak zone the browser cannot read leaves the band state unknown, so a sh
   assert.equal(d.inBand({ ...costs, peak: { ...costs.peak, zone: '' } }, IN), null, 'the empty zone reads the same');
   assert.deepEqual(d.bandNow(unzoned, IN), { unresolved: 'Not/AZone' });
   assert.equal(d.unreachableBand(d.bandNow(unzoned, IN)), null, 'both states stay in reach');
-  assert.equal(d.shareOf(unzoned, 'five_hour', MAX_20X, OPUS, usage({ input: 1 }), IN), null, 'no share on an assumed state');
   close(d.shareIn(unzoned, 'five_hour', MAX_20X, OPUS, usage({ input: 1 }), true), 0.04, 'inside the band, 2 / 100 / 0.5');
   close(d.shareIn(unzoned, 'five_hour', MAX_20X, OPUS, usage({ input: 1 }), false), 0.02, 'outside it, 2 / 100');
   assert.equal(d.nextLocalChange(unzoned, IN, 'Europe/Berlin'), null);
@@ -402,10 +389,6 @@ test('every reader prices through the overlay', () => {
   close(d.ratesOf(costs, 'five_hour', MAX_20X, OPUS)?.input, 20_000, 'input at the base, 2 x 1 / 100 x 1e6');
   close(d.shareIn(over, 'five_hour', MAX_20X, OPUS, u, true), d.shareIn(over, 'five_hour', MAX_20X, OPUS, u, false), 'the regime holds the window whole inside the band');
   close(d.shareIn(costs, 'five_hour', MAX_20X, OPUS, u, true), 2 * d.shareIn(costs, 'five_hour', MAX_20X, OPUS, u, false), "the base's inside share doubles");
-  // At an instant: the regime's 2 / 200 inside and outside the band, against the base's 2 / 100 out and 2 / 50 in.
-  close(d.shareOf(over, 'five_hour', MAX_20X, OPUS, u, IN), 0.01, 'shareOf inside the band');
-  close(d.shareOf(over, 'five_hour', MAX_20X, OPUS, u, OUT), 0.01, 'shareOf outside the band');
-  close(d.shareOf(costs, 'five_hour', MAX_20X, OPUS, u, IN), 2 * d.shareOf(costs, 'five_hour', MAX_20X, OPUS, u, OUT), 'the base through shareOf');
   assert.equal(d.bandFactor(over, 'five_hour', IN), 1);
   assert.equal(d.bandFactor(costs, 'five_hour', IN), 2);
   close(d.fullWindowsAWeek(over, MAX_20X, false), 6.25, 'Max 20x under the regime, 1250 / 200');
@@ -471,18 +454,16 @@ test("a model's tier is its model_tier entry, then its undated id's, then the ti
 test('every helper that reads a weight answers for a weighted model and returns nothing for a model without a weight of its own', () => {
   const u = usage({ input: 1 });
   const read = (model) => ({
-    equivalentOf: d.equivalentOf(costs, model, u, OUT),
     isWeighted: d.isWeighted(costs, model),
     ratesOf: d.ratesOf(costs, 'five_hour', MAX_20X, model),
     shareIn: d.shareIn(costs, 'five_hour', MAX_20X, model, u, false),
-    shareOf: d.shareOf(costs, 'five_hour', MAX_20X, model, u, OUT),
     weightOf: d.weightOf(costs, model, 'five_hour'),
     weightedWindows: d.weightedWindows(costs, model),
   });
   const weighted = read(OPUS);
   assert.ok(Object.values(weighted).every((v) => v !== null && v !== false && !(Array.isArray(v) && v.length === 0)), `a weighted model prices through every helper: ${JSON.stringify(weighted)}`);
   // Opus 4.8 sits in the Opus tier, which weighs Opus 5.5, and carries no weight of its own, so no reader borrows one.
-  for (const model of ['claude-opus-4-8', 'claude-mystery-2', 'claude-unknown-1']) assert.deepEqual(Object.values(read(model)), [null, false, null, null, null, null, []], `${model} prices nowhere`);
+  for (const model of ['claude-opus-4-8', 'claude-mystery-2', 'claude-unknown-1']) assert.deepEqual(Object.values(read(model)), [false, null, null, null, []], `${model} prices nowhere`);
 });
 
 test('the entry in force at an instant is the latest dated at or before it, else the first', () => {

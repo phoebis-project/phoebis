@@ -207,14 +207,14 @@ test('the mock leaves out a session no mod reports once its last use is older th
   const TWO_HOURS_BACK = 'e5a17c3d-8f20-4b6e-9d41-2c7b0a9f6e58';
   const key = (s) => `${s.keyId}|${s.keyGeneration}|${s.sessionId}`;
   const named = (s) => `${s.keyId} on ${s.accountId ?? 'no account'} ${s.sessionId.slice(0, 8)}${s.historical ? ' earlier holder' : ''}`;
-  const back = (s) => (d.lastUseOf(s) === null ? 'no use on record' : `${Math.round((now - Date.parse(d.lastUseOf(s))) / 60_000)} min back`);
+  const back = (s) => (d.lastActivity(s) === null ? 'no use on record' : `${Math.round((now - Date.parse(d.lastActivity(s))) / 60_000)} min back`);
   const sessions = await api.listSessions();
   const plain = sessions.filter((s) => s.companion === 'none');
   const overflow = plain.find((s) => s.keyId === 'desktop' && s.accountId === 'overflow');
   const pinless = plain.find((s) => s.keyId === 'laptop' && s.accountId === 'secondary' && !s.pinned);
   assert.ok(overflow && pinless, `the unpinned rows on overflow and secondary stay listed, their last use inside the hour: ${plain.map((s) => `${named(s)} (${back(s)})`).join(', ')}`);
   // The laptop row the ledger never saw holds no pin and no request: a null last use is never older than the timeout.
-  const unused = plain.filter((s) => d.lastUseOf(s) === null);
+  const unused = plain.filter((s) => d.lastActivity(s) === null);
   assert.deepEqual(unused.map((s) => `${s.keyId} on ${s.accountId}`), ['laptop on nightly'], 'one row no mod reports has no use on record and is listed at any instant');
   assert.ok(d.sessionsListedAt(now, undefined, 10_800).some((s) => s.sessionId === TWO_HOURS_BACK), 'a three-hour timeout lists the row last used two hours back');
   assert.ok(!d.sessionsListedAt(now, undefined, HOUR_S).some((s) => s.sessionId === TWO_HOURS_BACK), 'the one-hour timeout leaves it out');

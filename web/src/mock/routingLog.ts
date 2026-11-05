@@ -1,11 +1,11 @@
 import type {
-  Account, AllowanceReset, AttemptWindow, CohortHold, DecisionKind, DecisionRecord, DecisionSummary, Exhaustion, MoveCause, PinReason, Placement, PrefixEntry, RecordBudget, RecordCandidate, RecordCompletion, RecordCooldown, RecordHold, RecordOutcome,
+  Account, AllowanceReset, Attempt, AttemptWindow, CohortHold, DecisionKind, DecisionRecord, DecisionSummary, Exhaustion, MoveCause, PinReason, Placement, PrefixEntry, RecordBudget, RecordCandidate, RecordCompletion, RecordCooldown, RecordHold, RecordOutcome,
   PoolKeepalive, RecordPin, RecordRequest, RecordSettings, Refusal, RequestLog, RoutingEvent, RoutingLogPage, RoutingLogQuery, Score, SummaryFact, WalkFact, WalkStep,
 } from '@/api/types';
 import { DECISION_KIND_VALUES } from '@/api/types';
 import { shareIn, weightOf } from '@/lib/costs';
 import { placementHit } from '@/lib/format';
-import { MODEL_SCOPE_PREFIX, endOf, isPaidSource, readWindows, windowOf } from '@/lib/quota';
+import { MODEL_SCOPE_PREFIX, endOf, flagOf, isPaidSource, readWindows, windowOf } from '@/lib/quota';
 import { compareRows } from '@/lib/routingLog';
 import { WINDOW_KEY, hoursOfKey } from '@/lib/windows';
 import { ACCOUNTS, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT, SHARED_WINDOWS, SUNSET_WEEK_RESETS_IN, accountById, rankTier } from './accounts';
@@ -14,7 +14,7 @@ import { GUARDRAILS } from './guardrails';
 import { earliest, leadOf, leftPerHour, paceDeadline, paceHours } from './lead';
 import { SESSIONS } from './operations';
 import { KEY_REVOKED_AT, WORST_BUCKET, poolById, type PoolSeed } from './pools';
-import { BUDGET_CROSSING_ID, FORCED_MOVE_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, TIE_STORY_ID, UNSEEDED_IDS, cooldownOf, failsOver, holds, oauthWindows, requestById } from './requests';
+import { BUDGET_CROSSING_ID, FORCED_MOVE_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, TIE_STORY_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, oauthWindows, requestById } from './requests';
 import { createRng } from './rng';
 import { round } from './round';
 import { TABLES } from './samples';
@@ -221,8 +221,22 @@ function settingsNow(pool: PoolSeed): RecordSettings {
  */
 const OLDER_FACTOR = 0.8;
 
+/** Whether the decision sent an attempt: a placement, a renewal or a move. */
+const isDispatched = (spec: Spec) => spec.kind === 'placed' || spec.kind === 'renewed' || spec.kind === 'moved';
+
 /** The attempt a dispatching decision sent, whose answer the drawer shows. */
-const dispatchedAttempt = (spec: Spec) => (spec.kind === 'placed' || spec.kind === 'renewed' || spec.kind === 'moved' ? spec.request.attempts[spec.attempt - 1] : undefined);
+const dispatchedAttempt = (spec: Spec) => (isDispatched(spec) ? spec.request.attempts[spec.attempt - 1] : undefined);
+
+/**
+ * Where a held decision holds in place, null for every other decision. A hold for a spent window's reset ends the walk
+ * at the spent rule, so it reads no placement's partitions. A slow-down hold waits on the pin the move rules left in
+ * place, before its renewal, so it reads no placement either, and so does a moved pin's wait for the head of the
+ * request that carried the move.
+ */
+const inPlaceOf = (spec: Spec): 'reset' | 'rewrite' | 'slow_down' | null => {
+  const place = spec.hold?.place;
+  return spec.kind === 'held' && (place === 'reset' || place === 'rewrite' || place === 'slow_down') ? place : null;
+};
 
 /**
  * The windows a decision read on a member: the attempt's own reading on the account it went to, so the card and the
@@ -253,18 +267,16 @@ interface CooldownRow {
   window: string;
 }
 
+/** Every row an attempt's answer set, with the model it answered and its request, which the row's event names. */
+const ATTEMPT_COOLDOWNS: (CooldownRow & { model: string; requestId: string })[] = REQUESTS.flatMap((r) =>
+  r.attempts.flatMap((a) => (a.cooldownSet ? [{ accountId: a.accountId, ...cooldownOf(a.cooldownSet.reason, r.canonicalModel), setAt: attemptEnd(a), until: Date.parse(a.cooldownSet.until), model: r.canonicalModel, requestId: r.id }] : [])),
+);
+
 const cooldownRows: CooldownRow[] = [
   ...ACCOUNTS.flatMap((a) =>
     a.cooldowns.map((c) => ({ accountId: a.id, reason: c.reason.startsWith('rate_limit') ? 'rate_limit' : c.reason, scope: c.scope, setAt: Date.parse(c.setAt), until: Date.parse(c.until), window: c.scope === 'fast' ? 'fast' : c.windowId === '5h' ? 'five_hour' : c.scope.startsWith(MODEL_SCOPE_PREFIX) ? 'model_rejection' : (c.windowId ?? 'retry_after') })),
   ),
-  ...REQUESTS.flatMap((r) =>
-    r.attempts.flatMap((a) => {
-      if (!a.cooldownSet) return [];
-      const setAt = Date.parse(a.startedAt) + (a.durationMs ?? 0);
-      const until = Date.parse(a.cooldownSet.until);
-      return [{ accountId: a.accountId, ...cooldownOf(a.cooldownSet.reason, r.canonicalModel), setAt, until }];
-    }),
-  ),
+  ...ATTEMPT_COOLDOWNS.map(({ model: _model, requestId: _requestId, ...row }) => row),
 ];
 // A story attempt set the row its account carries now, so one cooldown is listed once.
 const COOLDOWNS: CooldownRow[] = [...new Map(cooldownRows.map((c) => [`${c.accountId}|${c.scope}|${c.until}`, c])).values()];
@@ -286,7 +298,7 @@ export function budgetsAt(pool: PoolSeed, accountId: string, at: number): Record
 /** The account's state at `at`: the Overflow workspace's credit balance ran out at 11:30:12. */
 const stateAt = (a: Account, at: number): string => {
   if (a.id === 'overflow') return at < OVERFLOW_LAPSED_AT ? 'ready' : 'funding_required';
-  return a.status === 'reauth_required' || a.status === 'funding_required' || a.status === 'unpaired' ? a.status : 'ready';
+  return flagOf(a.status) ?? 'ready';
 };
 
 /**
@@ -1157,15 +1169,15 @@ function pinStepOf(spec: Spec, pool: PoolSeed, pinKey: string): { pin: RecordPin
 }
 
 /**
- * The move rules a live pin a portable request still reaches walks, and the destinations a fired rule names. A token
- * count follows its pin, since it writes none a move could leave, and a pin past its account's end is released at
- * renewal instead.
+ * The move rules a live pin a portable request still reaches walks, the destinations a fired rule names and whether
+ * the move gate answered the fitting order, which tells a move's runway ties apart. A token count follows its pin,
+ * since it writes none a move could leave, and a pin past its account's end is released at renewal instead.
  */
-function moveWalkOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, pin: RecordPin | null, portable: boolean, inPlace: 'reset' | 'rewrite' | 'slow_down' | null): { movedAmong: string[] | undefined; steps: WalkStep[] } {
+function moveWalkOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, pin: RecordPin | null, portable: boolean): { gateFits: boolean; movedAmong: string[] | undefined; steps: WalkStep[] } {
   const r = spec.request;
   const steps: WalkStep[] = [];
   let movedAmong: string[] | undefined;
-  if (pin?.found === 'live' && portable && !spec.failover && (spec.kind === 'renewed' || spec.kind === 'moved' || inPlace !== null)) {
+  if (pin?.found === 'live' && portable && !spec.failover && (spec.kind === 'renewed' || spec.kind === 'moved' || inPlaceOf(spec) !== null)) {
     const source = candidates.find((c) => c.accountId === pin.accountId);
     const endsAt = source?.term?.endsAt ? Date.parse(source.term.endsAt) : null;
     const skip = r.kind === 'count_tokens' ? 'count' : endsAt !== null && endsAt <= spec.at ? 'subscription_ended' : null;
@@ -1191,21 +1203,21 @@ function moveWalkOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, p
       }
     }
   }
-  return { movedAmong, steps };
+  return { gateFits: steps.some((w) => w.step === 'fit' && w.verdict === 'fits'), movedAmong, steps };
 }
 
 /**
  * The placement walk: the partitions, the three rungs and the pick among the members they kept, or an exhaustion's
- * empty pick. `walk` is the walk so far, whose fit lines tell a move's runway ties apart. A decision that holds in
- * place or renews walks none.
+ * empty pick. `gateFits` is whether the move gate answered the fitting order, which tells a move's runway ties apart.
+ * A decision that holds in place or renews walks none.
  */
-function placingWalkOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, inPlace: 'reset' | 'rewrite' | 'slow_down' | null, movedAmong: string[] | undefined, walk: readonly WalkStep[]): { pick: ReturnType<typeof pickOf>; steps: WalkStep[]; tierSize: number } {
+function placingWalkOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, movedAmong: string[] | undefined, gateFits: boolean): { pick: ReturnType<typeof pickOf>; steps: WalkStep[]; tierSize: number } {
   const r = spec.request;
   const member = (id: string | null | undefined) => candidates.find((c) => c.accountId === id);
   const steps: WalkStep[] = [];
   let pick: ReturnType<typeof pickOf> = { runnerUp: null, score: null, tierSize: 0 };
   let tierSize = 0;
-  const placing = (spec.kind === 'placed' || spec.kind === 'moved' || spec.kind === 'held' || spec.kind === 'exhausted') && inPlace === null;
+  const placing = (spec.kind === 'placed' || spec.kind === 'moved' || spec.kind === 'held' || spec.kind === 'exhausted') && inPlaceOf(spec) === null;
   if (placing) {
     const set = candidates.filter((c) => (movedAmong ? movedAmong.includes(c.accountId) : c.obstacle === null));
     const partitions = narrowed(set, pool, r, movedAmong !== undefined, spec.failover !== undefined);
@@ -1244,7 +1256,6 @@ function placingWalkOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed
       // and round robin's cursor picks alone.
       const ranks = candidates.filter((c) => c.rank !== null);
       const ties = pool.strategy === 'pace' ? ranks.filter((c) => c.score === Math.max(...ranks.map((x) => x.score ?? 0))) : ranks;
-      const gateFits = [...walk, ...steps].some((w) => w.step === 'fit' && w.verdict === 'fits');
       const byRunway = pool.strategy === 'round_robin' ? [] : runwayTiesOf(ties, (c) => (movedAmong ? gateFits : spec.failover !== undefined && c.fit === 'fits'));
       // The draw is left to the runway's ties where they narrowed the strategy's, else to the strategy's own. Round
       // robin's cursor names the chosen member's turn among the ranked tier, so it leaves no draw.
@@ -1263,9 +1274,9 @@ function placingWalkOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed
  * The pin a dispatched decision writes back: every renewal, keeping its epoch and its stamp, and a placement or a move
  * with a fresh epoch. A token count creates and moves none, so the session keeps the one it had.
  */
-function pinWriteOf(spec: Spec, dispatched: boolean, pinning: boolean, pin: RecordPin | null, pinKey: string, stamps: { hashes: boolean; refresh: boolean }): RecordOutcome['pinWritten'] {
+function pinWriteOf(spec: Spec, pinning: boolean, pin: RecordPin | null, pinKey: string, stamps: { hashes: boolean; refresh: boolean }): RecordOutcome['pinWritten'] {
   const r = spec.request;
-  if (!dispatched || !pinning || (r.kind === 'count_tokens' && spec.kind !== 'renewed')) return null;
+  if (!isDispatched(spec) || !pinning || (r.kind === 'count_tokens' && spec.kind !== 'renewed')) return null;
   const action = spec.kind === 'renewed' ? 'renewed' : pin?.found === 'live' || spec.failover ? 'moved' : 'created';
   const prior = pins.get(pinKey);
   const epoch = action === 'renewed' && prior ? prior.epoch : (epochs += 1);
@@ -1282,10 +1293,9 @@ function pinWriteOf(spec: Spec, dispatched: boolean, pinning: boolean, pin: Reco
  * The router writes the message chain's rows first, each at the answer's one prefix, then the static chain's, each
  * numbered by its place in that chain.
  */
-function completionOf(spec: Spec, pool: PoolSeed, chosen: RecordCandidate | undefined, cache: { answered: boolean; hasUsage: boolean; hit: boolean | null; promised: number | null }): RecordCompletion {
+function completionOf(spec: Spec, pool: PoolSeed, chosen: RecordCandidate | undefined, attempt: Attempt | undefined, cache: { answered: boolean; hasUsage: boolean; hit: boolean | null; promised: number | null }): RecordCompletion {
   const r = spec.request;
   const usage = r.usage;
-  const attempt = dispatchedAttempt(spec);
   const ttlMs = ttlOf(pool, chosen?.kind ?? 'oauth', r.agentId !== 'main', r.canonicalModel);
   const prefixTokens = usage.cacheRead + usage.cacheWrite5m + usage.cacheWrite1h;
   const written = spec.cacheMap
@@ -1297,7 +1307,7 @@ function completionOf(spec: Spec, pool: PoolSeed, chosen: RecordCandidate | unde
   return {
     cacheMapWritten: cache.answered && usage.cacheWrite5m + usage.cacheWrite1h > 0 ? written.map((e) => ({ accountId: spec.accountId ?? '', depth: e.depth, prefixTokens: e.prefixTokens, tier: e.tier, ttlMs })) : null,
     cacheReadTokens: cache.hasUsage ? usage.cacheRead : null,
-    completedAt: attempt ? iso(Date.parse(attempt.startedAt) + (attempt.durationMs ?? 0)) : null,
+    completedAt: attempt ? iso(attemptEnd(attempt)) : null,
     freed: spec.heldBefore !== undefined,
     heldMs: spec.heldBefore?.heldMs ?? null,
     hit: cache.hit,
@@ -1311,7 +1321,8 @@ function completionOf(spec: Spec, pool: PoolSeed, chosen: RecordCandidate | unde
  * A held decision's hold. A slow-down hold copies the read it was answered from, its bound the pool's longest wait for
  * the slow-down, which bounds a wait for a rewrite in flight too.
  */
-function holdOf(spec: Spec, pool: PoolSeed, inPlace: 'reset' | 'rewrite' | 'slow_down' | null): RecordHold | null {
+function holdOf(spec: Spec, pool: PoolSeed): RecordHold | null {
+  const inPlace = inPlaceOf(spec);
   const slowed = inPlace === 'slow_down' ? slowReadAt(spec.accountId ?? '', pool, spec.at) : null;
   if (spec.kind !== 'held' || !spec.hold) return null;
   return {
@@ -1340,11 +1351,7 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
   const pool = poolById.get(r.poolId ?? '')!;
   const fast = r.shape.requestedSpeed === 'fast';
   const candidates = spec.kind === 'refused' ? [] : candidatesOf(spec, pool);
-  // A hold for a spent window's reset ends the walk at the spent rule, so it reads no placement's partitions. A
-  // slow-down hold waits on the pin the move rules left in place, before its renewal, so it reads no placement either,
-  // and so does a moved pin's wait for the head of the request that carried the move.
-  const place = spec.hold?.place;
-  const inPlace = spec.kind === 'held' && (place === 'reset' || place === 'rewrite' || place === 'slow_down') ? place : null;
+  const inPlace = inPlaceOf(spec);
   if (!spec.story && (spec.kind === 'placed' || spec.kind === 'moved')) fillDrawnRivals(spec, candidates, pool);
   if ((spec.kind === 'placed' || spec.kind === 'held' || spec.kind === 'exhausted') && inPlace === null) readPlacementFits(spec, candidates, pool);
   const portable = r.client !== 'other';
@@ -1365,7 +1372,7 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
     const facts = pinned ? [...(pinned.obstacle ? [fact('obstacle', pinned.obstacle.name)] : []), fact('tried', spec.attempted.includes(pinned.accountId))] : [];
     walk.push(step('probe', 'passed', facts));
   }
-  const { movedAmong, steps: moveSteps } = moveWalkOf(spec, candidates, pool, pin, portable, inPlace);
+  const { gateFits, movedAmong, steps: moveSteps } = moveWalkOf(spec, candidates, pool, pin, portable);
   walk.push(...moveSteps);
   // A renewal stamps the refresh on a turn that refreshes the pin, and the hashes on any turn that touches it and
   // carries a chain. A probe and a token count leave both.
@@ -1374,7 +1381,7 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
   if (spec.kind === 'renewed') {
     walk.push(step('renew', 'renewed', [fact('account_id', spec.accountId, null, spec.accountId), fact('lane', laneOf(r)), fact('refresh_stamped', stamps.refresh), fact('hashes_stamped', stamps.hashes)]));
   }
-  const { pick, steps: placingSteps, tierSize } = placingWalkOf(spec, candidates, pool, inPlace, movedAmong, walk);
+  const { pick, steps: placingSteps, tierSize } = placingWalkOf(spec, candidates, pool, movedAmong, gateFits);
   walk.push(...placingSteps);
   if (spec.kind === 'held' && spec.hold && inPlace === null) {
     walk.push(step('hold', 'held', [fact('place', spec.hold.place), fact('account_id', spec.accountId, null, spec.accountId), fact('bound_ms', pool.retryInPlaceSeconds * 1_000, 'ms')]));
@@ -1400,18 +1407,18 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
   }
 
   const chosen = member(spec.accountId);
-  const dispatched = spec.kind === 'placed' || spec.kind === 'renewed' || spec.kind === 'moved';
+  const dispatched = isDispatched(spec);
   const attempt = dispatchedAttempt(spec);
   const answered = attempt?.upstreamStatus === 200 && spec.attempt === r.attempts.length;
   const tier = dispatched && !spec.rung && spec.kind !== 'renewed' ? (chosen?.tier ?? null) : null;
   const pinEvents = pinEventsOf(spec, pinning);
-  const pinWritten = pinWriteOf(spec, dispatched, pinning, pin, pinKey, stamps);
+  const pinWritten = pinWriteOf(spec, pinning, pin, pinKey, stamps);
   const usage = r.usage;
   const promised = spec.rung && spec.rung.rung !== 'with_main' ? spec.rung.prefixTokens : null;
   const hasUsage = answered && bodyTokensOf(r) > 0;
   const hit = !hasUsage ? null : spec.rung ? placementHit(spec.rung, usage.cacheRead) : usage.cacheRead > 0;
-  const completion = dispatched ? completionOf(spec, pool, chosen, { answered, hasUsage, hit, promised }) : null;
-  const hold = holdOf(spec, pool, inPlace);
+  const completion = dispatched ? completionOf(spec, pool, chosen, attempt, { answered, hasUsage, hit, promised }) : null;
+  const hold = holdOf(spec, pool);
   // The decision that lands a failover's session on a pin names the cooldown that failed it over.
   const failedOver = spec.failover && pinWritten !== null ? r.attempts[spec.attempt - 2]?.cooldownSet : undefined;
   const outcome: RecordOutcome = {
@@ -1696,7 +1703,7 @@ function derivedSpecs(r: RequestLog): Spec[] {
     pinOn = a.accountId;
   });
   const last = r.attempts[r.attempts.length - 1];
-  const after = Date.parse(last.startedAt) + (last.durationMs ?? 0);
+  const after = attemptEnd(last);
   const tried = r.attempts.map((x) => x.accountId);
   if (r.errorCode === 'accounts_at_cap') ranOut(seq + 1, r.attempts.length + 1, after, tried);
   // A 429 or a refused model fails over, so a request whose last attempt answered one found nothing left at its
@@ -2384,7 +2391,7 @@ function expiredReservations(): EventSeed[] {
     const r = record ? requestById.get(record.requestId) : undefined;
     const last = r?.attempts[r.attempts.length - 1];
     if (!record || !booking || !r || !last || r.outcome === 'succeeded') return [];
-    const ended = Date.parse(last.startedAt) + (last.durationMs ?? 0);
+    const ended = attemptEnd(last);
     const detail = { age_ms: ended - Date.parse(record.request.at), attempt: record.request.attempt, cause: endCauseOf(r), shares: booking.rewrite };
     return [{ accountId: booking.accountId, at: iso(ended), detail, kind: 'reservation_expired', requestId: record.requestId }];
   });
@@ -2544,7 +2551,7 @@ function buildEvents(): RoutingEvent[] {
     if (!record?.outcome.pinEvents.some((e) => e.kind === 'pin_created')) continue;
     seeds.push({ accountId: s.accountId, agentId: s.agentId, at: s.at, detail: { agent_id: s.agentId, epoch: record.outcome.pinWritten?.epoch ?? null }, keyId: s.keyId, kind: 'pin_created', model: s.model, sessionId: s.sessionId });
   }
-  const heads = REQUESTS.flatMap((r) => r.attempts.map((a) => ({ a, at: Date.parse(a.startedAt) + (a.durationMs ?? 0), r }))).sort((x, y) => x.at - y.at);
+  const heads = REQUESTS.flatMap((r) => r.attempts.map((a) => ({ a, at: attemptEnd(a), r }))).sort((x, y) => x.at - y.at);
   // The story's own spent edge, which the poll read before any answer's head: nightly's 5-hour window at its limit
   // within the hour of the least-bad move onto it. Its first reading under the limit after that, an answer's head or
   // the reading a decision met, clears it, so the 429's head that reads the limit again before the reset is a crossing
@@ -2604,23 +2611,16 @@ function buildEvents(): RoutingEvent[] {
       seeds.push({ accountId: a.accountId, at: iso(at), detail: { reset: w.resetsAt === null ? null : Date.parse(w.resetsAt), source: 'head', source_request_id: r.id, utilization: 1, window }, kind: 'window_spent', requestId: r.id });
     }
   }
-  for (const r of REQUESTS) {
-    for (const a of r.attempts) {
-      const answeredAt = Date.parse(a.startedAt) + (a.durationMs ?? 0);
-      if (!a.cooldownSet) continue;
-      const rejected = a.cooldownSet.reason === 'model_rejected';
-      const until = Date.parse(a.cooldownSet.until);
-      const { reason, scope, window } = cooldownOf(a.cooldownSet.reason, r.canonicalModel);
-      seeds.push({
-        accountId: a.accountId,
-        at: iso(answeredAt),
-        detail: { reason, scope, source_request_id: r.id, until, window },
-        kind: 'cooldown_set',
-        ...(rejected ? { model: r.canonicalModel } : {}),
-        requestId: r.id,
-      });
-    }
-  }
+  seeds.push(
+    ...ATTEMPT_COOLDOWNS.map(({ accountId, model, reason, requestId, scope, setAt, until, window }): EventSeed => ({
+      accountId,
+      at: iso(setAt),
+      detail: { reason, scope, source_request_id: requestId, until, window },
+      kind: 'cooldown_set',
+      ...(scope.startsWith(MODEL_SCOPE_PREFIX) ? { model } : {}),
+      requestId,
+    })),
+  );
   // A pin event names the epoch the record wrote, so the event and the card read one number, and a rule's move the
   // fit, the runway and the window that binds on the destination its gate read.
   for (const seed of seeds) {
@@ -2665,7 +2665,7 @@ function buildEvents(): RoutingEvent[] {
     // the attempt's completion records the cut with the request's error word and the body bytes the client got.
     {
       accountId: cutAttempt.accountId,
-      at: iso(Date.parse(cutAttempt.startedAt) + (cutAttempt.durationMs ?? 0)),
+      at: iso(attemptEnd(cutAttempt)),
       detail: { attempt: cutAttempt.index + 1, bytes_relayed: 846, code: undecodable.errorCode, text: 'error decoding response body', upstream_request_id: cutAttempt.upstreamRequestId },
       keyId: undecodable.keyId,
       kind: 'stream_interrupted',

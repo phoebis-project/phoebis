@@ -247,14 +247,14 @@ test("the mock's burn fold sums the rows' own shares, prices only rows with toke
   const tier = 'default_claude_max_20x';
   const usageOf = (input) => ({ cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input, output: 0 });
   // A row carries its requests' shares, each priced at its completion, which can land past the hour it arrived in.
-  const sharesAt = (model, input, at) => Object.fromEntries(['five_hour', 'seven_day'].map((w) => [w, d.shareOf(costs, w, tier, model, usageOf(input), at)]));
-  const row = (model, uncachedInput, completedAt = hour) => ({ accountId: 'primary', costUsd: 0, equivalent: d.equivalentOf(costs, model, usageOf(uncachedInput), completedAt), funding: 'plan', hour: new Date(hour).toISOString(), keyId: 'desktop', model, requestClass: 'main', sessionId: 's', shares: sharesAt(model, uncachedInput, completedAt), tokens: { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, output: 0, uncachedInput } });
+  const sharesAt = (model, input, at) => Object.fromEntries(['five_hour', 'seven_day'].map((w) => [w, d.shareIn(costs, w, tier, model, usageOf(input), d.inBand(costs, at))]));
+  const row = (model, uncachedInput, completedAt = hour) => ({ accountId: 'primary', costUsd: 0, equivalent: d.equivalentIn(costs, model, usageOf(uncachedInput), d.inBand(costs, completedAt)), funding: 'plan', hour: new Date(hour).toISOString(), keyId: 'desktop', model, requestClass: 'main', sessionId: 's', shares: sharesAt(model, uncachedInput, completedAt), tokens: { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, output: 0, uncachedInput } });
   const range = { from: new Date(hour).toISOString(), to: new Date(hour + HOUR).toISOString() };
   const shareOf = (rows) => d.burnOf(rows, range, 'account').points.find((p) => p.group === 'primary' && Date.parse(p.at) === hour).fiveHourShare;
   // A request that arrived before the band opened and completed inside it, so the band's factor prices it.
   const priced = row('claude-opus-5-5', 1_000_000, edge + 60_000);
   const want = priced.shares.five_hour;
-  const atTheHour = d.shareOf(costs, 'five_hour', tier, 'claude-opus-5-5', usageOf(1_000_000), hour);
+  const atTheHour = d.shareIn(costs, 'five_hour', tier, 'claude-opus-5-5', usageOf(1_000_000), d.inBand(costs, hour));
   assert.ok(want !== null && atTheHour !== null && want > atTheHour, 'the shipped model prices Opus 5.5 on Max 20x, higher inside the band');
   // A failed request on Sonnet 4.5, which the cost model has no weight for, carries no token.
   const failed = row('claude-sonnet-4-5', 0);
@@ -285,7 +285,7 @@ test('an hour of two requests in different bands sums the per-request shares at 
   const before = rowAt(edge - 20 * 60_000, 60_000, usage(250_000, 9_000), 'req_before');
   const hours = d.rollups([crossing, before]);
   assert.equal(hours.length, 1, 'the two requests share one hour of one lane');
-  const share = (r, at) => d.shareOf(costs, 'five_hour', tier, r.canonicalModel, r.usage, at);
+  const share = (r, at) => d.shareIn(costs, 'five_hour', tier, r.canonicalModel, r.usage, d.inBand(costs, at));
   const completion = (r) => Date.parse(r.at) + r.durationMs;
   const got = hours[0].shares.five_hour;
   const want = share(crossing, completion(crossing)) + share(before, completion(before));
@@ -294,7 +294,7 @@ test('an hour of two requests in different bands sums the per-request shares at 
   assert.ok(Math.abs(got - atArrivals) > 1e-9, 'a request priced at its arrival reads the other band');
   const summed = usage(650_000, 29_000);
   for (const at of [completion(crossing), completion(before)]) {
-    assert.ok(Math.abs(got - d.shareOf(costs, 'five_hour', tier, template.canonicalModel, summed, at)) > 1e-9, 'the summed tokens priced at one instant read one band for both');
+    assert.ok(Math.abs(got - d.shareIn(costs, 'five_hour', tier, template.canonicalModel, summed, d.inBand(costs, at))) > 1e-9, 'the summed tokens priced at one instant read one band for both');
   }
 });
 

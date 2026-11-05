@@ -34,11 +34,13 @@ export function servedFigures(accountId: string, now: number, slowDown: boolean)
   return { burn: week.burn, paceScore: round((1 - week.utilization) / hours - burn, 5), speed };
 }
 /**
- * The route lists a pool's keys from the key registry, so the story seeds none on the pool itself. Its pins are its
- * members' sum, which the pool view reads, so the seed holds no figure of its own. Its guardrails are the attachments'
- * and its warnings the route's checks on its settings, both of which the pool view reads as the route does.
+ * A pool as the story seeds it and the mock stores it, over its kind of member. The route lists a pool's keys from the
+ * key registry, so the story seeds none on the pool itself. Its pins are its members' sum, which the pool view reads,
+ * so the seed holds no figure of its own. Its guardrails are the attachments' and its warnings the route's checks on
+ * its settings, both of which the pool view reads as the route does.
  */
-export type PoolSeed = Omit<Pool, 'activePins' | 'guardrails' | 'keys' | 'members' | 'warnings'> & { members: MemberSeed[] };
+export type PoolRow<M> = Omit<Pool, 'activePins' | 'guardrails' | 'keys' | 'members' | 'warnings'> & { members: M[] };
+export type PoolSeed = PoolRow<MemberSeed>;
 
 const unbudgeted = (accountId: string, priority: number): MemberSeed => ({ accountId, budgetDailyUsd: null, budgetMonthlyUsd: null, priority, spends: [] });
 
@@ -349,12 +351,15 @@ export const POOLS: PoolSeed[] = POOL_ROWS.map(({ guardrails: _g, warnings: _w, 
 
 export const poolById = new Map(POOLS.map((p) => [p.id, p]));
 
+/** A key as the story seeds it and the mock stores it. Its guardrails and its pool's are the attachments', which the
+ *  key view reads. */
+export type KeyRow = Omit<ApiKey, 'guardrails' | 'poolGuardrails'>;
+
 // Each key's 7-day usage derives from the rollups in `requests.ts`. A lifetime is the story's own where the key is
 // older than the month the rollups hold, raised there to their sum; a key created inside that month carries none,
 // so its lifetime is theirs.
-// MockApi restamps revision at construction, so the served figure is not this seed's. A key's guardrails and its pool's
-// are the attachments', which the key view reads.
-export const KEYS: Omit<ApiKey, 'guardrails' | 'poolGuardrails'>[] = [
+// MockApi restamps revision at construction, so the served figure is not this seed's.
+export const KEYS: KeyRow[] = [
   {
     ...KEY_SAMPLE,
     id: 'desktop',

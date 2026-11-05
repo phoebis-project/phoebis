@@ -16,15 +16,15 @@ import { tokensTotal } from '@/lib/format';
 import { modelRulesRefusal, poolWarnings, type NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
 import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
-import { MODEL_SCOPE_PREFIX, accountCooldown, accountStatusOf } from '@/lib/quota';
+import { MODEL_SCOPE_PREFIX, accountCooldown, accountStatusOf, flagOf } from '@/lib/quota';
 import { compareRequests } from '@/lib/requests';
 import { ACCOUNTS, QUOTA_HISTORY, accountById, usageOf } from './accounts';
-import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, reconciliationsOf, refusalCategoriesOf, rewritesOf, seriesOf, unusedAllowanceOf } from './analytics';
+import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, reconciliationsOf, refusalCategoriesOf, rewritesOf, seriesOf, termEndOf, unusedAllowanceOf } from './analytics';
 import { ATTENTION } from './attention';
 import { CATALOG } from './catalog';
 import { GUARDRAIL_RESERVED_IDS, GUARDRAIL_STALE, GUARDRAIL_TAKEN, GUARDRAILS, PRESETS, boundRefusal, conditionsRefusal, dryRunVerdict, repeatedId, sameConditions, withAttachments } from './guardrails';
 import { KEEPALIVE_OVERVIEW, KEEPALIVE_OVERVIEW_30D, RECIPES, SESSIONS, SETTINGS_WIRE, memberPins, pinsUnderPool, sessionsListedAt } from './operations';
-import { KEYS, POOLS, composedFor, resolvedFor, servedFigures } from './pools';
+import { KEYS, POOLS, composedFor, resolvedFor, servedFigures, type KeyRow, type PoolRow } from './pools';
 import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, UNPRICED_REQUEST, UNPRICED_ROLLUPS, capturedBodiesFor, landedAt, requestById, requestSidesOf } from './requests';
 import { GUARDRAIL_STORY_IDS } from './requests';
 import { createRng } from './rng';
@@ -301,6 +301,10 @@ const OTHER_BUILD = '0'.repeat(40);
  */
 export const UNPRICED_STORY_KEY = 'phoebis.mockUnpriced';
 const unpricedStory = (): boolean => switchSet(UNPRICED_STORY_KEY);
+// Built once, since no route writes into a read set.
+const UNPRICED_DAY_ROWS = [...DAY_ROWS, UNPRICED_REQUEST];
+const UNPRICED_LEDGER_ROLLUPS = [...ALL_ROLLUPS, ...UNPRICED_ROLLUPS];
+const NO_REQUESTS = new Map<string, RequestLog>();
 /**
  * The ledger's read sets as the routes fold them: the story's, the unpriced request's rows beside the story's under
  * its switch, and an empty form of each for a fresh installation, so a route that reads its rows here answers that
@@ -313,16 +317,16 @@ const ledger = () => {
     accountRollups: empty ? [] : ACCOUNT_ROLLUPS,
     attention: empty ? [] : ATTENTION,
     catalog: empty ? [] : CATALOG,
-    dayRows: empty ? [] : unpriced ? [...DAY_ROWS, UNPRICED_REQUEST] : DAY_ROWS,
+    dayRows: empty ? [] : unpriced ? UNPRICED_DAY_ROWS : DAY_ROWS,
     decisionOf: (requestId: string, seq: number): DecisionRecord | null => (empty ? null : getDecision(requestId, seq)),
     keepalive: empty ? EMPTY_KEEPALIVE_OVERVIEW : KEEPALIVE_OVERVIEW,
     keepalive30d: empty ? EMPTY_KEEPALIVE_OVERVIEW : KEEPALIVE_OVERVIEW_30D,
     quotaHistory: empty ? [] : QUOTA_HISTORY,
     reconciliations: empty ? [] : RECONCILIATIONS,
     recipes: empty ? [] : RECIPES,
-    requestById: empty ? new Map<string, RequestLog>() : requestById,
+    requestById: empty ? NO_REQUESTS : requestById,
     requests: empty ? [] : REQUESTS,
-    rollups: empty ? [] : unpriced ? [...ALL_ROLLUPS, ...UNPRICED_ROLLUPS] : ALL_ROLLUPS,
+    rollups: empty ? [] : unpriced ? UNPRICED_LEDGER_ROLLUPS : ALL_ROLLUPS,
     weeklyResets: empty ? [] : WEEKLY_RESETS,
   };
 };
@@ -331,7 +335,7 @@ const ledger = () => {
  * prices nothing and falls inside the week. The keys' fold runs once at load, so the null lands at the read, and the
  * key's other figures stay the story's.
  */
-const unpricedKey = (k: Omit<ApiKey, 'guardrails' | 'poolGuardrails'>): Omit<ApiKey, 'guardrails' | 'poolGuardrails'> => {
+const unpricedKey = (k: KeyRow): KeyRow => {
   if (!unpricedStory() || k.id !== UNPRICED_REQUEST.keyId || Date.parse(k.createdAt) !== UNPRICED_REQUEST.keyGeneration) return k;
   const nulled = <S extends Pick<ApiKey['lifetime'], 'equivalent'>>(s: S): S => ({ ...s, equivalent: null });
   return { ...k, lifetime: nulled(k.lifetime), usage7d: nulled(k.usage7d) };
@@ -368,9 +372,7 @@ function fromCallbackUrl(url: string): { code: string; state: string } | null {
 /**
  * A flag outranks the enabled bit and the cooldowns in the status the account view folds, so pausing never hides one.
  */
-const FLAGGED: Account['status'][] = ['funding_required', 'reauth_required', 'unpaired'];
-const statusOf = (a: Account, enabled: boolean): Account['status'] =>
-  accountStatusOf(FLAGGED.includes(a.status) ? (a.status as 'funding_required' | 'reauth_required' | 'unpaired') : null, enabled, a.cooldowns);
+const statusOf = (a: Account, enabled: boolean): Account['status'] => accountStatusOf(flagOf(a.status), enabled, a.cooldowns);
 
 type BudgetedSeed = Pick<PoolMember, 'budgetDailyUsd' | 'budgetMonthlyUsd' | 'spends'>;
 
@@ -388,7 +390,10 @@ const budgetUntilOf = (member: BudgetedSeed, now: number): string | null =>
     .reduce<string | null>((latest, s) => (latest === null || Date.parse(s.periodEnd ?? '') > Date.parse(latest) ? s.periodEnd : latest), null);
 
 /** Whether the router reads the account's term as over: canceled with its saved end passed, or flagged plan ended. */
-const termEnded = (a: Account, now: number): boolean => (a.canceled && a.subscription?.endsAt != null && Date.parse(a.subscription.endsAt) <= now) || (a.planEndedAt !== null && Date.parse(a.planEndedAt) <= now);
+const termEnded = (a: Account, now: number): boolean => {
+  const end = termEndOf(a, now);
+  return end !== null && end <= now;
+};
 
 /**
  * The pool route's reading of a member, in its order: paused, not ready or past its term is unavailable, then an
@@ -396,7 +401,7 @@ const termEnded = (a: Account, now: number): boolean => (a.canceled && a.subscri
  * then overage the router observed under a policy that admits none.
  */
 const eligibilityOf = (a: Account | undefined, policy: PoolInput['overagePolicy'], member: BudgetedSeed): MemberEligibility => {
-  if (!a || !a.routingEnabled || FLAGGED.includes(a.status) || termEnded(a, Date.now())) return 'unavailable';
+  if (!a || !a.routingEnabled || flagOf(a.status) !== null || termEnded(a, Date.now())) return 'unavailable';
   if (a.cooldowns.some((c) => c.scope === 'account' && Date.parse(c.until) > Date.now())) return 'cooldown';
   if (budgetUntilOf(member, Date.now()) !== null) return 'budget';
   if (policy === 'never' && a.overage?.inUse) return 'overage';
@@ -492,6 +497,8 @@ function isAfterCursor(r: RequestLog, cursor: string): boolean {
   return rowAt < at || (rowAt === at && r.id < id);
 }
 
+type StoredPool = PoolRow<Omit<PoolMember, 'activePins'>>;
+
 export class MockApi implements Api {
   private accounts = ACCOUNTS.map((a) => ({ ...a }));
   /** The incarnation each deleted id reached, which its next account starts above. */
@@ -509,13 +516,13 @@ export class MockApi implements Api {
   private guardrails: Guardrail[] = GUARDRAILS.map((g) => ({ ...g, revision: stampToken(1, g.updatedAt) }));
   // The live desktop key was issued under the id its deleted earlier holder had, so it is that id's second; every other
   // key of the story is its id's first.
-  private keys: Omit<ApiKey, 'guardrails' | 'poolGuardrails'>[] = KEYS.map((k) => ({ ...k, revision: stampToken((this.buriedKeys.get(k.id) ?? 0) + 1, k.updatedAt) }));
+  private keys: KeyRow[] = KEYS.map((k) => ({ ...k, revision: stampToken((this.buriedKeys.get(k.id) ?? 0) + 1, k.updatedAt) }));
   /** `label` is set on a pairing that creates its row at the confirm. The row's id is `accountId` either way. */
   private pairings = new Map<string, { accountId: string; label?: string; state: string }>();
   /** Set by the first replay, which lands the story's parked records. */
   private parkedLanded = false;
   // The route reads every member's kind and verdict afresh on each answer; the story's are read once, at load.
-  private pools: (Omit<Pool, 'activePins' | 'guardrails' | 'keys' | 'members' | 'warnings'> & { members: Omit<PoolMember, 'activePins'>[] })[] = POOLS.map((p) => ({
+  private pools: StoredPool[] = POOLS.map((p) => ({
     ...p,
     // Every pool of the story is its id's first.
     revision: stampToken(1, p.updatedAt),
@@ -566,7 +573,7 @@ export class MockApi implements Api {
    * The pool as the route answers it, with its keys listed from the key registry at the time of the read, and its
    * warnings the route's checks on the saved settings and the largest cohort among the pinned sessions under its keys.
    */
-  private poolView(p: Omit<Pool, 'activePins' | 'guardrails' | 'keys' | 'members' | 'warnings'> & { members: Omit<PoolMember, 'activePins'>[] }): Pool {
+  private poolView(p: StoredPool): Pool {
     const keys = this.keys.filter((k) => k.poolId === p.id).map((k) => ({ enabled: k.enabled, id: k.id, label: k.name, prefix: k.prefix }));
     const ids = new Set(keys.map((k) => k.id));
     const cohort = Math.max(0, ...this.sessions.filter((s) => s.pinned && ids.has(s.keyId)).map((s) => s.agents));
@@ -580,7 +587,7 @@ export class MockApi implements Api {
    * The key as the route answers it, its own guardrails and its pool's read from the attachments at the time of the
    * read.
    */
-  private keyView(k: Omit<ApiKey, 'guardrails' | 'poolGuardrails'>): ApiKey {
+  private keyView(k: KeyRow): ApiKey {
     return { ...k, guardrails: this.guardrailRefs('keys', k.id), poolGuardrails: this.guardrailRefs('pools', k.poolId) };
   }
 
@@ -894,7 +901,7 @@ export class MockApi implements Api {
     if (refusal) throw new ApiError(400, refusal, null);
     const body = this.token(40);
     const secret = `phoebis-${body}`;
-    const key: Omit<ApiKey, 'guardrails' | 'poolGuardrails'> = {
+    const key: KeyRow = {
       ...KEY_SAMPLE,
       id,
       name: input.name,
@@ -930,7 +937,7 @@ export class MockApi implements Api {
     if (refused) throw refused;
     const held = heldElsewhere(input.members, this.pools, id);
     if (held) throw new ApiError(409, held, null);
-    const pool: Omit<Pool, 'activePins' | 'guardrails' | 'keys' | 'members' | 'warnings'> & { members: Omit<PoolMember, 'activePins'>[] } = {
+    const pool: StoredPool = {
       ...POOL_SAMPLE,
       ...input,
       cost24h: 0,
@@ -1124,12 +1131,18 @@ export class MockApi implements Api {
   getOverview() {
     // The route answers its 24 hourly buckets over an empty ledger too, at zero, so each spark draws a flat line.
     const last24h = ledger().dayRows;
-    const hourlyMap = new Map<string, Overview['hourly'][number]>();
+    const byHour = new Map<number, RequestLog[]>();
+    for (const r of last24h) {
+      const hour = startOfHour(Date.parse(r.at));
+      const rows = byHour.get(hour);
+      if (rows) rows.push(r);
+      else byHour.set(hour, [r]);
+    }
+    const hourlyMap = new Map<number, Overview['hourly'][number]>();
     for (let i = 23; i >= 0; i -= 1) {
       const startMs = startOfHour(NOW - i * HOUR);
-      const at = iso(startMs);
-      const { billedUsd, equivalent } = requestSidesOf(last24h.filter((r) => Date.parse(r.at) >= startMs && Date.parse(r.at) < startMs + HOUR));
-      hourlyMap.set(at, { at, billed: billedUsd, cost: 0, equivalent, errors: 0, refused: 0, requests: 0, tokens: 0 });
+      const { billedUsd, equivalent } = requestSidesOf(byHour.get(startMs) ?? []);
+      hourlyMap.set(startMs, { at: iso(startMs), billed: billedUsd, cost: 0, equivalent, errors: 0, refused: 0, requests: 0, tokens: 0 });
     }
     let tokens = 0;
     let cached = 0;
@@ -1138,8 +1151,7 @@ export class MockApi implements Api {
     const refusalCodes = new Map<string, number>();
     const rated = last24h.filter((r) => !r.refused);
     for (const r of last24h) {
-      const at = iso(startOfHour(Date.parse(r.at)));
-      const bucket = hourlyMap.get(at);
+      const bucket = hourlyMap.get(startOfHour(Date.parse(r.at)));
       // The ledger's fold books a refused request under its refusals map and nothing else.
       if (r.refused) {
         if (r.errorCode) refusalCodes.set(r.errorCode, (refusalCodes.get(r.errorCode) ?? 0) + 1);
@@ -1350,7 +1362,7 @@ export class MockApi implements Api {
     const key = this.keys.find((k) => k.id === id);
     if (!key) return Promise.reject(new ApiError(404, 'key not found', null));
     const secret = `phoebis-${this.token(40)}`;
-    const next: Omit<ApiKey, 'guardrails' | 'poolGuardrails'> = { ...key, prefix: secret.slice(0, 16), retiredSecretLastUsedAt: null, sessionsOnRetiredSecret: 2, ...restamp(key) };
+    const next: KeyRow = { ...key, prefix: secret.slice(0, 16), retiredSecretLastUsedAt: null, sessionsOnRetiredSecret: 2, ...restamp(key) };
     this.keys = this.keys.map((k) => (k.id === id ? next : k));
     return latency({ key: this.keyView(next), secret }, 300);
   }
@@ -1498,7 +1510,7 @@ export class MockApi implements Api {
     const expiresAt = expiry === undefined ? current.expiresAt : expiry;
     // The status is the decoder's fold of the stored flags, so a key switched off or lapsed reads that way at once.
     const status = keyStatusOf(current.status === 'revoked', expiresAt, rest.enabled, Date.now());
-    const next: Omit<ApiKey, 'guardrails' | 'poolGuardrails'> = { ...current, ...rest, expiresAt, status, ...restamp(current) };
+    const next: KeyRow = { ...current, ...rest, expiresAt, status, ...restamp(current) };
     this.keys = this.keys.map((k, i) => (i === idx ? next : k));
     if (ownIds !== undefined) this.setSubjectGuardrails('keys', id, ownIds);
     return latency(this.keyView(next), 250);
@@ -1535,7 +1547,7 @@ export class MockApi implements Api {
     const missing = guardrailIds?.find((g) => !this.guardrails.some((x) => x.id === g));
     if (missing !== undefined) return Promise.reject(new ApiError(404, `guardrail ${missing} not found`, null));
     const verdict = new Map(current.members.map((m) => [m.accountId, m.eligible]));
-    const next: Omit<Pool, 'activePins' | 'guardrails' | 'keys' | 'members' | 'warnings'> & { members: Omit<PoolMember, 'activePins'>[] } = {
+    const next: StoredPool = {
       ...current,
       ...fields,
       // From the saved members' kinds, as the router composes them on every save.

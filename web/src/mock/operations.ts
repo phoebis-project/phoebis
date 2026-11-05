@@ -1,5 +1,6 @@
 import type { AgentContext, BurnUnit, CompanionState, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, RecipeCause, RecipeState, Session } from '@/api/types';
 import { anchorTier, tierCapacity, weightOf, type CostWindow } from '@/lib/costs';
+import { servedMissReason } from '@/lib/dimensions';
 import { byteOrder } from '@/lib/format';
 import { lastActivity, pinTtlMs } from '@/lib/keepalive';
 import { isPaidSource } from '@/lib/quota';
@@ -236,8 +237,6 @@ const NON_COMPANION_IDLE_SECONDS = 3_600;
 export const insideSessionExpiry = (lastAt: string, now: number): boolean => Date.parse(lastAt) + SESSION_EXPIRE_SECONDS * 1000 > now;
 /** Whether an instant is inside the non-companion timeout: a row or a line with no use on record is never older. */
 export const withinNonCompanionTimeout = (at: string | null, seconds: number, now: number): boolean => at === null || now - Date.parse(at) <= seconds * 1000;
-/** The later of a session's own last use and its last ledgered request, which the route's timeout reads. */
-export const lastUseOf = lastActivity;
 
 // Grouped as the route's activity query groups a session's rows, by key, generation and session with probes left out,
 // so the earlier holder's rows count for its own row below, never for the live session that shares their id. A refused
@@ -874,7 +873,7 @@ SESSIONS.push(...WRITTEN_SESSIONS);
  */
 export const sessionsListedAt = (now: number, sessions: readonly Session[] = SESSIONS, seconds = NON_COMPANION_IDLE_SECONDS): Session[] =>
   sessions
-    .filter((s) => s.companion !== 'none' || withinNonCompanionTimeout(lastUseOf(s), seconds, now))
+    .filter((s) => s.companion !== 'none' || withinNonCompanionTimeout(lastActivity(s), seconds, now))
     .map((s) => {
       if (s.companion !== 'none') return s;
       const standing = s.agentContexts.filter((c) => withinNonCompanionTimeout(c.lastUsedAt, seconds, now));
@@ -918,7 +917,7 @@ export const pinsUnderPool = (keyIds: ReadonlySet<string>): number => [...PINS.v
 
 // Read off the ledger rows, which cover the last 24 hours, so the tile and the
 // analytics Cache section agree on what "expired between turns" counts.
-const EXPIRED_BETWEEN_TURNS_24H = REQUESTS.filter((r) => r.status === 200 && r.usage.cacheRead === 0 && r.attempts[r.attempts.length - 1].cacheMissReason === 'none').length;
+const EXPIRED_BETWEEN_TURNS_24H = REQUESTS.filter((r) => r.status === 200 && r.usage.cacheRead === 0 && servedMissReason(r) === 'none').length;
 
 // The keepalive engine holds a session once the mod registered it or a request retained a recipe for it.
 const ENGINE_SESSIONS = SESSIONS.filter((s) => s.companion !== 'none' || s.keepalive.state !== null);

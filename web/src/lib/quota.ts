@@ -224,9 +224,18 @@ export const MODEL_SCOPE_PREFIX = 'model:';
 /** The row that cools the account: the first on a scope beyond the fast lane's, null where none does. */
 export const accountCooldown = (cooldowns: Cooldown[]): Cooldown | null => cooldowns.find((c) => !isFastScope(c.scope)) ?? null;
 
+/** The statuses an account's flag sets. */
+export const ACCOUNT_FLAGS = ['funding_required', 'reauth_required', 'unpaired'] as const;
+export type AccountFlag = (typeof ACCOUNT_FLAGS)[number];
+/** The flag an account's status carries, null for a status the enabled bit or the cooldowns decide. */
+export const flagOf = (status: Account['status']): AccountFlag | null => {
+  const flag = status as AccountFlag;
+  return ACCOUNT_FLAGS.includes(flag) ? flag : null;
+};
+
 /** The one badge an account's flag, enabled bit and cooldowns fold to. A flag outranks the rest, so pausing never
  *  hides one. */
-export const accountStatusOf = (flag: 'funding_required' | 'reauth_required' | 'unpaired' | null, enabled: boolean, cooldowns: Cooldown[]): Account['status'] =>
+export const accountStatusOf = (flag: AccountFlag | null, enabled: boolean, cooldowns: Cooldown[]): Account['status'] =>
   flag ?? (!enabled ? 'paused' : accountCooldown(cooldowns) !== null ? 'cooldown' : 'ready');
 
 /** The soonest future reset with its window: the card's highlight reads the window, the soonest sort the instant. */

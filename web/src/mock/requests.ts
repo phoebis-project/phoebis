@@ -7,9 +7,9 @@ import type { GuardrailMatch } from '@/api/types';
 import { keptWarmTokens } from '@/lib/analytics';
 import { emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { AGENT_TYPES } from '@/lib/client';
-import { anchorTier, fundingOf, inBand, modelWeeks, pricedWindow, shareIn, tierCapacity, weightOf } from '@/lib/costs';
+import { equivalentIn, fundingOf, inBand, modelWeeks, pricedWindow, shareIn, tierCapacity, weightOf } from '@/lib/costs';
 import { countOf, emptyCounts } from '@/lib/counts';
-import { NO_CLASS, NO_EFFORT, foldClassifier, foldEffort, foldRequestClass } from '@/lib/dimensions';
+import { NO_CLASS, NO_EFFORT, foldClassifier, foldEffort, foldRequestClass, foldSpeed, servedMissReason, servingAttempt, servingResponse } from '@/lib/dimensions';
 import { byteOrder, tokensTotal } from '@/lib/format';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
 import { MODEL_SCOPE_PREFIX, endOf, isPaidSource, readWindows } from '@/lib/quota';
@@ -244,7 +244,7 @@ function savingUsdOf(model: string, kept: { tokens1h: number; tokens5m: number }
 /** A kept request's read under the TTL its own write took, five minutes for a request that wrote none. */
 const keptOf = (r: RequestLog) => (r.usage.cacheWrite1h > 0 ? { tokens1h: r.usage.cacheRead, tokens5m: 0 } : { tokens1h: 0, tokens5m: r.usage.cacheRead });
 
-export const sumSplit = (parts: CostSplit[]): CostSplit => parts.reduce((s, c) => ({ cacheRead: s.cacheRead + c.cacheRead, cacheWrite: s.cacheWrite + c.cacheWrite, input: s.input + c.input, output: s.output + c.output }), { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 });
+export const sumSplit = (parts: CostSplit[]): CostSplit => sumEach(parts, { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 });
 
 // Its own stream, so these draws leave the fixtures the main stream feeds alone.
 const missRng = createRng(1_517);
@@ -571,7 +571,7 @@ function buildRequests(): RequestLog[] {
     const transport = kind === 'inference' ? (rng.chance(0.86) ? 'sse' : 'json') : 'json';
     // The request runs from its arrival to its last attempt's end, the gaps between attempts included, as the router
     // stamps it.
-    const durationMs = head === undefined ? 0 : Date.parse(head.startedAt) + (head.durationMs ?? 0) - atMs;
+    const durationMs = head === undefined ? 0 : attemptEnd(head) - atMs;
     // A 429 fails the attempt over, so a request that answers one has run its lane out and the router answers it.
     const errorCode = finalStatus === 200 ? null : finalStatus === 429 ? 'accounts_exhausted' : finalStatus === 529 ? 'overloaded_error' : 'api_error';
     // The head lands inside the serving attempt: past the write at its start, and far enough before its end for the
@@ -669,7 +669,7 @@ function buildRequests(): RequestLog[] {
           },
         ],
         // The answering attempt keeps its start, so the request runs from its arrival to that attempt's end.
-        durationMs: Date.parse(answered.startedAt) + (answered.durationMs ?? 0) - atMs,
+        durationMs: attemptEnd(answered) - atMs,
         canonicalModel: drawn,
         capturedBodies: false,
         costUsd: round(costOf(drawn, moved.usage, false, atMs), 4),
@@ -758,7 +758,7 @@ function liftCooldowns(rows: RequestLog[]) {
     for (const a of r.attempts) {
       const set = a.cooldownSet;
       if (!set) continue;
-      const setAt = Date.parse(a.startedAt) + (a.durationMs ?? 0);
+      const setAt = attemptEnd(a);
       const until = Date.parse(set.until);
       const wouldHold = (u: (typeof uses)[number]) => u.r !== r && u.accountId === a.accountId && coolingHolds(set.reason, r.canonicalModel, u.model, u.fast);
       const next = uses.find((u) => wouldHold(u) && u.at >= setAt && u.at < until);
@@ -799,7 +799,7 @@ function coolingAt(accountId: string, at: number, model: string, fast: boolean):
     r.attempts.some((a) => {
       const set = a.cooldownSet;
       if (!set || a.accountId !== accountId) return false;
-      const from = Date.parse(a.startedAt) + (a.durationMs ?? 0);
+      const from = attemptEnd(a);
       return at >= from && at < Date.parse(set.until) && coolingHolds(set.reason, r.canonicalModel, model, fast);
     }),
   );
@@ -833,6 +833,8 @@ function holdFirst(r: RequestLog, hold: CohortHold): boolean {
 
 /** Whether the relay fails the attempt over: a 429, or a model the account refuses, each of which sets a cooldown. */
 export const failsOver = (a: Attempt) => a.upstreamStatus === 429 || a.cooldownSet?.reason === 'model_rejected';
+/** The instant an attempt's answer lands, which its cooldown, its events and its completion date from. */
+export const attemptEnd = (a: Pick<Attempt, 'durationMs' | 'startedAt'>): number => Date.parse(a.startedAt) + (a.durationMs ?? 0);
 
 /** The rejection story's refused attempt: an account refuses a model it does not serve before any inference runs. */
 const REJECTION_MS = 180;
@@ -861,7 +863,7 @@ const endedAnswer = (attempts: Attempt[], atMs: number): Partial<RequestLog> => 
   const status = exhausted ? 429 : (last.upstreamStatus ?? 502);
   return {
     costUsd: 0,
-    durationMs: Date.parse(last.startedAt) + (last.durationMs ?? 0) - atMs,
+    durationMs: attemptEnd(last) - atMs,
     errorCode: exhausted ? 'accounts_exhausted' : status === 529 ? 'overloaded_error' : 'api_error',
     outcome: exhausted ? 'exhausted' : 'failed',
     status,
@@ -1667,7 +1669,7 @@ function buildRequestEvents(): Map<string, RequestEvent[]> {
     // An account's refusal of the model lands as its head does. The rejection story writes its own below.
     for (const a of r.id === REJECTION_STORY_ID ? [] : r.attempts) {
       if (a.cooldownSet?.reason !== 'model_rejected') continue;
-      events.push({ ...pin, accountId: a.accountId, at: iso(Date.parse(a.startedAt) + (a.durationMs ?? 0)), detail: { attempt: a.index + 1, request_id: a.upstreamRequestId, source_request_id: r.id, wire_model: r.model }, kind: 'model_rejected' });
+      events.push({ ...pin, accountId: a.accountId, at: iso(attemptEnd(a)), detail: { attempt: a.index + 1, request_id: a.upstreamRequestId, source_request_id: r.id, wire_model: r.model }, kind: 'model_rejected' });
     }
     // A few single-attempt rows moved on selection instead: the migrate rule read a sample, not a 429. The reason is
     // drawn and set aside so the stream stays where it was. The move stands where a rule takes the pin there.
@@ -1700,7 +1702,7 @@ function buildRequestEvents(): Map<string, RequestEvent[]> {
     const detail = { request_id: null, source_request_id: story.id, wire_model: story.model };
     const events: RequestEvent[] = [
       ...(out.get(story.id) ?? []),
-      { ...pin, accountId: refused.accountId, at: iso(Date.parse(refused.startedAt) + (refused.durationMs ?? 0)), detail: { attempt: 1, ...detail }, kind: 'model_rejected' },
+      { ...pin, accountId: refused.accountId, at: iso(attemptEnd(refused)), detail: { attempt: 1, ...detail }, kind: 'model_rejected' },
       { ...pin, accountId: served.accountId, at: iso(Date.parse(story.at) + (story.durationMs ?? 0)), detail: { attempt: story.attempts.length, rejected_by: [refused.accountId], ...detail }, kind: 'model_permitted' },
     ];
     out.set(story.id, events.sort((a, b) => Date.parse(a.at) - Date.parse(b.at)));
@@ -1974,7 +1976,7 @@ function seedHolds() {
   const heldAt = (r: RequestLog) => {
     const drawnAttempts = drawnPart(r);
     const last = drawnAttempts[drawnAttempts.length - 1] as Attempt | undefined;
-    return last ? Date.parse(last.startedAt) + (last.durationMs ?? 0) : Date.parse(r.at);
+    return last ? attemptEnd(last) : Date.parse(r.at);
   };
   // The reselect after the draws' last 429 meets the members left untried, the first of which it waits on.
   const untried = (r: RequestLog) => {
@@ -1998,13 +2000,20 @@ function seedHolds() {
   const lastKept = afterAttempt.attempts[afterAttempt.attempts.length - 1];
   Object.assign(afterAttempt, {
     accountId: null,
-    durationMs: Date.parse(lastKept.startedAt) + (lastKept.durationMs ?? 0) - Date.parse(afterAttempt.at) + bound,
+    durationMs: attemptEnd(lastKept) - Date.parse(afterAttempt.at) + bound,
     errorCode: 'accounts_at_cap',
     held: { cohort: null, heldMs: (before?.heldMs ?? 0) + bound, waitedOn: [...(before?.waitedOn ?? []), next], waits: [...(before?.waits ?? []), { heldMs: bound, reason: 'cap' }] },
     outcome: 'exhausted',
     status: 429,
   });
 }
+
+/**
+ * The band's state at `at` for a model with a 7-day weight, null for a model without one, whose figure and shares
+ * price nothing, and where the band cannot be read, since a share on an assumed state could read half what the ledger
+ * charges. A site reads it once for the figure and every window, each priced as the equivalent and the share read it.
+ */
+export const bandAt = (model: string, at: number): boolean | null => (weightOf(TABLES, model, 'seven_day') !== null ? inBand(TABLES, at) : null);
 
 /**
  * A row's Pro-week figure and its shares of its account's windows, as the request route answers them: null for a
@@ -2016,7 +2025,7 @@ function seedHolds() {
  */
 function costFiguresOf(r: RequestLog): Pick<RequestLog, 'costEquivalent' | 'costShares' | 'shareReason'> {
   if (!planPaid(r)) return { costEquivalent: null, costShares: null, shareReason: null };
-  const serving = r.attempts[r.attempts.length - 1];
+  const serving = servingAttempt(r)!;
   const tier = accountById.get(serving.accountId)?.subscription?.rateLimitTier;
   const finishedMs = Date.parse(r.at) + (r.durationMs ?? 0);
   const windows = shareWindowsOf(serving.accountId, r.canonicalModel);
@@ -2030,10 +2039,9 @@ function costFiguresOf(r: RequestLog): Pick<RequestLog, 'costEquivalent' | 'cost
       );
     return { costEquivalent: 0, costShares: tier === undefined ? {} : zeros(tier), shareReason: 'client_classifier' };
   }
-  // The band is read once for the figure and every window, each priced as the equivalent and the share read it.
-  const inside = weightOf(TABLES, r.canonicalModel, 'seven_day') !== null ? inBand(TABLES, finishedMs) : null;
+  const inside = bandAt(r.canonicalModel, finishedMs);
   const shares: CostShares = tier === undefined ? {} : Object.fromEntries(windows.map((w) => [w, inside === null ? null : shareIn(TABLES, w, tier, r.canonicalModel, r.usage, inside)]));
-  return { costEquivalent: inside === null ? null : shareIn(TABLES, 'seven_day', anchorTier(TABLES), r.canonicalModel, r.usage, inside), costShares: shares, shareReason: null };
+  return { costEquivalent: inside === null ? null : equivalentIn(TABLES, r.canonicalModel, r.usage, inside), costShares: shares, shareReason: null };
 }
 
 /**
@@ -2048,7 +2056,7 @@ function phaseRequests() {
   for (const r of REQUESTS) {
     const atMs = Date.parse(r.at);
     const first = r.attempts[0] as Attempt | undefined;
-    const last = r.attempts[r.attempts.length - 1] as Attempt | undefined;
+    const last = servingAttempt(r);
     // A row outside the seeded streams takes fixed instants, so every row after it keeps its draws.
     const unseeded = UNSEEDED_IDS.has(r.id);
     const write = unseeded ? 20 : phaseRng.int(8, 40);
@@ -2066,9 +2074,9 @@ function phaseRequests() {
       receivedAt: r.at,
       selectedAt: first === undefined ? null : first.startedAt,
       streamEndAt: closes ? iso(finishedMs - tail) : null,
-      writtenAt: last === undefined ? null : iso(Date.parse(last.startedAt) + write),
+      writtenAt: last === null ? null : iso(Date.parse(last.startedAt) + write),
     };
-    Object.assign(r, costFiguresOf(r), { tier: last === undefined ? null : accountTier(last.accountId) });
+    Object.assign(r, costFiguresOf(r), { tier: last === null ? null : accountTier(last.accountId) });
   }
 }
 
@@ -2155,8 +2163,8 @@ const heldRng = createRng(6_133);
  * head's overage flag, else the plan. A request no attempt served files under `plan` whatever speed it asked for.
  */
 const fundingKey = (r: RequestLog): HourlyRollup['funding'] => {
-  const last = r.attempts[r.attempts.length - 1] as Attempt | undefined;
-  if (last === undefined) return 'plan';
+  const last = servingAttempt(r);
+  if (last === null) return 'plan';
   const funding = fundingOf(last);
   return funding === 'api_key' ? 'billed' : funding;
 };
@@ -2171,15 +2179,12 @@ const fundingKey = (r: RequestLog): HourlyRollup['funding'] => {
 function hourShares(accountId: string, model: string, priced: { at: number; usage: Usage }[]): Pick<HourlyRollup, 'equivalent' | 'shares'> {
   const tier = accountById.get(accountId)?.subscription?.rateLimitTier;
   const windows = shareWindowsOf(accountId, model);
-  const weighted = weightOf(TABLES, model, 'seven_day') !== null;
   const shares: Record<string, number | null> = Object.fromEntries(windows.map((w) => [w, 0]));
   let equivalent: number | null = 0;
   for (const { at, usage } of priced) {
     if (tokensTotal(usage) === 0) continue;
-    // The band is read once per request for the figure and every window, each priced as the equivalent and the share
-    // read it.
-    const inside = weighted ? inBand(TABLES, at) : null;
-    equivalent = plus(equivalent, inside === null ? null : shareIn(TABLES, 'seven_day', anchorTier(TABLES), model, usage, inside));
+    const inside = bandAt(model, at);
+    equivalent = plus(equivalent, inside === null ? null : equivalentIn(TABLES, model, usage, inside));
     if (tier !== undefined) for (const w of windows) shares[w] = plus(shares[w], inside === null ? null : shareIn(TABLES, w, tier, model, usage, inside));
   }
   return { equivalent, shares };
@@ -2222,13 +2227,13 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
     const kept = new Set(isProbe || !warmsCaches(keyId, poolId) ? [] : okRows.filter((r) => r.usage.cacheRead > 0 && h.chance(0.35)));
     const moved = list.filter((r) => r.attempts.length > 1 && r.status === 200);
     const migrations = moved.length > 0 && h.chance(0.5) ? 1 : 0;
-    const probeCostUsd = isProbe ? list.reduce((s, r) => s + r.costUsd, 0) : 0;
+    const probeCostUsd = isProbe ? sumOf(list, (r) => r.costUsd) : 0;
     const probes = isProbe ? { ok: okRows.length, failed: list.length - okRows.length, held: 0, skipped: h.int(0, 2) } : null;
     const probeMigrated = isProbe && h.chance(0.35) ? Math.min(okRows.length, h.int(1, 2)) : 0;
     const waste = isProbe ? wastedProbes(h, okRows.length, probeCostUsd) : ZERO_WASTE;
     // A lane's rows share its key, model and kind, which is what decides fast mode in this story; a row refused
     // before any attempt files under the speed it asked for, as the ledger files the speed key alone.
-    const speed = (list[0].attempts[list[0].attempts.length - 1]?.response.speed ?? list[0].shape.requestedSpeed) === 'fast' ? 'fast' : 'standard';
+    const speed = foldSpeed(list[0]) === 'fast' ? 'fast' : 'standard';
     // The rollups file each request under its effort, its class and its classifier standing as they fold them, and a
     // probe under no class. The story files a probe under no effort either, so a lane hour's probes stay one row with
     // the probe figures on it.
@@ -2282,35 +2287,35 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
         },
         refusals,
         // Every attempt but the last one moved the request to another member.
-        failovers: served.reduce((s, r) => s + Math.max(0, r.attempts.length - 1), 0),
+        failovers: sumOf(served, (r) => Math.max(0, r.attempts.length - 1)),
         // The lane hour draws one migration, filed with the first request that moved.
         migrations: partRows.includes(moved[0]) ? migrations : 0,
         effort,
         tokens: {
-          uncachedInput: partRows.reduce((s, r) => s + r.usage.input, 0),
-          cacheRead: partRows.reduce((s, r) => s + r.usage.cacheRead, 0),
-          cacheWrite5m: partRows.reduce((s, r) => s + r.usage.cacheWrite5m, 0),
-          cacheWrite1h: partRows.reduce((s, r) => s + r.usage.cacheWrite1h, 0),
-          output: partRows.reduce((s, r) => s + r.usage.output, 0),
-          thinking: partRows.reduce((s, r) => s + r.usage.thinking, 0),
-          webFetch: partRows.reduce((s, r) => s + r.usage.webFetch, 0),
-          webSearch: partRows.reduce((s, r) => s + r.usage.webSearch, 0),
+          uncachedInput: sumOf(partRows, (r) => r.usage.input),
+          cacheRead: sumOf(partRows, (r) => r.usage.cacheRead),
+          cacheWrite5m: sumOf(partRows, (r) => r.usage.cacheWrite5m),
+          cacheWrite1h: sumOf(partRows, (r) => r.usage.cacheWrite1h),
+          output: sumOf(partRows, (r) => r.usage.output),
+          thinking: sumOf(partRows, (r) => r.usage.thinking),
+          webFetch: sumOf(partRows, (r) => r.usage.webFetch),
+          webSearch: sumOf(partRows, (r) => r.usage.webSearch),
         },
         cacheHits: ok.filter((r) => r.usage.cacheRead > 0).length,
         cacheMisses: ok.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h > 0).length,
         cacheMissReasons,
         incompleteCodes: incompleteCodesOf(partRows),
-        expiredBetweenTurns: ok.filter((r) => r.usage.cacheRead === 0 && r.attempts[r.attempts.length - 1].cacheMissReason === 'none').length,
+        expiredBetweenTurns: ok.filter((r) => r.usage.cacheRead === 0 && servedMissReason(r) === 'none').length,
         uncached: ok.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h === 0).length,
-        costUsd: partRows.reduce((s, r) => s + r.costUsd, 0),
-        cost: sumSplit(partRows.map((r) => costSplitOf(r.model, r.usage, r.attempts[r.attempts.length - 1]?.response.speed === 'fast', r.at))),
+        costUsd: sumOf(partRows, (r) => r.costUsd),
+        cost: sumSplit(partRows.map((r) => costSplitOf(r.model, r.usage, servingResponse(r)?.speed === 'fast', r.at))),
         // At each answer's completion, the instant its own shares price it at. A client classifier call takes no share
         // of a plan window, so its part prices nothing and reads zero.
         ...hourShares(accountId, partRows[0].canonicalModel, classifier === NO_CLASS ? partRows.map((r) => ({ at: Date.parse(r.at) + (r.durationMs ?? 0), usage: r.usage })) : []),
         tier: accountTier(accountId),
         histograms: histogramsOf(served),
-        keptWarm: { requests: keptHere.length, tokens1h: keptHere.reduce((s, r) => s + keptOf(r).tokens1h, 0), tokens5m: keptHere.reduce((s, r) => s + keptOf(r).tokens5m, 0) },
-        savingUsd: keptHere.reduce((s, r) => s + savingUsdOf(r.model, keptOf(r), promptOf(r.usage), r.attempts[r.attempts.length - 1]?.response.speed === 'fast', r.at), 0),
+        keptWarm: { requests: keptHere.length, tokens1h: sumOf(keptHere, (r) => keptOf(r).tokens1h), tokens5m: sumOf(keptHere, (r) => keptOf(r).tokens5m) },
+        savingUsd: sumOf(keptHere, (r) => savingUsdOf(r.model, keptOf(r), promptOf(r.usage), servingResponse(r)?.speed === 'fast', r.at)),
         probes: probes ?? { ok: 0, failed: 0, held: 0, skipped: 0 },
         probeMigrated,
         probeCostUsd,
@@ -2598,7 +2603,18 @@ export const DAY_ROWS: RequestLog[] = counted(DAY_FROM);
 const TOTAL_ROWS: RequestLog[] = counted(TOTALS_FROM);
 const COUNTED_ROLLUPS = ALL_ROLLUPS.filter((r) => r.kind !== 'probe');
 
-export const sumOf = <T,>(list: T[], read: (x: T) => number) => list.reduce((n, x) => n + read(x), 0);
+/** A sum over a list in its order. A declaration, since the rollups fold reads it while the module loads, above this
+ *  line. */
+export function sumOf<T>(list: T[], read: (x: T) => number): number {
+  return list.reduce((n, x) => n + read(x), 0);
+}
+/** The member-wise sum of records, each member added from the zero's in list order, the answer in the zero's key
+ *  order. A declaration, since `sumSplit` reads it while the module loads, above this line. */
+export function sumEach<T extends Record<string, number>>(parts: readonly T[], zero: T): T {
+  const s = { ...zero };
+  for (const p of parts) for (const k of Object.keys(zero) as (keyof T)[]) s[k] = (s[k] + p[k]) as T[keyof T];
+  return s;
+}
 /** Rollups' billed dollars and their plan rows' Pro-week figure, as the keys route sums a key's rows: an hour's figure
  *  is null where a request with tokens priced nothing, which nulls the sum, and 0 with no plan row. */
 const sidesOf = (rows: HourlyRollup[]): Pick<ApiKey['usage7d'], 'billedUsd' | 'equivalent'> => {
@@ -2613,7 +2629,7 @@ const sidesOf = (rows: HourlyRollup[]): Pick<ApiKey['usage7d'], 'billedUsd' | 'e
  * none of. A declaration, since the cost figures read it while the module loads, above this line.
  */
 export function planPaid(r: RequestLog): boolean {
-  return r.attempts.length > 0 && fundingOf(r.attempts[r.attempts.length - 1]) === 'plan';
+  return fundingOf(servingAttempt(r)) === 'plan';
 }
 /** The same over request rows, as the pools and dashboard routes sum theirs: a plan request with tokens that priced
  *  nothing nulls the figure, and one with no token prices nothing. */
@@ -2854,7 +2870,7 @@ export function capturedBodiesFor(request: RequestLog): CapturedBodies | null {
     type: 'message',
     role: 'assistant',
     model: isClaude ? request.model : `${request.model}-2026-05-01`,
-    stop_reason: request.attempts[request.attempts.length - 1]?.response.stopReason ?? 'end_turn',
+    stop_reason: servingResponse(request)?.stopReason ?? 'end_turn',
     stop_sequence: null,
     usage: {
       input_tokens: request.usage.input,
@@ -2892,7 +2908,7 @@ export function capturedBodiesFor(request: RequestLog): CapturedBodies | null {
             : []),
         ].join('')
       : { ...message, content: [{ type: 'text', text: ANSWER_TEXT }] };
-  const stored = request.attempts[request.attempts.length - 1]?.upstreamStatus === 502 ? EDGE_PAGE : response;
+  const stored = servingAttempt(request)?.upstreamStatus === 502 ? EDGE_PAGE : response;
   // Counted once here, as the router counts the vectors it stored; the drawer reads these and measures nothing.
   const requestBytes = byteLength(bodies.request);
   const responseBytes = byteLength(stored);
