@@ -159,7 +159,8 @@ pub struct ResponseFacts {
     pub cleared_input_tokens: Option<u64>,
     pub refusal_category: Option<String>,
     pub refusal_recommended_model: Option<String>,
-    /// The SHA-256 of `stop_details.fallback_credit_token` on a refusal, lowercase hex, `None` elsewhere.
+    /// The SHA-256 of `stop_details.fallback_credit_token` where the answer carries one, which the upstream issues with
+    /// a refusal, lowercase hex, `None` elsewhere.
     pub issued_digest: Option<String>,
 }
 

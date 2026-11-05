@@ -907,7 +907,9 @@ pub(crate) fn insert_request_in(
 
 /// Request rows the start's backfill writes per start. One slice read through `requests_serving_pending` after a
 /// filled prefix of ten slices holds the writer for about 97 ms on a desktop host, and the next start continues where
-/// this one stopped.
+/// this one stopped. The slice's ids bind in one `IN` list through `with_attempts`, so the constant stays under
+/// SQLite's default bind bound of 32,766 (`SQLITE_MAX_VARIABLE_NUMBER`, which the bundled build keeps), and a larger
+/// slice would need a chunked read.
 pub const BACKFILL_SLICE: usize = 10_000;
 
 /// What one start's backfill did: the rows it wrote and the rows still null with attempts, read after the slice

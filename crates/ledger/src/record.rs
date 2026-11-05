@@ -2,7 +2,8 @@
 //! belong with: `RequestRecord`'s truncation flag follows `bodies_captured`, `client_contract` follows `client_drift`
 //! and `classifier` follows `auto_mode`, and `row_to_request` reads each by its column's index.
 //! `RequestRecord::guardrails` is the one member no column holds: its rows live in the child table
-//! `request_guardrails`.
+//! `request_guardrails`. `ServingFacts` is the request row's nested block of its serving attempt's columns, read into
+//! the one member `RequestRecord::serving`.
 
 use phoebis_routing::{CacheMapEntry, DecisionRecord, DecisionSummary, PinUsage};
 use phoebis_store::AccountKind;
@@ -253,8 +254,8 @@ pub struct AttemptRecord {
     pub written_at: Option<i64>,
     /// The serving account's class as the registry held it at the attempt, false on a row from before the column.
     pub usage_based: bool,
-    /// The SHA-256 of the fallback credit token a refused attempt issued, lowercase hex, `None` elsewhere and on a row
-    /// from before the column.
+    /// The SHA-256 of `stop_details.fallback_credit_token` where the attempt's answer carries one, which the upstream
+    /// issues with a refusal, lowercase hex, `None` elsewhere and on a row from before the column.
     pub issued_digest: Option<String>,
 }
 

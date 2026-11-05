@@ -1492,9 +1492,9 @@ async fn the_backfill_fills_old_rows_with_the_facts_the_list_derived_from_their_
 
 /// A start fills one slice of the rows written before the columns, the oldest first behind a filled prefix ten slices
 /// long, and the next start fills the rest. A refused request no attempt served stays null and out of the pending
-/// index.
+/// index, and a request whose trail lost every attempt stays null in it, read and counted by neither start.
 #[tokio::test]
-async fn a_start_fills_one_slice_of_pending_rows_and_unattempted_refusals_stay_out_of_the_index() {
+async fn a_start_fills_one_slice_of_pending_rows_and_skips_refusals_and_lost_trails() {
     use phoebis_ledger::{backfill_serving_facts, Backfilled, BACKFILL_SLICE};
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("ledger.sqlite");
@@ -1516,7 +1516,10 @@ async fn a_start_fills_one_slice_of_pending_rows_and_unattempted_refusals_stay_o
          refused) \
          SELECT 'refused-' || i, {filled} + 2 * i + 1, 'm', 'm', 0, 'inference', 'client', 'rejected', 0, 1 FROM n; \
          INSERT INTO attempts (request_id, attempt, account_id, account_kind, started_at, outcome) \
-         SELECT id, 1, 'a', 'oauth', received_at, 'succeeded' FROM requests WHERE attempts = 1;",
+         SELECT id, 1, 'a', 'oauth', received_at, 'succeeded' FROM requests WHERE attempts = 1; \
+         WITH RECURSIVE n(i) AS (SELECT 10 UNION ALL SELECT i + 1 FROM n WHERE i < 14) \
+         INSERT INTO requests (id, received_at, model, canonical_model, stream, kind, origin, outcome, attempts) \
+         SELECT 'lost-' || i, {filled} + 2 * i + 1, 'm', 'm', 0, 'inference', 'client', 'failed', 1 FROM n;",
         last_filled = filled - 1,
         last_pending = pending - 1,
     ))
@@ -1538,6 +1541,8 @@ async fn a_start_fills_one_slice_of_pending_rows_and_unattempted_refusals_stay_o
         )
     );
     let (refused, _) = db.request("refused-0").await.unwrap().unwrap();
+    let (lost, _) = db.request("lost-10").await.unwrap().unwrap();
+    // An index b-tree keeps an entry in every cell, an interior page's included, so the cells count the entries.
     let indexed: i64 = seed
         .query_row(
             "SELECT COALESCE(SUM(ncell), 0) FROM dbstat WHERE name = 'requests_serving_pending'",
@@ -1546,9 +1551,9 @@ async fn a_start_fills_one_slice_of_pending_rows_and_unattempted_refusals_stay_o
         )
         .unwrap();
     assert_eq!(
-        (refused.serving.account_id, indexed),
-        (None, 0),
-        "the refusal keeps a null account and the pending index holds no entry"
+        (refused.serving.account_id, lost.serving.account_id, indexed),
+        (None, None, 5),
+        "the refusal and the lost trail keep a null account, and the pending index holds the five lost trails alone"
     );
 }
 
