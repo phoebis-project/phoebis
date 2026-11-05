@@ -1104,7 +1104,7 @@ asks "Release session": `Session {id} loses its pin to {account} and every recip
 picks an account again and the prompt cache on {account} goes cold.`, and answers "Session released".
 
 Opening a row reads `Created {time}, {ago}`, the session's first placement, kept until its last pin leaves, and one line
-per agent of the session, main first (from its conversation pin, or from the row where neither a pin nor a recipe names
+per agent of the session, main first (from its conversation pin or its recipe, or from the row where neither names
 main), then the lines with a lifecycle word grouped by that word (`busy` with `registered`, `idle`, `parked` with
 `unknown`, `released`), then the pins whose agent the mod does not report, inside each by the creation time or the last
 activity as the control orders the rows, as Agent, Model, Effort, Context, Account, TTL, Last request, Last probe, Next
