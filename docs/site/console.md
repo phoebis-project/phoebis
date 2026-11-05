@@ -1113,15 +1113,15 @@ reads the mod's state, `reporting` with `seen {ago}` under it, `silent` with how
 Context reads main's context in tokens, `184K`, with a dash for a session with no pin or no figure, and Effort the
 effort of its pin's last turn, `high`, with a dash for none, both from main's conversation pin (or, where main holds
 none, the newest conversation pin of another agent). Created reads the session's first placement as an age with the
-instant on hover, and Key links to the Keys view narrowed to the key, with `deleted holder` under an earlier holder's.
-Last request reads the last request's instant, or `none`. Next probe reads the instant, "pending" or "not scheduled".
-Runway reads the time until the projection of the pin's account reaches the ceiling on the window that binds, among
-those the pin's model draws: a span such as `6 h 55 min`, `none` where the runway is gone, `unbounded` where nothing
-burns or where the runway would pass the binding window's next reset, and a dash for an unpinned row or a pinned row
-with no projection. On a pinned row whose pin carries a cycle its hover reads `cycle 20 s`, the gap between the
-session's requests the slow-down's hold is sized from. Before the first session the card reads "No live sessions" with
-"A session appears here on its first request, or as soon as the keepalive mod registers it, and drops off once it passes
-the session expiry." While the filters hide every row the router lists, the card reads "No sessions kept by the filters"
+instant on hover, and Key links to the key's row in the Keys view, with `deleted holder` under an earlier holder's. Last
+request reads the last request's instant, or `none`. Next probe reads the instant, "pending" or "not scheduled". Runway
+reads the time until the projection of the pin's account reaches the ceiling on the window that binds, among those the
+pin's model draws: a span such as `6 h 55 min`, `none` where the runway is gone, `unbounded` where nothing burns or
+where the runway would pass the binding window's next reset, and a dash for an unpinned row or a pinned row with no
+projection. On a pinned row whose pin carries a cycle its hover reads `cycle 20 s`, the gap between the session's
+requests the slow-down's hold is sized from. Before the first session the card reads "No live sessions" with "A session
+appears here on its first request, or as soon as the keepalive mod registers it, and drops off once it passes the
+session expiry." While the filters hide every row the router lists, the card reads "No sessions kept by the filters"
 with `{k} sessions hidden by the filters.`
 
 A row's menu offers "View in analytics" and "View in requests" once the session has a ledgered request, each disabled

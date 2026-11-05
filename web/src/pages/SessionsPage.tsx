@@ -14,7 +14,7 @@ import { SpeedChip } from '@/components/ui/SpeedChip';
 import { IconChevron } from '@/components/ui/icons';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skeleton, toggleRow, useHostedDescription } from '@/components/ui/primitives';
-import { accountHref, ANALYTICS_CODEC, KEYS_CODEC, REQUESTS_CODEC, requestsHref as requestsAddressHref, SESSION_SORT_KEYS, SESSIONS_CODEC, type SessionsAddress, sortAddressOf, sortDirOf, type SortDir } from '@/lib/address';
+import { accountHref, ANALYTICS_CODEC, REQUESTS_CODEC, requestsHref as requestsAddressHref, SESSION_SORT_KEYS, SESSIONS_CODEC, type SessionsAddress, sortAddressOf, sortDirOf, type SortDir } from '@/lib/address';
 import { HINT_WINDOW, sentences, shareHint, type WeekReading } from '@/lib/analytics';
 import { AGENT_TYPES, clientVersion } from '@/lib/client';
 import { clock } from '@/lib/clock';
@@ -892,10 +892,10 @@ function SessionRows({
           </td>
         )}
         {visible.has('effort') && <td className="col-fit">{session.effort ?? <span className="muted">-</span>}</td>}
-        {/* No route lists one key, so the link opens the Keys view narrowed to it. */}
+        {/* No route lists one key and the Keys view's search matches no id, so the link lands on the key's row. */}
         {visible.has('key') && (
           <td className="mono col-fit">
-            <Link to={`/keys?${KEYS_CODEC.toParams({ pools: [], search: session.keyId, status: 'all' })}`} onClick={stopAtLink} onKeyDown={stopAtLink}>
+            <Link to={`/keys#${encodeURIComponent(session.keyId)}`} onClick={stopAtLink} onKeyDown={stopAtLink}>
               {session.keyId}
             </Link>
             {session.historical && (

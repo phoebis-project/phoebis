@@ -23898,16 +23898,16 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
   }
   {
     // The optional columns read off the story's first session: Created as its age with the instant on hover, and Key
-    // as a link to the Keys view narrowed to the key, which no route lists alone. Last request reads the instant of the
-    // written session's last request.
+    // as a link to its key's row in the Keys view (`desktop`, `sessionSpec[0]`'s key), which the view lands on by the
+    // anchor since its search matches no key id. Last request reads the instant of the written session's last request.
     for (const label of ['Created', 'Key', 'Last request']) await showColumn(page, label);
     const created = cellOf(subjects.story, 'Created');
     const key = cellOf(subjects.story, 'Key')?.querySelector('a');
     const read = { created: { text: created?.textContent?.trim() ?? null, title: created?.getAttribute('title') ?? null }, key: { href: key?.getAttribute('href') ?? null, text: key?.textContent?.trim() ?? null }, last: cellOf(subjects.written, 'Last request')?.textContent?.trim() ?? null };
     for (const label of ['Created', 'Key', 'Last request']) await showColumn(page, label, false);
-    const want = { created: { text: fmtRelative(subjects.story?.createdAt ?? null, CLOCK_ORIGIN), title: fmtAbsolute(subjects.story?.createdAt ?? null) }, key: { href: '/keys?search=desktop', text: 'desktop' }, last: fmtAbsolute(subjects.written?.lastRequestAt ?? null) };
+    const want = { created: { text: fmtRelative(subjects.story?.createdAt ?? null, CLOCK_ORIGIN), title: fmtAbsolute(subjects.story?.createdAt ?? null) }, key: { href: '/keys#desktop', text: 'desktop' }, last: fmtAbsolute(subjects.written?.lastRequestAt ?? null) };
     results.push({
-      name: "/sessions the Created, Key and Last request columns read the age with its instant, the key's link to the Keys view and the last request's instant",
+      name: "/sessions the Created, Key and Last request columns read the age with its instant, the key's link to its row in the Keys view and the last request's instant",
       ok: absent.length === 0 && JSON.stringify(read) === JSON.stringify(want),
       missing: [JSON.stringify(read), JSON.stringify(want)],
     });
