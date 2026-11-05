@@ -7190,9 +7190,9 @@ fn dropped_members(row: &serde_json::Value) -> Vec<String> {
 
 /// An agent line as the route answers it, under the harness pins' five-minute TTL and with no first-seen record, with
 /// the agent's lifecycle word where the engine holds its record. The harness pins burn nothing, so a line's burn reads
-/// 0, served at the rig's clock, in the unit of the account its own pin sits on: a share of the 5-hour window on
-/// `business`, whose tier the harness names, and dollars with no window and no Pro-week figure on the API-key account
-/// `direct`.
+/// 0 with `burn_at` at the rig's clock, in the unit of the account its own pin sits on: a share of the 5-hour window
+/// on `business`, whose tier the harness names, and dollars with no window and no Pro-week figure on the API-key
+/// account `direct`.
 // Each argument is a member the case pins, so a struct of them would only rename the call sites.
 #[allow(clippy::too_many_arguments)]
 fn agent_line(

@@ -657,7 +657,8 @@ fn price_pin_burn(
     } = *pricing;
     // The unit a reader takes for `burn`, the account's kind, its class and whether its overage evidence stands now:
     // the same predicate every reader of it applies, so a row or a line never disagrees with the selector. A pin whose
-    // account left the registry has no kind to pick a unit from, so both read null rather than guessing one.
+    // account left the registry has no kind to pick a unit from, so the unit, the burn, the window and the Pro-week
+    // figure read null rather than guessing one.
     let unit = snapshot.account(&p.account_id).map(|a| a.kind).map(|kind| {
         let in_overage = overages
             .iter()
