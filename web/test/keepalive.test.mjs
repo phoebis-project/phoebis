@@ -284,11 +284,17 @@ const NO_FILTERS = { account: [], active: '', agentType: [], cache: [], client: 
 const matchLine = (agentId, model, lifecycle) => ({ agentId, agentType: null, lifecycle, model, pin: null, recipe: null });
 const matchSession = { agentRequests: [], companion: 'reporting', forkedFrom: null, keyGeneration: 1, keyId: 'desktop', lastRequestAt: iso(ms(14, 20)), lastUsedAt: iso(ms(14, 20)), sessionId: 'session-1', speed: null, userAgent: null };
 
-test('matches lists a session under Agents filters where one of its lines passes them all, not where two lines pass one each', () => {
+test('matches lists a session under Agents filters where one of its drawn lines passes them all, not where two lines pass one each', () => {
   const filters = { ...NO_FILTERS, model: ['claude-opus-5'], status: ['busy'] };
   const row = (lines) => ({ finished: false, lines, poolId: 'all', session: matchSession });
   assert.equal(d.matches(row([matchLine('main', 'claude-opus-5', 'idle'), matchLine('a1', 'claude-sonnet-5', 'busy')]), filters, NOW), false, 'one line on the model, the other in the word');
   assert.equal(d.matches(row([matchLine('main', 'claude-sonnet-5', 'idle'), matchLine('a1', 'claude-opus-5', 'busy')]), filters, NOW), true, 'one line on the model in the word');
+  const onModel = { ...NO_FILTERS, model: ['claude-opus-5'] };
+  const finishedRow = { finished: true, lines: [matchLine('main', 'claude-sonnet-5', 'released'), matchLine('a1', 'claude-opus-5', 'released')], poolId: 'all', session: matchSession };
+  assert.equal(d.matches(finishedRow, { ...onModel, finished: true }, NOW), true, "a finished row's released line, which the row draws without the flag");
+  const liveLines = [matchLine('main', 'claude-sonnet-5', 'busy'), matchLine('a1', 'claude-opus-5', 'released')];
+  assert.equal(d.matches(row(liveLines), onModel, NOW), false, "a live row's released line, which the row draws only under the flag");
+  assert.equal(d.matches(row(liveLines), { ...onModel, released: true }, NOW), true, 'the same line under the flag');
 });
 
 test('activeWithin reads the later of the last use and the last request', () => {

@@ -444,9 +444,8 @@ const misses = (values: readonly string[], value: string | null): boolean => val
  *  with no pin matches none. */
 const cacheWords = (line: SessionLine): string[] => (line.pin === null ? [] : [line.pin.warm ? 'warm' : 'cold', ...(line.recipe === null ? ['no recipe'] : [])]);
 
-/** One line passes every Agents filter that stands. A released line is read only under `released`. */
+/** One line passes every Agents filter that stands. */
 export function lineMatches(line: SessionLine, filters: SessionFilters): boolean {
-  if (isReleasedLine(line) && !filters.released) return false;
   return !(
     misses(filters.account, line.recipe?.accountId ?? line.pin?.accountId ?? null) ||
     misses(filters.agentType, line.agentType) ||
@@ -458,9 +457,18 @@ export function lineMatches(line: SessionLine, filters: SessionFilters): boolean
 }
 
 /**
- * The row passes every Session filter and, where an Agents filter stands, one of its lines passes them all. A finished
- * row is out unless `finished` stands. The search matches the id's prefix whatever its case, and Key takes the key id
- * or `id@generation`.
+ * The lines a row draws, the ones the Agents filters read: a live row's released lines only under `released`, and
+ * every line of a finished row, released ones among them, so a session the engine is done with keeps its probe facts
+ * in view once it is shown.
+ */
+export function drawnLines(row: Pick<MatchRow, 'finished' | 'lines'>, filters: Pick<SessionFilters, 'released'>): SessionLine[] {
+  return row.lines.filter((line) => row.finished || filters.released || !isReleasedLine(line));
+}
+
+/**
+ * The row passes every Session filter and, where an Agents filter stands, one of the lines it draws passes them all. A
+ * finished row is out unless `finished` stands. The search matches the id's prefix whatever its case, and Key takes the
+ * key id or `id@generation`.
  */
 export function matches(row: MatchRow, filters: SessionFilters, now: number): boolean {
   const { session } = row;
@@ -472,16 +480,15 @@ export function matches(row: MatchRow, filters: SessionFilters, now: number): bo
   if (filters.forked && session.forkedFrom === null) return false;
   if (filters.key.length > 0 && !filters.key.some((k) => k === session.keyId || k === `${session.keyId}@${session.keyGeneration}`)) return false;
   if (filters.slowed && !(session.speed !== null && session.speed < 1)) return false;
-  return !agentFiltersStand(filters) || row.lines.some((line) => lineMatches(line, filters));
+  return !agentFiltersStand(filters) || drawnLines(row, filters).some((line) => lineMatches(line, filters));
 }
 
 /**
  * The lines the row draws and, under Agents filters, the ones that match with how many the fold line counts: the
- * other drawn lines and the earlier agents. A finished session draws every line and a live one its released lines
- * only under `released`, so the count leaves out a released line the row does not draw.
+ * other drawn lines and the earlier agents, so the count leaves out a released line the row does not draw.
  */
 export function hiddenLines(row: MatchRow, filters: SessionFilters): { hidden: number; shown: SessionLine[] } {
-  const drawn = row.lines.filter((line) => row.finished || filters.released || !isReleasedLine(line));
+  const drawn = drawnLines(row, filters);
   if (!agentFiltersStand(filters)) return { hidden: 0, shown: drawn };
   const shown = drawn.filter((line) => lineMatches(line, filters));
   return { hidden: drawn.length - shown.length + earlierAgents(row.session, row.lines).length, shown };
