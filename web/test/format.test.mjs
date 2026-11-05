@@ -139,6 +139,19 @@ test('a zone change with the same offset at the cached instant formats in the ne
   }
 });
 
+test("the shift reads the formatted instant's own offset, across a zone's daylight change", () => {
+  // New York sits 300 minutes behind UTC in January and 240 in July, so an offset read off the clock's instant,
+  // or one kept with the formatter, prints one of the two hours wrong whatever day the suite runs.
+  const zone = process.env.TZ;
+  try {
+    process.env.TZ = 'America/New_York';
+    assert.equal(fmtAbsolute('2026-01-15T12:00:00Z'), 'Jan 15, 2026, 07:00:00');
+    assert.equal(fmtAbsolute('2026-07-15T12:00:00Z'), 'Jul 15, 2026, 08:00:00');
+  } finally {
+    process.env.TZ = zone;
+  }
+});
+
 test('a named zone takes the instant unshifted while the machine sits off UTC', () => {
   // The suite runs under UTC, where a shift of a named zone's instant would be a shift by nothing.
   const zone = process.env.TZ;
