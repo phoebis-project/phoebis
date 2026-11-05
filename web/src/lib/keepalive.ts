@@ -1,6 +1,9 @@
-import type { AgentContext, KeepaliveRecipe, KeepaliveState, RecipeCause, Session } from '@/api/types';
+import type { AgentContext, KeepaliveRecipe, Lifecycle, RecipeCause, Session, SessionSpend, SessionSpendPart } from '@/api/types';
 import { RANGE_PRESETS, type SessionsAddress, type SortDir } from '@/lib/address';
-import { fmtCompact } from '@/lib/format';
+import { clientVersion } from '@/lib/client';
+import { lookup } from '@/lib/counts';
+import { fmtCompact, fmtDuration } from '@/lib/format';
+import type { BadgeTone } from '@/lib/quota';
 
 export const CAUSE_LABEL: Record<RecipeCause, string> = {
   affinity_too_short: 'affinity too short',
@@ -142,9 +145,9 @@ export const WARNING_CAUSES: RecipeCause[] = ['affinity_too_short', 'budget', 'e
 /** The engine's name for a session's main conversation. */
 export const MAIN_AGENT = 'main';
 
-/** The lifecycle words in the order a session's recipe lines run after main. `unknown` sits with `parked`, and
- * `released` closes the recipe lines wherever a released record is still listed. */
-const STATE_ORDER: Record<KeepaliveState, number> = { busy: 0, idle: 1, parked: 2, released: 3, unknown: 2 };
+/** The lifecycle words in the order a session's lines run after main. `registered` sits with `busy`, `unknown` with
+ * `parked`, and `released` closes the lines with a word wherever a released record is still listed. */
+const STATE_ORDER: Record<Lifecycle, number> = { busy: 0, idle: 1, parked: 2, registered: 0, released: 3, unknown: 2 };
 
 /**
  * Two instants newest first under `desc` and oldest first under `asc`, an instant missing last under either, so the
@@ -156,30 +159,46 @@ const byInstant = (a: string | null, b: string | null, dir: SortDir): number => 
   return dir === 'desc' ? order : -order;
 };
 
+/** Two figures largest first under `desc` and smallest first under `asc`, a missing one last under either. */
+const byFigure = (a: number | null, b: number | null, dir: SortDir): number => {
+  if (a === null || b === null) return a === b ? 0 : a === null ? 1 : -1;
+  return dir === 'desc' ? b - a : a - b;
+};
+
 /** The later of a session's own last use and its last ledgered request, the `activity` key's value. */
 export const lastActivity = (s: Pick<Session, 'lastRequestAt' | 'lastUsedAt'>): string | null => {
   if (s.lastUsedAt === null || s.lastRequestAt === null) return s.lastUsedAt ?? s.lastRequestAt;
   return Date.parse(s.lastRequestAt) > Date.parse(s.lastUsedAt) ? s.lastRequestAt : s.lastUsedAt;
 };
 
-/** The rows under a key and a direction, ties by session id, a row without the key's value last either way. */
-export function orderRows<T extends { session: Pick<Session, 'createdAt' | 'lastRequestAt' | 'lastUsedAt' | 'sessionId'> }>(rows: readonly T[], sort: SessionsAddress['sort'], dir: SortDir): T[] {
-  const valueOf = (s: T['session']) => (sort === 'activity' ? lastActivity(s) : s.createdAt);
-  return [...rows].sort((a, b) => byInstant(valueOf(a.session), valueOf(b.session), dir) || a.session.sessionId.localeCompare(b.session.sessionId));
-}
-
-/** A line's group: main first, then the recipe lines by lifecycle word, then the pins no recipe stands on. */
-const lineGroup = (line: SessionLine): number => (line.agentId === MAIN_AGENT ? -1 : line.recipe === null ? STATE_ORDER.released + 1 : STATE_ORDER[line.recipe.agentState]);
+type OrderedSession = Pick<Session, 'createdAt' | 'lastRequestAt' | 'lastUsedAt' | 'requests' | 'sessionId' | 'spend'>;
 
 /**
- * The lines under the rows' key: main first, then the lifecycle groups of the recipe lines (`STATE_ORDER`), then the
- * pin-only lines, and inside a group by the line's own `createdAt` under `created` (a line without one last) or by
- * `byInstant` under `activity` (a pin-only line by its pin's last use), the direction applied inside the groups,
- * ties by agent id and then by model.
+ * The rows under `created`, `activity`, `cost` (`spend.usd`, the list dollars, which add across units) or `requests`,
+ * ties by session id, a row without the value last either way.
+ */
+export function orderRows<T extends { session: OrderedSession }>(rows: readonly T[], sort: string, dir: SortDir): T[] {
+  const order = (a: OrderedSession, b: OrderedSession): number => {
+    if (sort === 'cost') return byFigure(a.spend?.usd ?? null, b.spend?.usd ?? null, dir);
+    if (sort === 'requests') return byFigure(a.requests, b.requests, dir);
+    return sort === 'activity' ? byInstant(lastActivity(a), lastActivity(b), dir) : byInstant(a.createdAt, b.createdAt, dir);
+  };
+  return [...rows].sort((a, b) => order(a.session, b.session) || a.session.sessionId.localeCompare(b.session.sessionId));
+}
+
+/** A line's group: main first, then the lines by lifecycle word, then the lines with no word, whose agent the engine
+ *  holds no record of. */
+const lineGroup = (line: SessionLine): number => (line.agentId === MAIN_AGENT ? -1 : line.lifecycle === null ? STATE_ORDER.released + 1 : STATE_ORDER[line.lifecycle]);
+
+/**
+ * The lines under the rows' key: main first, then the lifecycle groups (`STATE_ORDER`), then the lines with no word,
+ * and inside a group by the line's own `createdAt` under `created` (a line without one last) or by `byInstant` under
+ * `activity` (a pin-only line by its pin's last use), the direction applied inside the groups, ties by agent id and
+ * then by model.
  */
 export function orderLines(lines: readonly SessionLine[], sort: SessionsAddress['sort'], dir: SortDir): SessionLine[] {
   const valueOf = (line: SessionLine) => (sort === 'activity' ? (line.recipe !== null ? line.recipe.lastRequestAt : (line.pin?.lastUsedAt ?? null)) : (line.pin?.createdAt ?? null));
-  return [...lines].sort((a, b) => lineGroup(a) - lineGroup(b) || byInstant(valueOf(a), valueOf(b), dir) || a.agentId.localeCompare(b.agentId) || a.model.localeCompare(b.model));
+  return [...lines].sort((a, b) => lineGroup(a) - lineGroup(b) || byInstant(valueOf(a), valueOf(b), dir) || a.agentId.localeCompare(b.agentId) || (a.model ?? '').localeCompare(b.model ?? ''));
 }
 
 export type RequestsRange = (typeof RANGE_PRESETS)[number]['name'];
@@ -201,29 +220,69 @@ export function requestsRange(lastRequestAt: string | null, now: number): Reques
   return RANGE_PRESETS.find((r) => age <= r.ms - RANGE_HEADROOM_MS)?.name ?? null;
 }
 
-/**
- * Whether a recipe line is one the mod released under a live session, which the view hides at its next re-read. A
- * line of a session the mod ended, or one the operator released, keeps its ended state and stays listed, so an
- * ended session keeps its lines.
- */
-export function isReleasedLine(agent: Pick<KeepaliveRecipe, 'agentState' | 'cause'>): boolean {
-  return agent.agentState === 'released' && agent.cause === 'agent_released';
+/** Whether the mod released a line's agent, which a live session's row draws only under the Released agents filter. */
+export function isReleasedLine(line: Pick<SessionLine, 'lifecycle'>): boolean {
+  return line.lifecycle === 'released';
 }
 
 /**
  * How many of a list's lines the view hides, which the Agents column and the Agents tile take off the engine's counts.
  */
-export function releasedCount(agents: readonly Pick<KeepaliveRecipe, 'agentState' | 'cause'>[]): number {
-  return agents.filter(isReleasedLine).length;
+export function releasedCount(lines: readonly Pick<SessionLine, 'lifecycle'>[]): number {
+  return lines.filter(isReleasedLine).length;
 }
 
 /**
- * A session the engine is done with: main's recipe reads the cause `session_ended` or `released`, or every line it
- * holds is a released one. Such a session keeps its lines, so its probe facts stay in view once it is shown.
+ * A session the engine is done with: the row's recipe summary reads the cause `session_ended` or `released`, each of
+ * which drops every recipe of the session, or every line it draws is a released one. Such a session keeps its lines,
+ * so its probe facts stay in view once it is shown.
  */
-export function isFinished(session: Pick<Session, 'keepalive'>, agents: readonly Pick<KeepaliveRecipe, 'agentState' | 'cause'>[]): boolean {
+export function isFinished(session: Pick<Session, 'keepalive'>, lines: readonly Pick<SessionLine, 'lifecycle'>[]): boolean {
   const { cause } = session.keepalive;
-  return cause === 'session_ended' || cause === 'released' || (agents.length > 0 && agents.every(isReleasedLine));
+  return cause === 'session_ended' || cause === 'released' || (lines.length > 0 && lines.every(isReleasedLine));
+}
+
+/** A row's or a line's Status word: a lifecycle word, `finished` for a session the engine is done with, `unreported`
+ *  where no mod reports the agent. */
+export type StatusWord = 'busy' | 'finished' | 'idle' | 'parked' | 'registered' | 'released' | 'unknown' | 'unreported';
+
+const STATUS_TONE: Record<Lifecycle, BadgeTone> = { busy: 'accent', idle: 'good', parked: 'neutral', registered: 'neutral', released: 'neutral', unknown: 'neutral' };
+
+/**
+ * The row's Status word and tone: `finished` first (`isFinished` over the session and its lines), `unreported` where
+ * the lifecycle is null or no mod reports the session, else the lifecycle word. `muted` is the ink `unreported` takes.
+ */
+export function statusOf(session: Pick<Session, 'companion' | 'keepalive' | 'lifecycle'>, lines: readonly Pick<SessionLine, 'lifecycle'>[]): { tone: BadgeTone | 'muted'; word: StatusWord } {
+  if (isFinished(session, lines)) return { tone: 'neutral', word: 'finished' };
+  if (session.lifecycle === null || session.companion === 'none') return { tone: 'muted', word: 'unreported' };
+  return { tone: STATUS_TONE[session.lifecycle], word: session.lifecycle };
+}
+
+/**
+ * The Status sub line: `seen {ago}` while the mod reports (`presenceAgeSeconds`), `silent {span}` in the warning tone
+ * while it is silent (the span since `companionSince`), null where no mod reports and where the age or the instant
+ * the line reads is absent, so no age is made up.
+ */
+export function presenceOf(session: Pick<Session, 'companion' | 'companionSince' | 'presenceAgeSeconds'>, now: number): { text: string; tone: 'muted' | 'warning' } | null {
+  if (session.companion === 'reporting') return session.presenceAgeSeconds === null ? null : { text: `seen ${fmtDuration(session.presenceAgeSeconds * 1000)} ago`, tone: 'muted' };
+  if (session.companion === 'silent') return session.companionSince === null ? null : { text: `silent ${fmtDuration(now - Date.parse(session.companionSince))}`, tone: 'warning' };
+  return null;
+}
+
+/** A line's word for the Status filter and the split: its lifecycle, `unreported` where null. */
+export const lineWord = (line: Pick<SessionLine, 'lifecycle'>): Exclude<StatusWord, 'finished'> => line.lifecycle ?? 'unreported';
+
+/** The lines less the released ones, the Agents cell's and the Dashboard's count. */
+export const agentCount = (lines: readonly Pick<SessionLine, 'lifecycle'>[]): number => lines.filter((line) => !isReleasedLine(line)).length;
+
+/** The shown lines by word, `busy`, `idle`, `parked`, `registered`, `unknown`, `unreported`, the released ones out. */
+export function lifecycleSplit(lines: readonly Pick<SessionLine, 'lifecycle'>[]): Record<Exclude<StatusWord, 'finished' | 'released'>, number> {
+  const split = { busy: 0, idle: 0, parked: 0, registered: 0, unknown: 0, unreported: 0 };
+  for (const line of lines) {
+    const word = lineWord(line);
+    if (word !== 'released') split[word] += 1;
+  }
+  return split;
 }
 
 /** The Context cell's text: the tokens compact, a dash with none or before the first turn. */
@@ -239,28 +298,201 @@ const pinModel = (model: string): string => model.toLowerCase().replace(/\[1m\]$
 export const lineFigures = (s: Pick<Session, 'agentContexts'>, agentId: string, model: string): AgentContext | null =>
   s.agentContexts.find((c) => c.agentId === agentId && pinModel(c.model) === pinModel(model)) ?? null;
 
-/** One drawn line: a recipe with its pin, a recipe without one, or a pin without a recipe. */
+/**
+ * One drawn line: a recipe with its pin, a recipe without one, a pin without a recipe, or main's drawn from the row
+ * where no line names it, with `registered` among its words.
+ */
 export interface SessionLine {
   agentId: string;
-  model: string;
+  /** The agent's type from its newest ledger entry, null on an agent without one. */
+  agentType: string | null;
+  /** The pin's word where a pin stands, the engine's record, else the recipe's, and on main's drawn line the row's. */
+  lifecycle: Lifecycle | null;
+  /** Null on main's line drawn from a row that names no model. */
+  model: string | null;
   pin: AgentContext | null;
   recipe: KeepaliveRecipe | null;
 }
 
 /**
- * The union of a session's entries and its recipes, keyed by agent id and pin model: the recipes first in the order
- * handed, then the pins no recipe claims in the route's order, which `orderLines` sorts into the view's.
+ * The union of a session's entries and its recipes, keyed by agent id and pin model: main's line drawn from the row
+ * where no line names main, then the recipes in the order handed, then the pins no recipe claims in the route's order,
+ * which `orderLines` sorts into the view's.
  */
-export function sessionLines(s: Pick<Session, 'agentContexts'>, recipes: readonly KeepaliveRecipe[]): SessionLine[] {
+export function sessionLines(s: Pick<Session, 'agentContexts' | 'agentId' | 'agentRequests' | 'lifecycle' | 'model'>, recipes: readonly KeepaliveRecipe[]): SessionLine[] {
+  const typeOf = (agentId: string) => agentFigures(s, agentId)?.agentType ?? null;
   const claimed = new Set<AgentContext>();
   const lines: SessionLine[] = recipes.map((recipe) => {
     const pin = lineFigures(s, recipe.agentId, recipe.model);
     if (pin !== null) claimed.add(pin);
-    return { agentId: recipe.agentId, model: recipe.model, pin, recipe };
+    return { agentId: recipe.agentId, agentType: typeOf(recipe.agentId), lifecycle: pin !== null ? pin.lifecycle : recipe.agentState, model: recipe.model, pin, recipe };
   });
-  for (const pin of s.agentContexts) if (!claimed.has(pin)) lines.push({ agentId: pin.agentId, model: pin.model, pin, recipe: null });
-  return lines;
+  for (const pin of s.agentContexts) if (!claimed.has(pin)) lines.push({ agentId: pin.agentId, agentType: typeOf(pin.agentId), lifecycle: pin.lifecycle, model: pin.model, pin, recipe: null });
+  if (lines.some((line) => line.agentId === MAIN_AGENT)) return lines;
+  // A row whose pin is another agent's carries that agent's model, so main's line reads main's newest ledger entry.
+  const model = s.agentId === null || s.agentId === MAIN_AGENT ? s.model : (agentFigures(s, MAIN_AGENT)?.model ?? null);
+  return [{ agentId: MAIN_AGENT, agentType: typeOf(MAIN_AGENT), lifecycle: s.lifecycle, model, pin: null, recipe: null }, ...lines];
 }
+
+/** An agent's entries summed, since one agent may run two models. */
+export interface AgentFigures {
+  /** The newest entry's account, model and type (the entry with the latest `lastRequestAt`). */
+  accountId: string | null;
+  agentType: string | null;
+  lastRequestAt: string | null;
+  model: string;
+  requests: number;
+  spend: SessionSpend;
+}
+
+/** An agent's entries summed, null for an agent with no entry. */
+export function agentFigures(session: Pick<Session, 'agentRequests'>, agentId: string): AgentFigures | null {
+  const [first, ...rest] = session.agentRequests.filter((entry) => entry.agentId === agentId);
+  if (first === undefined) return null;
+  const newest = rest.reduce((n, entry) => (byInstant(entry.lastRequestAt, n.lastRequestAt, 'desc') < 0 ? entry : n), first);
+  return {
+    accountId: newest.accountId,
+    agentType: newest.agentType,
+    lastRequestAt: newest.lastRequestAt,
+    model: newest.model,
+    requests: rest.reduce((n, entry) => n + entry.requests, first.requests),
+    spend: rest.reduce((sum, entry) => addSpend(sum, entry.spend), first.spend),
+  };
+}
+
+/** Two maps keyed by data summed by key, built as fresh entries so no key the wire sends reaches a prototype. */
+const addMap = (a: Record<string, number>, b: Record<string, number>): Record<string, number> =>
+  Object.fromEntries([...new Set([...Object.keys(a), ...Object.keys(b)])].map((k) => [k, (lookup(a, k) ?? 0) + (lookup(b, k) ?? 0)]));
+
+const addPart = (a: SessionSpendPart, b: SessionSpendPart): SessionSpendPart => ({
+  billedUsd: addMap(a.billedUsd, b.billedUsd),
+  equivalent: a.equivalent === null || b.equivalent === null ? null : a.equivalent + b.equivalent,
+  requests: a.requests + b.requests,
+  shares: Object.fromEntries([...new Set([...Object.keys(a.shares), ...Object.keys(b.shares)])].map((id) => [id, addMap(lookup(a.shares, id) ?? {}, lookup(b.shares, id) ?? {})])),
+  usd: a.usd + b.usd,
+});
+
+/** Two spends summed: the maps merged by key, `equivalent` null where either is null. */
+export function addSpend(a: SessionSpend, b: SessionSpend): SessionSpend {
+  return { ...addPart(a, b), probes: addPart(a.probes, b.probes) };
+}
+
+/** Every agent with ledgered requests and no line, main never among them, in id order, each with its figures. */
+export function earlierAgents(session: Pick<Session, 'agentRequests'>, lines: readonly Pick<SessionLine, 'agentId'>[]): (AgentFigures & { agentId: string })[] {
+  const named = new Set(lines.map((line) => line.agentId));
+  const ids = [...new Set(session.agentRequests.map((entry) => entry.agentId))].filter((id) => id !== MAIN_AGENT && !named.has(id)).sort();
+  return ids.flatMap((agentId) => {
+    const figures = agentFigures(session, agentId);
+    return figures === null ? [] : [{ ...figures, agentId }];
+  });
+}
+
+/** The filters the Sessions view matches a row against, the address's values less its sort. */
+export interface SessionFilters {
+  account: string[];
+  /** `15m`, `1h`, `6h`, `24h` or empty. */
+  active: string;
+  agentType: string[];
+  /** `cold`, `no recipe`, `warm`. */
+  cache: string[];
+  /** Folded client versions, `clientVersion`'s words. */
+  client: string[];
+  companion: string[];
+  effort: string[];
+  finished: boolean;
+  forked: boolean;
+  key: string[];
+  model: string[];
+  pool: string[];
+  released: boolean;
+  /** A session id's prefix. */
+  search: string;
+  slowed: boolean;
+  /** The lifecycle words, `released`, `unknown` and `unreported` among them. */
+  status: string[];
+}
+
+/** The filters that read each agent line. The Released agents flag draws lines and matches none, so it stays out. */
+export const AGENT_FILTER_FIELDS: readonly (keyof SessionFilters)[] = ['account', 'agentType', 'cache', 'effort', 'model', 'status'];
+
+/** The Active within values, each read against the later of a row's last use and last request. */
+export const ACTIVE_WITHIN: readonly { id: string; label: string; ms: number }[] = [
+  { id: '15m', label: '15 min', ms: 15 * 60_000 },
+  { id: '1h', label: '1 h', ms: 3_600_000 },
+  { id: '6h', label: '6 h', ms: 6 * 3_600_000 },
+  { id: '24h', label: '24 h', ms: 24 * 3_600_000 },
+];
+
+/** What the matcher reads of a row: the session, its lines (the released ones among them), its key's pool. */
+export interface MatchRow {
+  finished: boolean;
+  lines: readonly SessionLine[];
+  poolId: string | null;
+  session: Session;
+}
+
+/** The later of the row's last use and last request is inside `spanMs` of `now`. */
+export function activeWithin(session: Pick<Session, 'lastRequestAt' | 'lastUsedAt'>, spanMs: number, now: number): boolean {
+  const last = lastActivity(session);
+  return last !== null && now - Date.parse(last) <= spanMs;
+}
+
+/** Whether a list filter turns a value away: an empty one passes every value, and a standing one turns null away. */
+const misses = (values: readonly string[], value: string | null): boolean => values.length > 0 && (value === null || !values.includes(value));
+
+/** The Cache words a line matches: its pin's `warm` or `cold`, and `no recipe` on a pin no recipe stands on. A line
+ *  with no pin matches none. */
+const cacheWords = (line: SessionLine): string[] => (line.pin === null ? [] : [line.pin.warm ? 'warm' : 'cold', ...(line.recipe === null ? ['no recipe'] : [])]);
+
+/** One line passes every Agents filter that stands. A released line is read only under `released`. */
+export function lineMatches(line: SessionLine, filters: SessionFilters): boolean {
+  if (isReleasedLine(line) && !filters.released) return false;
+  return !(
+    misses(filters.account, line.recipe?.accountId ?? line.pin?.accountId ?? null) ||
+    misses(filters.agentType, line.agentType) ||
+    (filters.cache.length > 0 && !cacheWords(line).some((word) => filters.cache.includes(word))) ||
+    misses(filters.effort, line.pin?.effort ?? null) ||
+    misses(filters.model, line.model) ||
+    misses(filters.status, lineWord(line))
+  );
+}
+
+/**
+ * The row passes every Session filter and, where an Agents filter stands, one of its lines passes them all. A finished
+ * row is out unless `finished` stands. The search matches the id's prefix whatever its case, and Key takes the key id
+ * or `id@generation`.
+ */
+export function matches(row: MatchRow, filters: SessionFilters, now: number): boolean {
+  const { session } = row;
+  if (row.finished && !filters.finished) return false;
+  if (filters.search !== '' && !session.sessionId.toLowerCase().startsWith(filters.search.toLowerCase())) return false;
+  const active = ACTIVE_WITHIN.find((a) => a.id === filters.active);
+  if (active !== undefined && !activeWithin(session, active.ms, now)) return false;
+  if (misses(filters.client, clientVersion(session.userAgent)) || misses(filters.companion, session.companion) || misses(filters.pool, row.poolId)) return false;
+  if (filters.forked && session.forkedFrom === null) return false;
+  if (filters.key.length > 0 && !filters.key.some((k) => k === session.keyId || k === `${session.keyId}@${session.keyGeneration}`)) return false;
+  if (filters.slowed && !(session.speed !== null && session.speed < 1)) return false;
+  return !agentFiltersStand(filters) || row.lines.some((line) => lineMatches(line, filters));
+}
+
+/**
+ * The lines the row draws and, under Agents filters, the ones that match with how many the fold line counts: the
+ * other drawn lines and the earlier agents. A finished session draws every line and a live one its released lines
+ * only under `released`, so the count leaves out a released line the row does not draw.
+ */
+export function hiddenLines(row: MatchRow, filters: SessionFilters): { hidden: number; shown: SessionLine[] } {
+  const drawn = row.lines.filter((line) => row.finished || filters.released || !isReleasedLine(line));
+  if (!agentFiltersStand(filters)) return { hidden: 0, shown: drawn };
+  const shown = drawn.filter((line) => lineMatches(line, filters));
+  return { hidden: drawn.length - shown.length + earlierAgents(row.session, row.lines).length, shown };
+}
+
+/** Whether any Agents filter stands. */
+export const agentFiltersStand = (filters: SessionFilters): boolean =>
+  AGENT_FILTER_FIELDS.some((field) => {
+    const values = filters[field];
+    return Array.isArray(values) && values.length > 0;
+  });
 
 /** A pin-only line's TTL: the time left to the pin's last use plus its cache TTL, null once passed or unknown. */
 export const pinTtlMs = (pin: Pick<AgentContext, 'cacheTtlMs' | 'lastUsedAt'>, now: number): number | null => {

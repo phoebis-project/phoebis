@@ -23122,7 +23122,7 @@ await forView('/sessions', async () => {
       bare.sessionsValue === '24 of 128' &&
       bare.sessionsTile === AWAY &&
       bare.agentsTile === AWAY &&
-      bare.agentsTitle === `The rows shown hold 36 agent records against the cap. 2 of them are subagents the mod released while their session lives, which draw no line and keep their slot for one cache TTL after the release, then leave the engine. ${AWAY}.`,
+      bare.agentsTitle === `The rows shown hold 36 agent records against the cap. 3 of them are subagents the mod released while their session lives, which draw no line and keep their slot for one cache TTL after the release, then leave the engine. ${AWAY}.`,
     missing: [String(bare.sessionsValue), String(bare.sessionsTile), String(bare.agentsTile), String(bare.agentsTitle)],
   });
   {
@@ -23346,26 +23346,25 @@ await forView('/sessions', async () => {
     });
   }
   {
-    // An expanded row's lines follow the rows' key: main first, then the recipe lines by lifecycle word, then the pins
-    // no recipe stands on, inside a group by the line's own creation time or by its last request (a pin's last use
-    // where no recipe stands on it), ties by agent id. No story session draws recipe lines and pin-only lines together,
-    // so two read it: the written session on desktop, whose seven agents hold a line in each lifecycle word and three
-    // released records (`WRITTEN_SUBAGENTS` in `web/src/mock/operations.ts`), and the slowed notebook session, whose
-    // main and Haiku subagent hold pins no recipe stands on (`SLOWED_PINS`). The written session's released lines stand
-    // on no pin, so under Created they tie and read by agent id, and under Last activity by their last requests.
+    // An expanded row's lines follow the rows' key: main first, then the lines by lifecycle word, then the lines with
+    // no word, inside a group by the line's own creation time or by its last request (a pin's last use where no recipe
+    // stands on it), ties by agent id. No story session draws recipe lines and pin-only lines together, so two read it:
+    // the written session on desktop, whose seven agents hold a line in each lifecycle word and three released records
+    // (`WRITTEN_SUBAGENTS` in `web/src/mock/operations.ts`), and the slowed notebook session, whose main and Haiku
+    // subagent hold pins no recipe stands on and no mod reports (`SLOWED_PINS`). The written session's released lines
+    // stand on no pin, so under Created they tie and read by agent id, and under Last activity by their last requests.
     const SLOWED_ID = '5f8a3c1e-9d27-4b6e-8c04-2a7e9b3d1f65';
-    const RANK = { busy: 0, idle: 1, parked: 2, unknown: 2, released: 3 };
+    const RANK = { busy: 0, idle: 1, parked: 2, registered: 0, unknown: 2, released: 3 };
     const writtenId = recipes.find((r) => r.agentId === 'e7c1' && r.cause === 'agent_released')?.sessionId;
     const hosts = { slowed: listed.find((s) => s.sessionId === SLOWED_ID), written: listed.find((s) => !s.historical && s.sessionId === writtenId) };
-    const releasedLive = (r) => r.agentState === 'released' && r.cause === 'agent_released';
     const wantLines = (s, released, sort, dir) => {
-      const own = recipes.filter((r) => r.keyId === s.keyId && r.sessionId === s.sessionId && (released || !releasedLive(r)));
+      const own = recipes.filter((r) => r.keyId === s.keyId && r.sessionId === s.sessionId && (released || r.agentState !== 'released'));
       // Every recipe of these two sessions runs on its pin's model as written, so a pin is found by its agent and
       // model.
       const pinOf = (r) => s.agentContexts.find((c) => c.agentId === r.agentId && c.model === r.model) ?? null;
       const lines = [
         ...own.map((r) => ({ at: sort === 'activity' ? r.lastRequestAt : (pinOf(r)?.createdAt ?? null), group: RANK[r.agentState], id: r.agentId })),
-        ...s.agentContexts.filter((c) => !own.some((r) => pinOf(r) === c)).map((c) => ({ at: sort === 'activity' ? c.lastUsedAt : c.createdAt, group: 4, id: c.agentId })),
+        ...s.agentContexts.filter((c) => !own.some((r) => pinOf(r) === c)).map((c) => ({ at: sort === 'activity' ? c.lastUsedAt : c.createdAt, group: c.lifecycle === null ? 4 : RANK[c.lifecycle], id: c.agentId })),
       ];
       return lines.sort((a, b) => ((a.id === 'main') !== (b.id === 'main') ? (a.id === 'main' ? -1 : 1) : a.group - b.group || byTime(a.at, b.at, dir) || a.id.localeCompare(b.id))).map((l) => l.id);
     };
@@ -23400,14 +23399,14 @@ await forView('/sessions', async () => {
       ok: story && reads.every((r) => JSON.stringify([r.got.slowed, r.got.written]) === JSON.stringify([r.want.slowed, r.want.written]) && r.want.slowed?.[0] === 'main' && r.want.written?.[0] === 'main'),
       missing: [`story ${story}`, ...reads.map((r) => `${r.query || 'bare'}: ${JSON.stringify({ slowed: r.got.slowed, written: r.got.written })} against ${JSON.stringify(r.want)}`)],
     });
-    // The release filter applies before the lines join their pins, under either key: `e7c1` and `91aa`, the subagents
-    // the mod released under the live session, draw no line with Released agents off, `c3a9`, released by the
-    // session's end, draws, and the filter on draws all three. The Agents cell counts the session's seven records less
-    // the two the view hides, and all seven with the filter on.
+    // The release filter reads each line's word, under either key: the three released subagents, `e7c1` and `91aa`
+    // released under the live session and `c3a9` by the session's end, draw no line with Released agents off, and the
+    // filter on draws all three. The Agents cell counts the session's seven records less the three the view hides, and
+    // all seven with the filter on.
     const release = reads.slice(0, 4).map((r) => ({ agents: r.got.agents, drawn: ['91aa', 'c3a9', 'e7c1'].filter((id) => r.got.written?.includes(id)), query: r.query, released: r.released }));
     results.push({
-      name: "/sessions Released agents off hides the written session's two subagents the mod released and keeps the one the session's end released under each key, and on draws all three",
-      ok: release.every((r) => JSON.stringify([r.agents, r.drawn]) === JSON.stringify(r.released ? ['7', ['91aa', 'c3a9', 'e7c1']] : ['5', ['c3a9']])),
+      name: "/sessions Released agents off hides the written session's three released subagents under each key, whatever released them, and on draws all three",
+      ok: release.every((r) => JSON.stringify([r.agents, r.drawn]) === JSON.stringify(r.released ? ['7', ['91aa', 'c3a9', 'e7c1']] : ['4', []])),
       missing: release.map((r) => JSON.stringify(r)),
     });
   }
@@ -23567,11 +23566,17 @@ await forView('/sessions', async () => {
       ok: JSON.stringify(head) === JSON.stringify(HEAD) && lines[0]?.agent === 'main' && pinOf(lines[0]) !== undefined && lines.length >= 3 && wrong.length === 0,
       missing: [JSON.stringify(head), ...lines.map((l) => JSON.stringify({ agent: l.agent, context: l.context, effort: l.effort, want: figuresOf(pinOf(l)) }))],
     });
-    // The auxiliary-only session draws its subagent's line alone: main's auxiliary pin draws none.
+    // The auxiliary-only session draws main's line from the row, since main's auxiliary pin draws none, with no pin's
+    // figures, then its subagent's line.
     const aux = linesOf(page, await open(page, subjects.auxiliaryOnly)).lines;
     results.push({
-      name: "/sessions the auxiliary-only session draws its subagent's line alone, which the row reads",
-      ok: aux.length === 1 && aux[0].agent === subjects.auxiliaryOnly?.agentId && aux[0].more && JSON.stringify({ context: aux[0].context, effort: aux[0].effort }) === JSON.stringify(figuresOf(subjects.auxiliaryOnly?.agentContexts[0])),
+      name: "/sessions the auxiliary-only session draws main's line from the row and its subagent's line, which the row reads",
+      ok:
+        aux.length === 2 &&
+        JSON.stringify({ agent: aux[0].agent, context: aux[0].context, effort: aux[0].effort }) === JSON.stringify({ agent: 'main', context: '-', effort: '-' }) &&
+        aux[1].agent === subjects.auxiliaryOnly?.agentId &&
+        aux[1].more &&
+        JSON.stringify({ context: aux[1].context, effort: aux[1].effort }) === JSON.stringify(figuresOf(subjects.auxiliaryOnly?.agentContexts[0])),
       missing: aux.map((l) => JSON.stringify({ agent: l.agent, context: l.context, effort: l.effort })),
     });
     page.unmount();
@@ -23744,7 +23749,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     // as a count of the cap the bootstrap file sets, so an operator sees how close the router runs to refusing a
     // session or dropping a recipe. The Agents figure leaves out the subagents the mod released under a live session,
     // which draw no line, and its title names them beside the records and then the rows the filters hide. Read on the
-    // story's instant, where the defaults keep 24 rows holding 36 records, two of them the written session's released
+    // story's instant, where the defaults keep 24 rows holding 36 records, three of them the written session's released
     // subagents, three the two written sessions' and one the workshop session's, and whose lines read 10 busy, 7 idle
     // and 4 parked, the auxiliary-only session's subagent among the busy: the overview's other two idle agents are the
     // mains of the session the mod ended, which the defaults hide, and of the row idle for two hours, which the route's
@@ -23758,7 +23763,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     pinned.unmount();
     const want = [
       ['Sessions', '24 of 128'],
-      ['Agents', '34 of 1,024', '10 busy, 7 idle, 4 parked'],
+      ['Agents', '33 of 1,024', '10 busy, 7 idle, 4 parked'],
       ['Retained', '40 MiB of 256 MiB', 'prompts kept for probes'],
     ];
     results.push({
@@ -23766,7 +23771,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
       ok:
         JSON.stringify(strip.map(([l]) => l)) === JSON.stringify(['Sessions', 'Agents', 'Retained', 'Cache probes, 24h', 'Expired between turns, 24h', 'Bus gaps']) &&
         JSON.stringify([ov.agents.busy, ov.agents.idle, ov.agents.parked]) === JSON.stringify([10, 9, 4]) &&
-        agentsTitle === 'The rows shown hold 36 agent records against the cap. 2 of them are subagents the mod released while their session lives, which draw no line and keep their slot for one cache TTL after the release, then leave the engine. 3 sessions hidden by the filters.' &&
+        agentsTitle === 'The rows shown hold 36 agent records against the cap. 3 of them are subagents the mod released while their session lives, which draw no line and keep their slot for one cache TTL after the release, then leave the engine. 3 sessions hidden by the filters.' &&
         want.every(([label, value, note]) => read(label)[1] === value && (note === undefined || read(label)[2] === note)),
       missing: [...strip.map((t) => t.join(' | ')), `overview ${ov.agents.busy} busy, ${ov.agents.idle} idle, ${ov.agents.parked} parked`, agentsTitle || 'no Agents title'],
     });
@@ -23777,7 +23782,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     // 43 agent records, three of them the two written sessions' and one the workshop session's, the ci key's two rows
     // and the row idle for two hours holding the other four of the story's 47.
     const { listKeepaliveRecipes } = api;
-    api.listKeepaliveRecipes = async (...args) => (await listKeepaliveRecipes.apply(api, args)).filter((r) => !(r.agentState === 'released' && r.cause === 'agent_released'));
+    api.listKeepaliveRecipes = async (...args) => (await listKeepaliveRecipes.apply(api, args)).filter((r) => r.agentState !== 'released');
     const none = await mount('/sessions?finished=1');
     const title = [...none.container.querySelectorAll('.stat-grid > .stat')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === 'Agents')?.querySelector('.stat__value [title]')?.getAttribute('title') ?? '';
     api.listKeepaliveRecipes = listKeepaliveRecipes;
@@ -23917,13 +23922,13 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const plus = [...m.container.querySelectorAll('tbody tr.srow .badge')].filter((b) => /^\+\d+$/.test(b.textContent?.trim() ?? ''));
     [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Collapse all')?.click();
     await m.settle(250);
-    // The default filters' 24 rows draw 31 lines, each on an account, and the registration-only row draws none. Nine
-    // are pins no recipe stands on: the written fleet session no mod reports draws two, studio's four slowed notebook
-    // rows five, the fleet row one and the workshop session one. The written auxiliary-only session draws its
-    // subagent's recipe line.
+    // The default filters' 24 rows draw 30 lines on an account. Nine are pins no recipe stands on: the written fleet
+    // session no mod reports draws two, studio's four slowed notebook rows five, the fleet row one and the workshop
+    // session one. The written auxiliary-only session draws its subagent's recipe line. Main's line drawn from a row
+    // stands on no pin and no recipe, so it names no account.
     results.push({
       name: "/sessions each line's Account cell links to the account with its kind on the title and in its description and its speed chip while slowed, and the +N badges stand on the Model cell",
-      ok: !heads().includes('Account') && links.length === 31 && off.length === 0 && kinds.includes('oauth') && kinds.includes('api_key') && links.some((l) => l.chip) && plus.length > 0 && plus.every((b) => b.closest('.srow__pin') !== null),
+      ok: !heads().includes('Account') && links.length === 30 && off.length === 0 && kinds.includes('oauth') && kinds.includes('api_key') && links.some((l) => l.chip) && plus.length > 0 && plus.every((b) => b.closest('.srow__pin') !== null),
       missing: [`${links.length} lines`, ...new Set(kinds), ...off.slice(0, 6).map((l) => l.link?.outerHTML ?? 'no link'), `${plus.length} +N badges`],
     });
   }
@@ -24465,8 +24470,12 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     await m.settle(200);
     const detail = m.container.querySelector('.srow__detail');
     results.push({
-      name: '/sessions the earlier holder opens on its own, with none of the live holder recipes',
-      ok: m.container.querySelectorAll('.srow__detail').length === 1 && (detail?.querySelectorAll('.agents__row').length ?? -1) === 0 && (detail?.textContent ?? '').includes('this key id was created again and the session belongs to the earlier holder'),
+      name: "/sessions the earlier holder opens on its own, with main's line from its row and none of the live holder recipes",
+      ok:
+        m.container.querySelectorAll('.srow__detail').length === 1 &&
+        JSON.stringify([...(detail?.querySelectorAll('.agents__row:not(.agents__row--head)') ?? [])].map((l) => l.firstElementChild?.textContent?.trim())) === JSON.stringify(['main']) &&
+        detail?.querySelector('.agents__more') === null &&
+        (detail?.textContent ?? '').includes('this key id was created again and the session belongs to the earlier holder'),
       missing: [String(m.container.querySelectorAll('.srow__detail').length), detail?.textContent?.slice(0, 160) ?? 'absent'],
     });
     gone?.click();
@@ -24797,9 +24806,9 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     row?.click();
     await m.settle(150);
   }
-  // A subagent the mod released under a live session draws no line, and the Agents column and tile leave the released
-  // lines out of their counts by taking them off the record counts of the rows the filters keep. A line the session's
-  // end released stays listed and counted. The column stays on.
+  // A subagent released under a live session draws no line, by the mod's word for the agent or by the session's end,
+  // and the Agents column and tile leave the released lines out of their counts by taking them off the record counts of
+  // the rows the filters keep. The column stays on.
   {
     const hidden = (await api.listKeepaliveRecipes()).filter((r) => r.agentState === 'released' && r.cause === 'agent_released');
     await showColumn(m, 'Agents');
@@ -24812,19 +24821,18 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     }));
     const count = cell(row, 'Agents')?.textContent?.trim();
     const tile = [...m.container.querySelectorAll('.stat-grid > .stat')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === 'Agents')?.querySelector('.stat__value')?.textContent?.trim();
-    // The 24 rows the default filters keep hold 36 records, two of them the written session's released subagents,
+    // The 24 rows the default filters keep hold 36 records, three of them the written session's released subagents,
     // three the two written sessions' and one the workshop session's. The earlier holder, the ci key's two rows, the
     // row idle for two hours and the refusal-only row left the list under the non-companion timeout with their
     // records.
-    const want = '34 of 1,024';
+    const want = '33 of 1,024';
     results.push({
-      name: '/sessions a line the mod released is not listed, one the session\'s end released is, and the Agents column and tile leave the hidden ones out of their counts',
+      name: '/sessions a released line is not listed, whatever released it, and the Agents column and tile leave the hidden ones out of their counts',
       ok:
         hidden.length > 0 &&
-        lines.length === 5 &&
-        JSON.stringify(lines.filter((l) => l.word === 'released').map((l) => l.id)) === JSON.stringify(['c3a9']) &&
-        lines.every((l) => !['e7c1', '91aa'].includes(l.id)) &&
-        count === '5' &&
+        lines.length === 4 &&
+        lines.every((l) => l.word !== 'released' && !['c3a9', 'e7c1', '91aa'].includes(l.id)) &&
+        count === '4' &&
         count === String(lines.length) &&
         tile === want,
       missing: [...lines.map((l) => `${l.id} ${l.word}`), `Agents cell ${count ?? 'absent'}`, `tile ${tile ?? 'absent'}, want ${want}`],

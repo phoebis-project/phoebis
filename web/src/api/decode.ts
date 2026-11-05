@@ -1,13 +1,13 @@
 import type {
-  Account, AccountCatalog, AccountKind, AccountRollup, AllowanceReset, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
-  CohortHold, CostRevision, CostSplit, CreatedApiKey, DecisionKind, DecisionRecord, DecisionSummary, Exhaustion, FastLaneReading, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, KeyFigures, KeyModels, MemberBudget, ModelPrice, ModelRule, ModelRulesMode,
+  Account, AccountCatalog, AccountKind, AccountRollup, AgentRequests, AllowanceReset, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
+  CohortHold, CostRevision, CostSplit, CreatedApiKey, DecisionKind, DecisionRecord, DecisionSummary, Exhaustion, FastLaneReading, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, KeyFigures, KeyModels, Lifecycle, MemberBudget, ModelPrice, ModelRule, ModelRulesMode,
   MoveCause, Overview, PairingConfirmed, PairingSession, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, PriceCells, PriceRevision, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, Reconciliation, ReconciliationsAnswer, RecordCandidate, RecordHold, RecordOutcome, RecordSettings, Refusal, RefusalCategoriesAnswer, ReplayOutcome, RequestEvent, RequestLog, RequestPage, RequestPhases, RequestShape, RewritesAnswer,
-  RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, Settings, Spend, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, UnusedAllowanceAnswer, WastedProbeReason, WindowId, WindowSample,
+  RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, SessionDay, SessionSpend, SessionSpendPart, Settings, Spend, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, UnusedAllowanceAnswer, WastedProbeReason, WindowId, WindowSample,
 } from './types';
 import type { AgentContext } from './types';
 import type { StreamCut } from './types';
 import type { Condition, Guardrail, GuardrailAttachment, GuardrailCounts, GuardrailMatch, GuardrailMode, GuardrailPreset, GuardrailPresetState, GuardrailRef, GuardrailTestResult } from './types';
-import { ACCOUNT_KIND_VALUES, AFFINITY_MODE_VALUES, AGENT_STATE_VALUES, ATTEMPT_OUTCOME_VALUES, ATTENTION_KIND_VALUES, ATTENTION_PAGE_VALUES, ATTENTION_SUBJECT_VALUES, AUTO_MODE_VALUES, BUDGET_PERIOD_VALUES, BURN_UNIT_VALUES, BY_KIND_VALUES, CONDITION_OPERATOR_VALUES, CONDITION_SUBJECT_VALUES, DECISION_KIND_VALUES, DIAGNOSTICS_SOURCE_VALUES, ELIGIBILITY_VALUES, FACT_ENTITY_VALUES, FACT_UNIT_VALUES, GUARDRAIL_MODE_VALUES, GUARD_VERDICT_VALUES, MESSAGE_SELECTOR_VALUES, MODEL_RULES_MODE_VALUES, OVERAGE_POLICY_VALUES, PARK_KIND_VALUES, PIN_REASON_VALUES, PLACEMENT_RUNG_VALUES, POLL_OUTCOME_VALUES, POOL_STATUS_VALUES, POOL_STRATEGY_VALUES, RECIPE_CAUSE_VALUES, RECIPE_STATE_VALUES, REQUEST_KIND_VALUES, REQUEST_OUTCOME_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, TEST_VERDICT_VALUES, WARM_SESSIONS_VALUES } from './types';
+import { ACCOUNT_KIND_VALUES, AFFINITY_MODE_VALUES, AGENT_STATE_VALUES, ATTEMPT_OUTCOME_VALUES, ATTENTION_KIND_VALUES, ATTENTION_PAGE_VALUES, ATTENTION_SUBJECT_VALUES, AUTO_MODE_VALUES, BUDGET_PERIOD_VALUES, BURN_UNIT_VALUES, BY_KIND_VALUES, CONDITION_OPERATOR_VALUES, CONDITION_SUBJECT_VALUES, DECISION_KIND_VALUES, DIAGNOSTICS_SOURCE_VALUES, ELIGIBILITY_VALUES, FACT_ENTITY_VALUES, FACT_UNIT_VALUES, GUARDRAIL_MODE_VALUES, GUARD_VERDICT_VALUES, LIFECYCLE_VALUES, MESSAGE_SELECTOR_VALUES, MODEL_RULES_MODE_VALUES, OVERAGE_POLICY_VALUES, PARK_KIND_VALUES, PIN_REASON_VALUES, PLACEMENT_RUNG_VALUES, POLL_OUTCOME_VALUES, POOL_STATUS_VALUES, POOL_STRATEGY_VALUES, RECIPE_CAUSE_VALUES, RECIPE_STATE_VALUES, REQUEST_KIND_VALUES, REQUEST_OUTCOME_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, TEST_VERDICT_VALUES, WARM_SESSIONS_VALUES } from './types';
 import { CACHE_TTL_DEFAULTS, METERED_TTL_DEFAULTS, PLAN_TTL_DEFAULTS, POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type AccountPatch, type KeyInput, type PoolInput } from './client';
 import type { GuardrailInput, GuardrailTestInput } from './client';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
@@ -812,19 +812,34 @@ export function decodeDashboard(v: unknown): Overview {
 
 const companion = (v: unknown): Session['companion'] => (str(v) === 'reporting' ? 'reporting' : str(v) === 'silent' ? 'silent' : 'none');
 const agentState = (v: unknown): KeepaliveState | null => oneOf(AGENT_STATE_VALUES, v);
+const lifecycle = (v: unknown): Lifecycle | null => oneOf(LIFECYCLE_VALUES, v);
 const guardVerdict = (v: unknown): GuardVerdict | null => oneOf(GUARD_VERDICT_VALUES, v);
 
 const burnUnit = (v: unknown): BurnUnit | null => oneOf(BURN_UNIT_VALUES, v);
 
 function decodeAgentContext(v: unknown): AgentContext {
   const c = rec(v);
-  return { accountId: str(c.account_id), agentId: str(c.agent_id), cacheTtlMs: numOrNull(c.cache_ttl_ms), createdAt: isoOrNull(c.created_at), effort: strOrNull(c.effort), lastInputTokens: numOrNull(c.last_input_tokens), lastUsedAt: isoOrNull(c.last_used_at), model: str(c.model), warm: bool(c.warm) };
+  return { accountId: str(c.account_id), agentId: str(c.agent_id), burn: numOrNull(c.burn), burnAt: isoOrNull(c.burn_at), burnEquivalent: numOrNull(c.burn_equivalent), burnUnit: burnUnit(c.burn_unit), burnWindow: strOrNull(c.burn_window), cacheTtlMs: numOrNull(c.cache_ttl_ms), createdAt: isoOrNull(c.created_at), effort: strOrNull(c.effort), lastInputTokens: numOrNull(c.last_input_tokens), lastUsedAt: isoOrNull(c.last_used_at), lifecycle: agentState(c.lifecycle), model: str(c.model), warm: bool(c.warm) };
+}
+
+function decodeSessionSpendPart(v: unknown): SessionSpendPart {
+  const p = rec(v);
+  return { billedUsd: numberMap(p.billed_usd), equivalent: numOrNull(p.equivalent), requests: num(p.requests), shares: Object.fromEntries(Object.entries(rec(p.shares)).map(([account, windows]) => [account, numberMap(windows)])), usd: num(p.usd) };
+}
+const decodeSessionSpend = (v: unknown): SessionSpend => ({ ...decodeSessionSpendPart(v), probes: decodeSessionSpendPart(rec(v).probes) });
+function decodeSessionDay(v: unknown): SessionDay {
+  const d = rec(v);
+  return { billedUsd: numberMap(d.billed_usd), equivalent: numOrNull(d.equivalent), requests: numberMap(d.requests), usd: num(d.usd) };
+}
+function decodeAgentRequests(v: unknown): AgentRequests {
+  const a = rec(v);
+  return { accountId: strOrNull(a.account_id), agentId: str(a.agent_id), agentType: strOrNull(a.agent_type), lastRequestAt: isoOrNull(a.last_request_at), model: str(a.model), requests: num(a.requests), spend: decodeSessionSpend(a.spend) };
 }
 
 export function decodeSession(v: unknown): Session {
   const s = rec(v);
   const k = rec(s.keepalive);
-  return { accountId: strOrNull(s.account_id), agentContexts: list(s.agent_contexts).map(decodeAgentContext), agentId: strOrNull(s.agent_id), agents: num(s.agents), burn: numOrNull(s.burn), burnAt: isoOrNull(s.burn_at), burnEquivalent: numOrNull(s.burn_equivalent), burnUnit: burnUnit(s.burn_unit), burnWindow: strOrNull(s.burn_window), cacheTtlMs: numOrNull(s.cache_ttl_ms), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), cycleMs: numOrNull(s.cycle_ms), effort: strOrNull(s.effort), epoch: numOrNull(s.epoch), forkDepth: numOrNull(s.fork_depth), forkedFrom: strOrNull(s.forked_from), historical: bool(s.historical), keepalive: { cause: recipeCause(k.cause), lastGuard: guardVerdict(k.last_guard), nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastInputTokens: numOrNull(s.last_input_tokens), lastRefreshAt: isoOrNull(s.last_refresh_at), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), model: strOrNull(s.model), pinned: bool(s.pinned), presenceAgeSeconds: numOrNull(s.presence_age_seconds), requests: num(s.requests), runwayBounded: boolOrNull(s.runway_bounded), runwayMs: numOrNull(s.runway_ms), sessionId: str(s.session_id), shedFrom: strOrNull(s.shed_from), shedReason: strOrNull(s.shed_reason), speed: numOrNull(s.speed) };
+  return { accountId: strOrNull(s.account_id), agentContexts: list(s.agent_contexts).map(decodeAgentContext), agentId: strOrNull(s.agent_id), agentRequests: list(s.agent_requests).map(decodeAgentRequests), agents: num(s.agents), burn: numOrNull(s.burn), burnAt: isoOrNull(s.burn_at), burnEquivalent: numOrNull(s.burn_equivalent), burnUnit: burnUnit(s.burn_unit), burnWindow: strOrNull(s.burn_window), cacheTtlMs: numOrNull(s.cache_ttl_ms), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), cycleMs: numOrNull(s.cycle_ms), day: decodeSessionDay(s.day), effort: strOrNull(s.effort), epoch: numOrNull(s.epoch), forkDepth: numOrNull(s.fork_depth), forkedFrom: strOrNull(s.forked_from), historical: bool(s.historical), keepalive: { cause: recipeCause(k.cause), lastGuard: guardVerdict(k.last_guard), nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastInputTokens: numOrNull(s.last_input_tokens), lastRefreshAt: isoOrNull(s.last_refresh_at), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), lifecycle: lifecycle(s.lifecycle), model: strOrNull(s.model), pinned: bool(s.pinned), presenceAgeSeconds: numOrNull(s.presence_age_seconds), requests: num(s.requests), runwayBounded: boolOrNull(s.runway_bounded), runwayMs: numOrNull(s.runway_ms), sessionId: str(s.session_id), shedFrom: strOrNull(s.shed_from), shedReason: strOrNull(s.shed_reason), speed: numOrNull(s.speed), spend: orNull(s.spend, decodeSessionSpend), userAgent: strOrNull(s.user_agent), warm: boolOrNull(s.warm) };
 }
 
 const recipeCause = (v: unknown): RecipeCause | null => oneOf(RECIPE_CAUSE_VALUES, v);
@@ -863,6 +878,7 @@ export function decodeKeepaliveOverview(v: unknown): KeepaliveOverview {
     agents: { busy: num(rec(o.agents).busy), idle: num(rec(o.agents).idle), parked: num(rec(o.agents).parked) },
     busGaps: num(o.bus_gaps),
     expiredBetweenTurns24h: num(o.expired_between_turns_24h),
+    lastBusGapAt: isoOrNull(o.last_bus_gap_at),
     limits: { agents: limit(l.agents), retainedBytes: limit(l.retained_bytes), sessions: limit(l.sessions) },
     pools: pools.map((q) => ({
       credited24h: num(q.credited_24h),

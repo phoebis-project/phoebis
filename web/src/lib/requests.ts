@@ -1,10 +1,10 @@
 import { effectiveLabel } from '@/api/decode';
-import type { Account, CohortHold, RequestLog, Settings, SubscriptionCosts } from '@/api/types';
+import type { Account, CohortHold, RequestLog, SessionSpend, SessionSpendPart, Settings, SubscriptionCosts } from '@/api/types';
 import { heldSpan, hintPlan, sentences, shareHint } from '@/lib/analytics';
 import { type Funding, fundingOf, inBand, nativeOf, revisionAt } from '@/lib/costs';
-import { lookup } from '@/lib/counts';
+import { has, lookup } from '@/lib/counts';
 import { servingAttempt } from '@/lib/dimensions';
-import { byteOrder, fmtUsd, fmtWeek, weekShort } from '@/lib/format';
+import { byteOrder, fmtCount, fmtUsd, fmtWeek, weekShort } from '@/lib/format';
 import { heldAccount, WAIT_REASON_WORD } from '@/lib/routingLog';
 import type { UnitPosition, WeekPosition } from '@/lib/unit';
 
@@ -97,6 +97,67 @@ export function requestCostUnit(r: RequestLog, unit: UnitPosition, accounts: Acc
   return costUnitOf(r, unit, args === null ? null : shareHint(...args));
 }
 
+/** The Cost cell's reading of a session's spend, null where the session has no ledgered request. */
+export interface SpendReading {
+  /** The other accounts whose plan windows the requests spent on, in id order, which the "+N" badge names. An API-key
+   *  account bills dollars and writes no window share, so none is among them. */
+  accounts: string[];
+  /** The dollars billed outside a plan beside a plan figure, summed over the fundings, the `+$` badge's figure, 0 with
+   *  none and where the figure is the billed dollars themselves. */
+  billed: number;
+  /** The cell's unit as the request log's cell reads one, which `costCellOf` prints in the chosen week. */
+  unit: CostUnit;
+}
+
+const billedSum = (part: Pick<SessionSpendPart, 'billedUsd'>): number => Object.values(part.billedUsd).reduce((n, usd) => n + usd, 0);
+
+/** The funding word of the largest billed entry, ties by word, null where no entry names a funding. */
+function largestFunding(billedUsd: Record<string, number>): Exclude<Funding, 'plan'> | null {
+  const named = Object.entries(billedUsd).filter((e): e is [Exclude<Funding, 'plan'>, number] => has(FUNDING_WORD, e[0]));
+  named.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  return named.length === 0 ? null : named[0][0];
+}
+
+/**
+ * A spend read through `costUnitOf`'s arms as one request: plan-funded where `shares` names an account, since every
+ * plan-funded request writes its serving account's key there (a free one with no share), and billed under the largest
+ * `billedUsd` entry's funding otherwise. A plan spend reads its Pro-week figure under native and its dollar equivalent
+ * under All in dollars and Dollar equivalent, the dollars billed beside it on the `+$` badge, and under Billed dollars
+ * those dollars or a dash. A spend no plan paid reads its billed dollars as the figure, a dash under Dollar equivalent,
+ * with no `+$` beside a figure that already is the dollars. A spend of no request reads zero dollars, and requests no
+ * account served their list dollars, as an unserved request reads. Nothing is read off `equivalent === 0`, since a free
+ * plan-funded request reads 0 too.
+ */
+export function spendUnitOf(spend: SessionSpendPart | null, unit: UnitPosition, accountId: string | null, hint: string | null): SpendReading | null {
+  if (spend === null) return null;
+  const accounts = Object.keys(spend.shares).filter((id) => id !== accountId).sort();
+  const billed = billedSum(spend);
+  const { usd } = spend;
+  const funding = largestFunding(spend.billedUsd);
+  if (spend.requests === 0) return { accounts, billed: 0, unit: { kind: 'unserved', usd: 0 } };
+  if (Object.keys(spend.shares).length > 0) {
+    if (unit === 'usd') return { accounts, billed: 0, unit: funding === null ? { kind: 'dash', title: NOTHING_BILLED_TITLE, usd } : { funding, kind: 'dollars', usd: billed } };
+    if (spend.equivalent === null) return { accounts, billed, unit: { kind: 'unpriced', usd } };
+    if (unit === 'native') return { accounts, billed, unit: { figure: spend.equivalent, hint, kind: 'equivalent', reason: null, usd } };
+    return { accounts, billed, unit: { figure: spend.equivalent, hint, kind: 'equivalent_dollars', reason: null, usd } };
+  }
+  if (funding === null) return { accounts, billed: 0, unit: { kind: 'unserved', usd } };
+  return { accounts, billed: 0, unit: unit === 'equivalent' ? { kind: 'dash', title: NO_EQUIVALENT_TITLE, usd } : { funding, kind: 'dollars', usd: billed } };
+}
+
+/**
+ * The hint's arguments over the one account the shares name, null where they name none or more than one or the
+ * accounts read is out: the plan label through `hintPlan` over the account's tier, its shares, the tier, no band.
+ */
+export function spendHintArgs(spend: Pick<SessionSpendPart, 'shares'>, accounts: Account[] | null): [string, Record<string, number | null>, string | null, null] | null {
+  const ids = Object.keys(spend.shares);
+  if (accounts === null || ids.length !== 1) return null;
+  const account = accounts.find((a) => a.id === ids[0]);
+  const tier = account?.subscription?.rateLimitTier ?? null;
+  const plan = hintPlan(account, tier);
+  return plan === null ? null : [plan, spend.shares[ids[0]], tier, null];
+}
+
 /**
  * A dollar equivalent unit's title: the hint, then the figure in the chosen week and the dollars. The figure waits on
  * the scale, so the title reads the dollars alone while it is out.
@@ -123,6 +184,29 @@ export function costCellOf(unit: CostUnit, week: WeekPosition, scale: number | n
   if (unit.kind === 'unserved') return { main: fmtUsd(unit.usd), sub: '', title: '' };
   if (scale === null) return null;
   return { main: weekShort(unit.figure * scale, week), sub: '', title: freeLed(unit.reason, sentences([unit.hint, `${fmtUsd(unit.usd)} equivalent`])) };
+}
+
+/**
+ * A spend's figure in full: the Pro-week figure in the chosen week where a plan paid and the scale is at hand, else its
+ * dollars, the billed ones where no plan paid.
+ */
+function spendFigure(part: SessionSpendPart, week: WeekPosition, scale: number | null): string {
+  const planFunded = Object.keys(part.shares).length > 0;
+  if (planFunded && part.equivalent !== null && scale !== null) return fmtWeek(part.equivalent * scale, week);
+  const billed = billedSum(part);
+  return fmtUsd(planFunded || billed === 0 ? part.usd : billed);
+}
+
+/**
+ * The cell's hover: `{n} requests`, the figure in full in the chosen week (or the dollars), the hint where one stands,
+ * the billed dollars by funding, then `+{figure} in {n} probes` where the spend carries probes.
+ */
+export function spendHover(spend: SessionSpend | SessionSpendPart, week: WeekPosition, scale: number | null, hint: string | null): string {
+  const billed = Object.entries(spend.billedUsd)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([funding, dollars]) => `${fmtUsd(dollars)} ${lookup(FUNDING_WORD, funding) ?? funding}`);
+  const probes = 'probes' in spend && spend.probes.requests > 0 ? `+${spendFigure(spend.probes, week, scale)} in ${fmtCount(spend.probes.requests, 'probe')}` : null;
+  return sentences([fmtCount(spend.requests, 'request'), spendFigure(spend, week, scale), hint, billed.length === 0 ? null : `Billed in dollars: ${billed.join(', ')}`, probes]);
 }
 
 /**

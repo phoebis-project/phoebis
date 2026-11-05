@@ -57,36 +57,46 @@ test('orderRows reads the newest created first, ties by session id and a row wit
   );
 });
 
-/** A line as `sessionLines` answers it: a recipe with its pin or none, or a pin with no recipe. */
-const line = (r, p) => ({ agentId: (r ?? p).agentId, model: (r ?? p).model, pin: p, recipe: r });
+test('orderRows by cost puts a row with no spend last under either direction, ties by session id, and by requests reads the count', () => {
+  // The creation times run in neither key's order, so a key that fell back to them reads otherwise.
+  const row = (sessionId, createdAt, usd, requests) => ({ session: { createdAt: iso(createdAt), lastRequestAt: null, lastUsedAt: null, requests, sessionId, spend: usd === null ? null : { usd } } });
+  const rows = [row('a', ms(13, 0), 0.5, 2), row('b', ms(14, 0), null, 9), row('c', ms(12, 0), 0.25, 4), row('d', ms(11, 0), 0.5, 1)];
+  assert.deepEqual(sessionIds(d.orderRows(rows, 'cost', 'desc')), ['a', 'd', 'c', 'b']);
+  assert.deepEqual(sessionIds(d.orderRows(rows, 'cost', 'asc')), ['c', 'a', 'd', 'b']);
+  assert.deepEqual(sessionIds(d.orderRows(rows, 'requests', 'desc')), ['b', 'c', 'a', 'd']);
+});
+
+/** A line as `sessionLines` answers it: a recipe with its pin or none, or a pin with no recipe, with its lifecycle
+ *  word. */
+const line = (r, p, lifecycle) => ({ agentId: (r ?? p).agentId, agentType: null, lifecycle, model: (r ?? p).model, pin: p, recipe: r });
 const linePin = (agentId, model, createdAt, lastUsedAt) => ({ accountId: 'primary', agentId, cacheTtlMs: 5 * MINUTE, createdAt: iso(createdAt), effort: 'high', lastInputTokens: 9_000, lastUsedAt: iso(lastUsedAt), model, warm: false });
 const lineNames = (lines) => lines.map((l) => (l.model === 'claude-sonnet-5' ? l.agentId : `${l.agentId} on ${l.model}`));
 
-test('orderLines puts main first, then the recipe lines by lifecycle word, then the pins no recipe stands on, each group under the key and the direction', () => {
+test('orderLines puts main first, then the lines by lifecycle word, a pin-only line with its word, then the lines with no word, each group under the key and the direction', () => {
   const HAIKU = 'claude-haiku-4-5';
   const released = (agentId, at) => ({ ...recipe(agentId, 'released', at), cause: 'agent_released' });
-  // Handed in no group's order: two busy lines, one on a pin and one with none, an idle one, two released ones with no
-  // pin, and two pin-only agents whose creation and last use run opposite ways, e5 pinned on two models at one instant.
+  // Handed in no group's order: two busy lines, one on a pin and one with none, two idle ones, one of them a pin no
+  // recipe stands on, two released ones with no pin, and e5, which no mod reports, pinned on two models at one instant.
   const lines = [
-    line(null, linePin('e5', 'claude-sonnet-5', ms(13, 40), ms(14, 12))),
-    line(released('e7c1', ms(14, 8)), null),
-    line(recipe('a4', 'busy', ms(14, 20)), null),
-    line(null, linePin('d1', 'claude-sonnet-5', ms(13, 20), ms(14, 15))),
-    line(recipe('c2', 'idle', ms(14, 5)), linePin('c2', 'claude-sonnet-5', ms(13, 10), ms(14, 5))),
-    line(recipe('main', 'busy', ms(14, 0)), linePin('main', 'claude-sonnet-5', ms(13, 0), ms(14, 0))),
-    line(null, linePin('e5', HAIKU, ms(13, 40), ms(14, 12))),
-    line(released('91aa', ms(14, 2)), null),
-    line(recipe('b7', 'busy', ms(14, 10)), linePin('b7', 'claude-sonnet-5', ms(13, 30), ms(14, 10))),
+    line(null, linePin('e5', 'claude-sonnet-5', ms(13, 40), ms(14, 12)), null),
+    line(released('e7c1', ms(14, 8)), null, 'released'),
+    line(recipe('a4', 'busy', ms(14, 20)), null, 'busy'),
+    line(null, linePin('d1', 'claude-sonnet-5', ms(13, 20), ms(14, 15)), 'idle'),
+    line(recipe('c2', 'idle', ms(14, 5)), linePin('c2', 'claude-sonnet-5', ms(13, 10), ms(14, 5)), 'idle'),
+    line(recipe('main', 'busy', ms(14, 0)), linePin('main', 'claude-sonnet-5', ms(13, 0), ms(14, 0)), 'busy'),
+    line(null, linePin('e5', HAIKU, ms(13, 40), ms(14, 12)), null),
+    line(released('91aa', ms(14, 2)), null, 'released'),
+    line(recipe('b7', 'busy', ms(14, 10)), linePin('b7', 'claude-sonnet-5', ms(13, 30), ms(14, 10)), 'busy'),
   ];
   const before = lineNames(lines);
   const e5 = [`e5 on ${HAIKU}`, 'e5'];
   // Under created a line reads its own pin's creation, the busy line with no pin and the two released ones last in
   // their groups whichever the direction, the released pair tied and read by agent id.
-  assert.deepEqual(lineNames(d.orderLines(lines, 'created', 'desc')), ['main', 'b7', 'a4', 'c2', '91aa', 'e7c1', ...e5, 'd1']);
-  assert.deepEqual(lineNames(d.orderLines(lines, 'created', 'asc')), ['main', 'b7', 'a4', 'c2', '91aa', 'e7c1', 'd1', ...e5]);
+  assert.deepEqual(lineNames(d.orderLines(lines, 'created', 'desc')), ['main', 'b7', 'a4', 'd1', 'c2', '91aa', 'e7c1', ...e5]);
+  assert.deepEqual(lineNames(d.orderLines(lines, 'created', 'asc')), ['main', 'b7', 'a4', 'c2', 'd1', '91aa', 'e7c1', ...e5]);
   // Under activity a recipe line reads its last request and a pin-only line its pin's last use, newest first.
-  assert.deepEqual(lineNames(d.orderLines(lines, 'activity', 'desc')), ['main', 'a4', 'b7', 'c2', 'e7c1', '91aa', 'd1', ...e5]);
-  assert.deepEqual(lineNames(d.orderLines(lines, 'activity', 'asc')), ['main', 'b7', 'a4', 'c2', '91aa', 'e7c1', ...e5, 'd1']);
+  assert.deepEqual(lineNames(d.orderLines(lines, 'activity', 'desc')), ['main', 'a4', 'b7', 'd1', 'c2', 'e7c1', '91aa', ...e5]);
+  assert.deepEqual(lineNames(d.orderLines(lines, 'activity', 'asc')), ['main', 'b7', 'a4', 'c2', 'd1', '91aa', 'e7c1', ...e5]);
   assert.deepEqual(lineNames(lines), before, 'the list handed in is left as it is');
 });
 
@@ -110,28 +120,23 @@ test('requestsRange picks the narrowest range that covers the last request, with
   assert.equal(d.requestsRange(null, NOW), null);
 });
 
-test('releasedCount counts the lines the view hides and nothing else', () => {
+test('releasedCount counts the released lines and nothing else, whatever released them', () => {
   const at = ms(14, 20);
-  const released = (agentId, cause) => ({ ...recipe(agentId, 'released', at), cause });
-  const live = [recipe('main', 'busy', at), recipe('b4', 'busy', at), recipe('i9', 'idle', at), recipe('p2', 'parked', at), recipe('u7', 'unknown', at)];
+  const live = [{ lifecycle: 'busy' }, { lifecycle: 'idle' }, { lifecycle: 'parked' }, { lifecycle: 'registered' }, { lifecycle: 'unknown' }, { lifecycle: null }];
   assert.equal(d.releasedCount(live), 0);
-  assert.equal(d.releasedCount([live[0], released('3e', 'agent_released'), live[2], released('91', 'agent_released'), live[3]]), 2);
-  assert.equal(d.releasedCount([released('3e', 'agent_released'), released('91', 'agent_released'), released('a0', 'agent_released')]), 3);
-  assert.equal(d.releasedCount([released('3e', 'session_ended'), released('91', 'released')]), 0);
-  assert.deepEqual(
-    [released('3e', 'agent_released'), released('3e', 'session_ended'), released('3e', 'released')].map((r) => d.isReleasedLine(r)),
-    [true, false, false],
-  );
+  assert.equal(d.releasedCount([live[0], { lifecycle: 'released' }, live[2], { lifecycle: 'released' }, live[5]]), 2);
+  assert.equal(d.releasedCount([{ lifecycle: 'released' }, { lifecycle: 'released' }, { lifecycle: 'released' }]), 3);
+  // The session's end released this line's agent, which the word alone tells.
+  const endedWith = line({ ...recipe('3e', 'released', at), cause: 'session_ended' }, null, 'released');
+  assert.deepEqual([d.isReleasedLine(endedWith), d.isReleasedLine(line(recipe('b4', 'busy', at), null, 'busy'))], [true, false]);
 });
 
 test('isFinished reads a session whose main ended with it or was released, or whose every line the mod released', () => {
-  const at = ms(14, 20);
-  const line = (agentId, agentState, cause) => ({ ...recipe(agentId, agentState, at), cause });
   const session = (state, cause) => ({ keepalive: { cause, lastGuard: null, nextProbeAt: null, state } });
-  assert.equal(d.isFinished(session('idle', 'session_ended'), [line('main', 'idle', 'session_ended'), line('3e', 'released', 'agent_released')]), true);
-  assert.equal(d.isFinished(session('released', 'released'), [line('main', 'released', 'released')]), true);
-  assert.equal(d.isFinished(session('released', 'agent_released'), [line('main', 'released', 'agent_released'), line('3e', 'released', 'agent_released')]), true);
-  assert.equal(d.isFinished(session('busy', 'probing'), [line('main', 'busy', 'probing'), line('3e', 'released', 'agent_released')]), false);
+  assert.equal(d.isFinished(session('idle', 'session_ended'), [{ agentId: 'main', lifecycle: 'idle' }, { agentId: '3e', lifecycle: 'released' }]), true);
+  assert.equal(d.isFinished(session('released', 'released'), [{ agentId: 'main', lifecycle: 'released' }]), true);
+  assert.equal(d.isFinished(session('released', 'agent_released'), [{ agentId: 'main', lifecycle: 'released' }, { agentId: '3e', lifecycle: 'released' }]), true);
+  assert.equal(d.isFinished(session('busy', 'probing'), [{ agentId: 'main', lifecycle: 'busy' }, { agentId: '3e', lifecycle: 'released' }]), false);
   assert.equal(d.isFinished(session('idle', 'scheduled'), []), false);
 });
 
@@ -168,24 +173,135 @@ test("an agent line reads the route's entry for its agent on its recipe's model,
   assert.equal(d.lineFigures(row, '4f0c', 'claude-sonnet-5-5'), null, 'an agent the list lacks, a released one among them, reads none');
 });
 
-test("sessionLines reads the recipes first with their pins, then every pin no recipe claims in the route's order", () => {
+/** A spend part with no request in it. */
+const NO_SPEND = { billedUsd: {}, equivalent: 0, requests: 0, shares: {}, usd: 0 };
+/** An agent's ledger entry as the decoder answers it, with no spend unless the members hand one. */
+const ledgerEntry = (agentId, model, requests, lastRequestAt, members = {}) => ({ accountId: 'business', agentId, agentType: null, lastRequestAt: iso(lastRequestAt), model, requests, spend: { ...NO_SPEND, probes: NO_SPEND }, ...members });
+
+test("sessionLines reads the recipes first with their pins, then every pin no recipe claims in the route's order, each line its pin's word where a pin stands", () => {
   const at = ms(14, 20);
-  const entries = [pinEntry('main', 'claude-sonnet-5', 52_000), pinEntry('7b2e', 'claude-haiku-4-5', 18_000), pinEntry('7b2e', 'claude-sonnet-5', 31_000), pinEntry('c21e', 'claude-sonnet-5', 9_000)];
+  // Main's pin carries no word under its busy recipe and 7b2e's Sonnet pin another word than its recipe's, so a line
+  // that read its recipe's word where a pin stands reads otherwise.
+  const entries = [
+    { ...pinEntry('main', 'claude-sonnet-5', 52_000), lifecycle: null },
+    { ...pinEntry('7b2e', 'claude-haiku-4-5', 18_000), lifecycle: 'idle' },
+    { ...pinEntry('7b2e', 'claude-sonnet-5', 31_000), lifecycle: 'busy' },
+    { ...pinEntry('c21e', 'claude-sonnet-5', 9_000), lifecycle: null },
+  ];
   // Every recipe runs on the helper's model, so 7b2e's Haiku pin is one no recipe claims, and 4f0c's release left none.
   const recipes = [recipe('main', 'busy', at), recipe('7b2e', 'idle', at), { ...recipe('4f0c', 'released', at), cause: 'agent_released' }];
-  const lines = d.sessionLines({ agentContexts: entries }, recipes);
+  const lines = d.sessionLines({ agentContexts: entries, agentId: 'main', agentRequests: [], lifecycle: 'busy', model: 'claude-sonnet-5' }, recipes);
   assert.deepEqual(
-    lines.map((l) => [l.agentId, l.model, l.recipe?.agentId ?? null, l.pin?.lastInputTokens ?? null]),
+    lines.map((l) => [l.agentId, l.model, l.recipe?.agentId ?? null, l.pin?.lastInputTokens ?? null, l.lifecycle]),
     [
-      ['main', 'claude-sonnet-5', 'main', 52_000],
-      ['7b2e', 'claude-sonnet-5', '7b2e', 31_000],
-      ['4f0c', 'claude-sonnet-5', '4f0c', null],
-      ['7b2e', 'claude-haiku-4-5', null, 18_000],
-      ['c21e', 'claude-sonnet-5', null, 9_000],
+      ['main', 'claude-sonnet-5', 'main', 52_000, null],
+      ['7b2e', 'claude-sonnet-5', '7b2e', 31_000, 'busy'],
+      ['4f0c', 'claude-sonnet-5', '4f0c', null, 'released'],
+      ['7b2e', 'claude-haiku-4-5', null, 18_000, 'idle'],
+      ['c21e', 'claude-sonnet-5', null, 9_000, null],
     ],
   );
   assert.ok(lines[0].recipe === recipes[0] && lines[0].pin === entries[0] && lines[3].pin === entries[1], 'each line carries the recipe and the entry it was handed');
-  assert.deepEqual(d.sessionLines({ agentContexts: [] }, []), [], 'a session with neither draws no line');
+  assert.deepEqual(
+    d.sessionLines({ agentContexts: [], agentId: null, agentRequests: [], lifecycle: 'registered', model: null }, []),
+    [{ agentId: 'main', agentType: null, lifecycle: 'registered', model: null, pin: null, recipe: null }],
+    "a session with neither draws main's line from the row",
+  );
+});
+
+test("sessionLines reads each line's type from the agent's newest ledger entry, and main's model off the ledger where the row's pin is another agent's", () => {
+  // Main sent auxiliary calls alone, so the row reads d41c's pin and d41c's model, which are not main's.
+  const row = {
+    agentContexts: [{ ...pinEntry('d41c', 'claude-sonnet-4-5', 23_400), lifecycle: 'busy' }],
+    agentId: 'd41c',
+    agentRequests: [ledgerEntry('main', 'claude-haiku-4-5', 2, ms(14, 0)), ledgerEntry('d41c', 'claude-haiku-4-5', 1, ms(13, 0), { agentType: 'Plan' }), ledgerEntry('d41c', 'claude-sonnet-4-5', 1, ms(14, 10), { agentType: 'Explore' })],
+    lifecycle: 'busy',
+    model: 'claude-sonnet-4-5',
+  };
+  assert.deepEqual(
+    d.sessionLines(row, []).map((l) => [l.agentId, l.model, l.agentType, l.lifecycle]),
+    [
+      ['main', 'claude-haiku-4-5', null, 'busy'],
+      ['d41c', 'claude-sonnet-4-5', 'Explore', 'busy'],
+    ],
+  );
+});
+
+test("statusOf reads finished before the lifecycle word, unreported where no word stands, and the engine's unknown as unknown", () => {
+  const session = (lifecycle, cause) => ({ companion: 'reporting', keepalive: { cause, lastGuard: null, nextProbeAt: null, state: null }, lifecycle });
+  assert.deepEqual(d.statusOf(session('busy', 'session_ended'), [{ lifecycle: 'busy' }]), { tone: 'neutral', word: 'finished' }, 'main busy when the session ended');
+  assert.deepEqual(d.statusOf(session(null, null), [{ lifecycle: null }]), { tone: 'muted', word: 'unreported' });
+  assert.deepEqual(d.statusOf(session('unknown', null), [{ lifecycle: 'unknown' }]), { tone: 'neutral', word: 'unknown' });
+});
+
+test("presenceOf reads a silent companion's span from when it fell silent and a reporting one's presence age", () => {
+  const silent = { companion: 'silent', companionSince: iso(NOW - (2 * HOUR + 18 * MINUTE)), presenceAgeSeconds: 9 };
+  assert.deepEqual(d.presenceOf(silent, NOW), { text: 'silent 2h 18m', tone: 'warning' });
+  assert.deepEqual(d.presenceOf({ ...silent, companion: 'reporting', companionSince: null }, NOW), { text: 'seen 9s ago', tone: 'muted' });
+});
+
+test('earlierAgents lists the agents with ledgered requests that no line names, in id order, main never among them', () => {
+  // No line names main, so a list that took main's entry for an earlier agent's reads it.
+  const session = { agentRequests: [ledgerEntry('main', 'claude-sonnet-5', 4, ms(14, 0)), ledgerEntry('e9', 'claude-haiku-4-5', 1, ms(13, 0)), ledgerEntry('a1', 'claude-sonnet-5', 2, ms(14, 5)), ledgerEntry('c3', 'claude-haiku-4-5', 1, ms(13, 30))] };
+  assert.deepEqual(
+    d.earlierAgents(session, [{ agentId: 'a1' }]).map((a) => a.agentId),
+    ['c3', 'e9'],
+  );
+});
+
+test("agentFigures sums an agent's entries across its models and reads the newest entry's model, account and type", () => {
+  const spend = (part, probes) => ({ ...part, probes });
+  const session = {
+    agentRequests: [
+      ledgerEntry('a1', 'claude-haiku-4-5', 3, ms(13, 0), {
+        agentType: 'Plan',
+        spend: spend({ billedUsd: { fast: 0.25 }, equivalent: 0.5, requests: 3, shares: { business: { five_hour: 0.125 } }, usd: 0.75 }, { billedUsd: {}, equivalent: 0.25, requests: 1, shares: { business: { five_hour: 0.0625 } }, usd: 0.5 }),
+      }),
+      ledgerEntry('a1', 'claude-sonnet-5', 2, ms(14, 0), {
+        accountId: 'studio',
+        agentType: 'Explore',
+        spend: spend({ billedUsd: { api_key: 0.5 }, equivalent: null, requests: 2, shares: { business: { five_hour: 0.25, seven_day: 0.125 } }, usd: 0.5 }, NO_SPEND),
+      }),
+      ledgerEntry('b2', 'claude-sonnet-5', 7, ms(14, 10)),
+    ],
+  };
+  const a1 = d.agentFigures(session, 'a1');
+  assert.deepEqual([a1.requests, a1.model, a1.accountId, a1.agentType, a1.lastRequestAt], [5, 'claude-sonnet-5', 'studio', 'Explore', iso(ms(14, 0))]);
+  assert.deepEqual(a1.spend, {
+    billedUsd: { api_key: 0.5, fast: 0.25 },
+    equivalent: null,
+    probes: { billedUsd: {}, equivalent: 0.25, requests: 1, shares: { business: { five_hour: 0.0625 } }, usd: 0.5 },
+    requests: 5,
+    shares: { business: { five_hour: 0.375, seven_day: 0.125 } },
+    usd: 1.25,
+  });
+  assert.equal(d.agentFigures(session, 'f00d'), null, 'an agent with no entry');
+});
+
+/** Every filter off, as the address reads with none set. */
+const NO_FILTERS = { account: [], active: '', agentType: [], cache: [], client: [], companion: [], effort: [], finished: false, forked: false, key: [], model: [], pool: [], released: false, search: '', slowed: false, status: [] };
+/** A drawn line with the two members the Model and Status filters read. */
+const matchLine = (agentId, model, lifecycle) => ({ agentId, agentType: null, lifecycle, model, pin: null, recipe: null });
+const matchSession = { agentRequests: [], companion: 'reporting', forkedFrom: null, keyGeneration: 1, keyId: 'desktop', lastRequestAt: iso(ms(14, 20)), lastUsedAt: iso(ms(14, 20)), sessionId: 'session-1', speed: null, userAgent: null };
+
+test('matches lists a session under Agents filters where one of its lines passes them all, not where two lines pass one each', () => {
+  const filters = { ...NO_FILTERS, model: ['claude-opus-5'], status: ['busy'] };
+  const row = (lines) => ({ finished: false, lines, poolId: 'all', session: matchSession });
+  assert.equal(d.matches(row([matchLine('main', 'claude-opus-5', 'idle'), matchLine('a1', 'claude-sonnet-5', 'busy')]), filters, NOW), false, 'one line on the model, the other in the word');
+  assert.equal(d.matches(row([matchLine('main', 'claude-sonnet-5', 'idle'), matchLine('a1', 'claude-opus-5', 'busy')]), filters, NOW), true, 'one line on the model in the word');
+});
+
+test('activeWithin reads the later of the last use and the last request', () => {
+  assert.equal(d.activeWithin({ lastRequestAt: iso(NOW - 2 * HOUR), lastUsedAt: iso(NOW - 10 * MINUTE) }, HOUR, NOW), true, 'the last use inside the span');
+  assert.equal(d.activeWithin({ lastRequestAt: iso(NOW - 10 * MINUTE), lastUsedAt: iso(NOW - 2 * HOUR) }, HOUR, NOW), true, 'the last request inside the span');
+  assert.equal(d.activeWithin({ lastRequestAt: iso(NOW - 2 * HOUR), lastUsedAt: iso(NOW - 2 * HOUR) }, HOUR, NOW), false, 'both older than the span');
+});
+
+test('hiddenLines counts the lines the Agents filters hide and the earlier agents', () => {
+  const session = { ...matchSession, agentRequests: [ledgerEntry('main', 'claude-sonnet-5', 4, ms(14, 0)), ledgerEntry('a1', 'claude-opus-5', 2, ms(14, 5)), ledgerEntry('b2', 'claude-sonnet-5', 1, ms(14, 6)), ledgerEntry('e9', 'claude-haiku-4-5', 1, ms(13, 0))] };
+  const row = { finished: false, lines: [matchLine('main', 'claude-sonnet-5', 'busy'), matchLine('a1', 'claude-opus-5', 'busy'), matchLine('b2', 'claude-sonnet-5', 'idle')], poolId: 'all', session };
+  const { hidden, shown } = d.hiddenLines(row, { ...NO_FILTERS, model: ['claude-opus-5'] });
+  assert.deepEqual([hidden, shown.map((l) => l.agentId)], [3, ['a1']]);
 });
 
 test("pinTtlMs reads the time left to the pin's last use plus its cache TTL, and none once that has passed or with no TTL", () => {

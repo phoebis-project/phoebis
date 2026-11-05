@@ -646,6 +646,14 @@ test('a session decodes its speed and its cycle, and a row without them reads nu
   assert.deepEqual(read(bare), [null, null], 'a row without the members reads null');
 });
 
+test("a session's lifecycle word reads one of the six words and none outside them", () => {
+  const row = fixture('sessions').sessions[0];
+  const lifecycle = (word) => d.decodeSession({ ...row, lifecycle: word }).lifecycle;
+  assert.equal(lifecycle('bussy'), null, 'a word outside the six reads none');
+  assert.equal(lifecycle(null), null, 'a session no mod reports');
+  assert.equal(lifecycle('registered'), 'registered', "the row's own word beside the engine's five");
+});
+
 test('a session decodes the word its pin was stamped by, and a row without one reads null', () => {
   const row = fixture('sessions').sessions[0];
   const read = (wire) => {
@@ -2059,11 +2067,17 @@ test('a session row carries the presence age and the cause of its main recipe', 
 const agentLine = (agent_id, model, members = {}) => ({
   account_id: 'business',
   agent_id,
+  burn: 0.00104,
+  burn_at: 1_791_721_000_000,
+  burn_equivalent: 0.0017333333333333335,
+  burn_unit: 'window_share',
+  burn_window: 'five_hour',
   cache_ttl_ms: 300_000,
   created_at: 1_791_717_340_000,
   effort: 'medium',
   last_input_tokens: 12_000,
   last_used_at: 1_791_721_000_000,
+  lifecycle: 'busy',
   model,
   warm: true,
   ...members,
@@ -2072,14 +2086,18 @@ const agentLine = (agent_id, model, members = {}) => ({
 test("a session row reads main's effort and every agent line with all its members, in the order the route sent them", () => {
   const row = fixture('sessions').sessions.find((s) => s.session_id === 's1');
   // Sent out of the alphabet's order, so a decoder that sorted would read the second line first.
-  const sent = [agentLine('7b2e', 'claude-haiku-4-5', { effort: 'low', warm: false }), agentLine('4f0c', 'claude-sonnet-5', { account_id: 'direct', effort: 'high', last_input_tokens: 31_000 })];
+  // The second line sits on an API-key account, whose burn reads dollars with no window and no Pro-week figure.
+  const sent = [
+    agentLine('7b2e', 'claude-haiku-4-5', { effort: 'low', lifecycle: 'idle', warm: false }),
+    agentLine('4f0c', 'claude-sonnet-5', { account_id: 'direct', burn: 0.074, burn_equivalent: null, burn_unit: 'usd', burn_window: null, effort: 'high', last_input_tokens: 31_000 }),
+  ];
   const s = d.decodeSession({ ...row, agent_contexts: sent, effort: 'high' });
   assert.equal(s.effort, 'high');
   const created = new Date(1_791_717_340_000).toISOString();
   const used = new Date(1_791_721_000_000).toISOString();
   assert.deepEqual(s.agentContexts, [
-    { accountId: 'business', agentId: '7b2e', cacheTtlMs: 300_000, createdAt: created, effort: 'low', lastInputTokens: 12_000, lastUsedAt: used, model: 'claude-haiku-4-5', warm: false },
-    { accountId: 'direct', agentId: '4f0c', cacheTtlMs: 300_000, createdAt: created, effort: 'high', lastInputTokens: 31_000, lastUsedAt: used, model: 'claude-sonnet-5', warm: true },
+    { accountId: 'business', agentId: '7b2e', burn: 0.00104, burnAt: used, burnEquivalent: 0.0017333333333333335, burnUnit: 'window_share', burnWindow: 'five_hour', cacheTtlMs: 300_000, createdAt: created, effort: 'low', lastInputTokens: 12_000, lastUsedAt: used, lifecycle: 'idle', model: 'claude-haiku-4-5', warm: false },
+    { accountId: 'direct', agentId: '4f0c', burn: 0.074, burnAt: used, burnEquivalent: null, burnUnit: 'usd', burnWindow: null, cacheTtlMs: 300_000, createdAt: created, effort: 'high', lastInputTokens: 31_000, lastUsedAt: used, lifecycle: 'busy', model: 'claude-sonnet-5', warm: true },
   ]);
 });
 
@@ -2330,7 +2348,7 @@ test('the dashboard, sessions, recipes, and overview decode', () => {
   const [recipe] = fixture('keepalive_recipes').recipes.map(d.decodeRecipe);
   assert.deepEqual([recipe.state, recipe.cause, recipe.agentState, recipe.parkKind, recipe.probesToday, recipe.creditedToday], ['retained', 'scheduled', 'busy', null, 0, 0]);
   const ov = d.decodeKeepaliveOverview(fixture('keepalive_overview'));
-  assert.deepEqual(Object.keys(ov).sort(), ['agents', 'busGaps', 'expiredBetweenTurns24h', 'limits', 'pools', 'probes24h']);
+  assert.deepEqual(Object.keys(ov).sort(), ['agents', 'busGaps', 'expiredBetweenTurns24h', 'lastBusGapAt', 'limits', 'pools', 'probes24h']);
   assert.equal(ov.busGaps, 0, 'the captured router saw no gap');
   assert.deepEqual(ov.limits, { agents: { count: 3, max: 1024 }, retainedBytes: { count: fixture('keepalive_overview').limits.retained_bytes.count, max: 268_435_456 }, sessions: { count: 1, max: 128 } }, 'each count beside the cap the bootstrap file sets');
   const [pool] = ov.pools;

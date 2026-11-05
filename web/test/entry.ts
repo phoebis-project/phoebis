@@ -38,6 +38,7 @@ export * from '@/lib/buckets';
 export * from '@/lib/cache';
 export * from '@/lib/capture';
 export * from '@/lib/chunks';
+export * from '@/lib/client';
 export { installClock } from '@/lib/clock';
 export * from '@/lib/costs';
 export * from '@/lib/decisionStrip';

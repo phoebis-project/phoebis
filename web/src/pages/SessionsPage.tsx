@@ -208,22 +208,23 @@ function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], keys: ApiKey
     const lastUsed = session.lastUsedAt ?? session.lastRequestAt;
     // The full list stays beside the lines drawn: the causes of a session without a line read every record, and a
     // session whose lines the mod all released still holds records, so it is no session without a recipe.
-    const finished = isFinished(session, agents);
+    const lines = sessionLines(session, agents);
+    const finished = isFinished(session, lines);
     // A finished session keeps every line so its probe facts stay in view, and a live one draws its released lines
     // only while the filter asks for them.
     const drawsReleased = finished || showReleased;
-    const shown = drawsReleased ? agents : agents.filter((a) => !isReleasedLine(a));
+    const shownLines = drawsReleased ? lines : lines.filter((l) => !isReleasedLine(l));
     return {
       agents,
       expiresAt: expiryOf(lastUsed, expireAfterSeconds),
       finished,
       idleLimit,
       lastUsed,
-      lines: orderLines(sessionLines(session, shown), sort, dir),
+      lines: orderLines(shownLines, sort, dir),
       noRecipe: agents.length === 0 || idleLimitOnly ? causes : null,
-      released: drawsReleased ? 0 : releasedCount(agents),
+      released: drawsReleased ? 0 : releasedCount(lines),
       session,
-      shown,
+      shown: shownLines.flatMap((l) => (l.recipe === null ? [] : [l.recipe])),
     };
   });
   return orderRows(rows, sort, dir);
@@ -571,7 +572,7 @@ function SessionRows({
   // another model, recipe or not, and the hover reads them in the order the expanded row draws them.
   const otherModels = lines.flatMap((l) => {
     const accountId = l.pin?.accountId ?? l.recipe?.accountId ?? null;
-    return accountId !== null && l.model !== session.model ? [{ accountId, agentId: l.agentId, model: l.model }] : [];
+    return accountId !== null && l.model !== null && l.model !== session.model ? [{ accountId, agentId: l.agentId, model: l.model }] : [];
   });
   // A retained agent with no time is waiting on its first stream event, which is
   // a different thing from a session nothing probes.
@@ -878,8 +879,8 @@ function AgentLine({ accountById, line, now, requestsTo }: { accountById: Readon
       <span className="mono agents__id" title={line.agentId}>
         {requestsTo === null ? line.agentId : <Link to={requestsTo}>{line.agentId}</Link>}
       </span>
-      <span className="mono nowrap" title={modelTitle(line.model, shortModel(line.model))}>
-        {shortModel(line.model)}
+      <span className="mono nowrap" title={modelTitle(line.model ?? '', shortModel(line.model ?? ''))}>
+        {shortModel(line.model ?? '')}
       </span>
       <span>{pin?.effort ?? <span className="muted">-</span>}</span>
       <span className={context === '-' ? 'muted' : 'num'}>{context}</span>

@@ -301,9 +301,15 @@ function runwayOf(i: number): Pick<Session, 'runwayBounded' | 'runwayMs'> {
 const EFFORT_WORDS = ['medium', 'high', 'low', 'max'] as const;
 const effortAt = (i: number) => EFFORT_WORDS[i % EFFORT_WORDS.length];
 
-/** A pin's line as the route answers it: warm while its last use is inside its cache TTL at the story's clock. */
-const pinLine = (line: Omit<AgentContext, 'createdAt' | 'warm'>): Omit<AgentContext, 'createdAt'> => ({
+/** A pin's line as the route answers it: warm while its last use is inside its cache TTL at the story's clock, its burn
+ *  unpriced. */
+const pinLine = (line: Omit<AgentContext, 'burn' | 'burnAt' | 'burnEquivalent' | 'burnUnit' | 'burnWindow' | 'createdAt' | 'warm'>): Omit<AgentContext, 'createdAt'> => ({
   ...line,
+  burn: null,
+  burnAt: null,
+  burnEquivalent: null,
+  burnUnit: null,
+  burnWindow: null,
   warm: pinTtlMs(line, NOW) !== null,
 });
 /** The route's order of a session's lines: main first, then by agent id and model as bytes. */
@@ -587,8 +593,8 @@ SESSIONS.forEach((pin, i) => {
     RECIPES.filter((r) => r.keyId === pin.keyId && r.sessionId === pin.sessionId).flatMap((r, j) => {
       if (r.agentState === 'released' || r.accountId === null) return [];
       const own = { accountId: r.accountId, agentId: r.agentId, model: r.model };
-      if (r.agentId === 'main') return [pinLine({ ...own, cacheTtlMs: pin.cacheTtlMs, effort: pin.effort, lastInputTokens: pin.lastInputTokens, lastUsedAt: pin.lastUsedAt ?? r.lastRequestAt })];
-      return [pinLine({ ...own, cacheTtlMs: 5 * MINUTE, effort: effortAt(j), lastInputTokens: agentTokens(i, j), lastUsedAt: r.lastRequestAt })];
+      if (r.agentId === 'main') return [pinLine({ ...own, cacheTtlMs: pin.cacheTtlMs, effort: pin.effort, lastInputTokens: pin.lastInputTokens, lastUsedAt: pin.lastUsedAt ?? r.lastRequestAt, lifecycle: r.agentState })];
+      return [pinLine({ ...own, cacheTtlMs: 5 * MINUTE, effort: effortAt(j), lastInputTokens: agentTokens(i, j), lastUsedAt: r.lastRequestAt, lifecycle: r.agentState })];
     }),
   );
 });
@@ -708,6 +714,7 @@ SLOWED_PINS.forEach((pin, k) => {
       effort: agentId === 'main' ? effort : effortAt(k + j),
       lastInputTokens: promptOf(newest.usage),
       lastUsedAt: newest.attempts[newest.attempts.length - 1].startedAt,
+      lifecycle: null,
       model,
     });
   });
@@ -750,7 +757,7 @@ if (FLEET_PINS.length > 0) {
   // One line per standing pin, each read off its model's last turn as the row reads the newest one.
   const lines = FLEET_PINS.map((pin, j) => {
     const attempt = pin.attempts[pin.attempts.length - 1];
-    return pinLine({ accountId: attempt.accountId, agentId: 'main', cacheTtlMs: 5 * MINUTE, effort: effortAt(j + 1), lastInputTokens: promptOf(pin.usage), lastUsedAt: attempt.startedAt, model: pin.canonicalModel });
+    return pinLine({ accountId: attempt.accountId, agentId: 'main', cacheTtlMs: 5 * MINUTE, effort: effortAt(j + 1), lastInputTokens: promptOf(pin.usage), lastUsedAt: attempt.startedAt, lifecycle: null, model: pin.canonicalModel });
   });
   SESSIONS.push(writtenRow({ accountId: lastAttempt.accountId, agentId: 'main', agents: 1, burn: 0.36, createdAt: firstSeen.at, keyId: 'fleet', sessionId: FLEET_SESSION_ID }, lines));
 }
@@ -767,7 +774,7 @@ const WORKSHOP_BURN = 0.0021;
 {
   const lastAttempt = WORKSHOP_PIN.attempts[WORKSHOP_PIN.attempts.length - 1];
   const createdAt = workshopRows[workshopRows.length - 1].at;
-  const line = pinLine({ accountId: 'workshop', agentId: 'main', cacheTtlMs: HOUR, effort: effortAt(1), lastInputTokens: promptOf(WORKSHOP_PIN.usage), lastUsedAt: lastAttempt.startedAt, model: WORKSHOP_PIN.canonicalModel });
+  const line = pinLine({ accountId: 'workshop', agentId: 'main', cacheTtlMs: HOUR, effort: effortAt(1), lastInputTokens: promptOf(WORKSHOP_PIN.usage), lastUsedAt: lastAttempt.startedAt, lifecycle: null, model: WORKSHOP_PIN.canonicalModel });
   SESSIONS.push(writtenRow({ accountId: 'workshop', agentId: 'main', agents: 1, burn: WORKSHOP_BURN, createdAt, keyId: 'bench', sessionId: WORKSHOP_SESSION_ID }, [line]));
 }
 
@@ -836,12 +843,13 @@ const auxiliaryOnlyLine = pinLine({
   effort: 'high',
   lastInputTokens: 23_400,
   lastUsedAt: auxiliaryOnlyRecipe.lastRequestAt,
+  lifecycle: auxiliaryOnlyRecipe.agentState,
   model: auxiliaryOnlyRecipe.model,
 });
 const AUXILIARY_ONLY_CREATED_AT = ago(38 * MINUTE);
 const noModLines = [
-  pinLine({ accountId: 'contract', agentId: 'main', cacheTtlMs: 5 * MINUTE, effort: 'max', lastInputTokens: 41_200, lastUsedAt: ago(2 * MINUTE), model: 'claude-sonnet-5-5' }),
-  pinLine({ accountId: 'contract', agentId: '5c8e', cacheTtlMs: 5 * MINUTE, effort: 'low', lastInputTokens: 7_900, lastUsedAt: ago(25 * MINUTE), model: HAIKU }),
+  pinLine({ accountId: 'contract', agentId: 'main', cacheTtlMs: 5 * MINUTE, effort: 'max', lastInputTokens: 41_200, lastUsedAt: ago(2 * MINUTE), lifecycle: null, model: 'claude-sonnet-5-5' }),
+  pinLine({ accountId: 'contract', agentId: '5c8e', cacheTtlMs: 5 * MINUTE, effort: 'low', lastInputTokens: 7_900, lastUsedAt: ago(25 * MINUTE), lifecycle: null, model: HAIKU }),
 ];
 const NO_MOD_CREATED_AT = ago(47 * MINUTE);
 const WRITTEN_SESSIONS = [

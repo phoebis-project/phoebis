@@ -347,6 +347,7 @@ const EMPTY_KEEPALIVE_OVERVIEW: KeepaliveOverview = {
   agents: { busy: 0, idle: 0, parked: 0 },
   busGaps: 0,
   expiredBetweenTurns24h: 0,
+  lastBusGapAt: null,
   // The caps are the bootstrap file's defaults, which the story's overview carries.
   limits: { agents: { ...KEEPALIVE_OVERVIEW.limits.agents, count: 0 }, retainedBytes: { ...KEEPALIVE_OVERVIEW.limits.retainedBytes, count: 0 }, sessions: { ...KEEPALIVE_OVERVIEW.limits.sessions, count: 0 } },
   pools: [],

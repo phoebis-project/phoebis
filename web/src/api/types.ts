@@ -1772,10 +1772,24 @@ export const BURN_UNIT_VALUES = ['usd', 'window_share'] as const;
 /** Which figure a pin's burn reads: the share of the account's own 5-hour window per hour on plan quota, dollars per hour off it. */
 export type BurnUnit = (typeof BURN_UNIT_VALUES)[number];
 
+export const LIFECYCLE_VALUES = [...AGENT_STATE_VALUES, 'registered'] as const;
+/** A row's lifecycle word: the engine's five, or `registered` for a main the mod registered that has sent no real
+ *  request yet. */
+export type Lifecycle = (typeof LIFECYCLE_VALUES)[number];
+
 export interface AgentContext {
   /** The pin's account. */
   accountId: string;
   agentId: string;
+  /** The pin's typed burn per hour in `burnUnit`, priced as the row's `burn` is for this pin. */
+  burn: number | null;
+  /** The instant the pin's served burn is decayed to, null for a pin never renewed with usage. */
+  burnAt: string | null;
+  /** The pin's burn per hour as the Pro-week figure, as the row's `burnEquivalent`. */
+  burnEquivalent: number | null;
+  burnUnit: BurnUnit | null;
+  /** The window `burn` is a share of for this pin, as the row's `burnWindow`. */
+  burnWindow: string | null;
   /** The cache TTL in force at the pin's last refresh. */
   cacheTtlMs: number | null;
   /** The agent's first-seen time, null where none. */
@@ -1784,9 +1798,52 @@ export interface AgentContext {
   effort: string | null;
   lastInputTokens: number | null;
   lastUsedAt: string | null;
+  /** The agent's lifecycle word from the keepalive engine's record, null where no mod reports it. */
+  lifecycle: KeepaliveState | null;
   model: string;
   /** The route's `now - last_used_at < cache_ttl_ms`: the State cell's warm or cold on a pin-only line. */
   warm: boolean;
+}
+
+/** A set of a session's requests: their count, their money and their shares per account. */
+export interface SessionSpendPart {
+  /** The dollars billed by funding (`api_key`, `fast`, `overage`, `usage_based`), a zero entry left out. */
+  billedUsd: Record<string, number>;
+  /** The Pro-week figures summed, null where a request priced nothing and 0 with no plan-funded request. */
+  equivalent: number | null;
+  requests: number;
+  /** Per account, its own windows' shares under the tier the serving attempt recorded. Every plan-funded request
+   *  writes its serving account's key, a free one with no share. */
+  shares: Record<string, Record<string, number>>;
+  /** The list dollars, the sum of what the request log shows as the cost. */
+  usd: number;
+}
+
+/** A session's spend over its client requests, and the same figures over its probes, apart. */
+export interface SessionSpend extends SessionSpendPart {
+  probes: SessionSpendPart;
+}
+
+/** A session's client requests of the last 24 hours by class, and their spend. */
+export interface SessionDay {
+  billedUsd: Record<string, number>;
+  equivalent: number | null;
+  /** By request class as the ledger holds it, `other` for a request with none. */
+  requests: Record<string, number>;
+  usd: number;
+}
+
+/** A session's requests of one agent on one canonical model, from the ledger. */
+export interface AgentRequests {
+  /** The newest client request's serving account. */
+  accountId: string | null;
+  agentId: string;
+  /** The newest request's agent type. */
+  agentType: string | null;
+  lastRequestAt: string | null;
+  model: string;
+  requests: number;
+  spend: SessionSpend;
 }
 
 export interface Session {
@@ -1795,6 +1852,9 @@ export interface Session {
   agentContexts: AgentContext[];
   /** The pin's own agent: `main`, or a subagent's id, and `null` for a session with no pin. */
   agentId: string | null;
+  /** The session's requests per agent and model, main's among them, each with its type, its newest request's account
+   *  and instant and its spend. */
+  agentRequests: AgentRequests[];
   agents: number;
   /** The pin's typed burn per hour in `burnUnit`, priced when read, on plan quota the share of the account's own window
    *  `burnWindow` names. It reads 0 for a pin never renewed with usage, and null with no pin at all, with one whose
@@ -1820,6 +1880,8 @@ export interface Session {
   /** The pin's cycle, null until two requests of the pin after its placement have measured a gap under the pool's
    *  burn average, and on a row with no pin. */
   cycleMs: number | null;
+  /** The session's client requests of the last 24 hours by class, and their spend. */
+  day: SessionDay;
   /** The effective effort of the pin's last turn, the word as the client sent it, and `null` with none or no pin. */
   effort: string | null;
   epoch: number | null;
@@ -1829,7 +1891,7 @@ export interface Session {
   forkedFrom: string | null;
   /** A generation no live key holds: the ledger's memory of an earlier holder of this key id. Read-only, no recipe, no release. */
   historical: boolean;
-  /** Main's recipe: `state` is null when main holds none, and `cause` and `lastGuard` are null with it. */
+  /** Main's recipe, or the newest other agent's where main holds none, every member null while no agent holds one. */
   keepalive: {
     cause: RecipeCause | null;
     lastGuard: GuardVerdict | null;
@@ -1847,6 +1909,9 @@ export interface Session {
   /** Last ledgered client request, and `null` for a session that has not been seen in the ledger. */
   lastRequestAt: string | null;
   lastUsedAt: string | null;
+  /** Main's lifecycle word from the keepalive engine's record, whether or not a recipe stands, null where no mod
+   *  reports the session. */
+  lifecycle: Lifecycle | null;
   model: string | null;
   /** Whether the session is pinned to its account for as long as affinity holds. */
   pinned: boolean;
@@ -1871,6 +1936,14 @@ export interface Session {
   shedReason: string | null;
   /** The pin's account's factor from the slow-down entry in force, null on a row with no pin and where none is in force. */
   speed: number | null;
+  /** The session's spend over its life under its key, null where the ledger holds no request of it the router did not
+   *  refuse. */
+  spend: SessionSpend | null;
+  /** The user agent of the session's newest client request, as the client sent it. */
+  userAgent: string | null;
+  /** Whether the pinned account still holds the session's prompt cache, from the pin's last use and its cache TTL.
+   *  Null without a pin. */
+  warm: boolean | null;
 }
 
 export const RECIPE_STATE_VALUES = ['ended', 'held', 'not_retained', 'paused', 'retained'] as const;
@@ -1923,6 +1996,8 @@ export interface KeepaliveOverview {
   busGaps: number;
   /** Requests whose prefix expired between turns in the last 24 hours. */
   expiredBetweenTurns24h: number;
+  /** The last bus gap's instant, null before the first gap. */
+  lastBusGapAt: string | null;
   /** The engine's live sessions, agent records and retained bytes, each beside the cap the bootstrap file sets. */
   limits: Record<'agents' | 'retainedBytes' | 'sessions', { count: number; max: number }>;
   /**
