@@ -2,7 +2,7 @@ import { isoOrNull, list, num, numOrNull, rec, strings } from '@/api/decode';
 import type { AttentionItem, AttentionKind } from '@/api/types';
 import { accountMeterHref } from './address';
 import { lookup } from './counts';
-import { fmtAbsolute, fmtRelative, instant as clockInstant, listWords, messageOf, noun, percentText, plural } from './format';
+import { fmtAbsolute, fmtPct, fmtRelative, instant as clockInstant, listWords, messageOf, noun, percentText, plural } from './format';
 import { WINDOW_WORD, entityHref, formatFact, logHref, sinceCondition, type LogLink } from './routingLog';
 import { speedWord } from './selection';
 
@@ -11,7 +11,10 @@ export const ATTENTION_LABEL: Record<AttentionKind, string> = {
   certificate_reload_failed: 'Certificate reload failed',
   client_drift: 'Client drift',
   destination_spent: 'Destination spent within the hour',
+  expired_between_turns: 'Expired between turns',
   funding_required: 'Funding required',
+  keepalive_bus_gaps: 'Keepalive bus gaps',
+  keepalive_cap: 'Keepalive cap',
   ledger_record_parked: 'Priced record parked',
   meter_drift: 'Meter drift against the table',
   model_unpriced: 'Model unpriced',
@@ -32,7 +35,10 @@ export const ATTENTION_TONE: Record<AttentionKind, 'critical' | 'info' | 'seriou
   certificate_reload_failed: 'serious',
   client_drift: 'serious',
   destination_spent: 'warning',
+  expired_between_turns: 'warning',
   funding_required: 'serious',
+  keepalive_bus_gaps: 'serious',
+  keepalive_cap: 'warning',
   ledger_record_parked: 'serious',
   meter_drift: 'warning',
   model_unpriced: 'info',
@@ -81,12 +87,14 @@ export const attentionKey = (item: Pick<AttentionItem, 'kind' | 'rawKind' | 'sub
 /**
  * A `pool_exhausted` item opens the routing log on the pool's exhausted decisions from the condition's start, and a
  * routing condition on its subject's rounds, moves, walls and slow-downs since then. A meter drift opens the Meter view
- * narrowed to the account, where its reconciled windows are listed. Every other kind opens the account, pool or key
- * where it is fixed. Null when the item names none, and for a kind this console does not
- * know whatever its link, since the console cannot say what the page would fix.
+ * narrowed to the account, where its reconciled windows are listed. The keepalive engine's conditions open the Sessions
+ * view, though their link names no page. Every other kind opens the account, pool or key where it is fixed. Null when
+ * the item names none, and for a kind this console does not know whatever its link, since the console cannot say what
+ * the page would fix.
  */
 export function attentionHref(item: LinkedItem, now: number): string | null {
   const { link } = item;
+  if (item.kind === 'keepalive_bus_gaps' || item.kind === 'keepalive_cap' || item.kind === 'expired_between_turns') return '/sessions';
   if (link === null || item.kind === 'unknown') return null;
   const since = sinceCondition(Date.parse(item.since), now);
   const pool = exhaustedPool(item);
@@ -177,6 +185,14 @@ export function attentionDetail(item: AttentionItem, now: number): string {
       return slowedWords(item, now);
     case 'meter_drift':
       return driftWords(item, now);
+    case 'keepalive_bus_gaps': {
+      const last = isoOrNull(d.last_at);
+      return `The keepalive subscriber fell behind the router's in-process request bus and discarded the observations it had open${last ? `, the last time ${fmtRelative(last, now)}` : ''}. Opens the Sessions view.`;
+    }
+    case 'keepalive_cap':
+      return 'The engine is near its cap and will refuse new records at it. Opens the Sessions view.';
+    case 'expired_between_turns':
+      return 'Prompt caches expired between two turns of a session a pool warms, so a probe came too late or not at all. Opens the Sessions view.';
     case 'unknown':
       return `a condition this console does not know (${item.rawKind ?? 'unknown'})`;
   }
@@ -264,11 +280,21 @@ function driftWords(item: AttentionItem, now: number): string {
   return [...ratios, sinceWords(item, now)].join(', ');
 }
 
+/** The engine's cap names in the words a `keepalive_cap` item reads, a name the console does not know as sent. */
+const CAP_WORD: Record<string, string> = { agents: 'agent records', retained: 'retained prompts', sessions: 'sessions' };
+
 /**
- * A routing condition's or a meter drift's sentence as the dashboard's line draws it, its subject first, or null for
- * any other kind, which keeps its label and subject.
+ * A routing condition's or a meter drift's sentence as the dashboard's line draws it, its subject first, a keepalive
+ * condition's after its label, or null for any other kind, which keeps its label and subject.
  */
 export function attentionWords(item: AttentionItem, now: number): string | null {
+  const d = item.detail;
+  if (item.kind === 'keepalive_bus_gaps') return `Keepalive bus gaps: ${num(d.gaps)} since the start`;
+  if (item.kind === 'keepalive_cap') {
+    const cap = text(d.cap) ?? '';
+    return `Keepalive cap at ${fmtPct(num(d.pct))}: ${lookup(CAP_WORD, cap) ?? cap}`;
+  }
+  if (item.kind === 'expired_between_turns') return `Expired between turns: ${num(d.expired)} in 24h`;
   if (item.kind === 'slowed_long') return `${item.subject.label}: ${slowedWords(item, now)}`;
   if (item.kind === 'meter_drift') return `${item.subject.label}: ${driftWords(item, now)}`;
   if (item.kind !== 'wall_reached' && item.kind !== 'destination_spent' && item.kind !== 'shed_no_runway') return null;

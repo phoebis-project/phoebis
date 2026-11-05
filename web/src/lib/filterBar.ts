@@ -28,6 +28,8 @@ export interface Dimension {
   perValue?: true;
   /** A list that opens on its search field however few its options, where a list draws one past twelve alone. */
   searchable?: true;
+  /** The words after the chip's values and the close of its title. */
+  suffix?: ChipSuffix;
   /** The chip's text, title and values for a value, in place of chipText's forms. The chip draws `values` as given, whatever `text` reads. */
   text?: (value: unknown, options: Option[]) => ChipText;
   /** A list that also takes a typed value through the field under its rows, a chip's value cut after 32 characters. */
@@ -43,11 +45,19 @@ export interface ChipText {
   values: string | null;
 }
 
+/** The words after a chip's values, drawn in the secondary ink, and the sentence that closes its title. */
+export interface ChipSuffix {
+  text: string;
+  title: string;
+}
+
 /** A standing filter as the chip line draws it. `label` is the dimension's chip word, which the x and the fold name. */
 export interface Chip {
   field: string;
   label: string;
   mono: boolean;
+  /** The suffixed dimension's suffix, which `text` and `title` already carry. */
+  suffix?: ChipSuffix;
   text: string;
   title: string;
   /** The one value a `perValue` dimension's chip stands for. */
@@ -143,7 +153,8 @@ export function chipsOf(dimensions: Dimension[], filters: Record<string, unknown
       const known = options[d.field] ?? [];
       const chipOf = (value: unknown): Chip => {
         const { text, title, values } = d.text ? d.text(value, known) : chipText(d, value, known);
-        return { field: d.field, label: d.word, mono: d.mono ?? false, text, title, values };
+        const chip = { field: d.field, label: d.word, mono: d.mono ?? false, text, title, values };
+        return d.suffix === undefined ? chip : { ...chip, suffix: d.suffix, text: `${text} ${d.suffix.text}`, title: `${title}, ${d.suffix.title}` };
       };
       // A hand-typed address can repeat an id, and the chip line tells chips apart by their value.
       if (d.perValue) return [...new Set(filters[d.field] as string[])].map((value) => ({ ...chipOf([value]), value }));
@@ -264,6 +275,7 @@ export const ANALYTICS_DIMENSIONS: Dimension[] = [
   { field: 'clients', group: 'Request', kind: 'list', label: 'Client', mono: true, perValue: true, typed: true, word: 'client' },
   { field: 'probes', group: 'Request', kind: 'flag', label: 'Include probes', word: 'include probes' },
   { field: 'userAgents', group: 'Request', kind: 'list', label: 'User agent', mono: true, perValue: true, typed: true, word: 'user agent' },
+  AGENT_ID,
   SESSION_ID,
 ];
 
@@ -279,9 +291,27 @@ export const KEYS_DIMENSIONS: Dimension[] = [
 /** Accounts. The status choice's none is `all`, the codec's default. */
 export const ACCOUNTS_DIMENSIONS: Dimension[] = [STATUS];
 
-/** Sessions. */
+/** The suffix of an Agents filter's chip on the Sessions view, which a session passes where one of its agents does. */
+export const ANY_AGENT: ChipSuffix = { text: '(any agent)', title: 'matched by any one agent' };
+
+/**
+ * Session, which reads the row, then Agents, which reads each agent line, main among them. Released agents draws the
+ * released lines and matches none, so its chip, which carries no values, carries no suffix either.
+ */
 export const SESSIONS_DIMENSIONS: Dimension[] = [
-  { field: 'companion', group: 'Sessions', kind: 'flag', label: 'Companion only', word: 'companion only' },
-  { field: 'finished', group: 'Sessions', kind: 'flag', label: 'Finished sessions', word: 'finished sessions' },
-  { field: 'released', group: 'Sessions', kind: 'flag', label: 'Released agents', word: 'released agents' },
+  { anyLabel: 'Any time', field: 'active', group: 'Session', kind: 'choice', label: 'Active within', word: 'active within' },
+  { field: 'client', group: 'Session', kind: 'list', label: 'Client', word: 'client' },
+  { field: 'companion', group: 'Session', kind: 'list', label: 'Companion', word: 'companion' },
+  { field: 'finished', group: 'Session', kind: 'flag', label: 'Finished sessions', word: 'finished sessions' },
+  { field: 'forked', group: 'Session', kind: 'flag', label: 'Forked sessions', word: 'forked sessions' },
+  { field: 'key', group: 'Session', kind: 'list', label: 'Key', mono: true, word: 'key' },
+  { field: 'pool', group: 'Session', kind: 'list', label: 'Pool', mono: true, word: 'pool' },
+  { field: 'slowed', group: 'Session', kind: 'flag', label: 'Slowed', word: 'slowed' },
+  { field: 'account', group: 'Agents', kind: 'list', label: 'Account', suffix: ANY_AGENT, word: 'account' },
+  { field: 'agentType', group: 'Agents', kind: 'list', label: 'Agent type', suffix: ANY_AGENT, word: 'agent type' },
+  { field: 'cache', group: 'Agents', kind: 'list', label: 'Cache', suffix: ANY_AGENT, word: 'cache' },
+  { field: 'effort', group: 'Agents', kind: 'list', label: 'Effort', suffix: ANY_AGENT, word: 'effort' },
+  { field: 'model', group: 'Agents', kind: 'list', label: 'Model', mono: true, suffix: ANY_AGENT, word: 'model' },
+  { field: 'released', group: 'Agents', kind: 'flag', label: 'Released agents', word: 'released agents' },
+  { field: 'status', group: 'Agents', kind: 'list', label: 'Status', suffix: ANY_AGENT, word: 'status' },
 ];

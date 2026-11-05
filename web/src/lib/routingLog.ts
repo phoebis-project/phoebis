@@ -791,7 +791,7 @@ export function entityHref(kind: FactEntity['kind'] | 'request' | 'session', id:
 /** A fixed window as two instants, or a preset ending now by name. */
 export type LogWindow = { from: number; to: number } | { range: string };
 
-export type LogLink = { accounts?: string[]; kinds?: string[]; models?: string[]; pools?: string[]; request?: string; session?: string } & LogWindow;
+export type LogLink = { accounts?: string[]; agentId?: string; kinds?: string[]; models?: string[]; pools?: string[]; request?: string; session?: string } & LogWindow;
 
 export const identityOf = (row: RoutingLogRow) => (row.type === 'decision' ? `${row.requestId}/${row.seq}` : `event/${row.id}`);
 
@@ -808,7 +808,7 @@ export function compareRows(a: RoutingLogRow, b: RoutingLogRow): number {
 export function logHref(link: LogLink): string {
   const range: RangeValue = 'range' in link ? { from: '', preset: link.range, to: '' } : { from: iso(link.from), preset: 'custom', to: iso(link.to) };
   const d = ROUTING_LOG_CODEC.defaults;
-  const search = ROUTING_LOG_CODEC.toParams({ ...d, accounts: link.accounts ?? d.accounts, kinds: link.kinds ?? d.kinds, models: link.models ?? d.models, pools: link.pools ?? d.pools, range, request: link.request ?? d.request, session: link.session ?? d.session }).toString();
+  const search = ROUTING_LOG_CODEC.toParams({ ...d, accounts: link.accounts ?? d.accounts, agentId: link.agentId ?? d.agentId, kinds: link.kinds ?? d.kinds, models: link.models ?? d.models, pools: link.pools ?? d.pools, range, request: link.request ?? d.request, session: link.session ?? d.session }).toString();
   return search ? `/routing-log?${search}` : '/routing-log';
 }
 

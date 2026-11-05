@@ -2,6 +2,7 @@ import { iso } from '@/api/decode';
 import type { Account, BurnGroup, KeyStatus, RequestKind, RequestOutcome } from '@/api/types';
 import { REQUEST_KIND_VALUES, REQUEST_OUTCOME_VALUES } from '@/api/types';
 import { clock } from './clock';
+import type { SessionFilters } from './keepalive';
 import { ACCOUNT_STATUSES } from './quota';
 import { DAY, HOUR } from './time';
 
@@ -265,6 +266,8 @@ export const requestHref = (id: string): string => `/requests/${encodeURICompone
 
 export interface AnalyticsAddress {
   accounts: string[];
+  /** An agent of the session, which narrows the session's view to the agent's requests. */
+  agentId: string;
   /** The group-by, the Burn section's own `session` among its values. */
   by: BurnGroup;
   /** The client patterns, any of which a request's client matches. */
@@ -293,6 +296,7 @@ const GROUP_BYS = Object.keys(GROUP_BY_KEYS) as BurnGroup[];
 export const ANALYTICS_CODEC = codecOf<AnalyticsAddress>({
   session: text('session'),
   key: text('key'),
+  agentId: text('agent_id'),
   accounts: list('accounts'),
   by: { default: 'key', kind: 'choice', name: 'by', values: GROUP_BYS },
   clients: { kind: 'patterns', name: 'clients' },
@@ -389,28 +393,38 @@ export const ACCOUNTS_CODEC = codecOf<AccountsAddress>({
   status: { default: 'all', kind: 'choice', name: 'status', values: ['all', ...ACCOUNT_STATUSES] },
 });
 
-export interface SessionsAddress {
-  /** Companion only: the rows whose companion reports or went silent. */
-  companion: boolean;
+export interface SessionsAddress extends SessionFilters {
   /** `asc`, `desc` or empty for the sort key's own default direction, which the address omits. */
   dir: '' | SortDir;
-  /** Show finished sessions. */
-  finished: boolean;
-  /** Show released agents on a live session. */
-  released: boolean;
-  /** The rows' order: `created` the default, the session's creation time, or `activity`, its last activity. */
+  /** `created` the default, `activity`, `cost` (the dollars of the session's requests) or `requests`. */
   sort: (typeof SESSION_SORT_KEYS)[number]['id'];
 }
 
 export const SESSION_SORT_KEYS = [
   { defaultDir: 'desc', id: 'created', label: 'Created' },
   { defaultDir: 'desc', id: 'activity', label: 'Last activity' },
+  { defaultDir: 'desc', id: 'cost', label: 'Cost' },
+  { defaultDir: 'desc', id: 'requests', label: 'Requests' },
 ] as const satisfies readonly SortKey[];
 
-// The codec's literal keeps the bar's order: codecOf writes the address's keys in its specification's order.
+// The codec's literal keeps the bar's order: codecOf writes the address's keys in its specification's order. The
+// Active within ids are spelled out, since `keepalive.ts`, which holds them, reads this module at run time.
 export const SESSIONS_CODEC = codecOf<SessionsAddress>({
-  companion: { kind: 'flag', name: 'companion' },
+  search: text('search'),
+  active: { default: '', kind: 'choice', name: 'active', values: ['', '15m', '1h', '6h', '24h'] },
+  client: list('client'),
+  companion: list('companion'),
   finished: { kind: 'flag', name: 'finished' },
+  forked: { kind: 'flag', name: 'forked' },
+  key: list('key'),
+  pool: list('pool'),
+  slowed: { kind: 'flag', name: 'slowed' },
+  account: list('account'),
+  agentType: list('agent_type'),
+  cache: list('cache'),
+  effort: list('effort'),
+  model: list('model'),
   released: { kind: 'flag', name: 'released' },
+  status: list('status'),
   ...sortSpecs(SESSION_SORT_KEYS, 'created'),
 });

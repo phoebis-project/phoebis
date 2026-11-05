@@ -294,7 +294,7 @@ export function SessionsPage() {
   const listed = useMemo(() => built?.filter((r) => r.expiresAt === null || r.expiresAt > now) ?? null, [built, now]);
   // The expiry stays the outer bound, and the filters narrow the list inside it.
   const rows = useMemo(
-    () => listed?.filter((r) => (!filters.companion || r.session.companion === 'reporting' || r.session.companion === 'silent') && (filters.finished || !r.finished)) ?? null,
+    () => listed?.filter((r) => (filters.companion.length === 0 || filters.companion.includes(r.session.companion)) && (filters.finished || !r.finished)) ?? null,
     [listed, filters.companion, filters.finished],
   );
   const hiddenRows = listed !== null && rows !== null ? listed.length - rows.length : 0;

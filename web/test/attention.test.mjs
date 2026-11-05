@@ -40,6 +40,17 @@ test('a pool exhausted item opens the routing log since the condition began and 
   assert.equal(attentionHref(item('ledger_record_parked', { link: { id: 'jobs', page: 'pools' } }), NOW), '/pools#jobs', "a parked record keeps its pool's card");
 });
 
+test("the keepalive engine's three conditions read their detail as the dashboard line's sentence", () => {
+  const keepalive = (kind, id, detail) => item(kind, { detail, subject: { id, label: 'Keepalive', type: 'router' } });
+  assert.equal(attentionWords(keepalive('keepalive_bus_gaps', 'keepalive', { gaps: 3 }), NOW), 'Keepalive bus gaps: 3 since the start');
+  assert.equal(attentionWords(keepalive('keepalive_cap', 'keepalive.retained', { cap: 'retained', pct: 0.92 }), NOW), 'Keepalive cap at 92%: retained prompts');
+  assert.equal(attentionWords(keepalive('expired_between_turns', 'keepalive', { expired: 4 }), NOW), 'Expired between turns: 4 in 24h');
+});
+
+test('a keepalive condition opens the Sessions view, though its link names no page', () => {
+  assert.equal(attentionHref(item('keepalive_cap', { subject: { id: 'keepalive.retained', label: 'Keepalive', type: 'router' } }), NOW), '/sessions');
+});
+
 test("a row reads each kind's detail as one sentence", () => {
   const sentence = (kind, detail) => attentionDetail(item(kind, { detail }), NOW);
   assert.equal(sentence('pool_exhausted', { key: 'ci', pool: 'jobs' }), 'no member could take a request from key ci');

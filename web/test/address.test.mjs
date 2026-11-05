@@ -12,12 +12,12 @@ const write = (codec, filters) => codec.toParams(filters).toString();
 /** Each view's codec over a filled address: every list with two ids, every text set, every flag on, every choice off its default. */
 const FILLED = {
   ACCOUNTS_CODEC: { dir: 'asc', search: 'git', sort: 'usage', status: 'paused' },
-  ANALYTICS_CODEC: { accounts: ['primary', 'secondary'], by: 'session', clients: ['claude-code/cli', 'claude-code/sdk*'], groups: 'claude-cli/2.1.*\nclaude-cli/2.0.*', key: 'desktop@1000', keys: ['desktop', 'laptop'], models: ['claude-opus-5', 'claude-sonnet-5'], pools: ['all', 'jobs'], probes: true, range: preset('7d'), session: '407dd39b-dd60', unit: 'share', userAgents: ['claude-cli/2.1.3 (external, cli)', 'claude-cli/2.0.*'] },
+  ANALYTICS_CODEC: { accounts: ['primary', 'secondary'], agentId: 'c21e', by: 'session', clients: ['claude-code/cli', 'claude-code/sdk*'], groups: 'claude-cli/2.1.*\nclaude-cli/2.0.*', key: 'desktop@1000', keys: ['desktop', 'laptop'], models: ['claude-opus-5', 'claude-sonnet-5'], pools: ['all', 'jobs'], probes: true, range: preset('7d'), session: '407dd39b-dd60', unit: 'share', userAgents: ['claude-cli/2.1.3 (external, cli)', 'claude-cli/2.0.*'] },
   KEYS_CODEC: { pools: ['all', 'jobs'], search: 'lap', status: 'active' },
   METER_CODEC: { accounts: ['primary', 'secondary'] },
   REQUESTS_CODEC: { accounts: ['primary', 'secondary'], agent: 'claude-cli/*', agentId: 'main', agentTypes: ['main', 'subagent'], cacheMissReasons: ['messages_changed', 'ttl_expired'], classifiers: ['client', '-'], client: 'claude-code/*', efforts: ['high', 'low'], guardrails: ['large-auxiliary', '-'], held: true, keys: ['desktop', 'laptop'], kind: 'probe', models: ['claude-opus-5', 'claude-sonnet-5'], outcomes: ['failed', 'succeeded'], pools: ['all', 'jobs'], range: preset('6h'), refusalCategories: ['cyber', '-'], request: 'req_f8085653', requestClasses: ['conversation', 'title'], rows: 50, search: 'req_1d9c3e55', session: '407dd39b-dd60', speeds: ['fast', 'standard'], statuses: ['200', '429'], stopReasons: ['refusal', '-'], turnOrigins: ['agent', 'user'] },
   ROUTING_LOG_CODEC: { accounts: ['primary', 'secondary'], agentId: 'main', keys: ['desktop', 'laptop'], kinds: ['exhausted', 'moved'], models: ['claude-opus-5', 'claude-sonnet-5'], pools: ['all', 'jobs'], range: preset('6h'), request: 'req_1d9c3e55', session: '407dd39b-dd60' },
-  SESSIONS_CODEC: { companion: true, dir: 'asc', finished: true, released: true, sort: 'activity' },
+  SESSIONS_CODEC: { account: ['primary', 'studio'], active: '1h', agentType: ['Explore', 'main'], cache: ['cold', 'no recipe'], client: ['Claude Code 2.1.310', 'claude-desktop/1.4'], companion: ['reporting', 'silent'], dir: 'asc', effort: ['high', 'low'], finished: true, forked: true, key: ['desktop', 'laptop@3'], model: ['claude-opus-5', 'claude-sonnet-5'], pool: ['all', 'jobs'], released: true, search: '407dd39b', slowed: true, sort: 'cost', status: ['busy', 'unreported'] },
 };
 
 test("each view's codec reads back the address it writes, the range at a preset and at a custom span", () => {
@@ -33,19 +33,26 @@ test("each view's codec reads back the address it writes, the range at a preset 
 
 test('the Sessions codec writes the filters off their defaults alone, in the bar order, reads no age, and Reset leaves a bare address', () => {
   const defaults = read(d.SESSIONS_CODEC, '');
-  assert.deepEqual(defaults, { companion: false, dir: '', finished: false, released: false, sort: 'created' });
+  assert.deepEqual(defaults, { account: [], active: '', agentType: [], cache: [], client: [], companion: [], dir: '', effort: [], finished: false, forked: false, key: [], model: [], pool: [], released: false, search: '', slowed: false, sort: 'created', status: [] });
   assert.equal(write(d.SESSIONS_CODEC, defaults), '');
   assert.deepEqual(read(d.SESSIONS_CODEC, 'age=6h'), defaults, 'an age is a key the codec does not know');
-  const set = { ...defaults, companion: true, released: true };
-  assert.equal(write(d.SESSIONS_CODEC, set), 'companion=1&released=1');
-  assert.deepEqual(read(d.SESSIONS_CODEC, 'companion=1&age=6h&released=1'), set);
-  assert.equal(write(d.SESSIONS_CODEC, { ...defaults, companion: true, dir: 'asc', released: true, sort: 'activity' }), 'companion=1&released=1&sort=activity&dir=asc', 'the control follows the filters in the bar');
+  const set = { ...defaults, companion: ['reporting', 'silent'], released: true };
+  assert.equal(write(d.SESSIONS_CODEC, set), 'companion=reporting%2Csilent&released=1');
+  assert.deepEqual(read(d.SESSIONS_CODEC, 'companion=reporting,silent&age=6h&released=1'), set);
+  assert.equal(write(d.SESSIONS_CODEC, { ...set, dir: 'asc', sort: 'activity' }), 'companion=reporting%2Csilent&released=1&sort=activity&dir=asc', 'the control follows the filters in the bar');
   const reset = Object.fromEntries(d.SESSIONS_DIMENSIONS.map((x) => [x.field, d.emptyValue(x)]));
   assert.equal(write(d.SESSIONS_CODEC, { ...set, finished: true, ...reset }), '');
 });
 
-test("both logs' codecs carry the agent id as agent_id, and agent stays the Requests view's user agent pattern", () => {
-  for (const [name, codec] of [['requests', d.REQUESTS_CODEC], ['routing log', d.ROUTING_LOG_CODEC]]) {
+test('the Sessions codec carries the Agents lists under their own keys and a flag as 1', () => {
+  const set = { ...read(d.SESSIONS_CODEC, ''), account: ['primary', 'studio'], forked: true, status: ['busy', 'unreported'] };
+  const written = write(d.SESSIONS_CODEC, set);
+  assert.equal(written, 'forked=1&account=primary%2Cstudio&status=busy%2Cunreported');
+  assert.deepEqual(read(d.SESSIONS_CODEC, written), set);
+});
+
+test("both logs' codecs and the Analytics codec carry the agent id as agent_id, and agent stays the Requests view's user agent pattern", () => {
+  for (const [name, codec] of [['requests', d.REQUESTS_CODEC], ['routing log', d.ROUTING_LOG_CODEC], ['analytics', d.ANALYTICS_CODEC]]) {
     const bare = read(codec, '');
     assert.equal(bare.agentId, '', `${name}: a bare address reads no agent id`);
     assert.equal(write(codec, { ...bare, agentId: 'main' }), 'agent_id=main', name);

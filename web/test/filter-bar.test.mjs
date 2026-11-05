@@ -88,6 +88,17 @@ test("the chips stand in the dimension list's order whatever the filters' key or
   assert.deepEqual(chips.map((c) => [c.label, c.mono]), [['account', false], ['held only', false], ['status', false], ['client', true], ['speed', true]]);
 });
 
+test('an Agents chip on the Sessions view ends its text with (any agent) and its title with the match rule, and a Session chip carries neither', () => {
+  const chips = d.chipsOf(d.SESSIONS_DIMENSIONS, { key: ['desktop'], model: ['claude-opus-5'] }, {});
+  assert.deepEqual(
+    chips.map((c) => [c.text, c.title]),
+    [
+      ['key: desktop', 'desktop'],
+      ['model: claude-opus-5 (any agent)', 'claude-opus-5, matched by any one agent'],
+    ],
+  );
+});
+
 test('the fold keeps five chips at most, fewer when they do not fit, one when none fits, and names the folded words', () => {
   const chips = ['account', 'key', 'model', 'pool', 'status', 'effort', 'speed'].map((word) => ({ field: word, label: word, mono: false, text: `${word}: x`, title: 'x', values: 'x' }));
   const five = d.foldChips(chips, () => true);
@@ -131,7 +142,7 @@ test("the lists are alphabetical inside each group, the groups in the view's ord
   assert.deepEqual(groups(d.ANALYTICS_DIMENSIONS), ['Routing', 'Request', 'Subject']);
   assert.deepEqual(groups(d.KEYS_DIMENSIONS), ['Keys']);
   assert.deepEqual(groups(d.ACCOUNTS_DIMENSIONS), ['Accounts']);
-  assert.deepEqual(groups(d.SESSIONS_DIMENSIONS), ['Sessions']);
+  assert.deepEqual(groups(d.SESSIONS_DIMENSIONS), ['Session', 'Agents']);
   for (const dimensions of [d.REQUESTS_DIMENSIONS, d.ROUTING_LOG_DIMENSIONS, d.ANALYTICS_DIMENSIONS, d.KEYS_DIMENSIONS, d.ACCOUNTS_DIMENSIONS, d.SESSIONS_DIMENSIONS]) {
     for (const group of groups(dimensions)) {
       const labels = dimensions.filter((x) => x.group === group).map((x) => x.label);

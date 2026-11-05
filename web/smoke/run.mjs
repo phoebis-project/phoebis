@@ -20907,7 +20907,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   await closeBoxes(m);
   results.push({
     name: '/analytics has a filter per dimension',
-    ok: JSON.stringify(dims) === JSON.stringify(['Account', 'Key', 'Model', 'Pool', 'Client', 'Include probes', 'User agent', 'Session']) && JSON.stringify(groupHeads) === JSON.stringify(['Routing', 'Request', 'Subject']),
+    ok: JSON.stringify(dims) === JSON.stringify(['Account', 'Key', 'Model', 'Pool', 'Client', 'Include probes', 'User agent', 'Agent', 'Session']) && JSON.stringify(groupHeads) === JSON.stringify(['Routing', 'Request', 'Subject']),
     missing: [...dims, ...groupHeads],
   });
   await openCustom(m);
@@ -23069,10 +23069,10 @@ await forView(CARD_VIEWS.map(([path]) => path), async () => {
 });
 
 await forView('/sessions', async () => {
-  // The Sessions view's three filters live in its address: each draws its chip and narrows the rows, the bare address
-  // reads the defaults, and the chip line's clear returns to it. Each view is read on the story's instant, so a row's
-  // age is its seed's. The row idle for two hours is found by the id the mock's seeds write out for it, in the seed,
-  // since it left the route's list under the non-companion timeout.
+  // The Sessions view's filters live in its address: each draws its chip, the bare address reads the defaults, and the
+  // chip line's clear returns to it. Each view is read on the story's instant, so a row's age is its seed's. The row
+  // idle for two hours is found by the id the mock's seeds write out for it, in the seed, since it left the route's
+  // list under the non-companion timeout.
   const TWO_HOURS_ID = 'e5a17c3d-8f20-4b6e-9d41-2c7b0a9f6e58';
   const RELEASED_SENTENCE = 'The mod released every agent of this session. Their records keep their slots of the cap for one cache TTL after the release and then leave the engine.';
   const listed = await api.listSessions();
@@ -23126,12 +23126,12 @@ await forView('/sessions', async () => {
     missing: [String(bare.sessionsValue), String(bare.sessionsTile), String(bare.agentsTile), String(bare.agentsTitle)],
   });
   {
-    // A silent companion counts as a companion, so Companion only keeps the thirteen rows of both companion states.
-    const only = await read('?companion=1');
+    // The Companion filter on both of its companion words keeps the thirteen rows a companion reports or went silent on.
+    const only = await read('?companion=reporting,silent');
     const kept = drawnOf(only);
     results.push({
-      name: '/sessions ?companion=1 keeps the rows whose companion reports or went silent, under the chip companion only',
-      ok: JSON.stringify(only.chips) === JSON.stringify(['companion only']) && only.drawn.length === 13 && kept.length === 13 && kept.every(companionRow) && kept.some((s) => s.companion === 'silent'),
+      name: '/sessions ?companion=reporting,silent keeps the rows whose companion reports or went silent, under the chip companion: reporting, silent',
+      ok: JSON.stringify(only.chips) === JSON.stringify(['companion: reporting, silent']) && only.drawn.length === 13 && kept.length === 13 && kept.every(companionRow) && kept.some((s) => s.companion === 'silent'),
       missing: [JSON.stringify(only.chips), `${only.drawn.length} rows`, ...new Set(kept.map((s) => s.companion))],
     });
   }
@@ -23142,10 +23142,11 @@ await forView('/sessions', async () => {
   });
   {
     // While the filters hide every row the router lists, the card says so with the hidden count and no expiry sentence:
-    // the route's eleven rows no companion reports inside the non-companion timeout, read under Companion only.
+    // the route's eleven rows no companion reports inside the non-companion timeout, read under the Companion filter on
+    // reporting.
     const { listSessions } = api;
     api.listSessions = async (...args) => (await listSessions.apply(api, args)).filter((s) => s.companion === 'none');
-    const page = await mount('/sessions?companion=1', { now: CLOCK_ORIGIN });
+    const page = await mount('/sessions?companion=reporting', { now: CLOCK_ORIGIN });
     const card = page.container.querySelector('.card--table');
     const got = { body: card?.querySelector('.empty')?.textContent?.trim() ?? card?.textContent?.trim() ?? null, rows: page.container.querySelectorAll('tbody tr.srow').length };
     page.unmount();
@@ -23234,9 +23235,8 @@ await forView('/sessions', async () => {
     });
   }
   {
-    // Add filter offers the three flags and no age, since the route's own timeout lists the sessions no mod reports. A
-    // flag's pick writes the address and its chip, and the chip line's clear returns every filter to its default and
-    // the bare address.
+    // Add filter offers the Session filters, then the Agents filters, each group in label order. A flag's pick writes
+    // the address and its chip, and the chip line's clear returns every filter to its default and the bare address.
     const page = await mount('/sessions', { now: CLOCK_ORIGIN });
     addFilterButton(page)?.click();
     await page.settle(100);
@@ -23246,16 +23246,17 @@ await forView('/sessions', async () => {
     await page.settle(300);
     const picked = { chips: chipsOn(page), search: page.location().search };
     page.unmount();
-    const full = await mount('/sessions?companion=1&finished=1&released=1', { now: CLOCK_ORIGIN });
+    const full = await mount('/sessions?companion=reporting,silent&finished=1&released=1', { now: CLOCK_ORIGIN });
     const three = chipsOn(full);
     [...full.container.querySelectorAll('.chip-line .link-btn')].find((b) => b.textContent?.trim() === 'Clear all')?.click();
     await full.settle(300);
     const cleared = { chips: chipsOn(full), rows: full.container.querySelectorAll('tbody tr.srow').length, search: full.location().search };
     full.unmount();
     results.push({
-      name: '/sessions Add filter offers the three filters and no age, and a pick writes the address and its chip',
+      name: '/sessions Add filter offers the Session and Agents filters, and a pick writes the address and its chip',
       ok:
-        JSON.stringify(offered) === JSON.stringify(['Companion only', 'Finished sessions', 'Released agents']) &&
+        JSON.stringify(offered) ===
+          JSON.stringify(['Active within', 'Client', 'Companion', 'Finished sessions', 'Forked sessions', 'Key', 'Pool', 'Slowed', 'Account', 'Agent type', 'Cache', 'Effort', 'Model', 'Released agents', 'Status']) &&
         picked.search === '?released=1' &&
         JSON.stringify(picked.chips) === JSON.stringify(['released agents']),
       missing: [JSON.stringify(offered), JSON.stringify(picked)],
@@ -23263,7 +23264,7 @@ await forView('/sessions', async () => {
     // The defaults keep the route's 24 rows, the two written sessions and the workshop session among them.
     results.push({
       name: "/sessions the chip line's Clear all returns the three filters to their defaults and the bare address",
-      ok: JSON.stringify(three) === JSON.stringify(['companion only', 'finished sessions', 'released agents']) && cleared.search === '' && cleared.chips.length === 0 && cleared.rows === 24,
+      ok: JSON.stringify(three) === JSON.stringify(['companion: reporting, silent', 'finished sessions', 'released agents']) && cleared.search === '' && cleared.chips.length === 0 && cleared.rows === 24,
       missing: [JSON.stringify(three), JSON.stringify(cleared)],
     });
   }
@@ -23331,11 +23332,11 @@ await forView('/sessions', async () => {
     const story = drawn.length === 24 && ![drawn.map(idOfRow), want.activity.rows].some((rows) => JSON.stringify(rows) === JSON.stringify(want.bare.rows)) && none('created') >= 2 && none('activity') >= 1;
     const wantRadios = {
       ascRadios: [
-        ['Created false', 'Last activity true'],
+        ['Created false', 'Last activity true', 'Cost false', 'Requests false'],
         ['Ascending true', 'Descending false'],
       ],
       bareRadios: [
-        ['Created true', 'Last activity false'],
+        ['Created true', 'Last activity false', 'Cost false', 'Requests false'],
         ['Ascending false', 'Descending true'],
       ],
     };

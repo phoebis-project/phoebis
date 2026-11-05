@@ -282,7 +282,7 @@ test("agentFigures sums an agent's entries across its models and reads the newes
 const NO_FILTERS = { account: [], active: '', agentType: [], cache: [], client: [], companion: [], effort: [], finished: false, forked: false, key: [], model: [], pool: [], released: false, search: '', slowed: false, status: [] };
 /** A drawn line with the two members the Model and Status filters read. */
 const matchLine = (agentId, model, lifecycle) => ({ agentId, agentType: null, lifecycle, model, pin: null, recipe: null });
-const matchSession = { agentRequests: [], companion: 'reporting', forkedFrom: null, keyGeneration: 1, keyId: 'desktop', lastRequestAt: iso(ms(14, 20)), lastUsedAt: iso(ms(14, 20)), sessionId: 'session-1', speed: null, userAgent: null };
+const matchSession = { agentRequests: [], companion: 'reporting', forkedFrom: null, historical: false, keyGeneration: 1, keyId: 'desktop', lastRequestAt: iso(ms(14, 20)), lastUsedAt: iso(ms(14, 20)), sessionId: 'session-1', speed: null, userAgent: null };
 
 test('matches lists a session under Agents filters where one of its drawn lines passes them all, not where two lines pass one each', () => {
   const filters = { ...NO_FILTERS, model: ['claude-opus-5'], status: ['busy'] };
@@ -295,6 +295,13 @@ test('matches lists a session under Agents filters where one of its drawn lines 
   const liveLines = [matchLine('main', 'claude-sonnet-5', 'busy'), matchLine('a1', 'claude-opus-5', 'released')];
   assert.equal(d.matches(row(liveLines), onModel, NOW), false, "a live row's released line, which the row draws only under the flag");
   assert.equal(d.matches(row(liveLines), { ...onModel, released: true }, NOW), true, 'the same line under the flag');
+});
+
+test("matches reads a bare key id as the live key's rows and id@generation as that lifetime's alone", () => {
+  const keyRow = (keyGeneration, historical) => ({ finished: false, lines: [], poolId: 'all', session: { ...matchSession, historical, keyGeneration } });
+  const rows = [keyRow(2, false), keyRow(1, true)];
+  assert.deepEqual(rows.map((r) => d.matches(r, { ...NO_FILTERS, key: ['desktop'] }, NOW)), [true, false], "a bare id keeps the live holder's row and turns the earlier holder's away");
+  assert.deepEqual(rows.map((r) => d.matches(r, { ...NO_FILTERS, key: ['desktop@1'] }, NOW)), [false, true], 'a lifetime keeps its own row alone');
 });
 
 test('activeWithin reads the later of the last use and the last request', () => {

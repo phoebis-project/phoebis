@@ -177,7 +177,7 @@ type OrderedSession = Pick<Session, 'createdAt' | 'lastRequestAt' | 'lastUsedAt'
  * The rows under `created`, `activity`, `cost` (`spend.usd`, the list dollars, which add across units) or `requests`,
  * ties by session id, a row without the value last either way.
  */
-export function orderRows<T extends { session: OrderedSession }>(rows: readonly T[], sort: string, dir: SortDir): T[] {
+export function orderRows<T extends { session: OrderedSession }>(rows: readonly T[], sort: SessionsAddress['sort'], dir: SortDir): T[] {
   const order = (a: OrderedSession, b: OrderedSession): number => {
     if (sort === 'cost') return byFigure(a.spend?.usd ?? null, b.spend?.usd ?? null, dir);
     if (sort === 'requests') return byFigure(a.requests, b.requests, dir);
@@ -467,8 +467,9 @@ function drawnLines(row: Pick<MatchRow, 'finished' | 'lines'>, filters: Pick<Ses
 
 /**
  * The row passes every Session filter and, where an Agents filter stands, one of the lines it draws passes them all. A
- * finished row is out unless `finished` stands. The search matches the id's prefix whatever its case, and Key takes the
- * key id or `id@generation`.
+ * finished row is out unless `finished` stands. The search matches the id's prefix whatever its case. Key reads the
+ * Requests view's selectors: `id@generation` names one lifetime and a bare id the live key's rows, so an earlier
+ * holder's rows answer to their own lifetime alone.
  */
 export function matches(row: MatchRow, filters: SessionFilters, now: number): boolean {
   const { session } = row;
@@ -478,7 +479,7 @@ export function matches(row: MatchRow, filters: SessionFilters, now: number): bo
   if (active !== undefined && !activeWithin(session, active.ms, now)) return false;
   if (misses(filters.client, clientVersion(session.userAgent)) || misses(filters.companion, session.companion) || misses(filters.pool, row.poolId)) return false;
   if (filters.forked && session.forkedFrom === null) return false;
-  if (filters.key.length > 0 && !filters.key.some((k) => k === session.keyId || k === `${session.keyId}@${session.keyGeneration}`)) return false;
+  if (filters.key.length > 0 && !filters.key.some((k) => (k.includes('@') ? k === `${session.keyId}@${session.keyGeneration}` : k === session.keyId && !session.historical))) return false;
   if (filters.slowed && !(session.speed !== null && session.speed < 1)) return false;
   return !agentFiltersStand(filters) || drawnLines(row, filters).some((line) => lineMatches(line, filters));
 }

@@ -419,6 +419,11 @@ test('each link in builds its URL with its range', () => {
   assert.deepEqual(Object.fromEntries(session), { from: '2026-09-16T10:00:00.000Z', session: '407dd39b', to: '2026-09-16T12:00:00.000Z' });
 });
 
+test("logHref writes the link's agent id as agent_id beside its session", () => {
+  const agent = new URL(d.logHref({ session: '407dd39b', agentId: 'c21e', ...d.aroundSubject(at, NOW) }), 'http://phoebis.test').searchParams;
+  assert.deepEqual(Object.fromEntries(agent), { agent_id: 'c21e', from: '2026-09-16T13:00:00.000Z', session: '407dd39b', to: '2026-09-16T14:30:00.000Z' });
+});
+
 test('logHref writes a preset by name and a window as two instants', () => {
   assert.equal(d.logHref({ range: '24h' }), '/routing-log?range=24h');
   assert.equal(d.logHref({ range: '1h' }), '/routing-log');

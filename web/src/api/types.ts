@@ -305,7 +305,7 @@ export interface QuotaSnapshot {
  * The conditions that need the operator, worst first: the order the route ranks by and the dashboard's line draws,
  * so not alphabetical.
  */
-export const ATTENTION_KIND_VALUES = ['pool_exhausted', 'client_drift', 'writer_degraded', 'certificate_reload_failed', 'reauth_required', 'funding_required', 'refresh_failed', 'certificate_expiring', 'ledger_record_parked', 'poll_backoff', 'model_unpriced', 'meter_drift', 'wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long'] as const;
+export const ATTENTION_KIND_VALUES = ['pool_exhausted', 'client_drift', 'writer_degraded', 'certificate_reload_failed', 'reauth_required', 'funding_required', 'refresh_failed', 'certificate_expiring', 'ledger_record_parked', 'keepalive_bus_gaps', 'poll_backoff', 'model_unpriced', 'meter_drift', 'wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long', 'keepalive_cap', 'expired_between_turns'] as const;
 /** `unknown` stands for a kind this console does not know, which the route never answers under that name. */
 export type AttentionKind = (typeof ATTENTION_KIND_VALUES)[number] | 'unknown';
 
@@ -330,7 +330,8 @@ export interface AttentionItem {
   /**
    * An account or a pool by id and label, a client version as both, a model's undated id as both, or one of the
    * router's own components as both: the ledger or the routing state writer, a listener's pair by its key
-   * (`proxy.tls`, `admin.tls`), or `-` for a parked record without a pool.
+   * (`proxy.tls`, `admin.tls`), or `-` for a parked record without a pool. The keepalive engine and its caps read
+   * `keepalive` and `keepalive.<cap>` under the label `Keepalive`.
    */
   subject: { id: string; label: string; type: (typeof ATTENTION_SUBJECT_VALUES)[number] };
 }
