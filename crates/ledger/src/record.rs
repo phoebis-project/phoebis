@@ -9,9 +9,8 @@ use phoebis_routing::{CacheMapEntry, DecisionRecord, DecisionSummary, PinUsage};
 use phoebis_store::AccountKind;
 
 use crate::plan::{funding_of, Funding};
-use crate::price::price_usd;
-use crate::pricing::{PriceRevisions, Speed};
-use crate::rollup::{deltas_of, fold_speed};
+use crate::pricing::Speed;
+use crate::rollup::fold_speed;
 use crate::LedgerError;
 
 // A parked row outlives the build that wrote it, so a field a later build adds reads at its default.
@@ -138,18 +137,11 @@ pub struct ServingFacts {
     pub cache_read_tokens: Option<u64>,
     /// The 5-minute and 1-hour writes summed.
     pub cache_write_tokens: Option<u64>,
-    pub cost_usd: Option<f64>,
 }
 
 impl ServingFacts {
-    /// The facts of `attempts`' last attempt, the cost priced as the rollup fold prices the request: each of its
-    /// `deltas_of` rows at the cells the row's band, speed and model select on the revision in force at the request's
-    /// `received_at`, summed, `None` where no attempt answered or no row priced.
-    pub(crate) fn of(
-        request: &RequestRecord,
-        attempts: &[AttemptRecord],
-        prices: &PriceRevisions,
-    ) -> ServingFacts {
+    /// The facts of `attempts`' last attempt, every field `None` for a request no attempt served.
+    pub(crate) fn of(request: &RequestRecord, attempts: &[AttemptRecord]) -> ServingFacts {
         let Some(last) = attempts.last() else {
             return ServingFacts::default();
         };
@@ -157,19 +149,6 @@ impl ServingFacts {
             (None, None) => None,
             (five_minute, hour) => Some(five_minute.unwrap_or(0) + hour.unwrap_or(0)),
         };
-        let cost_usd = attempts
-            .iter()
-            .any(AttemptRecord::has_usage)
-            .then(|| {
-                deltas_of(request, attempts, prices)
-                    .iter()
-                    .filter_map(|row| {
-                        price_usd(prices, &row.price_key(request.received_at), row.usage())
-                    })
-                    .map(|split| split.total())
-                    .reduce(|sum, usd| sum + usd)
-            })
-            .flatten();
         ServingFacts {
             account_id: Some(last.account_id.clone()),
             reached_upstream: Some(last.upstream_status.is_some()),
@@ -182,7 +161,6 @@ impl ServingFacts {
             output_tokens: last.output_tokens,
             cache_read_tokens: last.cache_read_tokens,
             cache_write_tokens,
-            cost_usd,
         }
     }
 }

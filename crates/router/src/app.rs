@@ -233,7 +233,7 @@ pub async fn run_until(
             "re-folded the requests whose prompt-length band moved"
         );
     }
-    let backfilled = phoebis_ledger::backfill_serving_facts(&ledger_db, &pricing.revisions())
+    let backfilled = phoebis_ledger::backfill_serving_facts(&ledger_db)
         .context("filling the serving attempt's facts on the request rows written before the columns existed")?;
     if backfilled.written > 0 || backfilled.left > 0 {
         tracing::info!(

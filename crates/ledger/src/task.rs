@@ -1582,7 +1582,6 @@ impl Handles {
                                 request,
                                 &attempts,
                                 bodies.as_ref(),
-                                &revisions,
                                 clock(),
                             )?;
                             crate::rollup::fold_request(

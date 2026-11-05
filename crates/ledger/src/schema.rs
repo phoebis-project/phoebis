@@ -423,7 +423,6 @@ const STEP_3: &str = "ALTER TABLE attempts ADD COLUMN issued_digest TEXT; \
     ALTER TABLE requests ADD COLUMN output_tokens INTEGER; \
     ALTER TABLE requests ADD COLUMN cache_read_tokens INTEGER; \
     ALTER TABLE requests ADD COLUMN cache_write_tokens INTEGER; \
-    ALTER TABLE requests ADD COLUMN cost_usd REAL; \
     CREATE INDEX requests_serving_pending ON requests (received_at) \
         WHERE serving_account_id IS NULL AND attempts > 0";
 

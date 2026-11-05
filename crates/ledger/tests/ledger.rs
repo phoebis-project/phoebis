@@ -1349,17 +1349,14 @@ type FiveFacts = (
 
 /// Rows written before the columns existed, their columns null, take the facts the request list derived per row from
 /// their attempts: a failover's second account, a refusal's category, a cache-miss reason, the standard speed of an
-/// answer that named none and the fast speed of a request that asked for it and was never answered. The other seven
-/// facts read the seeded attempt's own figures, the cost priced on the test's price list by hand, and a request no
-/// attempt served keeps every fact null.
+/// answer that named none and the fast speed of a request that asked for it and was never answered. The other six
+/// facts read the seeded attempt's own figures, and a request no attempt served keeps every fact null.
 #[tokio::test]
 async fn the_backfill_fills_old_rows_with_the_facts_the_list_derived_from_their_attempts() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("ledger.sqlite");
     let db = Arc::new(LedgerDb::open(&path).unwrap());
     let seed = rusqlite::Connection::open(&path).unwrap();
-    // The first entry of the test price list prices claude-sonnet-5-5 at 3, 0.3, 3.75, 6 and 15 dollars per million
-    // input, cache-read, 5-minute write, 1-hour write and output tokens, and the counts below price to whole halves.
     seed.execute_batch(&format!(
         "INSERT INTO requests (id, received_at, model, canonical_model, stream, kind, origin, outcome, attempts, \
          requested_speed, refused) VALUES \
@@ -1402,8 +1399,7 @@ async fn the_backfill_fills_old_rows_with_the_facts_the_list_derived_from_their_
         .unwrap()
         .collect::<rusqlite::Result<_>>()
         .unwrap();
-    phoebis_ledger::backfill_serving_facts(&db, &phoebis_ledger::test_tables::api_prices())
-        .unwrap();
+    phoebis_ledger::backfill_serving_facts(&db).unwrap();
     let mut filled: Vec<FiveFacts> = Vec::new();
     let mut figures = Vec::new();
     for (id, ..) in &derived {
@@ -1417,7 +1413,6 @@ async fn the_backfill_fills_old_rows_with_the_facts_the_list_derived_from_their_
             s.output_tokens,
             s.cache_read_tokens,
             s.cache_write_tokens,
-            s.cost_usd,
         ));
         filled.push((
             id.clone(),
@@ -1440,8 +1435,7 @@ async fn the_backfill_fills_old_rows_with_the_facts_the_list_derived_from_their_
                 Some(1_000_000),
                 Some(200_000),
                 Some(10_000_000),
-                Some(650_000),
-                Some(12.0)
+                Some(650_000)
             ),
             (
                 "missed".to_string(),
@@ -1450,8 +1444,7 @@ async fn the_backfill_fills_old_rows_with_the_facts_the_list_derived_from_their_
                 Some(1_000_000),
                 None,
                 None,
-                Some(400_000),
-                Some(4.5)
+                Some(400_000)
             ),
             (
                 "refusal".to_string(),
@@ -1460,14 +1453,12 @@ async fn the_backfill_fills_old_rows_with_the_facts_the_list_derived_from_their_
                 Some(2_000_000),
                 Some(0),
                 None,
-                None,
-                Some(6.0)
+                None
             ),
             (
                 "unanswered".to_string(),
                 Some(false),
                 Some("transport_error".to_string()),
-                None,
                 None,
                 None,
                 None,
@@ -1480,11 +1471,10 @@ async fn the_backfill_fills_old_rows_with_the_facts_the_list_derived_from_their_
                 Some(1_000_000),
                 None,
                 None,
-                None,
-                Some(3.0)
+                None
             ),
         ],
-        "the serving attempt's own figures, the cost priced on every answered attempt"
+        "the serving attempt's own figures"
     );
     let (unattempted, _) = db.request("unattempted").await.unwrap().unwrap();
     assert_eq!(unattempted.serving, phoebis_ledger::ServingFacts::default());
@@ -1524,9 +1514,8 @@ async fn a_start_fills_one_slice_of_pending_rows_and_skips_refusals_and_lost_tra
         last_pending = pending - 1,
     ))
     .unwrap();
-    let prices = phoebis_ledger::test_tables::api_prices();
-    let first = backfill_serving_facts(&db, &prices).unwrap();
-    let second = backfill_serving_facts(&db, &prices).unwrap();
+    let first = backfill_serving_facts(&db).unwrap();
+    let second = backfill_serving_facts(&db).unwrap();
     assert_eq!(
         (first, second),
         (
