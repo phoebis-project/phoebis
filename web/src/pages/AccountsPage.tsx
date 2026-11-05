@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams, type Location, type To } from 'react-router-dom';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError } from '@/api';
 import type { Account, AllowanceAccount, AllowanceReset, AllowanceWindow, PairingConfirmed, PairingPreview, PairingSession, QuotaHistory, ReconciliationsAnswer, Settings, SubscriptionCosts } from '@/api/types';
@@ -27,7 +27,7 @@ import { ACCOUNTS_DIMENSIONS } from '@/lib/filterBar';
 import { fmtAbsolute, fmtCredits, fmtDate, fmtDated, fmtDayMonth, fmtDayShort, fmtDuration, fmtEndsIn, fmtInt, fmtRelative, messageOf, pct, plural, upperFirst } from '@/lib/format';
 import { accountPatchOf, advancesOwnToken, derivedId, endZoneLabel, subscriptionEndFormOf, subscriptionEndRefusal, tickCanceled, type SubscriptionEndForm } from '@/lib/forms';
 import { useAsync, useLatest, useNow, useQueryFilters, type Loaded } from '@/lib/hooks';
-import { latestPerWindow, meterGroups } from '@/lib/meter';
+import { byWindow, meterGroups } from '@/lib/meter';
 import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, accountCooldown, planEndedSentence, planExtraUsage, planOverage, planWordLabel, readWindows, slowedOf } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
 import { speedHover } from '@/lib/selection';
@@ -44,6 +44,11 @@ const END_HINT = "The date the plan's billing settings show as its end. An annua
 /** With auto reload off, how often the page reads the list while a pairing's first reading is in flight, and for how long. */
 const FIRST_READING_EVERY_MS = 2_000;
 const FIRST_READING_FOR_MS = 30_000;
+/**
+ * An account's address that keeps the list's query and hash, so opening an account leaves the filters standing. The
+ * address hook keeps the location for its own writes alone.
+ */
+const accountAt = (location: Location, id: string): To => ({ hash: location.hash, pathname: accountHref(id), search: location.search });
 
 export function AccountsPage() {
   const { accountId } = useParams();
@@ -124,13 +129,12 @@ export function AccountsPage() {
   }, [awaiting, intervalMs, reread]);
   // A bare /accounts, and a deleted account's URL that names a row the reloaded list no longer holds, lead to the
   // router's first account the list shows, so the detail never opens on a row the filters hide. Where they hide every
-  // row it is the router's first. The query and the hash go along, since the address hook keeps the location for its
-  // own writes alone.
+  // row it is the router's first.
   const first = accounts.data?.find((a) => list.includes(a)) ?? accounts.data?.[0];
   useEffect(() => {
     if (created !== null && accountId === created.id) return;
-    if (accounts.data && !selected && first !== undefined) navigate({ hash: location.hash, pathname: accountHref(first.id), search: location.search }, { replace: true });
-  }, [accounts.data, accountId, created, first, location.hash, location.search, navigate, selected]);
+    if (accounts.data && !selected && first !== undefined) navigate(accountAt(location, first.id), { replace: true });
+  }, [accounts.data, accountId, created, first, location, navigate, selected]);
 
   return (
     <PopoverHost.Provider value={host}>
@@ -216,10 +220,7 @@ export function AccountsPage() {
           }}
         />
         <PairingDialog
-          open={pairing !== null}
-          start={pairing?.start ?? NO_PAIRING}
-          label={pairing?.label ?? ''}
-          repair={pairing?.repair ?? false}
+          pairing={pairing}
           onClose={() => setPairing(null)}
           onPaired={(preview, confirmed) => {
             const start = pairing?.start ?? null;
@@ -229,7 +230,7 @@ export function AccountsPage() {
             if (confirmed.firstPollInFlight) setAwaiting(confirmed.accountId);
             if (start !== null && 'id' in start) {
               setCreated({ id: start.id, reading: false });
-              navigate({ hash: location.hash, pathname: accountHref(start.id), search: location.search });
+              navigate(accountAt(location, start.id));
             }
           }}
         />
@@ -239,13 +240,12 @@ export function AccountsPage() {
 }
 
 function AccountRow({ account, active, now }: { account: Account; active: boolean; now: number }) {
-  // The row keeps the list's query and hash, so opening an account leaves the filters standing.
   const location = useLocation();
   const slowed = slowedOf(account, now);
   const extra = planExtraUsage(account);
   return (
     <li>
-      <Link to={{ hash: location.hash, pathname: accountHref(account.id), search: location.search }} className={`account-row ${active ? 'is-active' : ''}`}>
+      <Link to={accountAt(location, account.id)} className={`account-row ${active ? 'is-active' : ''}`}>
         <div className="account-row__head">
           <span className="account-row__name">{account.label}</span>
           {account.plan && <Badge tone="neutral">{account.plan}</Badge>}
@@ -820,39 +820,34 @@ const DRIFT_SUBTITLE = "The latest completed window of each kind, the upstream's
 function DriftCard({ accountId, answer, error, onRetry }: { accountId: string; answer: ReconciliationsAnswer | null; error: string | null; onRetry: () => void }) {
   // The answer lands once per account and on Refresh, and the grouping sorts by parsed instants, so the list's poll and
   // the clock re-render the card from the same derivation.
-  const drift = useMemo(() => {
+  const groups = useMemo(() => {
     if (answer === null) return null;
     const rows = answer.reconciliations.filter((r) => r.accountId === accountId);
-    return { groups: Object.values(meterGroups(rows)).flat(), latest: latestPerWindow(rows), rows };
+    return Object.values(meterGroups(rows)).flat().sort((a, b) => byWindow(a.window, b.window));
   }, [accountId, answer]);
   return (
     <Card title="Meter drift" subtitle={DRIFT_SUBTITLE} actions={<Link to={accountMeterHref(accountId)}>Meter</Link>}>
       {error !== null ? (
         <ErrorState title="Could not load the meter reconciliation" body={error} retry={onRetry} />
-      ) : drift === null ? (
+      ) : groups === null ? (
         <Skeleton height={60} />
-      ) : drift.rows.length === 0 ? (
+      ) : groups.length === 0 ? (
         <p className="muted">No completed window yet</p>
       ) : (
         <KeyValue
-          rows={drift.latest.map((latest) => {
-            const group = drift.groups.find((g) => g.window === latest.window);
-            const off = group?.off ?? 0;
-            const windows = group?.rows.length ?? 1;
-            return {
-              label: windowWord(latest.window),
-              value: (
-                <span className="meter-drift__line">
-                  <span className="meter-drift__ratio">
-                    <MeterRatio row={latest} />
-                  </span>
-                  <span className="meter-drift__meta" title={`ended ${fmtAbsolute(latest.windowEnd)}, ${off} of the ${plural(windows, 'window')} of the last 30 days off the band`}>
-                    {`${fmtDated(Date.parse(latest.windowEnd))}, ${off} of ${windows} off`}
-                  </span>
+          rows={groups.map((g) => ({
+            label: windowWord(g.window),
+            value: (
+              <span className="meter-drift__line">
+                <span className="meter-drift__ratio">
+                  <MeterRatio row={g.latest} />
                 </span>
-              ),
-            };
-          })}
+                <span className="meter-drift__meta" title={`ended ${fmtAbsolute(g.latest.windowEnd)}, ${g.off} of the ${plural(g.rows.length, 'window')} of the last 30 days off the band`}>
+                  {`${fmtDated(Date.parse(g.latest.windowEnd))}, ${g.off} of ${g.rows.length} off`}
+                </span>
+              </span>
+            ),
+          }))}
         />
       )}
     </Card>
@@ -1067,10 +1062,10 @@ const PAIR_STEPS: { label: string; step: PairStep }[] = [
  * its confirm creates under `id`.
  */
 type PairingTarget = { accountId: string } | { id: string; session: PairingSession };
-/** The closed dialog's start, one object for every render, so the dialog keys its opening on the start's identity. */
-const NO_PAIRING: PairingTarget = { accountId: '' };
 
-function PairingDialog({ open, start, label, repair, onClose, onPaired }: { label: string; onClose: () => void; onPaired: (p: PairingPreview, confirmed: PairingConfirmed) => void; open: boolean; repair: boolean; start: PairingTarget }) {
+function PairingDialog({ pairing, onClose, onPaired }: { onClose: () => void; onPaired: (p: PairingPreview, confirmed: PairingConfirmed) => void; pairing: { label: string; repair: boolean; start: PairingTarget } | null }) {
+  const open = pairing !== null;
+  const start = pairing?.start ?? null;
   const [session, setSession] = useState<PairingSession | null>(null);
   const [step, setStep] = useState<PairStep>(1);
   const [callback, setCallback] = useState('');
@@ -1092,11 +1087,10 @@ function PairingDialog({ open, start, label, repair, onClose, onPaired }: { labe
 
   // An opening, or a new start while open, resets the steps in the render that brings it. The page replaces its start
   // only as it opens or closes the dialog, so the start's identity names the opening.
-  const opening = open ? start : null;
   const [openedFor, setOpenedFor] = useState<PairingTarget | null>(null);
-  if (openedFor !== opening) {
-    setOpenedFor(opening);
-    if (opening !== null) restart('session' in start ? start.session : null);
+  if (openedFor !== start) {
+    setOpenedFor(start);
+    if (start !== null) restart('session' in start ? start.session : null);
   }
   // The start effect's run while the dialog stays open, which the Disconnect's fresh start reads as its close guard.
   const live = useRef({ alive: false });
@@ -1104,7 +1098,7 @@ function PairingDialog({ open, start, label, repair, onClose, onPaired }: { labe
   // claim or the transport left standing expires on its own.
   const consumed = useRef<string | null>(null);
   useEffect(() => {
-    if (!open || 'session' in start) return;
+    if (start === null || 'session' in start) return;
     const run = { alive: true };
     live.current = run;
     api.startPairing(start).then(
@@ -1120,7 +1114,7 @@ function PairingDialog({ open, start, label, repair, onClose, onPaired }: { labe
     return () => {
       run.alive = false;
     };
-  }, [open, start]);
+  }, [start]);
 
   const dismiss = () => {
     // The router keeps the account busy until the pairing expires, so leaving unconfirmed gives the session back.
@@ -1167,7 +1161,7 @@ function PairingDialog({ open, start, label, repair, onClose, onPaired }: { labe
   // The router failed this pairing on the sealed answer and cancels the account's pairings on the disconnect, so the
   // way on is a fresh pairing. The sealed answer comes on an existing slot alone, which the page opens by its id.
   const disconnect = async () => {
-    if (!('accountId' in start)) return;
+    if (!(start !== null && 'accountId' in start)) return;
     const { accountId } = start;
     const run = live.current;
     setBusy(true);
@@ -1188,7 +1182,7 @@ function PairingDialog({ open, start, label, repair, onClose, onPaired }: { labe
     }
   };
 
-  const title = repair ? `Re-pair ${label}` : `Pair ${label || 'new account'}`;
+  const title = pairing?.repair ? `Re-pair ${pairing.label}` : `Pair ${pairing?.label || 'new account'}`;
   return (
     <Dialog
       open={open}

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { fmtPct } from '@/lib/format';
 
 export interface DonutSlice {
@@ -68,5 +68,22 @@ export function Donut({ slices, total, centerLabel, centerValue, size = 148, onH
         {centerValue}
       </text>
     </svg>
+  );
+}
+
+/** The list beside a ring, `hover` the id its `onHover` last reported: while it is set, every other row dims. */
+export function DonutLegend({ hover, items }: { hover: string | null; items: { color: string; id: string; label: ReactNode; title?: string; value: ReactNode; valueTitle?: string }[] }) {
+  return (
+    <ul className="plain-list remaining__list">
+      {items.map((item) => (
+        <li key={item.id} className={hover && hover !== item.id ? 'is-dim' : ''} title={item.title}>
+          <span className="legend__swatch" style={{ background: item.color }} />
+          {item.label}
+          <span className="num" title={item.valueTitle}>
+            {item.value}
+          </span>
+        </li>
+      ))}
+    </ul>
   );
 }

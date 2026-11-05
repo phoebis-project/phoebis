@@ -235,7 +235,7 @@ export function KeysPage() {
           <Tile label="Keys" value={totals ? fmtInt(totals.keys) : null} />
           <Tile label="Active" value={totals ? fmtInt(totals.active) : null} />
           <Tile label="Lifetime requests" value={totals ? fmtCompact(totals.requests) : null} />
-          <Tile label="Lifetime cost" value={lifetimeTile?.value ?? null} title={lifetimeTile?.title} failure={lifetimeTile?.value === null ? reading.failure : null} />
+          <Tile label="Lifetime cost" value={lifetimeTile?.value ?? null} title={lifetimeTile?.title} failure={lifetimeTile?.failure ?? null} />
         </div>
 
         <div className="keys-layout">

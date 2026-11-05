@@ -11,7 +11,7 @@ import { Chips } from '@/components/ChipView';
 import { FilterBar } from '@/components/FilterBar';
 import { PhaseWaterfall } from '@/components/PhaseWaterfall';
 import { TokenBar } from '@/components/TokenBar';
-import { AttemptCount } from '@/components/ui/AttemptTrail';
+import { AttemptCount, StatusBadge } from '@/components/ui/AttemptTrail';
 import { ColumnsControl } from '@/components/ui/ColumnsControl';
 import { CostTd } from '@/components/ui/CostTd';
 import type { Option } from '@/components/ui/OptionList';
@@ -37,8 +37,7 @@ import { compareRequests, costCellOf, costHeaderTitle, type CostUnit, costUnitOf
 import { requestsWiden } from '@/lib/requestsLink';
 import { type Chip, logHref, requestLink, words } from '@/lib/routingLog';
 import { plainOutputOf } from '@/lib/tokenBar';
-import type { UnitPosition, WeekPosition } from '@/lib/unit';
-import { StatusBadge } from './DashboardPage';
+import type { UnitPosition } from '@/lib/unit';
 
 // `fill` marks the columns the table draws `col-fill`, so the table takes its content width when none of them shows.
 const COLUMNS = [
@@ -135,12 +134,9 @@ const routingLogHref = (r: RequestLog, now: number) => {
 /** The figure's context a request's cost reads: the accounts read and the cost model the hint is composed from, and the
  *  chosen week with its scale and `failure`, as `weekReadingOf` reads them, which a figure waiting on the scale draws
  *  as a dash titled with the failure. */
-interface CostContext {
+interface CostContext extends WeekReading {
   accounts: Account[] | null;
   costs: SubscriptionCosts | null;
-  failure: WeekReading['failure'];
-  scale: number | null;
-  week: WeekPosition;
 }
 
 /** A request's unit under a position, with the hint composed where the accounts read holds its account. */
@@ -157,7 +153,7 @@ function requestCost(request: RequestLog, unit: UnitPosition, context: CostConte
 function CostCell({ context, request, unit }: { context: CostContext; request: RequestLog; unit: UnitPosition }) {
   // The unit alone, as the Dashboard's RecentCost builds it: the drawer's hint lines would be built for nothing per row.
   const args = requestHintArgs(request, context.accounts, context.costs);
-  return <CostTd cell={costCellOf(costUnitOf(request, unit, args === null ? null : shareHint(...args)), context.week, context.scale)} className="requests__cost" error={context.failure?.text ?? null} />;
+  return <CostTd cell={costCellOf(costUnitOf(request, unit, args === null ? null : shareHint(...args)), context.week, context.scale)} className="requests__cost" failure={context.failure} />;
 }
 
 /** A component of its own, so the expression-bodied row map reads the hold's words once. */

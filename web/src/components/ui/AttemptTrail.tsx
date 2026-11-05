@@ -5,7 +5,7 @@ import { fmtAbsolute } from '@/lib/format';
 import { floatAt } from '@/lib/menu';
 import type { BadgeTone } from '@/lib/quota';
 import { useLeaveOnMove } from './overlay';
-import { Described } from './primitives';
+import { Badge, Described } from './primitives';
 
 /** The shape of a ledger attempt as the trail draws it. */
 export interface TrailAttempt {
@@ -26,6 +26,15 @@ const OUTCOME_LABEL: Record<AttemptOutcome, string> = {
 };
 
 export const statusTone = (status: number | null): BadgeTone => (status === null ? 'neutral' : status === 200 ? 'good' : status === 429 ? 'warning' : status === 529 ? 'serious' : 'critical');
+
+export function StatusBadge({ status, attempts = 1 }: { attempts?: number; status: number | null }) {
+  return (
+    <Badge tone={statusTone(status)} title={attempts > 1 ? `${attempts} attempts` : undefined}>
+      {status ?? '-'}
+      {attempts > 1 && <span className="badge__extra">×{attempts}</span>}
+    </Badge>
+  );
+}
 
 const lineFor = (a: TrailAttempt) =>
   [`${a.index + 1}. ${a.accountId}: ${OUTCOME_LABEL[a.outcome]}`, a.upstreamStatus === null ? 'no status' : `HTTP ${a.upstreamStatus}`, a.cooldownSet ? `cooldown set, ${a.cooldownSet.reason}, until ${fmtAbsolute(a.cooldownSet.until)}` : 'no cooldown set'].join(', ');

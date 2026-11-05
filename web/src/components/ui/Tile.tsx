@@ -69,11 +69,12 @@ export function figuresValue(figures: CostFigure[]): ReactNode {
 /**
  * A tile over a sum under a position. Native stacks the two sides with their words in the chosen week, the
  * subscription side a dash under `UNPRICED_TITLE` where a plan row priced nothing, and an empty sum reads its zero in
- * each unit rather than nothing. A null value is the skeleton native draws while the scale is out.
+ * each unit rather than nothing. A null value is the skeleton native draws while the scale is out, and `failure` the
+ * reading's failure there, which a tile draws as its dash.
  */
-export function sumTileOf(unit: UnitPosition, s: FundedSum, reading: WeekReading): { title?: string; value: ReactNode | null } {
-  if (unit !== 'native') return { value: fmtUsd(dollarsUnder(unit, s)) };
-  if (reading.scale === null) return { value: null };
+export function sumTileOf(unit: UnitPosition, s: FundedSum, reading: WeekReading): { failure: WeekReading['failure']; title?: string; value: ReactNode | null } {
+  if (unit !== 'native') return { failure: null, value: fmtUsd(dollarsUnder(unit, s)) };
+  if (reading.scale === null) return { failure: reading.failure, value: null };
   const native = nativeFiguresOf(nativeSidesOf(s), reading.week, reading.scale);
-  return { title: native.unpriced ? UNPRICED_TITLE : undefined, value: figuresValue(native.figures) };
+  return { failure: null, title: native.unpriced ? UNPRICED_TITLE : undefined, value: figuresValue(native.figures) };
 }

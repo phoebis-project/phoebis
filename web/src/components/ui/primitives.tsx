@@ -259,6 +259,16 @@ export function ErrorState({ title = 'Could not load', body, action, retry }: { 
   );
 }
 
+export function StateRow({ colSpan, empty, error, errorTitle, loading, retry }: { colSpan: number; empty: string; error: string | null; errorTitle: string; loading: boolean; retry?: () => void }) {
+  return (
+    <tr>
+      <td colSpan={colSpan} className={error ? '' : 'muted'}>
+        {error ? <ErrorState title={errorTitle} body={error} retry={retry} /> : loading ? <Skeleton height={22} /> : empty}
+      </td>
+    </tr>
+  );
+}
+
 /** A refused write or a failed step inside a dialog or an editor, announced the moment it appears. */
 export function Refusal({ children }: { children: ReactNode }) {
   return (

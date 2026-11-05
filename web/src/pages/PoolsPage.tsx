@@ -25,7 +25,7 @@ import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Badge, BadgeLink, Button, Card, ConfirmDialog, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, PageLink, Refusal, Select, Skeleton, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { accountHref, editHref, poolKeysHref } from '@/lib/address';
-import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, dollarsUnder, moveLabel, nativeSidesOf, sidesLine, sumFunded, type FundedSum, type WeekReading } from '@/lib/analytics';
+import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, moveLabel, nativeSidesOf, sidesLine, sumFunded, type FundedSum, type WeekReading } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
 import { weekReadingOf } from '@/lib/costs';
 import { fmtCompact, fmtDuration, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtShortTime, fmtUsd, messageOf, noun, plural, shortModel } from '@/lib/format';
@@ -372,7 +372,7 @@ export function PoolsPage() {
           <Tile label="Accounts in pools" value={totals ? fmtInt(totals.accounts) : null} />
           <Tile label="Keys" value={totals && totals.keys !== null ? fmtInt(totals.keys) : keysRead === 'failed' ? <span className="muted">n/a</span> : null} />
           <Tile label="Requests, 24h" value={totals ? fmtInt(totals.requests) : null} />
-          <Tile label="Cost, 24h" value={dayTile?.value ?? null} title={dayTile?.title} failure={dayTile?.value === null ? reading.failure : null} />
+          <Tile label="Cost, 24h" value={dayTile?.value ?? null} title={dayTile?.title} failure={dayTile?.failure ?? null} />
         </div>
         {/* A failed read leaves the cards on the last answer's items, or none before the first. This line says so. */}
         {attention.error !== null && <AttentionLine items={attention.items} error={attention.error} loadedAt={attention.loadedAt} now={now} refresh={refreshAttention} />}
@@ -601,21 +601,20 @@ function PoolCost({ pool, reading }: { pool: Pool; reading: WeekReading }) {
     </dd>
   );
   const day = dayOf(pool);
-  if (unit !== 'native') return <dd className="num">{fmtUsd(dollarsUnder(unit, day))}</dd>;
   const sides = nativeSidesOf(day);
-  if (sides.equivalent === undefined && sides.billed === undefined) return dash('No request in the last 24 hours');
-  const { scale, week } = reading;
-  if (scale === null)
-    return reading.failure === null ? (
+  if (unit === 'native' && sides.equivalent === undefined && sides.billed === undefined) return dash('No request in the last 24 hours');
+  const tile = sumTileOf(unit, day, reading);
+  if (tile.value === null)
+    return tile.failure ? (
+      dash(tile.failure.text)
+    ) : (
       <dd className="num">
         <Skeleton width={72} height={12} />
       </dd>
-    ) : (
-      dash(reading.failure.text)
     );
-  const tile = sumTileOf(unit, day, reading);
+  const { scale, week } = reading;
   return (
-    <dd className="num" title={tile.title ?? sidesLine(sides, week, scale)}>
+    <dd className="num" title={tile.title ?? (unit === 'native' && scale !== null ? sidesLine(sides, week, scale) : undefined)}>
       {tile.value}
     </dd>
   );

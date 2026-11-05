@@ -12,7 +12,7 @@ export const UNJUDGED_TITLE = 'the rise or the priced share is under 5%, so the 
 const SPAN_MS = 30 * DAY;
 
 /** The windows' order: the 5-hour window, the 7-day one, the known model week, then any other key by its spelling. */
-const byWindow = (a: string, b: string) => windowRank(a) - windowRank(b) || byteOrder(a, b);
+export const byWindow = (a: string, b: string) => windowRank(a) - windowRank(b) || byteOrder(a, b);
 const newestFirst = (a: Reconciliation, b: Reconciliation) => Date.parse(b.windowEnd) - Date.parse(a.windowEnd);
 
 export interface MeterGroup {
@@ -46,16 +46,6 @@ export function meterGroups(rows: Reconciliation[]): { fiveHour: MeterGroup[]; w
     })
     .sort((a, b) => byteOrder(a.accountId, b.accountId) || byWindow(a.window, b.window));
   return { fiveHour: groups.filter((g) => !isWeekly(g.window)), weekly: groups.filter((g) => isWeekly(g.window)) };
-}
-
-/** The newest completed window per window kind of one account, in the windows' order: the Accounts summary's lines. */
-export function latestPerWindow(rows: Reconciliation[]): Reconciliation[] {
-  const newest = new Map<string, Reconciliation>();
-  for (const r of rows) {
-    const held = newest.get(r.window);
-    if (held === undefined || Date.parse(r.windowEnd) > Date.parse(held.windowEnd)) newest.set(r.window, r);
-  }
-  return [...newest.values()].sort((a, b) => byWindow(a.window, b.window));
 }
 
 /** How many windows of a group an open group lists at first. */

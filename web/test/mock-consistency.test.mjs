@@ -2792,7 +2792,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (const r of reconciliations) assert.ok(oauth.has(r.accountId), `${r.accountId}'s window names an OAuth account of the story`);
     // The newest row of each window kind is the summary's line, and the condition reads the newest row whose rise reaches
     // the floor: every newest row is judged, so the two read one row.
-    const latest = [...new Set(reconciliations.map((r) => r.accountId))].flatMap((id) => s.lib.latestPerWindow(reconciliations.filter((r) => r.accountId === id)));
+    const latest = Object.values(s.lib.meterGroups(reconciliations)).flat().map((g) => g.latest);
     for (const r of latest) assert.ok(s.lib.judged(r), `${r.accountId}'s newest ${r.window} window reaches the floor on its rise and its priced share`);
     const off = latest.filter((r) => s.lib.ratioOff(r));
     assert.deepEqual(off.map((r) => [r.accountId, r.window]), [['nightly', 'five_hour']], "of the newest windows nightly's 5-hour one alone reads off the band");

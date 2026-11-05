@@ -3,20 +3,20 @@ import { Link } from 'react-router-dom';
 import { api } from '@/api';
 import type { Account, KeepaliveState, Overview, RequestLog, Session, Settings, SubscriptionCosts } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
-import { Donut } from '@/components/charts/Donut';
+import { Donut, DonutLegend } from '@/components/charts/Donut';
 import { Sparkline } from '@/components/charts/Sparkline';
 import { accountColor, accountSlots } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
-import { statusTone } from '@/components/ui/AttemptTrail';
+import { StatusBadge } from '@/components/ui/AttemptTrail';
 import { AttentionLine } from '@/components/ui/AttentionLine';
 import { CostReferenceLink } from '@/components/ui/CostReference';
 import { CostTd } from '@/components/ui/CostTd';
-import { Badge, Card, EmptyState, ErrorState, Skeleton } from '@/components/ui/primitives';
+import { Badge, Card, EmptyState, ErrorState, Skeleton, StateRow } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
-import { figuresValue } from '@/components/ui/Tile';
+import { sumTileOf } from '@/components/ui/Tile';
 import { accountHref, requestHref } from '@/lib/address';
-import { dollarsUnder, equivalentOrDash, nativeFiguresOf, nativeSidesOf, shareHint, UNPRICED_TITLE, type FundedSum, type WeekReading } from '@/lib/analytics';
+import { dollarsUnder, equivalentOrDash, nativeSidesOf, shareHint, type FundedSum, type WeekReading } from '@/lib/analytics';
 import { weekReadingOf } from '@/lib/costs';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortModel, tokensTotal } from '@/lib/format';
 import { failedFirst, refreshAttention, useAsync, useAttention, useNow, type Loaded } from '@/lib/hooks';
@@ -43,6 +43,7 @@ function asOfLine(reads: [string, Loaded<unknown>][], now: number): { text: stri
 
 /** The day's cost tile as `StatTile` draws it, a null value and note the skeleton. */
 interface CostTile {
+  failure: WeekReading['failure'];
   note: string | null;
   spark: (number | null)[];
   title?: string;
@@ -57,14 +58,14 @@ interface CostTile {
  * cost model sizes no chosen week. The dollar positions read their dollars.
  */
 function costTileOf(unit: UnitPosition, o: Overview, reading: WeekReading): CostTile {
-  const { failure, scale, week } = reading;
   const day: FundedSum = { billedUsd: o.billed24h, cost: o.cost24h, equivalent: o.equivalent24h };
+  const tile = sumTileOf(unit, day, reading);
   if (unit !== 'native') {
     const dollars = dollarsUnder(unit, day);
     return {
+      ...tile,
       note: unit === 'equivalent' ? 'at the API price list, the subscription requests' : `${fmtUsd(dollars / 24)} per hour`,
       spark: o.hourly.map((h) => dollarsUnder(unit, { billedUsd: h.billed, cost: h.cost, equivalent: h.equivalent })),
-      value: fmtUsd(dollars),
     };
   }
   const sides = nativeSidesOf(day);
@@ -73,13 +74,12 @@ function costTileOf(unit: UnitPosition, o: Overview, reading: WeekReading): Cost
   // In percent: the spark's scale floors at one, a dollar an hour on the dollar positions, and a floor of a whole
   // week an hour would flatten the day. An unpriced hour is no idle one, so it draws as a gap.
   const spark = (factor: number) => (plan || !billed ? o.hourly.map((h) => (h.equivalent === null ? null : h.equivalent * factor * 100)) : o.hourly.map((h) => h.billed));
-  if (scale === null) return failure === null ? { note: null, spark: spark(1), value: null } : { note: failure.unpriced ? 'unpriced' : 'could not load', spark: spark(1), title: failure.text, value: '-' };
-  const { figures, unpriced } = nativeFiguresOf(sides, week, scale);
+  const { scale, week } = reading;
+  if (scale === null) return { ...tile, note: null, spark: spark(1) };
   return {
+    ...tile,
     note: billed || !plan ? `${fmtUsd(o.billed24h / 24)} billed per hour` : `${equivalentOrDash(o.equivalent24h === null ? null : o.equivalent24h / 24, week, scale)} per hour`,
     spark: spark(scale),
-    title: unpriced ? UNPRICED_TITLE : undefined,
-    value: figuresValue(figures),
   };
 }
 
@@ -96,21 +96,18 @@ export function DashboardPage() {
 
   const o = overview.data;
   const costs = settings.data?.subscriptionCosts ?? null;
-  // A failed or unpriced reading builds its failure afresh on each call, and the cost tile's memo keys on it.
+  // A reading is a new object on each call, and the cost tile's memo keys on it.
   const reading = useMemo(() => weekReadingOf(costs, settings.error, week), [costs, settings.error, week]);
-  const { failure, scale } = reading;
   // Sparkline memoizes on its values, and the page re-renders on its five reads and the clock, so the sparks and the
   // cost tile follow the overview, the reading and the unit alone.
   const sparks = useMemo(() => {
     const hourly = o?.hourly ?? [];
     return { errors: hourly.map((h) => h.errors), refused: hourly.map((h) => h.refused), requests: hourly.map((h) => h.requests), tokens: hourly.map((h) => h.tokens) };
   }, [o]);
-  const costTile = useMemo(() => (o ? costTileOf(unit, o, { failure, scale, week }) : null), [failure, o, scale, unit, week]);
-  const ringFailure = failedFirst(accounts) ? (
-    <ErrorState title="Could not load the accounts" body={accounts.error} retry={accounts.reload} />
-  ) : failedFirst(settings) ? (
-    <ErrorState title="Could not load the settings" body={settings.error} retry={settings.reload} />
-  ) : null;
+  const costTile = useMemo(() => (o ? costTileOf(unit, o, reading) : null), [o, reading, unit]);
+  const accountsFailure = failedFirst(accounts) ? <ErrorState title="Could not load the accounts" body={accounts.error} retry={accounts.reload} /> : null;
+  const ringFailure = accountsFailure ?? (failedFirst(settings) ? <ErrorState title="Could not load the settings" body={settings.error} retry={settings.reload} /> : null);
+  const overviewFailed = failedFirst(overview);
   const asOf = asOfLine(
     [
       ['24-hour figures', overview],
@@ -122,20 +119,20 @@ export function DashboardPage() {
     now,
   );
   const retrySessions = () => {
-    if (failedFirst(overview)) overview.reload();
+    if (overviewFailed) overview.reload();
     if (failedFirst(sessions)) sessions.reload();
   };
 
   return (
     <div className="stack">
       <AttentionLine items={attention.items} error={attention.error} loadedAt={attention.loadedAt} now={now} refresh={refreshAttention} />
-      {failedFirst(overview) ? (
+      {overviewFailed ? (
         <ErrorState title="Could not load the 24-hour figures" body={overview.error} retry={overview.reload} />
       ) : (
         <div className="stat-grid stat-grid--day">
           <StatTile label="Requests, 24h" value={o ? fmtInt(o.requests24h) : null} note={o ? `${(o.requests24h / 24).toFixed(1)} per hour` : null} spark={sparks.requests} title="Requests the router asked an account for. The refused requests are in the Refused tile." color={ink.series[0]} />
           <StatTile label="Tokens, 24h" value={o ? fmtCompact(o.tokens24h) : null} note={o ? `${fmtPct(o.tokens24h ? o.tokensCached24h / o.tokens24h : 0)} served from cache` : null} spark={sparks.tokens} color={ink.series[2]} />
-          <StatTile label="Estimated cost, 24h" value={costTile?.value ?? null} note={costTile?.note ?? null} spark={costTile?.spark ?? []} title={costTile?.title} color={ink.series[1]} />
+          <StatTile label="Estimated cost, 24h" value={costTile?.value ?? null} note={costTile?.note ?? null} spark={costTile?.spark ?? []} title={costTile?.title} failure={costTile?.failure} color={ink.series[1]} />
           <StatTile
             label="Error rate, 24h"
             value={o ? fmtPct(o.errorRate24h ?? 0, 1) : null}
@@ -173,10 +170,8 @@ export function DashboardPage() {
 
       <section>
         <h2 className="section-title">Accounts</h2>
-        {failedFirst(accounts) ? (
-          // One state across the section: inside the auto-fill grid it would take a single column.
-          <ErrorState title="Could not load the accounts" body={accounts.error} retry={accounts.reload} />
-        ) : (
+        {/* One state across the section: inside the auto-fill grid it would take a single column. */}
+        {accountsFailure ?? (
           <div className="account-strip">
             {accounts.data
               ? accounts.data.map((a) => <AccountMini key={a.id} account={a} now={now} />)
@@ -193,11 +188,11 @@ export function DashboardPage() {
 
       <div className="dash-bottom">
         <Card title="Recent requests" subtitle="Last 10 across every pool" actions={<Link to="/requests">All requests</Link>} padded={false} className="card--table">
-          <RecentTable rows={requests.data?.requests ?? null} error={requests.error} settings={settings.data} settingsError={reading.failure?.text ?? null} accounts={accounts.data} scale={reading.scale} />
+          <RecentTable rows={requests.data?.requests ?? null} error={requests.error} settings={settings.data} accounts={accounts.data} reading={reading} />
         </Card>
         <Card title="Sessions" subtitle="Sticky pins and cache-warming agents" actions={<Link to="/sessions">Open</Link>}>
-          {failedFirst(overview) || failedFirst(sessions) ? (
-            <ErrorState title="Could not load the sessions" body={failedFirst(overview) ? overview.error : sessions.error} retry={retrySessions} />
+          {overviewFailed || failedFirst(sessions) ? (
+            <ErrorState title="Could not load the sessions" body={overviewFailed ? overview.error : sessions.error} retry={retrySessions} />
           ) : (
             <SessionsSummary activePins={o?.activePins ?? null} sessions={sessions.data} />
           )}
@@ -207,12 +202,13 @@ export function DashboardPage() {
   );
 }
 
-function StatTile({ label, value, note, spark, color, title }: { color: string; label: string; note: string | null; spark: (number | null)[]; title?: string; value: ReactNode }) {
+/** A failure draws as `Tile` draws one: a dash, its note, and its text in the title. */
+function StatTile({ label, value, note, spark, color, failure = null, title }: { color: string; failure?: WeekReading['failure']; label: string; note: string | null; spark: (number | null)[]; title?: string; value: ReactNode }) {
   return (
-    <div className="stat" title={title}>
+    <div className="stat" title={failure?.text ?? title}>
       <span className="stat__label">{label}</span>
-      <span className="stat__value">{value ?? <Skeleton width={96} height={26} />}</span>
-      <span className="stat__note">{note ?? <Skeleton width={120} />}</span>
+      <span className="stat__value">{failure ? '-' : (value ?? <Skeleton width={96} height={26} />)}</span>
+      <span className="stat__note">{failure ? (failure.unpriced ? 'unpriced' : 'could not load') : (note ?? <Skeleton width={120} />)}</span>
       <div className="stat__spark">{spark.length ? <Sparkline values={spark} color={color} /> : <Skeleton height={36} />}</div>
     </div>
   );
@@ -263,15 +259,7 @@ function WeighedRing({ figures, slotOf }: { figures: RingFigures; slotOf: (id: s
         centerValue={fmtPct(left / capacity)}
         onHover={setHover}
       />
-      <ul className="plain-list remaining__list">
-        {rows.map((r) => (
-          <li key={r.id} className={hover && hover !== r.id ? 'is-dim' : ''} title={titleOf(r)}>
-            <span className="legend__swatch" style={{ background: accountColor(ink, slotOf(r.id)) }} />
-            <Link to={accountHref(r.id)}>{r.label}</Link>
-            <span className="num">{fmtPct(r.remaining)}</span>
-          </li>
-        ))}
-      </ul>
+      <DonutLegend hover={hover} items={rows.map((r) => ({ color: accountColor(ink, slotOf(r.id)), id: r.id, label: <Link to={accountHref(r.id)}>{r.label}</Link>, title: titleOf(r), value: fmtPct(r.remaining) }))} />
       {line !== null && <p className="remaining__line">{line}</p>}
       {leftOut.length > 0 && <LeftOut accounts={leftOut} />}
     </div>
@@ -339,13 +327,13 @@ const MODEL_CHARS = 12;
  * accounts read and the cost model and the revisions in force on a native figure's title. The skeleton stands while
  * the scale is out, and a dash titled with the reading's error where it carries one.
  */
-function RecentCost({ accounts, error, request, scale, settings, unit, week }: { accounts: Account[] | null; error: string | null; request: RequestLog; scale: number | null; settings: Settings | null; unit: UnitPosition; week: WeekPosition }) {
+function RecentCost({ accounts, reading, request, settings, unit }: { accounts: Account[] | null; reading: WeekReading; request: RequestLog; settings: Settings | null; unit: UnitPosition }) {
   const args = requestHintArgs(request, accounts, settings?.subscriptionCosts ?? null);
-  return <CostTd cell={glanceCellOf(costUnitOf(request, unit, args === null ? null : shareHint(...args)), revisionsTitle(settings, request.at), week, scale)} error={error} />;
+  return <CostTd cell={glanceCellOf(costUnitOf(request, unit, args === null ? null : shareHint(...args)), revisionsTitle(settings, request.at), reading.week, reading.scale)} failure={reading.failure} />;
 }
 
-function RecentTable({ accounts, rows, error, scale, settings, settingsError }: { accounts: Account[] | null; error: string | null; rows: RequestLog[] | null; scale: number | null; settings: Settings | null; settingsError: string | null }) {
-  const { unit, week } = useAppSettings();
+function RecentTable({ accounts, rows, error, reading, settings }: { accounts: Account[] | null; error: string | null; reading: WeekReading; rows: RequestLog[] | null; settings: Settings | null }) {
+  const { unit } = useAppSettings();
   return (
     <div className="table-wrap">
       <table className="table dash__recent">
@@ -364,13 +352,7 @@ function RecentTable({ accounts, rows, error, scale, settings, settingsError }: 
         <tbody>
           {rows === null
             ? error
-              ? (
-                  <tr>
-                    <td colSpan={8}>
-                      <ErrorState title="Could not load the recent requests" body={error} />
-                    </td>
-                  </tr>
-                )
+              ? <StateRow colSpan={8} empty="" error={error} errorTitle="Could not load the recent requests" loading={false} />
               : Array.from({ length: 6 }, (_, i) => (
                   <tr key={i} className="table__detail">
                     <td colSpan={8}>
@@ -405,22 +387,13 @@ function RecentTable({ accounts, rows, error, scale, settings, settingsError }: 
                       {fmtCompact(tokensTotal(r.usage))}
                       <span className="sub">{fmtCompact(r.usage.cacheRead)} cached</span>
                     </td>
-                    <RecentCost accounts={accounts} error={settingsError} request={r} scale={scale} settings={settings} unit={unit} week={week} />
+                    <RecentCost accounts={accounts} reading={reading} request={r} settings={settings} unit={unit} />
                   </tr>
                 );
               })}
         </tbody>
       </table>
     </div>
-  );
-}
-
-export function StatusBadge({ status, attempts = 1 }: { attempts?: number; status: number | null }) {
-  return (
-    <Badge tone={statusTone(status)} title={attempts > 1 ? `${attempts} attempts` : undefined}>
-      {status ?? '-'}
-      {attempts > 1 && <span className="badge__extra">×{attempts}</span>}
-    </Badge>
   );
 }
 

@@ -8,7 +8,7 @@ import { FilterBar } from '@/components/FilterBar';
 import { OptionList, type Option, walkFocus } from '@/components/ui/OptionList';
 import { Popover, PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { IconChevron, IconInfo, IconPlus } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Field, GroupedDialog, Input, Menu, PageLink, Refusal, Segmented, Select, Skeleton, Toggle, type DialogGroup } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, EmptyState, Field, GroupedDialog, Input, Menu, PageLink, Refusal, Segmented, Select, Skeleton, StateRow, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { poolKeysHref, requestHref } from '@/lib/address';
 import { effectiveCaptureHours } from '@/lib/capture';
 import type { PauseCause } from '@/lib/follow';
@@ -143,7 +143,7 @@ export function GuardrailsPage(): JSX.Element {
   );
   const body = !list
     ? guardrails.error
-      ? row(<ErrorState title="Could not load the guardrails" body={guardrails.error} retry={guardrails.reload} />)
+      ? <StateRow colSpan={7} empty="" error={guardrails.error} errorTitle="Could not load the guardrails" loading={false} retry={guardrails.reload} />
       : [0, 1].map((i) => row(<Skeleton />, i))
     : list.length === 0
       ? row(

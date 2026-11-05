@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-const { judged, latestPerWindow, meterGroups, SPARK, sparkOf, windowWord } = await import('./dist/api.js');
+const { judged, meterGroups, SPARK, sparkOf, windowWord } = await import('./dist/api.js');
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -83,20 +83,6 @@ test('the groups fold by account and window kind, the weekly windows apart, each
   assert.deepEqual([weekly[2].off, weekly[2].judged], [1, 2], "acct-b's 7-day group: its older 1.4 off");
   const known = meterGroups([row('acct-a', 'seven_day_opus', T - DAY, 0.2, 0.2), ...ROWS]).weekly.map((g) => g.window);
   assert.deepEqual(known, ['seven_day', 'seven_day_fable', 'seven_day_opus', 'seven_day'], 'a model week the console does not know follows the known ones');
-});
-
-test("one account's latest windows: the newest of each kind, in the windows' order", () => {
-  const mine = ROWS.filter((r) => r.accountId === 'acct-a');
-  const latest = latestPerWindow(mine);
-  assert.deepEqual(
-    latest.map((r) => [r.window, r.windowEnd]),
-    [
-      ['five_hour', new Date(T - 2 * HOUR).toISOString()],
-      ['seven_day', new Date(T - 3 * DAY).toISOString()],
-      ['seven_day_fable', new Date(T - 3 * DAY).toISOString()],
-    ],
-  );
-  assert.deepEqual(latestPerWindow([]), [], 'no row, no line');
 });
 
 test("the spark spans the 30 days to the answer's newest window, the ratio's log clipped to 0.5 and 2, the judged windows alone", () => {

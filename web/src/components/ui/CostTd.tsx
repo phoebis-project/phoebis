@@ -1,18 +1,19 @@
+import type { WeekReading } from '@/lib/analytics';
 import { Skeleton } from './primitives';
 
 /**
  * A request's Cost cell from its built cell: the skeleton while the scale is out, a dash titled with the reading's
- * error, else the main line over its second, the full reading on the title.
+ * failure, else the main line over its second, the full reading on the title.
  */
-export function CostTd({ cell, className, error }: { cell: { main: string; sub: string; title: string } | null; className?: string; error: string | null }) {
+export function CostTd({ cell, className, failure }: { cell: { main: string; sub: string; title: string } | null; className?: string; failure: WeekReading['failure'] }) {
   const classes = className ? `right num col-fit ${className}` : 'right num col-fit';
   if (cell === null)
-    return error === null ? (
+    return failure === null ? (
       <td className={classes}>
         <Skeleton width={72} />
       </td>
     ) : (
-      <td className={classes} title={error}>
+      <td className={classes} title={failure.text}>
         -
       </td>
     );

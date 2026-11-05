@@ -7,7 +7,7 @@ import { iso } from '@/api/decode';
 import { foldGroups, foldRequests, keptRows, latestGenerations, loadSessionRequests, sumGroups, type SessionRequests } from '@/api/fold';
 import { useAppSettings } from '@/app/settings';
 import type { Account, AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, GuardrailCounts, LatencyHistograms, MemberBudget, PlacementRow, RefusalCategoriesAnswer, RequestLog, RewritesAnswer, SubscriptionCosts, UnusedAllowanceAnswer } from '@/api/types';
-import { Donut } from '@/components/charts/Donut';
+import { Donut, DonutLegend } from '@/components/charts/Donut';
 import { CHART_HEIGHT, OUTCOME_SERIES, PCT_AXIS, PERCENTILES, PROBE_SERIES, TOKEN_SERIES, accountColor, accountSlots, type ChartInk } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { Legend, timeTip, type TooltipRow } from '@/components/charts/Tooltip';
@@ -16,7 +16,7 @@ import { CostLines } from '@/components/ui/CostTd';
 import type { Option } from '@/components/ui/OptionList';
 import { figuresValue, Tile } from '@/components/ui/Tile';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
-import { Badge, Card, ErrorState, Meter, Segmented, Skeleton } from '@/components/ui/primitives';
+import { Badge, Card, ErrorState, Meter, Segmented, Skeleton, StateRow } from '@/components/ui/primitives';
 import { FilterBar } from '@/components/FilterBar';
 import { GroupBy as GroupByControl, GroupsButton } from '@/components/GroupBy';
 import { SectionBar } from '@/components/SectionBar';
@@ -1243,16 +1243,6 @@ function PctLabel({ text }: { text: string }) {
   );
 }
 
-function StateRow({ colSpan, empty, error, errorTitle, loading }: { colSpan: number; empty: string; error: string | null; errorTitle: string; loading: boolean }) {
-  return (
-    <tr>
-      <td colSpan={colSpan} className={error ? '' : 'muted'}>
-        {error ? <ErrorState title={errorTitle} body={error} /> : loading ? <Skeleton height={22} /> : empty}
-      </td>
-    </tr>
-  );
-}
-
 function BreakdownTable({
   title,
   groupLabel,
@@ -1789,17 +1779,20 @@ function CostDonut({ center, cost, figureTitle, format = fmtUsd, label = 'cost' 
   return (
     <div className="split-row">
       <Donut slices={COST_PARTS.map((p) => ({ id: p.key, label: p.label, value: cost[p.key], color: ink.series[p.slot] }))} total={total} centerLabel={label} centerValue={(center ?? format)(total)} onHover={setHover} />
-      <ul className="plain-list remaining__list">
-        {COST_PARTS.map((p) => (
-          <li key={p.key} className={hover && hover !== p.key ? 'is-dim' : ''}>
-            <span className="legend__swatch" style={{ background: ink.series[p.slot] }} />
-            <span>{p.label}</span>
-            <span className="num" title={figureTitle?.(cost[p.key])}>
+      <DonutLegend
+        hover={hover}
+        items={COST_PARTS.map((p) => ({
+          color: ink.series[p.slot],
+          id: p.key,
+          label: <span>{p.label}</span>,
+          value: (
+            <>
               {format(cost[p.key])} <span className="muted">{fmtPct(total ? cost[p.key] / total : 0)}</span>
-            </span>
-          </li>
-        ))}
-      </ul>
+            </>
+          ),
+          valueTitle: figureTitle?.(cost[p.key]),
+        }))}
+      />
     </div>
   );
 }
