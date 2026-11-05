@@ -56,13 +56,24 @@ export function cooldownBadge(until: string | undefined, now: number): StandingB
 }
 
 /**
- * An overage verdict's badge: the time the overage resets at where the account knows it, and its date too when the
- * reset falls on another day than `now` in the viewer's zone, so a reset days out never reads as today's.
+ * A badge that holds until a known reset: the time of the reset, and its date too when the reset falls on another day
+ * than `now` in the viewer's zone, so a reset days out never reads as today's.
  */
+function untilResetBadge(word: string, sentence: string, reset: string, now: number): StandingBadge {
+  const sameDay = new Date(reset).toDateString() === new Date(now).toDateString();
+  return { text: `${word} until ${sameDay ? fmtShortTime(reset) : fmtPeriodEnd(reset)}`, title: `${sentence} until ${fmtAbsolute(reset)}` };
+}
+
+/** An overage verdict's badge, until the overage resets where the account knows when. */
 export function overageBadge(reset: string | null, now: number): StandingBadge {
   if (reset === null) return { text: 'overage', title: 'In overage, reset unknown' };
-  const sameDay = new Date(reset).toDateString() === new Date(now).toDateString();
-  return { text: `overage until ${sameDay ? fmtShortTime(reset) : fmtPeriodEnd(reset)}`, title: `In overage until ${fmtAbsolute(reset)}` };
+  return untilResetBadge('overage', 'In overage', reset, now);
+}
+
+/** A spent verdict's badge, until the spend cap resets where the account knows when. */
+export function spentBadge(reset: string | null, now: number): StandingBadge {
+  if (reset === null) return { text: 'spend cap reached', title: 'At the spend cap, reset unknown' };
+  return untilResetBadge('spend cap', 'At the spend cap', reset, now);
 }
 
 /** A winding-down member's badge: the time left before the plan's end, which the member is held back for. */
@@ -225,13 +236,14 @@ const listOf = (names: StatusPart[]): StatusPart[] => names.flatMap((name, i) =>
 
 /**
  * When a skipped member returns, as the card already writes it: once every blocker the route reports has ended. The
- * verdict names the first blocker alone (unavailable, cooldown, budget, overage), while `budgetUntil` is set whenever
- * a budget holds the member, and under a pool's `never` overage policy the account's overage holds it until its window
- * resets. So a member in cooldown can sit at its budget and in overage too, and it returns at the latest of its
- * budget's period end (daily, monthly, or plain "budget" when no spend report names the period), its latest
- * account-scope cooldown end and its overage window's reset, which an overage verdict returns at too. A blocker
- * without an end (unavailable, a cooldown without an account-scope row, an overage window without a reset) gives no
- * return, and so does a budget verdict without an end.
+ * verdict names the first blocker alone (unavailable, cooldown, budget unknown, budget, spent, overage), while
+ * `budgetUntil` is set whenever a budget holds the member, and under a pool's `never` overage policy the account's
+ * overage holds it until its window resets. So a member in cooldown can sit at its budget and in overage too, and it
+ * returns at the latest of its budget's period end (daily, monthly, or plain "budget" when no spend report names the
+ * period), its latest account-scope cooldown end and its overage window's reset, which an overage verdict returns at
+ * too. A spent verdict returns at its spend cap's reset. A blocker without an end (unavailable, a budget the degraded
+ * ledger leaves unknown, a cooldown without an account-scope row, an overage window or a spend cap without a reset)
+ * gives no return, and so does a budget verdict without an end.
  */
 function returnOf(pool: Pool, member: PoolMember, name: StatusPart, account: Account | undefined, now: number): { at: number; parts: StatusPart[] } | null {
   const ends: { at: number; parts: StatusPart[] }[] = [];
@@ -252,6 +264,10 @@ function returnOf(pool: Pool, member: PoolMember, name: StatusPart, account: Acc
     const reset = account?.overage?.reset ?? null;
     if (reset === null) return null;
     ends.push({ at: Date.parse(reset), parts: [name, { text: `'s overage window resets ${fmtRelative(reset, now)}` }] });
+  } else if (member.eligible === 'spent') {
+    const reset = account?.spend?.resetsAt ?? null;
+    if (reset === null) return null;
+    ends.push({ at: Date.parse(reset), parts: [name, { text: `'s spend cap resets ${fmtRelative(reset, now)}` }] });
   } else if (member.eligible !== 'budget') {
     return null;
   }

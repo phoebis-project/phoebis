@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as d from './dist/api.js';
-import { cooldownBadge, fmtAbsolute, fmtPeriodEnd, fmtRelative, fmtShortTime, INELIGIBLE_LABEL, LAST_RESORT_LABEL, overageBadge, poolStatusSentence, selectionOrder, windingDownBadge } from './dist/api.js';
+import { cooldownBadge, fmtAbsolute, fmtPeriodEnd, fmtRelative, fmtShortTime, INELIGIBLE_LABEL, LAST_RESORT_LABEL, overageBadge, poolStatusSentence, selectionOrder, spentBadge, windingDownBadge } from './dist/api.js';
 
 const HOUR = 3_600_000;
 const MINUTE = 60_000;
@@ -294,6 +294,9 @@ test('the Standing badges read the time left or the reset time, each with its se
   assert.deepEqual(later, { text: `overage until ${fmtPeriodEnd(tomorrow)}`, title: `In overage until ${fmtAbsolute(tomorrow)}` });
   assert.match(later.text, /^overage until [A-Z][a-z]{2} \d\d, \d\d:\d\d$/, 'a reset on another day names its day, so it never reads as today');
   assert.deepEqual(overageBadge(null, NOW), { text: 'overage', title: 'In overage, reset unknown' });
+  assert.deepEqual(spentBadge(today, NOW), { text: `spend cap until ${fmtShortTime(today)}`, title: `At the spend cap until ${fmtAbsolute(today)}` });
+  assert.deepEqual(spentBadge(tomorrow, NOW), { text: `spend cap until ${fmtPeriodEnd(tomorrow)}`, title: `At the spend cap until ${fmtAbsolute(tomorrow)}` }, 'a spend cap resetting on another day names its day');
+  assert.deepEqual(spentBadge(null, NOW), { text: 'spend cap reached', title: 'At the spend cap, reset unknown' });
   const end = NOW + 3 * 24 * HOUR;
   assert.deepEqual(windingDownBadge(end, NOW), { text: 'winding down 3d', title: `Winding down to the plan's end at ${fmtAbsolute(new Date(end).toISOString())}` });
   assert.deepEqual(windingDownBadge(NOW - MINUTE, NOW), { text: 'winding down', title: `Winding down past the plan's end at ${fmtAbsolute(new Date(NOW - MINUTE).toISOString())}` }, 'an end behind the instant reads no time left');
@@ -445,6 +448,11 @@ test("an overage member returns at its overage window's reset", () => {
     `Exhausted: no member can take a request until held's overage window resets ${fmtRelative(hoursFromNow(3), NOW)}.`,
     'the earliest return among the members',
   );
+});
+
+test("a spent member returns at its spend cap's reset", () => {
+  const seat = account('seat', { spend: { resetsAt: hoursFromNow(4) } });
+  assert.equal(read(at(pool('pace', 'allow', [member('seat', 0, 'spent')]), 'exhausted'), [seat]), `Exhausted: no member can take a request until seat's spend cap resets ${fmtRelative(hoursFromNow(4), NOW)}.`);
 });
 
 test('a usage-based member is a metered source: behind every plan account under the kind order, by priority otherwise, never deferred and never held for overage', () => {

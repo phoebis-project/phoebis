@@ -36,7 +36,7 @@ import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf,
 import { minuteSpan, windowOf } from '@/lib/quota';
 import { aroundSubject, logHref, words } from '@/lib/routingLog';
 import { scrollToElement } from '@/lib/scroll';
-import { GROUP_LABEL, INELIGIBLE_LABEL, LAST_RESORT_LABEL, RULE_NOTE, STRATEGY_LABEL, cooldownBadge, kindOrdered, memberSpeed, overageBadge, poolStatusSentence, selectionOrder, type Placement, type StandingBadge, windingDownBadge } from '@/lib/selection';
+import { GROUP_LABEL, INELIGIBLE_LABEL, LAST_RESORT_LABEL, RULE_NOTE, STRATEGY_LABEL, cooldownBadge, kindOrdered, memberSpeed, overageBadge, poolStatusSentence, selectionOrder, spentBadge, type Placement, type StandingBadge, windingDownBadge } from '@/lib/selection';
 import { GuardrailList, KEY_STATUS_TONE, KeyDialog, SecretDialog } from './KeysPage';
 
 const POOL_STATUS_TONE = { active: 'good', degraded: 'warning', disabled: 'neutral', exhausted: 'critical' } as const;
@@ -976,7 +976,9 @@ function AtBudget({ periodEnd }: { periodEnd: string | null }) {
 function Eligibility({ verdict, account, now, periodEnd }: { account: Account | undefined; now: number; periodEnd: string | null; verdict: MemberEligibility }) {
   if (verdict === 'eligible') return <Badge tone="good">eligible</Badge>;
   if (verdict === 'budget') return <AtBudget periodEnd={periodEnd} />;
+  if (verdict === 'budget_unknown') return <Badge tone="warning" title="The ledger is degraded, so the router has no reading of this member's budget and places nothing on it">budget unknown</Badge>;
   if (verdict === 'overage') return <WordedBadge tone="serious" badge={overageBadge(account?.overage?.reset ?? null, now)} />;
+  if (verdict === 'spent') return <WordedBadge tone="serious" badge={spentBadge(account?.spend?.resetsAt ?? null, now)} />;
   if (verdict === 'unavailable') return <Badge tone="critical" title={account ? words(account.status) : 'not a known account'}>unavailable</Badge>;
   return <WordedBadge tone="warning" badge={cooldownBadge(account?.cooldowns.find((c) => c.scope === 'account')?.until, now)} />;
 }

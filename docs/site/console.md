@@ -441,10 +441,11 @@ prefers subscription accounts, the metered tier holding the API-key accounts and
 Standing and Pins. Standing reads `next` for the member a fresh session lands on, `eligible`, `after plan quota` for a
 member in overage ranked after the plan-funded ones, `winding down {left}` (on hover `Winding down to the plan's end at
 {time}`) for a member that serves only as the last resort, and for a member passed over `cooldown {left}` (on hover `In
-a cooldown that ends {time}`), `overage until {time}` (`overage` where the reset is unknown), `at budget` or `at budget
-until {time}` with the spend against the budget, and `unavailable` with the account's status on hover. On a card whose
-pool has the slow-down on, Standing carries the speed chip of a slowed member, `0.5x` with the Quota view's hover where
-the account is loaded. The caption names the strategy, `Pace`, `Priority, then random` or `Round robin`, with
+a cooldown that ends {time}`), `overage until {time}` (`overage` where the reset is unknown), `spend cap until {time}`
+(`spend cap reached` where the reset is unknown), `at budget` or `at budget until {time}` with the spend against the
+budget, `budget unknown` while the ledger is degraded, and `unavailable` with the account's status on hover. On a card
+whose pool has the slow-down on, Standing carries the speed chip of a slowed member, `0.5x` with the Quota view's hover
+where the account is loaded. The caption names the strategy, `Pace`, `Priority, then random` or `Round robin`, with
 `subscription accounts first` appended where the pool prefers subscription accounts, and its hover notes "A request for
 a Fable model is placed on the Fable window instead, which this card does not draw." Pins reads the member's active
 pins, one per agent and model as the card's Active pins fact counts them, a muted `0` for none. Then "Traffic, 24h"
