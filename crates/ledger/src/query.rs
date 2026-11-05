@@ -649,10 +649,11 @@ pub struct Refusals {
 
 /// The requests in `[from, to]` under `filter` whose serving attempt's `stop_reason` is `refusal`, counted per model
 /// and category (`-` for a refusal with none), the largest count first and then the model and the category, and the
-/// requests in the same range and filter whose row carries a fallback credit's digest. Read off the request row's
-/// columns, the serving attempt's facts written at the landing, since no rollup carries the category or the digest.
-/// The `clients` and `user_agents` patterns match each row's client and agent folded as the rollups fold them, so both
-/// reads narrow as the series do. Both reads share one transaction, so the count reads the snapshot the rows read.
+/// requests in the same range and filter whose row carries a fallback credit's digest. Both read off the request row's
+/// columns, the serving attempt's facts and the digest the request presented, written at the landing, since no rollup
+/// carries the category or the digest. The `clients` and `user_agents` patterns match each row's client and agent
+/// folded as the rollups fold them, so both reads narrow as the series do. Both reads share one transaction, so the
+/// count reads the snapshot the rows read.
 pub fn refusal_categories(
     conn: &Connection,
     filter: &RequestFilter,

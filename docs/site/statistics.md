@@ -134,10 +134,10 @@ decisions and events and leaves out a session-level event, which names no agent.
 credit a refusal issued carries the credit's digest, and the refused attempt carries the digest it issued, never the
 token, so the log links the two. `GET /admin/analytics/refusal_categories` counts the refused requests in range per
 model and category, `-` for a refusal with none, and answers `fallbacks`, the requests in range and filter whose row
-carries a fallback credit's digest, both read off the request row's columns, which hold the serving attempt's facts
-written when the request lands. It narrows by `clients` and `user_agents` as the analytics series do, over the client
-label and the agent's first product token, so a version picked from a breakdown counts that version's refusals, and it
-holds `user_agent_groups` to the two lists' bound and narrows nothing by its patterns.
+carries a fallback credit's digest, both read off the request row's columns, the serving attempt's facts and the digest
+the request presented, written when the request lands. It narrows by `clients` and `user_agents` as the analytics series
+do, over the client label and the agent's first product token, so a version picked from a breakdown counts that
+version's refusals, and it holds `user_agent_groups` to the two lists' bound and narrows nothing by its patterns.
 
 ## Quota samples
 

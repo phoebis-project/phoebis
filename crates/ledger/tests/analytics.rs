@@ -1285,16 +1285,17 @@ fn plant_stop(
 /// A made-up SHA-256 in lowercase hex, the form the digest columns hold.
 const FALLBACK_DIGEST: &str = "3b7e1f9a5c2d8e4b6a0f7c3d9e1b5a8f2c6d0e4a7b9f1c3e5d8a2b6f0c4e7a9d";
 
-/// A request served on `a` with `end_turn` that presented the fallback credit `FALLBACK_DIGEST` names, its client
-/// label and `User-Agent` header kept as sent.
+/// A request served on `account` with `end_turn` that presented the fallback credit `FALLBACK_DIGEST` names, its
+/// client label and `User-Agent` header kept as sent.
 fn plant_fallback(
     db: &LedgerDb,
     id: &str,
     received_at: i64,
+    account: &str,
     client: Option<&str>,
     user_agent: Option<&str>,
 ) {
-    let (request, attempt) = stop_rows(id, received_at, "a", "end_turn", None);
+    let (request, attempt) = stop_rows(id, received_at, account, "end_turn", None);
     let request = RequestRecord {
         client: client.map(String::from),
         user_agent: user_agent.map(String::from),
@@ -1337,9 +1338,10 @@ fn the_refusal_count_reads_each_served_refusal_in_range_by_model_and_category_an
         ..request
     };
     db.insert_request(&request, &[attempt], None).unwrap();
-    // A request that presented a fallback credit in range and one past it.
-    plant_fallback(&db, "f1", 9_000, None, None);
-    plant_fallback(&db, "f-late", 21_000, None, None);
+    // Requests that presented a fallback credit: one in range, one past it, and one in range on the other account.
+    plant_fallback(&db, "f1", 9_000, "a", None, None);
+    plant_fallback(&db, "f-late", 21_000, "a", None, None);
+    plant_fallback(&db, "f-b", 9_500, "b", None, None);
     let count = |accounts: &[&str]| {
         let filter = RequestFilter {
             accounts: accounts.iter().map(|a| a.to_string()).collect(),
@@ -1360,7 +1362,7 @@ fn the_refusal_count_reads_each_served_refusal_in_range_by_model_and_category_an
             fallbacks: 1,
         },
         "one row per model and category, the largest count first, then the model and the category in byte order, \
-         `-` for the refusal that named none, and the one fallback in range"
+         `-` for the refusal that named none, and the account's one fallback in range"
     );
     assert_eq!(
         count(&[]),
@@ -1371,9 +1373,10 @@ fn the_refusal_count_reads_each_served_refusal_in_range_by_model_and_category_an
                 ("claude-opus-5", "harmful_request", 1),
                 ("claude-sonnet-5", "-", 1),
             ]),
-            fallbacks: 1,
+            fallbacks: 2,
         },
-        "without the account filter the other account's refusal joins its model and category"
+        "without the account filter the other account's refusal joins its model and category, and its fallback \
+         joins the count"
     );
 }
 
@@ -1493,6 +1496,7 @@ fn the_refusal_count_narrows_by_a_client_pattern_on_the_label_the_rollups_fold()
         &db,
         "sdk-fallback",
         1_000,
+        "a",
         Some("claude-code/sdk-cli"),
         Some(SDK_310),
     );
