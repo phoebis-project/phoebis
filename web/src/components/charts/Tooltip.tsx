@@ -27,13 +27,19 @@ export function ChartTooltip({ title, rows }: { rows: TooltipRow[]; title: React
   );
 }
 
-/** A time chart's tooltip content: the hovered point's instant as the title over the rows `rows` builds from it. */
+function TimeTip<T extends { at: number }>({ payload, rows }: { payload?: readonly { payload?: unknown }[]; rows: (p: T) => TooltipRow[] }) {
+  const p = payload?.[0]?.payload as T | undefined;
+  if (!p) return null;
+  return <ChartTooltip title={fmtAbsolute(p.at)} rows={rows(p)} />;
+}
+
+/**
+ * A time chart's tooltip content: the hovered point's instant as the title over the rows `rows` builds from it. An
+ * element, which recharts clones with the hovered payload, so the tooltip keeps one component type across renders and
+ * a shown one updates in place.
+ */
 export function timeTip<T extends { at: number }>(rows: (p: T) => TooltipRow[]) {
-  return function TipContent({ payload }: { payload?: readonly { payload?: unknown }[] }) {
-    const p = payload?.[0]?.payload as T | undefined;
-    if (!p) return null;
-    return <ChartTooltip title={fmtAbsolute(p.at)} rows={rows(p)} />;
-  };
+  return <TimeTip<T> rows={rows} />;
 }
 
 /**

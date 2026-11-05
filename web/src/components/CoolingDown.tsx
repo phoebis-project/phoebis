@@ -2,7 +2,7 @@ import { type ReactNode, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Button, Card } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtRelative, plural } from '@/lib/format';
-import { MODEL_SCOPE_PREFIX } from '@/lib/quota';
+import { scopeModel } from '@/lib/quota';
 import { entityHref } from '@/lib/routingLog';
 
 /** One scope an account cools under: an account's own cooldown row with its id. */
@@ -15,7 +15,7 @@ function scopeLabel(scope: string): { label: string; mono: boolean } {
   if (scope === 'account') return { label: 'Whole account', mono: false };
   if (scope === 'fast') return { label: 'Fast mode', mono: false };
   if (scope === 'fast_credits') return { label: 'Fast mode credits', mono: false };
-  return { label: scope.startsWith(MODEL_SCOPE_PREFIX) ? scope.slice(MODEL_SCOPE_PREFIX.length) : scope, mono: true };
+  return { label: scopeModel(scope) ?? scope, mono: true };
 }
 
 /**

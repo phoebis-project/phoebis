@@ -15,10 +15,10 @@ import { WINDOW_LABEL } from '@/lib/windows';
 
 export type CostWindow = 'five_hour' | 'seven_day';
 /** The two windows the cost model sizes, as the cost views draw them: each window's key, the key of its peak capacity
- *  factor and its label. */
-export const COST_WINDOWS: readonly { factor: keyof WindowFactors; key: CostWindow; label: string }[] = [
-  { factor: 'fiveHour', key: 'five_hour', label: WINDOW_LABEL['5h'] },
-  { factor: 'sevenDay', key: 'seven_day', label: WINDOW_LABEL['7d'] },
+ *  factor, its label and its name ("5-hour window"). */
+export const COST_WINDOWS: readonly { factor: keyof WindowFactors; key: CostWindow; label: string; name: string }[] = [
+  { factor: 'fiveHour', key: 'five_hour', label: WINDOW_LABEL['5h'], name: `${WINDOW_LABEL['5h']} window` },
+  { factor: 'sevenDay', key: 'seven_day', label: WINDOW_LABEL['7d'], name: `${WINDOW_LABEL['7d']} window` },
 ];
 const factorKey = (window: CostWindow): keyof WindowFactors => COST_WINDOWS.find((w) => w.key === window)?.factor ?? 'sevenDay';
 export type TokenType = keyof TypeMultiplier;

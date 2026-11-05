@@ -1,8 +1,8 @@
-import type { Account, AccountSlowDown, RateLimitWindow, Spend } from '@/api/types';
+import type { Account, AccountSlowDown, KnownWindowId, RateLimitWindow, Spend } from '@/api/types';
 import { fmtAbsolute, fmtMinor, fmtPct, fmtRelative } from '@/lib/format';
 import { hasSpendReading, isExpired, isSubscription, meterTone, planEndedSentence, projectionParts, remainingOf, slowedOf, spendResetTitle, windowOf } from '@/lib/quota';
 import { speedHover } from '@/lib/selection';
-import { WINDOW_LABEL, WINDOW_ORDER } from '@/lib/windows';
+import { WINDOW_ORDER, windowWord } from '@/lib/windows';
 import { Meter, MeterAbsent } from './primitives';
 import { SpeedChip } from './SpeedChip';
 
@@ -113,13 +113,12 @@ export function WindowTriple({ account, now, compact = false, others = false }: 
       </div>
     );
   }
-  const w5 = windowOf(account, '5h');
-  const w7 = windowOf(account, '7d');
+  const slots = WINDOW_ORDER.map((id) => ({ id, w: windowOf(account, id) }));
   const known: readonly string[] = WINDOW_ORDER;
   const rest = others ? account.windows.filter((w) => !known.includes(w.id)) : [];
   // An API-key account carries no quota window by nature, so only a subscription account's empty triple waits on a
   // read, which a compact card writes short with the sentence on its title.
-  if (!w5 && !w7 && !account.fableWindow && rest.length === 0) {
+  if (slots.every((s) => s.w === null) && rest.length === 0) {
     const unread = account.planEndedAt === null && isSubscription(account);
     return (
       <div className={`wbar__none muted ${compact ? 'wbar__none--compact' : ''}`} title={unread && compact ? 'Not read yet' : undefined}>
@@ -130,12 +129,13 @@ export function WindowTriple({ account, now, compact = false, others = false }: 
   // One word each: "Fable 7d" wraps in the narrow compact columns, which drops
   // that meter a line below its two neighbors. Those columns have no room for a
   // speed chip beside the 5-hour label either, so a compact card draws it in its head.
-  const labels = compact ? { '5h': '5h', '7d': '7d', fable: 'Fable' } : { '5h': WINDOW_LABEL['5h'], '7d': WINDOW_LABEL['7d'], fable: 'Fable' };
+  const SHORT: Record<KnownWindowId, string> = { '5h': '5h', '7d': '7d', '7d_fable': 'Fable' };
   return (
     <div className={`wbars wbars--3 ${compact ? 'wbars--compact' : ''}`}>
-      {w5 ? <WindowBar window={{ ...w5, label: labels['5h'] }} now={now} compact={compact} slowDown={compact ? null : slowedOf(account, now)} /> : <WindowBarAbsent compact={compact} label={labels['5h']} words={`no ${WINDOW_LABEL['5h']} window`} />}
-      {w7 ? <WindowBar window={{ ...w7, label: labels['7d'] }} now={now} compact={compact} /> : <WindowBarAbsent compact={compact} label={labels['7d']} words={`no ${WINDOW_LABEL['7d']} window`} />}
-      {account.fableWindow ? <WindowBar window={{ ...account.fableWindow, label: labels.fable }} now={now} compact={compact} /> : <WindowBarAbsent compact={compact} label={labels.fable} words="no Fable window" />}
+      {slots.map(({ id, w }) => {
+        const label = compact ? SHORT[id] : windowWord(id);
+        return w ? <WindowBar key={id} window={{ ...w, label }} now={now} compact={compact} slowDown={id === '5h' && !compact ? slowedOf(account, now) : null} /> : <WindowBarAbsent key={id} compact={compact} label={label} words={`no ${windowWord(id)} window`} />;
+      })}
       {rest.map((w) => (
         <WindowBar key={w.id} window={w} now={now} compact={compact} />
       ))}

@@ -15,8 +15,6 @@ export const minuteClock = (minutes: number): string => {
   return formatIn({ hour: '2-digit', hourCycle: 'h12', minute: '2-digit', timeZone: 'UTC' }, Date.UTC(2000, 0, 1, 0, minutes));
 };
 
-const clockAt = (at: number) => fmtShortTime(at);
-
 /** "3 h 30 min", "45 min". */
 const fmtSpan = (ms: number) => {
   const minutes = Math.round(ms / MINUTE);
@@ -29,14 +27,12 @@ export const nowLine = (costs: SubscriptionCosts, now: number): string => {
   const next = bandNow(costs, now);
   if ('unresolved' in next) return `This browser cannot read the zone ${next.unresolved}.`;
   if (next.at === null) return next.inside ? 'Inside the peak band now, with no end in the next eight days.' : 'Outside the peak band now, with no start in the next eight days.';
-  return next.inside ? `Inside the peak band now, until ${clockAt(next.at)} (${fmtSpan(next.at - now)})` : `Outside the peak band now. It starts at ${clockAt(next.at)} (in ${fmtSpan(next.at - now)})`;
+  return next.inside ? `Inside the peak band now, until ${fmtShortTime(next.at)} (${fmtSpan(next.at - now)})` : `Outside the peak band now. It starts at ${fmtShortTime(next.at)} (in ${fmtSpan(next.at - now)})`;
 };
 
 /** "1.43x": what a share costs at a capacity factor. */
 const shareCost = (factor: number) => `${figure(1 / factor)}x`;
 const factorText = (factor: number) => (factor === 1 ? `no band, holds ${fmtPct(factor)}` : `holds ${fmtPct(factor)}, a share costs ${shareCost(factor)}`);
-
-const FACTOR_WINDOWS = COST_WINDOWS.map((w) => ({ key: w.factor, label: `${w.label} window` }));
 
 const HOUR_TICKS = [0, 3, 6, 9, 12, 15, 18, 21, 24];
 // Past 20:00 the now marker's label would run off the track's end, so it sits on the marker's left.
@@ -63,9 +59,9 @@ export function PeakBand({ costs, now }: { costs: SubscriptionCosts; now: number
   const { fiveHour } = costs.peak.capacityFactor;
   // The band and its factors are the base regime's. A regime that holds a window differently adds its own row.
   const factors = [
-    ...FACTOR_WINDOWS.map(({ key, label }) => ({ factor: costs.peak.capacityFactor[key], label })),
+    ...COST_WINDOWS.map((w) => ({ factor: costs.peak.capacityFactor[w.factor], label: w.name })),
     ...regimeNames(costs).flatMap((name) =>
-      FACTOR_WINDOWS.filter(({ key }) => costs.regimes[name].peakCapacityFactor[key] !== costs.peak.capacityFactor[key]).map(({ key, label }) => ({ factor: costs.regimes[name].peakCapacityFactor[key], label: `${label}, ${regimeWord(name)}` })),
+      COST_WINDOWS.filter((w) => costs.regimes[name].peakCapacityFactor[w.factor] !== costs.peak.capacityFactor[w.factor]).map((w) => ({ factor: costs.regimes[name].peakCapacityFactor[w.factor], label: `${w.name}, ${regimeWord(name)}` })),
     ),
   ];
   const state = bandNow(costs, now);
@@ -93,7 +89,7 @@ export function PeakBand({ costs, now }: { costs: SubscriptionCosts; now: number
                         title={`${day.label}, ${minuteClock(r.from)} to ${minuteClock(r.to)} here. A 5-hour share costs ${shareCost(fiveHour)}.`}
                       />
                     ))}
-                    {day.today && <span className={`cost-ref__band-now${nowMinute > LATE ? ' is-late' : ''}`} style={{ left: atMinute(nowMinute) }} title={`Now, ${clockAt(now)}`} />}
+                    {day.today && <span className={`cost-ref__band-now${nowMinute > LATE ? ' is-late' : ''}`} style={{ left: atMinute(nowMinute) }} title={`Now, ${fmtShortTime(now)}`} />}
                   </span>
                 </Fragment>
               ))}

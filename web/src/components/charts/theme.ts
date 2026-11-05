@@ -44,13 +44,6 @@ export function readChartInk(): ChartInk {
   };
 }
 
-/** Whether two reads hold the same colors, the two lists entry by entry. */
-export const sameInk = (a: ChartInk, b: ChartInk): boolean =>
-  (Object.keys(a) as (keyof ChartInk)[]).every((k) => {
-    const [x, y] = [a[k], b[k]];
-    return Array.isArray(x) && Array.isArray(y) ? x.length === y.length && x.every((v, i) => v === y[i]) : x === y;
-  });
-
 /** The series slots an account can take: every entry of SERIES_VARS but the muted ninth. */
 const ACCOUNT_SLOT_COUNT = SERIES_VARS.length - 1;
 

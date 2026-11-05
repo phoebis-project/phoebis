@@ -73,10 +73,10 @@ export function UtilizationBar({ ceiling, max, min, readings }: { ceiling: Thres
   const windows = readings.flatMap((r) =>
     (
       [
-        ['5h', WINDOW_LABEL['5h'], r.fiveHour],
-        ['7d', WINDOW_LABEL['7d'], r.sevenDay],
+        ['5h', r.fiveHour],
+        ['7d', r.sevenDay],
       ] as const
-    ).flatMap(([id, name, w]) => (w === null ? [] : [{ id, key: `${r.id}-${id}`, label: r.label, name, used: w.utilization }])),
+    ).flatMap(([id, w]) => (w === null ? [] : [{ id, key: `${r.id}-${id}`, label: r.label, name: WINDOW_LABEL[id], used: w.utilization }])),
   );
   return (
     <div className="ubar">

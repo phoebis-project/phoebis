@@ -31,9 +31,9 @@ export function RangeControl({ now, onChange, value, window: shown }: RangeContr
   // The window the popover opened on, so the view's window moving on while it is open changes no untouched field.
   const [edit, setEdit] = useState<{ base: { from: number; to: number }; from: string; to: string } | null>(null);
   const custom = value.preset === 'custom';
-  const pair = `${fmtAbsolute(shown.from)} to ${fmtAbsolute(shown.to)}`;
+  const to = fmtAbsolute(shown.to);
   const label = RANGE_PRESETS.find((p) => p.name === value.preset)?.label ?? value.preset;
-  const ends = `${label}, ends ${fmtAbsolute(shown.to)}`;
+  const span = custom ? `${fmtAbsolute(shown.from)} to ${to}` : `${label}, ends ${to}`;
 
   // A field's minute drops the window's seconds and milliseconds, so an untouched field keeps the window's own instant.
   const bound = (side: Side) => (edit === null ? Number.NaN : edit[side] === toLocalInput(edit.base[side]) ? edit.base[side] : Date.parse(edit[side]));
@@ -61,13 +61,13 @@ export function RangeControl({ now, onChange, value, window: shown }: RangeContr
 
   return (
     <>
-      <div className="segmented" role="group" aria-label="Range" title={custom ? pair : ends}>
+      <div className="segmented" role="group" aria-label="Range" title={span}>
         {RANGE_PRESETS.map((p) => (
-          <button key={p.name} type="button" className={p.name === value.preset ? 'is-active' : ''} title={p.name === value.preset ? ends : p.label} aria-pressed={p.name === value.preset} onClick={() => choose(p.name)}>
+          <button key={p.name} type="button" className={p.name === value.preset ? 'is-active' : ''} title={p.name === value.preset ? span : p.label} aria-pressed={p.name === value.preset} onClick={() => choose(p.name)}>
             {p.name}
           </button>
         ))}
-        <button ref={setAnchor} type="button" className={custom ? 'is-active' : ''} aria-pressed={custom} aria-haspopup="dialog" aria-expanded={edit !== null} title={custom ? pair : undefined} onClick={toggle}>
+        <button ref={setAnchor} type="button" className={custom ? 'is-active' : ''} aria-pressed={custom} aria-haspopup="dialog" aria-expanded={edit !== null} title={custom ? span : undefined} onClick={toggle}>
           {custom ? spanText(shown.from, shown.to) : 'Custom'}
         </button>
       </div>

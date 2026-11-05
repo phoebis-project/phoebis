@@ -5,6 +5,7 @@ import { setBuildHook } from '@/api/http';
 import { useSession, useToastQueue } from '@/app/session';
 import { useAppSettings, type ThemeChoice } from '@/app/settings';
 import { useAsync, useMediaQuery } from '@/lib/hooks';
+import { ChartInkProvider } from '@/components/charts/useChartInk';
 import { Button, Descriptions, Segmented, Toast, Toggle } from '@/components/ui/primitives';
 import { IconActivity, IconArrowRight, IconChart, IconFunnel, IconGauge, IconGrid, IconKey, IconLayers, IconList, IconMonitor, IconMoon, IconRoute, IconSessions, IconSliders, IconSun, IconUser } from '@/components/ui/icons';
 import { Mark } from '@/components/ui/Mark';
@@ -151,7 +152,9 @@ export function Shell() {
         <main className="content">
           {/* A titled badge a page draws outside its cards, such as the attention line's, describes through this host. */}
           <Descriptions>
-            <Outlet />
+            <ChartInkProvider>
+              <Outlet />
+            </ChartInkProvider>
           </Descriptions>
         </main>
       </div>

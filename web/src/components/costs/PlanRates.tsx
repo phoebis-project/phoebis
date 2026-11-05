@@ -15,17 +15,16 @@ export const TOKEN_TYPES: { key: TokenType; label: string }[] = [
   { key: 'cacheWrite1h', label: 'Write 1h' },
   { key: 'output', label: 'Output' },
 ];
-const WINDOWS = COST_WINDOWS.map((w) => ({ key: w.key, label: `${w.label} window` }));
 /** In millions: one click per decade, where the spinner's arrows step 100,000 tokens. */
 const PICKS = [0.1, 1, 10];
 /** "1M", "2.5M", "100k". */
-const fmtTokens = (millions: number) => (millions >= 1 ? `${Number(millions.toPrecision(4))}M` : `${Number((millions * 1000).toPrecision(3))}k`);
+const fmtTokens = (millions: number) => (millions >= 1 ? `${Number(millions.toPrecision(4))}M` : `${figure(millions * 1000)}k`);
 const ZERO: Usage = { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 };
 
 const dash = <span className="muted">-</span>;
 
 const weekLabel = (key: string) => `7-day ${upperFirst(key.slice('seven_day_'.length))}`;
-const windowLabel = (window: string) => WINDOWS.find((w) => w.key === window)?.label ?? `${weekLabel(window)} window`;
+const windowLabel = (window: string) => COST_WINDOWS.find((w) => w.key === window)?.name ?? `${weekLabel(window)} window`;
 
 /** The row at a model table's foot that folds its older models: their count, and the disclosure that shows them. */
 function FoldRow({ cols, count, onToggle, open }: { cols: number; count: number; onToggle: () => void; open: boolean }) {
@@ -103,7 +102,7 @@ export function PlanRates({ costs, now, olderOpen, onToggleOlder, prices }: { co
   const lightest = fiveHourWeighted.reduce<string | null>((low, model) => (low === null || fiveHourWeight(model) < fiveHourWeight(low) ? model : low), null);
   const heaviest = Math.max(0, ...models.map(fiveHourWeight));
   const tierName = planLabel(tier);
-  const cols = 2 + WINDOWS.length * TOKEN_TYPES.length;
+  const cols = 2 + COST_WINDOWS.length * TOKEN_TYPES.length;
 
   /** `what` names the window in the cell's title: "5-hour window", "7-day Fable". */
   const cell = (model: string, window: string, what: string, type: (typeof TOKEN_TYPES)[number], i: number) => {
@@ -170,13 +169,13 @@ export function PlanRates({ costs, now, olderOpen, onToggleOlder, prices }: { co
       <tr key={model} className={`${alt}${weeks.length ? ' has-sub' : ''}`}>
         <td className="mono">{model}</td>
         {weightCell(model)}
-        {WINDOWS.map((w) => TOKEN_TYPES.map((t, i) => cell(model, w.key, w.label, t, i)))}
+        {COST_WINDOWS.map((w) => TOKEN_TYPES.map((t, i) => cell(model, w.key, w.name, t, i)))}
       </tr>,
       ...weeks.map((week) => (
         <tr key={`${model} ${week}`} className={`cost-ref__sub ${alt}`}>
           <td title="A window only these models carry, sized against the 7-day window">{weekLabel(week)}</td>
           <td />
-          {WINDOWS.map((w) =>
+          {COST_WINDOWS.map((w) =>
             TOKEN_TYPES.map((t, i) =>
               w.key === 'seven_day' ? cell(model, week, weekLabel(week), t, i) : <td key={`${w.key}-${t.key}`} className={i === 0 ? 'cost-ref__sep' : undefined} />,
             ),
@@ -240,14 +239,14 @@ export function PlanRates({ costs, now, olderOpen, onToggleOlder, prices }: { co
             <tr>
               <th rowSpan={2}>Model</th>
               <th rowSpan={2}>Weight, 5-hour window</th>
-              {WINDOWS.map((w) => (
+              {COST_WINDOWS.map((w) => (
                 <th key={w.key} colSpan={TOKEN_TYPES.length} className="cost-ref__grp cost-ref__sep">
-                  {w.label}
+                  {w.name}
                 </th>
               ))}
             </tr>
             <tr>
-              {WINDOWS.map((w) =>
+              {COST_WINDOWS.map((w) =>
                 TOKEN_TYPES.map((t, i) => (
                   <th key={`${w.key}-${t.key}`} className={`right${i === 0 ? ' cost-ref__sep' : ''}`}>
                     {t.label}

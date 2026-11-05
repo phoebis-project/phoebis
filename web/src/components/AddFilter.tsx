@@ -137,40 +137,43 @@ export function AddFilter({ buttonRef, dimensions, disabled = {}, edit, filters,
     setQuery('');
   };
 
-  const needle = query.trim().toLowerCase();
-  const matching = dimensions.filter((d) => d.label.toLowerCase().includes(needle));
-  const headed = new Set(dimensions.map((d) => d.group)).size > 1;
-  const list = (
-    <div ref={bodyRef} className="add-filter" onKeyDown={(e) => walkRows(e, e.currentTarget)}>
-      <Input className="add-filter__search" aria-label="Filter by" placeholder="Filter by" value={query} onChange={(e) => setQuery(e.target.value)} />
-      <div role="listbox" aria-label="Filters">
-        {matching.length === 0 && <div className="mselect__empty">No matches</div>}
-        {matching.map((d, i) => {
-          const reason = disabled[d.field];
-          const words = valueWords(d, filters[d.field], options[d.field] ?? []);
-          return (
-            <Fragment key={d.field}>
-              {headed && d.group !== matching[i - 1]?.group && (
-                <div className="mselect__group" role="presentation">
-                  {d.group}
-                </div>
-              )}
-              {/* A disabled row stays a stop for the keys so a reader hears its reason, and the keys that would press it are held. */}
-              <button type="button" role="option" className="add-filter__row" aria-disabled={reason !== undefined ? true : undefined} aria-describedby={reason !== undefined ? `${boxId}-${d.field}` : undefined} title={reason} onClick={() => reason === undefined && choose(d)} onKeyDown={(e) => reason !== undefined && (e.key === 'Enter' || e.key === ' ') && e.preventDefault()}>
-                <span className="add-filter__label">{d.label}</span>
-                {words !== '' && <span className={d.mono ? 'add-filter__value ellipsis mono' : 'add-filter__value ellipsis'}>{words}</span>}
-                {reason !== undefined && (
-                  <span className="add-filter__description" id={`${boxId}-${d.field}`}>
-                    {reason}
-                  </span>
+  const list = () => {
+    const needle = query.trim().toLowerCase();
+    const matching = dimensions.filter((d) => d.label.toLowerCase().includes(needle));
+    const headed = new Set(dimensions.map((d) => d.group)).size > 1;
+    return (
+      <div ref={bodyRef} className="add-filter" onKeyDown={(e) => walkRows(e, e.currentTarget)}>
+        <Input className="add-filter__search" aria-label="Filter by" placeholder="Filter by" value={query} onChange={(e) => setQuery(e.target.value)} />
+        <div role="listbox" aria-label="Filters">
+          {matching.length === 0 && <div className="mselect__empty">No matches</div>}
+          {matching.map((d, i) => {
+            const reason = disabled[d.field];
+            const words = valueWords(d, filters[d.field], options[d.field] ?? []);
+            return (
+              <Fragment key={d.field}>
+                {headed && d.group !== matching[i - 1]?.group && (
+                  <div className="mselect__group" role="presentation">
+                    {d.group}
+                  </div>
                 )}
-              </button>
-            </Fragment>
-          );
-        })}
+                {/* A disabled row stays a stop for the keys so a reader hears its reason, and the keys that would
+                    press it are held. */}
+                <button type="button" role="option" className="add-filter__row" aria-disabled={reason !== undefined ? true : undefined} aria-describedby={reason !== undefined ? `${boxId}-${d.field}` : undefined} title={reason} onClick={() => reason === undefined && choose(d)} onKeyDown={(e) => reason !== undefined && (e.key === 'Enter' || e.key === ' ') && e.preventDefault()}>
+                  <span className="add-filter__label">{d.label}</span>
+                  {words !== '' && <span className={d.mono ? 'add-filter__value ellipsis mono' : 'add-filter__value ellipsis'}>{words}</span>}
+                  {reason !== undefined && (
+                    <span className="add-filter__description" id={`${boxId}-${d.field}`}>
+                      {reason}
+                    </span>
+                  )}
+                </button>
+              </Fragment>
+            );
+          })}
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
   const values = (d: Dimension) => {
     const value = filters[d.field];
     const known = options[d.field] ?? [];
@@ -276,7 +279,7 @@ export function AddFilter({ buttonRef, dimensions, disabled = {}, edit, filters,
         Add filter
       </Button>
       <Popover anchor={anchor} id={boxId} label="Add filter" labelledBy={dimension === undefined ? undefined : titleId} onClose={() => close(null)} open={open} placeKey={step}>
-        {dimension === undefined ? list : values(dimension)}
+        {open && (dimension === undefined ? list() : values(dimension))}
       </Popover>
     </>
   );

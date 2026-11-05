@@ -220,6 +220,8 @@ export const planEndedSentence = (planEndedAt: string, now: number, compact = fa
 export const isFastScope = (scope: string) => scope === 'fast' || scope === 'fast_credits';
 /** The router's spelling of a cooldown scoped to one model, `model:<id>`. */
 export const MODEL_SCOPE_PREFIX = 'model:';
+/** The model id a `model:<id>` cooldown scope names, null for a scope of any other kind. */
+export const scopeModel = (scope: string): string | null => (scope.startsWith(MODEL_SCOPE_PREFIX) ? scope.slice(MODEL_SCOPE_PREFIX.length) : null);
 
 /** The row that cools the account: the first on a scope beyond the fast lane's, null where none does. */
 export const accountCooldown = (cooldowns: Cooldown[]): Cooldown | null => cooldowns.find((c) => !isFastScope(c.scope)) ?? null;

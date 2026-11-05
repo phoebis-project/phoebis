@@ -44,7 +44,7 @@ export function Donut({ slices, total, centerLabel, centerValue, size = 148, onH
               strokeDasharray={dash}
               strokeDashoffset={-offset}
               opacity={hover && hover !== s.id ? 0.45 : 1}
-              style={{ transition: 'stroke-width 120ms, opacity 120ms' }}
+              style={{ transition: 'stroke-width var(--motion-base), opacity var(--motion-base)' }}
               onMouseEnter={() => {
                 setHover(s.id);
                 onHover?.(s.id);

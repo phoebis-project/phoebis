@@ -25222,8 +25222,11 @@ m.unmount();
     const smallest = tiers.find((tier) => windowMultiple(costs, tier, 'five_hour') === 1);
     const wantMultiples = (w) => tiers.map((tier) => `${figure(windowMultiple(costs, tier, w))}x`);
     const wantWeeks = (inside) => tiers.map((tier) => figure(fullWindowsAWeek(costs, tier, inside)));
+    // The shared table rule paints every second body row of a `.table` without `table--plain`, a `table__detail` row
+    // left out of the count. jsdom matches no `:nth-child(... of S)`, so the rule's pick is read off the DOM.
+    const striped = (r) => r.matches('.table:not(.table--plain) > tbody > tr') && [...(r.parentElement?.children ?? [])].filter((row) => !row.classList.contains('table__detail')).indexOf(r) % 2 === 1;
     // Counted over the whole body, since the stripes run on through the group rows above the base's.
-    const stripes = allRows.filter((r, n) => r.classList.contains('is-alt') !== (n % 2 === 1)).length;
+    const stripes = allRows.filter((r, n) => striped(r) !== (n % 2 === 1)).length;
     const before = { five: vals(1), seven: vals(2), weeks: vals(3), segs: segs() };
     results.push({
       name: "/sessions Windows by tier names each tier with its key, sizes both windows against the smallest tier's, and counts the full 5-hour windows a week outside the band",
@@ -25286,7 +25289,7 @@ m.unmount();
       );
       const groups = allRows.filter((r) => r.classList.contains('cost-ref__group'));
       const widths = [...(tierCard?.querySelectorAll('.cost-ref__bar') ?? [])].map((bar) => Number.parseFloat(bar.style.width));
-      const stripes = allRows.filter((r, n) => r.classList.contains('is-alt') !== (n % 2 === 1)).length;
+      const stripes = allRows.filter((r, n) => striped(r) !== (n % 2 === 1)).length;
       results.push({
         name: '/sessions windows by tier lists a group row and a row per tier each regime names, then the Headless group and the base rows',
         ok:

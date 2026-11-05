@@ -1,6 +1,6 @@
 import { Fragment, memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { findOffsets, highlightJson, type Token } from '@/lib/bodies';
-import { useLatest } from '@/lib/hooks';
+import { useLatest, useResizeObserver } from '@/lib/hooks';
 
 /** One row of the mono font's line height, 12 px at 1.5. `--body-row` in pages.css carries the same figure. */
 export const ROW_PX = 18;
@@ -174,20 +174,13 @@ export function BodyViewer({ find, highlight, lines }: { find?: BodyFind; highli
   // Read once as the box mounts, where no observer exists or one never reports. The wide dialog opens after its
   // children mount, so its height arrives through the observer.
   useEffect(() => {
-    const el = box.current;
     read();
-    const cancel = () => {
+    return () => {
       if (frame.current !== null) cancelAnimationFrame(frame.current);
       frame.current = null;
     };
-    if (!el || typeof ResizeObserver !== 'function') return cancel;
-    const observer = new ResizeObserver(settle);
-    observer.observe(el);
-    return () => {
-      observer.disconnect();
-      cancel();
-    };
-  }, [read, settle]);
+  }, [read]);
+  useResizeObserver(box, settle);
   // Absolutely placed rows widen the scroll area only while drawn, so the block's floor is the width the widest line
   // draws in the pre's font, read off a hidden copy of it once per text, and a reader scrolled sideways keeps the place
   // when that line leaves the window. A character count would miss a tab's stop, a wide character's second column and
@@ -196,16 +189,13 @@ export function BodyViewer({ find, highlight, lines }: { find?: BodyFind; highli
   const probe = useRef<HTMLDivElement>(null);
   const [floor, setFloor] = useState(0);
   useLayoutEffect(() => {
-    const el = probe.current;
-    if (!el) return;
-    setFloor(el.scrollWidth);
-    // The wide dialog lays its children out only once it opens, after they mount, so there the copy reads 0 wide
-    // until the observer reports its drawn width.
-    if (typeof ResizeObserver !== 'function') return;
-    const observer = new ResizeObserver(() => setFloor(el.scrollWidth));
-    observer.observe(el);
-    return () => observer.disconnect();
+    if (probe.current) setFloor(probe.current.scrollWidth);
   }, [widest]);
+  // The wide dialog lays its children out only once it opens, after they mount, so there the copy reads 0 wide until
+  // the observer reports its drawn width.
+  useResizeObserver(probe, () => {
+    if (probe.current) setFloor(probe.current.scrollWidth);
+  });
   const widestColumns = useMemo(() => columnsOf(widest), [widest]);
   const active = find?.active ?? null;
   const step = find?.step ?? 0;

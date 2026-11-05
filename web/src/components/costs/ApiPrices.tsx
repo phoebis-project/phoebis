@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import type { ModelPrice, ModelTiers, PriceCells } from '@/api/types';
 import { newestAndOlder, tierGroups } from '@/lib/costs';
 import { fmtCompact, fmtInt } from '@/lib/format';
@@ -39,28 +40,22 @@ export function ApiPrices({ costs, olderOpen, onToggleOlder, prices }: { costs: 
         </td>
       );
     });
-  const row = (p: ModelPrice, alt: string) => [
-    <tr key={p.model} className={`${alt}${p.fast || p.longContext ? ' has-sub' : ''}`}>
-      <td className="mono">{p.model}</td>
-      {cells(p)}
-    </tr>,
-    ...(p.fast
-      ? [
-          <tr key={`${p.model} fast`} className={`cost-ref__sub ${alt}`}>
-            <td title={FAST_MODE}>fast mode</td>
-            {cells(p.fast)}
-          </tr>,
-        ]
-      : []),
-    ...(p.longContext
-      ? [
-          <tr key={`${p.model} long-context`} className={`cost-ref__sub ${alt}`}>
-            <td title={LONG_CONTEXT(p.longContext.over)}>prompt over {fmtCompact(p.longContext.over)} tokens</td>
-            {cells(p.longContext)}
-          </tr>,
-        ]
-      : []),
-  ];
+  const row = (p: ModelPrice, alt: string) => {
+    const sub = (suffix: string, title: string, label: ReactNode, prices: PriceCells) => (
+      <tr key={`${p.model} ${suffix}`} className={`cost-ref__sub ${alt}`}>
+        <td title={title}>{label}</td>
+        {cells(prices)}
+      </tr>
+    );
+    return [
+      <tr key={p.model} className={`${alt}${p.fast || p.longContext ? ' has-sub' : ''}`}>
+        <td className="mono">{p.model}</td>
+        {cells(p)}
+      </tr>,
+      ...(p.fast ? [sub('fast', FAST_MODE, 'fast mode', p.fast)] : []),
+      ...(p.longContext ? [sub('long-context', LONG_CONTEXT(p.longContext.over), <>prompt over {fmtCompact(p.longContext.over)} tokens</>, p.longContext)] : []),
+    ];
+  };
   return (
     <>
       <div className="cost-ref__caption">
