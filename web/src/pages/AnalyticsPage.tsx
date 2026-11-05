@@ -3,6 +3,7 @@ import { flushSync } from 'react-dom';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Dot, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Link } from 'react-router-dom';
 import { api } from '@/api';
+import { iso } from '@/api/decode';
 import { foldGroups, foldRequests, keptRows, latestGenerations, loadSessionRequests, sumGroups, type SessionRequests } from '@/api/fold';
 import { useAppSettings } from '@/app/settings';
 import type { Account, AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, GuardrailCounts, LatencyHistograms, MemberBudget, PlacementRow, RefusalCategoriesAnswer, RequestLog, RewritesAnswer, SubscriptionCosts, UnusedAllowanceAnswer } from '@/api/types';
@@ -19,15 +20,16 @@ import { FilterBar } from '@/components/FilterBar';
 import { GroupBy as GroupByControl, GroupsButton } from '@/components/GroupBy';
 import { SectionBar } from '@/components/SectionBar';
 import { accountHref, addressWindow, ANALYTICS_CODEC, type AnalyticsAddress } from '@/lib/address';
-import { ALLOWANCE_WEEKS, allowanceColumnWord, allowanceRows, allowanceSpan, fleetFigures, resetInstant, weeklyKeys, weeklyResetsKey, type AllowanceFigure } from '@/lib/allowance';
+import { ALLOWANCE_WEEKS, allowanceRows, allowanceSpan, fleetFigures, resetInstant, weeklyKeys, weeklyResetsKey, type AllowanceFigure } from '@/lib/allowance';
 import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, failureHead, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, moveLabel, nativeCellOf, nativeFiguresOf, netSaving, niceAxisTop, oneAccountGroupOf, ownShareHint, peakLines, placementCells, placementRungLabel, readBurn, sampledWindows, sidesLine, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
-import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder, missShort } from '@/lib/cache';
+import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
 import { failed, weekReadingOf, weekScale } from '@/lib/costs';
+import { countOf } from '@/lib/counts';
 import { ANALYTICS_DIMENSIONS, chipText, escapePattern } from '@/lib/filterBar';
 import { effectiveInterval, ENDED_RANGE, readEnd, spanEnded } from '@/lib/follow';
-import { SESSION_CHARS, fmtAbsolute, fmtBytes, fmtCompact, fmtDayTick, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtShortTime, fmtUsd, fmtUsdTick, fmtWeek, keyLifetime, pct, shortId, upperFirst, usdTickDigits, weekShort } from '@/lib/format';
+import { SESSION_CHARS, fmtAbsolute, fmtBytes, fmtCompact, fmtDayTick, fmtDuration, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtShortTime, fmtUsd, fmtUsdTick, fmtWeek, keyLifetime, pct, shortId, upperFirst, usdTickDigits, weekShort } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
 import { useAsync, useHashSection, useQueryFilters, useRangeTakenAt, type Loaded } from '@/lib/hooks';
 import { REFUSED_TITLE } from '@/lib/requests';
@@ -36,7 +38,7 @@ import { words } from '@/lib/routingLog';
 import { HOUR } from '@/lib/time';
 import { plainOutputOf } from '@/lib/tokenBar';
 import { UNIT_FUNDING, UNIT_POSITIONS, type UnitPosition, type WeekPosition } from '@/lib/unit';
-import { windowLabelOf } from '@/lib/windows';
+import { windowLabelOf, windowWord } from '@/lib/windows';
 
 /** The dimensions the breakdown route groups on; `all` is the ungrouped total every section reads. */
 type GroupBy = Exclude<AnalyticsGroupBy, 'all'>;
@@ -293,8 +295,8 @@ export function AnalyticsPage() {
     const { from, to } = addressWindow(a.range, '24h', now);
     return { fromMs: from, toMs: readEnd(custom, to, now) };
   }, [a.range, custom, now]);
-  const fromIso = new Date(span.fromMs).toISOString();
-  const toIso = new Date(span.toMs).toISOString();
+  const fromIso = iso(span.fromMs);
+  const toIso = iso(span.toMs);
   const ended = spanEnded(custom, span.toMs, rangeTakenAt);
   const polledMs = effectiveInterval(intervalMs, ended);
   const sessionId = filters.sessionId[0] ?? null;
@@ -1416,7 +1418,7 @@ function CountLink({ children, target }: { children: ReactNode; target: Requests
 function ReasonBars({ link, plainLinks, totals }: { link: ReasonLink; plainLinks: boolean; totals: AnalyticsGroup }) {
   const ink = useChartInk();
   const rows = missReasonOrder([totals])
-    .map((reason) => ({ count: missCount(totals.cacheMissReasons, reason), reason }))
+    .map((reason) => ({ count: countOf(totals.cacheMissReasons, reason), reason }))
     .sort((a, b) => b.count - a.count);
   const max = Math.max(1, ...rows.map((r) => r.count));
   if (rows.every((r) => r.count === 0)) return <p className="muted">No diagnostics in range.</p>;
@@ -1589,7 +1591,7 @@ const breakable = (name: string): ReactNode => name.split(/(?<=_)/).flatMap((par
 function MissReasonsByGroup({ groupBy, groups, groupLabel, link, loading, plainLinks }: { groupBy: GroupBy; groupLabel: string; groups: AnalyticsGroup[]; link: ReasonLink; loading: boolean; plainLinks: boolean }) {
   const order = missReasonOrder(groups);
   const cell = (g: AnalyticsGroup, reason: CacheMissReason) => {
-    const count = missCount(g.cacheMissReasons, reason);
+    const count = countOf(g.cacheMissReasons, reason);
     return <CountLink target={plainLinks ? SEVERAL_CLIENTS : requestsLink({ ...link, count, group: { by: groupBy, key: g.key }, reason })}>{fmtInt(count)}</CountLink>;
   };
   return (
@@ -1965,7 +1967,7 @@ type TimeAxis = { axisLine: { stroke: string }; dataKey: 'at'; height?: number; 
  */
 function timeAxis(bucketMs: number, ink: ChartInk): TimeAxis {
   const look = { axisLine: { stroke: ink.axis }, dataKey: 'at', minTickGap: 40, tickLine: false } as const;
-  if (bucketMs < 6 * HOUR) return { ...look, tickFormatter: (v) => fmtHourTick(v) };
+  if (bucketMs < 6 * HOUR) return { ...look, tickFormatter: (v) => fmtShortTime(v) };
   // The label sits under the last tick, so the axis grows a line taller than its 30 px to keep the two apart.
   return { ...look, height: 40, label: { fill: ink.ink2, fontSize: 11, position: 'insideBottomRight', value: 'days start at 00:00 UTC' }, tickFormatter: (v) => fmtDayTick(v) };
 }
@@ -2709,8 +2711,8 @@ function AllowanceTable({ answer, costs, error, week }: { answer: UnusedAllowanc
               <th className="col-fill">Account</th>
               <th className="right col-fit">Resets</th>
               {windows.flatMap((w) => [
-                <th key={`${w}-last`} className="right col-fit">{`${allowanceColumnWord(w)}, last`}</th>,
-                <th key={`${w}-weeks`} className="right col-fit">{`${allowanceColumnWord(w)}, ${ALLOWANCE_WEEKS} weeks`}</th>,
+                <th key={`${w}-last`} className="right col-fit">{`${windowWord(w)}, last`}</th>,
+                <th key={`${w}-weeks`} className="right col-fit">{`${windowWord(w)}, ${ALLOWANCE_WEEKS} weeks`}</th>,
               ])}
             </tr>
           </thead>

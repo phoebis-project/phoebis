@@ -1,12 +1,13 @@
+import { iso } from '@/api/decode';
 import type { Account, AllowanceAccount, AllowanceReset, AllowanceWindow, SubscriptionCosts, UnusedAllowanceAnswer } from '@/api/types';
 import { HINT_WINDOW } from '@/lib/analytics';
 import { anchorTier, pricedWindow, tierCapacity, weekScale, weekUnpricedTitle } from '@/lib/costs';
 import { lookup } from '@/lib/counts';
-import { byteOrder, fmtAbsolute, fmtDated, fmtDayMonth, fmtShare, plural, weekShort } from '@/lib/format';
+import { byteOrder, fmtAbsolute, fmtDated, fmtShare, plural, weekShort } from '@/lib/format';
 import { pricedTier, readWindows } from '@/lib/quota';
 import { DAY } from '@/lib/time';
 import type { WeekPosition } from '@/lib/unit';
-import { WINDOW_HOURS, windowRank, windowWord } from '@/lib/windows';
+import { WINDOW_HOURS, windowRank } from '@/lib/windows';
 
 /** The weeks the Accounts block and the Analytics card read: the latest reset and the three before it. */
 export const ALLOWANCE_WEEKS = 4;
@@ -14,7 +15,7 @@ export const ALLOWANCE_WEEKS = 4;
 /** The span the block and the card read: 29 days behind now to now, 28 days and a day of slack so the fourth weekly
  *  reset is never cut by the hour of the week or by a clock-walk reading up to a poll interval old. */
 export function allowanceSpan(now: number): { from: string; to: string } {
-  return { from: new Date(now - (7 * ALLOWANCE_WEEKS + 1) * DAY).toISOString(), to: new Date(now).toISOString() };
+  return { from: iso(now - (7 * ALLOWANCE_WEEKS + 1) * DAY), to: iso(now) };
 }
 
 /** The resets of the accounts' 168-hour windows, the Fable window's among them, as one key that moves once a week has
@@ -116,9 +117,6 @@ export function weeklyKeys(accounts: AllowanceAccount[]): string[] {
   return keys.sort((a, b) => windowRank(a) - windowRank(b));
 }
 
-/** A window's word in the card's column heads: "7-day", "Fable", a model week the console does not know by its key. */
-export const allowanceColumnWord = (window: string): string => windowWord(window);
-
 /** The block's own words for where a reading came from, since the routing log's `window reset` panel names none. */
 const SOURCE_WORD = new Map([
   ['clock', 'the clock walk'],
@@ -132,9 +130,6 @@ export const resetHover = (reset: AllowanceReset): string => `${fmtAbsolute(rese
 /** A reset's own share for the week's hover, in the hint's words: "Ultra: 39% of the 7-day window left", "Max: 12% of
  *  the Fable week left", a week the console does not know under its key. */
 export const ownShareHover = (plan: string, window: string, shareLeft: number): string => `${plan}: ${fmtShare(shareLeft)} of ${lookup(HINT_WINDOW, window) ?? window} left`;
-
-/** A reset's day, "Sep 12": a week's reset lies days back, so the day is always written. */
-export const resetDate = (isoTime: string): string => fmtDayMonth(isoTime);
 
 /** A reset's day and time, "Sep 12 20:10", the day written even within a day of now. */
 export const resetInstant = (isoTime: string): string => fmtDated(Date.parse(isoTime));

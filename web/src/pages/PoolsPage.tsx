@@ -28,8 +28,8 @@ import { accountHref, poolKeysHref } from '@/lib/address';
 import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, dollarsUnder, moveLabel, nativeSidesOf, sidesLine, sumFunded, type FundedSum, type WeekReading } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
 import { weekReadingOf } from '@/lib/costs';
-import { fmtCompact, fmtDuration, fmtHourTick, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtUsd, messageOf, noun, plural, shortModel } from '@/lib/format';
-import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, guardrailIdsOf, guardrailsChange, keyFormOf, keyInputOf, poolRefusals, refusalsView, sameValues, saveStatus, type PoolGroup } from '@/lib/forms';
+import { fmtCompact, fmtDuration, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtShortTime, fmtUsd, messageOf, noun, plural, shortModel } from '@/lib/format';
+import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, guardrailIdsOf, guardrailsChange, keyFormOf, keyInputOf, memberField, poolRefusals, refusalsView, sameValues, saveStatus, type PoolGroup } from '@/lib/forms';
 import { failedFirst, refreshAttention, useAsync, useAttention, useLatest, useNow } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, slowDownPreview, slowDownPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
@@ -875,7 +875,7 @@ const PoolTraffic = memo(function PoolTraffic({ requests24h, traffic }: { reques
       ) : (
         <ResponsiveContainer width="100%" height={170}>
           <ComposedChart data={data} margin={{ top: 6, right: 4, bottom: 0, left: 4 }} barCategoryGap={2}>
-            <XAxis dataKey="at" tickFormatter={(v: number) => fmtHourTick(v)} tickLine={false} axisLine={{ stroke: ink.axis }} interval={5} minTickGap={24} />
+            <XAxis dataKey="at" tickFormatter={(v: number) => fmtShortTime(v)} tickLine={false} axisLine={{ stroke: ink.axis }} interval={5} minTickGap={24} />
             <YAxis width={32} tickLine={false} axisLine={false} tick={{ fill: ink.ink2, fontSize: 11 }} allowDecimals={false} />
             <Tooltip
               cursor={{ fill: ink.grid, opacity: 0.6 }}
@@ -1551,7 +1551,7 @@ export function PoolDialog({
                             if (e.key === 'Enter') setMemberOrder(orderedAccountIds(accounts, form.members));
                           }}
                           aria-label={`Priority for ${a.label}`}
-                          aria-invalid={invalid(`priority:${a.id}`)}
+                          aria-invalid={invalid(memberField('priority', a.id))}
                         />
                       </td>
                       <td className="right col-fit">
@@ -1564,7 +1564,7 @@ export function PoolDialog({
                           placeholder="none"
                           onChange={(e) => setBudget(a.id, { daily: e.target.value })}
                           aria-label={`Daily budget for ${a.label}, USD`}
-                          aria-invalid={invalid(`budget_daily:${a.id}`)}
+                          aria-invalid={invalid(memberField('budget_daily', a.id))}
                         />
                       </td>
                       <td className="right col-fit">
@@ -1577,7 +1577,7 @@ export function PoolDialog({
                           placeholder="none"
                           onChange={(e) => setBudget(a.id, { monthly: e.target.value })}
                           aria-label={`Monthly budget for ${a.label}, USD`}
-                          aria-invalid={invalid(`budget_monthly:${a.id}`)}
+                          aria-invalid={invalid(memberField('budget_monthly', a.id))}
                         />
                       </td>
                     </tr>
@@ -1597,7 +1597,7 @@ export function PoolDialog({
                             delete next[id];
                             set('members', next);
                           }}
-                          aria-invalid={invalid(`member:${id}`)}
+                          aria-invalid={invalid(memberField('member', id))}
                         />
                         <span className="members-table__name ellipsis">{id}</span>
                         {accountsLoaded && <Badge tone="neutral">not listed</Badge>}

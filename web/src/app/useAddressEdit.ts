@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { useLatest } from '@/lib/hooks';
+import { addressTo, useLatest } from '@/lib/hooks';
 import { useSession } from './session';
 
 /**
@@ -21,8 +21,7 @@ export function useAddressEdit<T extends { id: string }>(items: readonly T[] | n
     const group = params.get('group');
     params.delete('edit');
     params.delete('group');
-    const search = params.toString();
-    navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
+    navigate(addressTo(location.hash, location.pathname, params), { replace: true });
     const item = items.find((x) => x.id === edit);
     if (!item) {
       notify(`${noun} ${edit} not found`);

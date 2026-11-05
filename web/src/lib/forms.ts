@@ -71,6 +71,8 @@ export type PoolGroup = (typeof POOL_GROUPS)[number];
 
 /** A member row's refused control. */
 export type MemberColumn = 'budget_daily' | 'budget_monthly' | 'member' | 'priority';
+/** A member row's control as a refusal's `field` names it, so the dialog's lookups and the refusals agree. */
+export const memberField = (column: MemberColumn, accountId: string): string => `${column}:${accountId}`;
 
 export interface PoolRefusal {
   /** The refused control's accessible name; `priority:<id>`, `budget_daily:<id>`, `budget_monthly:<id>`, `member:<id>` for a member row; `members` for the missing member or an account list that did not load. */
@@ -169,11 +171,12 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string> |
   refuse('members', 'members', input.members.length > 0 ? null : 'the pool needs a member.');
   for (const m of input.members) {
     const id = m.accountId;
-    if (accountIds !== null) refuse('members', `member:${id}`, accountIds.has(id) ? null : `${id} is not an account the console lists.`, { accountId: id, column: 'member' });
-    refuse('members', `priority:${id}`, whole(m.priority, 0, Number.MAX_SAFE_INTEGER) ? null : 'Priority is a whole number of 0 or more.', { accountId: id, column: 'priority' });
+    const refuseMember = (column: MemberColumn, text: string | null) => refuse('members', memberField(column, id), text, { accountId: id, column });
+    if (accountIds !== null) refuseMember('member', accountIds.has(id) ? null : `${id} is not an account the console lists.`);
+    refuseMember('priority', whole(m.priority, 0, Number.MAX_SAFE_INTEGER) ? null : 'Priority is a whole number of 0 or more.');
     // A member written without a budget field has no budget over that period, as the member write reads it.
-    refuse('members', `budget_daily:${id}`, m.budgetDailyUsd == null ? null : budgetRefusal(String(m.budgetDailyUsd)), { accountId: id, column: 'budget_daily' });
-    refuse('members', `budget_monthly:${id}`, m.budgetMonthlyUsd == null ? null : budgetRefusal(String(m.budgetMonthlyUsd)), { accountId: id, column: 'budget_monthly' });
+    refuseMember('budget_daily', m.budgetDailyUsd == null ? null : budgetRefusal(String(m.budgetDailyUsd)));
+    refuseMember('budget_monthly', m.budgetMonthlyUsd == null ? null : budgetRefusal(String(m.budgetMonthlyUsd)));
   }
 
   refuse('models', 'Model rules', modelRulesRefusal(input.modelRules));

@@ -46,9 +46,9 @@ export type SortDir = 'asc' | 'desc';
 export const SORT_DIRS = ['asc', 'desc'] as const;
 
 /** One key of a view's sort control: its address value, its label and the direction a pick of it starts in. */
-export interface SortKey {
+export interface SortKey<K extends string = string> {
   defaultDir: SortDir;
-  id: string;
+  id: K;
   label: string;
 }
 
@@ -58,17 +58,17 @@ export interface SortKey {
  * differs from that direction and `?sort=usage` alone keeps its meaning. `sort` comes first, since `codecOf` writes
  * the keys in the specification's order, so a spread writes `sort=...&dir=...`.
  */
-export const sortSpecs = (keys: readonly SortKey[], defaultKey: string): { sort: KeySpec; dir: KeySpec } => ({
+export const sortSpecs = <K extends string>(keys: readonly SortKey<K>[], defaultKey: K): { sort: KeySpec; dir: KeySpec } => ({
   sort: { default: defaultKey, kind: 'choice', name: 'sort', values: keys.map((k) => k.id) },
   dir: { default: '', kind: 'choice', name: 'dir', values: SORT_DIRS },
 });
 
 /** The direction an address means: its `dir` where it names one, else the sort key's own default. */
-export const sortDirOf = (keys: readonly SortKey[], address: { dir: '' | SortDir; sort: string }): SortDir =>
+export const sortDirOf = <K extends string>(keys: readonly SortKey<K>[], address: { dir: '' | SortDir; sort: K }): SortDir =>
   address.dir !== '' ? address.dir : (keys.find((k) => k.id === address.sort)?.defaultDir ?? 'asc');
 
 /** The address fields of a pick: `dir` empty where it is the key's own default, so the address omits it. */
-export const sortAddressOf = (keys: readonly SortKey[], next: { dir: SortDir; sort: string }): { dir: '' | SortDir; sort: string } => ({
+export const sortAddressOf = <K extends string>(keys: readonly SortKey<K>[], next: { dir: SortDir; sort: K }): { dir: '' | SortDir; sort: K } => ({
   dir: next.dir === keys.find((k) => k.id === next.sort)?.defaultDir ? '' : next.dir,
   sort: next.sort,
 });
@@ -362,17 +362,17 @@ export interface AccountsAddress {
   dir: '' | SortDir;
   search: string;
   /** The list's order: `name` the default, `reset` the soonest reset, `usage` the most used, `status`. */
-  sort: string;
+  sort: (typeof ACCOUNT_SORT_KEYS)[number]['id'];
   /** `all` the default, else an account status. */
   status: 'all' | Account['status'];
 }
 
-export const ACCOUNT_SORT_KEYS: readonly SortKey[] = [
+export const ACCOUNT_SORT_KEYS = [
   { defaultDir: 'asc', id: 'name', label: 'Name' },
   { defaultDir: 'asc', id: 'reset', label: 'Soonest reset' },
   { defaultDir: 'desc', id: 'usage', label: 'Most used' },
   { defaultDir: 'asc', id: 'status', label: 'Status' },
-];
+] as const satisfies readonly SortKey[];
 
 export const ACCOUNTS_CODEC = codecOf<AccountsAddress>({
   search: text('search'),
@@ -395,13 +395,13 @@ export interface SessionsAddress {
   /** Show released agents on a live session. */
   released: boolean;
   /** The rows' order: `created` the default, the session's creation time, or `activity`, its last activity. */
-  sort: string;
+  sort: (typeof SESSION_SORT_KEYS)[number]['id'];
 }
 
-export const SESSION_SORT_KEYS: readonly SortKey[] = [
+export const SESSION_SORT_KEYS = [
   { defaultDir: 'desc', id: 'created', label: 'Created' },
   { defaultDir: 'desc', id: 'activity', label: 'Last activity' },
-];
+] as const satisfies readonly SortKey[];
 
 // The codec's literal keeps the bar's order: codecOf writes the address's keys in its specification's order.
 export const SESSIONS_CODEC = codecOf<SessionsAddress>({

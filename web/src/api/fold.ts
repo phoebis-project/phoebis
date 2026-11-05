@@ -1,10 +1,11 @@
-import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
+import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { fundingOf } from '@/lib/costs';
 import { countOf, emptyCounts } from '@/lib/counts';
 import { foldClassifier, foldEffort, foldRequestClass, foldSpeed, servedMissReason, servingAttempt } from '@/lib/dimensions';
 import { earlierHolderLabel, keyLifetime, tokensTotal } from '@/lib/format';
 import { emptyHistogram, histogramOf, mergeHistograms, quartet } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
+import { iso } from './decode';
 import type { AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, FundingFilter, RequestLog, RequestPage } from './types';
 
 export const METRICS = ['durationMs', 'outputTps', 'ttfbMs', 'ttftMs'] as const;
@@ -284,7 +285,7 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
     else if (r.usage.cacheWrite5m + r.usage.cacheWrite1h > 0) g.cacheMisses += 1;
     else g.uncached += 1;
     const reason = servedMissReason(r);
-    if (reason) g.cacheMissReasons[reason] = missCount(g.cacheMissReasons, reason) + 1;
+    if (reason) g.cacheMissReasons[reason] = countOf(g.cacheMissReasons, reason) + 1;
     if (reason === 'none' && r.usage.cacheRead === 0) g.expiredBetweenTurns += 1;
   }
   for (const { group: g, rows: list } of groups.values()) {
@@ -310,7 +311,7 @@ export function foldRequests(rows: RequestLog[], bucketMs: number, from: string,
     const i = Math.floor((Date.parse(r.at) - start) / bucketMs);
     if (i >= 0 && i < count) buckets[i].push(r);
   }
-  return buckets.map((inBucket, i) => ({ at: new Date(start + i * bucketMs).toISOString(), groups: foldGroups(inBucket, by, options, latest) }));
+  return buckets.map((inBucket, i) => ({ at: iso(start + i * bucketMs), groups: foldGroups(inBucket, by, options, latest) }));
 }
 
 /** A session's requests as the log answered them, partial where the page bound stopped the walk short of the end. */
@@ -373,7 +374,7 @@ export function sumGroups(groups: AnalyticsGroup[]): AnalyticsGroup {
     for (const k of ['cacheRead', 'cacheWrite1h', 'cacheWrite5m', 'output', 'thinking', 'uncachedInput', 'webFetch', 'webSearch'] as const) out.tokens[k] += g.tokens[k];
     for (const [code, n] of Object.entries(g.errors)) out.errors[code] = countOf(out.errors, code) + n;
     for (const [code, n] of Object.entries(g.refusals)) out.refusals[code] = countOf(out.refusals, code) + n;
-    for (const [reason, n] of Object.entries(g.cacheMissReasons)) out.cacheMissReasons[reason] = missCount(out.cacheMissReasons, reason) + n;
+    for (const [reason, n] of Object.entries(g.cacheMissReasons)) out.cacheMissReasons[reason] = countOf(out.cacheMissReasons, reason) + n;
     if (g.fromRequests) out.fromRequests = true;
     out.keptWarm = plusBoth(out.keptWarm, g.keptWarm);
     for (const k of ['failed', 'held', 'migrated', 'ok', 'planOk', 'skipped'] as const) out.probes[k] += g.probes[k];

@@ -4,11 +4,11 @@ import { Popover } from '@/components/ui/Popover';
 import { Button } from '@/components/ui/primitives';
 import type { SortDir, SortKey } from '@/lib/address';
 
-export interface SortControlProps {
-  keys: readonly SortKey[];
-  onChange: (next: { dir: SortDir; sort: string }) => void;
+export interface SortControlProps<K extends string = string> {
+  keys: readonly SortKey<K>[];
+  onChange: (next: { dir: SortDir; sort: K }) => void;
   /** The resolved direction, never the address's empty `dir`: the page maps it through sortDirOf and sortAddressOf. */
-  value: { dir: SortDir; sort: string };
+  value: { dir: SortDir; sort: K };
 }
 
 const DIRECTIONS: readonly { dir: SortDir; label: string }[] = [
@@ -30,7 +30,7 @@ function DirectionArrow({ dir }: { dir: SortDir }): JSX.Element {
  * "Sorted by {label}, {ascending|descending}", its Popover holding the view's keys as radios and, under a rule,
  * Ascending and Descending. A key's pick sends the key in its own default direction, a direction's pick keeps the key.
  */
-export function SortControl({ keys, onChange, value }: SortControlProps): JSX.Element {
+export function SortControl<K extends string>({ keys, onChange, value }: SortControlProps<K>): JSX.Element {
   const boxId = useId();
   const headId = useId();
   // Held in state through the ref callback, since the hooks lint refuses a ref read while rendering.
@@ -38,7 +38,7 @@ export function SortControl({ keys, onChange, value }: SortControlProps): JSX.El
   const [open, setOpen] = useState(false);
   const label = keys.find((k) => k.id === value.sort)?.label ?? value.sort;
   // The pick unmounts the radio that holds the focus, so the focus goes back to the button first, as Add filter's does.
-  const pick = (next: { dir: SortDir; sort: string }) => {
+  const pick = (next: { dir: SortDir; sort: K }) => {
     anchor?.focus({ preventScroll: true });
     setOpen(false);
     onChange(next);

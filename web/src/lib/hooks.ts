@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MutableRefObject, type RefObject } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '@/api';
+import { iso } from '@/api/decode';
 import { ApiError, quietly, reportRecovery } from '@/api/http';
 import type { Codec, RangeValue } from './address';
 import { createAttentionPoll, type AttentionRead } from './attention';
@@ -45,7 +46,7 @@ export interface AsyncOptions {
 }
 
 const sameDeps = (a: readonly unknown[], b: readonly unknown[]) => a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
-const stamp = () => new Date(clock.now()).toISOString();
+const stamp = () => iso(clock.now());
 
 /**
  * Counts `pending` in `out` until it settles, and hands it back for the caller's arms. A read counts once its call has
@@ -165,10 +166,10 @@ export function useLatest<T>(value: T): MutableRefObject<T> {
 
 /**
  * Arms a poll that reads every `periodMs` while the tab is visible and `idle()` holds. When the tab comes back, and on
- * arming with `readDueNow`, it reads at once if `answeredAt()` is a full period old and `idle()` holds, with `returned`
- * true only for the tab's return. Returns the cleanup.
+ * arming, it reads at once if `answeredAt()` is a full period old and `idle()` holds, with `returned` true only for the
+ * tab's return. Returns the cleanup.
  */
-export function armPoll(periodMs: number, read: (returned: boolean) => void, idle: () => boolean, answeredAt: () => number | null, readDueNow: boolean): () => void {
+export function armPoll(periodMs: number, read: (returned: boolean) => void, idle: () => boolean, answeredAt: () => number | null): () => void {
   // A tick or a due read that finds a read still out skips with no catch-up read, which would read back to back under a
   // slow server, and the next tick arrives one period later at most.
   const id = clock.setInterval(() => {
@@ -178,7 +179,7 @@ export function armPoll(periodMs: number, read: (returned: boolean) => void, idl
     const at = answeredAt();
     if (!document.hidden && idle() && at !== null && clock.now() - at >= periodMs) read(returned);
   };
-  if (readDueNow) readDue(false);
+  readDue(false);
   const offVisible = onVisibility(() => readDue(true));
   return () => {
     clock.clearInterval(id);
@@ -291,7 +292,7 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
     };
     // The load effect runs first in a commit and counts its read, so the arm's read at once yields to a read for new
     // deps the same render started, and that render reads once.
-    const disarm = armPoll(refreshMs, () => refresh(), () => inFlight.current === 0, () => (fetched.current === null ? null : Date.parse(fetched.current)), true);
+    const disarm = armPoll(refreshMs, () => refresh(), () => inFlight.current === 0, () => (fetched.current === null ? null : Date.parse(fetched.current)));
     return () => {
       armed.alive = false;
       disarm();
@@ -368,6 +369,12 @@ function keptFields<F>(held: F, next: F): F {
   return Object.fromEntries(fields.map((k) => [k, sameField(was[k], now[k]) ? was[k] : now[k]])) as F;
 }
 
+/** The address a query write navigates to: `params` as its search, with no bare `?` when it holds none. */
+export const addressTo = (hash: string, pathname: string, params: URLSearchParams) => {
+  const search = params.toString();
+  return { hash, pathname, search: search ? `?${search}` : '' };
+};
+
 /** A view's filters in the URL's query string: read on every address, written whole with `replace`, so a link sets
  * them, a reload keeps them and Back returns to the view before. A filter change makes a new address, which a caller
  * keys its cursor on. The hash stays on every write, since a tab, a section or an anchor lives there. A field whose
@@ -393,15 +400,13 @@ export function useQueryFilters<F>(codec: Codec<F>, options: { keep?: readonly s
       const value = searchParams.get(name);
       if (value !== null) params.set(name, value);
     }
-    const search = params.toString();
-    navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { flushSync: true, replace: true });
+    navigate(addressTo(location.hash, location.pathname, params), { flushSync: true, replace: true });
   };
   // An effect's write: `replace` flushes at once, which React cannot do inside an effect. It writes the codec's keys
   // alone, since a kept parameter could restore the one-shot parameter an effect drops in the same commit.
   const replaceLater = useCallback(
     (next: F) => {
-      const search = codec.toParams(next).toString();
-      navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
+      navigate(addressTo(location.hash, location.pathname, codec.toParams(next)), { replace: true });
     },
     [codec, location.hash, location.pathname, navigate],
   );

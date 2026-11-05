@@ -3,6 +3,7 @@ import { api } from '@/api';
 import type { ModelRule } from '@/api/types';
 import { IconInfo, IconPlus } from '@/components/ui/icons';
 import { Button, Input, RowActions, Segmented } from '@/components/ui/primitives';
+import { plural } from '@/lib/format';
 import { useKeyedRows } from '@/lib/hooks';
 import { UNDATED_MODEL_NOTE, checkPattern } from '@/lib/patterns';
 
@@ -66,7 +67,7 @@ export function PatternEditor({ inherited = [], label, onChange, suggestions, va
 
   const refusals = value.map((r) => checkPattern(r.pattern));
   const first = refusals.findIndex((r) => r !== null);
-  const count = `${value.length} ${value.length === 1 ? 'rule' : 'rules'}${inherited.length ? `, then ${inherited.length} from pool` : ''}`;
+  const count = `${plural(value.length, 'rule')}${inherited.length ? `, then ${inherited.length} from pool` : ''}`;
   const summary = first < 0 ? count : `${count}. Rule ${first + 1}: ${refusals[first]}`;
 
   return (

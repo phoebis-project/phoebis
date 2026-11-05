@@ -5,7 +5,7 @@ import { test } from 'node:test';
 // zone, and `node --test` gives each file a process of its own.
 process.env.TZ = 'UTC';
 
-const { earlierHolderLabel, fmtAbsolute, fmtBytes, fmtCredits, fmtDated, fmtDatedTime, fmtDayTick, fmtDuration, fmtEndsIn, fmtHours, fmtHourTick, fmtMiB, fmtMinor, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, fmtWeek, forkLabel, instant, parseKeyLifetime, pct, placementHit, setTimeFormat, shareLabel, shareShort, shortModel, undatedModel, usdTickDigits, weekShort } = await import('./dist/api.js');
+const { earlierHolderLabel, fmtAbsolute, fmtBytes, fmtCredits, fmtDated, fmtDatedTime, fmtDayTick, fmtDuration, fmtEndsIn, fmtHours, fmtMiB, fmtMinor, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, fmtWeek, forkLabel, instant, parseKeyLifetime, pct, placementHit, setTimeFormat, shareLabel, shareShort, shortModel, undatedModel, usdTickDigits, weekShort } = await import('./dist/api.js');
 
 test("a fork reads its base cut at the session's width and the depth where one is known", () => {
   const base = '1a2b3c4d-5e6f-4a7b-9c8d-7e6f5a4b3c2d';
@@ -52,7 +52,6 @@ test('an instant in the first hour of a day reads 00 on the 24-hour clock and 12
   assert.match(fmtAbsolute(midnight), /, 00:05:09$/);
   assert.equal(fmtTime(midnight), '00:05:09');
   assert.equal(fmtShortTime(midnight), '00:05');
-  assert.equal(fmtHourTick(Date.parse(midnight)), '00:05');
   setTimeFormat('12h');
   try {
     assert.match(fmtAbsolute(midnight), /, 12:05:09\sAM$/);

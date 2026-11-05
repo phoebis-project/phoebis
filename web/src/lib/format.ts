@@ -316,8 +316,6 @@ export function fmtDayTick(ms: number, timeZone?: string): string {
   return clock === '00:00' ? day : `${day} ${formatIn({ hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit', timeZone }, ms)}`;
 }
 
-export const fmtHourTick = (ms: number): string => fmtShortTime(ms);
-
 /**
  * The analytics label of a key generation no live key holds, built here for the route's groups and the fold's alike
  * so both paths print one shape, the creation minute in the viewer's zone. Generation 0, the rows the ledger left

@@ -19,11 +19,11 @@ import { Badge, Button, Card, ConfirmDialog, CopyButton, Descriptions, Dialog, E
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { accountHref, accountMeterHref, ACCOUNTS_CODEC, ACCOUNT_SORT_KEYS, sortAddressOf, sortDirOf } from '@/lib/address';
-import { ALLOWANCE_SUBTITLE, FREE_NOTE, allowanceFigure, allowanceSpan, allowanceWindows, newestResets, ownShareHover, pairOf, resetDate, resetHover, resetInstant, weeklyResetsKey, weeksFigure, type AllowanceFigure } from '@/lib/allowance';
+import { ALLOWANCE_SUBTITLE, FREE_NOTE, allowanceFigure, allowanceSpan, allowanceWindows, newestResets, ownShareHover, pairOf, resetHover, resetInstant, weeklyResetsKey, weeksFigure, type AllowanceFigure } from '@/lib/allowance';
 import { hintPlan } from '@/lib/analytics';
 import { clock } from '@/lib/clock';
 import { ACCOUNTS_DIMENSIONS } from '@/lib/filterBar';
-import { fmtAbsolute, fmtCredits, fmtDate, fmtDated, fmtDayShort, fmtDuration, fmtEndsIn, fmtInt, fmtRelative, messageOf, pct, plural, upperFirst } from '@/lib/format';
+import { fmtAbsolute, fmtCredits, fmtDate, fmtDated, fmtDayMonth, fmtDayShort, fmtDuration, fmtEndsIn, fmtInt, fmtRelative, messageOf, pct, plural, upperFirst } from '@/lib/format';
 import { accountPatchOf, advancesOwnToken, derivedId, endZoneLabel, subscriptionEndFormOf, subscriptionEndRefusal, tickCanceled, type SubscriptionEndForm } from '@/lib/forms';
 import { useAsync, useLatest, useNow, useQueryFilters, type Loaded } from '@/lib/hooks';
 import { latestPerWindow, meterGroups } from '@/lib/meter';
@@ -891,7 +891,7 @@ function AllowanceColumn({ account, costs, holder, week, window: w }: { account:
       {before.map((r) => (
         <div key={r.resetAt} className="allowance__row" title={hover(r)}>
           <span className="allowance__date">
-            {resetDate(r.resetAt)}
+            {fmtDayMonth(r.resetAt)}
             {r.source === 'term_ended' && <> {ended}</>}
           </span>
           <AllowanceText className="num" figure={figure(r)} />

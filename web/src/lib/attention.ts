@@ -2,7 +2,7 @@ import { isoOrNull, list, num, numOrNull, rec } from '@/api/decode';
 import type { AttentionItem, AttentionKind } from '@/api/types';
 import { accountMeterHref } from './address';
 import { lookup } from './counts';
-import { fmtAbsolute, fmtRelative, instant as clockInstant, listWords, messageOf, percentText, plural } from './format';
+import { fmtAbsolute, fmtRelative, instant as clockInstant, listWords, messageOf, noun, percentText, plural } from './format';
 import { WINDOW_WORD, entityHref, formatFact, logHref, sinceCondition, type LogLink } from './routingLog';
 import { speedWord } from './selection';
 
@@ -184,10 +184,8 @@ export function attentionDetail(item: AttentionItem, now: number): string {
 
 const names = (v: unknown): string[] => list(v).filter((x): x is string => typeof x === 'string');
 /** The spent windows as the record names them, `5h`, `7d` or `Fable`, a key the console does not know as sent. */
-const windowsOf = (v: unknown): string => {
-  const list = names(v);
-  return list.length === 0 ? '' : ` the ${listWords(list.map((w) => lookup(WINDOW_WORD, w) ?? w))} ${list.length === 1 ? 'window' : 'windows'}`;
-};
+const windowsOf = (list: string[]): string =>
+  list.length === 0 ? '' : ` the ${listWords(list.map((w) => lookup(WINDOW_WORD, w) ?? w))} ${noun(list.length, 'window')}`;
 
 /** The settings a condition names, each with the pool's value where the route sends one, printed by `value`. */
 const settingWords = (d: AttentionItem['detail'], value: (n: number) => string): string => {
@@ -211,10 +209,11 @@ function conditionWords(item: AttentionItem, now: number): string {
   const what = (() => {
     switch (item.kind) {
       case 'shed_no_runway':
-        return `${plural(num(d.rounds), 'round', 'rounds')} marked nothing, no destination had runway`;
+        return `${plural(num(d.rounds), 'round')} marked nothing, no destination had runway`;
       case 'destination_spent': {
-        const spent = windowsOf(d.windows);
-        return `${plural(num(d.moves), 'move', 'moves')} landed${spent ? ` and${spent} ${names(d.windows).length === 1 ? 'was' : 'were'} spent` : ''} within the hour`;
+        const spentWindows = names(d.windows);
+        const spent = windowsOf(spentWindows);
+        return `${plural(num(d.moves), 'move')} landed${spent ? ` and${spent} ${noun(spentWindows.length, 'was', 'were')} spent` : ''} within the hour`;
       }
       default: {
         const projectionError = numOrNull(d.projection_error);
@@ -222,8 +221,8 @@ function conditionWords(item: AttentionItem, now: number): string {
         // A slow-down round paces the window to its reset, so its wall reads how early it came instead.
         const earlyMs = numOrNull(d.early_ms);
         const early = earlyMs === null ? null : earlyMs > 0 ? `, the wall came ${formatFact(earlyMs, 'ms', now)} before the reset` : ', the wall came at the reset';
-        const on = windowsOf(d.windows);
-        return `${plural(num(d.walls), 'wall', 'walls')} reached${on ? ` on${on}` : ''}${early ?? error}`;
+        const on = windowsOf(names(d.windows));
+        return `${plural(num(d.walls), 'wall')} reached${on ? ` on${on}` : ''}${early ?? error}`;
       }
     }
   })();
@@ -256,11 +255,12 @@ const ratioWord = (ratio: number): string => {
  * subject. The first window carries the verb, the later ones their word and ratio alone, so the line stays short.
  */
 function driftWords(item: AttentionItem, now: number): string {
-  const windows = (Array.isArray(item.detail.windows) ? item.detail.windows : []).map(rec);
+  const windows = list(item.detail.windows).map(rec);
   const ratios = windows.map((w, i) => {
     const word = text(w.window) ?? '';
+    const name = lookup(WINDOW_WORD, word) ?? word;
     const ratio = `${ratioWord(num(w.ratio))}x`;
-    return i === 0 ? `${lookup(WINDOW_WORD, word) ?? word} charged ${ratio} the table` : `${lookup(WINDOW_WORD, word) ?? word} ${ratio}`;
+    return i === 0 ? `${name} charged ${ratio} the table` : `${name} ${ratio}`;
   });
   return [...ratios, sinceWords(item, now)].join(', ');
 }

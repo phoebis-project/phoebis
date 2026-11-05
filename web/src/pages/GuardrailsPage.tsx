@@ -14,7 +14,7 @@ import { effectiveCaptureHours } from '@/lib/capture';
 import type { PauseCause } from '@/lib/follow';
 import { fmtAbsolute, fmtCount, fmtInt, messageOf } from '@/lib/format';
 import { derivedId, refusalsView, sameMembers, sameValues, saveStatus } from '@/lib/forms';
-import { guardrailRefusals, MODE_TONE, presetBadges, presetBadgeTone, verdictWords } from '@/lib/guardrails';
+import { guardrailRefusals, MODE_TONE, presetBadges, verdictWords } from '@/lib/guardrails';
 import { useAsync } from '@/lib/hooks';
 
 const LEAD = 'A guardrail checks each request against its conditions before any account is selected. Observe records the matches, enforce refuses them with a 403.';
@@ -197,9 +197,9 @@ export function GuardrailsPage(): JSX.Element {
                 ) : (
                   <>
                     {presetName}
-                    {presetBadges(g.preset).map((word) => (
-                      <span key={word} className="sub">
-                        <Badge tone={presetBadgeTone(word)}>{word}</Badge>
+                    {presetBadges(g.preset).map((b) => (
+                      <span key={b.word} className="sub">
+                        <Badge tone={b.tone}>{b.word}</Badge>
                       </span>
                     ))}
                   </>
@@ -490,9 +490,9 @@ export function GuardrailDialog({ existing, existingIds, keys, onClose, onSaved,
           <div className="guardrails__preset">
             <p>
               From the preset {stampedPreset?.name ?? stamp.id} v{stamp.version}
-              {presetBadges(stamp).map((word) => (
-                <Badge key={word} tone={presetBadgeTone(word)}>
-                  {word}
+              {presetBadges(stamp).map((b) => (
+                <Badge key={b.word} tone={b.tone}>
+                  {b.word}
                 </Badge>
               ))}
             </p>

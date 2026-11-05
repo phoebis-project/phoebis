@@ -1,5 +1,5 @@
 import type { CacheMissReason, WastedProbeReason } from '@/api/types';
-import { countOf, emptyCounts, lookup } from '@/lib/counts';
+import { emptyCounts, lookup } from '@/lib/counts';
 
 /**
  * Reading order for the panels: the no-divergence answer, the diagnosed divergences, the two non-answers, then the
@@ -40,8 +40,6 @@ export const CACHE_MISS_SHORT: Record<CacheMissReason, string> = {
 
 /** A reason the console has no word for reads under the name the beta gave it. */
 export const missShort = (reason: CacheMissReason): string => lookup(CACHE_MISS_SHORT, reason) ?? reason;
-
-export const missCount = countOf;
 
 /** The columns a breakdown draws: the known reasons in reading order, then every other name the groups carry, alphabetically. */
 export function missReasonOrder(groups: readonly { cacheMissReasons: Record<CacheMissReason, number> }[]): CacheMissReason[] {

@@ -151,7 +151,6 @@ test("an account's windows and the card's column pairs read the 7-day window fir
   // The card draws the 7-day and Fable pairs whatever the answer holds, and a further model week's pair after them.
   assert.deepEqual(d.weeklyKeys([]), ['seven_day', 'seven_day_fable']);
   assert.deepEqual(d.weeklyKeys([accountOf('b', MAX_20X, [windowOf('seven_day', [0.5])]), a]), ['seven_day', 'seven_day_fable', 'seven_day_opus']);
-  assert.deepEqual(['seven_day', 'seven_day_fable', 'seven_day_opus'].map(d.allowanceColumnWord), ['7-day', 'Fable', 'seven_day_opus']);
 });
 
 test("a reset's hover names its instant and the reading's source in the block's own words, and its dates always carry the day", () => {
@@ -162,7 +161,7 @@ test("a reset's hover names its instant and the reading's source in the block's 
     ['Sep 12, 2026, 20:10:00, read from a usage sample', 'Sep 12, 2026, 20:10:00, read from replayed'],
   );
   // A week's reset lies days back, so even one within a day of now keeps its date.
-  assert.deepEqual([d.resetDate(iso(at)), d.resetInstant(iso(at)), d.resetInstant(iso(Date.UTC(2026, 9, 25, 7, 5)))], ['Sep 12', 'Sep 12 20:10', 'Oct 25 07:05']);
+  assert.deepEqual([d.resetInstant(iso(at)), d.resetInstant(iso(Date.UTC(2026, 9, 25, 7, 5)))], ['Sep 12 20:10', 'Oct 25 07:05']);
 });
 
 test("a reset's own share reads on its hover with the plan and the window named in words", () => {

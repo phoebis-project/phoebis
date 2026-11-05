@@ -1,6 +1,7 @@
 import { useId, useMemo, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
+import { iso } from '@/api/decode';
 import type { Account, ApiKey, CompanionState, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, Pool, RecipeState, Session } from '@/api/types';
 import { useSession } from '@/app/session';
 import { HELD_PROBE_HINT, MIGRATED_PROBE_HINT } from '@/components/charts/theme';
@@ -13,7 +14,7 @@ import { Tile } from '@/components/ui/Tile';
 import { IconChevron } from '@/components/ui/icons';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skeleton, useHostedDescription } from '@/components/ui/primitives';
-import { accountHref, ANALYTICS_CODEC, REQUESTS_CODEC, SESSION_SORT_KEYS, SESSIONS_CODEC, sortAddressOf, sortDirOf, type SortDir } from '@/lib/address';
+import { accountHref, ANALYTICS_CODEC, REQUESTS_CODEC, SESSION_SORT_KEYS, SESSIONS_CODEC, type SessionsAddress, sortAddressOf, sortDirOf, type SortDir } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { failed } from '@/lib/costs';
 import { SESSIONS_DIMENSIONS } from '@/lib/filterBar';
@@ -154,7 +155,7 @@ const sessionLabel = (session: Session, chars?: number) => (chars === undefined 
  */
 function idleLimitRanOutAt(session: Session, pool: Pool | null): string | null {
   const seconds = pool?.keepaliveResolved?.idleSeconds.max ?? 0;
-  return seconds > 0 && session.lastUsedAt !== null ? new Date(Date.parse(session.lastUsedAt) + seconds * 1000).toISOString() : null;
+  return seconds > 0 && session.lastUsedAt !== null ? iso(Date.parse(session.lastUsedAt) + seconds * 1000) : null;
 }
 
 /**
@@ -162,7 +163,7 @@ function idleLimitRanOutAt(session: Session, pool: Pool | null): string | null {
  * that. `showReleased`: the Released agents filter, which draws a live session's released lines. `sort` and `dir`: the
  * sort control's key and direction, which order the rows and each row's lines.
  */
-function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], accounts: Account[], keys: ApiKey[], pools: Pool[], poolsFailed: boolean, showReleased: boolean, sort: string, dir: SortDir, expireAfterSeconds: number | null, now: number): Row[] {
+function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], accounts: Account[], keys: ApiKey[], pools: Pool[], poolsFailed: boolean, showReleased: boolean, sort: SessionsAddress['sort'], dir: SortDir, expireAfterSeconds: number | null, now: number): Row[] {
   const accountById = new Map(accounts.map((a) => [a.id, a]));
   const keyById = new Map(keys.map((k) => [k.id, k]));
   const poolById = new Map(pools.map((p) => [p.id, p]));

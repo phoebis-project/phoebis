@@ -4,6 +4,7 @@ import { Link, useRouteError } from 'react-router-dom';
 import type { ToastItem } from '@/app/session';
 import { useAppSettings } from '@/app/settings';
 import { clock } from '@/lib/clock';
+import { plural } from '@/lib/format';
 import { useLatest } from '@/lib/hooks';
 import { floatAt, menuPlacement, type MenuAlign, type MenuPlacement } from '@/lib/menu';
 import type { BadgeTone } from '@/lib/quota';
@@ -698,7 +699,7 @@ function DialogGroupPanel({ chosen, group, on, register, turnOn }: { chosen: str
       {count > 0 && (
         <p className="field__hint dialog-group__more">
           {/* The trailing space keeps the button's focus ring clear of the last word. */}
-          {count === 1 ? '1 more setting in the ' : `${count} more settings in the `}
+          {`${plural(count, 'more setting')} in the `}
           <button
             type="button"
             className="link-btn dialog-group__more-link"

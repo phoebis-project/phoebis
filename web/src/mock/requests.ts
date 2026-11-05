@@ -5,7 +5,7 @@ import type {
 } from '@/api/types';
 import type { GuardrailMatch } from '@/api/types';
 import { keptWarmTokens } from '@/lib/analytics';
-import { emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
+import { emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { AGENT_TYPES } from '@/lib/client';
 import { anchorTier, fundingOf, inBand, modelWeeks, pricedWindow, shareIn, tierCapacity, weightOf } from '@/lib/costs';
 import { countOf, emptyCounts } from '@/lib/counts';
@@ -2253,7 +2253,7 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
       for (const r of refused) if (r.errorCode !== null) refusals[r.errorCode] = countOf(refusals, r.errorCode) + 1;
       const ok = served.filter((r) => r.status === 200);
       const cacheMissReasons = emptyCacheMissReasons();
-      for (const r of partRows) for (const a of r.attempts) if (a.cacheMissReason) cacheMissReasons[a.cacheMissReason] = missCount(cacheMissReasons, a.cacheMissReason) + 1;
+      for (const r of partRows) for (const a of r.attempts) if (a.cacheMissReason) cacheMissReasons[a.cacheMissReason] = countOf(cacheMissReasons, a.cacheMissReason) + 1;
       const keptHere = partRows.filter((r) => kept.has(r));
       out.push({
         hour,

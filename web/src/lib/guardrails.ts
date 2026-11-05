@@ -202,12 +202,13 @@ export function verdictWords(r: GuardrailTestResult['requests'][number]): string
   return r.verdict === 'unmatched' ? `failed at condition ${n}` : `condition ${n} needs the live header`;
 }
 
-/** The stamp's badges as the route reads it: the conditions changed since the stamp, and a newer version shipped. */
-export function presetBadges(preset: GuardrailPresetState | null): string[] {
+/**
+ * The stamp's badges as the route reads it, each with its tone: the conditions changed since the stamp, neutral as the
+ * operator's own edit, and a newer version shipped, in the accent.
+ */
+export function presetBadges(preset: GuardrailPresetState | null): { tone: BadgeTone; word: string }[] {
   if (preset === null) return [];
-  return [...(preset.customized ? ['customized'] : []), ...(preset.version < preset.currentVersion ? ['update available'] : [])];
+  return [...(preset.customized ? [{ tone: 'neutral' as const, word: 'customized' }] : []), ...(preset.version < preset.currentVersion ? [{ tone: 'accent' as const, word: 'update available' }] : [])];
 }
-/** A preset badge's tone: the operator's own edit neutral, a shipped update the accent. */
-export const presetBadgeTone = (word: string): BadgeTone => (word === 'customized' ? 'neutral' : 'accent');
 /** A mode badge's tone, an enforcing guardrail's the warning, on every view that draws one. */
 export const MODE_TONE: Record<GuardrailMode, BadgeTone> = { enforce: 'warning', observe: 'neutral' };

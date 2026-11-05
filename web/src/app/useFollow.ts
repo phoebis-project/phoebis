@@ -143,7 +143,7 @@ export function useFollow<R>(input: {
       );
     };
     // Only the tab's return read keeps its tint through the tick after it.
-    const disarm = armPoll(intervalMs, poll, () => out.current === 0 && (latest.current.shown !== null || latest.current.failed), () => lastAnswered.current, true);
+    const disarm = armPoll(intervalMs, poll, () => out.current === 0 && (latest.current.shown !== null || latest.current.failed), () => lastAnswered.current);
     return () => {
       armed.alive = false;
       disarm();

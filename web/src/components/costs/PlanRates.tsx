@@ -3,7 +3,7 @@ import type { ModelPrice, SubscriptionCosts } from '@/api/types';
 import { Input, Segmented } from '@/components/ui/primitives';
 import { anchorTier, bandNow, COST_WINDOWS, MODEL_WEEK_TIERS, modelWeeks, regimeNames, regimeTitle, regimeWord, shareIn, newestAndOlder, sizedTiers, tierGroups, unreachableBand, weightedWindows, weightOf, withRegime, type TokenType, type Usage } from '@/lib/costs';
 import { lookup } from '@/lib/counts';
-import { figure, fmtShare, undatedModel, upperFirst } from '@/lib/format';
+import { figure, fmtShare, plural, undatedModel, upperFirst } from '@/lib/format';
 import { planLabel } from '@/lib/quota';
 import { nowLine } from './PeakBand';
 import { BandSwitch } from './WindowsByTier';
@@ -33,7 +33,7 @@ export function FoldRow({ cols, count, onToggle, open }: { cols: number; count: 
     <tr className="cost-ref__fold">
       <td colSpan={cols}>
         <button type="button" className="link-btn" aria-expanded={open} onClick={onToggle}>
-          {count === 1 ? '1 older model' : `${count} older models`}
+          {plural(count, 'older model')}
         </button>
       </td>
     </tr>

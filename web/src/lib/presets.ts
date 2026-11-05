@@ -1,5 +1,5 @@
 import type { Account, MemberEligibility, Pool, RateLimitWindow, Session } from '@/api/types';
-import { byteOrder, fmtDuration, instant, percentText, plural } from './format';
+import { byteOrder, fmtDuration, instant, noun, percentText, plural } from './format';
 import { endOf, minuteSpan, windowOf } from './quota';
 import { speedWord, windingDown } from './selection';
 import { HOUR } from './time';
@@ -319,7 +319,7 @@ export function shedPreviewLine(preview: ShedPreview, now: number = Date.now()):
     const nearest = closest === null ? '' : `: the closest is ${closest.label}, ${WINDOW_SHORT[closest.window]} ${percentText(closest.projection)} ${at}`;
     return [...off, `No member projects over the ceiling on any window${nearest}.`, ...held].join(' ');
   }
-  const over = hot.length === 1 ? `1 member projects over the ceiling: ${hot[0].label}.` : `${hot.length} members project over the ceiling: ${hot.map((h) => h.label).join(', ')}.`;
+  const over = `${plural(hot.length, 'member')} ${noun(hot.length, 'projects', 'project')} over the ceiling: ${hot.map((h) => h.label).join(', ')}.`;
   if (preview.off) return [...off, over, ...held].join(' ');
   const count = plural(preview.sessions, 'session');
   const round = preview.noRunway
@@ -386,7 +386,7 @@ export function slowDownPreviewLine(preview: SlowDownPreview): string {
   // The first of the lowest factors, so a tie names the member listed first.
   const slowest = slowed.reduce((low, m) => (m.factor < low.factor ? m : low));
   const hold = `${preview.holdSeconds} s`;
-  const head = slowed.length === 1 ? `1 member is slowed: ${named[0]}.` : `${slowed.length} members are slowed: ${named.join(', ')}.`;
+  const head = `${plural(slowed.length, 'member')} ${noun(slowed.length, 'is', 'are')} slowed: ${named.join(', ')}.`;
   const who = slowed.length === 1 ? 'A session there' : `A session on ${slowest.label}`;
   // A factor of 0 is a window at its ceiling, where every held request waits the whole hold.
   const wait = slowest.factor > 0 ? `waits its cycle times ${(1 / slowest.factor - 1).toFixed(1)}, up to ${hold}` : `waits the full ${hold}`;

@@ -491,11 +491,13 @@ export const paceScoreOf = (sample: WindowSample): number | null => {
 };
 
 /**
- * One row per bucket from the bucket holding the span's start through its end, each account's keys at null, and the
- * rows by their start, so the charts that bucket one span draw on one grid.
+ * One row per bucket from the bucket holding the span's start through its end, each account's keys at null, the rows
+ * by their start, and the floor from an instant to its bucket's start, so the charts that bucket one span draw on one
+ * grid.
  */
-function bucketRows(accounts: string[], span: { fromMs: number; toMs: number }, bucketMs: number, keysOf: (account: string) => string[] = (a) => [a]): { byAt: Map<number, Record<string, number | null>>; data: Record<string, number | null>[] } {
-  const start = Math.floor(span.fromMs / bucketMs) * bucketMs;
+function bucketRows(accounts: string[], span: { fromMs: number; toMs: number }, bucketMs: number, keysOf: (account: string) => string[] = (a) => [a]): { bucketOf: (ms: number) => number; byAt: Map<number, Record<string, number | null>>; data: Record<string, number | null>[] } {
+  const bucketOf = (ms: number) => Math.floor(ms / bucketMs) * bucketMs;
+  const start = bucketOf(span.fromMs);
   const data: Record<string, number | null>[] = [];
   const byAt = new Map<number, Record<string, number | null>>();
   for (let t = start; t <= span.toMs; t += bucketMs) {
@@ -504,7 +506,7 @@ function bucketRows(accounts: string[], span: { fromMs: number; toMs: number }, 
     data.push(row);
     byAt.set(t, row);
   }
-  return { byAt, data };
+  return { bucketOf, byAt, data };
 }
 
 /**
@@ -516,13 +518,13 @@ function bucketRows(accounts: string[], span: { fromMs: number; toMs: number }, 
  */
 export function windowLines(rollups: AccountRollup[], window: string, read: 'pace' | 'usage', span: { fromMs: number; toMs: number }, bucketMs: number): { accounts: string[]; data: Record<string, number | null>[] } {
   const accounts = [...new Set(rollups.map((r) => r.accountId))].sort((a, b) => a.localeCompare(b));
-  const { byAt, data } = bucketRows(accounts, span, bucketMs, read === 'pace' ? (a) => [a, `${a}:score`] : undefined);
+  const { bucketOf, byAt, data } = bucketRows(accounts, span, bucketMs, read === 'pace' ? (a) => [a, `${a}:score`] : undefined);
   const drawn = new Map<string, number>();
   for (const r of rollups) {
     const sample = r.windows[window];
     if (sample === undefined) continue;
     const hourMs = Date.parse(r.hour);
-    const at = Math.floor(hourMs / bucketMs) * bucketMs;
+    const at = bucketOf(hourMs);
     const row = byAt.get(at);
     if (row === undefined) continue;
     const key = `${at}:${r.accountId}`;
@@ -540,9 +542,9 @@ export function windowLines(rollups: AccountRollup[], window: string, read: 'pac
  * falls in.
  */
 export function peakLines(rollups: AccountRollup[], accounts: string[], span: { fromMs: number; toMs: number }, bucketMs: number): Record<string, number | null>[] {
-  const { byAt, data } = bucketRows(accounts, span, bucketMs);
+  const { bucketOf, byAt, data } = bucketRows(accounts, span, bucketMs);
   for (const r of rollups) {
-    const row = byAt.get(Math.floor(Date.parse(r.hour) / bucketMs) * bucketMs);
+    const row = byAt.get(bucketOf(Date.parse(r.hour)));
     const peak = r.peak['5h'];
     if (!row || peak === null) continue;
     row[r.accountId] = Math.max(row[r.accountId] ?? 0, peak * 100);

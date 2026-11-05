@@ -5,7 +5,7 @@ import type {
 } from '@/api/types';
 import { bucketShare, keptWarmTokens } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
-import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
+import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { anchorTier, inBand, modelWeeks, pricedWindow, shareIn, tierCapacity, weightOf, type Usage } from '@/lib/costs';
 import { countOf, emptyCounts } from '@/lib/counts';
 import { byteOrder, earlierHolderLabel, placementHit } from '@/lib/format';
@@ -299,7 +299,7 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
 
   const cacheMissReasons = emptyCacheMissReasons();
   // Every name a row carries, as the ledger rolls up whatever the beta sent, not only the ones the console knows.
-  for (const r of counted) for (const [reason, n] of Object.entries(r.cacheMissReasons)) cacheMissReasons[reason] = missCount(cacheMissReasons, reason) + n;
+  for (const r of counted) for (const [reason, n] of Object.entries(r.cacheMissReasons)) cacheMissReasons[reason] = countOf(cacheMissReasons, reason) + n;
   const refusals = emptyCounts();
   for (const r of counted) for (const [code, n] of Object.entries(r.refusals)) refusals[code] = countOf(refusals, code) + n;
   const wastedProbeReasons = emptyWastedProbeReasons();

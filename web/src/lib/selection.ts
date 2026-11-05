@@ -1,5 +1,5 @@
 import type { Account, AccountSlowDown, MemberEligibility, Pool, PoolMember, PoolStrategy } from '@/api/types';
-import { fmtAbsolute, fmtDuration, fmtPeriodEnd, fmtRelative, fmtShortTime, instant, sameLocalDay } from './format';
+import { fmtAbsolute, fmtDuration, fmtPeriodEnd, fmtRelative, fmtShortTime, instant, noun, sameLocalDay } from './format';
 import { endOf, minuteSpan, planExtraUsage, planOverage, slowedOf } from './quota';
 import { MINUTE } from './time';
 
@@ -246,6 +246,7 @@ const listOf = (names: StatusPart[]): StatusPart[] => names.flatMap((name, i) =>
  * member) gives no return, and so does a budget verdict without an end.
  */
 function returnOf(pool: Pool, member: PoolMember, name: StatusPart, account: Account | undefined, now: number): { at: number; parts: StatusPart[] } | null {
+  const endAt = (reset: string, words: string) => ({ at: Date.parse(reset), parts: [name, { text: `'s ${words} ${fmtRelative(reset, now)}` }] });
   const ends: { at: number; parts: StatusPart[] }[] = [];
   if (member.budgetUntil) {
     const period = member.spends.find((s) => s.periodEnd === member.budgetUntil)?.period;
@@ -259,15 +260,15 @@ function returnOf(pool: Pool, member: PoolMember, name: StatusPart, account: Acc
       .sort((a, b) => Date.parse(a) - Date.parse(b))
       .pop();
     if (!until) return null;
-    ends.push({ at: Date.parse(until), parts: [name, { text: `'s cooldown ends ${fmtRelative(until, now)}` }] });
+    ends.push(endAt(until, 'cooldown ends'));
   } else if (member.eligible === 'overage') {
     const reset = account?.overage?.reset ?? null;
     if (reset === null) return null;
-    ends.push({ at: Date.parse(reset), parts: [name, { text: `'s overage window resets ${fmtRelative(reset, now)}` }] });
+    ends.push(endAt(reset, 'overage window resets'));
   } else if (member.eligible === 'spent') {
     const reset = account?.spend?.resetsAt ?? null;
     if (reset === null) return null;
-    ends.push({ at: Date.parse(reset), parts: [name, { text: `'s spend cap resets ${fmtRelative(reset, now)}` }] });
+    ends.push(endAt(reset, 'spend cap resets'));
   } else if (member.eligible !== 'budget') {
     return null;
   }
@@ -276,7 +277,7 @@ function returnOf(pool: Pool, member: PoolMember, name: StatusPart, account: Acc
   if (ends.length > 0 && pool.overagePolicy === 'never' && overage?.inUse) {
     const { reset } = overage;
     if (reset === null) return null;
-    ends.push({ at: Date.parse(reset), parts: [name, { text: `'s overage window resets ${fmtRelative(reset, now)}` }] });
+    ends.push(endAt(reset, 'overage window resets'));
   }
   return ends.sort((a, b) => b.at - a.at)[0] ?? null;
 }
@@ -309,7 +310,7 @@ export function poolStatusSentence(pool: Pool, accounts: Account[] | null, now: 
   const eligible = pool.members.filter((m) => m.eligible === 'eligible');
   if (members === 0) return say([{ text: 'the pool has no members yet.' }]);
   if (eligible.length === 0) return say([{ text: 'no member takes a fresh session right now.' }]);
-  const count = eligible.length === members ? `all ${members} members take fresh sessions` : `${eligible.length} of ${members} members ${eligible.length === 1 ? 'takes' : 'take'} fresh sessions`;
+  const count = eligible.length === members ? `all ${members} members take fresh sessions` : `${eligible.length} of ${members} members ${noun(eligible.length, 'takes', 'take')} fresh sessions`;
   if (accounts === null) return say([{ text: members === 1 ? "the pool's one member takes every fresh session." : `${count}.` }]);
   if (members === 1) return say([nameOf(eligible[0].accountId), { text: ' takes every fresh session.' }]);
   const next = selectionOrder(pool, accounts, now).find((tier) => tier.next.length > 0)?.next ?? [];

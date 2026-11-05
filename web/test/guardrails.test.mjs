@@ -109,8 +109,8 @@ test('the_verdict_words', () => {
 });
 
 test('the_preset_badges_read_customized_and_update_available', () => {
-  assert.deepEqual(g.presetBadges({ currentVersion: 2, customized: true, id: 'p', version: 1 }), ['customized', 'update available']);
+  assert.deepEqual(g.presetBadges({ currentVersion: 2, customized: true, id: 'p', version: 1 }).map((b) => b.word), ['customized', 'update available']);
   assert.deepEqual(g.presetBadges({ currentVersion: 1, customized: false, id: 'p', version: 1 }), []);
-  assert.deepEqual(g.presetBadges({ currentVersion: 1, customized: true, id: 'p', version: 1 }), ['customized']);
+  assert.deepEqual(g.presetBadges({ currentVersion: 1, customized: true, id: 'p', version: 1 }).map((b) => b.word), ['customized']);
   assert.deepEqual(g.presetBadges(null), []);
 });

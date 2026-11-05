@@ -1,5 +1,5 @@
 import type { AgentContext, KeepaliveRecipe, KeepaliveState, RecipeCause, Session } from '@/api/types';
-import { RANGE_PRESETS, type SortDir } from '@/lib/address';
+import { RANGE_PRESETS, type SessionsAddress, type SortDir } from '@/lib/address';
 import { fmtCompact } from '@/lib/format';
 
 export const CAUSE_LABEL: Record<RecipeCause, string> = {
@@ -163,7 +163,7 @@ export const lastActivity = (s: Pick<Session, 'lastRequestAt' | 'lastUsedAt'>): 
 };
 
 /** The rows under a key and a direction, ties by session id, a row without the key's value last either way. */
-export function orderRows<T extends { session: Pick<Session, 'createdAt' | 'lastRequestAt' | 'lastUsedAt' | 'sessionId'> }>(rows: readonly T[], sort: string, dir: SortDir): T[] {
+export function orderRows<T extends { session: Pick<Session, 'createdAt' | 'lastRequestAt' | 'lastUsedAt' | 'sessionId'> }>(rows: readonly T[], sort: SessionsAddress['sort'], dir: SortDir): T[] {
   const valueOf = (s: T['session']) => (sort === 'activity' ? lastActivity(s) : s.createdAt);
   return [...rows].sort((a, b) => byInstant(valueOf(a.session), valueOf(b.session), dir) || a.session.sessionId.localeCompare(b.session.sessionId));
 }
@@ -177,7 +177,7 @@ const lineGroup = (line: SessionLine): number => (line.agentId === MAIN_AGENT ? 
  * `byInstant` under `activity` (a pin-only line by its pin's last use), the direction applied inside the groups,
  * ties by agent id and then by model.
  */
-export function orderLines(lines: readonly SessionLine[], sort: string, dir: SortDir): SessionLine[] {
+export function orderLines(lines: readonly SessionLine[], sort: SessionsAddress['sort'], dir: SortDir): SessionLine[] {
   const valueOf = (line: SessionLine) => (sort === 'activity' ? (line.recipe !== null ? line.recipe.lastRequestAt : (line.pin?.lastUsedAt ?? null)) : (line.pin?.createdAt ?? null));
   return [...lines].sort((a, b) => lineGroup(a) - lineGroup(b) || byInstant(valueOf(a), valueOf(b), dir) || a.agentId.localeCompare(b.agentId) || a.model.localeCompare(b.model));
 }

@@ -937,7 +937,7 @@ const price = (model: string, m: Rec): ModelPrice => ({
  */
 export const effectiveDateOf = (effective: string): string | null => {
   const parsed = /^\d{4}-\d{2}-\d{2}/.test(effective) ? Date.parse(effective) : Number.NaN;
-  return Number.isNaN(parsed) ? null : new Date(parsed).toISOString();
+  return Number.isNaN(parsed) ? null : iso(parsed);
 };
 /**
  * A table's date as the router sent it, free text as sent. A date-only `effective` reads in UTC, the zone it parses
