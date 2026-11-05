@@ -255,7 +255,8 @@ function filterOptions(rows: readonly Row[], keys: ApiKey[] | null, pools: Pool[
     active: ACTIVE_WITHIN.map((a) => ({ label: a.label, value: a.id })),
     agentType: words(held([...AGENT_TYPES, ...lines.map((l) => l.agentType)]).sort()),
     cache: words(['cold', 'no recipe', 'warm']),
-    client: words(held(rows.map((r) => clientVersion(r.session.userAgent))).sort()),
+    // Numeric, so 2.1.40 lists before 2.1.310.
+    client: words(held(rows.map((r) => clientVersion(r.session.userAgent))).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))),
     companion: words(['none', 'reporting', 'silent']),
     effort: words(held(lines.map((l) => l.pin?.effort ?? null)).sort()),
     key: keyOptions(keys, held(rows.map((r) => (r.session.historical ? keyLifetime(r.session.keyId, r.session.keyGeneration) : null)))),
@@ -307,10 +308,11 @@ function presenceTitle(session: Session, now: number): string | undefined {
 }
 
 /**
- * What the Cost cell reads beside the row: the accounts its hint names, the chosen unit and week, and the week's scale
- * with its `failure`, as `weekReadingOf` answers them.
+ * What the Cost cell reads beside the row: the accounts its hint names, by id for its "+N" hover, the chosen unit and
+ * week, and the week's scale with its `failure`, as `weekReadingOf` answers them.
  */
 interface CostContext {
+  accountById: ReadonlyMap<string, Account>;
   accounts: Account[] | null;
   failure: WeekReading['failure'];
   scale: number | null;
@@ -392,7 +394,7 @@ export function SessionsPage() {
   // Main's pin, a fork's base and each line read their account here rather than off the rows, so an accounts answer
   // redraws the slow-down chips and the labels without rebuilding a row.
   const accountById = useMemo(() => new Map((accounts.data ?? []).map((a) => [a.id, a])), [accounts.data]);
-  const cost: CostContext = { accounts: accounts.data, failure: weekReading.failure, scale: weekReading.scale, unit, week };
+  const cost: CostContext = { accountById, accounts: accounts.data, failure: weekReading.failure, scale: weekReading.scale, unit, week };
   const followFork = (id: string) => {
     // jsdom leaves scrollIntoView undefined.
     document.getElementById(id)?.scrollIntoView?.({ block: 'center' });
@@ -611,14 +613,13 @@ function CostCell({ cost, session }: { cost: CostContext; session: Session }) {
         -{burn}
       </td>
     );
-  const accountById = new Map((cost.accounts ?? []).map((a) => [a.id, a]));
   return (
     <td className="right num col-fit" title={spendHover(spend, cost.week, cost.scale, hint)}>
       <span className="srow__pin srow__pin--wraps">
         {cell.main}
         {reading.billed > 0 && <Badge tone="neutral" title={`${fmtUsd(reading.billed)} billed in dollars`}>+$</Badge>}
         {reading.accounts.length > 0 && (
-          <Badge tone="neutral" title={`Other accounts the requests spent on:\n${reading.accounts.map((id) => accountById.get(id)?.label ?? id).join('\n')}`}>
+          <Badge tone="neutral" title={`Other accounts the requests spent on:\n${reading.accounts.map((id) => cost.accountById.get(id)?.label ?? id).join('\n')}`}>
             +{reading.accounts.length}
           </Badge>
         )}
