@@ -281,8 +281,10 @@ on a hit, marks every occurrence on the drawn rows and walks the hits with Enter
 request truncation flag, since the router stores a captured request whole, and the bodies' byte counts say what a cut
 dropped ([API reference](api-reference.md), [Requests](console.md#requests)). A pool member's `eligible` word on
 `GET /admin/pools` reads `spent` for a usage-based seat at its spend cap and `budget_unknown` for a budgeted member
-while the ledger is degraded, each a reason the router skips the member ([API reference](api-reference.md)).
-`GET /admin/analytics/burn` and `GET /admin/sessions` read each account's kind from the routing snapshot and answer no
+while the ledger is degraded, each a reason the router skips the member ([API reference](api-reference.md)). On the
+Routing log an exhaustion that waits on a spend cap reads `spend cap` in its By chip, and a candidate at its spend cap
+reads `spend cap reached until {time}` in its Verdict chip ([Routing log](console.md#routing-log)). `GET
+/admin/analytics/burn` and `GET /admin/sessions` read each account's kind from the routing snapshot and answer no
 `storage failure` ([API reference](api-reference.md)). On the Requests view a custom range's late row that lands below
 the rows shown draws on the next auto reload read ([Requests](console.md#requests)). On the Requests view and the
 Routing log the list's late answer replaces the page an auto reload poll stood in for it, and Next past an overrun under

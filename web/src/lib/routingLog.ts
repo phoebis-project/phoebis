@@ -360,7 +360,8 @@ function exhaustionWord(row: DecisionSummary): string {
       return x.obstacle === null ? 'pinned' : wordOf(OBSTACLE_WORD, x.obstacle);
     // A budget's deadline travels under the overage window, the claim the relay renders on the wire.
     case 'timed':
-      return x.window === 'budget' || x.window === 'overage' ? 'budget' : 'cooldown';
+      if (x.window === 'budget' || x.window === 'overage') return 'budget';
+      return x.window === SPEND_WINDOW ? 'spend cap' : 'cooldown';
     case 'untimed':
       return 'no deadline';
     default:
@@ -414,6 +415,11 @@ export const catalogModel = (row: RoutingLogRow): string | null => {
 
 /** A window's name as the windows read elsewhere in the console. */
 export const WINDOW_WORD: Record<string, string> = { five_hour: '5h', seven_day: '7d', seven_day_fable: 'Fable' };
+/**
+ * The window the router names a usage-based seat's spend cap by, in a timed exhaustion and a spent obstacle alike. It
+ * stays out of `WINDOW_WORD`, whose entries are the plan windows the decision strip draws a column for.
+ */
+const SPEND_WINDOW = 'spend';
 const STATE_WORD: Record<string, string> = { funding_required: 'funding required', reauth_required: 're-auth required' };
 /** The registry's word for who moved an account's state. */
 const CAUSE_WORD: Record<string, string> = { auth_failed: 'credential refused', funding_refused: 'credit balance', funding_retry: 'funding retried', operator: 'by hand', refresh_failed: 'refresh failed' };
@@ -1340,9 +1346,10 @@ function cooledWords(reason: string | null, window: string | null): string {
   return words(r || 'cooldown');
 }
 
+const untilWords = (o: NonNullable<RecordCandidate['obstacle']>, now: number): string => (o.until === null ? '' : ` until ${formatFact(o.until, 'time', now)}`);
+
 function cooldownWords(o: NonNullable<RecordCandidate['obstacle']>, now: number): string {
-  const until = o.until === null ? '' : ` until ${formatFact(o.until, 'time', now)}`;
-  return `${cooledWords(o.reason, o.window)}${until}`;
+  return `${cooledWords(o.reason, o.window)}${untilWords(o, now)}`;
 }
 
 /**
@@ -1387,6 +1394,7 @@ function obstacleWords(c: RecordCandidate, now: number): string {
     case 'operator':
       return operatorWords(c).value;
     case 'spent':
+      if (o.window === SPEND_WINDOW) return `spend cap reached${untilWords(o, now)}`;
       return `${o.window !== null ? wordOf(WINDOW_WORD, o.window) : 'window'} spent`;
     default:
       return lookup(PARTITION_WORD, o.name) ?? wordOf(OBSTACLE_WORD, o.name);

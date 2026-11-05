@@ -1249,18 +1249,18 @@ the request's drawer. By names what decided the row in one chip: the rule that f
 placed it (`static rung`), the strategy and the tier's priority (`Pace P0`, whose hover is the Pace hint), where a hold
 waited (`cohort`, `session pin`), `slow-down` for a request the slow-down held and for the renewal after its hold,
 `rewrite in flight` for a request that waited for a moved pin's first head and for the renewal after it, what exhausted
-the pool (`budget`, `cooldown`, `fast lane`), the refusal (`client contract`, `client drift`, `guardrail blocked`, `key
-revoked`), `no rule fired` for a renewal, or an event's reason (`window spent`, `429 on 5h`, `slow-down` for a
-slow-down's start and end, `5h cleared` for a window read under its limit again, with the whole `5h cleared to 40% under
-its reset` on hover). Fact gives the value that made it so as a muted label with its value, `gap`, `idle`, `prefix`,
-`until`, a held request's `until 18:20` and `speed 0.5x`, the renewal's `held 42 s`, a slow-down start's `speed 0.5x`
-and an end's `slowest 0.35x`, a move's `runway` on its destination (a span such as `2 h 10 min`, `none` or `unbounded`)
-followed by `least bad` or `rewrite only` where the destination did not fit, or a renewal's window utilization, such as
-`5h 96%`, where that window's projection reached the ceiling. A verdict reads in one color across the rows, the card and
-the strip: good when it served the request, warning when it changed its course, critical for a refusal or an exhaustion,
-and neutral for none and no. Every account, key, pool, model, session and request a row names is a link. Each column but
-Time keeps a set width and Time takes the rest of the card, so on a wide screen the request id under the time reads
-whole, and a window narrower than the columns' total scrolls the table inside its card.
+the pool (`budget`, `cooldown`, `fast lane`, `spend cap`), the refusal (`client contract`, `client drift`, `guardrail
+blocked`, `key revoked`), `no rule fired` for a renewal, or an event's reason (`window spent`, `429 on 5h`, `slow-down`
+for a slow-down's start and end, `5h cleared` for a window read under its limit again, with the whole `5h cleared to 40%
+under its reset` on hover). Fact gives the value that made it so as a muted label with its value, `gap`, `idle`,
+`prefix`, `until`, a held request's `until 18:20` and `speed 0.5x`, the renewal's `held 42 s`, a slow-down start's
+`speed 0.5x` and an end's `slowest 0.35x`, a move's `runway` on its destination (a span such as `2 h 10 min`, `none` or
+`unbounded`) followed by `least bad` or `rewrite only` where the destination did not fit, or a renewal's window
+utilization, such as `5h 96%`, where that window's projection reached the ceiling. A verdict reads in one color across
+the rows, the card and the strip: good when it served the request, warning when it changed its course, critical for a
+refusal or an exhaustion, and neutral for none and no. Every account, key, pool, model, session and request a row names
+is a link. Each column but Time keeps a set width and Time takes the rest of the card, so on a wide screen the request
+id under the time reads whole, and a window narrower than the columns' total scrolls the table inside its card.
 
 Every row opens beneath itself. A decision row loads its record and draws the decision card. Its verdict line names the
 decision with its accounts and its pool as links ("Moved secondary to primary", "Attempt 2 of 2: placed on primary",
@@ -1307,32 +1307,32 @@ version 1 record), each cell's hover reading `{pct} of the 7-day window left ove
 {burn} of burn: {rate}.` (or `to its subscription's end at {time}`) followed by `Inside its tier, the highest spare rate
 wins.` The pick line names the accounts whose scores tied, the runway that narrowed them where it did, and whether the
 draw chose among more than one. Verdict carries the one chip that decided it (`429 on 5h until 14:55`, `budget $1.10 of
-$5.00`), whose hover says why the member was passed over, and beside it a badge for a destination the gate read that did
-not fit, `rewrite only` or `least bad` in the warning tone and `ending` neutral. Three folds, "Request facts", "Pin and
-warmth" (a record that pins nothing reads why: not looked up or pinning off, and a pin that carries them reads Cycle and
-Slowed until) and `Settings in force since {time}` (which a guardrail's attach to or detach from the pool moves too,
-since the fence re-reads the pool's settings), stay closed until opened. In Pin and warmth, a stamped pin's Shed mark
-names the account it left, `shed from` after a shedding round and `failed over from` after a failover's landing, with
-the instant. The settings fold lists the pool's twenty-four settings in the card's order with Load shedding and
-Slow-down reading `on` or `off`, Stretch and Hold as spans, Return to plan as its word and Return dwell as a span or `at
-once` at 0, or "The key and its pool had left the registry". A refused record, which no pool setting entered, draws no
-settings fold, a guardrail block's among them, whose Admission line and Answer row carry `guardrail blocked` and the
-guardrail's name as a second chip. A record written before a setting existed reads `not recorded` for it, Load shedding
-and Window ceiling on a version 1 record and the five slow-down and return-to-plan settings on an older version 2
-record, and a version 1 record lists after the twenty-four, each marked `(then)`, the three settings it carried that a
-later record does not. "Outcome" lists the pin written, the reservation (the account, the share per window and the
-expiry), the cache-map entries the answer wrote (`pending` until it ends), the cache read with the TTL tier of its
-deepest entry, the hold, reading `for the reset at {time}` where the request waited for a reset, or `for the slow-down
-until {time}` with the chips `speed 0.5x`, `stretch 42 min of 30 min`, `bound 2 min` and `cycle 20 s` where the
-slow-down held it, or `for the rewrite in flight of {request} until {time}` with `bound 2 min` where it waited for a
-moved pin's first head, a Cause on a failover's landing or a move with a cause (`429 on 5h` or `fast lane 429` for a
-cooldown, `re-auth required by credential refused` for a mark), the answer an exhaustion or a refusal gave, and the
-spend against a budget. With four entries or more, the cache-map row draws one chip per tier with its count and depth
-range, such as `message ×11 depth 1 to 11`, then its three deepest message depths, and its control "All {n} entries"
-lists every entry until "Latest 3" folds them again. The foot offers the three widenings after "Widen to", this minute,
-this session and this account, names the record's version as `Record v{n}`, and "Copy as JSON" copies the record route's
-answer whole. A record the retention purged reads "The record left with the retention", and one still loading "Loading
-the record".
+$5.00`, `spend cap reached until 00:00`), whose hover says why the member was passed over, and beside it a badge for a
+destination the gate read that did not fit, `rewrite only` or `least bad` in the warning tone and `ending` neutral.
+Three folds, "Request facts", "Pin and warmth" (a record that pins nothing reads why: not looked up or pinning off, and
+a pin that carries them reads Cycle and Slowed until) and `Settings in force since {time}` (which a guardrail's attach
+to or detach from the pool moves too, since the fence re-reads the pool's settings), stay closed until opened. In Pin
+and warmth, a stamped pin's Shed mark names the account it left, `shed from` after a shedding round and `failed over
+from` after a failover's landing, with the instant. The settings fold lists the pool's twenty-four settings in the
+card's order with Load shedding and Slow-down reading `on` or `off`, Stretch and Hold as spans, Return to plan as its
+word and Return dwell as a span or `at once` at 0, or "The key and its pool had left the registry". A refused record,
+which no pool setting entered, draws no settings fold, a guardrail block's among them, whose Admission line and Answer
+row carry `guardrail blocked` and the guardrail's name as a second chip. A record written before a setting existed reads
+`not recorded` for it, Load shedding and Window ceiling on a version 1 record and the five slow-down and return-to-plan
+settings on an older version 2 record, and a version 1 record lists after the twenty-four, each marked `(then)`, the
+three settings it carried that a later record does not. "Outcome" lists the pin written, the reservation (the account,
+the share per window and the expiry), the cache-map entries the answer wrote (`pending` until it ends), the cache read
+with the TTL tier of its deepest entry, the hold, reading `for the reset at {time}` where the request waited for a
+reset, or `for the slow-down until {time}` with the chips `speed 0.5x`, `stretch 42 min of 30 min`, `bound 2 min` and
+`cycle 20 s` where the slow-down held it, or `for the rewrite in flight of {request} until {time}` with `bound 2 min`
+where it waited for a moved pin's first head, a Cause on a failover's landing or a move with a cause (`429 on 5h` or
+`fast lane 429` for a cooldown, `re-auth required by credential refused` for a mark), the answer an exhaustion or a
+refusal gave, and the spend against a budget. With four entries or more, the cache-map row draws one chip per tier with
+its count and depth range, such as `message ×11 depth 1 to 11`, then its three deepest message depths, and its control
+"All {n} entries" lists every entry until "Latest 3" folds them again. The foot offers the three widenings after "Widen
+to", this minute, this session and this account, names the record's version as `Record v{n}`, and "Copy as JSON" copies
+the record route's answer whole. A record the retention purged reads "The record left with the retention", and one still
+loading "Loading the record".
 
 An event row opens to a panel of pairs: When to the second, the account and the pool as links, then the kind's own
 pairs. An event that names a request ends with "Source request", which opens the log on that request a quarter hour
