@@ -139,6 +139,17 @@ test('a zone change with the same offset at the cached instant formats in the ne
   }
 });
 
+test('a named zone takes the instant unshifted while the machine sits off UTC', () => {
+  // The suite runs under UTC, where a shift of a named zone's instant would be a shift by nothing.
+  const zone = process.env.TZ;
+  try {
+    process.env.TZ = 'America/Lima';
+    assert.equal(fmtDayTick(Date.parse('2026-09-16T00:00:00Z'), 'UTC'), 'Sep 16', "the named zone's own clock, never Lima's offset applied to it");
+  } finally {
+    process.env.TZ = zone;
+  }
+});
+
 test('a zero cost never carries a sign, whatever the wire sent', () => {
   assert.equal(fmtUsd(-0), '$0.00', 'an empty sum of f64 costs reaches the decoder as -0');
   assert.equal(fmtUsd(0), '$0.00');
