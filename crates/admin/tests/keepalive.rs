@@ -1748,8 +1748,9 @@ async fn lines(
         .collect()
 }
 
-/// The line the route answers for a `line_pin` of `agent` under `model` used at `last_used_at`.
-fn line(agent: &str, model: &str, last_used_at: i64) -> serde_json::Value {
+/// The line the route answers for a `line_pin` of `agent` under `model` used at `last_used_at`, with the agent's
+/// lifecycle word where the engine holds its record.
+fn line(agent: &str, model: &str, last_used_at: i64, lifecycle: Option<&str>) -> serde_json::Value {
     serde_json::json!({
         "agent_id": agent,
         "model": model,
@@ -1760,6 +1761,7 @@ fn line(agent: &str, model: &str, last_used_at: i64) -> serde_json::Value {
         "last_used_at": last_used_at,
         "warm": true,
         "created_at": null,
+        "lifecycle": lifecycle,
     })
 }
 
@@ -1794,7 +1796,7 @@ async fn a_main_pins_line_reads_its_conversation_pin_beside_a_newer_auxiliary_pi
     register_with_the_engine(&parts, "s1", &[]);
     assert_eq!(
         lines(&parts, &cookie, &[("s1", 2)]).await,
-        [serde_json::json!([line("main", "claude-opus-5", now - 50)])],
+        [serde_json::json!([line("main", "claude-opus-5", now - 50, Some("busy"))])],
         "main's line is its conversation pin, and the newer pin of its auxiliary request draws none"
     );
 }
@@ -1861,7 +1863,7 @@ async fn a_pin_whose_requests_are_all_auxiliary_draws_no_line() {
     assert_eq!(
         lines(&parts, &cookie, &[("s-borrowed", 2), ("s-auxiliary", 1)]).await,
         [
-            serde_json::json!([line("worker-1", "claude-opus-5", now - 5)]),
+            serde_json::json!([line("worker-1", "claude-opus-5", now - 5, Some("busy"))]),
             serde_json::json!([]),
         ],
         "main sent auxiliary requests alone, so its pin draws no line beside the subagent's and none where it is the one \
@@ -1887,7 +1889,12 @@ async fn a_raw_callers_session_with_no_companion_lists_its_pin_as_mains_line() {
     }
     assert_eq!(
         lines(&parts, &cookie, &[("s-raw", 2)]).await,
-        [serde_json::json!([line("main", "claude-opus-5", now - 5)])],
+        [serde_json::json!([line(
+            "main",
+            "claude-opus-5",
+            now - 5,
+            None
+        )])],
         "the unclassed session's pin is main's line on a row no companion reports"
     );
 }

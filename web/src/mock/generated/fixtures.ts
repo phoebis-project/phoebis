@@ -16080,9 +16080,10 @@ export const FIXTURES: Record<string, Fixture> = {
           "burn_at": null,
           "runway_ms": null,
           "runway_bounded": null,
-          "cache_ttl_ms": 300000,
           "speed": null,
           "cycle_ms": null,
+          "cache_ttl_ms": 300000,
+          "warm": true,
           "last_input_tokens": 0,
           "effort": null,
           "last_refresh_at": 1791721000000,
@@ -16092,13 +16093,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "companion": "none",
           "companion_since": null,
           "agents": 1,
-          "keepalive": {
-            "cause": null,
-            "last_guard": null,
-            "next_probe_at": null,
-            "state": null
-          },
-          "presence_age_seconds": null,
           "agent_contexts": [
             {
               "agent_id": "main",
@@ -16109,9 +16103,18 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_ttl_ms": 300000,
               "last_used_at": 1791721000000,
               "warm": true,
-              "created_at": 1791721000000
+              "created_at": 1791721000000,
+              "lifecycle": null
             }
           ],
+          "keepalive": {
+            "cause": null,
+            "last_guard": null,
+            "next_probe_at": null,
+            "state": null
+          },
+          "lifecycle": null,
+          "presence_age_seconds": null,
           "forked_from": null,
           "fork_depth": null
         },
@@ -16135,9 +16138,10 @@ export const FIXTURES: Record<string, Fixture> = {
           "burn_at": null,
           "runway_ms": null,
           "runway_bounded": null,
-          "cache_ttl_ms": 300000,
           "speed": null,
           "cycle_ms": null,
+          "cache_ttl_ms": 300000,
+          "warm": true,
           "last_input_tokens": 0,
           "effort": null,
           "last_refresh_at": 1791721000000,
@@ -16147,13 +16151,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "companion": "none",
           "companion_since": null,
           "agents": 1,
-          "keepalive": {
-            "cause": null,
-            "last_guard": null,
-            "next_probe_at": null,
-            "state": null
-          },
-          "presence_age_seconds": null,
           "agent_contexts": [
             {
               "agent_id": "main",
@@ -16164,9 +16161,18 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_ttl_ms": 300000,
               "last_used_at": 1791721000000,
               "warm": true,
-              "created_at": 1791721000000
+              "created_at": 1791721000000,
+              "lifecycle": null
             }
           ],
+          "keepalive": {
+            "cause": null,
+            "last_guard": null,
+            "next_probe_at": null,
+            "state": null
+          },
+          "lifecycle": null,
+          "presence_age_seconds": null,
           "forked_from": null,
           "fork_depth": null
         },
@@ -16190,25 +16196,19 @@ export const FIXTURES: Record<string, Fixture> = {
           "burn_at": 1791721000000,
           "runway_ms": null,
           "runway_bounded": null,
-          "cache_ttl_ms": 300000,
           "speed": null,
           "cycle_ms": null,
+          "cache_ttl_ms": 300000,
+          "warm": true,
           "last_input_tokens": 52000,
           "effort": "high",
           "last_refresh_at": 1791717340000,
           "shed_from": null,
           "shed_reason": null,
+          "historical": false,
           "companion": "reporting",
           "companion_since": null,
           "agents": 3,
-          "keepalive": {
-            "cause": "scheduled",
-            "last_guard": "rearm",
-            "next_probe_at": 1791721240000,
-            "state": "busy"
-          },
-          "presence_age_seconds": null,
-          "historical": false,
           "agent_contexts": [
             {
               "agent_id": "main",
@@ -16219,7 +16219,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_ttl_ms": 300000,
               "last_used_at": 1791721000000,
               "warm": true,
-              "created_at": 1791717340000
+              "created_at": 1791717340000,
+              "lifecycle": "busy"
             },
             {
               "agent_id": "worker-1",
@@ -16230,7 +16231,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_ttl_ms": 300000,
               "last_used_at": 1791721000000,
               "warm": true,
-              "created_at": 1791717340000
+              "created_at": 1791717340000,
+              "lifecycle": "busy"
             },
             {
               "agent_id": "worker-2",
@@ -16241,9 +16243,18 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_ttl_ms": 300000,
               "last_used_at": 1791721000000,
               "warm": true,
-              "created_at": 1791717340000
+              "created_at": 1791717340000,
+              "lifecycle": "busy"
             }
           ],
+          "keepalive": {
+            "cause": "scheduled",
+            "last_guard": "rearm",
+            "next_probe_at": 1791721240000,
+            "state": "busy"
+          },
+          "lifecycle": "busy",
+          "presence_age_seconds": null,
           "forked_from": "s0",
           "fork_depth": 2
         },
@@ -16267,11 +16278,12 @@ export const FIXTURES: Record<string, Fixture> = {
           "burn_at": null,
           "runway_ms": null,
           "runway_bounded": null,
-          "cache_ttl_ms": null,
-          "last_input_tokens": null,
-          "effort": null,
           "speed": null,
           "cycle_ms": null,
+          "cache_ttl_ms": null,
+          "warm": null,
+          "last_input_tokens": null,
+          "effort": null,
           "last_refresh_at": null,
           "shed_from": null,
           "shed_reason": null,
@@ -16279,14 +16291,15 @@ export const FIXTURES: Record<string, Fixture> = {
           "companion": "none",
           "companion_since": null,
           "agents": 0,
+          "agent_contexts": [],
           "keepalive": {
             "cause": null,
             "last_guard": null,
             "next_probe_at": null,
             "state": null
           },
+          "lifecycle": null,
           "presence_age_seconds": null,
-          "agent_contexts": [],
           "forked_from": null,
           "fork_depth": null
         },
@@ -16310,11 +16323,12 @@ export const FIXTURES: Record<string, Fixture> = {
           "burn_at": null,
           "runway_ms": null,
           "runway_bounded": null,
-          "cache_ttl_ms": null,
-          "last_input_tokens": null,
-          "effort": null,
           "speed": null,
           "cycle_ms": null,
+          "cache_ttl_ms": null,
+          "warm": null,
+          "last_input_tokens": null,
+          "effort": null,
           "last_refresh_at": null,
           "shed_from": null,
           "shed_reason": null,
@@ -16322,14 +16336,15 @@ export const FIXTURES: Record<string, Fixture> = {
           "companion": "none",
           "companion_since": null,
           "agents": 0,
+          "agent_contexts": [],
           "keepalive": {
             "cause": null,
             "last_guard": null,
             "next_probe_at": null,
             "state": null
           },
+          "lifecycle": null,
           "presence_age_seconds": null,
-          "agent_contexts": [],
           "forked_from": null,
           "fork_depth": null
         },
@@ -16353,11 +16368,12 @@ export const FIXTURES: Record<string, Fixture> = {
           "burn_at": null,
           "runway_ms": null,
           "runway_bounded": null,
-          "cache_ttl_ms": null,
-          "last_input_tokens": null,
-          "effort": null,
           "speed": null,
           "cycle_ms": null,
+          "cache_ttl_ms": null,
+          "warm": null,
+          "last_input_tokens": null,
+          "effort": null,
           "last_refresh_at": null,
           "shed_from": null,
           "shed_reason": null,
@@ -16365,14 +16381,15 @@ export const FIXTURES: Record<string, Fixture> = {
           "companion": "none",
           "companion_since": null,
           "agents": 0,
+          "agent_contexts": [],
           "keepalive": {
             "cause": null,
             "last_guard": null,
             "next_probe_at": null,
             "state": null
           },
+          "lifecycle": null,
           "presence_age_seconds": null,
-          "agent_contexts": [],
           "forked_from": null,
           "fork_depth": null
         }

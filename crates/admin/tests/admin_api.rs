@@ -7188,7 +7188,10 @@ fn dropped_members(row: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
-/// An agent line as the route answers it, under the harness pins' five-minute TTL and with no first-seen record.
+/// An agent line as the route answers it, under the harness pins' five-minute TTL and with no first-seen record, with
+/// the agent's lifecycle word where the engine holds its record.
+// Each argument is a member the case pins, so a struct of them would only rename the call sites.
+#[allow(clippy::too_many_arguments)]
 fn agent_line(
     agent: &str,
     model: &str,
@@ -7197,6 +7200,7 @@ fn agent_line(
     last_input_tokens: u64,
     last_used_at: i64,
     warm: bool,
+    lifecycle: Option<&str>,
 ) -> serde_json::Value {
     serde_json::json!({
         "agent_id": agent,
@@ -7208,6 +7212,7 @@ fn agent_line(
         "last_used_at": last_used_at,
         "warm": warm,
         "created_at": null,
+        "lifecycle": lifecycle,
     })
 }
 
@@ -7272,7 +7277,8 @@ async fn a_plain_session_row_answers_its_pins_prompt_and_effort_and_lists_the_pi
                 Some("high"),
                 50_000,
                 NOW - 5,
-                true
+                true,
+                None
             )])),
         ],
         "the pin's prompt and effort on the row, and the pin as main's line, warm a few milliseconds after its last use"
@@ -7289,7 +7295,8 @@ async fn a_plain_session_row_answers_its_pins_prompt_and_effort_and_lists_the_pi
                 None,
                 0,
                 NOW - 5,
-                true
+                true,
+                None
             )])),
         ],
         "a pin with no turn yet reads no prompt, and a request that named no effort reads none"
@@ -7390,11 +7397,11 @@ async fn a_companion_session_lists_main_and_each_unreleased_agents_conversation_
             Some(json!(80_000)),
             Some(json!("high")),
             Some(json!([
-                agent_line("main", "claude-opus-5", "business", Some("high"), 80_000, NOW - 5, true),
-                agent_line("main", "claude-sonnet-5", "business", None, 5_000, NOW - 50, true),
-                agent_line("worker-1", "claude-opus-5", "direct", Some("low"), 30_000, NOW - 5, true),
-                agent_line("worker-1", "claude-sonnet-5", "direct", None, 0, NOW - 5, true),
-                agent_line("worker-2", "claude-sonnet-5", "business", None, 12_000, NOW - 5, true),
+                agent_line("main", "claude-opus-5", "business", Some("high"), 80_000, NOW - 5, true, Some("busy")),
+                agent_line("main", "claude-sonnet-5", "business", None, 5_000, NOW - 50, true, Some("busy")),
+                agent_line("worker-1", "claude-opus-5", "direct", Some("low"), 30_000, NOW - 5, true, Some("busy")),
+                agent_line("worker-1", "claude-sonnet-5", "direct", None, 0, NOW - 5, true, Some("busy")),
+                agent_line("worker-2", "claude-sonnet-5", "business", None, 12_000, NOW - 5, true, Some("busy")),
             ])),
         ],
         "main's figures on the row, and one line per conversation pin of main and of each agent the companion has not \
@@ -7412,7 +7419,8 @@ async fn a_companion_session_lists_main_and_each_unreleased_agents_conversation_
                 None,
                 20_000,
                 NOW - 5,
-                true
+                true,
+                Some("busy")
             )])),
         ],
         "a companion session whose every other agent is released lists main's line alone"
@@ -7462,8 +7470,17 @@ async fn a_session_whose_requests_named_the_long_context_twin_answers_its_pins_p
             })
     })
     .await;
-    let line = |agent, model, account, prompt| {
-        agent_line(agent, model, account, None, prompt, NOW - 5, true)
+    let line = |agent, model, account, prompt, lifecycle| {
+        agent_line(
+            agent,
+            model,
+            account,
+            None,
+            prompt,
+            NOW - 5,
+            true,
+            lifecycle,
+        )
     };
     assert_eq!(
         context_of(&session_row(&sessions, "s-long")),
@@ -7471,9 +7488,9 @@ async fn a_session_whose_requests_named_the_long_context_twin_answers_its_pins_p
             Some(json!(300_000)),
             Some(Value::Null),
             Some(json!([
-                line("main", "claude-opus-5", "business", 300_000),
-                line("worker-1", "claude-opus-5", "direct", 100_000),
-                line("worker-2", "claude-sonnet-5", "direct", 40_000),
+                line("main", "claude-opus-5", "business", 300_000, Some("busy")),
+                line("worker-1", "claude-opus-5", "direct", 100_000, Some("busy")),
+                line("worker-2", "claude-sonnet-5", "direct", 40_000, Some("busy")),
             ])),
         ],
         "main's newest request named the twin, and the row and its lines read each pin's prompt alone"
@@ -7483,7 +7500,13 @@ async fn a_session_whose_requests_named_the_long_context_twin_answers_its_pins_p
         [
             Some(json!(300_000)),
             Some(Value::Null),
-            Some(json!([line("main", "claude-opus-5", "business", 300_000)])),
+            Some(json!([line(
+                "main",
+                "claude-opus-5",
+                "business",
+                300_000,
+                None
+            )])),
         ],
         "a session whose only request named the twin reads its pin's prompt"
     );
@@ -7568,7 +7591,8 @@ async fn a_session_row_reads_mains_conversation_pin_beside_a_later_auxiliary_onl
                 Some("high"),
                 40_000,
                 NOW - 50,
-                true
+                true,
+                None
             )])),
         ],
         "main's line reads the conversation pin, and the auxiliary-only pin draws none"
@@ -7646,7 +7670,8 @@ async fn a_session_whose_main_holds_an_auxiliary_pin_alone_reads_its_subagents_c
                 Some("low"),
                 25_000,
                 NOW - 50,
-                true
+                true,
+                None
             )])),
         ],
         "the subagent's line, and none for main's auxiliary-only pin"
@@ -8023,8 +8048,8 @@ async fn a_session_no_companion_reports_leaves_after_the_timeout_and_its_old_lin
     assert_eq!(
         context_of(&session_row(&sessions, "s-mixed"))[2],
         Some(json!([
-            agent_line("main", "claude-opus-5", "business", None, 10_000, NOW - 5, true),
-            agent_line("worker-1", "claude-opus-5", "direct", None, 10_000, NOW - 400_000, false),
+            agent_line("main", "claude-opus-5", "business", None, 10_000, NOW - 5, true, None),
+            agent_line("worker-1", "claude-opus-5", "direct", None, 10_000, NOW - 400_000, false, None),
         ])),
         "a line whose pin was used within the timeout stays, warm or cold by its cache TTL, and an older one leaves"
     );
@@ -8037,7 +8062,8 @@ async fn a_session_no_companion_reports_leaves_after_the_timeout_and_its_old_lin
             None,
             10_000,
             NOW - IDLE_MS - 1,
-            false
+            false,
+            Some("busy")
         )])),
         "a companion row stays past the timeout within the session expiry, its line kept by the engine's own lifecycle"
     );
@@ -8184,7 +8210,8 @@ async fn a_session_no_companion_reports_stays_while_a_subagents_pin_is_inside_th
                 None,
                 10_000,
                 NOW - 5,
-                true
+                true,
+                None
             )]),
         )),
         "the subagent's use inside the timeout keeps the row, which reads main's pin with the subagent's newer use as \

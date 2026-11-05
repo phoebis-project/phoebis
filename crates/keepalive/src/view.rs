@@ -1,6 +1,7 @@
 //! What the admin routes read from the engine: one row per session, one per agent that has sent a real request, and
 //! the counts the overview tiles show. Every word here is a member of a closed set the UI knows.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use phoebis_ledger::{KeepaliveAgents, KeepaliveGaugeSource};
@@ -132,8 +133,15 @@ pub struct SessionView {
     pub key_id: String,
     pub key_generation: i64,
     pub keepalive: KeepaliveSummary,
+    /// Main's lifecycle word from its record, whether or not a recipe stands, `None` where no record of main stands.
+    pub lifecycle: Option<AgentState>,
+    /// Every agent record's lifecycle word by agent id, main's among them, so a line reads its own agent's word.
+    pub lifecycles: BTreeMap<String, AgentState>,
     /// How long ago main's last presence report arrived, in seconds, `null` before the first one.
     pub presence_age_seconds: Option<i64>,
+    /// True where main's record reads `Busy` with the reason `AwaitingRequest`: a registration with no real request
+    /// yet, which the sessions route words `registered`.
+    pub registered: bool,
     pub session_id: String,
 }
 
@@ -198,6 +206,7 @@ impl Engine {
                             .filter(|a| a.id != MAIN_AGENT && holds_recipe(a))
                             .max_by_key(|a| a.last_real_at)
                     });
+                let record = s.agents.get(MAIN_AGENT);
                 // An ended session keeps its tombstone for the lifecycle protocol, but its companion is
                 // gone: the engine refuses further events under that instance, and the lease sweep leaves an
                 // ended session alone, so `attended` stays as the last heartbeat left it.
@@ -223,11 +232,20 @@ impl Engine {
                         next_probe_at: s.agents.values().filter_map(|a| a.next_probe_at()).min(),
                         state: summary.map(|a| a.state),
                     },
+                    lifecycle: record.map(|a| a.state),
+                    lifecycles: s
+                        .agents
+                        .iter()
+                        .map(|(id, a)| (id.clone(), a.state))
+                        .collect(),
                     presence_age_seconds: s
                         .agents
                         .get(MAIN_AGENT)
                         .and_then(|a| a.last_presence_at)
                         .map(|at| (now - at).max(0) / 1_000),
+                    registered: record.is_some_and(|a| {
+                        a.state == AgentState::Busy && a.reason == Reason::AwaitingRequest
+                    }),
                     session_id: key.1.clone(),
                 }
             })

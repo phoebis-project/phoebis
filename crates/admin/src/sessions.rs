@@ -10,7 +10,6 @@ use axum::Json;
 use phoebis_routing::{
     entrypoint_of, BurnRates, BurnUnit, PinStanding, FIVE_HOUR, MAIN_AGENT, SEVEN_DAY,
 };
-use serde_json::{json, Value};
 use utoipa::ToSchema;
 
 use crate::openapi::{ErrorBody, LedgerFailure, RouterUnavailable};
@@ -20,8 +19,7 @@ use crate::AdminState;
 /// The live pins joined with what the ledger saw and the keepalive engine's own view, one row per session.
 #[derive(serde::Serialize, ToSchema)]
 pub(crate) struct SessionList {
-    #[schema(value_type = Vec<Session>)]
-    pub sessions: Vec<Value>,
+    pub sessions: Vec<Session>,
 }
 
 /// One session row. On a row with no pin the keys from `burn` to `shed_reason` read null.
@@ -79,6 +77,9 @@ pub(crate) struct Session {
     pub cycle_ms: Option<f64>,
     /// The cache TTL in force at the pin's last refresh.
     pub cache_ttl_ms: Option<i64>,
+    /// Whether the pinned account still holds the session's prompt cache, from the pin's last use and its cache
+    /// TTL. Null without a pin.
+    pub warm: Option<bool>,
     /// The context of the row's pin, the main agent's conversation pin where it holds one: its last turn's prompt in
     /// tokens, cache reads and writes included, 0 before its first turn.
     pub last_input_tokens: Option<u64>,
@@ -106,6 +107,11 @@ pub(crate) struct Session {
     pub agent_contexts: Vec<AgentContext>,
     /// Main's recipe, or the newest other agent's where main holds none.
     pub keepalive: SessionKeepalive,
+    /// Main's lifecycle word from the keepalive engine's record, whether or not a recipe stands: `busy`, `idle`,
+    /// `parked`, `released` or `unknown`, or `registered` for a main the mod registered that has sent no real request
+    /// yet. Null where no mod reports the session.
+    #[schema(example = "busy")]
+    pub lifecycle: Option<String>,
     /// The seconds since main's last presence report, null before the first one.
     pub presence_age_seconds: Option<i64>,
     /// The conversation the session's first request that is not auxiliary (a compaction, main, subagent or
@@ -137,17 +143,31 @@ pub(crate) struct AgentContext {
     pub warm: bool,
     /// The first placement of the pin's agent under the key and session, null where no record stands.
     pub created_at: Option<i64>,
+    /// The agent's lifecycle word from the keepalive engine's record, null where no mod reports it.
+    #[schema(example = "idle")]
+    pub lifecycle: Option<String>,
 }
 
 /// Main's recipe as the session row reads it, or the newest other agent's where main holds none, every member null
 /// while no agent holds one.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(Default, serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SessionKeepalive {
     pub cause: Option<String>,
     pub last_guard: Option<String>,
     pub next_probe_at: Option<i64>,
     pub state: Option<String>,
+}
+
+impl From<&phoebis_keepalive::KeepaliveSummary> for SessionKeepalive {
+    fn from(summary: &phoebis_keepalive::KeepaliveSummary) -> Self {
+        SessionKeepalive {
+            cause: summary.cause.map(word),
+            last_guard: summary.last_guard.map(word),
+            next_probe_at: summary.next_probe_at,
+            state: summary.state.map(word),
+        }
+    }
 }
 
 /// The per-model cost card the console shows beside the sessions.
@@ -198,7 +218,7 @@ pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
 // The error is a rendered HTTP response, returned once per request and dropped. Boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
-pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, Response> {
+pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
     let Ok(pins) = state.router.pins_standing().await else {
         return Err(router_unavailable());
     };
@@ -269,7 +289,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         Ok(read) => read,
         Err(e) => return Err(crate::analytics::ledger_failure(e)),
     };
-    let mut rows: std::collections::BTreeMap<(String, i64, String), serde_json::Value> =
+    let mut rows: std::collections::BTreeMap<(String, i64, String), Session> =
         std::collections::BTreeMap::new();
     // The keepalive's own agent count answers `agents` when a session has an engine view, so every agent a pin names
     // is counted here as the fallback where it does not.
@@ -326,8 +346,8 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         // A session holds a pin per agent and the row shows one of its conversation pins: the main agent's once one
         // exists (replaced only by a newer one of its own), else whichever the caller used last.
         let keep = rows.get(&key).is_none_or(|held| {
-            let newer = held["last_used_at"].as_i64().unwrap_or(0) < p.last_used_at;
-            if held["agent_id"] == MAIN_AGENT {
+            let newer = held.last_used_at.unwrap_or(0) < p.last_used_at;
+            if held.agent_id.as_deref() == Some(MAIN_AGENT) {
                 is_main && newer
             } else {
                 is_main || newer
@@ -385,18 +405,39 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         let created_at = created.get(&key).copied();
         rows.insert(
             key,
-            json!({
-                "key_id": p.key_id, "key_generation": generation, "session_id": p.session_id, "agent_id": p.agent_id, "model": p.model, "account_id": p.account_id, "epoch": p.epoch,
-                "created_at": created_at, "last_used_at": p.last_used_at, "last_request_at": null, "requests": null, "pinned": true,
-                "burn": burn, "burn_unit": unit, "burn_window": burn_window, "burn_equivalent": equivalent,
-                "burn_at": p.burn_at, "runway_ms": standing.runway_ms, "runway_bounded": standing.runway_bounded,
-                "cache_ttl_ms": p.cache_ttl_ms,
-                "speed": standing.speed,
-                "cycle_ms": standing.cycle_ms,
-                "last_input_tokens": p.last_input_tokens, "effort": standing.effort, "last_refresh_at": p.last_refresh_at,
-                "shed_from": p.shed.as_ref().map(|shed| &shed.from),
-                "shed_reason": p.shed.as_ref().and_then(|shed| shed.reason.as_ref()),
-            }),
+            Session {
+                agent_id: Some(p.agent_id.clone()),
+                account_id: Some(p.account_id.clone()),
+                epoch: Some(p.epoch),
+                last_used_at: Some(p.last_used_at),
+                requests: None,
+                pinned: true,
+                burn,
+                burn_unit: unit.map(|unit| unit.as_str().into()),
+                burn_window: burn_window.map(String::from),
+                burn_equivalent: equivalent,
+                burn_at: p.burn_at,
+                runway_ms: standing.runway_ms,
+                runway_bounded: standing.runway_bounded,
+                speed: standing.speed,
+                cycle_ms: standing.cycle_ms,
+                cache_ttl_ms: Some(p.cache_ttl_ms),
+                // The display pin's own use, read before the pass below moves the row's `last_used_at` to the
+                // newest use across the session's pins, since the cache the row names is this pin's.
+                warm: Some(now - p.last_used_at < p.cache_ttl_ms),
+                last_input_tokens: Some(p.last_input_tokens),
+                effort: standing.effort.clone(),
+                last_refresh_at: Some(p.last_refresh_at),
+                shed_from: p.shed.as_ref().map(|shed| shed.from.clone()),
+                shed_reason: p.shed.as_ref().and_then(|shed| shed.reason.clone()),
+                ..unpinned_row(
+                    &p.key_id,
+                    generation,
+                    &p.session_id,
+                    Some(&p.model),
+                    created_at,
+                )
+            },
         );
     }
     // The row's last use is the newest across the session's conversation pins, main's and its agents', so a
@@ -404,7 +445,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
     for (key, standings) in &agent_pins {
         if let Some(newest) = standings.iter().map(|s| s.pin.last_used_at).max() {
             if let Some(entry) = rows.get_mut(key) {
-                entry["last_used_at"] = json!(newest);
+                entry.last_used_at = Some(newest);
             }
         }
     }
@@ -421,22 +462,29 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
                 created_at,
             )
         });
-        entry["last_request_at"] = json!(a.last_request_at);
-        entry["requests"] = json!(a.requests);
-        if entry["account_id"].is_null() {
+        entry.last_request_at = Some(a.last_request_at);
+        entry.requests = Some(a.requests);
+        if entry.account_id.is_none() {
             // Without a pin the serving account is the ledger's: the newest attempt of the newest request.
-            entry["account_id"] = json!(a.account_id);
+            entry.account_id = a.account_id;
         }
     }
     for (key, view) in &engine {
         let entry = rows.entry(key.clone()).or_insert_with(|| {
             unpinned_row(&key.0, key.1, &key.2, None, created.get(key).copied())
         });
-        entry["companion"] = json!(view.companion);
-        entry["companion_since"] = json!(view.companion_since);
-        entry["agents"] = json!(view.agents);
-        entry["keepalive"] = json!(view.keepalive);
-        entry["presence_age_seconds"] = json!(view.presence_age_seconds);
+        entry.companion = word(view.companion);
+        entry.companion_since = view.companion_since;
+        entry.agents = view.agents as u64;
+        entry.keepalive = SessionKeepalive::from(&view.keepalive);
+        entry.lifecycle = view.lifecycle.map(|state| {
+            if view.registered {
+                "registered".into()
+            } else {
+                lifecycle_word(state).into()
+            }
+        });
+        entry.presence_age_seconds = view.presence_age_seconds;
     }
     // A row whose generation no live key holds is read-only: the engine's sessions and recipes are keyed
     // under the live generation alone and cannot belong to it, so it carries no companion or recipe. A
@@ -444,14 +492,14 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
     // clearing is on `historical` as well as on the engine's own map, not on the map alone.
     for (key, entry) in rows.iter_mut() {
         let historical = live.get(&key.0) != Some(&key.1);
-        entry["historical"] = json!(historical);
+        entry.historical = historical;
         if historical || !engine.contains_key(key) {
-            entry["companion"] = json!("none");
-            entry["companion_since"] = json!(null);
-            entry["agents"] = json!(agents_by_session.get(key).map_or(0, |a| a.len()));
-            entry["keepalive"] =
-                json!({ "cause": null, "last_guard": null, "next_probe_at": null, "state": null });
-            entry["presence_age_seconds"] = json!(null);
+            entry.companion = "none".into();
+            entry.companion_since = None;
+            entry.agents = agents_by_session.get(key).map_or(0, |a| a.len() as u64);
+            entry.keepalive = SessionKeepalive::default();
+            entry.lifecycle = None;
+            entry.presence_age_seconds = None;
         }
     }
     // Once the historical pass has settled `companion`: a session no companion reports leaves the list once the later
@@ -460,11 +508,11 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
     // request in flight with no ledger row yet keeps the row. An ended session the engine still holds is measured by
     // its end as well, its `companion_since`, so one that sent no request leaves after the timeout too.
     rows.retain(|_, entry| {
-        entry["companion"] != "none"
-            || entry["last_used_at"]
-                .as_i64()
-                .max(entry["last_request_at"].as_i64())
-                .max(entry["companion_since"].as_i64())
+        entry.companion != "none"
+            || entry
+                .last_used_at
+                .max(entry.last_request_at)
+                .max(entry.companion_since)
                 .is_none_or(|latest| latest >= idle_bound)
     });
     // The agent lines: on a companion row one per conversation pin of every agent the companion carries a recipe for
@@ -487,7 +535,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         }
     }
     for (key, entry) in rows.iter_mut() {
-        let companion = entry["companion"] != "none";
+        let companion = entry.companion != "none";
         let mut lines: Vec<&PinStanding> = agent_pins
             .get(key)
             .into_iter()
@@ -513,19 +561,27 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
                 &b.model,
             ))
         });
-        entry["agent_contexts"] = Value::Array(
-            lines
-                .into_iter()
-                .map(|standing| {
-                    let pin = &standing.pin;
-                    json!({
-                        "agent_id": pin.agent_id, "model": pin.model, "account_id": pin.account_id, "effort": standing.effort,
-                        "last_input_tokens": pin.last_input_tokens, "cache_ttl_ms": pin.cache_ttl_ms, "last_used_at": pin.last_used_at,
-                        "warm": now - pin.last_used_at < pin.cache_ttl_ms, "created_at": standing.first_seen_at,
-                    })
-                })
-                .collect(),
-        );
+        entry.agent_contexts = lines
+            .into_iter()
+            .map(|standing| {
+                let pin = &standing.pin;
+                AgentContext {
+                    agent_id: pin.agent_id.clone(),
+                    model: pin.model.clone(),
+                    account_id: pin.account_id.clone(),
+                    effort: standing.effort.clone(),
+                    last_input_tokens: pin.last_input_tokens,
+                    cache_ttl_ms: pin.cache_ttl_ms,
+                    last_used_at: pin.last_used_at,
+                    warm: now - pin.last_used_at < pin.cache_ttl_ms,
+                    created_at: standing.first_seen_at,
+                    lifecycle: engine
+                        .get(key)
+                        .and_then(|view| view.lifecycles.get(&pin.agent_id))
+                        .map(|&state| lifecycle_word(state).into()),
+                }
+            })
+            .collect();
     }
     // A session the engine knows only from a registration carries no pin and no ledger row, so its model and
     // serving account come from its main agent's recipe instead, the first the session's agents sort to. A
@@ -546,11 +602,11 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         let Some(recipe) = recipe_by_session.get(key) else {
             continue;
         };
-        if entry["model"].is_null() {
-            entry["model"] = json!(recipe.model);
+        if entry.model.is_none() {
+            entry.model = Some(recipe.model.clone());
         }
-        if entry["account_id"].is_null() {
-            entry["account_id"] = json!(recipe.account_id);
+        if entry.account_id.is_none() {
+            entry.account_id = recipe.account_id.clone();
         }
     }
     let identity_by_key: std::collections::BTreeMap<
@@ -567,17 +623,16 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         .collect();
     for (key, entry) in rows.iter_mut() {
         let identity = identity_by_key.get(key);
-        entry["forked_from"] = json!(identity.and_then(|i| i.forked_from.clone()));
-        entry["fork_depth"] = json!(identity.and_then(|i| i.fork_depth));
+        entry.forked_from = identity.and_then(|i| i.forked_from.clone());
+        entry.fork_depth = identity.and_then(|i| i.fork_depth);
     }
-    let mut out: Vec<serde_json::Value> = rows.into_values().collect();
-    let latest = |v: &serde_json::Value| {
-        v["last_used_at"]
-            .as_i64()
+    let mut out: Vec<Session> = rows.into_values().collect();
+    let latest = |row: &Session| {
+        row.last_used_at
             .unwrap_or(0)
-            .max(v["last_request_at"].as_i64().unwrap_or(0))
+            .max(row.last_request_at.unwrap_or(0))
     };
-    out.sort_by_key(|v| std::cmp::Reverse(latest(v)));
+    out.sort_by_key(|row| std::cmp::Reverse(latest(row)));
     Ok(out)
 }
 
@@ -594,17 +649,67 @@ fn unpinned_row(
     session_id: &str,
     model: Option<&str>,
     created_at: Option<i64>,
-) -> Value {
-    json!({
-        "key_id": key_id, "key_generation": key_generation, "session_id": session_id, "agent_id": null, "model": model, "account_id": null, "epoch": null,
-        "created_at": created_at, "last_used_at": null, "last_request_at": null, "requests": 0, "pinned": false,
-        "burn": null, "burn_unit": null, "burn_window": null, "burn_equivalent": null,
-        "burn_at": null, "runway_ms": null,
-        "runway_bounded": null, "cache_ttl_ms": null, "last_input_tokens": null, "effort": null,
-        "speed": null,
-        "cycle_ms": null,
-        "last_refresh_at": null, "shed_from": null, "shed_reason": null,
-    })
+) -> Session {
+    Session {
+        key_id: key_id.into(),
+        key_generation,
+        session_id: session_id.into(),
+        agent_id: None,
+        model: model.map(String::from),
+        account_id: None,
+        epoch: None,
+        created_at,
+        last_used_at: None,
+        last_request_at: None,
+        requests: Some(0),
+        pinned: false,
+        burn: None,
+        burn_unit: None,
+        burn_window: None,
+        burn_equivalent: None,
+        burn_at: None,
+        runway_ms: None,
+        runway_bounded: None,
+        speed: None,
+        cycle_ms: None,
+        cache_ttl_ms: None,
+        warm: None,
+        last_input_tokens: None,
+        effort: None,
+        last_refresh_at: None,
+        shed_from: None,
+        shed_reason: None,
+        historical: false,
+        companion: "none".into(),
+        companion_since: None,
+        agents: 0,
+        agent_contexts: Vec::new(),
+        keepalive: SessionKeepalive::default(),
+        lifecycle: None,
+        presence_age_seconds: None,
+        forked_from: None,
+        fork_depth: None,
+    }
+}
+
+/// The engine's word on the wire, the match with no wildcard so a sixth word fails to build.
+fn lifecycle_word(state: phoebis_keepalive::AgentState) -> &'static str {
+    use phoebis_keepalive::AgentState::*;
+    match state {
+        Busy => "busy",
+        Idle => "idle",
+        Parked => "parked",
+        Released => "released",
+        Unknown => "unknown",
+    }
+}
+
+/// The word serde writes for a member of one of the engine's closed sets, so the row spells it as the engine does.
+fn word(value: impl serde::Serialize) -> String {
+    match serde_json::to_value(value) {
+        Ok(serde_json::Value::String(word)) => word,
+        other => unreachable!("a closed set's member serializes to its word, not {other:?}"),
+    }
 }
 
 /// Read the per-model cost card.

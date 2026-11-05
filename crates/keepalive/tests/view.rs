@@ -401,6 +401,39 @@ async fn a_session_whose_main_holds_no_recipe_reads_the_newest_other_agents_reci
     );
 }
 
+/// Main's word stands on the row whether or not a recipe stands, so a registered main that reports `idle` before any
+/// request reads `idle` beside an empty summary. A state report leaves the reason at `AwaitingRequest`, so the
+/// registration's flag reads false here, where a flag read from the reason alone would read true.
+#[tokio::test]
+async fn mains_lifecycle_word_stands_beside_an_empty_summary_while_main_holds_no_recipe() {
+    let mut r = rig(RigSpec::default()).await;
+    r.state("main", "idle");
+    assert_eq!(r.status("main").reason, Reason::AwaitingRequest);
+    let view = &r.engine.sessions()[0];
+    assert_eq!(
+        (view.lifecycle, view.keepalive.state, view.registered),
+        (Some(AgentState::Idle), None, false),
+        "{view:?}"
+    );
+}
+
+/// A registration with no real request is main `Busy` under `AwaitingRequest`, which reads `registered`. Main's first
+/// real request keeps it `Busy` under the recipe's own reason, which does not, so a flag read from the state alone
+/// would still read true.
+#[tokio::test]
+async fn a_registered_main_reads_registered_until_its_first_real_request() {
+    let mut r = rig(RigSpec::default()).await;
+    let registered = &r.engine.sessions()[0];
+    assert!(registered.registered, "{registered:?}");
+    r.observe("main").await;
+    let requested = &r.engine.sessions()[0];
+    assert_eq!(
+        (requested.registered, requested.lifecycle),
+        (false, Some(AgentState::Busy)),
+        "{requested:?}"
+    );
+}
+
 #[tokio::test]
 async fn an_ended_recipe_keeps_its_row_with_the_cause() {
     let mut r = rig(RigSpec {
