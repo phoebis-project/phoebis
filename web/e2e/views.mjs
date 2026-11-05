@@ -11913,8 +11913,8 @@ async function sessionForkMark(theme) {
  * Every fork link on Sessions lies inside its cell's content box with its words whole and takes a pointer at its
  * center, with the default columns. The badge reads `fork` alone inside the client line, so its width is what the
  * measurement records beside its cell's. The story forks three sessions beside their bases, one of them without a
- * pin, so the mock pass requires three links. The router
- * pass measures the links its seed draws and records their count.
+ * pin, so the mock pass requires three links. The router pass measures the links its seed draws and records their
+ * count.
  */
 async function sessionForkBadges(theme) {
   const say = (what) => failures.push(`${theme} /sessions fork badges: ${what}`);

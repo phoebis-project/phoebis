@@ -3628,7 +3628,6 @@
   margin-top: 2px;
   font-family: var(--font-sans);
   text-align: left;
-  white-space: normal;
 }
 
 .srow[aria-current='true'] td {
