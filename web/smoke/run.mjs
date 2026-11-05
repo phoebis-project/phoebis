@@ -23638,7 +23638,7 @@ await forView('/sessions', async () => {
     // headroom ends halfway between the session's last request and its line older by the most, a recipe's.
     const MINUTE = 60_000;
     const HOUR = 60 * MINUTE;
-    const drawn = recipes.filter((r) => r.lastRequestAt !== null && !(r.agentState === 'released' && r.cause === 'agent_released'));
+    const drawn = recipes.filter((r) => r.lastRequestAt !== null && r.agentState !== 'released');
     const pairs = listed.flatMap((s) => (s.historical || s.lastRequestAt === null ? [] : drawn.filter((r) => r.keyId === s.keyId && r.sessionId === s.sessionId).map((line) => ({ gap: Date.parse(s.lastRequestAt) - Date.parse(line.lastRequestAt), line, session: s }))));
     const widest = pairs.sort((a, b) => b.gap - a.gap)[0];
     const at = widest === undefined ? CLOCK_ORIGIN : Date.parse(widest.line.lastRequestAt) + HOUR - MINUTE + Math.floor(widest.gap / 2);
@@ -24029,7 +24029,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const elsewhere = (s) => {
       const lines = new Map(s.agentContexts.map((c) => [`${c.agentId} ${c.model}`, c]));
       for (const r of recipes) {
-        const shown = !s.historical && r.keyId === s.keyId && r.sessionId === s.sessionId && !(r.agentState === 'released' && r.cause === 'agent_released');
+        const shown = !s.historical && r.keyId === s.keyId && r.sessionId === s.sessionId && r.agentState !== 'released';
         if (shown && !lines.has(`${r.agentId} ${r.model}`)) lines.set(`${r.agentId} ${r.model}`, r);
       }
       return [...lines.values()].filter((l) => l.accountId !== null && l.model !== s.model).map((l) => `${l.agentId}: ${l.model} on ${l.accountId}`);
