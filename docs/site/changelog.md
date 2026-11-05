@@ -537,7 +537,10 @@ as one ([API reference](api-reference.md)). A model filter that names a model's 
 rows on the request log, the analytics reads and the cache placements ([Requests](console.md#requests),
 [Analytics](console.md#analytics)). A request row carries the serving attempt's account, speed, outcome, token counts
 and cost, priced when it lands, and the start fills the rows written before the columns existed a slice at a time,
-logging the rows left ([Statistics](statistics.md#the-ledger)).
+logging the rows left ([Statistics](statistics.md#the-ledger)). Refusals count by the request's model and the category
+and the count answers the fallbacks in range, a request that presented a refusal's fallback credit carries the credit's
+digest beside the refused attempt's, and the request log filters on it ([Refused
+requests](statistics.md#refused-requests)).
 
 Every price is computed when it is read, from the token counts the ledger stores, at the price revision in force when
 the request arrived. The price table and the subscription cost model are revision lists keyed by effective date, the

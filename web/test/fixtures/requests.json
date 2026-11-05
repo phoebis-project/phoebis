@@ -3,136 +3,6 @@
   "body": {
     "requests": [
       {
-        "id": "r-1",
-        "at": 1791721000000,
-        "finished_at": 1791721000900,
-        "key_id": "desktop",
-        "key_generation": 1791721000000,
-        "pool_id": "main",
-        "account_id": "business",
-        "session_id": "s-fixture",
-        "agent_id": "main",
-        "parent_agent_id": null,
-        "model": "claude-sonnet-5",
-        "canonical_model": "claude-sonnet-5",
-        "kind": "inference",
-        "origin": "client",
-        "transport": "sse",
-        "request_class": null,
-        "auto_mode": null,
-        "classifier": null,
-        "forked_from": null,
-        "fork_depth": null,
-        "status": 200,
-        "outcome": "succeeded",
-        "error_code": null,
-        "client_drift": null,
-        "client_contract": null,
-        "ttfb_ms": 120,
-        "ttft_ms": 300,
-        "duration_ms": 900,
-        "request_bytes": null,
-        "response_bytes": null,
-        "kept_warm": false,
-        "captured_bodies": false,
-        "response_truncated": false,
-        "user_agent": "claude-cli/2.1.310 (external, cli)",
-        "client": "claude-code/cli",
-        "agent_type": null,
-        "compaction": null,
-        "context_compacted": null,
-        "prev_tool_ms": null,
-        "turn_origin": null,
-        "shape": {
-          "context_edits": [
-            "clear_thinking_20251015"
-          ],
-          "effort": "high",
-          "max_tokens": 32000,
-          "message_count": 1,
-          "requested_service_tier": null,
-          "requested_speed": null,
-          "system_blocks": 4,
-          "temperature": null,
-          "thinking_budget": 31999,
-          "thinking_type": "enabled",
-          "tool_count": 12
-        },
-        "usage": {
-          "cache_read": 500,
-          "cache_write_1h": 0,
-          "cache_write_5m": 200,
-          "input": 1000,
-          "output": 100,
-          "thinking": 40,
-          "web_fetch": 0,
-          "web_search": 0
-        },
-        "cost_usd": 0.0036,
-        "cost_shares": {
-          "five_hour": 8.8125e-6,
-          "seven_day": 2.35e-6
-        },
-        "cost_equivalent": 0.0000235,
-        "share_reason": null,
-        "tier": "default_claude_max_20x",
-        "phases": {
-          "received_at": 1791721000000,
-          "selected_at": 1791721000000,
-          "written_at": 1791721000030,
-          "head_at": 1791721000120,
-          "first_content_at": 1791721000300,
-          "stream_end_at": 1791721000850,
-          "finished_at": 1791721000900
-        },
-        "attempts": [
-          {
-            "index": 1,
-            "account_id": "business",
-            "account_kind": "oauth",
-            "outcome": "succeeded",
-            "upstream_status": 200,
-            "upstream_request_id": "req_r-1_1",
-            "upstream_message_id": "msg_r-1_1",
-            "started_at": 1791721000000,
-            "duration_ms": 400,
-            "ttfb_ms": 120,
-            "ttft_ms": null,
-            "cache_miss_reason": "none",
-            "service_tier": null,
-            "client_drift": null,
-            "cooldown_set": null,
-            "windows": [
-              {
-                "id": "five_hour",
-                "utilization": 0.4,
-                "resets_at": 1791724600000
-              }
-            ],
-            "overage_in_use": null,
-            "usage_based": false,
-            "estimated_usd": 0.0036,
-            "selection": null,
-            "response": {
-              "cleared_input_tokens": null,
-              "inference_geo": "us",
-              "refusal_category": null,
-              "refusal_recommended_model": null,
-              "served_model": null,
-              "speed": "standard",
-              "stop_reason": "end_turn",
-              "stop_sequence": null
-            },
-            "tier": "default_claude_max_20x"
-          }
-        ],
-        "held": null,
-        "diagnostics_source": null,
-        "guardrail_id": null,
-        "guardrails": [],
-        "refused": false
-      },
-      {
         "id": "r-placed",
         "at": 1791720970000,
         "finished_at": 1791720970900,
@@ -256,14 +126,16 @@
               "stop_reason": "end_turn",
               "stop_sequence": null
             },
-            "tier": null
+            "tier": null,
+            "issued_digest": null
           }
         ],
         "held": null,
         "diagnostics_source": null,
         "guardrail_id": null,
         "guardrails": [],
-        "refused": false
+        "refused": false,
+        "fallback_digest": null
       },
       {
         "id": "r-captured",
@@ -386,14 +258,16 @@
               "stop_reason": "end_turn",
               "stop_sequence": null
             },
-            "tier": "default_claude_max_20x"
+            "tier": "default_claude_max_20x",
+            "issued_digest": null
           }
         ],
         "held": null,
         "diagnostics_source": "client",
         "guardrail_id": null,
         "guardrails": [],
-        "refused": false
+        "refused": false,
+        "fallback_digest": null
       },
       {
         "id": "r-failed",
@@ -516,271 +390,16 @@
               "stop_reason": "end_turn",
               "stop_sequence": null
             },
-            "tier": "default_claude_max_20x"
+            "tier": "default_claude_max_20x",
+            "issued_digest": null
           }
         ],
         "held": null,
         "diagnostics_source": null,
         "guardrail_id": null,
         "guardrails": [],
-        "refused": false
-      },
-      {
-        "id": "r-worker-2",
-        "at": 1791717401000,
-        "finished_at": 1791717401900,
-        "key_id": "desktop",
-        "key_generation": 1791721000000,
-        "pool_id": "main",
-        "account_id": "direct",
-        "session_id": "s1",
-        "agent_id": "worker-2",
-        "parent_agent_id": null,
-        "model": "claude-sonnet-5-5",
-        "canonical_model": "claude-sonnet-5-5",
-        "kind": "inference",
-        "origin": "client",
-        "transport": "sse",
-        "request_class": "subagent",
-        "auto_mode": null,
-        "classifier": null,
-        "forked_from": null,
-        "fork_depth": null,
-        "status": 200,
-        "outcome": "succeeded",
-        "error_code": null,
-        "client_drift": null,
-        "client_contract": null,
-        "ttfb_ms": 120,
-        "ttft_ms": 300,
-        "duration_ms": 900,
-        "request_bytes": null,
-        "response_bytes": null,
-        "kept_warm": false,
-        "captured_bodies": false,
-        "response_truncated": false,
-        "user_agent": "claude-cli/2.1.310 (external, cli)",
-        "client": "claude-code/cli",
-        "agent_type": null,
-        "compaction": null,
-        "context_compacted": null,
-        "prev_tool_ms": null,
-        "turn_origin": null,
-        "shape": {
-          "context_edits": [
-            "clear_thinking_20251015"
-          ],
-          "effort": "high",
-          "max_tokens": 32000,
-          "message_count": 1,
-          "requested_service_tier": null,
-          "requested_speed": null,
-          "system_blocks": 4,
-          "temperature": null,
-          "thinking_budget": 31999,
-          "thinking_type": "enabled",
-          "tool_count": 12
-        },
-        "usage": {
-          "cache_read": 500,
-          "cache_write_1h": 0,
-          "cache_write_5m": 200,
-          "input": 1000,
-          "output": 100,
-          "thinking": 40,
-          "web_fetch": 0,
-          "web_search": 0
-        },
-        "cost_usd": 0.00355,
-        "cost_shares": null,
-        "cost_equivalent": null,
-        "share_reason": null,
-        "tier": null,
-        "phases": {
-          "received_at": 1791717401000,
-          "selected_at": 1791717401000,
-          "written_at": 1791717401030,
-          "head_at": 1791717401120,
-          "first_content_at": 1791717401300,
-          "stream_end_at": 1791717401850,
-          "finished_at": 1791717401900
-        },
-        "attempts": [
-          {
-            "index": 1,
-            "account_id": "direct",
-            "account_kind": "api_key",
-            "outcome": "succeeded",
-            "upstream_status": 200,
-            "upstream_request_id": "req_r-worker-2_1",
-            "upstream_message_id": "msg_r-worker-2_1",
-            "started_at": 1791717401000,
-            "duration_ms": 400,
-            "ttfb_ms": 120,
-            "ttft_ms": null,
-            "cache_miss_reason": "none",
-            "service_tier": null,
-            "client_drift": null,
-            "cooldown_set": null,
-            "windows": [
-              {
-                "id": "five_hour",
-                "utilization": 0.4,
-                "resets_at": 1791721001000
-              }
-            ],
-            "overage_in_use": null,
-            "usage_based": false,
-            "estimated_usd": 0.00355,
-            "selection": null,
-            "response": {
-              "cleared_input_tokens": null,
-              "inference_geo": "us",
-              "refusal_category": null,
-              "refusal_recommended_model": null,
-              "served_model": null,
-              "speed": "standard",
-              "stop_reason": "end_turn",
-              "stop_sequence": null
-            },
-            "tier": null
-          }
-        ],
-        "held": null,
-        "diagnostics_source": null,
-        "guardrail_id": null,
-        "guardrails": [],
-        "refused": false
-      },
-      {
-        "id": "r-worker-1",
-        "at": 1791717401000,
-        "finished_at": 1791717401900,
-        "key_id": "desktop",
-        "key_generation": 1791721000000,
-        "pool_id": "main",
-        "account_id": "business",
-        "session_id": "s1",
-        "agent_id": "worker-1",
-        "parent_agent_id": null,
-        "model": "claude-sonnet-5",
-        "canonical_model": "claude-sonnet-5",
-        "kind": "inference",
-        "origin": "client",
-        "transport": "sse",
-        "request_class": "subagent",
-        "auto_mode": null,
-        "classifier": null,
-        "forked_from": null,
-        "fork_depth": null,
-        "status": 200,
-        "outcome": "succeeded",
-        "error_code": null,
-        "client_drift": null,
-        "client_contract": null,
-        "ttfb_ms": 120,
-        "ttft_ms": 300,
-        "duration_ms": 900,
-        "request_bytes": null,
-        "response_bytes": null,
-        "kept_warm": false,
-        "captured_bodies": false,
-        "response_truncated": false,
-        "user_agent": "claude-cli/2.1.310 (external, cli)",
-        "client": "claude-code/cli",
-        "agent_type": null,
-        "compaction": null,
-        "context_compacted": null,
-        "prev_tool_ms": null,
-        "turn_origin": null,
-        "shape": {
-          "context_edits": [
-            "clear_thinking_20251015"
-          ],
-          "effort": "high",
-          "max_tokens": 32000,
-          "message_count": 1,
-          "requested_service_tier": null,
-          "requested_speed": null,
-          "system_blocks": 4,
-          "temperature": null,
-          "thinking_budget": 31999,
-          "thinking_type": "enabled",
-          "tool_count": 12
-        },
-        "usage": {
-          "cache_read": 500,
-          "cache_write_1h": 0,
-          "cache_write_5m": 200,
-          "input": 1000,
-          "output": 100,
-          "thinking": 40,
-          "web_fetch": 0,
-          "web_search": 0
-        },
-        "cost_usd": 0.0036,
-        "cost_shares": {
-          "five_hour": 8.8125e-6,
-          "seven_day": 2.35e-6
-        },
-        "cost_equivalent": 0.0000235,
-        "share_reason": null,
-        "tier": "default_claude_max_20x",
-        "phases": {
-          "received_at": 1791717401000,
-          "selected_at": 1791717401000,
-          "written_at": 1791717401030,
-          "head_at": 1791717401120,
-          "first_content_at": 1791717401300,
-          "stream_end_at": 1791717401850,
-          "finished_at": 1791717401900
-        },
-        "attempts": [
-          {
-            "index": 1,
-            "account_id": "business",
-            "account_kind": "oauth",
-            "outcome": "succeeded",
-            "upstream_status": 200,
-            "upstream_request_id": "req_r-worker-1_1",
-            "upstream_message_id": "msg_r-worker-1_1",
-            "started_at": 1791717401000,
-            "duration_ms": 400,
-            "ttfb_ms": 120,
-            "ttft_ms": null,
-            "cache_miss_reason": "none",
-            "service_tier": null,
-            "client_drift": null,
-            "cooldown_set": null,
-            "windows": [
-              {
-                "id": "five_hour",
-                "utilization": 0.4,
-                "resets_at": 1791721001000
-              }
-            ],
-            "overage_in_use": null,
-            "usage_based": false,
-            "estimated_usd": 0.0036,
-            "selection": null,
-            "response": {
-              "cleared_input_tokens": null,
-              "inference_geo": "us",
-              "refusal_category": null,
-              "refusal_recommended_model": null,
-              "served_model": null,
-              "speed": "standard",
-              "stop_reason": "end_turn",
-              "stop_sequence": null
-            },
-            "tier": "default_claude_max_20x"
-          }
-        ],
-        "held": null,
-        "diagnostics_source": null,
-        "guardrail_id": null,
-        "guardrails": [],
-        "refused": false
+        "refused": false,
+        "fallback_digest": null
       },
       {
         "id": "r-incomplete",
@@ -903,14 +522,16 @@
               "stop_reason": "end_turn",
               "stop_sequence": null
             },
-            "tier": "default_claude_max_20x"
+            "tier": "default_claude_max_20x",
+            "issued_digest": null
           }
         ],
         "held": null,
         "diagnostics_source": null,
         "guardrail_id": null,
         "guardrails": [],
-        "refused": false
+        "refused": false,
+        "fallback_digest": null
       },
       {
         "id": "r-earlier-holder",
@@ -1033,14 +654,16 @@
               "stop_reason": "end_turn",
               "stop_sequence": null
             },
-            "tier": "default_claude_max_20x"
+            "tier": "default_claude_max_20x",
+            "issued_digest": null
           }
         ],
         "held": null,
         "diagnostics_source": null,
         "guardrail_id": null,
         "guardrails": [],
-        "refused": false
+        "refused": false,
+        "fallback_digest": null
       },
       {
         "id": "r-failover",
@@ -1187,7 +810,8 @@
               "stop_reason": null,
               "stop_sequence": null
             },
-            "tier": null
+            "tier": null,
+            "issued_digest": null
           },
           {
             "index": 2,
@@ -1247,7 +871,8 @@
               "stop_reason": "tool_use",
               "stop_sequence": null
             },
-            "tier": "default_claude_max_20x"
+            "tier": "default_claude_max_20x",
+            "issued_digest": null
           }
         ],
         "held": {
@@ -1272,7 +897,8 @@
             "blocked": false
           }
         ],
-        "refused": false
+        "refused": false,
+        "fallback_digest": null
       },
       {
         "id": "r-blocked",
@@ -1370,7 +996,8 @@
             "blocked": true
           }
         ],
-        "refused": true
+        "refused": true,
+        "fallback_digest": null
       },
       {
         "id": "r-classifier",
@@ -1493,14 +1120,16 @@
               "stop_reason": "end_turn",
               "stop_sequence": null
             },
-            "tier": "default_claude_max_20x"
+            "tier": "default_claude_max_20x",
+            "issued_digest": null
           }
         ],
         "held": null,
         "diagnostics_source": null,
         "guardrail_id": null,
         "guardrails": [],
-        "refused": false
+        "refused": false,
+        "fallback_digest": null
       },
       {
         "id": "r-contract",
@@ -1587,7 +1216,8 @@
         "diagnostics_source": null,
         "guardrail_id": null,
         "guardrails": [],
-        "refused": true
+        "refused": true,
+        "fallback_digest": null
       },
       {
         "id": "r-usage-seat",
@@ -1701,14 +1331,16 @@
               "stop_reason": "end_turn",
               "stop_sequence": null
             },
-            "tier": null
+            "tier": null,
+            "issued_digest": null
           }
         ],
         "held": null,
         "diagnostics_source": null,
         "guardrail_id": null,
         "guardrails": [],
-        "refused": false
+        "refused": false,
+        "fallback_digest": null
       },
       {
         "id": "r-refused-3",
@@ -1831,14 +1463,16 @@
               "stop_reason": "refusal",
               "stop_sequence": null
             },
-            "tier": "default_claude_max_20x"
+            "tier": "default_claude_max_20x",
+            "issued_digest": null
           }
         ],
         "held": null,
         "diagnostics_source": null,
         "guardrail_id": null,
         "guardrails": [],
-        "refused": false
+        "refused": false,
+        "fallback_digest": null
       },
       {
         "id": "r-refused-2",
@@ -1961,14 +1595,16 @@
               "stop_reason": "refusal",
               "stop_sequence": null
             },
-            "tier": "default_claude_max_20x"
+            "tier": "default_claude_max_20x",
+            "issued_digest": null
           }
         ],
         "held": null,
         "diagnostics_source": null,
         "guardrail_id": null,
         "guardrails": [],
-        "refused": false
+        "refused": false,
+        "fallback_digest": null
       },
       {
         "id": "r-refused-1",
@@ -2091,17 +1727,283 @@
               "stop_reason": "refusal",
               "stop_sequence": null
             },
-            "tier": "default_claude_max_20x"
+            "tier": "default_claude_max_20x",
+            "issued_digest": null
           }
         ],
         "held": null,
         "diagnostics_source": null,
         "guardrail_id": null,
         "guardrails": [],
-        "refused": false
+        "refused": false,
+        "fallback_digest": null
+      },
+      {
+        "id": "r-fallback",
+        "at": 1791717395200,
+        "finished_at": 1791717396100,
+        "key_id": "desktop",
+        "key_generation": 1791721000000,
+        "pool_id": "main",
+        "account_id": "business",
+        "session_id": null,
+        "agent_id": "main",
+        "parent_agent_id": null,
+        "model": "claude-sonnet-5-5",
+        "canonical_model": "claude-sonnet-5-5",
+        "kind": "inference",
+        "origin": "client",
+        "transport": "sse",
+        "request_class": null,
+        "auto_mode": null,
+        "classifier": null,
+        "forked_from": null,
+        "fork_depth": null,
+        "status": 200,
+        "outcome": "succeeded",
+        "error_code": null,
+        "client_drift": null,
+        "client_contract": null,
+        "ttfb_ms": 120,
+        "ttft_ms": 300,
+        "duration_ms": 900,
+        "request_bytes": null,
+        "response_bytes": null,
+        "kept_warm": false,
+        "captured_bodies": false,
+        "response_truncated": false,
+        "user_agent": "claude-cli/2.1.310 (external, cli)",
+        "client": "claude-code/cli",
+        "agent_type": null,
+        "compaction": null,
+        "context_compacted": null,
+        "prev_tool_ms": null,
+        "turn_origin": null,
+        "shape": {
+          "context_edits": [
+            "clear_thinking_20251015"
+          ],
+          "effort": "high",
+          "max_tokens": 32000,
+          "message_count": 1,
+          "requested_service_tier": null,
+          "requested_speed": null,
+          "system_blocks": 4,
+          "temperature": null,
+          "thinking_budget": 31999,
+          "thinking_type": "enabled",
+          "tool_count": 12
+        },
+        "usage": {
+          "cache_read": 500,
+          "cache_write_1h": 0,
+          "cache_write_5m": 200,
+          "input": 1000,
+          "output": 100,
+          "thinking": 40,
+          "web_fetch": 0,
+          "web_search": 0
+        },
+        "cost_usd": 0.00355,
+        "cost_shares": {
+          "five_hour": 8.8125e-6,
+          "seven_day": 2.35e-6
+        },
+        "cost_equivalent": 0.0000235,
+        "share_reason": null,
+        "tier": "default_claude_max_20x",
+        "phases": {
+          "received_at": 1791717395200,
+          "selected_at": 1791717395200,
+          "written_at": 1791717395230,
+          "head_at": 1791717395320,
+          "first_content_at": 1791717395500,
+          "stream_end_at": 1791717396050,
+          "finished_at": 1791717396100
+        },
+        "attempts": [
+          {
+            "index": 1,
+            "account_id": "business",
+            "account_kind": "oauth",
+            "outcome": "succeeded",
+            "upstream_status": 200,
+            "upstream_request_id": "req_r-fallback_1",
+            "upstream_message_id": "msg_r-fallback_1",
+            "started_at": 1791717395200,
+            "duration_ms": 400,
+            "ttfb_ms": 120,
+            "ttft_ms": null,
+            "cache_miss_reason": "none",
+            "service_tier": null,
+            "client_drift": null,
+            "cooldown_set": null,
+            "windows": [
+              {
+                "id": "five_hour",
+                "utilization": 0.4,
+                "resets_at": 1791720995200
+              }
+            ],
+            "overage_in_use": null,
+            "usage_based": false,
+            "estimated_usd": 0.00355,
+            "selection": null,
+            "response": {
+              "cleared_input_tokens": null,
+              "inference_geo": "us",
+              "refusal_category": null,
+              "refusal_recommended_model": null,
+              "served_model": null,
+              "speed": "standard",
+              "stop_reason": "end_turn",
+              "stop_sequence": null
+            },
+            "tier": "default_claude_max_20x",
+            "issued_digest": null
+          }
+        ],
+        "held": null,
+        "diagnostics_source": null,
+        "guardrail_id": null,
+        "guardrails": [],
+        "refused": false,
+        "fallback_digest": "3b7e1f9a5c2d8e4b6a0f7c3d9e1b5a8f2c6d0e4a7b9f1c3e5d8a2b6f0c4e7a9d"
+      },
+      {
+        "id": "r-refused-4",
+        "at": 1791717394600,
+        "finished_at": 1791717395500,
+        "key_id": "desktop",
+        "key_generation": 1791721000000,
+        "pool_id": "main",
+        "account_id": "business",
+        "session_id": null,
+        "agent_id": "main",
+        "parent_agent_id": null,
+        "model": "claude-sonnet-5",
+        "canonical_model": "claude-sonnet-5",
+        "kind": "inference",
+        "origin": "client",
+        "transport": "sse",
+        "request_class": null,
+        "auto_mode": null,
+        "classifier": null,
+        "forked_from": null,
+        "fork_depth": null,
+        "status": 200,
+        "outcome": "succeeded",
+        "error_code": null,
+        "client_drift": null,
+        "client_contract": null,
+        "ttfb_ms": 120,
+        "ttft_ms": 300,
+        "duration_ms": 900,
+        "request_bytes": null,
+        "response_bytes": null,
+        "kept_warm": false,
+        "captured_bodies": false,
+        "response_truncated": false,
+        "user_agent": "claude-cli/2.1.310 (external, cli)",
+        "client": "claude-code/cli",
+        "agent_type": null,
+        "compaction": null,
+        "context_compacted": null,
+        "prev_tool_ms": null,
+        "turn_origin": null,
+        "shape": {
+          "context_edits": [
+            "clear_thinking_20251015"
+          ],
+          "effort": "high",
+          "max_tokens": 32000,
+          "message_count": 1,
+          "requested_service_tier": null,
+          "requested_speed": null,
+          "system_blocks": 4,
+          "temperature": null,
+          "thinking_budget": 31999,
+          "thinking_type": "enabled",
+          "tool_count": 12
+        },
+        "usage": {
+          "cache_read": 500,
+          "cache_write_1h": 0,
+          "cache_write_5m": 200,
+          "input": 1000,
+          "output": 100,
+          "thinking": 40,
+          "web_fetch": 0,
+          "web_search": 0
+        },
+        "cost_usd": 0.0036,
+        "cost_shares": {
+          "five_hour": 8.8125e-6,
+          "seven_day": 2.35e-6
+        },
+        "cost_equivalent": 0.0000235,
+        "share_reason": null,
+        "tier": "default_claude_max_20x",
+        "phases": {
+          "received_at": 1791717394600,
+          "selected_at": 1791717394600,
+          "written_at": 1791717394630,
+          "head_at": 1791717394720,
+          "first_content_at": 1791717394900,
+          "stream_end_at": 1791717395450,
+          "finished_at": 1791717395500
+        },
+        "attempts": [
+          {
+            "index": 1,
+            "account_id": "business",
+            "account_kind": "oauth",
+            "outcome": "succeeded",
+            "upstream_status": 200,
+            "upstream_request_id": "req_r-refused-4_1",
+            "upstream_message_id": "msg_r-refused-4_1",
+            "started_at": 1791717394600,
+            "duration_ms": 400,
+            "ttfb_ms": 120,
+            "ttft_ms": null,
+            "cache_miss_reason": "none",
+            "service_tier": null,
+            "client_drift": null,
+            "cooldown_set": null,
+            "windows": [
+              {
+                "id": "five_hour",
+                "utilization": 0.4,
+                "resets_at": 1791720994600
+              }
+            ],
+            "overage_in_use": null,
+            "usage_based": false,
+            "estimated_usd": 0.0036,
+            "selection": null,
+            "response": {
+              "cleared_input_tokens": null,
+              "inference_geo": "us",
+              "refusal_category": "harmful_request",
+              "refusal_recommended_model": null,
+              "served_model": null,
+              "speed": "standard",
+              "stop_reason": "refusal",
+              "stop_sequence": null
+            },
+            "tier": "default_claude_max_20x",
+            "issued_digest": "3b7e1f9a5c2d8e4b6a0f7c3d9e1b5a8f2c6d0e4a7b9f1c3e5d8a2b6f0c4e7a9d"
+          }
+        ],
+        "held": null,
+        "diagnostics_source": null,
+        "guardrail_id": null,
+        "guardrails": [],
+        "refused": false,
+        "fallback_digest": null
       }
     ],
     "next_cursor": null,
-    "landed_through": 1791721000015
+    "landed_through": 1791721000014
   }
 }

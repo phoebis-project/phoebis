@@ -191,6 +191,10 @@ pub(crate) struct RequestSummary {
     /// True where the router refused the request before any account was asked, for the client's or a policy's cause.
     /// The figures leave such a request out, the log lists it.
     pub refused: bool,
+    /// The SHA-256 of the fallback credit token the request presented, in lowercase hex, null where it presented none.
+    /// The refused attempt that issued the credit carries the same digest as `issued_digest`, so the log links the two.
+    /// The router keeps the digest alone, not the token.
+    pub fallback_digest: Option<String>,
 }
 
 /// A guardrail that matched a request: its id, its place in the evaluation order and whether it blocked.
@@ -292,6 +296,10 @@ pub(crate) struct Attempt {
     /// account, for an oauth account whose profile had not been read, for a plan the router does not price (a free
     /// organization, a usage-based seat), and for an attempt recorded before the router kept it.
     pub tier: Option<String>,
+    /// The SHA-256 of the fallback credit token the upstream issued with this attempt's refusal, in lowercase hex,
+    /// null elsewhere. A later request that presents the credit carries the same digest as `fallback_digest`. The
+    /// router keeps the digest alone, not the token.
+    pub issued_digest: Option<String>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
@@ -570,6 +578,7 @@ pub(crate) fn request_summary(
             })
             .collect(),
         refused: r.refused,
+        fallback_digest: r.fallback_digest.clone(),
     }
 }
 
@@ -788,6 +797,7 @@ fn attempt_json(a: &AttemptRecord, r: &RequestRecord, prices: &PriceRevisions) -
             stop_sequence: a.stop_sequence.clone(),
         },
         tier: a.tier.clone(),
+        issued_digest: a.issued_digest.clone(),
     }
 }
 
@@ -866,6 +876,8 @@ pub(crate) struct RequestsQuery {
     /// A comma list of refusal categories, read off the serving attempt as `stop_reasons` is, `-` for a request with
     /// none.
     pub refusal_categories: Option<String>,
+    /// `true`/`1` keeps the requests that presented a fallback credit, `false`/`0` the others.
+    pub fallback: Option<bool>,
     /// A comma list of efforts as the rollups fold them: a level, `none`, `other`.
     pub efforts: Option<String>,
     /// A comma list of classes as the rollups fold them: the class, `-`, `other`.
@@ -899,7 +911,7 @@ pub(crate) struct RequestsQuery {
     params(RequestsQuery),
     responses(
         (status = 200, description = "The page.", body = RequestList),
-        (status = 400, description = "- `{name} is not a number`, for `from` or `to`\n- `landed_after is not a number`\n- `statuses are numbers`\n- `limit is not a number`\n- `cursor is <received_at>:<id>`\n- `patterns are at most 256 characters, at most 32 of them`, for `user_agent` or `client`", body = ErrorBody, example = json!({"error": "{name} is not a number"})),
+        (status = 400, description = "- `{name} is not a number`, for `from` or `to`\n- `landed_after is not a number`\n- `statuses are numbers`\n- `limit is not a number`\n- `cursor is <received_at>:<id>`\n- `fallback is true or false`\n- `patterns are at most 256 characters, at most 32 of them`, for `user_agent` or `client`", body = ErrorBody, example = json!({"error": "{name} is not a number"})),
         (status = 500, response = LedgerFailure),
     ),
 )]
@@ -935,6 +947,13 @@ pub(crate) async fn list(
     ) else {
         return failure(StatusCode::BAD_REQUEST, phoebis_ledger::PATTERNS_TOO_LONG);
     };
+    // Not `flag`, which reads `false` as absent: here `false` keeps the requests without a digest.
+    let fallback = match q.get("fallback").map(String::as_str) {
+        None => None,
+        Some("true" | "1") => Some(true),
+        Some("false" | "0") => Some(false),
+        Some(_) => return failure(StatusCode::BAD_REQUEST, "fallback is true or false"),
+    };
     let filter = RequestFilter {
         text: text_param(&q, "text"),
         request: text_param(&q, "request"),
@@ -966,6 +985,7 @@ pub(crate) async fn list(
         guardrails: list_param(&q, "guardrails"),
         stop_reasons: list_param(&q, "stop_reasons"),
         refusal_categories: list_param(&q, "refusal_categories"),
+        fallback,
         fixed_end: flag(&q, "fixed_end"),
     };
     let limit = match q.get("limit") {

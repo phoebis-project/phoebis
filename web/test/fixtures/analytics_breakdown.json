@@ -9,36 +9,36 @@
         "key": "desktop",
         "label": "desktop",
         "key_id": "desktop",
-        "requests": 14,
-        "succeeded": 12,
+        "requests": 13,
+        "succeeded": 11,
         "rate_limited": 0,
         "failed": 1,
         "exhausted": 0,
         "rejected": 0,
-        "attempts": 15,
+        "attempts": 14,
         "failovers": 1,
         "incomplete": 1,
-        "cache_hits": 14,
+        "cache_hits": 13,
         "cache_misses": 0,
         "uncached": 0,
         "expired_between_turns": 0,
         "tokens": {
-          "cache_read": 7500,
+          "cache_read": 7000,
           "cache_write_1h": 0,
-          "cache_write_5m": 3000,
-          "output": 1500,
-          "thinking": 600,
-          "uncached_input": 15000,
+          "cache_write_5m": 2800,
+          "output": 1400,
+          "thinking": 560,
+          "uncached_input": 14000,
           "web_fetch": 0,
           "web_search": 0
         },
         "cost": {
-          "cache_read": 0.0008500000000000002,
-          "cache_write": 0.007000000000000001,
-          "input": 0.028000000000000004,
-          "output": 0.014000000000000002
+          "cache_read": 0.0007500000000000001,
+          "cache_write": 0.006500000000000001,
+          "input": 0.026000000000000002,
+          "output": 0.013000000000000001
         },
-        "cost_usd": 0.049850000000000005,
+        "cost_usd": 0.04625,
         "errors": {
           "stream_incomplete": 1,
           "upstream_error": 1
@@ -49,7 +49,7 @@
           "guardrail_blocked": 1
         },
         "cache_miss_reasons": {
-          "none": 13,
+          "none": 12,
           "pending": 1
         },
         "histograms": {
@@ -91,7 +91,7 @@
             0,
             0,
             0,
-            14,
+            13,
             0,
             0,
             0,
@@ -148,7 +148,7 @@
             0,
             0,
             0,
-            13,
+            12,
             0,
             0,
             0,
@@ -212,7 +212,7 @@
             0,
             0,
             0,
-            13,
+            12,
             0,
             0,
             0,
@@ -283,7 +283,7 @@
             0,
             0,
             0,
-            13,
+            12,
             0,
             0,
             0,
@@ -375,12 +375,12 @@
         },
         "saving_usd": 0.0,
         "saving_equivalent": 0.0,
-        "billed_usd": 0.0178,
+        "billed_usd": 0.01425,
         "billed": {
-          "cache_read": 0.00030000000000000003,
-          "cache_write": 0.0025,
-          "input": 0.01,
-          "output": 0.005
+          "cache_read": 0.00025,
+          "cache_write": 0.002,
+          "input": 0.008,
+          "output": 0.004
         },
         "equivalent_split": null
       },

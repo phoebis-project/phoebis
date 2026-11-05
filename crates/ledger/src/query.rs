@@ -168,6 +168,8 @@ pub struct RequestFilter {
     pub stop_reasons: Vec<String>,
     /// Keep the requests whose serving attempt answered a refusal category in the list, `-` as for `stop_reasons`.
     pub refusal_categories: Vec<String>,
+    /// Keep the requests whose row carries a fallback credit's digest (`true`) or carries none (`false`).
+    pub fallback: Option<bool>,
     /// The range's `to` is fixed, so `landed_through` may pass it: a row received before `to` lands after it, and a
     /// poll over a fixed range reads it once. False for a live range, whose `to` moves with the clock.
     pub fixed_end: bool,
@@ -460,6 +462,11 @@ fn filter_clauses(
     if filter.held {
         clauses.push("requests.held IS NOT NULL".into());
     }
+    match filter.fallback {
+        Some(true) => clauses.push("requests.fallback_digest IS NOT NULL".into()),
+        Some(false) => clauses.push("requests.fallback_digest IS NULL".into()),
+        None => {}
+    }
     // The rollups and the console's fold already read an absent agent or client as `-`; `pattern_any`'s
     // coalesce keeps a nullable column from excluding such a row from both the wildcard and the exact marker.
     pattern_any("user_agent", &filter.user_agent, &mut args, &mut clauses);
@@ -625,53 +632,101 @@ pub fn list_request_page(
     })
 }
 
-/// The requests in `[from, to]` under `filter` whose serving attempt's `stop_reason` is `refusal`, counted per
-/// category (`-` for a refusal with none), the largest count first and then the category. Read off the request row's
-/// columns, the serving attempt's facts written at the landing, since no rollup carries the category. The `clients`
-/// and `user_agents` patterns match each row's client and agent folded as the rollups fold them, so the count narrows
-/// as the series do.
+/// One refusal row: the request's canonical model, the category (`-` for none) and the refused requests.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RefusalCount {
+    pub model: String,
+    pub category: String,
+    pub requests: u64,
+}
+
+/// The refusals in range by model and category, and the requests in range whose row carries a fallback digest.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Refusals {
+    pub rows: Vec<RefusalCount>,
+    pub fallbacks: u64,
+}
+
+/// The requests in `[from, to]` under `filter` whose serving attempt's `stop_reason` is `refusal`, counted per model
+/// and category (`-` for a refusal with none), the largest count first and then the model and the category, and the
+/// requests in the same range and filter whose row carries a fallback credit's digest. Read off the request row's
+/// columns, the serving attempt's facts written at the landing, since no rollup carries the category or the digest.
+/// The `clients` and `user_agents` patterns match each row's client and agent folded as the rollups fold them, so both
+/// reads narrow as the series do. Both reads share one transaction, so the count reads the snapshot the rows read.
 pub fn refusal_categories(
     conn: &Connection,
     filter: &RequestFilter,
     live: &LiveKeys,
     from: i64,
     to: i64,
-) -> Result<Vec<(String, u64)>, LedgerError> {
+) -> Result<Refusals, LedgerError> {
     let filter = RequestFilter {
         from: Some(from),
         to: Some(to),
         ..filter.clone()
     };
-    let (args, mut clauses) = filter_clauses(&filter, live);
-    clauses.push("requests.stop_reason = 'refusal'".into());
+    // A read hands a shared connection, which only the unchecked form opens a transaction on.
+    let tx = conn.unchecked_transaction()?;
+    let (args, clauses) = filter_clauses(&filter, live);
+    let mut refused = clauses.clone();
+    refused.push("requests.stop_reason = 'refusal'".into());
     // SQL does not express the fold, so the patterns match each raw pair in memory, grouped first so a pair repeated
-    // across many refusals folds once per category.
+    // across many refusals folds once per model and category.
     let sql = format!(
-        "SELECT COALESCE(requests.refusal_category, '-') AS category, \
-         client, user_agent, COUNT(*) FROM requests WHERE {} GROUP BY category, client, user_agent",
-        clauses.join(" AND ")
+        "SELECT canonical_model, COALESCE(requests.refusal_category, '-') AS category, \
+         client, user_agent, COUNT(*) FROM requests WHERE {} GROUP BY canonical_model, category, client, user_agent",
+        refused.join(" AND ")
     );
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(params_from_iter(args), |r| {
+    let mut stmt = tx.prepare(&sql)?;
+    let rows = stmt.query_map(params_from_iter(args.clone()), |r| {
         Ok((
             r.get::<_, String>(0)?,
-            r.get::<_, Option<String>>(1)?,
+            r.get::<_, String>(1)?,
             r.get::<_, Option<String>>(2)?,
-            r.get::<_, i64>(3)? as u64,
+            r.get::<_, Option<String>>(3)?,
+            r.get::<_, i64>(4)? as u64,
         ))
     })?;
-    let mut counts: BTreeMap<String, u64> = BTreeMap::new();
+    let mut counts: BTreeMap<(String, String), u64> = BTreeMap::new();
     for row in rows {
-        let (category, client, user_agent, requests) = row?;
+        let (model, category, client, user_agent, requests) = row?;
         if passes_request_patterns(&filter, client.as_deref(), user_agent.as_deref()) {
-            *counts.entry(category).or_default() += requests;
+            *counts.entry((model, category)).or_default() += requests;
         }
     }
-    let mut counts: Vec<(String, u64)> = counts.into_iter().collect();
-    // The map hands the categories in byte order, as SQLite compares text, and the stable sort keeps that order among
-    // equal counts.
-    counts.sort_by_key(|(_, requests)| std::cmp::Reverse(*requests));
-    Ok(counts)
+    let mut rows: Vec<RefusalCount> = counts
+        .into_iter()
+        .map(|((model, category), requests)| RefusalCount {
+            model,
+            category,
+            requests,
+        })
+        .collect();
+    // The map hands the pairs in byte order, the model first, as SQLite compares text, and the stable sort keeps that
+    // order among equal counts.
+    rows.sort_by_key(|row| std::cmp::Reverse(row.requests));
+    let mut presented = clauses;
+    presented.push("requests.fallback_digest IS NOT NULL".into());
+    let sql = format!(
+        "SELECT client, user_agent, COUNT(*) FROM requests WHERE {} GROUP BY client, user_agent",
+        presented.join(" AND ")
+    );
+    let mut stmt = tx.prepare(&sql)?;
+    let pairs = stmt.query_map(params_from_iter(args), |r| {
+        Ok((
+            r.get::<_, Option<String>>(0)?,
+            r.get::<_, Option<String>>(1)?,
+            r.get::<_, i64>(2)? as u64,
+        ))
+    })?;
+    let mut fallbacks = 0;
+    for pair in pairs {
+        let (client, user_agent, requests) = pair?;
+        if passes_request_patterns(&filter, client.as_deref(), user_agent.as_deref()) {
+            fallbacks += requests;
+        }
+    }
+    Ok(Refusals { rows, fallbacks })
 }
 
 /// Whether a request row passes the filter's `clients` and `user_agents`, each value folded as `deltas_of` keys the

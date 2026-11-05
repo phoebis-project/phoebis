@@ -2605,15 +2605,14 @@ fn the_cache_miss_reason_filter_reads_the_serving_attempt_alone_and_passes_any_n
     );
 }
 
-/// Writes request `id`, served by one attempt on `served`'s `(account, stop_reason, refusal_category)` after a 429 on
-/// `a` where `retried` is set, or by no attempt where `served` is `None`.
-fn plant_stops(
-    db: &LedgerDb,
+/// Request `id`, served by one attempt on `served`'s `(account, stop_reason, refusal_category)` after a 429 on `a`
+/// where `retried` is set, or by no attempt where `served` is `None`.
+fn stop_rows(
     id: &str,
     received_at: i64,
     retried: bool,
     served: Option<(&str, &str, Option<&str>)>,
-) {
+) -> (RequestRecord, Vec<AttemptRecord>) {
     let mut attempts = Vec::new();
     if let Some((account, stop_reason, category)) = served {
         if retried {
@@ -2655,6 +2654,18 @@ fn plant_stops(
         attempts: attempts.len() as u32,
         ..Default::default()
     };
+    (request, attempts)
+}
+
+/// Writes the request `stop_rows` builds.
+fn plant_stops(
+    db: &LedgerDb,
+    id: &str,
+    received_at: i64,
+    retried: bool,
+    served: Option<(&str, &str, Option<&str>)>,
+) {
+    let (request, attempts) = stop_rows(id, received_at, retried, served);
     db.insert_request(&request, &attempts, None).unwrap();
 }
 
@@ -2679,7 +2690,15 @@ fn the_stop_reason_and_refusal_category_filters_read_the_serving_attempt_and_das
         Some(("b", "refusal", Some("harmful_request"))),
     );
     plant_stops(&db, "bare", 3, false, Some(("a", "refusal", None)));
-    plant_stops(&db, "ended", 2, false, Some(("a", "end_turn", None)));
+    // The one row that presented a fallback credit, a made-up digest in the columns' form.
+    let (ended, attempts) = stop_rows("ended", 2, false, Some(("a", "end_turn", None)));
+    let ended = RequestRecord {
+        fallback_digest: Some(
+            "3b7e1f9a5c2d8e4b6a0f7c3d9e1b5a8f2c6d0e4a7b9f1c3e5d8a2b6f0c4e7a9d".into(),
+        ),
+        ..ended
+    };
+    db.insert_request(&ended, &attempts, None).unwrap();
     plant_stops(&db, "unserved", 1, false, None);
     let listed = |stop_reasons: &[&str], refusal_categories: &[&str], accounts: &[&str]| {
         let words = |list: &[&str]| list.iter().map(|w| w.to_string()).collect();
@@ -2733,6 +2752,25 @@ fn the_stop_reason_and_refusal_category_filters_read_the_serving_attempt_and_das
         listed(&[], &[], &[]),
         ["harm-a", "harm-b", "bare", "ended", "unserved"],
         "empty lists narrow nothing"
+    );
+    let fallback = |fallback| {
+        listed_ids(
+            &db,
+            &RequestFilter {
+                fallback,
+                ..Default::default()
+            },
+        )
+    };
+    assert_eq!(
+        fallback(Some(true)),
+        ["ended"],
+        "`true` keeps the row that carries a digest"
+    );
+    assert_eq!(
+        fallback(Some(false)),
+        ["harm-a", "harm-b", "bare", "unserved"],
+        "`false` keeps every row that carries none"
     );
 }
 

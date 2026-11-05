@@ -1082,28 +1082,36 @@ pub(crate) async fn reconciliations(
 }
 
 /// The requests in range whose serving attempt the upstream answered with the stop reason `refusal`, counted per
-/// category, the largest count first and then the category.
+/// model and category, the largest count first and then the model and the category, beside the requests in range
+/// that presented a fallback credit.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RefusalCategories {
     pub from: i64,
     pub to: i64,
-    /// One row per category among the refused requests in range, the largest count first and then the category.
+    /// One row per model and category among the refused requests in range, the largest count first and then the model
+    /// and the category in byte order.
     pub rows: Vec<RefusalCategoryRow>,
+    /// The requests in range under the same filters whose row carries a fallback credit's digest, the
+    /// `fallback_digest` of the request log.
+    pub fallbacks: u64,
 }
 
-/// One category's refused requests over the range.
+/// One model and category's refused requests over the range.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RefusalCategoryRow {
+    /// The request's canonical model, the name the `models` filter reads.
+    #[schema(example = "claude-sonnet-5")]
+    pub model: String,
     /// The category the upstream's `stop_details` named, `-` for a refusal with none.
     #[schema(example = "-")]
     pub category: String,
-    /// The requests whose serving attempt the upstream refused under the category.
+    /// The requests on the model whose serving attempt the upstream refused under the category.
     pub requests: u64,
 }
 
-/// Read the refused requests per category.
+/// Read the refused requests per model and category.
 #[utoipa::path(
     get,
     path = "/admin/analytics/refusal_categories",
@@ -1142,20 +1150,31 @@ pub(crate) async fn refusal_categories(
         ..Default::default()
     };
     let live = LiveKeys::from_snapshot(&state.router.snapshot());
-    let rows = match state
+    let refusals = match state
         .ledger
         .db()
         .read(move |c| phoebis_ledger::refusal_categories(c, &filter, &live, from, to))
         .await
     {
-        Ok(rows) => rows,
+        Ok(refusals) => refusals,
         Err(e) => return ledger_failure(e),
     };
-    let rows = rows
+    let rows = refusals
+        .rows
         .into_iter()
-        .map(|(category, requests)| RefusalCategoryRow { category, requests })
+        .map(|row| RefusalCategoryRow {
+            model: row.model,
+            category: row.category,
+            requests: row.requests,
+        })
         .collect();
-    Json(RefusalCategories { from, to, rows }).into_response()
+    Json(RefusalCategories {
+        from,
+        to,
+        rows,
+        fallbacks: refusals.fallbacks,
+    })
+    .into_response()
 }
 
 /// The weekly allowance each subscription account left unused at its resets in range, read off the stored

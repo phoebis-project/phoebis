@@ -127,13 +127,17 @@ With `stats.retention_days` at 0, which keeps the requests for good, the move st
 An upstream's refusal is a served request: the serving attempt records the answer's `stop_reason` `refusal` with the
 `refusal_category` and the recommended model its `stop_details` named, the request's outcome stays `succeeded`, and the
 figures count it as any served request. `GET /admin/requests` filters on `stop_reasons` and `refusal_categories`, each
-read off the serving attempt with `-` for a request whose serving attempt carries none or that no attempt served, and on
-`agent_id`, which keeps one agent's requests, as `GET /admin/routing-log` keeps one agent's decisions and events and
-leaves out a session-level event, which names no agent. `GET /admin/analytics/refusal_categories` counts the refused
-requests in range per category, `-` for a refusal with none, read off the request row's columns, which hold the serving
-attempt's facts written when the request lands. It narrows by `clients` and `user_agents` as the analytics series do,
-over the client label and the agent's first product token, so a version picked from a breakdown counts that version's
-refusals, and it holds `user_agent_groups` to the two lists' bound and narrows nothing by its patterns.
+read off the serving attempt with `-` for a request whose serving attempt carries none or that no attempt served, on
+`fallback` (`true` or `false`), which keeps the requests whose row carries a fallback credit's digest or the ones whose
+row carries none, and on `agent_id`, which keeps one agent's requests, as `GET /admin/routing-log` keeps one agent's
+decisions and events and leaves out a session-level event, which names no agent. A request that presented the fallback
+credit a refusal issued carries the credit's digest, and the refused attempt carries the digest it issued, never the
+token, so the log links the two. `GET /admin/analytics/refusal_categories` counts the refused requests in range per
+model and category, `-` for a refusal with none, and answers `fallbacks`, the requests in range and filter whose row
+carries a fallback credit's digest, both read off the request row's columns, which hold the serving attempt's facts
+written when the request lands. It narrows by `clients` and `user_agents` as the analytics series do, over the client
+label and the agent's first product token, so a version picked from a breakdown counts that version's refusals, and it
+holds `user_agent_groups` to the two lists' bound and narrows nothing by its patterns.
 
 ## Quota samples
 

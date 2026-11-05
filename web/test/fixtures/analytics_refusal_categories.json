@@ -5,13 +5,21 @@
     "to": 1791721000000,
     "rows": [
       {
+        "model": "claude-sonnet-5-5",
         "category": "harmful_request",
         "requests": 2
       },
       {
+        "model": "claude-sonnet-5",
+        "category": "harmful_request",
+        "requests": 1
+      },
+      {
+        "model": "claude-sonnet-5-5",
         "category": "restricted_topic",
         "requests": 1
       }
-    ]
+    ],
+    "fallbacks": 1
   }
 }

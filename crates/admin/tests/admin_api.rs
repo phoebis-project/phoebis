@@ -2342,7 +2342,8 @@ async fn an_attempt_on_a_usage_based_seat_answers_its_class_and_one_on_a_plan_ac
 }
 
 /// The request log narrows on the serving attempt's stop reason and refusal category, and a kept row answers both
-/// words off its attempt's response, the row itself carrying neither.
+/// words off its attempt's response, the row itself carrying neither. The log also narrows on whether the row
+/// carries a fallback credit's digest.
 #[tokio::test]
 async fn the_request_list_filters_on_the_serving_attempts_stop_reason_and_refusal_category() {
     use common::{get, json, login, wait_json};
@@ -2394,9 +2395,25 @@ async fn the_request_list_filters_on_the_serving_attempts_stop_reason_and_refusa
     parts
         .ledger
         .record(served("r-bare", now - 3_000, Some(("refusal", None))));
-    parts
-        .ledger
-        .record(served("r-ended", now - 2_000, Some(("end_turn", None))));
+    // The answer after the refusals presented a fallback credit, a made-up digest in the column's form.
+    let Record::Request {
+        request,
+        attempts,
+        bodies,
+    } = served("r-ended", now - 2_000, Some(("end_turn", None)))
+    else {
+        unreachable!("served writes a request")
+    };
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            fallback_digest: Some(
+                "3b7e1f9a5c2d8e4b6a0f7c3d9e1b5a8f2c6d0e4a7b9f1c3e5d8a2b6f0c4e7a9d".into(),
+            ),
+            ..request
+        },
+        attempts,
+        bodies,
+    });
     parts.ledger.record(served("r-unserved", now - 1_000, None));
     wait_json(&parts.app, "/admin/requests", &cookie, |v| {
         v["requests"].as_array().is_some_and(|rows| rows.len() == 4)
@@ -2453,6 +2470,16 @@ async fn the_request_list_filters_on_the_serving_attempts_stop_reason_and_refusa
         ids(&listed("stop_reasons=refusal&refusal_categories=-").await),
         ["r-bare"],
         "the two filters conjoin, so `-` beside the refusal stop keeps the refusal that named no category"
+    );
+    assert_eq!(
+        ids(&listed("fallback=true").await),
+        ["r-ended"],
+        "`true` keeps the request that presented a fallback credit"
+    );
+    assert_eq!(
+        ids(&listed("fallback=false").await),
+        ["r-unserved", "r-bare", "r-harmful"],
+        "`false` keeps every request that presented none"
     );
 }
 

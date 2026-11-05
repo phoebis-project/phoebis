@@ -683,14 +683,14 @@
         "group": "business",
         "unit": "window_share",
         "usd": 0.0071,
-        "five_hour_share": 0.000052875000000000005,
-        "seven_day_share": 0.0000141,
+        "five_hour_share": 0.0000616875,
+        "seven_day_share": 0.00001645,
         "model_week_share": null,
-        "equivalent": 0.00014099999999999998,
+        "equivalent": 0.0001645,
         "unpriced": false,
-        "cached_tokens": 4500,
-        "tokens": 16200,
-        "uncached_tokens": 9000
+        "cached_tokens": 5000,
+        "tokens": 18000,
+        "uncached_tokens": 10000
       },
       {
         "at": 1791720000000,
@@ -702,9 +702,9 @@
         "model_week_share": null,
         "equivalent": null,
         "unpriced": true,
-        "cached_tokens": 2000,
-        "tokens": 7200,
-        "uncached_tokens": 4000
+        "cached_tokens": 1500,
+        "tokens": 5400,
+        "uncached_tokens": 3000
       },
       {
         "at": 1791633600000,
@@ -1032,15 +1032,15 @@
         "at": 1791716400000,
         "group": "direct",
         "unit": "usd",
-        "usd": 0.00355,
+        "usd": 0.0,
         "five_hour_share": null,
         "seven_day_share": null,
         "model_week_share": null,
-        "equivalent": 0.0,
+        "equivalent": null,
         "unpriced": false,
-        "cached_tokens": 500,
-        "tokens": 1800,
-        "uncached_tokens": 1000
+        "cached_tokens": 0,
+        "tokens": 0,
+        "uncached_tokens": 0
       },
       {
         "at": 1791720000000,

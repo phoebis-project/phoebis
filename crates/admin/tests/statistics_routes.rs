@@ -2155,7 +2155,11 @@ async fn the_refusal_count_route_answers_the_range_and_its_categories_under_the_
         rows.iter().map(|(c, n)| (c.to_string(), *n)).collect()
     };
     let every = read(String::new()).await;
-    assert_eq!(keys_in_order(&every), ["from", "to", "rows"], "{every}");
+    assert_eq!(
+        keys_in_order(&every),
+        ["from", "to", "rows", "fallbacks"],
+        "{every}"
+    );
     assert_eq!(
         (every["from"].as_i64(), every["to"].as_i64()),
         (Some(now - DAY), Some(now)),
@@ -2168,8 +2172,8 @@ async fn the_refusal_count_route_answers_the_range_and_its_categories_under_the_
     );
     assert_eq!(
         every["rows"][0],
-        serde_json::json!({"category": "harmful_request", "requests": 2}),
-        "a row is its category and its count"
+        serde_json::json!({"model": "claude-sonnet-5", "category": "harmful_request", "requests": 2}),
+        "a row is its model, its category and its count"
     );
     let business = read("?range=24h&accounts=business".into()).await;
     assert_eq!(

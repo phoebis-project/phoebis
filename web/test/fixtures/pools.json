@@ -119,7 +119,7 @@
             "spends": [
               {
                 "period": "month",
-                "spent_usd": 0.00715,
+                "spent_usd": 0.0036,
                 "period_end": 1793491200000
               }
             ],
@@ -152,9 +152,9 @@
           }
         ],
         "status": "active",
-        "requests_24h": 15,
-        "cost_24h": 0.053399999999999996,
-        "billed_24h": 0.0178,
+        "requests_24h": 14,
+        "cost_24h": 0.0498,
+        "billed_24h": 0.014249999999999999,
         "equivalent_24h": null,
         "active_pins": 6,
         "traffic_24h": [
@@ -371,15 +371,15 @@
             "failed": 1,
             "tokens": 19800,
             "cost_usd": 0.039099999999999996,
-            "billed_usd": 0.0142,
-            "equivalent": 0.00014099999999999998
+            "billed_usd": 0.01065,
+            "equivalent": 0.00016450000000000001
           },
           {
             "at": 1791720000000,
-            "requests": 5,
+            "requests": 4,
             "failed": 1,
-            "tokens": 9000,
-            "cost_usd": 0.0143,
+            "tokens": 7200,
+            "cost_usd": 0.010700000000000001,
             "billed_usd": 0.0036,
             "equivalent": null
           }

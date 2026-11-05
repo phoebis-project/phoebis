@@ -16,6 +16,7 @@ use phoebis_ledger::{
     RollupSelect, SeriesFilter, Speed, TotalsBy, WindowShares, BILLED_FUNDING, FAST_FUNDING,
     NO_CLASS, OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED, USAGE_BASED_FUNDING,
 };
+use phoebis_ledger::{RefusalCount, Refusals};
 use phoebis_routing::{
     PinUsage, RegistrySnapshot, RoutingState, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
@@ -1234,15 +1235,14 @@ fn a_flagged_request_folds_into_its_hours_refusals_map_and_under_no_other_figure
     );
 }
 
-/// A request served on `account`, its one attempt answering `stop_reason` with `category`.
-fn plant_stop(
-    db: &LedgerDb,
+/// A request on `claude-sonnet-5` served on `account`, its one attempt answering `stop_reason` with `category`.
+fn stop_rows(
     id: &str,
     received_at: i64,
     account: &str,
     stop_reason: &str,
     category: Option<&str>,
-) {
+) -> (RequestRecord, AttemptRecord) {
     let request = RequestRecord {
         id: id.into(),
         received_at,
@@ -1267,12 +1267,57 @@ fn plant_stop(
         refusal_category: category.map(String::from),
         ..Default::default()
     };
+    (request, attempt)
+}
+
+fn plant_stop(
+    db: &LedgerDb,
+    id: &str,
+    received_at: i64,
+    account: &str,
+    stop_reason: &str,
+    category: Option<&str>,
+) {
+    let (request, attempt) = stop_rows(id, received_at, account, stop_reason, category);
     db.insert_request(&request, &[attempt], None).unwrap();
 }
 
+/// A made-up SHA-256 in lowercase hex, the form the digest columns hold.
+const FALLBACK_DIGEST: &str = "3b7e1f9a5c2d8e4b6a0f7c3d9e1b5a8f2c6d0e4a7b9f1c3e5d8a2b6f0c4e7a9d";
+
+/// A request served on `a` with `end_turn` that presented the fallback credit `FALLBACK_DIGEST` names, its client
+/// label and `User-Agent` header kept as sent.
+fn plant_fallback(
+    db: &LedgerDb,
+    id: &str,
+    received_at: i64,
+    client: Option<&str>,
+    user_agent: Option<&str>,
+) {
+    let (request, attempt) = stop_rows(id, received_at, "a", "end_turn", None);
+    let request = RequestRecord {
+        client: client.map(String::from),
+        user_agent: user_agent.map(String::from),
+        fallback_digest: Some(FALLBACK_DIGEST.into()),
+        ..request
+    };
+    db.insert_request(&request, &[attempt], None).unwrap();
+}
+
+/// Refusal rows from `(model, category, requests)` triples.
+fn refusal_rows(rows: &[(&str, &str, u64)]) -> Vec<RefusalCount> {
+    rows.iter()
+        .map(|(model, category, requests)| RefusalCount {
+            model: model.to_string(),
+            category: category.to_string(),
+            requests: *requests,
+        })
+        .collect()
+}
+
 #[test]
-fn the_refusal_count_reads_each_served_refusal_in_range_under_its_category_the_largest_count_first()
-{
+fn the_refusal_count_reads_each_served_refusal_in_range_by_model_and_category_and_the_fallbacks_in_range(
+) {
     let db = LedgerDb::open_in_memory().unwrap();
     plant_stop(&db, "h1", 1_000, "a", "refusal", Some("harmful_request"));
     plant_stop(&db, "h2", 2_000, "a", "refusal", Some("harmful_request"));
@@ -1284,6 +1329,17 @@ fn the_refusal_count_reads_each_served_refusal_in_range_under_its_category_the_l
     plant_stop(&db, "late", 20_000, "a", "refusal", Some("harmful_request"));
     // Another account's refusal, which the account filter leaves out.
     plant_stop(&db, "b1", 7_000, "b", "refusal", Some("restricted_topic"));
+    // A refusal on a second model under the category of the first model's two.
+    let (request, attempt) = stop_rows("o1", 8_000, "a", "refusal", Some("harmful_request"));
+    let request = RequestRecord {
+        canonical_model: "claude-opus-5".into(),
+        model: "claude-opus-5".into(),
+        ..request
+    };
+    db.insert_request(&request, &[attempt], None).unwrap();
+    // A request that presented a fallback credit in range and one past it.
+    plant_fallback(&db, "f1", 9_000, None, None);
+    plant_fallback(&db, "f-late", 21_000, None, None);
     let count = |accounts: &[&str]| {
         let filter = RequestFilter {
             accounts: accounts.iter().map(|a| a.to_string()).collect(),
@@ -1292,18 +1348,32 @@ fn the_refusal_count_reads_each_served_refusal_in_range_under_its_category_the_l
         db.read_blocking(|c| refusal_categories(c, &filter, &LiveKeys::default(), 0, 10_000))
             .unwrap()
     };
-    let pairs = |rows: &[(&str, u64)]| -> Vec<(String, u64)> {
-        rows.iter().map(|(c, n)| (c.to_string(), *n)).collect()
-    };
     assert_eq!(
         count(&["a"]),
-        pairs(&[("harmful_request", 2), ("-", 1), ("restricted_topic", 1)]),
-        "the largest count first, then the category in byte order, `-` for the refusal that named none"
+        Refusals {
+            rows: refusal_rows(&[
+                ("claude-sonnet-5", "harmful_request", 2),
+                ("claude-opus-5", "harmful_request", 1),
+                ("claude-sonnet-5", "-", 1),
+                ("claude-sonnet-5", "restricted_topic", 1),
+            ]),
+            fallbacks: 1,
+        },
+        "one row per model and category, the largest count first, then the model and the category in byte order, \
+         `-` for the refusal that named none, and the one fallback in range"
     );
     assert_eq!(
         count(&[]),
-        pairs(&[("harmful_request", 2), ("restricted_topic", 2), ("-", 1)]),
-        "without the account filter the other account's refusal joins its category"
+        Refusals {
+            rows: refusal_rows(&[
+                ("claude-sonnet-5", "harmful_request", 2),
+                ("claude-sonnet-5", "restricted_topic", 2),
+                ("claude-opus-5", "harmful_request", 1),
+                ("claude-sonnet-5", "-", 1),
+            ]),
+            fallbacks: 1,
+        },
+        "without the account filter the other account's refusal joins its model and category"
     );
 }
 
@@ -1377,7 +1447,7 @@ fn plant_callers(db: &LedgerDb) {
 }
 
 /// The count over the planted range under the two pattern lists.
-fn count_under(db: &LedgerDb, clients: &[&str], user_agents: &[&str]) -> Vec<(String, u64)> {
+fn count_under(db: &LedgerDb, clients: &[&str], user_agents: &[&str]) -> Refusals {
     let words =
         |list: &[&str]| Patterns::new(list.iter().map(|w| w.to_string()).collect()).unwrap();
     let filter = RequestFilter {
@@ -1389,8 +1459,15 @@ fn count_under(db: &LedgerDb, clients: &[&str], user_agents: &[&str]) -> Vec<(St
         .unwrap()
 }
 
-fn category_counts(rows: &[(&str, u64)]) -> Vec<(String, u64)> {
-    rows.iter().map(|(c, n)| (c.to_string(), *n)).collect()
+/// The planted callers' rows, every refusal on `claude-sonnet-5`.
+fn category_counts(rows: &[(&str, u64)]) -> Vec<RefusalCount> {
+    rows.iter()
+        .map(|(category, requests)| RefusalCount {
+            model: "claude-sonnet-5".into(),
+            category: category.to_string(),
+            requests: *requests,
+        })
+        .collect()
 }
 
 #[test]
@@ -1398,19 +1475,34 @@ fn the_refusal_count_narrows_by_a_client_pattern_on_the_label_the_rollups_fold()
     let db = LedgerDb::open_in_memory().unwrap();
     plant_callers(&db);
     assert_eq!(
-        count_under(&db, &["claude-code/cli"], &[]),
+        count_under(&db, &["claude-code/cli"], &[]).rows,
         category_counts(&[("harmful_request", 1), ("restricted_topic", 1)]),
         "a label spelled in full counts that label's refusals alone"
     );
     assert_eq!(
-        count_under(&db, &["claude-code/*"], &[]),
+        count_under(&db, &["claude-code/*"], &[]).rows,
         category_counts(&[("harmful_request", 2), ("restricted_topic", 1)]),
         "a wildcard counts every label it matches, the caller with none left out"
     );
     assert_eq!(
-        count_under(&db, &["-"], &[]),
+        count_under(&db, &["-"], &[]).rows,
         category_counts(&[("-", 1)]),
         "a row with no client reads `-`, as the rollups file it"
+    );
+    plant_fallback(
+        &db,
+        "sdk-fallback",
+        1_000,
+        Some("claude-code/sdk-cli"),
+        Some(SDK_310),
+    );
+    assert_eq!(
+        (
+            count_under(&db, &["claude-code/cli"], &[]).fallbacks,
+            count_under(&db, &["claude-code/*"], &[]).fallbacks,
+        ),
+        (0, 1),
+        "the fallbacks narrow by the client pattern as the refusals do"
     );
 }
 
@@ -1419,17 +1511,17 @@ fn the_refusal_count_matches_a_user_agent_pattern_against_the_agents_first_produ
     let db = LedgerDb::open_in_memory().unwrap();
     plant_callers(&db);
     assert_eq!(
-        count_under(&db, &[], &["claude-cli/2.1.310"]),
+        count_under(&db, &[], &["claude-cli/2.1.310"]).rows,
         category_counts(&[("harmful_request", 2)]),
         "the token spelled in full counts the version's refusals under both entrypoints and none of 2.1.311's"
     );
     assert_eq!(
-        count_under(&db, &[], &["claude-cli/2.1.*"]),
+        count_under(&db, &[], &["claude-cli/2.1.*"]).rows,
         category_counts(&[("harmful_request", 2), ("restricted_topic", 1)]),
         "a wildcard over the token counts every version it matches"
     );
     assert_eq!(
-        count_under(&db, &[], &[CLI_310]),
+        count_under(&db, &[], &[CLI_310]).rows,
         Vec::new(),
         "the header with its comment is no token, so it counts nothing, as it names no group of the series"
     );
@@ -1440,12 +1532,12 @@ fn the_refusal_count_counts_the_rows_either_pattern_of_a_list_matches() {
     let db = LedgerDb::open_in_memory().unwrap();
     plant_callers(&db);
     assert_eq!(
-        count_under(&db, &[], &["claude-cli/2.1.311", "-"]),
+        count_under(&db, &[], &["claude-cli/2.1.311", "-"]).rows,
         category_counts(&[("-", 1), ("restricted_topic", 1)]),
         "two user agent patterns count the rows of either, the 2.1.310 rows left out"
     );
     assert_eq!(
-        count_under(&db, &["claude-code/sdk-cli", "-"], &[]),
+        count_under(&db, &["claude-code/sdk-cli", "-"], &[]).rows,
         category_counts(&[("-", 1), ("harmful_request", 1)]),
         "two client patterns count the rows of either, the `cli` rows left out"
     );
@@ -1456,7 +1548,7 @@ fn the_refusal_count_counts_a_row_only_where_the_client_and_the_user_agent_lists
     let db = LedgerDb::open_in_memory().unwrap();
     plant_callers(&db);
     assert_eq!(
-        count_under(&db, &["claude-code/cli"], &["claude-cli/2.1.310"]),
+        count_under(&db, &["claude-code/cli"], &["claude-cli/2.1.310"]).rows,
         category_counts(&[("harmful_request", 1)]),
         "one row holds both: the sdk-cli row fails the client list and the 2.1.311 row the user agent list"
     );

@@ -1354,6 +1354,60 @@ async fn every_route_is_captured_and_holds_its_shape() {
             bodies: None,
         });
     }
+    // A fourth refusal on a second model, so the refusal count reads two models, its attempt issuing the fallback
+    // credit whose digest the next request presents, so the refusal count reads one fallback. The digest is a made-up
+    // value in the columns' form, no token's. Both are older than every other row and in no session, as the refusals
+    // above are.
+    let issued_digest = "3b7e1f9a5c2d8e4b6a0f7c3d9e1b5a8f2c6d0e4a7b9f1c3e5d8a2b6f0c4e7a9d";
+    let issued_at = seat_at - 3_000;
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            session_id: None,
+            ..request(
+                key_generation,
+                "r-refused-4",
+                issued_at,
+                "desktop",
+                "s1",
+                200,
+                "succeeded",
+            )
+        },
+        attempts: vec![AttemptRecord {
+            stop_reason: Some("refusal".into()),
+            refusal_category: Some("harmful_request".into()),
+            issued_digest: Some(issued_digest.into()),
+            ..attempt("r-refused-4", 1, "business", 200, "succeeded", issued_at)
+        }],
+        bodies: None,
+    });
+    let presented_at = issued_at + 600;
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            session_id: None,
+            fallback_digest: Some(issued_digest.into()),
+            ..request(
+                key_generation,
+                "r-fallback",
+                presented_at,
+                "desktop",
+                "s1",
+                200,
+                "succeeded",
+            )
+        },
+        attempts: vec![attempt(
+            "r-fallback",
+            1,
+            "business",
+            200,
+            "succeeded",
+            presented_at,
+        )],
+        bodies: None,
+    });
     parts
         .keepalive
         .apply_event(
@@ -1704,7 +1758,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             finished_at: now,
         }));
     let ready = wait_json(app, "/admin/requests", &cookie, |v| {
-        v["requests"].as_array().unwrap().len() == 16
+        v["requests"].as_array().unwrap().len() == 18
     })
     .await;
     hold(&planted, "requests", "GET /admin/requests", ready);
