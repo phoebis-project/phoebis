@@ -173,7 +173,7 @@ test("the story's records give their stations, states, host and termini", async 
     assert.deepEqual(terminiOf(withMain), THREE_TERMINI(['chosen', 'placed']), id);
   }
 
-  for (const [id, place] of [['req_69e30548-32e/1', 'cohort'], ['req_e8b7eb13-060/1', 'strategy pick']]) {
+  for (const [id, place] of [['req_69e30548-32e/1', 'cohort'], ['req_03ddc3af-4d5/1', 'strategy pick']]) {
     const hold = modelOf(await recordOf(id));
     assert.deepEqual(read(hold), [...FRESH_LINE('none', 'match'), 'content: none (taken)', 'with main: none (taken)', 'static: none (taken)', 'Pick: chosen (taken)', 'Hold: held (taken)', 'Reserve: none (taken)'], id);
     assert.deepEqual([hold.decisive, hold.host], ['hold', 'pick'], id);
@@ -819,8 +819,8 @@ test("a short walk's line moves right so its leaves keep inside the strip, and a
 const STORY = [
   ...['e5a1c093-4d7', 'f3b6d218-85a', '0b7c2d94-e61', '1eaa9bc1-a18', '868264bc-611', 'a1f04c2e-7b3', 'b72e9d05-c14', 'c90d3f61-a28', 'd4e8a7b2-916', '3b8e51f4-0a9', 'da52d141-a5a', 'c41d0311-200', 'ef099b34-453', 'b2bed817-a58', '6c3a9e27-5b1', 'e0a4c6f2-118', '51d0e2b8-7a0', '31f0b7c2-6e1', '9a07c4e1-d55', 'f8085653-422'].map((id) => `req_${id}/1`),
   ...['1d9c3e55-0b2', '69e30548-32e', '2e7c90a1-6d4', '4b0e9d17-c31'].flatMap((id) => [`req_${id}/1`, `req_${id}/2`]),
-  'req_e8b7eb13-060/1',
-  'req_e8b7eb13-060/2',
+  'req_03ddc3af-4d5/1',
+  'req_03ddc3af-4d5/2',
   'req_77634945-72b/2',
   ...['9d4c1a73-e58/1', '9d4c1a73-e58/2', '5b2e8d47-c19/1', '6e1f3b98-a24/1', '2c7d9f15-b63/1', '7a3f0c26-d81/1', '4e8b1d36-f72/1', '9f2e7c5a-c49/1', '9f2e7c5a-c49/2', 'b8c3e9d4-e61/2', '5d6f1b3a-e27/1', '5d6f1b3a-e27/2'].map((id) => `req_${id}`),
 ];
@@ -920,7 +920,7 @@ test("the pick's score column reads the Pace cell under the Pace header", async 
   let rows = 0;
   // A tier mate scoring above the chosen member sits at its cap and drops before the pick, so the story's own picks
   // rank one member each. A hold keeps the whole set, so its pick ranks the tier.
-  for (const id of ['req_ef099b34-453/1', 'req_868264bc-611/1', 'req_e8b7eb13-060/1']) {
+  for (const id of ['req_ef099b34-453/1', 'req_868264bc-611/1', 'req_03ddc3af-4d5/1']) {
     const record = await recordOf(id);
     const { table } = stationPlan(record, 'pick').block;
     const score = table.columns.find((c) => c.key === 'score');
@@ -1030,7 +1030,7 @@ test("the rung's entry rows read the matched entry and never the deeper refused 
 });
 
 test("the hold's rows are place, on, slot and bound", async () => {
-  for (const [id, place] of [['req_69e30548-32e/1', 'cohort'], ['req_e8b7eb13-060/1', 'strategy pick']]) {
+  for (const [id, place] of [['req_69e30548-32e/1', 'cohort'], ['req_03ddc3af-4d5/1', 'strategy pick']]) {
     const record = await recordOf(id);
     const on = record.outcome.hold.accountId;
     const member = record.candidates.find((c) => c.accountId === on);

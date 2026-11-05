@@ -955,6 +955,8 @@ type StoryGeo = 'not_available';
 interface StorySeed {
   /** The agent the client named, null for a request refused before its body was read. */
   agentId: string | null;
+  /** The subagent's type, where its story names one other than general-purpose. */
+  agentType?: string;
   at: number;
   attempts: StoryAttempt[];
   canonical?: string;
@@ -1061,11 +1063,15 @@ export const FLEET_SESSION_ID = '8b1f4c2e-6a93-4d07-b5e2-3c9a7f1d4e68';
 /** The approved Ultra's session on bench, on the 7-day window and the Fable week alone. */
 export const WORKSHOP_SESSION_ID = '4a7c2e9b-1d58-4f36-b0e3-7c5a9d2f1e84';
 /**
- * The contract seat's rows on fleet and the approved Ultra's rows on bench: story rows the routing log derives its
- * records for, as it does a drawn row's, that take no draw from the streams the drawn rows read, so every drawn figure
- * stays where it was.
+ * The contract seat's rows on fleet, the approved Ultra's rows on bench, the last turns of the desktop session the mod
+ * ended and the one turn of story 4's Explore subagent: story rows the routing log derives its records for, as it does
+ * a drawn row's, that take no draw from the streams the drawn rows read and none of the events the story seats on a
+ * drawn row, so each keeps its written class and instants and every drawn figure stays where it was.
  */
-export const UNSEEDED_IDS: ReadonlySet<string> = new Set(['req_1c7e4a9d-f52', 'req_3f6a9c21-d48', 'req_7b2e5d93-a16', 'req_9d3b6f2a-c81', 'req_c94d1e07-b35']);
+export const UNSEEDED_IDS: ReadonlySet<string> = new Set([
+  'req_0b7f2c58-e43', 'req_1c7e4a9d-f52', 'req_3f6a9c21-d48', 'req_4c8e2a17-b39', 'req_7b2e5d93-a16', 'req_7f3d1b95-e62', 'req_9d3b6f2a-c81',
+  'req_a2e9c6d4-f17', 'req_c94d1e07-b35', 'req_d41e5b80-c26',
+]);
 
 const sessionOf = (prefix: string) => SESSION_IDS.find((id) => id.startsWith(prefix)) ?? prefix;
 
@@ -1128,7 +1134,7 @@ function storyRow(seed: StorySeed): RequestLog {
     ...REQUEST_SAMPLE,
     accountId: answered ? last.accountId : null,
     agentId: seed.agentId,
-    agentType: seed.agentId === null || seed.agentId === 'main' ? null : 'general-purpose',
+    agentType: seed.agentId === null || seed.agentId === 'main' ? null : (seed.agentType ?? 'general-purpose'),
     at: iso(seed.at),
     attempts,
     autoMode: null,
@@ -1518,6 +1524,10 @@ function storyRequests(): RequestLog[] {
     { agentId: 'a7f3', at: NOW - 34 * MINUTE, attempts: [{ accountId: 'nightly', at: NOW - 34 * MINUTE, ms: 3_800, status: 200 }], id: 'req_7f3d1b95-e62', keyId: 'desktop', model: 'claude-opus-5', requestClass: 'subagent', session: FINISHED_SESSION_ID, usage: { cacheRead: 9_600, input: 700, output: 180 } },
     { agentId: '5d0e', at: NOW - 47 * MINUTE, attempts: [{ accountId: 'nightly', at: NOW - 47 * MINUTE, ms: 4_100, status: 200 }], id: 'req_a2e9c6d4-f17', keyId: 'desktop', model: 'claude-opus-5', requestClass: 'subagent', session: FINISHED_SESSION_ID, usage: { cacheRead: 8_900, input: 600, output: 210 } },
     { agentId: 'd41e', at: NOW - 60 * MINUTE, attempts: [{ accountId: 'nightly', at: NOW - 60 * MINUTE, ms: 3_300, status: 200 }], id: 'req_d41e5b80-c26', keyId: 'desktop', model: 'claude-opus-5', requestClass: 'subagent', session: FINISHED_SESSION_ID, usage: { cacheRead: 7_200, input: 500, output: 160 } },
+    // A turn of story 4's Explore subagent on its desktop row, a subagent its recipes never pin, so the row lists it
+    // as an earlier agent. It reads a cached prefix, so it counts as no miss between turns. Last, so every seed above
+    // keeps the upstream ids it draws.
+    { agentId: '0b7f', agentType: 'Explore', at: NOW - 40 * MINUTE, attempts: [{ accountId: 'nightly', at: NOW - 40 * MINUTE, ms: 3_600, status: 200 }], id: 'req_0b7f2c58-e43', keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'subagent', session: '89cd1c92', usage: { cacheRead: 11_800, input: 600, output: 190 } },
   ];
   return seeds.map(storyRow);
 }
@@ -1884,7 +1894,7 @@ function addStoryEvents() {
     const next = owed[0];
     if (!next) break;
     const from = lane?.accountIds.find((id) => id !== r.accountId);
-    if (r.sessionId === null || r.accountId === null || r.kind === 'probe' || r.status !== 200 || r.attempts.length !== 1 || from === undefined || busy.has(pinOf(r)) || STORY_IDS.has(r.id)) continue;
+    if (r.sessionId === null || r.accountId === null || r.kind === 'probe' || r.status !== 200 || r.attempts.length !== 1 || from === undefined || busy.has(pinOf(r)) || STORY_IDS.has(r.id) || UNSEEDED_IDS.has(r.id)) continue;
     REQUEST_EVENTS.set(r.id, [next(r, from)]);
     busy.add(pinOf(r));
     owed.shift();

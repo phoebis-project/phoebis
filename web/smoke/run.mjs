@@ -16164,7 +16164,7 @@ await forView('/routing-log', async () => {
   }
   {
     // A hold on the strategy's pick names no cohort, and the placement after it reads the account it waited on.
-    const { card, page, record } = await story('req_e8b7eb13-060', 1);
+    const { card, page, record } = await story('req_03ddc3af-4d5', 1);
     scan('strategy hold', card);
     stripDrawn('strategy hold', card, modelPairs(record), record);
     await popoversOpen('strategy hold', page, card, record);
@@ -16175,9 +16175,9 @@ await forView('/routing-log', async () => {
       ok: record.outcome.hold?.cohort === null && hold?.second[0] === 'strategy pick' && (popoverRowOf(held, 'place') ?? []).includes('place strategy pick') && outcomeOf(card).Hold?.[1] === 'strategy pick',
       missing: [hold ? hold.second.join(' / ') : 'no hold station', rowsRead(held), JSON.stringify(outcomeOf(card).Hold)],
     });
-    const after = (await openRow(page, 'req_e8b7eb13-060/2'))?.querySelector('.decision-card');
+    const after = (await openRow(page, 'req_03ddc3af-4d5/2'))?.querySelector('.decision-card');
     scan('placement after a strategy hold', after);
-    const second = await api.getDecision('req_e8b7eb13-060', 2);
+    const second = await api.getDecision('req_03ddc3af-4d5', 2);
     stripDrawn('placement after a strategy hold', after, modelPairs(second), second);
     await popoversOpen('placement after a strategy hold', page, after, second);
     const { heldMs, waitedOn } = second.outcome.cohortHold;
@@ -18293,7 +18293,8 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
   // key's Failed leaves them out, as the Traffic line does. Laptop's Failed and the line's errors count the two rows
   // the router's own stop cut, `req_7a2c4e91-d03` and `req_c58d1f3a-e67`, and the line's requests the tie's failover
   // `req_8c41f2d7-a93`, which answered on its second attempt, the contract seat's three rows on fleet, the approved
-  // Ultra's two rows on bench and the four turns of the desktop session the mod ended, each answered.
+  // Ultra's two rows on bench, the four turns of the desktop session the mod ended and story 4's Explore turn, each
+  // answered.
   const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Refusals by code');
   const codes = [...(card?.querySelectorAll('.hbars li') ?? [])].map((li) => [li.querySelector('.mono')?.textContent?.trim(), li.querySelector('.num')?.firstChild?.textContent?.trim()]);
   const table = [...m.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Traffic by key');
@@ -18306,7 +18307,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
     ok:
       JSON.stringify(keys) === JSON.stringify([['desktop', '15', '3'], ['ci', '1', '3'], ['laptop', '6', '2']]) &&
       JSON.stringify(codes) === JSON.stringify([['guardrail_blocked', '3'], ['client_not_allowed', '2'], ['auth_unknown', '1'], ['client_contract', '1'], ['client_drift', '1']]) &&
-      line === '223 requests, 16.6% errors',
+      line === '224 requests, 16.5% errors',
     missing: [JSON.stringify(keys), JSON.stringify(codes), line ?? 'no line'],
   });
 }
