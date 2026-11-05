@@ -1035,73 +1035,100 @@ error state in place of the rows and the figures.
 
 ## Sessions
 
-![The Sessions view: the tiles and the table with a fork badge](assets/sessions-light.png#only-light)
-![The Sessions view: the tiles and the table with a fork badge](assets/sessions-dark.png#only-dark)
+![The Sessions view: the session table with a fork badge](assets/sessions-light.png#only-light)
+![The Sessions view: the session table with a fork badge](assets/sessions-dark.png#only-dark)
 
-The view opens on its bar: Add filter, the Columns control, the Sort control (Created, newest first by default, or Last
-activity, each with Ascending or Descending, carried in the address) and at the right edge the split Refresh button and
-the count of the sessions the filters keep, `{n} sessions`. Add filter opens a "Filter by" field over the filters of one
-group, Sessions: Companion only, Finished sessions and Released agents. Companion only keeps the rows whose companion
-reports or went silent. Finished sessions lists a session the engine is done with, one whose main agent ended with the
-session or was released or whose every agent the mod released, which the view hides by default. Released agents draws a
-live session's released agents after its others, each with its released badge. Companion only, Finished sessions and
-Released agents apply at once. The router lists a companion session within the session expiry and a session no mod
+The view opens on its bar: the search field "Session id", Add filter, the Columns control, the Sort control (Created,
+newest first by default, Last activity, Cost or Requests, each with Ascending or Descending, carried in the address) and
+at the right edge the split Refresh button and the count, `{n} sessions · {k} agents`, its agents counted as the Agents
+cell counts them over the rows the filters keep. While an Agents filter stands the count reads `{k} matching agents`,
+and while the filters hide rows its hover reads `{h} sessions hidden by the filters`. The search field matches the start
+of a session id. Add filter opens a "Filter by" field over two groups: Session, which reads the row (Active within,
+Client, Companion, Finished sessions, Forked sessions, Key, Pool and Slowed), and Agents, which reads each agent line,
+main's among them (Account, Agent type, Cache, Effort, Model, Released agents and Status). Filters are AND: a session is
+listed when it passes every Session filter and, while Agents filters stand, when one of its lines passes every Agents
+filter together. A finished session, one whose main agent ended with the session or was released or whose every agent
+the mod released, stays out unless Finished sessions stands, and Released agents draws a live session's released agents,
+which stay hidden without it. The router lists a companion session within the session expiry and a session no mod
 reports while the later of its last use and its last request is within the non-companion timeout of the Settings page
 (`sessions.non_companion_idle_seconds`, 1h by default), and the view reads that list as it is. Each filter off its
-default stands as a chip on a line under the bar, "companion only", "finished sessions" or "released agents": a click on
-the chip opens its values again, its x removes it, and from two chips on "Clear all" returns the three to their
-defaults. The filters live in the page's address, so a reload or a shared link keeps them, and a bare `/sessions` reads
-the defaults. The head under the bar reads "Every session within the session expiry that the filters keep, with the
-account each model is pinned to and each agent's cache-warming recipe." with the disclosure "How pins and recipes work",
-whose paragraph says what a pin and a recipe are, and a "Cost reference" link that opens the dialog on Plan rates. The
-tiles read Sessions (`{n} of {max}`, the rows the filters keep against the engine's cap), Agents (`{n} of {max}` with
-`{n} busy, {n} idle, {n} parked`, both over the agents of the rows the filters keep: the figure leaves out the subagents
-the mod released while their session lives, which draw no line and keep their slot for one cache TTL after the release,
-then leave the engine, named on hover, and counts them while Released agents draws them), Retained (`{n} MiB of {max}
-MiB`, "prompts kept for probes"), "Cache probes, 24h" (a bar by outcome and `{n} ok ({pct}), {n} migrated, {n} held, {n}
-skipped, {n} failed`), "Expired between turns, 24h" ("misses cache warming exists to prevent") and "Bus gaps" ("times
-the keepalive engine missed bus events"). While the filters hide rows, the Sessions and Agents tiles name them on hover,
-`{k} sessions hidden by the filters`. A tile whose read failed draws a dash with the reason on hover, and Try again
-under the tiles reads them again. Auto reload starts at 5 s and reads the accounts, the recipes, the sessions and the
-tiles at that one interval, and it waits while the Cost reference dialog, the Release question or a row's menu is open.
-The probes and the recipe are explained on [Keepalive](keepalive.md), the mod's words under [The
+default stands as a chip on a line under the bar: a click on the chip opens its values again, its x removes it, and from
+two chips on "Clear all" returns every filter to its default. The filters live in the page's address, so a reload or a
+shared link keeps them, and a bare `/sessions` reads the defaults. Where a read the rows wait on failed before it
+answered, the sessions, the recipes or the keys, a line under the bar names it, `Could not load the {read}: {reason}`,
+with Try again, and a failed accounts read draws a line of its own. The head under the bar reads "Every session the
+router lists: what it runs, where it is pinned, what it has spent and whether its prompt cache is warm." with the
+disclosure "How pins and recipes work", whose paragraph says what a pin and a recipe are, and a "Cost reference" link
+that opens the dialog on Plan rates. Auto reload starts at 5 s and reads the accounts, the recipes and the sessions at
+that one interval, and it waits while the Cost reference dialog, the Release question, a row's menu or a popover of the
+bar is open. The probes and the recipe are explained on [Keepalive](keepalive.md), the mod's words under [The
 mod](keepalive.md#the-mod) and the recipe's states under [The five states](keepalive.md#the-five-states).
 
-The card "Sessions" ("One row per session. Open a row for the cache-warming recipe each agent carries") offers "Expand
-all" or "Collapse all". The Session column is always drawn, and the twelve others, which the bar's Columns control shows
-or hides, are Key, Model, Context, Effort, Runway, Last used, Requests, Last request, Agents, Companion, Cache warming
-and Next probe, with Agents, Last request, Next probe and Requests hidden by default. The rows follow the sort control:
-by the session's creation time, its first placement, or by its last activity, the later of its last use and its last
-request, newest first by default, ties by session id and a row without the value last, and the five-second re-read keeps
-a row's place under Created. Last used, the last use the sort reads, is the newest use across the session's conversation
-pins, main's and its agents'. Requests counts the session's requests, the ones the router refused before any account was
-asked left out, and "View in requests" lists those with the rest, so a session whose every request was refused still
-opens its analytics and its request log. Session takes the card's free width and keeps at least 74 px, and a set of
-columns wider than the card scrolls inside it. Context reads the main agent's context in tokens, `184K`, with a dash for
-a session with no pin or no figure, and Effort the effort of its pin's last turn, `high`, with a dash for none, both
-from main's conversation pin (or, where main holds none, the newest conversation pin of another agent). The Model cell
-adds a "+N" badge where N agents of the session are pinned on another model, with or without a recipe, its hover naming
-each agent with its model and account in the lines' order. Runway reads the time until the projection of the pin's
-account reaches the ceiling on the window that binds, among those the pin's model draws: a span such as `6 h 55 min`,
-`none` where the runway is gone, `unbounded` where nothing burns or where the runway would pass the binding window's
-next reset, and a dash for an unpinned row or a pinned row with no projection. On a pinned row whose pin carries a cycle
-its hover reads `cycle 20 s`, the gap between the session's requests the slow-down's hold is sized from. The Session
-cell draws the speed chip after the id on a slowed session, with the Quota view's hover. The session cell cuts a long id
-with an ellipsis, whole on hover. A session that branched from another conversation at depth 2 or deeper carries a fork
-badge under its id, `fork, on another account` or `fork, same account` where the session it branched from is listed with
-a pinned account, and `fork at 3` otherwise, with the base, the depth and the base's account on hover, and a click on
-the badge scrolls to the base's row where the list holds it. Companion reads the mod's state, `reporting` with how long
-ago the person was last seen at the terminal, `silent` or `none`. Cache warming reads main's recipe, or where main holds
-none, the newest other agent's: the pin state badge, `busy`, `idle`, `parked`, `released` or `unknown`, with the recipe
-summary, or "no recipe" while no agent holds one. Next probe reads the instant, "pending" or "not scheduled". Before the
-first session the card reads "No live sessions" with "A session appears here on its first request, or as soon as the
-keepalive mod registers it, and drops off once it passes the session expiry." While the filters hide every row the
-router lists, the card reads "No sessions kept by the filters" with `{k} sessions hidden by the filters.`
+The card "Sessions", its title carrying "One row per session. Open a row for its agents, its routing and its cache
+warming." on hover, offers "Expand all" or "Collapse all", and its summary line reads the rows the filters keep: `{k}
+agents: {b} busy, {i} idle, {p} parked · {r} requests and {spend} in 24 h`, the agents counted as the Agents cell
+counts them, the busy, idle and parked ones by their lifecycle word, the client requests of the last 24 hours, and their
+spend as a share of the chosen week, with `+ {dollars}` after it where the day billed dollars, the probes left out. The
+Session column is always drawn, and the sixteen others, which the bar's Columns control shows or hides, are Status,
+Agents, Model, Account, Requests, Cost, Last used and Cache, shown by default, then Companion, Context, Created, Effort,
+Key, Last request, Next probe and Runway, hidden by default. The rows follow the sort control: by the session's creation
+time, its first placement, by its last activity, the later of its last use and its last request, by the list dollars of
+its requests, which add across units, or by its requests, newest or largest first by default, ties by session id and a
+row without the value last, and the five-second re-read keeps a row's place under Created. Session takes the card's free
+width and keeps at least 74 px, and a set of columns wider than the card scrolls inside it.
 
-A row's menu offers "View in analytics" and "View in requests" once the session has ledgered traffic, "View in routing
-log", which opens the log on that session's decisions an hour either side of its last request, and "Release". Release
-asks "Release session": `Session {id} loses its pin to {account} and every recipe on it is dropped. The next request
-picks an account again and the prompt cache on {account} goes cold.`, and answers "Session released".
+The Session cell cuts a long id with an ellipsis, whole on hover, and a line under it reads a `fork` badge on a session
+that branched from another conversation at depth 2 or deeper, then the client version and the epoch from 2 on, `Claude
+Code 2.1.310 · epoch 2`, with the user agent as the client sent it and the epoch's sentence on hover. The fork badge's
+hover names the base and the depth, and where the list holds the base with both pins live, whether the base is on the
+same account or another and the base's account. A click on the badge scrolls to the base's row where the list holds it.
+Status reads main's lifecycle word as a badge with its sentence on hover: `busy`, `idle`, `parked` with the park's kind
+and its deadline or wake time on hover, `registered` for a session the mod registered before any real request reached
+the router, `released` or `unknown`. A finished session reads `finished`, and a session no mod reports, or one whose
+main the engine holds no record of, reads `unreported` in the muted ink. Under the word, a companion session reads `seen
+9s ago` while the mod reports, or `silent 2h 18m` in the warning ink once it went silent, with the companion's sentence
+and the instant on hover. Agents counts the session's agents less the ones the mod released, main counted where no line
+names it, over the agents by word (`1 busy, 2 idle, 1 parked`). Model reads main's model, short with the id on hover,
+and a "+N" badge where N agents of the session are pinned on another model, its hover naming each agent with its model
+and account in the lines' order. Account links to the pinned account's page with its kind on hover, then the speed chip
+on a slowed session with the Quota view's hover, the warning badge `leaving` where a shedding round or a failover marked
+the session to leave the account, its hover naming the account and the reason, and a "+N" for the agents pinned on
+another account. A row with no account reads a dash.
+
+Requests counts the session's client requests over its life under its key, the ones the router refused before any
+account was asked left out, with its last request's age under it and the instant on hover, and "View in requests" lists
+the refused ones with the rest, so a session whose every request was refused still opens its analytics and its request
+log. Cost reads the spend of the same requests, which the same fold of the ledger answers as the Requests count: under
+Native the session's share of the chosen week, and under the other positions its dollars as the request log's Cost cell
+reads a request, then a `+$` badge where its requests billed dollars beside a plan figure and a "+N" naming the other
+accounts whose plan windows they spent on. Its hover counts the requests, reads the figure in full with the account's
+shares of its windows where the requests spent on one account, the dollars billed by funding and the probes' figure.
+Under the figure stands the pin's burn per hour, `0.09% Ultra week/h` or `$0.12/h`, its share of the account's own
+window on hover. A session with no ledgered request reads a dash with "No ledgered request yet". Last used, the last use
+the sort reads, is the newest use across the session's conversation pins, main's and its agents', with `expires in
+{span}` under it. Cache reads main's pin `warm` within its cache TTL or `cold` past it, with the recipe's state word
+under it (main's recipe, or the newest other agent's where main holds none) or `no recipe`, and `no pin` on a row with
+no pin, the pin's, the state's and the cause's sentences and the next probe on hover. Of the optional columns, Companion
+reads the mod's state, `reporting` with `seen {ago}` under it, `silent` with how long it has been silent, or `none`.
+Context reads main's context in tokens, `184K`, with a dash for a session with no pin or no figure, and Effort the
+effort of its pin's last turn, `high`, with a dash for none, both from main's conversation pin (or, where main holds
+none, the newest conversation pin of another agent). Created reads the session's first placement as an age with the
+instant on hover, and Key links to the Keys view narrowed to the key, with `deleted holder` under an earlier holder's.
+Last request reads the last request's instant, or `none`. Next probe reads the instant, "pending" or "not scheduled".
+Runway reads the time until the projection of the pin's account reaches the ceiling on the window that binds, among
+those the pin's model draws: a span such as `6 h 55 min`, `none` where the runway is gone, `unbounded` where nothing
+burns or where the runway would pass the binding window's next reset, and a dash for an unpinned row or a pinned row
+with no projection. On a pinned row whose pin carries a cycle its hover reads `cycle 20 s`, the gap between the
+session's requests the slow-down's hold is sized from. Before the first session the card reads "No live sessions" with
+"A session appears here on its first request, or as soon as the keepalive mod registers it, and drops off once it passes
+the session expiry." While the filters hide every row the router lists, the card reads "No sessions kept by the filters"
+with `{k} sessions hidden by the filters.`
+
+A row's menu offers "View in analytics" and "View in requests" once the session has a ledgered request, each disabled
+with "No ledgered request yet" on hover before it, "View in routing log", which opens the log on that session's
+decisions an hour either side of its last activity, and "Release". Release asks "Release session": `Session {id} loses
+its pin to {account} and every recipe on it is dropped. The next request picks an account again and the prompt cache on
+{account} goes cold.`, and answers "Session released".
 
 Opening a row reads `Created {time}, {ago}`, the session's first placement, kept until its last pin leaves, and one line
 per agent of the session, main first (from its conversation pin or its recipe, or from the row where neither names
@@ -1121,8 +1148,7 @@ deadline or wake time (`parked · background · deadline in 1h 12m`), then the s
 finished session, listed under Finished sessions, reads "The mod released every agent of this session. Their records
 keep their slots of the cap for one cache TTL after the release and then leave the engine." above its lines, which keep
 their ended state with the TTL, Last request, Last probe, Next probe and Probes / credited the engine last read, and its
-Agents cell counts the lines drawn. A session the mod released whole keeps its released badge. A session without a
-recipe reads "no recipe" and `Nothing is scheduled because {reason}.`
+Status reads `finished`. A session without a recipe reads "no recipe" and `Nothing is scheduled because {reason}.`
 
 ### The cost reference
 

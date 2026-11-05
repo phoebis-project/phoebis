@@ -1,52 +1,60 @@
-import { useId, useMemo, useState, type ReactNode } from 'react';
+import { Fragment, type KeyboardEvent, type MouseEvent, type ReactNode, useId, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
 import { iso } from '@/api/decode';
-import type { Account, ApiKey, CompanionState, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, Pool, RecipeState, Session } from '@/api/types';
+import type { Account, ApiKey, CompanionState, KeepaliveRecipe, ModelTiers, Pool, RecipeState, Session } from '@/api/types';
+import { useAppSettings } from '@/app/settings';
 import { useSession } from '@/app/session';
-import { HELD_PROBE_HINT, MIGRATED_PROBE_HINT } from '@/components/charts/theme';
 import { FilterBar } from '@/components/FilterBar';
 import { SortControl } from '@/components/SortControl';
 import { ColumnsControl } from '@/components/ui/ColumnsControl';
 import { CostReferenceLink } from '@/components/ui/CostReference';
+import type { Option } from '@/components/ui/OptionList';
 import { SpeedChip } from '@/components/ui/SpeedChip';
-import { Tile } from '@/components/ui/Tile';
 import { IconChevron } from '@/components/ui/icons';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skeleton, toggleRow, useHostedDescription } from '@/components/ui/primitives';
-import { accountHref, ANALYTICS_CODEC, REQUESTS_CODEC, requestsHref as requestsAddressHref, SESSION_SORT_KEYS, SESSIONS_CODEC, type SessionsAddress, sortAddressOf, sortDirOf, type SortDir } from '@/lib/address';
-import type { WeekReading } from '@/lib/analytics';
+import { accountHref, ANALYTICS_CODEC, KEYS_CODEC, REQUESTS_CODEC, requestsHref as requestsAddressHref, SESSION_SORT_KEYS, SESSIONS_CODEC, type SessionsAddress, sortAddressOf, sortDirOf, type SortDir } from '@/lib/address';
+import { HINT_WINDOW, sentences, shareHint, type WeekReading } from '@/lib/analytics';
+import { AGENT_TYPES, clientVersion } from '@/lib/client';
 import { clock } from '@/lib/clock';
-import { failed } from '@/lib/costs';
-import { groupInto } from '@/lib/counts';
+import { tierOrder, weekReadingOf } from '@/lib/costs';
+import { groupInto, lookup } from '@/lib/counts';
 import { SESSIONS_DIMENSIONS } from '@/lib/filterBar';
-import { SESSION_CHARS, fmtAbsolute, fmtCount, fmtDuration, fmtInt, fmtMiB, fmtPct, fmtRelative, keyGenerationOf, keyLifetime, messageOf, plural, shortId, shortModel } from '@/lib/format';
-import { CAUSE_HINT, CAUSE_LABEL, contextCell, isFinished, isReleasedLine, orderLines, orderRows, pinTtlMs, releasedCount, requestsRange, sessionLines, type SessionLine, WARNING_CAUSES } from '@/lib/keepalive';
+import { SESSION_CHARS, fmtAbsolute, fmtCount, fmtDuration, fmtInt, fmtRelative, fmtShare, fmtUsd, joinPresent, keyGenerationOf, keyLifetime, messageOf, shortId, shortModel, weekShort } from '@/lib/format';
+import { ACTIVE_WITHIN, agentCount, agentFiltersStand, CAUSE_HINT, CAUSE_LABEL, contextCell, hiddenLines, isFinished, lastActivity, lifecycleSplit, MAIN_AGENT, matches, orderLines, orderRows, pinTtlMs, presenceOf, requestsRange, sessionLines, type SessionLine, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES } from '@/lib/keepalive';
 import { failedFirst, toggled, useAsync, useNow, useQueryFilters } from '@/lib/hooks';
 import { minuteSpan, type BadgeTone } from '@/lib/quota';
+import { costCellOf, spendHintArgs, spendHover, spendUnitOf } from '@/lib/requests';
 import { ageWord, aroundSubject, logHref } from '@/lib/routingLog';
 import { memberSpeed } from '@/lib/selection';
+import type { UnitPosition, WeekPosition } from '@/lib/unit';
+import { keyOptions } from './RequestsPage';
 
-// The optional columns: the Session column is the row's identity and the table's fill column, so it is always drawn.
+// The Session column is the row's identity and the table's fill column, so it is always drawn and the control toggles
+// the others.
 const SESSION_COLUMNS = [
-  { id: 'key', label: 'Key' },
-  { id: 'model', label: 'Model' },
-  { id: 'context', label: 'Context' },
-  { id: 'effort', label: 'Effort' },
-  { id: 'runway', label: 'Runway' },
-  { id: 'lastUsed', label: 'Last used' },
-  { id: 'requests', label: 'Requests', right: true },
-  { id: 'lastRequest', label: 'Last request' },
+  { id: 'status', label: 'Status' },
   { id: 'agents', label: 'Agents', right: true },
+  { id: 'model', label: 'Model' },
+  { id: 'account', label: 'Account' },
+  { id: 'requests', label: 'Requests', right: true },
+  { id: 'cost', label: 'Cost', right: true },
+  { id: 'lastUsed', label: 'Last used' },
+  { id: 'cache', label: 'Cache' },
   { id: 'companion', label: 'Companion' },
-  { id: 'cacheWarming', label: 'Cache warming' },
+  { id: 'context', label: 'Context' },
+  { id: 'created', label: 'Created' },
+  { id: 'effort', label: 'Effort' },
+  { id: 'key', label: 'Key' },
+  { id: 'lastRequest', label: 'Last request' },
   { id: 'nextProbe', label: 'Next probe' },
+  { id: 'runway', label: 'Runway' },
 ] as const;
 type SessionColumnId = (typeof SESSION_COLUMNS)[number]['id'];
-// The default set fits the card at 1280 by 800 without these: Last used carries recency, Cache warming and the expanded
-// row carry the agents and their next probes, and the request log and analytics carry the request count, whose room the
-// Context column takes.
-const HIDDEN_BY_DEFAULT: readonly SessionColumnId[] = ['agents', 'lastRequest', 'nextProbe', 'requests'];
+// The default set fits the card at 1280 by 800 without these: the Status cell carries the presence, the expanded row
+// carries the pin's figures, the key and the probes, and the Columns control brings each back.
+const HIDDEN_BY_DEFAULT: readonly SessionColumnId[] = ['companion', 'context', 'created', 'effort', 'key', 'lastRequest', 'nextProbe', 'runway'];
 
 /**
  * The pin's runway on its account as the route answers it: a span, `none` at zero, `unbounded` where no window binds.
@@ -57,13 +65,16 @@ const runwayWord = (s: Session): string | null => (!s.pinned ? null : s.runwayMs
 /** The id as sent on hover where the cell shows less of it. */
 const modelTitle = (model: string, shown: string) => (shown === model ? undefined : model);
 
-const PIN_TONE: Record<KeepaliveState, BadgeTone> = { busy: 'accent', idle: 'good', parked: 'neutral', released: 'neutral', unknown: 'neutral' };
-const PIN_HINT: Record<KeepaliveState, string> = {
+/** A row's or a line's Status word with its sentence. */
+const LIFECYCLE_HINT: Record<StatusWord, string> = {
   busy: 'Between model turns, running tools or streaming. Probed like any other agent, and the idle window of the main conversation keeps running.',
+  finished: 'The mod released every agent of this session. Their records keep their slots of the cap for one cache TTL after the release and then leave the engine.',
   idle: "Stopped and waiting for the user. Probed until the pool's idle window runs out, the break-even where the pool sets none.",
   parked: 'Stopped while a background command, a subagent or a scheduled wakeup is open. Probed under the parked and horizon rules and the idle window.',
+  registered: 'The mod registered this session and no real request has reached the router from it yet',
   released: 'The mod released this agent, a subagent that finished or the main conversation. Its recipe is gone.',
   unknown: "The reporter could not tell this agent's state.",
+  unreported: 'No keepalive mod reports this agent, so the router holds no lifecycle word for it.',
 };
 const STATE_TONE: Record<RecipeState, BadgeTone> = { ended: 'neutral', held: 'neutral', not_retained: 'neutral', paused: 'warning', retained: 'good' };
 const STATE_LABEL: Record<RecipeState, string> = { ended: 'ended', held: 'held', not_retained: 'not retained', paused: 'paused', retained: 'retained' };
@@ -76,7 +87,6 @@ const STATE_HINT: Record<RecipeState, string> = {
 };
 const NO_RECIPE_HINT = 'Nothing probes this session, so its prompt cache expires on its own schedule.';
 const HISTORICAL_HINT = 'A holder of this key id that no longer exists. The ledger keeps its sessions until they expire';
-const HISTORICAL_NO_RECIPE_HINT = 'Belongs to an earlier holder of this key id, so nothing is scheduled for it';
 const HISTORICAL_CAUSE = 'this key id was created again and the session belongs to the earlier holder';
 const KIND_HINT: Record<Account['kind'], string> = {
   api_key: 'API-key account: billed per token, no quota windows',
@@ -96,9 +106,14 @@ const timeCell = (at: string | null, now: number, empty: string): { children: Re
   children: at ? <span className="num">{fmtRelative(at, now)}</span> : <span className="muted">{empty}</span>,
   title: at ? fmtAbsolute(at) : undefined,
 });
-const NO_TRAFFIC_HINT = 'This session has no ledgered requests, so there is nothing to show in analytics or the request log.';
+const EPOCH_HINT = "How many times this session's pin was re-created";
+const NO_TRAFFIC_HINT = 'No ledgered request yet';
+const REQUESTS_HINT = "Requests over the session's life";
 interface Row {
-  /** Every recipe filed under the session, as the route answered them: the no-recipe causes read this list. */
+  /**
+   * Every recipe filed under the session, as the route answered them: the no-recipe causes and the Cache cell read this
+   * list.
+   */
   agents: KeepaliveRecipe[];
   /** When the router forgets the session, from `expiryOf`. */
   expiresAt: number | null;
@@ -114,15 +129,14 @@ interface Row {
    * alone carries no activity of its own, so the last ledgered request stands in for it.
    */
   lastUsed: string | null;
-  /** The lines the row draws in the view's order: the recipes `shown` holds and the pins no recipe stands on. */
+  /** The session's lines in the view's order, the released ones among them, which `hiddenLines` draws or hides. */
   lines: SessionLine[];
   /** Why a session carries no recipe at all, the causes that need no clock, null while it has one. */
   noRecipe: string[] | null;
-  /** The session's lines the view hides, which its Agents column takes off the engine's record count. */
-  released: number;
+  /** The pool of the session's key, null where the key list does not hold the key. */
+  poolId: string | null;
   session: Session;
-  /** The recipes the row draws, the release filter applied: the summary, the badges and the probe state read them. */
-  shown: KeepaliveRecipe[];
+  status: ReturnType<typeof statusOf>;
 }
 
 /** The instant the router forgets an idle session, null without an expiry or a use. */
@@ -162,6 +176,9 @@ const analyticsHref = (trafficSession: string, session: Pick<Session, 'keyGenera
  */
 const sessionLabel = (session: Session, chars?: number) => (chars === undefined ? session.sessionId : shortId(session.sessionId, chars));
 
+/** A link inside a row opens its page, so its click and Enter stop at the link rather than opening the row. */
+const stopAtLink = (e: KeyboardEvent | MouseEvent) => e.stopPropagation();
+
 /**
  * When the pool stopped probing: the longest idle window the router resolves for the pool's recipes, counted from the
  * session's last activity, so the time never reads earlier than the window could have run.
@@ -173,10 +190,9 @@ function idleLimitRanOutAt(session: Session, pool: Pool | null): string | null {
 
 /**
  * `poolsFailed`: the pool list did not load, so a session whose pool is not found has no cause the rows can name but
- * that. `showReleased`: the Released agents filter, which draws a live session's released lines. `sort` and `dir`: the
- * sort control's key and direction, which order the rows and each row's lines.
+ * that. `sort` and `dir`: the sort control's key and direction, which order the rows and each row's lines.
  */
-function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], keys: ApiKey[], pools: Pool[], poolsFailed: boolean, showReleased: boolean, sort: SessionsAddress['sort'], dir: SortDir, expireAfterSeconds: number | null): Row[] {
+function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], keys: ApiKey[], pools: Pool[], poolsFailed: boolean, sort: SessionsAddress['sort'], dir: SortDir, expireAfterSeconds: number | null): Row[] {
   const keyById = new Map(keys.map((k) => [k.id, k]));
   // A recipe names no generation and belongs to the live key alone, so it is filed under that generation and
   // an earlier holder of the same key id reads none of them.
@@ -206,41 +222,74 @@ function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], keys: ApiKey
       else if (causes.length === 0) causes.push('the last request left no cacheable prefix to replay');
     }
     const lastUsed = session.lastUsedAt ?? session.lastRequestAt;
-    // The full list stays beside the lines drawn: the causes of a session without a line read every record, and a
-    // session whose lines the mod all released still holds records, so it is no session without a recipe.
+    // The full list stays beside the lines: the causes of a session without a line read every record, and a session
+    // whose lines the mod all released still holds records, so it is no session without a recipe.
     const lines = sessionLines(session, agents);
-    const finished = isFinished(session, lines);
-    // A finished session keeps every line so its probe facts stay in view, and a live one draws its released lines
-    // only while the filter asks for them.
-    const drawsReleased = finished || showReleased;
-    const shownLines = drawsReleased ? lines : lines.filter((l) => !isReleasedLine(l));
     return {
       agents,
       expiresAt: expiryOf(lastUsed, expireAfterSeconds),
-      finished,
+      finished: isFinished(session, lines),
       idleLimit,
       lastUsed,
-      lines: orderLines(shownLines, sort, dir),
+      lines: orderLines(lines, sort, dir),
       noRecipe: agents.length === 0 || idleLimitOnly ? causes : null,
-      released: drawsReleased ? 0 : releasedCount(lines),
+      poolId: key?.poolId ?? null,
       session,
-      shown: shownLines.flatMap((l) => (l.recipe === null ? [] : [l.recipe])),
+      status: statusOf(session, lines),
     };
   });
   return orderRows(rows, sort, dir);
 }
 
 /**
- * Reads as "2 retained, 1 held" for the collapsed row, from the states still holding a prompt to the ones that ended. An
- * agent awaiting cache evidence is retained with no time yet, and counts as retained here.
+ * The Add filter lists' rows: the fixed words, the listed rows' client versions and their lines' types, efforts and
+ * models, and the keys', pools' and accounts' entries, an earlier holder's lifetime among the keys under its own label
+ * as the Requests view lists one, and the models in the cost model's tier order.
  */
-function stateSummary(agents: KeepaliveRecipe[]): string {
-  const states: RecipeState[] = ['retained', 'held', 'paused', 'not_retained', 'ended'];
-  return states
-    .map((state) => ({ count: agents.filter((a) => a.state === state).length, state }))
-    .filter((x) => x.count > 0)
-    .map((x) => `${x.count} ${STATE_LABEL[x.state]}`)
-    .join(', ');
+function filterOptions(rows: readonly Row[], keys: ApiKey[] | null, pools: Pool[], accounts: Account[], modelTiers: ModelTiers): Record<string, Option[]> {
+  const words = (values: readonly string[]): Option[] => values.map((value) => ({ label: value, value }));
+  const held = (values: (string | null)[]) => [...new Set(values.filter((v): v is string => v !== null))];
+  const lines = rows.flatMap((r) => r.lines);
+  return {
+    account: accounts.map((a) => ({ label: a.label, value: a.id })),
+    active: ACTIVE_WITHIN.map((a) => ({ label: a.label, value: a.id })),
+    agentType: words(held([...AGENT_TYPES, ...lines.map((l) => l.agentType)]).sort()),
+    cache: words(['cold', 'no recipe', 'warm']),
+    client: words(held(rows.map((r) => clientVersion(r.session.userAgent))).sort()),
+    companion: words(['none', 'reporting', 'silent']),
+    effort: words(held(lines.map((l) => l.pin?.effort ?? null)).sort()),
+    key: keyOptions(keys, held(rows.map((r) => (r.session.historical ? keyLifetime(r.session.keyId, r.session.keyGeneration) : null)))),
+    model: words(tierOrder(held(lines.map((l) => l.model)), modelTiers)),
+    pool: pools.map((p) => ({ label: p.name, value: p.id })),
+    status: words(['busy', 'idle', 'parked', 'registered', 'released', 'unknown', 'unreported']),
+  };
+}
+
+/** The kept rows' figures the card's summary line reads, each agent counted as the Agents cell counts it. */
+function daySummary(rows: readonly Row[]): { agents: number; billed: number; busy: number; equivalent: number; idle: number; parked: number; requests: number } {
+  const sum = (values: number[]) => values.reduce((n, v) => n + v, 0);
+  const splits = rows.map((r) => lifecycleSplit(r.lines));
+  return {
+    agents: sum(rows.map((r) => agentCount(r.lines))),
+    billed: sum(rows.flatMap((r) => Object.values(r.session.day.billedUsd))),
+    busy: sum(splits.map((s) => s.busy)),
+    // A day the cost model priced nothing for adds nothing to the figure.
+    equivalent: sum(rows.flatMap((r) => (r.session.day.equivalent === null ? [] : [r.session.day.equivalent]))),
+    idle: sum(splits.map((s) => s.idle)),
+    parked: sum(splits.map((s) => s.parked)),
+    requests: sum(rows.flatMap((r) => Object.values(r.session.day.requests))),
+  };
+}
+
+/**
+ * The recipe the row's Cache cell reads, as the route picks the row's `keepalive` summary: main's where one stands,
+ * else the one with the newest last request, a recipe without one last and ties by agent id.
+ */
+function rowRecipe(agents: readonly KeepaliveRecipe[]): KeepaliveRecipe | null {
+  const main = agents.find((a) => a.agentId === MAIN_AGENT);
+  if (main !== undefined) return main;
+  const at = (a: KeepaliveRecipe) => (a.lastRequestAt === null ? Number.NEGATIVE_INFINITY : Date.parse(a.lastRequestAt));
+  return [...agents].sort((a, b) => at(b) - at(a) || a.agentId.localeCompare(b.agentId))[0] ?? null;
 }
 
 /** The park's kind and the time it returns by, read after the lifecycle word: "background · deadline in 1h 12m". */
@@ -248,6 +297,25 @@ function parkDetail(a: KeepaliveRecipe, now: number): string {
   if (a.agentState !== 'parked' || a.parkKind === null) return '';
   const times = [a.deadline && `deadline ${fmtRelative(a.deadline, now)}`, a.wakeAt && `wakes ${fmtRelative(a.wakeAt, now)}`].filter(Boolean);
   return [a.parkKind, ...times].map((part) => ` · ${part}`).join('');
+}
+
+/** The presence line's hover: the companion word's sentence and the instant the line counts from. */
+function presenceTitle(session: Session, now: number): string | undefined {
+  if (session.companion === 'reporting' && session.presenceAgeSeconds !== null) return `${COMPANION_HINT.reporting} Last seen ${fmtAbsolute(iso(now - session.presenceAgeSeconds * 1000))}.`;
+  if (session.companion === 'silent' && session.companionSince !== null) return `${COMPANION_HINT.silent} Silent since ${fmtAbsolute(session.companionSince)}.`;
+  return undefined;
+}
+
+/**
+ * What the Cost cell reads beside the row: the accounts its hint names, the chosen unit and week, and the week's scale
+ * with its `failure`, as `weekReadingOf` answers them.
+ */
+interface CostContext {
+  accounts: Account[] | null;
+  failure: WeekReading['failure'];
+  scale: number | null;
+  unit: UnitPosition;
+  week: WeekPosition;
 }
 
 export function SessionsPage() {
@@ -260,15 +328,16 @@ export function SessionsPage() {
   const reread = { paused: pauseCause !== null, refreshMs: intervalMs };
   // The router keeps a session while it is used, so the list is read again rather than aged on this clock alone: a
   // session still sending requests would otherwise drop off once its first-read activity crossed the expiry. The
-  // accounts, the overview and the recipes read on the same interval, so the lines' slow-down chips, the tiles and the
-  // hidden lines move with the rows.
+  // accounts and the recipes read on the same interval, so the slow-down chips and the lines move with the rows.
   const accounts = useAsync(() => api.listAccounts(), [], reread);
   const keys = useAsync(() => api.listKeys(), []);
-  const overview = useAsync(() => api.getKeepaliveOverview(), [], reread);
   const pools = useAsync(() => api.listPools(), []);
   const recipes = useAsync(() => api.listKeepaliveRecipes(), [], reread);
   const sessions = useAsync(() => api.listSessions(), [], reread);
+  // The session expiry, and the cost model whose capacities scale a spend to the chosen week.
   const settings = useAsync(() => api.getSettings(), []);
+  const { modelTiers, unit, week } = useAppSettings();
+  const weekReading = weekReadingOf(settings.data?.subscriptionCosts ?? null, settings.error, week);
   const now = useNow(5_000);
   const navigate = useNavigate();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -287,45 +356,26 @@ export function SessionsPage() {
   const poolsFailed = failedFirst(pools);
   // Built without the clock, so a tick only filters the rows again.
   const built = useMemo(
-    () => (sessionData && recipeData && keys.data ? buildRows(sessionData, recipeData, keys.data, pools.data ?? [], poolsFailed, filters.released, filters.sort, dir, expireAfterSeconds) : null),
-    [sessionData, recipeData, keys.data, pools.data, poolsFailed, filters.released, filters.sort, dir, expireAfterSeconds],
+    () => (sessionData && recipeData && keys.data ? buildRows(sessionData, recipeData, keys.data, pools.data ?? [], poolsFailed, filters.sort, dir, expireAfterSeconds) : null),
+    [sessionData, recipeData, keys.data, pools.data, poolsFailed, filters.sort, dir, expireAfterSeconds],
   );
   // The router forgets a session once it has been idle for the expiry, so this list has to as well.
   const listed = useMemo(() => built?.filter((r) => r.expiresAt === null || r.expiresAt > now) ?? null, [built, now]);
   // The expiry stays the outer bound, and the filters narrow the list inside it.
-  const rows = useMemo(
-    () => listed?.filter((r) => (filters.companion.length === 0 || filters.companion.includes(r.session.companion)) && (filters.finished || !r.finished)) ?? null,
-    [listed, filters.companion, filters.finished],
-  );
+  const rows = useMemo(() => listed?.filter((r) => matches(r, filters, now)) ?? null, [listed, filters, now]);
+  // The lines each kept row draws, which its cells, its detail and the count read.
+  const drawn = useMemo(() => new Map((rows ?? []).map((r) => [rowKey(r.session), hiddenLines(r, filters).shown])), [rows, filters]);
+  const options = useMemo(() => (listed === null ? {} : filterOptions(listed, keys.data, pools.data ?? [], accounts.data ?? [], modelTiers)), [listed, keys.data, pools.data, accounts.data, modelTiers]);
   const hiddenRows = listed !== null && rows !== null ? listed.length - rows.length : 0;
   const hiddenTitle = hiddenRows > 0 ? `${fmtCount(hiddenRows, 'session')} hidden by the filters` : undefined;
-  const o = overview.data;
-  // A refresh that fails keeps the tiles it drew, so only a read that never answered draws them as failed.
-  const overviewFailure = failed(failedFirst(overview) ? overview.error : null);
-  // Keyed by the word the notice names each read by, so the overview reads as the tiles.
-  const reads = { keys, recipes, sessions, tiles: overview };
-  const firstFailedOf = (names: readonly (keyof typeof reads)[]) => names.find((n) => failedFirst(reads[n])) ?? null;
-  // The Sessions and Agents figures count the rows, which the sessions, the recipes and the keys build, so each of
-  // those reads can end their placeholder with its error. The other tiles read the overview alone.
-  const firstFailed = firstFailedOf(['tiles', 'sessions', 'recipes', 'keys']);
-  const countFailure = failed(firstFailed === null ? null : reads[firstFailed].error);
-  // The card's own reads in the notice's order, so with the overview answered and two of them failed, the card and the
-  // notice name the same one.
-  const cardFailed = firstFailedOf(['sessions', 'recipes', 'keys']);
-  // Counted over the rows shown, so the note agrees with the table under it and the count beside it.
-  const withCompanion = rows ? rows.filter((r) => r.session.companion === 'reporting' || r.session.companion === 'silent').length : null;
-  const withRecipe = rows ? rows.filter((r) => r.session.keepalive.state !== null).length : null;
-  const sessionsNote = withCompanion !== null && withRecipe !== null ? `${fmtInt(withCompanion)} with the keepalive mod, ${fmtInt(withRecipe)} with a recipe` : null;
-  // Counted over the rows the filters keep, so the Agents figure and its note agree with the table under them.
-  const agentRecords = rows?.reduce((n, r) => n + r.session.agents, 0) ?? 0;
-  const hidden = rows?.reduce((n, r) => n + r.released, 0) ?? 0;
-  const lifecycle = rows?.reduce(
-    (n, r) => {
-      for (const a of r.agents) if (a.agentState === 'busy' || a.agentState === 'idle' || a.agentState === 'parked') n[a.agentState] += 1;
-      return n;
-    },
-    { busy: 0, idle: 0, parked: 0 },
-  );
+  const agentsKept = [...drawn.values()].reduce((n, lines) => n + agentCount(lines), 0);
+  const matching = agentFiltersStand(filters);
+  const countWords = rows === null ? '' : `${fmtCount(rows.length, 'session')} · ${fmtCount(agentsKept, matching ? 'matching agent' : 'agent')}`;
+  const summary = rows === null ? null : daySummary(rows);
+  // The rows wait on these three reads, so the first that failed before it ever answered names the notice, and the card
+  // draws its error state where that read is the sessions. A refresh that fails after a first answer keeps the rows.
+  const reads = { keys, recipes, sessions };
+  const firstFailed = (['sessions', 'recipes', 'keys'] as const).find((n) => failedFirst(reads[n])) ?? null;
   const onConfirmRelease = () => {
     if (!pending) return;
     void api.releaseSession(pending.session.keyId, pending.session.sessionId).then(
@@ -342,12 +392,12 @@ export function SessionsPage() {
   // Main's pin, a fork's base and each line read their account here rather than off the rows, so an accounts answer
   // redraws the slow-down chips and the labels without rebuilding a row.
   const accountById = useMemo(() => new Map((accounts.data ?? []).map((a) => [a.id, a])), [accounts.data]);
+  const cost: CostContext = { accounts: accounts.data, failure: weekReading.failure, scale: weekReading.scale, unit, week };
   const followFork = (id: string) => {
     // jsdom leaves scrollIntoView undefined.
     document.getElementById(id)?.scrollIntoView?.({ block: 'center' });
     setCurrent(id);
   };
-  const warmingSomewhere = (pools.data ?? []).some((p) => p.keepalive.enabled);
   const allOpen = rows !== null && rows.length > 0 && rows.every((r) => expanded.has(rowKey(r.session)));
   const toggle = (id: string) => setExpanded((prev) => toggled(prev, id));
   // The expand gutter, the Session column and the menu are drawn whatever the control hides.
@@ -358,15 +408,16 @@ export function SessionsPage() {
       <div className="stack">
         <FilterBar
           address={address}
-          count={rows === null ? '' : plural(rows.length, 'session')}
+          count={hiddenTitle === undefined ? countWords : <span title={hiddenTitle}>{countWords}</span>}
           dimensions={SESSIONS_DIMENSIONS}
           filters={filters}
+          options={options}
+          placeholder="Session id"
           refresh={{
             intervalMs,
             onIntervalChange: setIntervalMs,
             onRefresh: () => {
               accounts.reload();
-              overview.reload();
               recipes.reload();
               sessions.reload();
             },
@@ -378,10 +429,12 @@ export function SessionsPage() {
           <ColumnsControl columns={SESSION_COLUMNS} visible={visible} onChange={setVisible} />
           <SortControl keys={SESSION_SORT_KEYS} onChange={(next) => update(sortAddressOf(SESSION_SORT_KEYS, next))} value={{ dir, sort: filters.sort }} />
         </FilterBar>
+        {firstFailed !== null && <ReadNotice error={reads[firstFailed].error} name={firstFailed} retry={reads[firstFailed].reload} />}
+        {failedFirst(accounts) && <ReadNotice error={accounts.error} name="accounts" retry={accounts.reload} />}
         <div className="page-head">
           <div className="page-head__lead">
             <p className="page-head__meta">
-              Every session within the session expiry that the filters keep, with the account each model is pinned to and each agent&apos;s cache-warming recipe.{' '}
+              Every session the router lists: what it runs, where it is pinned, what it has spent and whether its prompt cache is warm.{' '}
               <button type="button" className="link-btn" aria-expanded={howOpen} aria-controls={howId} onClick={() => setHowOpen((v) => !v)}>
                 How pins and recipes work
               </button>
@@ -395,58 +448,21 @@ export function SessionsPage() {
           <CostReferenceLink tab="plan-rates" />
         </div>
 
-        <div className="stat-grid stat-grid--caps">
-          <Tile label="Sessions" value={o && rows ? <span className="nowrap">{`${fmtInt(rows.length)} of ${fmtInt(o.limits.sessions.max)}`}</span> : null} note={sessionsNote} title={hiddenTitle} failure={countFailure} />
-          {/* The sessions and the recipes are two reads that land apart, so the figure can trail the hidden lines by a
-              read, which is accepted. Only a line the recipes list carries comes off, so a record that never drew a line
-              is never subtracted. */}
-          <Tile
-            label="Agents"
-            value={
-              o && rows ? (
-                <span
-                  className="nowrap"
-                  title={`The rows shown hold ${fmtInt(agentRecords)} agent records against the cap.${hidden > 0 ? ` ${fmtInt(hidden)} of them are subagents the mod released while their session lives, which draw no line and keep their slot for one cache TTL after the release, then leave the engine.` : ''}${hiddenTitle === undefined ? '' : ` ${hiddenTitle}.`}`}
-                >
-                  {`${fmtInt(Math.max(0, agentRecords - hidden))} of ${fmtInt(o.limits.agents.max)}`}
-                </span>
-              ) : null
-            }
-            note={lifecycle ? `${fmtInt(lifecycle.busy)} busy, ${fmtInt(lifecycle.idle)} idle, ${fmtInt(lifecycle.parked)} parked` : null}
-            title={hiddenTitle}
-            failure={countFailure}
-          />
-          <Tile
-            label="Retained"
-            value={o ? <span className="nowrap">{`${fmtMiB(o.limits.retainedBytes.count)} of ${fmtMiB(o.limits.retainedBytes.max)}`}</span> : null}
-            note="prompts kept for probes"
-            failure={overviewFailure}
-          />
-          <ProbeTile overview={o} failure={overviewFailure} />
-          {/* The count is router-wide, so a warm tone means at least one pool is paying for probes that did not land. */}
-          <Tile
-            label="Expired between turns, 24h"
-            value={o ? fmtInt(o.expiredBetweenTurns24h) : null}
-            note="misses cache warming exists to prevent"
-            tone={o && o.expiredBetweenTurns24h > 0 && warmingSomewhere ? 'warning' : undefined}
-            failure={overviewFailure}
-          />
-          <Tile
-            label="Bus gaps"
-            value={o ? fmtInt(o.busGaps) : null}
-            note="times the keepalive engine missed bus events"
-            tone={o && o.busGaps > 0 ? 'warning' : undefined}
-            failure={overviewFailure}
-          />
-        </div>
-        {firstFailed !== null && <ReadNotice error={reads[firstFailed].error} name={firstFailed} retry={reads[firstFailed].reload} />}
-        {failedFirst(accounts) && <ReadNotice error={accounts.error} name="accounts" retry={accounts.reload} />}
-
         <Card
           padded={false}
           className="card--table"
-          title="Sessions"
-          subtitle="One row per session. Open a row for the cache-warming recipe each agent carries"
+          title={<span title="One row per session. Open a row for its agents, its routing and its cache warming.">Sessions</span>}
+          subtitle={
+            summary === null ? undefined : (
+              <>
+                {`${fmtCount(summary.agents, 'agent')}: ${fmtInt(summary.busy)} busy, ${fmtInt(summary.idle)} idle, ${fmtInt(summary.parked)} parked · ${fmtCount(summary.requests, 'request')} and `}
+                {/* The figure is a Pro-week figure read in the chosen week, so it waits on the cost model's scale. */}
+                {weekReading.scale !== null ? weekShort(summary.equivalent * weekReading.scale, week) : weekReading.failure === null ? <Skeleton width={64} /> : <span title={weekReading.failure.text}>-</span>}
+                {summary.billed > 0 && ` + ${fmtUsd(summary.billed)}`}
+                {' in 24 h'}
+              </>
+            )
+          }
           actions={
             rows && rows.length > 0 ? (
               <Button size="sm" onClick={() => setExpanded(allOpen ? new Set() : new Set(rows.map((r) => rowKey(r.session))))} aria-pressed={allOpen}>
@@ -481,7 +497,9 @@ export function SessionsPage() {
                       onToggle={() => toggle(rowKey(row.session))}
                       now={now}
                       columns={columns}
+                      cost={cost}
                       current={current === rowDomId(row.session)}
+                      drawn={drawn.get(rowKey(row.session)) ?? []}
                       forkBase={row.session.forkedFrom === null ? null : rowDomId({ ...row.session, sessionId: row.session.forkedFrom })}
                       listedRows={listedRows}
                       onFollowFork={followFork}
@@ -495,10 +513,10 @@ export function SessionsPage() {
             </div>
           ) : (
             <div style={{ padding: 20 }}>
-              {rows === null && cardFailed !== null ? (
+              {rows === null && firstFailed === 'sessions' ? (
                 <ErrorState
                   title="Could not load the sessions"
-                  body={reads[cardFailed].error}
+                  body={reads.sessions.error}
                   retry={() => {
                     sessions.reload();
                     keys.reload();
@@ -533,6 +551,109 @@ export function SessionsPage() {
   );
 }
 
+function ReadNotice({ error, name, retry }: { error: string | null; name: string; retry: () => void }) {
+  return (
+    <p className="sessions__notice" role="status">
+      Could not load the {name}: {error}{' '}
+      <Button size="sm" onClick={retry}>
+        Try again
+      </Button>
+    </p>
+  );
+}
+
+/**
+ * The pin's burn per hour under the Cost figure: the share of the chosen week on a plan pin, the dollars on a pin
+ * billed in dollars, and the share of the pin's own window on hover. None on an unpinned row or a pin with no figure.
+ */
+function BurnLine({ cost, session }: { cost: CostContext; session: Session }) {
+  if (!session.pinned || session.burn === null) return null;
+  if (session.burnUnit === 'usd') return <span className="sub">{`${fmtUsd(session.burn)}/h`}</span>;
+  if (session.burnUnit !== 'window_share' || session.burnEquivalent === null || cost.scale === null) return null;
+  const window = session.burnWindow === null ? null : (lookup(HINT_WINDOW, session.burnWindow) ?? session.burnWindow);
+  return (
+    <span className="sub" title={window === null ? undefined : `${fmtShare(session.burn)} of ${window}`}>
+      {`${weekShort(session.burnEquivalent * cost.scale, cost.week)}/h`}
+    </span>
+  );
+}
+
+/**
+ * The Cost cell: the session's spend over its client requests in the chosen unit, as the request log's cell reads a
+ * request, then the dollars billed beside a plan figure and the other accounts whose windows the requests spent on, the
+ * figure in full with the probes' share on the title, and the pin's burn under it. The skeleton while the scale is
+ * out, a dash titled with the week reading's failure where it carries one, and a muted dash before any ledgered
+ * request.
+ */
+function CostCell({ cost, session }: { cost: CostContext; session: Session }) {
+  const { spend } = session;
+  const args = spend === null ? null : spendHintArgs(spend, cost.accounts);
+  const hint = args === null ? null : shareHint(...args);
+  const reading = spendUnitOf(spend, cost.unit, session.accountId, hint);
+  const burn = <BurnLine cost={cost} session={session} />;
+  if (spend === null || reading === null)
+    return (
+      <td className="right num col-fit" title={NO_TRAFFIC_HINT}>
+        <span className="muted">-</span>
+        {burn}
+      </td>
+    );
+  const cell = costCellOf(reading.unit, cost.week, cost.scale);
+  if (cell === null)
+    return cost.failure === null ? (
+      <td className="right num col-fit">
+        <Skeleton width={72} />
+        {burn}
+      </td>
+    ) : (
+      <td className="right num col-fit" title={cost.failure.text}>
+        -{burn}
+      </td>
+    );
+  const accountById = new Map((cost.accounts ?? []).map((a) => [a.id, a]));
+  return (
+    <td className="right num col-fit" title={spendHover(spend, cost.week, cost.scale, hint)}>
+      <span className="srow__pin srow__pin--wraps">
+        {cell.main}
+        {reading.billed > 0 && <Badge tone="neutral" title={`${fmtUsd(reading.billed)} billed in dollars`}>+$</Badge>}
+        {reading.accounts.length > 0 && (
+          <Badge tone="neutral" title={`Other accounts the requests spent on:\n${reading.accounts.map((id) => accountById.get(id)?.label ?? id).join('\n')}`}>
+            +{reading.accounts.length}
+          </Badge>
+        )}
+      </span>
+      {cell.sub && <span className="sub">{cell.sub}</span>}
+      {burn}
+    </td>
+  );
+}
+
+/**
+ * The row's account: a link to its page with the kind on its title, described to a reader that never hovers, the
+ * slow-down chip on a slowed pin, the shed mark, and the agents pinned on another account. A dash with no account.
+ */
+function RowAccount({ account, now, others, session }: { account: Account | null; now: number; others: { accountId: string; agentId: string; model: string }[]; session: Session }) {
+  const title = account ? KIND_HINT[account.kind] : undefined;
+  const kind = useHostedDescription(title);
+  if (session.accountId === null) return <span className="muted">-</span>;
+  return (
+    <span className="srow__pin">
+      <Link to={accountHref(session.accountId)} title={title} aria-describedby={kind} onClick={stopAtLink} onKeyDown={stopAtLink}>
+        {session.accountId}
+      </Link>
+      {/* An unpinned row on a slowed account carries no speed, so the row's own speed gates the chip. */}
+      {session.speed !== null && <SpeedChip {...memberSpeed(session, account, now)} />}
+      {/* A pin stamped before the mark carried its reason reads as shed. */}
+      {session.shedFrom !== null && (
+        <Badge tone="warning" title={`Marked to leave ${session.shedFrom}: ${session.shedReason ?? 'shed'}. The next request moves the session`}>
+          leaving
+        </Badge>
+      )}
+      <OtherPins agents={others} lead="Agents on another account:" />
+    </span>
+  );
+}
+
 function SessionRows({
   accountById,
   row,
@@ -540,7 +661,9 @@ function SessionRows({
   onToggle,
   now,
   columns,
+  cost,
   current,
+  drawn,
   forkBase,
   listedRows,
   onFollowFork,
@@ -550,8 +673,11 @@ function SessionRows({
 }: {
   accountById: ReadonlyMap<string, Account>;
   columns: number;
+  cost: CostContext;
   /** Whether a fork link last led here. */
   current: boolean;
+  /** The lines the row draws, `hiddenLines`' answer under the filters. */
+  drawn: SessionLine[];
   /** The element id the base of a forked session would carry, whether or not it is listed; null off a fork. */
   forkBase: string | null;
   listedRows: ReadonlyMap<string, Row>;
@@ -564,16 +690,19 @@ function SessionRows({
   row: Row;
   visible: ReadonlySet<SessionColumnId>;
 }) {
-  const { expiresAt, lastUsed, lines, session, shown } = row;
+  const { expiresAt, lastUsed, session, status } = row;
   const noRecipe = noRecipeText(row, now);
-  const summary = stateSummary(shown);
+  const lines = drawn;
+  const shown = drawn.flatMap((l) => (l.recipe === null ? [] : [l.recipe]));
   // A line takes its account from its pin, or from its recipe where no pin stands, and a recipe whose request was
-  // refused before any account served it names none, so that line is left out. The badge counts every other line on
-  // another model, recipe or not, and the hover reads them in the order the expanded row draws them.
-  const otherModels = lines.flatMap((l) => {
+  // refused before any account served it names none, so that line is left out. A "+N" counts every other line on
+  // another model or account, recipe or not, and its hover reads them in the order the expanded row draws them.
+  const placed = lines.flatMap((l) => {
     const accountId = l.pin?.accountId ?? l.recipe?.accountId ?? null;
-    return accountId !== null && l.model !== null && l.model !== session.model ? [{ accountId, agentId: l.agentId, model: l.model }] : [];
+    return accountId !== null && l.model !== null ? [{ accountId, agentId: l.agentId, model: l.model }] : [];
   });
+  const otherModels = placed.filter((l) => l.model !== session.model);
+  const otherAccounts = placed.filter((l) => l.accountId !== session.accountId);
   // A retained agent with no time is waiting on its first stream event, which is
   // a different thing from a session nothing probes.
   const pendingProbe = shown.some((a) => a.state === 'retained' && a.nextProbeAt === null);
@@ -581,6 +710,7 @@ function SessionRows({
   // leaves a refused request out while the log lists it, so a ledgered row reads off the last request instead.
   const hasTraffic = session.lastRequestAt !== null;
   const trafficSession = session.sessionId;
+  const activity = lastActivity(session);
   // The base's row where the list holds it: the fork badge reads the account relation off the two listed rows, and
   // only while both pins are live, since a released or expired pin leaves the last ledgered request's account on the
   // row.
@@ -588,6 +718,20 @@ function SessionRows({
   const baseAccountId = baseRow !== null && baseRow.session.pinned ? baseRow.session.accountId : null;
   // The row's figures are main's conversation pin's, so a row with no pin reads a dash.
   const context = contextCell(session.pinned ? session.lastInputTokens : null);
+  const forked = session.forkedFrom !== null && forkBase !== null;
+  const client = joinPresent([clientVersion(session.userAgent), (session.epoch ?? 1) > 1 ? `epoch ${session.epoch}` : null], ' · ');
+  const clientTitle = sentences([session.userAgent, (session.epoch ?? 1) > 1 ? EPOCH_HINT : null]);
+  const mainRecipe = row.agents.find((a) => a.agentId === MAIN_AGENT) ?? null;
+  const park = status.word === 'parked' && mainRecipe !== null ? parkDetail(mainRecipe, now).replace(/^ · /, '') : '';
+  const statusTitle = park === '' ? LIFECYCLE_HINT[status.word] : `${LIFECYCLE_HINT[status.word]}\n${park}`;
+  const presence = presenceOf(session, now);
+  const split = Object.entries(lifecycleSplit(row.lines)).flatMap(([word, n]) => (n > 0 ? [`${fmtInt(n)} ${word}`] : []));
+  // The state the route's summary reads, unless no recipe keeps the session's prompt.
+  const recipe = row.noRecipe === null ? rowRecipe(row.agents) : null;
+  const cacheTitle =
+    session.warm === null
+      ? undefined
+      : joinPresent([PIN_CACHE_HINT[session.warm ? 'warm' : 'cold'], recipe === null ? NO_RECIPE_HINT : `${STATE_HINT[recipe.state]} ${CAUSE_HINT[recipe.cause]}`, recipe?.nextProbeAt ? `Next probe at ${fmtAbsolute(recipe.nextProbeAt)}.` : null], ' ');
   return (
     <>
       <tr
@@ -605,53 +749,76 @@ function SessionRows({
         </td>
         <td className="mono col-fill" title={session.sessionId}>
           <span className="srow__id ellipsis">{sessionLabel(session)}</span>
-          {session.forkedFrom !== null && forkBase !== null && (
-            <ForkBadge
-              base={baseRow ? forkBase : null}
-              baseAccount={baseAccountId === null ? null : { id: baseAccountId, label: accountById.get(baseAccountId)?.label ?? baseAccountId }}
-              depth={session.forkDepth}
-              from={session.forkedFrom}
-              onFollow={onFollowFork}
-              rowAccountId={session.pinned ? session.accountId : null}
-            />
-          )}
-          {(session.epoch ?? 1) > 1 && (
-            <span className="sub srow__epoch" title="How many times this session's pin was re-created">
-              epoch {session.epoch}
+          {(forked || client !== '') && (
+            <span className="sub srow__client" title={clientTitle === '' ? undefined : clientTitle}>
+              {forked && (
+                <ForkBadge
+                  base={baseRow ? forkBase : null}
+                  baseAccount={baseAccountId === null ? null : { id: baseAccountId, label: accountById.get(baseAccountId)?.label ?? baseAccountId }}
+                  depth={session.forkDepth}
+                  from={session.forkedFrom ?? ''}
+                  onFollow={onFollowFork}
+                  rowAccountId={session.pinned ? session.accountId : null}
+                />
+              )}
+              {forked && client !== '' && ' · '}
+              {client}
             </span>
           )}
-          {/* An unpinned row on a slowed account carries no speed, so the row's own speed gates main's chip. */}
-          {session.speed !== null && <SpeedChip {...memberSpeed(session, accountById.get(session.accountId ?? '') ?? null, now)} />}
         </td>
-        {visible.has('key') && (
-          <td className="mono col-fit">
-            {session.keyId}
-            {session.historical && (
-              <span className="sub" title={HISTORICAL_HINT}>
-                deleted holder
+        {visible.has('status') && (
+          <td className="col-fit">
+            {status.tone === 'muted' ? (
+              <span className="muted" title={statusTitle}>
+                {status.word}
+              </span>
+            ) : (
+              <Badge tone={status.tone} dot title={statusTitle}>
+                {status.word}
+              </Badge>
+            )}
+            {presence && (
+              <span className={presence.tone === 'warning' ? 'sub srow__presence srow__presence--warning' : 'sub srow__presence'} title={presenceTitle(session, now)}>
+                {presence.text}
+              </span>
+            )}
+          </td>
+        )}
+        {visible.has('agents') && (
+          <td className="right num col-fit">
+            {fmtInt(agentCount(row.lines))}
+            {split.length > 0 && (
+              <span className="sub srow__split">
+                {split.map((part, i) => (
+                  <Fragment key={part}>
+                    {i > 0 && ', '}
+                    <span className="nowrap">{part}</span>
+                  </Fragment>
+                ))}
               </span>
             )}
           </td>
         )}
         {visible.has('model') && (
           <td className="mono nowrap col-fit" title={session.model === null ? undefined : modelTitle(session.model, shortModel(session.model))}>
-            <span className="srow__pin">
+            <span className="srow__pin srow__pin--wraps">
               {session.model === null ? <span className="muted">-</span> : shortModel(session.model)}
-              <OtherPins agents={otherModels} />
+              <OtherPins agents={otherModels} lead="Agents on another model:" />
             </span>
           </td>
         )}
-        {visible.has('context') && (
+        {visible.has('account') && (
           <td className="col-fit">
-            <span className={context === '-' ? 'muted' : 'num'}>{context}</span>
+            <RowAccount account={accountById.get(session.accountId ?? '') ?? null} now={now} others={otherAccounts} session={session} />
           </td>
         )}
-        {visible.has('effort') && <td className="col-fit">{session.effort ?? <span className="muted">-</span>}</td>}
-        {visible.has('runway') && (
-          <td className="col-fit" title={session.pinned && session.cycleMs !== null ? `cycle ${ageWord(session.cycleMs)}` : undefined}>
-            {runwayWord(session) ?? <span className="muted">-</span>}
+        {visible.has('requests') && (
+          <td className="right num col-fit" title={sentences([REQUESTS_HINT, session.lastRequestAt === null ? null : `Last request ${fmtAbsolute(session.lastRequestAt)}`])}>
+            {session.requests > 0 ? fmtInt(session.requests) : <span className="muted">0</span>}
+            {session.lastRequestAt !== null && <span className="sub">{fmtRelative(session.lastRequestAt, now)}</span>}
           </td>
         )}
+        {visible.has('cost') && <CostCell cost={cost} session={session} />}
         {/* Expiry rides under the last-used time rather than in a column of its own, which is 90px the 1600px window did not have. */}
         {visible.has('lastUsed') && (
           <td className="col-fit" title={fmtAbsolute(lastUsed)}>
@@ -663,16 +830,20 @@ function SessionRows({
             )}
           </td>
         )}
-        {visible.has('requests') && (
-          <td className="right num col-fit" title={hasTraffic ? undefined : NO_TRAFFIC_HINT}>
-            {session.requests > 0 ? fmtInt(session.requests) : <span className="muted">0</span>}
+        {visible.has('cache') && (
+          <td className="col-fit">
+            {session.warm === null ? (
+              <span className="muted">no pin</span>
+            ) : (
+              <>
+                <Badge tone={session.warm ? 'good' : 'neutral'} dot title={cacheTitle}>
+                  {session.warm ? 'warm' : 'cold'}
+                </Badge>
+                <span className="sub">{recipe === null ? 'no recipe' : STATE_LABEL[recipe.state]}</span>
+              </>
+            )}
           </td>
         )}
-        {visible.has('lastRequest') && (
-          <td className="col-fit" {...timeCell(session.lastRequestAt, now, 'none')} />
-        )}
-        {/* The sessions and the recipes are read apart, so the count stops at zero while the two disagree. */}
-        {visible.has('agents') && <td className="right num col-fit">{Math.max(0, session.agents - row.released)}</td>}
         {visible.has('companion') && (
           <td className="col-fit">
             {session.companion === 'reporting' ? (
@@ -680,9 +851,9 @@ function SessionRows({
                 <Badge tone="good" dot title={COMPANION_HINT.reporting}>
                   reporting
                 </Badge>
-                {session.presenceAgeSeconds !== null && (
-                  <span className="sub srow__presence" title="When the person was last seen at the terminal">
-                    presence {fmtDuration(session.presenceAgeSeconds * 1000)} ago
+                {presence && (
+                  <span className="sub srow__presence" title={presenceTitle(session, now)}>
+                    {presence.text}
                   </span>
                 )}
               </>
@@ -691,7 +862,11 @@ function SessionRows({
                 <Badge tone="warning" dot title={COMPANION_HINT.silent}>
                   silent
                 </Badge>
-                <span className="sub">since {fmtRelative(session.companionSince, now)}</span>
+                {session.companionSince !== null && (
+                  <span className="sub" title={presenceTitle(session, now)}>
+                    {fmtDuration(now - Date.parse(session.companionSince))}
+                  </span>
+                )}
               </>
             ) : (
               <span className="muted" title={COMPANION_HINT.none}>
@@ -700,24 +875,38 @@ function SessionRows({
             )}
           </td>
         )}
-        {visible.has('cacheWarming') && (
+        {visible.has('context') && (
           <td className="col-fit">
-            {session.keepalive.state && !noRecipe ? (
-              <>
-                <Badge tone={PIN_TONE[session.keepalive.state]} dot title={PIN_HINT[session.keepalive.state]}>
-                  {session.keepalive.state}
-                </Badge>
-                {summary && <span className="sub srow__summary">{summary}</span>}
-              </>
-            ) : (
-              <span className="muted" title={session.historical ? HISTORICAL_NO_RECIPE_HINT : NO_RECIPE_HINT}>
-                no recipe
+            <span className={context === '-' ? 'muted' : 'num'}>{context}</span>
+          </td>
+        )}
+        {visible.has('created') && (
+          <td className="col-fit" title={session.createdAt === null ? undefined : fmtAbsolute(session.createdAt)}>
+            {session.createdAt === null ? <span className="muted">-</span> : fmtRelative(session.createdAt, now)}
+          </td>
+        )}
+        {visible.has('effort') && <td className="col-fit">{session.effort ?? <span className="muted">-</span>}</td>}
+        {/* No route lists one key, so the link opens the Keys view narrowed to it. */}
+        {visible.has('key') && (
+          <td className="mono col-fit">
+            <Link to={`/keys?${KEYS_CODEC.toParams({ pools: [], search: session.keyId, status: 'all' })}`} onClick={stopAtLink} onKeyDown={stopAtLink}>
+              {session.keyId}
+            </Link>
+            {session.historical && (
+              <span className="sub" title={HISTORICAL_HINT}>
+                deleted holder
               </span>
             )}
           </td>
         )}
+        {visible.has('lastRequest') && <td className="col-fit">{session.lastRequestAt ? <span className="num">{fmtAbsolute(session.lastRequestAt)}</span> : <span className="muted">none</span>}</td>}
         {visible.has('nextProbe') && (
           <td className="col-fit" {...timeCell(session.keepalive.nextProbeAt, now, pendingProbe ? 'pending' : 'not scheduled')} />
+        )}
+        {visible.has('runway') && (
+          <td className="col-fit" title={session.pinned && session.cycleMs !== null ? `cycle ${ageWord(session.cycleMs)}` : undefined}>
+            {runwayWord(session) ?? <span className="muted">-</span>}
+          </td>
         )}
         {/* The actions sit in a menu, a fraction of spelled-out buttons' width, and close the row: the id leads it, so a
             reader scans ids down the first column, and the actions stay reachable at the row's end at 1280 px. */}
@@ -727,8 +916,9 @@ function SessionRows({
             items={[
               { label: 'View in analytics', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(analyticsHref(trafficSession, session)) },
               { label: 'View in requests', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(requestsHref(trafficSession, session, session.lastRequestAt)) },
-              // The routing log reads the decisions, which exist once a pin does, so it needs no ledgered request.
-              { label: 'View in routing log', disabled: !session.sessionId, onClick: () => onOpen(logHref({ session: session.sessionId, ...aroundSubject(session.lastRequestAt ? Date.parse(session.lastRequestAt) : null, now) })) },
+              // The routing log reads the decisions, which exist once a pin does, so it needs no ledgered request and
+              // opens an hour either side of the session's last activity.
+              { label: 'View in routing log', disabled: !session.sessionId, onClick: () => onOpen(logHref({ session: session.sessionId, ...aroundSubject(activity === null ? null : Date.parse(activity), now) })) },
               ...(!session.historical ? [{ label: 'Release', onClick: onRelease }] : []),
             ]}
           />
@@ -788,8 +978,9 @@ function SessionRows({
 
 /**
  * A forked session's marker: a link to its base's row where the base is listed, plain where it is not, with the base's
- * whole id and the depth on the title. The link stops at the row, whose click and Enter would otherwise open it. The
- * title describes the badge through the card's host, so a reader that never hovers hears the relation.
+ * whole id, the depth and the relation to the base's account on the title. The link stops at the row, whose click and
+ * Enter would otherwise open it. The title describes the badge through the card's host, so a reader that never hovers
+ * hears the relation.
  */
 function ForkBadge({
   base,
@@ -820,14 +1011,12 @@ function ForkBadge({
       ? `Branched from session ${from}${at}, which this list does not hold`
       : relation === null
         ? `Branched from session ${from}${at}. Go to its row`
-        : `Branched from session ${from}${at} on ${baseAccount?.label}. Go to its row`;
+        : `Branched from session ${from}${at}, ${relation} (${baseAccount?.label}). Go to its row`;
   const hosted = useHostedDescription(title);
-  // The badge sits under the session id, so it names the relation or the depth alone, and the title the base.
-  const words = relation !== null ? `fork, ${relation}` : depth === null ? 'fork' : `fork at ${depth}`;
   if (base === null)
     return (
       <span className="badge badge--accent srow__fork" title={title} aria-describedby={hosted}>
-        {words}
+        fork
       </span>
     );
   return (
@@ -843,7 +1032,7 @@ function ForkBadge({
       }}
       onKeyDown={(e) => e.stopPropagation()}
     >
-      {words}
+      fork
     </a>
   );
 }
@@ -917,7 +1106,7 @@ function AgentLine({ accountById, line, now, requestsTo }: { accountById: Readon
           </span>
           <div className="agents__more">
             <span className="agents__life">
-              <Badge tone={PIN_TONE[a.agentState]} dot title={PIN_HINT[a.agentState]}>
+              <Badge tone={STATUS_TONE[a.agentState]} dot title={LIFECYCLE_HINT[a.agentState]}>
                 {a.agentState}
               </Badge>
               {parkDetail(a, now)}
@@ -949,53 +1138,12 @@ function LineAccount({ account, id, now }: { account: Account | null; id: string
   );
 }
 
-/** "+2" beside a session's main pin, hovering into one line per agent that sits on another model. */
-function OtherPins({ agents }: { agents: { accountId: string; agentId: string; model: string }[] }) {
+/** "+2" beside a row's figure, hovering into `lead` and one line per agent that sits on another model or account. */
+function OtherPins({ agents, lead }: { agents: { accountId: string; agentId: string; model: string }[]; lead: string }) {
   if (agents.length === 0) return null;
   return (
-    <Badge tone="neutral" title={`Agents pinned elsewhere:\n${agents.map((a) => `${a.agentId}: ${a.model} on ${a.accountId}`).join('\n')}`}>
+    <Badge tone="neutral" title={`${lead}\n${agents.map((a) => `${a.agentId}: ${a.model} on ${a.accountId}`).join('\n')}`}>
       +{agents.length}
     </Badge>
   );
 }
-
-function ReadNotice({ error, name, retry }: { error: string | null; name: string; retry: () => void }) {
-  return (
-    <p className="sessions__notice" role="status">
-      Could not load the {name}: {error}{' '}
-      <Button size="sm" onClick={retry}>
-        Try again
-      </Button>
-    </p>
-  );
-}
-
-function ProbeTile({ failure, overview: o }: { failure: WeekReading['failure']; overview: KeepaliveOverview | null }) {
-  const total = o ? o.probes24h.ok + o.probes24h.migrated + o.probes24h.held + o.probes24h.skipped + o.probes24h.failed : 0;
-  return (
-    <Tile
-      label="Cache probes, 24h"
-      value={o ? fmtInt(total) : null}
-      failure={failure}
-      note={
-        o ? (
-          <>
-            <div className="probe-bar" role="img" aria-label={`Probes in the last 24h: ${o.probes24h.ok} ok, ${o.probes24h.migrated} migrated, ${o.probes24h.held} held, ${o.probes24h.skipped} skipped, ${o.probes24h.failed} failed`}>
-              <span className="probe-bar__seg probe-bar__seg--ok" style={{ flex: o.probes24h.ok }} />
-              <span className="probe-bar__seg probe-bar__seg--migrated" style={{ flex: o.probes24h.migrated }} title={MIGRATED_PROBE_HINT} />
-              <span className="probe-bar__seg probe-bar__seg--held" style={{ flex: o.probes24h.held }} title={HELD_PROBE_HINT} />
-              <span className="probe-bar__seg probe-bar__seg--skipped" style={{ flex: o.probes24h.skipped }} />
-              <span className="probe-bar__seg probe-bar__seg--failed" style={{ flex: o.probes24h.failed }} />
-            </div>
-            <span className="stat__note">
-              {fmtInt(o.probes24h.ok)} ok ({fmtPct(total ? o.probes24h.ok / total : 0)}), <span title={MIGRATED_PROBE_HINT}>{fmtInt(o.probes24h.migrated)} migrated</span>, <span title={HELD_PROBE_HINT}>{fmtInt(o.probes24h.held)} held</span>,{' '}
-              {fmtInt(o.probes24h.skipped)} skipped,{' '}
-              {fmtInt(o.probes24h.failed)} failed
-            </span>
-          </>
-        ) : null
-      }
-    />
-  );
-}
-

@@ -10638,8 +10638,8 @@ async function sessionsLead(theme) {
         lineHeight: lead ? parseFloat(getComputedStyle(lead).lineHeight) : null,
         line,
         bar: box(document.querySelector('.filter-bar')),
+        card: box(document.querySelector('.sessions-table')?.closest('.card') ?? null),
         para: box(para),
-        tiles: box(document.querySelector('.stat-grid')),
         words,
         wrap: box(wrap),
       };
@@ -10686,7 +10686,7 @@ async function sessionsLead(theme) {
     if (open.expanded !== 'true' || open.para === null || open.para.height === 0) say(`${where} a click left the paragraph closed`);
     else {
       if (open.lead === null || Math.abs(open.para.top - open.lead.bottom - 6) > 1) say(`${where} the opened paragraph starts ${open.lead ? px(open.para.top - open.lead.bottom) : 'with no lead'}px under the lead, not 6px`);
-      if (open.tiles === null || open.para.bottom > open.tiles.top) say(`${where} the opened paragraph ends at ${px(open.para.bottom)}px, past the tiles' top at ${px(open.tiles?.top) ?? 'none'}px`);
+      if (open.card === null || open.para.bottom > open.card.top) say(`${where} the opened paragraph ends at ${px(open.para.bottom)}px, past the card's top at ${px(open.card?.top) ?? 'none'}px`);
       if (open.cost === null || open.wrap === null || open.cost.right < open.wrap.right) say(`${where} Cost reference ends at ${px(open.cost?.right) ?? 'none'}px, short of the lead's right at ${px(open.wrap?.right) ?? 'none'}px`);
     }
     const { cost: shut, costLineHeight } = closed;
@@ -11379,10 +11379,10 @@ async function burnShot(theme) {
 }
 
 /**
- * The Sessions table's default columns, the Context column among them, fit its card at the pass's 1280 by 800 and at
- * 1440 by 900: the table needs no more than its wrap's width, so nothing scrolls sideways and the companion and the
- * cache warming state stay in view. A slowed session's speed chip stands inside its Session cell under the session id,
- * which the mock pass requires on studio's sessions, read at 1280. At 375 by 800 the set is wider than the phone's
+ * The Sessions table's default columns, the Cost column among them, fit its card at the pass's 1280 by 800 and at 1440
+ * by 900: the table needs no more than its wrap's width, so nothing scrolls sideways and the status and the cache state
+ * stay in view. A slowed session's speed chip stands inside its Account cell, which the mock pass requires on studio's
+ * sessions, read at 1280. At 375 by 800 the set is wider than the phone's
  * card: it scrolls inside its wrap with Session, the fill, at its floor within 1 px, and the document stays as wide as
  * the window. The viewport returns to the pass's 1280 by 800 after.
  */
@@ -11397,6 +11397,7 @@ async function sessionsTableFits(theme) {
       const least = Math.ceil(table.getBoundingClientRect().width);
       table.style.width = '';
       const session = [...table.querySelectorAll('thead th')].find((th) => th.textContent?.trim() === 'Session') ?? null;
+      const account = [...table.querySelectorAll('thead th')].find((th) => th.textContent?.trim() === 'Account') ?? null;
       return {
         client: wrap.clientWidth,
         columns: [...table.querySelectorAll('thead th')].map((th) => [th.textContent?.trim() ?? '', Math.round(th.getBoundingClientRect().width)]),
@@ -11409,8 +11410,7 @@ async function sessionsTableFits(theme) {
           const td = chip.closest('td');
           const cell = td.getBoundingClientRect();
           const box = chip.getBoundingClientRect();
-          const id = td.querySelector('.srow__id')?.getBoundingClientRect() ?? null;
-          return { inside: box.left >= cell.left - 0.5 && box.right <= cell.right + 0.5, line: session !== null && td.cellIndex === session.cellIndex && id !== null && box.top >= id.bottom - 0.5, text: chip.textContent?.trim() ?? '' };
+          return { inside: box.left >= cell.left - 0.5 && box.right <= cell.right + 0.5, line: account !== null && td.cellIndex === account.cellIndex, text: chip.textContent?.trim() ?? '' };
         }),
         wrapScroll: wrap.scrollWidth,
       };
@@ -11419,10 +11419,10 @@ async function sessionsTableFits(theme) {
   measurements.push(`${theme} /sessions table ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px, at least ${read.least}px (slack ${read.client - read.least}px), ${read.rows} rows, columns ${JSON.stringify(read.columns)}, speed chips ${JSON.stringify(read.speed)}`}`);
   if (read === null) failures.push(`${theme} /sessions: no session table to measure`);
   else {
-    if (!read.columns.some(([label]) => label === 'Context')) failures.push(`${theme} /sessions: the default columns draw no Context column, so the fit is read without it`);
+    if (!read.columns.some(([label]) => label === 'Cost')) failures.push(`${theme} /sessions: the default columns draw no Cost column, so the fit is read without it`);
     if (read.scroll > read.client || read.wrapScroll > read.client) failures.push(`${theme} /sessions: the default columns need ${Math.max(read.scroll, read.wrapScroll)}px of the wrap's ${read.client}px, so the table scrolls sideways`);
-    if (mock && read.speed.length === 0) failures.push(`${theme} /sessions: the story slows studio's sessions, yet no Session cell draws a speed chip`);
-    for (const chip of read.speed.filter((c) => !c.inside || !c.line)) failures.push(`${theme} /sessions: the speed chip ${JSON.stringify(chip.text)} stands ${chip.inside ? 'outside the Session cell under the id' : 'past its cell'}`);
+    if (mock && read.speed.length === 0) failures.push(`${theme} /sessions: the story slows studio's sessions, yet no Account cell draws a speed chip`);
+    for (const chip of read.speed.filter((c) => !c.inside || !c.line)) failures.push(`${theme} /sessions: the speed chip ${JSON.stringify(chip.text)} stands ${chip.inside ? 'outside the Account cell' : 'past its cell'}`);
   }
   try {
     for (const { height, width } of [
@@ -11532,12 +11532,22 @@ async function tableColumns(theme, view, selector, fill, fixed = 0, { overflowRe
       const boxes = [...flex.children].filter((n) => !['absolute', 'fixed'].includes(getComputedStyle(n).position)).map((n) => n.getBoundingClientRect());
       return boxes.filter((b, i) => i > 0 && b.top >= boxes[i - 1].bottom - 1).length + 1;
     };
-    // A wrapping cell's flex row drops its items under each other, so its need is its widest single item, and a cell
-    // of the column without a flex row (its header) reads as any other.
+    // A wrapping cell's flex row drops its items under each other, so its need is its widest single item, a run of
+    // text among them (a figure before its badges), and a cell of the column without a flex row (its header) reads as
+    // any other.
     const widestItem = (c) => {
       const flex = [c, ...c.children].find((n) => ['flex', 'inline-flex'].includes(getComputedStyle(n).display));
       if (!flex) return inlineWidth(c);
-      return Math.max(0, ...[...flex.children].filter((n) => !['absolute', 'fixed'].includes(getComputedStyle(n).position)).map((n) => n.getBoundingClientRect().width));
+      const widths = [...flex.childNodes].flatMap((n) => {
+        if (n.nodeType === Node.TEXT_NODE) {
+          if (!n.textContent?.trim()) return [];
+          const range = document.createRange();
+          range.selectNodeContents(n);
+          return [range.getBoundingClientRect().width];
+        }
+        return n.nodeType === Node.ELEMENT_NODE && !['absolute', 'fixed'].includes(getComputedStyle(n).position) ? [n.getBoundingClientRect().width] : [];
+      });
+      return Math.max(0, ...widths);
     };
     const columns = ths.map((th, i) => {
       const cells = [th, ...rows.map((r) => r.children[i])];
@@ -11677,8 +11687,8 @@ async function sessionRowMenu(theme) {
  * its grid's scroll width there and inside its visible box at 1440 px, where no grid scrolls: the widest grid's scroll
  * and client widths are recorded at both. At both widths the expanded table stays inside its wrap, whose scroll and
  * client widths are recorded. A cause badge wraps inside its own State cell, its edges recorded against the table's
- * visible edge. The plain session's collapsed row, the first row no companion reports whose pin names an effort, draws
- * the first text line of its Model, Context and Effort cells on the session id's line, its top and its height.
+ * visible edge. The plain session's collapsed row, the first row whose Status reads unreported, draws the first text
+ * line of its Model, Requests and Last used cells on the session id's line, its top and its height.
  */
 async function agentLines(theme, width) {
   const where = width === 1280 ? '' : ` at ${width} px`;
@@ -11691,7 +11701,7 @@ async function agentLines(theme, width) {
   const plain = await page.evaluate(() => {
     const heads = [...document.querySelectorAll('.sessions-table thead th')].map((th) => th.textContent?.trim() ?? '');
     const cellOf = (tr, head) => (heads.includes(head) ? tr.children[heads.indexOf(head)] : null);
-    const row = [...document.querySelectorAll('.sessions-table tbody tr.srow')].find((tr) => cellOf(tr, 'Companion')?.textContent?.trim() === 'none' && !['', '-'].includes(cellOf(tr, 'Effort')?.textContent?.trim() ?? ''));
+    const row = [...document.querySelectorAll('.sessions-table tbody tr.srow')].find((tr) => cellOf(tr, 'Status')?.textContent?.trim() === 'unreported');
     if (!row) return null;
     // A cell's first text line, the first box of a range over its first text, which a cell whose content wraps under
     // the session id's line would set apart from that line, while every cell of the row shares the row's box.
@@ -11705,13 +11715,13 @@ async function agentLines(theme, width) {
       const b = range.getClientRects()[0];
       return b ? { height: Math.round(b.height * 100) / 100, text: el.textContent?.trim() ?? '', top: Math.round(b.top * 100) / 100 } : null;
     };
-    return { context: line(cellOf(row, 'Context')), effort: line(cellOf(row, 'Effort')), model: line(cellOf(row, 'Model')), session: line(cellOf(row, 'Session')?.querySelector('.srow__id')) };
+    return { 'last used': line(cellOf(row, 'Last used')), model: line(cellOf(row, 'Model')), requests: line(cellOf(row, 'Requests')), session: line(cellOf(row, 'Session')?.querySelector('.srow__id')) };
   });
   measurements.push(`${theme} /sessions${where} plain row ${JSON.stringify(plain)}`);
   if (plain === null) {
-    if (mock) say('the story lists a session no companion reports, yet no such row names an effort');
+    if (mock) say('the story lists a session no mod reports, yet no row reads unreported');
   } else {
-    for (const cell of ['Model', 'Context', 'Effort']) {
+    for (const cell of ['Model', 'Requests', 'Last used']) {
       const read = plain[cell.toLowerCase()];
       const off = read === null || plain.session === null ? ['top', 'height'] : ['top', 'height'].filter((key) => Math.abs(read[key] - plain.session[key]) > 1);
       if (off.length > 0) say(`the plain session's ${cell} cell's first line differs from its session id's line in ${off.join(' and ')} (${JSON.stringify(read)} against ${JSON.stringify(plain.session)})`);
@@ -11864,9 +11874,8 @@ async function sessionsSortOrder(theme) {
 
 /**
  * The Sessions table's fork badge against the row's other badges: it sits under the session id's line in the face of
- * the Companion and Cache warming badges (its height is free, since it wraps its words when the column is narrower
- * than they are). Both seeds record a fork, so both passes measure the fork badge, and only the mock's pass fails when
- * none is drawn.
+ * the Status badges (its height is free, since it wraps its words when the column is narrower than they are). Both
+ * seeds record a fork, so both passes measure the fork badge, and only the mock's pass fails when none is drawn.
  */
 async function sessionForkMark(theme) {
   const say = (what) => failures.push(`${theme} /sessions: ${what}`);
@@ -11877,8 +11886,7 @@ async function sessionForkMark(theme) {
       return `${s.fontFamily}/${s.fontSize}/${s.lineHeight}/${s.paddingTop}/${s.paddingLeft}`;
     };
     const heads = [...document.querySelectorAll('.sessions-table thead th')].map((th) => th.textContent?.trim());
-    const companion = heads.indexOf('Companion');
-    const warming = heads.indexOf('Cache warming');
+    const status = heads.indexOf('Status');
     const rows = [...document.querySelectorAll('.sessions-table tbody tr.srow')];
     const fork = document.querySelector('.sessions-table .srow__fork');
     // The badge sits under the id's line, so its middle lies below that line's bottom.
@@ -11889,7 +11897,7 @@ async function sessionForkMark(theme) {
       const box = fork.getBoundingClientRect();
       return (box.top + box.bottom) / 2 > line.bottom;
     })();
-    const rowBadge = rows.map((r) => r.children[companion]?.querySelector('.badge') ?? r.children[warming]?.querySelector('.badge')).find(Boolean);
+    const rowBadge = rows.map((r) => r.children[status]?.querySelector('.badge')).find(Boolean);
     return { below, forkBadge: face(fork), rowFace: face(rowBadge) };
   });
   measurements.push(`${theme} /sessions fork mark ${JSON.stringify(read)}`);
@@ -11953,34 +11961,43 @@ async function sessionForkBadges(theme) {
 }
 
 /**
- * The Sessions tile's probe bar draws the outcomes the Analytics probe chart also draws in that chart's slots
- * (`PROBE_SERIES` in `web/src/components/charts/theme.ts`), so one color reads one outcome on both pages. The ok and
- * failed segments keep the status colors.
+ * The Sessions row's badges and sub lines against each other: on the first row whose Status and Cache cells both draw a
+ * badge, the Status badge in the face and height of the Cache badge, and the sub lines of the Agents, Requests, Cost
+ * and Cache cells in the font family, size and line height of the Status cell's, the presence line's ink left free. The
+ * story's rows draw both badges and every sub line, so only the mock's pass fails where they are missing.
  */
-async function probeBarSlots(theme) {
-  const say = (what) => failures.push(`${theme} /sessions: the probe bar ${what}`);
-  const read = await page.evaluate((slots) => {
-    const bar = document.querySelector('.probe-bar');
-    if (!bar) return null;
-    // A computed color holds the value, never the token's name, so each token is resolved on a probe of its own.
-    const resolve = (token) => {
-      const probe = document.body.appendChild(document.createElement('span'));
-      probe.style.backgroundColor = `var(${token})`;
-      const color = getComputedStyle(probe).backgroundColor;
-      probe.remove();
-      return color;
+async function sessionsRowBadges(theme) {
+  const say = (what) => failures.push(`${theme} /sessions row badges: ${what}`);
+  const read = await page.evaluate(() => {
+    const heads = [...document.querySelectorAll('.sessions-table thead th')].map((th) => th.textContent?.trim() ?? '');
+    const cellOf = (tr, head) => (heads.includes(head) ? tr.children[heads.indexOf(head)] : null);
+    const row = [...document.querySelectorAll('.sessions-table tbody tr.srow')].find((tr) => cellOf(tr, 'Status')?.querySelector('.badge') && cellOf(tr, 'Cache')?.querySelector('.badge'));
+    if (!row) return null;
+    const face = (el) => {
+      const s = getComputedStyle(el);
+      return { fontFamily: s.fontFamily, fontSize: s.fontSize, height: Math.round(el.getBoundingClientRect().height * 100) / 100, lineHeight: s.lineHeight, paddingLeft: s.paddingLeft, paddingTop: s.paddingTop, text: el.textContent?.trim() ?? '' };
     };
-    return Object.entries(slots).map(([outcome, token]) => {
-      const segment = bar.querySelector(`.probe-bar__seg--${outcome}`);
-      return { drawn: segment ? getComputedStyle(segment).backgroundColor : null, outcome, slot: resolve(token) };
-    });
-  }, { held: '--series-muted', migrated: '--series-3', skipped: '--series-4' });
-  measurements.push(`${theme} /sessions probe bar slots ${JSON.stringify(read)}`);
+    const type = (el) => {
+      if (!el) return null;
+      const s = getComputedStyle(el);
+      return { fontFamily: s.fontFamily, fontSize: s.fontSize, lineHeight: s.lineHeight, text: el.textContent?.trim() ?? '' };
+    };
+    return {
+      badges: { cache: face(cellOf(row, 'Cache').querySelector('.badge')), status: face(cellOf(row, 'Status').querySelector('.badge')) },
+      row: row.id,
+      subs: Object.fromEntries(['Status', 'Agents', 'Requests', 'Cost', 'Cache'].map((head) => [head, type(cellOf(row, head)?.querySelector('.sub'))])),
+    };
+  });
+  measurements.push(`${theme} /sessions row badges ${JSON.stringify(read)}`);
   if (read === null) {
-    if (mock) say('is missing, though the story counts probes');
+    if (mock) say('no row draws both a Status and a Cache badge');
     return;
   }
-  for (const r of read) if (r.drawn !== r.slot) say(`draws ${r.outcome} in ${r.drawn}, not the ${r.slot} the chart draws it in`);
+  for (const what of compare(read.badges.status, read.badges.cache, ['fontFamily', 'fontSize', 'height', 'lineHeight', 'paddingLeft', 'paddingTop'], 'the Status badge against the Cache badge')) say(what);
+  for (const [head, sub] of Object.entries(read.subs).filter(([head]) => head !== 'Status')) {
+    if (sub === null && !mock) continue;
+    for (const what of compare(sub, read.subs.Status, ['fontFamily', 'fontSize', 'lineHeight'], `the ${head} cell's sub line against the Status cell's`)) say(what);
+  }
 }
 
 /** The mock's switch that fails every sessions read, as a store that refuses the list, and the message it answers. */
@@ -11988,48 +12005,39 @@ const SESSIONS_FAIL_SWITCH = 'phoebis.mockSessionsFail';
 const SESSIONS_FAIL_MESSAGE = 'store busy';
 
 /**
- * The Sessions view under the mock's sessions failure switch: the Sessions and Agents tiles, whose figures count the
- * rows the sessions read builds, read a dash over "could not load" titled with the read's message, in the box, the
- * value's line and the note's line of the Retained tile beside them, which reads the overview alone and keeps its
- * figure, and the notice under the tiles names the sessions. The page loads again without the switch, so the shot and
- * the measures after it read the story whole.
+ * The Sessions view under the mock's sessions failure switch: the notice under the bar names the sessions with the
+ * read's message, its top 12 px under the bar's bottom, and the card draws its error state with a Try again of its own,
+ * the notice's Try again in the height, the type size and the weight of the card's. The page loads again without the
+ * switch, so the shot and the measures after it read the story whole.
  */
-async function sessionsTilesError(theme) {
-  const say = (what) => failures.push(`${theme} /sessions: ${what}`);
+async function sessionsReadError(theme) {
+  const say = (what) => failures.push(`${theme} /sessions read error: ${what}`);
   try {
     await page.evaluate((key) => localStorage.setItem(key, '1'), SESSIONS_FAIL_SWITCH);
-    // The table never draws while the sessions read fails, so the load waits on the notice under the tiles.
-    await loadAtOrigin('/sessions', '.stat-grid + .sessions__notice');
+    // The table never draws while the sessions read fails, so the load waits on the notice under the bar.
+    await loadAtOrigin('/sessions', '.sessions__notice');
     const read = await page.evaluate(() => {
-      const tile = (label) => {
-        const t = [...document.querySelectorAll('.stat-grid > .stat')].find((s) => s.querySelector('.stat__label')?.textContent?.trim() === label);
-        if (!t) return null;
-        const box = t.getBoundingClientRect();
-        const value = t.querySelector('.stat__value');
-        const note = t.querySelector(':scope > .stat__note');
-        return {
-          height: Math.round(box.height),
-          note: note?.textContent?.trim() ?? null,
-          noteHeight: note ? Math.round(note.getBoundingClientRect().height) : null,
-          title: t.getAttribute('title'),
-          top: Math.round(box.top),
-          value: value?.textContent?.trim() ?? null,
-          valueHeight: value ? Math.round(value.getBoundingClientRect().height) : null,
-          width: Math.round(box.width),
-        };
+      const button = (el) => {
+        if (!el) return null;
+        const s = getComputedStyle(el);
+        return { fontSize: s.fontSize, fontWeight: s.fontWeight, height: Math.round(el.getBoundingClientRect().height) };
       };
-      return { agents: tile('Agents'), notice: document.querySelector('.stat-grid + .sessions__notice')?.textContent?.trim() ?? null, retained: tile('Retained'), sessions: tile('Sessions') };
+      const retry = (root) => [...(root?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Try again') ?? null;
+      const notice = document.querySelector('.sessions__notice');
+      const card = document.querySelector('.card--table .empty--error');
+      const bar = document.querySelector('.filter-bar');
+      return {
+        card: card === null ? null : { body: card.querySelector('.empty__body')?.textContent?.trim() ?? null, retry: button(retry(card)), title: card.querySelector('.empty__title')?.textContent?.trim() ?? null },
+        gap: notice && bar ? Math.round(notice.getBoundingClientRect().top - bar.getBoundingClientRect().bottom) : null,
+        notice: notice === null ? null : { retry: button(retry(notice)), text: notice.textContent?.trim() ?? null },
+      };
     });
-    measurements.push(`${theme} /sessions tiles in error ${JSON.stringify(read)}`);
-    for (const [label, t] of [
-      ['Sessions', read.sessions],
-      ['Agents', read.agents],
-    ]) {
-      if (t?.value !== '-' || t.note !== 'could not load' || t.title !== SESSIONS_FAIL_MESSAGE) say(`under the sessions failure switch the ${label} tile reads ${JSON.stringify(t)}, not a dash over could not load titled ${SESSIONS_FAIL_MESSAGE}`);
-      for (const what of compare(t, read.retained, ['height', 'noteHeight', 'top', 'valueHeight', 'width'], `the ${label} tile in error against the Retained tile beside it`)) say(what);
-    }
-    if (!read.retained || read.retained.value === '-' || read.retained.note === 'could not load') say(`under the sessions failure switch the Retained tile reads ${JSON.stringify(read.retained)}, not its figure`);
-    if (!read.notice?.startsWith(`Could not load the sessions: ${SESSIONS_FAIL_MESSAGE}`)) say(`the notice under the tiles reads ${JSON.stringify(read.notice)}`);
+    measurements.push(`${theme} /sessions read error ${JSON.stringify(read)}`);
+    if (!read.notice?.text?.startsWith(`Could not load the sessions: ${SESSIONS_FAIL_MESSAGE}`)) say(`the notice under the bar reads ${JSON.stringify(read.notice?.text ?? null)}`);
+    if (read.card?.title !== 'Could not load the sessions' || read.card.body !== SESSIONS_FAIL_MESSAGE) say(`the card's error state reads ${JSON.stringify(read.card)}`);
+    if (read.notice?.retry === null || read.card?.retry === null || read.notice === null || read.card === null) say('the notice or the card draws no Try again');
+    else for (const what of compare(read.notice.retry, read.card.retry, ['fontSize', 'fontWeight', 'height'], "the notice's Try again against the card's")) say(what);
+    if (read.gap !== 12) say(`the notice's top lies ${read.gap}px under the bar's bottom, not 12px`);
   } finally {
     await page.evaluate((key) => localStorage.removeItem(key), SESSIONS_FAIL_SWITCH);
     await loadAtOrigin('/sessions', '.sessions-table');
@@ -12061,26 +12069,24 @@ async function forkLink(theme) {
   else if (read.current !== 'true' || read.marked !== 1 || !read.inView) say(`following the fork link leaves its base ${JSON.stringify(read)}`);
 }
 
-/** The finished session's line, and the Agents tile's hover's tail on subagents released under a live session. */
+/** The finished session's line. */
 const RELEASED_LINE = 'The mod released every agent of this session. Their records keep their slots of the cap for one cache TTL after the release and then leave the engine.';
-const RELEASED_HOVER = 'which draw no line and keep their slot for one cache TTL after the release, then leave the engine.';
 
 /**
- * The session the mod released whole, listed under the finished filter alone and found by its Cache warming badge: its
- * open detail's line reads the records' leave in the type of the detail's cell, and the Agents tile's hover names the
- * same leave. In the mock pass alone, whose story holds such a session, on a load of its own after the view's shot, so
- * that shot keeps the bare view.
+ * A finished session, listed under the finished filter alone and found by its Status cell reading finished: its open
+ * detail's line reads the records' leave in the type of the detail's cell. In the mock pass alone, whose story holds
+ * such a session, on a load of its own after the view's shot, so that shot keeps the bare view.
  */
 async function sessionsReleasedLine(theme) {
   const say = (what) => failures.push(`${theme} /sessions released line: ${what}`);
   await loadAtOrigin('/sessions?finished=1', '.sessions-table');
   const rows = page.locator('.sessions-table > tbody > tr.srow');
   const index = await page.evaluate(() => {
-    const warming = [...document.querySelectorAll('.sessions-table thead th')].map((th) => th.textContent?.trim()).indexOf('Cache warming');
-    return [...document.querySelectorAll('.sessions-table > tbody > tr.srow')].findIndex((tr) => tr.children[warming]?.querySelector('.badge')?.textContent?.trim() === 'released');
+    const status = [...document.querySelectorAll('.sessions-table thead th')].map((th) => th.textContent?.trim()).indexOf('Status');
+    return [...document.querySelectorAll('.sessions-table > tbody > tr.srow')].findIndex((tr) => tr.children[status]?.querySelector('.badge')?.textContent?.trim() === 'finished');
   });
   if (index < 0) {
-    say('the finished filter lists no session the mod released whole');
+    say('the finished filter lists no finished session');
     return;
   }
   await rows.nth(index).locator('.srow__chevron').click();
@@ -12093,17 +12099,13 @@ async function sessionsReleasedLine(theme) {
     };
     const detail = tr.nextElementSibling?.classList.contains('srow__detail') ? tr.nextElementSibling : null;
     const line = detail?.querySelector('.agents__released') ?? null;
-    const tile = [...document.querySelectorAll('.stat-grid > .stat')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === 'Agents');
     return {
       cell: type(detail?.querySelector(':scope > td')),
-      hover: tile?.querySelector('.stat__value [title]')?.getAttribute('title') ?? null,
       line: line === null ? null : { ...type(line), text: line.textContent?.trim() ?? null },
     };
   });
   measurements.push(`${theme} /sessions released line ${JSON.stringify(read)}`);
   if (read.line?.text !== RELEASED_LINE) say(`the open detail reads ${JSON.stringify(read.line?.text ?? null)}, not ${JSON.stringify(RELEASED_LINE)}`);
-  // The hover composes the records' count and the hidden rows around this sentence, so its tail is read alone.
-  if (!(read.hover ?? '').includes(RELEASED_HOVER)) say(`the Agents tile's hover reads ${JSON.stringify(read.hover)}, without ${JSON.stringify(RELEASED_HOVER)}`);
   failures.push(...compare(read.line, read.cell, ['fontFamily', 'fontSize', 'lineHeight'], `${theme} /sessions released line: the line against the detail's cell`));
 }
 
@@ -12338,12 +12340,12 @@ try {
       if (['/', '/accounts'].includes(view.path)) await spendBarLines(theme, view.path);
       if (view.path === '/sessions') {
         // Its loads end on the bare view, so the measures after it read the view as it first drew.
-        if (mock) await sessionsTilesError(theme);
+        if (mock) await sessionsReadError(theme);
         await sessionsLead(theme);
         await costReference(theme);
         if (mock) await costReferenceHeadlines(theme);
         await sessionsTableFits(theme);
-        await tableColumns(theme, 'sessions', '.sessions-table', ['Session'], 1);
+        await tableColumns(theme, 'sessions', '.sessions-table', ['Session'], 1, { wrapping: ['Cost', 'Model'] });
         await sessionIdWidth(theme);
         await sessionRowMenu(theme);
         await agentLines(theme, 1280);
@@ -12359,7 +12361,7 @@ try {
         await sessionsSortOrder(theme);
         await sessionForkMark(theme);
         await sessionForkBadges(theme);
-        await probeBarSlots(theme);
+        await sessionsRowBadges(theme);
         for (const what of await chevronWeight(`${theme} /sessions row`, page.locator('.srow__chevron > svg'), 14, 1.75)) failures.push(`${theme} /sessions row: ${what}`);
       }
       if (view.path === '/pools') {

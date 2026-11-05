@@ -238,7 +238,7 @@ function CostRows({ context, request: r, settings, unit }: { context: CostContex
  * earlier holder's label, so a link from an earlier holder's session reads whole. Until the key list lands no lifetime
  * can be told from a live key's own, so none is listed.
  */
-function keyOptions(keys: ApiKey[] | null, selected: string[]): Option[] {
+export function keyOptions(keys: ApiKey[] | null, selected: string[]): Option[] {
   if (keys === null) return [];
   const live = new Map(keys.map((k) => [k.id, keyGenerationOf(k)]));
   const earlier = selected.flatMap((value) => {

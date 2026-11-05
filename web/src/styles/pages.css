@@ -3520,13 +3520,7 @@
   color: var(--critical-ink);
 }
 
-/* The Sessions strip reads its counts beside their caps, "40 MiB of 256 MiB" the longest, which a sixth of the page at
-   1280 px breaks after "of": the tiles take three to a row there, and each value stays on its line. */
-.stat-grid--caps {
-  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-}
-
-/* A read that failed under the tiles or the table: one line between the two, 12px from each, its Try again inline. The
+/* A read that failed, on one line under the bar, 12px from it and from the head below, its Try again inline. The
    negative margin takes the page stack's 18px gap down to that. */
 .sessions__notice {
   display: flex;
@@ -3544,11 +3538,17 @@
   white-space: nowrap;
 }
 
-/* The recipe summary and the presence age run longer than the badges above them, and the default columns have no room
-   for them on one line at 1280 px, so they wrap under their badge rather than widening the column. */
+/* The presence line and the agents' split by word run longer than the badge or the count above them, and the default
+   columns have no room for them on one line at 1280 px, so they wrap under it rather than widening the column, the
+   split between its parts, each of which stays whole. */
 .sessions-table .srow__presence,
-.sessions-table .srow__summary {
+.sessions-table .srow__split {
   white-space: normal;
+}
+
+/* A silent companion's span since it went quiet, in the ink of the silent badge it stands for. */
+.sessions-table .sub.srow__presence--warning {
+  color: var(--warning-ink);
 }
 
 /* The cells take 5 px each side, one step wider than 4. Each pixel of padding widens the fit columns by 17 px and the
@@ -3609,12 +3609,14 @@
   border-bottom-color: transparent;
 }
 
-/* The session id is mono; the epoch line under it is prose. */
-.srow__epoch {
+/* The session id is mono, and the client line under it is prose. */
+.srow__client {
   font-family: var(--font-sans);
 }
 
-/* The id line alone: the column's free width cuts a long id with an ellipsis, the whole id on the cell's title. */
+/* The id line and the client line under it: the column's free width cuts each with an ellipsis, the whole id on the
+   cell's title and the user agent on the line's. */
+.srow__client,
 .srow__id {
   display: block;
 }
@@ -3638,6 +3640,13 @@
   display: inline-flex;
   gap: 8px;
   align-items: baseline;
+}
+
+/* The Model and Cost cells' badges wrap under their figure, so each column is as wide as its widest figure: on one line
+   with the figures, the badges would leave the default columns' Session cell under eleven characters at 1280 px. */
+.sessions-table .srow__pin--wraps {
+  flex-wrap: wrap;
+  row-gap: 2px;
 }
 
 /* The detail row takes its parent's tone from the table's stripe rule, so it sets no fill of its own. */

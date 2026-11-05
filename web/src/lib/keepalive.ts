@@ -246,7 +246,7 @@ export function isFinished(session: Pick<Session, 'keepalive'>, lines: readonly 
  *  where no mod reports the agent. */
 export type StatusWord = 'busy' | 'finished' | 'idle' | 'parked' | 'registered' | 'released' | 'unknown' | 'unreported';
 
-const STATUS_TONE: Record<Lifecycle, BadgeTone> = { busy: 'accent', idle: 'good', parked: 'neutral', registered: 'neutral', released: 'neutral', unknown: 'neutral' };
+export const STATUS_TONE: Record<Lifecycle, BadgeTone> = { busy: 'accent', idle: 'good', parked: 'neutral', registered: 'neutral', released: 'neutral', unknown: 'neutral' };
 
 /**
  * The row's Status word and tone: `finished` first (`isFinished` over the session and its lines), `unreported` where
