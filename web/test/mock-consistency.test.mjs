@@ -837,17 +837,20 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     // The session expiry lists every row the story seeds, the ones past the non-companion timeout among them.
     const seeded = s.lib.sessionsListedAt(s.now, undefined, s.settings.sessions.expireAfterSeconds);
     const seed = [...s.lib.requestById.values()];
-    // The agents the seed gives requests on a session and no pin there, by the session's id.
+    // The engine files its recipes under each key's live generation alone, so a row of an earlier holder reads none, as
+    // the route clears them.
+    const live = new Map(s.keys.map((k) => [k.id, Date.parse(k.createdAt)]));
+    const desktop = live.get('desktop');
+    const holder = seed.find((r) => r.keyId === 'desktop' && r.keyGeneration !== desktop).keyGeneration;
+    // The agents the seed gives requests on a listed row and no line there, by the row's key generation and session id:
+    // the ended session's subagent the mod never pinned, story 4's Explore subagent, and story 0's pinned subagent on
+    // the earlier holder's row, which lists no recipe. Stories 10 and 11 and the fork session declare none: their
+    // subagents' seed rows sit under another key than the listed row's, and the mock lists no row for the fork session.
     const finished = '9b4e2f71-6c3d-4a85-b0e2-5d7f8a1c3e96';
-    const forks = '9e4c2b7a-5d31-4f86-a0b9-3c7e1d5f2a48';
     const earlier = [
-      [finished, 'd41e'],
-      [s.lib.SESSION_IDS[4], '0b7f'],
-      [s.lib.SESSION_IDS[10], 'e90b'],
-      [s.lib.SESSION_IDS[11], '4d1a'],
-      [forks, 'a5e1'],
-      [forks, 'b7d3'],
-      [forks, 'd8f3'],
+      [desktop, finished, 'd41e'],
+      [desktop, s.lib.SESSION_IDS[4], '0b7f'],
+      [holder, s.lib.SESSION_IDS[0], 'e4b7'],
     ];
     for (const row of seeded) {
       const name = `${row.keyId} ${row.sessionId}${row.historical ? ', the earlier holder' : ''}`;
@@ -855,16 +858,16 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const clients = own.filter((r) => r.kind !== 'probe').length;
       if (own.length === 0) assert.deepEqual([row.spend, row.requests], [null, 0], `${name} holds no request the router did not refuse`);
       else assert.deepEqual([row.spend?.requests, row.requests], [clients, clients], `${name}'s client requests, its probes apart`);
-      const lines = new Set(['main', ...row.agentContexts.map((c) => c.agentId), ...recipes.filter((r) => r.keyId === row.keyId && r.sessionId === row.sessionId).map((r) => r.agentId)]);
+      const filed = recipes.filter((r) => r.keyId === row.keyId && live.get(r.keyId) === row.keyGeneration && r.sessionId === row.sessionId);
+      const lines = new Set(['main', ...row.agentContexts.map((c) => c.agentId), ...filed.map((r) => r.agentId)]);
       for (const entry of row.agentRequests) {
-        const known = lines.has(entry.agentId) || earlier.some(([sessionId, agentId]) => sessionId === row.sessionId && agentId === entry.agentId);
+        const known = lines.has(entry.agentId) || earlier.some(([generation, sessionId, agentId]) => generation === row.keyGeneration && sessionId === row.sessionId && agentId === entry.agentId);
         assert.ok(known, `${name}: ${entry.agentId} on ${entry.model} names no line of the session and no earlier agent`);
       }
     }
-    // Story 0's desktop row under the live key, whose plan-funded client rows with tokens primary and secondary serve at
-    // both instants. `req_9b6275a3-96b` is a plan-funded request on nightly with no token, which prices nothing, so the
-    // fold keys no share for nightly.
-    const desktop = Date.parse(s.keys.find((k) => k.id === 'desktop').createdAt);
+    // Story 0's desktop row under the live key, whose plan-funded client rows with tokens primary and secondary serve
+    // at both instants. `req_9b6275a3-96b` is a plan-funded request on nightly with no token, which prices nothing, so
+    // the fold keys no share for nightly.
     const story0 = seeded.find((row) => row.keyId === 'desktop' && row.keyGeneration === desktop && row.sessionId === s.lib.SESSION_IDS[0]);
     assert.deepEqual(Object.keys(story0.spend.shares).sort(), ['primary', 'secondary'], "story 0's desktop row keys the accounts that priced its plan rows");
   });
