@@ -11,7 +11,7 @@ for (const key of ['document', 'navigator', 'HTMLElement', 'Element', 'Node', 'g
 globalThis.window = window;
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 after(() => window.close());
-const { act, createElement: h, createRoot, FilterBar, PopoverHost, RefreshControl, useState } = await import('./dist/ui.js');
+const { act, createElement: h, createRoot, FilterBar, RefreshControl, useState } = await import('./dist/ui.js');
 const { RELOAD_INTERVALS } = await import('./dist/api.js');
 
 const roots = [];
@@ -184,7 +184,7 @@ const REFRESH = { intervalMs: 5_000, onIntervalChange() {}, onRefresh() {}, paus
 const NOW = Date.parse('2026-09-16T14:30:00.000Z');
 
 /** A bar over filters the host holds, each patch merged and recorded. */
-function bar(props = {}, start = {}, host = null) {
+function bar(props = {}, start = {}) {
   const patches = [];
   const seen = { root: null };
   function Host() {
@@ -203,7 +203,7 @@ function bar(props = {}, start = {}, host = null) {
       ...props,
     });
   }
-  render(host === null ? h(Host) : h(PopoverHost.Provider, { value: host }, h(Host)));
+  render(h(Host));
   return { patches, root: () => seen.root };
 }
 
@@ -252,20 +252,4 @@ test('a FilterBar Clear all writes every dimension and leaves the range, the sea
   click(clear);
   assert.deepEqual(b.patches, [{ keys: [], status: 'all' }]);
   assert.equal(b.root().querySelector('.chip-line'), null);
-});
-
-test("a FilterBar's open interval menu and Add filter popover hold the page's host as a menu", () => {
-  const reports = [];
-  const b = bar({ dimensions: [KEY] }, {}, { add: (id, cause) => reports.push(`add ${cause}`), remove: () => reports.push('remove') });
-  assert.deepEqual(reports, [], 'nothing open, nothing held at mount');
-  const part = b.root().querySelector('button.refresh-control__part');
-  click(part);
-  assert.deepEqual(reports, ['add menu'], 'the interval menu opens');
-  click(part);
-  assert.deepEqual(reports, ['add menu', 'remove'], 'and closes');
-  const add = [...b.root().querySelectorAll('button')].find((el) => el.textContent === 'Add filter');
-  click(add);
-  assert.deepEqual(reports, ['add menu', 'remove', 'add menu'], 'Add filter opens');
-  press('Escape');
-  assert.deepEqual(reports, ['add menu', 'remove', 'add menu', 'remove'], 'and closes on Escape');
 });

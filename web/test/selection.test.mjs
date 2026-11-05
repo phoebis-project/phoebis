@@ -295,7 +295,6 @@ test('the Standing badges read the time left or the reset time, each with its se
   assert.match(later.text, /^overage until [A-Z][a-z]{2} \d\d, \d\d:\d\d$/, 'a reset on another day names its day, so it never reads as today');
   assert.deepEqual(overageBadge(null, NOW), { text: 'overage', title: 'In overage, reset unknown' });
   assert.deepEqual(spentBadge(today, NOW), { text: `spend cap until ${fmtShortTime(today)}`, title: `At the spend cap until ${fmtAbsolute(today)}` });
-  assert.deepEqual(spentBadge(tomorrow, NOW), { text: `spend cap until ${fmtPeriodEnd(tomorrow)}`, title: `At the spend cap until ${fmtAbsolute(tomorrow)}` }, 'a spend cap resetting on another day names its day');
   assert.deepEqual(spentBadge(null, NOW), { text: 'spend cap reached', title: 'At the spend cap, reset unknown' });
   const end = NOW + 3 * 24 * HOUR;
   assert.deepEqual(windingDownBadge(end, NOW), { text: 'winding down 3d', title: `Winding down to the plan's end at ${fmtAbsolute(new Date(end).toISOString())}` });

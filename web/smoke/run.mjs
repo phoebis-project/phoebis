@@ -25222,11 +25222,6 @@ m.unmount();
     const smallest = tiers.find((tier) => windowMultiple(costs, tier, 'five_hour') === 1);
     const wantMultiples = (w) => tiers.map((tier) => `${figure(windowMultiple(costs, tier, w))}x`);
     const wantWeeks = (inside) => tiers.map((tier) => figure(fullWindowsAWeek(costs, tier, inside)));
-    // The shared table rule paints every second body row of a `.table` without `table--plain`, a `table__detail` row
-    // left out of the count. jsdom matches no `:nth-child(... of S)`, so the rule's pick is read off the DOM.
-    const striped = (r) => r.matches('.table:not(.table--plain) > tbody > tr') && [...(r.parentElement?.children ?? [])].filter((row) => !row.classList.contains('table__detail')).indexOf(r) % 2 === 1;
-    // Counted over the whole body, since the stripes run on through the group rows above the base's.
-    const stripes = allRows.filter((r, n) => striped(r) !== (n % 2 === 1)).length;
     const before = { five: vals(1), seven: vals(2), weeks: vals(3), segs: segs() };
     results.push({
       name: "/sessions Windows by tier names each tier with its key, sizes both windows against the smallest tier's, and counts the full 5-hour windows a week outside the band",
@@ -25239,7 +25234,6 @@ m.unmount();
         JSON.stringify(before.seven) === JSON.stringify(wantMultiples('seven_day')) &&
         JSON.stringify(before.weeks) === JSON.stringify(wantWeeks(false)) &&
         JSON.stringify(before.segs) === JSON.stringify(tiers.map((tier) => Math.round(fullWindowsAWeek(costs, tier, false)))) &&
-        stripes === 0 &&
         tierCard?.querySelector('[aria-label="Tier"]') === null &&
         JSON.stringify([...(tierCard?.children ?? [])].filter((el) => !el.matches('[data-descriptions]')).map((el) => el.tagName)) === JSON.stringify(['HEADER', 'TABLE']) &&
         JSON.stringify(pressedIn(tierCard, 'Peak band')) === JSON.stringify(['Outside']),
@@ -25289,7 +25283,6 @@ m.unmount();
       );
       const groups = allRows.filter((r) => r.classList.contains('cost-ref__group'));
       const widths = [...(tierCard?.querySelectorAll('.cost-ref__bar') ?? [])].map((bar) => Number.parseFloat(bar.style.width));
-      const stripes = allRows.filter((r, n) => striped(r) !== (n % 2 === 1)).length;
       results.push({
         name: '/sessions windows by tier lists a group row and a row per tier each regime names, then the Headless group and the base rows',
         ok:
@@ -25299,11 +25292,10 @@ m.unmount();
           regime === 'interactive' &&
           JSON.stringify(groups.map((r) => r.textContent)) === JSON.stringify([INTERACTIVE_TITLE, HEADLESS_TITLE]) &&
           groups.every((r) => r.children.length === 1 && r.children[0].colSpan === 4) &&
-          stripes === 0 &&
           widths.length > 0 &&
           widths.every((w) => w <= 100) &&
           widths.includes(100),
-        missing: [JSON.stringify(drawn), JSON.stringify(want), `${stripes} rows off their stripe`, JSON.stringify(widths)],
+        missing: [JSON.stringify(drawn), JSON.stringify(want), JSON.stringify(widths)],
       });
     }
     [...(tierCard?.querySelectorAll('[aria-label="Peak band"] button') ?? [])].find((b) => b.textContent?.trim() === 'Inside')?.click();

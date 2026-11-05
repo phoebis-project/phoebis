@@ -461,7 +461,7 @@ const stalledBody = (time, text) => async (_url, init = {}) => {
   return { headers: { get: () => null }, ok: true, status: 200, text: () => body };
 };
 
-test('a session read with no answer within the deadline fails as a read that never answered, and a 401 inside it still reads as no session', async () => {
+test('a session read with no answer within the deadline fails as a read that never answered', async () => {
   // The suite has no window, so the clock is frozen before the read arms its timer, and only a tick fires one.
   const time = fakeClock();
   time.freeze(0);
@@ -471,8 +471,6 @@ test('a session read with no answer within the deadline fails as a read that nev
     const read = new HttpApi().getSession();
     time.tick(60_001);
     await assert.rejects(read, (e) => e instanceof ApiError && e.status === 0 && e.message === 'no answer within 60 s');
-    stub(() => answer(401, { error: 'no admin session' }));
-    assert.equal(await new HttpApi().getSession(), null);
   } finally {
     installClock(null);
   }

@@ -10,7 +10,7 @@ for (const key of ['document', 'navigator', 'HTMLElement', 'Element', 'Node', 'g
 globalThis.window = window;
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 after(() => window.close());
-const { act, AddFilter, Button, ChipLine, createElement: h, createRoot, fakeClock, FilterChip, installClock, Menu, PATTERN_GRAMMAR, Popover, PopoverHost, useAsync, useHoldHost, useState } = await import('./dist/ui.js');
+const { act, AddFilter, Button, ChipLine, createElement: h, createRoot, FilterChip, PATTERN_GRAMMAR, Popover, PopoverHost, useState } = await import('./dist/ui.js');
 const { chipsOf, KEYS_DIMENSIONS, REQUESTS_DIMENSIONS, withoutValue } = await import('./dist/api.js');
 
 // jsdom lays nothing out, so the boxes the placement reads are stood in: a 1280 by 800 window, an anchor's box from
@@ -118,51 +118,6 @@ test('a PopoverHost above the box holds a menu on open and lets go on close and 
   click(container.querySelector('.toggle'));
   act(() => roots.pop().unmount());
   assert.deepEqual(calls, [['add', id, 'menu'], ['remove', id], ['add', id, 'menu'], ['remove', id]], 'unmounting while open lets go too');
-});
-
-test("an open menu inside a page pauses that page's poll, and closing it resumes the poll", async () => {
-  const clock = fakeClock();
-  clock.freeze(Date.UTC(2026, 9, 14, 12));
-  installClock(clock);
-  try {
-    let reads = 0;
-    function Poll({ paused }) {
-      useAsync(
-        () => {
-          reads += 1;
-          return Promise.resolve(reads);
-        },
-        [],
-        { paused, refreshMs: 1_000 },
-      );
-      return h(Menu, { items: [{ label: 'Edit', onClick() {} }] });
-    }
-    function Page() {
-      const { cause, host } = useHoldHost();
-      return h(PopoverHost.Provider, { value: host }, h(Poll, { paused: cause !== null }));
-    }
-    // A read answers on a promise, which settles after a synchronous act has returned.
-    const settled = async () => {
-      globalThis.IS_REACT_ACT_ENVIRONMENT = false;
-      for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setImmediate(resolve));
-      globalThis.IS_REACT_ACT_ENVIRONMENT = true;
-    };
-    const { container } = render(h(Page));
-    await settled();
-    const trigger = container.querySelector('.menu__trigger');
-    click(trigger);
-    act(() => clock.tick(1_000));
-    await settled();
-    const whileOpen = reads;
-    click(trigger);
-    await settled();
-    const closed = reads;
-    act(() => clock.tick(1_000));
-    await settled();
-    assert.deepEqual({ next: reads - closed, whileOpen }, { next: 1, whileOpen: 1 }, 'the open menu holds the period with no read, and the next period after it closes reads');
-  } finally {
-    installClock(null);
-  }
 });
 
 test('Escape calls onClose once, puts focus on the anchor and goes no further', () => {

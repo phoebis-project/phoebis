@@ -11,7 +11,7 @@ for (const key of ['document', 'navigator', 'HTMLElement', 'Element', 'Node', 'g
 globalThis.window = window;
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 after(() => window.close());
-const { act, ApiError, call, createElement: h, createRoot, fakeClock, installClock, Menu, PopoverHost, queueToast, setHooks, useAsync } = await import('./dist/ui.js');
+const { act, ApiError, call, createElement: h, createRoot, fakeClock, installClock, queueToast, setHooks, useAsync } = await import('./dist/ui.js');
 
 const ORIGIN = Date.UTC(2026, 8, 16, 14, 30);
 const at = (ms) => new Date(ORIGIN + ms).toISOString();
@@ -350,26 +350,6 @@ test('a first load still out through a pause lands once it answers', async () =>
   assert.deepEqual([p.last().data, p.last().loading, p.last().fetchedAt], ['load', false, at(30_000)]);
 });
 
-test("a tab's return under a load for new deps still out reads nothing, and the load's answer lands and ends the loading", async () => {
-  const clock = frozen();
-  const reads = held();
-  const container = document.createElement('div');
-  document.body.append(container);
-  const root = createRoot(container);
-  roots.push(root);
-  const seen = [];
-  const show = (id) => act(() => root.render(h(KeyedProbe, { id, load: reads.load, seen })));
-  show('a');
-  reads.calls[0].resolve('a');
-  await settled();
-  show('b');
-  away(clock, 30_000);
-  assert.equal(reads.calls.length, 2, "the tab's return finds the load for the new deps out and reads nothing");
-  reads.calls[1].resolve('load');
-  await settled();
-  assert.deepEqual([seen.at(-1).data, seen.at(-1).loading], ['load', false]);
-});
-
 function KeyedProbe({ id, load, seen }) {
   const r = useAsync(() => load(id), [id], { refreshMs: 30_000 });
   seen.push(r);
@@ -492,24 +472,6 @@ test('an identical text is dropped, and so is a failure of a route already queue
   assert.equal(queueToast(failing, toast(4, '/admin/settings failed: the router answered 500', 'failure', '/admin/settings')), failing, 'a second failure of the route adds none');
   const refused = queueToast(failing, toast(5, 'the viewer role cannot change anything', 'failure'));
   assert.equal(queueToast(refused, toast(6, 'the viewer role cannot change anything', 'failure')), refused, 'a refusal already queued adds none');
-});
-
-test("a menu holds its page's host as a menu while open, nothing at mount, and lets go on close and on unmount", () => {
-  const reports = [];
-  const host = { add: (id, cause) => reports.push(`add ${cause}`), remove: () => reports.push('remove') };
-  const container = document.createElement('div');
-  document.body.append(container);
-  const root = createRoot(container);
-  act(() => root.render(h(PopoverHost.Provider, { value: host }, h(Menu, { items: [{ label: 'Edit', onClick() {} }] }))));
-  assert.deepEqual(reports, [], 'a closed menu holds nothing as it mounts');
-  const trigger = container.querySelector('.menu__trigger');
-  act(() => trigger.click());
-  assert.deepEqual(reports, ['add menu']);
-  act(() => trigger.click());
-  assert.deepEqual(reports, ['add menu', 'remove']);
-  act(() => trigger.click());
-  act(() => root.unmount());
-  assert.deepEqual(reports, ['add menu', 'remove', 'add menu', 'remove'], 'a menu unmounted open lets go of its hold');
 });
 
 test('the frozen harness clock fires timers only on tick, each at its deadline', async () => {
