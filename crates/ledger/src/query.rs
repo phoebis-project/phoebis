@@ -4438,7 +4438,7 @@ pub struct RequestPrice {
 }
 
 /// `None` for a usage with no token, which prices nothing, as `price_usage` returns early for it.
-pub fn price_request(
+pub(crate) fn price_request(
     prices: &PriceRevisions,
     tables: &PlanTables,
     key: RowKey<'_>,
@@ -5091,22 +5091,21 @@ pub struct SessionSpendRow {
     pub attempt: Option<SpendAttempt>,
 }
 
-/// One attempt's facts the fold prices, `PricedAttempt`'s with the account and the start beside them, so a test outside
-/// this crate builds one by its fields.
+/// One attempt's facts the fold prices, `PricedAttempt`'s with the account and the start beside them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SpendAttempt {
     pub account_id: String,
-    pub account_kind: String,
+    pub(crate) account_kind: String,
     pub started_at: i64,
     /// The completion the meter charges at, `attempts.finished_at`, else the request's, else the start.
-    pub completed_at: i64,
-    pub speed: Option<String>,
-    pub overage_in_use: Option<bool>,
-    pub usage_based: bool,
-    pub tier: Option<String>,
-    pub client: Option<String>,
-    pub classifier: Option<String>,
-    pub usage: PinUsage,
+    pub(crate) completed_at: i64,
+    pub(crate) speed: Option<String>,
+    pub(crate) overage_in_use: Option<bool>,
+    pub(crate) usage_based: bool,
+    pub(crate) tier: Option<String>,
+    pub(crate) client: Option<String>,
+    pub(crate) classifier: Option<String>,
+    pub(crate) usage: PinUsage,
 }
 
 impl SpendAttempt {

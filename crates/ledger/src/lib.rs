@@ -68,7 +68,7 @@ pub use query::{
     latest_extra_usage_polled, latest_extra_usage_share, latest_quota, list_requests,
     list_routing_log, member_spends, moves_by_reason, moves_by_reason_and_fit, names_one_account,
     newest_landed_at, parked_count, parked_summary, parse_range,
-    pin_migrations_by_account_and_reason, placements, pool_traffic, pools_traffic, price_request,
+    pin_migrations_by_account_and_reason, placements, pool_traffic, pools_traffic,
     recent_events_of_kind, recent_gaps, request_by_id, request_events, request_totals,
     revision_spans, rewrite_series, routing_conditions, series_paged, session_activity,
     session_burn_series, session_identities, session_spend_rows_of, session_spend_rows_since,
