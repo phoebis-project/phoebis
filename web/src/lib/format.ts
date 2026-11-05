@@ -177,21 +177,22 @@ const dateTimeFormats = new Map<string, Intl.DateTimeFormat>();
 export type FormatOptions = Pick<Intl.DateTimeFormatOptions, 'day' | 'hour' | 'hourCycle' | 'minute' | 'month' | 'second' | 'timeZone' | 'weekday' | 'year'>;
 /**
  * `at` through the formatter of one set of options, built once. The cache key spells every option, the hour cycle and
- * the zone among them, since the time format switches at run time and a chart names its own zone. A formatter without
- * a zone keeps the one it resolved when built, so the instant's offset joins the key too, and a tab whose machine moves
- * to a zone with another offset reads the new zone.
+ * the zone among them, since the time format switches at run time and a chart names its own zone. A call that names no
+ * zone formats the instant shifted by its own offset through a UTC formatter: a formatter keeps the zone it resolved
+ * when built, and resolving the browser's zone per call costs as much as a build. The `Date` reads the offset in the
+ * machine's zone at the call, so a tab whose machine moves to another zone prints the new zone's time.
  */
 export function formatIn(o: FormatOptions, at: number | string): string {
   const d = new Date(at);
   // `format` throws on an invalid instant, where the `toLocale*String` methods read "Invalid Date".
   if (Number.isNaN(d.getTime())) return 'Invalid Date';
-  const cached = `${o.day}|${o.hour}|${o.hourCycle}|${o.minute}|${o.month}|${o.second}|${o.timeZone}|${o.weekday}|${o.year}|${d.getTimezoneOffset()}`;
+  const cached = `${o.day}|${o.hour}|${o.hourCycle}|${o.minute}|${o.month}|${o.second}|${o.timeZone}|${o.weekday}|${o.year}`;
   let f = dateTimeFormats.get(cached);
   if (f === undefined) {
-    f = new Intl.DateTimeFormat('en-US', o);
+    f = new Intl.DateTimeFormat('en-US', { ...o, timeZone: o.timeZone ?? 'UTC' });
     dateTimeFormats.set(cached, f);
   }
-  return f.format(d);
+  return f.format(o.timeZone === undefined ? d.getTime() - d.getTimezoneOffset() * MINUTE : d);
 }
 
 export function fmtAbsolute(at: number | string | null): string {

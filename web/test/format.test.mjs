@@ -5,7 +5,7 @@ import { test } from 'node:test';
 // zone, and `node --test` gives each file a process of its own.
 process.env.TZ = 'UTC';
 
-const { earlierHolderLabel, fmtAbsolute, fmtBytes, fmtCredits, fmtDated, fmtDatedTime, fmtDayTick, fmtDuration, fmtEndsIn, fmtHours, fmtMiB, fmtMinor, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, fmtWeek, forkLabel, instant, parseKeyLifetime, pct, placementHit, setTimeFormat, shareLabel, shortModel, undatedModel, usdTickDigits, weekShort } = await import('./dist/api.js');
+const { earlierHolderLabel, fmtAbsolute, fmtBytes, fmtCredits, fmtDated, fmtDatedTime, fmtDayTick, fmtDuration, fmtEndsIn, fmtHours, fmtMiB, fmtMinor, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, fmtWeek, forkLabel, formatIn, instant, parseKeyLifetime, pct, placementHit, setTimeFormat, shareLabel, shortModel, undatedModel, usdTickDigits, weekShort } = await import('./dist/api.js');
 
 test("a fork reads its base cut at the session's width and the depth where one is known", () => {
   const base = '1a2b3c4d-5e6f-4a7b-9c8d-7e6f5a4b3c2d';
@@ -116,35 +116,27 @@ const builds = (run) => {
   return built;
 };
 
-/** Runs `run` with every instant `offset` minutes off UTC, so a case reads no formatter another case built. */
-const atOffset = (offset, run) => {
-  const real = Date.prototype.getTimezoneOffset;
-  Date.prototype.getTimezoneOffset = () => offset;
-  try {
-    run();
-  } finally {
-    Date.prototype.getTimezoneOffset = real;
-  }
-};
-
 test('two calls with one shape share a formatter', () => {
   const at = Date.parse('2026-09-16T09:12:05Z');
-  const built = builds(() =>
-    atOffset(-17, () => {
-      fmtTime(at);
-      fmtTime(at + 1_000);
-    }),
-  );
+  // No other case of the file formats a long weekday, so the first call finds no formatter an earlier case built.
+  const built = builds(() => {
+    formatIn({ weekday: 'long' }, at);
+    formatIn({ weekday: 'long' }, at + 1_000);
+  });
   assert.equal(built, 1, 'the second call reads the formatter the first one built');
 });
 
-test('a changed offset builds a new formatter', () => {
-  const at = Date.parse('2026-09-16T09:12:05Z');
-  const built = builds(() => {
-    atOffset(-23, () => fmtTime(at));
-    atOffset(-24, () => fmtTime(at));
-  });
-  assert.equal(built, 2, 'a formatter built before the zone moved serves no call after it');
+test('a zone change with the same offset at the cached instant formats in the new zone', () => {
+  // New York in January and Lima in July both sit 300 minutes behind UTC, and New York keeps daylight time in July.
+  const zone = process.env.TZ;
+  try {
+    process.env.TZ = 'America/New_York';
+    fmtAbsolute('2026-01-15T12:00:00Z');
+    process.env.TZ = 'America/Lima';
+    assert.equal(fmtAbsolute('2026-07-15T12:00:00Z'), 'Jul 15, 2026, 07:00:00', "Lima's clock, never the New York daylight hour 08:00:00");
+  } finally {
+    process.env.TZ = zone;
+  }
 });
 
 test('a zero cost never carries a sign, whatever the wire sent', () => {
