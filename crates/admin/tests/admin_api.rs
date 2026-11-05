@@ -8175,7 +8175,7 @@ async fn a_session_no_companion_reports_stays_while_a_subagents_pin_is_inside_th
         row,
         Some((
             serde_json::json!("main"),
-            serde_json::json!(NOW - IDLE_MS - 1),
+            serde_json::json!(NOW - 5),
             serde_json::Value::Null,
             serde_json::json!([agent_line(
                 "worker-1",
@@ -8187,8 +8187,8 @@ async fn a_session_no_companion_reports_stays_while_a_subagents_pin_is_inside_th
                 true
             )]),
         )),
-        "the subagent's use inside the timeout keeps the row, which still reads main's pin, and main's older line \
-         leaves: {sessions}"
+        "the subagent's use inside the timeout keeps the row, which reads main's pin with the subagent's newer use as \
+         its last use, and main's older line leaves: {sessions}"
     );
     // Past the timeout from the subagent's last use, still inside the session expiry and the pool's idle TTL.
     parts

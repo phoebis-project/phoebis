@@ -38,6 +38,7 @@ pub(crate) struct Session {
     /// The first placement of the session's main agent under the key and session, kept until the session's last pin
     /// leaves for good, so a failover, a move or a second pin leaves it alone. Null where main never placed a pin.
     pub created_at: Option<i64>,
+    /// The newest use across the session's conversation pins, main's and its agents', null without a pin.
     pub last_used_at: Option<i64>,
     pub last_request_at: Option<i64>,
     pub requests: Option<u64>,
@@ -397,6 +398,15 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             }),
         );
     }
+    // The row's last use is the newest across the session's conversation pins, main's and its agents', so a
+    // subagent's turn in flight keeps the row live and the retention and the order read the row's own figure.
+    for (key, standings) in &agent_pins {
+        if let Some(newest) = standings.iter().map(|s| s.pin.last_used_at).max() {
+            if let Some(entry) = rows.get_mut(key) {
+                entry["last_used_at"] = json!(newest);
+            }
+        }
+    }
     // Every row is keyed by its own session, as the pins are, so a session's requests land on the row of its pin.
     for a in activity {
         let key = activity_key(&a);
@@ -445,16 +455,13 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
     }
     // Once the historical pass has settled `companion`: a session no companion reports leaves the list once the later
     // of its newest pin use and its last request is older than the non-companion timeout, the session expiry bounding
-    // it. The retention reads the newest use across the session's conversation pins, since the row's own `last_used_at`
-    // is the display pin's, main's even where a subagent's request is in flight and has no ledger row yet. An ended
-    // session the engine still holds is measured by its end as well, its `companion_since`, so one that sent no request
-    // leaves after the timeout too.
-    rows.retain(|key, entry| {
-        let newest_pin_use = agent_pins
-            .get(key)
-            .and_then(|pins| pins.iter().map(|standing| standing.pin.last_used_at).max());
+    // it. The row's `last_used_at` carries the newest use across the session's conversation pins, so a subagent's
+    // request in flight with no ledger row yet keeps the row. An ended session the engine still holds is measured by
+    // its end as well, its `companion_since`, so one that sent no request leaves after the timeout too.
+    rows.retain(|_, entry| {
         entry["companion"] != "none"
-            || newest_pin_use
+            || entry["last_used_at"]
+                .as_i64()
                 .max(entry["last_request_at"].as_i64())
                 .max(entry["companion_since"].as_i64())
                 .is_none_or(|latest| latest >= idle_bound)

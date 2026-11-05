@@ -1073,7 +1073,8 @@ or hides, are Key, Model, Context, Effort, Runway, Last used, Requests, Last req
 and Next probe, with Agents, Last request, Next probe and Requests hidden by default. The rows follow the sort control:
 by the session's creation time, its first placement, or by its last activity, the later of its last use and its last
 request, newest first by default, ties by session id and a row without the value last, and the five-second re-read keeps
-a row's place under Created. Requests counts the session's requests, the ones the router refused before any account was
+a row's place under Created. Last used, the last use the sort reads, is the newest use across the session's conversation
+pins, main's and its agents'. Requests counts the session's requests, the ones the router refused before any account was
 asked left out, and "View in requests" lists those with the rest, so a session whose every request was refused still
 opens its analytics and its request log. Session takes the card's free width and keeps at least 74 px, and a set of
 columns wider than the card scrolls inside it. Context reads the main agent's context in tokens, `184K`, with a dash for
