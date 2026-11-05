@@ -231,6 +231,20 @@ export function Skeleton({ width = '100%', height = 12, className = '' }: { clas
   return <span className={`skeleton ${className}`} style={{ width, height }} aria-hidden />;
 }
 
+export function SkeletonRows({ colSpan, count }: { colSpan: number; count: number }) {
+  return (
+    <>
+      {Array.from({ length: count }, (_, i) => (
+        <tr key={i} className="table__detail">
+          <td colSpan={colSpan}>
+            <Skeleton />
+          </td>
+        </tr>
+      ))}
+    </>
+  );
+}
+
 export function EmptyState({ title, body, action }: { action?: ReactNode; body?: ReactNode; title: string }) {
   return (
     <div className="empty">

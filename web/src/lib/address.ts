@@ -226,6 +226,8 @@ const isOutcome = (value: string): boolean => REQUEST_OUTCOME_VALUES.some((o) =>
 const isStatus = (value: string): boolean => /^\d+$/.test(value);
 
 const REQUEST_KINDS: readonly ('' | RequestKind)[] = ['', ...REQUEST_KIND_VALUES];
+/** The Rows select's sizes and the codec's, one list, so every size the select offers reads back from the address. */
+export const REQUEST_PAGE_SIZES = [10, 25, 50, 100] as const;
 
 export const REQUESTS_CODEC = codecOf<RequestsAddress>({
   search: text('search'),
@@ -252,7 +254,7 @@ export const REQUESTS_CODEC = codecOf<RequestsAddress>({
   refusalCategories: list('refusal_categories'),
   stopReasons: list('stop_reasons'),
   kind: { default: '', kind: 'choice', name: 'kind', values: REQUEST_KINDS },
-  rows: { default: 25, kind: 'count', name: 'rows', values: [10, 25, 50, 100] },
+  rows: { default: 25, kind: 'count', name: 'rows', values: REQUEST_PAGE_SIZES },
   range: { default: '24h', kind: 'range' },
 });
 export const requestsHref = (address: RequestsAddress): string => `/requests?${REQUESTS_CODEC.toParams(address)}`;

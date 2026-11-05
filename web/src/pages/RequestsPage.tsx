@@ -18,8 +18,8 @@ import type { Option } from '@/components/ui/OptionList';
 import { IconChevronLeft, IconChevronRight, IconX } from '@/components/ui/icons';
 import { PagerNav } from '@/components/ui/PagerNav';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
-import { Badge, Button, Card, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Input, KeyValue, Select, Skeleton } from '@/components/ui/primitives';
-import { accountHref, addressWindow, requestHref, REQUESTS_CODEC } from '@/lib/address';
+import { Badge, Button, Card, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Input, KeyValue, Select, Skeleton, SkeletonRows } from '@/components/ui/primitives';
+import { accountHref, addressWindow, REQUEST_PAGE_SIZES, requestHref, REQUESTS_CODEC } from '@/lib/address';
 import { shareHint, shareHintLines, type WeekReading } from '@/lib/analytics';
 import { autoModeLabel } from '@/lib/autoMode';
 import { bodyLines, bodyText, findHits } from '@/lib/bodies';
@@ -28,7 +28,7 @@ import { AGENT_TYPES, TURN_ORIGINS } from '@/lib/client';
 import { clock } from '@/lib/clock';
 import { EFFORT_LEVELS, foldRequestClass, NO_CLASS, NO_EFFORT, OTHER_DIMENSION, REQUEST_KIND_LABEL, servedMissReason, servingAttempt, servingResponse } from '@/lib/dimensions';
 import { notLoadedReason, REQUESTS_DIMENSIONS } from '@/lib/filterBar';
-import { effectiveInterval, ENDED_RANGE, FOLLOW_OVERRUN, pollQuery, readEnd, shownCount, spanEnded } from '@/lib/follow';
+import { effectiveInterval, ENDED_RANGE, FOLLOW_OVERRUN, pollQuery, readEnd, rowsRefreshTitle, shownCount, spanEnded } from '@/lib/follow';
 import { bytesDropped, earlierHolderLabel, fmtAbsolute, fmtCompact, fmtDatedTime, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, fmtWeek, forkLabel, keyGenerationOf, parseKeyLifetime, shortAgent, shortId, shortModel, tokensTotal } from '@/lib/format';
 import { guardrailLabel, guardrailOptions } from '@/lib/guardrails';
 import { useAsync, useNow, useQueryFilters, useRangeTakenAt, useWeekReading } from '@/lib/hooks';
@@ -60,7 +60,6 @@ const HIDDEN_BY_DEFAULT: readonly ColumnId[] = ['kind', 'pool', 'transport'];
 /** The columns the table shows while the drawer is open: derived at render, so the chosen set returns on close. */
 const COMPACT: readonly ColumnId[] = ['time', 'model', 'status', 'attempts'];
 
-const PAGE_SIZES = [10, 25, 50, 100];
 /** The codes the router and Anthropic answer; any other code a page or the address holds is offered by its number. */
 const STATUS_CODES: readonly (readonly [number, string])[] = [
   [200, 'OK'],
@@ -115,6 +114,7 @@ const REQUEST_OUTCOME_LABEL: Record<RequestOutcome, string> = {
   rejected: 'rejected',
   succeeded: 'succeeded',
 };
+const transportLabel = (r: Pick<RequestLog, 'transport'>) => (r.transport === 'sse' ? 'SSE' : 'JSON');
 
 /**
  * The router's ids run to 44 characters, which would wrap the drawer head to a second line beside its two actions at
@@ -354,6 +354,7 @@ export function RequestsPage() {
   const selected = requestId ? rows.find((r) => r.id === requestId) ?? null : null;
   const shown = requestId ? new Set<ColumnId>(COMPACT) : visible;
   const fills = COLUMNS.some((c) => shown.has(c.id) && 'fill' in c && c.fill);
+  const detailTo = (id: string) => ({ pathname: requestHref(id), search: location.search });
 
   return (
     <PopoverHost.Provider value={host}>
@@ -373,7 +374,7 @@ export function RequestsPage() {
             onIntervalChange: setIntervalMs,
             onRefresh: refresh,
             paused: requestId ? 'request' : (holdCause ?? (cursor !== undefined ? 'olderPage' : null)),
-            refreshTitle: custom ? `Rows from ${fmtTime(filters.range.from)} to ${fmtTime(filters.range.to)}. Refresh reads the same window again` : `Rows up to ${fmtTime(loadedAt)}. Refresh reads up to now`,
+            refreshTitle: rowsRefreshTitle(custom, filters.range.from, custom ? filters.range.to : loadedAt),
           }}
           update={update}
         >
@@ -415,22 +416,16 @@ export function RequestsPage() {
                   {/* A list read in flight over a stand-in page (the poll's newest page holding the place of a read that
                       failed) keeps the stand-in's rows drawn, so the skeleton rows are the empty table's alone. */}
                   {requests.loading && !requests.data && rows.length === 0
-                    ? Array.from({ length: 8 }, (_, i) => (
-                        <tr key={i} className="table__detail">
-                          <td colSpan={shown.size + 1}>
-                            <Skeleton />
-                          </td>
-                        </tr>
-                      ))
+                    ? <SkeletonRows count={8} colSpan={shown.size + 1} />
                     : rows.map((r) => (
                         <tr
                           key={r.id}
                           className={[r.id === requestId ? 'is-selected' : '', fresh.has(r.id) ? 'is-new' : ''].filter(Boolean).join(' ')}
-                          onClick={() => navigate({ pathname: requestHref(r.id), search: location.search })}
+                          onClick={() => navigate(detailTo(r.id))}
                           tabIndex={0}
                           // A key pressed on a link in the row is the link's own, so Enter on Routing opens the log
                           // alone.
-                          onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && navigate({ pathname: requestHref(r.id), search: location.search })}
+                          onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && navigate(detailTo(r.id))}
                         >
                           {shown.has('time') && (
                             <td className="num requests__time col-fill" title={fmtAbsolute(r.at)}>
@@ -459,7 +454,7 @@ export function RequestsPage() {
                           {shown.has('kind') && <td className="col-fit">{words(r.kind)}</td>}
                           {shown.has('transport') && (
                             <td className="col-fit">
-                              <Badge tone={r.transport === 'sse' ? 'accent' : 'neutral'}>{r.transport === 'sse' ? 'SSE' : 'JSON'}</Badge>
+                              <Badge tone={r.transport === 'sse' ? 'accent' : 'neutral'}>{transportLabel(r)}</Badge>
                             </td>
                           )}
                           {shown.has('status') && (
@@ -496,7 +491,7 @@ export function RequestsPage() {
                               <Link to={routingLogHref(r, now)} onClick={(e) => e.stopPropagation()}>
                                 Routing
                               </Link>
-                              <Link to={{ pathname: requestHref(r.id), search: location.search }} onClick={(e) => e.stopPropagation()}>
+                              <Link to={detailTo(r.id)} onClick={(e) => e.stopPropagation()}>
                                 Details
                               </Link>
                             </span>
@@ -521,7 +516,7 @@ export function RequestsPage() {
               <label className="row">
                 <span className="muted">Rows</span>
                 <Select value={filters.rows} onChange={(e) => update({ rows: Number(e.target.value) })}>
-                  {PAGE_SIZES.map((n) => (
+                  {REQUEST_PAGE_SIZES.map((n) => (
                     <option key={n} value={n}>
                       {n}
                     </option>
@@ -723,7 +718,7 @@ function RequestDrawer({ context, guardrails, request, requestId, now, onClose, 
                 { label: 'User agent', value: r.userAgent ? shortAgent(r.userAgent) : '-', mono: true, title: r.userAgent ?? undefined },
                 { label: 'Key', value: r.keyId ?? '-', mono: true },
                 { label: 'Pool', value: r.poolId ?? '-', mono: true },
-                { label: 'Kind', value: `${words(r.kind)}, ${r.transport === 'sse' ? 'SSE' : 'JSON'}` },
+                { label: 'Kind', value: `${words(r.kind)}, ${transportLabel(r)}` },
                 ...r.attempts.flatMap((a) => {
                   const ids = upstreamIdChips(a);
                   return ids.length ? [{ label: `Attempt ${a.index + 1}`, value: <Chips chips={ids} /> }] : [];

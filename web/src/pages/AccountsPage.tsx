@@ -29,7 +29,7 @@ import { fmtAbsolute, fmtCredits, fmtDate, fmtDated, fmtDayMonth, fmtDayShort, f
 import { accountPatchOf, advancesOwnToken, derivedId, endZoneLabel, subscriptionEndFormOf, subscriptionEndRefusal, tickCanceled, type SubscriptionEndForm } from '@/lib/forms';
 import { useAsync, useLatest, useNow, useQueryFilters, type Loaded } from '@/lib/hooks';
 import { byWindow, meterGroups } from '@/lib/meter';
-import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, accountCooldown, planEndedSentence, planExtraUsage, planOverage, planWordLabel, readWindows, slowedOf } from '@/lib/quota';
+import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, accountCooldown, canceledEndOf, planEndedSentence, planExtraUsage, planOverage, planWordLabel, readWindows, slowedOf } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
 import { speedHover } from '@/lib/selection';
 import { MINUTE } from '@/lib/time';
@@ -316,7 +316,7 @@ function AccountDetail({ account, awaitingReading, generation, now, onToast, onP
   }, []);
   const endRefusal = endForm ? subscriptionEndRefusal(endForm) : null;
   const endsLabel = endZoneLabel();
-  const endsAt = account.canceled ? (account.subscription?.endsAt ?? null) : null;
+  const endsAt = canceledEndOf(account);
   const trialEndsAt = account.subscription?.trialEndsAt ?? null;
 
   const isOauth = account.kind === 'oauth';

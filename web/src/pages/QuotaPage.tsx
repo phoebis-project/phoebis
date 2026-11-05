@@ -11,7 +11,7 @@ import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Badge, ErrorState, Meter, MeterAbsent, Pill, Segmented, Select, Skeleton } from '@/components/ui/primitives';
 import { CELL_MIN_PX, cellsFit, fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinor, fmtMinute, fmtPct, fmtRelative, fmtShortHour, fmtShortTime, formatIn, getTimeFormat, noun, plural, upperFirst } from '@/lib/format';
 import { useAsync, useHashSection, useNow, useResizeObserver } from '@/lib/hooks';
-import { STATUS_LABEL, STATUS_TONE, burnWords, endOf, extraUsageState, hasSpendReading, isExpired, isQuotaListed, meterTone, onTimeline, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, slowedOf, soonestReset, soonestResetAt, sortByPace, spendLeftOf, spendResetTitle, timelineLanes, windowOf, type ExtraUsageState } from '@/lib/quota';
+import { STATUS_LABEL, STATUS_TONE, burnWords, canceledEndOf, endOf, extraUsageState, hasSpendReading, isExpired, isQuotaListed, meterTone, onTimeline, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, slowedOf, soonestReset, soonestResetAt, sortByPace, spendLeftOf, spendResetTitle, timelineLanes, windowOf, type ExtraUsageState } from '@/lib/quota';
 import { speedHover } from '@/lib/selection';
 import { DAY, HOUR } from '@/lib/time';
 
@@ -185,7 +185,7 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
   const end = endOf(account, now);
   const plan = account.plan;
   const trialEndsAt = account.subscription?.trialEndsAt ?? null;
-  const endsAt = account.canceled ? (account.subscription?.endsAt ?? null) : null;
+  const endsAt = canceledEndOf(account);
   const soon = (at: string) => Date.parse(at) - now < 7 * DAY;
   const reading = pollReading(snapshot?.poll ?? null, snapshot?.fetchedAt ?? null, now);
   // Windows the card holds are drawn whatever the last read said. The error takes their place only with none, where a
@@ -412,6 +412,18 @@ function spanFor(mode: Mode, offset: number, now: number, sessionCells: number) 
   return { startMs: start, endMs: start + 14 * DAY, cells: 14, cellMs: DAY };
 }
 
+type DayCell = { at: number; weekend: boolean };
+/** What every lane and bar of one draw reads, built once by the timeline, so all of them place against one width. */
+interface LaneFrame {
+  cells: DayCell[];
+  now: number;
+  nowPct: number | null;
+  span: { endMs: number; startMs: number };
+  stamp: (at: number) => string;
+  steps: ReadonlyMap<string, LabelStep>;
+  width: number;
+}
+
 /** A pill naming the window and how much of it is left, toned by its share as the card chips are. Without a share
  *  it sits on the grey surface. */
 function LaneChip({ label, window: w, now }: { label: string; now: number; window: RateLimitWindow | null }) {
@@ -474,7 +486,8 @@ function addMonths(ms: number, months: number): number {
  * A lane: the head with the account's dot, name, period word and chips, then the track with its piece of the day grid,
  * the bars, an optional end marker and the now line.
  */
-function Lane({ account, cells, children, chips, color, end, nowPct, period }: { account: Account; cells: { at: number; weekend: boolean }[]; children: ReactNode; chips: ReactNode; color: string; end?: ReactNode; nowPct: number | null; period: string }) {
+function Lane({ account, children, chips, color, end, frame, period }: { account: Account; children: ReactNode; chips: ReactNode; color: string; end?: ReactNode; frame: LaneFrame; period: string }) {
+  const { cells, nowPct } = frame;
   return (
     <div className="lane" style={{ ['--lane-color' as string]: color }}>
       <div className="lane__head">
@@ -506,13 +519,17 @@ function Lane({ account, cells, children, chips, color, end, nowPct, period }: {
  * part, so a fill past the now line reads as ahead of pace and one short of it as behind, the now line being the
  * elapsed mark. A bar without a share draws no fill. `extra` closes the title.
  */
-function LaneBar({ barKey, end, extra = '', label, share, span, stamp, start, state, step, stop, usedEnd, width }: { barKey: string; end: number; extra?: string; label: string; share: string | null; span: { endMs: number; startMs: number }; stamp: (at: number) => string; start: number; state: 'live' | 'next' | 'past'; step: LabelStep; stop: number; usedEnd: number; width: number }) {
+function LaneBar({ account, end, extra = '', frame, share, start, stop, usedEnd }: { account: Account; end: number; extra?: string; frame: LaneFrame; share: string | null; start: number; stop: number; usedEnd: number }) {
+  const { now, span, stamp, steps, width } = frame;
+  const barKey = `${account.id} ${start}`;
+  const step = steps.get(barKey) ?? 0;
+  const state = now >= start && now < stop ? 'live' : stop <= now ? 'past' : 'next';
   const from = Math.max(start, span.startMs);
   const to = Math.min(stop, span.endMs);
   const filled = state === 'live' && share !== null;
   const used = filled ? Math.max(0, (Math.min(usedEnd, to) - from) / (to - from)) * 100 : 0;
   return (
-    <div className={`lane__bar lane__bar--${state}`} style={{ left: `${((from - span.startMs) / width) * 100}%`, width: `${((to - from) / width) * 100}%` }} title={`${label}\n${fmtAbsolute(start)} to ${fmtAbsolute(end)}${filled ? `\n${share}` : ''}${extra}`}>
+    <div className={`lane__bar lane__bar--${state}`} style={{ left: `${((from - span.startMs) / width) * 100}%`, width: `${((to - from) / width) * 100}%` }} title={`${account.label}\n${fmtAbsolute(start)} to ${fmtAbsolute(end)}${filled ? `\n${share}` : ''}${extra}`}>
       {filled && (
         <span className="lane__clip">
           <span className="lane__used" style={{ width: `${used}%` }} />
@@ -539,45 +556,37 @@ function LaneBar({ barKey, end, extra = '', label, share, span, stamp, start, st
  * and labeled as a plan bar is, the upcoming one dashed where the span reaches it. With no limit set the current
  * window's outline stands alone, with no share to fill it.
  */
-function SpendLane({ account, cells, color, now, nowPct, span, spend, stamp, steps }: { account: Account; cells: { at: number; weekend: boolean }[]; color: string; now: number; nowPct: number | null; span: { endMs: number; startMs: number }; spend: Spend; stamp: (at: number) => string; steps: ReadonlyMap<string, LabelStep> }) {
-  const width = span.endMs - span.startMs;
+function SpendLane({ account, color, frame, spend }: { account: Account; color: string; frame: LaneFrame; spend: Spend }) {
+  const { span } = frame;
   const reset = spend.resetsAt === null ? Number.NaN : Date.parse(spend.resetsAt);
   const unlimited = spend.amounts !== null && spend.amounts.limitMinor === null;
   const left = spendLeftOf(spend);
   const share = left === null ? null : `${fmtPct(left)} left`;
   // The reading's own window ends at its reset. Its share says nothing of any other, so only that one is filled.
-  const bars: { current: boolean; end: number; start: number; state: 'live' | 'next' | 'past' }[] = [];
+  const bars: { current: boolean; end: number; start: number }[] = [];
   if (Number.isFinite(reset)) {
     let k = 0;
     while (addMonths(reset, k - 1) > span.startMs) k -= 1;
     for (; addMonths(reset, k - 1) < span.endMs; k += 1) {
       const [start, end] = [addMonths(reset, k - 1), addMonths(reset, k)];
       if (end <= span.startMs || (unlimited && k !== 0)) continue;
-      bars.push({ current: k === 0, end, start, state: now >= start && now < end ? 'live' : end <= now ? 'past' : 'next' });
+      bars.push({ current: k === 0, end, start });
     }
   }
   return (
-    <Lane account={account} cells={cells} chips={<SpendChip spend={spend} />} color={color} nowPct={nowPct} period="month">
-      {bars.map((b) => {
-        const key = `${account.id} ${b.start}`;
-        return (
-          <LaneBar
-            key={b.start}
-            barKey={key}
-            end={b.end}
-            label={account.label}
-            share={b.current ? share : null}
-            span={span}
-            stamp={stamp}
-            start={b.start}
-            state={b.state}
-            step={steps.get(key) ?? 0}
-            stop={b.end}
-            usedEnd={b.start + Math.min(1, Math.max(0, spend.utilization ?? 0)) * (b.end - b.start)}
-            width={width}
-          />
-        );
-      })}
+    <Lane account={account} chips={<SpendChip spend={spend} />} color={color} frame={frame} period="month">
+      {bars.map((b) => (
+        <LaneBar
+          key={b.start}
+          account={account}
+          end={b.end}
+          frame={frame}
+          share={b.current ? share : null}
+          start={b.start}
+          stop={b.end}
+          usedEnd={b.start + Math.min(1, Math.max(0, spend.utilization ?? 0)) * (b.end - b.start)}
+        />
+      ))}
     </Lane>
   );
 }
@@ -587,18 +596,18 @@ function SpendLane({ account, cells, color, now, nowPct, span, spend, stamp, ste
  * reset, the current one filled by the window's used share. A canceled account's saved end stops the bar that spans
  * it, opens no window after it and draws the end marker.
  */
-function PlanLane({ account, cells, color, now, nowPct, period, span, stamp, steps, window: w }: { account: Account; cells: { at: number; weekend: boolean }[]; color: string; now: number; nowPct: number | null; period: string; span: { endMs: number; startMs: number }; stamp: (at: number) => string; steps: ReadonlyMap<string, LabelStep>; window: RateLimitWindow }) {
-  const width = span.endMs - span.startMs;
+function PlanLane({ account, color, frame, period, window: w }: { account: Account; color: string; frame: LaneFrame; period: string; window: RateLimitWindow }) {
+  const { now, span } = frame;
   // The bars project the period on from the last reset, but an expired window's share is of the period before it, so
   // the current bar names no share: the previous window's use would fill a window the sample never read.
   const share = isExpired(w, now) ? null : `${fmtPct(remainingOf(w))} left`;
   const windowMs = w.periodHours * HOUR;
   const resetAt = Date.parse(w.resetsAt ?? '');
   // A canceled account's saved end: no window opens after it, and the one that spans it stops there.
-  const endsAt = account.canceled ? (account.subscription?.endsAt ?? null) : null;
+  const endsAt = canceledEndOf(account);
   const endMs = endsAt ? Date.parse(endsAt) : Number.POSITIVE_INFINITY;
-  const endPct = endMs >= span.startMs && endMs < span.endMs ? ((endMs - span.startMs) / width) * 100 : null;
-  const bars: { end: number; start: number; state: 'live' | 'next' | 'past'; stop: number }[] = [];
+  const endPct = endMs >= span.startMs && endMs < span.endMs ? ((endMs - span.startMs) / frame.width) * 100 : null;
+  const bars: { end: number; start: number; stop: number }[] = [];
   let start = resetAt - windowMs;
   while (start > span.startMs) start -= windowMs;
   for (; start < span.endMs; start += windowMs) {
@@ -608,12 +617,11 @@ function PlanLane({ account, cells, color, now, nowPct, period, span, stamp, ste
     // before that start.
     if (stop <= span.startMs) continue;
     if (start >= endMs) continue;
-    bars.push({ start, end, state: now >= start && now < stop ? 'live' : stop <= now ? 'past' : 'next', stop });
+    bars.push({ start, end, stop });
   }
   return (
     <Lane
       account={account}
-      cells={cells}
       chips={
         <>
           <LaneChip label="5-hour limit" window={windowOf(account, '5h')} now={now} />
@@ -623,37 +631,29 @@ function PlanLane({ account, cells, color, now, nowPct, period, span, stamp, ste
       }
       color={color}
       end={endPct !== null && <span className="lane__end" style={{ left: `${endPct}%` }} title={`${account.label} ends ${fmtAbsolute(endsAt)}`} aria-hidden />}
-      nowPct={nowPct}
+      frame={frame}
       period={period}
     >
-      {bars.map((b) => {
-        const key = `${account.id} ${b.start}`;
-        return (
-          <LaneBar
-            key={b.start}
-            barKey={key}
-            end={b.end}
-            extra={b.stop < b.end ? `\nends ${fmtAbsolute(endsAt)}` : ''}
-            label={account.label}
-            share={share}
-            span={span}
-            stamp={stamp}
-            start={b.start}
-            state={b.state}
-            step={steps.get(key) ?? 0}
-            stop={b.stop}
-            usedEnd={b.start + Math.min(1, w.utilization) * windowMs}
-            width={width}
-          />
-        );
-      })}
+      {bars.map((b) => (
+        <LaneBar
+          key={b.start}
+          account={account}
+          end={b.end}
+          extra={b.stop < b.end ? `\nends ${fmtAbsolute(endsAt)}` : ''}
+          frame={frame}
+          share={share}
+          start={b.start}
+          stop={b.stop}
+          usedEnd={b.start + Math.min(1, w.utilization) * windowMs}
+        />
+      ))}
     </Lane>
   );
 }
 
 /** The day grid's columns, one builder for the chart's grid and each track's piece of it, so both shapes draw the same
  *  columns and weekend tint. */
-function rasterCells(cells: { at: number; weekend: boolean }[]) {
+function rasterCells(cells: DayCell[]) {
   return cells.map((c) => <span key={c.at} className={c.weekend ? 'is-weekend' : ''} />);
 }
 
@@ -739,6 +739,7 @@ function ResetTimeline({ accounts, now, slotOf }: { accounts: Account[]; now: nu
   useResizeObserver(cellsRef, measure);
 
   const lanes = timelineLanes(accounts, mode === 'session' ? '5h' : '7d');
+  const frame: LaneFrame = { cells, now, nowPct, span, stamp, steps, width };
 
   return (
     <section className="timeline card card--padded">
@@ -813,9 +814,9 @@ function ResetTimeline({ accounts, now, slotOf }: { accounts: Account[]; now: nu
 
           {lanes.map(({ account, spend, window: w }) =>
             w === null ? (
-              spend === null ? null : <SpendLane key={account.id} account={account} cells={cells} color={accountColor(ink, slotOf(account.id))} now={now} nowPct={nowPct} span={span} spend={spend} stamp={stamp} steps={steps} />
+              spend === null ? null : <SpendLane key={account.id} account={account} color={accountColor(ink, slotOf(account.id))} frame={frame} spend={spend} />
             ) : (
-              <PlanLane key={account.id} account={account} cells={cells} color={accountColor(ink, slotOf(account.id))} now={now} nowPct={nowPct} period={mode === 'session' ? '5h' : '7d'} span={span} stamp={stamp} steps={steps} window={w} />
+              <PlanLane key={account.id} account={account} color={accountColor(ink, slotOf(account.id))} frame={frame} period={mode === 'session' ? '5h' : '7d'} window={w} />
             ),
           )}
         </div>

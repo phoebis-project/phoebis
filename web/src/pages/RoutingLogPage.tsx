@@ -13,13 +13,13 @@ import type { Option } from '@/components/ui/OptionList';
 import { IconChevronRight } from '@/components/ui/icons';
 import { PagerNav } from '@/components/ui/PagerNav';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
-import { Badge, Button, Card, EmptyState, ErrorState, Skeleton, toggleRow, useHostedDescription } from '@/components/ui/primitives';
+import { Badge, Button, Card, EmptyState, ErrorState, SkeletonRows, toggleRow, useHostedDescription } from '@/components/ui/primitives';
 import { addressWindow, type LogFilters, ROUTING_LOG_CODEC } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { tierOrder } from '@/lib/costs';
 import { chipText, notLoadedReason, ROUTING_LOG_DIMENSIONS } from '@/lib/filterBar';
-import { effectiveInterval, ENDED_RANGE, FOLLOW_OVERRUN, readEnd, shownCount, spanEnded } from '@/lib/follow';
-import { fmtAbsolute, fmtDatedTime, fmtTime, plural, upperFirst } from '@/lib/format';
+import { effectiveInterval, ENDED_RANGE, FOLLOW_OVERRUN, readEnd, rowsRefreshTitle, shownCount, spanEnded } from '@/lib/follow';
+import { fmtAbsolute, fmtDatedTime, plural, upperFirst } from '@/lib/format';
 import { sameMembers } from '@/lib/forms';
 import { toggled, useAsync, useQueryFilters, useRangeTakenAt, useWeekReading } from '@/lib/hooks';
 import { ALL_KINDS, byOf, catalogModel, compareRows, DECISION_KIND_LABEL, DECISION_KIND_TONE, entityHref, EVENT_KIND_LABEL, eventTone, factsOf, identityOf, KIND_PRESETS, type LogLink, logHref, movedFrom, registryTarget, words } from '@/lib/routingLog';
@@ -36,6 +36,11 @@ const KIND_OPTIONS: Option[] = [
     .sort((a, b) => a.label.localeCompare(b.label)),
 ];
 const KIND_PRESET_ROWS = { kinds: KIND_PRESETS };
+/**
+ * A set equal to every kind is every kind: an update writes no key for it, since an absent `kinds` reads every
+ * kind, and the bar draws no chip for it and every row of the Kinds list checked.
+ */
+const everyKindAsNone = <T extends { kinds?: readonly string[] }>(f: T): T => (f.kinds !== undefined && sameMembers(f.kinds, ALL_KINDS) ? { ...f, kinds: [] } : f);
 
 const Dash = () => <span className="muted">-</span>;
 
@@ -48,8 +53,7 @@ const EntityLink = ({ children, id, kind, mono = false }: { children?: ReactNode
 
 export function RoutingLogPage() {
   const { address, filters, update: rawUpdate } = useQueryFilters(ROUTING_LOG_CODEC);
-  // A set equal to every kind writes no key, since an absent `kinds` reads every kind.
-  const update = (patch: Partial<LogFilters>) => rawUpdate(patch.kinds !== undefined && sameMembers(patch.kinds, ALL_KINDS) ? { ...patch, kinds: [] } : patch);
+  const update = (patch: Partial<LogFilters>) => rawUpdate(everyKindAsNone(patch));
   const navigate = useNavigate();
   const keys = useAsync(() => api.listKeys(), []);
   const pools = useAsync(() => api.listPools(), []);
@@ -117,8 +121,7 @@ export function RoutingLogPage() {
   };
 
   const now = clock.now();
-  // An address that lists every kind is every kind, which draws no chip and every row of the Kinds list checked.
-  const barFilters = useMemo(() => (sameMembers(filters.kinds, ALL_KINDS) ? { ...filters, kinds: [] } : filters), [filters]);
+  const barFilters = useMemo(() => everyKindAsNone(filters), [filters]);
   const counts = log.data?.counts ?? null;
   // The request chip keeps its id form and carries the route's counts for the request in its title.
   const dimensions = useMemo(
@@ -163,7 +166,7 @@ export function RoutingLogPage() {
             onIntervalChange: setIntervalMs,
             onRefresh: refresh,
             paused: holdCause ?? (cursor !== undefined ? 'olderPage' : null),
-            refreshTitle: custom ? `Rows from ${fmtTime(range.from)} to ${fmtTime(range.to)}. Refresh reads the same window again` : `Rows up to ${fmtTime(range.to)}. Refresh reads up to now`,
+            refreshTitle: rowsRefreshTitle(custom, range.from, range.to),
           }}
           update={update}
         />
@@ -192,13 +195,7 @@ export function RoutingLogPage() {
               </thead>
               <tbody>
                 {log.loading && !log.data
-                  ? Array.from({ length: 8 }, (_, i) => (
-                      <tr key={i} className="table__detail">
-                        <td colSpan={9}>
-                          <Skeleton />
-                        </td>
-                      </tr>
-                    ))
+                  ? <SkeletonRows count={8} colSpan={9} />
                   : rows.map((row) => {
                       const id = identityOf(row);
                       return (
@@ -252,21 +249,13 @@ function AccountCell({ row }: { row: RoutingLogRow }) {
       </span>
     );
   }
-  if (row.type === 'event' && row.poolId !== null) {
-    return (
-      <span className="routing-log__cut ellipsis">
-        <span className="muted">pool</span> <EntityLink kind="pool" id={row.poolId} />
-      </span>
-    );
-  }
-  if (keyId !== null) {
-    return (
-      <span className="routing-log__cut ellipsis">
-        <span className="muted">key</span> <EntityLink kind="key" id={keyId} />
-      </span>
-    );
-  }
-  return <Dash />;
+  const subject = row.type === 'event' && row.poolId !== null ? { id: row.poolId, kind: 'pool' as const } : keyId !== null ? { id: keyId, kind: 'key' as const } : null;
+  if (subject === null) return <Dash />;
+  return (
+    <span className="routing-log__cut ellipsis">
+      <span className="muted">{subject.kind}</span> <EntityLink kind={subject.kind} id={subject.id} />
+    </span>
+  );
 }
 
 /** A catalog change that names one model draws it as the row's model. */

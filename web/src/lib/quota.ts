@@ -124,6 +124,9 @@ export function endOf(account: Pick<Account, 'canceled' | 'subscription'>, now: 
   return trial > now ? trial : null;
 }
 
+/** The operator's saved end as stored, standing only while the account is canceled, with no trial end in its place. */
+export const canceledEndOf = (account: Pick<Account, 'canceled' | 'subscription'>): string | null => (account.canceled ? (account.subscription?.endsAt ?? null) : null);
+
 /** The account's `end` where a window's pace runs to it, an end before the reset (one at the reset is the reset), and
  *  null otherwise. */
 export const paceEnd = (resetsAt: string | null, end: number | null): number | null => (resetsAt !== null && end !== null && end < Date.parse(resetsAt) ? end : null);

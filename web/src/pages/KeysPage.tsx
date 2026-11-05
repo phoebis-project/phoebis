@@ -13,7 +13,7 @@ import { KEY_STATUS_TONE, KeyDialog, SecretDialog } from '@/components/KeyDialog
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { sumTileOf, Tile } from '@/components/ui/Tile';
 import { IconPlus } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skeleton } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skeleton, SkeletonRows } from '@/components/ui/primitives';
 import { EDIT_PARAM, EDIT_PARAMS, KEYS_CODEC } from '@/lib/address';
 import { dollarsUnder, nativeSidesOf, sidesLine, sumFunded, UNPRICED_TITLE, type FundedSum, type WeekReading } from '@/lib/analytics';
 import { effectiveCaptureHours } from '@/lib/capture';
@@ -262,13 +262,7 @@ export function KeysPage() {
                             </td>
                           </tr>
                         )
-                      : [0, 1, 2].map((i) => (
-                          <tr key={i} className="table__detail">
-                            <td colSpan={8}>
-                              <Skeleton />
-                            </td>
-                          </tr>
-                        ))
+                      : <SkeletonRows count={3} colSpan={8} />
                     : rows.map((k) => (
                         <tr key={k.id} id={k.id} tabIndex={-1} className="key-row">
                           <td className="col-fill" title={k.name}>

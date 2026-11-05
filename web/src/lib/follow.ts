@@ -1,5 +1,5 @@
 import { iso } from '@/api/decode';
-import { fmtInt } from './format';
+import { fmtInt, fmtTime } from './format';
 
 /** The pages one auto reload poll reads at most, so a burst of arrivals cannot keep a poll reading without end. */
 export const FOLLOW_PAGES = 8;
@@ -14,6 +14,9 @@ export const RELOAD_INTERVALS = [
 export const FOLLOW_OVERRUN = 'More rows arrived than auto reload could fetch. Reload to read them.';
 /** Why Refresh is off while a custom span has ended, on every view that reads one. */
 export const ENDED_RANGE = 'A custom range that has ended has nothing new to read';
+/** The logs' Refresh title: a custom span's own window, which Refresh reads again, or the end a preset's rows reach. */
+export const rowsRefreshTitle = (custom: boolean, from: number | string, to: number | string): string =>
+  custom ? `Rows from ${fmtTime(from)} to ${fmtTime(to)}. Refresh reads the same window again` : `Rows up to ${fmtTime(to)}. Refresh reads up to now`;
 /** A read that failed before it ever answered, so the view has nothing to draw but the failure. */
 export const failedFirst = (read: { data: unknown; error: string | null }): boolean => read.data === null && read.error !== null;
 /** A log's count beside its filters: the rows shown and whether a next page waits, nothing before the first answer. */

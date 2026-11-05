@@ -6,7 +6,7 @@ import { MeterRatio } from '@/components/MeterRatio';
 import type { Option } from '@/components/ui/OptionList';
 import { IconChevron } from '@/components/ui/icons';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
-import { Button, Card, ErrorState, Skeleton, toggleRow } from '@/components/ui/primitives';
+import { Button, Card, ErrorState, SkeletonRows, toggleRow } from '@/components/ui/primitives';
 import { accountHref, METER_CODEC } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { METER_DIMENSIONS, notLoadedReason } from '@/lib/filterBar';
@@ -161,13 +161,7 @@ function GroupsCard({ accounts, error, first, groups, newest, now, onExpand, onM
           </thead>
           <tbody>
             {groups === null && error === null
-              ? Array.from({ length: 3 }, (_, i) => (
-                  <tr key={i} className="table__detail">
-                    <td colSpan={COLUMNS}>
-                      <Skeleton />
-                    </td>
-                  </tr>
-                ))
+              ? <SkeletonRows count={3} colSpan={COLUMNS} />
               : (groups ?? []).map((g) => {
                   const key = groupKey(g);
                   return (

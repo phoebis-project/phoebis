@@ -5,6 +5,7 @@ import type { Account, ApiKey, GuardrailRef, ModelRule, ModelRulesMode, Pool, Po
 import { AFFINITY_MODE_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/types';
 import { byteOrder, fmtInt, toLocalInput, viewingZone } from './format';
 import { checkPattern } from './patterns';
+import { canceledEndOf } from './quota';
 import { DAY } from './time';
 
 export type NumericKeepaliveKey = { [K in keyof PoolKeepalive]-?: PoolKeepalive[K] extends number | null ? K : never }[keyof PoolKeepalive];
@@ -451,7 +452,7 @@ export interface SubscriptionEndForm {
 export function subscriptionEndFormOf(
   account: Pick<Account, 'canceled' | 'revision' | 'subscription'>,
 ): SubscriptionEndForm {
-  const end = account.canceled ? (account.subscription?.endsAt ?? null) : null;
+  const end = canceledEndOf(account);
   return { canceled: account.canceled, endsAt: end ? toLocalInput(Date.parse(end)) : '', revision: account.revision };
 }
 
