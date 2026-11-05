@@ -697,14 +697,13 @@ mod tests {
             None,
         )
         .unwrap();
-        let rows = rows_of(&db, "s");
         let (prices, tables) = (api_prices(), subscription_costs());
         let fold = SessionSpendFold::default();
         let s = key("s");
         fold.fold(
             PollRows {
                 fill: vec![s.clone()],
-                fill_rows: rows.clone(),
+                fill_rows: rows_of(&db, "s"),
                 since_rows: Vec::new(),
                 watermark: 3,
             },
@@ -716,7 +715,7 @@ mod tests {
             PollRows {
                 fill: Vec::new(),
                 fill_rows: Vec::new(),
-                since_rows: rows.clone(),
+                since_rows: rows_of(&db, "s"),
                 watermark: 3,
             },
             &prices,
@@ -769,10 +768,9 @@ mod tests {
         alone.fold(
             PollRows {
                 fill: vec![s.clone()],
-                fill_rows: rows
-                    .iter()
+                fill_rows: rows_of(&db, "s")
+                    .into_iter()
                     .filter(|r| r.request_id == "r1")
-                    .cloned()
                     .collect(),
                 since_rows: Vec::new(),
                 watermark: 1,
@@ -855,7 +853,6 @@ mod tests {
             None,
         )
         .unwrap();
-        let rows = rows_of(&db, "s");
         let s = key("s");
         let fold = SessionSpendFold::default();
         // The fill the route's read takes from the cursor: the session where the fold does not hold it.
@@ -863,7 +860,7 @@ mod tests {
             let held = cursor.held.contains(&s);
             PollRows {
                 fill: if held { Vec::new() } else { vec![s.clone()] },
-                fill_rows: if held { Vec::new() } else { rows.clone() },
+                fill_rows: if held { Vec::new() } else { rows_of(&db, "s") },
                 since_rows: Vec::new(),
                 watermark: cursor.watermark.unwrap_or(1),
             }

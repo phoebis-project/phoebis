@@ -4423,7 +4423,7 @@ pub(crate) fn price_usage(
 
 /// What one request's serving attempt costs, as `price_usage` prices a usage row: one `price_row` call under the
 /// funding, the kind, the tier, the entrypoint, the classifier and the band at the attempt's completion.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug)]
 pub struct RequestPrice {
     pub funding: Funding,
     /// The serving attempt's list dollars through `price_usd`.
@@ -5072,7 +5072,7 @@ fn read_session_attempts(
 /// The request facts and the attempt the session fold prices, one row per attempt of a request and one row with no
 /// attempt for a request no account served. The first fill answers them by session, `received_at` and request id, the
 /// incremental read by `landed_at`, and both keep a request's attempts one run in attempt order.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug)]
 pub struct SessionSpendRow {
     pub request_id: String,
     /// `None` on a request that named no session, which the fold passes over.
@@ -5092,7 +5092,7 @@ pub struct SessionSpendRow {
 }
 
 /// One attempt's facts the fold prices, `PricedAttempt`'s with the account and the start beside them.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug)]
 pub struct SpendAttempt {
     pub account_id: String,
     pub(crate) account_kind: String,
