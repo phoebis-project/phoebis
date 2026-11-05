@@ -96,10 +96,10 @@ pub(crate) struct ParkedRow {
 /// SQLite's busy handler retries a waiting write on a backoff that grows to 100 ms, while back-to-back slices free
 /// the lock for microseconds between them: a write left to the handler alone waits out most of a pass, and past the
 /// busy timeout its batch fails into the writer's retries. So a slice starts only once every write begun before it
-/// has ended, and a batch waits one slice at most. The handoff works in one direction, a bodies slice alone giving
-/// way between two bodies to a write that began after its handoff: after its wait the purge's `BEGIN IMMEDIATE`
-/// competes with the next batch under SQLite's busy backoff, so a writer landing batches back to back can push a
-/// slice past the 5 s busy timeout, and the pass ends logged until the next hour.
+/// has ended, and a batch waits one slice at most. The handoff works in one direction: after its wait the purge's
+/// `BEGIN IMMEDIATE` competes with the next batch under SQLite's busy backoff, so a writer landing batches back to
+/// back can push a slice past the 5 s busy timeout, and the pass ends logged until the next hour. A bodies slice alone
+/// gives way between two bodies to a write that began after its handoff.
 #[derive(Default)]
 struct Writes {
     begun: AtomicU64,
