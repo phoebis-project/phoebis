@@ -173,12 +173,16 @@ async fn a_request_after_an_expiry_gap_with_a_covering_probe_is_kept_warm() {
             "{id}: the probe-less gap credited nothing"
         );
     }
+    // The credit lands in a batch of its own, which can follow the request row's, so the row is read once the credit
+    // shows.
+    rollups(&r, |rows| {
+        inference_rows(rows).kept_warm_requests == 2 && probe_rows(rows).requests >= 2
+    })
+    .await;
     assert!(
         row(&r, &fifth).await.kept_warm,
         "the rewrite kept the entry the fifth request read"
     );
-    let rows = rollups(&r, |rows| probe_rows(rows).requests >= 2).await;
-    assert_eq!(inference_rows(&rows).kept_warm_requests, 2);
     // A model switch discards the recipe the probe warmed: after a covering probe on the first model, a request
     // on another model past the TTL is not credited, and a request back on the first model inside the second's
     // TTL is not either, since no probe covered it since the switch.
