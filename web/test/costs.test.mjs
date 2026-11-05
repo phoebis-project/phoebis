@@ -39,20 +39,11 @@ test("an override replaces the multiplier and the window's weight it names and l
   close(d.shareIn(costs, 'five_hour', MAX_20X, 'claude-haiku-4-5', usage({ input: 1 }), false), 0.005, "Haiku's input on the 5-hour window, 0.5 x 1 / 100");
 });
 
-test('a model an override weighs on the week alone is weighted', () => {
-  // The test table leaves Opus 5 at null; this copy weighs it 3 on the week through an override.
-  const weekOnly = { ...costs, overrides: { ...costs.overrides, 'claude-opus-5': { weightByWindow: { seven_day: 3 } } } };
-  assert.equal(d.isWeighted(weekOnly, 'claude-opus-5'), true, 'weighted through the override');
-});
-
 test('a Fable model an override weighs on the 7-day Fable window alone is weighted, a dash on the shared windows and a share on its week', () => {
   // The test table weighs Fable 5.1 10. This copy leaves its shared weight null and weighs it 10 on the 7-day Fable
   // window alone.
   const FABLE = 'claude-fable-5-1';
   const weekOnly = { ...costs, modelWeight: { ...costs.modelWeight, [FABLE]: null }, overrides: { ...costs.overrides, [FABLE]: { weightByWindow: { seven_day_fable: 10 } } } };
-  assert.equal(d.isWeighted(weekOnly, FABLE), true, 'weighted through the override');
-  // Fable 5.1 is the one Fable model of the test table, so its model tier has no weighed model to read.
-  assert.equal(d.isWeighted({ ...weekOnly, overrides: costs.overrides }, FABLE), false, 'unweighted without the override');
   assert.equal(d.shareIn(weekOnly, 'five_hour', MAX_20X, FABLE, usage({ input: 1 }), false), null, 'the 5-hour window');
   close(d.shareIn(weekOnly, 'seven_day_fable', MAX_20X, FABLE, usage({ input: 1 }), false), 0.02, 'the 7-day Fable window, 10 x 1 / 1000 / 0.5');
   assert.deepEqual(d.modelWeeks(weekOnly, FABLE), ['seven_day_fable'], 'a Fable model carries the 7-day Fable window');
@@ -367,14 +358,7 @@ test('the full 5-hour windows a week are the week over the window, each at its o
 
 test('the overlay prices a listed entrypoint under its regime and anything else at the base', () => {
   assert.deepEqual(d.regimeNames(costs), ['desk']);
-  assert.equal(d.regimeOf(costs, 'pane'), 'desk');
-  assert.equal(d.regimeOf(costs, 'desk'), 'desk');
-  assert.equal(d.regimeOf(costs, 'cli'), null, 'an entrypoint no regime lists');
-  assert.equal(d.regimeOf(costs, null), null, 'a request without an entrypoint');
-  assert.deepEqual(d.underRegime(costs, 'desk'), d.withRegime(costs, 'desk'));
   assert.notDeepEqual(d.withRegime(costs, 'desk'), costs, 'the regime changes the model');
-  assert.equal(d.underRegime(costs, 'sdk-cli'), costs, 'an unlisted entrypoint prices at the base itself');
-  assert.equal(d.underRegime(costs, null), costs);
   assert.equal(d.withRegime(costs, 'nowhere'), costs, 'an unknown name is the base itself');
   assert.equal(d.withRegime(costs, null), costs);
 });
@@ -454,16 +438,15 @@ test("a model's tier is its model_tier entry, then its undated id's, then the ti
 test('every helper that reads a weight answers for a weighted model and returns nothing for a model without a weight of its own', () => {
   const u = usage({ input: 1 });
   const read = (model) => ({
-    isWeighted: d.isWeighted(costs, model),
     ratesOf: d.ratesOf(costs, 'five_hour', MAX_20X, model),
     shareIn: d.shareIn(costs, 'five_hour', MAX_20X, model, u, false),
     weightOf: d.weightOf(costs, model, 'five_hour'),
     weightedWindows: d.weightedWindows(costs, model),
   });
   const weighted = read(OPUS);
-  assert.ok(Object.values(weighted).every((v) => v !== null && v !== false && !(Array.isArray(v) && v.length === 0)), `a weighted model prices through every helper: ${JSON.stringify(weighted)}`);
+  assert.ok(Object.values(weighted).every((v) => v !== null && !(Array.isArray(v) && v.length === 0)), `a weighted model prices through every helper: ${JSON.stringify(weighted)}`);
   // Opus 4.8 sits in the Opus tier, which weighs Opus 5.5, and carries no weight of its own, so no reader borrows one.
-  for (const model of ['claude-opus-4-8', 'claude-mystery-2', 'claude-unknown-1']) assert.deepEqual(Object.values(read(model)), [false, null, null, null, []], `${model} prices nowhere`);
+  for (const model of ['claude-opus-4-8', 'claude-mystery-2', 'claude-unknown-1']) assert.deepEqual(Object.values(read(model)), [null, null, null, []], `${model} prices nowhere`);
 });
 
 test('the entry in force at an instant is the latest dated at or before it, else the first', () => {

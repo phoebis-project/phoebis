@@ -285,13 +285,3 @@ export const SESSIONS_DIMENSIONS: Dimension[] = [
   { field: 'finished', group: 'Sessions', kind: 'flag', label: 'Finished sessions', word: 'finished sessions' },
   { field: 'released', group: 'Sessions', kind: 'flag', label: 'Released agents', word: 'released agents' },
 ];
-
-/** The codec keys that are no dimension: `range`, `rows` and `search` everywhere, and per view the keys named here. */
-export const NOT_DIMENSIONS: Record<'accounts' | 'analytics' | 'keys' | 'requests' | 'routingLog' | 'sessions', readonly string[]> = {
-  accounts: ['dir', 'range', 'rows', 'search', 'sort'],
-  analytics: ['by', 'groups', 'key', 'range', 'rows', 'search', 'unit'],
-  keys: ['range', 'rows', 'search'],
-  requests: ['range', 'rows', 'search'],
-  routingLog: ['range', 'rows', 'search'],
-  sessions: ['dir', 'range', 'rows', 'search', 'sort'],
-};

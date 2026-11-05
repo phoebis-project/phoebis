@@ -271,7 +271,7 @@ test('an hour of two requests in different bands sums the per-request shares at 
   const costs = (await api.getSettings()).subscriptionCosts;
   const tierOf = new Map(d.ACCOUNTS.map((a) => [a.id, a.subscription?.rateLimitTier]));
   // A plan-funded inference the cost model prices, as the template the two rows are written from.
-  const template = [...d.requestById.values()].find((r) => r.kind === 'inference' && r.status === 200 && r.attempts.length === 1 && tierOf.get(r.accountId ?? '') !== undefined && d.fundingOf(r.attempts[0]) === 'plan' && d.isWeighted(costs, r.canonicalModel));
+  const template = [...d.requestById.values()].find((r) => r.kind === 'inference' && r.status === 200 && r.attempts.length === 1 && tierOf.get(r.accountId ?? '') !== undefined && d.fundingOf(r.attempts[0]) === 'plan' && d.weightedWindows(costs, r.canonicalModel).length > 0);
   assert.ok(template, 'the story holds a priced plan-funded answer');
   const tier = tierOf.get(template.accountId);
   // The band's next edge after the early hours of a Wednesday, read off the table the mock prices with.

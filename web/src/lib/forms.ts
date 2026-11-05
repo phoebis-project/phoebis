@@ -223,11 +223,6 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string> |
   return out;
 }
 
-/** Whether the pool routes would take `input` as it stands, with every member one of `accountIds`; null holds it. */
-export function validatePoolInput(input: PoolInput, accountIds: ReadonlySet<string> | null, checks: PoolChecks = {}): boolean {
-  return poolRefusals(input, accountIds, checks).length === 0;
-}
-
 /** The settings the pool routes' static checks read, on a saved pool or a dialog's input alike. */
 export type WarnedSettings = Pick<
   Pool,

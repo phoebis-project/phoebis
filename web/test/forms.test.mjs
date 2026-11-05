@@ -45,54 +45,54 @@ const input = {
 const tuned = (patch) => ({ ...input, keepalive: { ...input.keepalive, ...patch } });
 
 test('a pool input the router would take validates', () => {
-  assert.equal(d.validatePoolInput(input, accounts), true);
-  assert.equal(d.validatePoolInput({ ...input, affinityTtlSeconds: 0, keepalive: { ...input.keepalive, enabled: false } }, accounts), true, '0 turns affinity off');
-  assert.equal(d.validatePoolInput({ ...input, affinityTtlSeconds: 60, keepalive: { ...input.keepalive, enabled: false } }, accounts), true);
-  assert.equal(d.validatePoolInput({ ...input, loadShedding: false }, accounts), true, 'the switch is a toggle with no bound');
+  assert.equal(d.poolRefusals(input, accounts).length === 0, true);
+  assert.equal(d.poolRefusals({ ...input, affinityTtlSeconds: 0, keepalive: { ...input.keepalive, enabled: false } }, accounts).length === 0, true, '0 turns affinity off');
+  assert.equal(d.poolRefusals({ ...input, affinityTtlSeconds: 60, keepalive: { ...input.keepalive, enabled: false } }, accounts).length === 0, true);
+  assert.equal(d.poolRefusals({ ...input, loadShedding: false }, accounts).length === 0, true, 'the switch is a toggle with no bound');
 });
 
 test('a pool input refuses the affinity the router refuses', () => {
   const off = { ...input.keepalive, enabled: false };
-  for (const seconds of [1, 30, 59]) assert.equal(d.validatePoolInput({ ...input, affinityTtlSeconds: seconds, keepalive: off }, accounts), false, `${seconds} s is neither off nor a minute`);
-  assert.equal(d.validatePoolInput({ ...input, affinityTtlSeconds: 90.5, keepalive: off }, accounts), false, 'the route takes whole seconds');
-  assert.equal(d.validatePoolInput({ ...input, affinityTtlSeconds: 120, keepalive: { ...input.keepalive, enabled: true } }, accounts), false, 'warming needs a pin of five minutes');
+  for (const seconds of [1, 30, 59]) assert.equal(d.poolRefusals({ ...input, affinityTtlSeconds: seconds, keepalive: off }, accounts).length === 0, false, `${seconds} s is neither off nor a minute`);
+  assert.equal(d.poolRefusals({ ...input, affinityTtlSeconds: 90.5, keepalive: off }, accounts).length === 0, false, 'the route takes whole seconds');
+  assert.equal(d.poolRefusals({ ...input, affinityTtlSeconds: 120, keepalive: { ...input.keepalive, enabled: true } }, accounts).length === 0, false, 'warming needs a pin of five minutes');
 });
 
 test('a pool input refuses a keepalive idle below 0, a fraction of a second and an empty ceiling, and takes a null one', () => {
   // The captured route probes hold each field's bound pairs, and none sends an idle below its floor of 0.
-  assert.equal(d.validatePoolInput(tuned({ maxIdleSeconds: -1 }), accounts), false, 'maxIdleSeconds -1 is below the floor');
-  assert.equal(d.validatePoolInput(tuned({ maxIdleSeconds: 2.5 }), accounts), false, 'seconds are whole');
-  assert.equal(d.validatePoolInput(tuned({ maxParkedSeconds: null, scheduledHorizonSeconds: null }), accounts), true, 'a null ceiling is the break-even');
-  assert.equal(d.validatePoolInput(tuned({ maxParkedSeconds: Number.NaN }), accounts), false, 'a switched-on ceiling left empty is held');
+  assert.equal(d.poolRefusals(tuned({ maxIdleSeconds: -1 }), accounts).length === 0, false, 'maxIdleSeconds -1 is below the floor');
+  assert.equal(d.poolRefusals(tuned({ maxIdleSeconds: 2.5 }), accounts).length === 0, false, 'seconds are whole');
+  assert.equal(d.poolRefusals(tuned({ maxParkedSeconds: null, scheduledHorizonSeconds: null }), accounts).length === 0, true, 'a null ceiling is the break-even');
+  assert.equal(d.poolRefusals(tuned({ maxParkedSeconds: Number.NaN }), accounts).length === 0, false, 'a switched-on ceiling left empty is held');
 });
 
 test('a pool input refuses members the member write would refuse', () => {
-  assert.equal(d.validatePoolInput({ ...input, members: [] }, accounts), false, 'a pool needs a member');
-  assert.equal(d.validatePoolInput({ ...input, members: [...input.members, { accountId: 'ghost', priority: 0 }] }, accounts), false, 'an account the console does not know');
-  assert.equal(d.validatePoolInput({ ...input, members: [{ accountId: input.members[0].accountId, priority: -1 }] }, accounts), false, 'priorities are unsigned');
-  assert.equal(d.validatePoolInput({ ...input, members: [{ accountId: input.members[0].accountId, priority: 1.5 }] }, accounts), false, 'priorities are whole');
-  assert.equal(d.validatePoolInput({ ...input, members: [{ accountId: input.members[0].accountId, priority: 7 }] }, accounts), true);
+  assert.equal(d.poolRefusals({ ...input, members: [] }, accounts).length === 0, false, 'a pool needs a member');
+  assert.equal(d.poolRefusals({ ...input, members: [...input.members, { accountId: 'ghost', priority: 0 }] }, accounts).length === 0, false, 'an account the console does not know');
+  assert.equal(d.poolRefusals({ ...input, members: [{ accountId: input.members[0].accountId, priority: -1 }] }, accounts).length === 0, false, 'priorities are unsigned');
+  assert.equal(d.poolRefusals({ ...input, members: [{ accountId: input.members[0].accountId, priority: 1.5 }] }, accounts).length === 0, false, 'priorities are whole');
+  assert.equal(d.poolRefusals({ ...input, members: [{ accountId: input.members[0].accountId, priority: 7 }] }, accounts).length === 0, true);
 });
 
 test('a members list that did not load holds the save once and names no member', () => {
   const held = { field: 'members', group: 'members', text: 'the account list did not load, so the members cannot be checked.' };
   assert.deepEqual(d.poolRefusals(input, null), [held]);
-  assert.equal(d.validatePoolInput(input, null), false);
+  assert.equal(d.poolRefusals(input, null).length === 0, false);
   const ghost = { accountId: 'ghost', budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 0 };
   assert.deepEqual(d.poolRefusals({ ...input, members: [...input.members, ghost] }, null), [held], 'an id the list may hold is not refused');
 });
 
 test('a pool input refuses thresholds outside their range and an empty name', () => {
-  assert.equal(d.validatePoolInput({ ...input, name: '' }, accounts), false);
-  assert.equal(d.validatePoolInput({ ...input, windowCeiling: 0.5 }, accounts), true, 'a ceiling runs from half of a window');
-  assert.equal(d.validatePoolInput({ ...input, windowCeiling: 1 }, accounts), true, 'to the wall itself');
-  assert.equal(d.validatePoolInput({ ...input, windowCeiling: 0.49 }, accounts), false);
-  assert.equal(d.validatePoolInput({ ...input, windowCeiling: 1.01 }, accounts), false);
-  assert.equal(d.validatePoolInput({ ...input, windowCeiling: Number.NaN }, accounts), false, 'a field left empty holds the save');
-  assert.equal(d.validatePoolInput({ ...input, shedCap: 0.1 }, accounts), true, 'a cap runs from a tenth of the burn');
-  assert.equal(d.validatePoolInput({ ...input, shedCap: 1 }, accounts), true);
-  assert.equal(d.validatePoolInput({ ...input, shedCap: 0.09 }, accounts), false);
-  assert.equal(d.validatePoolInput({ ...input, shedCap: 1.01 }, accounts), false);
+  assert.equal(d.poolRefusals({ ...input, name: '' }, accounts).length === 0, false);
+  assert.equal(d.poolRefusals({ ...input, windowCeiling: 0.5 }, accounts).length === 0, true, 'a ceiling runs from half of a window');
+  assert.equal(d.poolRefusals({ ...input, windowCeiling: 1 }, accounts).length === 0, true, 'to the wall itself');
+  assert.equal(d.poolRefusals({ ...input, windowCeiling: 0.49 }, accounts).length === 0, false);
+  assert.equal(d.poolRefusals({ ...input, windowCeiling: 1.01 }, accounts).length === 0, false);
+  assert.equal(d.poolRefusals({ ...input, windowCeiling: Number.NaN }, accounts).length === 0, false, 'a field left empty holds the save');
+  assert.equal(d.poolRefusals({ ...input, shedCap: 0.1 }, accounts).length === 0, true, 'a cap runs from a tenth of the burn');
+  assert.equal(d.poolRefusals({ ...input, shedCap: 1 }, accounts).length === 0, true);
+  assert.equal(d.poolRefusals({ ...input, shedCap: 0.09 }, accounts).length === 0, false);
+  assert.equal(d.poolRefusals({ ...input, shedCap: 1.01 }, accounts).length === 0, false);
 });
 
 test('a pool input refuses a half step on every whole engine field and a choice outside its list, each refusal in its group', () => {
@@ -109,13 +109,13 @@ test('a pool input refuses a half step on every whole engine field and a choice 
     slowDownStretchSeconds: 60.5,
     windDownMinutes: 0.5,
   };
-  for (const [field, value] of Object.entries(halves)) assert.equal(d.validatePoolInput({ ...input, [field]: value }, accounts), false, `${field} is whole`);
-  for (const mode of ['always', 'never', 'when_needed']) assert.equal(d.validatePoolInput({ ...input, warmSessions: mode }, accounts), true);
-  assert.equal(d.validatePoolInput({ ...input, warmSessions: 'sometimes' }, accounts), false);
-  assert.equal(d.validatePoolInput({ ...input, migrateWhenSpent: false }, accounts), true);
-  for (const mode of ['always', 'never', 'when_cold']) assert.equal(d.validatePoolInput({ ...input, returnToPlan: mode }, accounts), true);
+  for (const [field, value] of Object.entries(halves)) assert.equal(d.poolRefusals({ ...input, [field]: value }, accounts).length === 0, false, `${field} is whole`);
+  for (const mode of ['always', 'never', 'when_needed']) assert.equal(d.poolRefusals({ ...input, warmSessions: mode }, accounts).length === 0, true);
+  assert.equal(d.poolRefusals({ ...input, warmSessions: 'sometimes' }, accounts).length === 0, false);
+  assert.equal(d.poolRefusals({ ...input, migrateWhenSpent: false }, accounts).length === 0, true);
+  for (const mode of ['always', 'never', 'when_cold']) assert.equal(d.poolRefusals({ ...input, returnToPlan: mode }, accounts).length === 0, true);
   assert.deepEqual(d.poolRefusals({ ...input, returnToPlan: 'sometimes' }, accounts), [{ field: 'Return to plan', group: 'overage', text: 'Return to plan is one of its listed choices.' }]);
-  assert.equal(d.validatePoolInput({ ...input, slowDown: true }, accounts), true, 'the slow-down is a toggle with no bound');
+  assert.equal(d.poolRefusals({ ...input, slowDown: true }, accounts).length === 0, true, 'the slow-down is a toggle with no bound');
   assert.deepEqual(
     d.poolRefusals({ ...input, returnToPlanDwellSeconds: 86_401, slowDownHoldSeconds: 0, slowDownStretchSeconds: 59 }, accounts).map((r) => [r.group, r.field, r.text]),
     [
@@ -143,18 +143,18 @@ test('a pool input takes each listed spelling of the pin and placement fields, a
     subagentPlacement: [['by_cohort', 'by_strategy', 'with_main'], 'alone'],
   };
   for (const [field, [taken, unknown]] of Object.entries(spellings)) {
-    for (const value of taken) assert.equal(d.validatePoolInput({ ...input, [field]: value }, accounts), true, `${field} ${value} is taken`);
-    assert.equal(d.validatePoolInput({ ...input, [field]: unknown }, accounts), false, `${field} ${unknown} is refused`);
+    for (const value of taken) assert.equal(d.poolRefusals({ ...input, [field]: value }, accounts).length === 0, true, `${field} ${value} is taken`);
+    assert.equal(d.poolRefusals({ ...input, [field]: unknown }, accounts).length === 0, false, `${field} ${unknown} is refused`);
   }
-  for (const tokens of [0, 20_000, 1_000_000]) assert.equal(d.validatePoolInput({ ...input, minSharedPrefixTokens: tokens }, accounts), true, `${tokens} tokens is taken`);
-  for (const tokens of [-1, 1.5, Number.NaN]) assert.equal(d.validatePoolInput({ ...input, minSharedPrefixTokens: tokens }, accounts), false, `${tokens} tokens is refused`);
+  for (const tokens of [0, 20_000, 1_000_000]) assert.equal(d.poolRefusals({ ...input, minSharedPrefixTokens: tokens }, accounts).length === 0, true, `${tokens} tokens is taken`);
+  for (const tokens of [-1, 1.5, Number.NaN]) assert.equal(d.poolRefusals({ ...input, minSharedPrefixTokens: tokens }, accounts).length === 0, false, `${tokens} tokens is refused`);
 });
 
 test('a member budget is a dollar amount above 0 or none, a daily and a monthly side by side', () => {
   for (const v of ['', '  ', '0.01', '12.5', '50', '1e3']) assert.equal(d.budgetRefusal(v), null, `${JSON.stringify(v)} is taken`);
   for (const v of ['0', '-1', 'x', 'Infinity', '12,50']) assert.equal(d.budgetRefusal(v), 'A budget is a dollar amount above 0. Leave it empty for no budget.', `${JSON.stringify(v)} is refused`);
   const [first] = input.members;
-  const withBudget = (budget) => d.validatePoolInput({ ...input, members: [{ ...first, ...budget }] }, accounts);
+  const withBudget = (budget) => d.poolRefusals({ ...input, members: [{ ...first, ...budget }] }, accounts).length === 0;
   assert.equal(withBudget({ budgetDailyUsd: 12.5, budgetMonthlyUsd: null }), true);
   assert.equal(withBudget({ budgetDailyUsd: 5, budgetMonthlyUsd: 50 }), true, 'both budgets at once');
   assert.equal(withBudget({ budgetDailyUsd: null, budgetMonthlyUsd: null }), true, 'no budget');
@@ -249,8 +249,8 @@ test('a model rule list is refused in the route\'s order and words, and the refu
   assert.equal(d.modelRulesRefusal(rules('')), 'model_rules[0]: pattern is empty');
   assert.equal(d.modelRulesRefusal(rules(...Array(256).fill('*'))), null, 'the bound admits 256 entries');
   assert.equal(d.modelRulesRefusal(rules(...Array(257).fill(''))), 'model_rules holds at most 256 entries', 'the bound is checked before any entry');
-  assert.equal(d.validatePoolInput({ ...input, modelRules: rules('claude-*') }, accounts), true);
-  assert.equal(d.validatePoolInput({ ...input, modelRules: rules('claude-*', 'a***') }, accounts), false);
+  assert.equal(d.poolRefusals({ ...input, modelRules: rules('claude-*') }, accounts).length === 0, true);
+  assert.equal(d.poolRefusals({ ...input, modelRules: rules('claude-*', 'a***') }, accounts).length === 0, false);
 });
 
 test("the key dialog's holds agree with its Save condition", () => {
@@ -357,8 +357,8 @@ test('a retention while capture is on must be a whole number of hours inside the
   for (const typed of ['1', '72']) assert.deepEqual(retention(typed), [], `${typed} is inside`);
   assert.deepEqual(retention('', false), [], 'with capture off the field is not read');
   assert.deepEqual(retention('48', true, 24), refused(24), 'the limit is the one passed in');
-  assert.equal(d.validatePoolInput(input, accounts, { capture: { maxHours: 72, on: true, typed: '' } }), false);
-  assert.equal(d.validatePoolInput(input, accounts, { capture: { maxHours: 72, on: true, typed: '24' } }), true);
+  assert.equal(d.poolRefusals(input, accounts, { capture: { maxHours: 72, on: true, typed: '' } }).length === 0, false);
+  assert.equal(d.poolRefusals(input, accounts, { capture: { maxHours: 72, on: true, typed: '24' } }).length === 0, true);
 });
 
 test('a retention while the limit is unread checks the floor of 1 alone', () => {
@@ -462,13 +462,13 @@ test('the form admits and refuses the values the routes do', () => {
     } else if (field.startsWith('keepalive.')) {
       const key = camel(field.slice('keepalive.'.length));
       assert.ok(key in d.KEEPALIVE_BOUNDS, `${field} is a field the form bounds`);
-      admitted = d.validatePoolInput(tuned({ ...keepaliveWith(fields), [key]: value }), accounts);
+      admitted = d.poolRefusals(tuned({ ...keepaliveWith(fields), [key]: value }), accounts).length === 0;
     } else if (field === 'model_rules') {
-      admitted = d.validatePoolInput({ ...input, modelRules: Array.from({ length: value }, () => ({ not: true, pattern: 'claude-haiku-*' })) }, accounts);
+      admitted = d.poolRefusals({ ...input, modelRules: Array.from({ length: value }, () => ({ not: true, pattern: 'claude-haiku-*' })) }, accounts).length === 0;
     } else {
       const key = camel(field);
       assert.ok(key in d.ENGINE_BOUNDS, `${field} is a field the form bounds`);
-      admitted = d.validatePoolInput({ ...input, [key]: value }, accounts);
+      admitted = d.poolRefusals({ ...input, [key]: value }, accounts).length === 0;
     }
     assert.equal(admitted, status >= 200 && status < 300, `${route} ${field} ${value}: the route answered ${status}`);
   }

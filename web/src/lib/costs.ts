@@ -81,10 +81,6 @@ export const bandSentence = (costs: SubscriptionCosts): string => {
   return `The band applies to ${listWords(applies)} traffic only: a request completing inside it spends more of its 5-hour window. ${listWords(spared.map(regimeWord))} sessions hold the full window at every hour.`;
 };
 
-/** The regime listing the entrypoint, null for null or an entrypoint no regime lists. */
-export const regimeOf = (costs: SubscriptionCosts, entrypoint: string | null): string | null =>
-  entrypoint === null ? null : (regimeNames(costs).find((name) => costs.regimes[name].entrypoints.includes(entrypoint)) ?? null);
-
 /** The model as the named regime prices it: its capacity rows over the base's, a tier it does not name keeping the
  *  base row, and its band factors in place of the base's. The base itself for null or an unknown name. */
 export const withRegime = (costs: SubscriptionCosts, name: string | null): SubscriptionCosts => {
@@ -92,9 +88,6 @@ export const withRegime = (costs: SubscriptionCosts, name: string | null): Subsc
   if (regime === undefined) return costs;
   return { ...costs, capacity: { ...costs.capacity, ...regime.capacity }, peak: { ...costs.peak, capacityFactor: regime.peakCapacityFactor } };
 };
-
-/** `withRegime` of the regime listing the entrypoint: one derived model every reader prices through. */
-export const underRegime = (costs: SubscriptionCosts, entrypoint: string | null): SubscriptionCosts => withRegime(costs, regimeOf(costs, entrypoint));
 
 /** The model's row key: its id as sent, else its undated name, since the price rows carry dated ids. */
 const keyOf = (costs: SubscriptionCosts, model: string): string | null => (has(costs.modelWeight, model) ? model : has(costs.modelWeight, undatedModel(model)) ? undatedModel(model) : null);
@@ -123,9 +116,6 @@ export const modelWeeks = (costs: SubscriptionCosts, model: string): string[] =>
 /** The windows the model has a weight on, the two shared windows first and then its model weeks: an override's weight
  *  on a window prices that window even under a null shared weight. */
 export const weightedWindows = (costs: SubscriptionCosts, model: string): string[] => ['five_hour', 'seven_day', ...modelWeeks(costs, model)].filter((w) => weightOf(costs, model, w) !== null);
-
-/** Whether any window the model can be priced on carries a weight for it. */
-export const isWeighted = (costs: SubscriptionCosts, model: string): boolean => weightedWindows(costs, model).length > 0;
 
 const multipliersOf = (costs: SubscriptionCosts, model: string): TypeMultiplier => {
   const key = keyOf(costs, model);

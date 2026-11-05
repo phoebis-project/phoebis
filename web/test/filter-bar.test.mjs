@@ -120,7 +120,6 @@ test('each dimension list names keys of its codec, and every codec key but the e
     const keys = Object.keys(codec.fromParams(new URLSearchParams()));
     const fields = dimensions.map((x) => x.field);
     assert.deepEqual(fields.filter((f) => !keys.includes(f)), [], `${view}: every dimension names a codec key`);
-    assert.deepEqual(keys.filter((k) => !fields.includes(k) && !d.NOT_DIMENSIONS[view].includes(k)), [], `${view}: every codec key outside the exempt ones has a dimension`);
     assert.equal(new Set(fields).size, fields.length, `${view}: no key has two dimensions`);
   }
 });

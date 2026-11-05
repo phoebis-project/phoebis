@@ -389,11 +389,6 @@ export const ACCOUNTS_CODEC = codecOf<AccountsAddress>({
   status: { default: 'all', kind: 'choice', name: 'status', values: ['all', ...ACCOUNT_STATUSES] },
 });
 
-// These views have no filter, so their codecs read and write nothing: the Pools page keeps its hash and its one-shot
-// `edit` and `group`, the Quota page's hash is its section, and a filter either view gains later lands here.
-export const POOLS_CODEC = codecOf<Record<string, never>>({});
-export const QUOTA_CODEC = codecOf<Record<string, never>>({});
-
 export interface SessionsAddress {
   /** Companion only: the rows whose companion reports or went silent. */
   companion: boolean;
