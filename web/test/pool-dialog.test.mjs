@@ -152,6 +152,20 @@ test("a stored member's row waits disabled for the account list, then the list's
   assert.deepEqual(read(missing), { badge: 'not listed', checked: true, disabled: false, title: null }, 'the member the list lacks keeps its ticked row, enabled and marked');
 });
 
+test('a pool dialog whose account list failed draws the failure with its retry, and no member row waits', async () => {
+  const pool = pools.find((p) => p.members.length > 0);
+  assert.ok(pool, 'the mock holds a pool with members');
+  let reloads = 0;
+  const { container, draw } = mount();
+  await draw(poolDialog({ accounts: { data: null, error: 'HTTP 503', reload: () => (reloads += 1) }, pool }));
+  const members = container.querySelector('dialog[open] section.dialog-group[aria-label="Members"]');
+  const failed = members?.querySelector('.empty--error');
+  assert.deepEqual([failed?.querySelector('.empty__title')?.textContent, failed?.querySelector('.empty__body')?.textContent], ['The account list did not load', 'HTTP 503']);
+  assert.equal(members?.querySelectorAll('.members-table input[type="checkbox"][disabled][title="Waiting for the account list"]').length, 0, 'no stored member waits for a list that failed');
+  act(() => failed?.querySelector('button')?.click());
+  assert.equal(reloads, 1, 'Try again reads the list again');
+});
+
 test("the key override is unbounded with the floor's sentence until the settings read lands the limit", async () => {
   const key = (await mock.listKeys()).find((k) => k.id === 'desktop');
   assert.ok(key, 'the mock holds the desktop key');
