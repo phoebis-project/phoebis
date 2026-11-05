@@ -461,7 +461,7 @@ export function lineMatches(line: SessionLine, filters: SessionFilters): boolean
  * every line of a finished row, released ones among them, so a session the engine is done with keeps its probe facts
  * in view once it is shown.
  */
-export function drawnLines(row: Pick<MatchRow, 'finished' | 'lines'>, filters: Pick<SessionFilters, 'released'>): SessionLine[] {
+function drawnLines(row: Pick<MatchRow, 'finished' | 'lines'>, filters: Pick<SessionFilters, 'released'>): SessionLine[] {
   return row.lines.filter((line) => row.finished || filters.released || !isReleasedLine(line));
 }
 
