@@ -18,8 +18,16 @@ export function CostTd({ cell, className, error }: { cell: { main: string; sub: 
     );
   return (
     <td className={classes} title={cell.title || undefined}>
+      <CostLines cell={cell} />
+    </td>
+  );
+}
+
+export function CostLines({ cell }: { cell: { main: string; sub: string } }) {
+  return (
+    <>
       {cell.main}
       {cell.sub && <span className="sub">{cell.sub}</span>}
-    </td>
+    </>
   );
 }

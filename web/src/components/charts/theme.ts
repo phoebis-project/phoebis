@@ -98,3 +98,8 @@ export const PERCENTILES = [
   { key: 'p95', label: 'p95', p: 0.95, rampIndex: 2 },
   { key: 'p99', label: 'p99', p: 0.99, rampIndex: 4 },
 ] as const;
+
+/** A chart card's plot height, its skeleton's too, so a card keeps its height as the answer lands. */
+export const CHART_HEIGHT = 220;
+
+export const PCT_AXIS = { axisLine: false, domain: [0, 100], tickFormatter: (v: number) => `${v}%`, tickLine: false, ticks: [0, 25, 50, 75, 100], width: 40 };

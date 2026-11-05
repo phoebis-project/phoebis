@@ -6,6 +6,7 @@ import type { Account, AllowanceAccount, AllowanceReset, AllowanceWindow, Pairin
 import { useSession } from '@/app/session';
 import { useAppSettings } from '@/app/settings';
 import { CatalogDialog } from '@/components/CatalogDialog';
+import { CHART_HEIGHT, PCT_AXIS } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { Legend, timeTip } from '@/components/charts/Tooltip';
 import { CoolingDown } from '@/components/CoolingDown';
@@ -910,35 +911,27 @@ function AllowanceColumn({ account, costs, holder, week, window: w }: { account:
 const TrendChart = memo(function TrendChart({ history, loading, hasFable }: { hasFable: boolean; history: QuotaHistory[] | null; loading: boolean }) {
   const ink = useChartInk();
   const data = useMemo(() => (history ? joinTrend(history, hasFable) : []), [history, hasFable]);
-  if (loading || !history) return <Skeleton height={220} />;
+  if (loading || !history) return <Skeleton height={CHART_HEIGHT} />;
   if (data.length === 0) return <EmptyState title="No samples yet" body="Quota samples appear after the first successful quota fetch." />;
+  const series: { color: string; dashed?: boolean; key: 'u5' | 'u7' | 'uf'; name: string; type: 'linear' | 'monotone'; width: number }[] = [
+    { color: ink.series[0], key: 'u5', name: '5-hour', type: 'linear', width: 1.5 },
+    { color: ink.series[1], key: 'u7', name: '7-day', type: 'monotone', width: 2 },
+    ...(hasFable ? [{ color: ink.series[2], dashed: true, key: 'uf' as const, name: 'Fable 7-day', type: 'monotone' as const, width: 2 }] : []),
+  ];
   return (
     <>
-      <ResponsiveContainer width="100%" height={220}>
+      <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
         <LineChart data={data} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
           <CartesianGrid vertical={false} stroke={ink.grid} />
           <XAxis dataKey="at" type="number" domain={['dataMin', 'dataMax']} tickFormatter={(v: number) => fmtDayShort(v)} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={60} />
-          <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tickFormatter={(v: number) => `${v}%`} tickLine={false} axisLine={false} width={40} />
-          <Tooltip
-            cursor={{ stroke: ink.axis }}
-            content={timeTip<(typeof data)[number]>((p) => [
-              { color: ink.series[0], label: '5-hour used', value: pct(p.u5) },
-              { color: ink.series[1], label: '7-day used', value: p.u7 === null ? 'no sample yet' : pct(p.u7) },
-              ...(hasFable ? [{ color: ink.series[2], label: 'Fable 7-day used', value: p.uf === null ? 'no sample yet' : pct(p.uf) }] : []),
-            ])}
-          />
-          <Line type="linear" dataKey="u5" stroke={ink.series[0]} strokeWidth={1.5} dot={false} isAnimationActive={false} />
-          <Line type="monotone" dataKey="u7" stroke={ink.series[1]} strokeWidth={2} dot={false} isAnimationActive={false} />
-          {hasFable && <Line type="monotone" dataKey="uf" stroke={ink.series[2]} strokeWidth={2} strokeDasharray="5 4" dot={false} isAnimationActive={false} />}
+          <YAxis {...PCT_AXIS} />
+          <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<(typeof data)[number]>((p) => series.map((s) => ({ color: s.color, label: `${s.name} used`, value: p[s.key] === null ? 'no sample yet' : pct(p[s.key]) })))} />
+          {series.map((s) => (
+            <Line key={s.key} type={s.type} dataKey={s.key} stroke={s.color} strokeWidth={s.width} strokeDasharray={s.dashed ? '5 4' : undefined} dot={false} isAnimationActive={false} />
+          ))}
         </LineChart>
       </ResponsiveContainer>
-      <Legend
-        items={[
-          { color: ink.series[0], label: '5-hour window', shape: 'line' },
-          { color: ink.series[1], label: '7-day window', shape: 'line' },
-          ...(hasFable ? [{ color: ink.series[2], dashed: true, label: 'Fable 7-day window', shape: 'line' as const }] : []),
-        ]}
-      />
+      <Legend items={series.map((s) => ({ color: s.color, dashed: s.dashed, label: `${s.name} window`, shape: 'line' as const }))} />
     </>
   );
 });

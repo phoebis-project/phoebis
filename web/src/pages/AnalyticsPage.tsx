@@ -8,10 +8,11 @@ import { foldGroups, foldRequests, keptRows, latestGenerations, loadSessionReque
 import { useAppSettings } from '@/app/settings';
 import type { Account, AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, GuardrailCounts, LatencyHistograms, MemberBudget, PlacementRow, RefusalCategoriesAnswer, RequestLog, RewritesAnswer, SubscriptionCosts, UnusedAllowanceAnswer } from '@/api/types';
 import { Donut } from '@/components/charts/Donut';
-import { OUTCOME_SERIES, PERCENTILES, PROBE_SERIES, TOKEN_SERIES, accountColor, accountSlots, type ChartInk } from '@/components/charts/theme';
+import { CHART_HEIGHT, OUTCOME_SERIES, PCT_AXIS, PERCENTILES, PROBE_SERIES, TOKEN_SERIES, accountColor, accountSlots, type ChartInk } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { Legend, timeTip, type TooltipRow } from '@/components/charts/Tooltip';
 import { CostReferenceLink } from '@/components/ui/CostReference';
+import { CostLines } from '@/components/ui/CostTd';
 import type { Option } from '@/components/ui/OptionList';
 import { figuresValue, Tile } from '@/components/ui/Tile';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
@@ -31,7 +32,7 @@ import { ANALYTICS_DIMENSIONS, chipText, escapePattern } from '@/lib/filterBar';
 import { effectiveInterval, ENDED_RANGE, readEnd, spanEnded } from '@/lib/follow';
 import { SESSION_CHARS, fmtAbsolute, fmtBytes, fmtCompact, fmtDayTick, fmtDuration, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtShortTime, fmtUsd, fmtUsdTick, fmtWeek, keyLifetime, pct, shortId, upperFirst, usdTickDigits, weekShort } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
-import { useAsync, useHashSection, useQueryFilters, useRangeTakenAt, type Loaded } from '@/lib/hooks';
+import { useAsync, useHashSection, useQueryFilters, useRangeTakenAt, useResizeObserver, type Loaded } from '@/lib/hooks';
 import { REFUSED_TITLE } from '@/lib/requests';
 import { CLIENT_PATTERNS_PLAIN, linkedKeyIds, refusalLink, requestsLink, type RequestsLinkInput, type RequestsLinkTarget } from '@/lib/requestsLink';
 import { words } from '@/lib/routingLog';
@@ -153,8 +154,7 @@ const NATIVE_COLUMNS = ['Requests', 'Cost', 'Per request', 'Per 1k output'];
 /** A native cell's figure over its billed line, the full reading on its title. */
 const nativeCell = (cell: { main: string; sub: string; title: string }): ReactNode => (
   <span title={cell.title || undefined}>
-    {cell.main}
-    {cell.sub && <span className="sub">{cell.sub}</span>}
+    <CostLines cell={cell} />
   </span>
 );
 /**
@@ -163,19 +163,17 @@ const nativeCell = (cell: { main: string; sub: string; title: string }): ReactNo
  * tokens with the billed dollars per billed request and per 1k billed output tokens under it, a side with no rows left
  * out and a figure with no count a dash.
  */
-function nativeRowOf(g: AnalyticsGroup, week: WeekPosition, weekFactor: number, hint: string | null): { cells: ReactNode[]; key: string; label: string; title: string } {
+function nativeRowOf(g: AnalyticsGroup, week: WeekPosition, weekFactor: number, hint: string | null): { cells: ReactNode[]; key: string; label: string } {
   const sides = sidesOf(g);
   const figure = sides.equivalent === undefined ? null : g.costEquivalent;
   // Undefined leaves a side with no rows out of the cell, as the tiles leave it out.
   const both = (equivalent: number | null, billed: number | null, shown: string | null = null) => nativeCell(nativeCellOf(sides.equivalent === undefined ? undefined : equivalent, sides.billed === undefined ? undefined : billed, week, weekFactor, shown));
   const ratio = (planCount: number | null, whole: number, scale: number) => both(per(figure, planCount, scale), per(sides.billed ?? null, billedCount(planCount, whole), scale));
   // The route labels every group, the model grouping's empty key included, since the ledger labels that key itself.
-  const label = g.label;
   return {
     cells: [fmtInt(g.requests), both(figure, sides.billed ?? null, hint), ratio(g.planRequests, g.requests, 1), ratio(g.planOutputTokens, g.tokens.output, 1000)],
     key: g.key,
-    label,
-    title: label,
+    label: g.label,
   };
 }
 
@@ -197,11 +195,12 @@ const totalsOf = (groups: AnalyticsGroup[]) => {
 };
 const bucketsOf = (points: AnalyticsPoint[]): Bucket[] => points.map((p) => ({ at: Date.parse(p.at), ...totalsOf(p.groups) }));
 /**
- * A side read's load: only the tab that draws it reads, so a hidden tab answers null without a request and the read
- * runs once its tab is chosen, and a session view answers an empty list for the log fold to fill.
+ * A read that runs while `reads` holds and answers null without a request otherwise (a hidden tab, the rollups in a
+ * session view, a side the unit leaves out). It holds its refresh while it reads nothing, since each empty answer still
+ * lands and re-renders the page, and `reads` joins the deps, so the opening of its tab reads it once.
  */
-function sideRead<T>(open: boolean, sessionId: string | null, read: () => Promise<T[]>): Promise<T[] | null> {
-  return open && sessionId === null ? read() : Promise.resolve(sessionId === null ? null : []);
+function useGatedRead<T>(reads: boolean, load: () => Promise<T>, deps: readonly unknown[], reload: { paused: boolean; refreshMs: number }): Loaded<T | null> {
+  return useAsync(() => (reads ? load() : Promise.resolve(null)), [...deps, reads], { paused: reload.paused || !reads, refreshMs: reload.refreshMs });
 }
 
 /**
@@ -211,7 +210,7 @@ function sideRead<T>(open: boolean, sessionId: string | null, read: () => Promis
  * filter is set, or either one reading a new range), the last answer that was current stands in, so a list never
  * blanks and only ever offers this dimension's own keys.
  */
-function useDimensionKeys(from: string, to: string, groupBy: GroupBy, generation: number, shared?: Loaded<AnalyticsGroup[]>): Loaded<AnalyticsGroup[] | null> {
+function useDimensionKeys(from: string, to: string, groupBy: GroupBy, generation: number, shared?: Loaded<AnalyticsGroup[] | null>): Loaded<AnalyticsGroup[] | null> {
   const own = useAsync(() => (shared ? Promise.resolve(null) : api.getAnalyticsBreakdown({ from, groupBy, to })), [from, groupBy, to, generation, shared !== undefined]);
   const source = shared ?? own;
   const current = source.current;
@@ -264,9 +263,8 @@ export function AnalyticsPage() {
   }, [a, replaceLater, setUnit]);
   // The hook keeps a list's identity while its value stands, so a unit change re-issues none of the reads they key.
   const filters = useMemo<Record<Dim, string[]>>(() => ({ accountId: a.accounts, keyId: a.keys, model: a.models, poolId: a.pools, sessionId: a.session ? [a.session] : [] }), [a.accounts, a.keys, a.models, a.pools, a.session]);
-  const patterns = useMemo<Record<PatternDim, string[]>>(() => ({ clients: a.clients, userAgents: a.userAgents }), [a.clients, a.userAgents]);
   // The request log reads one client pattern, so a session view's log read carries the one where exactly one stands.
-  const logClient = patterns.clients.length === 1 ? patterns.clients[0] : undefined;
+  const logClient = a.clients.length === 1 ? a.clients[0] : undefined;
   const ink = useChartInk();
   // A committed filter reads the window up to the instant it changed, as a range change does. The end and the address
   // change in one render, so each read goes out once: the hook writes the address at once, and a pattern commits from
@@ -303,32 +301,30 @@ export function AnalyticsPage() {
 
   const agentGroups = useMemo(() => (groupBy === 'user_agent' && clientGroups.trim() ? clientGroups.split('\n').map((s) => s.trim()).filter(Boolean) : undefined), [clientGroups, groupBy]);
   const query = useMemo<AnalyticsQuery>(
-    () => ({ accountIds: filters.accountId, clients: patterns.clients, from: fromIso, groupBy, includeProbes, keyIds: filters.keyId, models: filters.model, poolIds: filters.poolId, to: toIso, userAgentGroups: agentGroups, userAgents: patterns.userAgents }),
-    [agentGroups, patterns, filters, fromIso, groupBy, includeProbes, toIso],
+    () => ({ accountIds: filters.accountId, clients: a.clients, from: fromIso, groupBy, includeProbes, keyIds: filters.keyId, models: filters.model, poolIds: filters.poolId, to: toIso, userAgentGroups: agentGroups, userAgents: a.userAgents }),
+    [agentGroups, a.clients, a.userAgents, filters, fromIso, groupBy, includeProbes, toIso],
   );
   // The route narrows the rows a session view folds by one client pattern at most, and the fold applies both pattern
   // lists over what it holds: several client patterns narrow here alone, a cursor page that crossed a filter change
   // may be wider than the patterns, and the user agent matches its folded token, as the unscoped page's rollups do,
   // where the route matches the raw header.
-  const patternOptions = useMemo(() => ({ agentPatterns: patterns.userAgents, clientPatterns: patterns.clients }), [patterns]);
+  const patternOptions = useMemo(() => ({ agentPatterns: a.userAgents, clientPatterns: a.clients }), [a.clients, a.userAgents]);
   // A custom span holds its end, so no dependency moves at the interval: its window's reads poll at it instead, and the
   // figures stay drawn until the new answer lands, where a request that finished late shows, in the session log when it
   // falls on the first page. A preset's end moves to now at a boundary, and that change reads again.
   const reload = { paused, refreshMs: custom ? polledMs : 0 };
-  // A read whose load answers without a request (a hidden tab, the rollups in a session view, a side the unit leaves
-  // out) holds its refresh while that holds, since each empty answer still lands and re-renders the page. Each
-  // condition is one of the read's deps, so the opening of its tab reads it once.
-  const reloadWhile = (reads: boolean) => ({ paused: paused || !reads, refreshMs: reload.refreshMs });
   // A session view answers every section from the request log, so the rollup reads stay home while one is set.
-  const series = useAsync(() => (sessionId === null ? api.getAnalyticsSeries(query) : Promise.resolve<AnalyticsPoint[]>([])), [query, sessionId, generation], reloadWhile(sessionId === null));
-  const breakdown = useAsync(() => (sessionId === null ? api.getAnalyticsBreakdown(query) : Promise.resolve<AnalyticsGroup[]>([])), [query, sessionId, generation], reloadWhile(sessionId === null));
-  const byModel = useAsync(() => sideRead(tab === 'cache', sessionId, () => api.getAnalyticsBreakdown({ ...query, groupBy: 'model' })), [query, sessionId, tab, generation], reloadWhile(tab === 'cache' && sessionId === null));
-  const byPool = useAsync(() => sideRead(tab === 'cache-warming', sessionId, () => api.getAnalyticsBreakdown({ ...query, groupBy: 'pool' })), [query, sessionId, tab, generation], reloadWhile(tab === 'cache-warming' && sessionId === null));
+  const series = useGatedRead(sessionId === null, () => api.getAnalyticsSeries(query), [query, sessionId, generation], reload);
+  const breakdown = useGatedRead(sessionId === null, () => api.getAnalyticsBreakdown(query), [query, sessionId, generation], reload);
+  const byModel = useGatedRead(tab === 'cache' && sessionId === null, () => api.getAnalyticsBreakdown({ ...query, groupBy: 'model' }), [query, sessionId, tab, generation], reload);
+  const byPool = useGatedRead(tab === 'cache-warming' && sessionId === null, () => api.getAnalyticsBreakdown({ ...query, groupBy: 'pool' }), [query, sessionId, tab, generation], reload);
   // The log's last answer with the deps it answers, so an auto reload of the same deps reads the first page alone and
   // the later pages stand as the walk loaded them. Other deps walk the pages again. The ref names the current deps from
   // the moment a read starts, so a read under earlier deps that settles later keeps nothing.
   const heldLog = useRef<{ answer: SessionRequests | null; deps: string } | null>(null);
   const logDeps = JSON.stringify([logClient, filters, fromIso, includeProbes, sessionId, sessionKey, toIso, generation]);
+  // The load runs unscoped as well, so its reset drops the held answer there and a session view entered again walks its
+  // pages again.
   const log = useAsync(
     () => {
       if (heldLog.current?.deps !== logDeps) heldLog.current = { answer: null, deps: logDeps };
@@ -348,17 +344,21 @@ export function AnalyticsPage() {
       });
     },
     [logClient, filters, fromIso, includeProbes, sessionId, sessionKey, toIso, generation],
-    reloadWhile(sessionId !== null),
+    { paused: paused || sessionId === null, refreshMs: reload.refreshMs },
   );
-  const accountRollups = useAsync(() => (tab === 'accounts' ? api.listAccountRollups(fromIso, toIso) : Promise.resolve(null)), [fromIso, toIso, tab, generation], reloadWhile(tab === 'accounts'));
+  const accountRollups = useGatedRead(tab === 'accounts', () => api.listAccountRollups(fromIso, toIso), [fromIso, toIso, tab, generation], reload);
   // The fold rates the hour still running over the part of it this read saw, so the answer keeps its end and instant.
   // The instant is the read's own: the range clock stands still while another tab is open, and a read made later in
   // the same hour has seen more of it.
-  const burn = useAsync(() => {
-    if (tab !== 'burn') return Promise.resolve(null);
-    const readAt = clock.now();
-    return readBurn(api, { from: fromIso, to: toIso }, pageBy, { accountIds: filters.accountId, userAgentGroups: agentGroups }).then((read) => ({ ...read, endMs: span.toMs, readAt }));
-  }, [fromIso, toIso, pageBy, filters.accountId, agentGroups, tab, generation], reloadWhile(tab === 'burn'));
+  const burn = useGatedRead(
+    tab === 'burn',
+    () => {
+      const readAt = clock.now();
+      return readBurn(api, { from: fromIso, to: toIso }, pageBy, { accountIds: filters.accountId, userAgentGroups: agentGroups }).then((read) => ({ ...read, endMs: span.toMs, readAt }));
+    },
+    [fromIso, toIso, pageBy, filters.accountId, agentGroups, tab, generation],
+    reload,
+  );
   // The registry's list, for the account slots alone: the range's option list holds the accounts with traffic and
   // differs from the Dashboard's, and one account keeps one color across the views. It reads with the window, since
   // each answer redraws every chart of the open tab for colors, hints and resets that seldom move.
@@ -381,63 +381,57 @@ export function AnalyticsPage() {
   const reading = weekReadingOf(costs, costSettings.error, week);
   const { scale } = reading;
   const sized = useMemo(() => (burn.data && costs ? sizedAccounts(burn.data.accounts, costs) : null), [burn.data, costs]);
-  const rewrites = useAsync(() => (tab === 'traffic' ? api.getAnalyticsRewrites({ from: fromIso, to: toIso }) : Promise.resolve(null)), [fromIso, toIso, tab, generation], reloadWhile(tab === 'traffic'));
-  const refusalCategories = useAsync(() => (tab === 'traffic' ? api.getAnalyticsRefusalCategories(query) : Promise.resolve(null)), [query, tab, generation], reloadWhile(tab === 'traffic'));
+  const rewrites = useGatedRead(tab === 'traffic', () => api.getAnalyticsRewrites({ from: fromIso, to: toIso }), [fromIso, toIso, tab, generation], reload);
+  const refusalCategories = useGatedRead(tab === 'traffic', () => api.getAnalyticsRefusalCategories(query), [query, tab, generation], reload);
   // The counts route reads the range alone, which the card's subtitle says, since it carries no filter.
-  const guardrailCounts = useAsync(() => (tab === 'traffic' ? api.getAnalyticsGuardrails({ from: fromIso, to: toIso }) : Promise.resolve(null)), [fromIso, toIso, tab, generation], reloadWhile(tab === 'traffic'));
+  const guardrailCounts = useGatedRead(tab === 'traffic', () => api.getAnalyticsGuardrails({ from: fromIso, to: toIso }), [fromIso, toIso, tab, generation], reload);
   // Side groupings on the page's own query, as byModel and byPool are; a session view folds them from the log.
-  const bySpeed = useAsync(() => sideRead(tab === 'traffic' || tab === 'cost', sessionId, () => api.getAnalyticsSeries({ ...query, groupBy: 'speed' })), [query, sessionId, tab, generation], reloadWhile((tab === 'traffic' || tab === 'cost') && sessionId === null));
-  const byEffort = useAsync(() => sideRead(tab === 'traffic', sessionId, () => api.getAnalyticsBreakdown({ ...query, groupBy: 'effort' })), [query, sessionId, tab, generation], reloadWhile(tab === 'traffic' && sessionId === null));
+  const bySpeed = useGatedRead((tab === 'traffic' || tab === 'cost') && sessionId === null, () => api.getAnalyticsSeries({ ...query, groupBy: 'speed' }), [query, sessionId, tab, generation], reload);
+  const byEffort = useGatedRead(tab === 'traffic' && sessionId === null, () => api.getAnalyticsBreakdown({ ...query, groupBy: 'effort' }), [query, sessionId, tab, generation], reload);
   // A dollar side narrows the three cost-bearing sections to the rows that side paid for, a filter the page's reads
   // cannot carry (Traffic, Latency and the Cache token charts read every row), so those sections read a second query
   // while one of them shows. The whole reads the page's own.
   const fundedTab = tab === 'cache' || tab === 'cache-warming' || tab === 'cost';
   const funded = sessionId === null && (unit === 'usd' || unit === 'equivalent');
-  const costSeries = useAsync(() => (funded && fundedTab ? api.getAnalyticsSeries({ ...query, funding }) : Promise.resolve<AnalyticsPoint[] | null>(null)), [query, funding, funded, fundedTab, generation], reloadWhile(funded && fundedTab));
+  const costSeries = useGatedRead(funded && fundedTab, () => api.getAnalyticsSeries({ ...query, funding }), [query, funding, funded, fundedTab, generation], reload);
   // The Cache warming card's Probe cost tile is the one reader of this breakdown on its tab, and it reads the probe
   // rows counted under every position, the whole included: a breakdown that does not count probes drops a group left
   // with probe rows alone, whether a dollar side dropped the group's real rows or the group is probe-only in the whole
   // (the probe kind, an idle account over a short range), and the three positions add up only when all three keep it.
   // Under the whole the read carries no funding.
   const warming = sessionId === null && tab === 'cache-warming';
-  const costBreakdown = useAsync(
-    () => ((funded && fundedTab) || warming ? api.getAnalyticsBreakdown({ ...query, funding: funded ? funding : undefined, includeProbes: query.includeProbes || warming }) : Promise.resolve<AnalyticsGroup[] | null>(null)),
+  const costBreakdown = useGatedRead(
+    (funded && fundedTab) || warming,
+    () => api.getAnalyticsBreakdown({ ...query, funding: funded ? funding : undefined, includeProbes: query.includeProbes || warming }),
     [query, funding, funded, fundedTab, warming, generation],
-    reloadWhile((funded && fundedTab) || warming),
+    reload,
   );
   // The Saved by probes chart's series twin of that breakdown, counting probes under the same funding: the page's
   // series counts them only when the address asks, and a bucket left with probe rows alone would draw no probe cost
   // there.
-  const warmingSeries = useAsync(
-    () => (warming ? api.getAnalyticsSeries({ ...query, funding: funded ? funding : undefined, includeProbes: true }) : Promise.resolve<AnalyticsPoint[] | null>(null)),
-    [query, funding, funded, warming, generation],
-    reloadWhile(warming),
-  );
+  const warmingSeries = useGatedRead(warming, () => api.getAnalyticsSeries({ ...query, funding: funded ? funding : undefined, includeProbes: true }), [query, funding, funded, warming, generation], reload);
   // Native pairs the whole read's plan probes with the billed probes' dollars, which no member of the whole carries, so
   // the Cache warming tab reads the billed rows once more, counting probes as the whole read does.
   const nativeWarming = warming && unit === 'native';
-  const billedBreakdown = useAsync(() => (nativeWarming ? api.getAnalyticsBreakdown({ ...query, funding: 'billed', includeProbes: true }) : Promise.resolve<AnalyticsGroup[] | null>(null)), [query, nativeWarming, generation], reloadWhile(nativeWarming));
+  const billedBreakdown = useGatedRead(nativeWarming, () => api.getAnalyticsBreakdown({ ...query, funding: 'billed', includeProbes: true }), [query, nativeWarming, generation], reload);
   // And the chart's billed twin, whose dollars the native tooltip pairs with the plan side's equivalents.
-  const billedWarmingSeries = useAsync(() => (nativeWarming ? api.getAnalyticsSeries({ ...query, funding: 'billed', includeProbes: true }) : Promise.resolve<AnalyticsPoint[] | null>(null)), [query, nativeWarming, generation], reloadWhile(nativeWarming));
+  const billedWarmingSeries = useGatedRead(nativeWarming, () => api.getAnalyticsSeries({ ...query, funding: 'billed', includeProbes: true }), [query, nativeWarming, generation], reload);
   // A dollar side narrows Cache by model's two cost cells alone, its token columns reading every row, so the side's
   // rows by model come from a read of their own beside the page's.
-  const byModelFunded = useAsync(() => (tab === 'cache' && funded ? api.getAnalyticsBreakdown({ ...query, funding, groupBy: 'model' }) : Promise.resolve<AnalyticsGroup[] | null>(null)), [query, funding, funded, tab, generation], reloadWhile(tab === 'cache' && funded));
+  const byModelFunded = useGatedRead(tab === 'cache' && funded, () => api.getAnalyticsBreakdown({ ...query, funding, groupBy: 'model' }), [query, funding, funded, tab, generation], reload);
   // The by-pool table's Probe cost cell reads a dollar side's probes, and under native the billed probes beside the
   // whole read's equivalent. Probes count, so a pool left with probe rows alone on that side keeps its figure.
   const poolFunding = nativeWarming ? 'billed' : warming && funded ? funding : undefined;
-  const fundedByPool = useAsync(
-    () => (poolFunding !== undefined ? api.getAnalyticsBreakdown({ ...query, funding: poolFunding, groupBy: 'pool', includeProbes: true }) : Promise.resolve<AnalyticsGroup[] | null>(null)),
-    [query, poolFunding, generation],
-    reloadWhile(poolFunding !== undefined),
-  );
-  const placements = useAsync(
-    () => sideRead(tab === 'cache', sessionId, () => api.analyticsPlacements({ from: fromIso, keyIds: filters.keyId, poolIds: filters.poolId, to: toIso })),
+  const fundedByPool = useGatedRead(poolFunding !== undefined, () => api.getAnalyticsBreakdown({ ...query, funding: poolFunding, groupBy: 'pool', includeProbes: true }), [query, poolFunding, generation], reload);
+  const placements = useGatedRead(
+    tab === 'cache' && sessionId === null,
+    () => api.analyticsPlacements({ from: fromIso, keyIds: filters.keyId, poolIds: filters.poolId, to: toIso }),
     [fromIso, toIso, filters.keyId, filters.poolId, sessionId, tab, generation],
-    reloadWhile(tab === 'cache' && sessionId === null),
+    reload,
   );
   const budgets = useAsync(() => (tab === 'burn' ? api.analyticsBudgets() : Promise.resolve(null)), [tab]);
   // With no filter and no session the page's breakdown is the range's whole key list on its grouping.
-  const plain = sessionId === null && filters.accountId.length === 0 && filters.keyId.length === 0 && filters.model.length === 0 && filters.poolId.length === 0 && patterns.clients.length === 0 && patterns.userAgents.length === 0 && !includeProbes && agentGroups === undefined;
+  const plain = sessionId === null && filters.accountId.length === 0 && filters.keyId.length === 0 && filters.model.length === 0 && filters.poolId.length === 0 && a.clients.length === 0 && a.userAgents.length === 0 && !includeProbes && agentGroups === undefined;
   const accountKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.accountId, generation, plain && groupBy === DIM_GROUP.accountId ? breakdown : undefined);
   const keyKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.keyId, generation, plain && groupBy === DIM_GROUP.keyId ? breakdown : undefined);
   const modelKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.model, generation, plain && groupBy === DIM_GROUP.model ? breakdown : undefined);
@@ -491,8 +485,7 @@ export function AnalyticsPage() {
   };
   // The memos below key on a read's current answer through a local, since the hooks lint takes a `.current` in a
   // dependency list for a ref's.
-  const logAnswer = log.current;
-  const rows = useMemo(() => logAnswer?.requests ?? [], [logAnswer]);
+  const rows = log.current?.requests ?? NO_REQUESTS;
   // The folds below share one pass of the pattern filter, and the key generations come from every row, since the kept
   // rows alone would label an earlier key holder as the live key.
   const kept = useMemo(() => keptRows(rows, patternOptions), [rows, patternOptions]);
@@ -504,14 +497,14 @@ export function AnalyticsPage() {
   const bucketMs = buckets.length > 1 ? buckets[1].at - buckets[0].at : rangeBucketMs;
   const groups = useMemo(() => (stale ? [] : sessionId === null ? (breakdown.data ?? []) : foldGroups(kept, groupBy, { agentGroups }, latest)), [stale, sessionId, breakdown.data, kept, groupBy, agentGroups, latest]);
   const byPoolAnswer = byPool.current;
-  const poolGroups = useMemo(() => (sessionId === null ? (byPoolAnswer ?? []) : foldGroups(kept, 'pool', { agentGroups }, latest)), [sessionId, byPoolAnswer, kept, agentGroups, latest]);
+  const poolGroups = useMemo(() => (sessionId === null ? (byPoolAnswer ?? []) : tab === 'cache-warming' ? foldGroups(kept, 'pool', { agentGroups }, latest) : []), [sessionId, byPoolAnswer, tab, kept, agentGroups, latest]);
   const bySpeedAnswer = bySpeed.current;
   const speedPoints = useMemo(
-    () => (sessionId === null ? (bySpeedAnswer ?? []) : foldRequests(kept, rangeBucketMs, fromIso, toIso, 'speed', { agentGroups }, latest)),
-    [sessionId, bySpeedAnswer, kept, rangeBucketMs, fromIso, toIso, agentGroups, latest],
+    () => (sessionId === null ? (bySpeedAnswer ?? []) : tab === 'traffic' || tab === 'cost' ? foldRequests(kept, rangeBucketMs, fromIso, toIso, 'speed', { agentGroups }, latest) : []),
+    [sessionId, bySpeedAnswer, tab, kept, rangeBucketMs, fromIso, toIso, agentGroups, latest],
   );
   const byEffortAnswer = byEffort.current;
-  const effortGroups = useMemo(() => (sessionId === null ? (byEffortAnswer ?? []) : foldGroups(kept, 'effort', { agentGroups }, latest)), [sessionId, byEffortAnswer, kept, agentGroups, latest]);
+  const effortGroups = useMemo(() => (sessionId === null ? (byEffortAnswer ?? []) : tab === 'traffic' ? foldGroups(kept, 'effort', { agentGroups }, latest) : []), [sessionId, byEffortAnswer, tab, kept, agentGroups, latest]);
   const totals = useMemo(() => totalsOf(groups), [groups]);
   // A session fold has no warming facts, so those figures read unavailable rather than zero.
   const { keptWarm } = totals;
@@ -520,14 +513,14 @@ export function AnalyticsPage() {
   // the whole, and in a session view the rows folded by who paid for them.
   const costSeriesAnswer = costSeries.current;
   const costPoints = useMemo(() => {
-    if (sessionId !== null) return funding === undefined ? points : stale ? [] : foldRequests(kept, rangeBucketMs, fromIso, toIso, groupBy, { agentGroups, funding }, latest);
+    if (sessionId !== null) return funding === undefined ? points : stale || !fundedTab ? [] : foldRequests(kept, rangeBucketMs, fromIso, toIso, groupBy, { agentGroups, funding }, latest);
     return funded ? (costSeriesAnswer ?? []) : points;
-  }, [sessionId, funding, funded, points, stale, kept, rangeBucketMs, fromIso, toIso, groupBy, agentGroups, latest, costSeriesAnswer]);
+  }, [sessionId, funding, funded, points, stale, fundedTab, kept, rangeBucketMs, fromIso, toIso, groupBy, agentGroups, latest, costSeriesAnswer]);
   const costBreakdownAnswer = costBreakdown.current;
   const costGroups = useMemo(() => {
-    if (sessionId !== null) return funding === undefined ? groups : stale ? [] : foldGroups(kept, groupBy, { agentGroups, funding }, latest);
+    if (sessionId !== null) return funding === undefined ? groups : stale || !fundedTab ? [] : foldGroups(kept, groupBy, { agentGroups, funding }, latest);
     return funded || warming ? (costBreakdownAnswer ?? []) : groups;
-  }, [sessionId, funding, funded, warming, groups, stale, kept, groupBy, agentGroups, latest, costBreakdownAnswer]);
+  }, [sessionId, funding, funded, warming, groups, stale, fundedTab, kept, groupBy, agentGroups, latest, costBreakdownAnswer]);
   const costBuckets = useMemo(() => (costPoints === points ? buckets : bucketsOf(costPoints)), [costPoints, points, buckets]);
   const costTotals = useMemo(() => totalsOf(costGroups), [costGroups]);
   const costHead = costHeadOf(unit, costTotals, week, scale);
@@ -544,7 +537,7 @@ export function AnalyticsPage() {
   const rowHint = (g: AnalyticsGroup): string | null => (groupBy === 'account' ? hintOf(g.key, g.costShares) : namedAccount === null ? null : hintOf(namedAccount, g.costShares));
   const oneGroup = useMemo(() => (namedAccount === null ? null : oneAccountGroupOf(costTotals, costGroups)), [costGroups, costTotals, namedAccount]);
   const tileHint = namedAccount === null || oneGroup === null ? null : hintOf(namedAccount, oneGroup.costShares);
-  const otherFilters = filters.keyId.length > 0 || filters.poolId.length > 0 || filters.model.length > 0 || patterns.userAgents.length > 0 || patterns.clients.length > 0 || sessionId !== null || includeProbes;
+  const otherFilters = filters.keyId.length > 0 || filters.poolId.length > 0 || filters.model.length > 0 || a.userAgents.length > 0 || a.clients.length > 0 || sessionId !== null || includeProbes;
   // The rewrite and fit routes read the range alone, so every filter of the bar passes them by. The burn route reads
   // the Accounts filter and the user agent groups beside it.
   const unfiltered = otherFilters || filters.accountId.length > 0;
@@ -578,21 +571,23 @@ export function AnalyticsPage() {
       ? costBreakdown.current === null || (nativeWarming && billedBreakdown.current === null)
       : loading;
   const costError = funded ? (costSeries.error ?? costBreakdown.error) : warming ? (costBreakdown.error ?? billedBreakdown.error) : null;
+  const costFailure = failed(costError);
   // Under native every week figure waits on the scale: a surface draws its skeleton while the cost model is out and the
   // reading's error in its place, never a Pro-week figure under another week's label.
   const weekWait = unit === 'native' && scale === null;
   const figureLoading = costLoading || weekWait;
-  const figureFailure = failed(costError) ?? (weekWait ? reading.failure : null);
+  const weekFailure = (error: string | null) => failed(error) ?? (weekWait ? reading.failure : null);
+  const figureFailure = weekFailure(costError);
   const warmingError = sessionId === null ? (warmingSeries.error ?? billedWarmingSeries.error) : null;
   const modelError = byModel.error ?? byModelFunded.error;
   const poolError = sessionId === null ? (byPool.error ?? fundedByPool.error) : null;
   const billedBreakdownAnswer = billedBreakdown.current;
   const billedTotals = useMemo(() => (nativeWarming && billedBreakdownAnswer !== null ? sumGroups(billedBreakdownAnswer) : null), [nativeWarming, billedBreakdownAnswer]);
-  const probeTile = warmingTileOf(unit, costTotals, figureLoading, sessionId !== null, reading, `${fmtInt(probesOf(costTotals))} probes`, probeSidesOf(costTotals, billedTotals, 'cost'), costTotals.probeCostUsd);
-  const savingTile = warmingTileOf(unit, costTotals, figureLoading, sessionId !== null, reading, keptWarmRequests(costTotals), savingSidesOf(costTotals, billedTotals, 'gross'), costTotals.savingUsd);
-  const netTile = warmingTileOf(unit, costTotals, figureLoading, sessionId !== null, reading, 'less the probe cost', savingSidesOf(costTotals, billedTotals, 'net'), netSaving(costTotals.savingUsd, costTotals.probeCostUsd));
-  const warmingSeriesAnswer = warmingSeries.current;
-  const warmingPoints = useMemo(() => (warmingSeriesAnswer ?? []), [warmingSeriesAnswer]);
+  const warmingTile = (lead: string, sides: ReturnType<typeof probeSidesOf>, usd: number) => warmingTileOf(unit, costTotals, figureLoading, sessionId !== null, reading, lead, sides, usd);
+  const probeTile = warmingTile(`${fmtInt(probesOf(costTotals))} probes`, probeSidesOf(costTotals, billedTotals, 'cost'), costTotals.probeCostUsd);
+  const savingTile = warmingTile(keptWarmRequests(costTotals), savingSidesOf(costTotals, billedTotals, 'gross'), costTotals.savingUsd);
+  const netTile = warmingTile('less the probe cost', savingSidesOf(costTotals, billedTotals, 'net'), netSaving(costTotals.savingUsd, costTotals.probeCostUsd));
+  const warmingPoints = warmingSeries.current ?? NO_POINTS;
   const billedWarmingPoints = nativeWarming ? billedWarmingSeries.current : null;
   const warmingLoading = warmingSeries.current === null || (nativeWarming && billedWarmingSeries.current === null);
   const byModelFundedAnswer = byModelFunded.current;
@@ -616,10 +611,10 @@ export function AnalyticsPage() {
   // several draw every count plain. The user agent patterns ride joined, so any of them keeps a count plain, since the
   // request log matches the raw header.
   const linkInput: ReasonLink = {
-    filters: { accountIds: filters.accountId, clientPattern: patterns.clients.length === 1 ? patterns.clients[0] : '', includeProbes, keyIds: linkedKeyIds(filters.keyId, sessionId === null ? null : sessionKey), models: filters.model, poolIds: filters.poolId, sessionId, userAgentPattern: patterns.userAgents.join('\n') },
+    filters: { accountIds: filters.accountId, clientPattern: a.clients.length === 1 ? a.clients[0] : '', includeProbes, keyIds: linkedKeyIds(filters.keyId, sessionId === null ? null : sessionKey), models: filters.model, poolIds: filters.poolId, sessionId, userAgentPattern: a.userAgents.join('\n') },
     window: { exact: sessionId !== null, fromMs: span.fromMs, nowMs: now, toMs: span.toMs },
   };
-  const plainLinks = patterns.clients.length > 1;
+  const plainLinks = a.clients.length > 1;
   // The refusal route reads the page's own key selection, never a session view's key lifetime, and `refusalLink` sets
   // the exact window and leaves the session out.
   const refusalInput: ReasonLink = { ...linkInput, filters: { ...linkInput.filters, keyIds: filters.keyId } };
@@ -710,7 +705,7 @@ export function AnalyticsPage() {
                 </LineChart>
               </ChartCard>
 
-              <RewritesCard answer={rewrites.current} error={rewrites.error} loading={rewrites.current === null} axis={axis} unfiltered={unfiltered} />
+              <RewritesCard answer={rewrites.current} error={rewrites.error} axis={axis} unfiltered={unfiltered} />
 
               <SpeedCard points={speedPoints} error={speedError} loading={speedLoading} axis={axis} />
 
@@ -753,7 +748,6 @@ export function AnalyticsPage() {
               costs={costs}
               error={burn.error}
               groupBy={pageBy}
-              loading={burn.current === null}
               reading={burnReading}
               rangeEndMs={burn.data?.endMs}
               readAt={burn.data?.readAt}
@@ -823,19 +817,19 @@ export function AnalyticsPage() {
                   { color: ink.series[2], label: 'Cached share of input', shape: 'line', value: fmtPct(cachedShareOf(totals) ?? 0) },
                 ]}
               >
-                <LineChart data={buckets.map((b) => ({ ...b, hitRatio: pct100(hitRatioOf(b)), cachedShare: pct100(cachedShareOf(b)) }))} margin={CHART_MARGIN}>
+                <LineChart data={buckets} margin={CHART_MARGIN}>
                   <CartesianGrid vertical={false} stroke={ink.grid} />
                   <XAxis {...axis} />
-                  <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tickFormatter={(v: number) => `${v}%`} tickLine={false} axisLine={false} width={40} />
+                  <YAxis {...PCT_AXIS} />
                   <Tooltip
                     cursor={{ stroke: ink.axis }}
-                    content={timeTip<Bucket & { cachedShare: number | null; hitRatio: number | null }>((p) => [
-                      { color: ink.series[0], label: 'cache hit ratio', value: pct(p.hitRatio) },
-                      { color: ink.series[2], label: 'cached share of input', value: pct(p.cachedShare) },
+                    content={timeTip<Bucket>((p) => [
+                      { color: ink.series[0], label: 'cache hit ratio', value: pct(pct100(hitRatioOf(p))) },
+                      { color: ink.series[2], label: 'cached share of input', value: pct(pct100(cachedShareOf(p))) },
                     ])}
                   />
-                  <Line type="monotone" dataKey="hitRatio" stroke={ink.series[0]} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
-                  <Line type="monotone" dataKey="cachedShare" stroke={ink.series[2]} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+                  <Line type="monotone" dataKey={(b: Bucket) => pct100(hitRatioOf(b))} stroke={ink.series[0]} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+                  <Line type="monotone" dataKey={(b: Bucket) => pct100(cachedShareOf(b))} stroke={ink.series[2]} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
                 </LineChart>
               </ChartCard>
 
@@ -847,7 +841,7 @@ export function AnalyticsPage() {
                     : `USD per bucket spent writing the cache and reading it back, ${UNIT_SPLIT[unit === 'native' ? 'usd' : dollars]}`
                 }
                 loading={cacheEquivalent ? figureLoading : costLoading}
-                failure={cacheEquivalent ? figureFailure : failed(costError)}
+                failure={cacheEquivalent ? figureFailure : costFailure}
                 legend={
                   cacheScale !== null
                     ? [
@@ -903,7 +897,7 @@ export function AnalyticsPage() {
               <CacheByModel
                 groups={byModel.current ?? []}
                 funded={fundedModels}
-                failure={failed(modelError) ?? (weekWait ? reading.failure : null)}
+                failure={weekFailure(modelError)}
                 loading={byModel.current === null || (funded && byModelFunded.current === null) || weekWait}
                 reading={reading}
                 unit={unit}
@@ -914,7 +908,7 @@ export function AnalyticsPage() {
               <PlacementTable
                 error={placements.error}
                 rows={placements.current}
-                unfiltered={filters.accountId.length > 0 || filters.model.length > 0 || patterns.userAgents.length > 0 || patterns.clients.length > 0}
+                unfiltered={filters.accountId.length > 0 || filters.model.length > 0 || a.userAgents.length > 0 || a.clients.length > 0}
               />
             )}
           </Section>
@@ -931,8 +925,8 @@ export function AnalyticsPage() {
                 </>
               ) : (
                 <>
-                  <Tile label="Cost per request" value={costLoading ? null : fmtUsd(costTotals.requests ? costTotals.costUsd / costTotals.requests : 0)} note={`${fmtInt(costTotals.requests)} requests`} failure={failed(costError)} />
-                  <Tile label="Cost per 1k output tokens" value={costLoading ? null : fmtUsd(costTotals.tokens.output ? (costTotals.costUsd / costTotals.tokens.output) * 1000 : 0)} note={`${fmtCompact(costTotals.tokens.output)} output tokens`} failure={failed(costError)} />
+                  <Tile label="Cost per request" value={costLoading ? null : fmtUsd(per(costTotals.costUsd, costTotals.requests, 1) ?? 0)} note={`${fmtInt(costTotals.requests)} requests`} failure={costFailure} />
+                  <Tile label="Cost per 1k output tokens" value={costLoading ? null : fmtUsd(per(costTotals.costUsd, costTotals.tokens.output, 1000) ?? 0)} note={`${fmtCompact(costTotals.tokens.output)} output tokens`} failure={costFailure} />
                 </>
               )}
               <Tile label="Fast mode spend" value={speedError !== null ? '-' : speedLoading ? null : fmtUsd(fastSpend)} note="usage credits, at the fast cells" />
@@ -973,7 +967,7 @@ export function AnalyticsPage() {
               <BreakdownTable
                 title={`Cost by ${groupLabel.toLowerCase()}`}
                 subtitle={`Totals for the selected range and filters, ${costHead?.subset ?? ''}`}
-                failure={failed(costError)}
+                failure={costFailure}
                 loading={costLoading}
                 groupLabel={groupLabel}
                 columns={['Requests', 'Cost', 'Input', 'Cache read', 'Cache write', 'Output', 'Per request', 'Per 1k output']}
@@ -987,8 +981,8 @@ export function AnalyticsPage() {
                     usdOrDash(g.cost.cacheRead),
                     usdOrDash(g.cost.cacheWrite),
                     fmtUsd(g.cost.output),
-                    fmtUsd(g.requests ? g.costUsd / g.requests : 0),
-                    fmtUsd(g.tokens.output ? (g.costUsd / g.tokens.output) * 1000 : 0),
+                    fmtUsd(per(g.costUsd, g.requests, 1) ?? 0),
+                    fmtUsd(per(g.costUsd, g.tokens.output, 1000) ?? 0),
                   ],
                 }))}
               />
@@ -1033,7 +1027,7 @@ export function AnalyticsPage() {
               <SavingChart
                 axis={axis}
                 billed={billedWarmingPoints}
-                failure={failed(warmingError) ?? (weekWait ? reading.failure : null)}
+                failure={weekFailure(warmingError)}
                 loading={(sessionId === null ? warmingLoading : loading) || weekWait}
                 points={sessionId === null ? warmingPoints : points}
                 reading={reading}
@@ -1064,7 +1058,7 @@ export function AnalyticsPage() {
             <KeepaliveByPool
               groups={poolGroups}
               funded={fundedPools}
-              failure={failed(poolError) ?? (weekWait ? reading.failure : null)}
+              failure={weekFailure(poolError)}
               loading={(sessionId === null ? byPool.current === null || (poolFunding !== undefined && fundedByPool.current === null) : loading) || weekWait}
               reading={reading}
               unit={unit}
@@ -1079,7 +1073,6 @@ export function AnalyticsPage() {
               allowance={{ answer: unusedAllowance.current, costs: costSettings.data?.subscriptionCosts ?? null, error: unusedAllowance.error ?? costSettings.error }}
               bucketMs={bucketMs}
               error={accountRollups.error}
-              loading={accountRollups.current === null}
               otherFilters={otherFilters}
               rollups={accountRollups.current}
               slotOf={slotOf}
@@ -1097,18 +1090,15 @@ export function AnalyticsPage() {
 const pct100 = (v: number | null) => (v === null ? null : v * 100);
 
 /** Live border-box height of a sticky bar, so the bar below it can dock against it. */
-function useStickyHeight(ref: RefObject<HTMLElement | null>): number {
+function useStickyHeight(ref: RefObject<Element>): number {
   const [height, setHeight] = useState(0);
   useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const read = () => setHeight(el.getBoundingClientRect().height);
-    read();
-    if (typeof ResizeObserver !== 'function') return;
-    const observer = new ResizeObserver(read);
-    observer.observe(el);
-    return () => observer.disconnect();
+    if (ref.current) setHeight(ref.current.getBoundingClientRect().height);
   }, [ref]);
+  const read = () => {
+    if (ref.current) setHeight(ref.current.getBoundingClientRect().height);
+  };
+  useResizeObserver(ref, read);
   return height;
 }
 const SECTIONS = [
@@ -1193,14 +1183,11 @@ const keptWarmRequests = (g: AnalyticsGroup | null) => `${fmtInt(g?.keptWarm?.re
 function warmingTileOf(unit: UnitPosition, totals: AnalyticsGroup, loading: boolean, session: boolean, reading: WeekReading, lead: string, sides: ReturnType<typeof probeSidesOf>, usd: number): { critical: boolean; note: string; value: ReactNode | null } {
   if (session || totals.fromRequests === true) return { critical: false, note: UNAVAILABLE_NOTE, value: loading ? null : '-' };
   if (unit === 'native') {
-    const shown = !loading && reading.scale !== null;
-    return { critical: shown && typeof sides.equivalent === 'number' && sides.equivalent < 0, note: `${lead}, ${NATIVE_SUBSET}`, value: shown && reading.scale !== null ? figuresValue(nativeFiguresOf(sides, reading.week, reading.scale).figures) : null };
+    const scale = loading ? null : reading.scale;
+    return { critical: scale !== null && typeof sides.equivalent === 'number' && sides.equivalent < 0, note: `${lead}, ${NATIVE_SUBSET}`, value: scale === null ? null : figuresValue(nativeFiguresOf(sides, reading.week, scale).figures) };
   }
   return { critical: !loading && usd < 0, note: `${lead}, ${UNIT_SPLIT[dollarsOf(unit)]}`, value: loading ? null : fmtUsd(usd) };
 }
-
-/** A chart card's plot height, its skeleton's too, so a card keeps its height as the answer lands. */
-const CHART_HEIGHT = 220;
 
 function ChartCard({
   title,
@@ -1322,7 +1309,7 @@ function BreakdownTable({
                 colSpan={columns.length + 1}
                 empty="No rows."
                 error={failure?.text ?? null}
-                errorTitle={failure?.unpriced ? `Unpriced: ${title.toLowerCase()}` : 'Could not load this breakdown'}
+                errorTitle={failure?.unpriced ? failureHead(failure, title.toLowerCase()) : 'Could not load this breakdown'}
                 loading={loading}
               />
             )}
@@ -1344,17 +1331,32 @@ function CountBars({ color, empty, rows }: { color: string; empty: string; rows:
   return (
     <ul className="plain-list hbars hbars--errors">
       {rows.map((r) => (
-        <li key={r.label}>
-          <span className="mono">{r.label}</span>
-          <div className="hbars__track">
-            <span className="hbars__fill" style={{ width: `${(r.count / max) * 100}%`, background: color }} />
-          </div>
-          <span className="num">
-            {r.target ? <CountLink target={r.target}>{fmtInt(r.count)}</CountLink> : fmtInt(r.count)} <span className="muted">{fmtPct(r.count / total)}</span>
-          </span>
-        </li>
+        <HBarRow
+          key={r.label}
+          color={color}
+          count={r.target ? <CountLink target={r.target}>{fmtInt(r.count)}</CountLink> : fmtInt(r.count)}
+          fill={r.count / max}
+          label={r.label}
+          labelClass="mono"
+          share={fmtPct(r.count / total)}
+        />
       ))}
     </ul>
+  );
+}
+
+/** A bar list's row, `fill` the bar's share of its track. `count` is drawn as given, so a list can link it. */
+function HBarRow({ color, count, fill, label, labelClass, rowClass, share }: { color: string; count: ReactNode; fill: number; label: string; labelClass?: string; rowClass?: string; share: string }) {
+  return (
+    <li className={rowClass}>
+      <span className={labelClass}>{label}</span>
+      <div className="hbars__track">
+        <span className="hbars__fill" style={{ width: `${fill * 100}%`, background: color }} />
+      </div>
+      <span className="num">
+        {count} <span className="muted">{share}</span>
+      </span>
+    </li>
   );
 }
 
@@ -1425,16 +1427,14 @@ function ReasonBars({ link, plainLinks, totals }: { link: ReasonLink; plainLinks
   return (
     <ul className="plain-list hbars hbars--reasons">
       {rows.map((r) => (
-        <li key={r.reason}>
-          <span>{missLabel(r.reason)}</span>
-          <div className="hbars__track">
-            <span className="hbars__fill" style={{ width: `${(r.count / max) * 100}%`, background: reasonColor(ink, r.reason) }} />
-          </div>
-          <span className="num">
-            <CountLink target={plainLinks ? SEVERAL_CLIENTS : requestsLink({ ...link, count: r.count, reason: r.reason })}>{fmtInt(r.count)}</CountLink>{' '}
-            <span className="muted">{fmtPct(totals.requests ? r.count / totals.requests : 0, 1)}</span>
-          </span>
-        </li>
+        <HBarRow
+          key={r.reason}
+          color={reasonColor(ink, r.reason)}
+          count={<CountLink target={plainLinks ? SEVERAL_CLIENTS : requestsLink({ ...link, count: r.count, reason: r.reason })}>{fmtInt(r.count)}</CountLink>}
+          fill={r.count / max}
+          label={missLabel(r.reason)}
+          share={fmtPct(totals.requests ? r.count / totals.requests : 0, 1)}
+        />
       ))}
     </ul>
   );
@@ -1494,15 +1494,15 @@ function WastedProbes({ billed, group, probes, reading, unit }: { billed: Analyt
       <ul className="plain-list hbars hbars--reasons hbars--under-tiles">
         {rows.map((r) => (
           // The longest reason wraps in this column, so the row anchors the bar and the count to its first line.
-          <li key={r.reason} className="hbars__row--top">
-            <span>{WASTED_PROBE_LABEL[r.reason]}</span>
-            <div className="hbars__track">
-              <span className="hbars__fill" style={{ width: `${(r.count / max) * 100}%`, background: r.reason === 'idle_limit' ? ink.series[3] : ink.muted }} />
-            </div>
-            <span className="num">
-              {fmtInt(r.count)} <span className="muted">{fmtPct(group.wastedProbes ? r.count / group.wastedProbes : 0, 1)}</span>
-            </span>
-          </li>
+          <HBarRow
+            key={r.reason}
+            color={r.reason === 'idle_limit' ? ink.series[3] : ink.muted}
+            count={fmtInt(r.count)}
+            fill={r.count / max}
+            label={WASTED_PROBE_LABEL[r.reason]}
+            rowClass="hbars__row--top"
+            share={fmtPct(group.wastedProbes ? r.count / group.wastedProbes : 0, 1)}
+          />
         ))}
       </ul>
     </>
@@ -1716,7 +1716,6 @@ function CacheByModel({ failure, funded, groups, loading, reading, unit }: { fai
           : rows.map((g) => ({
               key: g.key,
               label: g.label,
-              title: g.label,
               cells: [fmtCompact(g.tokens.cacheRead), fmtCompact(g.tokens.cacheWrite5m), fmtCompact(g.tokens.cacheWrite1h), fmtPct(hitRatioOf(g) ?? 0), fmtPct(cachedShareOf(g) ?? 0), ...costsOf(g, factor)],
             }))
       }
@@ -2014,8 +2013,9 @@ const fitRank = (fit: string) => (MOVE_FITS.includes(fit) ? MOVE_FITS.indexOf(fi
  */
 const fitColor = (ink: ChartInk, fit: string): string => (fit === 'fits' ? ink.good : fit === 'rewrite_only' ? ink.warning : fit === 'least_bad' ? ink.critical : ink.muted);
 
-function RewritesCard({ answer, axis, error, loading, unfiltered }: { answer: RewritesAnswer | null; axis: TimeAxis; error: string | null; loading: boolean; unfiltered: boolean }) {
+function RewritesCard({ answer, axis, error, unfiltered }: { answer: RewritesAnswer | null; axis: TimeAxis; error: string | null; unfiltered: boolean }) {
   const ink = useChartInk();
+  const loading = answer === null;
   const data = useMemo(() => (answer?.points ?? []).map((p) => ({ at: Date.parse(p.at), rewriteTokens: p.rewriteTokens })), [answer]);
   const total = data.reduce((n, p) => n + p.rewriteTokens, 0);
   const moves = Object.entries(answer?.moves ?? {}).sort(([a], [b]) => a.localeCompare(b));
@@ -2178,6 +2178,8 @@ const SPEND_REST_LABEL: Record<Exclude<BurnLineUnit, 'usd'>, string> = { unknown
 const TIER_UNKNOWN_HINT = 'A free plan, no tier on file or one the cost model does not hold, and no bucket of the range priced, so no share of the week is drawn';
 const MODEL_UNLISTED_HINT = 'A bucket whose traffic ran on a model without a weight in the cost model prices no share and draws no point';
 const NO_ACCOUNT: ReadonlySet<string> = new Set();
+const NO_POINTS: AnalyticsPoint[] = [];
+const NO_REQUESTS: RequestLog[] = [];
 const PARTIAL_NOTE = 'The last bucket is partial, rated over the part of its width it covers';
 const PLAN_TITLE = 'Plan per hour';
 const PLAN_SUBTITLE = 'The subscription traffic per hour as a share of the chosen week';
@@ -2205,7 +2207,6 @@ function BurnCharts({
   costs,
   error,
   groupBy,
-  loading,
   rangeEndMs,
   readAt,
   reading,
@@ -2218,7 +2219,6 @@ function BurnCharts({
   costs: SubscriptionCosts | null;
   error: string | null;
   groupBy: BurnGroup;
-  loading: boolean;
   rangeEndMs: number | undefined;
   readAt: number | undefined;
   reading: WeekReading;
@@ -2226,6 +2226,7 @@ function BurnCharts({
   slotOf: (id: string) => number | null;
 }) {
   const ink = useChartInk();
+  const loading = answer === null;
   const { lines, rows } = useMemo(
     () => (answer === null ? { lines: [] as BurnLine[], rows: [] as BurnRow[] } : foldBurn(answer.points, groupBy, answer.bucketSeconds, sized ?? NO_ACCOUNT, rangeEndMs, readAt, { account })),
     [account, answer, groupBy, rangeEndMs, readAt, sized],
@@ -2527,7 +2528,6 @@ function AccountsSection({
   axis,
   bucketMs,
   error,
-  loading,
   otherFilters,
   rollups: all,
   slotOf,
@@ -2540,7 +2540,6 @@ function AccountsSection({
   axis: TimeAxis;
   bucketMs: number;
   error: string | null;
-  loading: boolean;
   otherFilters: boolean;
   rollups: AccountRollup[] | null;
   slotOf: (id: string) => number | null;
@@ -2548,6 +2547,7 @@ function AccountsSection({
   week: WeekPosition;
 }) {
   const ink = useChartInk();
+  const loading = all === null;
   const rollups = useMemo(() => (all === null ? null : accountIds.length === 0 ? all : all.filter((r) => accountIds.includes(r.accountId))), [all, accountIds]);
   const accounts = useMemo(() => [...new Set((rollups ?? []).map((r) => r.accountId))].sort(), [rollups]);
   const table = useMemo(
@@ -2581,7 +2581,9 @@ function AccountsSection({
     return widest > 0 ? niceAxisTop(widest) : 50;
   }, [pace, accounts]);
   const toggle = <Segmented value={chosen} options={windows.map((id) => ({ label: toggleLabel(id), value: id }))} onChange={setWindow} ariaLabel="Window" />;
-  const legend = accounts.map((a) => ({ color: accountColor(ink, slotOf(a)), label: a, shape: 'line' as const }));
+  const colorOf = (a: string) => accountColor(ink, slotOf(a));
+  const legend = accounts.map((a) => ({ color: colorOf(a), label: a, shape: 'line' as const }));
+  const shareTip = timeTip<Record<string, number | null> & { at: number }>((p) => accounts.map((a) => ({ color: colorOf(a), label: a, value: pct(p[a]) })));
   const scoreOf = (p: Record<string, number | null>, a: string) => {
     const score = p[`${a}:score`];
     return score === null || score === undefined ? '-' : score.toFixed(2);
@@ -2592,15 +2594,15 @@ function AccountsSection({
         title="Peak 5-hour utilization"
         subtitle="Highest utilization seen in each bucket, per account"
         loading={loading}
-        legend={accounts.filter((a) => data.some((p) => p[a] !== null && p[a] !== undefined)).map((a) => ({ color: accountColor(ink, slotOf(a)), label: a, shape: 'line' }))}
+        legend={accounts.filter((a) => data.some((p) => p[a] !== null && p[a] !== undefined)).map((a) => ({ color: colorOf(a), label: a, shape: 'line' }))}
       >
         <LineChart data={data} margin={CHART_MARGIN}>
           <CartesianGrid vertical={false} stroke={ink.grid} />
           <XAxis {...axis} />
-          <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tickFormatter={(v: number) => `${v}%`} tickLine={false} axisLine={false} width={40} />
-          <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Record<string, number | null> & { at: number }>((p) => accounts.map((a) => ({ color: accountColor(ink, slotOf(a)), label: a, value: pct(p[a]) })))} />
+          <YAxis {...PCT_AXIS} />
+          <Tooltip cursor={{ stroke: ink.axis }} content={shareTip} />
           {accounts.map((a) => (
-            <Line key={a} type="monotone" dataKey={a} stroke={accountColor(ink, slotOf(a))} strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />
+            <Line key={a} type="monotone" dataKey={a} stroke={colorOf(a)} strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />
           ))}
         </LineChart>
       </ChartCard>
@@ -2609,13 +2611,13 @@ function AccountsSection({
           <LineChart data={usage.data} margin={CHART_MARGIN}>
             <CartesianGrid vertical={false} stroke={ink.grid} />
             <XAxis {...axis} />
-            <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tickFormatter={(v: number) => `${v}%`} tickLine={false} axisLine={false} width={40} />
-            <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Record<string, number | null> & { at: number }>((p) => accounts.map((a) => ({ color: accountColor(ink, slotOf(a)), label: a, value: pct(p[a]) })))} />
+            <YAxis {...PCT_AXIS} />
+            <Tooltip cursor={{ stroke: ink.axis }} content={shareTip} />
             {/* The lines leave a null bucket unconnected, so a bucket with no sample reads as a gap rather than a
                 slope, and a sampled bucket with a gap or the range's edge on both sides draws as a dot, as the share
                 chart draws one. */}
             {accounts.map((a) => (
-              <Line key={a} type="monotone" dataKey={a} stroke={accountColor(ink, slotOf(a))} strokeWidth={1.5} dot={isolatedDot(usage.data.map((r) => r[a]), accountColor(ink, slotOf(a)))} isAnimationActive={false} />
+              <Line key={a} type="monotone" dataKey={a} stroke={colorOf(a)} strokeWidth={1.5} dot={isolatedDot(usage.data.map((r) => r[a]), colorOf(a))} isAnimationActive={false} />
             ))}
           </LineChart>
         </ChartCard>
@@ -2625,9 +2627,9 @@ function AccountsSection({
             <XAxis {...axis} />
             <YAxis domain={[-paceTop, paceTop]} ticks={[-paceTop, -paceTop / 2, 0, paceTop / 2, paceTop]} tickFormatter={(v: number) => pct(v, true)} tickLine={false} axisLine={false} width={44} />
             <ReferenceLine y={0} stroke={ink.axis} />
-            <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Record<string, number | null> & { at: number }>((p) => accounts.flatMap((a) => [{ color: accountColor(ink, slotOf(a)), label: a, value: pct(p[a], true) }, { label: `Pace score, ${a}`, title: "the remaining share over the hours from the sample's instant to the window's reset", value: scoreOf(p, a) }]))} />
+            <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Record<string, number | null> & { at: number }>((p) => accounts.flatMap((a) => [{ color: colorOf(a), label: a, value: pct(p[a], true) }, { label: `Pace score, ${a}`, title: "the remaining share over the hours from the sample's instant to the window's reset", value: scoreOf(p, a) }]))} />
             {accounts.map((a) => (
-              <Line key={a} type="monotone" dataKey={a} stroke={accountColor(ink, slotOf(a))} strokeWidth={1.5} dot={isolatedDot(pace.data.map((r) => r[a]), accountColor(ink, slotOf(a)))} isAnimationActive={false} />
+              <Line key={a} type="monotone" dataKey={a} stroke={colorOf(a)} strokeWidth={1.5} dot={isolatedDot(pace.data.map((r) => r[a]), colorOf(a))} isAnimationActive={false} />
             ))}
           </LineChart>
         </ChartCard>
