@@ -9,8 +9,8 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_ledger::{
-    decision_record, list_routing_log, DecisionListRow, EventListRow, LogKinds, RoutingLogCursor,
-    RoutingLogFilter, RoutingLogRow,
+    decision_record, list_routing_log, DecisionListRow, Direction, EventListRow, LogKinds,
+    RoutingLogCursor, RoutingLogFilter, RoutingLogRow,
 };
 use phoebis_routing::HOUR_MS;
 use serde_json::{json, Map, Value};
@@ -18,7 +18,7 @@ use utoipa::ToSchema;
 
 use crate::analytics::ledger_failure;
 use crate::openapi::{ErrorBody, LedgerFailure};
-use crate::requests::{list_param, text_param};
+use crate::requests::{list_param, one_of, text_param};
 use crate::routes::failure;
 use crate::AdminState;
 
@@ -28,7 +28,7 @@ const MAX_LIMIT: usize = 200;
 /// The view's URL keys, alphabetical. A key outside them is refused rather than ignored, so a link built for another
 /// view never reads as a filter that took.
 const KEYS: &[&str] = &[
-    "accounts", "agent_id", "cursor", "from", "keys", "kinds", "limit", "models", "pools",
+    "accounts", "agent_id", "cursor", "dir", "from", "keys", "kinds", "limit", "models", "pools",
     "request", "session", "to",
 ];
 
@@ -45,10 +45,12 @@ fn time(q: &HashMap<String, String>, name: &'static str) -> Result<Option<i64>, 
         .map_err(|_| format!("{name} is not a time"))
 }
 
-/// The routing decisions and the events of a range, merged into one page, newest first.
+/// The routing decisions and the events of a range, merged into one page, newest first by default and oldest first
+/// under `dir=asc`.
 #[derive(serde::Serialize, ToSchema)]
 pub(crate) struct RoutingLog {
-    /// At one `at`, the decisions before the events. Each row's `type` is `decision` or `event`.
+    /// At one `at`, the decisions before the events, and after them under `dir=asc`. Each row's `type` is `decision`
+    /// or `event`.
     #[schema(value_type = Vec<Row>)]
     rows: Vec<PageRow>,
     /// Set only while a row lies past the page. A page of exactly `limit` rows with none beyond answers null.
@@ -465,8 +467,10 @@ pub(crate) struct RoutingLogQuery {
     /// The decisions and the events whose agent id equals the value, literally, so an event that names no agent is
     /// left out. Combines with `session` and every other filter.
     pub agent_id: Option<String>,
-    /// The `next_cursor` of the page before, `<at>:<rank>:<id>`.
+    /// The `next_cursor` of the page before under the same `dir`, `<at>:<rank>:<id>`.
     pub cursor: Option<String>,
+    /// `desc` (the default), newest first, or `asc`, oldest first.
+    pub dir: Option<String>,
     /// An RFC 3339 instant such as `2026-09-16T14:15:00.000Z` or Unix milliseconds, a value that reads as an
     /// integer taken as milliseconds. Defaults to an hour before now. Inclusive.
     pub from: Option<String>,
@@ -505,6 +509,7 @@ pub(crate) struct RoutingLogQuery {
             "- `unknown kind {name}`\n",
             "- `{name} is not a time`, for `from` or `to`\n",
             "- `limit is 1 to 200`\n",
+            "- `dir is desc or asc`\n",
             "- `cursor is <at>:<rank>:<id>`",
         ), body = ErrorBody, example = json!({"error": "unknown filter {name}"})),
         (status = 500, response = LedgerFailure),
@@ -541,6 +546,16 @@ pub(crate) async fn list(
         Some(Ok(n)) if (1..=MAX_LIMIT).contains(&n) => n,
         Some(_) => return failure(StatusCode::BAD_REQUEST, "limit is 1 to 200"),
     };
+    let dir = match q.get("dir").map(|word| Direction::parse(word)) {
+        None => Direction::default(),
+        Some(Some(dir)) => dir,
+        Some(None) => {
+            return failure(
+                StatusCode::BAD_REQUEST,
+                &format!("dir is {}", one_of(Direction::WORDS)),
+            )
+        }
+    };
     let cursor = match q.get("cursor").map(|raw| RoutingLogCursor::parse(raw)) {
         None => None,
         Some(Some(cursor)) => Some(cursor),
@@ -561,7 +576,7 @@ pub(crate) async fn list(
     let page = state
         .ledger
         .db()
-        .read(move |c| list_routing_log(c, &filter, cursor.as_ref(), limit))
+        .read(move |c| list_routing_log(c, &filter, dir, cursor.as_ref(), limit))
         .await;
     let page = match page {
         Ok(page) => page,

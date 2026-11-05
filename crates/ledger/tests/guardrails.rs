@@ -13,9 +13,9 @@ use phoebis_bus::{
 };
 use phoebis_ledger::{
     guardrail_counts, guardrail_sample_page, list_requests, request_body, request_by_id,
-    run_retention, BodyRecord, GuardrailCountRow, GuardrailMatchRecord, LedgerConfig, LedgerDb,
-    LiveKeys, RequestCursor, RequestFilter, RequestRecord, SampleRow, GUARDRAIL_BLOCKED_BYTES_SQL,
-    GUARDRAIL_COUNTS_SQL,
+    run_retention, BodyRecord, Direction, GuardrailCountRow, GuardrailMatchRecord, LedgerConfig,
+    LedgerDb, LiveKeys, RequestCursor, RequestFilter, RequestOrder, RequestRecord, SampleRow,
+    GUARDRAIL_BLOCKED_BYTES_SQL, GUARDRAIL_COUNTS_SQL,
 };
 use phoebis_store::AttachmentSubject;
 
@@ -70,12 +70,22 @@ fn listed_ids(db: &LedgerDb, guardrails: &[&str]) -> Vec<String> {
         guardrails: guardrails.iter().map(|g| g.to_string()).collect(),
         ..RequestFilter::default()
     };
-    db.read_blocking(|c| list_requests(c, &filter, &LiveKeys::default(), None, 50))
-        .unwrap()
-        .0
-        .into_iter()
-        .map(|(r, _)| r.id)
-        .collect()
+    db.read_blocking(|c| {
+        list_requests(
+            c,
+            &filter,
+            &LiveKeys::default(),
+            RequestOrder::ReceivedAt,
+            Direction::Desc,
+            None,
+            50,
+        )
+    })
+    .unwrap()
+    .0
+    .into_iter()
+    .map(|(r, _)| r.id)
+    .collect()
 }
 
 /// The detail of each step of the statement's query plan under the given parameters.
@@ -108,7 +118,15 @@ fn a_request_with_two_matches_round_trips_through_the_row_and_the_child_table() 
     assert_eq!(shown.guardrail_id.as_deref(), Some("aa-block"));
     let listed = db
         .read_blocking(|c| {
-            list_requests(c, &RequestFilter::default(), &LiveKeys::default(), None, 10)
+            list_requests(
+                c,
+                &RequestFilter::default(),
+                &LiveKeys::default(),
+                RequestOrder::ReceivedAt,
+                Direction::Desc,
+                None,
+                10,
+            )
         })
         .unwrap()
         .0;
@@ -140,7 +158,15 @@ fn a_listed_page_answers_each_requests_own_matches() {
     db.insert_request(&newer, &[], None).unwrap();
     let listed: Vec<RequestRecord> = db
         .read_blocking(|c| {
-            list_requests(c, &RequestFilter::default(), &LiveKeys::default(), None, 10)
+            list_requests(
+                c,
+                &RequestFilter::default(),
+                &LiveKeys::default(),
+                RequestOrder::ReceivedAt,
+                Direction::Desc,
+                None,
+                10,
+            )
         })
         .unwrap()
         .0
@@ -437,7 +463,8 @@ fn sample_ids(
     cursor: Option<&str>,
     limit: usize,
 ) -> (Vec<String>, Option<String>) {
-    let cursor = cursor.map(|c| RequestCursor::parse(c).expect("a page's own cursor"));
+    let cursor = cursor
+        .map(|c| RequestCursor::parse(c, RequestOrder::ReceivedAt).expect("a page's own cursor"));
     let (rows, next) = db
         .read_blocking(|c| guardrail_sample_page(c, subject, since, cursor.as_ref(), limit))
         .unwrap();

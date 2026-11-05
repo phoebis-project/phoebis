@@ -951,6 +951,8 @@ async fn a_shutdown_past_the_drain_window_books_the_cut_stream_and_the_headless_
                     c,
                     &phoebis_ledger::RequestFilter::default(),
                     &phoebis_ledger::LiveKeys::default(),
+                    phoebis_ledger::RequestOrder::ReceivedAt,
+                    phoebis_ledger::Direction::Desc,
                     None,
                     10,
                 )
@@ -1099,6 +1101,8 @@ async fn a_stream_held_past_the_proxy_listeners_own_drain_is_cut_there_and_booke
                     c,
                     &phoebis_ledger::RequestFilter::default(),
                     &phoebis_ledger::LiveKeys::default(),
+                    phoebis_ledger::RequestOrder::ReceivedAt,
+                    phoebis_ledger::Direction::Desc,
                     None,
                     10,
                 )
@@ -2770,6 +2774,8 @@ async fn the_binary_ledgers_serves_statistics_and_metrics_and_lands_the_ledger_o
                 c,
                 &phoebis_ledger::RequestFilter::default(),
                 &phoebis_ledger::LiveKeys::default(),
+                phoebis_ledger::RequestOrder::ReceivedAt,
+                phoebis_ledger::Direction::Desc,
                 None,
                 10,
             )

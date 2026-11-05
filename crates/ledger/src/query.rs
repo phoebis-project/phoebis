@@ -511,54 +511,194 @@ fn filter_clauses(
     (args, clauses)
 }
 
+/// The request list's order keys. `ReceivedAt` is the default and the only key with an index, so the others sort the
+/// rows the filters admit. A row without the figure of a nullable key sorts after every row with it, under either
+/// direction.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RequestOrder {
+    #[default]
+    ReceivedAt,
+    Attempts,
+    DurationMs,
+    TtfbMs,
+    InputTokens,
+    OutputTokens,
+}
+
+impl RequestOrder {
+    /// The words `parse` reads, the default first.
+    pub const WORDS: &'static [&'static str] = &[
+        "received_at",
+        "attempts",
+        "duration_ms",
+        "ttfb_ms",
+        "input_tokens",
+        "output_tokens",
+    ];
+
+    pub fn parse(word: &str) -> Option<RequestOrder> {
+        Some(match word {
+            "received_at" => RequestOrder::ReceivedAt,
+            "attempts" => RequestOrder::Attempts,
+            "duration_ms" => RequestOrder::DurationMs,
+            "ttfb_ms" => RequestOrder::TtfbMs,
+            "input_tokens" => RequestOrder::InputTokens,
+            "output_tokens" => RequestOrder::OutputTokens,
+            _ => return None,
+        })
+    }
+
+    /// The requests table's column the key orders by.
+    fn column(self) -> &'static str {
+        match self {
+            RequestOrder::ReceivedAt => "received_at",
+            RequestOrder::Attempts => "attempts",
+            RequestOrder::DurationMs => "duration_ms",
+            RequestOrder::TtfbMs => "ttfb_ms",
+            RequestOrder::InputTokens => "input_tokens",
+            RequestOrder::OutputTokens => "output_tokens",
+        }
+    }
+
+    /// Whether the key's column can be null. The null prefix joins the order and the cursor on such a key alone, so
+    /// `received_at` keeps its walk of `requests_received` (its id tie-break sorted), and `attempts`, which has no
+    /// index, keeps the same shape as the other not-null key.
+    fn nullable(self) -> bool {
+        match self {
+            RequestOrder::ReceivedAt | RequestOrder::Attempts => false,
+            RequestOrder::DurationMs
+            | RequestOrder::TtfbMs
+            | RequestOrder::InputTokens
+            | RequestOrder::OutputTokens => true,
+        }
+    }
+
+    /// The key's figure on a listed row, the value its cursor carries.
+    fn value_of(self, r: &RequestRecord) -> Option<i64> {
+        match self {
+            RequestOrder::ReceivedAt => Some(r.received_at),
+            RequestOrder::Attempts => Some(i64::from(r.attempts)),
+            RequestOrder::DurationMs => r.duration_ms,
+            RequestOrder::TtfbMs => r.ttfb_ms,
+            RequestOrder::InputTokens => r.serving.input_tokens.map(|n| n as i64),
+            RequestOrder::OutputTokens => r.serving.output_tokens.map(|n| n as i64),
+        }
+    }
+}
+
+/// `desc` (the default) or `asc`, the direction of a paged read's order.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Direction {
+    #[default]
+    Desc,
+    Asc,
+}
+
+impl Direction {
+    /// The words `parse` reads, the default first.
+    pub const WORDS: &'static [&'static str] = &["desc", "asc"];
+
+    pub fn parse(word: &str) -> Option<Direction> {
+        match word {
+            "desc" => Some(Direction::Desc),
+            "asc" => Some(Direction::Asc),
+            _ => None,
+        }
+    }
+
+    fn sql(self) -> &'static str {
+        match self {
+            Direction::Desc => "DESC",
+            Direction::Asc => "ASC",
+        }
+    }
+
+    /// The comparison a row past the cursor's value meets.
+    fn past(self) -> &'static str {
+        match self {
+            Direction::Desc => "<",
+            Direction::Asc => ">",
+        }
+    }
+}
+
 /// The request list's statement and its binds, spelled once so the seeded plan test explains the statement the
 /// read runs under each filter.
 pub(crate) fn list_requests_statement(
     filter: &RequestFilter,
     live: &LiveKeys,
+    order: RequestOrder,
+    dir: Direction,
     cursor: Option<&RequestCursor>,
     limit: usize,
 ) -> (String, Vec<rusqlite::types::Value>) {
     let (mut args, mut clauses) = filter_clauses(filter, live);
+    let column = order.column();
+    let past = dir.past();
     if let Some(cursor) = cursor {
-        args.push(cursor.received_at.into());
-        let n = args.len();
-        args.push(cursor.id.clone().into());
-        clauses.push(format!(
-            "(received_at < ?{n} OR (received_at = ?{n} AND id < ?{}))",
-            n + 1
-        ));
+        let n = args.len() + 1;
+        let clause = match cursor.value {
+            // Past a row without the figure lie only the rows without it, past its id.
+            None if order.nullable() => {
+                args.push(cursor.id.clone().into());
+                format!("({column} IS NULL AND id {past} ?{n})")
+            }
+            value => {
+                args.push(value.into());
+                args.push(cursor.id.clone().into());
+                let pair = format!(
+                    "{column} {past} ?{n} OR ({column} = ?{n} AND id {past} ?{})",
+                    n + 1
+                );
+                if order.nullable() {
+                    format!("({column} IS NULL OR {pair})")
+                } else {
+                    format!("({pair})")
+                }
+            }
+        };
+        clauses.push(clause);
     }
     let r#where = if clauses.is_empty() {
         String::new()
     } else {
         format!(" WHERE {}", clauses.join(" AND "))
     };
+    // `IS NULL` reads 0 for a figure and 1 for none, so the rows without the figure sort last under either direction.
+    let nulls_last = if order.nullable() {
+        format!("{column} IS NULL, ")
+    } else {
+        String::new()
+    };
+    let dir = dir.sql();
     // One row past the page says whether a next page exists, so a page of exactly `limit` rows offers no
     // cursor that would only lead to an empty page.
     args.push(((limit + 1) as i64).into());
     let sql = format!(
-        "{REQUEST_SELECT}{where} ORDER BY received_at DESC, id DESC LIMIT ?{}",
+        "{REQUEST_SELECT}{where} ORDER BY {nulls_last}{column} {dir}, id {dir} LIMIT ?{}",
         args.len()
     );
     (sql, args)
 }
 
-/// The request log's page under `filter`, newest first, from `cursor` on.
+/// The request log's page under `filter` in `order` and `dir`, from `cursor` on: by default newest first, the
+/// newest `received_at` and then the highest id.
 pub fn list_requests(
     conn: &Connection,
     filter: &RequestFilter,
     live: &LiveKeys,
+    order: RequestOrder,
+    dir: Direction,
     cursor: Option<&RequestCursor>,
     limit: usize,
 ) -> Result<(Vec<RequestWithAttempts>, Option<String>), LedgerError> {
-    let (sql, args) = list_requests_statement(filter, live, cursor, limit);
+    let (sql, args) = list_requests_statement(filter, live, order, dir, cursor, limit);
     let mut stmt = conn.prepare(&sql)?;
     let mut requests = stmt
         .query_map(params_from_iter(args), row_to_request)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let next = next_page(&mut requests, limit, |r| {
-        RequestCursor::of(&r.id, r.received_at).encode()
+        RequestCursor::of(&r.id, order.value_of(r)).encode()
     });
     let mut out = with_attempts(conn, requests)?;
     fill_guardrails(conn, &mut out)?;
@@ -592,12 +732,14 @@ pub fn list_request_page(
     conn: &Connection,
     filter: &RequestFilter,
     live: &LiveKeys,
+    order: RequestOrder,
+    dir: Direction,
     cursor: Option<&RequestCursor>,
     limit: usize,
 ) -> Result<RequestPage, LedgerError> {
     // A read hands a shared connection, which only the unchecked form opens a transaction on.
     let tx = conn.unchecked_transaction()?;
-    let (rows, next) = list_requests(&tx, filter, live, cursor, limit)?;
+    let (rows, next) = list_requests(&tx, filter, live, order, dir, cursor, limit)?;
     // For a live range, whose `to` moves with the clock, a row the filters leave out, such as one received after `to`
     // and written before this read, stays above the watermark, so the next poll's later bound still finds it. The
     // writer stamps a row from its clock, so a row received after `to` lands after it: the cap at `to` keeps a later
@@ -839,8 +981,8 @@ pub const GUARDRAIL_SAMPLE_CURSOR_SQL: &str =
 pub const GUARDRAIL_SAMPLE_ORDER_SQL: &str = " ORDER BY r.received_at DESC, r.id DESC LIMIT ?";
 
 /// The newest captured, non-probe rows of the subject since `since`, newest first, at most `limit`, with the next
-/// cursor in `list_requests`'s spelling where more exist. Walks `requests_received` for a pool and `requests_key`
-/// for a key.
+/// cursor in `list_requests`'s spelling under `RequestOrder::ReceivedAt` where more exist, its value read as the
+/// arrival. Walks `requests_received` for a pool and `requests_key` for a key.
 pub fn guardrail_sample_page(
     conn: &Connection,
     subject: &AttachmentSubject,
@@ -857,7 +999,7 @@ pub fn guardrail_sample_page(
     let mut args: Vec<rusqlite::types::Value> = vec![subject.id().to_string().into(), since.into()];
     let mut after = "";
     if let Some(cursor) = cursor {
-        args.push(cursor.received_at.into());
+        args.push(cursor.value.into());
         args.push(cursor.id.clone().into());
         after = GUARDRAIL_SAMPLE_CURSOR_SQL;
     }
@@ -882,7 +1024,7 @@ pub fn guardrail_sample_page(
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let next = next_page(&mut rows, limit, |r| {
-        RequestCursor::of(&r.id, r.received_at)
+        RequestCursor::of(&r.id, Some(r.received_at))
     });
     Ok((rows, next))
 }
@@ -1078,32 +1220,42 @@ impl LogKinds {
     }
 }
 
-/// `<received_at>:<id>`, the request list's and the guardrail sample's cursor: the page after it starts below that
-/// row in the `received_at DESC, id DESC` order.
+/// `<value>:<id>`, the request list's and the guardrail sample's cursor: the order key's value on a page's last row
+/// and its id, an empty value for a null figure. The page after it starts past that row in the list's order and
+/// direction, so under the default order, `received_at` newest first, it reads `<received_at>:<id>`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RequestCursor {
+    pub value: Option<i64>,
     pub id: String,
-    pub received_at: i64,
 }
 
 impl RequestCursor {
-    /// The id may hold a `:` of its own, so the instant is read off the first.
-    pub fn parse(s: &str) -> Option<RequestCursor> {
-        let (received_at, id) = s.split_once(':')?;
+    /// The id may hold a `:` of its own, so the value is read off the first. An empty value is a null figure, which a
+    /// key the schema declares not null (`received_at`, `attempts`) never holds, so it answers `None` there.
+    pub fn parse(s: &str, order: RequestOrder) -> Option<RequestCursor> {
+        let (value, id) = s.split_once(':')?;
+        let value = match value {
+            "" if order.nullable() => None,
+            "" => return None,
+            value => Some(value.parse().ok()?),
+        };
         Some(RequestCursor {
+            value,
             id: id.to_string(),
-            received_at: received_at.parse().ok()?,
         })
     }
 
     pub fn encode(&self) -> String {
-        format!("{}:{}", self.received_at, self.id)
+        match self.value {
+            Some(value) => format!("{value}:{}", self.id),
+            None => format!(":{}", self.id),
+        }
     }
 
-    fn of(id: &str, received_at: i64) -> RequestCursor {
+    fn of(id: &str, value: Option<i64>) -> RequestCursor {
         RequestCursor {
+            value,
             id: id.to_string(),
-            received_at,
         }
     }
 }
@@ -1405,11 +1557,13 @@ fn event_statement(filter: &RoutingLogFilter) -> Option<LogStatement> {
     Some(statement)
 }
 
-/// The page of decisions and events under `filter`, newest first, decisions before events at one `at`. Two
-/// statements rather than a `UNION ALL`, so each walks its own index, merged here by the same key the cursor names.
+/// The page of decisions and events under `filter`, newest first under `Direction::Desc` (the default) with the
+/// decisions before the events at one `at`, and oldest first under `Asc`, the exact reverse. Two statements rather than
+/// a `UNION ALL`, so each walks its own index, merged here by the same key the cursor names.
 pub fn list_routing_log(
     conn: &Connection,
     filter: &RoutingLogFilter,
+    dir: Direction,
     cursor: Option<&RoutingLogCursor>,
     limit: usize,
 ) -> Result<RoutingLogPage, LedgerError> {
@@ -1424,23 +1578,26 @@ pub fn list_routing_log(
     };
     let page = (limit + 1) as i64;
     let mut decided = match decisions {
-        Some(statement) => decision_rows(conn, statement, cursor, page)?,
+        Some(statement) => decision_rows(conn, statement, dir, cursor, page)?,
         None => Vec::new(),
     }
     .into_iter()
     .peekable();
     let mut evented = match events {
-        Some(statement) => event_rows(conn, statement, cursor, page)?,
+        Some(statement) => event_rows(conn, statement, dir, cursor, page)?,
         None => Vec::new(),
     }
     .into_iter()
     .peekable();
-    // Both lists arrive in the page's order, so the merge takes a decision whenever it is at or after the next
-    // event: decisions rank before events at one `at`.
+    // Both lists arrive in the page's order, so the merge takes the decision whenever it comes first in that order:
+    // newest first, decisions rank before events at one `at`, and oldest first, the exact reverse, after them.
     let mut rows = Vec::with_capacity(limit + 1);
     while rows.len() <= limit {
         let take_decision = match (decided.peek(), evented.peek()) {
-            (Some(d), Some(e)) => d.at >= e.at,
+            (Some(d), Some(e)) => match dir {
+                Direction::Desc => d.at >= e.at,
+                Direction::Asc => d.at < e.at,
+            },
             (Some(_), None) => true,
             (None, Some(_)) => false,
             (None, None) => break,
@@ -1463,10 +1620,12 @@ pub fn list_routing_log(
 /// the read runs, its binds and its order included.
 pub(crate) fn decision_rows_statement(
     mut statement: LogStatement,
+    dir: Direction,
     cursor: Option<&RoutingLogCursor>,
     page: i64,
 ) -> (String, Vec<rusqlite::types::Value>) {
     let n = statement.args.len() + 1;
+    let past = dir.past();
     match cursor {
         None => {}
         Some(RoutingLogCursor::Decision {
@@ -1478,26 +1637,32 @@ pub(crate) fn decision_rows_statement(
             statement.args.push(request_id.clone().into());
             statement.args.push((*seq).into());
             statement.clauses.push(format!(
-                "(d.at < ?{n} OR (d.at = ?{n} AND (d.request_id < ?{} OR (d.request_id = ?{} AND d.seq < ?{}))))",
+                "(d.at {past} ?{n} OR (d.at = ?{n} AND (d.request_id {past} ?{} OR (d.request_id = ?{} AND d.seq {past} ?{}))))",
                 n + 1,
                 n + 1,
                 n + 2
             ));
         }
-        // Decisions rank before events at one `at`, so an event's cursor already passed every decision at its own.
+        // Decisions rank before events at one `at` newest first and after them oldest first, so an event's cursor
+        // has passed every decision at its own `at` under `Desc` and none under `Asc`.
         Some(RoutingLogCursor::Event { at, .. }) => {
             statement.args.push((*at).into());
-            statement.clauses.push(format!("d.at < ?{n}"));
+            let op = match dir {
+                Direction::Desc => "<",
+                Direction::Asc => ">=",
+            };
+            statement.clauses.push(format!("d.at {op} ?{n}"));
         }
     }
     statement.args.push(page.into());
+    let dir = dir.sql();
     let sql = format!(
         "SELECT d.request_id, d.seq, d.attempt, d.at, d.kind, d.probe, d.key_id, d.pool_id, d.session_id, \
          d.agent_id, d.model, d.account_id, d.from_account_id, d.summary, r.attempts, a.upstream_status, \
          a.input_tokens, a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens \
          FROM decisions d LEFT JOIN requests r ON r.id = d.request_id \
          LEFT JOIN attempts a ON a.request_id = d.request_id AND a.attempt = ({completing}) \
-         WHERE {} ORDER BY d.at DESC, d.request_id DESC, d.seq DESC LIMIT ?{}",
+         WHERE {} ORDER BY d.at {dir}, d.request_id {dir}, d.seq {dir} LIMIT ?{}",
         statement.sql(),
         statement.args.len(),
         completing = completing_attempt(),
@@ -1509,10 +1674,11 @@ pub(crate) fn decision_rows_statement(
 fn decision_rows(
     conn: &Connection,
     statement: LogStatement,
+    dir: Direction,
     cursor: Option<&RoutingLogCursor>,
     page: i64,
 ) -> Result<Vec<DecisionListRow>, LedgerError> {
-    let (sql, args) = decision_rows_statement(statement, cursor, page);
+    let (sql, args) = decision_rows_statement(statement, dir, cursor, page);
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
         .query_map(params_from_iter(args), |r| {
@@ -1558,30 +1724,38 @@ fn decision_rows(
 fn event_rows(
     conn: &Connection,
     mut statement: LogStatement,
+    dir: Direction,
     cursor: Option<&RoutingLogCursor>,
     page: i64,
 ) -> Result<Vec<EventListRow>, LedgerError> {
     let n = statement.args.len() + 1;
+    let past = dir.past();
     match cursor {
         None => {}
-        // Decisions rank before events at one `at`, so a decision's cursor leaves every event at its own to read.
+        // Decisions rank before events at one `at` newest first and after them oldest first, so a decision's cursor
+        // leaves every event at its own `at` to read under `Desc` and none under `Asc`.
         Some(RoutingLogCursor::Decision { at, .. }) => {
             statement.args.push((*at).into());
-            statement.clauses.push(format!("e.at <= ?{n}"));
+            let op = match dir {
+                Direction::Desc => "<=",
+                Direction::Asc => ">",
+            };
+            statement.clauses.push(format!("e.at {op} ?{n}"));
         }
         Some(RoutingLogCursor::Event { at, rowid }) => {
             statement.args.push((*at).into());
             statement.args.push((*rowid).into());
             statement.clauses.push(format!(
-                "(e.at < ?{n} OR (e.at = ?{n} AND e.rowid < ?{}))",
+                "(e.at {past} ?{n} OR (e.at = ?{n} AND e.rowid {past} ?{}))",
                 n + 1
             ));
         }
     }
     statement.args.push(page.into());
+    let dir = dir.sql();
     let sql = format!(
         "SELECT e.rowid, e.at, e.kind, e.account_id, e.key_id, e.pool_id, e.session_id, e.agent_id, e.model, \
-         e.request_id, e.actor, e.detail FROM events e WHERE {} ORDER BY e.at DESC, e.rowid DESC LIMIT ?{}",
+         e.request_id, e.actor, e.detail FROM events e WHERE {} ORDER BY e.at {dir}, e.rowid {dir} LIMIT ?{}",
         statement.sql(),
         statement.args.len()
     );

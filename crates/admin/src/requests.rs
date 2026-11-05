@@ -11,9 +11,9 @@ use axum::Json;
 use phoebis_bus::Classifier;
 use phoebis_ledger::{
     entrypoint_of_client, free_equivalent, free_shares, list_request_page, price_equivalent,
-    price_shares, request_by_id, request_events, AttemptRecord, Funding, LiveKeys, Patterns,
-    PlanTables, PriceRevisions, RequestCursor, RequestFilter, RequestRecord, Speed, WindowShares,
-    SHARE_REASON_CLIENT_CLASSIFIER,
+    price_shares, request_by_id, request_events, AttemptRecord, Direction, Funding, LiveKeys,
+    Patterns, PlanTables, PriceRevisions, RequestCursor, RequestFilter, RequestOrder,
+    RequestRecord, Speed, WindowShares, SHARE_REASON_CLIENT_CLASSIFIER,
 };
 use phoebis_routing::{UtilizationSample, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_OVERAGE_INCLUDED};
 use serde_json::Value;
@@ -829,6 +829,14 @@ pub(crate) fn flag(q: &HashMap<String, String>, name: &str) -> bool {
     q.get(name).is_some_and(|v| v == "true" || v == "1")
 }
 
+/// The words a parameter takes as its refusal lists them, `a, b or c`.
+pub(crate) fn one_of(words: &[&str]) -> String {
+    let (last, rest) = words
+        .split_last()
+        .expect("a parameter takes at least two words");
+    format!("{} or {last}", rest.join(", "))
+}
+
 /// `GET /admin/requests`'s query.
 // Declared for the document alone, since the handler reads the request by hand.
 #[allow(dead_code)]
@@ -903,8 +911,16 @@ pub(crate) struct RequestsQuery {
     /// `true`/`1`: the range's end is fixed, so `landed_through` may pass `to` and a poll over the range reads a row
     /// that landed after the end once. Leave it off for a live range.
     pub fixed_end: Option<bool>,
+    /// The order key: `received_at` (the default), `attempts`, `duration_ms`, `ttfb_ms`, `input_tokens` or
+    /// `output_tokens`. Under `duration_ms`, `ttfb_ms` and the two token keys a request without the figure sorts after
+    /// every request with it, in either direction. The id breaks a tie in the key's direction.
+    pub order: Option<String>,
+    /// `desc` (the default) or `asc`, the direction of `order`.
+    pub dir: Option<String>,
     /// Default 50, clamped to 1 through 500.
     pub limit: Option<u32>,
+    /// The `next_cursor` of the page before under the same `order` and `dir`, `<value>:<id>`: the order key's value on
+    /// the page's last row, empty for a row without the figure, and its id. Under the default order it reads
     /// `<received_at>:<id>`.
     pub cursor: Option<String>,
 }
@@ -918,7 +934,7 @@ pub(crate) struct RequestsQuery {
     params(RequestsQuery),
     responses(
         (status = 200, description = "The page.", body = RequestList),
-        (status = 400, description = "- `{name} is not a number`, for `from` or `to`\n- `landed_after is not a number`\n- `statuses are numbers`\n- `limit is not a number`\n- `cursor is <received_at>:<id>`\n- `fallback is true or false`\n- `patterns are at most 256 characters, at most 32 of them`, for `user_agent` or `client`", body = ErrorBody, example = json!({"error": "{name} is not a number"})),
+        (status = 400, description = "- `{name} is not a number`, for `from` or `to`\n- `landed_after is not a number`\n- `statuses are numbers`\n- `limit is not a number`\n- `order is received_at, attempts, duration_ms, ttfb_ms, input_tokens or output_tokens`\n- `dir is desc or asc`\n- `cursor is <value>:<id>`\n- `fallback is true or false`\n- `patterns are at most 256 characters, at most 32 of them`, for `user_agent` or `client`", body = ErrorBody, example = json!({"error": "{name} is not a number"})),
         (status = 500, response = LedgerFailure),
     ),
 )]
@@ -1003,10 +1019,30 @@ pub(crate) async fn list(
         },
     }
     .clamp(1, MAX_LIMIT);
-    let cursor = match q.get("cursor").map(|c| RequestCursor::parse(c)) {
+    let order = match q.get("order").map(|word| RequestOrder::parse(word)) {
+        None => RequestOrder::default(),
+        Some(Some(order)) => order,
+        Some(None) => {
+            return failure(
+                StatusCode::BAD_REQUEST,
+                &format!("order is {}", one_of(RequestOrder::WORDS)),
+            )
+        }
+    };
+    let dir = match q.get("dir").map(|word| Direction::parse(word)) {
+        None => Direction::default(),
+        Some(Some(dir)) => dir,
+        Some(None) => {
+            return failure(
+                StatusCode::BAD_REQUEST,
+                &format!("dir is {}", one_of(Direction::WORDS)),
+            )
+        }
+    };
+    let cursor = match q.get("cursor").map(|c| RequestCursor::parse(c, order)) {
         None => None,
         Some(Some(cursor)) => Some(cursor),
-        Some(None) => return failure(StatusCode::BAD_REQUEST, "cursor is <received_at>:<id>"),
+        Some(None) => return failure(StatusCode::BAD_REQUEST, "cursor is <value>:<id>"),
     };
     let shares = ShareContext::read(&state);
     let live = LiveKeys::from_snapshot(&state.router.snapshot());
@@ -1014,7 +1050,7 @@ pub(crate) async fn list(
     match state
         .ledger
         .db()
-        .read(move |c| list_request_page(c, &filter, &live, cursor.as_ref(), limit))
+        .read(move |c| list_request_page(c, &filter, &live, order, dir, cursor.as_ref(), limit))
         .await
     {
         Ok(page) => Json(RequestList {

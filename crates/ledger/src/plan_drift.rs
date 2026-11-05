@@ -21,7 +21,7 @@ use crate::bodies::{
 use crate::db::{begin_write, insert_decision_in, ANALYSIS_LIMIT, LANDING_STAMP_SQL};
 use crate::query::{
     decision_rows_statement, decision_statement, list_requests_statement,
-    session_attempts_statement, LiveKeys, RequestFilter, RoutingLogFilter,
+    session_attempts_statement, Direction, LiveKeys, RequestFilter, RequestOrder, RoutingLogFilter,
     GUARDRAIL_BLOCKED_BYTES_SQL, GUARDRAIL_COUNTS_SQL, GUARDRAIL_SAMPLE_CURSOR_SQL,
     GUARDRAIL_SAMPLE_KEY_SQL, GUARDRAIL_SAMPLE_ORDER_SQL, GUARDRAIL_SAMPLE_POOL_SQL,
     HOURLY_WINDOW_SAMPLES_SQL, LATEST_QUOTA_SQL, RECENT_EVENTS_OF_KIND,
@@ -549,7 +549,14 @@ fn the_request_list_by_key_keeps_its_plan_under_statistics() {
         ..RequestFilter::default()
     };
     let live = LiveKeys(BTreeMap::from([("main".into(), KEY_GENERATION)]));
-    let (sql, args) = list_requests_statement(&filter, &live, None, 50);
+    let (sql, args) = list_requests_statement(
+        &filter,
+        &live,
+        RequestOrder::ReceivedAt,
+        Direction::Desc,
+        None,
+        50,
+    );
     let steps = plan(&db, &sql, params_from_iter(args));
     assert!(
         seeks(&steps, "requests_key", &["key_id=?"]) && !walks(&steps, &["requests"]),
@@ -564,10 +571,44 @@ fn the_request_list_by_session_keeps_its_plan_under_statistics() {
         session: Some("s007".into()),
         ..RequestFilter::default()
     };
-    let (sql, args) = list_requests_statement(&filter, &LiveKeys::default(), None, 50);
+    let (sql, args) = list_requests_statement(
+        &filter,
+        &LiveKeys::default(),
+        RequestOrder::ReceivedAt,
+        Direction::Desc,
+        None,
+        50,
+    );
     let steps = plan(&db, &sql, params_from_iter(args));
     assert!(
         seeks(&steps, "requests_session", &["session_id=?"]) && !walks(&steps, &["requests"]),
+        "{steps:?}"
+    );
+}
+
+/// The default page walks `requests_received` and sorts only the id that breaks a tie on the arrival (`USE TEMP
+/// B-TREE FOR LAST TERM OF ORDER BY`), where a null term ahead of the arrival would scan the table and sort every row
+/// the filters admit before the limit. Neither `seeks` nor `walks` reads this plan: its step is a `SCAN` through the
+/// index.
+#[test]
+fn the_unfiltered_request_list_walks_the_arrival_index_under_the_default_order() {
+    let (_dir, db) = seeded();
+    let (sql, args) = list_requests_statement(
+        &RequestFilter::default(),
+        &LiveKeys::default(),
+        RequestOrder::ReceivedAt,
+        Direction::Desc,
+        None,
+        50,
+    );
+    let steps = plan(&db, &sql, params_from_iter(args));
+    assert!(
+        steps
+            .iter()
+            .any(|step| step.contains("INDEX requests_received"))
+            && !steps
+                .iter()
+                .any(|step| step == "USE TEMP B-TREE FOR ORDER BY"),
         "{steps:?}"
     );
 }
@@ -584,7 +625,7 @@ fn the_routing_log_by_session_keeps_its_plan_under_statistics() {
         ..RoutingLogFilter::default()
     };
     let statement = decision_statement(&filter).expect("no kind is named, so decisions are read");
-    let (sql, args) = decision_rows_statement(statement, None, 51);
+    let (sql, args) = decision_rows_statement(statement, Direction::Desc, None, 51);
     let steps = plan(&db, &sql, params_from_iter(args));
     assert!(
         (seeks(&steps, "decisions_at", &["at>?"])

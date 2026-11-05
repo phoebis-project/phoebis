@@ -16,10 +16,11 @@ use phoebis_bus::{
 use phoebis_ledger::{
     apply_filter, breakdown, list_requests, member_spends, parked_count, parked_summary,
     read_rollups, run_retention, Assembler, AttemptRecord, AttentionGauges, BodyRecord,
-    BudgetedMember, CacheMapWrite, DecisionRow, EventRecord, LedgerConfig, LedgerDb, LedgerError,
-    LiveKeys, LogKinds, ParkedSummary, PlanTables, PriceRevisions, Purged, Record, Replayed,
-    RequestCursor, RequestFilter, RequestRecord, RollupFilter, RollupRow, RollupSelect, Speed,
-    WriterRead, BATCH_RETRY_DELAYS, BATCH_RETRY_HOLD, LEDGER_BEHIND_DEPTH, UNATTRIBUTED,
+    BudgetedMember, CacheMapWrite, DecisionRow, Direction, EventRecord, LedgerConfig, LedgerDb,
+    LedgerError, LiveKeys, LogKinds, ParkedSummary, PlanTables, PriceRevisions, Purged, Record,
+    Replayed, RequestCursor, RequestFilter, RequestOrder, RequestRecord, RollupFilter, RollupRow,
+    RollupSelect, Speed, WriterRead, BATCH_RETRY_DELAYS, BATCH_RETRY_HOLD, LEDGER_BEHIND_DEPTH,
+    UNATTRIBUTED,
 };
 
 /// A rollup row's dollars, its counts priced through `price_row` at its own key on `prices`.
@@ -301,6 +302,8 @@ async fn the_row_carries_the_callers_user_agent_and_the_log_filters_on_it() {
                 c,
                 &filter,
                 &phoebis_ledger::LiveKeys::default(),
+                RequestOrder::ReceivedAt,
+                Direction::Desc,
                 None,
                 10,
             )
@@ -434,6 +437,8 @@ async fn the_row_carries_the_client_class_the_hints_and_the_turn_origin_and_the_
                 c,
                 &filter,
                 &phoebis_ledger::LiveKeys::default(),
+                RequestOrder::ReceivedAt,
+                Direction::Desc,
                 None,
                 10,
             )
@@ -462,6 +467,8 @@ async fn the_row_carries_the_client_class_the_hints_and_the_turn_origin_and_the_
                 c,
                 &filter,
                 &phoebis_ledger::LiveKeys::default(),
+                RequestOrder::ReceivedAt,
+                Direction::Desc,
                 None,
                 10,
             )
@@ -490,6 +497,8 @@ async fn the_row_carries_the_client_class_the_hints_and_the_turn_origin_and_the_
                 c,
                 &filter,
                 &phoebis_ledger::LiveKeys::default(),
+                RequestOrder::ReceivedAt,
+                Direction::Desc,
                 None,
                 10,
             )
@@ -620,6 +629,8 @@ async fn a_request_with_no_user_agent_is_found_by_the_wildcard_and_the_exact_das
                 c,
                 &filter,
                 &phoebis_ledger::LiveKeys::default(),
+                RequestOrder::ReceivedAt,
+                Direction::Desc,
                 None,
                 10,
             )
@@ -666,12 +677,22 @@ async fn text_matches_an_upstream_message_id_and_an_upstream_request_id() {
             text: Some(text.into()),
             ..Default::default()
         };
-        h.db.read_blocking(|c| list_requests(c, &filter, &LiveKeys::default(), None, 10))
-            .unwrap()
-            .0
-            .iter()
-            .map(|(row, _)| row.id.clone())
-            .collect::<Vec<_>>()
+        h.db.read_blocking(|c| {
+            list_requests(
+                c,
+                &filter,
+                &LiveKeys::default(),
+                RequestOrder::ReceivedAt,
+                Direction::Desc,
+                None,
+                10,
+            )
+        })
+        .unwrap()
+        .0
+        .iter()
+        .map(|(row, _)| row.id.clone())
+        .collect::<Vec<_>>()
     };
     assert_eq!(
         listed("msg_01abc"),
@@ -760,7 +781,17 @@ fn the_search_matches_its_text_literally() {
             ..Default::default()
         };
         let mut ids: Vec<String> = db
-            .read_blocking(|c| list_requests(c, &filter, &LiveKeys::default(), None, 10))
+            .read_blocking(|c| {
+                list_requests(
+                    c,
+                    &filter,
+                    &LiveKeys::default(),
+                    RequestOrder::ReceivedAt,
+                    Direction::Desc,
+                    None,
+                    10,
+                )
+            })
             .unwrap()
             .0
             .iter()
@@ -1693,8 +1724,15 @@ async fn listed(h: &Harness, id: &str) -> RequestRecord {
     wait_for_async(Duration::from_secs(5), || async {
         let id = id.to_string();
         h.db.read(move |c| {
-            let (rows, _) =
-                list_requests(c, &RequestFilter::default(), &LiveKeys::default(), None, 50)?;
+            let (rows, _) = list_requests(
+                c,
+                &RequestFilter::default(),
+                &LiveKeys::default(),
+                RequestOrder::ReceivedAt,
+                Direction::Desc,
+                None,
+                50,
+            )?;
             Ok(rows.into_iter().find(|(r, _)| r.id == id).map(|(r, _)| r))
         })
         .await
@@ -1712,7 +1750,15 @@ async fn listed_with_probes(h: &Harness, id: &str) -> RequestRecord {
                 include_probes: true,
                 ..Default::default()
             };
-            let (rows, _) = list_requests(c, &filter, &LiveKeys::default(), None, 50)?;
+            let (rows, _) = list_requests(
+                c,
+                &filter,
+                &LiveKeys::default(),
+                RequestOrder::ReceivedAt,
+                Direction::Desc,
+                None,
+                50,
+            )?;
             Ok(rows.into_iter().find(|(r, _)| r.id == id).map(|(r, _)| r))
         })
         .await
@@ -2315,7 +2361,15 @@ async fn the_held_filter_keeps_the_requests_that_waited_for_a_slot() {
                 held: true,
                 ..RequestFilter::default()
             };
-            let (rows, _) = list_requests(c, &filter, &LiveKeys::default(), None, 50)?;
+            let (rows, _) = list_requests(
+                c,
+                &filter,
+                &LiveKeys::default(),
+                RequestOrder::ReceivedAt,
+                Direction::Desc,
+                None,
+                50,
+            )?;
             Ok(rows.into_iter().map(|(r, _)| r.id).collect::<Vec<_>>())
         })
         .await
@@ -2363,6 +2417,7 @@ fn paging_ledger(matching: usize) -> phoebis_ledger::LedgerDb {
 
 fn sonnet_page(
     db: &phoebis_ledger::LedgerDb,
+    dir: Direction,
     cursor: Option<&str>,
     limit: usize,
 ) -> (Vec<String>, Option<String>) {
@@ -2370,9 +2425,20 @@ fn sonnet_page(
         models: vec!["claude-sonnet-5".into()],
         ..Default::default()
     };
-    let cursor = cursor.map(|c| RequestCursor::parse(c).expect("a page's own cursor"));
+    let cursor = cursor
+        .map(|c| RequestCursor::parse(c, RequestOrder::ReceivedAt).expect("a page's own cursor"));
     let (rows, next) = db
-        .read_blocking(|c| list_requests(c, &filter, &LiveKeys::default(), cursor.as_ref(), limit))
+        .read_blocking(|c| {
+            list_requests(
+                c,
+                &filter,
+                &LiveKeys::default(),
+                RequestOrder::ReceivedAt,
+                dir,
+                cursor.as_ref(),
+                limit,
+            )
+        })
         .unwrap();
     (rows.into_iter().map(|(r, _)| r.id).collect(), next)
 }
@@ -2380,7 +2446,7 @@ fn sonnet_page(
 #[test]
 fn a_page_of_exactly_limit_rows_answers_no_cursor() {
     let db = paging_ledger(5);
-    let (ids, next) = sonnet_page(&db, None, 5);
+    let (ids, next) = sonnet_page(&db, Direction::Desc, None, 5);
     assert_eq!(ids, ["r04", "r03", "r02", "r01", "r00"]);
     assert_eq!(
         next, None,
@@ -2391,20 +2457,99 @@ fn a_page_of_exactly_limit_rows_answers_no_cursor() {
 #[test]
 fn a_page_with_one_row_beyond_it_answers_a_cursor_whose_next_page_holds_that_row() {
     let db = paging_ledger(5);
-    let (ids, next) = sonnet_page(&db, None, 4);
+    let (ids, next) = sonnet_page(&db, Direction::Desc, None, 4);
     assert_eq!(ids, ["r04", "r03", "r02", "r01"]);
     assert_eq!(
         next.as_deref(),
         Some("1:r01"),
         "the cursor names the last row of the page, never the row beyond it"
     );
-    let (ids, next) = sonnet_page(&db, next.as_deref(), 4);
+    let (ids, next) = sonnet_page(&db, Direction::Desc, next.as_deref(), 4);
     assert_eq!(
         ids,
         ["r00"],
         "the next page holds the one row beyond the first"
     );
     assert_eq!(next, None);
+    let (ids, next) = sonnet_page(&db, Direction::Asc, None, 4);
+    assert_eq!(ids, ["r00", "r01", "r02", "r03"], "oldest first under asc");
+    assert_eq!(next.as_deref(), Some("3:r03"));
+    let (ids, next) = sonnet_page(&db, Direction::Asc, next.as_deref(), 4);
+    assert_eq!(
+        ids,
+        ["r04"],
+        "past the cursor under asc lies the newer row alone"
+    );
+    assert_eq!(next, None);
+}
+
+/// Five requests whose arrival order (40, 10, 30, 10, none) differs from their duration order, so a page that
+/// continues by the arrival rather than the key rereads or skips a row.
+#[test]
+fn pages_under_a_nullable_key_continue_at_the_keys_value_and_list_a_row_without_it_last() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let put = |id: &str, received_at: i64, duration_ms: Option<i64>| {
+        db.insert_request(
+            &RequestRecord {
+                id: id.into(),
+                received_at,
+                duration_ms,
+                ..Default::default()
+            },
+            &[],
+            None,
+        )
+        .unwrap();
+    };
+    put("r1", 1, Some(40));
+    put("r2", 2, Some(10));
+    put("r3", 3, Some(30));
+    put("r4", 4, Some(10));
+    put("r5", 5, None);
+    let page = |cursor: Option<&str>, limit: usize| {
+        let cursor = cursor.map(|c| {
+            RequestCursor::parse(c, RequestOrder::DurationMs).expect("a page's own cursor")
+        });
+        let (rows, next) = db
+            .read_blocking(|c| {
+                list_requests(
+                    c,
+                    &RequestFilter::default(),
+                    &LiveKeys::default(),
+                    RequestOrder::DurationMs,
+                    Direction::Asc,
+                    cursor.as_ref(),
+                    limit,
+                )
+            })
+            .unwrap();
+        (
+            rows.into_iter().map(|(r, _)| r.id).collect::<Vec<_>>(),
+            next,
+        )
+    };
+    let (first, next) = page(None, 2);
+    assert_eq!(first, ["r2", "r4"], "the two at 10, by id");
+    assert_eq!(next.as_deref(), Some("10:r4"));
+    let (second, next) = page(next.as_deref(), 2);
+    assert_eq!(second, ["r3", "r1"], "past the second 10 lie 30 and 40");
+    let (third, next) = page(next.as_deref(), 2);
+    assert_eq!(
+        (third, next),
+        (vec!["r5".to_string()], None),
+        "the row without a duration comes last under asc"
+    );
+    // A second row without a duration, so a page can end on the first and continue at its empty value.
+    put("r6", 6, None);
+    let (first, next) = page(None, 5);
+    assert_eq!(first, ["r2", "r4", "r3", "r1", "r5"]);
+    assert_eq!(next.as_deref(), Some(":r5"));
+    let (rest, next) = page(next.as_deref(), 5);
+    assert_eq!(
+        (rest, next),
+        (vec!["r6".to_string()], None),
+        "past a row without the figure lie the rows without it past its id alone"
+    );
 }
 
 /// A fast request the router refused before any attempt served lists under the speed it asked for, and one that
@@ -2435,7 +2580,17 @@ fn a_fast_request_refused_before_any_attempt_is_listed_under_the_fast_speed_filt
             ..Default::default()
         };
         let (rows, _) = db
-            .read_blocking(|c| list_requests(c, &filter, &LiveKeys::default(), None, 10))
+            .read_blocking(|c| {
+                list_requests(
+                    c,
+                    &filter,
+                    &LiveKeys::default(),
+                    RequestOrder::ReceivedAt,
+                    Direction::Desc,
+                    None,
+                    10,
+                )
+            })
             .unwrap();
         rows.into_iter().map(|(r, _)| r.id).collect::<Vec<_>>()
     };
@@ -2484,7 +2639,17 @@ fn a_fast_request_whose_answer_named_no_speed_is_listed_under_the_standard_speed
             ..Default::default()
         };
         let (rows, _) = db
-            .read_blocking(|c| list_requests(c, &filter, &LiveKeys::default(), None, 10))
+            .read_blocking(|c| {
+                list_requests(
+                    c,
+                    &filter,
+                    &LiveKeys::default(),
+                    RequestOrder::ReceivedAt,
+                    Direction::Desc,
+                    None,
+                    10,
+                )
+            })
             .unwrap();
         rows.into_iter().map(|(r, _)| r.id).collect::<Vec<_>>()
     };
@@ -2549,7 +2714,17 @@ fn plant_trail(db: &LedgerDb, id: &str, received_at: i64, trail: &[(&str, u16, O
 /// The ids `filter` lists, newest first.
 fn listed_ids(db: &LedgerDb, filter: &RequestFilter) -> Vec<String> {
     let (rows, _) = db
-        .read_blocking(|c| list_requests(c, filter, &LiveKeys::default(), None, 10))
+        .read_blocking(|c| {
+            list_requests(
+                c,
+                filter,
+                &LiveKeys::default(),
+                RequestOrder::ReceivedAt,
+                Direction::Desc,
+                None,
+                10,
+            )
+        })
         .unwrap();
     rows.into_iter().map(|(r, _)| r.id).collect()
 }
@@ -2842,8 +3017,13 @@ fn a_list_from_a_stamp_answers_the_rows_written_after_it_and_the_newest_stamp() 
                 c,
                 filter,
                 &LiveKeys::default(),
+                RequestOrder::ReceivedAt,
+                Direction::Desc,
                 cursor
-                    .map(|c| RequestCursor::parse(c).expect("a page's own cursor"))
+                    .map(|c| {
+                        RequestCursor::parse(c, RequestOrder::ReceivedAt)
+                            .expect("a page's own cursor")
+                    })
                     .as_ref(),
                 limit,
             )
@@ -2923,7 +3103,15 @@ fn a_row_received_after_the_pages_bound_keeps_the_watermark_below_its_stamp_for_
     let db = LedgerDb::open_in_memory().unwrap();
     let page = |filter: &RequestFilter| {
         db.read_blocking(|c| {
-            phoebis_ledger::list_request_page(c, filter, &LiveKeys::default(), None, 10)
+            phoebis_ledger::list_request_page(
+                c,
+                filter,
+                &LiveKeys::default(),
+                RequestOrder::ReceivedAt,
+                Direction::Desc,
+                None,
+                10,
+            )
         })
         .unwrap()
     };
@@ -2997,7 +3185,15 @@ async fn a_read_bounded_by_to_caps_its_watermark_there_so_a_later_poll_reads_a_r
     }
     let page = |filter: RequestFilter| {
         h.db.read(move |c| {
-            phoebis_ledger::list_request_page(c, &filter, &LiveKeys::default(), None, 10)
+            phoebis_ledger::list_request_page(
+                c,
+                &filter,
+                &LiveKeys::default(),
+                RequestOrder::ReceivedAt,
+                Direction::Desc,
+                None,
+                10,
+            )
         })
     };
     let ids = |page: &phoebis_ledger::RequestPage| -> Vec<String> {
@@ -3057,7 +3253,15 @@ async fn a_fixed_end_read_lets_its_watermark_pass_to_so_a_row_that_landed_after_
     );
     let page = |filter: RequestFilter| {
         h.db.read(move |c| {
-            phoebis_ledger::list_request_page(c, &filter, &LiveKeys::default(), None, 10)
+            phoebis_ledger::list_request_page(
+                c,
+                &filter,
+                &LiveKeys::default(),
+                RequestOrder::ReceivedAt,
+                Direction::Desc,
+                None,
+                10,
+            )
         })
     };
     let ids = |page: &phoebis_ledger::RequestPage| -> Vec<String> {
@@ -3294,7 +3498,15 @@ async fn two_request_rows_written_in_one_clock_millisecond_carry_increasing_stam
     ledgered(&h, "second").await;
     let page = |filter: RequestFilter| {
         h.db.read_blocking(|c| {
-            phoebis_ledger::list_request_page(c, &filter, &LiveKeys::default(), None, 10)
+            phoebis_ledger::list_request_page(
+                c,
+                &filter,
+                &LiveKeys::default(),
+                RequestOrder::ReceivedAt,
+                Direction::Desc,
+                None,
+                10,
+            )
         })
         .unwrap()
     };
@@ -3942,9 +4154,10 @@ async fn a_decision_lands_as_a_row_whose_frame_decodes_to_the_record() {
         ..log_filter()
     };
     let listed = wait_for(Duration::from_secs(5), || {
-        let page =
-            h.db.read_blocking(|c| phoebis_ledger::list_routing_log(c, &one, None, 25))
-                .unwrap();
+        let page = h
+            .db
+            .read_blocking(|c| phoebis_ledger::list_routing_log(c, &one, Direction::Desc, None, 25))
+            .unwrap();
         match page.rows.as_slice() {
             [phoebis_ledger::RoutingLogRow::Decision(row)] => Some(row.clone()),
             _ => None,
@@ -4050,9 +4263,11 @@ fn a_decision_whose_pool_is_empty_reads_back_with_no_pool() {
             pools,
             ..log_filter()
         };
-        db.read_blocking(|c| phoebis_ledger::list_routing_log(c, &filter, None, 25))
-            .unwrap()
-            .rows
+        db.read_blocking(|c| {
+            phoebis_ledger::list_routing_log(c, &filter, Direction::Desc, None, 25)
+        })
+        .unwrap()
+        .rows
     };
     let all = listed(Vec::new());
     let [phoebis_ledger::RoutingLogRow::Decision(row)] = all.as_slice() else {
@@ -7722,7 +7937,7 @@ fn log_filter() -> phoebis_ledger::RoutingLogFilter {
 /// Each row by its identity: `d:<request>/<seq>` for a decision, `e:<kind>@<at>` for an event.
 fn log_ids(db: &LedgerDb, filter: &phoebis_ledger::RoutingLogFilter) -> Vec<String> {
     let page = db
-        .read_blocking(|c| phoebis_ledger::list_routing_log(c, filter, None, 200))
+        .read_blocking(|c| phoebis_ledger::list_routing_log(c, filter, Direction::Desc, None, 200))
         .unwrap();
     page.rows.iter().map(log_id).collect()
 }
@@ -7784,11 +7999,11 @@ fn the_routing_log_answers_a_cursor_only_past_a_full_page() {
     db.insert_event(&logged_event(100, "cooldown_set")).unwrap();
     db.insert_event(&logged_event(100, "cooldown_cleared"))
         .unwrap();
-    let page = |cursor: Option<&phoebis_ledger::RoutingLogCursor>, limit: usize| {
-        db.read_blocking(|c| phoebis_ledger::list_routing_log(c, &log_filter(), cursor, limit))
+    let page = |dir: Direction, cursor: Option<&phoebis_ledger::RoutingLogCursor>, limit: usize| {
+        db.read_blocking(|c| phoebis_ledger::list_routing_log(c, &log_filter(), dir, cursor, limit))
             .unwrap()
     };
-    let whole = page(None, 5);
+    let whole = page(Direction::Desc, None, 5);
     assert_eq!(
         whole.rows.iter().map(log_id).collect::<Vec<_>>(),
         [
@@ -7804,10 +8019,11 @@ fn the_routing_log_answers_a_cursor_only_past_a_full_page() {
         whole.next_cursor, None,
         "a page of exactly `limit` rows has nothing past it"
     );
-    let first = page(None, 4);
+    let first = page(Direction::Desc, None, 4);
     assert_eq!(first.rows.len(), 4);
     let cursor = first.next_cursor.expect("a row lies past a page of four");
     let next = page(
+        Direction::Desc,
         Some(&phoebis_ledger::RoutingLogCursor::parse(&cursor).expect("the cursor parses back")),
         4,
     );
@@ -7817,21 +8033,36 @@ fn the_routing_log_answers_a_cursor_only_past_a_full_page() {
         "the next page holds the extra row"
     );
     assert_eq!(next.next_cursor, None);
-    // Page by page through one instant: the cursor's three keys neither skip nor repeat a row on a tie.
-    let mut walked = Vec::new();
-    let mut cursor: Option<phoebis_ledger::RoutingLogCursor> = None;
-    loop {
-        let one = page(cursor.as_ref(), 1);
-        walked.extend(one.rows.iter().map(log_id));
-        match one.next_cursor {
-            Some(next) => cursor = phoebis_ledger::RoutingLogCursor::parse(&next),
-            None => break,
+    // Page by page through one instant: the cursor's three keys neither skip nor repeat a row on a tie. The walk stops
+    // at twice the rows, so a cursor that rereads a row fails the comparison rather than looping.
+    let walk = |dir: Direction| {
+        let mut walked = Vec::new();
+        let mut cursor: Option<phoebis_ledger::RoutingLogCursor> = None;
+        for _ in 0..10 {
+            let one = page(dir, cursor.as_ref(), 1);
+            walked.extend(one.rows.iter().map(log_id));
+            match one.next_cursor {
+                Some(next) => cursor = phoebis_ledger::RoutingLogCursor::parse(&next),
+                None => break,
+            }
         }
-    }
+        walked
+    };
     assert_eq!(
-        walked,
+        walk(Direction::Desc),
         whole.rows.iter().map(log_id).collect::<Vec<_>>(),
         "one row a page walks the instant in the whole page's order"
+    );
+    assert_eq!(
+        walk(Direction::Asc),
+        [
+            "e:cooldown_set@100",
+            "e:cooldown_cleared@100",
+            "d:r1/1",
+            "d:r1/2",
+            "d:r2/1"
+        ],
+        "under asc the exact reverse: at one instant the events, oldest first, then the decisions"
     );
 }
 
@@ -7928,7 +8159,7 @@ fn a_guardrails_refusal_reads_back_through_the_routing_log_with_its_kind_and_cod
         ..log_filter()
     };
     let page = db
-        .read_blocking(|c| phoebis_ledger::list_routing_log(c, &refused, None, 25))
+        .read_blocking(|c| phoebis_ledger::list_routing_log(c, &refused, Direction::Desc, None, 25))
         .unwrap();
     let [phoebis_ledger::RoutingLogRow::Decision(row)] = page.rows.as_slice() else {
         panic!("{:?}", page.rows)
@@ -7965,8 +8196,10 @@ fn counts_answer_under_a_request_filter_alone() {
         .unwrap();
     }
     let read = |filter: &phoebis_ledger::RoutingLogFilter, limit: usize| {
-        db.read_blocking(|c| phoebis_ledger::list_routing_log(c, filter, None, limit))
-            .unwrap()
+        db.read_blocking(|c| {
+            phoebis_ledger::list_routing_log(c, filter, Direction::Desc, None, limit)
+        })
+        .unwrap()
     };
     assert_eq!(
         read(&log_filter(), 25).counts,
@@ -8157,7 +8390,9 @@ fn a_decision_s_completion_is_the_attempt_that_answered_after_a_retry_in_place()
         None,
     );
     let page = db
-        .read_blocking(|c| phoebis_ledger::list_routing_log(c, &log_filter(), None, 25))
+        .read_blocking(|c| {
+            phoebis_ledger::list_routing_log(c, &log_filter(), Direction::Desc, None, 25)
+        })
         .unwrap();
     let facts: Vec<CompletionFacts> = page
         .rows
@@ -8238,7 +8473,9 @@ fn a_decision_reads_only_its_own_account_s_answer_before_the_request_s_next_deci
         None,
     );
     let page = db
-        .read_blocking(|c| phoebis_ledger::list_routing_log(c, &log_filter(), None, 25))
+        .read_blocking(|c| {
+            phoebis_ledger::list_routing_log(c, &log_filter(), Direction::Desc, None, 25)
+        })
         .unwrap();
     let listed: Vec<AnsweredFacts> = page
         .rows

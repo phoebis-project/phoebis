@@ -1847,7 +1847,17 @@ fn a_model_filter_in_the_long_context_spelling_lists_its_canonical_models_reques
         ..Default::default()
     };
     let listed: Vec<String> = db
-        .read_blocking(|c| list_requests(c, &filter, &LiveKeys::default(), None, 10))
+        .read_blocking(|c| {
+            list_requests(
+                c,
+                &filter,
+                &LiveKeys::default(),
+                phoebis_ledger::RequestOrder::ReceivedAt,
+                phoebis_ledger::Direction::Desc,
+                None,
+                10,
+            )
+        })
         .unwrap()
         .0
         .into_iter()
@@ -1868,12 +1878,22 @@ fn the_speed_filter_reads_the_serving_attempts_speed() {
             speeds: speeds.iter().map(|s| s.to_string()).collect(),
             ..Default::default()
         };
-        db.read_blocking(|c| list_requests(c, &filter, &LiveKeys::default(), None, 10))
-            .unwrap()
-            .0
-            .into_iter()
-            .map(|(r, _)| r.id)
-            .collect::<Vec<_>>()
+        db.read_blocking(|c| {
+            list_requests(
+                c,
+                &filter,
+                &LiveKeys::default(),
+                phoebis_ledger::RequestOrder::ReceivedAt,
+                phoebis_ledger::Direction::Desc,
+                None,
+                10,
+            )
+        })
+        .unwrap()
+        .0
+        .into_iter()
+        .map(|(r, _)| r.id)
+        .collect::<Vec<_>>()
     };
     assert_eq!(
         listed(&["fast"]),

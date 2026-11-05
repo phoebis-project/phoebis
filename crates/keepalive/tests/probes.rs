@@ -257,6 +257,8 @@ async fn a_probe_preserves_routing_and_constraints() {
                         ..Default::default()
                     },
                     &phoebis_ledger::LiveKeys::default(),
+                    phoebis_ledger::RequestOrder::ReceivedAt,
+                    phoebis_ledger::Direction::Desc,
                     None,
                     10,
                 )
@@ -342,6 +344,8 @@ async fn a_probe_built_from_a_placeholder_request_carries_the_placeholder_and_th
                         ..Default::default()
                     },
                     &phoebis_ledger::LiveKeys::default(),
+                    phoebis_ledger::RequestOrder::ReceivedAt,
+                    phoebis_ledger::Direction::Desc,
                     None,
                     10,
                 )
@@ -1314,6 +1318,8 @@ async fn a_probe_the_relay_refuses_for_the_client_contract_pauses_as_an_unsuppor
                         ..Default::default()
                     },
                     &phoebis_ledger::LiveKeys::default(),
+                    phoebis_ledger::RequestOrder::ReceivedAt,
+                    phoebis_ledger::Direction::Desc,
                     None,
                     10,
                 )

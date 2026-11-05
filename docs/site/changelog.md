@@ -546,7 +546,9 @@ the requests held ([Conditions and gauges](statistics.md#conditions-and-gauges))
 bodies ends after the body in progress once a write is waiting, so a write waits for one body at most
 ([Retention](statistics.md#retention)). A response head's `7d_oi` window is filed as the Fable week, so a head and a
 poll of one bucket write one Fable row and the gauge holds one Fable series ([Quota
-samples](statistics.md#quota-samples)).
+samples](statistics.md#quota-samples)). The request log orders by its arrival, attempts, duration, time to first byte,
+tokens in or tokens out, either way, and the routing log by its time either way, each page continuing at its last row
+([API reference](api-reference.md)).
 
 Every price is computed when it is read, from the token counts the ledger stores, at the price revision in force when
 the request arrived. The price table and the subscription cost model are revision lists keyed by effective date, the
