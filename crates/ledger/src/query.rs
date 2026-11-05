@@ -5515,7 +5515,7 @@ mod tests {
     /// before the request id. The writer stamps each landing above the last, so the incremental read's boundary is
     /// what can slip: a request landed at the watermark was folded by the poll that set it.
     #[test]
-    fn the_session_spend_reads_keep_a_requests_attempts_one_run() {
+    fn the_session_spend_reads_keep_attempts_one_run_and_the_read_since_leaves_the_watermark_out() {
         let db = LedgerDb::open_in_memory().unwrap();
         let request = |id: &str| RequestRecord {
             id: id.into(),
