@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use bytes::Bytes;
 use fake_upstream::FakeUpstream;
 use phoebis_attention::{
-    Attention, AttentionHandles, AttentionParts, KeepaliveFacts, KeepaliveStanding, PairFacts,
-    TlsPairs,
+    Attention, AttentionHandles, AttentionParts, KeepaliveCap, KeepaliveFacts, KeepaliveStanding,
+    PairFacts, TlsPairs,
 };
 use phoebis_bus::{
     Bus, Event, Kind as RequestKind, Origin, Outcome, RequestComplete, RequestObserved,
@@ -123,12 +123,37 @@ impl TlsPairs for Pairs {
 }
 
 /// The engine's standing as a case sets it, read whole on every call as the engine's would be.
-#[derive(Default)]
 pub struct Standing(pub Mutex<KeepaliveStanding>);
 
+impl Standing {
+    pub fn idle() -> Standing {
+        Standing(Mutex::new(KeepaliveStanding {
+            bus_gaps: 0,
+            last_bus_gap_at: None,
+            caps: Vec::new(),
+            warming: false,
+        }))
+    }
+}
+
 impl KeepaliveFacts for Standing {
+    // Field by field, as the engine builds a fresh standing on each read and the type derives no `Clone`.
     fn standing(&self) -> KeepaliveStanding {
-        self.0.lock().unwrap().clone()
+        let set = self.0.lock().unwrap();
+        KeepaliveStanding {
+            bus_gaps: set.bus_gaps,
+            last_bus_gap_at: set.last_bus_gap_at,
+            caps: set
+                .caps
+                .iter()
+                .map(|cap| KeepaliveCap {
+                    name: cap.name,
+                    count: cap.count,
+                    max: cap.max,
+                })
+                .collect(),
+            warming: set.warming,
+        }
     }
 }
 

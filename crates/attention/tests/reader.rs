@@ -2386,7 +2386,7 @@ async fn a_revision_that_weights_the_model_clears_its_item_at_the_next_landing_a
 #[tokio::test]
 async fn a_keepalive_cap_holds_its_item_from_ninety_percent_of_its_max() {
     let rig = rig().await;
-    let standing = Arc::new(Standing::default());
+    let standing = Arc::new(Standing::idle());
     let (attention, _arm) = rig.attention_with_keepalive(standing.clone());
     let fill = |count| {
         standing.0.lock().unwrap().caps = vec![KeepaliveCap {
@@ -2437,7 +2437,7 @@ async fn a_keepalive_cap_holds_its_item_from_ninety_percent_of_its_max() {
 #[tokio::test]
 async fn a_bus_gap_holds_its_item_for_a_day_and_clears_after() {
     let rig = rig().await;
-    let standing = Arc::new(Standing::default());
+    let standing = Arc::new(Standing::idle());
     let (attention, _arm) = rig.attention_with_keepalive(standing.clone());
     let gap_at = |at| {
         let mut standing = standing.0.lock().unwrap();
@@ -2510,7 +2510,7 @@ fn expired_turn(id: &str) -> Record {
 #[tokio::test]
 async fn expiries_between_turns_hold_their_item_only_while_a_pool_warms_caches() {
     let rig = rig().await;
-    let standing = Arc::new(Standing::default());
+    let standing = Arc::new(Standing::idle());
     standing.0.lock().unwrap().warming = true;
     let (attention, _arm) = rig.attention_with_keepalive(standing.clone());
     rig.ledger.record_request(expired_turn("r1")).await;

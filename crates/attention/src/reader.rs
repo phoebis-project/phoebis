@@ -146,8 +146,8 @@ impl SubjectKind {
 }
 
 /// What a condition is about: the account's or the pool's id and label, the client version as both, the router's own
-/// component as both, except the keepalive engine's subjects, which share the label `Keepalive`, or a model's undated
-/// id as both.
+/// component as both, or a model's undated id as both. The keepalive engine's subjects are the exception among the
+/// router's components: they share the label `Keepalive`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Subject {
     pub kind: SubjectKind,

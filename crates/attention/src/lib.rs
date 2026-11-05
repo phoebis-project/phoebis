@@ -51,7 +51,7 @@ pub trait TlsPairs: Send + Sync {
 /// What the keepalive engine stands at when a read runs: the gap counter and the last gap's instant, the three caps
 /// and whether a pool's policy warms caches. Behind a trait, so this crate names no keepalive type, as `TlsPairs`
 /// keeps the listeners out of it.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct KeepaliveStanding {
     pub bus_gaps: u64,
     pub last_bus_gap_at: Option<i64>,
@@ -61,7 +61,7 @@ pub struct KeepaliveStanding {
     pub warming: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct KeepaliveCap {
     pub name: &'static str,
     pub count: usize,
