@@ -11382,9 +11382,9 @@ async function burnShot(theme) {
  * The Sessions table's default columns, the Cost column among them, fit its card at the pass's 1280 by 800 and at 1440
  * by 900: the table needs no more than its wrap's width, so nothing scrolls sideways and the status and the cache state
  * stay in view. A slowed session's speed chip stands inside its Account cell, which the mock pass requires on studio's
- * sessions, read at 1280. At 375 by 800 the set is wider than the phone's
- * card: it scrolls inside its wrap with Session, the fill, at its floor within 1 px, and the document stays as wide as
- * the window. The viewport returns to the pass's 1280 by 800 after.
+ * sessions, read at 1280. At 375 by 800 the set is wider than the phone's card: it scrolls inside its wrap with
+ * Session, the fill, at its floor within 1 px, and the document stays as wide as the window. The viewport returns to
+ * the pass's 1280 by 800 after.
  */
 async function sessionsTableFits(theme) {
   const measure = () =>
@@ -11995,7 +11995,8 @@ async function sessionsRowBadges(theme) {
   }
   for (const what of compare(read.badges.status, read.badges.cache, ['fontFamily', 'fontSize', 'height', 'lineHeight', 'paddingLeft', 'paddingTop'], 'the Status badge against the Cache badge')) say(what);
   for (const [head, sub] of Object.entries(read.subs).filter(([head]) => head !== 'Status')) {
-    if (sub === null && !mock) continue;
+    // A router row draws no presence line before its mod first reports, so outside the mock either side may be absent.
+    if ((sub === null || read.subs.Status === null) && !mock) continue;
     for (const what of compare(sub, read.subs.Status, ['fontFamily', 'fontSize', 'lineHeight'], `the ${head} cell's sub line against the Status cell's`)) say(what);
   }
 }

@@ -23808,12 +23808,14 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     });
   }
   {
-    // Cost under the Dollar equivalent position: the written session's six requests (`req_37e37256-959`,
-    // `req_8dd195e0-e77`, `req_3bff0475-0f4`, `req_77634945-72b`, `req_49399591-4bb` and `req_11cde11f-053` in the
-    // seed) cost $0.0438, $0.0551, $0.4812, $0, $0.1846 and $0.3881, $1.15 together, over "equivalent" since two of
-    // them priced no share, then the neutral +$ for the $0.4812 the API-key request billed on overflow and the neutral
-    // +1 for secondary, whose plan windows the requests spent on beside the row's primary. Under Native the cell draws
-    // its figure, no placeholder. The laptop row the ledger never saw reads a muted dash with the sentence, and the sub
+    // Cost under the Dollar equivalent position: the written session's six client requests on desktop, the rows the
+    // request seed draws onto its session (`SESSION_IDS[9]` in mock/requests.ts, its probe left out), cost $1.15
+    // together: main's on primary on claude-fable-5-1 ($0.3881), main's on overflow's API key on claude-fable-5-1
+    // ($0.4812), main's ($0.0551) and e7c1's two ($0.0438 and $0.1846) on secondary on claude-sonnet-4-5, and b2d8's
+    // 429 on claude-sonnet-4-5 that no account served ($0). The figure reads over "equivalent" since the secondary rows
+    // priced no share, then the neutral +$ for the $0.4812 overflow's row billed and the neutral +1 for secondary,
+    // whose plan windows the three secondary rows spent on beside the row's primary. Under Native the cell draws its
+    // figure, no placeholder. The laptop row the ledger never saw reads a muted dash with the sentence, and the sub
     // line reads the pin's burn per hour: the fleet session's usage-based seat at $0.36 an hour (`FLEET_BURN`), and
     // studio's slowed session its 5-hour window share on hover (`SLOWED_PINS`' 0.0125).
     const costOf = (s) => {
@@ -23877,9 +23879,14 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
   {
     // The summary line under the card's title, over the rows the filters keep: the 35 agents the Agents cells count,
     // 10 busy, 7 idle and 4 parked among them, the 86 client requests of the last 24 hours the rows' `day` folds and
-    // their spend, the figure in the chosen week, then the $1.40 the day billed in dollars (the story's first session's
-    // $0.7747 and the written session's $0.4812 on API keys, the fleet session's $0.1065 usage-based, nightly's $0.0055
-    // overage and story 5's $0.0357). The card's title carries its sentence on hover.
+    // their spend, the figure in the chosen week, then the $1.40 the day billed in dollars, $1.4036 over these rows of
+    // the request seed (mock/requests.ts): e4b7's row the seed draws onto the story's first session (`SESSION_IDS[0]`)
+    // on desktop, on overflow's API key on claude-fable-5-1 ($0.7747), the written session's row on overflow's API key
+    // that the Cost case names ($0.4812), the fleet session's three written rows on the fleet key, on contract's
+    // usage-based seat on claude-opus-5-5 and claude-sonnet-5-5 ($0.0554, $0.0174 and $0.0337), 0b7f's written row on
+    // story 4's desktop session in nightly's overage on claude-sonnet-5 ($0.0055) and the failover on story 5's desktop
+    // session that ends on overflow's API key on claude-sonnet-4-6 (`REJECTION_STORY_ID`, $0.0357). The card's title
+    // carries its sentence on hover.
     const card = page.container.querySelector('.card--table');
     const subtitle = card?.querySelector('.card__subtitle')?.textContent ?? '';
     const parts = /^(.*) · (.*) requests and (.*) \+ (\$[\d.]+) in 24 h$/.exec(subtitle);
@@ -25041,6 +25048,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
       api.listSessions = seedSessions(listSessions);
       await m.navigate('/settings');
       await m.navigate('/sessions?finished=1');
+      await until(m, () => rows().length > 0);
       await showColumn(m, 'Key');
       const released = rows().filter((r) => cell(r, 'Session')?.getAttribute('title') === id);
       const keys = released.map((r) => ({ key: cell(r, 'Key')?.textContent?.trim() ?? '', sub: cell(r, 'Key')?.querySelector('.sub')?.textContent?.trim() ?? null }));
