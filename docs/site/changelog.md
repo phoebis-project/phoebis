@@ -496,21 +496,21 @@ the router's clock, so a long request that finishes below rows already shown lan
 next read ([Statistics](statistics.md#the-ledger), [Requests](console.md#requests)). A request log read over a fixed
 range passes `fixed_end`, so its `landed_through` may pass the range's end and a row that landed after it is read once
 ([The ledger](statistics.md#the-ledger)). A reconciled window splits at a fall and sums its parts, a slid window writes
-no row, the drift holds only where the rise and the priced share both reach 5%, and a window's two ends are readings of
-one source ([Statistics](statistics.md#conditions-and-gauges)). The drift condition reads the windows that ended inside
-the last eight days, so an account that serves nothing leaves it within eight days of its newest window's end
-([Statistics](statistics.md#conditions-and-gauges)). The hourly purge frees captured bodies in slices of about 32 MiB, a
-larger body going alone in a slice of its own, so the ledger's writer waits behind one slice at most, well inside its
-timeout ([Statistics](statistics.md#retention)). The usage poll reads a usage-based Enterprise seat's answer:
-extra-usage amounts with a fraction part round to the minor unit, the body's `spend` object is read beside them, and a
-failed parse carries the parser's reason ([Quota samples](statistics.md#quota-samples)). A usage-based seat's requests
-file under the funding `usage_based`, priced in dollars at the API rates and kept by the `billed` filter ([The
-ledger](statistics.md#the-ledger), [Plan meter](statistics.md#plan-meter)). A usage-based seat's account view carries
-its spend window with the poll's amounts, the newest share and a reset estimated at 00:00 UTC on the first of the next
-month until a header names one ([Quota samples](statistics.md#quota-samples)). The account view answers the 7-day Fable
-under the one id `seven_day_fable` ([Quota samples](statistics.md#quota-samples)). The quota history of an `oauth`
-account answers a head's sample and a poll's at one instant where both landed in one bucket ([Quota
-samples](statistics.md#quota-samples)). A request the router's own shutdown ends past the drain window is booked
+no row, the drift holds only where the rise and the priced share both reach 5%, and a window's two ends are its first
+and last readings whatever their source ([Statistics](statistics.md#conditions-and-gauges)). The drift condition reads
+the windows that ended inside the last eight days, so an account that serves nothing leaves it within eight days of its
+newest window's end ([Statistics](statistics.md#conditions-and-gauges)). The hourly purge frees captured bodies in
+slices of about 32 MiB, a larger body going alone in a slice of its own, so the ledger's writer waits behind one slice
+at most, well inside its timeout ([Statistics](statistics.md#retention)). The usage poll reads a usage-based Enterprise
+seat's answer: extra-usage amounts with a fraction part round to the minor unit, the body's `spend` object is read
+beside them, and a failed parse carries the parser's reason ([Quota samples](statistics.md#quota-samples)). A
+usage-based seat's requests file under the funding `usage_based`, priced in dollars at the API rates and kept by the
+`billed` filter ([The ledger](statistics.md#the-ledger), [Plan meter](statistics.md#plan-meter)). A usage-based seat's
+account view carries its spend window with the poll's amounts, the newest share and a reset estimated at 00:00 UTC on
+the first of the next month until a header names one ([Quota samples](statistics.md#quota-samples)). The account view
+answers the 7-day Fable under the one id `seven_day_fable` ([Quota samples](statistics.md#quota-samples)). The quota
+history of an `oauth` account answers a head's sample and a poll's at one instant where both landed in one bucket
+([Quota samples](statistics.md#quota-samples)). A request the router's own shutdown ends past the drain window is booked
 `canceled` under the code `router_shutdown`, apart from a caller that left on its own under `client_gone` ([The
 ledger](statistics.md#the-ledger)). The request log filters on the serving attempt's stop reason and refusal category,
 and the analytics answer the refused requests in range per category ([Refused

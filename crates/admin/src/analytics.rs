@@ -1017,10 +1017,10 @@ pub(crate) struct Reconciliation {
     pub window_end: i64,
     pub first_reading_at: i64,
     pub last_reading_at: i64,
-    /// The rise between each contributing part's two ends, readings of one source, each part's rise floored at zero,
-    /// summed over the parts a fall split the window into, as a fraction of the window. A part contributes where it
-    /// holds a priced attempt, and `first_reading_at` and `last_reading_at` are the first and last ends of the parts
-    /// that contributed.
+    /// The rise between each contributing part's two ends, its first and last readings whatever their source, each
+    /// part's rise floored at zero, summed over the parts a fall split the window into, as a fraction of the window. A
+    /// part contributes where it holds a priced attempt, and `first_reading_at` and `last_reading_at` are the first and
+    /// last ends of the parts that contributed.
     pub observed_rise: f64,
     /// The share of the window the router priced its attempts at.
     pub predicted_share: f64,

@@ -112,28 +112,14 @@ struct Part {
     readings: Vec<Reading>,
 }
 
-/// The source a stretch of readings is read under: the polls where two or more stand, else the heads.
-fn chosen_source<'a>(readings: impl IntoIterator<Item = &'a Reading>) -> SampleSource {
-    let polls = readings
-        .into_iter()
-        .filter(|r| r.source == SampleSource::Poll)
-        .count();
-    if polls >= 2 {
-        SampleSource::Poll
-    } else {
-        SampleSource::Head
-    }
-}
-
 impl Part {
-    /// The part's two ends under one source: its first and last polls where it holds two or more, else its first
-    /// and last heads, `None` for a part with fewer than two readings of the chosen source.
+    /// The part's first and last readings, `None` for a part of fewer than two. Either source bounds the part, since a
+    /// mixed pair errs within one reading step as a same-source pair does.
     fn ends(&self) -> Option<(Reading, Reading)> {
-        let source = chosen_source(&self.readings);
-        let mut chosen = self.readings.iter().filter(|r| r.source == source);
-        let first = *chosen.next()?;
-        let last = *chosen.next_back()?;
-        Some((first, last))
+        match self.readings.as_slice() {
+            [first, .., last] => Some((*first, *last)),
+            _ => None,
+        }
     }
 }
 
@@ -235,17 +221,10 @@ fn drop_faulty_dips(
         .enumerate()
         .flat_map(|(label, part)| part.readings.iter().map(move |r| (label, *r)))
         .collect();
-    let source = chosen_source(readings.iter().map(|(_, r)| r));
-    let chosen: Vec<usize> = readings
-        .iter()
-        .enumerate()
-        .filter(|(_, (_, r))| r.source == source)
-        .map(|(i, _)| i)
-        .collect();
     let mut dropped = vec![false; readings.len()];
     let mut open: Vec<Dip> = Vec::new();
-    for pair in chosen.windows(2) {
-        let (before, at) = (pair[0], pair[1]);
+    for at in 1..readings.len() {
+        let before = at - 1;
         let close = readings[at].1;
         // A dip opens below every open dip's level, so the levels fall from the outermost to the innermost and the
         // dips a reading closes are the innermost ones, judged from the outermost of them.
@@ -275,8 +254,8 @@ fn drop_faulty_dips(
             if climb <= rounded(share * RATIO_HIGH) {
                 continue;
             }
-            for &i in chosen.iter().filter(|&&i| (dip.first..at).contains(&i)) {
-                dropped[i] = true;
+            for gone in &mut dropped[dip.first..at] {
+                *gone = true;
             }
             let (level_part, close_part) = (readings[dip.level].0, readings[at].0);
             for (label, _) in readings.iter_mut() {
@@ -405,10 +384,10 @@ struct RunSum {
     requests: u32,
 }
 
-/// Each part's rise between its two ends of one source against the attempts priced between them, a part without two
-/// such ends or without a priced attempt adding nothing, the rise rounded once over the sum. `None` where no part
-/// adds, or where a part holds a plan-funded attempt carrying tokens that the tables price to no share on the window,
-/// whose draw the rise holds and the sum would miss.
+/// Each part's rise between its first and last readings against the attempts priced between them, a part under two
+/// readings or without a priced attempt adding nothing, the rise rounded once over the sum. `None` where no part adds,
+/// or where a part holds a plan-funded attempt carrying tokens that the tables price to no share on the window, whose
+/// draw the rise holds and the sum would miss.
 fn run_sum(
     tx: &Transaction<'_>,
     prices: &PriceRevisions,

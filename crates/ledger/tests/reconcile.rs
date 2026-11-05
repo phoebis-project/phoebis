@@ -701,6 +701,40 @@ fn a_dip_whose_climb_stays_under_the_least_rise_keeps_its_split() {
     assert!(close(row.predicted_share, 0.60), "{}", row.predicted_share);
 }
 
+#[test]
+fn a_failed_polls_zero_among_heads_is_a_dip_the_walk_judges_whatever_its_source() {
+    let reset = SATURDAY + 2 * HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    seed_request(&db, "seed", SATURDAY - MINUTE);
+    // A failed poll reads zero between heads at 0.30 and 0.32, and the two Sonnet units completed between the zero and
+    // the next head predict far less than the climb back.
+    db.insert_samples(
+        &[
+            head_reading(FIVE_HOUR, SATURDAY, 0.10, reset),
+            head_reading(FIVE_HOUR, SATURDAY + 10 * MINUTE, 0.30, reset),
+            reading(FIVE_HOUR, SATURDAY + 20 * MINUTE, 0.0, reset),
+            head_reading(FIVE_HOUR, SATURDAY + 30 * MINUTE, 0.32, reset),
+            head_reading(FIVE_HOUR, SATURDAY + 40 * MINUTE, 0.40, reset),
+        ],
+        None,
+    )
+    .unwrap();
+    served(&db, "r1", SONNET, SATURDAY + 5 * MINUTE, 20, None);
+    served(&db, "r2", SONNET, SATURDAY + 25 * MINUTE, 2, None);
+    served(&db, "r3", SONNET, SATURDAY + 35 * MINUTE, 8, None);
+    let row = the_row(&db, reset);
+    assert_eq!(
+        (row.first_reading_at, row.last_reading_at, row.requests),
+        (SATURDAY, SATURDAY + 40 * MINUTE, 3),
+        "{row:?}"
+    );
+    assert!(
+        close(row.observed_rise, 0.30),
+        "0.10 to 0.40 with the zero gone, its climb back counted no second time: {}",
+        row.observed_rise
+    );
+}
+
 /// A run its own reset closed reads as one that slid only where its key lies past the closing reading's instant by
 /// more than the reset tolerance: the key rounds a fractional reset up by up to half a second, and a router clock that
 /// lags moves the closing instant earlier, while a live slide moves the reset by whole 10-minute steps.
@@ -804,7 +838,40 @@ fn a_drift_holds_only_where_the_rise_and_the_priced_share_both_reach_the_least_r
 }
 
 #[test]
-fn a_run_opening_on_a_head_and_closing_on_a_poll_reads_its_polls_alone() {
+fn a_quiet_stretch_of_polls_and_a_busy_stretch_of_heads_reconcile_from_the_first_poll_to_the_last_head(
+) {
+    let reset = SATURDAY + HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    seed_request(&db, "seed", SATURDAY - MINUTE);
+    db.insert_samples(
+        &[
+            reading(FIVE_HOUR, SATURDAY, 0.10, reset),
+            reading(FIVE_HOUR, SATURDAY + 10 * MINUTE, 0.12, reset),
+            head_reading(FIVE_HOUR, SATURDAY + 20 * MINUTE, 0.30, reset),
+            head_reading(FIVE_HOUR, SATURDAY + 30 * MINUTE, 0.45, reset),
+        ],
+        None,
+    )
+    .unwrap();
+    // 0.02 of the window between the two polls, then 0.18 and 0.15 in the busy stretch the heads alone read.
+    served(&db, "quiet", SONNET, SATURDAY + 5 * MINUTE, 2, None);
+    served(&db, "busy-1", SONNET, SATURDAY + 15 * MINUTE, 18, None);
+    served(&db, "busy-2", SONNET, SATURDAY + 25 * MINUTE, 15, None);
+    let row = the_row(&db, reset);
+    assert_eq!(
+        (row.first_reading_at, row.last_reading_at, row.requests),
+        (SATURDAY, SATURDAY + 30 * MINUTE, 3),
+        "the first poll's and the last head's instants with every attempt between them: {row:?}"
+    );
+    assert!(
+        close(row.observed_rise, 0.35),
+        "0.10 to 0.45, the busy stretch's climb inside the rise: {}",
+        row.observed_rise
+    );
+}
+
+#[test]
+fn a_run_opening_on_a_head_and_closing_on_a_poll_reads_from_its_first_head_to_its_last_poll() {
     let reset = SATURDAY + HOUR;
     let db = LedgerDb::open_in_memory().unwrap();
     seed_request(&db, "seed", SATURDAY - MINUTE);
@@ -817,7 +884,7 @@ fn a_run_opening_on_a_head_and_closing_on_a_poll_reads_its_polls_alone() {
         None,
     )
     .unwrap();
-    // 0.10 of the window before the first poll, outside the polls' rise, and 0.20 between the polls.
+    // 0.10 of the window before the first poll and 0.20 between the polls, both inside the rise from the head.
     served(&db, "before", SONNET, SATURDAY + 5 * MINUTE, 10, None);
     served(&db, "between", SONNET, SATURDAY + 15 * MINUTE, 20, None);
     let now = reset + HOUR;
@@ -827,16 +894,16 @@ fn a_run_opening_on_a_head_and_closing_on_a_poll_reads_its_polls_alone() {
         rows.iter()
             .map(|r| (r.first_reading_at, r.last_reading_at, r.requests))
             .collect::<Vec<_>>(),
-        [(SATURDAY + 10 * MINUTE, SATURDAY + 20 * MINUTE, 1)],
-        "the polls' instants and the attempt between them: {rows:?}"
+        [(SATURDAY, SATURDAY + 20 * MINUTE, 2)],
+        "the head's and the last poll's instants and both attempts: {rows:?}"
     );
     assert!(
-        close(rows[0].observed_rise, 0.20),
-        "the polls' rise: {}",
+        close(rows[0].observed_rise, 0.30),
+        "the head to the last poll: {}",
         rows[0].observed_rise
     );
     assert!(
-        close(rows[0].predicted_share, 0.20),
+        close(rows[0].predicted_share, 0.30),
         "{}",
         rows[0].predicted_share
     );
@@ -875,7 +942,7 @@ fn a_run_of_heads_alone_reconciles_as_a_run_of_polls_does() {
 }
 
 #[test]
-fn a_run_with_one_poll_among_its_heads_reconciles_between_its_first_and_last_heads() {
+fn a_run_with_one_poll_among_its_heads_reconciles_between_its_first_head_and_the_poll() {
     let reset = SATURDAY + HOUR;
     let db = LedgerDb::open_in_memory().unwrap();
     seed_request(&db, "seed", SATURDAY - MINUTE);
@@ -888,7 +955,7 @@ fn a_run_with_one_poll_among_its_heads_reconciles_between_its_first_and_last_hea
         None,
     )
     .unwrap();
-    // 0.20 of the window between the heads, and 0.10 after the last head.
+    // 0.20 of the window between the heads and 0.10 between the last head and the poll.
     served(&db, "between", SONNET, SATURDAY + 5 * MINUTE, 20, None);
     served(&db, "after", SONNET, SATURDAY + 15 * MINUTE, 10, None);
     let now = reset + HOUR;
@@ -898,18 +965,18 @@ fn a_run_with_one_poll_among_its_heads_reconciles_between_its_first_and_last_hea
         rows.iter()
             .map(|r| (r.first_reading_at, r.last_reading_at, r.requests))
             .collect::<Vec<_>>(),
-        [(SATURDAY, SATURDAY + 10 * MINUTE, 1)],
-        "the heads' instants and the attempt between them: {rows:?}"
+        [(SATURDAY, SATURDAY + 20 * MINUTE, 2)],
+        "the first head's and the poll's instants and both attempts: {rows:?}"
     );
     assert!(
-        close(rows[0].observed_rise, 0.20),
-        "the heads' rise: {}",
+        close(rows[0].observed_rise, 0.30),
+        "the first head to the poll: {}",
         rows[0].observed_rise
     );
 }
 
 #[test]
-fn a_run_of_one_head_and_one_poll_writes_no_row() {
+fn a_run_of_one_head_and_one_poll_reconciles_between_the_two() {
     let reset = SATURDAY + HOUR;
     let db = LedgerDb::open_in_memory().unwrap();
     seed_request(&db, "seed", SATURDAY - MINUTE);
@@ -924,10 +991,18 @@ fn a_run_of_one_head_and_one_poll_writes_no_row() {
     served(&db, "r1", SONNET, SATURDAY + 5 * MINUTE, 20, None);
     let now = reset + HOUR;
     fold(&db, now);
+    let rows = rows(&db, now);
     assert_eq!(
-        rows(&db, now),
-        [],
-        "neither source read the window twice, so no two ends share a quantization"
+        rows.iter()
+            .map(|r| (r.first_reading_at, r.last_reading_at, r.requests))
+            .collect::<Vec<_>>(),
+        [(SATURDAY, SATURDAY + 20 * MINUTE, 1)],
+        "a head and a poll bound the run as two readings of one source do: {rows:?}"
+    );
+    assert!(
+        close(rows[0].observed_rise, 0.20),
+        "the head to the poll: {}",
+        rows[0].observed_rise
     );
 }
 
@@ -964,8 +1039,8 @@ fn a_head_one_percent_under_the_poll_before_it_joins_the_run_and_two_percent_und
     );
     assert_eq!(
         fold_with(0.48),
-        [(SATURDAY + 10 * MINUTE, 1, 0.4)],
-        "two percent under is a fall, and the part the head opens holds one head and one poll, so it adds nothing"
+        [(SATURDAY + 30 * MINUTE, 2, 0.52)],
+        "two percent under is a fall, and the part the head opens holds a head and a poll, so it adds its rise"
     );
 }
 
