@@ -300,10 +300,10 @@ const burnUnitOf = (accountId: string): BurnUnit | null => {
 };
 /**
  * The served burn of a line beside its row's display pin, set from the row's figures rather than drawn, so the rows
- * after it keep their rolls: the display pin's burn scaled by the line's last prompt over the display pin's, decayed to
- * the line's last use, none where the display pin burns none or where a window share has no weight for the line's
- * model to price it at. A pin whose last use is its session's first sighting was never renewed with usage, so it burns
- * 0 and names no instant. The display pin's own line reads the row's figures instead.
+ * after it keep their rolls: the display pin's burn scaled by the line's last prompt over the display pin's, with
+ * `burnAt` the line's last use, none where the display pin burns none or where a window share has no weight for the
+ * line's model to price it at. A pin whose last use is its session's first sighting was never renewed with usage, so it
+ * burns 0 and names no instant. The display pin's own line reads the row's figures instead.
  */
 const servedBeside = (
   display: Pick<Session, 'burn' | 'lastInputTokens'>,
@@ -551,8 +551,8 @@ const ENDED_WITH_THE_SESSION: Partial<KeepaliveRecipe> = { cause: 'session_ended
 
 /**
  * A drawn story's pinned subagent at place `j` past main: the story's own, the one its request rows name. A uuid is
- * drawn and left unused, so the rolls after it stay, and a table short of the story's agents fails the mock build
- * rather than reading a default.
+ * drawn and left unused, so the rolls after it stay, and a table short of the story's agents fails the mock as it
+ * loads rather than reading a default.
  */
 function storySubagent(i: number, j: number): string {
   rng.uuid();
