@@ -269,3 +269,25 @@ test("a key move sends the stored key's settings with the new pool, the name tri
     poolId: target.id,
   });
 });
+
+test('a pool dialog reopened after a 30-day pick reads its return rate once, over 7 days', async () => {
+  const pool = pools[0];
+  const ranges = [];
+  api.getKeepaliveOverview = async ({ range }) => {
+    ranges.push(range);
+    return overviews[range];
+  };
+  const { container, draw } = mount();
+  await draw(poolDialog({ accounts: accountsRead(accounts), pool }));
+  const select = container.querySelector('dialog[open] select[aria-label="Return rate range"]');
+  act(() => {
+    Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(select, '30d');
+    select.dispatchEvent(new window.Event('change', { bubbles: true }));
+  });
+  await settled();
+  assert.deepEqual(ranges, ['7d', '30d'], 'the opening reads 7 days and the pick 30 days');
+  await draw(poolDialog({ accounts: accountsRead(accounts), open: false, pool: null }));
+  ranges.length = 0;
+  await draw(poolDialog({ accounts: accountsRead(accounts), pool }));
+  assert.deepEqual(ranges, ['7d'], 'the reopening reads once, over 7 days');
+});

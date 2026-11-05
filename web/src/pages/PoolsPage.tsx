@@ -1140,8 +1140,10 @@ export function PoolDialog({
   const [chosen, setChosen] = useState<PoolGroup>('identity');
   // Once per opening of a saved pool, since a create takes no attachment and offers nothing to attach.
   const guardrailRegistry = useAsync(() => (open && pool ? api.listGuardrails() : Promise.resolve(null)), [open, pool?.id]);
-  // The return rate's range, which each opening resets to 7 days.
+  // The return rate's range, which each opening starts on 7 days. The close puts it back, in the render that closes,
+  // so an opening's first overview read is the 7-day one.
   const [returnRange, setReturnRange] = useState<OverviewRange>('7d');
+  if (!open && returnRange !== '7d') setReturnRange('7d');
   // Each opening of a saved pool reads the sessions and the keepalive overview once, the overview again on a range
   // pick, and both again after a key write, never at the interval.
   const sessionsRead = useAsync(() => (open && pool ? api.listSessions() : Promise.resolve(null)), [open, pool?.id]);
@@ -1206,7 +1208,6 @@ export function PoolDialog({
     setAttempted(false);
     setStale(null);
     setChosen(initialGroup ?? 'identity');
-    setReturnRange('7d');
   }, [open, pool, initialGroup, accountsNow]);
   // The server's refusal describes the form it was sent. Every control writes through `setForm`, so the next edit
   // takes it away, while a failed save changes no field and leaves it standing.
