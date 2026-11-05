@@ -439,12 +439,13 @@ version, `phoebis_keepalive_probes_total` by pool and outcome (`landed`, `cold`,
 
 ## In the console
 
-The Sessions view reads each session's standing, the mod's word for it and the main conversation's recipe summary, and a
-row's expanded detail reads each agent's state and cause with the sentence of each on hover (see
-[Sessions](console.md#sessions)). A pool card that keeps caches warm reads the pool's three resolved ceilings after its
-`keepalive` chip, and the pool dialog's Keepalive group reads, under each field, the break-even a ceiling left off
-resolves to and the figure in effect under one switched on past it (see [Pools](console.md#pools)). The Analytics view's
-Cache warming tab draws the probes by outcome and the wasted probes by reason (see [Analytics](console.md#analytics)).
+The Sessions view reads each session's standing, the mod's word for it and a recipe summary: main's recipe, or the
+newest other agent's where main holds none. A row's expanded detail reads each agent's state and cause with the sentence
+of each on hover (see [Sessions](console.md#sessions)). A pool card that keeps caches warm reads the pool's three
+resolved ceilings after its `keepalive` chip, and the pool dialog's Keepalive group reads, under each field, the
+break-even a ceiling left off resolves to and the figure in effect under one switched on past it (see
+[Pools](console.md#pools)). The Analytics view's Cache warming tab draws the probes by outcome and the wasted probes by
+reason (see [Analytics](console.md#analytics)).
 
 A session's row reads main's conversation pin, the newest by last use where main holds two, else the newest conversation
 pin of another agent of the session, else no pin, and never a pin only auxiliary requests have used, such as the one a
