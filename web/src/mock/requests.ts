@@ -12,11 +12,12 @@ import { countOf, emptyCounts } from '@/lib/counts';
 import { NO_CLASS, NO_EFFORT, foldClassifier, foldEffort, foldRequestClass } from '@/lib/dimensions';
 import { byteOrder, tokensTotal } from '@/lib/format';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
-import { MODEL_SCOPE_PREFIX, endOf } from '@/lib/quota';
-import { ACCOUNTS, LEDGER_WINDOW, QUOTA_HISTORY, accountById, isPaidSource, kindTier, sharedWindowsOf, windowsOf } from './accounts';
+import { MODEL_SCOPE_PREFIX, endOf, isPaidSource, readWindows } from '@/lib/quota';
+import { WINDOW_KEY } from '@/lib/windows';
+import { ACCOUNTS, QUOTA_HISTORY, SHARED_WINDOWS, accountById, rankTier, sharedWindowsOf } from './accounts';
 import type { HourlyRollup } from './analytics';
 import { cellsFor, promptOf } from './catalog';
-import { earliest, leadOf, paceHours } from './lead';
+import { leadOf, leftPerHour, paceDeadline } from './lead';
 import { keyById, poolById } from './pools';
 import { createRng, type Rng } from './rng';
 import { round } from './round';
@@ -361,15 +362,15 @@ function countOrder(ids: string[], poolId: string, atMs: number, model: string, 
   if (!pool) return ids;
   const tierOf = (id: string): number[] => {
     const overage = id === 'nightly' && atMs >= NIGHTLY_CAP_RAISED;
-    return [kindTier(pool.preferSubscription, kindOf(id) === 'api_key' || usageBasedOf(id), overage), pool.members.find((m) => m.accountId === id)?.priority ?? 0, overage ? 1 : 0];
+    return rankTier(pool.preferSubscription, isPaidSource({ kind: kindOf(id), usageBased: usageBasedOf(id) }), overage, pool.members.find((m) => m.accountId === id)?.priority ?? 0);
   };
   const windowId = model.includes('fable') ? '7d_fable' : '7d';
   const scoreOf = (id: string): number => {
     if (pool.strategy !== 'pace') return id === drawn ? 1 : 0;
     if (kindOf(id) === 'api_key') return 0;
     const reading = oauthWindows(id, atMs, () => SERVED_FACTOR).find((w) => w.id === windowId && w.utilization !== null);
-    const deadlines = [reading?.resetsAt, accountById.get(id)?.subscription?.endsAt].flatMap((x) => (x ? [Date.parse(x)] : []));
-    return Math.max(0, 1 - (reading?.utilization ?? 0)) / paceHours(earliest(...deadlines), atMs);
+    const reset = reading?.resetsAt ? Date.parse(reading.resetsAt) : null;
+    return leftPerHour(reading?.utilization ?? 0, paceDeadline(accountById.get(id)!, reset, atMs), atMs);
   };
   const ranked = ids.map((id) => ({ id, score: scoreOf(id), tier: tierOf(id) }));
   ranked.sort((x, y) => {
@@ -783,10 +784,8 @@ export const cooldownOf = (reason: string, model: string): { reason: string; sco
       ? { reason, scope: 'fast', window: 'fast' }
       : { reason: 'rate_limit', scope: 'account', window: windowOfReason(reason) };
 
-export const PLAN_WINDOWS = ['five_hour', 'seven_day'] as const;
-
 /** Whether a live row keeps this request off its account: a plan-window row holds a standard request alone. */
-export const holds = (c: { scope: string; window: string }, model: string, fast: boolean) => (c.scope === 'account' ? !(fast && PLAN_WINDOWS.some((w) => w === c.window)) : c.scope === 'fast' ? fast : c.scope === `${MODEL_SCOPE_PREFIX}${model}`);
+export const holds = (c: { scope: string; window: string }, model: string, fast: boolean) => (c.scope === 'account' ? !(fast && SHARED_WINDOWS.some((w) => w === c.window)) : c.scope === 'fast' ? fast : c.scope === `${MODEL_SCOPE_PREFIX}${model}`);
 
 /**
  * Whether a cooldown an answer set holds a request: a model's refusal holds that model, a fast lane's a fast request,
@@ -1826,7 +1825,7 @@ function undrawnTrace(r: RequestLog, a: Attempt, last: boolean): SelectionTrace 
   const account = accountById.get(a.accountId);
   const priority = pool?.members.find((m) => m.accountId === a.accountId)?.priority ?? 0;
   const overage = a.overageInUse === true;
-  return { cacheRead: last && r.status === 200 ? r.usage.cacheRead : null, cohortHold: null, moved: null, placement: null, renewed: false, skipped: [], strategy: pool?.strategy ?? 'pace', tier: [kindTier(pool?.preferSubscription ?? false, account !== undefined && isPaidSource(account), overage), priority, overage ? 1 : 0] };
+  return { cacheRead: last && r.status === 200 ? r.usage.cacheRead : null, cohortHold: null, moved: null, placement: null, renewed: false, skipped: [], strategy: pool?.strategy ?? 'pace', tier: rankTier(pool?.preferSubscription ?? false, account !== undefined && isPaidSource(account), overage, priority) };
 }
 
 /**
@@ -1856,11 +1855,6 @@ function traceRequests() {
       // The ledger folds the cache read into the trace of the attempt that answered, and only once it did.
       const cacheRead = i === all.length - 1 && r.status === 200 ? r.usage.cacheRead : null;
       const strategy = pool?.strategy ?? 'pace';
-      const account = accountById.get(a.accountId);
-      const inOverage = a.overageInUse === true;
-      const overage = inOverage ? 1 : 0;
-      const group = kindTier(pool?.preferSubscription ?? false, account !== undefined && isPaidSource(account), inOverage);
-      const priority = pool?.members.find((m) => m.accountId === a.accountId)?.priority ?? 0;
       // A request renews the pin its first selection finds live on the account it went to, and only then. The renewal
       // draw is taken either way, so the stream stays where it was, and a drawn renewal with no live pin to renew is
       // placed afresh on no further draw.
@@ -1882,8 +1876,7 @@ function traceRequests() {
         const passed = skipped.filter((s) => s.obstacle !== 'ranked');
         return { ...a, selection: { cacheRead, cohortHold, moved: null, placement, renewed: false, skipped: passed, strategy, tier: null } };
       }
-      const traced = { cacheRead, cohortHold, moved: typeof moved === 'string' ? moved : null, placement, renewed: false, skipped, strategy };
-      return { ...a, selection: { ...traced, tier: [group, priority, overage] } };
+      return { ...a, selection: { ...undrawnTrace(r, a, i === all.length - 1), cohortHold, moved: typeof moved === 'string' ? moved : null, skipped } };
     });
   }
 }
@@ -2733,8 +2726,8 @@ function accountRollups(): AccountRollup[] {
   // of zero across the story's accounts.
   const sampledWindows = (account: (typeof ACCOUNTS)[number], t: number): AccountRollup['windows'] => {
     const windows: AccountRollup['windows'] = {};
-    for (const w of windowsOf(account)) {
-      const key = LEDGER_WINDOW[w.id];
+    for (const w of readWindows(account)) {
+      const key = WINDOW_KEY[w.id];
       const sample = lastSample.get(`${account.id}|${w.id}`)?.get(t);
       if (key === undefined || sample === undefined) continue;
       const sampledMs = Date.parse(sample.at);
@@ -2755,7 +2748,7 @@ function accountRollups(): AccountRollup[] {
     // With no reading `Math.max` answers -Infinity, so such an account holds no hour.
     const since = account.subscription?.since;
     const from = since ? startOfHour(Date.parse(since)) : start;
-    const readings = windowsOf(account).map((w) => Date.parse(w.observedAt));
+    const readings = readWindows(account).map((w) => Date.parse(w.observedAt));
     const until = Math.max(...readings);
     // The ledger reads the 5-hour peak off the heads' 5-hour readings, which an account whose set lacks the window
     // never sends. Its drift is still drawn, so every account after it keeps its stream.

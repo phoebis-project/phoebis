@@ -1,8 +1,7 @@
 import { CACHE_TTL_DEFAULTS, KEEPALIVE_DEFAULTS, POOL_AFFINITY_DEFAULTS } from '@/api/client';
 import type { AccountKind, ApiKey, BudgetPeriod, CacheTtl, Pool, PoolCacheTtl, PoolKeepalive, PoolMember, Range } from '@/api/types';
-import { endOf } from '@/lib/quota';
 import { accountById } from './accounts';
-import { earliest, paceHours } from './lead';
+import { paceDeadline, paceHours } from './lead';
 import { round } from './round';
 import { KEY_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, DELETED_HOLDER_END, MINUTE, NOW, ago, ahead, clock, daysAgo, endOfMonth, iso, startOfDay } from './time';
@@ -29,9 +28,8 @@ export function servedFigures(accountId: string, now: number, slowDown: boolean)
   const speed = slowDown ? (account.slowDown?.factor ?? null) : null;
   const week = account.windows.find((w) => w.id === '7d');
   if (week === undefined) return { burn: null, paceScore: null, speed };
-  const end = endOf(account, now);
   const reset = week.resetsAt === null ? null : Date.parse(week.resetsAt);
-  const hours = paceHours(earliest(reset, end), now);
+  const hours = paceHours(paceDeadline(account, reset, now), now);
   const burn = week.burn ?? 0;
   return { burn: week.burn, paceScore: round((1 - week.utilization) / hours - burn, 5), speed };
 }

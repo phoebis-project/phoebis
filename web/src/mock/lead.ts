@@ -1,3 +1,5 @@
+import type { Account } from '@/api/types';
+import { endOf } from '@/lib/quota';
 import { HOUR } from '@/lib/time';
 
 /** The earliest of the instants given, null where none is. */
@@ -8,6 +10,12 @@ export const earliest = (...at: (number | null)[]): number | null => at.reduce<n
  * the account's end, at least one, and a week where neither is read.
  */
 export const paceHours = (deadline: number | null, at: number): number => (deadline === null ? 168 : Math.max(1, (deadline - at) / HOUR));
+
+/** The Pace deadline: the earlier of the window's reset and the end the router's pace reads (`endOf`). */
+export const paceDeadline = (account: Pick<Account, 'canceled' | 'subscription'>, reset: number | null, at: number): number | null => earliest(reset, endOf(account, at));
+
+/** The share left per hour to the deadline, the ratio the router's Pace strategy scores a window by. */
+export const leftPerHour = (utilization: number, deadline: number | null, at: number): number => Math.max(0, 1 - utilization) / paceHours(deadline, at);
 
 /**
  * The router's lead over pace, as the account answer carries it, computed by the mock in the router's place: the

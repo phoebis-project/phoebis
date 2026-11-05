@@ -2,6 +2,7 @@ import type { AgentContext, BurnUnit, CompanionState, KeepaliveOverview, Keepali
 import { anchorTier, tierCapacity, weightOf, type CostWindow } from '@/lib/costs';
 import { byteOrder } from '@/lib/format';
 import { lastActivity, pinTtlMs } from '@/lib/keepalive';
+import { isPaidSource } from '@/lib/quota';
 import { accountById, sharedWindowsOf } from './accounts';
 import { API_PRICES_WIRE, SUBSCRIPTION_COSTS_WIRE, promptOf } from './catalog';
 import { FIXTURES } from './generated/fixtures';
@@ -325,6 +326,8 @@ const datedLines = (createdAt: string | null, session: string, lines: readonly O
     return { ...line, createdAt: first ?? (createdAt === null ? null : iso(Date.parse(createdAt) + place * MINUTE)) };
   });
 };
+/** The summary of a row main holds no recipe for. A factory, since the summary loop below writes into a row's own. */
+const noRecipe = (): Session['keepalive'] => ({ cause: null, lastGuard: null, nextProbeAt: null, state: null });
 
 export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   // An entry past the story's session ids draws one the ledger never saw. The draw runs where the spec writes its id
@@ -344,11 +347,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   const createdAgo = Math.max(createdRoll, lastUsedAgo + 5 * MINUTE);
   // A session the engine still keeps a recipe for is the one holding a pin on its account.
   const pinned = spec.state !== null;
-  const unit: BurnUnit | null = pinned
-    ? accountById.get(spec.accountId)?.kind === 'api_key'
-      ? 'usd'
-      : 'window_share'
-    : null;
+  const unit: BurnUnit | null = pinned ? (isPaidSource(accountById.get(spec.accountId)!) ? 'usd' : 'window_share') : null;
   // Drawn whatever the spec says, except on a fixed row, so pinning or the account's kind never shifts the stream the
   // rows after this one read. A row's burn is the per-hour figure the wire answers for its unit: dollars on the usd
   // roll, a share of the account's 5-hour window on the other.
@@ -426,7 +425,7 @@ SESSIONS.push({
   forkDepth: null,
   forkedFrom: null,
   historical: false,
-  keepalive: { cause: null, lastGuard: null, nextProbeAt: null, state: null },
+  keepalive: noRecipe(),
   keyGeneration: Date.parse(keyById.get('laptop')!.createdAt),
   keyId: 'laptop',
   lastRequestAt: null,
@@ -596,38 +595,54 @@ SESSIONS.forEach((pin, i) => {
 });
 
 /**
- * A written row that names no fork, no cycle, no runway and no shed stamp, and has reached no ledger, its figures read
- * off the main agent's line. A pinned row the ledger holds overrides its ledger fields and any figure of its own.
+ * A written row that names no fork, no cycle, no runway and no shed stamp: its lines dated from its first-seen time,
+ * its figures read off the line its caller lists first, its burn in its account's unit, and its last request and count
+ * off the activity fold. A row passes a companion, a summary or a presence only where a mod reports or a recipe warms.
  */
-const writtenRow = (row: Pick<Session, 'accountId' | 'agentContexts' | 'agentId' | 'agents' | 'burn' | 'companion' | 'createdAt' | 'keepalive' | 'keyId' | 'presenceAgeSeconds' | 'sessionId'>, line: Omit<AgentContext, 'createdAt'>): Session => ({
-  ...SESSION_SAMPLE,
-  ...row,
-  burnAt: line.lastUsedAt,
-  burnEquivalent: null,
-  burnUnit: 'usd',
-  burnWindow: null,
-  cacheTtlMs: line.cacheTtlMs,
-  companionSince: null,
-  cycleMs: null,
-  effort: line.effort,
-  epoch: 1,
-  forkDepth: null,
-  forkedFrom: null,
-  historical: false,
-  keyGeneration: Date.parse(keyById.get(row.keyId)!.createdAt),
-  lastInputTokens: line.lastInputTokens,
-  lastRefreshAt: line.lastUsedAt,
-  lastRequestAt: null,
-  lastUsedAt: line.lastUsedAt,
-  model: line.model,
-  pinned: true,
-  requests: 0,
-  runwayBounded: null,
-  runwayMs: null,
-  shedFrom: null,
-  shedReason: null,
-  speed: null,
-});
+const writtenRow = (
+  row: Pick<Session, 'agentId' | 'agents' | 'burn' | 'createdAt' | 'keyId' | 'sessionId'> & Partial<Pick<Session, 'companion' | 'keepalive' | 'presenceAgeSeconds'>> & { accountId: string },
+  lines: Omit<AgentContext, 'createdAt'>[],
+): Session => {
+  const keyGeneration = Date.parse(keyById.get(row.keyId)!.createdAt);
+  const key = activityOf(row.keyId, keyGeneration, row.sessionId);
+  const line = lines[0];
+  const seen = ledgered.get(key);
+  const unit = isPaidSource(accountById.get(row.accountId)!) ? 'usd' : 'window_share';
+  const window = unit === 'window_share' ? burnWindowOf(row.accountId) : null;
+  return {
+    ...SESSION_SAMPLE,
+    ...row,
+    agentContexts: datedLines(row.createdAt, key, lines),
+    burnAt: line.lastUsedAt,
+    burnEquivalent: window === null ? null : burnEquivalentOf(row.burn, row.accountId, window),
+    burnUnit: unit,
+    burnWindow: window,
+    cacheTtlMs: line.cacheTtlMs,
+    companion: row.companion ?? 'none',
+    companionSince: null,
+    cycleMs: null,
+    effort: line.effort,
+    epoch: 1,
+    forkDepth: null,
+    forkedFrom: null,
+    historical: false,
+    keepalive: row.keepalive ?? noRecipe(),
+    keyGeneration,
+    lastInputTokens: line.lastInputTokens,
+    lastRefreshAt: line.lastUsedAt,
+    lastRequestAt: seen?.last ?? null,
+    lastUsedAt: line.lastUsedAt,
+    model: line.model,
+    pinned: true,
+    presenceAgeSeconds: row.presenceAgeSeconds ?? null,
+    requests: seen?.requests ?? 0,
+    runwayBounded: null,
+    runwayMs: null,
+    shedFrom: null,
+    shedReason: null,
+    speed: null,
+  };
+};
 
 /**
  * A row the router lists off the ledger's rows alone: no pin, no recipe and no line, the activity fold's count and
@@ -651,7 +666,7 @@ const ledgerOnlyRow = (fields: Pick<Session, 'accountId' | 'historical' | 'keyGe
   epoch: null,
   forkDepth: null,
   forkedFrom: null,
-  keepalive: { cause: null, lastGuard: null, nextProbeAt: null, state: null },
+  keepalive: noRecipe(),
   lastInputTokens: null,
   lastRefreshAt: null,
   lastUsedAt: null,
@@ -698,25 +713,7 @@ SLOWED_PINS.forEach((pin, k) => {
     });
   });
   SESSIONS.push({
-    ...writtenRow(
-      {
-        accountId: 'studio',
-        agentContexts: datedLines(createdAt, activityOf('notebook', Date.parse(keyById.get('notebook')!.createdAt), pin.sessionId), lines),
-        agentId: 'main',
-        agents: pin.agents.length,
-        burn: pin.burn,
-        companion: 'none',
-        createdAt,
-        keepalive: { cause: null, lastGuard: null, nextProbeAt: null, state: null },
-        keyId: 'notebook',
-        presenceAgeSeconds: null,
-        sessionId: pin.sessionId,
-      },
-      lines[0],
-    ),
-    burnEquivalent: burnEquivalentOf(pin.burn, 'studio', burnWindowOf('studio')),
-    burnUnit: 'window_share',
-    burnWindow: burnWindowOf('studio'),
+    ...writtenRow({ accountId: 'studio', agentId: 'main', agents: pin.agents.length, burn: pin.burn, createdAt, keyId: 'notebook', sessionId: pin.sessionId }, lines),
     cycleMs: pin.cycleMs,
     lastRequestAt: rows[0].at,
     requests: rows.length,
@@ -744,8 +741,6 @@ const FLEET_PINS = [...new Set(fleetRows.map((r) => r.canonicalModel))]
 if (FLEET_PINS.length > 0) {
   const last = FLEET_PINS[0];
   const lastAttempt = last.attempts[last.attempts.length - 1];
-  const keyGeneration = Date.parse(keyById.get('fleet')!.createdAt);
-  const seen = ledgered.get(activityOf('fleet', keyGeneration, FLEET_SESSION_ID)) ?? null;
   // The session is first seen at the oldest turn of its last unbroken run: a turn that came once the pin before it had
   // passed the affinity window found the session holding no pin, so the router dated the session again from it.
   let firstSeen = fleetRows[0];
@@ -758,26 +753,7 @@ if (FLEET_PINS.length > 0) {
     const attempt = pin.attempts[pin.attempts.length - 1];
     return pinLine({ accountId: attempt.accountId, agentId: 'main', cacheTtlMs: 5 * MINUTE, effort: effortAt(j + 1), lastInputTokens: promptOf(pin.usage), lastUsedAt: attempt.startedAt, model: pin.canonicalModel });
   });
-  SESSIONS.push({
-    ...writtenRow(
-      {
-        accountId: lastAttempt.accountId,
-        agentContexts: datedLines(firstSeen.at, activityOf('fleet', keyGeneration, FLEET_SESSION_ID), lines),
-        agentId: 'main',
-        agents: 1,
-        burn: 0.36,
-        companion: 'none',
-        createdAt: firstSeen.at,
-        keepalive: { cause: null, lastGuard: null, nextProbeAt: null, state: null },
-        keyId: 'fleet',
-        presenceAgeSeconds: null,
-        sessionId: FLEET_SESSION_ID,
-      },
-      lines[0],
-    ),
-    lastRequestAt: seen?.last ?? null,
-    requests: seen?.requests ?? 0,
-  });
+  SESSIONS.push(writtenRow({ accountId: lastAttempt.accountId, agentId: 'main', agents: 1, burn: 0.36, createdAt: firstSeen.at, keyId: 'fleet', sessionId: FLEET_SESSION_ID }, lines));
 }
 
 /**
@@ -791,33 +767,9 @@ const WORKSHOP_PIN = workshopRows[0];
 const WORKSHOP_BURN = 0.0021;
 {
   const lastAttempt = WORKSHOP_PIN.attempts[WORKSHOP_PIN.attempts.length - 1];
-  const keyGeneration = Date.parse(keyById.get('bench')!.createdAt);
-  const seen = ledgered.get(activityOf('bench', keyGeneration, WORKSHOP_SESSION_ID)) ?? null;
   const createdAt = workshopRows[workshopRows.length - 1].at;
   const line = pinLine({ accountId: 'workshop', agentId: 'main', cacheTtlMs: HOUR, effort: effortAt(1), lastInputTokens: promptOf(WORKSHOP_PIN.usage), lastUsedAt: lastAttempt.startedAt, model: WORKSHOP_PIN.canonicalModel });
-  SESSIONS.push({
-    ...writtenRow(
-      {
-        accountId: 'workshop',
-        agentContexts: datedLines(createdAt, activityOf('bench', keyGeneration, WORKSHOP_SESSION_ID), [line]),
-        agentId: 'main',
-        agents: 1,
-        burn: WORKSHOP_BURN,
-        companion: 'none',
-        createdAt,
-        keepalive: { cause: null, lastGuard: null, nextProbeAt: null, state: null },
-        keyId: 'bench',
-        presenceAgeSeconds: null,
-        sessionId: WORKSHOP_SESSION_ID,
-      },
-      line,
-    ),
-    burnEquivalent: burnEquivalentOf(WORKSHOP_BURN, 'workshop', burnWindowOf('workshop')),
-    burnUnit: 'window_share',
-    burnWindow: burnWindowOf('workshop'),
-    lastRequestAt: seen?.last ?? null,
-    requests: seen?.requests ?? 0,
-  });
+  SESSIONS.push(writtenRow({ accountId: 'workshop', agentId: 'main', agents: 1, burn: WORKSHOP_BURN, createdAt, keyId: 'bench', sessionId: WORKSHOP_SESSION_ID }, [line]));
 }
 
 // The earlier holder of the `desktop` key id, which the analytics story draws as `desktop (deleted, created ...)`
@@ -897,7 +849,6 @@ const WRITTEN_SESSIONS = [
   writtenRow(
     {
       accountId: 'overflow',
-      agentContexts: datedLines(AUXILIARY_ONLY_CREATED_AT, activityOf('laptop', Date.parse(keyById.get('laptop')!.createdAt), AUXILIARY_ONLY_SESSION_ID), [auxiliaryOnlyLine]),
       agentId: auxiliaryOnlyLine.agentId,
       agents: 1,
       burn: 0.05,
@@ -909,24 +860,9 @@ const WRITTEN_SESSIONS = [
       presenceAgeSeconds: 9,
       sessionId: AUXILIARY_ONLY_SESSION_ID,
     },
-    auxiliaryOnlyLine,
+    [auxiliaryOnlyLine],
   ),
-  writtenRow(
-    {
-      accountId: 'contract',
-      agentContexts: datedLines(NO_MOD_CREATED_AT, activityOf('fleet', Date.parse(keyById.get('fleet')!.createdAt), NO_MOD_SESSION_ID), noModLines),
-      agentId: 'main',
-      agents: noModLines.length,
-      burn: 0.22,
-      companion: 'none',
-      createdAt: NO_MOD_CREATED_AT,
-      keepalive: { cause: null, lastGuard: null, nextProbeAt: null, state: null },
-      keyId: 'fleet',
-      presenceAgeSeconds: null,
-      sessionId: NO_MOD_SESSION_ID,
-    },
-    noModLines[0],
-  ),
+  writtenRow({ accountId: 'contract', agentId: 'main', agents: noModLines.length, burn: 0.22, createdAt: NO_MOD_CREATED_AT, keyId: 'fleet', sessionId: NO_MOD_SESSION_ID }, noModLines),
 ];
 SESSIONS.push(...WRITTEN_SESSIONS);
 

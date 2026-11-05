@@ -31,7 +31,7 @@ import { createRng } from './rng';
 import { ROUTING_LOG_KINDS, WEEKLY_RESETS, getDecision, listRoutingLog } from './routingLog';
 import { ROUTING_EVENTS } from './routingLog';
 import { ACCOUNT_SAMPLE, KEY_SAMPLE, PAIRING_SAMPLE, POOL_SAMPLE } from './samples';
-import { DAY, HOUR, MINUTE, NOW, ago, ahead, iso, startOfHour } from './time';
+import { DAY, HOUR, MINUTE, NOW, ago, ahead, hourCeil, iso, startOfHour } from './time';
 
 // Fixed, so a pass over the mock reads the same secrets every run.
 const MOCK_SEED = 4_211;
@@ -1208,7 +1208,7 @@ export class MockApi implements Api {
   listAccountRollups(from: string, to: string) {
     // As the route reads a range: from the hour holding the start up to the hour ceiling of the end, exclusive.
     const fromHour = startOfHour(Date.parse(from));
-    const toCeiling = Math.ceil(Date.parse(to) / HOUR) * HOUR;
+    const toCeiling = hourCeil(Date.parse(to));
     return latency(ledger().accountRollups.filter((r) => Date.parse(r.hour) >= fromHour && Date.parse(r.hour) < toCeiling));
   }
 

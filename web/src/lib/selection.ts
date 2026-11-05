@@ -1,6 +1,6 @@
 import type { Account, AccountSlowDown, MemberEligibility, Pool, PoolMember, PoolStrategy } from '@/api/types';
 import { fmtAbsolute, fmtDuration, fmtPeriodEnd, fmtRelative, fmtShortTime, instant, noun, sameLocalDay } from './format';
-import { endOf, minuteSpan, planExtraUsage, planOverage, slowedOf } from './quota';
+import { endOf, isPaidSource, minuteSpan, planExtraUsage, planOverage, slowedOf } from './quota';
 import { MINUTE } from './time';
 
 export const STRATEGY_LABEL: Record<PoolStrategy, string> = { pace: 'Pace', priority: 'Priority, then random', round_robin: 'Round robin' };
@@ -141,11 +141,14 @@ function resortOf(pool: Pool, account: Account, now: number): { lastResort: Last
   return { lastResort: winding ? 'winding_down' : null, order: winding ? 2 : 0 };
 }
 
+/** A kind tier by `GROUP_LABEL`'s order: a paid source files with the metered sources whatever its overage reads. */
+export const kindGroup = (paid: boolean, overage: boolean): 0 | 1 | 2 => (paid ? 2 : overage ? 1 : 0);
+
 /**
  * Which kind tier an account sits in. A member the accounts list does not carry has no kind, so it leads, and a
  * usage-based seat is a paid source, so it files with the API keys whatever its extra usage flags read.
  */
-const groupOf = (account: Account | undefined): 0 | 1 | 2 => (account?.kind === 'api_key' || account?.usageBased ? 2 : account?.extraUsage?.inUse ? 1 : 0);
+const groupOf = (account: Account | undefined): 0 | 1 | 2 => (account === undefined ? 0 : kindGroup(isPaidSource(account), account.extraUsage?.inUse === true));
 
 /** The order the router walks for a fresh session of this pool, from the data the routes already serve. */
 export function selectionOrder(pool: Pool, accounts: Account[], now: number = Date.now()): Tier[] {

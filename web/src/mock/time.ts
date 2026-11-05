@@ -1,6 +1,6 @@
-import { DAY, HOUR, MINUTE } from '@/lib/time';
+import { DAY, HOUR, MINUTE, hourCeil } from '@/lib/time';
 
-export { DAY, HOUR, MINUTE };
+export { DAY, HOUR, MINUTE, hourCeil };
 
 // Anchored once at load so every relative label counts down from the same instant.
 export const NOW = Date.now();

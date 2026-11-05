@@ -5,16 +5,16 @@ import type {
 import { DECISION_KIND_VALUES } from '@/api/types';
 import { shareIn, weightOf } from '@/lib/costs';
 import { placementHit } from '@/lib/format';
-import { MODEL_SCOPE_PREFIX, endOf } from '@/lib/quota';
+import { MODEL_SCOPE_PREFIX, endOf, isPaidSource, readWindows, windowOf } from '@/lib/quota';
 import { compareRows } from '@/lib/routingLog';
-import { hoursOfKey } from '@/lib/windows';
-import { ACCOUNTS, LEDGER_WINDOW, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT, SUNSET_WEEK_RESETS_IN, accountById, isPaidSource, kindTier, windowsOf } from './accounts';
+import { WINDOW_KEY, hoursOfKey } from '@/lib/windows';
+import { ACCOUNTS, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT, SHARED_WINDOWS, SUNSET_WEEK_RESETS_IN, accountById, rankTier } from './accounts';
 import { promptOf } from './catalog';
 import { GUARDRAILS } from './guardrails';
-import { earliest, leadOf, paceHours } from './lead';
+import { earliest, leadOf, leftPerHour, paceDeadline, paceHours } from './lead';
 import { SESSIONS } from './operations';
 import { KEY_REVOKED_AT, WORST_BUCKET, poolById, type PoolSeed } from './pools';
-import { BUDGET_CROSSING_ID, FORCED_MOVE_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, PLAN_WINDOWS, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, TIE_STORY_ID, UNSEEDED_IDS, cooldownOf, failsOver, holds, oauthWindows, requestById } from './requests';
+import { BUDGET_CROSSING_ID, FORCED_MOVE_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, TIE_STORY_ID, UNSEEDED_IDS, cooldownOf, failsOver, holds, oauthWindows, requestById } from './requests';
 import { createRng } from './rng';
 import { round } from './round';
 import { TABLES } from './samples';
@@ -36,7 +36,7 @@ const RESERVATION_MS = HOUR;
 const WRITE_SHARE: Record<string, number> = { five_hour: 1.2e-7, seven_day: 1.4e-8, seven_day_fable: 2.8e-8 };
 const familyWeight = (model: string) => (model.includes('fable') ? 1 : model.includes('opus') ? 0.5 : model.includes('sonnet') ? 0.25 : 0.08);
 /** The plan windows a model draws: both shared windows, and a Fable model its week as well. */
-const drawnWindows = (model: string): string[] => (model.includes('fable') ? [...PLAN_WINDOWS, 'seven_day_fable'] : [...PLAN_WINDOWS]);
+const drawnWindows = (model: string): string[] => (model.includes('fable') ? [...SHARED_WINDOWS, 'seven_day_fable'] : [...SHARED_WINDOWS]);
 const round3 = (x: number) => round(x, 3);
 const round5 = (x: number) => round(x, 5);
 /** A rewrite of `tokens` per plan window the model draws, in window share. */
@@ -354,8 +354,8 @@ const ACCOUNT_BURNS = new Map(
   ACCOUNTS.map((a) => [
     a.id,
     Object.fromEntries(
-      windowsOf(a).flatMap((w) => {
-        const name = LEDGER_WINDOW[w.id];
+      readWindows(a).flatMap((w) => {
+        const name = WINDOW_KEY[w.id];
         return name !== undefined && w.burn ? [[name, w.burn]] : [];
       }),
     ) as Record<string, number>,
@@ -374,7 +374,7 @@ const burnsOf = (spec: Spec, accountId: string): Record<string, number> => (spec
 function horizonOf(name: string, resetsAt: string | null, end: number | null, at: number): number {
   const reset = resetsAt === null ? null : Date.parse(resetsAt);
   const bounds = name === 'five_hour' ? [reset ?? at + FIVE_HOURS, end] : [at + FIVE_HOURS, reset, end];
-  return Math.max(at, Math.min(...bounds.filter((x): x is number => x !== null)));
+  return Math.max(at, earliest(...bounds) ?? at);
 }
 
 /**
@@ -481,12 +481,12 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
     // Where an entry stands, the sessions burn the 5-hour window at the demand it read times the speed its holds
     // realize, so the window's demand reads the entry's own.
     const burn: Record<string, number> = a.kind === 'oauth' ? { ...burnsOf(spec, a.id), ...(spec.story && entry ? { five_hour: round5(entry.demand * entry.speed) } : {}) } : {};
+    const end = endOf(a, at);
     if (a.kind === 'oauth') {
       const head = r.attempts.some((x) => x.accountId === a.id) || a.id === 'primary';
       const ageMs = head ? 4_000 : 120_000;
-      const end = endOf(a, at);
       for (const w of readingsOf(spec, a.id)) {
-        const name = LEDGER_WINDOW[w.id];
+        const name = WINDOW_KEY[w.id];
         if (name === undefined || w.utilization === null) continue;
         const ahead = leadOf({ resetsAt: w.resetsAt, utilization: w.utilization }, hoursOfKey(name) * HOUR, at, end);
         const horizon = horizonOf(name, w.resetsAt, end, at);
@@ -527,7 +527,7 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
     const reading = a.kind === 'api_key' ? windows.worst_bucket : paid ? undefined : windows[windowName];
     const remaining = reading === undefined ? 1 : Math.max(0, 1 - reading.utilization);
     const reset = paid ? null : (reading?.reset ?? null);
-    const deadlineMs = paid ? null : earliest(reset ? Date.parse(reset) : null, endsAt);
+    const deadlineMs = paid ? null : paceDeadline(a, reset ? Date.parse(reset) : null, at);
     const hours = paid ? null : paceHours(deadlineMs, at);
     const paceBurn = paid ? 0 : (burn[windowName] ?? 0);
     return {
@@ -551,7 +551,7 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
       obstacle,
       overage: overage ? { observedAt: iso(at - 40_000), reset: a.overage?.reset ?? null, since: iso(OVERAGE_FROM), source: 'head' } : null,
       // The spare rate: the share left per hour to the deadline less the burn the account's sessions already spend.
-      pace: pool.strategy === 'pace' ? { burn: paceBurn, deadline: deadlineMs === null ? null : iso(deadlineMs), end: paid || endsAt === null ? null : iso(endsAt), hours: hours === null ? null : Math.round(hours * 10) / 10, remaining, reset, score: hours === null ? remaining : round5(remaining / hours - paceBurn), window: paid ? null : windowName } : null,
+      pace: pool.strategy === 'pace' ? { burn: paceBurn, deadline: deadlineMs === null ? null : iso(deadlineMs), end: paid || end === null ? null : iso(end), hours: hours === null ? null : round(hours, 1), remaining, reset, score: hours === null ? remaining : round5(remaining / hours - paceBurn), window: paid ? null : windowName } : null,
       partition: null,
       planTier: sub?.plan ?? null,
       prefix: { ...NO_PREFIX, ...spec.prefix?.[a.id] },
@@ -563,7 +563,7 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
       term: a.kind === 'api_key' || !sub
         ? { canceled: false, ended: false, endsAt: null, since: null, trialEndsAt: null, windingDown: false }
         : { canceled: a.canceled === true, ended: false, endsAt: sub.endsAt, since: sub.since, trialEndsAt: sub.trialEndsAt, windingDown: endsAt !== null && endsAt - at <= pool.windDownMinutes * MINUTE },
-      tier: [kindTier(pool.preferSubscription, paid, overage), m.priority, overage ? 1 : 0],
+      tier: rankTier(pool.preferSubscription, paid, overage, m.priority),
       verdict: obstacle ? 'out' : 'eligible',
       windows,
     };
@@ -1002,7 +1002,7 @@ function readPlacementFits(spec: Spec, candidates: RecordCandidate[], pool: Pool
 }
 
 /** A Fable request draws on its own week and both shared windows, so a reading at or past 1 on any of them is spent. */
-const spentForFable = (utilization: (window: string) => number | null | undefined) => [...PLAN_WINDOWS, 'seven_day_fable'].some((w) => (utilization(w) ?? 0) >= 1);
+const spentForFable = (utilization: (window: string) => number | null | undefined) => [...SHARED_WINDOWS, 'seven_day_fable'].some((w) => (utilization(w) ?? 0) >= 1);
 
 /** One reading of whether extra usage funds a spent member, so the partition and a run-out's servable set agree. */
 const fundedBy = (pool: PoolSeed, credits: RecordCandidate['credits']) => pool.overagePolicy === 'allow' && credits !== null && credits.blocked === null;
@@ -1644,7 +1644,7 @@ function derivedSpecs(r: RequestLog): Spec[] {
     // before the cap, so it takes no hold and is never passed over. The windows are the ones the answering record
     // reads.
     const fast = r.shape.requestedSpeed === 'fast';
-    const spent = (id: string) => r.canonicalModel.includes('fable') && spentForFable((w) => oauthWindows(id, answeredAt, () => OLDER_FACTOR).find((x) => LEDGER_WINDOW[x.id] === w)?.utilization);
+    const spent = (id: string) => r.canonicalModel.includes('fable') && spentForFable((w) => oauthWindows(id, answeredAt, () => OLDER_FACTOR).find((x) => WINDOW_KEY[x.id] === w)?.utilization);
     // A spent Fable member stays servable where the pool allows overage and the credits the record reads are unblocked.
     const funded = (id: string) => pool !== undefined && fundedBy(pool, fast ? creditsAt(id, answeredAt) : null);
     const servable = pool === undefined ? [] : pool.members.map((m) => m.accountId).filter((id) => obstacleOf(accountById.get(id)!, pool, answeredAt, r.canonicalModel, fast, []) === null && (!spent(id) || funded(id)));
@@ -1835,8 +1835,7 @@ function storySpecs(): Spec[] {
   const tieAt = t(8, 16, 21);
   const spareOf = (id: string): number => {
     const week = oauthWindows(id, tieAt, () => OLDER_FACTOR).find((w) => w.id === '7d');
-    const end = endOf(accountById.get(id)!, tieAt);
-    return Math.max(0, 1 - (week?.utilization ?? 0)) / paceHours(earliest(week?.resetsAt ? Date.parse(week.resetsAt) : null, end), tieAt);
+    return leftPerHour(week?.utilization ?? 0, paceDeadline(accountById.get(id)!, week?.resetsAt ? Date.parse(week.resetsAt) : null, tieAt), tieAt);
   };
   const TIE_SCORE = 0.006;
   const tieBurns = { nightly: { five_hour: 0.02, seven_day: spareOf('nightly') - TIE_SCORE }, primary: { five_hour: 0.03, seven_day: spareOf('primary') - TIE_SCORE } };
@@ -2499,7 +2498,7 @@ function weeklyResets(accountId: string, window: string, resetsAtMs: number, sha
 
 const resetOf = (accountId: string, window: '7d' | '7d_fable'): number => {
   const a = accountById.get(accountId);
-  return Date.parse((window === '7d_fable' ? a?.fableWindow : a?.windows.find((w) => w.id === window))?.resetsAt ?? '');
+  return Date.parse((a ? windowOf(a, window) : null)?.resetsAt ?? '');
 };
 
 /**
@@ -2598,7 +2597,7 @@ function buildEvents(): RoutingEvent[] {
   const announced = new Map<string, number>([[`nightly|five_hour|${iso(nightlyReset)}`, nightlyClear?.at ?? Number.POSITIVE_INFINITY]]);
   for (const { a, at, r } of heads) {
     for (const w of a.windows) {
-      const window = LEDGER_WINDOW[w.id];
+      const window = WINDOW_KEY[w.id];
       const edge = `${a.accountId}|${window}|${w.resetsAt}`;
       if ((window !== 'five_hour' && window !== 'seven_day') || (w.utilization ?? 0) < 1 || at < (announced.get(edge) ?? Number.NEGATIVE_INFINITY)) continue;
       announced.set(edge, Number.POSITIVE_INFINITY);

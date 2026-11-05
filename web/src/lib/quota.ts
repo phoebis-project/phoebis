@@ -88,7 +88,7 @@ export const spendLeftOf = (spend: Spend): number | null =>
 export const windowOf = (account: Account, id: WindowId): RateLimitWindow | null => (id === '7d_fable' ? account.fableWindow : (account.windows.find((w) => w.id === id) ?? null));
 
 /** Every window an account's poll read, the Fable week from `fableWindow` among them. */
-export const readWindows = (account: Account): RateLimitWindow[] => (account.fableWindow === null ? account.windows : [...account.windows, account.fableWindow]);
+export const readWindows = (account: Pick<Account, 'fableWindow' | 'windows'>): RateLimitWindow[] => (account.fableWindow === null ? account.windows : [...account.windows, account.fableWindow]);
 
 /**
  * The account's extra usage as its plan bills it: none for a usage-based seat, which always pays in dollars, so none
@@ -200,6 +200,8 @@ export function burnWords(w: Pick<RateLimitWindow, 'burn'>): string | null {
 }
 
 export const isSubscription = (account: Pick<Account, 'kind'>) => account.kind === 'oauth';
+/** A paid source, as the engine reads one: an API-key account or a usage-based seat, neither with plan capacity. */
+export const isPaidSource = (a: Pick<Account, 'kind' | 'usageBased'>): boolean => a.kind === 'api_key' || a.usageBased;
 /**
  * Whether the Quota page lists the account. It lists a subscription account that is paired, not awaiting
  * re-authentication and whose plan has not ended. The flag alone decides the third: a saved end that has passed counts

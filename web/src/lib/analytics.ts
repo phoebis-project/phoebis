@@ -4,7 +4,7 @@ import { MODEL_WEEK_TIERS, tierCapacity, type CostWindow } from '@/lib/costs';
 import { has, lookup } from '@/lib/counts';
 import { earlierHolderLabel, fmtCompact, fmtCount, fmtInt, fmtPct, fmtShare, fmtUsd, fmtWeek, joinPresent, parseKeyLifetime, weekShort } from '@/lib/format';
 import { planLabel, pricedTier } from '@/lib/quota';
-import { ageWord, HOUR } from '@/lib/time';
+import { ageWord, HOUR, hourCeil } from '@/lib/time';
 import type { UnitPosition, WeekPosition } from '@/lib/unit';
 import { WINDOW_KEYS } from '@/lib/windows';
 
@@ -554,7 +554,6 @@ export function peakLines(rollups: AccountRollup[], accounts: string[], span: { 
 
 /** Each value weighed by its weight, so a bucket counts for the part of its width it covers. */
 const weighedMean = (pairs: { value: number; weight: number }[]) => pairs.reduce((n, p) => n + p.value * p.weight, 0) / pairs.reduce((n, p) => n + p.weight, 0);
-const hourCeil = (ms: number) => Math.ceil(ms / HOUR) * HOUR;
 /** The share of its width a bucket covers before it sets the axis and the peak: 6 minutes of an hour, 36 of six. */
 const SCALE_FLOOR = 0.1;
 

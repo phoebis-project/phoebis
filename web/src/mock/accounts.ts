@@ -1,6 +1,7 @@
 import { planName } from '@/api/decode';
 import type { Account, PlanWord, QuotaHistory, QuotaSample, QuotaSnapshot, RateLimitWindow, Subscription, WindowId } from '@/api/types';
-import { endOf } from '@/lib/quota';
+import { endOf, readWindows } from '@/lib/quota';
+import { kindGroup } from '@/lib/selection';
 import { WINDOW_HOURS, WINDOW_LABEL, hoursOfKey, windowKeyId } from '@/lib/windows';
 import { leadOf } from './lead';
 import { createRng } from './rng';
@@ -493,20 +494,15 @@ export const ACCOUNTS: Account[] = SEEDS.map((a) => {
 
 export const accountById = new Map(ACCOUNTS.map((a) => [a.id, a]));
 
-/** A paid source, as the engine reads one: an API-key account or a usage-based seat, neither with plan capacity. */
-export const isPaidSource = (a: Pick<Account, 'kind' | 'usageBased'>): boolean => a.kind === 'api_key' || a.usageBased;
 /**
  * The kind tier the engine files a member in where its pool prefers subscriptions: the plan-funded subscriptions, the
  * ones in overage, then the paid sources. Each caller reads the overage its own way, the engine's at the instant it
  * ranks. A pool that prefers none files every member in one tier.
  */
-export const kindTier = (preferSubscription: boolean, paid: boolean, overage: boolean): number => (preferSubscription ? (paid ? 2 : overage ? 1 : 0) : 0);
-
-/** The ledger's key of each window the account view names, which the samples, the rollups and the routing log read. */
-export const LEDGER_WINDOW: Partial<Record<string, string>> = { '5h': 'five_hour', '7d': 'seven_day', '7d_fable': 'seven_day_fable' };
+export const rankTier = (preferSubscription: boolean, paid: boolean, overage: boolean, priority: number): [number, number, number] => [preferSubscription ? kindGroup(paid, overage) : 0, priority, overage ? 1 : 0];
 
 /** The two shared windows by the ledger's id. */
-const SHARED_WINDOWS = ['five_hour', 'seven_day'] as const;
+export const SHARED_WINDOWS = ['five_hour', 'seven_day'] as const;
 /**
  * The shared windows an account's newest clean poll names, as the router holds its window set: the ones its reading
  * carries, and both before any reading names one. The model weeks are no part of the set.
@@ -629,12 +625,9 @@ function carryLegacyEdges(account: (typeof ACCOUNTS)[number], w: RateLimitWindow
   });
 }
 
-/** An account's windows and its Fable week as one list, a seed's or a served account's. */
-export const windowsOf = (a: Pick<Account, 'fableWindow' | 'windows'>): RateLimitWindow[] => [...a.windows, ...(a.fableWindow ? [a.fableWindow] : [])];
-
 // The samples are built from the literal's windows, since a flagged account answers none.
 export const QUOTA_HISTORY: QuotaHistory[] = SEEDS.flatMap((seed, i) =>
-  windowsOf(seed).map((w) => ({
+  readWindows(seed).map((w) => ({
     accountId: seed.id,
     windowId: w.id,
     samples: carryLegacyEdges(ACCOUNTS[i], w, sawtooth(1000 + i * 7 + (HISTORY_SEED[w.id] ?? 4), Date.parse(w.resetsAt ?? ''), w.periodHours * HOUR, w.utilization, samplesEndOf(ACCOUNTS[i]))),

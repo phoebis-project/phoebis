@@ -5,13 +5,15 @@ import { lookup } from './counts';
 export type ByWindow<T> = Readonly<Record<KnownWindowId, T>> & Readonly<Partial<Record<string, T>>>;
 
 export const WINDOW_HOURS: ByWindow<number> = { '5h': 5, '7d': 168, '7d_fable': 168 };
+/** A window's wire key, the ledger's and the usage endpoint's spelling of it. */
+export const WINDOW_KEY: ByWindow<string> = { '5h': 'five_hour', '7d': 'seven_day', '7d_fable': 'seven_day_fable' };
 export const WINDOW_LABEL: ByWindow<string> = { '5h': '5-hour', '7d': '7-day', '7d_fable': '7-day Fable' };
 /** A window's short word, for a cell too narrow for its label. */
 export const WINDOW_SHORT: ByWindow<string> = { '5h': '5h', '7d': '7d', '7d_fable': '7-day Fable' };
 /** The order the pages draw the windows in: the two shared windows, then the model-scoped one. */
 export const WINDOW_ORDER: KnownWindowId[] = ['5h', '7d', '7d_fable'];
 /** The wire keys of the three windows the router reads, in the order the pages draw them. */
-export const WINDOW_KEYS: readonly string[] = ['five_hour', 'seven_day', 'seven_day_fable'];
+export const WINDOW_KEYS: readonly string[] = WINDOW_ORDER.map((id) => WINDOW_KEY[id]);
 /**
  * The three windows `keys` holds in `WINDOW_KEYS` order, then its other keys as listed. An alias spelling (`5h`,
  * `fable`) trails with the others, where a sort by `windowRank` would file it among the three.

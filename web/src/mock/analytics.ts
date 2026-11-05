@@ -11,9 +11,9 @@ import { countOf, emptyCounts } from '@/lib/counts';
 import { byteOrder, earlierHolderLabel, placementHit } from '@/lib/format';
 import { mergeHistograms, quartet } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
-import { endOf } from '@/lib/quota';
-import { hoursOfKey } from '@/lib/windows';
-import { ACCOUNTS, LEDGER_WINDOW, accountById, sharedWindowsOf } from './accounts';
+import { endOf, isPaidSource } from '@/lib/quota';
+import { WINDOW_KEY, hoursOfKey } from '@/lib/windows';
+import { accountById, sharedWindowsOf } from './accounts';
 import { earliest } from './lead';
 import { keyById } from './pools';
 import { requestsIn, sumOf, sumSplit, tokensIn } from './requests';
@@ -21,7 +21,7 @@ import { createRng } from './rng';
 import { round } from './round';
 import type { EventSeed } from './routingLog';
 import { TABLES } from './samples';
-import { DAY, HOUR, MINUTE, NOW, clock, iso, startOfHour } from './time';
+import { DAY, HOUR, MINUTE, NOW, clock, hourCeil, iso, startOfHour } from './time';
 
 /**
  * One hour of one lane of the fixture ledger. The admin routes answer buckets and groups rather than rows,
@@ -147,10 +147,9 @@ function passesFunding(r: HourlyRollup, funding: AnalyticsQuery['funding']): boo
   return funding === 'plan' ? r.funding === 'plan' : r.funding !== 'plan';
 }
 
-function inQuery(r: HourlyRollup, q: AnalyticsQuery, fromMs: number, toMs: number): boolean {
-  const hour = Date.parse(r.hour);
+function inQuery(r: HourlyRollup, q: AnalyticsQuery, hour: number, fromHour: number, toCeiling: number): boolean {
   // As the route reads a range: from the hour holding the start up to the hour ceiling of the end, exclusive.
-  if (hour < startOfHour(fromMs) || hour >= Math.ceil(toMs / HOUR) * HOUR) return false;
+  if (hour < fromHour || hour >= toCeiling) return false;
   if (!passesFunding(r, q.funding)) return false;
   if (q.accountIds?.length && !q.accountIds.includes(r.accountId)) return false;
   if (q.keyIds?.length && !q.keyIds.some((selector) => selectsKey(selector, r))) return false;
@@ -438,38 +437,42 @@ export function groupsOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsGrou
 }
 
 export function breakdownOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsGroup[] {
-  const fromMs = Date.parse(q.from);
-  const toMs = Date.parse(q.to);
+  const fromHour = startOfHour(Date.parse(q.from));
+  const toCeiling = hourCeil(Date.parse(q.to));
   return groupsOf(
-    rows.filter((r) => inQuery(r, q, fromMs, toMs)),
+    rows.filter((r) => inQuery(r, q, Date.parse(r.hour), fromHour, toCeiling)),
     q,
   );
 }
 
 export function seriesOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsPoint[] {
-  const fromMs = Date.parse(q.from);
-  const toMs = Date.parse(q.to);
-  const { bucketMs, starts } = bucketsOf(q);
+  const fromHour = startOfHour(Date.parse(q.from));
+  const toCeiling = hourCeil(Date.parse(q.to));
+  const { slotOf, starts } = bucketsOf(q);
   // Each row is placed in its bucket in one pass, and a bucket keeps the rows' input order, so its sums add as a scan
   // of the whole list would. An index outside the starts names no bucket.
   const byBucket = starts.map((): HourlyRollup[] => []);
-  for (const r of rows) if (inQuery(r, q, fromMs, toMs)) byBucket[Math.floor((Date.parse(r.hour) - starts[0]) / bucketMs)]?.push(r);
+  for (const r of rows) {
+    const hour = Date.parse(r.hour);
+    if (inQuery(r, q, hour, fromHour, toCeiling)) byBucket[slotOf(hour)]?.push(r);
+  }
   return starts.map((at, i) => ({ at: iso(at), groups: groupsOf(byBucket[i], q) }));
 }
 
 type Range = Pick<AnalyticsQuery, 'from' | 'to'>;
 
 /**
- * The bucket starts the analytics routes answer a range in, and each bucket's width. Buckets start on a whole
- * multiple of their own width and run to the hour after the range ends, as the route's do.
+ * The bucket starts the analytics routes answer a range in, each bucket's width, and the index of the bucket an
+ * instant falls in. Buckets start on a whole multiple of their own width and run to the hour after the range ends, as
+ * the route's do.
  */
-function bucketsOf(range: Range): { bucketMs: number; starts: number[] } {
+function bucketsOf(range: Range): { bucketMs: number; slotOf: (ms: number) => number; starts: number[] } {
   const fromMs = Date.parse(range.from);
   const toMs = Date.parse(range.to);
   const bucketMs = bucketSizeFor(toMs - fromMs);
   const starts: number[] = [];
-  for (let at = Math.floor(fromMs / bucketMs) * bucketMs; at < Math.ceil(toMs / HOUR) * HOUR; at += bucketMs) starts.push(at);
-  return { bucketMs, starts };
+  for (let at = Math.floor(fromMs / bucketMs) * bucketMs; at < hourCeil(toMs); at += bucketMs) starts.push(at);
+  return { bucketMs, slotOf: (ms) => Math.floor((ms - starts[0]) / bucketMs), starts };
 }
 
 const usageOf = (r: HourlyRollup): Usage => ({ cacheRead: r.tokens.cacheRead, cacheWrite1h: r.tokens.cacheWrite1h, cacheWrite5m: r.tokens.cacheWrite5m, input: r.tokens.uncachedInput, output: r.tokens.output });
@@ -499,18 +502,18 @@ const BURN_SESSIONS = 20;
 const burnGroupOf = (groupBy: BurnGroup, named: string[]): ((r: HourlyRollup) => string) => (groupBy === 'session' ? (r) => r.sessionId : groupKeyOf(groupBy, named));
 
 export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, filters: Pick<AnalyticsQuery, 'accountIds' | 'userAgentGroups'> = {}): { bucketSeconds: number; points: BurnPoint[] } {
-  const { bucketMs, starts } = bucketsOf(range);
-  // A usage-based seat is a paid source, so its burn reads in dollars as an API key's does.
-  const usageBased = new Set(ACCOUNTS.filter((a) => a.usageBased).map((a) => a.id));
+  const { bucketMs, slotOf, starts } = bucketsOf(range);
   const first = starts[0] ?? 0;
   const end = (starts[starts.length - 1] ?? 0) + bucketMs;
   const accounts = filters.accountIds ?? [];
-  // The route prices a row by its account's kind and skips a row whose account left the registry.
-  const kept = rows.filter((r) => Date.parse(r.hour) >= first && Date.parse(r.hour) < end && accountById.has(r.accountId) && (accounts.length === 0 || accounts.includes(r.accountId)));
   const groupOf = burnGroupOf(groupBy, filters.userAgentGroups ?? []);
   const sums = new Map<string, Map<number, BurnSum>>();
-  for (const r of kept) {
-    const at = Math.floor((Date.parse(r.hour) - first) / bucketMs) * bucketMs + first;
+  for (const r of rows) {
+    const hour = Date.parse(r.hour);
+    // The route prices a row by its account's kind and skips a row whose account left the registry.
+    const kept = hour >= first && hour < end && accountById.has(r.accountId) && (accounts.length === 0 || accounts.includes(r.accountId));
+    if (!kept) continue;
+    const at = starts[slotOf(hour)];
     const oauth = accountById.get(r.accountId)?.kind === 'oauth';
     // A fast answer spends usage credits and an overage row the account's overage, each in dollars on either kind
     // and off every plan window: on a tier the cost model sizes they read as a zero share, so the account is still a
@@ -556,32 +559,34 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
   if (groupBy === 'session') groups = [...groups].sort((a, b) => tokensOf(b) - tokensOf(a)).slice(0, BURN_SESSIONS).sort();
   // The route answers the shares and the unit where each group holds one account's rows: the account grouping, or a
   // filter naming exactly one account.
-  const points = groups.flatMap((group) =>
-    starts.map((at): BurnPoint => {
-      const s = sums.get(group)?.get(at) ?? emptyBurn();
-      const account = shareAccountOf(group, groupBy, filters.accountIds);
-      const kind = account === null ? undefined : accountById.get(account)?.kind;
-      const share = (list: (number | null)[]) => (account === null ? null : bucketShare(list));
-      // The route answers no 5-hour share where the account's window set lacks the window, a billed row's zero
-      // included.
-      const fiveHour = account !== null && !sharedWindowsOf(account).includes('five_hour') ? null : share(s.fiveHour);
+  const points = groups.flatMap((group) => {
+    const byAt = sums.get(group);
+    const account = shareAccountOf(group, groupBy, filters.accountIds);
+    const holder = account === null ? undefined : accountById.get(account);
+    const share = (list: (number | null)[]) => (account === null ? null : bucketShare(list));
+    // The route answers no 5-hour share where the account's window set lacks the window, a billed row's zero included.
+    const noFiveHour = account !== null && !sharedWindowsOf(account).includes('five_hour');
+    // A usage-based seat is a paid source, so its burn reads in dollars as an API key's does.
+    const unit = holder === undefined ? null : isPaidSource(holder) ? 'usd' : 'window_share';
+    return starts.map((at): BurnPoint => {
+      const s = byAt?.get(at) ?? emptyBurn();
       return {
         at: iso(at),
         cachedTokens: Math.round(s.cached),
         equivalent: bucketShare(s.equivalent),
-        fiveHourShare: fiveHour,
+        fiveHourShare: noFiveHour ? null : share(s.fiveHour),
         group,
         modelWeekShare: share(s.week),
         sevenDayShare: share(s.sevenDay),
         tokens: Math.round(s.tokens),
         uncachedTokens: Math.round(s.uncached),
-        unit: kind === undefined ? null : kind === 'oauth' && !usageBased.has(account ?? '') ? 'window_share' : 'usd',
+        unit,
         // Every row the list holds carried tokens, so a null among the figures is a row priced nothing.
         unpriced: s.equivalent.some((v) => v === null),
         usd: s.usd,
       };
-    }),
-  );
+    });
+  });
   return { bucketSeconds: bucketMs / 1_000, points };
 }
 
@@ -601,19 +606,19 @@ const FIT_TURNS = ['fits', 'fits', 'rewrite_only', 'fits', 'least_bad', 'fits', 
  * reads carries it: the slow-down waits of the bucket's requests summed, and the requests that waited one.
  */
 export function rewritesOf(rollups: AccountRollup[], requests: RequestLog[], range: Range): RewritesAnswer {
-  const { bucketMs, starts } = bucketsOf(range);
+  const { slotOf, starts } = bucketsOf(range);
   // Placed in their buckets in one pass, as the series places its rows: the rollups that moved a pin in, each with its
   // parsed hour, and the requests that waited on a slow-down, each with its summed wait.
   const moved = starts.map((): { hour: number; r: AccountRollup }[] => []);
   for (const r of rollups) {
     if (r.pins.migratedIn === 0) continue;
     const hour = Date.parse(r.hour);
-    moved[Math.floor((hour - starts[0]) / bucketMs)]?.push({ hour, r });
+    moved[slotOf(hour)]?.push({ hour, r });
   }
   const slowedMs = starts.map((): number[] => []);
   for (const r of requests) {
     const slowed = (r.held?.waits ?? []).filter((w) => w.reason === 'slow_down');
-    if (slowed.length > 0) slowedMs[Math.floor((Date.parse(r.at) - starts[0]) / bucketMs)]?.push(slowed.reduce((n, w) => n + w.heldMs, 0));
+    if (slowed.length > 0) slowedMs[slotOf(Date.parse(r.at))]?.push(slowed.reduce((n, w) => n + w.heldMs, 0));
   }
   const movesByReasonAndFit: Record<string, Record<string, number>> = {};
   const points = starts.map((at, i): RewritePoint => {
@@ -863,7 +868,7 @@ export function unusedAllowanceOf(events: EventSeed[], accounts: Account[], hist
       }
       if (ended !== null) {
         for (const h of history) {
-          const window = LEDGER_WINDOW[h.windowId] ?? h.windowId;
+          const window = WINDOW_KEY[h.windowId] ?? h.windowId;
           if (h.accountId !== a.id || !isWeekly(window)) continue;
           const before = h.samples.filter((x) => Date.parse(x.at) < ended);
           const last = before[before.length - 1];
