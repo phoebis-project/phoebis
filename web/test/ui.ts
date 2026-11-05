@@ -27,6 +27,7 @@ export { PlanRates } from '@/components/costs/PlanRates';
 export { PAGE_TITLES } from '@/components/shell/Shell';
 export { OptionList } from '@/components/ui/OptionList';
 export { Popover, PopoverHost } from '@/components/ui/Popover';
+export { sumTileOf } from '@/components/ui/Tile';
 export { UnitLegend } from '@/components/ui/UnitControls';
 export { Button, ConfirmDialog, CopyButton, Descriptions, Dialog, Menu, PageLoadFailed } from '@/components/ui/primitives';
 export { installClock } from '@/lib/clock';
