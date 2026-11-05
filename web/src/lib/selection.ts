@@ -242,8 +242,8 @@ const listOf = (names: StatusPart[]): StatusPart[] => names.flatMap((name, i) =>
  * returns at the latest of its budget's period end (daily, monthly, or plain "budget" when no spend report names the
  * period), its latest account-scope cooldown end and its overage window's reset, which an overage verdict returns at
  * too. A spent verdict returns at its spend cap's reset. A blocker without an end (a budget the degraded ledger leaves
- * unknown, a cooldown without an account-scope row, an overage window or a spend cap without a reset, unavailable)
- * gives no return, and so does a budget verdict without an end.
+ * unknown, a cooldown without an account-scope row, an overage window or a spend cap without a reset, or an unavailable
+ * member) gives no return, and so does a budget verdict without an end.
  */
 function returnOf(pool: Pool, member: PoolMember, name: StatusPart, account: Account | undefined, now: number): { at: number; parts: StatusPart[] } | null {
   const ends: { at: number; parts: StatusPart[] }[] = [];
