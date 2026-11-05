@@ -2279,7 +2279,7 @@ textarea.input {
   border-radius: 50%;
 }
 
-/* Without centring, the min-height below stretches a child shorter than the
+/* Without centering, the min-height below stretches a child shorter than the
    row, such as a badge, past the size it has everywhere else. */
 .chips {
   display: flex;
@@ -2368,7 +2368,7 @@ textarea.input {
 }
 
 /* The head's disclosure wraps to a line of its own at narrower widths, where it starts under the sentence's first
-   word; on the sentence's line the space before it is the gap. */
+   word. On the sentence's line the space before it is the gap. */
 .page-head__lead .link-btn {
   padding-inline: 0;
 }
