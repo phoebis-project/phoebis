@@ -221,7 +221,7 @@ export function requestsRange(lastRequestAt: string | null, now: number): Reques
 }
 
 /** Whether the mod released a line's agent, which a live session's row draws only under the Released agents filter. */
-export function isReleasedLine(line: Pick<SessionLine, 'lifecycle'>): boolean {
+function isReleasedLine(line: Pick<SessionLine, 'lifecycle'>): boolean {
   return line.lifecycle === 'released';
 }
 
