@@ -49,12 +49,16 @@ export * from '@/lib/format';
 export * from '@/lib/forms';
 export * from '@/lib/guardrails';
 export * from '@/lib/keepalive';
+// keepalive and quota both export a STATUS_TONE, which the two star exports would drop: quota's keeps the name through
+// the explicit export below, and keepalive's reads under this alias.
+export { STATUS_TONE as LIFECYCLE_STATUS_TONE } from '@/lib/keepalive';
 export * from '@/lib/menu';
 export * from '@/lib/meter';
 export * from '@/lib/pattern';
 export * as modelPatterns from '@/lib/patterns';
 export * from '@/lib/presets';
 export * from '@/lib/quota';
+export { STATUS_TONE } from '@/lib/quota';
 export * from '@/lib/requests';
 export * from '@/lib/requestsLink';
 export * from '@/lib/rings';

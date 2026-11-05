@@ -11873,9 +11873,9 @@ async function sessionsSortOrder(theme) {
 }
 
 /**
- * The Sessions table's fork badge against the row's other badges: it sits under the session id's line in the face of
- * the Status badges (its height is free, since it wraps its words when the column is narrower than they are). Both
- * seeds record a fork, so both passes measure the fork badge, and only the mock's pass fails when none is drawn.
+ * The Sessions table's fork badge against the row's other badges: it reads `fork` alone at the head of the client line
+ * under the session id, in the face of the Status badges. Both seeds record a fork, so both passes measure the fork
+ * badge, and only the mock's pass fails when none is drawn.
  */
 async function sessionForkMark(theme) {
   const say = (what) => failures.push(`${theme} /sessions: ${what}`);
