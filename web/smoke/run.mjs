@@ -24116,10 +24116,14 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
       const whole = new Map();
       for (const r of await api.listKeepaliveRecipes()) whole.set(r.sessionId, (whole.get(r.sessionId) ?? true) && r.agentState === 'released');
       const id = [...whole].find(([, all]) => all)?.[0];
+      const rowOf = () => rows().find((r) => cell(r, 'Session')?.getAttribute('title') === id);
       await m.navigate('/sessions');
-      const bare = rows().find((r) => cell(r, 'Session')?.getAttribute('title') === id);
+      const bare = rowOf();
       await m.navigate('/sessions?finished=1');
-      const row = rows().find((r) => cell(r, 'Session')?.getAttribute('title') === id);
+      // The filter calls no mock route, so the navigation's settle has no call to wait out, and the router draws the
+      // address in a transition, which can still be rendering every column's rows when two reads of the old text agree.
+      await until(m, () => rowOf() !== undefined);
+      const row = rowOf();
       row?.click();
       await m.settle(150);
       const detail = row?.nextElementSibling?.classList.contains('srow__detail') ? row.nextElementSibling : null;
@@ -24139,6 +24143,8 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
       row?.click();
       await m.settle(150);
       await m.navigate('/sessions');
+      // The way back draws in a transition too, and the cases after this one read the bare address's rows.
+      await until(m, () => rowOf() === undefined);
       results.push({
         name: '/sessions the session the mod released whole is hidden on the bare address, and under ?finished=1 reads one sentence above every line ended with its probe facts, keeps its released badge with a title that words a released main agent, and counts the lines drawn',
         ok:
