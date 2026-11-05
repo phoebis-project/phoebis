@@ -23126,7 +23126,7 @@ await forView('/sessions', async () => {
     missing: [String(bare.sessionsValue), String(bare.sessionsTile), String(bare.agentsTile), String(bare.agentsTitle)],
   });
   {
-    // The Companion filter on both of its companion words keeps the thirteen rows a companion reports or went silent on.
+    // The Companion filter on reporting and silent keeps the thirteen rows a companion reports or went silent on.
     const only = await read('?companion=reporting,silent');
     const kept = drawnOf(only);
     results.push({
