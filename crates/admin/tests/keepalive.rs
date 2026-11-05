@@ -1749,7 +1749,8 @@ async fn lines(
 }
 
 /// The line the route answers for a `line_pin` of `agent` under `model` used at `last_used_at`, with the agent's
-/// lifecycle word where the engine holds its record.
+/// lifecycle word where the engine holds its record. A `line_pin` burns nothing on the plan account `business`, whose
+/// tier `lines_harness` leaves unnamed, so its burn is a 5-hour share the route cannot size and its Pro-week figure 0.
 fn line(agent: &str, model: &str, last_used_at: i64, lifecycle: Option<&str>) -> serde_json::Value {
     serde_json::json!({
         "agent_id": agent,
@@ -1760,6 +1761,11 @@ fn line(agent: &str, model: &str, last_used_at: i64, lifecycle: Option<&str>) ->
         "cache_ttl_ms": 300_000,
         "last_used_at": last_used_at,
         "warm": true,
+        "burn": null,
+        "burn_unit": "window_share",
+        "burn_window": "five_hour",
+        "burn_equivalent": 0.0,
+        "burn_at": common::NOW,
         "created_at": null,
         "lifecycle": lifecycle,
     })

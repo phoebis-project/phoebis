@@ -16103,6 +16103,11 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_ttl_ms": 300000,
               "last_used_at": 1791721000000,
               "warm": true,
+              "burn": 0,
+              "burn_unit": "window_share",
+              "burn_window": "five_hour",
+              "burn_equivalent": 0,
+              "burn_at": null,
               "created_at": 1791721000000,
               "lifecycle": null
             }
@@ -16161,6 +16166,11 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_ttl_ms": 300000,
               "last_used_at": 1791721000000,
               "warm": true,
+              "burn": 0,
+              "burn_unit": "usd",
+              "burn_window": null,
+              "burn_equivalent": null,
+              "burn_at": null,
               "created_at": 1791721000000,
               "lifecycle": null
             }
@@ -16219,6 +16229,11 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_ttl_ms": 300000,
               "last_used_at": 1791721000000,
               "warm": true,
+              "burn": 0.00104,
+              "burn_unit": "window_share",
+              "burn_window": "five_hour",
+              "burn_equivalent": 0.0017333333333333335,
+              "burn_at": 1791721000000,
               "created_at": 1791717340000,
               "lifecycle": "busy"
             },
@@ -16231,6 +16246,11 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_ttl_ms": 300000,
               "last_used_at": 1791721000000,
               "warm": true,
+              "burn": 0.0006199999999999999,
+              "burn_unit": "window_share",
+              "burn_window": "five_hour",
+              "burn_equivalent": 0.0010333333333333334,
+              "burn_at": 1791721000000,
               "created_at": 1791717340000,
               "lifecycle": "busy"
             },
@@ -16243,6 +16263,11 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_ttl_ms": 300000,
               "last_used_at": 1791721000000,
               "warm": true,
+              "burn": 0.07400000000000001,
+              "burn_unit": "usd",
+              "burn_window": null,
+              "burn_equivalent": null,
+              "burn_at": 1791721000000,
               "created_at": 1791717340000,
               "lifecycle": "busy"
             }

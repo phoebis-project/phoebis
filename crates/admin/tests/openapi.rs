@@ -878,6 +878,11 @@ async fn a_session_row_answers_its_effort_and_its_agent_lines() {
         BTreeSet::from([
             "account_id",
             "agent_id",
+            "burn",
+            "burn_at",
+            "burn_equivalent",
+            "burn_unit",
+            "burn_window",
             "cache_ttl_ms",
             "created_at",
             "effort",

@@ -7189,7 +7189,10 @@ fn dropped_members(row: &serde_json::Value) -> Vec<String> {
 }
 
 /// An agent line as the route answers it, under the harness pins' five-minute TTL and with no first-seen record, with
-/// the agent's lifecycle word where the engine holds its record.
+/// the agent's lifecycle word where the engine holds its record. The harness pins burn nothing, so a line's burn reads
+/// 0, served at the rig's clock, in the unit of the account its own pin sits on: a share of the 5-hour window on
+/// `business`, whose tier the harness names, and dollars with no window and no Pro-week figure on the API-key account
+/// `direct`.
 // Each argument is a member the case pins, so a struct of them would only rename the call sites.
 #[allow(clippy::too_many_arguments)]
 fn agent_line(
@@ -7202,6 +7205,7 @@ fn agent_line(
     warm: bool,
     lifecycle: Option<&str>,
 ) -> serde_json::Value {
+    let plan = account == "business";
     serde_json::json!({
         "agent_id": agent,
         "model": model,
@@ -7211,6 +7215,11 @@ fn agent_line(
         "cache_ttl_ms": 300_000,
         "last_used_at": last_used_at,
         "warm": warm,
+        "burn": 0.0,
+        "burn_unit": if plan { "window_share" } else { "usd" },
+        "burn_window": plan.then_some("five_hour"),
+        "burn_equivalent": plan.then_some(0.0),
+        "burn_at": common::NOW,
         "created_at": null,
         "lifecycle": lifecycle,
     })

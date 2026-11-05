@@ -141,6 +141,19 @@ pub(crate) struct AgentContext {
     pub last_used_at: i64,
     /// Whether `now - last_used_at < cache_ttl_ms` at the read: the cache entry the pin warms is still alive.
     pub warm: bool,
+    /// The pin's typed burn per hour in `burn_unit`, priced as the row's `burn` is for this pin.
+    pub burn: Option<f64>,
+    /// `window_share` or `usd` for this pin, as the row's `burn_unit`.
+    #[schema(example = "window_share")]
+    pub burn_unit: Option<String>,
+    /// The window `burn` is a share of for this pin, as the row's `burn_window`.
+    #[schema(example = "five_hour")]
+    pub burn_window: Option<String>,
+    /// The pin's burn per hour as the Pro-week figure, as the row's `burn_equivalent`.
+    pub burn_equivalent: Option<f64>,
+    /// The instant the pin's served burn is decayed to, as the row's `burn_at`. Null for a pin never renewed with
+    /// usage.
+    pub burn_at: Option<i64>,
     /// The first placement of the pin's agent under the key and session, null where no record stands.
     pub created_at: Option<i64>,
     /// The agent's lifecycle word from the keepalive engine's record, null where no mod reports it.
@@ -314,6 +327,15 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         seven_day: state.tables.regime_rates(SEVEN_DAY, now),
         fast: prices.fast_rate_table(),
     };
+    let pricing = BurnPricing {
+        snapshot: &snapshot,
+        overages: &overages,
+        reported: &reported,
+        rates: &rates,
+        tables: &state.tables,
+        now,
+        fallback_ms,
+    };
     let mut tiers: std::collections::HashMap<String, Option<String>> =
         std::collections::HashMap::new();
     // Every standing carries its session's creation time, an auxiliary-only one and one past the expiry among them,
@@ -356,52 +378,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         if !keep {
             continue;
         }
-        // The unit a reader takes for `burn`, the account's kind, its class and whether its overage evidence stands
-        // now: the same predicate every reader of it applies, so this row never disagrees with the selector. A pin
-        // whose account left the registry has no kind to pick a unit from, so both read null rather than
-        // guessing one.
-        let unit = snapshot.account(&p.account_id).map(|a| a.kind).map(|kind| {
-            let in_overage = overages
-                .iter()
-                .any(|(id, e)| *id == p.account_id && e.stands(now, fallback_ms));
-            BurnUnit::of(kind, snapshot.usage_based(&p.account_id), in_overage)
-        });
-        let window = if reported
-            .get(&p.account_id)
-            .is_none_or(|sample| sample.has_window(FIVE_HOUR))
-        {
-            FIVE_HOUR
-        } else {
-            SEVEN_DAY
-        };
-        let burn_window = (unit == Some(BurnUnit::WindowShare)).then_some(window);
-        let equivalent = (unit == Some(BurnUnit::WindowShare))
-            .then(|| rates.price_pin(BurnUnit::WindowShare, p, SEVEN_DAY))
-            .flatten()
-            .map(|b| b * 3_600.0);
-        let burn = match unit {
-            None => None,
-            Some(BurnUnit::Usd) => rates
-                .price_pin(BurnUnit::Usd, p, FIVE_HOUR)
-                .map(|b| b * 3_600.0),
-            Some(BurnUnit::WindowShare) => {
-                if !tiers.contains_key(&p.account_id) {
-                    // The selector's own read of the plan, so a plan the cost model does not price (a free
-                    // organization) reads unpriced here as it does there.
-                    let tier = snapshot.priced_tier(&p.account_id).map(String::from);
-                    tiers.insert(p.account_id.clone(), tier);
-                }
-                let tier = tiers.get(&p.account_id).and_then(Option::as_deref);
-                // An account tier the cost model does not size prices nothing, as does a model without a weight, so
-                // the figure reads null rather than a guess.
-                tier.and_then(|t| state.tables.tier_factor(t, window, entrypoint_of(p), now))
-                    .and_then(|factor| {
-                        rates
-                            .price_pin(BurnUnit::WindowShare, p, window)
-                            .map(|b| b * 3_600.0 / factor)
-                    })
-            }
-        };
+        let priced = price_pin_burn(p, &pricing, &mut tiers);
         let created_at = created.get(&key).copied();
         rows.insert(
             key,
@@ -412,11 +389,11 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                 last_used_at: Some(p.last_used_at),
                 requests: None,
                 pinned: true,
-                burn,
-                burn_unit: unit.map(|unit| unit.as_str().into()),
-                burn_window: burn_window.map(String::from),
-                burn_equivalent: equivalent,
-                burn_at: p.burn_at,
+                burn: priced.burn,
+                burn_unit: priced.unit.map(|unit| unit.as_str().into()),
+                burn_window: priced.window.map(String::from),
+                burn_equivalent: priced.equivalent,
+                burn_at: priced.at,
                 runway_ms: standing.runway_ms,
                 runway_bounded: standing.runway_bounded,
                 speed: standing.speed,
@@ -565,6 +542,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
             .into_iter()
             .map(|standing| {
                 let pin = &standing.pin;
+                let priced = price_pin_burn(pin, &pricing, &mut tiers);
                 AgentContext {
                     agent_id: pin.agent_id.clone(),
                     model: pin.model.clone(),
@@ -574,6 +552,11 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                     cache_ttl_ms: pin.cache_ttl_ms,
                     last_used_at: pin.last_used_at,
                     warm: now - pin.last_used_at < pin.cache_ttl_ms,
+                    burn: priced.burn,
+                    burn_unit: priced.unit.map(|unit| unit.as_str().into()),
+                    burn_window: priced.window.map(String::from),
+                    burn_equivalent: priced.equivalent,
+                    burn_at: priced.at,
                     created_at: standing.first_seen_at,
                     lifecycle: engine
                         .get(key)
@@ -634,6 +617,96 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
     };
     out.sort_by_key(|row| std::cmp::Reverse(latest(row)));
     Ok(out)
+}
+
+/// What every pin's burn is priced through, read once per request.
+struct BurnPricing<'a> {
+    snapshot: &'a phoebis_routing::RegistrySnapshot,
+    overages: &'a [(String, phoebis_routing::OverageEvidence)],
+    reported: &'a std::collections::BTreeMap<String, phoebis_routing::UtilizationSample>,
+    rates: &'a BurnRates,
+    tables: &'a phoebis_ledger::PlanTables,
+    now: i64,
+    fallback_ms: i64,
+}
+
+/// The pin's burn per hour in its unit, its window, its Pro-week figure and the instant it is decayed to, priced on the
+/// account the pin sits on: the figures the row carries for its display pin and a line for its own.
+struct PricedBurn {
+    burn: Option<f64>,
+    unit: Option<BurnUnit>,
+    window: Option<&'static str>,
+    equivalent: Option<f64>,
+    at: Option<i64>,
+}
+
+/// Prices the row's display pin and each line's pin alike, so a row and its display pin's line answer the same figures.
+fn price_pin_burn(
+    p: &phoebis_store::PinRow,
+    pricing: &BurnPricing,
+    tiers: &mut std::collections::HashMap<String, Option<String>>,
+) -> PricedBurn {
+    let BurnPricing {
+        snapshot,
+        overages,
+        reported,
+        rates,
+        tables,
+        now,
+        fallback_ms,
+    } = *pricing;
+    // The unit a reader takes for `burn`, the account's kind, its class and whether its overage evidence stands now:
+    // the same predicate every reader of it applies, so a row or a line never disagrees with the selector. A pin whose
+    // account left the registry has no kind to pick a unit from, so both read null rather than guessing one.
+    let unit = snapshot.account(&p.account_id).map(|a| a.kind).map(|kind| {
+        let in_overage = overages
+            .iter()
+            .any(|(id, e)| *id == p.account_id && e.stands(now, fallback_ms));
+        BurnUnit::of(kind, snapshot.usage_based(&p.account_id), in_overage)
+    });
+    let window = if reported
+        .get(&p.account_id)
+        .is_none_or(|sample| sample.has_window(FIVE_HOUR))
+    {
+        FIVE_HOUR
+    } else {
+        SEVEN_DAY
+    };
+    let burn_window = (unit == Some(BurnUnit::WindowShare)).then_some(window);
+    let equivalent = (unit == Some(BurnUnit::WindowShare))
+        .then(|| rates.price_pin(BurnUnit::WindowShare, p, SEVEN_DAY))
+        .flatten()
+        .map(|b| b * 3_600.0);
+    let burn = match unit {
+        None => None,
+        Some(BurnUnit::Usd) => rates
+            .price_pin(BurnUnit::Usd, p, FIVE_HOUR)
+            .map(|b| b * 3_600.0),
+        Some(BurnUnit::WindowShare) => {
+            if !tiers.contains_key(&p.account_id) {
+                // The selector's own read of the plan, so a plan the cost model does not price (a free
+                // organization) reads unpriced here as it does there.
+                let tier = snapshot.priced_tier(&p.account_id).map(String::from);
+                tiers.insert(p.account_id.clone(), tier);
+            }
+            let tier = tiers.get(&p.account_id).and_then(Option::as_deref);
+            // An account tier the cost model does not size prices nothing, as does a model without a weight, so
+            // the figure reads null rather than a guess.
+            tier.and_then(|t| tables.tier_factor(t, window, entrypoint_of(p), now))
+                .and_then(|factor| {
+                    rates
+                        .price_pin(BurnUnit::WindowShare, p, window)
+                        .map(|b| b * 3_600.0 / factor)
+                })
+        }
+    };
+    PricedBurn {
+        burn,
+        unit,
+        window: burn_window,
+        equivalent,
+        at: p.burn_at,
+    }
 }
 
 /// The row a session's ledger activity lands on, spelled once so the fork-facts read names the row the activity pass
