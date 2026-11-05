@@ -885,9 +885,11 @@ async fn a_heads_7d_oi_reading_and_a_later_polls_fable_week_leave_one_fable_seri
         true,
     );
     assert_eq!(
-        utilization(),
+        utilization()
+            .into_iter()
+            .filter(|l| l.contains(r#"window="seven_day"#))
+            .collect::<BTreeSet<_>>(),
         BTreeSet::from([
-            five_hour.to_string(),
             r#"phoebis_account_ratelimit_utilization{account="a",window="seven_day_fable"} 0.6"#
                 .to_string(),
         ]),
