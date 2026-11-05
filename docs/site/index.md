@@ -7,6 +7,14 @@ of the Americas that land on the right flower. If you are setting a router up fo
 [Quick start](quickstart.md). The rest of this page is the three listeners, the path a request takes through them, the
 words the other pages use, what the router does not do and where each page fits.
 
+**A note on the terms.** Phoebis Router switches between Claude accounts that you personally own and pay for. Each
+account's limits stay enforced by Anthropic, and switching accounts to work past a limit is a gray area under
+[Anthropic's consumer terms](https://www.anthropic.com/legal/consumer-terms), so you run the router at your own risk.
+The terms forbid sharing an account's login or credentials with anyone else, reselling access and bypassing Anthropic's
+protective measures, and they say nothing about one person who holds several subscriptions. Do not back a shared or
+commercial service with consumer subscriptions. On its own side the router never presents an SDK client as the CLI, and
+an OAuth account refuses a request that names no user.
+
 ## The three listeners
 
 One `phoebis` process serves three listeners.
