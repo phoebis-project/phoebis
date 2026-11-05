@@ -1445,10 +1445,10 @@ async fn the_breakdown_counts_the_plan_served_credits_and_probes_and_nulls_the_p
     );
 }
 
-/// The request count on a session row is the ledger's. A pin the ledger has no row for has no count, and
-/// saying zero would read as "this session made no requests" rather than "nothing was recorded".
+/// The request count on a session row is the ledger's over the session's life, so a pin the ledger has no row for
+/// counts none.
 #[tokio::test]
-async fn a_pin_the_ledger_has_no_row_for_reports_no_request_count() {
+async fn a_pin_the_ledger_has_no_row_for_reads_a_zero_request_count() {
     // The router loads the pins at spawn and purges any whose key names no pool, so the pool, the key, and
     // the pins are written through one harness and the store is handed to the one under test.
     let seed = common::admin_parts_full().await;
@@ -1529,9 +1529,10 @@ async fn a_pin_the_ledger_has_no_row_for_reports_no_request_count() {
         (Some(3), Some(true)),
         "a pin the ledger saw carries the ledger's count"
     );
-    assert!(
-        row("silent")["requests"].is_null(),
-        "a pin with no ledger row has no count to report"
+    assert_eq!(
+        row("silent")["requests"].as_u64(),
+        Some(0),
+        "a pin with no ledger row counts no request"
     );
     assert_eq!(row("silent")["pinned"].as_bool(), Some(true));
 }

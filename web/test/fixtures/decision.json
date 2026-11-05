@@ -242,7 +242,7 @@
           {
             "period": "month",
             "budget_usd": 50.0,
-            "spent_usd": 0.0036,
+            "spent_usd": 0.00715,
             "period_start": 1790812800000,
             "period_end": 1793491200000,
             "observed_at": 1791721000000

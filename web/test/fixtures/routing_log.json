@@ -753,7 +753,7 @@
         "request_id": "r-1",
         "seq": 1,
         "attempt": 1,
-        "attempt_count": null,
+        "attempt_count": 1,
         "at": 1791721000000,
         "kind": "placed",
         "probe": false,
@@ -801,8 +801,13 @@
         "exhaustion": null,
         "refusal": null,
         "fast": false,
-        "cache": null,
-        "status": null
+        "cache": {
+          "hit": true,
+          "read_tokens": 500,
+          "promised_tokens": null,
+          "input_tokens": 1000
+        },
+        "status": 200
       },
       {
         "type": "event",

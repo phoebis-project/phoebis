@@ -14,6 +14,7 @@ use utoipa::ToSchema;
 
 use crate::openapi::{ErrorBody, LedgerFailure, RouterUnavailable};
 use crate::routes::{failure, router_unavailable};
+use crate::session_spend::{AgentRequests, SessionDay, SessionSpend};
 use crate::AdminState;
 
 /// The live pins joined with what the ledger saw and the keepalive engine's own view, one row per session.
@@ -39,7 +40,16 @@ pub(crate) struct Session {
     /// The newest use across the session's conversation pins, main's and its agents', null without a pin.
     pub last_used_at: Option<i64>,
     pub last_request_at: Option<i64>,
-    pub requests: Option<u64>,
+    /// The session's client requests over its life under its key, the ones `spend` counts, 0 where the ledger holds
+    /// none.
+    pub requests: u64,
+    /// The user agent of the session's newest client request, as the client sent it.
+    pub user_agent: Option<String>,
+    /// The session's spend over its life under its key, null where the ledger holds no request of it the router did
+    /// not refuse.
+    pub spend: Option<SessionSpend>,
+    /// The session's client requests of the last 24 hours by class, and their spend.
+    pub day: SessionDay,
     pub pinned: bool,
     /// The pin's typed burn per hour, decayed to the read with its pool's `burn_average_seconds` as a shedding round
     /// decays it, priced in `burn_unit`: the share of the account's own window `burn_window` names on plan quota,
@@ -105,6 +115,9 @@ pub(crate) struct Session {
     /// on a companion row the pins of the agents the engine holds and has not released, on a row whose `companion`
     /// is `none` the pins used within `sessions.non_companion_idle_seconds`. Empty where none draws.
     pub agent_contexts: Vec<AgentContext>,
+    /// The session's requests per agent and model, from the ledger, with each agent's type, the account and the
+    /// instant of its newest request and its spend.
+    pub agent_requests: Vec<AgentRequests>,
     /// Main's recipe, or the newest other agent's where main holds none.
     pub keepalive: SessionKeepalive,
     /// Main's lifecycle word from the keepalive engine's record, whether or not a recipe stands: `busy`, `idle`,
@@ -278,10 +291,15 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
     // the read, the activity's come from the read itself, and a row's fork facts come from the requests of its own
     // session whichever pass surfaced it. Only the sessions the retain below can keep are named: every engine
     // session, and one with a pin use or a request at or after `idle_bound`.
+    let cursor = state.spend.cursor(&state.tables, now);
     let read = state.ledger.db().read(move |c| {
+        // One WAL snapshot for every statement: `read` lends a connection and starts no transaction, and a request
+        // landing between the first fill and the incremental read would be dropped by the filled-session rule and
+        // passed by the watermark.
+        let tx = c.unchecked_transaction()?;
         // Grouped by the client's own session, which the router keys pins under, so a request shows on the row of
         // the pin it took.
-        let activity = phoebis_ledger::session_activity(c, cutoff)?;
+        let activity = phoebis_ledger::session_activity(&tx, cutoff)?;
         candidates.extend(
             activity
                 .iter()
@@ -289,7 +307,15 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                 .map(activity_key),
         );
         let keys: Vec<(String, i64, String)> = candidates.into_iter().collect();
-        Ok((activity, phoebis_ledger::session_identities(c, &keys)?))
+        // The fold's reads ride in this snapshot: the start watermark where the fold starts, the whole history of
+        // each candidate the fold does not hold yet, and the rows landed since the watermark, so one reader hold
+        // serves the poll.
+        let poll = crate::session_spend::read_poll(&tx, &cursor, &keys)?;
+        Ok((
+            activity,
+            phoebis_ledger::session_identities(&tx, &keys)?,
+            poll,
+        ))
     });
     // Each read is a snapshot of its own, so they wait together and their order carries no meaning.
     let (overages, reported, read) = tokio::join!(
@@ -298,7 +324,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         read,
     );
     let overages = overages.unwrap_or_default();
-    let (activity, identities) = match read {
+    let (activity, identities, poll) = match read {
         Ok(read) => read,
         Err(e) => return Err(crate::analytics::ledger_failure(e)),
     };
@@ -320,6 +346,9 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
     // window over its tier's capacity ratio there, both under the pin's regime. The 7-day anchor rates alone are the
     // Pro-week figure. Each account's tier and window set are read once per request.
     let revisions = state.pricing.revisions();
+    // Both spend reads are in, so the fold applies the poll's rows in one call, and before the passes, so a session
+    // the fill named reads its figures in this poll.
+    state.spend.fold(poll, &revisions, &state.tables, now);
     let prices = revisions.in_force(now);
     let rates = BurnRates {
         dollars: prices.rate_table(),
@@ -387,7 +416,6 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                 account_id: Some(p.account_id.clone()),
                 epoch: Some(p.epoch),
                 last_used_at: Some(p.last_used_at),
-                requests: None,
                 pinned: true,
                 burn: priced.burn,
                 burn_unit: priced.unit.map(|unit| unit.as_str().into()),
@@ -440,7 +468,6 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
             )
         });
         entry.last_request_at = Some(a.last_request_at);
-        entry.requests = Some(a.requests);
         if entry.account_id.is_none() {
             // Without a pin the serving account is the ledger's: the newest attempt of the newest request.
             entry.account_id = a.account_id;
@@ -609,6 +636,20 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         entry.forked_from = identity.and_then(|i| i.forked_from.clone());
         entry.fork_depth = identity.and_then(|i| i.fork_depth);
     }
+    // The count is the fold's over the session's life, so Requests and Cost read the same requests. The activity's
+    // `last_request_at` stays, which the listing's cutoff and the retention above read.
+    for (key, entry) in rows.iter_mut() {
+        let Some(figures) = state.spend.answer(key, now) else {
+            continue;
+        };
+        entry.user_agent = figures.user_agent;
+        entry.spend = figures.spend;
+        entry.day = figures.day;
+        entry.agent_requests = figures.agent_requests;
+        entry.requests = figures.requests;
+    }
+    let listed: std::collections::BTreeSet<(String, i64, String)> = rows.keys().cloned().collect();
+    state.spend.retain(&listed, now, state.session_expiry);
     let mut out: Vec<Session> = rows.into_values().collect();
     let latest = |row: &Session| {
         row.last_used_at
@@ -735,7 +776,10 @@ fn unpinned_row(
         created_at,
         last_used_at: None,
         last_request_at: None,
-        requests: Some(0),
+        requests: 0,
+        user_agent: None,
+        spend: None,
+        day: SessionDay::default(),
         pinned: false,
         burn: None,
         burn_unit: None,
@@ -758,6 +802,7 @@ fn unpinned_row(
         companion_since: None,
         agents: 0,
         agent_contexts: Vec::new(),
+        agent_requests: Vec::new(),
         keepalive: SessionKeepalive::default(),
         lifecycle: None,
         presence_age_seconds: None,

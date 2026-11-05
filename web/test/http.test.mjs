@@ -422,7 +422,7 @@ test('the placements read sends the range and the key and pool lists, the budget
     budgets.map((b) => [b.accountId, b.kind, b.spentUsd, b.periodEnd]),
     [
       ['business', 'oauth', wire.business.spent_usd, end],
-      ['direct', 'api_key', 0.0036, end],
+      ['direct', 'api_key', 0.00715, end],
     ],
   );
 });

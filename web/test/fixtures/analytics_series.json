@@ -105,36 +105,36 @@
             "key": "desktop",
             "label": "desktop",
             "key_id": "desktop",
-            "requests": 7,
-            "succeeded": 6,
+            "requests": 9,
+            "succeeded": 8,
             "rate_limited": 0,
             "failed": 0,
             "exhausted": 0,
             "rejected": 0,
-            "attempts": 8,
+            "attempts": 10,
             "failovers": 1,
             "incomplete": 1,
-            "cache_hits": 7,
+            "cache_hits": 9,
             "cache_misses": 0,
             "uncached": 0,
             "expired_between_turns": 0,
             "tokens": {
-              "cache_read": 4000,
+              "cache_read": 5000,
               "cache_write_1h": 0,
-              "cache_write_5m": 1600,
-              "output": 800,
-              "thinking": 320,
-              "uncached_input": 8000,
+              "cache_write_5m": 2000,
+              "output": 1000,
+              "thinking": 400,
+              "uncached_input": 10000,
               "web_fetch": 0,
               "web_search": 0
             },
             "cost": {
-              "cache_read": 0.0004000000000000001,
-              "cache_write": 0.004,
-              "input": 0.016,
-              "output": 0.008
+              "cache_read": 0.00055,
+              "cache_write": 0.005000000000000001,
+              "input": 0.020000000000000004,
+              "output": 0.010000000000000002
             },
-            "cost_usd": 0.0284,
+            "cost_usd": 0.035550000000000005,
             "errors": {
               "stream_incomplete": 1
             },
@@ -144,7 +144,7 @@
               "guardrail_blocked": 1
             },
             "cache_miss_reasons": {
-              "none": 7
+              "none": 9
             },
             "histograms": {
               "duration_ms": [
@@ -185,7 +185,7 @@
                 0,
                 0,
                 0,
-                7,
+                9,
                 0,
                 0,
                 0,
@@ -242,7 +242,7 @@
                 0,
                 0,
                 0,
-                6,
+                8,
                 0,
                 0,
                 0,
@@ -306,7 +306,7 @@
                 0,
                 0,
                 0,
-                6,
+                8,
                 0,
                 0,
                 0,
@@ -377,7 +377,7 @@
                 0,
                 0,
                 0,
-                6,
+                8,
                 0,
                 0,
                 0,
@@ -459,12 +459,12 @@
             "wasted_probe_usd": 0.0,
             "wasted_probe_reasons": {},
             "cost_shares": null,
-            "plan_requests": 5,
-            "plan_output_tokens": 500,
-            "cost_equivalent": 0.000094,
+            "plan_requests": 6,
+            "plan_output_tokens": 600,
+            "cost_equivalent": 0.0001175,
             "cache_equivalent": {
-              "read": 6.666666666666667e-7,
-              "write": 0.000013333333333333333
+              "read": 8.333333333333333e-7,
+              "write": 0.000016666666666666667
             },
             "probe_equivalent": {
               "cost": 0.0,
@@ -472,18 +472,18 @@
             },
             "saving_usd": 0.0,
             "saving_equivalent": 0.0,
-            "billed_usd": 0.01065,
+            "billed_usd": 0.0142,
             "billed": {
-              "cache_read": 0.00015000000000000001,
-              "cache_write": 0.0015,
-              "input": 0.006,
-              "output": 0.003
+              "cache_read": 0.0002,
+              "cache_write": 0.002,
+              "input": 0.008,
+              "output": 0.004
             },
             "equivalent_split": {
-              "input": 0.00005333333333333333,
-              "cache_read": 6.666666666666667e-7,
-              "cache_write": 0.000013333333333333333,
-              "output": 0.000026666666666666667
+              "input": 0.00006666666666666667,
+              "cache_read": 8.333333333333333e-7,
+              "cache_write": 0.000016666666666666667,
+              "output": 0.000033333333333333335
             }
           },
           {
@@ -876,43 +876,43 @@
             "key": "desktop",
             "label": "desktop",
             "key_id": "desktop",
-            "requests": 4,
-            "succeeded": 3,
+            "requests": 5,
+            "succeeded": 4,
             "rate_limited": 0,
             "failed": 1,
             "exhausted": 0,
             "rejected": 0,
-            "attempts": 4,
+            "attempts": 5,
             "failovers": 0,
             "incomplete": 0,
-            "cache_hits": 4,
+            "cache_hits": 5,
             "cache_misses": 0,
             "uncached": 0,
             "expired_between_turns": 0,
             "tokens": {
-              "cache_read": 2000,
+              "cache_read": 2500,
               "cache_write_1h": 0,
-              "cache_write_5m": 800,
-              "output": 400,
-              "thinking": 160,
-              "uncached_input": 4000,
+              "cache_write_5m": 1000,
+              "output": 500,
+              "thinking": 200,
+              "uncached_input": 5000,
               "web_fetch": 0,
               "web_search": 0
             },
             "cost": {
-              "cache_read": 0.0002,
-              "cache_write": 0.0015,
-              "input": 0.006,
-              "output": 0.003
+              "cache_read": 0.00030000000000000003,
+              "cache_write": 0.002,
+              "input": 0.008,
+              "output": 0.004
             },
-            "cost_usd": 0.010700000000000001,
+            "cost_usd": 0.0143,
             "errors": {
               "upstream_error": 1
             },
             "refused": 0,
             "refusals": {},
             "cache_miss_reasons": {
-              "none": 3,
+              "none": 4,
               "pending": 1
             },
             "histograms": {
@@ -954,7 +954,7 @@
                 0,
                 0,
                 0,
-                4,
+                5,
                 0,
                 0,
                 0,
@@ -1011,7 +1011,7 @@
                 0,
                 0,
                 0,
-                4,
+                5,
                 0,
                 0,
                 0,
@@ -1075,7 +1075,7 @@
                 0,
                 0,
                 0,
-                4,
+                5,
                 0,
                 0,
                 0,
@@ -1146,7 +1146,7 @@
                 0,
                 0,
                 0,
-                4,
+                5,
                 0,
                 0,
                 0,
@@ -1228,8 +1228,8 @@
             "wasted_probe_usd": 0.0,
             "wasted_probe_reasons": {},
             "cost_shares": null,
-            "plan_requests": 3,
-            "plan_output_tokens": 300,
+            "plan_requests": 4,
+            "plan_output_tokens": 400,
             "cost_equivalent": null,
             "cache_equivalent": null,
             "probe_equivalent": {

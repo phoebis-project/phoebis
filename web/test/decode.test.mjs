@@ -1698,7 +1698,7 @@ test('a decision record decodes its six blocks and the completion', () => {
   assert.ok(isIso(chosen.windows.fast_input.observedAt));
   assert.deepEqual(chosen.cooldowns.map((c) => [c.scope, c.blocking]), [['model:claude-haiku-4-5-20251001', false]]);
   assert.deepEqual([chosen.verdict, spare.verdict, spare.kind, spare.pace.hours], ['chosen', 'not_needed', 'api_key', null]);
-  assert.equal(spare.budget[0].spentUsd, 0.0036);
+  assert.equal(spare.budget[0].spentUsd, 0.00715);
   assert.deepEqual(r.walk.map((s) => s.step), ['pin', 'eligible', 'partitions', 'rung:content', 'rung:with_main', 'rung:static', 'reserve']);
   assert.deepEqual(r.walk[5].facts[0], { accountId: null, key: 'depth', unit: 'count', value: 1 });
   assert.deepEqual(r.walk[1].facts[0], { accountId: 'business', key: 'standing', unit: null, value: 'eligible' });
@@ -1748,19 +1748,19 @@ test("a refusal's record decodes its pin reason as not looked up", () => {
 test('request rows fold into analytics groups with the same sums the routes answer', () => {
   const page = d.decodeRequestPage(fixture('requests'));
   const [all] = d.foldGroups(page.requests, 'all');
-  assert.equal(all.requests, 11, 'the two requests the route flagged refused leave the count');
+  assert.equal(all.requests, 14, 'the two requests the route flagged refused leave the count');
   assert.equal(all.refused, 2, 'the fold counts them under refused');
   assert.deepEqual({ ...all.refusals }, { client_contract: 1, guardrail_blocked: 1 }, 'and under their codes');
   assert.equal(all.rejected, 0, 'and under no outcome');
   assert.ok(!('client_contract' in all.errors) && !('guardrail_blocked' in all.errors), JSON.stringify({ ...all.errors }));
-  assert.equal(all.succeeded, 9);
+  assert.equal(all.succeeded, 12);
   assert.equal(all.failed, 1, 'a stream that ended short is not a failure');
   assert.equal(all.incomplete, 1);
-  assert.equal(all.attempts, 12);
+  assert.equal(all.attempts, 15);
   assert.equal(all.failovers, 1);
-  assert.equal(all.tokens.cacheRead, 5500);
-  assert.equal(all.histograms.ttfbMs.reduce((a, b) => a + b, 0), 11);
-  assert.equal(all.cacheMissReasons.none, 10);
+  assert.equal(all.tokens.cacheRead, 7000);
+  assert.equal(all.histograms.ttfbMs.reduce((a, b) => a + b, 0), 14);
+  assert.equal(all.cacheMissReasons.none, 13);
   assert.equal(all.cacheMissReasons.pending, 1, 'a comparison still running counts under its own word');
   assert.equal(all.probes.ok, 0);
   assert.equal(all.probes.held, 0, 'a group folded from request rows counts no held probe');
@@ -2207,7 +2207,7 @@ test('a session fold keeps two holders of one key id apart and labels the earlie
   const groups = inZone('UTC', () => d.foldGroups(rows, 'key'));
   assert.deepEqual(
     groups.map((g) => [g.key, g.label, g.requests]),
-    [[`desktop@${live.keyGeneration}`, 'desktop', 10], [`desktop@${earlier.keyGeneration}`, 'desktop (deleted, created Oct 11, 2026, 12:15)', 1]],
+    [[`desktop@${live.keyGeneration}`, 'desktop', 13], [`desktop@${earlier.keyGeneration}`, 'desktop (deleted, created Oct 11, 2026, 12:15)', 1]],
     'the key a group carries is the lifetime the requests route selects by',
   );
   assert.deepEqual(d.foldGroups([{ ...live, keyGeneration: 0, keyId: null }], 'key').map((g) => [g.key, g.label]), [['-@0', 'unattributed']]);
@@ -2246,12 +2246,12 @@ test('a session view folds every page the cursor names', () => {
   const load = async (cursor) => { calls += 1; return cursor === undefined ? pages[0] : pages[1]; };
   return d.loadSessionRequests(load, 20).then(({ partial, requests }) => {
     assert.equal(calls, 2);
-    assert.equal(requests.length, 13, 'both pages folded');
+    assert.equal(requests.length, 16, 'both pages folded');
     assert.equal(partial, false);
     return d.loadSessionRequests(async () => ({ nextCursor: 'more', requests: page.requests }), 2);
   }).then(({ partial, requests }) => {
     assert.equal(partial, true, 'the page bound marks the result partial');
-    assert.equal(requests.length, 26);
+    assert.equal(requests.length, 32);
   });
 });
 
@@ -2325,7 +2325,7 @@ test('the dashboard, sessions, recipes, and overview decode', () => {
   assert.equal(s1.keepalive.state, 'busy');
   assert.equal(s1.keepalive.cause, 'scheduled');
   assert.equal(s1.presenceAgeSeconds, null, 'the captured mod reported no presence');
-  assert.equal(s1.requests, 3);
+  assert.equal(s1.requests, 5);
   assert.ok(isIso(s1.lastUsedAt));
   const [recipe] = fixture('keepalive_recipes').recipes.map(d.decodeRecipe);
   assert.deepEqual([recipe.state, recipe.cause, recipe.agentState, recipe.parkKind, recipe.probesToday, recipe.creditedToday], ['retained', 'scheduled', 'busy', null, 0, 0]);
@@ -2359,7 +2359,7 @@ test('a session decodes its fork', () => {
   const by = (id) => sessions.find((s) => s.sessionId === id);
   assert.deepEqual([by('s1').forkedFrom, by('s1').forkDepth], ['s0', 2], 'a session that branched from another names its base and the depth where the two part');
   assert.deepEqual([by('s2').forkedFrom, by('s2').forkDepth], [null, null], 'a session that continued no other reads no fork');
-  assert.deepEqual([by('s-fixture').forkedFrom, by('s-fixture').forkDepth], [null, null], 'a session the ledger holds no request for reads no fork');
+  assert.deepEqual([by('s-fixture-2').forkedFrom, by('s-fixture-2').forkDepth], [null, null], 'a session the ledger holds no request for reads no fork');
 });
 
 test('a placement row and a member budget keep the figures the routes leave null as null', () => {

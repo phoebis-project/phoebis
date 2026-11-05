@@ -6906,8 +6906,9 @@ async fn a_pin_used_within_the_hour_names_its_session_to_the_fork_facts_when_its
             row["fork_depth"].as_i64(),
             row["requests"].as_u64()
         ),
-        (Some("base"), Some(2), None),
-        "the pin lists the session with no request in the window and still names it to the fork facts: {row}"
+        (Some("base"), Some(2), Some(1)),
+        "the pin lists the session with no request in the window, still names it to the fork facts and counts the \
+         request over the session's life: {row}"
     );
 }
 

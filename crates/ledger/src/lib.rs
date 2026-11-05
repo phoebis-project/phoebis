@@ -108,6 +108,8 @@ pub use rollup::{
     PAGE_HOURS, PLAN_FUNDING, SHED_CAP_SETTING, SLOW_DOWN_STRETCH_SETTING, SLOW_SETTINGS,
     STANDARD_BAND, UNATTRIBUTED, USAGE_BASED_FUNDING, WALL_SETTINGS, WINDOW_CEILING_SETTING,
 };
+/// The type `LedgerDb::read` and `read_blocking` lend a closure, so a caller can name it in a signature.
+pub use rusqlite::Connection;
 pub use task::{
     spawn, Admission, Ledger, LedgerConfig, LedgerGone, LedgerStats, Replayed, UnpricedModel,
     BATCH_RETRY_DELAYS, BATCH_RETRY_HOLD, CHANNEL_DEPTH, LEDGER_BEHIND_DEPTH,

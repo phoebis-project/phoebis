@@ -513,9 +513,9 @@ test("the mock prices a fast hour at the model's fast cells", async () => {
 test('the session fold files a request under the speed its serving attempt reported, else fast when it asked for fast, standard otherwise', () => {
   const rows = d.decodeRequestPage(fixture('requests')).requests;
   const served = (r) => r.attempts.at(-1)?.response.speed;
-  // Of the fixture's 13 requests the failover's serving attempt answered fast and ten others standard. The route flags
+  // Of the fixture's 16 requests the failover's serving attempt answered fast and 13 others standard. The route flags
   // the blocked and the contract request as refused before any account, which the fold counts under no speed.
-  assert.deepEqual(d.foldGroups(rows, 'speed').map((g) => [g.key, g.requests]).sort(), [['fast', 1], ['standard', 10]]);
+  assert.deepEqual(d.foldGroups(rows, 'speed').map((g) => [g.key, g.requests]).sort(), [['fast', 1], ['standard', 13]]);
   const named = rows.find((r) => served(r) === 'fast');
   const unnamed = { ...named, attempts: named.attempts.map((a) => ({ ...a, response: { ...a.response, speed: null } })) };
   assert.deepEqual(d.foldGroups([unnamed], 'speed').map((g) => g.key), ['standard'], 'an answer that named no speed files as standard, as the rollups file it');

@@ -87,7 +87,9 @@ Each operation names its request (path segments, query parameters, or body field
             never merges its sessions with an earlier holder's. A row whose generation no live key holds is \
             `historical`, reads `companion` `none` with no recipe, and cannot be released. The session of a pinned or \
             active row is the one the router keys pins by, the client's own session id. A row the keepalive mod \
-            registered keeps the client's own session, the one the mod registered under."),
+            registered keeps the client's own session, the one the mod registered under. The row's `requests`, \
+            `spend`, `day` and `agent_requests` read one fold over the session's life under its key, so Requests and \
+            Cost agree."),
         (name = "Settings"),
         (name = "System"),
     ),

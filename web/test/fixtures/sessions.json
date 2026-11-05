@@ -12,8 +12,36 @@
         "epoch": 1,
         "created_at": 1791721000000,
         "last_used_at": 1791721000000,
-        "last_request_at": null,
-        "requests": null,
+        "last_request_at": 1791721000000,
+        "requests": 1,
+        "user_agent": "claude-cli/2.1.310 (external, cli)",
+        "spend": {
+          "requests": 1,
+          "usd": 0.0036,
+          "billed_usd": {},
+          "equivalent": 0.0000235,
+          "shares": {
+            "business": {
+              "five_hour": 8.8125e-6,
+              "seven_day": 2.35e-6
+            }
+          },
+          "probes": {
+            "requests": 0,
+            "usd": 0.0,
+            "billed_usd": {},
+            "equivalent": 0.0,
+            "shares": {}
+          }
+        },
+        "day": {
+          "requests": {
+            "other": 1
+          },
+          "usd": 0.0036,
+          "billed_usd": {},
+          "equivalent": 0.0000235
+        },
         "pinned": true,
         "burn": 0.0,
         "burn_unit": "window_share",
@@ -54,6 +82,35 @@
             "lifecycle": null
           }
         ],
+        "agent_requests": [
+          {
+            "agent_id": "main",
+            "model": "claude-sonnet-5",
+            "agent_type": null,
+            "account_id": "business",
+            "requests": 1,
+            "last_request_at": 1791721000000,
+            "spend": {
+              "requests": 1,
+              "usd": 0.0036,
+              "billed_usd": {},
+              "equivalent": 0.0000235,
+              "shares": {
+                "business": {
+                  "five_hour": 8.8125e-6,
+                  "seven_day": 2.35e-6
+                }
+              },
+              "probes": {
+                "requests": 0,
+                "usd": 0.0,
+                "billed_usd": {},
+                "equivalent": 0.0,
+                "shares": {}
+              }
+            }
+          }
+        ],
         "keepalive": {
           "cause": null,
           "last_guard": null,
@@ -76,7 +133,15 @@
         "created_at": 1791721000000,
         "last_used_at": 1791721000000,
         "last_request_at": null,
-        "requests": null,
+        "requests": 0,
+        "user_agent": null,
+        "spend": null,
+        "day": {
+          "requests": {},
+          "usd": 0.0,
+          "billed_usd": {},
+          "equivalent": 0.0
+        },
         "pinned": true,
         "burn": 0.0,
         "burn_unit": "usd",
@@ -117,6 +182,7 @@
             "lifecycle": null
           }
         ],
+        "agent_requests": [],
         "keepalive": {
           "cause": null,
           "last_guard": null,
@@ -139,7 +205,47 @@
         "created_at": 1791717340000,
         "last_used_at": 1791721000000,
         "last_request_at": 1791720940000,
-        "requests": 3,
+        "requests": 5,
+        "user_agent": "claude-cli/2.1.310 (external, cli)",
+        "spend": {
+          "requests": 5,
+          "usd": 0.017800000000000003,
+          "billed_usd": {
+            "api_key": 0.00355,
+            "fast": 0.00355
+          },
+          "equivalent": 0.00007049999999999999,
+          "shares": {
+            "business": {
+              "five_hour": 0.000026437500000000002,
+              "seven_day": 7.05e-6
+            }
+          },
+          "probes": {
+            "requests": 1,
+            "usd": 0.00355,
+            "billed_usd": {},
+            "equivalent": 0.0000235,
+            "shares": {
+              "business": {
+                "five_hour": 8.8125e-6,
+                "seven_day": 2.35e-6
+              }
+            }
+          }
+        },
+        "day": {
+          "requests": {
+            "other": 3,
+            "subagent": 2
+          },
+          "usd": 0.017800000000000003,
+          "billed_usd": {
+            "api_key": 0.00355,
+            "fast": 0.00355
+          },
+          "equivalent": 0.00007049999999999999
+        },
         "pinned": true,
         "burn": 0.00104,
         "burn_unit": "window_share",
@@ -214,6 +320,93 @@
             "lifecycle": "busy"
           }
         ],
+        "agent_requests": [
+          {
+            "agent_id": "main",
+            "model": "claude-sonnet-5-5",
+            "agent_type": null,
+            "account_id": "business",
+            "requests": 3,
+            "last_request_at": 1791720940000,
+            "spend": {
+              "requests": 3,
+              "usd": 0.01065,
+              "billed_usd": {
+                "fast": 0.00355
+              },
+              "equivalent": 0.000047,
+              "shares": {
+                "business": {
+                  "five_hour": 0.000017625,
+                  "seven_day": 4.7e-6
+                }
+              },
+              "probes": {
+                "requests": 1,
+                "usd": 0.00355,
+                "billed_usd": {},
+                "equivalent": 0.0000235,
+                "shares": {
+                  "business": {
+                    "five_hour": 8.8125e-6,
+                    "seven_day": 2.35e-6
+                  }
+                }
+              }
+            }
+          },
+          {
+            "agent_id": "worker-1",
+            "model": "claude-sonnet-5",
+            "agent_type": null,
+            "account_id": "business",
+            "requests": 1,
+            "last_request_at": 1791717401000,
+            "spend": {
+              "requests": 1,
+              "usd": 0.0036,
+              "billed_usd": {},
+              "equivalent": 0.0000235,
+              "shares": {
+                "business": {
+                  "five_hour": 8.8125e-6,
+                  "seven_day": 2.35e-6
+                }
+              },
+              "probes": {
+                "requests": 0,
+                "usd": 0.0,
+                "billed_usd": {},
+                "equivalent": 0.0,
+                "shares": {}
+              }
+            }
+          },
+          {
+            "agent_id": "worker-2",
+            "model": "claude-sonnet-5-5",
+            "agent_type": null,
+            "account_id": "direct",
+            "requests": 1,
+            "last_request_at": 1791717401000,
+            "spend": {
+              "requests": 1,
+              "usd": 0.00355,
+              "billed_usd": {
+                "api_key": 0.00355
+              },
+              "equivalent": 0.0,
+              "shares": {},
+              "probes": {
+                "requests": 0,
+                "usd": 0.0,
+                "billed_usd": {},
+                "equivalent": 0.0,
+                "shares": {}
+              }
+            }
+          }
+        ],
         "keepalive": {
           "cause": "scheduled",
           "last_guard": "rearm",
@@ -237,6 +430,33 @@
         "last_used_at": null,
         "last_request_at": 1791720970000,
         "requests": 1,
+        "user_agent": "claude-cli/2.1.310 (external, cli)",
+        "spend": {
+          "requests": 1,
+          "usd": 0.0036,
+          "billed_usd": {
+            "api_key": 0.0036
+          },
+          "equivalent": 0.0,
+          "shares": {},
+          "probes": {
+            "requests": 0,
+            "usd": 0.0,
+            "billed_usd": {},
+            "equivalent": 0.0,
+            "shares": {}
+          }
+        },
+        "day": {
+          "requests": {
+            "other": 1
+          },
+          "usd": 0.0036,
+          "billed_usd": {
+            "api_key": 0.0036
+          },
+          "equivalent": 0.0
+        },
         "pinned": false,
         "burn": null,
         "burn_unit": null,
@@ -259,6 +479,32 @@
         "companion_since": null,
         "agents": 0,
         "agent_contexts": [],
+        "agent_requests": [
+          {
+            "agent_id": "main",
+            "model": "claude-sonnet-5",
+            "agent_type": null,
+            "account_id": "direct",
+            "requests": 1,
+            "last_request_at": 1791720970000,
+            "spend": {
+              "requests": 1,
+              "usd": 0.0036,
+              "billed_usd": {
+                "api_key": 0.0036
+              },
+              "equivalent": 0.0,
+              "shares": {},
+              "probes": {
+                "requests": 0,
+                "usd": 0.0,
+                "billed_usd": {},
+                "equivalent": 0.0,
+                "shares": {}
+              }
+            }
+          }
+        ],
         "keepalive": {
           "cause": null,
           "last_guard": null,
@@ -282,6 +528,35 @@
         "last_used_at": null,
         "last_request_at": 1791720880000,
         "requests": 2,
+        "user_agent": "claude-cli/2.1.310 (external, cli)",
+        "spend": {
+          "requests": 2,
+          "usd": 0.0071,
+          "billed_usd": {},
+          "equivalent": 0.0000235,
+          "shares": {
+            "business": {
+              "five_hour": 8.8125e-6,
+              "seven_day": 2.35e-6
+            }
+          },
+          "probes": {
+            "requests": 0,
+            "usd": 0.0,
+            "billed_usd": {},
+            "equivalent": 0.0,
+            "shares": {}
+          }
+        },
+        "day": {
+          "requests": {
+            "auxiliary": 1,
+            "other": 1
+          },
+          "usd": 0.0071,
+          "billed_usd": {},
+          "equivalent": 0.0000235
+        },
         "pinned": false,
         "burn": null,
         "burn_unit": null,
@@ -304,6 +579,35 @@
         "companion_since": null,
         "agents": 0,
         "agent_contexts": [],
+        "agent_requests": [
+          {
+            "agent_id": "main",
+            "model": "claude-sonnet-5-5",
+            "agent_type": null,
+            "account_id": "business",
+            "requests": 2,
+            "last_request_at": 1791720880000,
+            "spend": {
+              "requests": 2,
+              "usd": 0.0071,
+              "billed_usd": {},
+              "equivalent": 0.0000235,
+              "shares": {
+                "business": {
+                  "five_hour": 8.8125e-6,
+                  "seven_day": 2.35e-6
+                }
+              },
+              "probes": {
+                "requests": 0,
+                "usd": 0.0,
+                "billed_usd": {},
+                "equivalent": 0.0,
+                "shares": {}
+              }
+            }
+          }
+        ],
         "keepalive": {
           "cause": null,
           "last_guard": null,
@@ -327,6 +631,34 @@
         "last_used_at": null,
         "last_request_at": 1791717400500,
         "requests": 1,
+        "user_agent": "claude-cli/2.1.310 (external, cli)",
+        "spend": {
+          "requests": 1,
+          "usd": 0.00355,
+          "billed_usd": {},
+          "equivalent": 0.0000235,
+          "shares": {
+            "business": {
+              "five_hour": 8.8125e-6,
+              "seven_day": 2.35e-6
+            }
+          },
+          "probes": {
+            "requests": 0,
+            "usd": 0.0,
+            "billed_usd": {},
+            "equivalent": 0.0,
+            "shares": {}
+          }
+        },
+        "day": {
+          "requests": {
+            "other": 1
+          },
+          "usd": 0.00355,
+          "billed_usd": {},
+          "equivalent": 0.0000235
+        },
         "pinned": false,
         "burn": null,
         "burn_unit": null,
@@ -349,6 +681,35 @@
         "companion_since": null,
         "agents": 0,
         "agent_contexts": [],
+        "agent_requests": [
+          {
+            "agent_id": "main",
+            "model": "claude-sonnet-5-5",
+            "agent_type": null,
+            "account_id": "business",
+            "requests": 1,
+            "last_request_at": 1791717400500,
+            "spend": {
+              "requests": 1,
+              "usd": 0.00355,
+              "billed_usd": {},
+              "equivalent": 0.0000235,
+              "shares": {
+                "business": {
+                  "five_hour": 8.8125e-6,
+                  "seven_day": 2.35e-6
+                }
+              },
+              "probes": {
+                "requests": 0,
+                "usd": 0.0,
+                "billed_usd": {},
+                "equivalent": 0.0,
+                "shares": {}
+              }
+            }
+          }
+        ],
         "keepalive": {
           "cause": null,
           "last_guard": null,

@@ -636,6 +636,28 @@ async fn every_route_is_captured_and_holds_its_shape() {
         other => panic!("the pool's two eligible members answer a selection, not {other:?}"),
     };
     let trace_json = serde_json::to_string(&selection.trace).unwrap();
+    // The selection's request, ledgered on the account it named, so the pinned row of `s-fixture` carries its client's
+    // user agent and one priced request.
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            ..request(
+                key_generation,
+                "r-1",
+                now,
+                "desktop",
+                "s-fixture",
+                200,
+                "succeeded",
+            )
+        },
+        attempts: vec![AttemptRecord {
+            account_kind: selection.account.kind,
+            ..attempt("r-1", 1, &selection.account.id, 200, "succeeded", now)
+        }],
+        bodies: None,
+    });
     // The failover request's first attempt lands where its messages' prefix is warm, after one hold on its
     // cohort's account, so `request.json` captures a placement and a hold as `select` serializes them on the
     // attempt the shape check reads. The boundaries stand for the conversation `s1` forked from.
@@ -1434,6 +1456,35 @@ async fn every_route_is_captured_and_holds_its_shape() {
         };
         // Its in-flight slot goes back now, so no later capture reads the account as busy.
         drop(answer);
+        // Each agent's turn ledgered as a subagent's request on its pin's account, so the companion row's spend, day
+        // and agents carry them. Received after main's first answer stopped for a tool, since the session's fork is
+        // read off its first request that is not auxiliary, and a subagent's names no fork.
+        if agent != "main" {
+            let turn_id = format!("r-{agent}");
+            let turn_at = hour_ago + 1_000;
+            parts.ledger.record(Record::Request {
+                request: RequestRecord {
+                    agent_id: Some(agent.into()),
+                    model: model.into(),
+                    canonical_model: model.into(),
+                    request_class: Some("subagent".into()),
+                    ..request(
+                        key_generation,
+                        &turn_id,
+                        turn_at,
+                        "desktop",
+                        "s1",
+                        200,
+                        "succeeded",
+                    )
+                },
+                attempts: vec![AttemptRecord {
+                    account_kind: selection.account.kind,
+                    ..attempt(&turn_id, 1, account, 200, "succeeded", turn_at)
+                }],
+                bodies: None,
+            });
+        }
         parts
             .router
             .report(phoebis_routing::Report::PinRenewed {
@@ -1480,6 +1531,33 @@ async fn every_route_is_captured_and_holds_its_shape() {
             ))
             .await;
     }
+    // A probe of main on its pin's account, a day and an hour back, so the companion row's spend carries its probes
+    // apart while the keepalive overview's day holds no probe row.
+    let probe_at = now - DAY - 3_600_000;
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            kind: "probe".into(),
+            origin: "keepalive".into(),
+            ..request(
+                key_generation,
+                "r-s1-probe",
+                probe_at,
+                "desktop",
+                "s1",
+                200,
+                "succeeded",
+            )
+        },
+        attempts: vec![attempt(
+            "r-s1-probe",
+            1,
+            "business",
+            200,
+            "succeeded",
+            probe_at,
+        )],
+        bodies: None,
+    });
     // One auxiliary request of main on a second model, naming no effort, so `sessions.json` reads the row from main's
     // conversation pin beside a pin only auxiliary requests have used, which draws no line. It is placed at the pins'
     // instant, before the routing log's hour, and renewed at its answer's end as theirs are, inside the pool's TTL.
@@ -1626,7 +1704,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             finished_at: now,
         }));
     let ready = wait_json(app, "/admin/requests", &cookie, |v| {
-        v["requests"].as_array().unwrap().len() == 13
+        v["requests"].as_array().unwrap().len() == 16
     })
     .await;
     hold(&planted, "requests", "GET /admin/requests", ready);
