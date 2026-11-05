@@ -5511,10 +5511,11 @@ mod tests {
     }
 
     /// The fold takes a request's last attempt as the one that served it, so each request's attempts must reach it as
-    /// one run in attempt order: r1's retry starts before its first attempt, where a start order would end the run
-    /// on the wrong attempt. Two requests of a session received at one instant tie on every first-fill order column
-    /// before the request id. The writer stamps each landing above the last, so the incremental read's boundary is
-    /// what can slip: a request landed at the watermark was folded by the poll that set it.
+    /// one run in attempt order: each request's retry starts before its first attempt, so a start order in either
+    /// statement ends the run on the wrong attempt. Two requests of a session received at one instant tie on every
+    /// first-fill order column before the request id. The writer stamps each landing above the last, so the
+    /// incremental read's boundary is what can slip: a request landed at the watermark was folded by the poll that set
+    /// it.
     #[test]
     fn the_session_spend_reads_keep_attempts_one_run_and_the_read_since_leaves_the_watermark_out() {
         let db = LedgerDb::open_in_memory().unwrap();
@@ -5540,8 +5541,12 @@ mod tests {
             None,
         )
         .unwrap();
-        db.insert_request(&request("r2"), &[attempt("r2", 1, 200)], None)
-            .unwrap();
+        db.insert_request(
+            &request("r2"),
+            &[attempt("r2", 1, 200), attempt("r2", 2, 150)],
+            None,
+        )
+        .unwrap();
         let runs = |rows: Vec<SessionSpendRow>| -> Vec<(String, Option<i64>)> {
             rows.into_iter()
                 .map(|row| (row.request_id, row.attempt.map(|a| a.started_at)))
@@ -5557,12 +5562,16 @@ mod tests {
                 ("r1".to_string(), Some(100)),
                 ("r1".to_string(), Some(50)),
                 ("r2".to_string(), Some(200)),
+                ("r2".to_string(), Some(150)),
             ]
         );
         let since = db
             .read_blocking(|c| session_spend_rows_since(c, 1))
             .unwrap();
-        assert_eq!(runs(since), [("r2".to_string(), Some(200))]);
+        assert_eq!(
+            runs(since),
+            [("r2".to_string(), Some(200)), ("r2".to_string(), Some(150))]
+        );
     }
 
     #[test]
