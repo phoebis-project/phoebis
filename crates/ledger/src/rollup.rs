@@ -1190,7 +1190,8 @@ pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), Ledge
 }
 
 /// How far back the routing conditions read: a condition holds while one qualifying event lies this close to the fold,
-/// and `slowed_long` holds as well on a slow-down span open from before this cutoff, which no row inside it names.
+/// and `slowed_long` counts as well a slow-down span open from before this cutoff, which no row inside it names, and
+/// sums the held time of the hours that start inside it.
 const CONDITION_SPAN_MS: i64 = DAY_MS;
 
 /// How soon after a move a spent window on its destination counts against the move.
@@ -1217,7 +1218,7 @@ pub enum RoutingKind {
     MeterDrift,
     /// A pool whose shedding round marked nothing for want of a destination with runway.
     ShedNoRunway,
-    /// An account slowed in the day past twice its pool's stretch threshold, at least an hour.
+    /// An account whose requests the slow-down held past twice its pool's stretch threshold in a day, at least an hour.
     SlowedLong,
     /// An account that read a window spent.
     WallReached,
@@ -1250,10 +1251,10 @@ impl RoutingKind {
     }
 }
 
-/// How many stretch thresholds of slow-down in the trailing day raise `slowed_long`. The slow-down holds an account
-/// while its demand runs ahead of its window, and the threshold is how long the pool lets it hold before a round moves
-/// sessions, so two thresholds' worth in a day says the pool's load exceeds the account's windows under any threshold:
-/// the pool's membership, its ceiling or its threshold rather than one long turn.
+/// How many stretch thresholds of held time in the trailing day raise `slowed_long`. The slow-down holds an account's
+/// requests while its demand runs ahead of its window, and the threshold is how long the pool lets it hold before a
+/// round moves sessions, so two thresholds' worth of held time in a day says the pool's load exceeds the account's
+/// windows under any threshold: the pool's membership, its ceiling or its threshold rather than one long turn.
 const SLOWED_LONG_STRETCHES: i64 = 2;
 
 /// The bar's floor, so a pool near the threshold's own floor raises nothing on a few minutes of slow-down.
@@ -1304,9 +1305,12 @@ struct Held {
 /// `destination_spent` per account from the moves onto it that a spent window of any source followed within the hour,
 /// with no `window_cleared` on that account and window after it,
 /// `wall_reached` per account from its spent windows of any source, a predicted wall among them, and `slowed_long` per
-/// account from its slow-down spans, summed across its pools, once their parts inside the day pass the bar:
-/// `SLOWED_LONG_STRETCHES` times the `threshold_ms` of the newest counted span's start row, at least
-/// `SLOWED_LONG_FLOOR_MS`. `since` is the oldest qualifying event's time, and for `slowed_long` the own start of the
+/// account with a slow-down span inside the day, once the time the slow-down held its requests passes the bar:
+/// `slow_down_held_ms` summed over the account's `rollups_hourly` rows across its pools and keys whose hour starts at
+/// or after the cutoff (bound in seconds rounded up, since `hour` holds seconds), beside the same sum of
+/// `slow_down_held`, against `SLOWED_LONG_STRETCHES` times the `threshold_ms` of the newest counted span's start row,
+/// at least `SLOWED_LONG_FLOOR_MS`. The spans name the pool, the threshold and the start, so held time with no span in
+/// the day raises nothing. `since` is the oldest qualifying event's time, and for `slowed_long` the own start of the
 /// oldest span counted, which a span open from before the cutoff dates before the day. A wall reads the newest round on
 /// the account's newest wall's window inside that window's length before the wall: after a projection round its
 /// `projection_error` is one less the round's projection, after a stretch round its `early_ms` is the reset the wall's
@@ -1511,38 +1515,30 @@ pub fn fold_routing_conditions(
     let cutoff = now - CONDITION_SPAN_MS;
     let mut standing = slow_down_open_at(tx, cutoff)?;
     let mut counted: BTreeMap<String, Vec<SlowSpan>> = BTreeMap::new();
-    let mut count = |account: &str,
-                     pool: &str,
-                     since: i64,
-                     end: i64,
-                     open: bool,
-                     factor: Option<f64>,
-                     threshold_ms: Option<i64>| {
-        // Only the part inside the trailing day counts, and a span with none there is not counted at all.
-        let slowed_ms = end.min(now) - since.max(cutoff);
-        if slowed_ms > 0 {
-            counted
-                .entry(account.to_string())
-                .or_default()
-                .push(SlowSpan {
-                    pool: pool.to_string(),
-                    since,
-                    slowed_ms,
-                    open,
-                    factor,
-                    threshold_ms,
-                });
-        }
-    };
+    let mut count =
+        |account: &str, pool: &str, since: i64, end: i64, open: bool, threshold_ms: Option<i64>| {
+            // A span with no part inside the trailing day is not counted at all.
+            if end.min(now) > since.max(cutoff) {
+                counted
+                    .entry(account.to_string())
+                    .or_default()
+                    .push(SlowSpan {
+                        pool: pool.to_string(),
+                        since,
+                        open,
+                        threshold_ms,
+                    });
+            }
+        };
     for event in &events {
         if event.kind == ROUTER_STARTED {
-            // The previous run's newest row is the last instant its slow-down can have held, so the downtime before
-            // the restart counts as no slowed time. A run that stopped right after the start row has that row as its
-            // newest, and the span it closes is of no length.
+            // The previous run's newest row is the last instant its slow-down can have held, so the span ends there
+            // rather than at the restart. A run that stopped right after the start row has that row as its newest, and
+            // the span it closes is of no length.
             let down_since = event.detail["down_since"].as_i64();
-            for ((account, pool), (since, factor, threshold_ms)) in std::mem::take(&mut standing) {
+            for ((account, pool), (since, threshold_ms)) in std::mem::take(&mut standing) {
                 let end = down_since.filter(|down| *down >= since).unwrap_or(event.at);
-                count(&account, &pool, since, end, false, factor, threshold_ms);
+                count(&account, &pool, since, end, false, threshold_ms);
             }
             continue;
         }
@@ -1553,19 +1549,16 @@ pub fn fold_routing_conditions(
         let key = (account.to_string(), pool.to_string());
         match event.kind.as_str() {
             SLOW_DOWN_STARTED => {
-                let factor = event.detail["factor"].as_f64();
                 // The router emits an end before every next start, so a second start before any end or restart
-                // follows a lost row alone. It lowers the standing span's factor and opens no second span, which would
-                // count the overlap twice.
+                // follows a lost row alone. It opens no second span, which would count the one span twice.
                 standing
                     .entry(key)
-                    .and_modify(|span| span.1 = lowest(span.1, factor))
-                    .or_insert((event.at, factor, event.detail["threshold_ms"].as_i64()));
+                    .or_insert((event.at, event.detail["threshold_ms"].as_i64()));
             }
             SLOW_DOWN_ENDED => {
                 // An end with no span standing closes nothing this fold counts: the state at the cutoff opens a span
                 // only from a start newer than any end or restart, so its start was lost or a restart closed it.
-                let Some((start, factor, threshold_ms)) = standing.remove(&key) else {
+                let Some((start, threshold_ms)) = standing.remove(&key) else {
                     continue;
                 };
                 // The end row lands after the wait that closed the span, so the span's own start and length come
@@ -1574,17 +1567,25 @@ pub fn fold_routing_conditions(
                 let end = event.detail["duration_ms"]
                     .as_i64()
                     .map_or(event.at, |duration| since + duration);
-                let factor = event.detail["factor_min"].as_f64().or(factor);
-                count(account, pool, since, end, false, factor, threshold_ms);
+                count(account, pool, since, end, false, threshold_ms);
             }
             _ => {}
         }
     }
-    for ((account, pool), (since, factor, threshold_ms)) in &standing {
-        count(account, pool, *since, now, true, *factor, *threshold_ms);
+    for ((account, pool), (since, threshold_ms)) in &standing {
+        count(account, pool, *since, now, true, *threshold_ms);
     }
+    // `hour` holds the hour's start in seconds, so the cutoff rounds up to the first second inside the day.
+    let held_time: BTreeMap<String, (i64, i64)> = tx
+        .prepare(
+            "SELECT account_id, SUM(slow_down_held_ms), SUM(slow_down_held) FROM rollups_hourly \
+             WHERE hour >= ?1 GROUP BY account_id",
+        )?
+        .query_map(params![(cutoff + 999).div_euclid(1_000)], |r| {
+            Ok((r.get(0)?, (r.get(1)?, r.get(2)?)))
+        })?
+        .collect::<Result<_, _>>()?;
     for (account, spans) in counted {
-        let slowed_ms: i64 = spans.iter().map(|span| span.slowed_ms).sum();
         let (Some(oldest), Some(newest)) = (
             spans.iter().map(|span| span.since).min(),
             spans.iter().max_by_key(|span| span.since),
@@ -1597,7 +1598,8 @@ pub fn fold_routing_conditions(
                 threshold.saturating_mul(SLOWED_LONG_STRETCHES)
             })
             .max(SLOWED_LONG_FLOOR_MS);
-        if slowed_ms <= bar_ms {
+        let (held_ms, requests) = held_time.get(&account).copied().unwrap_or_default();
+        if held_ms <= bar_ms {
             continue;
         }
         held.insert(
@@ -1608,10 +1610,10 @@ pub fn fold_routing_conditions(
                 count: spans.len() as u64,
                 detail: serde_json::json!({
                     "bar_ms": bar_ms,
-                    "factor_min": spans.iter().fold(None, |min, span| lowest(min, span.factor)),
+                    "held": requests,
+                    "held_ms": held_ms,
                     "open": spans.iter().any(|span| span.open),
                     "setting": setting(SLOW_SETTINGS),
-                    "slowed_ms": slowed_ms,
                     "spans": spans.len(),
                 }),
             },
@@ -1677,31 +1679,22 @@ pub fn fold_routing_conditions(
     Ok(())
 }
 
-/// One slow-down span the fold counts: its pool, its own start, its part inside the trailing day, whether it still
-/// stands, its lowest factor and the stretch threshold its start row read.
+/// One slow-down span the fold counts: its pool, its own start, whether it still stands and the stretch threshold its
+/// start row read.
 struct SlowSpan {
     pool: String,
     since: i64,
-    slowed_ms: i64,
     open: bool,
-    factor: Option<f64>,
     threshold_ms: Option<i64>,
 }
 
-fn lowest(a: Option<f64>, b: Option<f64>) -> Option<f64> {
-    match (a, b) {
-        (Some(a), Some(b)) => Some(a.min(b)),
-        (a, b) => a.or(b),
-    }
-}
+/// The slow-down spans standing at a point of the fold, by account and pool: each one's own start and the stretch
+/// threshold its start read.
+type OpenSpans = BTreeMap<(String, String), (i64, Option<i64>)>;
 
-/// The slow-down spans standing at a point of the fold, by account and pool: each one's own start and the factor and
-/// the stretch threshold its start read.
-type OpenSpans = BTreeMap<(String, String), (i64, Option<f64>, Option<i64>)>;
-
-/// The spans standing at `cutoff`, per account and pool, with each one's own start and the factor and the stretch
-/// threshold its start read: the newest `slow_down_started` or `slow_down_ended` row before the cutoff where that row
-/// is a start newer than the newest `router_started` row before it.
+/// The spans standing at `cutoff`, per account and pool, with each one's own start and the stretch threshold its start
+/// read: the newest `slow_down_started` or `slow_down_ended` row before the cutoff where that row is a start newer than
+/// the newest `router_started` row before it.
 fn slow_down_open_at(tx: &Transaction<'_>, cutoff: i64) -> Result<OpenSpans, LedgerError> {
     let restart: Option<(i64, i64)> = tx
         .query_row(
@@ -1733,10 +1726,8 @@ fn slow_down_open_at(tx: &Transaction<'_>, cutoff: i64) -> Result<OpenSpans, Led
         .into_iter()
         .filter(|(start, ..)| restart.is_none_or(|restart| restart < *start))
         .map(|((at, _), account, pool, detail)| {
-            let detail = detail_json(detail.as_deref());
-            let (factor, threshold_ms) =
-                (detail["factor"].as_f64(), detail["threshold_ms"].as_i64());
-            ((account, pool), (at, factor, threshold_ms))
+            let threshold_ms = detail_json(detail.as_deref())["threshold_ms"].as_i64();
+            ((account, pool), (at, threshold_ms))
         })
         .collect())
 }

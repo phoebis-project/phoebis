@@ -1877,7 +1877,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
     // A 5-hour window of `business` that ended two hours ago and charged 1.4 times the table.
     let window_end = now - 2 * 3_600_000;
     // One row of each routing condition, as the ledger's hourly fold writes them, so the attention capture carries the
-    // four kinds beside the others, the drift naming the window above.
+    // five kinds beside the others, the drift naming the window above.
     let condition = |kind: phoebis_ledger::RoutingKind,
                      subject_kind: &str,
                      subject: &str,
@@ -1952,6 +1952,24 @@ async fn every_route_is_captured_and_holds_its_shape() {
                     }],
                 }),
             ),
+            phoebis_ledger::RoutingCondition {
+                count: 3,
+                ..condition(
+                    phoebis_ledger::RoutingKind::SlowedLong,
+                    "account",
+                    "business",
+                    Some("main"),
+                    now - 6 * 3_600_000,
+                    j!({
+                        "bar_ms": 3_600_000,
+                        "held": 7,
+                        "held_ms": 5_400_000,
+                        "open": false,
+                        "setting": ["slow_down_stretch_seconds"],
+                        "spans": 3,
+                    }),
+                )
+            },
         ],
     )
     .await;

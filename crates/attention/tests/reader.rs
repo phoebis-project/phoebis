@@ -1567,8 +1567,45 @@ async fn an_account_slowed_past_twice_its_pools_threshold_in_the_day_holds_the_c
             }),
         )
     };
-    // A span of 50 minutes closed inside the day and one open since 50 minutes before the fold: 100 minutes, past the
-    // bar of twice the pool's 45 minutes.
+    // A request of `business` the slow-down held for `held_ms`, through the ledger's landing, which books the wait
+    // into its hour's rollup row.
+    let held_request = |id: &str, at: i64, held_ms: i64| {
+        rig.db
+            .insert_request_at(
+                &RequestRecord {
+                    id: id.into(),
+                    received_at: at,
+                    key_id: Some("desktop".into()),
+                    pool_id: Some("main".into()),
+                    canonical_model: "claude-sonnet-5".into(),
+                    model: "claude-sonnet-5".into(),
+                    kind: "inference".into(),
+                    origin: "client".into(),
+                    status: Some(200),
+                    outcome: "succeeded".into(),
+                    attempts: 1,
+                    held: Some(
+                        json!({ "waits": [{ "reason": "slow_down", "held_ms": held_ms }] })
+                            .to_string(),
+                    ),
+                    ..Default::default()
+                },
+                &[AttemptRecord {
+                    request_id: id.into(),
+                    attempt: 1,
+                    account_id: "business".into(),
+                    account_kind: AccountKind::Oauth,
+                    started_at: at,
+                    outcome: "succeeded".into(),
+                    ..Default::default()
+                }],
+                None,
+                &PriceRevisions::shipped(),
+            )
+            .unwrap()
+    };
+    // A span closed inside the day and one open since 50 minutes before the fold, inside which the slow-down held a
+    // request for an hour and another for 40 minutes: 100 minutes, past the bar of twice the pool's 45 minutes.
     started(NOW - 2 * HOUR, 0.5);
     ended(
         NOW - 2 * HOUR + 52 * MINUTE,
@@ -1577,6 +1614,8 @@ async fn an_account_slowed_past_twice_its_pools_threshold_in_the_day_holds_the_c
         0.4,
     );
     started(NOW - 50 * MINUTE, 0.35);
+    held_request("r-1", NOW - 2 * HOUR, HOUR);
+    held_request("r-2", NOW - 40 * MINUTE, 40 * MINUTE);
     fold_at(&rig, NOW).await;
     let conditions = read(&attention, NOW);
     let held = find(&conditions, Kind::SlowedLong, "business").unwrap();
@@ -1600,11 +1639,11 @@ async fn an_account_slowed_past_twice_its_pools_threshold_in_the_day_holds_the_c
             }),
             &json!({
                 "bar_ms": 5_400_000,
-                "factor_min": 0.35,
+                "held": 2,
+                "held_ms": 6_000_000,
                 "open": true,
                 "setting": ["slow_down_stretch_seconds"],
                 "setting_values": { "slow_down_stretch_seconds": 2_700 },
-                "slowed_ms": 100 * MINUTE,
                 "spans": 2,
             })
         ),
@@ -1638,10 +1677,10 @@ async fn an_account_slowed_past_twice_its_pools_threshold_in_the_day_holds_the_c
             None,
             &json!({
                 "bar_ms": null,
-                "factor_min": null,
+                "held": 0,
+                "held_ms": 0,
                 "open": false,
                 "setting": ["slow_down_stretch_seconds"],
-                "slowed_ms": 0,
                 "spans": 0,
             })
         ),

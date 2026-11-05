@@ -61,14 +61,15 @@ pub(crate) struct AttentionItem {
     /// after a stretch round the milliseconds the newest wall arrived before its window's reset, 0 at or after it, each
     /// null after the other trigger's round and both null with none), `destination_spent` with `moves`, `fits` (the
     /// moves' destination fits with counts) and `windows`, `shed_no_runway` with `rounds` and `accounts`, and
-    /// `slowed_long` with `spans` (the slow-down spans counted), `slowed_ms` (their parts inside the day, summed),
-    /// `bar_ms` (the bar the sum passed, twice the stretch threshold of the newest counted span's start and at least an
-    /// hour), `open` (whether a span still stands) and `factor_min` (the lowest factor of the spans). `shed_no_runway`
-    /// and `slowed_long` add `setting_values` (the pool's value of each setting `setting` names, present only for a
-    /// pool the registry still holds). `keepalive_bus_gaps` carries `gaps` (the engine's gaps since the start) and
-    /// `last_at` (the last gap's instant), `keepalive_cap` carries `cap` (`sessions`, `agents` or `retained`), `count`,
-    /// `max` and `pct` (`count` over `max` as a fraction, 0 where `max` is 0), and `expired_between_turns` carries
-    /// `expired` (the cache entries that expired between turns in the trailing 24 hours).
+    /// `slowed_long` with `spans` (the slow-down spans counted), `held_ms` (the slow-down's waits of the day's
+    /// requests, summed), `held` (the requests held), `bar_ms` (the bar the held time passed, twice the stretch
+    /// threshold of the newest counted span's start and at least an hour) and `open` (whether a span still stands).
+    /// `shed_no_runway` and `slowed_long` add `setting_values` (the pool's value of each setting `setting` names,
+    /// present only for a pool the registry still holds). `keepalive_bus_gaps` carries `gaps` (the engine's gaps since
+    /// the start) and `last_at` (the last gap's instant), `keepalive_cap` carries `cap` (`sessions`, `agents` or
+    /// `retained`), `count`, `max` and `pct` (`count` over `max` as a fraction, 0 where `max` is 0), and
+    /// `expired_between_turns` carries `expired` (the cache entries that expired between turns in the trailing 24
+    /// hours).
     #[schema(value_type = Object)]
     pub detail: Value,
 }

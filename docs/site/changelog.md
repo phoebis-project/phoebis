@@ -540,7 +540,9 @@ counts, written when it lands, and the start fills the rows written before the c
 logging the rows left ([Statistics](statistics.md#the-ledger)). Refusals count by the request's model and the category
 and the count answers the fallbacks in range, a request that presented a refusal's fallback credit carries the credit's
 digest beside the refused attempt's, and the request log filters on it ([Refused
-requests](statistics.md#refused-requests)).
+requests](statistics.md#refused-requests)). The `slowed_long` condition holds on the time the slow-down held the
+account's requests over the trailing day, against twice the stretch and at least an hour, and names the held time and
+the requests held ([Conditions and gauges](statistics.md#conditions-and-gauges)).
 
 Every price is computed when it is read, from the token counts the ledger stores, at the price revision in force when
 the request arrived. The price table and the subscription cost model are revision lists keyed by effective date, the

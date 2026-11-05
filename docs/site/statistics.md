@@ -630,13 +630,14 @@ that series the same way, until the fold's trailing day lets its row go. A resta
 request bus over, and the usage poll keeps its backoff in memory as well, so `poll_backoff` reads 0 until a new backoff
 run is thirty minutes old. The conditions read from the registry, and `ledger_record_parked`, read from the ledger file,
 hold again at the first read. The four routing conditions, `wall_reached`, `destination_spent`, `shed_no_runway` and
-`slowed_long`, read a table the ledger folds from its events of the trailing 24 hours once an hour and at start, so a
-restart holds them again at the first fold. `meter_drift` lands in the same table by the same fold, from the reconciled
-windows rather than the events, so a restart holds it again at the first fold too. Of the keepalive engine's three
-conditions, `keepalive_bus_gaps` starts over, since the engine keeps its gaps in memory alone, `keepalive_cap` holds
-again once the engine has read its saved sessions, agents and recipes back from the registry at start, and only where
-those still reach 90 percent of a cap ([A router restart](keepalive.md#a-router-restart)), and `expired_between_turns`,
-read from the ledger's hourly rollups, holds again at the first read.
+`slowed_long`, read a table the ledger folds from its events of the trailing 24 hours once an hour and at start,
+`slowed_long` also from the hourly rollups' held sums, so a restart holds them again at the first fold. `meter_drift`
+lands in the same table by the same fold, from the reconciled windows rather than the events, so a restart holds it
+again at the first fold too. Of the keepalive engine's three conditions, `keepalive_bus_gaps` starts over, since the
+engine keeps its gaps in memory alone, `keepalive_cap` holds again once the engine has read its saved sessions, agents
+and recipes back from the registry at start, and only where those still reach 90 percent of a cap
+([A router restart](keepalive.md#a-router-restart)), and `expired_between_turns`, read from the ledger's hourly rollups,
+holds again at the first read.
 
 | Kind | Tone | Subject | Clears when |
 | --- | --- | --- | --- |
@@ -657,7 +658,7 @@ read from the ledger's hourly rollups, holds again at the first read.
 | `wall_reached` | warning | the account | no window of the account read spent in the last 24 hours |
 | `destination_spent` | warning | the destination account | no move onto the account was followed by a spent window within an hour in the last 24 hours, or a `window_cleared` on the same window followed each such spent window |
 | `shed_no_runway` | warning | the pool | no round of the pool marked nothing for want of a destination in the last 24 hours |
-| `slowed_long` | warning | the account | the slow-down spans of the last 24 hours sum at or under twice the pool's `slow_down_stretch_seconds`, at least an hour |
+| `slowed_long` | warning | the account | the slow-down's held time of the last 24 hours comes to at most twice the pool's `slow_down_stretch_seconds`, at least an hour |
 | `keepalive_cap` | warning | the crossed cap | the count falls under 90 percent of its max |
 | `expired_between_turns` | warning | the keepalive engine | no expiry between turns stands in the last 24 hours, or no pool warms caches |
 
@@ -794,21 +795,22 @@ outcome `nothing_to_mark` with the reason `no_runway`) in the last 24 hours, one
 and names the accounts they ran on and the setting `window_ceiling` with the pool's value. The item opens the routing
 log on the pool's shedding rounds since the condition began.
 
-**`slowed_long`** holds while the account's slow-down spans of the last 24 hours, each from its `slow_down_started`
-event to its `slow_down_ended` event, to the previous run's last row where a `router_started` row closed it (or to that
-row where it names none), or to now while it stands open, sum past twice the pool's `slow_down_stretch_seconds`, at
-least an hour (five hours at the default of 9000, the hour on a pool set to move early at 1800), every span clamped to
-the day. It is folded as `wall_reached` is. The slow-down holds an account for as long as its demand runs ahead of its
-window, and the threshold is how long the operator lets it hold before a round moves sessions, so two thresholds' worth
-of slow-down in a day says the pool's load exceeds that account's windows, which is the pool's membership, its ceiling
-or its threshold and not one turn, while an account slowed for ten minutes at the end of a window is working as intended
-and raises nothing. The subject is the account, and the item dates from the start of the oldest span counted. The detail
-counts the spans, gives their sum, the bar, whether a span is open and the lowest factor of the spans, and names the
-setting `slow_down_stretch_seconds` with the pool's value, which the dashboard's line words under the label "Slowed past
-twice the stretch" as
-`studio: slowed 2 h 8 min of the last 24 h, over 1 h, slowest 0.35x, slow_down_stretch_seconds 1800, since 09:12`. The
-item opens the routing log on the account's slow-down starts and ends since the condition began
-([Slow-down](routing.md#slow-down)).
+**`slowed_long`** holds while the time the slow-down held the account's requests over the last 24 hours passes twice the
+pool's `slow_down_stretch_seconds`, at least an hour (five hours at the default of 9000, the hour on a pool set to move
+early at 1800). The held time sums the slow-down's waits of the account's requests across its pools and keys, read from
+the hourly rollups whose hour starts inside the day, and the requests held are counted beside it. The account needs a
+slow-down span in the day as well, each from its `slow_down_started` event to its `slow_down_ended` event, to the
+previous run's last row where a `router_started` row closed it (or to that row where it names none), or to now while it
+stands open: the spans name the pool and the start, the threshold the newest span's start row read sets the bar, and
+held time with no span in the day raises nothing. It is folded as `wall_reached` is. The slow-down holds an account's
+requests for as long as its demand runs ahead of its window, and the threshold is how long the operator lets it hold
+before a round moves sessions, so two thresholds' worth of held time in a day says the pool's load exceeds that
+account's windows, which is the pool's membership, its ceiling or its threshold and not one turn, while an account
+slowed for ten minutes at the end of a window is working as intended and raises nothing. The subject is the account, and
+the item dates from the start of the oldest span counted. The detail gives the held time, the requests held, the bar,
+whether a span is open and the count of spans, and names the setting `slow_down_stretch_seconds` with the pool's value,
+which the dashboard's line words under the condition's label. The item opens the routing log on the account's slow-down
+starts and ends since the condition began ([Slow-down](routing.md#slow-down)).
 
 **`keepalive_cap`** holds while one of the keepalive engine's caps, its live sessions, its agent records or its retained
 prompts' bytes, stands at 90 percent of its max or more, each cap a series of its own. At a max the engine refuses what

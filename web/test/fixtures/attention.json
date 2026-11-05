@@ -173,6 +173,35 @@
             "window_ceiling": 0.95
           }
         }
+      },
+      {
+        "kind": "slowed_long",
+        "subject": {
+          "type": "account",
+          "id": "business",
+          "label": "Business"
+        },
+        "link": {
+          "page": "accounts",
+          "id": "business"
+        },
+        "pools": [
+          "main"
+        ],
+        "since": 1791699400000,
+        "detail": {
+          "bar_ms": 3600000,
+          "held": 7,
+          "held_ms": 5400000,
+          "open": false,
+          "setting": [
+            "slow_down_stretch_seconds"
+          ],
+          "spans": 3,
+          "setting_values": {
+            "slow_down_stretch_seconds": 9000
+          }
+        }
       }
     ]
   }

@@ -62,9 +62,9 @@ const RELEASE_VERSION_MAX_BYTES: usize = 32;
 /// the cost model's figures. That last one names a pricing that is off and ranks above the four routing conditions,
 /// whose causes it can explain. Those four stop no traffic and rank under every kind that does, worst first among
 /// themselves: an account that reached its wall, a move whose destination was spent within the hour, a pool whose
-/// rounds found no destination with runway, and an account slowed past twice its pool's stretch threshold in the day,
-/// a slow-down that worked for long. The keepalive engine's two warnings rank last: a cap filled to 90 percent or
-/// more, then cache entries that expired between turns while a pool warms caches.
+/// rounds found no destination with runway, and an account whose requests waited past twice its pool's stretch
+/// threshold in the day, a slow-down that worked for long. The keepalive engine's two warnings rank last: a cap filled
+/// to 90 percent or more, then cache entries that expired between turns while a pool warms caches.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind {
     PoolExhausted,
@@ -921,10 +921,10 @@ fn routing_conditions(
             Kind::SlowedLong,
             json!({
                 "bar_ms": null,
-                "factor_min": null,
+                "held": 0,
+                "held_ms": 0,
                 "open": false,
                 "setting": SLOW_SETTINGS,
-                "slowed_ms": 0,
                 "spans": 0,
             }),
         ),
