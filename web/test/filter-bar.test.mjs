@@ -107,7 +107,7 @@ test("the fold's title names each folded field once, in the chips' order", () =>
   assert.deepEqual([one.folded.length, one.title], [3, 'Folded: pool, status'], 'the two per-value pool chips name their field once');
 });
 
-test('each dimension list names keys of its codec, and every codec key but the exempt ones has a dimension', () => {
+test('each dimension list names keys of its codec, and no codec key has two dimensions', () => {
   const views = [
     ['requests', d.REQUESTS_DIMENSIONS, d.REQUESTS_CODEC],
     ['routingLog', d.ROUTING_LOG_DIMENSIONS, d.ROUTING_LOG_CODEC],

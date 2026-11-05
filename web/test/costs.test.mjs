@@ -39,7 +39,7 @@ test("an override replaces the multiplier and the window's weight it names and l
   close(d.shareIn(costs, 'five_hour', MAX_20X, 'claude-haiku-4-5', usage({ input: 1 }), false), 0.005, "Haiku's input on the 5-hour window, 0.5 x 1 / 100");
 });
 
-test('a Fable model an override weighs on the 7-day Fable window alone is weighted, a dash on the shared windows and a share on its week', () => {
+test('a Fable model an override weighs on the 7-day Fable window alone reads a dash on the shared windows and a share on its week', () => {
   // The test table weighs Fable 5.1 10. This copy leaves its shared weight null and weighs it 10 on the 7-day Fable
   // window alone.
   const FABLE = 'claude-fable-5-1';
@@ -356,7 +356,7 @@ test('the full 5-hour windows a week are the week over the window, each at its o
   close(d.fullWindowsAWeek(bandedWeek, MAX_20X, true), 10, 'a banded week, (1000 x 0.5) / (100 x 0.5)');
 });
 
-test('the overlay prices a listed entrypoint under its regime and anything else at the base', () => {
+test('the overlay lists its regime, a named regime changes the model, and an unknown name or none is the base itself', () => {
   assert.deepEqual(d.regimeNames(costs), ['desk']);
   assert.notDeepEqual(d.withRegime(costs, 'desk'), costs, 'the regime changes the model');
   assert.equal(d.withRegime(costs, 'nowhere'), costs, 'an unknown name is the base itself');
