@@ -268,17 +268,3 @@ export const pinTtlMs = (pin: Pick<AgentContext, 'cacheTtlMs' | 'lastUsedAt'>, n
   const left = Date.parse(pin.lastUsedAt) + pin.cacheTtlMs - now;
   return left > 0 ? left : null;
 };
-
-/** A read a tile's figure needs: the word the notice names it by, its error, and whether it has ever answered. */
-export interface TileRead {
-  error: string | null;
-  loaded: boolean;
-  name: string;
-}
-
-/**
- * The first read, in the order handed, that failed before it ever answered, so a tile shows one error and the notice
- * under the tiles names the read whose Try again reads it again. A refresh that fails after a first answer keeps the
- * figures it drew, which `loaded` carries.
- */
-export const firstFailedRead = (reads: readonly TileRead[]): TileRead | null => reads.find((r) => !r.loaded && r.error !== null) ?? null;

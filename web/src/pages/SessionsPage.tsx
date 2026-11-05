@@ -13,14 +13,15 @@ import { SpeedChip } from '@/components/ui/SpeedChip';
 import { Tile } from '@/components/ui/Tile';
 import { IconChevron } from '@/components/ui/icons';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
-import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skeleton, useHostedDescription } from '@/components/ui/primitives';
-import { accountHref, ANALYTICS_CODEC, REQUESTS_CODEC, SESSION_SORT_KEYS, SESSIONS_CODEC, type SessionsAddress, sortAddressOf, sortDirOf, type SortDir } from '@/lib/address';
+import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skeleton, toggleRow, useHostedDescription } from '@/components/ui/primitives';
+import { accountHref, ANALYTICS_CODEC, REQUESTS_CODEC, requestsHref as requestsAddressHref, SESSION_SORT_KEYS, SESSIONS_CODEC, type SessionsAddress, sortAddressOf, sortDirOf, type SortDir } from '@/lib/address';
+import type { WeekReading } from '@/lib/analytics';
 import { clock } from '@/lib/clock';
 import { failed } from '@/lib/costs';
 import { groupInto } from '@/lib/counts';
 import { SESSIONS_DIMENSIONS } from '@/lib/filterBar';
 import { SESSION_CHARS, fmtAbsolute, fmtCount, fmtDuration, fmtInt, fmtMiB, fmtPct, fmtRelative, keyGenerationOf, keyLifetime, messageOf, plural, shortId, shortModel } from '@/lib/format';
-import { CAUSE_HINT, CAUSE_LABEL, contextCell, firstFailedRead, isFinished, isReleasedLine, orderLines, orderRows, pinTtlMs, releasedCount, requestsRange, sessionLines, type SessionLine, type TileRead, WARNING_CAUSES } from '@/lib/keepalive';
+import { CAUSE_HINT, CAUSE_LABEL, contextCell, isFinished, isReleasedLine, orderLines, orderRows, pinTtlMs, releasedCount, requestsRange, sessionLines, type SessionLine, WARNING_CAUSES } from '@/lib/keepalive';
 import { failedFirst, toggled, useAsync, useNow, useQueryFilters } from '@/lib/hooks';
 import { minuteSpan, type BadgeTone } from '@/lib/quota';
 import { ageWord, aroundSubject, logHref } from '@/lib/routingLog';
@@ -34,9 +35,9 @@ const SESSION_COLUMNS = [
   { id: 'effort', label: 'Effort' },
   { id: 'runway', label: 'Runway' },
   { id: 'lastUsed', label: 'Last used' },
-  { id: 'requests', label: 'Requests' },
+  { id: 'requests', label: 'Requests', right: true },
   { id: 'lastRequest', label: 'Last request' },
-  { id: 'agents', label: 'Agents' },
+  { id: 'agents', label: 'Agents', right: true },
   { id: 'companion', label: 'Companion' },
   { id: 'cacheWarming', label: 'Cache warming' },
   { id: 'nextProbe', label: 'Next probe' },
@@ -97,17 +98,26 @@ const timeCell = (at: string | null, now: number, empty: string): { children: Re
 });
 const NO_TRAFFIC_HINT = 'This session has no ledgered requests, so there is nothing to show in analytics or the request log.';
 interface Row {
-  account: Account | null;
   /** Every recipe filed under the session, as the route answered them: the no-recipe causes read this list. */
   agents: KeepaliveRecipe[];
   /** When the router forgets the session, from `expiryOf`. */
   expiresAt: number | null;
   /** The engine is done with the session, which draws every line it holds under the released sentence. */
   finished: boolean;
+  /**
+   * Set where the idle limit ended every recipe, with the instant it ran out where the pool's window gives one. Its
+   * phrase reads the clock, so `noRecipeText` writes it at draw time and a tick rebuilds no row.
+   */
+  idleLimit: { ranOutAt: string | null } | null;
+  /**
+   * The instant the Last used cell and the expiry count from. A session known from the ledger or from a registration
+   * alone carries no activity of its own, so the last ledgered request stands in for it.
+   */
+  lastUsed: string | null;
   /** The lines the row draws in the view's order: the recipes `shown` holds and the pins no recipe stands on. */
   lines: SessionLine[];
-  /** Why a session carries no recipe at all; null while it has one. */
-  noRecipe: string | null;
+  /** Why a session carries no recipe at all, the causes that need no clock, null while it has one. */
+  noRecipe: string[] | null;
   /** The session's lines the view hides, which its Agents column takes off the engine's record count. */
   released: number;
   session: Session;
@@ -115,13 +125,15 @@ interface Row {
   shown: KeepaliveRecipe[];
 }
 
-/**
- * The instant the router forgets an idle session, null without an expiry or a use. A session known from the ledger or
- * from a registration alone carries no activity of its own, so the last ledgered request stands in for it.
- */
-const expiryOf = (session: Pick<Session, 'lastRequestAt' | 'lastUsedAt'>, expireAfterSeconds: number | null): number | null => {
-  const lastUsed = session.lastUsedAt ?? session.lastRequestAt;
-  return expireAfterSeconds === null || lastUsed === null ? null : Date.parse(lastUsed) + expireAfterSeconds * 1000;
+/** The instant the router forgets an idle session, null without an expiry or a use. */
+const expiryOf = (lastUsed: string | null, expireAfterSeconds: number | null): number | null =>
+  expireAfterSeconds === null || lastUsed === null ? null : Date.parse(lastUsed) + expireAfterSeconds * 1000;
+
+/** Why a session carries no recipe at all, its causes joined into one clause, null while it has one. */
+const noRecipeText = ({ idleLimit, noRecipe }: Pick<Row, 'idleLimit' | 'noRecipe'>, now: number): string | null => {
+  if (noRecipe === null) return null;
+  const idle = idleLimit === null ? [] : [idleLimit.ranOutAt ? `the idle limit ran out ${fmtRelative(idleLimit.ranOutAt, now)}` : 'the idle limit ran out'];
+  return [...noRecipe, ...idle].join(' and ');
 };
 
 /** One session id can be held by two generations of a key id, so all three name a row. */
@@ -138,7 +150,7 @@ const rowDomId = (session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'
 const requestsHref = (trafficSession: string, session: Pick<Session, 'keyGeneration' | 'keyId'>, lastRequestAt: string | null, agentId?: string) => {
   const defaults = REQUESTS_CODEC.defaults;
   const range = requestsRange(lastRequestAt, clock.now());
-  return `/requests?${REQUESTS_CODEC.toParams({ ...defaults, agentId: agentId ?? defaults.agentId, keys: [keyLifetime(session.keyId, session.keyGeneration)], range: range === null ? defaults.range : { from: '', preset: range, to: '' }, session: trafficSession })}`;
+  return requestsAddressHref({ ...defaults, agentId: agentId ?? defaults.agentId, keys: [keyLifetime(session.keyId, session.keyGeneration)], range: range === null ? defaults.range : { from: '', preset: range, to: '' }, session: trafficSession });
 };
 /** The analytics on the session the client sent under the row's key lifetime. */
 const analyticsHref = (trafficSession: string, session: Pick<Session, 'keyGeneration' | 'keyId'>) =>
@@ -164,19 +176,15 @@ function idleLimitRanOutAt(session: Session, pool: Pool | null): string | null {
  * that. `showReleased`: the Released agents filter, which draws a live session's released lines. `sort` and `dir`: the
  * sort control's key and direction, which order the rows and each row's lines.
  */
-function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], accounts: Account[], keys: ApiKey[], pools: Pool[], poolsFailed: boolean, showReleased: boolean, sort: SessionsAddress['sort'], dir: SortDir, expireAfterSeconds: number | null, now: number): Row[] {
-  const accountById = new Map(accounts.map((a) => [a.id, a]));
+function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], keys: ApiKey[], pools: Pool[], poolsFailed: boolean, showReleased: boolean, sort: SessionsAddress['sort'], dir: SortDir, expireAfterSeconds: number | null): Row[] {
   const keyById = new Map(keys.map((k) => [k.id, k]));
-  const poolById = new Map(pools.map((p) => [p.id, p]));
   // A recipe names no generation and belongs to the live key alone, so it is filed under that generation and
   // an earlier holder of the same key id reads none of them.
-  const liveGeneration = (keyId: string) => {
-    const k = keyById.get(keyId);
-    return k ? keyGenerationOf(k) : null;
-  };
+  const generationById = new Map(keys.map((k) => [k.id, keyGenerationOf(k)]));
+  const poolById = new Map(pools.map((p) => [p.id, p]));
   const bySession = groupInto(recipes, (r) => {
-    const g = liveGeneration(r.keyId);
-    return g === null ? null : `${r.keyId}:${g}:${r.sessionId}`;
+    const g = generationById.get(r.keyId);
+    return g === undefined ? null : rowKey({ keyGeneration: g, keyId: r.keyId, sessionId: r.sessionId });
   });
   const rows = sessions.map((session) => {
     const agents = bySession.get(rowKey(session)) ?? [];
@@ -186,6 +194,7 @@ function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], accounts: Ac
     // gone, so the session reads as having no recipe even though the rows remain.
     const idleLimitOnly = agents.length > 0 && agents.every((a) => a.cause === 'idle_limit');
     const causes: string[] = [];
+    let idleLimit: Row['idleLimit'] = null;
     // The live key's pool and opt-out say nothing about a session that no longer belongs to it, so an earlier
     // holder carries that reason alone.
     if (session.historical) causes.push(HISTORICAL_CAUSE);
@@ -193,12 +202,10 @@ function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], accounts: Ac
     else {
       if (pool && !pool.keepalive.enabled) causes.push(`pool ${pool.name} keeps no caches warm`);
       if (key?.keepaliveOptOut) causes.push(`key ${key.name} opts out`);
-      if (idleLimitOnly) {
-        const ranOut = idleLimitRanOutAt(session, pool);
-        causes.push(ranOut ? `the idle limit ran out ${fmtRelative(ranOut, now)}` : 'the idle limit ran out');
-      }
-      if (causes.length === 0) causes.push('the last request left no cacheable prefix to replay');
+      if (idleLimitOnly) idleLimit = { ranOutAt: idleLimitRanOutAt(session, pool) };
+      else if (causes.length === 0) causes.push('the last request left no cacheable prefix to replay');
     }
+    const lastUsed = session.lastUsedAt ?? session.lastRequestAt;
     // The full list stays beside the lines drawn: the causes of a session without a line read every record, and a
     // session whose lines the mod all released still holds records, so it is no session without a recipe.
     const finished = isFinished(session, agents);
@@ -207,12 +214,13 @@ function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], accounts: Ac
     const drawsReleased = finished || showReleased;
     const shown = drawsReleased ? agents : agents.filter((a) => !isReleasedLine(a));
     return {
-      account: accountById.get(session.accountId ?? '') ?? null,
       agents,
-      expiresAt: expiryOf(session, expireAfterSeconds),
+      expiresAt: expiryOf(lastUsed, expireAfterSeconds),
       finished,
+      idleLimit,
+      lastUsed,
       lines: orderLines(sessionLines(session, shown), sort, dir),
-      noRecipe: agents.length === 0 || idleLimitOnly ? causes.join(' and ') : null,
+      noRecipe: agents.length === 0 || idleLimitOnly ? causes : null,
       released: drawsReleased ? 0 : releasedCount(agents),
       session,
       shown,
@@ -276,14 +284,13 @@ export function SessionsPage() {
   const recipeData = recipes.data;
   const expireAfterSeconds = settings.data?.sessions.expireAfterSeconds ?? null;
   const poolsFailed = failedFirst(pools);
-  // The router forgets a session once it has been idle for the expiry, so this list has to as well.
-  const listed = useMemo(
-    () =>
-      sessionData && recipeData && keys.data
-        ? buildRows(sessionData, recipeData, accounts.data ?? [], keys.data, pools.data ?? [], poolsFailed, filters.released, filters.sort, dir, expireAfterSeconds, now).filter((r) => r.expiresAt === null || r.expiresAt > now)
-        : null,
-    [sessionData, recipeData, accounts.data, keys.data, pools.data, poolsFailed, filters.released, filters.sort, dir, expireAfterSeconds, now],
+  // Built without the clock, so a tick only filters the rows again.
+  const built = useMemo(
+    () => (sessionData && recipeData && keys.data ? buildRows(sessionData, recipeData, keys.data, pools.data ?? [], poolsFailed, filters.released, filters.sort, dir, expireAfterSeconds) : null),
+    [sessionData, recipeData, keys.data, pools.data, poolsFailed, filters.released, filters.sort, dir, expireAfterSeconds],
   );
+  // The router forgets a session once it has been idle for the expiry, so this list has to as well.
+  const listed = useMemo(() => built?.filter((r) => r.expiresAt === null || r.expiresAt > now) ?? null, [built, now]);
   // The expiry stays the outer bound, and the filters narrow the list inside it.
   const rows = useMemo(
     () => listed?.filter((r) => (!filters.companion || r.session.companion === 'reporting' || r.session.companion === 'silent') && (filters.finished || !r.finished)) ?? null,
@@ -293,16 +300,17 @@ export function SessionsPage() {
   const hiddenTitle = hiddenRows > 0 ? `${fmtCount(hiddenRows, 'session')} hidden by the filters` : undefined;
   const o = overview.data;
   // A refresh that fails keeps the tiles it drew, so only a read that never answered draws them as failed.
-  const overviewError = o === null ? overview.error : null;
-  const readOf = (name: string, r: { data: unknown; error: string | null }): TileRead => ({ error: r.error, loaded: r.data !== null, name });
+  const overviewFailure = failed(failedFirst(overview) ? overview.error : null);
+  // Keyed by the word the notice names each read by, so the overview reads as the tiles.
+  const reads = { keys, recipes, sessions, tiles: overview };
+  const firstFailedOf = (names: readonly (keyof typeof reads)[]) => names.find((n) => failedFirst(reads[n])) ?? null;
   // The Sessions and Agents figures count the rows, which the sessions, the recipes and the keys build, so each of
   // those reads can end their placeholder with its error. The other tiles read the overview alone.
-  const countReads = [readOf('tiles', overview), readOf('sessions', sessions), readOf('recipes', recipes), readOf('keys', keys)];
-  const firstFailed = firstFailedRead(countReads);
+  const firstFailed = firstFailedOf(['tiles', 'sessions', 'recipes', 'keys']);
+  const countFailure = failed(firstFailed === null ? null : reads[firstFailed].error);
   // The card's own reads in the notice's order, so with the overview answered and two of them failed, the card and the
   // notice name the same one.
-  const cardFailed = firstFailedRead([readOf('sessions', sessions), readOf('recipes', recipes), readOf('keys', keys)]);
-  const reloadOf: Record<string, () => void> = { keys: keys.reload, recipes: recipes.reload, sessions: sessions.reload, tiles: overview.reload };
+  const cardFailed = firstFailedOf(['sessions', 'recipes', 'keys']);
   // Counted over the rows shown, so the note agrees with the table under it and the count beside it.
   const withCompanion = rows ? rows.filter((r) => r.session.companion === 'reporting' || r.session.companion === 'silent').length : null;
   const withRecipe = rows ? rows.filter((r) => r.session.keepalive.state !== null).length : null;
@@ -330,7 +338,8 @@ export function SessionsPage() {
   };
   // The listed rows by element id, so a fork's badge finds its base's row and reads the account the base sits on.
   const listedRows = useMemo(() => new Map((rows ?? []).map((r) => [rowDomId(r.session), r])), [rows]);
-  // A line's account reads its kind and its slow-down off the accounts list, the row's own account being main's pin's.
+  // Main's pin, a fork's base and each line read their account here rather than off the rows, so an accounts answer
+  // redraws the slow-down chips and the labels without rebuilding a row.
   const accountById = useMemo(() => new Map((accounts.data ?? []).map((a) => [a.id, a])), [accounts.data]);
   const followFork = (id: string) => {
     // jsdom leaves scrollIntoView undefined.
@@ -386,7 +395,7 @@ export function SessionsPage() {
         </div>
 
         <div className="stat-grid stat-grid--caps">
-          <Tile label="Sessions" value={o && rows ? <span className="nowrap">{`${fmtInt(rows.length)} of ${fmtInt(o.limits.sessions.max)}`}</span> : null} note={sessionsNote} title={hiddenTitle} failure={failed(firstFailed?.error ?? null)} />
+          <Tile label="Sessions" value={o && rows ? <span className="nowrap">{`${fmtInt(rows.length)} of ${fmtInt(o.limits.sessions.max)}`}</span> : null} note={sessionsNote} title={hiddenTitle} failure={countFailure} />
           {/* The sessions and the recipes are two reads that land apart, so the figure can trail the hidden lines by a
               read, which is accepted. Only a line the recipes list carries comes off, so a record that never drew a line
               is never subtracted. */}
@@ -404,47 +413,33 @@ export function SessionsPage() {
             }
             note={lifecycle ? `${fmtInt(lifecycle.busy)} busy, ${fmtInt(lifecycle.idle)} idle, ${fmtInt(lifecycle.parked)} parked` : null}
             title={hiddenTitle}
-            failure={failed(firstFailed?.error ?? null)}
+            failure={countFailure}
           />
           <Tile
             label="Retained"
             value={o ? <span className="nowrap">{`${fmtMiB(o.limits.retainedBytes.count)} of ${fmtMiB(o.limits.retainedBytes.max)}`}</span> : null}
             note="prompts kept for probes"
-            failure={failed(overviewError)}
+            failure={overviewFailure}
           />
-          <ProbeTile overview={o} error={overviewError} />
+          <ProbeTile overview={o} failure={overviewFailure} />
           {/* The count is router-wide, so a warm tone means at least one pool is paying for probes that did not land. */}
           <Tile
             label="Expired between turns, 24h"
             value={o ? fmtInt(o.expiredBetweenTurns24h) : null}
             note="misses cache warming exists to prevent"
             tone={o && o.expiredBetweenTurns24h > 0 && warmingSomewhere ? 'warning' : undefined}
-            failure={failed(overviewError)}
+            failure={overviewFailure}
           />
           <Tile
             label="Bus gaps"
             value={o ? fmtInt(o.busGaps) : null}
             note="times the keepalive engine missed bus events"
             tone={o && o.busGaps > 0 ? 'warning' : undefined}
-            failure={failed(overviewError)}
+            failure={overviewFailure}
           />
         </div>
-        {firstFailed !== null && (
-          <p className="sessions__notice" role="status">
-            Could not load the {firstFailed.name}: {firstFailed.error}{' '}
-            <Button size="sm" onClick={reloadOf[firstFailed.name]}>
-              Try again
-            </Button>
-          </p>
-        )}
-        {failedFirst(accounts) && (
-          <p className="sessions__notice" role="status">
-            Could not load the accounts: {accounts.error}{' '}
-            <Button size="sm" onClick={accounts.reload}>
-              Try again
-            </Button>
-          </p>
-        )}
+        {firstFailed !== null && <ReadNotice error={reads[firstFailed].error} name={firstFailed} retry={reads[firstFailed].reload} />}
+        {failedFirst(accounts) && <ReadNotice error={accounts.error} name="accounts" retry={accounts.reload} />}
 
         <Card
           padded={false}
@@ -459,31 +454,7 @@ export function SessionsPage() {
             ) : undefined
           }
         >
-          {rows === null && cardFailed !== null ? (
-            <div style={{ padding: 20 }}>
-              <ErrorState
-                title="Could not load the sessions"
-                body={cardFailed.error}
-                retry={() => {
-                  sessions.reload();
-                  keys.reload();
-                  recipes.reload();
-                }}
-              />
-            </div>
-          ) : rows === null ? (
-            <div style={{ padding: 20 }}>
-              <Skeleton height={14} />
-            </div>
-          ) : rows.length === 0 ? (
-            <div style={{ padding: 20 }}>
-              {hiddenTitle === undefined ? (
-                <EmptyState title="No live sessions" body="A session appears here on its first request, or as soon as the keepalive mod registers it, and drops off once it passes the session expiry." />
-              ) : (
-                <EmptyState title="No sessions kept by the filters" body={`${hiddenTitle}.`} />
-              )}
-            </div>
-          ) : (
+          {rows !== null && rows.length > 0 ? (
             <div className="table-wrap">
               <table className="table sessions-table">
                 <thead>
@@ -491,18 +462,11 @@ export function SessionsPage() {
                     {/* The gutter keeps its own width and takes neither column class, whose 1% would outrank it. */}
                     <th className="sessions-table__gutter" />
                     <th className="col-fill">Session</th>
-                    {visible.has('key') && <th className="col-fit">Key</th>}
-                    {visible.has('model') && <th className="col-fit">Model</th>}
-                    {visible.has('context') && <th className="col-fit">Context</th>}
-                    {visible.has('effort') && <th className="col-fit">Effort</th>}
-                    {visible.has('runway') && <th className="col-fit">Runway</th>}
-                    {visible.has('lastUsed') && <th className="col-fit">Last used</th>}
-                    {visible.has('requests') && <th className="col-fit right">Requests</th>}
-                    {visible.has('lastRequest') && <th className="col-fit">Last request</th>}
-                    {visible.has('agents') && <th className="col-fit right">Agents</th>}
-                    {visible.has('companion') && <th className="col-fit">Companion</th>}
-                    {visible.has('cacheWarming') && <th className="col-fit">Cache warming</th>}
-                    {visible.has('nextProbe') && <th className="col-fit">Next probe</th>}
+                    {SESSION_COLUMNS.filter((c) => visible.has(c.id)).map((c) => (
+                      <th key={c.id} className={'right' in c ? 'col-fit right' : 'col-fit'}>
+                        {c.label}
+                      </th>
+                    ))}
                     <th className="col-fit" />
                   </tr>
                 </thead>
@@ -527,6 +491,26 @@ export function SessionsPage() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          ) : (
+            <div style={{ padding: 20 }}>
+              {rows === null && cardFailed !== null ? (
+                <ErrorState
+                  title="Could not load the sessions"
+                  body={reads[cardFailed].error}
+                  retry={() => {
+                    sessions.reload();
+                    keys.reload();
+                    recipes.reload();
+                  }}
+                />
+              ) : rows === null ? (
+                <Skeleton height={14} />
+              ) : hiddenTitle === undefined ? (
+                <EmptyState title="No live sessions" body="A session appears here on its first request, or as soon as the keepalive mod registers it, and drops off once it passes the session expiry." />
+              ) : (
+                <EmptyState title="No sessions kept by the filters" body={`${hiddenTitle}.`} />
+              )}
             </div>
           )}
         </Card>
@@ -579,7 +563,8 @@ function SessionRows({
   row: Row;
   visible: ReadonlySet<SessionColumnId>;
 }) {
-  const { account, expiresAt, lines, session, shown } = row;
+  const { expiresAt, lastUsed, lines, session, shown } = row;
+  const noRecipe = noRecipeText(row, now);
   const summary = stateSummary(shown);
   // A line takes its account from its pin, or from its recipe where no pin stands, and a recipe whose request was
   // refused before any account served it names none, so that line is left out. The badge counts every other line on
@@ -591,8 +576,6 @@ function SessionRows({
   // A retained agent with no time is waiting on its first stream event, which is
   // a different thing from a session nothing probes.
   const pendingProbe = shown.some((a) => a.state === 'retained' && a.nextProbeAt === null);
-  // The last ledgered request stands in for a session with no activity of its own, as its expiry reads it.
-  const lastUsed = session.lastUsedAt ?? session.lastRequestAt;
   // Analytics and the request log read the ledger, so a session that never reached it has nothing to open. The count
   // leaves a refused request out while the log lists it, so a ledgered row reads off the last request instead.
   const hasTraffic = session.lastRequestAt !== null;
@@ -612,12 +595,7 @@ function SessionRows({
         aria-current={current ? 'true' : undefined}
         aria-expanded={open}
         tabIndex={0}
-        onClick={onToggle}
-        onKeyDown={(e) => {
-          if (e.key !== 'Enter' && e.key !== ' ') return;
-          e.preventDefault();
-          onToggle();
-        }}
+        {...toggleRow(onToggle)}
       >
         <td className="sessions-table__gutter">
           <span className="srow__chevron" aria-hidden>
@@ -629,7 +607,7 @@ function SessionRows({
           {session.forkedFrom !== null && forkBase !== null && (
             <ForkBadge
               base={baseRow ? forkBase : null}
-              baseAccount={baseAccountId === null ? null : { id: baseAccountId, label: baseRow?.account?.label ?? baseAccountId }}
+              baseAccount={baseAccountId === null ? null : { id: baseAccountId, label: accountById.get(baseAccountId)?.label ?? baseAccountId }}
               depth={session.forkDepth}
               from={session.forkedFrom}
               onFollow={onFollowFork}
@@ -642,7 +620,7 @@ function SessionRows({
             </span>
           )}
           {/* An unpinned row on a slowed account carries no speed, so the row's own speed gates main's chip. */}
-          {session.speed !== null && <SpeedChip {...memberSpeed(session, account, now)} />}
+          {session.speed !== null && <SpeedChip {...memberSpeed(session, accountById.get(session.accountId ?? '') ?? null, now)} />}
         </td>
         {visible.has('key') && (
           <td className="mono col-fit">
@@ -723,7 +701,7 @@ function SessionRows({
         )}
         {visible.has('cacheWarming') && (
           <td className="col-fit">
-            {session.keepalive.state && !row.noRecipe ? (
+            {session.keepalive.state && !noRecipe ? (
               <>
                 <Badge tone={PIN_TONE[session.keepalive.state]} dot title={PIN_HINT[session.keepalive.state]}>
                   {session.keepalive.state}
@@ -761,12 +739,12 @@ function SessionRows({
             <p className="agents__created">
               {session.createdAt === null ? 'Created: unknown' : `Created ${fmtAbsolute(session.createdAt)}, ${fmtRelative(session.createdAt, now)}`}
             </p>
-            {row.noRecipe && (
+            {noRecipe && (
               <p className="agents__none">
                 <Badge tone="neutral" title={NO_RECIPE_HINT}>
                   no recipe
                 </Badge>
-                <span>Nothing is scheduled because {row.noRecipe}.</span>
+                <span>Nothing is scheduled because {noRecipe}.</span>
               </p>
             )}
             {/* A finished session keeps its lines, so the sentence stands above them. */}
@@ -980,13 +958,24 @@ function OtherPins({ agents }: { agents: { accountId: string; agentId: string; m
   );
 }
 
-function ProbeTile({ error, overview: o }: { error: string | null; overview: KeepaliveOverview | null }) {
+function ReadNotice({ error, name, retry }: { error: string | null; name: string; retry: () => void }) {
+  return (
+    <p className="sessions__notice" role="status">
+      Could not load the {name}: {error}{' '}
+      <Button size="sm" onClick={retry}>
+        Try again
+      </Button>
+    </p>
+  );
+}
+
+function ProbeTile({ failure, overview: o }: { failure: WeekReading['failure']; overview: KeepaliveOverview | null }) {
   const total = o ? o.probes24h.ok + o.probes24h.migrated + o.probes24h.held + o.probes24h.skipped + o.probes24h.failed : 0;
   return (
     <Tile
       label="Cache probes, 24h"
       value={o ? fmtInt(total) : null}
-      failure={failed(error)}
+      failure={failure}
       note={
         o ? (
           <>
