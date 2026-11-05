@@ -23929,6 +23929,31 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
       missing: [JSON.stringify(badgeOf(unknown))],
     });
   }
+  {
+    // An Agents filter narrows the rows and the lines an open row draws, and a "+N" still counts every line on another
+    // model or account. Under the story's first session's main model (`claude-fable-5-1`, `sessionSpec[0]`) the row
+    // matches through main's line alone, and its Model and Account cells read +2 as on the bare page: its subagents
+    // c21e and e4b7, each on claude-sonnet-5 on nightly beside main on primary. The count names the agents the filter
+    // matches.
+    const filtered = await mount('/sessions?model=claude-fable-5-1', { now: CLOCK_ORIGIN });
+    const row = subjects.story === undefined ? null : filtered.container.querySelector(`[id="${sessionRowId(subjects.story)}"]`);
+    const plusOf = (header) => {
+      const badge = [...(sessionCell(filtered, row, header)?.querySelectorAll('.badge') ?? [])].find((b) => /^\+\d+$/.test(b.textContent?.trim() ?? ''));
+      if (badge === undefined) return null;
+      const [lead, ...lines] = (badge.getAttribute('title') ?? '').split('\n');
+      return { lines: [lead, ...lines.sort()], text: badge.textContent?.trim() ?? '' };
+    };
+    const read = { account: plusOf('Account'), model: plusOf('Model') };
+    const count = filtered.container.querySelector('.filter-bar__count')?.textContent ?? null;
+    filtered.unmount();
+    const OTHERS = ['c21e: claude-sonnet-5 on nightly', 'e4b7: claude-sonnet-5 on nightly'];
+    const want = { account: { lines: ['Agents on another account:', ...OTHERS], text: '+2' }, model: { lines: ['Agents on another model:', ...OTHERS], text: '+2' } };
+    results.push({
+      name: '/sessions an Agents filter leaves the Model and Account +N counting every line on another model or account, and the count names the matching agents',
+      ok: absent.length === 0 && row !== null && JSON.stringify(read) === JSON.stringify(want) && /^\d+ sessions? · \d+ matching agents?$/.test(count ?? ''),
+      missing: [JSON.stringify(read), String(count)],
+    });
+  }
 }
 {
   const rows = () => [...m.container.querySelectorAll('tbody tr.srow')];

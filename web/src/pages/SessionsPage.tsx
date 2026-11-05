@@ -22,7 +22,7 @@ import { tierOrder, weekReadingOf } from '@/lib/costs';
 import { groupInto, lookup } from '@/lib/counts';
 import { SESSIONS_DIMENSIONS } from '@/lib/filterBar';
 import { SESSION_CHARS, fmtAbsolute, fmtCount, fmtDuration, fmtInt, fmtRelative, fmtShare, fmtUsd, joinPresent, keyGenerationOf, keyLifetime, messageOf, shortId, shortModel, weekShort } from '@/lib/format';
-import { ACTIVE_WITHIN, agentCount, agentFiltersStand, CAUSE_HINT, CAUSE_LABEL, contextCell, hiddenLines, isFinished, lastActivity, lifecycleSplit, MAIN_AGENT, matches, orderLines, orderRows, pinTtlMs, presenceOf, requestsRange, sessionLines, type SessionLine, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES } from '@/lib/keepalive';
+import { ACTIVE_WITHIN, agentCount, agentFiltersStand, CAUSE_HINT, CAUSE_LABEL, contextCell, drawnLines, hiddenLines, isFinished, lastActivity, lifecycleSplit, MAIN_AGENT, matches, orderLines, orderRows, pinTtlMs, presenceOf, requestsRange, sessionLines, type SessionLine, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES } from '@/lib/keepalive';
 import { failedFirst, toggled, useAsync, useNow, useQueryFilters } from '@/lib/hooks';
 import { minuteSpan, type BadgeTone } from '@/lib/quota';
 import { costCellOf, spendHintArgs, spendHover, spendUnitOf } from '@/lib/requests';
@@ -363,7 +363,7 @@ export function SessionsPage() {
   const listed = useMemo(() => built?.filter((r) => r.expiresAt === null || r.expiresAt > now) ?? null, [built, now]);
   // The expiry stays the outer bound, and the filters narrow the list inside it.
   const rows = useMemo(() => listed?.filter((r) => matches(r, filters, now)) ?? null, [listed, filters, now]);
-  // The lines each kept row draws, which its cells, its detail and the count read.
+  // The lines each kept row draws under the filters, which its detail and the count read.
   const drawn = useMemo(() => new Map((rows ?? []).map((r) => [rowKey(r.session), hiddenLines(r, filters).shown])), [rows, filters]);
   const options = useMemo(() => (listed === null ? {} : filterOptions(listed, keys.data, pools.data ?? [], accounts.data ?? [], modelTiers)), [listed, keys.data, pools.data, accounts.data, modelTiers]);
   const hiddenRows = listed !== null && rows !== null ? listed.length - rows.length : 0;
@@ -505,6 +505,7 @@ export function SessionsPage() {
                       onFollowFork={followFork}
                       onOpen={(path) => navigate(path)}
                       onRelease={() => setPending(row)}
+                      released={filters.released}
                       visible={visible}
                     />
                   ))}
@@ -669,6 +670,7 @@ function SessionRows({
   onFollowFork,
   onOpen,
   onRelease,
+  released,
   visible,
 }: {
   accountById: ReadonlyMap<string, Account>;
@@ -687,6 +689,8 @@ function SessionRows({
   onRelease: () => void;
   onToggle: () => void;
   open: boolean;
+  /** Whether the Released agents filter stands, which draws a live row's released lines. */
+  released: boolean;
   row: Row;
   visible: ReadonlySet<SessionColumnId>;
 }) {
@@ -695,9 +699,10 @@ function SessionRows({
   const lines = drawn;
   const shown = drawn.flatMap((l) => (l.recipe === null ? [] : [l.recipe]));
   // A line takes its account from its pin, or from its recipe where no pin stands, and a recipe whose request was
-  // refused before any account served it names none, so that line is left out. A "+N" counts every other line on
-  // another model or account, recipe or not, and its hover reads them in the order the expanded row draws them.
-  const placed = lines.flatMap((l) => {
+  // refused before any account served it names none, so that line is left out. A "+N" counts every other line the row
+  // draws on another model or account, recipe or not, whatever the Agents filters match, and its hover reads them in
+  // the order the expanded row draws them.
+  const placed = drawnLines(row, { released }).flatMap((l) => {
     const accountId = l.pin?.accountId ?? l.recipe?.accountId ?? null;
     return accountId !== null && l.model !== null ? [{ accountId, agentId: l.agentId, model: l.model }] : [];
   });
