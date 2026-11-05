@@ -2066,6 +2066,11 @@ async fn an_ended_session_is_listed_without_a_companion() {
         [(Some("s1"), Some("reporting"))],
         "the registered session is reporting"
     );
+    assert_eq!(
+        listed["sessions"][0]["lifecycle"].as_str(),
+        Some("registered"),
+        "main has sent no request since its registration, so the row words it registered rather than busy"
+    );
     parts
         .keepalive
         .apply_event(
