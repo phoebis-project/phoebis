@@ -2434,6 +2434,8 @@ async fn a_keepalive_cap_holds_its_item_from_ninety_percent_of_its_max() {
     );
 }
 
+/// The reads after the clear date a re-raised item by its own run and keep that instant while it holds, which breaks
+/// when the pushes run after the read's prune of the first-seen entries and every read dates the item afresh.
 #[tokio::test]
 async fn a_bus_gap_holds_its_item_for_a_day_and_clears_after() {
     let rig = rig().await;
@@ -2470,6 +2472,21 @@ async fn a_bus_gap_holds_its_item_for_a_day_and_clears_after() {
         (gap.holds, gap.since),
         (false, None),
         "a day after the last gap the item clears"
+    );
+    gap_at(NOW + 3 * MINUTE);
+    let raised = read(&attention, NOW + 4 * MINUTE);
+    let gap = find(&raised, Kind::KeepaliveBusGaps, "keepalive").unwrap();
+    assert_eq!(
+        (gap.holds, gap.since),
+        (true, Some(NOW + 4 * MINUTE)),
+        "a gap after the clear raises the item again, dated by its new run, never the earlier one"
+    );
+    let held = read(&attention, NOW + 5 * MINUTE);
+    let gap = find(&held, Kind::KeepaliveBusGaps, "keepalive").unwrap();
+    assert_eq!(
+        gap.since,
+        Some(NOW + 4 * MINUTE),
+        "the item keeps its first-seen instant while it holds"
     );
 }
 
