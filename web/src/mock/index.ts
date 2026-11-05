@@ -301,10 +301,6 @@ const OTHER_BUILD = '0'.repeat(40);
  */
 export const UNPRICED_STORY_KEY = 'phoebis.mockUnpriced';
 const unpricedStory = (): boolean => switchSet(UNPRICED_STORY_KEY);
-// Built once, since no route writes into a read set.
-const UNPRICED_DAY_ROWS = [...DAY_ROWS, UNPRICED_REQUEST];
-const UNPRICED_LEDGER_ROLLUPS = [...ALL_ROLLUPS, ...UNPRICED_ROLLUPS];
-const NO_REQUESTS = new Map<string, RequestLog>();
 /**
  * The ledger's read sets as the routes fold them: the story's, the unpriced request's rows beside the story's under
  * its switch, and an empty form of each for a fresh installation, so a route that reads its rows here answers that
@@ -317,16 +313,16 @@ const ledger = () => {
     accountRollups: empty ? [] : ACCOUNT_ROLLUPS,
     attention: empty ? [] : ATTENTION,
     catalog: empty ? [] : CATALOG,
-    dayRows: empty ? [] : unpriced ? UNPRICED_DAY_ROWS : DAY_ROWS,
+    dayRows: empty ? [] : unpriced ? [...DAY_ROWS, UNPRICED_REQUEST] : DAY_ROWS,
     decisionOf: (requestId: string, seq: number): DecisionRecord | null => (empty ? null : getDecision(requestId, seq)),
     keepalive: empty ? EMPTY_KEEPALIVE_OVERVIEW : KEEPALIVE_OVERVIEW,
     keepalive30d: empty ? EMPTY_KEEPALIVE_OVERVIEW : KEEPALIVE_OVERVIEW_30D,
     quotaHistory: empty ? [] : QUOTA_HISTORY,
     reconciliations: empty ? [] : RECONCILIATIONS,
     recipes: empty ? [] : RECIPES,
-    requestById: empty ? NO_REQUESTS : requestById,
+    requestById: empty ? new Map<string, RequestLog>() : requestById,
     requests: empty ? [] : REQUESTS,
-    rollups: empty ? [] : unpriced ? UNPRICED_LEDGER_ROLLUPS : ALL_ROLLUPS,
+    rollups: empty ? [] : unpriced ? [...ALL_ROLLUPS, ...UNPRICED_ROLLUPS] : ALL_ROLLUPS,
     weeklyResets: empty ? [] : WEEKLY_RESETS,
   };
 };
