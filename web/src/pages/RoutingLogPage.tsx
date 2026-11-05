@@ -16,12 +16,12 @@ import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Badge, Button, Card, EmptyState, ErrorState, Skeleton, toggleRow, useHostedDescription } from '@/components/ui/primitives';
 import { addressWindow, type LogFilters, ROUTING_LOG_CODEC } from '@/lib/address';
 import { clock } from '@/lib/clock';
-import { tierOrder, weekReadingOf } from '@/lib/costs';
+import { tierOrder } from '@/lib/costs';
 import { chipText, notLoadedReason, ROUTING_LOG_DIMENSIONS } from '@/lib/filterBar';
 import { effectiveInterval, ENDED_RANGE, FOLLOW_OVERRUN, readEnd, shownCount, spanEnded } from '@/lib/follow';
 import { fmtAbsolute, fmtDatedTime, fmtTime, plural, upperFirst } from '@/lib/format';
 import { sameMembers } from '@/lib/forms';
-import { toggled, useAsync, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';
+import { toggled, useAsync, useQueryFilters, useRangeTakenAt, useWeekReading } from '@/lib/hooks';
 import { ALL_KINDS, byOf, catalogModel, compareRows, DECISION_KIND_LABEL, DECISION_KIND_TONE, entityHref, EVENT_KIND_LABEL, eventTone, factsOf, identityOf, KIND_PRESETS, type LogLink, logHref, movedFrom, registryTarget, words } from '@/lib/routingLog';
 
 const PAGE_SIZE = 25;
@@ -58,8 +58,7 @@ export function RoutingLogPage() {
   const { modelTiers, week } = useAppSettings();
   // The cost model whose capacities scale a shedding round's Pro-week rewrite to the chosen week. The Pro week reads
   // without it.
-  const settings = useAsync(() => api.getSettings(), []);
-  const reading = weekReadingOf(settings.data?.subscriptionCosts ?? null, settings.error, week);
+  const { reading, settings } = useWeekReading(week);
   const modelOptions = useMemo<Option[]>(() => tierOrder((catalog.data ?? []).map((m) => m.id), modelTiers).map((id) => ({ label: id, value: id })), [catalog.data, modelTiers]);
 
   // `pagedTo` holds the range's end a walk from the poll's overrun reads under, the end its cursor came from.

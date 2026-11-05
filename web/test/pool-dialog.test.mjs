@@ -32,16 +32,18 @@ const { MockApi } = await import('./dist/api.js');
 const LIMIT = 72;
 
 const roots = [];
-const reads = { getKeyModels: api.getKeyModels, listCatalogOf: api.listCatalogOf, updateKey: api.updateKey };
+const reads = { getKeepaliveOverview: api.getKeepaliveOverview, getKeyModels: api.getKeyModels, listCatalogOf: api.listCatalogOf, listSessions: api.listSessions, updateKey: api.updateKey };
 beforeEach(() => {
   // A frozen clock, so the dialog's ticking instant arms no window timer.
   const clock = fakeClock();
   clock.freeze(Date.UTC(2026, 9, 14, 12));
   installClock(clock);
-  // The test build's api is the HTTP client, so the dialogs' other reads answer empty here: the members' catalogs
-  // after the suggestions' pause, and an open edit's model list.
+  // The test build's api is the HTTP client, so the dialogs' other reads answer here: the members' catalogs after the
+  // suggestions' pause and an open edit's model list empty, a saved pool's sessions and return rate as the mock does.
   api.listCatalogOf = async () => [];
   api.getKeyModels = async (keyId) => ({ keyId, longContextTwins: true, modelRulesMode: 'extend', poolId: '', rules: [] });
+  api.getKeepaliveOverview = async ({ range }) => overviews[range];
+  api.listSessions = async () => sessions;
 });
 afterEach(() => {
   for (const root of roots.splice(0)) act(() => root.unmount());
@@ -95,20 +97,21 @@ const mock = new MockApi();
 const pools = await mock.listPools();
 const accounts = await mock.listAccounts();
 
+// A saved pool's dialog reads the sessions and its return rate itself, answered here as the mock answers them.
+const sessions = await mock.listSessions();
+const overviews = { '30d': await mock.getKeepaliveOverview({ range: '30d' }), '7d': await mock.getKeepaliveOverview({ range: '7d' }) };
+/** The accounts read as the page hands it down, its list null until it answers. */
+const accountsRead = (data) => ({ data, error: null, reload() {} });
+
 function poolDialog(props) {
   return h(PoolDialog, {
-    accountsFailed: null,
-    // The page opens each dialog's return rate on 7 days, so the dialog draws that range as it does there.
-    idleReturns: { buckets: [], error: null, loading: false, onRange() {}, range: '7d' },
     keys: [],
     models: [],
     onClose() {},
     onKeysChanged() {},
-    onRetryAccounts() {},
     onSaved() {},
     open: true,
     pools,
-    sessions: [],
     ...props,
   });
 }
@@ -117,7 +120,7 @@ test('the pool retention is unbounded with the short hint and the floor alone un
   const pool = pools.find((p) => p.bodyCaptureHours > 0);
   assert.ok(pool, 'the mock holds a pool that captures bodies');
   const { container, draw } = mount();
-  await draw(poolDialog({ accounts, accountsLoaded: true, pool }));
+  await draw(poolDialog({ accounts: accountsRead(accounts), pool }));
   const field = () => container.querySelector('dialog[open] input[aria-label="Capture retention in hours"]');
   const hint = () => shownText(fieldIn(container, 'Retention (hours)')?.querySelector('.field__hint'));
   assert.equal(field()?.value, String(pool.bodyCaptureHours), 'the field opens on the stored retention');
@@ -125,7 +128,7 @@ test('the pool retention is unbounded with the short hint and the floor alone un
   assert.equal(hint(), "At most the bootstrap's body capture limit, shown on the Settings page's About card.");
   type(field(), '');
   assert.equal(statusOf(container), 'Save is held: Retention is a whole number of hours of at least 1.', 'an emptied field names the floor alone');
-  await draw(poolDialog({ accounts, accountsLoaded: true, captureMaxHours: LIMIT, pool }));
+  await draw(poolDialog({ accounts: accountsRead(accounts), captureMaxHours: LIMIT, pool }));
   assert.equal(field()?.getAttribute('max'), String(LIMIT), 'the limit lands as the ceiling');
   assert.equal(hint(), `At most the bootstrap's body capture limit, ${LIMIT} hours here, shown on the Settings page's About card.`);
   assert.equal(statusOf(container), `Save is held: Retention is a whole number of hours from 1 to ${LIMIT}.`);
@@ -142,10 +145,10 @@ test("a stored member's row waits disabled for the account list, then the list's
     const box = row?.querySelector('input[type="checkbox"]');
     return { badge: row?.querySelector('.badge')?.textContent?.trim() ?? null, checked: box?.checked ?? null, disabled: box?.disabled ?? null, title: box?.getAttribute('title') ?? null };
   };
-  // Before the read answers the page hands an empty list, so every stored member draws as a row of its own.
-  await draw(poolDialog({ accounts: [], accountsLoaded: false, pool }));
+  // Before the read answers it holds no list, so every stored member draws as a row of its own.
+  await draw(poolDialog({ accounts: accountsRead(null), pool }));
   for (const m of pool.members) assert.deepEqual(read(m.accountId), { badge: null, checked: true, disabled: true, title: 'Waiting for the account list' }, `${m.accountId} waits for the list`);
-  await draw(poolDialog({ accounts: accounts.filter((a) => a.id !== missing), accountsLoaded: true, pool }));
+  await draw(poolDialog({ accounts: accountsRead(accounts.filter((a) => a.id !== missing)), pool }));
   assert.deepEqual(read(missing), { badge: 'not listed', checked: true, disabled: false, title: null }, 'the member the list lacks keeps its ticked row, enabled and marked');
 });
 
@@ -171,7 +174,7 @@ test('an idle window set above the break-even reads a note under its field and i
   const pool = pools.find((p) => p.id === 'jobs');
   assert.ok(pool && pool.keepalive.maxIdleSeconds > pool.keepaliveResolved.breakEvenSeconds.max, 'the mock holds a pool whose idle window is set above its whole break-even');
   const { container, draw } = mount();
-  await draw(poolDialog({ accounts, accountsLoaded: true, pool }));
+  await draw(poolDialog({ accounts: accountsRead(accounts), pool }));
   const BREAK_EVEN_HINT = "The pause length at which the recipe's probes cost one re-write of its prefix, for this pool's funding, cache TTL and models.";
   const keepalive = () => container.querySelector('dialog[open] section.dialog-group[aria-label="Keepalive"]');
   const linesOf = (el) => [...(el?.querySelectorAll('.keepalive-resolved') ?? [])].map((l) => l.textContent.replace(/\s+/g, ' ').trim());
@@ -201,7 +204,7 @@ test('an idle window set above the break-even reads a note under its field and i
 
 test('a new pool opens with the switch to keep prompt caches warm off, and free to turn on', async () => {
   const { container, draw } = mount();
-  await draw(poolDialog({ accounts, accountsLoaded: true, pool: null }));
+  await draw(poolDialog({ accounts: accountsRead(accounts), pool: null }));
   const warm = container.querySelector('dialog[open] section.dialog-group[aria-label="Keepalive"] button[role="switch"][aria-label="Keep prompt caches warm"]');
   assert.ok(warm, 'the Keepalive group holds the switch');
   assert.equal(warm.getAttribute('aria-checked'), 'false', 'the switch starts off');
@@ -237,7 +240,7 @@ test("a key move sends the stored key's settings with the new pool, the name tri
     return { ...stored, poolId: input.poolId };
   };
   const { container, draw } = mount();
-  await draw(poolDialog({ accounts, accountsLoaded: true, keys: [stored], pool }));
+  await draw(poolDialog({ accounts: accountsRead(accounts), keys: [stored], pool }));
   const row = [...container.querySelectorAll('dialog[open] .keys-table tbody tr')].find((tr) => tr.children[0]?.textContent === stored.name);
   act(() => row?.querySelector('.menu__trigger')?.click());
   act(() => [...(row?.querySelectorAll('[role="menuitem"]') ?? [])].find((b) => b.textContent?.trim() === 'Move to…')?.click());

@@ -405,6 +405,8 @@ export interface FundedSum {
   /** The plan rows as the Pro-week figure, null where a plan row priced nothing. */
   equivalent: number | null;
 }
+/** The day's sum of a pool or of the overview, from the route's three 24-hour fields. */
+export const daySumOf = (d: { billed24h: number; cost24h: number; equivalent24h: number | null }): FundedSum => ({ billedUsd: d.billed24h, cost: d.cost24h, equivalent: d.equivalent24h });
 /** A dollar position's dollars of a sum: every row's, the billed rows', or the plan rows' at the API price list. */
 export const dollarsUnder = (unit: DollarPosition, s: FundedSum): number => (unit === 'all' ? s.cost : unit === 'usd' ? s.billedUsd : s.cost - s.billedUsd);
 /**

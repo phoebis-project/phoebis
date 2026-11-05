@@ -139,6 +139,24 @@ export function useSession(): SessionState {
   return v;
 }
 
+/**
+ * One row's write, the list read again behind it and the `done` toast before the read where the caller names one. A
+ * refusal only toasts, leaving the list alone.
+ */
+export function useRun(reload: () => void): (action: () => Promise<unknown>, done?: string) => Promise<void> {
+  const { notify } = useSession();
+  return async (action, done) => {
+    try {
+      await action();
+    } catch (e) {
+      notify(messageOf(e));
+      return;
+    }
+    if (done) notify(done);
+    reload();
+  };
+}
+
 function Brand() {
   return (
     <div className="brand">

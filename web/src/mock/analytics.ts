@@ -7,7 +7,7 @@ import { bucketShare, keptWarmTokens } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { equivalentIn, modelWeeks, pricedWindow, tierCapacity, type Usage } from '@/lib/costs';
-import { countOf, emptyCounts } from '@/lib/counts';
+import { countOf, emptyCounts, groupInto } from '@/lib/counts';
 import { servingResponse } from '@/lib/dimensions';
 import { byteOrder, earlierHolderLabel, placementHit } from '@/lib/format';
 import { mergeHistograms, quartet } from '@/lib/histogram';
@@ -421,13 +421,7 @@ const groupKeyOf = (groupBy: AnalyticsGroupBy, named: string[]): ((r: HourlyRoll
 
 export function groupsOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsGroup[] {
   const of = groupKeyOf(q.groupBy, q.userAgentGroups ?? []);
-  const buckets = new Map<string, HourlyRollup[]>();
-  for (const r of rows) {
-    const key = of(r);
-    const list = buckets.get(key);
-    if (list) list.push(r);
-    else buckets.set(key, [r]);
-  }
+  const buckets = groupInto(rows, of);
   return [...buckets.entries()].map(([key, list]) => ({ ...groupOf(key, labelOf(key, q.groupBy), list, q.includeProbes ?? false, q.groupBy, q.accountIds), ...holderOf(key, q.groupBy) })).sort((a, b) => a.label.localeCompare(b.label) || (a.keyCreatedAt ?? 0) - (b.keyCreatedAt ?? 0) || a.key.localeCompare(b.key));
 }
 

@@ -1,14 +1,15 @@
 import { useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import { api, ApiError } from '@/api';
+import { api } from '@/api';
 import type { GuardrailPatch } from '@/api/client';
+import { isStaleEdit } from '@/api/http';
 import type { ApiKey, Condition, Guardrail, GuardrailAttachment, GuardrailMode, GuardrailPreset, GuardrailTestResult, Pool } from '@/api/types';
-import { useSession } from '@/app/session';
+import { useRun, useSession } from '@/app/session';
 import { blankCondition, ConditionsEditor } from '@/components/ConditionsEditor';
 import { FilterBar } from '@/components/FilterBar';
 import { OptionList, type Option, walkFocus } from '@/components/ui/OptionList';
 import { Popover, PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { IconChevron, IconInfo, IconPlus } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, EmptyState, Field, GroupedDialog, Input, Menu, PageLink, Refusal, Segmented, Select, Skeleton, StateRow, Toggle, type DialogGroup } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, EmptyState, Field, GroupedDialog, Input, Menu, PageLink, Refusal, Segmented, Select, Skeleton, StaleRefusal, StateRow, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { poolKeysHref, requestHref } from '@/lib/address';
 import { effectiveCaptureHours } from '@/lib/capture';
 import type { PauseCause } from '@/lib/follow';
@@ -124,17 +125,7 @@ export function GuardrailsPage(): JSX.Element {
     pools.reload();
     keys.reload();
   };
-  /** One row's write, the list read again behind it. A refusal only toasts, leaving the list alone. */
-  const run = async (action: () => Promise<unknown>, done?: string) => {
-    try {
-      await action();
-    } catch (e) {
-      notify(messageOf(e));
-      return;
-    }
-    if (done) notify(done);
-    reload();
-  };
+  const run = useRun(reload);
 
   const row = (content: ReactNode, key: string | number = 'state') => (
     <tr key={key}>
@@ -433,7 +424,7 @@ export function GuardrailDialog({ existing, existingIds, keys, onClose, onSaved,
       onSaved(saved);
     } catch (e) {
       setBusy(false);
-      if (e instanceof ApiError && e.status === 409 && e.code === 'stale_edit') {
+      if (isStaleEdit(e)) {
         // The row moved under the dialog, so the operator reloads and applies the edit again rather than saving over it.
         setStale(e.message);
         return;
@@ -673,16 +664,7 @@ export function GuardrailDialog({ existing, existingIds, keys, onClose, onSaved,
       status={save.status}
       hold={save.hold ?? (rowRefusal && !stale ? 'conditions' : null)}
       held={save.held}
-      notice={
-        stale && (
-          <Refusal>
-            {stale}{' '}
-            <Button variant="ghost" onClick={onClose}>
-              Reload
-            </Button>
-          </Refusal>
-        )
-      }
+      notice={stale && <StaleRefusal message={stale} onReload={onClose} />}
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>

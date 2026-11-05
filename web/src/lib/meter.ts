@@ -1,5 +1,6 @@
 import type { Reconciliation } from '@/api/types';
 import { judged, RATIO_HIGH, RATIO_LOW, ratioOff } from './analytics';
+import { groupInto } from './counts';
 import { byteOrder } from './format';
 import { DAY } from './time';
 import { windowRank } from './windows';
@@ -31,13 +32,7 @@ const isWeekly = (window: string) => window.startsWith('seven_day');
 /** The rows grouped by account and window kind, the weekly windows apart from the 5-hour ones, each group's rows newest
  *  first, the groups by account id and inside an account the 7-day window before the model weeks. */
 export function meterGroups(rows: Reconciliation[]): { fiveHour: MeterGroup[]; weekly: MeterGroup[] } {
-  const byKey = new Map<string, Reconciliation[]>();
-  for (const r of rows) {
-    const key = `${r.accountId}\u0000${r.window}`;
-    const list = byKey.get(key);
-    if (list) list.push(r);
-    else byKey.set(key, [r]);
-  }
+  const byKey = groupInto(rows, (r) => `${r.accountId}\u0000${r.window}`);
   const groups = [...byKey.values()]
     .map((list): MeterGroup => {
       const sorted = [...list].sort(newestFirst);

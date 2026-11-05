@@ -1,6 +1,6 @@
 import { effectiveLabel } from '@/api/decode';
 import type { Account, CohortHold, RequestLog, Settings, SubscriptionCosts } from '@/api/types';
-import { heldSpan, hintPlan, sentences } from '@/lib/analytics';
+import { heldSpan, hintPlan, sentences, shareHint } from '@/lib/analytics';
 import { type Funding, fundingOf, inBand, nativeOf, revisionAt } from '@/lib/costs';
 import { lookup } from '@/lib/counts';
 import { servingAttempt } from '@/lib/dimensions';
@@ -89,6 +89,12 @@ export function costUnitOf(r: Pick<RequestLog, 'attempts' | 'costEquivalent' | '
   if (funding !== 'plan') return unit === 'equivalent' ? { kind: 'dash', title: NO_EQUIVALENT_TITLE, usd } : { funding, kind: 'dollars', usd };
   if (unit === 'usd') return { kind: 'dash', title: NOTHING_BILLED_TITLE, usd };
   return r.costEquivalent === null ? { kind: 'unpriced', usd } : { figure: r.costEquivalent, hint, kind: 'equivalent_dollars', reason, usd };
+}
+
+/** A request's cost unit with its hint composed from the accounts read and the cost model. */
+export function requestCostUnit(r: RequestLog, unit: UnitPosition, accounts: Account[] | null, costs: SubscriptionCosts | null): CostUnit {
+  const args = requestHintArgs(r, accounts, costs);
+  return costUnitOf(r, unit, args === null ? null : shareHint(...args));
 }
 
 /**

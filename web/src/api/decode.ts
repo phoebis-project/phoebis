@@ -29,7 +29,7 @@ export const numOrNull = (v: unknown): number | null => (typeof v === 'number' &
 const bool = (v: unknown, fallback = false): boolean => (typeof v === 'boolean' ? v : fallback);
 const boolOrNull = (v: unknown): boolean | null => (typeof v === 'boolean' ? v : null);
 export const strings = (v: unknown): string[] => list(v).filter((x): x is string => typeof x === 'string');
-const oneOf = <T extends string>(values: readonly T[], v: unknown): T | null => values.find((x) => x === v) ?? null;
+export const oneOf = <T extends string>(values: readonly T[], v: unknown): T | null => values.find((x) => x === v) ?? null;
 const accountKind = (v: unknown): AccountKind => oneOf(ACCOUNT_KIND_VALUES, v) ?? 'oauth';
 const budgetPeriod = (v: unknown): BudgetPeriod => oneOf(BUDGET_PERIOD_VALUES, v) ?? 'month';
 const rulesMode = (v: unknown): ModelRulesMode => oneOf(MODEL_RULES_MODE_VALUES, v) ?? 'extend';

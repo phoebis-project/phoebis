@@ -1,20 +1,23 @@
 import { Fragment, memo, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { Bar, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_DEFAULTS } from '@/api';
 import { POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type CreatePoolInput, type OverviewRange, type PoolEngineFields } from '@/api/client';
-import { slug } from '@/api/http';
+import { oneOf } from '@/api/decode';
+import { isStaleEdit, slug } from '@/api/http';
 import type {
-  Account, AffinityMode, ApiKey, AttentionItem, CacheTtl, CreatedApiKey, KeepaliveOverview, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolMember, PoolStrategy, PoolWarning, Range, ReturnToPlan, Session,
+  Account, AffinityMode, ApiKey, AttentionItem, CacheTtl, CreatedApiKey, KeepaliveOverview, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolMember, PoolStrategy, PoolWarning, Range, ReturnToPlan,
   SessionPlacement, SubagentPlacement, TtlRules, WarmSessions,
 } from '@/api/types';
 import { useSession } from '@/app/session';
 import { useAppSettings } from '@/app/settings';
 import { useAddressEdit } from '@/app/useAddressEdit';
+import { useHashLanding } from '@/app/useHashLanding';
 import { AttentionRows } from '@/components/AttentionRows';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { Legend, timeTip } from '@/components/charts/Tooltip';
 import { FilterBar } from '@/components/FilterBar';
+import { GuardrailList, KEY_STATUS_TONE, KeyDialog, SecretDialog } from '@/components/KeyDialog';
 import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor';
 import { AttentionLine } from '@/components/ui/AttentionLine';
 import { CostReferenceLink } from '@/components/ui/CostReference';
@@ -23,21 +26,18 @@ import { sumTileOf, Tile } from '@/components/ui/Tile';
 import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
-import { Badge, BadgeLink, Button, Card, ConfirmDialog, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, PageLink, Refusal, Select, Skeleton, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
+import { Badge, BadgeLink, Button, Card, ConfirmDialog, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, PageLink, Refusal, Select, Skeleton, StaleRefusal, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { accountHref, editHref, poolKeysHref } from '@/lib/address';
-import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, moveLabel, nativeSidesOf, sidesLine, sumFunded, type FundedSum, type WeekReading } from '@/lib/analytics';
-import { anchorOf } from '@/lib/attention';
-import { weekReadingOf } from '@/lib/costs';
+import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, daySumOf, moveLabel, nativeSidesOf, sidesLine, sumFunded, type WeekReading } from '@/lib/analytics';
+import { groupInto } from '@/lib/counts';
 import { fmtCompact, fmtDuration, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtShortTime, fmtUsd, messageOf, noun, plural, shortModel } from '@/lib/format';
 import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, guardrailIdsOf, guardrailsChange, keyFormOf, keyInputOf, memberField, poolRefusals, refusalsView, sameValues, saveStatus, type PoolGroup } from '@/lib/forms';
-import { failedFirst, refreshAttention, useAsync, useAttention, useLatest, useNow } from '@/lib/hooks';
+import { failedFirst, refreshAttention, useAsync, useAttention, useLatest, useNow, useWeekReading, type Loaded } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, slowDownPreview, slowDownPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
 import { minuteSpan, windowOf } from '@/lib/quota';
 import { aroundSubject, logHref, words } from '@/lib/routingLog';
-import { scrollToElement } from '@/lib/scroll';
 import { GROUP_LABEL, INELIGIBLE_LABEL, LAST_RESORT_LABEL, RULE_NOTE, STRATEGY_LABEL, cooldownBadge, kindOrdered, memberSpeed, overageBadge, poolStatusSentence, selectionOrder, spentBadge, type Placement, type StandingBadge, windingDownBadge } from '@/lib/selection';
-import { GuardrailList, KEY_STATUS_TONE, KeyDialog, SecretDialog } from './KeysPage';
 
 const POOL_STATUS_TONE = { active: 'good', degraded: 'warning', disabled: 'neutral', exhausted: 'critical' } as const;
 // What a first pool needs, said on the create dialog's rail. The words stay while the refusal dots come and go.
@@ -45,7 +45,6 @@ const CREATE_MARKS: Partial<Record<PoolGroup, string>> = { guardrails: 'after sa
 // Every field of these groups belongs to the expert view, so with the mode off a group has nothing to show and leaves
 // the rail.
 const EXPERT_ONLY: ReadonlySet<PoolGroup> = new Set(['autoMode', 'cacheDiagnostics', 'failover', 'placement', 'slowDown']);
-const isPoolGroup = (value: string | null): value is PoolGroup => value !== null && (POOL_GROUPS as readonly string[]).includes(value);
 const percentOf = (share: number) => Math.round(share * 10_000) / 100;
 /** The route's bounds on the two shares the dialog reads in percent: the window ceiling and the shed cap. */
 const CEILING_PERCENT = { max: 100, min: 50 } as const;
@@ -233,11 +232,8 @@ const STRATEGY_HINT: Record<PoolStrategy, ReactNode> = {
 export function PoolsPage() {
   const { unit, week } = useAppSettings();
   // The cost model whose capacities scale the day's figures to the chosen week. The Pro week reads without it.
-  const settings = useAsync(() => api.getSettings(), []);
-  const reading = weekReadingOf(settings.data?.subscriptionCosts ?? null, settings.error, week);
-  // The return rate's range is the dialog's own, so each opening, a fresh state without one, starts on 7 days.
-  const [dialog, setDialog] = useState<{ initialGroup: PoolGroup | null; pool: Pool | null; range?: OverviewRange } | null>(null);
-  const returnRange = dialog?.range ?? '7d';
+  const { reading, settings } = useWeekReading(week);
+  const [dialog, setDialog] = useState<{ initialGroup: PoolGroup | null; pool: Pool | null } | null>(null);
   const [deleting, setDeleting] = useState<Pool | null>(null);
   const [intervalMs, setIntervalMs] = useState(5_000);
   // The pool dialog draws these lists, so auto reload waits while it is open rather than change them under an edit, and
@@ -251,67 +247,19 @@ export function PoolsPage() {
   // Feeds the cache TTL per-model override picker's options alone, so it is read once per visit rather than on every
   // auto reload, and Refresh reads it again.
   const catalog = useAsync(() => api.listCatalog(), []);
-  // The dialog alone draws the sessions and the keepalive overview, so each opening of a saved pool reads them once,
-  // the overview again on a range pick, and both again after a key write and on Refresh, never at the interval.
-  const openedPool = dialog?.pool?.id ?? null;
-  const sessions = useAsync(() => (openedPool === null ? Promise.resolve(null) : api.listSessions()), [openedPool]);
-  // The dialog's return rate over the range the dialog picks, each answer carrying the range it was read for.
-  const overview = useAsync(
-    () => (openedPool === null ? Promise.resolve(null) : api.getKeepaliveOverview({ range: returnRange }).then((read) => ({ overview: read, range: returnRange }))),
-    [openedPool, returnRange],
-  );
-  const answer = overview.data?.range === returnRange ? overview.data.overview : null;
   const attention = useAttention();
   const now = useNow();
-  const location = useLocation();
   const pageRef = useRef<HTMLDivElement>(null);
-  const landed = useRef<string | null>(null);
   const { notify } = useSession();
 
   // The dialog reads both lists, so the address's edit waits for the accounts too.
-  useAddressEdit(accounts.data ? pools.data : null, 'Pool', (pool, group) => setDialog({ initialGroup: isPoolGroup(group) ? group : 'identity', pool }));
+  useAddressEdit(accounts.data ? pools.data : null, 'Pool', (pool, group) => setDialog({ initialGroup: oneOf(POOL_GROUPS, group) ?? 'identity', pool }));
 
-  // `/pools#<pool id>` lands on the card once the pools have drawn it, whenever the list arrives after the mount, and
-  // once per arrival: the dialog query's own address rewrites keep the hash and must not scroll the page back. The
-  // card is looked up inside this page, so an id such as `root` cannot name the app's container.
-  useEffect(() => {
-    if (location.hash === landed.current) return;
-    const id = anchorOf(location.hash);
-    if (id === null) {
-      landed.current = location.hash;
-      return;
-    }
-    if (!pools.data) return;
-    const card = [...(pageRef.current?.querySelectorAll<HTMLElement>('.pool') ?? [])].find((el) => el.id === id);
-    if (!card) return;
-    landed.current = location.hash;
-    scrollToElement(card);
-    card.focus({ preventScroll: true });
-  }, [location.hash, pools.data]);
+  // `/pools#<pool id>` lands on the card once the pools have drawn it.
+  useHashLanding(pageRef, '.pool', () => pools.data !== null, [pools.data]);
 
   const accountById = useMemo(() => new Map((accounts.data ?? []).map((a) => [a.id, a])), [accounts.data]);
-  const keysByPool = useMemo(() => {
-    const m = new Map<string, ApiKey[]>();
-    for (const k of keys.data ?? []) {
-      const list = m.get(k.poolId);
-      if (list) list.push(k);
-      else m.set(k.poolId, [k]);
-    }
-    return m;
-  }, [keys.data]);
-  // A session reaches a pool through its key, which is the only link the sessions route carries.
-  const sessionsByPool = useMemo(() => {
-    const poolOf = new Map((keys.data ?? []).map((k) => [k.id, k.poolId]));
-    const m = new Map<string, Session[]>();
-    for (const s of sessions.data ?? []) {
-      const poolId = poolOf.get(s.keyId);
-      if (poolId === undefined) continue;
-      const list = m.get(poolId);
-      if (list) list.push(s);
-      else m.set(poolId, [s]);
-    }
-    return m;
-  }, [keys.data, sessions.data]);
+  const keysByPool = useMemo(() => groupInto(keys.data ?? [], (k) => k.poolId), [keys.data]);
 
   const removePool = async (p: Pool) => {
     try {
@@ -326,16 +274,21 @@ export function PoolsPage() {
   // `useAsync` keeps the last list through a reload and after a failed one, so the read's state decides rather than the
   // list: during a refresh the old list lacks the key just created, and a failed refresh leaves it standing.
   const keysRead = keys.loading ? 'loading' : keys.error ? 'failed' : 'loaded';
-  const totals = pools.data
-    ? {
-        pools: pools.data.length,
-        accounts: new Set(pools.data.flatMap((p) => p.members.map((m) => m.accountId))).size,
-        // Null until the key list is read, so the tile waits as the cards' Keys tiles do rather than reading 0.
-        keys: keysRead === 'loaded' && keys.data ? keys.data.length : null,
-        requests: pools.data.reduce((s, p) => s + p.requests24h, 0),
-        day: sumFunded(pools.data.map(dayOf)),
-      }
-    : null;
+  const totals = useMemo(
+    () =>
+      pools.data
+        ? {
+            pools: pools.data.length,
+            accounts: new Set(pools.data.flatMap((p) => p.members.map((m) => m.accountId))).size,
+            // Null until the key list is read, so the tile waits as the cards' Keys tiles do rather than reading 0.
+            keys: keysRead === 'loaded' && keys.data ? keys.data.length : null,
+            requests: pools.data.reduce((s, p) => s + p.requests24h, 0),
+            day: sumFunded(pools.data.map(daySumOf)),
+          }
+        : null,
+    [keys.data, keysRead, pools.data],
+  );
+  const attentionOf = useMemo(() => new Map((pools.data ?? []).map((p) => [p.id, (attention.items ?? []).filter((i) => i.pools.includes(p.id))])), [attention.items, pools.data]);
   const dayTile = totals ? sumTileOf(unit, totals.day, reading) : null;
 
   return (
@@ -353,8 +306,6 @@ export function PoolsPage() {
               accounts.reload();
               keys.reload();
               catalog.reload();
-              sessions.reload();
-              overview.reload();
               settings.reload();
             },
             paused: pauseCause,
@@ -386,7 +337,7 @@ export function PoolsPage() {
                   keysRead={keysRead}
                   accounts={accounts.data}
                   accountById={accountById}
-                  attention={(attention.items ?? []).filter((i) => i.pools.includes(p.id))}
+                  attention={attentionOf.get(p.id) ?? []}
                   now={now}
                   reading={reading}
                   onEdit={() => setDialog({ initialGroup: null, pool: p })}
@@ -409,22 +360,9 @@ export function PoolsPage() {
               keys.reload();
             }
           }}
-          accounts={accounts.data ?? []}
-          accountsFailed={failedFirst(accounts) ? accounts.error : null}
-          accountsLoaded={accounts.data !== null || accounts.error !== null}
-          onRetryAccounts={accounts.reload}
+          accounts={accounts}
           keys={keys.data ?? []}
           pools={pools.data ?? []}
-          sessions={dialog?.pool ? (sessionsByPool.get(dialog.pool.id) ?? []) : []}
-          idleReturns={{
-            // The last answer outlives a pending or failed read, which after a pick is the other range's, so the dialog
-            // draws an answer read for the range it names, its loading or its error otherwise.
-            buckets: (dialog?.pool && answer?.pools.find((p) => p.poolId === dialog.pool?.id)?.idleReturns) || [],
-            error: answer === null && !overview.loading ? overview.error : null,
-            loading: answer === null && overview.loading,
-            onRange: (range) => setDialog((d) => d && { ...d, range }),
-            range: returnRange,
-          }}
           models={(catalog.data ?? []).map((m) => ({ label: m.id, value: m.id }))}
           onSaved={(created) => {
             setDialog(null);
@@ -437,8 +375,6 @@ export function PoolsPage() {
           onKeysChanged={() => {
             keys.reload();
             pools.reload();
-            sessions.reload();
-            overview.reload();
           }}
         />
         <ConfirmDialog
@@ -585,8 +521,6 @@ function CacheTtlOverrides({
   );
 }
 
-const dayOf = (p: Pool): FundedSum => ({ billedUsd: p.billed24h, cost: p.cost24h, equivalent: p.equivalent24h });
-
 /**
  * A pool card's Cost 24h under the unit. Native stacks the day's figure in the chosen week over its billed dollars, a
  * side with no rows left out, and a day a plan row priced nothing on reads the dash under `UNPRICED_TITLE`. A pool sums
@@ -600,7 +534,7 @@ function PoolCost({ pool, reading }: { pool: Pool; reading: WeekReading }) {
       -
     </dd>
   );
-  const day = dayOf(pool);
+  const day = daySumOf(pool);
   const sides = nativeSidesOf(day);
   if (unit === 'native' && sides.equivalent === undefined && sides.billed === undefined) return dash('No request in the last 24 hours');
   const tile = sumTileOf(unit, day, reading);
@@ -1169,25 +1103,14 @@ export function PoolDialog({
   onClose,
   onSaved,
   onKeysChanged,
-  onRetryAccounts,
-  accounts,
-  accountsFailed,
-  accountsLoaded,
+  accounts: accountsRead,
   keys,
   pools,
   models,
-  sessions,
-  idleReturns,
 }: {
-  accounts: Account[];
-  /** The accounts read's error while it has never answered. The Members group names it in place of the table. */
-  accountsFailed: string | null;
-  /** Whether the accounts read has answered or failed. Before that no stored member is refused or marked unlisted. */
-  accountsLoaded: boolean;
+  accounts: Pick<Loaded<Account[]>, 'data' | 'error' | 'reload'>;
   /** The bootstrap's body capture limit from the host page's settings read, undefined while that read is out. */
   captureMaxHours?: number;
-  /** The pool's idle-age counters from the keepalive overview, empty for a new pool or one the overview does not list. */
-  idleReturns: ReturnRateProps;
   /** The group the address named. The reset opens on it, Identity otherwise. */
   initialGroup?: PoolGroup | null;
   keys: ApiKey[];
@@ -1195,14 +1118,17 @@ export function PoolDialog({
   /** `reload` is true from the stale save's Reload, and on a close after any refused save or a key move refused as stale, whose cause may be lists that are out of date. */
   onClose: (reload: boolean) => void;
   onKeysChanged: () => void;
-  onRetryAccounts: () => void;
   onSaved: (created: boolean) => void;
   open: boolean;
   pool: Pool | null;
   pools: Pool[];
-  /** The sessions under the pool's keys: a shedding round weighs the pool's own pins on a member alone. */
-  sessions: Session[];
 }) {
+  const accounts = accountsRead.data ?? [];
+  // The Members group names a read that never answered in place of the table.
+  const accountsFailed = failedFirst(accountsRead) ? accountsRead.error : null;
+  // Until the read answers or fails, no stored member is refused or marked unlisted.
+  const accountsLoaded = accountsRead.data !== null || accountsRead.error !== null;
+  const onRetryAccounts = accountsRead.reload;
   const now = useNow(undefined, open);
   const [form, setForm] = useState<PoolForm>(blankForm);
   // The values the dialog opened with, which the discard question compares the form against.
@@ -1214,6 +1140,33 @@ export function PoolDialog({
   const [chosen, setChosen] = useState<PoolGroup>('identity');
   // Once per opening of a saved pool, since a create takes no attachment and offers nothing to attach.
   const guardrailRegistry = useAsync(() => (open && pool ? api.listGuardrails() : Promise.resolve(null)), [open, pool?.id]);
+  // The return rate's range, which each opening resets to 7 days.
+  const [returnRange, setReturnRange] = useState<OverviewRange>('7d');
+  // Each opening of a saved pool reads the sessions and the keepalive overview once, the overview again on a range
+  // pick, and both again after a key write, never at the interval.
+  const sessionsRead = useAsync(() => (open && pool ? api.listSessions() : Promise.resolve(null)), [open, pool?.id]);
+  // Each answer carries the range it was read for.
+  const overview = useAsync(
+    () => (open && pool ? api.getKeepaliveOverview({ range: returnRange }).then((read) => ({ overview: read, range: returnRange })) : Promise.resolve(null)),
+    [open, pool?.id, returnRange],
+  );
+  const answer = overview.data?.range === returnRange ? overview.data.overview : null;
+  // The pool's idle-age counters, empty for a new pool or one the overview does not list.
+  const idleReturns: ReturnRateProps = {
+    // The last answer outlives a pending or failed read, which after a pick is the other range's, so the dialog draws
+    // an answer read for the range it names, its loading or its error otherwise.
+    buckets: (pool && answer?.pools.find((p) => p.poolId === pool.id)?.idleReturns) || [],
+    error: answer === null && !overview.loading ? overview.error : null,
+    loading: answer === null && overview.loading,
+    onRange: setReturnRange,
+    range: returnRange,
+  };
+  // The sessions under the pool's keys: a shedding round weighs the pool's own pins on a member alone. A session
+  // reaches a pool through its key, which is the only link the sessions route carries.
+  const sessions = useMemo(() => {
+    const poolKeyIds = new Set(keys.filter((k) => k.poolId === pool?.id).map((k) => k.id));
+    return (sessionsRead.data ?? []).filter((s) => poolKeyIds.has(s.keyId));
+  }, [keys, pool?.id, sessionsRead.data]);
   // The flag `GroupedDialog` hands its expert wrappers, whose registry the bodies built here cannot reach: a half cell
   // whose row-mate is expert spans the row while the mate is hidden.
   const { expertView } = useAppSettings();
@@ -1234,8 +1187,8 @@ export function PoolDialog({
   // A refused return dwell under When cold or Never stays editable while it holds the focus, so the keystroke that
   // clears the refusal does not disable the field under the cursor.
   const [dwellFocused, setDwellFocused] = useState(false);
-  // The reset reads the accounts through a ref: the parent hands down a fresh array on every render, and reacting to
-  // that would wipe the form mid-edit.
+  // The reset reads the accounts through a ref: the list is a fresh array on every render while the read is out, and
+  // reacting to that would wipe the form mid-edit.
   const accountsNow = useLatest(accounts);
   useEffect(() => {
     if (!open) return;
@@ -1253,6 +1206,7 @@ export function PoolDialog({
     setAttempted(false);
     setStale(null);
     setChosen(initialGroup ?? 'identity');
+    setReturnRange('7d');
   }, [open, pool, initialGroup, accountsNow]);
   // The server's refusal describes the form it was sent. Every control writes through `setForm`, so the next edit
   // takes it away, while a failed save changes no field and leaves it standing.
@@ -1280,6 +1234,7 @@ export function PoolDialog({
         : [...pools, { autoModeServer: form.autoModeServer, bodyCaptureHours: draftCaptureHours, guardrails: [], id: draftPoolId, members: Object.keys(form.members).map((accountId) => ({ accountId })), modelRules: form.modelRules, name: draftName }],
     [pool, pools, draftCaptureHours, draftPoolId, draftName, form.autoModeServer, form.members, form.modelRules],
   );
+  const keyIds = useMemo(() => new Set([...keys, ...localKeys].map((k) => k.id)), [keys, localKeys]);
   const suggestions = useCatalogSuggestions(Object.keys(form.members), open);
   // Below five minutes a pin expires before the probe it scheduled can help.
   const keepaliveBlocked = form.affinity < 300;
@@ -1346,42 +1301,22 @@ export function PoolDialog({
   const { first, invalid, refusalOf, refusedFields, refusedGroups } = refusalsView(refusals);
   const valid = first === null;
 
-  const orderIndex = new Map(memberOrder.map((id, i) => [id, i]));
-  const orderedAccounts = [...accounts].sort((a, b) => (orderIndex.get(a.id) ?? accounts.length) - (orderIndex.get(b.id) ?? accounts.length) || a.label.localeCompare(b.label));
-  // A stored member the list does not hold gets a row of its own, the only place it can be unticked.
-  const unlisted = accountsFailed === null ? Object.keys(form.members).filter((id) => !listed.has(id)).sort() : [];
-
   const setEngine = <K extends keyof PoolEngineFields>(key: K, value: PoolEngineFields[K]) => setForm((f) => ({ ...f, engine: { ...f.engine, [key]: value } }));
-  const sheddingPill: SheddingPreset = form.sheddingCustom ? 'custom' : sheddingPresetOf(form.engine);
-  const failoverPill: FailoverPreset = form.failoverCustom ? 'custom' : failoverPresetOf(form.engine);
   const pickShedding = (name: SheddingPreset) =>
     setForm((f) => (name === 'custom' ? { ...f, sheddingCustom: true } : { ...f, engine: { ...f.engine, ...SHEDDING_PRESETS[name] }, sheddingCustom: false }));
   const pickFailover = (name: FailoverPreset) =>
     setForm((f) => (name === 'custom' ? { ...f, failoverCustom: true } : { ...f, engine: { ...f.engine, ...FAILOVER_PRESETS[name] }, failoverCustom: false }));
   const rulesRefusal = refusalOf('Model rules');
   const prefixRefusal = refusalOf('Minimum shared prefix, tokens');
-  const budgetRefusal = refusals.find((r) => r.member?.column === 'budget_daily' || r.member?.column === 'budget_monthly');
-  const budgetRefused = budgetRefusal && {
-    label: accounts.find((a) => a.id === budgetRefusal.member?.accountId)?.label ?? budgetRefusal.field,
-    refusal: budgetRefusal.text,
-  };
-  const memberAccounts = accounts.filter((a) => a.id in form.members);
   const setBudget = (accountId: string, patch: Partial<{ daily: string; monthly: string }>) =>
     setForm((f) => ({ ...f, budgets: { ...f.budgets, [accountId]: { ...(f.budgets[accountId] ?? { daily: '', monthly: '' }), ...patch } } }));
-  const readings = memberAccounts.map((a) => {
-    const shared = (id: '5h' | '7d') => {
-      const w = windowOf(a, id);
-      return w === null ? null : { utilization: w.utilization };
-    };
-    return { fiveHour: shared('5h'), id: a.id, label: a.label, sevenDay: shared('7d') };
-  });
-  // The route's verdict per stored member, so a member in cooldown is no destination for a shed session.
-  const verdict = new Map((pool?.members ?? []).map((m) => [m.accountId, m.eligible]));
-  const preview = shedPreview({ ...input, members: input.members.map((m) => ({ ...m, eligible: verdict.get(m.accountId) })) }, accounts, sessions, now);
-  // The route's factor per stored member, which a member whose account did not load is read by.
-  const speedOf = new Map((pool?.members ?? []).map((m) => [m.accountId, m.speed]));
-  const slowPreview = slowDownPreview({ ...input, members: input.members.map((m) => ({ ...m, speed: speedOf.get(m.accountId) ?? null })) }, accounts);
   const setCacheTtl = <K extends keyof PoolCacheTtl>(key: K, value: PoolCacheTtl[K]) => setForm((f) => ({ ...f, cacheTtl: { ...f.cacheTtl, [key]: value } }));
+
+  const keysChanged = () => {
+    onKeysChanged();
+    sessionsRead.reload();
+    overview.reload();
+  };
 
   const startMove = (k: ApiKey) => {
     const to = otherPools[0]?.id ?? '';
@@ -1399,11 +1334,11 @@ export function PoolDialog({
       await api.updateKey(moving.id, keyInputOf({ ...keyFormOf(moving, moving.poolId), poolId: moveTo }, now), moving.revision);
       setMoved((prev) => new Set(prev).add(moving.id));
       setMoving(null);
-      onKeysChanged();
+      keysChanged();
     } catch (e) {
       setMoveError(messageOf(e));
       // The key moved since the page read it, so the lists are out of date and the dialog's close reads them again.
-      if (e instanceof ApiError && e.status === 409 && e.code === 'stale_edit') setAttempted(true);
+      if (isStaleEdit(e)) setAttempted(true);
     } finally {
       setMoveBusy(false);
     }
@@ -1413,7 +1348,7 @@ export function PoolDialog({
     try {
       await api.revokeKey(k.id);
       setRevoked((prev) => new Set(prev).add(k.id));
-      onKeysChanged();
+      keysChanged();
     } catch (e) {
       setError(messageOf(e));
     }
@@ -1430,7 +1365,7 @@ export function PoolDialog({
       // Stated inside the dialog, which stays open: it sits in the browser's top layer, where a toast raised
       // behind its backdrop would never be seen, and the edit that was refused is still on screen.
       setBusy(false);
-      if (e instanceof ApiError && e.status === 409 && e.code === 'stale_edit') {
+      if (isStaleEdit(e)) {
         // The row moved under the dialog: the edit is about values that are gone, so the operator reloads and
         // re-applies it rather than saving over what someone else wrote. Cancel reads the lists again as well.
         setStale(e.message);
@@ -1446,914 +1381,943 @@ export function PoolDialog({
   };
 
   // Keyed by group, so a group without a body fails to compile. `POOL_GROUPS` sets the rail order.
-  const bodies: Record<PoolGroup, ReactNode> = {
-    identity: (
-      <div className="cells">
-        <Field
-          label="Name"
-          className="cell--half"
-          hint={
-            <>
-              The pool&apos;s id is made from this name when the pool is created, and stays when it is renamed.
-              {pool === null && form.name.trim() !== '' && ` Id: ${draftPoolId}`}
-            </>
-          }
-        >
-          <Input value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="shared" className="mono" aria-invalid={invalid('Name')} />
-        </Field>
-        <Field label="Status" className="cell--half" hint="A disabled pool keeps its keys and members but stops accepting requests.">
-          <Select value={form.status} onChange={(e) => set('status', e.target.value as 'active' | 'disabled')}>
-            <option value="active">Active</option>
-            <option value="disabled">Disabled</option>
-          </Select>
-        </Field>
-      </div>
-    ),
-    members: (
-      <div className="cells">
-        <p className="field__hint">
-          Lower numbers are tried first: the strategy picks inside the first tier that has an eligible account, after the kind order that <GroupLink id="selection">Prioritize subscription accounts</GroupLink> sets. An account belongs to one pool. Each account&apos;s windows and state are on the{' '}
-          <PageLink to="/accounts">Accounts page</PageLink>.
-        </p>
-        <p className="field__hint">
-          A member whose spend reaches its daily or its monthly budget is skipped until that UTC day or month ends, priced at API list rates: an API-key member&apos;s whole spend counts, a subscription member&apos;s metered spend alone (overage and fast answers). Set one, both, or neither.
-        </p>
-        {accountsFailed !== null ? (
-          <ErrorState title="The account list did not load" body={accountsFailed} retry={onRetryAccounts} />
-        ) : (
-          <div className="table-wrap">
-            <table className="table members-table table--plain">
-              <thead>
-                <tr>
-                  <th className="col-fill">Account</th>
-                  <th className="right col-fit">Priority</th>
-                  <th className="right col-fit">Daily budget, USD</th>
-                  <th className="right col-fit">Monthly budget, USD</th>
-                </tr>
-              </thead>
-              <tbody>
-                {orderedAccounts.map((a) => {
-                  const on = a.id in form.members;
-                  // A ticked member keeps its checkbox even once a re-read finds another pool holding it, so the
-                  // operator can still untick it.
-                  const heldBy = on ? undefined : otherPools.find((p) => p.members.some((m) => m.accountId === a.id));
-                  if (heldBy) {
-                    return (
-                      <tr key={a.id}>
-                        <td className="col-fill" title={a.label}>
-                          <div className="row">
-                            <div className="members-table__check" />
-                            <span className="members-table__name ellipsis">{a.label}</span>
-                            {a.email && <span className="muted mono">{a.email}</span>}
-                            <span className="muted" title={`An account belongs to one pool. Remove it from ${heldBy.id} first.`}>
-                              In pool {heldBy.id}
-                            </span>
-                          </div>
-                        </td>
-                        <td className="right col-fit">
-                          <div className="input members-table__blank">&nbsp;</div>
-                        </td>
-                        <td className="right col-fit" />
-                        <td className="right col-fit" />
-                      </tr>
-                    );
-                  }
-                  return (
-                    <tr key={a.id}>
-                      <td className="col-fill" title={a.label}>
-                        <label>
-                          <input
-                            type="checkbox"
-                            checked={on}
-                            onChange={(e) => {
-                              const next = { ...form.members };
-                              if (e.target.checked) next[a.id] = 0;
-                              else delete next[a.id];
-                              set('members', next);
-                              setMemberOrder(orderedAccountIds(accounts, next));
-                            }}
-                          />
-                          <span className="members-table__name ellipsis">{a.label}</span>
-                          {a.email && <span className="muted mono">{a.email}</span>}
-                        </label>
-                      </td>
-                      <td className="right col-fit">
-                        <Input
-                          type="number"
-                          min={0}
-                          max={9}
-                          value={on ? form.members[a.id] : ''}
-                          disabled={!on}
-                          onChange={(e) => set('members', { ...form.members, [a.id]: Number(e.target.value) })}
-                          onBlur={() => setMemberOrder(orderedAccountIds(accounts, form.members))}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') setMemberOrder(orderedAccountIds(accounts, form.members));
-                          }}
-                          aria-label={`Priority for ${a.label}`}
-                          aria-invalid={invalid(memberField('priority', a.id))}
-                        />
-                      </td>
-                      <td className="right col-fit">
-                        <Input
-                          type="number"
-                          min={0.01}
-                          step="any"
-                          value={budgetOf(a.id).daily}
-                          disabled={!on}
-                          placeholder="none"
-                          onChange={(e) => setBudget(a.id, { daily: e.target.value })}
-                          aria-label={`Daily budget for ${a.label}, USD`}
-                          aria-invalid={invalid(memberField('budget_daily', a.id))}
-                        />
-                      </td>
-                      <td className="right col-fit">
-                        <Input
-                          type="number"
-                          min={0.01}
-                          step="any"
-                          value={budgetOf(a.id).monthly}
-                          disabled={!on}
-                          placeholder="none"
-                          onChange={(e) => setBudget(a.id, { monthly: e.target.value })}
-                          aria-label={`Monthly budget for ${a.label}, USD`}
-                          aria-invalid={invalid(memberField('budget_monthly', a.id))}
-                        />
-                      </td>
-                    </tr>
-                  );
-                })}
-                {unlisted.map((id) => (
-                  <tr key={id}>
-                    <td className="col-fill" title={id}>
-                      <label>
-                        <input
-                          type="checkbox"
-                          checked
-                          disabled={!accountsLoaded}
-                          title={accountsLoaded ? undefined : 'Waiting for the account list'}
-                          onChange={() => {
-                            const next = { ...form.members };
-                            delete next[id];
-                            set('members', next);
-                          }}
-                          aria-invalid={invalid(memberField('member', id))}
-                        />
-                        <span className="members-table__name ellipsis">{id}</span>
-                        {accountsLoaded && <Badge tone="neutral">not listed</Badge>}
-                      </label>
-                    </td>
-                    <td className="right col-fit">
-                      <Input type="number" value={form.members[id]} disabled aria-label={`Priority for ${id}`} />
-                    </td>
-                    <td className="right col-fit">
-                      <Input type="number" value={budgetOf(id).daily} disabled placeholder="none" aria-label={`Daily budget for ${id}, USD`} />
-                    </td>
-                    <td className="right col-fit">
-                      <Input type="number" value={budgetOf(id).monthly} disabled placeholder="none" aria-label={`Monthly budget for ${id}, USD`} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        {budgetRefused && (
-          <Refusal>
-            {budgetRefused.label}: {budgetRefused.refusal}
-          </Refusal>
-        )}
-      </div>
-    ),
-    keys: (
-      <>
+  const bodiesOf = (): Record<PoolGroup, ReactNode> => {
+    const orderIndex = new Map(memberOrder.map((id, i) => [id, i]));
+    const orderedAccounts = [...accounts].sort((a, b) => (orderIndex.get(a.id) ?? accounts.length) - (orderIndex.get(b.id) ?? accounts.length) || a.label.localeCompare(b.label));
+    // A stored member the list does not hold gets a row of its own, the only place it can be unticked.
+    const unlisted = accountsFailed === null ? Object.keys(form.members).filter((id) => !listed.has(id)).sort() : [];
+    const sheddingPill: SheddingPreset = form.sheddingCustom ? 'custom' : sheddingPresetOf(form.engine);
+    const failoverPill: FailoverPreset = form.failoverCustom ? 'custom' : failoverPresetOf(form.engine);
+    const budgetRefusal = refusals.find((r) => r.member?.column === 'budget_daily' || r.member?.column === 'budget_monthly');
+    const budgetRefused = budgetRefusal && {
+      label: accounts.find((a) => a.id === budgetRefusal.member?.accountId)?.label ?? budgetRefusal.field,
+      refusal: budgetRefusal.text,
+    };
+    const memberAccounts = accounts.filter((a) => a.id in form.members);
+    const readings = memberAccounts.map((a) => {
+      const shared = (id: '5h' | '7d') => {
+        const w = windowOf(a, id);
+        return w === null ? null : { utilization: w.utilization };
+      };
+      return { fiveHour: shared('5h'), id: a.id, label: a.label, sevenDay: shared('7d') };
+    });
+    // The route's verdict per stored member, so a member in cooldown is no destination for a shed session.
+    const verdict = new Map((pool?.members ?? []).map((m) => [m.accountId, m.eligible]));
+    const preview = shedPreview({ ...input, members: input.members.map((m) => ({ ...m, eligible: verdict.get(m.accountId) })) }, accounts, sessions, now);
+    // The route's factor per stored member, which a member whose account did not load is read by.
+    const speedOf = new Map((pool?.members ?? []).map((m) => [m.accountId, m.speed]));
+    const slowPreview = slowDownPreview({ ...input, members: input.members.map((m) => ({ ...m, speed: speedOf.get(m.accountId) ?? null })) }, accounts);
+    return {
+      identity: (
         <div className="cells">
-          <div className="row">
-            {/* A key is posted against a pool id, so there is nothing to create one on until the pool exists. */}
-            <Button size="sm" icon={<IconPlus size={13} />} onClick={() => setKeyOpen(true)} disabled={!pool}>
-              Create key
-            </Button>
-          </div>
-          {poolKeys.length === 0 ? (
-            <p className="muted">{pool ? 'No keys belong to this pool yet.' : 'Keys can be created once the pool is saved.'}</p>
+          <Field
+            label="Name"
+            className="cell--half"
+            hint={
+              <>
+                The pool&apos;s id is made from this name when the pool is created, and stays when it is renamed.
+                {pool === null && form.name.trim() !== '' && ` Id: ${draftPoolId}`}
+              </>
+            }
+          >
+            <Input value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="shared" className="mono" aria-invalid={invalid('Name')} />
+          </Field>
+          <Field label="Status" className="cell--half" hint="A disabled pool keeps its keys and members but stops accepting requests.">
+            <Select value={form.status} onChange={(e) => set('status', e.target.value as 'active' | 'disabled')}>
+              <option value="active">Active</option>
+              <option value="disabled">Disabled</option>
+            </Select>
+          </Field>
+        </div>
+      ),
+      members: (
+        <div className="cells">
+          <p className="field__hint">
+            Lower numbers are tried first: the strategy picks inside the first tier that has an eligible account, after the kind order that <GroupLink id="selection">Prioritize subscription accounts</GroupLink> sets. An account belongs to one pool. Each account&apos;s windows and state are on the{' '}
+            <PageLink to="/accounts">Accounts page</PageLink>.
+          </p>
+          <p className="field__hint">
+            A member whose spend reaches its daily or its monthly budget is skipped until that UTC day or month ends, priced at API list rates: an API-key member&apos;s whole spend counts, a subscription member&apos;s metered spend alone (overage and fast answers). Set one, both, or neither.
+          </p>
+          {accountsFailed !== null ? (
+            <ErrorState title="The account list did not load" body={accountsFailed} retry={onRetryAccounts} />
           ) : (
             <div className="table-wrap">
-              <table className="table keys-table table--plain">
+              <table className="table members-table table--plain">
                 <thead>
                   <tr>
-                    <th className="col-fill">Key</th>
-                    <th className="col-fit">Prefix</th>
-                    <th className="col-fit">Status</th>
-                    <th className="col-fit" />
+                    <th className="col-fill">Account</th>
+                    <th className="right col-fit">Priority</th>
+                    <th className="right col-fit">Daily budget, USD</th>
+                    <th className="right col-fit">Monthly budget, USD</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {poolKeys.map((k) => {
-                    const status = revoked.has(k.id) ? 'revoked' : k.status;
+                  {orderedAccounts.map((a) => {
+                    const on = a.id in form.members;
+                    // A ticked member keeps its checkbox even once a re-read finds another pool holding it, so the
+                    // operator can still untick it.
+                    const heldBy = on ? undefined : otherPools.find((p) => p.members.some((m) => m.accountId === a.id));
+                    if (heldBy) {
+                      return (
+                        <tr key={a.id}>
+                          <td className="col-fill" title={a.label}>
+                            <div className="row">
+                              <div className="members-table__check" />
+                              <span className="members-table__name ellipsis">{a.label}</span>
+                              {a.email && <span className="muted mono">{a.email}</span>}
+                              <span className="muted" title={`An account belongs to one pool. Remove it from ${heldBy.id} first.`}>
+                                In pool {heldBy.id}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="right col-fit">
+                            <div className="input members-table__blank">&nbsp;</div>
+                          </td>
+                          <td className="right col-fit" />
+                          <td className="right col-fit" />
+                        </tr>
+                      );
+                    }
                     return (
-                      <tr key={k.id}>
-                        <td className="col-fill" title={k.name}>{k.name}</td>
-                        <td className="mono muted col-fit">{k.prefix}…</td>
-                        <td className="col-fit">
-                          <Badge tone={KEY_STATUS_TONE[status]} dot>
-                            {status}
-                          </Badge>
+                      <tr key={a.id}>
+                        <td className="col-fill" title={a.label}>
+                          <label>
+                            <input
+                              type="checkbox"
+                              checked={on}
+                              onChange={(e) => {
+                                const next = { ...form.members };
+                                if (e.target.checked) next[a.id] = 0;
+                                else delete next[a.id];
+                                set('members', next);
+                                setMemberOrder(orderedAccountIds(accounts, next));
+                              }}
+                            />
+                            <span className="members-table__name ellipsis">{a.label}</span>
+                            {a.email && <span className="muted mono">{a.email}</span>}
+                          </label>
                         </td>
-                        <td className="col-fit">
-                          <Menu
-                            label={`Actions for key ${k.name}`}
-                            items={[
-                              { label: 'Move to…', disabled: otherPools.length === 0, onClick: () => startMove(k) },
-                              { label: 'Revoke', danger: true, disabled: status !== 'active', onClick: () => setRevoking(k) },
-                            ]}
+                        <td className="right col-fit">
+                          <Input
+                            type="number"
+                            min={0}
+                            max={9}
+                            value={on ? form.members[a.id] : ''}
+                            disabled={!on}
+                            onChange={(e) => set('members', { ...form.members, [a.id]: Number(e.target.value) })}
+                            onBlur={() => setMemberOrder(orderedAccountIds(accounts, form.members))}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') setMemberOrder(orderedAccountIds(accounts, form.members));
+                            }}
+                            aria-label={`Priority for ${a.label}`}
+                            aria-invalid={invalid(memberField('priority', a.id))}
+                          />
+                        </td>
+                        <td className="right col-fit">
+                          <Input
+                            type="number"
+                            min={0.01}
+                            step="any"
+                            value={budgetOf(a.id).daily}
+                            disabled={!on}
+                            placeholder="none"
+                            onChange={(e) => setBudget(a.id, { daily: e.target.value })}
+                            aria-label={`Daily budget for ${a.label}, USD`}
+                            aria-invalid={invalid(memberField('budget_daily', a.id))}
+                          />
+                        </td>
+                        <td className="right col-fit">
+                          <Input
+                            type="number"
+                            min={0.01}
+                            step="any"
+                            value={budgetOf(a.id).monthly}
+                            disabled={!on}
+                            placeholder="none"
+                            onChange={(e) => setBudget(a.id, { monthly: e.target.value })}
+                            aria-label={`Monthly budget for ${a.label}, USD`}
+                            aria-invalid={invalid(memberField('budget_monthly', a.id))}
                           />
                         </td>
                       </tr>
                     );
                   })}
+                  {unlisted.map((id) => (
+                    <tr key={id}>
+                      <td className="col-fill" title={id}>
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked
+                            disabled={!accountsLoaded}
+                            title={accountsLoaded ? undefined : 'Waiting for the account list'}
+                            onChange={() => {
+                              const next = { ...form.members };
+                              delete next[id];
+                              set('members', next);
+                            }}
+                            aria-invalid={invalid(memberField('member', id))}
+                          />
+                          <span className="members-table__name ellipsis">{id}</span>
+                          {accountsLoaded && <Badge tone="neutral">not listed</Badge>}
+                        </label>
+                      </td>
+                      <td className="right col-fit">
+                        <Input type="number" value={form.members[id]} disabled aria-label={`Priority for ${id}`} />
+                      </td>
+                      <td className="right col-fit">
+                        <Input type="number" value={budgetOf(id).daily} disabled placeholder="none" aria-label={`Daily budget for ${id}, USD`} />
+                      </td>
+                      <td className="right col-fit">
+                        <Input type="number" value={budgetOf(id).monthly} disabled placeholder="none" aria-label={`Monthly budget for ${id}, USD`} />
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
           )}
-          <p className="field__hint">
-            A key reaches only this pool&apos;s members. Create key, Move to and Revoke apply at once, without Save pool. Rotation and expiry are on the <PageLink to="/keys">Keys page</PageLink>.
-          </p>
+          {budgetRefused && (
+            <Refusal>
+              {budgetRefused.label}: {budgetRefused.refusal}
+            </Refusal>
+          )}
         </div>
-      </>
-    ),
-    models: (
-      <div className="cells">
-        {/* Field's frame without its label element: a label forwards a click on its text to the first control
-            inside, which here would press Add rule or flip the first row. */}
-        <Field
-          label="Model rules"
-          plain
-          hint="Top to bottom, first match wins. A model no rule names is allowed, and a closing Deny * allows only what the list names. Write an undated id with a trailing *. A key extends or replaces these rules, and the saved key's Effective list shows the list it ends up with."
-        >
-          <PatternEditor label="Model rules" value={form.modelRules} onChange={(rules) => set('modelRules', rules)} suggestions={suggestions} />
-        </Field>
-        {rulesRefusal && <Refusal>{rulesRefusal}</Refusal>}
-      </div>
-    ),
-    guardrails: (
-      <div className="cells">
-        {/* Field's frame without its label element: a label forwards a click on its text to the first button inside. */}
-        <Field
-          label="Guardrails"
-          plain
-          hint={
-            <>
-              Top to bottom. A pool&apos;s guardrails run before a key&apos;s own. <PageLink to="/guardrails">Manage guardrails</PageLink>
-            </>
-          }
-        >
-          <GuardrailList onChange={(ids) => set('guardrails', ids)} pending={pool ? undefined : 'Guardrails can be attached once the pool is saved.'} refs={pool?.guardrails ?? []} registry={guardrailRegistry} value={form.guardrails} />
-        </Field>
-      </div>
-    ),
-    autoMode: (
-      <div className="cells">
-        <Expert>
-          <Field
-            label="Support server-side auto mode"
-            beside
-            hint={
-              <>
-                Claude Code asks the upstream to review each tool use on the model&apos;s own turn. Off, the router drops that request from every message of this pool&apos;s keys, and the client reviews with classifier requests of its own, billed to the account&apos;s windows. A key can override this. The Client page of the documentation explains what the client does in each state.
-              </>
-            }
-          >
-            <Toggle checked={form.autoModeServer} onChange={(v) => set('autoModeServer', v)} label="Support server-side auto mode" />
-          </Field>
-        </Expert>
-      </div>
-    ),
-    selection: (
-      <div className="cells">
-        <Field label="Strategy" hint={STRATEGY_HINT[form.strategy]}>
-          <Select value={form.strategy} onChange={(e) => set('strategy', e.target.value as PoolStrategy)} aria-label="Strategy">
-            {(Object.keys(STRATEGY_LABEL) as PoolStrategy[]).map((v) => (
-              <option key={v} value={v}>
-                {STRATEGY_LABEL[v]}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Field
-          label="Prioritize subscription accounts"
-          beside
-          hint={
-            <>
-              Plan quota first, then accounts in <GroupLink id="overage">overage</GroupLink>, then the metered accounts, and <GroupLink id="members">priority</GroupLink> orders each of those groups.
-            </>
-          }
-        >
-          <Toggle checked={form.preferSubscription} onChange={(v) => set('preferSubscription', v)} label="Prioritize subscription accounts" />
-        </Field>
-      </div>
-    ),
-    placement: (
-      <div className="cells">
-        <Expert refused={refusedFields.has('Subagent placement')}>
-          <Field
-            label="Subagent placement"
-            hint={
-              <>
-                Where a subagent&apos;s first request lands. By cohort: with the subagents that share its static prefix. With the main conversation: on its parent&apos;s account. By strategy: wherever the <GroupLink id="selection">strategy</GroupLink> picks.
-              </>
-            }
-          >
-            <Select value={form.subagentPlacement} onChange={(e) => set('subagentPlacement', e.target.value as SubagentPlacement)} aria-label="Subagent placement" aria-invalid={invalid('Subagent placement')}>
-              <option value="by_cohort">By cohort</option>
-              <option value="by_strategy">By strategy</option>
-              <option value="with_main">With the main conversation</option>
-            </Select>
-          </Field>
-        </Expert>
-        <Expert refused={refusedFields.has('Session placement')}>
-          <Field
-            label="Session placement"
-            hint={
-              <>
-                By warm prefix lands a fresh session where its static prefix is already cached, when the prefix reaches the minimum below. By strategy leaves it to the <GroupLink id="selection">strategy</GroupLink>.
-              </>
-            }
-          >
-            <Select value={form.sessionPlacement} onChange={(e) => set('sessionPlacement', e.target.value as SessionPlacement)} aria-label="Session placement" aria-invalid={invalid('Session placement')}>
-              <option value="by_strategy">By strategy</option>
-              <option value="by_warm_prefix">By warm prefix</option>
-            </Select>
-          </Field>
-        </Expert>
-        <Expert refused={refusedFields.has('Minimum shared prefix, tokens')}>
-          <Field
-            label="Minimum shared prefix, tokens"
-            hint={
-              <>
-                The smallest shared prefix that places a fresh session, or a subagent by cohort, by warmth. Below it the <GroupLink id="selection">strategy</GroupLink> decides. Estimated from the request&apos;s bytes, not counted by the upstream.
-              </>
-            }
-          >
-            <Input
-              type="number"
-              min={0}
-              step={1_000}
-              value={form.prefixTokens}
-              onChange={(e) => set('prefixTokens', e.target.value)}
-              disabled={!prefixEnabled}
-              aria-label="Minimum shared prefix, tokens"
-              aria-invalid={invalid('Minimum shared prefix, tokens')}
-            />
-          </Field>
-        </Expert>
-        {prefixRefusal && <Refusal>{prefixRefusal}</Refusal>}
-      </div>
-    ),
-    pinning: (
-      <div className="cells">
-        <Field
-          label="Session affinity"
-          plain
-          hint={
-            <>
-              {AFFINITY_HINT} <GroupLink id="keepalive">Keepalive</GroupLink> needs at least 5m and warns under 1h.
-            </>
-          }
-        >
-          <span className="chips" role="group" aria-label="Session affinity">
-            {AFFINITY_PICKS.map((pick) => {
-              const on = !form.customAffinity && form.affinity === pick.seconds;
-              return (
-                <button key={pick.label} type="button" className={`pill ${on ? 'is-active' : ''}`} aria-pressed={on} onClick={() => setForm((f) => ({ ...f, affinity: pick.seconds, customAffinity: false }))}>
-                  {pick.label}
-                </button>
-              );
-            })}
-            <button type="button" className={`pill ${form.customAffinity ? 'is-active' : ''}`} aria-pressed={form.customAffinity} onClick={() => set('customAffinity', true)}>
-              custom
-            </button>
-          </span>
-          <Input
-            type="number"
-            min={60}
-            step={30}
-            value={form.affinity}
-            onChange={(e) => set('affinity', Math.max(0, Number(e.target.value)))}
-            disabled={!form.customAffinity}
-            aria-label="Session affinity in seconds"
-            aria-invalid={invalid('Session affinity in seconds')}
-          />
-        </Field>
-        <Expert refused={refusedFields.has('Pin sessions')}>
-          <Field
-            label="Pin sessions"
-            hint={
-              <>
-                Only when the request caches: a request with no cache marker, and none added by the <GroupLink id="cacheTtl">cache TTL policy</GroupLink>, lands by the <GroupLink id="selection">strategy</GroupLink> and takes no pin. A request bound to its account keeps its pin either way.
-              </>
-            }
-          >
-            <Select value={form.affinityMode} onChange={(e) => set('affinityMode', e.target.value as AffinityMode)} aria-label="Pin sessions" aria-invalid={invalid('Pin sessions')}>
-              <option value="always">Always</option>
-              <option value="when_cached">Only when the request caches</option>
-            </Select>
-          </Field>
-        </Expert>
-      </div>
-    ),
-    utilization: (
-      <>
-        <p className="dialog-group__intro">
-          The windows the router works from: the share of each it keeps every account under, and the span each session&apos;s burn is averaged over.
-        </p>
+      ),
+      keys: (
+        <>
+          <div className="cells">
+            <div className="row">
+              {/* A key is posted against a pool id, so there is nothing to create one on until the pool exists. */}
+              <Button size="sm" icon={<IconPlus size={13} />} onClick={() => setKeyOpen(true)} disabled={!pool}>
+                Create key
+              </Button>
+            </div>
+            {poolKeys.length === 0 ? (
+              <p className="muted">{pool ? 'No keys belong to this pool yet.' : 'Keys can be created once the pool is saved.'}</p>
+            ) : (
+              <div className="table-wrap">
+                <table className="table keys-table table--plain">
+                  <thead>
+                    <tr>
+                      <th className="col-fill">Key</th>
+                      <th className="col-fit">Prefix</th>
+                      <th className="col-fit">Status</th>
+                      <th className="col-fit" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {poolKeys.map((k) => {
+                      const status = revoked.has(k.id) ? 'revoked' : k.status;
+                      return (
+                        <tr key={k.id}>
+                          <td className="col-fill" title={k.name}>{k.name}</td>
+                          <td className="mono muted col-fit">{k.prefix}…</td>
+                          <td className="col-fit">
+                            <Badge tone={KEY_STATUS_TONE[status]} dot>
+                              {status}
+                            </Badge>
+                          </td>
+                          <td className="col-fit">
+                            <Menu
+                              label={`Actions for key ${k.name}`}
+                              items={[
+                                { label: 'Move to…', disabled: otherPools.length === 0, onClick: () => startMove(k) },
+                                { label: 'Revoke', danger: true, disabled: status !== 'active', onClick: () => setRevoking(k) },
+                              ]}
+                            />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <p className="field__hint">
+              A key reaches only this pool&apos;s members. Create key, Move to and Revoke apply at once, without Save pool. Rotation and expiry are on the <PageLink to="/keys">Keys page</PageLink>.
+            </p>
+          </div>
+        </>
+      ),
+      models: (
         <div className="cells">
+          {/* Field's frame without its label element: a label forwards a click on its text to the first control
+              inside, which here would press Add rule or flip the first row. */}
           <Field
-            label="Window ceiling (%)"
-            className={expertView || refusedFields.has(ENGINE_FIELD_LABELS.burnAverageSeconds) ? 'cell--half' : undefined}
-            hint="A move or a new session lands on a member only where its windows stay under this share until they reset, or for the next five hours on a weekly window. A round runs on a member whose window would pass it."
+            label="Model rules"
+            plain
+            hint="Top to bottom, first match wins. A model no rule names is allowed, and a closing Deny * allows only what the list names. Write an undated id with a trailing *. A key extends or replaces these rules, and the saved key's Effective list shows the list it ends up with."
           >
-            <Input
-              type="number"
-              min={CEILING_PERCENT.min}
-              max={CEILING_PERCENT.max}
-              value={percentOf(form.engine.windowCeiling)}
-              onChange={(e) => setEngine('windowCeiling', Number(e.target.value) / 100)}
-              aria-label="Window ceiling (%)"
-              aria-invalid={invalid('Window ceiling (%)')}
-            />
+            <PatternEditor label="Model rules" value={form.modelRules} onChange={(rules) => set('modelRules', rules)} suggestions={suggestions} />
           </Field>
-          <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.burnAverageSeconds)}>
-            <Field label={ENGINE_FIELD_LABELS.burnAverageSeconds} className="cell--half" hint="The time constant of each session's burn average. The projection, the slow-down and the round read it. A 5-hour window younger than twice it fires no round. A slowed member's holds reach their full length over it. Editable under the Custom preset in Load shedding.">
-              <Input
-                type="number"
-                min={ENGINE_BOUNDS.burnAverageSeconds.min}
-                step={60}
-                value={form.engine.burnAverageSeconds}
-                onChange={(e) => setEngine('burnAverageSeconds', Number(e.target.value))}
-                disabled={sheddingPill !== 'custom'}
-                aria-invalid={invalid(ENGINE_FIELD_LABELS.burnAverageSeconds)}
-              />
-            </Field>
-          </Expert>
+          {rulesRefusal && <Refusal>{rulesRefusal}</Refusal>}
+        </div>
+      ),
+      guardrails: (
+        <div className="cells">
+          {/* Field's frame without its label element: a label forwards a click on its text to the first button
+              inside. */}
           <Field
-            label="Member utilization"
+            label="Guardrails"
             plain
             hint={
               <>
-                Each tick is a member&apos;s latest 5-hour or 7-day reading, as on the <PageLink to="/quota">Quota page</PageLink>. Drag the ceiling&apos;s handle, or focus it and use the arrow keys.
+                Top to bottom. A pool&apos;s guardrails run before a key&apos;s own. <PageLink to="/guardrails">Manage guardrails</PageLink>
               </>
             }
           >
-            <UtilizationBar
-              ceiling={{ onChange: (v) => setEngine('windowCeiling', v / 100), value: percentOf(form.engine.windowCeiling) }}
-              min={CEILING_PERCENT.min}
-              max={CEILING_PERCENT.max}
-              readings={readings}
-            />
+            <GuardrailList onChange={(ids) => set('guardrails', ids)} pending={pool ? undefined : 'Guardrails can be attached once the pool is saved.'} refs={pool?.guardrails ?? []} registry={guardrailRegistry} value={form.guardrails} />
           </Field>
         </div>
-      </>
-    ),
-    shedding: (
-      <>
-        <p className="dialog-group__intro">
-          A member whose window would pass the <GroupLink id="utilization">ceiling</GroupLink> before its reset, or within five hours on a weekly window, runs a round that marks the sessions that cover the excess, and each moves to a sibling with runway at its next request. With the slow-down on, a round fires when the time the slow-down adds passes the stretch threshold, and removes only what the slow-down cannot cover.
-        </p>
+      ),
+      autoMode: (
         <div className="cells">
-          <Field label="Load shedding" beside hint="Off, no round runs and nothing is marked. The ceiling still holds every move and new session, and Migrate when spent keeps its own switch.">
-            <Toggle checked={form.engine.loadShedding} onChange={(v) => setEngine('loadShedding', v)} label="Load shedding" />
-          </Field>
           <Expert>
-            <Field label="Preset" plain hint={SHEDDING_HINT[sheddingPill]}>
-              <PresetPills label="Load shedding preset" value={sheddingPill} onPick={pickShedding} hints={SHEDDING_HINT} />
-            </Field>
-          </Expert>
-          {/* An expert half halves its row only while its mate draws, in the expert view or under the mate's refusal,
-              so a refused half drawn alone in the plain view spans its row. */}
-          <Expert refused={refusedFields.has('Shed cap (%)')}>
-            <Field label="Shed cap (%)" className={expertView || refusedFields.has(ENGINE_FIELD_LABELS.shedDwellSeconds) ? 'cell--half' : undefined} hint="The most of the member's burn one round removes. The round removes what brings the window under the ceiling, up to this.">
-              <Input
-                type="number"
-                min={CAP_PERCENT.min}
-                max={CAP_PERCENT.max}
-                value={percentOf(form.engine.shedCap)}
-                onChange={(e) => setEngine('shedCap', Number(e.target.value) / 100)}
-                disabled={sheddingPill !== 'custom'}
-                aria-invalid={invalid('Shed cap (%)')}
-              />
-            </Field>
-          </Expert>
-          <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.shedDwellSeconds)}>
-            <Field label={ENGINE_FIELD_LABELS.shedDwellSeconds} className={expertView || refusedFields.has('Shed cap (%)') ? 'cell--half' : undefined} hint="The least time between two rounds on one member, and how long a moved session stays off it.">
-              <Input
-                type="number"
-                min={ENGINE_BOUNDS.shedDwellSeconds.min}
-                step={60}
-                value={form.engine.shedDwellSeconds}
-                onChange={(e) => setEngine('shedDwellSeconds', Number(e.target.value))}
-                disabled={sheddingPill !== 'custom'}
-                aria-invalid={invalid(ENGINE_FIELD_LABELS.shedDwellSeconds)}
-              />
-            </Field>
-          </Expert>
-          <Expert refused={refusedFields.has('Warm sessions')}>
             <Field
-              label="Warm sessions"
+              label="Support server-side auto mode"
+              beside
+              hint={
+                <>
+                  Claude Code asks the upstream to review each tool use on the model&apos;s own turn. Off, the router drops that request from every message of this pool&apos;s keys, and the client reviews with classifier requests of its own, billed to the account&apos;s windows. A key can override this. The Client page of the documentation explains what the client does in each state.
+                </>
+              }
+            >
+              <Toggle checked={form.autoModeServer} onChange={(v) => set('autoModeServer', v)} label="Support server-side auto mode" />
+            </Field>
+          </Expert>
+        </div>
+      ),
+      selection: (
+        <div className="cells">
+          <Field label="Strategy" hint={STRATEGY_HINT[form.strategy]}>
+            <Select value={form.strategy} onChange={(e) => set('strategy', e.target.value as PoolStrategy)} aria-label="Strategy">
+              {(Object.keys(STRATEGY_LABEL) as PoolStrategy[]).map((v) => (
+                <option key={v} value={v}>
+                  {STRATEGY_LABEL[v]}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field
+            label="Prioritize subscription accounts"
+            beside
+            hint={
+              <>
+                Plan quota first, then accounts in <GroupLink id="overage">overage</GroupLink>, then the metered accounts, and <GroupLink id="members">priority</GroupLink> orders each of those groups.
+              </>
+            }
+          >
+            <Toggle checked={form.preferSubscription} onChange={(v) => set('preferSubscription', v)} label="Prioritize subscription accounts" />
+          </Field>
+        </div>
+      ),
+      placement: (
+        <div className="cells">
+          <Expert refused={refusedFields.has('Subagent placement')}>
+            <Field
+              label="Subagent placement"
+              hint={
+                <>
+                  Where a subagent&apos;s first request lands. By cohort: with the subagents that share its static prefix. With the main conversation: on its parent&apos;s account. By strategy: wherever the <GroupLink id="selection">strategy</GroupLink> picks.
+                </>
+              }
+            >
+              <Select value={form.subagentPlacement} onChange={(e) => set('subagentPlacement', e.target.value as SubagentPlacement)} aria-label="Subagent placement" aria-invalid={invalid('Subagent placement')}>
+                <option value="by_cohort">By cohort</option>
+                <option value="by_strategy">By strategy</option>
+                <option value="with_main">With the main conversation</option>
+              </Select>
+            </Field>
+          </Expert>
+          <Expert refused={refusedFields.has('Session placement')}>
+            <Field
+              label="Session placement"
+              hint={
+                <>
+                  By warm prefix lands a fresh session where its static prefix is already cached, when the prefix reaches the minimum below. By strategy leaves it to the <GroupLink id="selection">strategy</GroupLink>.
+                </>
+              }
+            >
+              <Select value={form.sessionPlacement} onChange={(e) => set('sessionPlacement', e.target.value as SessionPlacement)} aria-label="Session placement" aria-invalid={invalid('Session placement')}>
+                <option value="by_strategy">By strategy</option>
+                <option value="by_warm_prefix">By warm prefix</option>
+              </Select>
+            </Field>
+          </Expert>
+          <Expert refused={refusedFields.has('Minimum shared prefix, tokens')}>
+            <Field
+              label="Minimum shared prefix, tokens"
+              hint={
+                <>
+                  The smallest shared prefix that places a fresh session, or a subagent by cohort, by warmth. Below it the <GroupLink id="selection">strategy</GroupLink> decides. Estimated from the request&apos;s bytes, not counted by the upstream.
+                </>
+              }
+            >
+              <Input
+                type="number"
+                min={0}
+                step={1_000}
+                value={form.prefixTokens}
+                onChange={(e) => set('prefixTokens', e.target.value)}
+                disabled={!prefixEnabled}
+                aria-label="Minimum shared prefix, tokens"
+                aria-invalid={invalid('Minimum shared prefix, tokens')}
+              />
+            </Field>
+          </Expert>
+          {prefixRefusal && <Refusal>{prefixRefusal}</Refusal>}
+        </div>
+      ),
+      pinning: (
+        <div className="cells">
+          <Field
+            label="Session affinity"
+            plain
+            hint={
+              <>
+                {AFFINITY_HINT} <GroupLink id="keepalive">Keepalive</GroupLink> needs at least 5m and warns under 1h.
+              </>
+            }
+          >
+            <span className="chips" role="group" aria-label="Session affinity">
+              {AFFINITY_PICKS.map((pick) => {
+                const on = !form.customAffinity && form.affinity === pick.seconds;
+                return (
+                  <button key={pick.label} type="button" className={`pill ${on ? 'is-active' : ''}`} aria-pressed={on} onClick={() => setForm((f) => ({ ...f, affinity: pick.seconds, customAffinity: false }))}>
+                    {pick.label}
+                  </button>
+                );
+              })}
+              <button type="button" className={`pill ${form.customAffinity ? 'is-active' : ''}`} aria-pressed={form.customAffinity} onClick={() => set('customAffinity', true)}>
+                custom
+              </button>
+            </span>
+            <Input
+              type="number"
+              min={60}
+              step={30}
+              value={form.affinity}
+              onChange={(e) => set('affinity', Math.max(0, Number(e.target.value)))}
+              disabled={!form.customAffinity}
+              aria-label="Session affinity in seconds"
+              aria-invalid={invalid('Session affinity in seconds')}
+            />
+          </Field>
+          <Expert refused={refusedFields.has('Pin sessions')}>
+            <Field
+              label="Pin sessions"
+              hint={
+                <>
+                  Only when the request caches: a request with no cache marker, and none added by the <GroupLink id="cacheTtl">cache TTL policy</GroupLink>, lands by the <GroupLink id="selection">strategy</GroupLink> and takes no pin. A request bound to its account keeps its pin either way.
+                </>
+              }
+            >
+              <Select value={form.affinityMode} onChange={(e) => set('affinityMode', e.target.value as AffinityMode)} aria-label="Pin sessions" aria-invalid={invalid('Pin sessions')}>
+                <option value="always">Always</option>
+                <option value="when_cached">Only when the request caches</option>
+              </Select>
+            </Field>
+          </Expert>
+        </div>
+      ),
+      utilization: (
+        <>
+          <p className="dialog-group__intro">
+            The windows the router works from: the share of each it keeps every account under, and the span each session&apos;s burn is averaged over.
+          </p>
+          <div className="cells">
+            <Field
+              label="Window ceiling (%)"
+              className={expertView || refusedFields.has(ENGINE_FIELD_LABELS.burnAverageSeconds) ? 'cell--half' : undefined}
+              hint="A move or a new session lands on a member only where its windows stay under this share until they reset, or for the next five hours on a weekly window. A round runs on a member whose window would pass it."
+            >
+              <Input
+                type="number"
+                min={CEILING_PERCENT.min}
+                max={CEILING_PERCENT.max}
+                value={percentOf(form.engine.windowCeiling)}
+                onChange={(e) => setEngine('windowCeiling', Number(e.target.value) / 100)}
+                aria-label="Window ceiling (%)"
+                aria-invalid={invalid('Window ceiling (%)')}
+              />
+            </Field>
+            <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.burnAverageSeconds)}>
+              <Field label={ENGINE_FIELD_LABELS.burnAverageSeconds} className="cell--half" hint="The time constant of each session's burn average. The projection, the slow-down and the round read it. A 5-hour window younger than twice it fires no round. A slowed member's holds reach their full length over it. Editable under the Custom preset in Load shedding.">
+                <Input
+                  type="number"
+                  min={ENGINE_BOUNDS.burnAverageSeconds.min}
+                  step={60}
+                  value={form.engine.burnAverageSeconds}
+                  onChange={(e) => setEngine('burnAverageSeconds', Number(e.target.value))}
+                  disabled={sheddingPill !== 'custom'}
+                  aria-invalid={invalid(ENGINE_FIELD_LABELS.burnAverageSeconds)}
+                />
+              </Field>
+            </Expert>
+            <Field
+              label="Member utilization"
               plain
               hint={
                 <>
-                  A warm session rewrites its cache where it lands. The <CostReferenceLink tab="plan-rates" /> shows what that write costs.
+                  Each tick is a member&apos;s latest 5-hour or 7-day reading, as on the <PageLink to="/quota">Quota page</PageLink>. Drag the ceiling&apos;s handle, or focus it and use the arrow keys.
                 </>
               }
             >
-              <ChoiceList choices={WARM_CHOICES} invalid={invalid('Warm sessions')} label="Warm sessions" name={`warm-${pool?.id ?? 'new'}`} onChange={(v) => setEngine('warmSessions', v)} value={form.engine.warmSessions} />
-            </Field>
-          </Expert>
-          <Expert>
-            <Field label="Preview" plain>
-              <p className="shed-preview num" role="status">
-                {shedPreviewLine(preview, now)}
-              </p>
-            </Field>
-          </Expert>
-        </div>
-      </>
-    ),
-    slowDown: (
-      <>
-        <p className="dialog-group__intro">
-          The slow-down holds each request of a session before it is forwarded, so an account whose sessions would pass the ceiling before the reset reaches it under the ceiling instead. A session waits its own cycle times the slow-down, so a fast session waits more than a slow one and each keeps its share.
-        </p>
-        <div className="cells">
-          <Expert>
-            <Field label="Slow-down" beside hint="Holds requests on a member whose five-hour window would pass the ceiling. Auxiliary requests, compactions, the fast lane, probes and token counts are never held.">
-              <Toggle checked={form.engine.slowDown} onChange={(v) => setEngine('slowDown', v)} label="Slow-down" />
-            </Field>
-          </Expert>
-          <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.slowDownStretchSeconds)}>
-            <Field
-              label={ENGINE_FIELD_LABELS.slowDownStretchSeconds}
-              className={expertView || refusedFields.has(ENGINE_FIELD_LABELS.slowDownHoldSeconds) ? 'cell--half' : undefined}
-              hint="The time the slow-down may add to a session before a round moves sessions off the member, with load shedding on. Under it the slow-down holds alone."
-            >
-              <Input
-                type="number"
-                min={ENGINE_BOUNDS.slowDownStretchSeconds.min}
-                max={ENGINE_BOUNDS.slowDownStretchSeconds.max}
-                step={60}
-                value={form.engine.slowDownStretchSeconds}
-                onChange={(e) => setEngine('slowDownStretchSeconds', Number(e.target.value))}
-                aria-invalid={invalid(ENGINE_FIELD_LABELS.slowDownStretchSeconds)}
+              <UtilizationBar
+                ceiling={{ onChange: (v) => setEngine('windowCeiling', v / 100), value: percentOf(form.engine.windowCeiling) }}
+                min={CEILING_PERCENT.min}
+                max={CEILING_PERCENT.max}
+                readings={readings}
               />
             </Field>
-          </Expert>
-          <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.slowDownHoldSeconds)}>
-            <Field label={ENGINE_FIELD_LABELS.slowDownHoldSeconds} className={expertView || refusedFields.has(ENGINE_FIELD_LABELS.slowDownStretchSeconds) ? 'cell--half' : undefined} hint="The longest one request waits. 120 s leaves 60 s of the client's 180 s first-byte window for the upstream's head.">
-              <Input
-                type="number"
-                min={ENGINE_BOUNDS.slowDownHoldSeconds.min}
-                max={ENGINE_BOUNDS.slowDownHoldSeconds.max}
-                value={form.engine.slowDownHoldSeconds}
-                onChange={(e) => setEngine('slowDownHoldSeconds', Number(e.target.value))}
-                aria-invalid={invalid(ENGINE_FIELD_LABELS.slowDownHoldSeconds)}
-              />
-            </Field>
-          </Expert>
-          <Expert>
-            <Field label="Preview" plain>
-              {/* Drawn as the shedding preview is, under a class of its own so a check reads the one it means. */}
-              <p className="shed-preview slow-down-preview num" role="status">
-                {slowDownPreviewLine(slowPreview)}
-              </p>
-            </Field>
-          </Expert>
-        </div>
-      </>
-    ),
-    failover: (
-      <>
-        <p className="dialog-group__intro">
-          How long a request waits out a throttle on its member, how many requests one member serves at once, and whether a spent window moves the session at once.
-        </p>
-        <div className="cells">
-          <Expert>
-            <Field label="Preset" plain hint={FAILOVER_HINT[failoverPill]}>
-              <PresetPills label="Failover preset" value={failoverPill} onPick={pickFailover} hints={FAILOVER_HINT} />
-            </Field>
-          </Expert>
-          <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.inFlightCap)}>
-            <Field
-              label={ENGINE_FIELD_LABELS.inFlightCap}
-              className={expertView || refusedFields.has(ENGINE_FIELD_LABELS.retryInPlaceSeconds) ? 'cell--half' : undefined}
-              hint="Requests one member serves at once. A member at the cap takes no fresh session while a sibling has room. With every member full, a request waits up to Retry in place for a slot."
-            >
-              <Input
-                type="number"
-                min={ENGINE_BOUNDS.inFlightCap.min}
-                value={form.engine.inFlightCap}
-                onChange={(e) => setEngine('inFlightCap', Number(e.target.value))}
-                disabled={failoverPill !== 'custom'}
-                aria-invalid={invalid(ENGINE_FIELD_LABELS.inFlightCap)}
-              />
-            </Field>
-          </Expert>
-          <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.retryInPlaceSeconds)}>
-            <Field label={ENGINE_FIELD_LABELS.retryInPlaceSeconds} className={expertView || refusedFields.has(ENGINE_FIELD_LABELS.inFlightCap) ? 'cell--half' : undefined} hint="The longest throttle a request waits out on its member before failing over, and the longest wait for a free slot. At 0 a request fails over at once. Claude Code gives up on a request that has waited about 180 seconds without an answer and retries it on its own, so a longer wait is spent for nothing.">
-              <Input
-                type="number"
-                min={ENGINE_BOUNDS.retryInPlaceSeconds.min}
-                max={ENGINE_BOUNDS.retryInPlaceSeconds.max}
-                value={form.engine.retryInPlaceSeconds}
-                onChange={(e) => setEngine('retryInPlaceSeconds', Number(e.target.value))}
-                disabled={failoverPill !== 'custom'}
-                aria-invalid={invalid(ENGINE_FIELD_LABELS.retryInPlaceSeconds)}
-              />
-            </Field>
-          </Expert>
-          <Expert>
-            <Field label="Migrate when spent" beside hint="Moves a session off a member whose window for its model is spent, to a sibling with allowance left, without waiting for a round or the upstream's 429.">
-              <Toggle checked={form.engine.migrateWhenSpent} onChange={(v) => setEngine('migrateWhenSpent', v)} label="Migrate when spent" />
-            </Field>
-          </Expert>
-        </div>
-      </>
-    ),
-    overage: (
-      <div className="cells">
-        <Field
-          label="Overage policy"
-          plain
-          hint={
-            <>
-              For subscription accounts billing extra usage. A daily or monthly budget in <GroupLink id="members">Members</GroupLink> caps a member&apos;s spend in dollars: an API-key member&apos;s whole spend, a subscription member&apos;s overage and fast answers. The <PageLink to="/accounts">Accounts page</PageLink> shows which account is in overage.
-            </>
-          }
-        >
-          <ChoiceList choices={OVERAGE_CHOICES} label="Overage policy" name={`overage-${pool?.id ?? 'new'}`} onChange={(v) => set('overage', v)} value={form.overage} />
-        </Field>
-        <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.overageMoveGraceMinutes)}>
-          <Field label={ENGINE_FIELD_LABELS.overageMoveGraceMinutes} hint="Under Prefer plan quota, a session stays on an account in overage while its window resets within this many minutes. At 0 it moves at once.">
-            <Input
-              type="number"
-              min={ENGINE_BOUNDS.overageMoveGraceMinutes.min}
-              max={ENGINE_BOUNDS.overageMoveGraceMinutes.max}
-              value={form.engine.overageMoveGraceMinutes}
-              onChange={(e) => setEngine('overageMoveGraceMinutes', Number(e.target.value))}
-              aria-invalid={invalid(ENGINE_FIELD_LABELS.overageMoveGraceMinutes)}
-            />
-          </Field>
-        </Expert>
-        <Expert refused={refusedFields.has('Return to plan')}>
-          <Field label="Return to plan" plain hint="When a session on an API-key member returns to a subscription member. Under Never it leaves the metered member on expiry, a cooldown or a mark alone.">
-            <ChoiceList choices={RETURN_CHOICES} invalid={invalid('Return to plan')} label="Return to plan" name={`return-${pool?.id ?? 'new'}`} onChange={(v) => setEngine('returnToPlan', v)} value={form.engine.returnToPlan} />
-          </Field>
-        </Expert>
-        <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.returnToPlanDwellSeconds)}>
-          <Field label={ENGINE_FIELD_LABELS.returnToPlanDwellSeconds} hint="Under Always, how long a warm session stays on the API-key member before it returns. 0 returns it at once.">
-            <Input
-              type="number"
-              min={ENGINE_BOUNDS.returnToPlanDwellSeconds.min}
-              max={ENGINE_BOUNDS.returnToPlanDwellSeconds.max}
-              value={form.engine.returnToPlanDwellSeconds}
-              onChange={(e) => setEngine('returnToPlanDwellSeconds', Number(e.target.value))}
-              onFocus={() => setDwellFocused(true)}
-              onBlur={() => setDwellFocused(false)}
-              // A refused dwell stays editable whatever the mode, or its hold on the save could not be cleared.
-              disabled={form.engine.returnToPlan !== 'always' && !refusedFields.has(ENGINE_FIELD_LABELS.returnToPlanDwellSeconds) && !dwellFocused}
-              aria-invalid={invalid(ENGINE_FIELD_LABELS.returnToPlanDwellSeconds)}
-            />
-          </Field>
-        </Expert>
-        <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.windDownMinutes)}>
-          <Field
-            label={ENGINE_FIELD_LABELS.windDownMinutes}
-            hint={
-              <>
-                This long before a canceled subscription ends, its account takes new sessions only as the last resort and cold sessions move off. Inside it the account is no destination for a move. The end is set on the <PageLink to="/accounts">Accounts page</PageLink>.
-              </>
-            }
-          >
-            <Input
-              type="number"
-              min={ENGINE_BOUNDS.windDownMinutes.min}
-              max={ENGINE_BOUNDS.windDownMinutes.max}
-              value={form.engine.windDownMinutes}
-              onChange={(e) => setEngine('windDownMinutes', Number(e.target.value))}
-              aria-invalid={invalid(ENGINE_FIELD_LABELS.windDownMinutes)}
-            />
-          </Field>
-        </Expert>
-      </div>
-    ),
-    cacheTtl: (
-      <div className="cells">
-        <Field label="Set the cache TTL for this pool" beside hint="Rewrites every cache marker a request carries to the TTL below, on every account of this pool, so the client's own TTL setting has no effect through it.">
-          <Toggle checked={form.cacheTtl.enabled} onChange={(v) => setCacheTtl('enabled', v)} label="Set the cache TTL for this pool" />
-        </Field>
-        <Expert>
-          <Field
-            label="Add a cache marker to a request without one"
-            beside
-            hint={
-              <>
-                Adds a marker to a request that carries none. Off leaves such a request as sent. <GroupLink id="pinning">Pin sessions</GroupLink> counts an added marker.
-              </>
-            }
-          >
-            <Toggle checked={form.cacheTtl.injectWhenAbsent} onChange={(v) => setCacheTtl('injectWhenAbsent', v)} label="Add a cache marker to a request without one" disabled={!form.cacheTtl.enabled} />
-          </Field>
-        </Expert>
-        <Field
-          label="Write cost"
-          plain
-          hint="Plan writes apply while an account spends plan quota, where a 1-hour write costs the same as a 5-minute one. Metered writes apply while a write costs money, on an API-key account or a subscription account in overage: 2x input for an hour against 1.25x for five minutes. Reads cost the same either way."
-        >
-          <div className="row">
-            <CostReferenceLink tab="api-prices" />
           </div>
-        </Field>
-        <CacheTtlGrid
-          disabled={!form.cacheTtl.enabled}
-          plan={form.cacheTtl.plan}
-          metered={form.cacheTtl.metered}
-          onChange={(name, rules) => setCacheTtl(name, rules)}
-          hint={
-            <>
-              The TTL each turn writes with, by agent. A <GroupLink id="keepalive">keepalive probe</GroupLink> replays the turn under its agent&apos;s TTL, so the first probe after a turn and every later one follow the same rule.
-            </>
-          }
-        />
-        <Expert>
-          <CacheTtlOverrides
-            key={`plan-${open}-${pool?.id ?? 'new'}`}
-            name="plan"
-            label="Plan writes"
-            disabled={!form.cacheTtl.enabled}
-            rules={form.cacheTtl.plan}
-            onChange={(rules) => setCacheTtl('plan', rules)}
-            models={models}
-          />
-        </Expert>
-        <Expert>
-          <CacheTtlOverrides
-            key={`metered-${open}-${pool?.id ?? 'new'}`}
-            name="metered"
-            label="Metered writes"
-            disabled={!form.cacheTtl.enabled}
-            rules={form.cacheTtl.metered}
-            onChange={(rules) => setCacheTtl('metered', rules)}
-            models={models}
-          />
-        </Expert>
-      </div>
-    ),
-    keepalive: (
-      <>
+        </>
+      ),
+      shedding: (
+        <>
+          <p className="dialog-group__intro">
+            A member whose window would pass the <GroupLink id="utilization">ceiling</GroupLink> before its reset, or within five hours on a weekly window, runs a round that marks the sessions that cover the excess, and each moves to a sibling with runway at its next request. With the slow-down on, a round fires when the time the slow-down adds passes the stretch threshold, and removes only what the slow-down cannot cover.
+          </p>
+          <div className="cells">
+            <Field label="Load shedding" beside hint="Off, no round runs and nothing is marked. The ceiling still holds every move and new session, and Migrate when spent keeps its own switch.">
+              <Toggle checked={form.engine.loadShedding} onChange={(v) => setEngine('loadShedding', v)} label="Load shedding" />
+            </Field>
+            <Expert>
+              <Field label="Preset" plain hint={SHEDDING_HINT[sheddingPill]}>
+                <PresetPills label="Load shedding preset" value={sheddingPill} onPick={pickShedding} hints={SHEDDING_HINT} />
+              </Field>
+            </Expert>
+            {/* An expert half halves its row only while its mate draws, in the expert view or under the mate's refusal,
+                so a refused half drawn alone in the plain view spans its row. */}
+            <Expert refused={refusedFields.has('Shed cap (%)')}>
+              <Field label="Shed cap (%)" className={expertView || refusedFields.has(ENGINE_FIELD_LABELS.shedDwellSeconds) ? 'cell--half' : undefined} hint="The most of the member's burn one round removes. The round removes what brings the window under the ceiling, up to this.">
+                <Input
+                  type="number"
+                  min={CAP_PERCENT.min}
+                  max={CAP_PERCENT.max}
+                  value={percentOf(form.engine.shedCap)}
+                  onChange={(e) => setEngine('shedCap', Number(e.target.value) / 100)}
+                  disabled={sheddingPill !== 'custom'}
+                  aria-invalid={invalid('Shed cap (%)')}
+                />
+              </Field>
+            </Expert>
+            <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.shedDwellSeconds)}>
+              <Field label={ENGINE_FIELD_LABELS.shedDwellSeconds} className={expertView || refusedFields.has('Shed cap (%)') ? 'cell--half' : undefined} hint="The least time between two rounds on one member, and how long a moved session stays off it.">
+                <Input
+                  type="number"
+                  min={ENGINE_BOUNDS.shedDwellSeconds.min}
+                  step={60}
+                  value={form.engine.shedDwellSeconds}
+                  onChange={(e) => setEngine('shedDwellSeconds', Number(e.target.value))}
+                  disabled={sheddingPill !== 'custom'}
+                  aria-invalid={invalid(ENGINE_FIELD_LABELS.shedDwellSeconds)}
+                />
+              </Field>
+            </Expert>
+            <Expert refused={refusedFields.has('Warm sessions')}>
+              <Field
+                label="Warm sessions"
+                plain
+                hint={
+                  <>
+                    A warm session rewrites its cache where it lands. The <CostReferenceLink tab="plan-rates" /> shows what that write costs.
+                  </>
+                }
+              >
+                <ChoiceList choices={WARM_CHOICES} invalid={invalid('Warm sessions')} label="Warm sessions" name={`warm-${pool?.id ?? 'new'}`} onChange={(v) => setEngine('warmSessions', v)} value={form.engine.warmSessions} />
+              </Field>
+            </Expert>
+            <Expert>
+              <Field label="Preview" plain>
+                <p className="shed-preview num" role="status">
+                  {shedPreviewLine(preview, now)}
+                </p>
+              </Field>
+            </Expert>
+          </div>
+        </>
+      ),
+      slowDown: (
+        <>
+          <p className="dialog-group__intro">
+            The slow-down holds each request of a session before it is forwarded, so an account whose sessions would pass the ceiling before the reset reaches it under the ceiling instead. A session waits its own cycle times the slow-down, so a fast session waits more than a slow one and each keeps its share.
+          </p>
+          <div className="cells">
+            <Expert>
+              <Field label="Slow-down" beside hint="Holds requests on a member whose five-hour window would pass the ceiling. Auxiliary requests, compactions, the fast lane, probes and token counts are never held.">
+                <Toggle checked={form.engine.slowDown} onChange={(v) => setEngine('slowDown', v)} label="Slow-down" />
+              </Field>
+            </Expert>
+            <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.slowDownStretchSeconds)}>
+              <Field
+                label={ENGINE_FIELD_LABELS.slowDownStretchSeconds}
+                className={expertView || refusedFields.has(ENGINE_FIELD_LABELS.slowDownHoldSeconds) ? 'cell--half' : undefined}
+                hint="The time the slow-down may add to a session before a round moves sessions off the member, with load shedding on. Under it the slow-down holds alone."
+              >
+                <Input
+                  type="number"
+                  min={ENGINE_BOUNDS.slowDownStretchSeconds.min}
+                  max={ENGINE_BOUNDS.slowDownStretchSeconds.max}
+                  step={60}
+                  value={form.engine.slowDownStretchSeconds}
+                  onChange={(e) => setEngine('slowDownStretchSeconds', Number(e.target.value))}
+                  aria-invalid={invalid(ENGINE_FIELD_LABELS.slowDownStretchSeconds)}
+                />
+              </Field>
+            </Expert>
+            <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.slowDownHoldSeconds)}>
+              <Field label={ENGINE_FIELD_LABELS.slowDownHoldSeconds} className={expertView || refusedFields.has(ENGINE_FIELD_LABELS.slowDownStretchSeconds) ? 'cell--half' : undefined} hint="The longest one request waits. 120 s leaves 60 s of the client's 180 s first-byte window for the upstream's head.">
+                <Input
+                  type="number"
+                  min={ENGINE_BOUNDS.slowDownHoldSeconds.min}
+                  max={ENGINE_BOUNDS.slowDownHoldSeconds.max}
+                  value={form.engine.slowDownHoldSeconds}
+                  onChange={(e) => setEngine('slowDownHoldSeconds', Number(e.target.value))}
+                  aria-invalid={invalid(ENGINE_FIELD_LABELS.slowDownHoldSeconds)}
+                />
+              </Field>
+            </Expert>
+            <Expert>
+              <Field label="Preview" plain>
+                {/* Drawn as the shedding preview is, under a class of its own so a check reads the one it means. */}
+                <p className="shed-preview slow-down-preview num" role="status">
+                  {slowDownPreviewLine(slowPreview)}
+                </p>
+              </Field>
+            </Expert>
+          </div>
+        </>
+      ),
+      failover: (
+        <>
+          <p className="dialog-group__intro">
+            How long a request waits out a throttle on its member, how many requests one member serves at once, and whether a spent window moves the session at once.
+          </p>
+          <div className="cells">
+            <Expert>
+              <Field label="Preset" plain hint={FAILOVER_HINT[failoverPill]}>
+                <PresetPills label="Failover preset" value={failoverPill} onPick={pickFailover} hints={FAILOVER_HINT} />
+              </Field>
+            </Expert>
+            <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.inFlightCap)}>
+              <Field
+                label={ENGINE_FIELD_LABELS.inFlightCap}
+                className={expertView || refusedFields.has(ENGINE_FIELD_LABELS.retryInPlaceSeconds) ? 'cell--half' : undefined}
+                hint="Requests one member serves at once. A member at the cap takes no fresh session while a sibling has room. With every member full, a request waits up to Retry in place for a slot."
+              >
+                <Input
+                  type="number"
+                  min={ENGINE_BOUNDS.inFlightCap.min}
+                  value={form.engine.inFlightCap}
+                  onChange={(e) => setEngine('inFlightCap', Number(e.target.value))}
+                  disabled={failoverPill !== 'custom'}
+                  aria-invalid={invalid(ENGINE_FIELD_LABELS.inFlightCap)}
+                />
+              </Field>
+            </Expert>
+            <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.retryInPlaceSeconds)}>
+              <Field label={ENGINE_FIELD_LABELS.retryInPlaceSeconds} className={expertView || refusedFields.has(ENGINE_FIELD_LABELS.inFlightCap) ? 'cell--half' : undefined} hint="The longest throttle a request waits out on its member before failing over, and the longest wait for a free slot. At 0 a request fails over at once. Claude Code gives up on a request that has waited about 180 seconds without an answer and retries it on its own, so a longer wait is spent for nothing.">
+                <Input
+                  type="number"
+                  min={ENGINE_BOUNDS.retryInPlaceSeconds.min}
+                  max={ENGINE_BOUNDS.retryInPlaceSeconds.max}
+                  value={form.engine.retryInPlaceSeconds}
+                  onChange={(e) => setEngine('retryInPlaceSeconds', Number(e.target.value))}
+                  disabled={failoverPill !== 'custom'}
+                  aria-invalid={invalid(ENGINE_FIELD_LABELS.retryInPlaceSeconds)}
+                />
+              </Field>
+            </Expert>
+            <Expert>
+              <Field label="Migrate when spent" beside hint="Moves a session off a member whose window for its model is spent, to a sibling with allowance left, without waiting for a round or the upstream's 429.">
+                <Toggle checked={form.engine.migrateWhenSpent} onChange={(v) => setEngine('migrateWhenSpent', v)} label="Migrate when spent" />
+              </Field>
+            </Expert>
+          </div>
+        </>
+      ),
+      overage: (
         <div className="cells">
           <Field
-            label="Keep prompt caches warm"
-            beside
+            label="Overage policy"
+            plain
             hint={
               <>
-                Probes an idle session shortly before its cache expires, so its next turn reads instead of writes. A probe follows the session&apos;s pin, so <GroupLink id="pinning">Session affinity</GroupLink> must be at least 5m.
-                {keepaliveBlocked && (
-                  <p className="field__hint">
-                    Needs Session affinity of at least 5 minutes: a probe follows the session&apos;s pin, and a shorter pin cannot keep the session on the account it warmed. Set it under <GroupLink id="pinning">Pinning</GroupLink>.
-                  </p>
-                )}
+                For subscription accounts billing extra usage. A daily or monthly budget in <GroupLink id="members">Members</GroupLink> caps a member&apos;s spend in dollars: an API-key member&apos;s whole spend, a subscription member&apos;s overage and fast answers. The <PageLink to="/accounts">Accounts page</PageLink> shows which account is in overage.
               </>
             }
           >
-            <Toggle checked={warming} onChange={(v) => set('keepalive', v)} label="Keep prompt caches warm" disabled={keepaliveBlocked} />
+            <ChoiceList choices={OVERAGE_CHOICES} label="Overage policy" name={`overage-${pool?.id ?? 'new'}`} onChange={(v) => set('overage', v)} value={form.overage} />
           </Field>
+          <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.overageMoveGraceMinutes)}>
+            <Field label={ENGINE_FIELD_LABELS.overageMoveGraceMinutes} hint="Under Prefer plan quota, a session stays on an account in overage while its window resets within this many minutes. At 0 it moves at once.">
+              <Input
+                type="number"
+                min={ENGINE_BOUNDS.overageMoveGraceMinutes.min}
+                max={ENGINE_BOUNDS.overageMoveGraceMinutes.max}
+                value={form.engine.overageMoveGraceMinutes}
+                onChange={(e) => setEngine('overageMoveGraceMinutes', Number(e.target.value))}
+                aria-invalid={invalid(ENGINE_FIELD_LABELS.overageMoveGraceMinutes)}
+              />
+            </Field>
+          </Expert>
+          <Expert refused={refusedFields.has('Return to plan')}>
+            <Field label="Return to plan" plain hint="When a session on an API-key member returns to a subscription member. Under Never it leaves the metered member on expiry, a cooldown or a mark alone.">
+              <ChoiceList choices={RETURN_CHOICES} invalid={invalid('Return to plan')} label="Return to plan" name={`return-${pool?.id ?? 'new'}`} onChange={(v) => setEngine('returnToPlan', v)} value={form.engine.returnToPlan} />
+            </Field>
+          </Expert>
+          <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.returnToPlanDwellSeconds)}>
+            <Field label={ENGINE_FIELD_LABELS.returnToPlanDwellSeconds} hint="Under Always, how long a warm session stays on the API-key member before it returns. 0 returns it at once.">
+              <Input
+                type="number"
+                min={ENGINE_BOUNDS.returnToPlanDwellSeconds.min}
+                max={ENGINE_BOUNDS.returnToPlanDwellSeconds.max}
+                value={form.engine.returnToPlanDwellSeconds}
+                onChange={(e) => setEngine('returnToPlanDwellSeconds', Number(e.target.value))}
+                onFocus={() => setDwellFocused(true)}
+                onBlur={() => setDwellFocused(false)}
+                // A refused dwell stays editable whatever the mode, or its hold on the save could not be cleared.
+                disabled={form.engine.returnToPlan !== 'always' && !refusedFields.has(ENGINE_FIELD_LABELS.returnToPlanDwellSeconds) && !dwellFocused}
+                aria-invalid={invalid(ENGINE_FIELD_LABELS.returnToPlanDwellSeconds)}
+              />
+            </Field>
+          </Expert>
+          <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.windDownMinutes)}>
+            <Field
+              label={ENGINE_FIELD_LABELS.windDownMinutes}
+              hint={
+                <>
+                  This long before a canceled subscription ends, its account takes new sessions only as the last resort and cold sessions move off. Inside it the account is no destination for a move. The end is set on the <PageLink to="/accounts">Accounts page</PageLink>.
+                </>
+              }
+            >
+              <Input
+                type="number"
+                min={ENGINE_BOUNDS.windDownMinutes.min}
+                max={ENGINE_BOUNDS.windDownMinutes.max}
+                value={form.engine.windDownMinutes}
+                onChange={(e) => setEngine('windDownMinutes', Number(e.target.value))}
+                aria-invalid={invalid(ENGINE_FIELD_LABELS.windDownMinutes)}
+              />
+            </Field>
+          </Expert>
+        </div>
+      ),
+      cacheTtl: (
+        <div className="cells">
+          <Field label="Set the cache TTL for this pool" beside hint="Rewrites every cache marker a request carries to the TTL below, on every account of this pool, so the client's own TTL setting has no effect through it.">
+            <Toggle checked={form.cacheTtl.enabled} onChange={(v) => setCacheTtl('enabled', v)} label="Set the cache TTL for this pool" />
+          </Field>
+          <Expert>
+            <Field
+              label="Add a cache marker to a request without one"
+              beside
+              hint={
+                <>
+                  Adds a marker to a request that carries none. Off leaves such a request as sent. <GroupLink id="pinning">Pin sessions</GroupLink> counts an added marker.
+                </>
+              }
+            >
+              <Toggle checked={form.cacheTtl.injectWhenAbsent} onChange={(v) => setCacheTtl('injectWhenAbsent', v)} label="Add a cache marker to a request without one" disabled={!form.cacheTtl.enabled} />
+            </Field>
+          </Expert>
           <Field
-            label={KEEPALIVE_FIELD_LABELS.maxIdleSeconds}
+            label="Write cost"
+            plain
+            hint="Plan writes apply while an account spends plan quota, where a 1-hour write costs the same as a 5-minute one. Metered writes apply while a write costs money, on an API-key account or a subscription account in overage: 2x input for an hour against 1.25x for five minutes. Reads cost the same either way."
+          >
+            <div className="row">
+              <CostReferenceLink tab="api-prices" />
+            </div>
+          </Field>
+          <CacheTtlGrid
+            disabled={!form.cacheTtl.enabled}
+            plan={form.cacheTtl.plan}
+            metered={form.cacheTtl.metered}
+            onChange={(name, rules) => setCacheTtl(name, rules)}
             hint={
               <>
-                The idle window of the main conversation. 0 is the recipe&apos;s break-even, and a value above the break-even runs as set.
-                {resolved && (
-                  <span className="keepalive-resolved">
-                    <span title={SHARE_HINT}>
-                      Costs {rangeText(resolved.idleShare, fmtPct)} of one re-write{shareOf}
+                The TTL each turn writes with, by agent. A <GroupLink id="keepalive">keepalive probe</GroupLink> replays the turn under its agent&apos;s TTL, so the first probe after a turn and every later one follow the same rule.
+              </>
+            }
+          />
+          <Expert>
+            <CacheTtlOverrides
+              key={`plan-${open}-${pool?.id ?? 'new'}`}
+              name="plan"
+              label="Plan writes"
+              disabled={!form.cacheTtl.enabled}
+              rules={form.cacheTtl.plan}
+              onChange={(rules) => setCacheTtl('plan', rules)}
+              models={models}
+            />
+          </Expert>
+          <Expert>
+            <CacheTtlOverrides
+              key={`metered-${open}-${pool?.id ?? 'new'}`}
+              name="metered"
+              label="Metered writes"
+              disabled={!form.cacheTtl.enabled}
+              rules={form.cacheTtl.metered}
+              onChange={(rules) => setCacheTtl('metered', rules)}
+              models={models}
+            />
+          </Expert>
+        </div>
+      ),
+      keepalive: (
+        <>
+          <div className="cells">
+            <Field
+              label="Keep prompt caches warm"
+              beside
+              hint={
+                <>
+                  Probes an idle session shortly before its cache expires, so its next turn reads instead of writes. A probe follows the session&apos;s pin, so <GroupLink id="pinning">Session affinity</GroupLink> must be at least 5m.
+                  {keepaliveBlocked && (
+                    <p className="field__hint">
+                      Needs Session affinity of at least 5 minutes: a probe follows the session&apos;s pin, and a shorter pin cannot keep the session on the account it warmed. Set it under <GroupLink id="pinning">Pinning</GroupLink>.
+                    </p>
+                  )}
+                </>
+              }
+            >
+              <Toggle checked={warming} onChange={(v) => set('keepalive', v)} label="Keep prompt caches warm" disabled={keepaliveBlocked} />
+            </Field>
+            <Field
+              label={KEEPALIVE_FIELD_LABELS.maxIdleSeconds}
+              hint={
+                <>
+                  The idle window of the main conversation. 0 is the recipe&apos;s break-even, and a value above the break-even runs as set.
+                  {resolved && (
+                    <span className="keepalive-resolved">
+                      <span title={SHARE_HINT}>
+                        Costs {rangeText(resolved.idleShare, fmtPct)} of one re-write{shareOf}
+                      </span>
+                      {idleAtBreakEven && (
+                        <>
+                          {' · '}capped at the break-even, <RangeFigures range={idleAtBreakEven} />
+                        </>
+                      )}
                     </span>
-                    {idleAtBreakEven && (
-                      <>
-                        {' · '}capped at the break-even, <RangeFigures range={idleAtBreakEven} />
-                      </>
-                    )}
-                  </span>
-                )}
-                {idleAbove && <BreakEvenNote lead="Above the break-even," range={idleAbove} />}
-              </>
-            }
-          >
-            <Input
-              type="number"
-              min={KEEPALIVE_BOUNDS.maxIdleSeconds.min}
-              max={KEEPALIVE_BOUNDS.maxIdleSeconds.max}
-              value={form.maxIdleSeconds}
-              onChange={(e) => set('maxIdleSeconds', Number(e.target.value))}
-              disabled={!warming}
-              aria-invalid={invalid(KEEPALIVE_FIELD_LABELS.maxIdleSeconds)}
-            />
-          </Field>
-          <div className="cell--half">
-            <SwitchedNumber
-              label={KEEPALIVE_FIELD_LABELS.maxParkedSeconds}
-              disabled={!warming}
-              checked={form.maxParkedOn}
-              onChange={(v) => set('maxParkedOn', v)}
-              input={{ min: KEEPALIVE_BOUNDS.maxParkedSeconds.min, max: KEEPALIVE_BOUNDS.maxParkedSeconds.max, value: form.maxParkedSeconds, onChange: (e) => set('maxParkedSeconds', Number(e.target.value)), 'aria-label': KEEPALIVE_FIELD_LABELS.maxParkedSeconds, 'aria-invalid': invalid(KEEPALIVE_FIELD_LABELS.maxParkedSeconds) }}
-              hint={
-                <>
-                  How long a park on a background command or a subagent is probed. Off is the recipe&apos;s break-even.
-                  {resolved && !form.maxParkedOn && <BreakEvenNote lead="Break-even:" range={resolved.breakEvenSeconds} />}
-                  {parkedCapped && <BreakEvenNote lead="Capped at the break-even," range={parkedCapped} />}
+                  )}
+                  {idleAbove && <BreakEvenNote lead="Above the break-even," range={idleAbove} />}
                 </>
               }
-            />
-          </div>
-          <div className="cell--half">
-            <SwitchedNumber
-              label={KEEPALIVE_FIELD_LABELS.scheduledHorizonSeconds}
-              disabled={!warming}
-              checked={form.horizonOn}
-              onChange={(v) => set('horizonOn', v)}
-              input={{ min: KEEPALIVE_BOUNDS.scheduledHorizonSeconds.min, max: KEEPALIVE_BOUNDS.scheduledHorizonSeconds.max, value: form.horizonSeconds, onChange: (e) => set('horizonSeconds', Number(e.target.value)), 'aria-label': KEEPALIVE_FIELD_LABELS.scheduledHorizonSeconds, 'aria-invalid': invalid(KEEPALIVE_FIELD_LABELS.scheduledHorizonSeconds) }}
-              hint={
-                <>
-                  A park on a scheduled wakeup is probed while the wake is at most this far away. Off is the recipe&apos;s break-even.
-                  {resolved && !form.horizonOn && <BreakEvenNote lead="Break-even:" range={resolved.breakEvenSeconds} />}
-                  {scheduledCapped && <BreakEvenNote lead="Capped at the break-even," range={scheduledCapped} />}
-                </>
-              }
-            />
-          </div>
-        </div>
-        <ReturnRate {...idleReturns} />
-        {warming && shortAffinity && (
-          <div className="callout callout--warning" role="status">
-            <IconWarning size={16} />
-            <div>
-              Session affinity is {fmtAffinity(form.affinity)}, shorter than one hour: a one-hour cache entry outlives the pin, so a session can move away from the cache it warmed. Raise it under <GroupLink id="pinning">Pinning</GroupLink>.
+            >
+              <Input
+                type="number"
+                min={KEEPALIVE_BOUNDS.maxIdleSeconds.min}
+                max={KEEPALIVE_BOUNDS.maxIdleSeconds.max}
+                value={form.maxIdleSeconds}
+                onChange={(e) => set('maxIdleSeconds', Number(e.target.value))}
+                disabled={!warming}
+                aria-invalid={invalid(KEEPALIVE_FIELD_LABELS.maxIdleSeconds)}
+              />
+            </Field>
+            <div className="cell--half">
+              <SwitchedNumber
+                label={KEEPALIVE_FIELD_LABELS.maxParkedSeconds}
+                disabled={!warming}
+                checked={form.maxParkedOn}
+                onChange={(v) => set('maxParkedOn', v)}
+                input={{ min: KEEPALIVE_BOUNDS.maxParkedSeconds.min, max: KEEPALIVE_BOUNDS.maxParkedSeconds.max, value: form.maxParkedSeconds, onChange: (e) => set('maxParkedSeconds', Number(e.target.value)), 'aria-label': KEEPALIVE_FIELD_LABELS.maxParkedSeconds, 'aria-invalid': invalid(KEEPALIVE_FIELD_LABELS.maxParkedSeconds) }}
+                hint={
+                  <>
+                    How long a park on a background command or a subagent is probed. Off is the recipe&apos;s break-even.
+                    {resolved && !form.maxParkedOn && <BreakEvenNote lead="Break-even:" range={resolved.breakEvenSeconds} />}
+                    {parkedCapped && <BreakEvenNote lead="Capped at the break-even," range={parkedCapped} />}
+                  </>
+                }
+              />
+            </div>
+            <div className="cell--half">
+              <SwitchedNumber
+                label={KEEPALIVE_FIELD_LABELS.scheduledHorizonSeconds}
+                disabled={!warming}
+                checked={form.horizonOn}
+                onChange={(v) => set('horizonOn', v)}
+                input={{ min: KEEPALIVE_BOUNDS.scheduledHorizonSeconds.min, max: KEEPALIVE_BOUNDS.scheduledHorizonSeconds.max, value: form.horizonSeconds, onChange: (e) => set('horizonSeconds', Number(e.target.value)), 'aria-label': KEEPALIVE_FIELD_LABELS.scheduledHorizonSeconds, 'aria-invalid': invalid(KEEPALIVE_FIELD_LABELS.scheduledHorizonSeconds) }}
+                hint={
+                  <>
+                    A park on a scheduled wakeup is probed while the wake is at most this far away. Off is the recipe&apos;s break-even.
+                    {resolved && !form.horizonOn && <BreakEvenNote lead="Break-even:" range={resolved.breakEvenSeconds} />}
+                    {scheduledCapped && <BreakEvenNote lead="Capped at the break-even," range={scheduledCapped} />}
+                  </>
+                }
+              />
             </div>
           </div>
-        )}
-      </>
-    ),
-    bodyCapture: (
-      <div className="cells">
-        <Field
-          label="Capture request and response bodies"
-          beside
-          hint={
-            <>
-              Keeps the request and response bodies of this pool&apos;s keys for the request drawer on the <PageLink to="/requests">Requests page</PageLink>. A key can override it, and only the admin secret can read them.
-            </>
-          }
-        >
-          <Toggle checked={form.capture} onChange={(v) => set('capture', v)} label="Capture request and response bodies" />
-        </Field>
-        <Field
-          label="Retention (hours)"
-          hint={
-            <>
-              At most the bootstrap&apos;s body capture limit, {captureMaxHours !== undefined && `${plural(captureMaxHours, 'hour')} here, `}shown on the <PageLink to="/settings">Settings page&apos;s About card</PageLink>.
-            </>
-          }
-        >
-          <Input
-            type="number"
-            min={1}
-            max={captureMaxHours}
-            value={form.captureHours}
-            onChange={(e) => set('captureHours', e.target.value)}
-            disabled={!form.capture}
-            aria-label="Capture retention in hours"
-            aria-invalid={invalid('Capture retention in hours')}
-          />
-        </Field>
-      </div>
-    ),
-    cacheDiagnostics: (
-      <div className="cells">
-        <Expert>
+          <ReturnRate {...idleReturns} />
+          {warming && shortAffinity && (
+            <div className="callout callout--warning" role="status">
+              <IconWarning size={16} />
+              <div>
+                Session affinity is {fmtAffinity(form.affinity)}, shorter than one hour: a one-hour cache entry outlives the pin, so a session can move away from the cache it warmed. Raise it under <GroupLink id="pinning">Pinning</GroupLink>.
+              </div>
+            </div>
+          )}
+        </>
+      ),
+      bodyCapture: (
+        <div className="cells">
           <Field
-            label="Cache diagnostics"
+            label="Capture request and response bodies"
             beside
             hint={
               <>
-                On asks the upstream why a cache read missed, on every account of this pool, and the reason lands in the <PageLink to="/requests">request log</PageLink>.
+                Keeps the request and response bodies of this pool&apos;s keys for the request drawer on the <PageLink to="/requests">Requests page</PageLink>. A key can override it, and only the admin secret can read them.
               </>
             }
           >
-            <Toggle checked={form.cacheDiagnostics} onChange={(v) => set('cacheDiagnostics', v)} label="Cache diagnostics" />
+            <Toggle checked={form.capture} onChange={(v) => set('capture', v)} label="Capture request and response bodies" />
           </Field>
-        </Expert>
-      </div>
-    ),
+          <Field
+            label="Retention (hours)"
+            hint={
+              <>
+                At most the bootstrap&apos;s body capture limit, {captureMaxHours !== undefined && `${plural(captureMaxHours, 'hour')} here, `}shown on the <PageLink to="/settings">Settings page&apos;s About card</PageLink>.
+              </>
+            }
+          >
+            <Input
+              type="number"
+              min={1}
+              max={captureMaxHours}
+              value={form.captureHours}
+              onChange={(e) => set('captureHours', e.target.value)}
+              disabled={!form.capture}
+              aria-label="Capture retention in hours"
+              aria-invalid={invalid('Capture retention in hours')}
+            />
+          </Field>
+        </div>
+      ),
+      cacheDiagnostics: (
+        <div className="cells">
+          <Expert>
+            <Field
+              label="Cache diagnostics"
+              beside
+              hint={
+                <>
+                  On asks the upstream why a cache read missed, on every account of this pool, and the reason lands in the <PageLink to="/requests">request log</PageLink>.
+                </>
+              }
+            >
+              <Toggle checked={form.cacheDiagnostics} onChange={(v) => set('cacheDiagnostics', v)} label="Cache diagnostics" />
+            </Field>
+          </Expert>
+        </div>
+      ),
+    };
   };
+  const bodies = open ? bodiesOf() : null;
   const warnings = pool?.warnings ?? [];
-  const groups: DialogGroup[] = POOL_GROUPS.map((id) => ({ ...POOL_RAIL[id], body: bodies[id], expertOnly: EXPERT_ONLY.has(id), id, mark: pool ? undefined : CREATE_MARKS[id], refused: refusedGroups.has(id) }));
+  const groups: DialogGroup[] = POOL_GROUPS.map((id) => ({ ...POOL_RAIL[id], body: bodies?.[id] ?? null, expertOnly: EXPERT_ONLY.has(id), id, mark: pool ? undefined : CREATE_MARKS[id], refused: refusedGroups.has(id) }));
   const save = saveStatus({ error, first, stale, subject: pool ? 'the pool' : null });
 
   return (
@@ -2380,12 +2344,7 @@ export function PoolDialog({
             <div className="pool-notice">
               {stale && (
                 <StaleNotice>
-                  <Refusal>
-                    {stale}{' '}
-                    <Button variant="ghost" onClick={() => onClose(true)}>
-                      Reload
-                    </Button>
-                  </Refusal>
+                  <StaleRefusal message={stale} onReload={() => onClose(true)} />
                 </StaleNotice>
               )}
               {warnings.length > 0 && <PoolWarnings warnings={warnings} />}
@@ -2408,14 +2367,14 @@ export function PoolDialog({
         captureMaxHours={captureMaxHours}
         onClose={() => setKeyOpen(false)}
         pools={keyDialogPools}
-        existingIds={new Set([...keys, ...localKeys].map((k) => k.id))}
+        existingIds={keyIds}
         initialPoolId={pool ? pool.id : draftPoolId}
         lockPool
         onCreated={(c) => {
           setKeyOpen(false);
           setLocalKeys((prev) => [c.key, ...prev]);
           setCreated(c);
-          onKeysChanged();
+          keysChanged();
         }}
       />
       <Dialog

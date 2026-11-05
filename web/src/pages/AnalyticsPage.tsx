@@ -26,13 +26,13 @@ import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, costHeadOf, dollarsOf
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
-import { failed, weekReadingOf, weekScale } from '@/lib/costs';
-import { countOf } from '@/lib/counts';
+import { failed, weekScale } from '@/lib/costs';
+import { countOf, groupInto } from '@/lib/counts';
 import { ANALYTICS_DIMENSIONS, chipText, escapePattern } from '@/lib/filterBar';
 import { effectiveInterval, ENDED_RANGE, readEnd, spanEnded } from '@/lib/follow';
 import { SESSION_CHARS, fmtAbsolute, fmtBytes, fmtCompact, fmtDayTick, fmtDuration, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtShortTime, fmtUsd, fmtUsdTick, fmtWeek, keyLifetime, pct, shortId, upperFirst, usdTickDigits, weekShort } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
-import { useAsync, useHashSection, useQueryFilters, useRangeTakenAt, useResizeObserver, type Loaded } from '@/lib/hooks';
+import { useAsync, useHashSection, useQueryFilters, useRangeTakenAt, useResizeObserver, useWeekReading, type Loaded } from '@/lib/hooks';
 import { REFUSED_TITLE } from '@/lib/requests';
 import { CLIENT_PATTERNS_PLAIN, linkedKeyIds, refusalLink, requestsLink, type RequestsLinkInput, type RequestsLinkTarget } from '@/lib/requestsLink';
 import { words } from '@/lib/routingLog';
@@ -376,9 +376,8 @@ export function AnalyticsPage() {
   // The cost model, read once per page load whatever the tab: the chosen week's scale reads every week figure the page
   // draws, the plan chart's line category reads each account's stored tier against its capacity rows, and the unused
   // allowance card prices its figures through it.
-  const costSettings = useAsync(() => api.getSettings(), []);
+  const { reading, settings: costSettings } = useWeekReading(week);
   const costs = costSettings.data?.subscriptionCosts ?? null;
-  const reading = weekReadingOf(costs, costSettings.error, week);
   const { scale } = reading;
   const sized = useMemo(() => (burn.data && costs ? sizedAccounts(burn.data.accounts, costs) : null), [burn.data, costs]);
   const rewrites = useGatedRead(tab === 'traffic', () => api.getAnalyticsRewrites({ from: fromIso, to: toIso }), [fromIso, toIso, tab, generation], reload);
@@ -2225,16 +2224,7 @@ function BurnCharts({
     [account, answer, groupBy, rangeEndMs, readAt, sized],
   );
   // The points by bucket and group, for the tooltip's hint, which reads a bucket's one point of one account.
-  const pointsAt = useMemo(() => {
-    const at = new Map<string, BurnPoint[]>();
-    for (const p of answer?.points ?? []) {
-      const slot = `${Date.parse(p.at)}|${p.group}`;
-      const list = at.get(slot);
-      if (list) list.push(p);
-      else at.set(slot, [p]);
-    }
-    return at;
-  }, [answer]);
+  const pointsAt = useMemo(() => groupInto(answer?.points ?? [], (p) => `${Date.parse(p.at)}|${p.group}`), [answer]);
   const named = useMemo(() => lines.filter((l) => !l.other).map((l) => l.key).sort(), [lines]);
   const colorOf = (l: BurnLine) => (l.other ? ink.muted : groupBy === 'account' ? accountColor(ink, slotOf(l.key)) : ink.series[Math.min(7, named.indexOf(l.key))]);
   // A session id runs past any legend, so it shows cut as the Sessions view cuts it. The spend chart's legend and

@@ -16,12 +16,11 @@ import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { sumTileOf } from '@/components/ui/Tile';
 import { accountHref, requestHref } from '@/lib/address';
-import { dollarsUnder, equivalentOrDash, nativeSidesOf, shareHint, type FundedSum, type WeekReading } from '@/lib/analytics';
-import { weekReadingOf } from '@/lib/costs';
+import { daySumOf, dollarsUnder, equivalentOrDash, nativeSidesOf, type WeekReading } from '@/lib/analytics';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortModel, tokensTotal } from '@/lib/format';
-import { failedFirst, refreshAttention, useAsync, useAttention, useNow, type Loaded } from '@/lib/hooks';
+import { failedFirst, refreshAttention, useAsync, useAttention, useNow, useWeekReading, type Loaded } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, accountCooldown, planExtraUsage, slowedOf } from '@/lib/quota';
-import { REFUSED_TITLE, costHeaderTitle, costUnitOf, glanceCellOf, requestHintArgs, revisionsTitle } from '@/lib/requests';
+import { REFUSED_TITLE, costHeaderTitle, glanceCellOf, requestCostUnit, revisionsTitle } from '@/lib/requests';
 import { ringFigures, ringLine, ringRowTitle, type RingFigures, type RingLeftOut, type RingRow, type RingWindow } from '@/lib/rings';
 import { speedHover } from '@/lib/selection';
 import type { UnitPosition, WeekPosition } from '@/lib/unit';
@@ -58,7 +57,7 @@ interface CostTile {
  * cost model sizes no chosen week. The dollar positions read their dollars.
  */
 function costTileOf(unit: UnitPosition, o: Overview, reading: WeekReading): CostTile {
-  const day: FundedSum = { billedUsd: o.billed24h, cost: o.cost24h, equivalent: o.equivalent24h };
+  const day = daySumOf(o);
   const tile = sumTileOf(unit, day, reading);
   if (unit !== 'native') {
     const dollars = dollarsUnder(unit, day);
@@ -89,15 +88,13 @@ export function DashboardPage() {
   const accounts = useAsync(() => api.listAccounts(), [], { refreshMs: 30_000 });
   const requests = useAsync(() => api.listRequests({ limit: 10 }), [], { refreshMs: 30_000 });
   const sessions = useAsync(() => api.listSessions(), [], { refreshMs: 30_000 });
-  const settings = useAsync(() => api.getSettings(), [], { refreshMs: 30_000 });
+  const { reading, settings } = useWeekReading(week, { refreshMs: 30_000 });
   const attention = useAttention();
   const now = useNow();
   const ink = useChartInk();
 
   const o = overview.data;
   const costs = settings.data?.subscriptionCosts ?? null;
-  // A reading is a new object on each call, and the cost tile's memo keys on it.
-  const reading = useMemo(() => weekReadingOf(costs, settings.error, week), [costs, settings.error, week]);
   // Sparkline memoizes on its values, and the page re-renders on its five reads and the clock, so the sparks and the
   // cost tile follow the overview, the reading and the unit alone.
   const sparks = useMemo(() => {
@@ -328,8 +325,7 @@ const MODEL_CHARS = 12;
  * the scale is out, and a dash titled with the reading's error where it carries one.
  */
 function RecentCost({ accounts, reading, request, settings, unit }: { accounts: Account[] | null; reading: WeekReading; request: RequestLog; settings: Settings | null; unit: UnitPosition }) {
-  const args = requestHintArgs(request, accounts, settings?.subscriptionCosts ?? null);
-  return <CostTd cell={glanceCellOf(costUnitOf(request, unit, args === null ? null : shareHint(...args)), revisionsTitle(settings, request.at), reading.week, reading.scale)} failure={reading.failure} />;
+  return <CostTd cell={glanceCellOf(requestCostUnit(request, unit, accounts, settings?.subscriptionCosts ?? null), revisionsTitle(settings, request.at), reading.week, reading.scale)} failure={reading.failure} />;
 }
 
 function RecentTable({ accounts, rows, error, reading, settings }: { accounts: Account[] | null; error: string | null; reading: WeekReading; rows: RequestLog[] | null; settings: Settings | null }) {

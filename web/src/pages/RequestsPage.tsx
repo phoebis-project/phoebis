@@ -26,14 +26,13 @@ import { bodyLines, bodyText, findHits } from '@/lib/bodies';
 import { CACHE_MISS_REASONS, isDivergence, missLabel } from '@/lib/cache';
 import { AGENT_TYPES, TURN_ORIGINS } from '@/lib/client';
 import { clock } from '@/lib/clock';
-import { weekReadingOf } from '@/lib/costs';
 import { EFFORT_LEVELS, foldRequestClass, NO_CLASS, NO_EFFORT, OTHER_DIMENSION, REQUEST_KIND_LABEL, servedMissReason, servingAttempt, servingResponse } from '@/lib/dimensions';
 import { notLoadedReason, REQUESTS_DIMENSIONS } from '@/lib/filterBar';
 import { effectiveInterval, ENDED_RANGE, FOLLOW_OVERRUN, pollQuery, readEnd, shownCount, spanEnded } from '@/lib/follow';
 import { bytesDropped, earlierHolderLabel, fmtAbsolute, fmtCompact, fmtDatedTime, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, fmtWeek, forkLabel, keyGenerationOf, parseKeyLifetime, shortAgent, shortId, shortModel, tokensTotal } from '@/lib/format';
 import { guardrailLabel, guardrailOptions } from '@/lib/guardrails';
-import { useAsync, useNow, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';
-import { compareRequests, costCellOf, costHeaderTitle, type CostUnit, costUnitOf, FREE_SHARE_TITLE, FUNDING_WORD, heldWords, NO_SHARE_TITLE, requestHintArgs, revisionsTitle } from '@/lib/requests';
+import { useAsync, useNow, useQueryFilters, useRangeTakenAt, useWeekReading } from '@/lib/hooks';
+import { compareRequests, costCellOf, costHeaderTitle, type CostUnit, costUnitOf, FREE_SHARE_TITLE, FUNDING_WORD, heldWords, NO_SHARE_TITLE, requestCostUnit, requestHintArgs, revisionsTitle } from '@/lib/requests';
 import { requestsWiden } from '@/lib/requestsLink';
 import { type Chip, logHref, requestLink, words } from '@/lib/routingLog';
 import { plainOutputOf } from '@/lib/tokenBar';
@@ -151,9 +150,8 @@ function requestCost(request: RequestLog, unit: UnitPosition, context: CostConte
  * skeleton while the scale is out, and a dash titled with the context's failure where it carries one.
  */
 function CostCell({ context, request, unit }: { context: CostContext; request: RequestLog; unit: UnitPosition }) {
-  // The unit alone, as the Dashboard's RecentCost builds it: the drawer's hint lines would be built for nothing per row.
-  const args = requestHintArgs(request, context.accounts, context.costs);
-  return <CostTd cell={costCellOf(costUnitOf(request, unit, args === null ? null : shareHint(...args)), context.week, context.scale)} className="requests__cost" failure={context.failure} />;
+  // The unit alone: the drawer's hint lines would be built for nothing per row.
+  return <CostTd cell={costCellOf(requestCostUnit(request, unit, context.accounts, context.costs), context.week, context.scale)} className="requests__cost" failure={context.failure} />;
 }
 
 /** A component of its own, so the expression-bodied row map reads the hold's words once. */
@@ -264,12 +262,12 @@ export function RequestsPage() {
   const guardrails = useAsync(() => api.listGuardrails(), []);
   const accounts = useAsync(() => api.listAccounts(), []);
   const catalog = useAsync(() => api.listCatalog(), []);
+  const { timeFormat, unit, week } = useAppSettings();
   // The revisions the drawer's cost row names, and the cost model whose capacities scale every figure to the chosen week
   // and whose band the hint reads at a request's completion.
-  const settings = useAsync(() => api.getSettings(), []);
-  const { timeFormat, unit, week } = useAppSettings();
+  const { reading, settings } = useWeekReading(week);
   const costs = settings.data?.subscriptionCosts ?? null;
-  const context: CostContext = { accounts: accounts.data, costs, ...weekReadingOf(costs, settings.error, week) };
+  const context: CostContext = { accounts: accounts.data, costs, ...reading };
 
   const { address, filters, replace, update } = useQueryFilters(REQUESTS_CODEC);
   const [visible, setVisible] = useState<Set<ColumnId>>(() => new Set(COLUMNS.map((c) => c.id).filter((id) => !HIDDEN_BY_DEFAULT.includes(id))));

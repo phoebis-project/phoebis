@@ -17,6 +17,7 @@ import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skele
 import { accountHref, ANALYTICS_CODEC, REQUESTS_CODEC, SESSION_SORT_KEYS, SESSIONS_CODEC, type SessionsAddress, sortAddressOf, sortDirOf, type SortDir } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { failed } from '@/lib/costs';
+import { groupInto } from '@/lib/counts';
 import { SESSIONS_DIMENSIONS } from '@/lib/filterBar';
 import { SESSION_CHARS, fmtAbsolute, fmtCount, fmtDuration, fmtInt, fmtMiB, fmtPct, fmtRelative, keyGenerationOf, keyLifetime, messageOf, plural, shortId, shortModel } from '@/lib/format';
 import { CAUSE_HINT, CAUSE_LABEL, contextCell, firstFailedRead, isFinished, isReleasedLine, orderLines, orderRows, pinTtlMs, releasedCount, requestsRange, sessionLines, type SessionLine, type TileRead, WARNING_CAUSES } from '@/lib/keepalive';
@@ -167,21 +168,16 @@ function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], accounts: Ac
   const accountById = new Map(accounts.map((a) => [a.id, a]));
   const keyById = new Map(keys.map((k) => [k.id, k]));
   const poolById = new Map(pools.map((p) => [p.id, p]));
-  const bySession = new Map<string, KeepaliveRecipe[]>();
   // A recipe names no generation and belongs to the live key alone, so it is filed under that generation and
   // an earlier holder of the same key id reads none of them.
   const liveGeneration = (keyId: string) => {
     const k = keyById.get(keyId);
     return k ? keyGenerationOf(k) : null;
   };
-  for (const r of recipes) {
+  const bySession = groupInto(recipes, (r) => {
     const g = liveGeneration(r.keyId);
-    if (g === null) continue;
-    const id = `${r.keyId}:${g}:${r.sessionId}`;
-    const list = bySession.get(id);
-    if (list) list.push(r);
-    else bySession.set(id, [r]);
-  }
+    return g === null ? null : `${r.keyId}:${g}:${r.sessionId}`;
+  });
   const rows = sessions.map((session) => {
     const agents = bySession.get(rowKey(session)) ?? [];
     const key = keyById.get(session.keyId) ?? null;

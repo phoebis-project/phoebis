@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams, type Location, type To } from 'react-router-dom';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError } from '@/api';
+import { isStaleEdit } from '@/api/http';
 import type { Account, AllowanceAccount, AllowanceReset, AllowanceWindow, PairingConfirmed, PairingPreview, PairingSession, QuotaHistory, ReconciliationsAnswer, Settings, SubscriptionCosts } from '@/api/types';
 import { useSession } from '@/app/session';
 import { useAppSettings } from '@/app/settings';
@@ -341,7 +342,7 @@ function AccountDetail({ account, awaitingReading, generation, now, onToast, onP
       // A stale refusal says the row moved under the editor: the edit is about values that are gone, so the operator
       // reloads and re-applies it rather than saving over what someone else wrote.
       if (onRefused && !mounted.current) onToast(`Save on ${account.label} refused: ${message}`);
-      else if (onRefused) onRefused({ message, stale: e instanceof ApiError && e.status === 409 && e.code === 'stale_edit' });
+      else if (onRefused) onRefused({ message, stale: isStaleEdit(e) });
       else onToast(message);
       return null;
     } finally {

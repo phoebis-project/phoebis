@@ -19,6 +19,9 @@ export class ApiError extends Error {
   }
 }
 
+/** A write refused because the row moved since the dialog read it, which the dialog answers with Reload. */
+export const isStaleEdit = (e: unknown): e is ApiError => e instanceof ApiError && e.status === 409 && e.code === 'stale_edit';
+
 /** The router took the secret, yet the session read that follows finds no session: the browser dropped the cookie. */
 export class SessionNotKept extends Error {
   constructor() {

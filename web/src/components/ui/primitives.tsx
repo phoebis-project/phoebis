@@ -149,14 +149,17 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
   );
 });
 
-/** A list row's Move up, Move down and Remove buttons, `noun` naming the row in their labels ("Move rule 2 up"). */
-export function RowActions({ count, index, noun, onMove, onRemove }: { count: number; index: number; noun: string; onMove: (from: number, to: number) => void; onRemove: (index: number) => void }) {
-  const n = index + 1;
+/**
+ * A list row's Move up, Move down and Remove buttons, `noun` naming the row in their labels ("Move rule 2 up"), or
+ * `name` where the row carries a name of its own ("Move strict up").
+ */
+export function RowActions({ count, index, name, noun, onMove, onRemove }: { count: number; index: number; name?: string; noun: string; onMove: (from: number, to: number) => void; onRemove: (index: number) => void }) {
+  const label = name ?? `${noun} ${index + 1}`;
   return (
     <>
-      <Button size="sm" variant="ghost" className="row-actions__up" icon={<IconChevron size={14} />} aria-label={`Move ${noun} ${n} up`} disabled={index === 0} onClick={() => onMove(index, index - 1)} />
-      <Button size="sm" variant="ghost" icon={<IconChevron size={14} />} aria-label={`Move ${noun} ${n} down`} disabled={index === count - 1} onClick={() => onMove(index, index + 1)} />
-      <Button size="sm" variant="ghost" icon={<IconX size={14} />} aria-label={`Remove ${noun} ${n}`} onClick={() => onRemove(index)} />
+      <Button size="sm" variant="ghost" className="row-actions__up" icon={<IconChevron size={14} />} aria-label={`Move ${label} up`} disabled={index === 0} onClick={() => onMove(index, index - 1)} />
+      <Button size="sm" variant="ghost" icon={<IconChevron size={14} />} aria-label={`Move ${label} down`} disabled={index === count - 1} onClick={() => onMove(index, index + 1)} />
+      <Button size="sm" variant="ghost" icon={<IconX size={14} />} aria-label={`Remove ${label}`} onClick={() => onRemove(index)} />
     </>
   );
 }
@@ -276,6 +279,18 @@ export function Refusal({ children }: { children: ReactNode }) {
       <IconWarning size={16} />
       <div>{children}</div>
     </div>
+  );
+}
+
+/** A save refused as stale, with the Reload that reads the record again. */
+export function StaleRefusal({ message, onReload }: { message: string; onReload?: () => void }) {
+  return (
+    <Refusal>
+      {message}{' '}
+      <Button variant="ghost" onClick={onReload}>
+        Reload
+      </Button>
+    </Refusal>
   );
 }
 

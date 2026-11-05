@@ -3,10 +3,14 @@ import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '@/api';
 import { iso } from '@/api/decode';
 import { ApiError, quietly, reportRecovery } from '@/api/http';
+import type { Settings } from '@/api/types';
 import type { Codec, RangeValue } from './address';
+import type { WeekReading } from './analytics';
 import { createAttentionPoll, type AttentionRead } from './attention';
 import { clock } from './clock';
+import { weekReadingOf } from './costs';
 import { messageOf } from './format';
+import type { WeekPosition } from './unit';
 
 export interface Loaded<T> {
   /**
@@ -323,6 +327,17 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
 
   const stale = error !== null || (loadedFor !== null && !sameDeps(loadedFor, deps));
   return { current: stale ? null : data, data, error, fetchedAt, loading, reload: () => setNonce((n) => n + 1), stale };
+}
+
+/**
+ * A page's settings read and the chosen week's reading built from it. The reading is memoized, since `weekReadingOf`
+ * answers a new object on each call and a caller's memo keys on it.
+ */
+export function useWeekReading(week: WeekPosition, options?: AsyncOptions): { reading: WeekReading; settings: Loaded<Settings> } {
+  const settings = useAsync(() => api.getSettings(), [], options);
+  const costs = settings.data?.subscriptionCosts ?? null;
+  const reading = useMemo(() => weekReadingOf(costs, settings.error, week), [costs, settings.error, week]);
+  return { reading, settings };
 }
 
 /**
