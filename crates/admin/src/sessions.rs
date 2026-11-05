@@ -104,7 +104,7 @@ pub(crate) struct Session {
     /// on a companion row the pins of the agents the engine holds and has not released, on a row whose `companion`
     /// is `none` the pins used within `sessions.non_companion_idle_seconds`. Empty where none draws.
     pub agent_contexts: Vec<AgentContext>,
-    /// Main's recipe.
+    /// Main's recipe, or the newest other agent's where main holds none.
     pub keepalive: SessionKeepalive,
     /// The seconds since main's last presence report, null before the first one.
     pub presence_age_seconds: Option<i64>,
@@ -139,7 +139,8 @@ pub(crate) struct AgentContext {
     pub created_at: Option<i64>,
 }
 
-/// The recipe as the session row reads it, every member null while main holds none.
+/// Main's recipe as the session row reads it, or the newest other agent's where main holds none, every member null
+/// while no agent holds one.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SessionKeepalive {

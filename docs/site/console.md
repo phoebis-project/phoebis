@@ -1091,12 +1091,12 @@ with an ellipsis, whole on hover. A session that branched from another conversat
 badge under its id, `fork, on another account` or `fork, same account` where the session it branched from is listed with
 a pinned account, and `fork at 3` otherwise, with the base, the depth and the base's account on hover, and a click on
 the badge scrolls to the base's row where the list holds it. Companion reads the mod's state, `reporting` with how long
-ago the person was last seen at the terminal, `silent` or `none`. Cache warming reads the pin state badge, `busy`,
-`idle`, `parked`, `released` or `unknown`, with the recipe summary, or "no recipe". Next probe reads the instant,
-"pending" or "not scheduled". Before the first session the card reads "No live sessions" with "A session appears here on
-its first request, or as soon as the keepalive mod registers it, and drops off once it passes the session expiry." While
-the filters hide every row the router lists, the card reads "No sessions kept by the filters" with `{k} sessions hidden
-by the filters.`
+ago the person was last seen at the terminal, `silent` or `none`. Cache warming reads main's recipe, or where main holds
+none, the newest other agent's: the pin state badge, `busy`, `idle`, `parked`, `released` or `unknown`, with the recipe
+summary, or "no recipe" while no agent holds one. Next probe reads the instant, "pending" or "not scheduled". Before the
+first session the card reads "No live sessions" with "A session appears here on its first request, or as soon as the
+keepalive mod registers it, and drops off once it passes the session expiry." While the filters hide every row the
+router lists, the card reads "No sessions kept by the filters" with `{k} sessions hidden by the filters.`
 
 A row's menu offers "View in analytics" and "View in requests" once the session has ledgered traffic, "View in routing
 log", which opens the log on that session's decisions an hour either side of its last request, and "Release". Release

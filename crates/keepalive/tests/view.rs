@@ -376,6 +376,31 @@ async fn the_session_row_carries_the_presence_age() {
     assert_eq!(r.engine.sessions()[0].presence_age_seconds, Some(12));
 }
 
+/// Main holds no recipe, so the row's summary reads the recipe of the other agent whose real request is newest. That
+/// agent reports `idle` while the older one stays `busy`, so a summary read from main answers no state and one read
+/// from the older agent answers `busy`.
+#[tokio::test]
+async fn a_session_whose_main_holds_no_recipe_reads_the_newest_other_agents_recipe() {
+    let mut r = rig(RigSpec::default()).await;
+    for agent in ["worker-1", "worker-2"] {
+        r.event(Event {
+            event: "agent_start".into(),
+            agent_id: Some(agent.into()),
+            ..Default::default()
+        })
+        .unwrap();
+        r.observe(agent).await;
+        r.advance_attended(1_000);
+    }
+    r.state("worker-2", "idle");
+    assert_eq!(
+        r.engine.sessions()[0].keepalive.state,
+        Some(AgentState::Idle),
+        "{:?}",
+        r.engine.sessions()
+    );
+}
+
 #[tokio::test]
 async fn an_ended_recipe_keeps_its_row_with_the_cause() {
     let mut r = rig(RigSpec {

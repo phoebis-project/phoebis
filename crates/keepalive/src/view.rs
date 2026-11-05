@@ -114,7 +114,8 @@ pub struct RecipeView {
     pub wake_at: Option<i64>,
 }
 
-/// Main's recipe as the session row reads it, every member `null` while main holds none.
+/// Main's recipe as the session row reads it, or the newest other agent's where main holds none, every member null
+/// while no agent holds one.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct KeepaliveSummary {
     pub cause: Option<Reason>,
@@ -185,7 +186,18 @@ impl Engine {
             .sessions
             .iter()
             .map(|(key, s)| {
-                let main = s.agents.get(MAIN_AGENT).filter(|a| holds_recipe(a));
+                // Main's recipe stands for the session. Where main holds none, the newest other agent's does, so a
+                // session whose main sent auxiliary calls alone while a subagent works still reads a recipe.
+                let summary = s
+                    .agents
+                    .get(MAIN_AGENT)
+                    .filter(|a| holds_recipe(a))
+                    .or_else(|| {
+                        s.agents
+                            .values()
+                            .filter(|a| a.id != MAIN_AGENT && holds_recipe(a))
+                            .max_by_key(|a| a.last_real_at)
+                    });
                 // An ended session keeps its tombstone for the lifecycle protocol, but its companion is
                 // gone: the engine refuses further events under that instance, and the lease sweep leaves an
                 // ended session alone, so `attended` stays as the last heartbeat left it.
@@ -206,10 +218,10 @@ impl Engine {
                     key_id: key.0.clone(),
                     key_generation: s.key_generation,
                     keepalive: KeepaliveSummary {
-                        cause: main.map(|a| a.reason),
-                        last_guard: main.and_then(|a| a.last_guard),
+                        cause: summary.map(|a| a.reason),
+                        last_guard: summary.and_then(|a| a.last_guard),
                         next_probe_at: s.agents.values().filter_map(|a| a.next_probe_at()).min(),
-                        state: main.map(|a| a.state),
+                        state: summary.map(|a| a.state),
                     },
                     presence_age_seconds: s
                         .agents
