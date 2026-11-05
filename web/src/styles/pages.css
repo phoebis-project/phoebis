@@ -3653,19 +3653,119 @@
   padding: 0 12px 12px 42px;
 }
 
-.agents__created {
-  margin: 0 0 8px;
-  font-size: 12px;
+/* An open row's sections, one under the other, their text free to wrap where the session row's cells keep theirs on one
+   line. The panel is the facts' container, since size containment has no effect on the table cell around it. */
+.sessions-table .srow__panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  white-space: normal;
+  container-type: inline-size;
+}
+
+.srow__finished {
+  margin: 0;
+  padding: 8px 12px;
+  color: var(--ink-2);
+  border-left: 2px solid var(--hairline-strong);
+}
+
+.srow__facts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 24px;
+}
+
+@container (width < 620px) {
+  .srow__facts {
+    grid-template-columns: 1fr;
+  }
+}
+
+.facts__head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin-bottom: 6px;
+}
+
+.facts__title {
+  font-weight: 600;
+}
+
+.facts__head a {
+  font-size: 12.5px;
+}
+
+/* The Companion chip's presence reads beside its badge in a fact, where the table's sub line would drop under it. */
+.sessions-table .facts .sub {
+  display: inline;
+  margin-left: 6px;
+}
+
+/* The Agents table nests in the session table, whose descendant rules would give it their 5 px cells and one-line text:
+   its own inset, 8 px before each cell and none after, keeps the head's first and last cells level with its body's and
+   leaves the eleven columns room at 1280 px, and its text wraps, so a type breaks at its hyphen where room runs out,
+   while a fit cell keeps its figure whole as the session row's does. */
+.sessions-table .agents-table th,
+.sessions-table .agents-table td {
+  padding: 6px 0 6px 8px;
+}
+
+.sessions-table .agents-table td {
+  white-space: normal;
+}
+
+.sessions-table .agents-table td.col-fit {
+  white-space: nowrap;
+}
+
+.srow__fold {
+  margin: 0;
+  font-size: 12.5px;
   color: var(--ink-2);
 }
 
-/* `.agents` holds the eleven tracks for Agent, Model, Effort, Context, Account, TTL, Last request, Last probe, Next
-   probe, Probes / credited and State, and each line is a subgrid row of them, so a column's edge is one edge for the
-   head and every line. The Agent and Account tracks are as wide as the longest id and account with its chip among the
-   lines, which read whole, and the grid scrolls inside the card where they outgrow it. */
+.disclosure {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.disclosure__toggle {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  font-weight: 600;
+}
+
+/* The chevron turns as the session row's gutter does. */
+.disclosure__chevron {
+  display: inline-flex;
+  transition: transform 140ms ease-out;
+  transform: rotate(-90deg);
+}
+
+.disclosure__toggle[aria-expanded='true'] .disclosure__chevron {
+  transform: none;
+}
+
+.disclosure__hint {
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+.srow__warming-body > * {
+  margin-top: 8px;
+}
+
+/* `.agents` holds the seven tracks for Agent, TTL, Last request, Last probe, Next probe, Probes / credited and State,
+   and each line is a subgrid row of them, so a column's edge is one edge for the head and every line. The Agent track
+   is as wide as the longest id among the lines, which read whole, and the grid scrolls inside the card where they
+   outgrow it. */
 .agents {
   display: grid;
-  grid-template-columns: max-content 76px 56px 56px max-content 44px 76px 68px 96px 64px minmax(130px, 1fr);
+  grid-template-columns: max-content 44px 76px 68px 96px 64px minmax(130px, 1fr);
   column-gap: 6px;
   overflow-x: auto;
   white-space: normal;
@@ -3730,14 +3830,6 @@
   align-items: center;
   padding: 8px 12px;
   color: var(--ink-2);
-  border-left: 2px solid var(--hairline-strong);
-}
-
-/* The session table keeps its cells on one line, which this sentence would run past the card on. */
-.agents__released {
-  padding: 8px 12px;
-  color: var(--ink-2);
-  white-space: normal;
   border-left: 2px solid var(--hairline-strong);
 }
 

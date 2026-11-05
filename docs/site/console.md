@@ -1130,25 +1130,53 @@ decisions an hour either side of its last activity, and "Release". Release asks 
 its pin to {account} and every recipe on it is dropped. The next request picks an account again and the prompt cache on
 {account} goes cold.`, and answers "Session released".
 
-Opening a row reads `Created {time}, {ago}`, the session's first placement, kept until its last pin leaves, and one line
-per agent of the session, main first (from its conversation pin or its recipe, or from the row where neither names
-main), then the lines with a lifecycle word grouped by that word (`busy` with `registered`, `idle`, `parked` with
-`unknown`, `released`), then the pins whose agent the mod does not report, inside each by the creation time or the last
-activity as the control orders the rows, as Agent, Model, Effort, Context, Account, TTL, Last request, Last probe, Next
-probe ("on first stream event" or "not scheduled"), Probes / credited and State. Agent links to the request log on the
-session and the agent once the session has ledgered traffic, and Account links to the account's page with its kind on
-hover and the speed chip on a slowed account. Effort and Context read the line's pin, the effort of its last turn and
-its context in tokens, and a recipe without a pin, a released agent's among them, reads dashes in Effort and Context,
-with Model and TTL as the recipe reads them. A pin no recipe stands on reads its TTL as the time left on its cache, its
-last use as Last request, dashes in the probe cells and a State of `warm` or `cold` by its cache TTL, the word carrying
-its own sentence on hover. On a recipe's line State reads the recipe's state word (`ended`, `held`, `not retained`,
-`paused` or `retained`) with the cause beside it, the state word and the cause each carrying the cause's sentence on
-hover, and the line under them reads the mod's lifecycle word for the agent with a parked agent's park kind and its
-deadline or wake time (`parked · background · deadline in 1h 12m`), then the state's sentence with the cause's. A
-finished session, listed under Finished sessions, reads "The mod released every agent of this session. Their records
-keep their slots of the cap for one cache TTL after the release and then leave the engine." above its lines, which keep
-their ended state with the TTL, Last request, Last probe, Next probe and Probes / credited the engine last read, and its
-Status reads `finished`. A session without a recipe reads "no recipe" and `Nothing is scheduled because {reason}.`
+Opening a row reads, on a finished session, "The mod released every agent of this session. Their records keep their
+slots of the cap for one cache TTL after the release and then leave the engine." first, then two grids of facts side by
+side, one above the other where the open row is narrower than 620 px. Session reads Created (`{time}, {ago}`, the
+session's first placement, kept until its last pin leaves, or `unknown`), Key (`{key} in pool {pool}`, the key a link to
+its row in the Keys view, or `deleted holder` on an earlier holder's), Client (the client version, the user agent on
+hover), Fork (the base cut to 13 characters and whole on hover, a link to its row where the list holds it, the depth and
+the relation to the base's account, or `none`), Epoch and Companion, the Companion column's badge with `seen {ago}` or
+the time since it went silent. Routing reads Account (the link and `subscription` or `API key`, or `none`), Pinned since
+(main's pin's creation, else the session's), Shed mark (the `leaving` badge with the account and the reason, or `none`),
+Runway, Speed (the speed chip on a slowed session, else `full speed`) and Cycle (or `not measured yet`), and its title
+carries "View in routing log", the row menu's link.
+
+The Agents table under the facts lists one line per agent, main first (from its conversation pin or its recipe, or from
+the row where neither names main), then the lines with a lifecycle word grouped by that word (`busy` with `registered`,
+`idle`, `parked` with `unknown`, `released`), then the pins whose agent the mod does not report, inside each by the
+creation time or the last activity as the control orders the rows. Agent links to the request log on the session and the
+agent once the session has ledgered traffic, with the agent's last request and its pin's creation on hover. Type reads
+the agent's type from the ledger, breaking at its hyphen (`general-purpose`) where room runs out, and a dash on main.
+Model reads the line's model, short with the id on hover, and the effort of its pin's last turn under it. Account links
+to the line's account with its kind on hover, then the row's speed chip and `leaving` badge where the line sits on the
+row's account and the account's speed chip elsewhere while it is slowed, and reads `none` where the line's request was
+refused before any account served it. Context reads the pin's tokens, Burn the pin's burn per hour as the Cost cell's
+line reads the row's, and Requests and Cost the agent's requests over every model it ran and their spend, read as the
+row's Cost cell reads the session's, its "+N" naming the accounts other than the line's. Status reads the line's
+lifecycle word with its sentence and a parked agent's park on hover, or `unreported` where no mod reports the agent or
+the session, and Cache reads the pin's `warm` or `cold` with the recipe's state word under it, or `no pin`. Each line's
+menu offers "View in analytics", "View in requests" and "View in routing log", each narrowed to the session and the
+agent, the routing log an hour either side of the agent's last request, and an open one holds auto reload as a row's
+does. While an Agents filter stands, the table lists the matching lines alone and a line under it reads `{k} agents
+hidden by the filters`.
+
+The earlier agents, the ones the ledger holds requests of that draw no line, such as a subagent whose pin and recipe are
+gone, share one line under the table, `{n} earlier agents · {k} requests · {cost}`, with a `+$` badge where they
+billed dollars beside a plan figure and their ids on hover. The line opens to one row per earlier agent in the table:
+its type, the model and account of its newest request, its requests and its cost, `no pin` in Status and dashes for a
+pin's figures, with the same menu. The Cache warming details close the row, shut by default with the recipes' states on
+their line (`1 retained, 1 paused, 1 ended`) or `no recipe`. Open, they read one line per agent as Agent, TTL, Last
+request, Last probe, Next probe ("on first stream event" or "not scheduled"), Probes / credited and State. A pin no
+recipe stands on reads its TTL as the time left on its cache, its last use as Last request, dashes in the probe cells
+and a State of `warm` or `cold` by its cache TTL, the word carrying its own sentence on hover. On a recipe's line State
+reads the recipe's state word (`ended`, `held`, `not retained`, `paused` or `retained`) with the cause beside it, the
+state word and the cause each carrying the cause's sentence on hover, and the line under them reads the mod's lifecycle
+word for the agent with a parked agent's park kind and its deadline or wake time (`parked · background · deadline in
+1h 12m`), then the state's sentence with the cause's. A finished session, listed under Finished sessions, keeps its
+lines in their ended state with the TTL, Last request, Last probe, Next probe and Probes / credited the engine last
+read, and its Status reads `finished`. A session without a recipe reads "no recipe" and `Nothing is scheduled because
+{reason}.` inside the details.
 
 ### The cost reference
 

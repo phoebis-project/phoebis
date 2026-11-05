@@ -357,7 +357,7 @@ const barPhrases = (bars, account, at, compact) =>
  */
 const barsOff = (read) => read.filter((r) => r.reset === null || r.text !== (r.want === null ? r.reset : r.compact ? r.want : `${r.reset}, ${r.want}`));
 const sessionCell = (m, tr, header) => {
-  const i = [...m.container.querySelectorAll('.sessions-table thead th')].findIndex((th) => th.textContent?.trim() === header);
+  const i = [...m.container.querySelectorAll('.sessions-table > thead th')].findIndex((th) => th.textContent?.trim() === header);
   return i < 0 ? undefined : tr?.children[i];
 };
 /** The agents the drawn Sessions rows count in their Agents cells, the figure the count slot sums. */
@@ -21961,9 +21961,10 @@ await forView('/sessions', async () => {
   const pins = [...(sessionCell(page, row, 'Model')?.querySelectorAll('.badge') ?? [])].map((b) => b.getAttribute('title') ?? '');
   row?.click();
   await page.settle(200);
-  const line = [...page.container.querySelectorAll('.agents__row')].find((l) => l.children[0]?.textContent?.trim() === 'zz01');
-  // The lines carry Effort and Context before Account, so the cell is found by its head.
-  const accountAt = [...(page.container.querySelector('.agents__row--head')?.children ?? [])].findIndex((c) => c.textContent?.trim() === 'Account');
+  const table = page.container.querySelector('table.agents-table');
+  const line = [...(table?.querySelectorAll(':scope > tbody > tr') ?? [])].find((l) => l.children[0]?.textContent?.trim() === 'zz01');
+  // The Agents table carries Type and Model before Account, so the cell is found by its head.
+  const accountAt = [...(table?.querySelectorAll(':scope > thead th') ?? [])].findIndex((c) => c.textContent?.trim() === 'Account');
   const account = line?.children[accountAt]?.textContent?.trim() ?? null;
   page.unmount();
   api.listKeepaliveRecipes = listKeepaliveRecipes;
@@ -23082,26 +23083,26 @@ await forView('/sessions', async () => {
     });
   }
   {
-    // A finished session keeps its lines once shown: the released sentence stands above them, and each reads its ended
-    // state with the probes and credits the engine last read.
+    // A finished session keeps its lines once shown: the finished sentence opens its detail above the facts, and each
+    // line of the Cache warming details reads its ended state with the probes and credits the engine last read.
     const page = await mount('/sessions?finished=1', { now: CLOCK_ORIGIN });
     const chips = chipsOn(page);
     const row = finished === undefined ? null : page.container.querySelector(`[id="${idOfRow(finished)}"]`);
     row?.click();
     await page.settle(150);
     const detail = row?.nextElementSibling?.classList.contains('srow__detail') ? row.nextElementSibling : null;
-    const sentence = detail?.querySelector('.agents__released') ?? null;
+    const sentence = detail?.querySelector('p.srow__finished') ?? null;
     const lines = [...(detail?.querySelectorAll('.agents__row:not(.agents__row--head)') ?? [])];
     const got = {
-      above: sentence?.nextElementSibling?.classList.contains('agents') === true,
+      above: sentence !== null && sentence.parentElement?.firstElementChild === sentence && sentence.nextElementSibling?.classList.contains('srow__facts') === true,
       counts: lines.map((l) => l.querySelector('.agents__counts')?.textContent?.trim() ?? ''),
-      sentences: detail?.querySelectorAll('.agents__released').length ?? 0,
+      sentences: detail?.querySelectorAll('.srow__finished').length ?? 0,
       states: lines.map((l) => l.querySelector('.agents__state > .badge:first-child')?.textContent?.trim() ?? ''),
       text: sentence?.textContent?.trim() ?? null,
     };
     page.unmount();
     results.push({
-      name: '/sessions ?finished=1 lists the finished session under the chip finished sessions, its expanded row the released sentence above its three lines, each ended with its probes and credits',
+      name: '/sessions ?finished=1 lists the finished session under the chip finished sessions, its expanded row the finished sentence above its facts and its three lines each ended with its probes and credits',
       ok:
         JSON.stringify(chips) === JSON.stringify(['finished sessions']) &&
         row !== null &&
@@ -23309,7 +23310,7 @@ await forView('/sessions', async () => {
         if (key === 'written') got.agents = sessionCell(page, row, 'Agents')?.firstChild?.textContent?.trim() ?? null;
         row?.click();
         await page.settle(150);
-        got[key] = row?.nextElementSibling?.classList.contains('srow__detail') ? [...row.nextElementSibling.querySelectorAll('.agents__row:not(.agents__row--head)')].map((l) => l.firstElementChild?.textContent?.trim() ?? '') : null;
+        got[key] = row?.nextElementSibling?.classList.contains('srow__detail') ? [...row.nextElementSibling.querySelectorAll('table.agents-table > tbody > tr')].map((l) => l.firstElementChild?.textContent?.trim() ?? '') : null;
       }
       page.unmount();
       const want = Object.fromEntries(Object.entries(hosts).map(([key, s]) => [key, s === undefined ? null : wantLines(s, released, sort, dir)]));
@@ -23398,7 +23399,8 @@ await forView('/sessions', async () => {
   const AUXILIARY_ONLY_ID = '3e9b7c21-4d58-4a06-8f1e-6c2a9d0b5e74';
   const NO_MOD_ID = 'b7e2d5a9-6c13-4f80-a4d2-9e1f3c7b0a68';
   const COMPACTED_HINT = 'A completed compaction replaced the context this recipe kept warm, so the recipe stopped and no probe is sent. The next main turn starts a recipe for the new context.';
-  const HEAD = ['Agent', 'Model', 'Effort', 'Context', 'Account', 'TTL', 'Last request', 'Last probe', 'Next probe', 'Probes / credited', 'State'];
+  const HEAD = ['Agent', 'Type', 'Model', 'Account', 'Context', 'Burn', 'Requests', 'Cost', 'Status', 'Cache', ''];
+  const GRID = ['Agent', 'TTL', 'Last request', 'Last probe', 'Next probe', 'Probes / credited', 'State'];
   const CACHE_HINT = {
     cold: "The pin's prompt cache has passed its TTL, and the next request pays a cold read.",
     warm: "The pin's prompt cache is within its TTL.",
@@ -23409,31 +23411,41 @@ await forView('/sessions', async () => {
   // The story's first session, whose recipes the route lists first: a companion session on desktop with main and two
   // subagents and ledgered traffic, read by its id since the view orders the rows by their creation.
   const storySession = listed.find((s) => !s.historical && s.keyId === recipes[0]?.keyId && s.sessionId === recipes[0]?.sessionId);
-  /** An expanded row's agent lines, each cell read under its head. */
+  /**
+   * An expanded row's agent lines, each read from its Agents table row and its Cache warming grid line, every cell
+   * under its head. The grid draws the table's lines in the table's order, so a line pairs by its place and its id.
+   */
   const linesOf = (page, tr) => {
     const detail = tr?.nextElementSibling?.classList.contains('srow__detail') ? tr.nextElementSibling : null;
-    const head = [...(detail?.querySelector('.agents__row--head')?.children ?? [])].map((c) => c.textContent?.trim() ?? '');
-    const lines = [...(detail?.querySelectorAll('.agents__row:not(.agents__row--head)') ?? [])].map((l) => {
-      const at = (name) => (head.includes(name) ? l.children[head.indexOf(name)] : null);
+    const table = detail?.querySelector('table.agents-table') ?? null;
+    const head = [...(table?.querySelectorAll(':scope > thead th') ?? [])].map((c) => c.textContent?.trim() ?? '');
+    const grid = [...(detail?.querySelector('.agents__row--head')?.children ?? [])].map((c) => c.textContent?.trim() ?? '');
+    const gridLines = [...(detail?.querySelectorAll('.agents__row:not(.agents__row--head)') ?? [])];
+    const lines = [...(table?.querySelectorAll(':scope > tbody > tr') ?? [])].map((r, i) => {
+      const agent = r.children[0]?.textContent?.trim() ?? '';
+      const l = gridLines[i]?.children[0]?.textContent?.trim() === agent ? gridLines[i] : null;
+      const at = (name) => (head.includes(name) ? r.children[head.indexOf(name)] : null);
+      const on = (name) => (l !== null && grid.includes(name) ? l.children[grid.indexOf(name)] : null);
+      const model = at('Model');
       return {
         account: at('Account')?.querySelector('a')?.textContent?.trim() ?? at('Account')?.textContent?.trim() ?? null,
-        agent: l.children[0]?.textContent?.trim() ?? '',
-        agentHref: l.children[0]?.querySelector('a')?.getAttribute('href') ?? null,
-        cause: l.querySelector('.agents__state > .badge:nth-child(2)'),
+        agent,
+        agentHref: r.children[0]?.querySelector('a')?.getAttribute('href') ?? null,
+        cause: l?.querySelector('.agents__state > .badge:nth-child(2)') ?? null,
         context: at('Context')?.textContent?.trim() ?? null,
-        counts: at('Probes / credited')?.textContent?.trim() ?? null,
-        effort: at('Effort')?.textContent?.trim() ?? null,
-        last: at('Last request')?.textContent?.trim() ?? null,
-        lastProbe: at('Last probe')?.textContent?.trim() ?? null,
-        model: at('Model')?.textContent?.trim() ?? null,
-        modelTitle: at('Model')?.getAttribute('title') ?? null,
-        more: l.querySelector('.agents__more') !== null,
-        next: at('Next probe')?.textContent?.trim() ?? null,
-        state: l.querySelector('.agents__state > .badge:first-child'),
-        ttl: at('TTL')?.textContent?.trim() ?? null,
+        counts: on('Probes / credited')?.textContent?.trim() ?? null,
+        effort: model?.querySelector('.sub')?.textContent?.trim() ?? null,
+        last: on('Last request')?.textContent?.trim() ?? null,
+        lastProbe: on('Last probe')?.textContent?.trim() ?? null,
+        model: model?.querySelector(':scope > :not(.sub)')?.textContent?.trim() ?? null,
+        modelTitle: model?.getAttribute('title') ?? null,
+        more: l?.querySelector('.agents__more') != null,
+        next: on('Next probe')?.textContent?.trim() ?? null,
+        state: l?.querySelector('.agents__state > .badge:first-child') ?? null,
+        ttl: on('TTL')?.textContent?.trim() ?? null,
       };
     });
-    return { head, lines };
+    return { grid, head, lines };
   };
   const open = async (page, s) => {
     const tr = page.container.querySelector(`[id="${s === undefined ? '' : idOfRow(s)}"]`);
@@ -23483,15 +23495,15 @@ await forView('/sessions', async () => {
         off.length === 0,
       missing: Object.entries(subjects).map(([k, s]) => `${k} ${s?.sessionId ?? 'absent'} ${s === undefined ? '' : JSON.stringify({ drawn: cells(s), want: want(s) })}`),
     });
-    // Expanded, a session's lines read the eleven columns: main's line first with its own pin's figures, and each
-    // subagent its own line's.
-    const { head, lines } = linesOf(page, await open(page, first));
+    // Expanded, a session's lines read the Agents table's columns and the Cache warming grid's: main's line first with
+    // its own pin's figures, and each subagent its own line's.
+    const { grid, head, lines } = linesOf(page, await open(page, first));
     const pinOf = (l) => first.agentContexts.find((c) => c.agentId === l.agent && shortModel(c.model) === l.model);
     const wrong = lines.filter((l) => JSON.stringify({ context: l.context, effort: l.effort }) !== JSON.stringify(figuresOf(pinOf(l))));
     results.push({
-      name: "/sessions a session's lines read Agent, Model, Effort, Context, Account, TTL, Last request, Last probe, Next probe, Probes / credited and State, main first with its own pin's figures",
-      ok: JSON.stringify(head) === JSON.stringify(HEAD) && lines[0]?.agent === 'main' && pinOf(lines[0]) !== undefined && lines.length >= 3 && wrong.length === 0,
-      missing: [JSON.stringify(head), ...lines.map((l) => JSON.stringify({ agent: l.agent, context: l.context, effort: l.effort, want: figuresOf(pinOf(l)) }))],
+      name: "/sessions a session's lines read the Agents table's columns and the Cache warming grid's Agent, TTL, Last request, Last probe, Next probe, Probes / credited and State, main first with its own pin's figures",
+      ok: JSON.stringify(head) === JSON.stringify(HEAD) && JSON.stringify(grid) === JSON.stringify(GRID) && lines[0]?.agent === 'main' && pinOf(lines[0]) !== undefined && lines.length >= 3 && wrong.length === 0,
+      missing: [JSON.stringify(head), JSON.stringify(grid), ...lines.map((l) => JSON.stringify({ agent: l.agent, context: l.context, effort: l.effort, want: figuresOf(pinOf(l)) }))],
     });
     // The auxiliary-only session draws main's line from the row, since main's auxiliary pin draws none, with no pin's
     // figures, then its subagent's line.
@@ -23560,13 +23572,22 @@ await forView('/sessions', async () => {
   }
   {
     // An agent whose last request is older than its session's lists only in a range that covers its own, so a line's
-    // link reads the line's instant and the row's link the session's. At the story's instant no line older than its
-    // session sits past a range edge from the session, so the page mounts where the hour less the link's minute of
-    // headroom ends halfway between the session's last request and its line older by the most, a recipe's.
+    // link reads the agent's last ledgered request and the row's link the session's. At the story's instant no line
+    // older than its session sits past a range edge from the session, so the page mounts where the hour less the link's
+    // minute of headroom ends halfway between the session's last request and its line's agent older by the most, within
+    // ten hours, the widest gap whose halfway point leaves the line inside six hours.
     const MINUTE = 60_000;
     const HOUR = 60 * MINUTE;
-    const drawn = recipes.filter((r) => r.lastRequestAt !== null && r.agentState !== 'released');
-    const pairs = listed.flatMap((s) => (s.historical || s.lastRequestAt === null ? [] : drawn.filter((r) => r.keyId === s.keyId && r.sessionId === s.sessionId).map((line) => ({ gap: Date.parse(s.lastRequestAt) - Date.parse(line.lastRequestAt), line, session: s }))));
+    const drawnIds = (s) => new Set([...s.agentContexts.map((c) => c.agentId), ...recipes.filter((r) => r.keyId === s.keyId && r.sessionId === s.sessionId && r.agentState !== 'released').map((r) => r.agentId)]);
+    const newestOf = (s, agentId) => s.agentRequests.filter((e) => e.agentId === agentId && e.lastRequestAt !== null).map((e) => e.lastRequestAt).sort().pop() ?? null;
+    const pairs = listed.flatMap((s) =>
+      s.historical || s.lastRequestAt === null
+        ? []
+        : [...drawnIds(s)].flatMap((agentId) => {
+            const last = newestOf(s, agentId);
+            return last === null ? [] : [{ gap: Date.parse(s.lastRequestAt) - Date.parse(last), line: { agentId, lastRequestAt: last }, session: s }];
+          }),
+    ).filter((p) => p.gap <= 10 * HOUR);
     const widest = pairs.sort((a, b) => b.gap - a.gap)[0];
     const at = widest === undefined ? CLOCK_ORIGIN : Date.parse(widest.line.lastRequestAt) + HOUR - MINUTE + Math.floor(widest.gap / 2);
     const page = await mount('/sessions', { now: at });
@@ -23963,9 +23984,388 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
   }
 }
 {
+  // The expanded row, one case per section on the story row that draws it, read at the story's instant: the Session and
+  // Routing facts, the Agents table with its menus, the earlier agents line and the Cache warming details. The rows are
+  // the mock's sessions (`sessionSpec` and the written rows in `web/src/mock/operations.ts`), their agents' figures the
+  // mock's fold over the request seed (`web/src/mock/requests.ts`).
+  const HOUR = 3_600_000;
+  const FINISHED_ID = '9b4e2f71-6c3d-4a85-b0e2-5d7f8a1c3e96';
+  const NOTEBOOK_ID = '6d2f8b40-1e7a-4c95-a3d8-7b5e0c9f2a61';
+  const SLOWED_ID = '5f8a3c1e-9d27-4b6e-8c04-2a7e9b3d1f65';
+  const UNREPORTED = 'No keepalive mod reports this agent, so the router holds no lifecycle word for it.';
+  const listed = await api.listSessions();
+  const recipes = await api.listKeepaliveRecipes();
+  const live = (id) => listed.find((s) => !s.historical && s.sessionId === id);
+  // The story's first session (`sessionSpec[0]`): main on primary, its subagents c21e and e4b7 on nightly.
+  const story = live(recipes[0]?.sessionId);
+  // The written session (`sessionSpec[9]` and `WRITTEN_SUBAGENTS`), whose seven agents hold a line in each word.
+  const written = live(recipes.find((r) => r.agentId === 'e7c1' && r.cause === 'agent_released')?.sessionId);
+  // The silent session forked from the second story session (`sessionSpec[2]`) at depth 3.
+  const silent = listed.find((s) => s.companion === 'silent' && s.forkedFrom !== null);
+  // Story 4 (`sessionSpec[4]`), whose Explore subagent 0b7f holds a seed row of its own and no line.
+  const explored = listed.find((s) => !s.historical && s.agentRequests.some((e) => e.agentId === '0b7f'));
+  const subjects = { explored, finished: live(FINISHED_ID), notebook: live(NOTEBOOK_ID), silent, slowed: live(SLOWED_ID), story, written };
+  const absent = Object.entries(subjects).filter(([, s]) => s === undefined).map(([k]) => k);
+  /** Opens `s`'s row and answers its detail row, null where none opened. */
+  const openRow = async (page, s) => {
+    const tr = s === undefined ? null : page.container.querySelector(`[id="${sessionRowId(s)}"]`);
+    tr?.click();
+    await page.settle(150);
+    return tr?.nextElementSibling?.classList.contains('srow__detail') ? tr.nextElementSibling : null;
+  };
+  /** A facts group by its title: its link and each fact's label with its value element. */
+  const factsOf = (detail, title) => {
+    const group = [...(detail?.querySelectorAll('.srow__facts > *') ?? [])].find((g) => g.querySelector('.facts__title')?.textContent?.trim() === title);
+    const values = Object.fromEntries([...(group?.querySelectorAll('dl.facts > .kv__row') ?? [])].map((r) => [r.querySelector('dt')?.textContent?.trim() ?? '', r.querySelector('dd')]));
+    return { link: group?.querySelector('.facts__head a') ?? null, values };
+  };
+  const textOf = (el) => el?.textContent?.replace(/\s+/g, ' ').trim() ?? null;
+  /** The Agents table's heads and its rows, each cell read under its head. */
+  const agentsOf = (detail) => {
+    const table = detail?.querySelector('table.agents-table') ?? null;
+    const heads = [...(table?.querySelectorAll(':scope > thead > tr > th') ?? [])].map((th) => th.textContent?.trim() ?? '');
+    const rows = [...(table?.querySelectorAll(':scope > tbody > tr') ?? [])].map((tr) => {
+      const at = (head) => (heads.includes(head) ? tr.children[heads.indexOf(head)] : null);
+      const model = at('Model');
+      const status = at('Status');
+      const cache = at('Cache');
+      return {
+        account: textOf(at('Account')),
+        agent: textOf(at('Agent')),
+        agentHref: at('Agent')?.querySelector('a')?.getAttribute('href') ?? null,
+        agentTitle: at('Agent')?.getAttribute('title') ?? null,
+        burn: textOf(at('Burn')),
+        cache: { badge: cache?.querySelector('.badge')?.textContent?.trim() ?? null, muted: textOf(cache?.querySelector(':scope > .muted')), sub: textOf(cache?.querySelector('.sub')) },
+        context: textOf(at('Context')),
+        cost: textOf(at('Cost')?.querySelector('.srow__pin') ?? at('Cost')),
+        costSub: textOf(at('Cost')?.querySelector('.sub')),
+        effort: textOf(model?.querySelector('.sub')),
+        menu: tr.lastElementChild?.querySelector('.menu__trigger')?.getAttribute('aria-label') ?? null,
+        model: textOf(model?.querySelector(':scope > :not(.sub)')),
+        modelTitle: model?.getAttribute('title') ?? null,
+        requests: textOf(at('Requests')),
+        status: { badge: status?.querySelector('.badge')?.className ?? null, muted: status?.querySelector(':scope > .muted') !== null, text: textOf(status), title: (status?.querySelector('.badge') ?? status?.querySelector('.muted'))?.getAttribute('title') ?? null },
+        tr,
+        type: textOf(at('Type')),
+      };
+    });
+    return { heads, rows, table };
+  };
+  /** A disclosure line under the Agents table by its class: the button's state, its label and its hint. */
+  const disclosureOf = (detail, cls) => {
+    const line = detail?.querySelector(`.${cls} > .disclosure, .disclosure.${cls}`) ?? null;
+    const button = line?.querySelector('button') ?? null;
+    return { button, controls: button?.getAttribute('aria-controls') ?? null, expanded: button?.getAttribute('aria-expanded') ?? null, hint: textOf(line?.querySelector('.disclosure__hint')), label: textOf(button), title: button?.getAttribute('title') ?? null };
+  };
+  const pools = await api.listPools();
+  const keys = await api.listKeys();
+  const poolOf = (s) => pools.find((p) => p.id === keys.find((k) => k.id === s?.keyId)?.poolId)?.name ?? null;
+  const at = (s) => (x) => s !== undefined && x.keyId === s.keyId && x.sessionId === s.sessionId && !x.historical;
+  {
+    // The Session and Routing facts read the row they open on: the written session for the plain words, studio's
+    // slowed notebook session (`SLOWED_PINS`) for the speed chip and the measured cycle, and the silent session for the
+    // fork, whose base the list holds on another account. No story row carries a shed mark, so the written session is
+    // handed one from a shedding round. Each Companion fact draws the chip the Companion column draws.
+    const { listSessions } = api;
+    api.listSessions = async () => (await listSessions.call(api)).map((s) => (at(written)(s) ? { ...s, shedFrom: 'overflow', shedReason: 'round' } : s));
+    const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+    await showColumn(page, 'Companion');
+    const chipOf = (el) => (el === null || el === undefined ? null : { badge: el.querySelector('.badge')?.className ?? null, text: textOf(el), title: (el.querySelector('.badge') ?? el.querySelector('.muted'))?.getAttribute('title') ?? null });
+    const read = {};
+    for (const key of ['written', 'slowed', 'silent']) {
+      const s = subjects[key];
+      const column = chipOf(sessionCell(page, page.container.querySelector(`[id="${s === undefined ? '' : sessionRowId(s)}"]`), 'Companion'));
+      const detail = await openRow(page, s);
+      const session = factsOf(detail, 'Session');
+      const routing = factsOf(detail, 'Routing');
+      read[key] = {
+        companion: JSON.stringify(chipOf(session.values.Companion)) === JSON.stringify(column) && column !== null,
+        labels: [Object.keys(session.values), Object.keys(routing.values)],
+        routing: Object.fromEntries(Object.entries(routing.values).map(([label, dd]) => [label, textOf(dd)])),
+        session: Object.fromEntries(Object.entries(session.values).filter(([label]) => label !== 'Companion').map(([label, dd]) => [label, textOf(dd)])),
+        links: { account: routing.values.Account?.querySelector('a')?.getAttribute('href') ?? null, fork: session.values.Fork?.querySelector('a')?.getAttribute('href') ?? null, forkTitle: session.values.Fork?.querySelector('[title]')?.getAttribute('title') ?? null, key: session.values.Key?.querySelector('a')?.getAttribute('href') ?? null, log: logTarget(routing.link?.getAttribute('href')), logText: textOf(routing.link) },
+        speed: routing.values.Speed?.querySelector('.speed-chip') !== null && routing.values.Speed !== undefined,
+        shed: routing.values['Shed mark']?.querySelector('.badge')?.className ?? null,
+        clientTitle: session.values.Client?.querySelector('[title]')?.getAttribute('title') ?? session.values.Client?.getAttribute('title') ?? null,
+      };
+    }
+    page.unmount();
+    api.listSessions = listSessions;
+    const since = (iso) => `${fmtAbsolute(iso)}, ${fmtRelative(iso, CLOCK_ORIGIN)}`;
+    const window = (s) => {
+      const last = Math.max(...[s.lastUsedAt, s.lastRequestAt].filter((t) => t !== null).map((t) => Date.parse(t)));
+      return { path: '/routing-log', session: s.sessionId, from: isoAt(last - HOUR), to: isoAt(Math.min(last + HOUR, CLOCK_ORIGIN)) };
+    };
+    const LABELS = [
+      ['Created', 'Key', 'Client', 'Fork', 'Epoch', 'Companion'],
+      ['Account', 'Pinned since', 'Shed mark', 'Runway', 'Speed', 'Cycle'],
+    ];
+    const want = {
+      written: {
+        companion: true,
+        labels: LABELS,
+        routing: { Account: 'primary subscription', 'Pinned since': since(written?.createdAt ?? null), 'Shed mark': 'leaving overflow (round)', Runway: 'none', Speed: 'full speed', Cycle: 'not measured yet' },
+        session: { Created: since(written?.createdAt ?? null), Key: `desktop in pool ${poolOf(written)}`, Client: 'Claude Code 2.1.310', Fork: 'none', Epoch: '1' },
+        links: { account: '/accounts/primary', fork: null, forkTitle: null, key: '/keys#desktop', log: written === undefined ? null : window(written), logText: 'View in routing log' },
+        speed: false,
+        shed: 'badge badge--warning',
+        clientTitle: 'claude-cli/2.1.310 (external, cli)',
+      },
+      slowed: {
+        companion: true,
+        labels: LABELS,
+        routing: { Account: 'studio subscription', 'Pinned since': since(subjects.slowed?.createdAt ?? null), 'Shed mark': 'none', Runway: minuteSpan(subjects.slowed?.runwayMs ?? 0), Speed: '0.5x', Cycle: '42 s' },
+        session: { Created: since(subjects.slowed?.createdAt ?? null), Key: `notebook in pool ${poolOf(subjects.slowed)}`, Client: '-', Fork: 'none', Epoch: '1' },
+        links: { account: '/accounts/studio', fork: null, forkTitle: null, key: '/keys#notebook', log: subjects.slowed === undefined ? null : window(subjects.slowed), logText: 'View in routing log' },
+        speed: true,
+        shed: null,
+        clientTitle: null,
+      },
+      silent: {
+        companion: true,
+        labels: LABELS,
+        routing: { Account: 'nightly subscription', 'Pinned since': since(silent?.createdAt ?? null), 'Shed mark': 'none', Runway: 'unbounded', Speed: 'full speed', Cycle: 'not measured yet' },
+        session: { Created: since(silent?.createdAt ?? null), Key: `desktop in pool ${poolOf(silent)}`, Client: 'Claude Code 2.1.310', Fork: `${silent?.forkedFrom?.slice(0, 13)}… at depth 3, on another account`, Epoch: '2' },
+        links: { account: '/accounts/nightly', fork: silent === undefined ? null : `#${sessionRowId({ ...silent, sessionId: silent.forkedFrom })}`, forkTitle: silent?.forkedFrom ?? null, key: '/keys#desktop', log: silent === undefined ? null : window(silent), logText: 'View in routing log' },
+        speed: false,
+        shed: null,
+        clientTitle: 'claude-cli/2.1.310 (external, cli)',
+      },
+    };
+    const off = Object.keys(want).filter((k) => JSON.stringify(read[k]) !== JSON.stringify(want[k]));
+    results.push({
+      name: "/sessions an open row's Session and Routing facts read its creation, key and pool, client, fork, epoch and Companion chip, then its account, pin, shed mark, runway, speed and cycle with the routing log's link",
+      ok: absent.length === 0 && off.length === 0,
+      missing: [`absent ${absent.join(',')}`, ...off.flatMap((k) => [`${k} ${JSON.stringify(read[k])}`, `want ${JSON.stringify(want[k])}`])],
+    });
+  }
+  {
+    // The Agents table reads each line's own facts beside the session's: the written session's main line first with
+    // its own pin (claude-fable-5-1 at high effort, 16,228 tokens), main's two seed rows summed into its Requests, then
+    // the busy subagent 4d1a on its own pin (22,000 tokens), whose one seed row ledgered no request. The table closes
+    // on the agent's menu, labeled with the agent.
+    const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+    const { heads, rows } = agentsOf(await openRow(page, written));
+    page.unmount();
+    const main = rows.find((r) => r.agent === 'main');
+    const busy = rows.find((r) => r.agent === '4d1a');
+    const mainPin = written?.agentContexts.find((c) => c.agentId === 'main');
+    const busyPin = written?.agentContexts.find((c) => c.agentId === '4d1a');
+    const newest = (agentId) => written?.agentRequests.filter((e) => e.agentId === agentId && e.lastRequestAt !== null).map((e) => e.lastRequestAt).sort().pop() ?? null;
+    const titleOf = (last, pinned) => [last === null ? null : `Last request ${fmtAbsolute(last)}, ${fmtRelative(last, CLOCK_ORIGIN)}.`, `Pinned since ${fmtAbsolute(pinned)}, ${fmtRelative(pinned, CLOCK_ORIGIN)}.`].filter(Boolean).join(' ');
+    const pick = (r) => (r === undefined ? null : { account: r.account, agent: r.agent, agentTitle: r.agentTitle, burn: r.burn, cache: r.cache, context: r.context, effort: r.effort, menu: r.menu, model: r.model, modelTitle: r.modelTitle, requests: r.requests, status: r.status, type: r.type });
+    const want = {
+      main: {
+        account: 'primary',
+        agent: 'main',
+        agentTitle: titleOf(newest('main'), mainPin?.createdAt ?? null),
+        burn: `${weekCell(mainPin?.burnEquivalent ?? 0)}/h`,
+        cache: { badge: 'cold', muted: null, sub: 'retained' },
+        context: '16.2K',
+        effort: 'high',
+        menu: 'Actions for agent main',
+        model: 'fable-5-1',
+        modelTitle: 'claude-fable-5-1',
+        requests: '3',
+        status: { badge: 'badge badge--good', muted: false, text: 'idle', title: "Stopped and waiting for the user. Probed until the pool's idle window runs out, the break-even where the pool sets none." },
+        type: '-',
+      },
+      busy: {
+        account: 'primary',
+        agent: '4d1a',
+        agentTitle: titleOf(newest('4d1a'), busyPin?.createdAt ?? null),
+        burn: `${weekCell(busyPin?.burnEquivalent ?? 0)}/h`,
+        cache: { badge: 'cold', muted: null, sub: 'held' },
+        context: '22K',
+        effort: 'high',
+        menu: 'Actions for agent 4d1a',
+        model: 'fable-5-1',
+        modelTitle: 'claude-fable-5-1',
+        requests: '0',
+        status: { badge: 'badge badge--accent', muted: false, text: 'busy', title: 'Between model turns, running tools or streaming. Probed like any other agent, and the idle window of the main conversation keeps running.' },
+        type: '-',
+      },
+    };
+    const read = { busy: pick(busy), main: pick(main) };
+    results.push({
+      name: "/sessions an open row's Agents table reads Agent, Type, Model, Account, Context, Burn, Requests, Cost, Status, Cache and the menu, main first, each line its own pin's facts and its agent's requests",
+      ok: absent.length === 0 && JSON.stringify(heads) === JSON.stringify(['Agent', 'Type', 'Model', 'Account', 'Context', 'Burn', 'Requests', 'Cost', 'Status', 'Cache', '']) && rows[0]?.agent === 'main' && JSON.stringify(read) === JSON.stringify({ busy: want.busy, main: want.main }),
+      missing: [JSON.stringify(heads), JSON.stringify(read), `want ${JSON.stringify(want)}`],
+    });
+  }
+  {
+    // Main's line reads unreported where no mod reports the session, as the row's Status does, though the engine holds
+    // main's idle word for the notebook session whose recipe it keeps (`sessionSpec` in mock/operations.ts).
+    const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+    const tr = subjects.notebook === undefined ? null : page.container.querySelector(`[id="${sessionRowId(subjects.notebook)}"]`);
+    const row = textOf(sessionCell(page, tr, 'Status'));
+    const main = agentsOf(await openRow(page, subjects.notebook)).rows.find((r) => r.agent === 'main');
+    page.unmount();
+    results.push({
+      name: "/sessions main's line of a session no mod reports reads unreported in the muted ink, as its row does, over the engine's word",
+      ok: subjects.notebook?.companion === 'none' && subjects.notebook.lifecycle === 'idle' && row === 'unreported' && JSON.stringify(main?.status) === JSON.stringify({ badge: null, muted: true, text: 'unreported', title: UNREPORTED }),
+      missing: [String(row), JSON.stringify(main?.status ?? null)],
+    });
+  }
+  {
+    // The earlier agents line stands under the table, closed, over the agents with seed rows and no line: d41e on the
+    // finished session 9b4e2f71 (its one row billed $0.0202 in fast mode) and story 4's Explore subagent 0b7f (its one
+    // row billed $0.0055 in overage). Opened, each joins the table as a row of its own off its newest row, its model
+    // with a dash under it, dashes for the pin's facts, no pin in Status.
+    const read = {};
+    for (const [key, query, agent] of [
+      ['finished', '?finished=1', 'd41e'],
+      ['explored', '', '0b7f'],
+    ]) {
+      const page = await mount(`/sessions${query}`, { now: CLOCK_ORIGIN });
+      const detail = await openRow(page, subjects[key]);
+      const closed = { line: disclosureOf(detail, 'srow__earlier'), rows: agentsOf(detail).rows.map((r) => r.agent) };
+      closed.line.button?.click();
+      await page.settle(150);
+      const opened = { line: disclosureOf(detail, 'srow__earlier'), rows: agentsOf(detail).rows };
+      const row = opened.rows.find((r) => r.agent === agent);
+      read[key] = {
+        closed: { controls: closed.line.controls === agentsOf(detail).table?.id && closed.line.controls !== null, expanded: closed.line.expanded, hint: closed.line.hint, label: closed.line.label, rows: closed.rows.includes(agent), title: closed.line.title },
+        opened: { expanded: opened.line.expanded, last: opened.rows.at(-1)?.agent ?? null },
+        row: row === undefined ? null : { account: row.account, burn: row.burn, cache: row.cache, context: row.context, cost: row.cost, costSub: row.costSub, effort: row.effort, menu: row.menu, model: row.model, requests: row.requests, status: row.status.text, muted: row.status.muted, type: row.type },
+      };
+      page.unmount();
+    }
+    const row = (account, cost, costSub, agent) => ({ account, burn: '-', cache: { badge: null, muted: '-', sub: null }, context: '-', cost, costSub, effort: '-', menu: `Actions for agent ${agent}`, model: 'opus-5', requests: '1', status: 'no pin', muted: true, type: 'general-purpose' });
+    const want = {
+      finished: { closed: { controls: true, expanded: 'false', hint: '· 1 request · $0.02', label: '1 earlier agent', rows: false, title: 'd41e' }, opened: { expanded: 'true', last: 'd41e' }, row: row('nightly', '$0.02', 'fast mode', 'd41e') },
+      explored: { closed: { controls: true, expanded: 'false', hint: '· 1 request · $0.0055', label: '1 earlier agent', rows: false, title: '0b7f' }, opened: { expanded: 'true', last: '0b7f' }, row: { ...row('nightly', '$0.0055', 'overage', '0b7f'), model: 'sonnet-5', type: 'Explore' } },
+    };
+    results.push({
+      name: '/sessions the earlier agents line reads its count, requests and cost closed, and opened adds one row per earlier agent off its newest request with no pin',
+      ok: absent.length === 0 && JSON.stringify(read) === JSON.stringify(want),
+      missing: [JSON.stringify(read), `want ${JSON.stringify(want)}`],
+    });
+  }
+  {
+    // The Cache warming details stand closed under the agents, their line reading the drawn recipes' states: the story's
+    // first session holds main retained, c21e paused and e4b7 ended. Opened, the grid reads the probe columns, one line
+    // per agent of the table. Studio's slowed notebook session holds no recipe, so its line reads no recipe and the
+    // details its cause.
+    const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+    const read = {};
+    for (const key of ['story', 'slowed']) {
+      const detail = await openRow(page, subjects[key]);
+      const closed = disclosureOf(detail, 'srow__warming');
+      const body = closed.controls === null ? null : detail?.querySelector(`[id="${closed.controls}"]`);
+      const hidden = body?.hidden ?? null;
+      closed.button?.click();
+      await page.settle(150);
+      const opened = disclosureOf(detail, 'srow__warming');
+      read[key] = {
+        closed: { expanded: closed.expanded, hidden, hint: closed.hint, label: closed.label },
+        opened: { expanded: opened.expanded, hidden: body?.hidden ?? null },
+        head: [...(body?.querySelectorAll('.agents__row--head > span') ?? [])].map((c) => c.textContent?.trim() ?? ''),
+        lines: [...(body?.querySelectorAll('.agents__row:not(.agents__row--head)') ?? [])].map((l) => l.firstElementChild?.textContent?.trim() ?? ''),
+        agents: agentsOf(detail).rows.map((r) => r.agent),
+        none: textOf(body?.querySelector('.agents__none > span:not(.badge)')),
+        noneBadge: textOf(body?.querySelector('.agents__none > .badge')),
+      };
+    }
+    page.unmount();
+    const HEAD = ['Agent', 'TTL', 'Last request', 'Last probe', 'Next probe', 'Probes / credited', 'State'];
+    const ok =
+      absent.length === 0 &&
+      JSON.stringify(read.story?.closed) === JSON.stringify({ expanded: 'false', hidden: true, hint: '1 retained, 1 paused, 1 ended', label: 'Cache warming' }) &&
+      JSON.stringify(read.story?.opened) === JSON.stringify({ expanded: 'true', hidden: false }) &&
+      JSON.stringify(read.story?.head) === JSON.stringify(HEAD) &&
+      read.story?.lines.length === 3 &&
+      JSON.stringify(read.story?.lines) === JSON.stringify(read.story?.agents) &&
+      read.story?.none === null &&
+      JSON.stringify(read.slowed?.closed) === JSON.stringify({ expanded: 'false', hidden: true, hint: 'no recipe', label: 'Cache warming' }) &&
+      read.slowed?.noneBadge === 'no recipe' &&
+      (read.slowed?.none ?? '').startsWith('Nothing is scheduled because ');
+    results.push({
+      name: '/sessions the Cache warming details stand closed under the agents with the recipes\' states or no recipe, and open on the probe columns with a line per agent or the missing recipe\'s cause',
+      ok,
+      missing: [JSON.stringify(read)],
+    });
+  }
+  {
+    // An agent's menu offers the row's three views narrowed to the agent: the analytics session view and the request log
+    // with its id, and the routing log on the session and the agent an hour either side of its last request. The story's
+    // first session's c21e last sent a request at the newest of its seed rows.
+    const agent = 'c21e';
+    const last = story?.agentRequests.filter((e) => e.agentId === agent && e.lastRequestAt !== null).map((e) => Date.parse(e.lastRequestAt)).sort((a, b) => a - b).pop() ?? null;
+    const followed = {};
+    let items = [];
+    for (const label of ['View in analytics', 'View in requests', 'View in routing log']) {
+      const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+      const row = agentsOf(await openRow(page, story)).rows.find((r) => r.agent === agent);
+      row?.tr.querySelector('.menu__trigger')?.click();
+      await page.settle(120);
+      const buttons = [...(row?.tr.querySelectorAll('.menu__list button') ?? [])];
+      items = buttons.map((b) => b.textContent?.trim() ?? '');
+      buttons.find((b) => b.textContent?.trim() === label)?.click();
+      await page.settle(300);
+      const landed = page.location();
+      followed[label] = { path: landed.pathname, ...Object.fromEntries(new URLSearchParams(landed.search)) };
+      page.unmount();
+    }
+    const lifetime = story === undefined ? null : `${story.keyId}@${story.keyGeneration}`;
+    const pickOf = (got, names) => Object.fromEntries(names.map((n) => [n, got?.[n] ?? null]));
+    const read = {
+      analytics: pickOf(followed['View in analytics'], ['path', 'session', 'key', 'agent_id']),
+      log: pickOf(followed['View in routing log'], ['path', 'session', 'agent_id', 'from', 'to']),
+      requests: pickOf(followed['View in requests'], ['path', 'session', 'agent_id', 'keys']),
+    };
+    const want = {
+      analytics: { path: '/analytics', session: story?.sessionId ?? null, key: lifetime, agent_id: agent },
+      log: { path: '/routing-log', session: story?.sessionId ?? null, agent_id: agent, from: last === null ? null : isoAt(last - HOUR), to: last === null ? null : isoAt(Math.min(last + HOUR, CLOCK_ORIGIN)) },
+      requests: { path: '/requests', session: story?.sessionId ?? null, agent_id: agent, keys: lifetime },
+    };
+    results.push({
+      name: "/sessions an agent's menu offers View in analytics, View in requests and View in routing log, each narrowed to the session and the agent, the log an hour either side of the agent's last request",
+      ok: absent.length === 0 && last !== null && JSON.stringify(items) === JSON.stringify(['View in analytics', 'View in requests', 'View in routing log']) && JSON.stringify(read) === JSON.stringify(want),
+      missing: [JSON.stringify(items), JSON.stringify(read), `want ${JSON.stringify(want)}`],
+    });
+  }
+  {
+    // An open agent menu holds auto reload as the row's menu does, and the reads resume once it closes.
+    const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+    const row = agentsOf(await openRow(page, story)).rows.find((r) => r.agent === 'c21e');
+    const spy = countCalls('listSessions');
+    row?.tr.querySelector('.menu__trigger')?.click();
+    await page.settle(120);
+    tick(5_000);
+    await page.settle();
+    const open = spy.calls.length;
+    row?.tr.querySelector('.menu__trigger')?.click();
+    await page.settle(120);
+    tick(5_000);
+    await page.settle();
+    const closed = spy.calls.length - open;
+    spy.restore();
+    page.unmount();
+    results.push({
+      name: "/sessions an open agent menu pauses auto reload, and the reads resume once it closes",
+      ok: row !== undefined && open === 0 && closed > 0,
+      missing: [`${open} reads while open, ${closed} after the close`],
+    });
+  }
+  {
+    // Under an Agents filter an open row's table lists its matching lines alone and one line counts the others: under
+    // claude-sonnet-5 the story's first session draws c21e and e4b7, with main hidden.
+    const page = await mount('/sessions?model=claude-sonnet-5', { now: CLOCK_ORIGIN });
+    const detail = await openRow(page, story);
+    const read = { fold: textOf(detail?.querySelector('.srow__fold')), rows: agentsOf(detail).rows.map((r) => r.agent).sort() };
+    page.unmount();
+    results.push({
+      name: '/sessions under an Agents filter an open row lists its matching lines alone and counts the agents the filters hide',
+      ok: absent.length === 0 && JSON.stringify(read) === JSON.stringify({ fold: '1 agent hidden by the filters', rows: ['c21e', 'e4b7'] }),
+      missing: [JSON.stringify(read)],
+    });
+  }
+}
+{
   const rows = () => [...m.container.querySelectorAll('tbody tr.srow')];
   const cell = (tr, header) => sessionCell(m, tr, header);
-  const heads = () => [...m.container.querySelectorAll('.sessions-table thead th')].map((th) => th.textContent?.trim() ?? '');
+  const heads = () => [...m.container.querySelectorAll('.sessions-table > thead th')].map((th) => th.textContent?.trim() ?? '');
   // The columns the control offers: the Session column is the row's identity and is always drawn.
   const COLUMNS = ['Status', 'Agents', 'Model', 'Account', 'Requests', 'Cost', 'Last used', 'Cache', 'Companion', 'Context', 'Created', 'Effort', 'Key', 'Last request', 'Next probe', 'Runway'];
   const HIDDEN = ['Companion', 'Context', 'Created', 'Effort', 'Key', 'Last request', 'Next probe', 'Runway'];
@@ -24089,7 +24489,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     const slowed = new Set(accounts.filter((a) => a.slowDown !== null && a.slowDown.factor < 1).map((a) => a.id));
     [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Expand all')?.click();
     await m.settle(250);
-    const links = [...m.container.querySelectorAll('.agents__row:not(.agents__row--head) .agents__account')].map((c) => ({ chip: c.querySelector('.speed-chip') !== null, link: c.querySelector('a') }));
+    const links = [...m.container.querySelectorAll('table.agents-table > tbody > tr .agents__account')].map((c) => ({ chip: c.querySelector('.speed-chip') !== null, link: c.querySelector('a') }));
     const kinds = links.map((l) => KINDS[l.link?.getAttribute('title') ?? '']);
     const off = links.filter((l) => {
       const id = l.link?.textContent?.trim() ?? '';
@@ -24251,8 +24651,8 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     twice?.click();
     await byActivity.settle(150);
     const detail = twice?.nextElementSibling?.classList.contains('srow__detail') ? twice.nextElementSibling : null;
-    const lined = [...(detail?.querySelectorAll('.agents__row:not(.agents__row--head)') ?? [])]
-      .map((l) => `${l.querySelector('.agents__id')?.getAttribute('title')}: ${l.children[1]?.getAttribute('title') ?? l.children[1]?.textContent?.trim()}`)
+    const lined = [...(detail?.querySelectorAll('table.agents-table > tbody > tr') ?? [])]
+      .map((l) => `${l.children[0]?.textContent?.trim()}: ${l.children[2]?.getAttribute('title') ?? l.children[2]?.querySelector(':scope > :not(.sub)')?.textContent?.trim()}`)
       .filter((line) => hovered.includes(line));
     byActivity.unmount();
     results.push({ name: "/sessions the +N hover lists the agents pinned elsewhere in the expanded lines' order", ok: twiceSession !== undefined && hovered.length === elsewhere(twiceSession).length && JSON.stringify(lined) === JSON.stringify(hovered), missing: [JSON.stringify(hovered), JSON.stringify(lined)] });
@@ -24270,8 +24670,8 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     const listedNow = await api.listSessions();
     {
       // Every line of the session the mod released whole is a released one, so the session is finished: the bare
-      // address hides it, and under the finished filter its expanded detail draws the sentence once above every line
-      // in its ended state with its probe facts, its Status reads finished with the same sentence on hover, and its
+      // address hides it, and under the finished filter its expanded detail opens on the sentence once, every line of
+      // its Cache warming details in its ended state with its probe facts, its Status reads finished with the same sentence on hover, and its
       // Agents cell counts none, since it counts the lines less the released ones.
       const whole = new Map();
       for (const r of await api.listKeepaliveRecipes()) whole.set(r.sessionId, (whole.get(r.sessionId) ?? true) && r.agentState === 'released');
@@ -24287,15 +24687,15 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
       row?.click();
       await m.settle(150);
       const detail = row?.nextElementSibling?.classList.contains('srow__detail') ? row.nextElementSibling : null;
-      const sentence = detail?.querySelector('.agents__released') ?? null;
+      const sentence = detail?.querySelector('p.srow__finished') ?? null;
       const lines = [...(detail?.querySelectorAll('.agents__row:not(.agents__row--head)') ?? [])];
       const read = {
-        above: sentence?.nextElementSibling?.classList.contains('agents') === true,
+        above: sentence !== null && sentence.parentElement?.firstElementChild === sentence,
         agents: cell(row, 'Agents')?.firstChild?.textContent?.trim() ?? null,
         badge: cell(row, 'Status')?.querySelector('.badge')?.textContent?.trim() ?? null,
         counts: lines.map((l) => l.querySelector('.agents__counts')?.textContent?.trim() ?? ''),
         lines: lines.length,
-        sentences: m.container.querySelectorAll('.agents__released').length,
+        sentences: m.container.querySelectorAll('.srow__finished').length,
         states: lines.map((l) => l.querySelector('.agents__state > .badge:first-child')?.textContent?.trim() ?? ''),
         text: sentence?.textContent?.trim() ?? null,
         title: cell(row, 'Status')?.querySelector('.badge')?.getAttribute('title') ?? null,
@@ -24470,7 +24870,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
       api.listSessions = async () => (await listSessions.call(api)).map((s) => (base !== null && s.sessionId === base.sessionId && s.keyId === base.keyId && !s.historical ? { ...s, pinned: false } : s));
       const page = await mount('/sessions');
       const listedNow = await api.listSessions();
-      const at = [...page.container.querySelectorAll('.sessions-table thead th')].findIndex((th) => th.textContent?.trim() === 'Session');
+      const at = [...page.container.querySelectorAll('.sessions-table > thead th')].findIndex((th) => th.textContent?.trim() === 'Session');
       const rowIn = (s) => (s === null ? undefined : (page.container.querySelector(`[id="${sessionRowId(s)}"]`) ?? undefined));
       const forkRow = rowIn(forked);
       const baseRowIn = rowIn(base);
@@ -24674,6 +25074,16 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
         (detail?.textContent ?? '').includes('this key id was created again and the session belongs to the earlier holder'),
       missing: [String(m.container.querySelectorAll('.srow__detail').length), detail?.textContent?.slice(0, 160) ?? 'absent'],
     });
+    {
+      // The earlier holder's Key fact names its key with no link, since the Keys view lists the live holder alone.
+      const fact = [...(detail?.querySelectorAll('dl.facts > .kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent?.trim() === 'Key')?.querySelector('dd') ?? null;
+      const read = { link: fact === null || fact.querySelector('a') !== null, text: fact?.textContent?.replace(/\s+/g, ' ').trim() ?? null, title: fact?.querySelector('[title]')?.getAttribute('title') ?? null };
+      results.push({
+        name: "/sessions the earlier holder's Key fact reads deleted holder with no link",
+        ok: JSON.stringify(read) === JSON.stringify({ link: false, text: 'desktop, deleted holder', title: 'A holder of this key id that no longer exists. The ledger keeps its sessions until they expire' }),
+        missing: [JSON.stringify(read)],
+      });
+    }
     gone?.click();
     await m.settle(200);
     api.listSessions = listSessions;
@@ -24689,8 +25099,8 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
   expect('/sessions row expands into its agents', detail?.textContent ?? '', ['Created', ' ago', 'Agent', 'Model', 'Account', 'TTL', 'Last request', 'Last probe', 'Next probe', 'Probes / credited', 'State', 'main']);
   {
     const head = [...(detail?.querySelectorAll('.agents__row--head > span') ?? [])].map((c) => c.textContent?.trim());
-    // Every session's lines read Effort and Context after Model, and its Account after them.
-    const want = ['Agent', 'Model', 'Effort', 'Context', 'Account', 'TTL', 'Last request', 'Last probe', 'Next probe', 'Probes / credited', 'State'];
+    // Every session's Cache warming details read the probe columns alone.
+    const want = ['Agent', 'TTL', 'Last request', 'Last probe', 'Next probe', 'Probes / credited', 'State'];
     results.push({ name: "/sessions an agent's line carries no net, and the page no net-saved tile", ok: JSON.stringify(head) === JSON.stringify(want) && !m.text().includes('Net saved'), missing: [...head, m.text().includes('Net saved') ? 'Net saved tile' : ''].filter(Boolean) });
   }
   {
@@ -24703,7 +25113,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
   }
   {
     // A line's model reads the short id and carries the whole one on its title.
-    const models = [...(detail?.querySelectorAll('.agents__row:not(.agents__row--head)') ?? [])].map((r) => [r.children[1]?.textContent?.trim(), r.children[1]?.getAttribute('title')]);
+    const models = [...(detail?.querySelectorAll('table.agents-table > tbody > tr') ?? [])].map((r) => [r.children[2]?.querySelector(':scope > :not(.sub)')?.textContent?.trim(), r.children[2]?.getAttribute('title')]);
     const read = (id) => models.some(([shown, title]) => shown === shortModel(id) && title === id);
     results.push({
       name: '/sessions agent rows carry their own model and account',
@@ -24723,7 +25133,10 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
   await m.settle(250);
   const open = m.container.querySelectorAll('.srow__detail').length;
   results.push({ name: '/sessions Expand all opens every row', ok: open === (await api.listSessions()).length, missing: [String(open)] });
-  results.push({ name: '/sessions a session with no creation time says so', ok: m.text().includes('Created: unknown'), missing: [] });
+  {
+    const created = [...m.container.querySelectorAll('dl.facts > .kv__row')].filter((r) => r.querySelector('dt')?.textContent?.trim() === 'Created').map((r) => r.querySelector('dd')?.textContent?.trim() ?? '');
+    results.push({ name: '/sessions a session with no creation time says so in its Created fact', ok: created.includes('unknown'), missing: [...new Set(created)].slice(0, 4) });
+  }
   expect('/sessions states and causes', m.text(), ['retained', 'held', 'paused', 'not retained', 'ended', 'probing', 'scheduled', 'affinity too short', 'awaiting cache evidence', 'entry expired', 'idle limit', 'cold probes', 'overage', 'pool exhausted', 'unsupported shape']);
   results.push({ name: '/sessions no reason reads session bound any more', ok: !m.text().includes('session bound'), missing: [m.text().includes('session bound') ? 'still there' : ''] });
   results.push({ name: '/sessions no reason reads net negative', ok: !m.text().includes('net negative'), missing: [m.text().includes('net negative') ? 'still there' : ''] });

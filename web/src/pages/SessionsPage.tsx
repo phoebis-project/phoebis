@@ -2,7 +2,7 @@ import { Fragment, type KeyboardEvent, type MouseEvent, type ReactNode, useId, u
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
 import { iso } from '@/api/decode';
-import type { Account, ApiKey, CompanionState, KeepaliveRecipe, ModelTiers, Pool, RecipeState, Session } from '@/api/types';
+import type { Account, AgentContext, ApiKey, CompanionState, KeepaliveRecipe, ModelTiers, Pool, RecipeState, Session, SessionSpend } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { useSession } from '@/app/session';
 import { FilterBar } from '@/components/FilterBar';
@@ -22,7 +22,7 @@ import { tierOrder, weekReadingOf } from '@/lib/costs';
 import { groupInto, lookup } from '@/lib/counts';
 import { SESSIONS_DIMENSIONS } from '@/lib/filterBar';
 import { SESSION_CHARS, fmtAbsolute, fmtCount, fmtDuration, fmtInt, fmtRelative, fmtShare, fmtUsd, joinPresent, keyGenerationOf, keyLifetime, messageOf, shortId, shortModel, weekShort } from '@/lib/format';
-import { ACTIVE_WITHIN, agentCount, agentFiltersStand, CAUSE_HINT, CAUSE_LABEL, contextCell, drawnLines, hiddenLines, isFinished, lastActivity, lifecycleSplit, MAIN_AGENT, matches, orderLines, orderRows, pinTtlMs, presenceOf, requestsRange, sessionLines, type SessionLine, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES } from '@/lib/keepalive';
+import { ACTIVE_WITHIN, addSpend, agentCount, type AgentFigures, agentFigures, agentFiltersStand, CAUSE_HINT, CAUSE_LABEL, contextCell, drawnLines, earlierAgents, hiddenLines, isFinished, lastActivity, lifecycleSplit, MAIN_AGENT, matches, orderLines, orderRows, pinTtlMs, presenceOf, reportedWord, requestsRange, sessionLines, type SessionLine, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES } from '@/lib/keepalive';
 import { failedFirst, toggled, useAsync, useNow, useQueryFilters } from '@/lib/hooks';
 import { minuteSpan, type BadgeTone } from '@/lib/quota';
 import { costCellOf, spendHintArgs, spendHover, spendUnitOf } from '@/lib/requests';
@@ -133,6 +133,8 @@ interface Row {
   lines: SessionLine[];
   /** Why a session carries no recipe at all, the causes that need no clock, null while it has one. */
   noRecipe: string[] | null;
+  /** The pool of the session's key, null where the key list does not hold the key or the pools did not load. */
+  pool: Pool | null;
   /** The pool of the session's key, null where the key list does not hold the key. */
   poolId: string | null;
   session: Session;
@@ -166,9 +168,9 @@ const requestsHref = (trafficSession: string, session: Pick<Session, 'keyGenerat
   const range = requestsRange(lastRequestAt, clock.now());
   return requestsAddressHref({ ...defaults, agentId: agentId ?? defaults.agentId, keys: [keyLifetime(session.keyId, session.keyGeneration)], range: range === null ? defaults.range : { from: '', preset: range, to: '' }, session: trafficSession });
 };
-/** The analytics on the session the client sent under the row's key lifetime. */
-const analyticsHref = (trafficSession: string, session: Pick<Session, 'keyGeneration' | 'keyId'>) =>
-  `/analytics?${ANALYTICS_CODEC.toParams({ ...ANALYTICS_CODEC.defaults, key: keyLifetime(session.keyId, session.keyGeneration), session: trafficSession })}`;
+/** The analytics on the session the client sent under the row's key lifetime, an agent line's narrowed to its agent. */
+const analyticsHref = (trafficSession: string, session: Pick<Session, 'keyGeneration' | 'keyId'>, agentId?: string) =>
+  `/analytics?${ANALYTICS_CODEC.toParams({ ...ANALYTICS_CODEC.defaults, agentId: agentId ?? ANALYTICS_CODEC.defaults.agentId, key: keyLifetime(session.keyId, session.keyGeneration), session: trafficSession })}`;
 
 /**
  * A session id reads whole, since the cell's column cuts it with an ellipsis, and a sentence passes `chars` to cut it
@@ -233,6 +235,7 @@ function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], keys: ApiKey
       lastUsed,
       lines: orderLines(lines, sort, dir),
       noRecipe: agents.length === 0 || idleLimitOnly ? causes : null,
+      pool,
       poolId: key?.poolId ?? null,
       session,
       status: statusOf(session, lines),
@@ -291,6 +294,19 @@ function rowRecipe(agents: readonly KeepaliveRecipe[]): KeepaliveRecipe | null {
   if (main !== undefined) return main;
   const at = (a: KeepaliveRecipe) => (a.lastRequestAt === null ? Number.NEGATIVE_INFINITY : Date.parse(a.lastRequestAt));
   return [...agents].sort((a, b) => at(b) - at(a) || a.agentId.localeCompare(b.agentId))[0] ?? null;
+}
+
+/**
+ * Reads as "2 retained, 1 held" for the Cache warming details' line, from the states still holding a prompt to the ones
+ * that ended. An agent awaiting cache evidence is retained with no time yet, and counts as retained here.
+ */
+function stateSummary(agents: KeepaliveRecipe[]): string {
+  const states: RecipeState[] = ['retained', 'held', 'paused', 'not_retained', 'ended'];
+  return states
+    .map((state) => ({ count: agents.filter((a) => a.state === state).length, state }))
+    .filter((x) => x.count > 0)
+    .map((x) => `${x.count} ${STATE_LABEL[x.state]}`)
+    .join(', ');
 }
 
 /** The park's kind and the time it returns by, read after the lifecycle word: "background · deadline in 1h 12m". */
@@ -365,12 +381,13 @@ export function SessionsPage() {
   const listed = useMemo(() => built?.filter((r) => r.expiresAt === null || r.expiresAt > now) ?? null, [built, now]);
   // The expiry stays the outer bound, and the filters narrow the list inside it.
   const rows = useMemo(() => listed?.filter((r) => matches(r, filters, now)) ?? null, [listed, filters, now]);
-  // The lines each kept row draws under the filters, which its detail, its Next probe cell and the count read.
-  const drawn = useMemo(() => new Map((rows ?? []).map((r) => [rowKey(r.session), hiddenLines(r, filters).shown])), [rows, filters]);
+  // The lines each kept row draws under the filters and how many the filters fold away, which its detail, its Next
+  // probe cell and the count read.
+  const drawn = useMemo(() => new Map((rows ?? []).map((r) => [rowKey(r.session), hiddenLines(r, filters)])), [rows, filters]);
   const options = useMemo(() => (listed === null ? {} : filterOptions(listed, keys.data, pools.data ?? [], accounts.data ?? [], modelTiers)), [listed, keys.data, pools.data, accounts.data, modelTiers]);
   const hiddenRows = listed !== null && rows !== null ? listed.length - rows.length : 0;
   const hiddenTitle = hiddenRows > 0 ? `${fmtCount(hiddenRows, 'session')} hidden by the filters` : undefined;
-  const agentsKept = [...drawn.values()].reduce((n, lines) => n + agentCount(lines), 0);
+  const agentsKept = [...drawn.values()].reduce((n, lines) => n + agentCount(lines.shown), 0);
   const matching = agentFiltersStand(filters);
   const countWords = rows === null ? '' : `${fmtCount(rows.length, 'session')} · ${fmtCount(agentsKept, matching ? 'matching agent' : 'agent')}`;
   const summary = rows === null ? null : daySummary(rows);
@@ -501,7 +518,8 @@ export function SessionsPage() {
                       columns={columns}
                       cost={cost}
                       current={current === rowDomId(row.session)}
-                      drawn={drawn.get(rowKey(row.session)) ?? []}
+                      drawn={drawn.get(rowKey(row.session))?.shown ?? []}
+                      fold={matching ? (drawn.get(rowKey(row.session))?.hidden ?? 0) : null}
                       forkBase={row.session.forkedFrom === null ? null : rowDomId({ ...row.session, sessionId: row.session.forkedFrom })}
                       listedRows={listedRows}
                       onFollowFork={followFork}
@@ -565,35 +583,42 @@ function ReadNotice({ error, name, retry }: { error: string | null; name: string
   );
 }
 
+/** A pin's burn members: the row's for its display pin, a line's for its own. */
+type BurnFigures = Pick<AgentContext, 'burn' | 'burnEquivalent' | 'burnUnit' | 'burnWindow'>;
+
 /**
- * The pin's burn per hour under the Cost figure: the share of the chosen week on a plan pin, the dollars on a pin
- * billed in dollars, and the share of the pin's own window on hover. None on an unpinned row or a pin with no figure.
+ * A pin's burn per hour: the share of the chosen week on a plan pin, the dollars on a pin billed in dollars, and the
+ * share of the pin's own window as its title. Null with no pin, no figure, or while the week's scale is out.
  */
+function burnReading(pin: BurnFigures | null, cost: CostContext): { text: string; title: string | undefined } | null {
+  if (pin === null || pin.burn === null) return null;
+  if (pin.burnUnit === 'usd') return { text: `${fmtUsd(pin.burn)}/h`, title: undefined };
+  if (pin.burnUnit !== 'window_share' || pin.burnEquivalent === null || cost.scale === null) return null;
+  const window = pin.burnWindow === null ? null : (lookup(HINT_WINDOW, pin.burnWindow) ?? pin.burnWindow);
+  return { text: `${weekShort(pin.burnEquivalent * cost.scale, cost.week)}/h`, title: window === null ? undefined : `${fmtShare(pin.burn)} of ${window}` };
+}
+
+/** The pin's burn per hour under the Cost figure, none on an unpinned row or a pin with no figure. */
 function BurnLine({ cost, session }: { cost: CostContext; session: Session }) {
-  if (!session.pinned || session.burn === null) return null;
-  if (session.burnUnit === 'usd') return <span className="sub">{`${fmtUsd(session.burn)}/h`}</span>;
-  if (session.burnUnit !== 'window_share' || session.burnEquivalent === null || cost.scale === null) return null;
-  const window = session.burnWindow === null ? null : (lookup(HINT_WINDOW, session.burnWindow) ?? session.burnWindow);
-  return (
-    <span className="sub" title={window === null ? undefined : `${fmtShare(session.burn)} of ${window}`}>
-      {`${weekShort(session.burnEquivalent * cost.scale, cost.week)}/h`}
+  const burn = burnReading(session.pinned ? session : null, cost);
+  return burn === null ? null : (
+    <span className="sub" title={burn.title}>
+      {burn.text}
     </span>
   );
 }
 
 /**
- * The Cost cell: the session's spend over its client requests in the chosen unit, as the request log's cell reads a
- * request, then the dollars billed beside a plan figure and the other accounts whose windows the requests spent on, the
- * figure in full with the probes' share on the title, and the pin's burn under it. The skeleton while the scale is
- * out, a dash titled with the week reading's failure where it carries one, and a muted dash before any ledgered
- * request.
+ * The Cost cell: a spend over client requests in the chosen unit, the session's or an agent's, as the request log's
+ * cell reads a request, then the dollars billed beside a plan figure and the accounts other than `accountId` whose
+ * windows the requests spent on, the figure in full with the probes' share on the title, and `burn` under it. The
+ * skeleton while the scale is out, a dash titled with the week reading's failure where it carries one, and a muted
+ * dash before any ledgered request.
  */
-function CostCell({ cost, session }: { cost: CostContext; session: Session }) {
-  const { spend } = session;
+function CostCell({ accountId, burn = null, cost, spend }: { accountId: string | null; burn?: ReactNode; cost: CostContext; spend: SessionSpend | null }) {
   const args = spend === null ? null : spendHintArgs(spend, cost.accounts);
   const hint = args === null ? null : shareHint(...args);
-  const reading = spendUnitOf(spend, cost.unit, session.accountId, hint);
-  const burn = <BurnLine cost={cost} session={session} />;
+  const reading = spendUnitOf(spend, cost.unit, accountId, hint);
   if (spend === null || reading === null)
     return (
       <td className="right num col-fit" title={NO_TRAFFIC_HINT}>
@@ -645,14 +670,104 @@ function RowAccount({ account, now, others, session }: { account: Account | null
       </Link>
       {/* An unpinned row on a slowed account carries no speed, so the row's own speed gates the chip. */}
       {session.speed !== null && <SpeedChip {...memberSpeed(session, account, now)} />}
-      {/* A pin stamped before the mark carried its reason reads as shed. */}
-      {session.shedFrom !== null && (
-        <Badge tone="warning" title={`Marked to leave ${session.shedFrom}: ${session.shedReason ?? 'shed'}. The next request moves the session`}>
-          leaving
-        </Badge>
-      )}
+      <ShedBadge session={session} />
       <OtherPins agents={others} lead="Agents on another account:" />
     </span>
+  );
+}
+
+/** The warning badge `leaving` on a session a shedding round or a failover marked to leave its account. */
+function ShedBadge({ session }: { session: Pick<Session, 'shedFrom' | 'shedReason'> }) {
+  if (session.shedFrom === null) return null;
+  // A pin stamped before the mark carried its reason reads as shed.
+  return (
+    <Badge tone="warning" title={`Marked to leave ${session.shedFrom}: ${session.shedReason ?? 'shed'}. The next request moves the session`}>
+      leaving
+    </Badge>
+  );
+}
+
+/** The mod's state for a session: `reporting` with `seen {ago}`, `silent` with how long, or `none` muted. */
+function CompanionChip({ now, session }: { now: number; session: Session }) {
+  const presence = presenceOf(session, now);
+  if (session.companion === 'reporting')
+    return (
+      <>
+        <Badge tone="good" dot title={COMPANION_HINT.reporting}>
+          reporting
+        </Badge>
+        {presence && (
+          <span className="sub srow__presence" title={presenceTitle(session, now)}>
+            {presence.text}
+          </span>
+        )}
+      </>
+    );
+  if (session.companion === 'silent')
+    return (
+      <>
+        <Badge tone="warning" dot title={COMPANION_HINT.silent}>
+          silent
+        </Badge>
+        {session.companionSince !== null && (
+          <span className="sub" title={presenceTitle(session, now)}>
+            {fmtDuration(now - Date.parse(session.companionSince))}
+          </span>
+        )}
+      </>
+    );
+  return (
+    <span className="muted" title={COMPANION_HINT.none}>
+      none
+    </span>
+  );
+}
+
+/**
+ * A fork's relation to its base's account, read off the two listed rows alone: a base this list does not hold, or a
+ * row without a live pin, is never claimed to be on the same account or another.
+ */
+const forkRelation = (baseAccountId: string | null, rowAccountId: string | null): string | null =>
+  baseAccountId === null || rowAccountId === null ? null : baseAccountId === rowAccountId ? 'same account' : 'on another account';
+
+/** One fact of an open row: its label and its value. */
+type Fact = [string, ReactNode];
+
+/** A grid of an open row's facts under its title, with the title's link beside it. */
+function Facts({ link, rows, title }: { link?: ReactNode; rows: Fact[]; title: string }) {
+  return (
+    <div className="facts__group">
+      <div className="facts__head">
+        <span className="facts__title">{title}</span>
+        {link}
+      </div>
+      <dl className="kv facts">
+        {rows.map(([label, value]) => (
+          <div key={label} className="kv__row">
+            <dt>{label}</dt>
+            <dd>{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
+/**
+ * A line that opens and shuts what `controls` names, as the head's disclosure does: the chevron, turned as the row's
+ * gutter is while open, and the label on a link button, then the hint in the secondary ink.
+ */
+function Disclosure({ className, controls, hint, label, onToggle, open, title }: { className?: string; controls: string; hint?: ReactNode; label: string; onToggle: () => void; open: boolean; title?: string }) {
+  return (
+    <div className={className === undefined ? 'disclosure' : `disclosure ${className}`}>
+      <button type="button" className="link-btn disclosure__toggle" aria-expanded={open} aria-controls={controls} title={title} onClick={onToggle}>
+        <span className="disclosure__chevron" aria-hidden>
+          <IconChevron size={14} />
+        </span>
+        {label}
+      </button>
+      {hint !== undefined && <span className="disclosure__hint">{hint}</span>}
+    </div>
   );
 }
 
@@ -666,6 +781,7 @@ function SessionRows({
   cost,
   current,
   drawn,
+  fold,
   forkBase,
   listedRows,
   onFollowFork,
@@ -681,6 +797,8 @@ function SessionRows({
   current: boolean;
   /** The lines the row draws, `hiddenLines`' answer under the filters. */
   drawn: SessionLine[];
+  /** How many agents the Agents filters fold out of the open row, null while none stands. */
+  fold: number | null;
   /** The element id the base of a forked session would carry, whether or not it is listed; null off a fork. */
   forkBase: string | null;
   listedRows: ReadonlyMap<string, Row>;
@@ -696,6 +814,7 @@ function SessionRows({
   visible: ReadonlySet<SessionColumnId>;
 }) {
   const { expiresAt, lastUsed, session, status } = row;
+  const account = accountById.get(session.accountId ?? '') ?? null;
   const noRecipe = noRecipeText(row, now);
   const lines = drawn;
   const shown = drawn.flatMap((l) => (l.recipe === null ? [] : [l.recipe]));
@@ -734,6 +853,29 @@ function SessionRows({
   const split = Object.entries(lifecycleSplit(row.lines)).flatMap(([word, n]) => (n > 0 ? [`${fmtInt(n)} ${word}`] : []));
   // The state the route's summary reads, unless no recipe keeps the session's prompt.
   const recipe = row.noRecipe === null ? rowRecipe(row.agents) : null;
+  const relation = forkRelation(baseAccountId, session.pinned ? session.accountId : null);
+  // The earlier agents are the ones no line names, a released line hidden by the filters among the named.
+  const earlier = earlierAgents(session, row.lines);
+  const [earlierOpen, setEarlierOpen] = useState(false);
+  const [warmingOpen, setWarmingOpen] = useState(false);
+  const tableId = useId();
+  const warmingId = useId();
+  const since = (iso: string) => `${fmtAbsolute(iso)}, ${fmtRelative(iso, now)}`;
+  const pinnedSince = row.lines.find((l) => l.agentId === MAIN_AGENT)?.pin?.createdAt ?? session.createdAt;
+  const speed = memberSpeed(session, account, now);
+  const agentRow = (agentId: string, line: SessionLine | null, figures: AgentFigures | null) => (
+    <AgentRow
+      key={line === null ? `earlier|${agentId}` : `${agentId}|${line.model}`}
+      accountById={accountById}
+      agentId={agentId}
+      cost={cost}
+      figures={figures}
+      line={line}
+      now={now}
+      onOpen={onOpen}
+      session={session}
+    />
+  );
   const cacheTitle =
     session.warm === null
       ? undefined
@@ -815,7 +957,7 @@ function SessionRows({
         )}
         {visible.has('account') && (
           <td className="col-fit">
-            <RowAccount account={accountById.get(session.accountId ?? '') ?? null} now={now} others={otherAccounts} session={session} />
+            <RowAccount account={account} now={now} others={otherAccounts} session={session} />
           </td>
         )}
         {visible.has('requests') && (
@@ -824,7 +966,7 @@ function SessionRows({
             {session.lastRequestAt !== null && <span className="sub">{fmtRelative(session.lastRequestAt, now)}</span>}
           </td>
         )}
-        {visible.has('cost') && <CostCell cost={cost} session={session} />}
+        {visible.has('cost') && <CostCell accountId={session.accountId} burn={<BurnLine cost={cost} session={session} />} cost={cost} spend={session.spend} />}
         {/* Expiry rides under the last-used time rather than in a column of its own, which is 90px the 1600px window did not have. */}
         {visible.has('lastUsed') && (
           <td className="col-fit" title={fmtAbsolute(lastUsed)}>
@@ -852,33 +994,7 @@ function SessionRows({
         )}
         {visible.has('companion') && (
           <td className="col-fit">
-            {session.companion === 'reporting' ? (
-              <>
-                <Badge tone="good" dot title={COMPANION_HINT.reporting}>
-                  reporting
-                </Badge>
-                {presence && (
-                  <span className="sub srow__presence" title={presenceTitle(session, now)}>
-                    {presence.text}
-                  </span>
-                )}
-              </>
-            ) : session.companion === 'silent' ? (
-              <>
-                <Badge tone="warning" dot title={COMPANION_HINT.silent}>
-                  silent
-                </Badge>
-                {session.companionSince !== null && (
-                  <span className="sub" title={presenceTitle(session, now)}>
-                    {fmtDuration(now - Date.parse(session.companionSince))}
-                  </span>
-                )}
-              </>
-            ) : (
-              <span className="muted" title={COMPANION_HINT.none}>
-                none
-              </span>
-            )}
+            <CompanionChip now={now} session={session} />
           </td>
         )}
         {visible.has('context') && (
@@ -933,52 +1049,198 @@ function SessionRows({
       {open && (
         <tr className="srow__detail table__detail">
           <td colSpan={columns}>
-            <p className="agents__created">
-              {session.createdAt === null ? 'Created: unknown' : `Created ${fmtAbsolute(session.createdAt)}, ${fmtRelative(session.createdAt, now)}`}
-            </p>
-            {noRecipe && (
-              <p className="agents__none">
-                <Badge tone="neutral" title={NO_RECIPE_HINT}>
-                  no recipe
-                </Badge>
-                <span>Nothing is scheduled because {noRecipe}.</span>
-              </p>
-            )}
-            {/* A finished session keeps its lines, so the sentence stands above them. */}
-            {row.finished && shown.length > 0 && (
-              <p className="agents__released">The mod released every agent of this session. Their records keep their slots of the cap for one cache TTL after the release and then leave the engine.</p>
-            )}
-            {/* The union's length, so a session no mod reports draws its pins' lines. */}
-            {lines.length > 0 && (
-              <div className="agents">
-                <div className="agents__row agents__row--head">
-                  <span>Agent</span>
-                  <span>Model</span>
-                  <span>Effort</span>
-                  <span>Context</span>
-                  <span>Account</span>
-                  <span>TTL</span>
-                  <span>Last request</span>
-                  <span>Last probe</span>
-                  <span>Next probe</span>
-                  <span title={COUNTS_HINT}>Probes / credited</span>
-                  <span>State</span>
-                </div>
-                {lines.map((line) => (
-                  <AgentLine
-                    key={`${line.agentId}|${line.model}`}
-                    accountById={accountById}
-                    line={line}
-                    now={now}
-                    requestsTo={hasTraffic ? requestsHref(trafficSession, session, lineLastRequestAt(line) ?? session.lastRequestAt, line.agentId) : null}
-                  />
-                ))}
+            <div className="srow__panel">
+              {row.finished && <p className="srow__finished">{LIFECYCLE_HINT.finished}</p>}
+              <div className="srow__facts">
+                <Facts
+                  title="Session"
+                  rows={[
+                    ['Created', session.createdAt === null ? <span className="muted">unknown</span> : since(session.createdAt)],
+                    [
+                      'Key',
+                      session.historical ? (
+                        <>
+                          <span className="mono">{session.keyId}</span>,{' '}
+                          <span className="muted" title={HISTORICAL_HINT}>
+                            deleted holder
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          {/* The Keys view lands on the key's row by its id and clears a filter that would hide it. */}
+                          <Link className="mono" to={`/keys#${encodeURIComponent(session.keyId)}`}>
+                            {session.keyId}
+                          </Link>
+                          {row.pool !== null && ` in pool ${row.pool.name}`}
+                        </>
+                      ),
+                    ],
+                    ['Client', session.userAgent === null ? <span className="muted">-</span> : <span title={session.userAgent}>{clientVersion(session.userAgent)}</span>],
+                    [
+                      'Fork',
+                      session.forkedFrom === null ? (
+                        <span className="muted">none</span>
+                      ) : (
+                        <>
+                          {baseRow !== null && forkBase !== null ? (
+                            <a
+                              className="mono"
+                              href={`#${forkBase}`}
+                              title={session.forkedFrom}
+                              onClick={(e) => {
+                                e.preventDefault();
+                                onFollowFork(forkBase);
+                              }}
+                            >
+                              {shortId(session.forkedFrom, 13)}
+                            </a>
+                          ) : (
+                            <span className="mono" title={session.forkedFrom}>
+                              {shortId(session.forkedFrom, 13)}
+                            </span>
+                          )}
+                          {session.forkDepth === null ? '' : ` at depth ${session.forkDepth}`}
+                          {relation === null ? '' : `, ${relation}`}
+                        </>
+                      ),
+                    ],
+                    ['Epoch', String(session.epoch ?? 1)],
+                    ['Companion', <CompanionChip now={now} session={session} />],
+                  ]}
+                />
+                <Facts
+                  title="Routing"
+                  link={<Link to={logHref({ session: session.sessionId, ...aroundSubject(activity === null ? null : Date.parse(activity), now) })}>View in routing log</Link>}
+                  rows={[
+                    [
+                      'Account',
+                      session.accountId === null ? (
+                        <span className="muted">none</span>
+                      ) : (
+                        <>
+                          <Link to={accountHref(session.accountId)}>{session.accountId}</Link>
+                          {account !== null && ` ${account.kind === 'oauth' ? 'subscription' : 'API key'}`}
+                        </>
+                      ),
+                    ],
+                    ['Pinned since', pinnedSince === null ? <span className="muted">-</span> : since(pinnedSince)],
+                    [
+                      'Shed mark',
+                      session.shedFrom === null ? (
+                        <span className="muted">none</span>
+                      ) : (
+                        <>
+                          <ShedBadge session={session} />
+                          {` ${session.shedFrom} (${session.shedReason ?? 'shed'})`}
+                        </>
+                      ),
+                    ],
+                    ['Runway', runwayWord(session) ?? <span className="muted">-</span>],
+                    ['Speed', session.speed !== null && speed.factor !== null && speed.factor < 1 ? <SpeedChip {...speed} /> : 'full speed'],
+                    ['Cycle', session.cycleMs === null ? <span className="muted">not measured yet</span> : ageWord(session.cycleMs)],
+                  ]}
+                />
               </div>
-            )}
+              <table id={tableId} className="table agents-table">
+                <thead>
+                  <tr>
+                    <th>Agent</th>
+                    <th>Type</th>
+                    <th>Model</th>
+                    <th>Account</th>
+                    <th>Context</th>
+                    <th>Burn</th>
+                    <th className="right">Requests</th>
+                    <th className="right">Cost</th>
+                    <th>Status</th>
+                    <th>Cache</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {lines.map((line) => agentRow(line.agentId, line, agentFigures(session, line.agentId)))}
+                  {fold === null && earlierOpen && earlier.map((agent) => agentRow(agent.agentId, null, agent))}
+                </tbody>
+              </table>
+              {fold !== null && fold > 0 && <p className="srow__fold">{fmtCount(fold, 'agent')} hidden by the filters</p>}
+              {/* Under Agents filters the earlier agents are among the agents the fold line counts. */}
+              {fold === null && earlier.length > 0 && <EarlierLine agents={earlier} controls={tableId} cost={cost} onToggle={() => setEarlierOpen((v) => !v)} open={earlierOpen} session={session} />}
+              <div className="srow__warming">
+                <Disclosure
+                  controls={warmingId}
+                  hint={noRecipe !== null ? 'no recipe' : stateSummary(shown) || 'no recipe'}
+                  label="Cache warming"
+                  onToggle={() => setWarmingOpen((v) => !v)}
+                  open={warmingOpen}
+                />
+                <div id={warmingId} className="srow__warming-body" hidden={!warmingOpen}>
+                  {noRecipe && (
+                    <p className="agents__none">
+                      <Badge tone="neutral" title={NO_RECIPE_HINT}>
+                        no recipe
+                      </Badge>
+                      <span>Nothing is scheduled because {noRecipe}.</span>
+                    </p>
+                  )}
+                  {/* The union's length, so a session no mod reports draws its pins' lines. */}
+                  {lines.length > 0 && (
+                    <div className="agents">
+                      <div className="agents__row agents__row--head">
+                        <span>Agent</span>
+                        <span>TTL</span>
+                        <span>Last request</span>
+                        <span>Last probe</span>
+                        <span>Next probe</span>
+                        <span title={COUNTS_HINT}>Probes / credited</span>
+                        <span>State</span>
+                      </div>
+                      {lines.map((line) => (
+                        <AgentLine key={`${line.agentId}|${line.model}`} line={line} now={now} requestsTo={hasTraffic ? requestsHref(trafficSession, session, lineLastRequestAt(line) ?? session.lastRequestAt, line.agentId) : null} />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
           </td>
         </tr>
       )}
     </>
+  );
+}
+
+/**
+ * The earlier agents line: how many agents the ledger holds rows of with no line, their requests and their spend as the
+ * Cost cell reads it, `+$` where dollars were billed beside a plan figure, and their ids on its title. Opened, each joins
+ * the Agents table the line controls.
+ */
+function EarlierLine({ agents, controls, cost, onToggle, open, session }: { agents: (AgentFigures & { agentId: string })[]; controls: string; cost: CostContext; onToggle: () => void; open: boolean; session: Session }) {
+  const [first, ...rest] = agents;
+  const spend = rest.reduce((sum, agent) => addSpend(sum, agent.spend), first.spend);
+  const reading = spendUnitOf(spend, cost.unit, session.accountId, null);
+  const cell = reading === null ? null : costCellOf(reading.unit, cost.week, cost.scale);
+  return (
+    <Disclosure
+      className="srow__earlier"
+      controls={controls}
+      hint={
+        <>
+          {`· ${fmtCount(spend.requests, 'request')} · ${cell?.main ?? '-'}`}
+          {reading !== null && reading.billed > 0 && (
+            <>
+              {' '}
+              <Badge tone="neutral" title={`${fmtUsd(reading.billed)} billed in dollars`}>
+                +$
+              </Badge>
+            </>
+          )}
+        </>
+      }
+      label={fmtCount(agents.length, 'earlier agent')}
+      onToggle={onToggle}
+      open={open}
+      title={agents.map((a) => a.agentId).join(', ')}
+    />
   );
 }
 
@@ -1009,9 +1271,7 @@ function ForkBadge({
   rowAccountId: string | null;
 }) {
   const at = depth === null ? '' : ` at depth ${depth}`;
-  // The relation is read off the two listed rows alone: a base this list does not hold, or a row without a live pin,
-  // is never claimed to be on the same account or another.
-  const relation = base !== null && baseAccount !== null && rowAccountId !== null ? (baseAccount.id === rowAccountId ? 'same account' : 'on another account') : null;
+  const relation = forkRelation(baseAccount?.id ?? null, rowAccountId);
   const title =
     base === null
       ? `Branched from session ${from}${at}, which this list does not hold`
@@ -1057,15 +1317,12 @@ const PIN_CACHE_HINT = {
 const lineLastRequestAt = ({ pin, recipe }: SessionLine): string | null => (recipe !== null ? recipe.lastRequestAt : (pin?.lastUsedAt ?? null));
 
 /**
- * One line of an expanded row. A recipe's line reads its own model, account, TTL, probes and state as the mod reports
- * them, and its pin's Effort and Context, dashes where it stands on none. A pin no recipe stands on reads its own
- * figures, its TTL as the time left on its cache, its last use as its last request, a dash in each probe cell and a
- * warm or cold state, with no lifecycle line under it.
+ * One line of the Cache warming details. A recipe's line reads its TTL, probes and state as the mod reports them. A pin
+ * no recipe stands on reads its TTL as the time left on its cache, its last use as its last request, a dash in each
+ * probe cell and a warm or cold state, with no lifecycle line under it.
  */
-function AgentLine({ accountById, line, now, requestsTo }: { accountById: ReadonlyMap<string, Account>; line: SessionLine; now: number; requestsTo: string | null }) {
+function AgentLine({ line, now, requestsTo }: { line: SessionLine; now: number; requestsTo: string | null }) {
   const { pin, recipe: a } = line;
-  const context = contextCell(pin?.lastInputTokens ?? null);
-  const accountId = a !== null ? a.accountId : (pin?.accountId ?? null);
   const ttlMs = a !== null ? a.ttlSeconds * 1000 : pin === null ? null : pinTtlMs(pin, now);
   const lastRequestAt = lineLastRequestAt(line);
   const cache = pin?.warm ? 'warm' : 'cold';
@@ -1074,12 +1331,6 @@ function AgentLine({ accountById, line, now, requestsTo }: { accountById: Readon
       <span className="mono agents__id" title={line.agentId}>
         {requestsTo === null ? line.agentId : <Link to={requestsTo}>{line.agentId}</Link>}
       </span>
-      <span className="mono nowrap" title={modelTitle(line.model ?? '', shortModel(line.model ?? ''))}>
-        {shortModel(line.model ?? '')}
-      </span>
-      <span>{pin?.effort ?? <span className="muted">-</span>}</span>
-      <span className={context === '-' ? 'muted' : 'num'}>{context}</span>
-      {accountId === null ? <span className="muted">none</span> : <LineAccount account={accountById.get(accountId) ?? null} id={accountId} now={now} />}
       {ttlMs === null ? <span className="muted">-</span> : <span className="num">{fmtDuration(ttlMs)}</span>}
       <span {...timeCell(lastRequestAt, now, 'none')} />
       {a === null ? (
@@ -1128,10 +1379,11 @@ function AgentLine({ accountById, line, now, requestsTo }: { accountById: Readon
 }
 
 /**
- * A line's account: a link to its page with the kind on its title, described to a reader that never hovers, and its
- * slow-down chip while the slow-down holds. An account the list lacks reads its id alone.
+ * A line's account: a link to its page with the kind on its title, described to a reader that never hovers, then on the
+ * row's own account the row's slow-down chip and shed mark, and on another the account's slow-down chip while it
+ * holds. An account the list lacks reads its id alone.
  */
-function LineAccount({ account, id, now }: { account: Account | null; id: string; now: number }) {
+function LineAccount({ account, id, now, row }: { account: Account | null; id: string; now: number; row: Session | null }) {
   const title = account ? KIND_HINT[account.kind] : undefined;
   const kind = useHostedDescription(title);
   return (
@@ -1139,8 +1391,118 @@ function LineAccount({ account, id, now }: { account: Account | null; id: string
       <Link to={accountHref(id)} title={title} aria-describedby={kind}>
         {id}
       </Link>
-      <SpeedChip {...memberSpeed({ speed: null }, account, now)} />
+      {row === null ? <SpeedChip {...memberSpeed({ speed: null }, account, now)} /> : row.speed !== null && <SpeedChip {...memberSpeed(row, account, now)} />}
+      {row !== null && <ShedBadge session={row} />}
     </span>
+  );
+}
+
+/**
+ * One row of the Agents table: a line's agent, read off its pin and its recipe, or an earlier agent, which holds no line
+ * and reads its newest ledger entry, dashes for a pin's figures and `no pin`. Requests and Cost read every entry of the
+ * agent summed, and the menu opens the session's views narrowed to the agent.
+ */
+function AgentRow({
+  accountById,
+  agentId,
+  cost,
+  figures,
+  line,
+  now,
+  onOpen,
+  session,
+}: {
+  accountById: ReadonlyMap<string, Account>;
+  agentId: string;
+  cost: CostContext;
+  /** The agent's entries summed, null for an agent the ledger holds no row of. */
+  figures: AgentFigures | null;
+  /** The line the agent draws, null for an earlier agent. */
+  line: SessionLine | null;
+  now: number;
+  onOpen: (path: string) => void;
+  session: Session;
+}) {
+  const pin = line?.pin ?? null;
+  const recipe = line?.recipe ?? null;
+  // Analytics and the request log read the ledger, so a session that never reached it has nothing to open.
+  const hasTraffic = session.lastRequestAt !== null;
+  const lastRequestAt = figures?.lastRequestAt ?? null;
+  const model = line === null ? (figures?.model ?? null) : line.model;
+  const short = model === null ? null : shortModel(model);
+  // A recipe names the account its request reached, and none where the request was refused before any account served
+  // it, whatever pin stands beside it.
+  const accountId = line === null ? (figures?.accountId ?? null) : recipe !== null ? recipe.accountId : (pin?.accountId ?? null);
+  const type = agentId === MAIN_AGENT ? null : line === null ? (figures?.agentType ?? null) : line.agentType;
+  const since = (iso: string) => `${fmtAbsolute(iso)}, ${fmtRelative(iso, now)}`;
+  const title = joinPresent([lastRequestAt === null ? null : `Last request ${since(lastRequestAt)}.`, pin?.createdAt ? `Pinned since ${since(pin.createdAt)}.` : null], ' ');
+  const tokens = pin?.lastInputTokens ?? null;
+  const context = contextCell(tokens);
+  const burn = burnReading(pin, cost);
+  // Main reads unreported on a session no mod reports, as its row does, whatever word the engine holds for it.
+  const word = line === null ? null : agentId === MAIN_AGENT ? reportedWord(session, line.lifecycle) : line.lifecycle;
+  const park = word === 'parked' && recipe !== null ? parkDetail(recipe, now).replace(/^ · /, '') : '';
+  const hint = LIFECYCLE_HINT[word ?? 'unreported'];
+  const cacheTitle =
+    pin === null
+      ? undefined
+      : joinPresent([PIN_CACHE_HINT[pin.warm ? 'warm' : 'cold'], recipe === null ? null : `${STATE_HINT[recipe.state]} ${CAUSE_HINT[recipe.cause]}`, recipe?.nextProbeAt ? `Next probe at ${fmtAbsolute(recipe.nextProbeAt)}.` : null], ' ');
+  return (
+    <tr>
+      <td className="mono" title={title === '' ? undefined : title}>
+        {hasTraffic ? <Link to={requestsHref(session.sessionId, session, lastRequestAt, agentId)}>{agentId}</Link> : agentId}
+      </td>
+      <td>{type ?? <span className="muted">-</span>}</td>
+      <td title={model === null || short === null ? undefined : modelTitle(model, short)}>
+        {short === null ? <span className="muted">-</span> : <span className="mono nowrap">{short}</span>}
+        <span className="sub">{pin?.effort ?? '-'}</span>
+      </td>
+      <td>{accountId === null ? <span className="muted">none</span> : <LineAccount account={accountById.get(accountId) ?? null} id={accountId} now={now} row={accountId === session.accountId ? session : null} />}</td>
+      <td title={tokens ? `${fmtInt(tokens)} tokens` : undefined}>
+        <span className={context === '-' ? 'muted' : 'num'}>{context}</span>
+      </td>
+      <td title={burn?.title}>{burn === null ? <span className="muted">-</span> : <span className="num">{burn.text}</span>}</td>
+      <td className="right num">{figures !== null && figures.requests > 0 ? fmtInt(figures.requests) : <span className="muted">0</span>}</td>
+      <CostCell accountId={accountId} cost={cost} spend={figures?.spend ?? null} />
+      <td>
+        {line === null ? (
+          <span className="muted">no pin</span>
+        ) : word === null ? (
+          <span className="muted" title={hint}>
+            unreported
+          </span>
+        ) : (
+          <Badge tone={STATUS_TONE[word]} dot title={park === '' ? hint : `${hint}\n${park}`}>
+            {word}
+          </Badge>
+        )}
+      </td>
+      <td>
+        {line === null ? (
+          <span className="muted">-</span>
+        ) : pin === null ? (
+          <span className="muted">no pin</span>
+        ) : (
+          <>
+            <Badge tone={pin.warm ? 'good' : 'neutral'} dot title={cacheTitle}>
+              {pin.warm ? 'warm' : 'cold'}
+            </Badge>
+            {recipe !== null && <span className="sub">{STATE_LABEL[recipe.state]}</span>}
+          </>
+        )}
+      </td>
+      <td onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+        <Menu
+          label={`Actions for agent ${agentId}`}
+          items={[
+            { label: 'View in analytics', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(analyticsHref(session.sessionId, session, agentId)) },
+            { label: 'View in requests', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(requestsHref(session.sessionId, session, lastRequestAt, agentId)) },
+            // An hour either side of the agent's last request, read when the item is chosen.
+            { label: 'View in routing log', onClick: () => onOpen(logHref({ agentId, session: session.sessionId, ...aroundSubject(lastRequestAt === null ? null : Date.parse(lastRequestAt), now) })) },
+          ]}
+        />
+      </td>
+    </tr>
   );
 }
 

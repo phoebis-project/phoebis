@@ -11396,11 +11396,13 @@ async function sessionsTableFits(theme) {
       table.style.width = 'min-content';
       const least = Math.ceil(table.getBoundingClientRect().width);
       table.style.width = '';
-      const session = [...table.querySelectorAll('thead th')].find((th) => th.textContent?.trim() === 'Session') ?? null;
-      const account = [...table.querySelectorAll('thead th')].find((th) => th.textContent?.trim() === 'Account') ?? null;
+      // The session table's own head, never an open row's Agents table's.
+      const heads = [...table.querySelectorAll(':scope > thead > tr > th')];
+      const session = heads.find((th) => th.textContent?.trim() === 'Session') ?? null;
+      const account = heads.find((th) => th.textContent?.trim() === 'Account') ?? null;
       return {
         client: wrap.clientWidth,
-        columns: [...table.querySelectorAll('thead th')].map((th) => [th.textContent?.trim() ?? '', Math.round(th.getBoundingClientRect().width)]),
+        columns: heads.map((th) => [th.textContent?.trim() ?? '', Math.round(th.getBoundingClientRect().width)]),
         document: { inner: window.innerWidth, scroll: document.documentElement.scrollWidth },
         least,
         rows: table.querySelectorAll('tbody tr.srow').length,
@@ -11483,9 +11485,10 @@ async function tableColumns(theme, view, selector, fill, fixed = 0, { overflowRe
     const table = document.querySelector(sel);
     if (!table) return null;
     const wrap = table.closest('.table-wrap') ?? table.parentElement;
-    const ths = [...table.querySelectorAll('thead th')];
+    // The table's own head and rows, never those of a table nested in a detail row's cell.
+    const ths = [...table.querySelectorAll(':scope > thead > tr > th')];
     // A detail row spans the table with one cell, so only the rows shaped like the head are read.
-    const rows = [...table.querySelectorAll('tbody tr')].filter((tr) => tr.children.length === ths.length);
+    const rows = [...table.querySelectorAll(':scope > tbody > tr')].filter((tr) => tr.children.length === ths.length);
     const inline = (display) => display.startsWith('inline') || display === 'contents';
     // A form control is a box whatever its display, since a select's options draw no boxes of their own.
     const atomic = (node) => node.matches('button, input, select, textarea');
@@ -11678,12 +11681,12 @@ async function sessionRowMenu(theme) {
 }
 
 /**
- * The agent lines Expand all opens on Sessions, read at the width the pass sets (1280 by 800, then 1440 by 900). Each
- * session's `.agents` is one grid of eleven tracks whose head and lines are subgrid rows, so on the story's companion
- * session with the longest subagent id the head's, main's and that id's cells share one left edge per column within
- * 1 px, the edges recorded. Every id reads whole on one line (its laid-out width inside its cell, the widest as wide as
- * the Agent track, and no title but the id), every Account cell holds its link and its speed chip inside its box, and
- * State closes the line's columns. A grid may scroll inside the card at 1280 px, so each line's state badge ends inside
+ * The agent lines of the Cache warming details on every row Expand all opens on Sessions, each details opened, read at
+ * the width the pass sets (1280 by 800, then 1440 by 900). Each session's `.agents` is one grid of seven tracks whose
+ * head and lines are subgrid rows, so on the story's companion session with the longest subagent id the head's, main's
+ * and that id's cells share one left edge per column within 1 px, the edges recorded. Every id reads whole on one line
+ * (its laid-out width inside its cell, the widest as wide as the Agent track, and no title but the id), and State
+ * closes the line's columns. A grid may scroll inside the card at 1280 px, so each line's state badge ends inside
  * its grid's scroll width there and inside its visible box at 1440 px, where no grid scrolls: the widest grid's scroll
  * and client widths are recorded at both. At both widths the expanded table stays inside its wrap, whose scroll and
  * client widths are recorded. A cause badge wraps inside its own State cell, its edges recorded against the table's
@@ -11729,6 +11732,10 @@ async function agentLines(theme, width) {
     }
   }
   await expand.click();
+  await settle();
+  const warming = page.locator('.srow__warming .disclosure__toggle');
+  const details = await warming.count();
+  for (let i = 0; i < details; i += 1) await warming.nth(i).click();
   await settle();
   const read = await page.evaluate(() => {
     const round = (n) => Math.round(n * 100) / 100;
@@ -11802,7 +11809,7 @@ async function agentLines(theme, width) {
   // scrolling inside its own box, and the wrap's scroll width is what shows it.
   if (read.wrap === null) say('Expand all left no session table to bound');
   else if (read.wrap.scroll > read.wrap.client + 1) say(`the expanded lines widen the session table to ${read.wrap.scroll}px of its ${read.wrap.client}px wrap at ${width} px, so the table scrolls sideways where a grid should scroll inside the card`);
-  for (const g of read.grids.filter((x) => x.head.length !== 11 || x.head[x.head.length - 1] !== 'State')) say(`an agent grid's head reads ${JSON.stringify(g.head)}, not eleven columns closing on State`);
+  for (const g of read.grids.filter((x) => x.head.length !== 7 || x.head[x.head.length - 1] !== 'State')) say(`an agent grid's head reads ${JSON.stringify(g.head)}, not seven columns closing on State`);
   if (mock && (edges === null || edges.main === null)) say("the story's companion session with the longest subagent id draws no main line to read its column edges against");
   if (edges !== null && edges.main !== null) {
     const names = columns.head;
@@ -11823,6 +11830,65 @@ async function agentLines(theme, width) {
   for (const line of reasons.filter((l) => l.reason.left < l.cell.left || l.reason.right > l.cell.right)) {
     say(`agent ${line.agent}'s cause "${line.reason.text}" runs from ${line.reason.left}px to ${line.reason.right}px, outside its State cell's ${line.cell.left}px to ${line.cell.right}px`);
   }
+  // A row keeps its details open across a collapse, so each shuts before the rows do.
+  for (let i = 0; i < details; i += 1) await warming.nth(i).click();
+  await page.getByRole('button', { name: 'Collapse all', exact: true }).click();
+  await atRest();
+  await settle();
+}
+
+/**
+ * The Agents table of every row Expand all opens on Sessions at 1280 by 800, each earlier agents line opened so its
+ * agents join the table: the table's scroll width at or under its detail panel's client width, which the detail cell's
+ * inset leaves it, its eleven heads closing on the menu's, and its head cells in the size, weight and ink of the session
+ * table's. Every table stretches to its panel, so the one whose narrowest layout is widest is recorded with that width.
+ * The earlier agents lines and the rows shut again.
+ */
+async function agentsTableFits(theme) {
+  const say = (what) => failures.push(`${theme} /sessions agents table: ${what}`);
+  const expand = page.getByRole('button', { name: 'Expand all', exact: true });
+  if ((await expand.count()) === 0) {
+    if (mock) say('the story has sessions to expand, yet there is no Expand all button');
+    return;
+  }
+  await expand.click();
+  await settle();
+  const earlier = page.locator('.srow__earlier .disclosure__toggle');
+  const opened = await earlier.count();
+  for (let i = 0; i < opened; i += 1) await earlier.nth(i).click();
+  await settle();
+  const read = await page.evaluate(() => {
+    const type = (el) => {
+      if (!el) return null;
+      const s = getComputedStyle(el);
+      return { color: s.color, fontSize: s.fontSize, fontWeight: s.fontWeight };
+    };
+    const tables = [...document.querySelectorAll('.sessions-table .srow__detail table.agents-table')].map((table) => {
+      table.style.width = 'min-content';
+      const least = Math.ceil(table.getBoundingClientRect().width);
+      table.style.width = '';
+      return {
+        cell: table.closest('td')?.clientWidth ?? null,
+        heads: [...table.querySelectorAll(':scope > thead > tr > th')].map((th) => th.textContent?.trim() ?? ''),
+        least,
+        panel: table.closest('.srow__panel')?.clientWidth ?? null,
+        rows: table.querySelectorAll(':scope > tbody > tr').length,
+        scroll: table.scrollWidth,
+        session: table.closest('tr.srow__detail')?.previousElementSibling?.querySelector('.srow__id')?.textContent?.trim() ?? null,
+      };
+    });
+    return { head: type(document.querySelector('.sessions-table .srow__detail table.agents-table > thead > tr > th')), outer: type(document.querySelector('.sessions-table > thead > tr > th.col-fill')), tables };
+  });
+  const widest = read.tables.reduce((w, t) => (w === null || t.least > w.least ? t : w), null);
+  measurements.push(`${theme} /sessions agents table ${JSON.stringify({ earlier: opened, head: read.head, tables: read.tables.length, widest })}`);
+  if (mock && read.tables.length === 0) say('Expand all opened no Agents table');
+  if (mock && opened === 0) say('the story holds earlier agents, yet no open row draws their line');
+  for (const t of read.tables) {
+    if (t.panel === null || t.scroll > t.panel) say(`the table of ${t.session} needs ${t.scroll}px of its panel's ${t.panel}px`);
+    if (t.heads.length !== 11 || t.heads[10] !== '') say(`the table of ${t.session} reads the heads ${JSON.stringify(t.heads)}, not eleven closing on the menu's`);
+  }
+  failures.push(...compare(read.head, read.outer, ['fontSize', 'fontWeight', 'color'], `${theme} /sessions agents table: its head against the session table's`));
+  for (let i = 0; i < opened; i += 1) await earlier.nth(i).click();
   await page.getByRole('button', { name: 'Collapse all', exact: true }).click();
   await atRest();
   await settle();
@@ -12075,8 +12141,9 @@ const RELEASED_LINE = 'The mod released every agent of this session. Their recor
 
 /**
  * A finished session, listed under the finished filter alone and found by its Status cell reading finished: its open
- * detail's line reads the records' leave in the type of the detail's cell. In the mock pass alone, whose story holds
- * such a session, on a load of its own after the view's shot, so that shot keeps the bare view.
+ * detail's first line, the finished sentence, reads the records' leave in the type of the detail's cell. In the mock
+ * pass alone, whose story holds such a session, on a load of its own after the view's shot, so that shot keeps the bare
+ * view.
  */
 async function sessionsReleasedLine(theme) {
   const say = (what) => failures.push(`${theme} /sessions released line: ${what}`);
@@ -12099,7 +12166,7 @@ async function sessionsReleasedLine(theme) {
       return { color: s.color, fontFamily: s.fontFamily, fontSize: s.fontSize, lineHeight: s.lineHeight };
     };
     const detail = tr.nextElementSibling?.classList.contains('srow__detail') ? tr.nextElementSibling : null;
-    const line = detail?.querySelector('.agents__released') ?? null;
+    const line = detail?.querySelector('.srow__panel > p.srow__finished:first-child') ?? null;
     return {
       cell: type(detail?.querySelector(':scope > td')),
       line: line === null ? null : { ...type(line), text: line.textContent?.trim() ?? null },
@@ -12350,6 +12417,7 @@ try {
         await sessionIdWidth(theme);
         await sessionRowMenu(theme);
         await agentLines(theme, 1280);
+        await agentsTableFits(theme);
         try {
           await page.setViewportSize({ height: 900, width: 1440 });
           await settle();
