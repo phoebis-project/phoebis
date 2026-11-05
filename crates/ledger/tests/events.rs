@@ -1860,7 +1860,7 @@ fn the_slowed_long_fold_counts_an_open_span_from_before_the_cutoff_over_the_whol
 }
 
 #[test]
-fn the_slowed_long_fold_clamps_a_closed_span_crossing_the_cutoff_to_the_trailing_day() {
+fn the_slowed_long_fold_counts_the_hour_that_starts_at_the_cutoff_and_not_the_hour_before_it() {
     const HOUR: i64 = 3_600_000;
     let now = 1_000 * HOUR;
     let cutoff = now - 24 * HOUR;
@@ -1888,6 +1888,46 @@ fn the_slowed_long_fold_clamps_a_closed_span_crossing_the_cutoff_to_the_trailing
         )],
         "the held time of the hour that starts at the cutoff counts and the hour before it stays out, past the bar of \
          twice the start row's 40 minutes"
+    );
+}
+
+#[test]
+fn the_slowed_long_fold_leaves_out_the_hour_that_started_inside_the_second_before_the_cutoff() {
+    const MINUTE: i64 = 60_000;
+    const HOUR: i64 = 60 * MINUTE;
+    // A millisecond past an hour, so the hour holding `cutoff - 1` starts a millisecond before the cutoff, inside the
+    // second before it, and the next hour starts inside the day.
+    let now = 1_000 * HOUR + 1;
+    let cutoff = now - 24 * HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    held_request(&db, "a-1", "a", "p", cutoff - 1, 2 * HOUR);
+    held_request(&db, "a-2", "a", "p", cutoff - 1 + HOUR, 70 * MINUTE);
+    let rows = slowed_long_at(
+        &db,
+        &[
+            // A span across the cutoff that holds both requests.
+            slow_down_started(cutoff - HOUR, "a", "p", 0.5),
+            slow_down_ended(
+                cutoff + 2 * HOUR + 2 * MINUTE,
+                "a",
+                "p",
+                cutoff - HOUR,
+                3 * HOUR,
+                0.5,
+            ),
+        ],
+        now,
+    );
+    assert_eq!(
+        rows,
+        [slowed_row(
+            "a",
+            "p",
+            cutoff - HOUR,
+            now,
+            (1, 70 * MINUTE, 1, 3_600_000, false)
+        )],
+        "the hour that starts a millisecond before the cutoff stays out, so the held time is the next hour's alone"
     );
 }
 
