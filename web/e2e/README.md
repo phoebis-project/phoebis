@@ -16,7 +16,7 @@ expert field's wrapper (a half cell beside the plain one, a lone field the grid'
 mark's box 36 px square with the logo drawn 26 px square in it, the name 17 px at weight 600 on one line and inside the
 sidebar's content box), the dashboard's attention line (one 22 px row in every state, each badge and the "+N more" badge
 the pool card's strip badge on the row's one top edge, in the content box and clear of the tiles, with the story's
-seventeen items folded behind the dashed "+N more" badge in the mock pass, the seeded exhaustion or the quiet line in
+nineteen items folded behind the dashed "+N more" badge in the mock pass, the seeded exhaustion or the quiet line in
 the router pass), the list the "+N more" badge opens (every item, one badge per row inside the box, 8 px under the badge
 and 8 px inside the window, the unpriced model's info badge against the first warning badge in height, left edge and
 type, its ink on its fill contrasting less than the warning badge's and at 4.5 to 1 or more, read here since the line
@@ -273,7 +273,11 @@ Estimated cost row's figure chip and muted equivalent on one line each inside th
 their own under it, each on one line inside that row's one cell across the table, at 1280 by 800 and 1440 by 900, the
 story's Fable request reading its figure in the Ultra week alone on the cost row, then its plan, and a 5-hour, a 7-day
 and a Fable week share in that order), a reasons panel link landing on a list whose first row's drawer reads the reason
-(mock pass, on a load of its own once every view's shot is taken), the find field of a captured body (after the wide
+(mock pass, on a load of its own once every view's shot is taken), the attempt count's hover card at the request log's
+bottom (mock pass, on the log read at 50 rows a page, where the story's last row of two or more attempts sits below the
+window's fold, the bare log loaded again after: that row scrolled to the viewport's bottom edge and its count hovered,
+the card inside the viewport and uncovered at its center with its last badge ending inside it, the card drawn again on
+the focused count and gone after a 60 px scroll, each read recorded), the find field of a captured body (after the wide
 dialog's Escape, the trimmed text of a line the copied body first holds past a third of the box typed into the Request
 block's field, the find row at the 400 px drawer inside its width with the field at least 8rem wide and the count and
 its buttons on one line, and Enter opening the wide dialog with that row the one drawn active inside the rows in view,
