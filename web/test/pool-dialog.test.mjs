@@ -25,7 +25,7 @@ window.HTMLDialogElement.prototype.close = function () {
   this.dispatchEvent(new window.Event('close'));
 };
 after(() => window.close());
-const { act, api, AppSettingsProvider, createElement: h, createRoot, fakeClock, installClock, KeyDialog, MemoryRouter, PoolDialog } = await import('./dist/ui.js');
+const { act, api, ApiError, AppSettingsProvider, createElement: h, createRoot, fakeClock, installClock, KeyDialog, MemoryRouter, PoolDialog } = await import('./dist/ui.js');
 const { MockApi } = await import('./dist/api.js');
 
 // The bootstrap's limit the page's settings read hands the dialogs, the test's own figure.
@@ -182,6 +182,25 @@ test("the key override is unbounded with the floor's sentence until the settings
   await draw(keyDialog(LIMIT));
   assert.equal(field()?.getAttribute('max'), String(LIMIT), 'the limit lands as the ceiling');
   assert.equal(statusOf(container), `Save is held: Capture hours is a whole number from 1 to ${LIMIT}.`);
+});
+
+test("a key dialog keeps a failed save's words while a field is written again unchanged, and drops them on the next edit", async () => {
+  const desktop = (await mock.listKeys()).find((k) => k.id === 'desktop');
+  assert.ok(desktop, 'the mock holds the desktop key');
+  // A stored override opens the dialog on it, so the override field's focus writes the mode the form already holds.
+  const key = { ...desktop, bodyCaptureHours: 12 };
+  api.updateKey = async () => {
+    throw new ApiError(422, 'The pool refused the key', null);
+  };
+  const { container, draw } = mount();
+  await draw(h(KeyDialog, { captureMaxHours: LIMIT, existing: key, existingIds: new Set(), onClose() {}, onCreated() {}, open: true, pools }));
+  act(() => [...container.querySelectorAll('dialog[open] .dialog__actions button')].find((b) => b.textContent?.trim() === 'Save')?.click());
+  await settled();
+  assert.equal(statusOf(container), 'The pool refused the key');
+  act(() => container.querySelector('dialog[open] input[aria-label="Capture hours for this key"]')?.focus());
+  assert.equal(statusOf(container), 'The pool refused the key', "the override field's focus keeps the words");
+  type(fieldIn(container, 'Name')?.querySelector('input'), 'Renamed key');
+  assert.equal(statusOf(container), 'Every group saves together.', 'a changed name drops them');
 });
 
 test('an idle window set above the break-even reads a note under its field and its cost from the set value, while 0 and the other two ceilings read the cap', async () => {
