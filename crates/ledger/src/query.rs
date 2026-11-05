@@ -5511,7 +5511,8 @@ mod tests {
     }
 
     /// The fold takes a request's last attempt as the one that served it, so each request's attempts must reach it as
-    /// one run in attempt order. Two requests of a session received at one instant tie on every first-fill order column
+    /// one run in attempt order: r1's retry starts before its first attempt, where a start order would end the run
+    /// on the wrong attempt. Two requests of a session received at one instant tie on every first-fill order column
     /// before the request id. The writer stamps each landing above the last, so the incremental read's boundary is
     /// what can slip: a request landed at the watermark was folded by the poll that set it.
     #[test]
@@ -5535,7 +5536,7 @@ mod tests {
         };
         db.insert_request(
             &request("r1"),
-            &[attempt("r1", 1, 100), attempt("r1", 2, 300)],
+            &[attempt("r1", 1, 100), attempt("r1", 2, 50)],
             None,
         )
         .unwrap();
@@ -5554,7 +5555,7 @@ mod tests {
             runs(filled),
             [
                 ("r1".to_string(), Some(100)),
-                ("r1".to_string(), Some(300)),
+                ("r1".to_string(), Some(50)),
                 ("r2".to_string(), Some(200)),
             ]
         );
