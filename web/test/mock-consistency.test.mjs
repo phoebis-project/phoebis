@@ -861,6 +861,12 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
         assert.ok(known, `${name}: ${entry.agentId} on ${entry.model} names no line of the session and no earlier agent`);
       }
     }
+    // Story 0's desktop row under the live key, whose plan-funded client rows with tokens primary and secondary serve at
+    // both instants. `req_9b6275a3-96b` is a plan-funded request on nightly with no token, which prices nothing, so the
+    // fold keys no share for nightly.
+    const desktop = Date.parse(s.keys.find((k) => k.id === 'desktop').createdAt);
+    const story0 = seeded.find((row) => row.keyId === 'desktop' && row.keyGeneration === desktop && row.sessionId === s.lib.SESSION_IDS[0]);
+    assert.deepEqual(Object.keys(story0.spend.shares).sort(), ['primary', 'secondary'], "story 0's desktop row keys the accounts that priced its plan rows");
   });
 
   test(`a switched-off key was last used before its last write, and a pool's one member holds what its keys sent, at ${at}`, async () => {

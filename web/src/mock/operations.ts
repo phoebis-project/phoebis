@@ -1,7 +1,7 @@
 import type { AgentContext, AgentRequests, BurnUnit, CompanionState, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, RecipeCause, RecipeState, RequestLog, Session, SessionDay, SessionSpendPart } from '@/api/types';
 import { anchorTier, fundingOf, tierCapacity, weightOf, type CostWindow } from '@/lib/costs';
 import { servedMissReason, servingAttempt } from '@/lib/dimensions';
-import { byteOrder } from '@/lib/format';
+import { byteOrder, tokensTotal } from '@/lib/format';
 import { lastActivity, pinTtlMs } from '@/lib/keepalive';
 import { isPaidSource } from '@/lib/quota';
 import { compareRequests } from '@/lib/requests';
@@ -1001,8 +1001,8 @@ SESSIONS.push(...WRITTEN_SESSIONS);
  * A session's `requests`, `spend`, `day`, `agentRequests` and `userAgent` folded from the request seed's rows on it, as
  * the route folds the ledger's: a refused row passed over, a probe's figures apart in the probes, every other row a
  * client request priced as the request log prices it (`costUsd`, `costShares`, `costEquivalent`) under its serving
- * attempt's funding, the day the client requests of the hours from the one holding `now - 24 h` by class, the agents
- * per id and model, and the user agent the newest client request's.
+ * attempt's funding and one with no token priced nothing, the day the client requests of the hours from the one holding
+ * `now - 24 h` by class, the agents per id and model, and the user agent the newest client request's.
  */
 export function foldSessionSpend(rows: readonly RequestLog[], session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'>, now: number): Pick<Session, 'agentRequests' | 'day' | 'requests' | 'spend' | 'userAgent'> {
   const emptyPart = (): SessionSpendPart => ({ billedUsd: {}, equivalent: 0, requests: 0, shares: {}, usd: 0 });
@@ -1014,9 +1014,12 @@ export function foldSessionSpend(rows: readonly RequestLog[], session: Pick<Sess
     if (funding === 'plan') into.equivalent = into.equivalent === null || r.costEquivalent === null ? null : into.equivalent + r.costEquivalent;
     else if (r.costUsd > 0) into.billedUsd[funding] = (into.billedUsd[funding] ?? 0) + r.costUsd;
   };
+  // The route prices no usage without a token, so such a request, a failed one among them, adds its count alone.
+  const priced = (r: RequestLog) => tokensTotal(r.usage) > 0;
   // Every plan-funded request names its serving account under `shares`, a free one with no share in it.
   const add = (into: SessionSpendPart, r: RequestLog) => {
     into.requests += 1;
+    if (!priced(r)) return;
     addMoney(into, r);
     const serving = servingAttempt(r);
     if (serving === null || fundingOf(serving) !== 'plan') return;
@@ -1055,7 +1058,7 @@ export function foldSessionSpend(rows: readonly RequestLog[], session: Pick<Sess
     if (Date.parse(r.at) >= dayFrom) {
       const requestClass = r.requestClass ?? 'other';
       day.requests[requestClass] = (day.requests[requestClass] ?? 0) + 1;
-      addMoney(day, r);
+      if (priced(r)) addMoney(day, r);
     }
   }
   const agentRequests: AgentRequests[] = [...agents.values()]
