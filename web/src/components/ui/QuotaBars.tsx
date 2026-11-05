@@ -91,7 +91,7 @@ export function WindowBarAbsent({ compact = false, label, words }: { compact?: b
         <span className="wbar__label ellipsis">{label}</span>
         <span className="wbar__pct muted">{compact ? COMPACT_ABSENT : words}</span>
       </div>
-      <MeterAbsent thin />
+      <MeterAbsent />
       <div className="wbar__reset muted">not reported</div>
     </div>
   );

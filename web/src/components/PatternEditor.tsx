@@ -103,7 +103,7 @@ export function PatternEditor({ inherited = [], label, onChange, suggestions, va
                     onChange={(e) => update(i, { ...rule, pattern: e.target.value })}
                   />
                   <span className="pattern-editor__actions">
-                    <RowActions count={value.length} index={i} noun="rule" onMove={move} onRemove={remove} upClass="pattern-editor__up" />
+                    <RowActions count={value.length} index={i} noun="rule" onMove={move} onRemove={remove} />
                   </span>
                 </div>
                 {refusal && (

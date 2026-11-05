@@ -28,7 +28,7 @@ const weekLabel = (key: string) => `7-day ${upperFirst(key.slice('seven_day_'.le
 const windowLabel = (window: string) => WINDOWS.find((w) => w.key === window)?.label ?? `${weekLabel(window)} window`;
 
 /** The row at a model table's foot that folds its older models: their count, and the disclosure that shows them. */
-export function FoldRow({ cols, count, onToggle, open }: { cols: number; count: number; onToggle: () => void; open: boolean }) {
+function FoldRow({ cols, count, onToggle, open }: { cols: number; count: number; onToggle: () => void; open: boolean }) {
   return (
     <tr className="cost-ref__fold">
       <td colSpan={cols}>

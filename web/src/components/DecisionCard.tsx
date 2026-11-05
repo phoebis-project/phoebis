@@ -5,7 +5,7 @@ import type { DecisionRecord, DecisionSummary } from '@/api/types';
 import { ChipView, Chips, chipValue, rowValue } from '@/components/ChipView';
 import { DecisionStrip } from '@/components/DecisionStrip';
 import { EntryChips } from '@/components/EntryChips';
-import { Badge, Button, CopyButton, ErrorState, KeyValue, useHostedDescription } from '@/components/ui/primitives';
+import { Badge, Button, CopyButton, DescribedCell, ErrorState, KeyValue } from '@/components/ui/primitives';
 import { failedFirst, useAsync } from '@/lib/hooks';
 import {
   aroundRequest,
@@ -47,17 +47,6 @@ export const keyValueRows = (rows: CardRow[], expanded = false, setExpanded?: (e
         rowValue(r.chips)
       ),
   }));
-
-/** A member's Pace score with its hover, described through the page's host as a `Badge` is. */
-function PaceCell({ title, value }: { title: string | null; value: string }) {
-  // Outside every host the title alone describes the cell: a node beside it would join the cell's text.
-  const hosted = useHostedDescription(title ?? undefined);
-  return (
-    <td className="num" title={title ?? undefined} aria-describedby={hosted}>
-      {value === '-' ? <span className="muted">-</span> : value}
-    </td>
-  );
-}
 
 /**
  * The open decision row's card: loads the record on mount and draws the six parts of the spec's card. The record is
@@ -165,7 +154,9 @@ function Card({ now, onWiden, record, row }: { now: number; onWiden: (link: LogL
                       </td>
                       <td className="num">{cells.runway === '-' ? <span className="muted">-</span> : cells.runway}</td>
                       <td className="num">{cells.inFlight}</td>
-                      <PaceCell title={cells.paceTitle} value={cells.pace} />
+                      <DescribedCell className="num" title={cells.paceTitle ?? undefined}>
+                        {cells.pace === '-' ? <span className="muted">-</span> : cells.pace}
+                      </DescribedCell>
                       <td className="decision-card__prefix">{cells.prefix.hash ? <EntryChips entry={cells.prefix.hash} now={now} /> : <span className="muted">-</span>}</td>
                       <td className="decision-card__judged">
                         <Badge tone={cells.verdict.badgeTone}>{cells.verdict.badge}</Badge>

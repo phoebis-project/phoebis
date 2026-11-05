@@ -1,9 +1,9 @@
-import { type KeyboardEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
+import { type KeyboardEvent, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { ChipView, rowValue } from '@/components/ChipView';
 import { HashChip } from '@/components/EntryChips';
-import { GAP, TABBABLE, blurLeaves, placeFixed } from '@/components/ui/Popover';
-import { Badge, Described, useHostedDescription } from '@/components/ui/primitives';
+import { GAP, blurLeaves, placeFixed, tabAtEdge } from '@/components/ui/Popover';
+import { Badge, Described, DescribedCell, useHostedDescription } from '@/components/ui/primitives';
 import type { StripLayout } from '@/lib/decisionStrip';
 import type { Chip } from '@/lib/routingLog';
 import type { PlanGroup, PlanRow, PlanTable, PopoverPlan, WindowRow } from '@/lib/stripFacts';
@@ -24,18 +24,6 @@ function DescribedChip({ chip, marked }: { chip: Chip; marked?: boolean }) {
   // A node beside the chip would join the text of the row or the cell that holds it.
   const hosted = useHostedDescription(chip.title);
   return <ChipView chip={chip} describedBy={hosted} marked={marked} />;
-}
-
-/** A table cell's hover, described through the host. Outside one the title alone describes it, as the Pace cell's. */
-function Cell({ children, head = false, numeric, title }: { children: ReactNode; head?: boolean; numeric: boolean; title: string | undefined }) {
-  // A node after the cell would stand in the row, where only cells may.
-  const hosted = useHostedDescription(title);
-  const Tag = head ? 'th' : 'td';
-  return (
-    <Tag className={numeric ? 'right' : undefined} title={title} aria-describedby={hosted}>
-      {children}
-    </Tag>
-  );
 }
 
 function Rows({ rows }: { rows: PlanRow[] }) {
@@ -84,9 +72,9 @@ function Table({ table }: { table: PlanTable }) {
           <tr>
             <th>Account</th>
             {table.columns.map((c) => (
-              <Cell key={c.key} head numeric={c.numeric} title={c.title}>
+              <DescribedCell key={c.key} className={c.numeric ? 'right' : undefined} head title={c.title}>
                 {c.label}
-              </Cell>
+              </DescribedCell>
             ))}
           </tr>
         </thead>
@@ -97,9 +85,9 @@ function Table({ table }: { table: PlanTable }) {
               {table.columns.map((c) => {
                 const cell = r.cells[c.key];
                 return (
-                  <Cell key={c.key} numeric={c.numeric} title={cell?.title}>
+                  <DescribedCell key={c.key} className={c.numeric ? 'right' : undefined} title={cell?.title}>
                     {cell?.tone === undefined ? (cell?.text ?? '') : <Badge tone={cell.tone}>{cell.text}</Badge>}
-                  </Cell>
+                  </DescribedCell>
                 );
               })}
             </tr>
@@ -218,17 +206,12 @@ export function StripPopover({ anchor, bounds, focus, id, layout, onClose, pinne
   // The box stands at the body's end, after every other stop, so Tab off either end would leave the page or land at
   // its far end. The keys keep the walk in the strip: on past the anchor, or back onto it.
   const tab = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== 'Tab') return;
-    const root = e.currentTarget;
-    const stops = [...root.querySelectorAll<HTMLElement>(TABBABLE)];
+    if (e.key !== 'Tab' || !tabAtEdge(e)) return;
+    e.preventDefault();
     if (e.shiftKey) {
-      if (e.target !== root && e.target !== stops[0]) return;
-      e.preventDefault();
       anchor.focus({ preventScroll: true });
       return;
     }
-    if (e.target !== (stops.length > 0 ? stops[stops.length - 1] : root)) return;
-    e.preventDefault();
     let next = anchor.nextElementSibling;
     while (next !== null && next.tagName !== 'BUTTON') next = next.nextElementSibling;
     // The anchor stands for the next button when it is the strip's last.

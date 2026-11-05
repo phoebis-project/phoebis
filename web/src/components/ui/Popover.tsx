@@ -1,8 +1,9 @@
-import { createContext, type FocusEvent, type KeyboardEvent, type ReactNode, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { type FocusEvent, type KeyboardEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import type { PauseCause } from '@/lib/follow';
 import { useLatest } from '@/lib/hooks';
-import { useOutsidePress } from './primitives';
+import { useHold, useOutsidePress } from './overlay';
+
+export { type HoldCause, type HoldHost, PopoverHost, useHold, useHoldHost } from './overlay';
 
 /** The room a fixed box keeps from the window's edges and from its anchor. */
 export const GAP = 8;
@@ -46,59 +47,19 @@ export function placeFixed(el: HTMLElement, anchor: HTMLElement, left: (box: DOM
  * A box's blur handler, closing it when focus leaves for an element outside the box and its anchor. A blur naming no
  * element (a click on a button Safari gives no focus, the window losing focus) closes nothing, as a menu's does.
  */
-export const blurLeaves = (anchor: HTMLElement, close: () => void) => (e: FocusEvent<HTMLElement>) => {
+export const blurLeaves = (anchor: Node | null, close: () => void) => (e: FocusEvent<HTMLElement>) => {
   const to = e.relatedTarget;
-  if (to !== null && !e.currentTarget.contains(to) && !anchor.contains(to)) close();
+  if (to !== null && !e.currentTarget.contains(to) && !anchor?.contains(to)) close();
 };
 
-/** What an open overlay holds a page's auto reload for, in the refresh control's words for the pause. */
-export type HoldCause = Extract<PauseCause, 'dialog' | 'menu'>;
-
-/** A page's register of the overlays open under it, each under its own id with its cause. */
-export interface HoldHost {
-  add: (id: string, cause: HoldCause) => void;
-  remove: (id: string) => void;
-}
-
 /**
- * The context a page provides: every popover, menu and cost reference dialog under it holds the page's auto reload
- * while it is open. A component under no provider holds nothing.
+ * Whether a Tab key inside a box walks off its edge: Shift+Tab from the box or its first stop, Tab from its last stop
+ * or from a box that holds none.
  */
-export const PopoverHost = createContext<HoldHost | null>(null);
-
-/** Holds the page's auto reload for `cause` while `active`, and lets go as it turns false or the caller unmounts. */
-export function useHold(active: boolean, cause: HoldCause): void {
-  const host = useContext(PopoverHost);
-  const id = useId();
-  useEffect(() => {
-    if (!active || host === null) return;
-    host.add(id, cause);
-    return () => host.remove(id);
-  }, [active, cause, host, id]);
-}
-
-/**
- * A page's host for its `PopoverHost` provider, and the cause its open overlays hold auto reload for: a dialog before
- * a menu, null while none is open.
- */
-export function useHoldHost(): { cause: HoldCause | null; host: HoldHost } {
-  const [holds, setHolds] = useState<ReadonlyMap<string, HoldCause>>(() => new Map());
-  // An open overlay registers again whenever the host's value changes, so the value is made once.
-  const host = useMemo<HoldHost>(
-    () => ({
-      add: (id, cause) => setHolds((m) => (m.get(id) === cause ? m : new Map(m).set(id, cause))),
-      remove: (id) =>
-        setHolds((m) => {
-          if (!m.has(id)) return m;
-          const next = new Map(m);
-          next.delete(id);
-          return next;
-        }),
-    }),
-    [],
-  );
-  const causes = [...holds.values()];
-  return { cause: causes.includes('dialog') ? 'dialog' : causes.length > 0 ? 'menu' : null, host };
+export function tabAtEdge(e: KeyboardEvent<HTMLElement>): boolean {
+  const root = e.currentTarget;
+  const stops = [...root.querySelectorAll<HTMLElement>(TABBABLE)];
+  return e.shiftKey ? e.target === root || e.target === stops[0] : e.target === (stops.length > 0 ? stops[stops.length - 1] : root);
 }
 
 export interface PopoverProps {
@@ -175,7 +136,7 @@ export function Popover({ anchor, children, className, id, label, labelledBy, on
     (el.querySelector<HTMLElement>(TABBABLE) ?? el).focus({ preventScroll: true });
   }, [anchor, shown]);
   useHold(shown, 'menu');
-  useOutsidePress(shown && anchor !== null, () => [ref.current, anchor], onClose);
+  useOutsidePress(shown, () => [ref.current, anchor], onClose);
   if (!open || anchor === null) return null;
   const leave = blurLeaves(anchor, onClose);
   const keys = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -188,13 +149,9 @@ export function Popover({ anchor, children, className, id, label, labelledBy, on
     }
     // The box stands at the end of the body, so Tab off either end would leave the page or land at its far end, with
     // the box left open behind. The keys take the walk back beside the anchor.
-    if (e.key !== 'Tab') return;
-    const root = e.currentTarget;
-    const stops = [...root.querySelectorAll<HTMLElement>(TABBABLE)];
-    const atEdge = e.shiftKey ? e.target === root || e.target === stops[0] : e.target === (stops.length > 0 ? stops[stops.length - 1] : root);
-    if (!atEdge) return;
+    if (e.key !== 'Tab' || !tabAtEdge(e)) return;
     e.preventDefault();
-    const to = e.shiftKey ? anchor : (stopAfter(anchor, root) ?? anchor);
+    const to = e.shiftKey ? anchor : (stopAfter(anchor, e.currentTarget) ?? anchor);
     to.focus({ preventScroll: to === anchor });
     // Focus leaving for anything but the anchor has closed the box already.
     if (to === anchor) onClose();

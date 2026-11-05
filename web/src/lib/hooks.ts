@@ -137,6 +137,26 @@ export function useKeyedRows<T>(value: T[], onChange: (next: T[]) => void, blank
 }
 
 /**
+ * A map in state under string ids. `set` and `drop` keep their identity for the mount, and each answers the map it
+ * found when it would change nothing, so a register that writes again on every change re-renders nothing.
+ */
+export function useKeyedMap<V>(): { drop: (id: string) => void; map: ReadonlyMap<string, V>; set: (id: string, value: V) => void } {
+  const [map, setMap] = useState<ReadonlyMap<string, V>>(() => new Map());
+  const set = useCallback((id: string, value: V) => setMap((m) => (m.get(id) === value ? m : new Map(m).set(id, value))), []);
+  const drop = useCallback(
+    (id: string) =>
+      setMap((m) => {
+        if (!m.has(id)) return m;
+        const next = new Map(m);
+        next.delete(id);
+        return next;
+      }),
+    [],
+  );
+  return { drop, map, set };
+}
+
+/**
  * Calls `onResize` whenever the element under `ref` changes size, while `enabled` holds and the browser has a
  * `ResizeObserver` (the jsdom harness has none). The latest callback runs, so a caller passes a fresh one each render.
  */

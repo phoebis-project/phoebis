@@ -98,7 +98,7 @@ export function ConditionsEditor({ onChange, refusals, value }: { onChange: (c: 
                       <Input className="mono" aria-label={`Condition ${n} value`} placeholder={c.operator === 'matches' ? '^Describe' : 'Value'} spellCheck={false} autoComplete="off" value={c.value ?? ''} aria-invalid={invalid} aria-describedby={described} onChange={(e) => update(i, { ...c, value: e.target.value })} />
                     ))}
                   <span className="pattern-editor__actions conditions-editor__actions">
-                    <RowActions count={value.length} index={i} noun="condition" onMove={move} onRemove={remove} upClass="pattern-editor__up" />
+                    <RowActions count={value.length} index={i} noun="condition" onMove={move} onRemove={remove} />
                   </span>
                 </div>
                 {refusal && (

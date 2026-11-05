@@ -1,16 +1,17 @@
-import { createContext, forwardRef, Fragment, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type FocusEvent, type HTMLAttributes, type InputHTMLAttributes, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject, type SelectHTMLAttributes } from 'react';
+import { createContext, forwardRef, Fragment, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type HTMLAttributes, type InputHTMLAttributes, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type SelectHTMLAttributes } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useRouteError } from 'react-router-dom';
 import type { ToastItem } from '@/app/session';
 import { useAppSettings } from '@/app/settings';
 import { clock } from '@/lib/clock';
 import { plural } from '@/lib/format';
-import { useLatest } from '@/lib/hooks';
+import { useKeyedMap, useLatest } from '@/lib/hooks';
 import { floatAt, menuPlacement, type MenuAlign, type MenuPlacement } from '@/lib/menu';
 import type { BadgeTone } from '@/lib/quota';
 import { IconCheck, IconChevron, IconCopy, IconSearch, IconWarning, IconX } from './icons';
 import { walkFocus } from './OptionList';
-import { useHold } from './Popover';
+import { useHold, useLeaveOnMove, useOutsidePress } from './overlay';
+import { blurLeaves, TABBABLE } from './Popover';
 
 const DescriptionHost = createContext<{ base: string; register: (text: string) => () => void } | null>(null);
 const fnv1a = (text: string): string => {
@@ -59,7 +60,7 @@ export function Descriptions({ children }: { children: ReactNode }) {
 }
 
 /** Null without text; under a host the id of the host's entry, else an own id the caller renders a sibling node for. */
-export function useDescription(text: string | undefined): { id: string; sibling: boolean } | null {
+function useDescription(text: string | undefined): { id: string; sibling: boolean } | null {
   const host = useContext(DescriptionHost);
   const own = useId();
   useEffect(() => (host && text ? host.register(text) : undefined), [host, text]);
@@ -72,6 +73,18 @@ export function useDescription(text: string | undefined): { id: string; sibling:
 export function useHostedDescription(text: string | undefined): string | undefined {
   const described = useDescription(text);
   return described && !described.sibling ? described.id : undefined;
+}
+
+/** A table cell's hover, described through the host. Outside one the title alone describes it. */
+export function DescribedCell({ children, className, head = false, title }: { children: ReactNode; className?: string; head?: boolean; title: string | undefined }) {
+  // A node after the cell would stand in the row, where only cells may.
+  const hosted = useHostedDescription(title);
+  const Tag = head ? 'th' : 'td';
+  return (
+    <Tag className={className} title={title} aria-describedby={hosted}>
+      {children}
+    </Tag>
+  );
 }
 
 /**
@@ -137,11 +150,11 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
 });
 
 /** A list row's Move up, Move down and Remove buttons, `noun` naming the row in their labels ("Move rule 2 up"). */
-export function RowActions({ count, index, noun, onMove, onRemove, upClass }: { count: number; index: number; noun: string; onMove: (from: number, to: number) => void; onRemove: (index: number) => void; upClass: string }) {
+export function RowActions({ count, index, noun, onMove, onRemove }: { count: number; index: number; noun: string; onMove: (from: number, to: number) => void; onRemove: (index: number) => void }) {
   const n = index + 1;
   return (
     <>
-      <Button size="sm" variant="ghost" className={upClass} icon={<IconChevron size={14} />} aria-label={`Move ${noun} ${n} up`} disabled={index === 0} onClick={() => onMove(index, index - 1)} />
+      <Button size="sm" variant="ghost" className="row-actions__up" icon={<IconChevron size={14} />} aria-label={`Move ${noun} ${n} up`} disabled={index === 0} onClick={() => onMove(index, index - 1)} />
       <Button size="sm" variant="ghost" icon={<IconChevron size={14} />} aria-label={`Move ${noun} ${n} down`} disabled={index === count - 1} onClick={() => onMove(index, index + 1)} />
       <Button size="sm" variant="ghost" icon={<IconX size={14} />} aria-label={`Remove ${noun} ${n}`} onClick={() => onRemove(index)} />
     </>
@@ -203,9 +216,9 @@ export function Meter({ value, tone, label, mark, thin = false, title }: { label
 }
 
 /** A meter for a window that holds no share: the whole track in the absent ink, with nothing for a reader to announce. */
-export function MeterAbsent({ thin = false }: { thin?: boolean }) {
+export function MeterAbsent() {
   return (
-    <div className={thin ? 'meter meter--thin meter--absent' : 'meter meter--absent'} role="presentation">
+    <div className="meter meter--thin meter--absent" role="presentation">
       <div className="meter__fill" style={{ width: '100%' }} />
     </div>
   );
@@ -454,7 +467,6 @@ export function CopyButton({ text, label = 'Copy', size = 'sm' }: { label?: stri
 
 // What takes the focus back after Keep editing: the control that held it, or else the first one a Tab reaches.
 const HELD_FOCUS = 'a[href], button, input, select, textarea, [tabindex]';
-const TABBABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /**
  * The outside path of a modal dialog: a backdrop click or the Escape key's `cancel`. While `unsaved` holds, both
@@ -660,18 +672,7 @@ export function Expert({ children, refused = false }: { children: ReactNode; ref
 }
 
 function DialogGroupPanel({ chosen, group, on, register, turnOn }: { chosen: string; group: DialogGroup; on: boolean; register: (id: string, el: HTMLElement | null) => void; turnOn: () => void }) {
-  const [hidden, setHidden] = useState<Map<string, boolean>>(new Map());
-  const set = useCallback((id: string, isHidden: boolean) => setHidden((m) => (m.get(id) === isHidden ? m : new Map(m).set(id, isHidden))), []);
-  const drop = useCallback(
-    (id: string) =>
-      setHidden((m) => {
-        if (!m.has(id)) return m;
-        const next = new Map(m);
-        next.delete(id);
-        return next;
-      }),
-    [],
-  );
+  const { map: hidden, set, drop } = useKeyedMap<boolean>();
   const registry = useMemo<ExpertRegistry>(() => ({ drop, on, set }), [drop, on, set]);
   const count = [...hidden.values()].filter(Boolean).length;
   const ref = useRef<HTMLElement | null>(null);
@@ -980,55 +981,6 @@ export function ConfirmDialog({ open, onClose, onConfirm, title, body, cancelLab
 }
 
 /**
- * Calls `onOutside` on a mouse press outside every node `inside` names, while `active` holds. Both are read when the
- * press lands, so a caller passes fresh functions each render and the listener stays put.
- */
-export function useOutsidePress(active: boolean, inside: () => (Node | null | undefined)[], onOutside: () => void): void {
-  const latest = useLatest({ inside, onOutside });
-  useEffect(() => {
-    if (!active) return;
-    const down = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (!latest.current.inside().some((node) => node?.contains(target))) latest.current.onOutside();
-    };
-    document.addEventListener('mousedown', down);
-    return () => document.removeEventListener('mousedown', down);
-  }, [active, latest]);
-}
-
-/**
- * Leaves a fixed layer when its trigger moves: a fixed layer stays where it was drawn while the page moves under it, so
- * it leaves rather than float beside another row. A scroll is read by whether it moved `target` from `rest`, the box it
- * rested at once the layer opened: the scroll that brought the row into view can report after the click that opened
- * it, and a scroll inside the layer or in another pane moves nothing. A refresh that re-sorts the rows moves the
- * trigger with no scroll or resize to report it, so every render of the open layer reads the trigger by the same rule.
- * A resize leaves at once.
- */
-export function useLeaveOnMove(active: boolean, target: RefObject<HTMLElement>, rest: RefObject<{ left: number; top: number }>, leave: () => void): void {
-  const latest = useLatest(leave);
-  useLayoutEffect(() => {
-    if (active && movedFrom(target, rest)) leave();
-  });
-  useEffect(() => {
-    if (!active) return;
-    const onScroll = () => {
-      if (movedFrom(target, rest)) latest.current();
-    };
-    const onResize = () => latest.current();
-    window.addEventListener('scroll', onScroll, true);
-    window.addEventListener('resize', onResize);
-    return () => {
-      window.removeEventListener('scroll', onScroll, true);
-      window.removeEventListener('resize', onResize);
-    };
-  }, [active, latest, rest, target]);
-}
-const movedFrom = (target: RefObject<HTMLElement>, rest: RefObject<{ left: number; top: number }>): boolean => {
-  const at = target.current?.getBoundingClientRect();
-  return !at || !rest.current || at.top !== rest.current.top || at.left !== rest.current.left;
-};
-
-/**
  * An expandable row's handlers: a click opens the row unless it lands on a link or a button inside it, which follows,
  * and Enter or Space opens it while the row itself has the focus, not a control inside it.
  */
@@ -1119,14 +1071,7 @@ export function Menu({ align = 'right', items, label = 'Actions' }: { align?: Me
       return;
     }
     const items = [...(listRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [])];
-    walkFocus(e, items, e.target);
-  };
-  // Safari, and Firefox on macOS, give a clicked button no focus, so a click on an item blurs the list naming no
-  // element; a blur closes the list only when it names an element outside the list and the trigger, whose own click
-  // toggles the list.
-  const closeOnLeave = (e: FocusEvent<HTMLDivElement>) => {
-    const to = e.relatedTarget;
-    if (to && !listRef.current?.contains(to) && !triggerRef.current?.contains(to)) setOpen(false);
+    walkFocus(e, items);
   };
   const list = open && (
     <div
@@ -1134,7 +1079,10 @@ export function Menu({ align = 'right', items, label = 'Actions' }: { align?: Me
       className={`menu__list${placement.kind === 'down' ? '' : ` menu__list--${placement.kind}`}${align === 'left' ? ' menu__list--left' : ''}`}
       role="menu"
       style={placement.kind === 'float' ? { left: placement.left, top: placement.top } : undefined}
-      onBlur={closeOnLeave}
+      // Safari, and Firefox on macOS, give a clicked button no focus, so a click on an item blurs the list naming no
+      // element. A blur closes the list only when it names an element outside the list and the trigger, whose own
+      // click toggles the list.
+      onBlur={(e) => blurLeaves(triggerRef.current, () => setOpen(false))(e)}
     >
       {items.map((item) => (
         <button

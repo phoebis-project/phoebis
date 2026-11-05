@@ -319,7 +319,7 @@ function QuotaWindow({ absent, end, name, window: w, now, slowDown = null, soon 
       {live ? (
         <Meter value={remainingOf(live)} tone={meterTone(remainingOf(live))} thin label={reading} title={reading} mark={remainingTimeShare(live) ?? undefined} />
       ) : (
-        <MeterAbsent thin />
+        <MeterAbsent />
       )}
       {live ? (
         <span className={`qwin__reset ${projection ? 'qwin__reset--split' : ''} ${soon ? 'is-soon' : ''}`} title={`${fmtAbsolute(live.resetsAt)}${soon ? ', the first of this account to recover' : ''}${burn ? `, ${burn}` : ''}`}>
@@ -379,7 +379,7 @@ function SpendWindow({ spend, now, soon }: { now: number; soon: boolean; spend: 
         // An empty cell keeps the reset in its column of the card's grid.
         <span aria-hidden="true" />
       ) : (
-        <MeterAbsent thin />
+        <MeterAbsent />
       )}
       {/* The estimate's word is a part of its own, so a column too narrow for the line breaks before it, as a live
           window's label breaks before its projection. */}

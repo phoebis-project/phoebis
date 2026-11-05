@@ -42,7 +42,7 @@ const ROWS = '[role="option"], [role="radio"]';
  * The one key map of the menus and the lists: the index a key moves to from `at` among `count` rows, the arrows
  * wrapping at either end and Home and End jumping to the first and the last row. Null for a key the walk leaves alone.
  */
-export function walkIndex(key: string, count: number, at: number): number | null {
+function walkIndex(key: string, count: number, at: number): number | null {
   switch (key) {
     case 'ArrowDown':
       return (at + 1) % count;
@@ -57,10 +57,10 @@ export function walkIndex(key: string, count: number, at: number): number | null
   }
 }
 
-/** Moves the focus where `walkIndex` sends the key from `from` among `items`, claiming the key, and does nothing for a
- *  key it does not map. */
-export function walkFocus(e: KeyboardEvent<HTMLElement>, items: readonly HTMLElement[], from: EventTarget | null): void {
-  const i = walkIndex(e.key, items.length, items.indexOf(from as HTMLElement));
+/** Moves the focus where `walkIndex` sends the key from the event's target among `items`, claiming the key, and does
+ *  nothing for a key it does not map. */
+export function walkFocus(e: KeyboardEvent<HTMLElement>, items: readonly HTMLElement[]): void {
+  const i = walkIndex(e.key, items.length, items.indexOf(e.target as HTMLElement));
   const to = i === null ? undefined : items[i];
   if (!to) return;
   e.preventDefault();
@@ -79,7 +79,7 @@ export function walkRows(e: KeyboardEvent<HTMLElement>, list: HTMLElement): void
   // Home and End move the caret in the field, so off a row they are the field's.
   if ((e.key === 'Home' || e.key === 'End') && !onChoice) return;
   const walked = e.key === 'Home' || e.key === 'End' ? choices : stops;
-  walkFocus(e, walked, e.target);
+  walkFocus(e, walked);
 }
 
 /** A row that selects a set of options: on with every one, mixed with some, its mark a check or a dash. */
@@ -99,10 +99,10 @@ function TriStateRow({ children, mixed, modifier, on, onClick }: { children: Rea
   );
 }
 
-/** A one-choice row with the lists' check mark, the radio rows `ROWS` walks. */
-export function RadioRow({ checked, children, onClick }: { checked: boolean; children: ReactNode; onClick: () => void }) {
+/** A one-choice row with the lists' check mark: a radio row `ROWS` walks, or a menu's `menuitemradio` row. */
+export function RadioRow({ checked, children, className = 'add-filter__row', onClick, onKeyDown, role = 'radio' }: { checked: boolean; children: ReactNode; className?: string; onClick: () => void; onKeyDown?: (e: KeyboardEvent<HTMLButtonElement>) => void; role?: 'menuitemradio' | 'radio' }) {
   return (
-    <button type="button" role="radio" aria-checked={checked} className="add-filter__row" onClick={onClick}>
+    <button type="button" role={role} aria-checked={checked} className={className} onClick={onClick} onKeyDown={onKeyDown}>
       <span className="mselect__check">{checked && <IconCheck size={14} />}</span>
       {children}
     </button>

@@ -1066,7 +1066,8 @@ textarea.input {
   gap: 2px;
 }
 
-.pattern-editor__up svg {
+.pattern-editor__up svg,
+.row-actions__up svg {
   transform: rotate(180deg);
 }
 

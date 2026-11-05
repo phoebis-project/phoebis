@@ -11,7 +11,7 @@ export type CoolingRow = { accountId: string; reason: string; scope: string; unt
 /** `Whole account` for the account scope, `Fast mode` and `Fast mode credits` for the fast lane's rate limit and
  *  usage-credits refusal, the model id for `model:<id>`. An identifier, the model id or a scope this build does not
  *  know shown as sent, draws in the mono face, and the worded scopes do not. */
-export function scopeLabel(scope: string): { label: string; mono: boolean } {
+function scopeLabel(scope: string): { label: string; mono: boolean } {
   if (scope === 'account') return { label: 'Whole account', mono: false };
   if (scope === 'fast') return { label: 'Fast mode', mono: false };
   if (scope === 'fast_credits') return { label: 'Fast mode credits', mono: false };

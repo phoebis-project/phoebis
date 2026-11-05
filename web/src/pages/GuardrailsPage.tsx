@@ -70,7 +70,7 @@ function CreateMenu({ onBlank, onPreset, presets }: { onBlank: () => void; onPre
   // The menus' one key map, so the arrows wrap and Home and End jump to either end as the Menu primitive's items do.
   const walk = (e: KeyboardEvent<HTMLDivElement>) => {
     const items = [...e.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]')];
-    walkFocus(e, items, e.target);
+    walkFocus(e, items);
   };
   return (
     <>

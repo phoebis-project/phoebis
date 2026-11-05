@@ -11,7 +11,7 @@ import { clock } from '@/lib/clock';
 import { revisionAt } from '@/lib/costs';
 import { useAsync, useNow } from '@/lib/hooks';
 import { MINUTE } from '@/lib/time';
-import { useHold } from './Popover';
+import { useHold } from './overlay';
 import { Button, Dialog, ErrorState, Select, Skeleton, Tabs } from './primitives';
 
 export type CostTab = 'api-prices' | 'plan-rates' | 'tiers';
@@ -101,16 +101,14 @@ export function CostReferenceLink({ tab }: { tab: CostTab }) {
             </>
           }
         >
-          {open && (
-            <CostPanels
-              costs={s === null ? null : (costsAt?.content ?? s.subscriptionCosts)}
-              error={settings.error}
-              onTab={setShown}
-              prices={s === null ? null : (pricesAt?.models ?? s.apiPrices.models)}
-              problem={s?.subscriptionCosts.problem ?? null}
-              tab={shown}
-            />
-          )}
+          <CostPanels
+            costs={s === null ? null : (costsAt?.content ?? s.subscriptionCosts)}
+            error={settings.error}
+            onTab={setShown}
+            prices={s === null ? null : (pricesAt?.models ?? s.apiPrices.models)}
+            problem={s?.subscriptionCosts.problem ?? null}
+            tab={shown}
+          />
         </Dialog>,
         document.body,
       )}

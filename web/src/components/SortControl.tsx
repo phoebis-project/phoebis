@@ -43,11 +43,6 @@ export function SortControl<K extends string>({ keys, onChange, value }: SortCon
     setOpen(false);
     onChange(next);
   };
-  const radio = (id: string, text: string, on: boolean, choose: () => void) => (
-    <RadioRow key={id} checked={on} onClick={choose}>
-      {text}
-    </RadioRow>
-  );
   return (
     <>
       <Button ref={setAnchor} size="sm" aria-label="Sort" aria-haspopup="dialog" aria-expanded={open} title={`Sorted by ${label}, ${value.dir === 'asc' ? 'ascending' : 'descending'}`} onClick={() => setOpen((v) => !v)}>
@@ -60,11 +55,19 @@ export function SortControl<K extends string>({ keys, onChange, value }: SortCon
         </span>
         <div className="sort-popover">
           <div role="radiogroup" aria-labelledby={headId}>
-            {keys.map((k) => radio(k.id, k.label, k.id === value.sort, () => pick({ dir: k.defaultDir, sort: k.id })))}
+            {keys.map((k) => (
+              <RadioRow key={k.id} checked={k.id === value.sort} onClick={() => pick({ dir: k.defaultDir, sort: k.id })}>
+                {k.label}
+              </RadioRow>
+            ))}
           </div>
           <hr className="sort-popover__rule" />
           <div role="radiogroup" aria-label="Direction">
-            {DIRECTIONS.map((d) => radio(d.dir, d.label, d.dir === value.dir, () => pick({ dir: d.dir, sort: value.sort })))}
+            {DIRECTIONS.map((d) => (
+              <RadioRow key={d.dir} checked={d.dir === value.dir} onClick={() => pick({ dir: d.dir, sort: value.sort })}>
+                {d.label}
+              </RadioRow>
+            ))}
           </div>
         </div>
       </Popover>

@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { type Chip, entityHref } from '@/lib/routingLog';
 
 /** Where a chip's value links: the entity it names, else the address a session or a request chip carries. */
-export const chipHref = (c: Chip): string | undefined => (c.entity ? entityHref(c.entity.kind, c.entity.id) : c.href);
+const chipHref =(c: Chip): string | undefined => (c.entity ? entityHref(c.entity.kind, c.entity.id) : c.href);
 
 /**
  * The value, a link where the chip resolves one. `face` is the class of a value drawn outside a chip's own span: inside

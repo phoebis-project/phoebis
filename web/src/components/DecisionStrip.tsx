@@ -2,7 +2,8 @@ import { type FocusEvent, type KeyboardEvent, useCallback, useEffect, useId, use
 import type { DecisionRecord, DecisionSummary } from '@/api/types';
 import { ChipView } from '@/components/ChipView';
 import { StripPopover } from '@/components/StripPopover';
-import { Badge, Described, useOutsidePress } from '@/components/ui/primitives';
+import { useOutsidePress } from '@/components/ui/overlay';
+import { Badge, Described } from '@/components/ui/primitives';
 import { clock } from '@/lib/clock';
 import { BRACKET_TICK, BRACKET_WORD_RISE, type LabelHeights, layoutStrip, LEAF_HALF, leafName, type OpenPopover, popoverStore, RADIUS, stationModel, stationName, type StripAnchor, TERMINUS_RADIUS, terminusName, type PathState } from '@/lib/decisionStrip';
 import { anchorPlan } from '@/lib/stripFacts';

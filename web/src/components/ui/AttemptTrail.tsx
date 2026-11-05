@@ -4,7 +4,8 @@ import type { AttemptOutcome } from '@/api/types';
 import { fmtAbsolute } from '@/lib/format';
 import { floatAt } from '@/lib/menu';
 import type { BadgeTone } from '@/lib/quota';
-import { Described, useLeaveOnMove } from './primitives';
+import { useLeaveOnMove } from './overlay';
+import { Described } from './primitives';
 
 /** The shape of a ledger attempt as the trail draws it. */
 export interface TrailAttempt {

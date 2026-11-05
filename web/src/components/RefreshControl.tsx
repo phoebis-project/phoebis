@@ -1,7 +1,7 @@
 import { type KeyboardEvent, useId, useState } from 'react';
-import { walkFocus } from '@/components/ui/OptionList';
+import { RadioRow, walkFocus } from '@/components/ui/OptionList';
 import { Popover } from '@/components/ui/Popover';
-import { IconCheck, IconChevron, IconRefresh } from '@/components/ui/icons';
+import { IconChevron, IconRefresh } from '@/components/ui/icons';
 import { PAUSE_CAUSE, type PauseCause, RELOAD_INTERVALS } from '@/lib/follow';
 import { useDocumentHidden } from '@/lib/hooks';
 
@@ -22,7 +22,7 @@ export interface RefreshControlProps {
 /** The menu's keys, as the Menu primitive walks its items: the arrows wrap, Home and End jump to either end. */
 function walk(e: KeyboardEvent<HTMLButtonElement>) {
   const items = [...(e.currentTarget.parentElement?.querySelectorAll<HTMLElement>('[role="menuitemradio"]') ?? [])];
-  walkFocus(e, items, e.currentTarget);
+  walkFocus(e, items);
 }
 
 /**
@@ -68,10 +68,9 @@ export function RefreshControl({ disabled, intervalMs, note, onIntervalChange, o
       </button>
       <Popover anchor={anchor} id={menuId} label="Auto reload interval" onClose={() => setOpen(false)} open={open} role="menu">
         {RELOAD_INTERVALS.map((i) => (
-          <button key={i.ms} type="button" role="menuitemradio" aria-checked={i.ms === ms} className="mselect__option" onClick={() => choose(i.ms)} onKeyDown={walk}>
-            <span className="mselect__check">{i.ms === ms && <IconCheck size={14} />}</span>
+          <RadioRow key={i.ms} checked={i.ms === ms} className="mselect__option" onClick={() => choose(i.ms)} onKeyDown={walk} role="menuitemradio">
             {i.label}
-          </button>
+          </RadioRow>
         ))}
       </Popover>
     </div>
