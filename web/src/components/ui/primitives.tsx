@@ -1186,13 +1186,19 @@ export function KeyValue({ rows, className = '' }: { className?: string; rows: {
   );
 }
 
+/**
+ * A failure's dwell is long enough to read the route it names. A confirmation only acknowledges the action just taken,
+ * for the 2.4 s the smoke run's confirmation reads are timed against.
+ */
+const DWELL_MS: Record<ToastItem['kind'], number> = { confirmation: 2_400, failure: 6_000 };
+
 /** Draws the first toast of the queue for its dwell, then hands its id to `onDone` so the next one shows. */
 export function Toast({ onDone, queue }: { onDone: (id: number) => void; queue: ToastItem[] }) {
   // Keyed on the item rather than the callback, so a fresh callback on a re-render does not restart the dwell.
   const done = useLatest(onDone);
   const showing = queue[0];
   const id = showing?.id;
-  const dwellMs = showing?.dwellMs;
+  const dwellMs = showing && DWELL_MS[showing.kind];
   useEffect(() => {
     if (id === undefined || dwellMs === undefined) return;
     const timer = clock.setTimeout(() => done.current(id), dwellMs);

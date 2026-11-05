@@ -63,7 +63,7 @@ export function RoutingLogPage() {
   const modelOptions = useMemo<Option[]>(() => tierOrder((catalog.data ?? []).map((m) => m.id), modelTiers).map((id) => ({ label: id, value: id })), [catalog.data, modelTiers]);
 
   // `pagedTo` holds the range's end a walk from the poll's overrun reads under, the end its cursor came from.
-  const { cursor, pagedTo, paging, reset: resetPaging, setPaging, stack } = usePaging(address);
+  const { cursor, pagedTo, reset: resetPaging, setPaging, stack } = usePaging(address);
   // The open rows belong to the page they were opened on, so another page or another filter starts with every row shut.
   const pageKey = `${cursor ?? ''}|${address}`;
   const [opened, setOpened] = useState<{ for: string; ids: Set<string> }>({ for: pageKey, ids: new Set() });
@@ -94,15 +94,17 @@ export function RoutingLogPage() {
   const { error, fresh, goNext, goPrevious, nextCursor, overrun, rows, setFollowed } = useFollow<RoutingLogRow>({
     address,
     compare: compareRows,
+    cursor,
     error: log.error,
     fixedEnd: false,
     identity: identityOf,
     intervalMs: polledMs,
     list: log.data,
-    paging,
+    pagedTo,
     paused: holdCause !== null,
     read: (c, to) => api.listRoutingLog({ ...query, cursor: c, to: iso(readEnd(custom, range.to, to)) }),
     setPaging,
+    stack,
     stale: log.stale,
   });
 

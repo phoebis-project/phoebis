@@ -1,6 +1,6 @@
 import { iso, list, numOrNull as num, strOrNull as str } from '@/api/decode';
-import { PIN_RELEASE_REASON_VALUES } from '@/api/types';
-import type { CohortHold, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, ModelTiers, PinReason, PinReleaseReason, Placement, PrefixEntry, RecordCandidate, RecordOutcome, RecordSettings, RoutingEvent, RoutingLogRow, WalkFact, WalkStep } from '@/api/types';
+import { FACT_UNIT_VALUES, PIN_RELEASE_REASON_VALUES } from '@/api/types';
+import type { CohortHold, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, ModelTiers, PinReason, PinReleaseReason, Placement, PrefixEntry, RecordCandidate, RecordOutcome, RecordSettings, Refusal, RoutingEvent, RoutingLogRow, WalkFact, WalkStep } from '@/api/types';
 import { accountHref, requestHref, ROUTING_LOG_CODEC, type RangeValue } from './address';
 import { FAILOVER_MOVE_REASONS, moveLabel, RULE_MOVE_REASONS, type WeekReading } from './analytics';
 import { tierOrder } from './costs';
@@ -1032,8 +1032,7 @@ const SELF_NAMED = new Set(['score', 'standing']);
 const WARMTH_CAUSE_WORD: Record<string, string> = { chainless: 'no chain', class_auxiliary: 'auxiliary class', class_refreshes: 'refreshing class', continues_pin: 'continues the pin', count: 'token count' };
 const WARMTH_WORD: Record<string, string> = { refresh: 'warm' };
 const SNAKE = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/;
-const FACT_UNITS: readonly FactUnit[] = ['count', 'ms', 'percent', 'percent_per_hour', 'text', 'time', 'tokens', 'usd'];
-const unitOf = (unit: string | null): FactUnit | null => FACT_UNITS.find((u) => u === unit) ?? null;
+const unitOf = (unit: string | null): FactUnit | null => FACT_UNIT_VALUES.find((u) => u === unit) ?? null;
 
 /** A word the engine writes, in the console's words. An identifier such as a model or an id reads as written. */
 function textWord(key: string, value: string): string {
@@ -1127,7 +1126,7 @@ function clientVersionOf(row: DecisionSummary | undefined): string | null {
 /** A refusal's reason: a contract's missing item, a drift's trigger beside the client's version, a guardrail's block
  *  beside the guardrail's name, or a key refusal's words by its code, its sentence for a code the console has no words
  *  for. */
-function refusalChips(refusal: { code: string; kind: string; reason: string }, version: string | null): Chip[] {
+function refusalChips(refusal: Refusal, version: string | null): Chip[] {
   if (refusal.kind === 'guardrail') return [plain('guardrail blocked'), plain(refusal.reason, 'guardrail')];
   if (refusal.kind !== 'client') return [plain(lookup(KEY_REFUSAL_WORD, refusal.code) ?? refusal.reason)];
   if (refusal.code === 'contract') return [plain(words(refusal.reason), 'contract')];

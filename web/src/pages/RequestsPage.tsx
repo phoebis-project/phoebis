@@ -279,7 +279,7 @@ export function RequestsPage() {
   const [visible, setVisible] = useState<Set<ColumnId>>(() => new Set(COLUMNS.map((c) => c.id).filter((id) => !HIDDEN_BY_DEFAULT.includes(id))));
   // Under a preset a cursor page here reads to the router's clock, as the poll under the watermark does, so only the
   // first page and a custom range read an end.
-  const { cursor, pagedTo, paging, reset: resetPaging, setPaging, stack } = usePaging(address);
+  const { cursor, pagedTo, reset: resetPaging, setPaging, stack } = usePaging(address);
   // The range ends where the list was loaded, so the first page and a custom range's cursor pages read against the
   // window the list was loaded under, a preset's cursor page to the router's clock, and Refresh moves the end to now.
   const [loadedAt, setLoadedAt] = useState(() => clock.now());
@@ -304,15 +304,17 @@ export function RequestsPage() {
   const { error, fresh, goNext, goPrevious, nextCursor, overrun, rows, setFollowed } = useFollow<RequestLog>({
     address,
     compare: compareRequests,
+    cursor,
     error: requests.error,
     fixedEnd: custom,
     identity: (r) => r.id,
     intervalMs: polledMs,
     list: requests.data && listed(requests.data),
-    paging,
+    pagedTo,
     paused: Boolean(requestId) || holdCause !== null,
     read: (c, to, landedAfter) => api.listRequests(pollQuery(query, custom, span.to, to, c, landedAfter)).then(listed),
     setPaging,
+    stack,
     stale: requests.stale,
   });
 

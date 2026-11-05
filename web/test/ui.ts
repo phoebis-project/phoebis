@@ -29,6 +29,7 @@ export { Popover, PopoverHost, useHoldHost } from '@/components/ui/Popover';
 export { UnitLegend } from '@/components/ui/UnitControls';
 export { Button, ConfirmDialog, CopyButton, Descriptions, Dialog, Menu, PageLoadFailed } from '@/components/ui/primitives';
 export { installClock } from '@/lib/clock';
+export { pagingFor } from '@/lib/follow';
 export { getTimeFormat, setTimeFormat, spanText } from '@/lib/format';
 export { useAsync, useCommittedText, useNow, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';
 export { AccountsPage } from '@/pages/AccountsPage';

@@ -1,4 +1,4 @@
-import { isoOrNull, list, num, numOrNull, rec } from '@/api/decode';
+import { isoOrNull, list, num, numOrNull, rec, strings } from '@/api/decode';
 import type { AttentionItem, AttentionKind } from '@/api/types';
 import { accountMeterHref } from './address';
 import { lookup } from './counts';
@@ -148,7 +148,7 @@ export function attentionDetail(item: AttentionItem, now: number): string {
     }
     case 'ledger_record_parked': {
       const n = num(d.count);
-      const accounts = names(d.accounts);
+      const accounts = strings(d.accounts);
       return `${plural(n, 'priced record')} parked, landing at the next start or on the dashboard's Replay${accounts.length ? ` (${accounts.join(', ')})` : ''}`;
     }
     case 'poll_backoff': {
@@ -182,7 +182,6 @@ export function attentionDetail(item: AttentionItem, now: number): string {
   }
 }
 
-const names = (v: unknown): string[] => list(v).filter((x): x is string => typeof x === 'string');
 /** The spent windows as the record names them, `5h`, `7d` or `Fable`, a key the console does not know as sent. */
 const windowsOf = (list: string[]): string =>
   list.length === 0 ? '' : ` the ${listWords(list.map((w) => lookup(WINDOW_WORD, w) ?? w))} ${noun(list.length, 'window')}`;
@@ -191,7 +190,7 @@ const windowsOf = (list: string[]): string =>
 const settingWords = (d: AttentionItem['detail'], value: (n: number) => string): string => {
   const values = rec(d.setting_values);
   return listWords(
-    names(d.setting).map((name) => {
+    strings(d.setting).map((name) => {
       const v = values[name];
       return typeof v === 'number' ? `${name} ${value(v)}` : name;
     }),
@@ -211,7 +210,7 @@ function conditionWords(item: AttentionItem, now: number): string {
       case 'shed_no_runway':
         return `${plural(num(d.rounds), 'round')} marked nothing, no destination had runway`;
       case 'destination_spent': {
-        const spentWindows = names(d.windows);
+        const spentWindows = strings(d.windows);
         const spent = windowsOf(spentWindows);
         return `${plural(num(d.moves), 'move')} landed${spent ? ` and${spent} ${noun(spentWindows.length, 'was', 'were')} spent` : ''} within the hour`;
       }
@@ -221,7 +220,7 @@ function conditionWords(item: AttentionItem, now: number): string {
         // A slow-down round paces the window to its reset, so its wall reads how early it came instead.
         const earlyMs = numOrNull(d.early_ms);
         const early = earlyMs === null ? null : earlyMs > 0 ? `, the wall came ${formatFact(earlyMs, 'ms', now)} before the reset` : ', the wall came at the reset';
-        const on = windowsOf(names(d.windows));
+        const on = windowsOf(strings(d.windows));
         return `${plural(num(d.walls), 'wall')} reached${on ? ` on${on}` : ''}${early ?? error}`;
       }
     }

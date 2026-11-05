@@ -20,6 +20,7 @@ import { armPoll, counted, readQuiet, type Streak, streakFailed, streakLanded, u
 export function useFollow<R>(input: {
   address: string;
   compare: (a: R, b: R) => number;
+  cursor: string | undefined;
   error: string | null;
   /**
    * Whether the range holds its own end (a custom range), so with no next cursor a late row below the list's last row
@@ -30,15 +31,15 @@ export function useFollow<R>(input: {
   /** The auto reload interval in milliseconds, 0 for off. */
   intervalMs: number;
   list: { landedThrough?: number; nextCursor: string | null; rows: R[] } | null;
-  paging: Paging;
+  pagedTo: number | undefined;
   /** The page's own pause (an open drawer). A cursor page and a hidden tab are the hook's. */
   paused: boolean;
   read: (cursor: string | undefined, to: number, landedAfter?: number) => Promise<{ landedThrough?: number; nextCursor: string | null; rows: R[] }>;
   setPaging: Dispatch<SetStateAction<Paging>>;
+  stack: (string | undefined)[];
   stale: boolean;
 }): { error: string | null; fresh: Set<string>; goNext: () => void; goPrevious: () => void; nextCursor: string | null; overrun: Overrun | null; rows: R[]; setFollowed: Dispatch<SetStateAction<Followed<R> | null>> } {
-  const { address, compare, error, fixedEnd, identity, intervalMs, list, paging, paused, read, setPaging, stale } = input;
-  const { cursor, stack, to: pagedTo } = pagingFor(paging, address);
+  const { address, compare, cursor, error, fixedEnd, identity, intervalMs, list, pagedTo, paused, read, setPaging, stack, stale } = input;
   const [followed, setFollowed] = useState<Followed<R> | null>(null);
   // The tint marks what the last poll brought, or after the tab's return what its read and the tick after it brought,
   // and with auto reload off no poll follows to take it away.
@@ -179,9 +180,9 @@ export function useFollow<R>(input: {
  * so changing a filter back does not return to the page left behind under it. `pagedTo` is the end the walk's cursor
  * came from, and `reset` returns to the first page.
  */
-export function usePaging(address: string): { cursor: string | undefined; pagedTo: number | undefined; paging: Paging; reset: () => void; setPaging: Dispatch<SetStateAction<Paging>>; stack: (string | undefined)[] } {
+export function usePaging(address: string): { cursor: string | undefined; pagedTo: number | undefined; reset: () => void; setPaging: Dispatch<SetStateAction<Paging>>; stack: (string | undefined)[] } {
   const [paging, setPaging] = useState<Paging>({ for: address, stack: [] });
   if (paging.for !== address) setPaging({ for: address, stack: [] });
   const { cursor, stack, to: pagedTo } = pagingFor(paging, address);
-  return { cursor, pagedTo, paging, reset: () => setPaging({ for: address, stack: [] }), setPaging, stack };
+  return { cursor, pagedTo, reset: () => setPaging({ for: address, stack: [] }), setPaging, stack };
 }

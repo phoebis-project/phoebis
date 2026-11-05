@@ -358,6 +358,12 @@ export const KEYS_CODEC = codecOf<KeysAddress>({
 /** The Keys view on one pool's keys, every other filter at its default. */
 export const poolKeysHref = (poolId: string): string => `/keys?${KEYS_CODEC.toParams({ ...KEYS_CODEC.defaults, pools: [poolId] })}`;
 
+export const EDIT_PARAM = 'edit';
+export const GROUP_PARAM = 'group';
+export const EDIT_PARAMS = [EDIT_PARAM, GROUP_PARAM] as const;
+/** The view at `path` with the dialog of item `id` opened once on `group`, which `useAddressEdit` reads. */
+export const editHref = (path: string, id: string, group: string): string => `${path}?${new URLSearchParams({ [EDIT_PARAM]: id, [GROUP_PARAM]: group })}`;
+
 export interface AccountsAddress {
   /** `asc`, `desc` or empty for the sort key's own default direction, which the address omits. */
   dir: '' | SortDir;

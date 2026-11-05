@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { EDIT_PARAM, GROUP_PARAM } from '@/lib/address';
 import { addressTo, useLatest } from '@/lib/hooks';
 import { useSession } from './session';
 
@@ -16,11 +17,11 @@ export function useAddressEdit<T extends { id: string }>(items: readonly T[] | n
   const openRef = useLatest(open);
   useEffect(() => {
     const params = new URLSearchParams(location.search);
-    const edit = params.get('edit');
+    const edit = params.get(EDIT_PARAM);
     if (edit === null || !items) return;
-    const group = params.get('group');
-    params.delete('edit');
-    params.delete('group');
+    const group = params.get(GROUP_PARAM);
+    params.delete(EDIT_PARAM);
+    params.delete(GROUP_PARAM);
     navigate(addressTo(location.hash, location.pathname, params), { replace: true });
     const item = items.find((x) => x.id === edit);
     if (!item) {

@@ -24,7 +24,7 @@ import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Badge, BadgeLink, Button, Card, ConfirmDialog, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, PageLink, Refusal, Select, Skeleton, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
-import { accountHref, poolKeysHref } from '@/lib/address';
+import { accountHref, editHref, poolKeysHref } from '@/lib/address';
 import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, dollarsUnder, moveLabel, nativeSidesOf, sidesLine, sumFunded, type FundedSum, type WeekReading } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
 import { weekReadingOf } from '@/lib/costs';
@@ -705,7 +705,7 @@ function PoolCard({
           <div className="pool__features chips">
             {features.map((f) => (
               <Fragment key={f.group}>
-                <BadgeLink to={`/pools?edit=${pool.id}&group=${f.group}`} title={`Opens the pool dialog on ${POOL_RAIL[f.group].label}`}>
+                <BadgeLink to={editHref('/pools', pool.id, f.group)} title={`Opens the pool dialog on ${POOL_RAIL[f.group].label}`}>
                   {f.word(pool)}
                 </BadgeLink>
                 {f.group === 'keepalive' && pool.keepaliveResolved && <span className="muted pool__ceilings">{ceilingsLine(pool.keepaliveResolved)}</span>}
@@ -835,7 +835,7 @@ function PoolCard({
         <div>
           <dt>Warnings</dt>
           <dd className="num" title={pool.warnings.length === 0 ? undefined : pool.warnings.map((w) => w.text).join(' ')}>
-            {warnedAt === null ? fmtInt(pool.warnings.length) : <Link to={`/pools?edit=${pool.id}&group=${warnedAt}`}>{fmtInt(pool.warnings.length)}</Link>}
+            {warnedAt === null ? fmtInt(pool.warnings.length) : <Link to={editHref('/pools', pool.id, warnedAt)}>{fmtInt(pool.warnings.length)}</Link>}
           </dd>
         </div>
         <div>

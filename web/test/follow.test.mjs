@@ -12,7 +12,7 @@ globalThis.window = window;
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 after(() => window.close());
 const d = await import('./dist/api.js');
-const { act, api, createElement: h, createRoot, fakeClock, installClock, setHooks, useFollow, useRangeTakenAt, useState } = await import('./dist/ui.js');
+const { act, api, createElement: h, createRoot, fakeClock, installClock, pagingFor, setHooks, useFollow, useRangeTakenAt, useState } = await import('./dist/ui.js');
 
 const at = (s) => new Date(Date.UTC(2026, 8, 16, 14, 0, s)).toISOString();
 const byId = (r) => r.id;
@@ -221,7 +221,8 @@ async function settled() {
 /** The page's side of the hook: the paging state it holds over one address. */
 function Host({ input, seen }) {
   const [paging, setPaging] = useState({ for: 'q', stack: [] });
-  seen.push({ ...useFollow({ ...input, paging, setPaging }), paging });
+  const { cursor, stack, to: pagedTo } = pagingFor(paging, input.address);
+  seen.push({ ...useFollow({ ...input, cursor, pagedTo, setPaging, stack }), paging });
   return null;
 }
 

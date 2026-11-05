@@ -14,7 +14,7 @@ import { Popover, PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { sumTileOf, Tile } from '@/components/ui/Tile';
 import { IconChevron, IconInfo, IconPlus, IconWarning, IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, ErrorState, Expert, Field, GroupedDialog, Input, Menu, PageLink, Refusal, Segmented, Select, Skeleton, Toggle, type DialogGroup } from '@/components/ui/primitives';
-import { KEYS_CODEC } from '@/lib/address';
+import { EDIT_PARAM, EDIT_PARAMS, KEYS_CODEC } from '@/lib/address';
 import { dollarsUnder, nativeSidesOf, sidesLine, sumFunded, UNPRICED_TITLE, type FundedSum, type WeekReading } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
 import { effectiveCaptureHours } from '@/lib/capture';
@@ -101,7 +101,7 @@ export function KeysPage() {
   const landed = useRef<string | null>(null);
   // The dialog's one-shot `edit` and `group` wait in the address until the key list loads, so a filter written before
   // then carries them through.
-  const { address, filters, replaceLater, update } = useQueryFilters(KEYS_CODEC, { keep: ['edit', 'group'] });
+  const { address, filters, replaceLater, update } = useQueryFilters(KEYS_CODEC, { keep: EDIT_PARAMS });
   const status = filters.status;
   const [dialog, setDialog] = useState<{ initialGroup: KeyGroup | null; key: ApiKey | null } | null>(null);
   // Held only while the dialog that shows it is open, because the router keeps no copy of a secret.
@@ -131,7 +131,7 @@ export function KeysPage() {
   const poolOptions = useMemo(() => [...poolList.map((p) => ({ label: p.name, value: p.id })), ...filters.pools.filter((id) => !poolById.has(id)).map((id) => ({ label: id, value: id }))], [filters.pools, poolById, poolList]);
   useEffect(() => {
     if (!pools.data || poolIds.length === filters.pools.length) return;
-    if (new URLSearchParams(location.search).has('edit')) return;
+    if (new URLSearchParams(location.search).has(EDIT_PARAM)) return;
     replaceLater({ ...filters, pools: poolIds });
   }, [filters, location.search, poolIds, pools.data, replaceLater]);
   const rows = useMemo(

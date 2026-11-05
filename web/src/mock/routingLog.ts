@@ -1,7 +1,8 @@
 import type {
-  Account, AllowanceReset, AttemptWindow, CohortHold, DecisionKind, DecisionRecord, DecisionSummary, MoveCause, PinReason, Placement, PrefixEntry, RecordBudget, RecordCandidate, RecordCompletion, RecordCooldown, RecordHold, RecordOutcome,
-  PoolKeepalive, RecordPin, RecordRequest, RecordSettings, RequestLog, RoutingEvent, RoutingLogPage, RoutingLogQuery, Score, SummaryFact, WalkFact, WalkStep,
+  Account, AllowanceReset, AttemptWindow, CohortHold, DecisionKind, DecisionRecord, DecisionSummary, Exhaustion, MoveCause, PinReason, Placement, PrefixEntry, RecordBudget, RecordCandidate, RecordCompletion, RecordCooldown, RecordHold, RecordOutcome,
+  PoolKeepalive, RecordPin, RecordRequest, RecordSettings, Refusal, RequestLog, RoutingEvent, RoutingLogPage, RoutingLogQuery, Score, SummaryFact, WalkFact, WalkStep,
 } from '@/api/types';
+import { DECISION_KIND_VALUES } from '@/api/types';
 import { shareIn, weightOf } from '@/lib/costs';
 import { placementHit } from '@/lib/format';
 import { MODEL_SCOPE_PREFIX, endOf } from '@/lib/quota';
@@ -100,7 +101,7 @@ interface Spec {
    * builder derives: the message chain's depth, and the size of each static boundary another key held there.
    */
   cacheMap?: { messages: number; staticSizes: number[] };
-  exhaustion?: RecordOutcome['exhaustion'];
+  exhaustion?: Exhaustion | null;
   /** A summary fact the story names where the router's own reading is not what the row tells. */
   fact?: SummaryFact[];
   /** The pin event reason of a failover placement, which moves the pin from the task rather than by a rule. */
@@ -129,7 +130,7 @@ interface Spec {
   prefix?: Record<string, Partial<RecordCandidate['prefix']>>;
   /** The windows a member reads where the story's own readings are not the walk back's. */
   readings?: Record<string, AttemptWindow[]>;
-  refusal?: { code: string; kind: string; reason: string };
+  refusal?: Refusal;
   request: RequestLog;
   round?: ShedRound;
   rule?: string;
@@ -1501,8 +1502,8 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
  * lane's soonest reset, the usage credits where every obstacle is theirs, the soonest dated cooldown or budget, a model
  * refusal alone, or nothing dated.
  */
-function exhaustionOf(candidates: RecordCandidate[]): NonNullable<RecordOutcome['exhaustion']> {
-  const answer = (kind: string, o: Partial<NonNullable<RecordOutcome['exhaustion']>> = {}) => ({ deadline: null, kind, obstacle: null, reason: null, window: null, ...o });
+function exhaustionOf(candidates: RecordCandidate[]): Exhaustion {
+  const answer = (kind: string, o: Partial<Exhaustion> = {}) => ({ deadline: null, kind, obstacle: null, reason: null, window: null, ...o });
   const obstacles = candidates.flatMap((c) => (c.obstacle ? [c.obstacle] : []));
   const untilOf = (until: string | null) => (until === null ? Number.POSITIVE_INFINITY : Date.parse(until));
   const fastLane = obstacles.filter((o) => o.name === 'cooldown' && o.reason === 'fast_rate_limit').map((o) => untilOf(o.until));
@@ -2753,7 +2754,6 @@ export const ROUTING_EVENTS: RoutingEvent[] = buildEvents();
 /** The late event's id: the route lists it once its clock reaches the event, as the ledger has written it by then. */
 const LATE_EVENT_ID = ROUTING_EVENTS.find((e) => Date.parse(e.at) === LATE_EVENT_AT)?.id;
 
-const DECISION_KINDS: readonly string[] = ['exhausted', 'held', 'moved', 'placed', 'refused', 'renewed'];
 /** Every event kind the ledger writes, as the route validates `kinds` against them. */
 const EVENT_KINDS: readonly string[] = [
   'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'mark_cleared', 'model_permitted', 'model_rejected',
@@ -2834,7 +2834,7 @@ export function listRoutingLog(query: RoutingLogQuery, now: number, written: rea
 }
 
 /** The kinds the route accepts in `kinds`: every decision and event kind, and the probe pseudo-kind. */
-export const ROUTING_LOG_KINDS: readonly string[] = [...DECISION_KINDS, 'probe', ...EVENT_KINDS];
+export const ROUTING_LOG_KINDS: readonly string[] = [...DECISION_KIND_VALUES, 'probe', ...EVENT_KINDS];
 
 /** The record route's answer, or null for a decision no request of the mock made. */
 export function getDecision(requestId: string, seq: number): DecisionRecord | null {

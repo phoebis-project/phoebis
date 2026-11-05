@@ -23,7 +23,6 @@ const QueueCtx = createContext<ToastItem[]>([]);
 export const useToastQueue = (): ToastItem[] => useContext(QueueCtx);
 
 export interface ToastItem {
-  dwellMs: number;
   id: number;
   kind: 'confirmation' | 'failure';
   message: string;
@@ -31,11 +30,6 @@ export interface ToastItem {
   path: string | null;
 }
 
-/**
- * A failure's dwell is long enough to read the route it names. A confirmation only acknowledges the action just taken,
- * for the 2.4 s the smoke run's confirmation reads are timed against.
- */
-const DWELL_MS: Record<ToastItem['kind'], number> = { confirmation: 2_400, failure: 6_000 };
 const isConfirmation = (t: ToastItem) => t.kind === 'confirmation';
 
 /**
@@ -65,7 +59,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const push = useCallback((message: string, kind: ToastItem['kind'], path: string | null) => {
     lastId.current += 1;
-    const item = { dwellMs: DWELL_MS[kind], id: lastId.current, kind, message, path };
+    const item = { id: lastId.current, kind, message, path };
     setQueue((q) => queueToast(q, item));
   }, []);
   const notify = useCallback((message: string) => push(message, 'confirmation', null), [push]);
