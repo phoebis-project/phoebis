@@ -7,7 +7,7 @@ import { byteOrder, fmtAbsolute, fmtDated, fmtShare, plural, weekShort } from '@
 import { pricedTier, readWindows } from '@/lib/quota';
 import { DAY } from '@/lib/time';
 import type { WeekPosition } from '@/lib/unit';
-import { WINDOW_HOURS, windowRank } from '@/lib/windows';
+import { WINDOW_HOURS, inWindowOrder } from '@/lib/windows';
 
 /** The weeks the Accounts block and the Analytics card read: the latest reset and the three before it. */
 export const ALLOWANCE_WEEKS = 4;
@@ -106,7 +106,7 @@ export const ALLOWANCE_SUBTITLE = 'Each weekly window left unused when it reset,
 /** The account's weekly windows in the console's order, the 7-day window first and then each model week, a week the
  *  console does not know after the known ones in the answer's order. */
 export function allowanceWindows(account: AllowanceAccount): AllowanceWindow[] {
-  return [...account.windows].sort((a, b) => windowRank(a.window) - windowRank(b.window));
+  return inWindowOrder(account.windows, (w) => w.window);
 }
 
 /** The weekly windows the Analytics card draws a pair of columns for: the 7-day window and the Fable week always, then
@@ -114,7 +114,7 @@ export function allowanceWindows(account: AllowanceAccount): AllowanceWindow[] {
 export function weeklyKeys(accounts: AllowanceAccount[]): string[] {
   const keys = ['seven_day', 'seven_day_fable'];
   for (const a of accounts) for (const w of a.windows) if (!keys.includes(w.window)) keys.push(w.window);
-  return keys.sort((a, b) => windowRank(a) - windowRank(b));
+  return inWindowOrder(keys, (k) => k);
 }
 
 /** The block's own words for where a reading came from, since the routing log's `window reset` panel names none. */

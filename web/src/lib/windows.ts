@@ -52,3 +52,8 @@ export const windowRank = (key: string): number => {
   const at = (WINDOW_ORDER as readonly string[]).indexOf(windowKeyId(key) ?? '');
   return at === -1 ? WINDOW_ORDER.length : at;
 };
+/** The items in the order the pages draw their windows, then the items of any other window in arrival order. */
+export function inWindowOrder<T>(items: readonly T[], keyOf: (item: T) => string): T[] {
+  // A stable sort, so the ids the pages do not know keep their arrival order.
+  return [...items].sort((x, y) => windowRank(keyOf(x)) - windowRank(keyOf(y)));
+}

@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api } from '@/api';
-import { iso, REQUEST_OUTCOME_VALUES } from '@/api/decode';
+import { iso } from '@/api/decode';
 import type { Account, ApiKey, Attempt, AttemptResponse, CapturedBodies, CohortHold, DiagnosticsSource, Guardrail, RequestLog, RequestOutcome, RequestPage, RequestQuery, Settings, SubscriptionCosts, Usage } from '@/api/types';
-import { REFUSAL_CATEGORIES, STOP_REASONS } from '@/api/types';
+import { REFUSAL_CATEGORIES, REQUEST_OUTCOME_VALUES, STOP_REASONS } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { useFollow, usePaging } from '@/app/useFollow';
 import { BodyViewer } from '@/components/BodyViewer';

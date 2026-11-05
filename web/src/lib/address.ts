@@ -1,5 +1,6 @@
-import { iso, REQUEST_KIND_VALUES, REQUEST_OUTCOME_VALUES } from '@/api/decode';
+import { iso } from '@/api/decode';
 import type { Account, BurnGroup, KeyStatus, RequestKind, RequestOutcome } from '@/api/types';
+import { REQUEST_KIND_VALUES, REQUEST_OUTCOME_VALUES } from '@/api/types';
 import { clock } from './clock';
 import { ACCOUNT_STATUSES } from './quota';
 import { DAY, HOUR } from './time';

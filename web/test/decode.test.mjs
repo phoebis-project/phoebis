@@ -1924,9 +1924,9 @@ test('a session fold groups on the client class and narrows to a class pattern t
   const rows = [row, { ...row, id: 'r-second' }, { ...row, client: null, id: 'r-unclassed' }];
   const byClient = d.foldGroups(rows, 'client');
   assert.deepEqual(byClient.map((g) => [g.key, g.label, g.requests]).sort(), [['-', 'unattributed', 1], ['claude-code/cli', 'claude-code/cli', 2]], 'a row with no class files under -, as the rollups file it');
-  const narrowed = d.foldGroups(rows, 'client', { clientPatterns: ['claude-code/*'] });
+  const narrowed = d.foldGroups(d.keptRows(rows, { clientPatterns: ['claude-code/*'] }), 'client');
   assert.deepEqual(narrowed.map((g) => [g.key, g.requests]), [['claude-code/cli', 2]], 'a row with no class is matched as -, which the pattern does not name');
-  assert.deepEqual(d.foldGroups(rows, 'all', { clientPatterns: ['sdk/*'] }), []);
+  assert.deepEqual(d.foldGroups(d.keptRows(rows, { clientPatterns: ['sdk/*'] }), 'all'), []);
 });
 
 test('the session fold buckets a range the way the analytics routes do', () => {
@@ -2139,9 +2139,9 @@ test('a session fold groups on the client each row named', () => {
   const named = d.foldGroups(rows, 'user_agent', { agentGroups: ['claude-cli/2.1.*', 'phoebis-batch/*'] });
   assert.deepEqual(named.map((g) => g.key).sort(), ['claude-cli/2.1.*', 'other', 'phoebis-batch/*'], 'the row that named no client falls under other, as the breakdown route files it');
   assert.deepEqual(named.map((g) => g.requests), [1, 1, 1]);
-  assert.equal(d.foldGroups(rows, 'all', { agentPatterns: ['claude-cli/*'] })[0].requests, 1, 'the pattern keeps only the clients it admits');
+  assert.equal(d.foldGroups(d.keptRows(rows, { agentPatterns: ['claude-cli/*'] }), 'all')[0].requests, 1, 'the pattern keeps only the clients it admits');
   assert.equal(
-    d.foldGroups(rows, 'all', { agentPatterns: ['claude-cli/2.1.310'] })[0]?.requests,
+    d.foldGroups(d.keptRows(rows, { agentPatterns: ['claude-cli/2.1.310'] }), 'all')[0]?.requests,
     1,
     'an exact token selects the row it folds from, as the unscoped page matches the rollups',
   );

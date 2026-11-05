@@ -7,7 +7,7 @@ import type {
 import type { AgentContext } from './types';
 import type { StreamCut } from './types';
 import type { Condition, Guardrail, GuardrailAttachment, GuardrailCounts, GuardrailMatch, GuardrailMode, GuardrailPreset, GuardrailPresetState, GuardrailRef, GuardrailTestResult } from './types';
-import { ACCOUNT_KIND_VALUES, AFFINITY_MODE_VALUES, AGENT_STATE_VALUES, ATTEMPT_OUTCOME_VALUES, ATTENTION_KIND_VALUES, ATTENTION_PAGE_VALUES, ATTENTION_SUBJECT_VALUES, AUTO_MODE_VALUES, BUDGET_PERIOD_VALUES, BURN_UNIT_VALUES, BY_KIND_VALUES, CONDITION_OPERATOR_VALUES, CONDITION_SUBJECT_VALUES, DECISION_KIND_VALUES, DIAGNOSTICS_SOURCE_VALUES, ELIGIBILITY_VALUES, FACT_ENTITY_VALUES, FACT_UNIT_VALUES, GUARDRAIL_MODE_VALUES, GUARD_VERDICT_VALUES, MESSAGE_SELECTOR_VALUES, MODEL_RULES_MODE_VALUES, OVERAGE_POLICY_VALUES, PARK_KIND_VALUES, PIN_MIGRATION_REASON_VALUES, PIN_REASON_VALUES, PIN_RELEASE_REASON_VALUES, PLACEMENT_RUNG_VALUES, POLL_OUTCOME_VALUES, POOL_STATUS_VALUES, POOL_STRATEGY_VALUES, RECIPE_CAUSE_VALUES, RECIPE_STATE_VALUES, REQUEST_KIND_VALUES, REQUEST_OUTCOME_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, TEST_VERDICT_VALUES, WARM_SESSIONS_VALUES } from './types';
+import { ACCOUNT_KIND_VALUES, AFFINITY_MODE_VALUES, AGENT_STATE_VALUES, ATTEMPT_OUTCOME_VALUES, ATTENTION_KIND_VALUES, ATTENTION_PAGE_VALUES, ATTENTION_SUBJECT_VALUES, AUTO_MODE_VALUES, BUDGET_PERIOD_VALUES, BURN_UNIT_VALUES, BY_KIND_VALUES, CONDITION_OPERATOR_VALUES, CONDITION_SUBJECT_VALUES, DECISION_KIND_VALUES, DIAGNOSTICS_SOURCE_VALUES, ELIGIBILITY_VALUES, FACT_ENTITY_VALUES, FACT_UNIT_VALUES, GUARDRAIL_MODE_VALUES, GUARD_VERDICT_VALUES, MESSAGE_SELECTOR_VALUES, MODEL_RULES_MODE_VALUES, OVERAGE_POLICY_VALUES, PARK_KIND_VALUES, PIN_REASON_VALUES, PLACEMENT_RUNG_VALUES, POLL_OUTCOME_VALUES, POOL_STATUS_VALUES, POOL_STRATEGY_VALUES, RECIPE_CAUSE_VALUES, RECIPE_STATE_VALUES, REQUEST_KIND_VALUES, REQUEST_OUTCOME_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, TEST_VERDICT_VALUES, WARM_SESSIONS_VALUES } from './types';
 import { CACHE_TTL_DEFAULTS, METERED_TTL_DEFAULTS, PLAN_TTL_DEFAULTS, POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type AccountPatch, type KeyInput, type PoolInput } from './client';
 import type { GuardrailInput, GuardrailTestInput } from './client';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
@@ -15,7 +15,7 @@ import { emptyCounts } from '@/lib/counts';
 import { earlierHolderLabel, fmtDate, formatIn } from '@/lib/format';
 import { BUCKET_COUNT, emptyHistogram } from '@/lib/histogram';
 import { accountStatusOf, planWordLabel } from '@/lib/quota';
-import { WINDOW_HOURS, WINDOW_LABEL, hoursOfKey, windowKeyId, windowRank } from '@/lib/windows';
+import { WINDOW_HOURS, WINDOW_LABEL, hoursOfKey, inWindowOrder, windowKeyId } from '@/lib/windows';
 
 type Rec = Record<string, unknown>;
 export const rec = (v: unknown): Rec => (v && typeof v === 'object' ? (v as Rec) : {});
@@ -29,7 +29,7 @@ export const numOrNull = (v: unknown): number | null => (typeof v === 'number' &
 const bool = (v: unknown, fallback = false): boolean => (typeof v === 'boolean' ? v : fallback);
 const boolOrNull = (v: unknown): boolean | null => (typeof v === 'boolean' ? v : null);
 const strings = (v: unknown): string[] => list(v).filter((x): x is string => typeof x === 'string');
-const oneOf = <T extends string>(values: readonly T[], v: unknown): T | undefined => values.find((x) => x === v);
+const oneOf = <T extends string>(values: readonly T[], v: unknown): T | null => values.find((x) => x === v) ?? null;
 const accountKind = (v: unknown): AccountKind => oneOf(ACCOUNT_KIND_VALUES, v) ?? 'oauth';
 const budgetPeriod = (v: unknown): BudgetPeriod => oneOf(BUDGET_PERIOD_VALUES, v) ?? 'month';
 const rulesMode = (v: unknown): ModelRulesMode => oneOf(MODEL_RULES_MODE_VALUES, v) ?? 'extend';
@@ -57,12 +57,6 @@ function decodeWindow(w: Rec): RateLimitWindow | null {
     burn: numOrNull(w.burn), demand: numOrNull(w.demand), horizon: isoOrNull(w.horizon), id, label: WINDOW_LABEL[id] ?? id, lead: numOrNull(w.lead), observedAt: isoOr(w.observed_at, epoch), periodHours: WINDOW_HOURS[id] ?? hoursOfKey(id),
     projection: numOrNull(w.projection), resetsAt: isoOrNull(w.resets_at), utilization: num(w.utilization),
   };
-}
-
-/** The windows in the order the pages draw them, then every other id in the order it arrived. */
-function drawnOrder<T>(items: T[], idOf: (item: T) => WindowId): T[] {
-  // A stable sort, so the ids the pages do not know keep their arrival order.
-  return [...items].sort((x, y) => windowRank(idOf(x)) - windowRank(idOf(y)));
 }
 
 /** A usage-based seat's spend window, null on every other account and on a row from a router without the member. */
@@ -105,45 +99,6 @@ export function decodeKeyModels(v: unknown): KeyModels {
   };
 }
 
-// The closed sets are defined beside the types they spell and exported here for the decoder's importers.
-export {
-  ACCOUNT_KIND_VALUES,
-  AFFINITY_MODE_VALUES,
-  AGENT_STATE_VALUES,
-  ATTEMPT_OUTCOME_VALUES,
-  ATTENTION_KIND_VALUES,
-  ATTENTION_PAGE_VALUES,
-  ATTENTION_SUBJECT_VALUES,
-  BUDGET_PERIOD_VALUES,
-  BURN_UNIT_VALUES,
-  CONDITION_OPERATOR_VALUES,
-  CONDITION_SUBJECT_VALUES,
-  DECISION_KIND_VALUES,
-  ELIGIBILITY_VALUES,
-  GUARDRAIL_MODE_VALUES,
-  GUARD_VERDICT_VALUES,
-  MESSAGE_SELECTOR_VALUES,
-  MODEL_RULES_MODE_VALUES,
-  OVERAGE_POLICY_VALUES,
-  PARK_KIND_VALUES,
-  PIN_MIGRATION_REASON_VALUES,
-  PIN_REASON_VALUES,
-  PIN_RELEASE_REASON_VALUES,
-  PLACEMENT_RUNG_VALUES,
-  POLL_OUTCOME_VALUES,
-  POOL_STATUS_VALUES,
-  POOL_STRATEGY_VALUES,
-  RECIPE_CAUSE_VALUES,
-  RECIPE_STATE_VALUES,
-  REQUEST_KIND_VALUES,
-  REQUEST_OUTCOME_VALUES,
-  RETURN_TO_PLAN_VALUES,
-  SESSION_PLACEMENT_VALUES,
-  SUBAGENT_PLACEMENT_VALUES,
-  TEST_VERDICT_VALUES,
-  WARM_SESSIONS_VALUES,
-};
-
 /** The typed subscription the route's `profile` and `subscription` records fold into; null when both are absent. */
 export function decodeSubscription(profile: Rec | null, sub: Rec | null): Subscription | null {
   if (profile === null && sub === null) return null;
@@ -161,9 +116,8 @@ export function decodeSubscription(profile: Rec | null, sub: Rec | null): Subscr
 
 export function decodeAccount(v: unknown): Account {
   const a = rec(v);
-  const cooldowns = list(a.cooldowns).map(rec);
-  const decodedCooldowns = cooldowns.map((c) => ({ reason: str(c.reason), scope: str(c.scope), setAt: isoOr(c.set_at, epoch), until: isoOr(c.until, epoch), windowId: windowKeyId(str(c.window)) }));
-  const windows = drawnOrder(list(a.windows).map(rec).map(decodeWindow).filter((w): w is RateLimitWindow => w !== null), (w) => w.id);
+  const cooldowns = list(a.cooldowns).map(rec).map((c) => ({ reason: str(c.reason), scope: str(c.scope), setAt: isoOr(c.set_at, epoch), until: isoOr(c.until, epoch), windowId: windowKeyId(str(c.window)) }));
+  const windows = inWindowOrder(list(a.windows).map(rec).map(decodeWindow).filter((w): w is RateLimitWindow => w !== null), (w) => w.id);
   const profile = orNull(a.profile, (r) => r);
   const sub = orNull(a.subscription, (r) => r);
   const identity = rec(a.identity);
@@ -171,7 +125,7 @@ export function decodeAccount(v: unknown): Account {
   const subscription = decodeSubscription(profile, sub);
   return {
     canceled: bool(a.canceled),
-    cooldowns: decodedCooldowns,
+    cooldowns,
     credential: { accessTokenExpiresAt: isoOrNull(credential.access_expires_at), lastError: strOrNull(credential.last_error), lastRefreshAt: isoOrNull(credential.last_refresh_at), quarantined: bool(credential.quarantined), refreshTokenExpiresAt: isoOrNull(credential.refresh_expires_at) },
     email: strOrNull(identity.email),
     // Kept when the provider switched extra usage off: the reason it gave exists for exactly that account.
@@ -192,7 +146,7 @@ export function decodeAccount(v: unknown): Account {
     routingEnabled: bool(a.enabled, true),
     slowDown: orNull(a.slow_down, (s) => ({ factor: num(s.factor, 1), holdMs: num(s.hold_ms), since: isoOrNull(s.since), speed: num(s.speed, 1), stretchMs: num(s.stretch_ms), thresholdMs: num(s.threshold_ms) })),
     spend: decodeSpend(a.spend),
-    status: accountStatus(a, decodedCooldowns),
+    status: accountStatus(a, cooldowns),
     subscription,
     usage: orNull(a.usage, (u) => decodeSnapshot(str(a.id), u)),
     usageBased: bool(a.usage_based),
@@ -244,7 +198,7 @@ export function decodeQuotaHistory(v: unknown): QuotaHistory[] {
     // A window the header and the poll both sampled is one series, whatever each called it.
     byId.set(id, seen ? { ...seen, samples: [...seen.samples, ...samples].sort((x, y) => x.at.localeCompare(y.at)) } : { accountId: str(q.account_id), samples, windowId: id });
   }
-  return drawnOrder([...byId.values()], (h) => h.windowId);
+  return inWindowOrder([...byId.values()], (h) => h.windowId);
 }
 
 function decodePoll(v: unknown): QuotaPoll | null {
@@ -270,16 +224,16 @@ export function decodeAttention(v: unknown): AttentionItem {
   const subject = rec(a.subject);
   const link = a.link ? rec(a.link) : null;
   // A page this build does not know has no place to open the subject on, so the item draws no link.
-  const page = link ? oneOf(ATTENTION_PAGE_VALUES, link.page) : undefined;
+  const page = link ? oneOf(ATTENTION_PAGE_VALUES, link.page) : null;
   const raw = str(a.kind);
   const kind = oneOf(ATTENTION_KIND_VALUES, raw);
   return {
     detail: rec(a.detail),
     kind: kind ?? 'unknown',
     // A kind this build does not know names no fix the console can vouch for, so it opens nothing whatever its page.
-    link: kind !== undefined && link && page !== undefined ? { id: str(link.id), page } : null,
+    link: kind !== null && link && page !== null ? { id: str(link.id), page } : null,
     pools: strings(a.pools),
-    rawKind: kind === undefined ? raw : null,
+    rawKind: kind === null ? raw : null,
     since: isoOr(a.since, epoch),
     subject: { id: str(subject.id), label: str(subject.label), type: oneOf(ATTENTION_SUBJECT_VALUES, subject.type) ?? 'pool' },
   };
@@ -369,13 +323,12 @@ const decodeRange = (v: unknown): Range => {
 /** A pool with no member answers null, and so does a row from a router that resolves nothing. */
 export function decodeKeepaliveResolved(v: unknown): Pool['keepaliveResolved'] {
   if (!isMap(v)) return null;
-  const r = rec(v);
   return {
-    breakEvenSeconds: decodeRange(r.break_even_seconds),
-    horizonSeconds: decodeRange(r.horizon_seconds),
-    idleSeconds: decodeRange(r.idle_seconds),
-    idleShare: decodeRange(r.idle_share),
-    parkedSeconds: decodeRange(r.parked_seconds),
+    breakEvenSeconds: decodeRange(v.break_even_seconds),
+    horizonSeconds: decodeRange(v.horizon_seconds),
+    idleSeconds: decodeRange(v.idle_seconds),
+    idleShare: decodeRange(v.idle_share),
+    parkedSeconds: decodeRange(v.parked_seconds),
   };
 }
 
@@ -476,7 +429,7 @@ const tierOf = (v: unknown): SelectionTrace['tier'] => {
 const placementOf = (v: unknown): Placement | null =>
   orNull(v, (p) => {
     const rung = oneOf(PLACEMENT_RUNG_VALUES, p.rung);
-    return rung === undefined ? null : { depth: num(p.depth), prefixTokens: num(p.prefix_tokens), rung };
+    return rung === null ? null : { depth: num(p.depth), prefixTokens: num(p.prefix_tokens), rung };
   });
 /** A row from before the waits were recorded reads none, so its hold says it waited and not for what. */
 const cohortHoldOf = (v: unknown): CohortHold | null =>
@@ -493,11 +446,11 @@ export function decodeRequest(v: unknown): RequestLog {
   return {
     accountId: strOrNull(r.account_id), agentId: strOrNull(r.agent_id), agentType: strOrNull(r.agent_type), at: isoOr(r.at, epoch),
     attempts: list(r.attempts).map(rec).map((a) => ({ accountId: str(a.account_id), accountKind: accountKind(a.account_kind), cacheMissReason: strOrNull(a.cache_miss_reason), cooldownSet: a.cooldown_set ? { reason: str(rec(a.cooldown_set).reason), until: isoOr(rec(a.cooldown_set).until, epoch) } : null, durationMs: numOrNull(a.duration_ms), index: num(a.index) - 1, outcome: outcomeOf(a.outcome), overageInUse: boolOrNull(a.overage_in_use), response: responseOf(a.response), selection: decodeSelection(a.selection), serviceTier: strOrNull(a.service_tier), startedAt: isoOr(a.started_at, epoch), tier: strOrNull(a.tier), upstreamMessageId: strOrNull(a.upstream_message_id), upstreamRequestId: strOrNull(a.upstream_request_id), upstreamStatus: numOrNull(a.upstream_status), usageBased: bool(a.usage_based), windows: attemptWindows(a.windows) })),
-    autoMode: oneOf(AUTO_MODE_VALUES, r.auto_mode) ?? null,
+    autoMode: oneOf(AUTO_MODE_VALUES, r.auto_mode),
     canonicalModel: str(r.canonical_model), capturedBodies: bool(r.captured_bodies), classifier: r.classifier === 'client' ? 'client' : null, client: strOrNull(r.client), clientContract: strOrNull(r.client_contract), clientDrift: strOrNull(r.client_drift), compaction: strOrNull(r.compaction), contextCompacted: strOrNull(r.context_compacted),
     costEquivalent: numOrNull(r.cost_equivalent),
     costShares: orNull(r.cost_shares, nullableNumberMap), costUsd: num(r.cost_usd),
-    diagnosticsSource: oneOf(DIAGNOSTICS_SOURCE_VALUES, r.diagnostics_source) ?? null,
+    diagnosticsSource: oneOf(DIAGNOSTICS_SOURCE_VALUES, r.diagnostics_source),
     durationMs: numOrNull(r.duration_ms), errorCode: strOrNull(r.error_code),
     forkDepth: numOrNull(r.fork_depth), forkedFrom: strOrNull(r.forked_from),
     guardrailId: strOrNull(r.guardrail_id), guardrails: list(r.guardrails).map(decodeGuardrailMatch),
@@ -520,7 +473,7 @@ export function decodeStreamCut(raw: unknown): StreamCut | null {
   return orNull(raw, (c) => ({ at: isoOr(c.at, epoch), attempt: num(c.attempt), bytesRelayed: num(c.bytes_relayed), code: str(c.code), text: str(c.text), upstreamRequestId: strOrNull(c.upstream_request_id) }));
 }
 
-const decisionKindOf = (v: unknown): DecisionKind | undefined => oneOf(DECISION_KIND_VALUES, v);
+const decisionKindOf = (v: unknown): DecisionKind | null => oneOf(DECISION_KIND_VALUES, v);
 const scoreOf = (v: unknown): Score | null => orNull(v, (s) => ({ accountId: str(s.account_id), score: num(s.score), unit: str(s.unit) }));
 /** A hold with no reason is a version 1 record's, which held for a slot alone. */
 const holdOf = (v: unknown): RecordHold | null =>
@@ -538,9 +491,9 @@ const factOf = (v: unknown): SummaryFact[] => {
   if (typeof f.value !== 'number' && typeof f.value !== 'string') return [];
   const entity = orNull(f.entity, (e) => {
     const kind = oneOf(FACT_ENTITY_VALUES, e.kind);
-    return kind === undefined ? null : { id: str(e.id), kind };
+    return kind === null ? null : { id: str(e.id), kind };
   });
-  return [{ entity, key: str(f.key), unit: oneOf(FACT_UNIT_VALUES, f.unit) ?? null, value: f.value }];
+  return [{ entity, key: str(f.key), unit: oneOf(FACT_UNIT_VALUES, f.unit), value: f.value }];
 };
 
 export function decodeDecisionSummary(v: unknown): DecisionSummary {
@@ -574,7 +527,7 @@ export function decodeRoutingEvent(v: unknown): RoutingEvent {
  */
 const routingLogRowOf = (v: unknown): RoutingLogRow[] => {
   const r = rec(v);
-  if (r.type === 'decision') return typeof r.request_id === 'string' && numOrNull(r.seq) !== null && decisionKindOf(r.kind) !== undefined ? [decodeDecisionSummary(r)] : [];
+  if (r.type === 'decision') return typeof r.request_id === 'string' && numOrNull(r.seq) !== null && decisionKindOf(r.kind) !== null ? [decodeDecisionSummary(r)] : [];
   if (r.type === 'event') return numOrNull(r.id) !== null && typeof r.kind === 'string' ? [decodeRoutingEvent(r)] : [];
   return [];
 };
@@ -676,7 +629,7 @@ export function decodeDecisionRecord(v: unknown): DecisionRecord {
       shed: orNull(p.shed, (x) => ({ at: isoOr(x.at, epoch), from: str(x.from), reason: str(x.reason, 'round') })), slowDownUntil: isoOrNull(p.slow_down_until), warmth: strOrNull(p.warmth), warmthCause: strOrNull(p.warmth_cause),
     })),
     // A word this build does not know reads as none, as a poll outcome does. The raw answer still carries it.
-    pinReason: oneOf(PIN_REASON_VALUES, r.pin_reason) ?? null,
+    pinReason: oneOf(PIN_REASON_VALUES, r.pin_reason),
     raw: v,
     request: {
       agentId: str(q.agent_id), at: isoOr(q.at, epoch), attempt: num(q.attempt, 1), attempted: strings(q.attempted), bodyTokens: numOrNull(q.body_tokens), canonicalModel: str(q.canonical_model),
@@ -858,10 +811,10 @@ export function decodeDashboard(v: unknown): Overview {
 }
 
 const companion = (v: unknown): Session['companion'] => (str(v) === 'reporting' ? 'reporting' : str(v) === 'silent' ? 'silent' : 'none');
-const agentState = (v: unknown): KeepaliveState | null => oneOf(AGENT_STATE_VALUES, v) ?? null;
-const guardVerdict = (v: unknown): GuardVerdict | null => oneOf(GUARD_VERDICT_VALUES, v) ?? null;
+const agentState = (v: unknown): KeepaliveState | null => oneOf(AGENT_STATE_VALUES, v);
+const guardVerdict = (v: unknown): GuardVerdict | null => oneOf(GUARD_VERDICT_VALUES, v);
 
-const burnUnit = (v: unknown): BurnUnit | null => oneOf(BURN_UNIT_VALUES, v) ?? null;
+const burnUnit = (v: unknown): BurnUnit | null => oneOf(BURN_UNIT_VALUES, v);
 
 function decodeAgentContext(v: unknown): AgentContext {
   const c = rec(v);
@@ -874,7 +827,7 @@ export function decodeSession(v: unknown): Session {
   return { accountId: strOrNull(s.account_id), agentContexts: list(s.agent_contexts).map(decodeAgentContext), agentId: strOrNull(s.agent_id), agents: num(s.agents), burn: numOrNull(s.burn), burnAt: isoOrNull(s.burn_at), burnEquivalent: numOrNull(s.burn_equivalent), burnUnit: burnUnit(s.burn_unit), burnWindow: strOrNull(s.burn_window), cacheTtlMs: numOrNull(s.cache_ttl_ms), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), cycleMs: numOrNull(s.cycle_ms), effort: strOrNull(s.effort), epoch: numOrNull(s.epoch), forkDepth: numOrNull(s.fork_depth), forkedFrom: strOrNull(s.forked_from), historical: bool(s.historical), keepalive: { cause: recipeCause(k.cause), lastGuard: guardVerdict(k.last_guard), nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastInputTokens: numOrNull(s.last_input_tokens), lastRefreshAt: isoOrNull(s.last_refresh_at), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), model: strOrNull(s.model), pinned: bool(s.pinned), presenceAgeSeconds: numOrNull(s.presence_age_seconds), requests: num(s.requests), runwayBounded: boolOrNull(s.runway_bounded), runwayMs: numOrNull(s.runway_ms), sessionId: str(s.session_id), shedFrom: strOrNull(s.shed_from), shedReason: strOrNull(s.shed_reason), speed: numOrNull(s.speed) };
 }
 
-const recipeCause = (v: unknown): RecipeCause | null => oneOf(RECIPE_CAUSE_VALUES, v) ?? null;
+const recipeCause = (v: unknown): RecipeCause | null => oneOf(RECIPE_CAUSE_VALUES, v);
 export function decodeRecipe(v: unknown): KeepaliveRecipe {
   const r = rec(v);
   return {
@@ -890,7 +843,7 @@ export function decodeRecipe(v: unknown): KeepaliveRecipe {
     lastRequestAt: isoOrNull(r.last_request_at),
     model: str(r.model),
     nextProbeAt: isoOrNull(r.next_probe_at),
-    parkKind: oneOf(PARK_KIND_VALUES, r.park_kind) ?? null,
+    parkKind: oneOf(PARK_KIND_VALUES, r.park_kind),
     poolId: str(r.pool_id),
     probesToday: num(r.probes_today),
     sessionId: str(r.session_id),
@@ -1156,9 +1109,8 @@ const attachmentsOf = (v: unknown): GuardrailAttachment[] => byPosition(list(v).
 /** The member is on the wire whether null or the stamp, while the OpenAPI document marks it optional: absent reads none. */
 const presetStateOf = (v: unknown): GuardrailPresetState | null => {
   if (!isMap(v)) return null;
-  const p = rec(v);
-  const version = num(p.version, 1);
-  return { currentVersion: num(p.current_version, version), customized: bool(p.customized), id: str(p.id), version };
+  const version = num(v.version, 1);
+  return { currentVersion: num(v.current_version, version), customized: bool(v.customized), id: str(v.id), version };
 };
 
 export function decodeGuardrail(v: unknown): Guardrail {

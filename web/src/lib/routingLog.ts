@@ -1,4 +1,5 @@
-import { iso, list, numOrNull as num, PIN_RELEASE_REASON_VALUES, strOrNull as str } from '@/api/decode';
+import { iso, list, numOrNull as num, strOrNull as str } from '@/api/decode';
+import { PIN_RELEASE_REASON_VALUES } from '@/api/types';
 import type { CohortHold, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, ModelTiers, PinReason, PinReleaseReason, Placement, PrefixEntry, RecordCandidate, RecordOutcome, RecordSettings, RoutingEvent, RoutingLogRow, WalkFact, WalkStep } from '@/api/types';
 import { accountHref, requestHref, ROUTING_LOG_CODEC, type RangeValue } from './address';
 import { FAILOVER_MOVE_REASONS, moveLabel, RULE_MOVE_REASONS, type WeekReading } from './analytics';

@@ -1,6 +1,6 @@
 import { useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { api, ApiError } from '@/api';
-import type { GuardrailInput } from '@/api/client';
+import type { GuardrailPatch } from '@/api/client';
 import type { ApiKey, Condition, Guardrail, GuardrailAttachment, GuardrailMode, GuardrailPreset, GuardrailTestResult, Pool } from '@/api/types';
 import { useSession } from '@/app/session';
 import { blankCondition, ConditionsEditor } from '@/components/ConditionsEditor';
@@ -419,7 +419,7 @@ export function GuardrailDialog({ existing, existingIds, keys, onClose, onSaved,
       if (existing) {
         // The guardrail's side appends a newly named subject and detaches one left out, so an untouched picker sends
         // nothing and leaves an attachment made meanwhile from the subject's side in place.
-        const input: Partial<GuardrailInput> & { preset?: never } = {
+        const input: GuardrailPatch = {
           ...fields,
           ...(sameMembers(form.pools, opened.pools) ? {} : { pools: form.pools }),
           ...(sameMembers(form.keys, opened.keys) ? {} : { keys: form.keys }),

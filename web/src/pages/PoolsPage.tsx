@@ -1,8 +1,8 @@
 import { Fragment, memo, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Bar, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_DEFAULTS, type PoolInput } from '@/api';
-import { POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type OverviewRange, type PoolEngineFields } from '@/api/client';
+import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_DEFAULTS } from '@/api';
+import { POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type CreatePoolInput, type OverviewRange, type PoolEngineFields } from '@/api/client';
 import { slug } from '@/api/http';
 import type {
   Account, AffinityMode, ApiKey, AttentionItem, CacheTtl, CreatedApiKey, KeepaliveOverview, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolMember, PoolStrategy, PoolWarning, Range, ReturnToPlan, Session,
@@ -1301,7 +1301,7 @@ export function PoolDialog({
   // Sessions by warm prefix and subagents by cohort both place by the shared prefix, so either one reads the threshold.
   const prefixEnabled = form.sessionPlacement === 'by_warm_prefix' || form.subagentPlacement === 'by_cohort';
   const budgetOf = (accountId: string) => form.budgets[accountId] ?? { daily: '', monthly: '' };
-  const input: PoolInput & { guardrails?: never } = {
+  const input: CreatePoolInput = {
     ...form.engine,
     affinityMode: form.affinityMode,
     affinityTtlSeconds: form.affinity,

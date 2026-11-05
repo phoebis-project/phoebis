@@ -1,5 +1,6 @@
-import { CONDITION_OPERATOR_VALUES, CONDITION_SUBJECT_VALUES, MESSAGE_SELECTOR_VALUES, decodeGuardrailPreset } from '@/api/decode';
+import { decodeGuardrailPreset } from '@/api/decode';
 import type { Condition, Guardrail, GuardrailAttachment, GuardrailPreset, RequestLog, TestVerdict } from '@/api/types';
+import { CONDITION_OPERATOR_VALUES, CONDITION_SUBJECT_VALUES, MESSAGE_SELECTOR_VALUES } from '@/api/types';
 import { MAX_CONDITIONS, MAX_PATTERN_CHARS, parsesAsNumber, pathRefusal, subjectOf, takesValue } from '@/lib/guardrails';
 import { FIXTURES } from './generated/fixtures';
 import { daysAgo, hoursAgo } from './time';

@@ -8,7 +8,7 @@ import { matchesPattern } from '@/lib/pattern';
 import { iso } from './decode';
 import type { AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, FundingFilter, RequestLog, RequestPage } from './types';
 
-export const METRICS = ['durationMs', 'outputTps', 'ttfbMs', 'ttftMs'] as const;
+const METRICS = ['durationMs', 'outputTps', 'ttfbMs', 'ttftMs'] as const;
 
 /**
  * A group as the routes answer one, every figure present and the shares null. `foldGroups` fills `costShares` under
@@ -124,12 +124,18 @@ const keyOf = (r: RequestLog, by: AnalyticsGroupBy, agentGroups: string[]): stri
 export interface FoldOptions {
   /** Patterns naming the groups under `user_agent`; a row falls in the first that matches, the rest under `other`. */
   agentGroups?: string[];
-  /** Patterns a row's folded user agent must match one of; a row that named none is matched as `-`, as the rollups file it. */
-  agentPatterns?: string[];
-  /** Patterns a row's client class must match one of; a row with none is matched as `-`, as the rollups file it. */
-  clientPatterns?: string[];
   /** The side the kept rows were paid on, read off each row's serving attempt. Absent keeps every row. */
   funding?: FundingFilter;
+}
+
+export interface PatternOptions {
+  /**
+   * Patterns a row's folded user agent must match one of. A row that named none is matched as `-`, as the rollups
+   * file it.
+   */
+  agentPatterns?: string[];
+  /** Patterns a row's client class must match one of. A row with none is matched as `-`, as the rollups file it. */
+  clientPatterns?: string[];
 }
 
 /** The newest generation of each key id among the rows, the one the breakdown labels with the bare id. */
@@ -210,19 +216,32 @@ function foldShares(g: AnalyticsGroup, rows: RequestLog[]) {
   g.costShares = shares;
 }
 
+/** `read(key)` the first time `key` comes up, the answer `seen` holds for it after that. */
+const once = <K, V>(seen: Map<K, V>, key: K, read: (key: K) => V): V => {
+  const held = seen.get(key);
+  if (held !== undefined) return held;
+  const v = read(key);
+  seen.set(key, v);
+  return v;
+};
+
 /**
- * The rows the pattern lists and the funding side keep. The agent is matched on its folded token, as the unscoped
- * page's rollups hold it, so one pattern selects the same rows under both scopes. The token is folded once per row
- * ahead of the patterns, since the fold splits the header.
+ * The rows the pattern lists keep. The agent is matched on its folded token, as the unscoped page's rollups hold it, so
+ * one pattern selects the same rows under both scopes. The token is folded once per distinct header ahead of the
+ * patterns, since the fold splits the header.
  */
-export function keptRows(rows: RequestLog[], options: FoldOptions): RequestLog[] {
+export function keptRows(rows: RequestLog[], options: PatternOptions): RequestLog[] {
   const agentPatterns = options.agentPatterns ?? [];
   const clientPatterns = options.clientPatterns ?? [];
-  const { funding } = options;
-  return rows.filter((r) => {
-    const agent = agentPatterns.length > 0 ? agentTokenOf(r.userAgent) : null;
-    return (agent === null || agentPatterns.some((p) => matchesPattern(p, agent))) && (!clientPatterns.length || clientPatterns.some((p) => matchesPattern(p, r.client ?? '-'))) && (funding === undefined || onSide(r, funding));
-  });
+  if (agentPatterns.length === 0 && clientPatterns.length === 0) return rows;
+  const agentOk = new Map<string | null, boolean>();
+  const clientOk = new Map<string | null, boolean>();
+  const agentKept = (userAgent: string | null) => {
+    const agent = agentPatterns.length > 0 ? agentTokenOf(userAgent) : null;
+    return agent === null || agentPatterns.some((p) => matchesPattern(p, agent));
+  };
+  const clientKept = (client: string | null) => !clientPatterns.length || clientPatterns.some((p) => matchesPattern(p, client ?? '-'));
+  return rows.filter((r) => once(agentOk, r.userAgent, agentKept) && once(clientOk, r.client, clientKept));
 }
 
 /**
@@ -231,9 +250,13 @@ export function keptRows(rows: RequestLog[], options: FoldOptions): RequestLog[]
  * deleted.
  */
 export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: FoldOptions = {}, latest = latestGenerations(rows)): AnalyticsGroup[] {
+  const { funding } = options;
+  const agentGroups = options.agentGroups ?? [];
+  // The `user_agent` key reads the header alone, so each distinct header is folded and matched once.
+  const agentKeys = new Map<string | null, string>();
   const groups = new Map<string, { group: AnalyticsGroup; rows: RequestLog[] }>();
-  for (const r of keptRows(rows, options)) {
-    const key = keyOf(r, by, options.agentGroups ?? []);
+  for (const r of funding === undefined ? rows : rows.filter((row) => onSide(row, funding))) {
+    const key = by === 'user_agent' ? once(agentKeys, r.userAgent, () => keyOf(r, by, agentGroups)) : keyOf(r, by, agentGroups);
     const entry = groups.get(key) ?? { group: emptyFolded(key, labelOf(r, key, by, latest)), rows: [] };
     groups.set(key, entry);
     const g = entry.group;
