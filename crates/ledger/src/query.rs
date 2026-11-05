@@ -5071,7 +5071,7 @@ fn read_session_attempts(
 
 /// The request facts and the attempt the session fold prices, one row per attempt of a request and one row with no
 /// attempt for a request no account served. The first fill answers them by session, `received_at` and request id, the
-/// incremental read by `landed_at`, and both keep a request's attempts one run in start order.
+/// incremental read by `landed_at`, and both keep a request's attempts one run in attempt order.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SessionSpendRow {
     pub request_id: String,
@@ -5194,26 +5194,26 @@ impl SessionSpendRow {
 /// `session_spend_rows_since`'s statement: every request landed after the watermark with its attempts, oldest landing
 /// first, through the landing index the writer's poll rule names. The index is named so the seek holds whatever
 /// statistics a file carries. The request id keeps the two statements' orders one shape, and a request's attempts run
-/// by start, then by attempt index, since two attempts can start in one millisecond and the run's last must be the
-/// attempt the request log takes as the serving one.
+/// by attempt index alone, so the run ends on the highest index, the attempt the request log takes as the serving
+/// one, even where a retry's start reads earlier than its predecessor's.
 pub(crate) fn session_spend_since_statement(
     landed_after: i64,
 ) -> (String, Vec<rusqlite::types::Value>) {
     let sql = format!(
         "SELECT {SESSION_SPEND_COLUMNS}, {PRICED_ATTEMPT_COLUMNS} \
          FROM requests r INDEXED BY requests_landed_at LEFT JOIN attempts a ON a.request_id = r.id \
-         WHERE r.landed_at > ? ORDER BY r.landed_at, r.id, a.started_at, a.attempt"
+         WHERE r.landed_at > ? ORDER BY r.landed_at, r.id, a.attempt"
     );
     (sql, vec![rusqlite::types::Value::Integer(landed_after)])
 }
 
 /// `session_spend_rows_of`'s statement for one chunk of named sessions: every request of each under its key lifetime
 /// with its attempts, seeking the session index per named session as the identities read does, each session's rows
-/// oldest first with each request's attempts one run (the request id before the attempt start, since two requests of
-/// a session can share `received_at`, and the attempt index after it, as the incremental read orders). The key and its
-/// generation scope the rows, as `session_identities_statement` scopes its own. The named sessions hold the outer loop
-/// through `CROSS JOIN`: the session index yields the order the statement sorts by, and on statistics that make a
-/// session look large the planner would walk the whole index in that order to spare the sort.
+/// oldest first with each request's attempts one run (the request id before the attempt index, since two requests of
+/// a session can share `received_at`, and the attempts by index alone, as the incremental read orders them). The key
+/// and its generation scope the rows, as `session_identities_statement` scopes its own. The named sessions hold the
+/// outer loop through `CROSS JOIN`: the session index yields the order the statement sorts by, and on statistics that
+/// make a session look large the planner would walk the whole index in that order to spare the sort.
 pub(crate) fn session_spend_of_statement(
     sessions: &[(String, i64, String)],
 ) -> (String, Vec<rusqlite::types::Value>) {
@@ -5240,7 +5240,7 @@ pub(crate) fn session_spend_of_statement(
          FROM named n CROSS JOIN requests r INDEXED BY requests_session ON r.session_id = n.session_id \
          AND r.key_id = n.key_id AND r.key_generation = n.key_generation \
          LEFT JOIN attempts a ON a.request_id = r.id \
-         ORDER BY r.session_id, r.received_at, r.id, a.started_at, a.attempt",
+         ORDER BY r.session_id, r.received_at, r.id, a.attempt",
         values.join(", ")
     );
     (sql, binds)
@@ -5511,7 +5511,7 @@ mod tests {
     }
 
     /// The fold takes a request's last attempt as the one that served it, so each request's attempts must reach it as
-    /// one run in start order. Two requests of a session received at one instant tie on every first-fill order column
+    /// one run in attempt order. Two requests of a session received at one instant tie on every first-fill order column
     /// before the request id. The writer stamps each landing above the last, so the incremental read's boundary is
     /// what can slip: a request landed at the watermark was folded by the poll that set it.
     #[test]
