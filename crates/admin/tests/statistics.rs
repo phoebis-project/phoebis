@@ -2018,6 +2018,7 @@ fn observed(id: &str) -> phoebis_bus::Event {
         guardrail_id: None,
         guardrails: Vec::new(),
         received_at: common::NOW,
+        fallback_digest: None,
     })
 }
 

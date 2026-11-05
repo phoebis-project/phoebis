@@ -413,14 +413,18 @@ fn without_bodies(event: &Event) -> String {
     format!("{event:?}")
 }
 
+/// The refused stream's completion carries the token's digest as `issued_digest` and the next body's observation as
+/// `fallback_digest`, the completion's through the stream's merge of its events. The token itself reaches no router
+/// event, bus event or record, and the digest no router event and no decision record.
 #[tokio::test]
-async fn no_record_router_event_or_bus_event_carries_the_credit_token_or_its_digest() {
+async fn the_credit_digest_rides_the_refusal_and_the_next_body_and_the_token_rides_nothing() {
     let up = upstream(refusal_stream(TOKEN)).await;
     let bus = Bus::new();
     let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(&up, &accounts(), pool(), bus).await;
     let mut router_events = h.router.subscribe_events();
-    assert_eq!(served(&h, turn(&fresh_session(), None)).await.0, "b");
+    let (refusing, refused_id) = served(&h, turn(&fresh_session(), None)).await;
+    assert_eq!(refusing, "b");
     step_past_the_cooldown(&h);
     let (account, request_id) = served(&h, turn(&fresh_session(), Some(TOKEN))).await;
     assert_eq!(
@@ -441,18 +445,36 @@ async fn no_record_router_event_or_bus_event_carries_the_credit_token_or_its_dig
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect();
-    let mut searched: Vec<(String, String)> = Vec::new();
+    let issued = bus_events.iter().find_map(|event| match event {
+        Event::RequestComplete(complete) if complete.request_id == refused_id => {
+            Some(complete.response.issued_digest.clone())
+        }
+        _ => None,
+    });
+    let presented = bus_events.iter().find_map(|event| match event {
+        Event::RequestObserved(observed) if observed.request_id == request_id => {
+            Some(observed.fallback_digest.clone())
+        }
+        _ => None,
+    });
+    assert_eq!(
+        (issued, presented),
+        (Some(Some(digest.clone())), Some(Some(digest.clone()))),
+        "the refusal's completion and the next request's observation each carry the digest"
+    );
+    let mut router_side: Vec<(String, String)> = Vec::new();
     for event in &seen {
         if let RouterEvent::Decision { record, .. } = event {
-            searched.push((
+            router_side.push((
                 "decision record".into(),
                 serde_json::to_string(&**record).unwrap(),
             ));
         }
-        searched.push(("router event".into(), format!("{event:?}")));
+        router_side.push(("router event".into(), format!("{event:?}")));
     }
+    let mut ledger_side: Vec<(String, String)> = Vec::new();
     for event in &bus_events {
-        searched.push(("bus event".into(), without_bodies(event)));
+        ledger_side.push(("bus event".into(), without_bodies(event)));
     }
     let mut assembler = phoebis_ledger::Assembler::new(std::sync::Arc::new(|| 0));
     let mut requests = 0;
@@ -466,17 +488,20 @@ async fn no_record_router_event_or_bus_event_carries_the_credit_token_or_its_dig
         } = record
         {
             requests += 1;
-            searched.push(("request record".into(), format!("{request:?}")));
+            ledger_side.push(("request record".into(), format!("{request:?}")));
             for attempt in attempts {
-                searched.push(("attempt record".into(), format!("{attempt:?}")));
+                ledger_side.push(("attempt record".into(), format!("{attempt:?}")));
             }
         }
     }
     assert_eq!(requests, 2, "both requests assembled their rows");
-    for (what, text) in &searched {
+    for (what, text) in &router_side {
         for needle in [TOKEN, digest.as_str()] {
             assert!(!text.contains(needle), "a {what} carries {needle}: {text}");
         }
+    }
+    for (what, text) in &ledger_side {
+        assert!(!text.contains(TOKEN), "a {what} carries the token: {text}");
     }
     up.shutdown().await;
 }

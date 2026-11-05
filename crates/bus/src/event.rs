@@ -159,6 +159,8 @@ pub struct ResponseFacts {
     pub cleared_input_tokens: Option<u64>,
     pub refusal_category: Option<String>,
     pub refusal_recommended_model: Option<String>,
+    /// The SHA-256 of `stop_details.fallback_credit_token` on a refusal, lowercase hex, `None` elsewhere.
+    pub issued_digest: Option<String>,
 }
 
 impl ResponseFacts {
@@ -172,6 +174,7 @@ impl ResponseFacts {
         overlay(&mut self.inference_geo, &later.inference_geo);
         overlay(&mut self.cleared_input_tokens, &later.cleared_input_tokens);
         overlay(&mut self.refusal_category, &later.refusal_category);
+        overlay(&mut self.issued_digest, &later.issued_digest);
         overlay(
             &mut self.refusal_recommended_model,
             &later.refusal_recommended_model,
@@ -389,6 +392,9 @@ pub struct RequestObserved {
     /// Every guardrail that matched, in evaluation order, empty for a refusal published before the step.
     pub guardrails: Vec<GuardrailMatch>,
     pub received_at: i64,
+    /// The SHA-256 of the body's top-level `fallback_credit_token`, lowercase hex, `None` without one. The token itself
+    /// never leaves the relay's read.
+    pub fallback_digest: Option<String>,
 }
 
 #[derive(Clone, Debug)]

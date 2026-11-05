@@ -508,7 +508,7 @@ pub(crate) fn request_summary(
         key_id: r.key_id.clone(),
         key_generation: r.key_generation,
         pool_id: r.pool_id.clone(),
-        account_id: last.map(|a| a.account_id.clone()),
+        account_id: r.serving.account_id.clone(),
         session_id: r.session_id.clone(),
         agent_id: r.agent_id.clone(),
         parent_agent_id: r.parent_agent_id.clone(),
@@ -544,12 +544,7 @@ pub(crate) fn request_summary(
         turn_origin: r.turn_origin.clone(),
         shape: shape_json(r),
         usage: usage_json(last),
-        // Folded onto a positive zero rather than summed: `Sum<f64>` starts at -0.0, so a request with no
-        // priced attempt would put a signed zero on the wire and the UI would read "-$0.00".
-        cost_usd: trail
-            .iter()
-            .filter_map(|a| a.estimated_usd)
-            .fold(0.0, |a, b| a + b),
+        cost_usd: r.serving.cost_usd.unwrap_or(0.0),
         cost_shares: plan.as_ref().map(cost_shares_json),
         cost_equivalent: plan.as_ref().and_then(|p| p.equivalent),
         share_reason: plan
@@ -1140,7 +1135,7 @@ pub(crate) async fn bodies(
 mod tests {
     use super::*;
     use phoebis_ledger::test_tables::{tables, SHARE_COSTS};
-    use phoebis_ledger::{CostRevisions, PlanTables, RequestRecord};
+    use phoebis_ledger::{CostRevisions, PlanTables, RequestRecord, ServingFacts};
     use phoebis_routing::PinUsage;
     use phoebis_store::AccountKind;
     use serde_json::json;
@@ -1637,6 +1632,10 @@ revisions:
         let request = RequestRecord {
             received_at: LAST_JANUARY_MINUTE,
             finished_at: Some(FIRST_FEBRUARY_MINUTE + 1_000),
+            serving: ServingFacts {
+                cost_usd: Some(3e-6),
+                ..ServingFacts::default()
+            },
             ..request_of("claude-fable-5-1")
         };
         let attempt = AttemptRecord {
@@ -1647,8 +1646,9 @@ revisions:
         let summary = request_summary(&request, &[attempt], &priced_by(TWO_PRICES));
         assert_eq!(
             (summary.attempts[0].estimated_usd, summary.cost_usd),
-            (Some(1e-6), 1e-6),
-            "January's cell, though the attempt started and finished in February"
+            (Some(1e-6), 3e-6),
+            "January's cell, though the attempt started and finished in February, and the request reads the cost its \
+             row landed with"
         );
     }
 

@@ -33,7 +33,7 @@ pub use bodies::{
     run_retention, run_retention_blocking, Purged, MAX_CAPTURED_BODY, PURGE_SLICE,
     PURGE_SLICE_BYTES,
 };
-pub use db::{LedgerDb, WriterRead, READERS};
+pub use db::{backfill_serving_facts, Backfilled, LedgerDb, WriterRead, BACKFILL_SLICE, READERS};
 pub use events::{
     catalog_changed, event_of, plan_ended, plan_restored, poll_backoff, poll_failed, MirrorBaseline,
 };
@@ -95,7 +95,7 @@ pub use reconcile::{
 pub use record::{
     AttemptRecord, BodyRecord, CacheMapWrite, DecisionRow, EventRecord, ExtraUsageSampleRecord,
     GuardrailMatchRecord, KeepaliveDelta, ParkedRecord, QuotaSampleRecord, RequestRecord,
-    SampleSource,
+    SampleSource, ServingFacts,
 };
 pub use refold::refold_bands;
 pub use rollup::{

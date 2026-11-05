@@ -59,7 +59,7 @@ use crate::classify::{
     classify, error_message, is_rate_limit_event, refused_injected, Cooldown, HeadContext, Scope,
     Verdict,
 };
-use crate::credit::CreditStore;
+use crate::credit::{hex_of, CreditDigest, CreditStore};
 use crate::dispatch::{self, until_canceled, AttemptFailure, Sent};
 use crate::errors::{
     accounts_at_cap, body_budget_exhausted, key_body_reads, key_refusal, relay_failure, Failure,
@@ -687,6 +687,7 @@ impl Trace {
         rotation_at: Option<i64>,
         guardrail_id: Option<String>,
         guardrails: Vec<GuardrailMatch>,
+        fallback_digest: Option<CreditDigest>,
     ) {
         if self.bus.is_none() {
             return;
@@ -733,6 +734,7 @@ impl Trace {
             guardrail_id,
             guardrails,
             received_at: self.received_at,
+            fallback_digest: fallback_digest.as_ref().map(hex_of),
         }))
         .await;
         // The assembler holds an entry for the request from this fact on, and only a completion closes it.
@@ -1507,6 +1509,7 @@ impl Relay {
                         key.rotated_at,
                         None,
                         Vec::new(),
+                        facts.credit_digest,
                     )
                     .await;
                 return self
@@ -1620,6 +1623,7 @@ impl Relay {
                 key.rotated_at,
                 guardrail_id.clone(),
                 guardrails,
+                facts.credit_digest,
             )
             .await;
         if let Some(id) = guardrail_id {
@@ -3801,6 +3805,7 @@ impl Relay {
                 key.and_then(|k| k.rotated_at),
                 None,
                 Vec::new(),
+                None,
             )
             .await;
         self.refused(trace, 0, failure, key, None, client_version)

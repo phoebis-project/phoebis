@@ -22,7 +22,7 @@ use crate::pricing::PriceRevisions;
 use crate::query::{bind_all, request_by_id, RequestWithAttempts};
 use crate::record::{
     AttemptRecord, BodyRecord, CacheMapWrite, DecisionRow, EventRecord, ExtraUsageSampleRecord,
-    GuardrailMatchRecord, QuotaSampleRecord, RequestRecord, SampleSource,
+    GuardrailMatchRecord, QuotaSampleRecord, RequestRecord, SampleSource, ServingFacts,
 };
 use crate::{schema, LedgerError};
 
@@ -483,7 +483,7 @@ impl LedgerDb {
     ) -> Result<(), LedgerError> {
         self.write(|conn| {
             let tx = begin_write(conn)?;
-            let previous = insert_request_in(&tx, request, attempts, bodies, 0)?;
+            let previous = insert_request_in(&tx, request, attempts, bodies, prices, 0)?;
             crate::rollup::fold_request(
                 &tx,
                 request,
@@ -820,12 +820,14 @@ pub(crate) const LANDING_STAMP_SQL: &str = "SELECT COALESCE(MAX(landed_at), 0) F
 
 /// Writes the request and its attempts, answering the rows the id held before, if any: a replacement has to
 /// take its earlier contribution out of every aggregate that was folded from it. `now` is the writer's clock, which
-/// the row's `landed_at` is stamped from.
+/// the row's `landed_at` is stamped from. The row's serving facts are derived here from the attempts it writes, priced
+/// on `prices`, so every landing path writes them through one rule.
 pub(crate) fn insert_request_in(
     tx: &Transaction<'_>,
     request: &RequestRecord,
     attempts: &[AttemptRecord],
     bodies: Option<&BodyRecord>,
+    prices: &PriceRevisions,
     now: i64,
 ) -> Result<Option<(RequestRecord, Vec<AttemptRecord>)>, LedgerError> {
     let previous = request_by_id(tx, &request.id)?;
@@ -838,9 +840,10 @@ pub(crate) fn insert_request_in(
         .is_some();
     let kept_warm = request.kept_warm || marked;
     let landed_at = landing_stamp(tx, now)?;
+    let serving = ServingFacts::of(request, attempts, prices);
     tx.prepare_cached(
-        "INSERT OR REPLACE INTO requests (id, received_at, finished_at, key_id, key_generation, pool_id, session_id, agent_id, parent_agent_id, model, canonical_model, stream, kind, origin, status, outcome, attempts, request_bytes, response_bytes, ttfb_ms, ttfc_ms, duration_ms, error_code, client_drift, kept_warm, bodies_captured, user_agent, effort, thinking_type, thinking_budget, max_tokens, tool_count, system_blocks, message_count, context_edits, temperature, requested_speed, requested_service_tier, presented_retired, rotation_at, response_truncated, client, agent_type, compaction, context_compacted, prev_tool_ms, turn_origin, request_class, identified_by, identity_root, identity_depth, forked_from, fork_depth, auto_mode, held, stream_end_at, diagnostics_source, guardrail_id, classifier, client_contract, landed_at, refused) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, NULL, NULL, NULL, ?49, ?50, ?51, ?52, ?53, ?54, ?55, ?56, ?57, ?58, ?59)",
+        "INSERT OR REPLACE INTO requests (id, received_at, finished_at, key_id, key_generation, pool_id, session_id, agent_id, parent_agent_id, model, canonical_model, stream, kind, origin, status, outcome, attempts, request_bytes, response_bytes, ttfb_ms, ttfc_ms, duration_ms, error_code, client_drift, kept_warm, bodies_captured, user_agent, effort, thinking_type, thinking_budget, max_tokens, tool_count, system_blocks, message_count, context_edits, temperature, requested_speed, requested_service_tier, presented_retired, rotation_at, response_truncated, client, agent_type, compaction, context_compacted, prev_tool_ms, turn_origin, request_class, identified_by, identity_root, identity_depth, forked_from, fork_depth, auto_mode, held, stream_end_at, diagnostics_source, guardrail_id, classifier, client_contract, landed_at, refused, fallback_digest, serving_account_id, reached_upstream, outcome_class, speed, cache_miss_reason, stop_reason, refusal_category, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, NULL, NULL, NULL, ?49, ?50, ?51, ?52, ?53, ?54, ?55, ?56, ?57, ?58, ?59, ?60, ?61, ?62, ?63, ?64, ?65, ?66, ?67, ?68, ?69, ?70, ?71, ?72)",
     )?
     .execute(params![
         request.id, request.received_at, request.finished_at, request.key_id, request.key_generation, request.pool_id, request.session_id, request.agent_id,
@@ -856,13 +859,17 @@ pub(crate) fn insert_request_in(
         request.request_class, request.forked_from, request.fork_depth.map(|n| n as i64), request.auto_mode, request.held,
         request.stream_end_at,
         request.diagnostics_source, request.guardrail_id, request.classifier, request.client_contract, landed_at, request.refused,
+        request.fallback_digest, serving.account_id, serving.reached_upstream, serving.outcome_class, serving.speed,
+        serving.cache_miss_reason, serving.stop_reason, serving.refusal_category, serving.input_tokens.map(|n| n as i64),
+        serving.output_tokens.map(|n| n as i64), serving.cache_read_tokens.map(|n| n as i64),
+        serving.cache_write_tokens.map(|n| n as i64), serving.cost_usd,
     ])?;
     tx.prepare_cached("DELETE FROM attempts WHERE request_id = ?1")?
         .execute(params![request.id])?;
     for a in attempts {
         tx.prepare_cached(
-            "INSERT INTO attempts (request_id, attempt, account_id, account_kind, pin_epoch, started_at, finished_at, ttfb_ms, ttfc_ms, upstream_status, upstream_request_id, outcome, cooldown_scope, cooldown_until, input_tokens, output_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, service_tier, cache_miss_reason, client_drift, ratelimit_5h_utilization, ratelimit_5h_reset, ratelimit_7d_utilization, ratelimit_7d_reset, ratelimit_7d_oi_utilization, ratelimit_7d_oi_reset, overage_in_use, overage_utilization, thinking_tokens, web_search_requests, web_fetch_requests, stop_reason, stop_sequence, served_model, speed, inference_geo, cleared_input_tokens, refusal_category, refusal_recommended_model, selection, upstream_message_id, written_at, tier, usage_based) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46)",
+            "INSERT INTO attempts (request_id, attempt, account_id, account_kind, pin_epoch, started_at, finished_at, ttfb_ms, ttfc_ms, upstream_status, upstream_request_id, outcome, cooldown_scope, cooldown_until, input_tokens, output_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, service_tier, cache_miss_reason, client_drift, ratelimit_5h_utilization, ratelimit_5h_reset, ratelimit_7d_utilization, ratelimit_7d_reset, ratelimit_7d_oi_utilization, ratelimit_7d_oi_reset, overage_in_use, overage_utilization, thinking_tokens, web_search_requests, web_fetch_requests, stop_reason, stop_sequence, served_model, speed, inference_geo, cleared_input_tokens, refusal_category, refusal_recommended_model, selection, upstream_message_id, written_at, tier, usage_based, issued_digest) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47)",
         )?
         .execute(params![
             a.request_id, a.attempt, a.account_id, a.account_kind, a.pin_epoch.map(|n| n as i64), a.started_at, a.finished_at,
@@ -874,7 +881,7 @@ pub(crate) fn insert_request_in(
             a.thinking_tokens.map(|n| n as i64), a.web_search_requests.map(|n| n as i64), a.web_fetch_requests.map(|n| n as i64),
             a.stop_reason, a.stop_sequence, a.served_model, a.speed, a.inference_geo,
             a.cleared_input_tokens.map(|n| n as i64), a.refusal_category, a.refusal_recommended_model, a.selection,
-            a.upstream_message_id, a.written_at, a.tier, a.usage_based,
+            a.upstream_message_id, a.written_at, a.tier, a.usage_based, a.issued_digest,
         ])?;
     }
     // A new row with no match has no child row to clear, so it pays no statement. A replaced row keeps the delete
@@ -896,6 +903,81 @@ pub(crate) fn insert_request_in(
         .execute(params![b.request_id, b.request_body, b.response_body, b.request_len_seen as i64, b.response_len_seen as i64, b.expires_at])?;
     }
     Ok(previous)
+}
+
+/// Request rows the start's backfill writes per start. One slice read through `requests_serving_pending` after a
+/// filled prefix of ten slices holds the writer for about 97 ms on a desktop host, and the next start continues where
+/// this one stopped.
+pub const BACKFILL_SLICE: usize = 10_000;
+
+/// What one start's backfill did: the rows it wrote and the rows still null with attempts, read after the slice
+/// committed. The rare row whose trail lost every attempt stays in the pending index and counts in neither.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Backfilled {
+    pub written: usize,
+    pub left: usize,
+}
+
+/// The rows the backfill fills, appended to a `FROM requests`: the pending index's own predicate, which the
+/// `INDEXED BY` holds the read to, and the attempt rows the facts derive from.
+const SERVING_PENDING: &str = " INDEXED BY requests_serving_pending \
+    WHERE serving_account_id IS NULL AND attempts > 0 \
+    AND EXISTS (SELECT 1 FROM attempts a WHERE a.request_id = requests.id)";
+
+/// Fills `ServingFacts` on up to `BACKFILL_SLICE` request rows whose `serving_account_id` is null and whose attempts
+/// exist, oldest first through `requests_serving_pending`, in one transaction, the facts through `ServingFacts::of`,
+/// the one rule the landing runs, so a row landed after the step and a backfilled row with the same attempts read
+/// alike. `left` counts the same rows through the same index on a pooled reader after the slice's transaction
+/// commits, outside the writer's lock.
+pub fn backfill_serving_facts(
+    db: &LedgerDb,
+    prices: &PriceRevisions,
+) -> Result<Backfilled, LedgerError> {
+    let written = db.write(|conn| {
+        let tx = begin_write(conn)?;
+        let pending = tx
+            .prepare(&format!(
+                "{REQUEST_SELECT}{SERVING_PENDING} ORDER BY received_at LIMIT ?1"
+            ))?
+            .query_map(params![BACKFILL_SLICE as i64], row_to_request)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let rows = with_attempts(&tx, pending)?;
+        {
+            let mut fill = tx.prepare(
+                "UPDATE requests SET serving_account_id = ?2, reached_upstream = ?3, outcome_class = ?4, speed = ?5, \
+                 cache_miss_reason = ?6, stop_reason = ?7, refusal_category = ?8, input_tokens = ?9, \
+                 output_tokens = ?10, cache_read_tokens = ?11, cache_write_tokens = ?12, cost_usd = ?13 WHERE id = ?1",
+            )?;
+            for (request, attempts) in &rows {
+                let facts = ServingFacts::of(request, attempts, prices);
+                fill.execute(params![
+                    request.id,
+                    facts.account_id,
+                    facts.reached_upstream,
+                    facts.outcome_class,
+                    facts.speed,
+                    facts.cache_miss_reason,
+                    facts.stop_reason,
+                    facts.refusal_category,
+                    facts.input_tokens.map(|n| n as i64),
+                    facts.output_tokens.map(|n| n as i64),
+                    facts.cache_read_tokens.map(|n| n as i64),
+                    facts.cache_write_tokens.map(|n| n as i64),
+                    facts.cost_usd,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(rows.len())
+    })?;
+    let left = db.read_blocking(|conn| {
+        Ok(conn.query_row(
+            &format!("SELECT COUNT(*) FROM requests{SERVING_PENDING}"),
+            [],
+            |r| r.get::<_, i64>(0),
+        )? as usize)
+    })?;
+    Ok(Backfilled { written, left })
 }
 
 pub(crate) fn insert_event_in(conn: &Connection, e: &EventRecord) -> Result<(), LedgerError> {
@@ -949,8 +1031,8 @@ pub(crate) fn update_cache_map_in(
         .execute(params![write.request_id, write.seq, entries])?)
 }
 
-pub(crate) const REQUEST_SELECT: &str = "SELECT id, received_at, finished_at, key_id, key_generation, pool_id, session_id, agent_id, parent_agent_id, model, canonical_model, stream, kind, origin, status, outcome, attempts, request_bytes, response_bytes, ttfb_ms, ttfc_ms, duration_ms, error_code, client_drift, kept_warm, bodies_captured, user_agent, effort, thinking_type, thinking_budget, max_tokens, tool_count, system_blocks, message_count, context_edits, temperature, requested_speed, requested_service_tier, presented_retired, rotation_at, response_truncated, client, agent_type, compaction, context_compacted, prev_tool_ms, turn_origin, request_class, forked_from, fork_depth, auto_mode, held, stream_end_at, diagnostics_source, guardrail_id, classifier, client_contract, refused FROM requests";
-pub(crate) const ATTEMPT_SELECT: &str = "SELECT request_id, attempt, account_id, account_kind, pin_epoch, started_at, finished_at, ttfb_ms, ttfc_ms, upstream_status, upstream_request_id, outcome, cooldown_scope, cooldown_until, input_tokens, output_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, service_tier, cache_miss_reason, client_drift, ratelimit_5h_utilization, ratelimit_5h_reset, ratelimit_7d_utilization, ratelimit_7d_reset, ratelimit_7d_oi_utilization, ratelimit_7d_oi_reset, overage_in_use, overage_utilization, thinking_tokens, web_search_requests, web_fetch_requests, stop_reason, stop_sequence, served_model, speed, inference_geo, cleared_input_tokens, refusal_category, refusal_recommended_model, selection, upstream_message_id, written_at, tier, usage_based FROM attempts";
+pub(crate) const REQUEST_SELECT: &str = "SELECT id, received_at, finished_at, key_id, key_generation, pool_id, session_id, agent_id, parent_agent_id, model, canonical_model, stream, kind, origin, status, outcome, attempts, request_bytes, response_bytes, ttfb_ms, ttfc_ms, duration_ms, error_code, client_drift, kept_warm, bodies_captured, user_agent, effort, thinking_type, thinking_budget, max_tokens, tool_count, system_blocks, message_count, context_edits, temperature, requested_speed, requested_service_tier, presented_retired, rotation_at, response_truncated, client, agent_type, compaction, context_compacted, prev_tool_ms, turn_origin, request_class, forked_from, fork_depth, auto_mode, held, stream_end_at, diagnostics_source, guardrail_id, classifier, client_contract, refused, fallback_digest, serving_account_id, reached_upstream, outcome_class, speed, cache_miss_reason, stop_reason, refusal_category, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd FROM requests";
+pub(crate) const ATTEMPT_SELECT: &str = "SELECT request_id, attempt, account_id, account_kind, pin_epoch, started_at, finished_at, ttfb_ms, ttfc_ms, upstream_status, upstream_request_id, outcome, cooldown_scope, cooldown_until, input_tokens, output_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, service_tier, cache_miss_reason, client_drift, ratelimit_5h_utilization, ratelimit_5h_reset, ratelimit_7d_utilization, ratelimit_7d_reset, ratelimit_7d_oi_utilization, ratelimit_7d_oi_reset, overage_in_use, overage_utilization, thinking_tokens, web_search_requests, web_fetch_requests, stop_reason, stop_sequence, served_model, speed, inference_geo, cleared_input_tokens, refusal_category, refusal_recommended_model, selection, upstream_message_id, written_at, tier, usage_based, issued_digest FROM attempts";
 
 pub(crate) fn row_to_request(r: &rusqlite::Row<'_>) -> rusqlite::Result<RequestRecord> {
     Ok(RequestRecord {
@@ -1014,6 +1096,21 @@ pub(crate) fn row_to_request(r: &rusqlite::Row<'_>) -> rusqlite::Result<RequestR
         refused: r.get(57)?,
         // The child table holds the matches, which the reads that answer a request fill beside its attempts.
         guardrails: Vec::new(),
+        fallback_digest: r.get(58)?,
+        serving: ServingFacts {
+            account_id: r.get(59)?,
+            reached_upstream: r.get(60)?,
+            outcome_class: r.get(61)?,
+            speed: r.get(62)?,
+            cache_miss_reason: r.get(63)?,
+            stop_reason: r.get(64)?,
+            refusal_category: r.get(65)?,
+            input_tokens: r.get::<_, Option<i64>>(66)?.map(|n| n as u64),
+            output_tokens: r.get::<_, Option<i64>>(67)?.map(|n| n as u64),
+            cache_read_tokens: r.get::<_, Option<i64>>(68)?.map(|n| n as u64),
+            cache_write_tokens: r.get::<_, Option<i64>>(69)?.map(|n| n as u64),
+            cost_usd: r.get(70)?,
+        },
     })
 }
 
@@ -1086,6 +1183,7 @@ pub(crate) fn row_to_attempt(r: &rusqlite::Row<'_>) -> rusqlite::Result<AttemptR
         upstream_message_id: r.get(42)?,
         written_at: r.get(43)?,
         usage_based: r.get(45)?,
+        issued_digest: r.get(46)?,
     })
 }
 
@@ -1421,6 +1519,7 @@ mod tests {
             ),
             written_at: Some(1_010 + n as i64),
             usage_based: true,
+            issued_digest: None,
         }
     }
 
@@ -1428,7 +1527,7 @@ mod tests {
     async fn the_schema_opens_in_wal_mode_with_a_version_and_rows_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let db = Arc::new(LedgerDb::open(&dir.path().join("data").join("ledger.sqlite")).unwrap());
-        assert_eq!(db.read_blocking(read_version).unwrap(), 2);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 3);
         let mode: String = db
             .read_blocking(|c| Ok(c.query_row("PRAGMA journal_mode", [], |r| r.get(0))?))
             .unwrap();
@@ -1441,27 +1540,51 @@ mod tests {
             response_len_seen: 2,
             expires_at: 9_000,
         };
-        db.insert_request(
+        // The test list lacks the request's model, so the landing prices no cost.
+        let prices = crate::test_tables::api_prices();
+        db.insert_request_at(
             &request("r1"),
             &[
                 attempt("r1", 1, "a", "rate_limited"),
                 attempt("r1", 2, "b", "succeeded"),
             ],
             Some(&bodies),
+            &prices,
         )
         .unwrap();
         // A second write of the same request replaces rather than fails, so a retried record is not an error.
-        db.insert_request(
+        db.insert_request_at(
             &request("r1"),
             &[
                 attempt("r1", 1, "a", "rate_limited"),
                 attempt("r1", 2, "b", "succeeded"),
             ],
             None,
+            &prices,
         )
         .unwrap();
         let (row, attempts) = db.request("r1").await.unwrap().unwrap();
-        assert_eq!(row, request("r1"));
+        assert_eq!(
+            row,
+            RequestRecord {
+                serving: ServingFacts {
+                    account_id: Some("b".into()),
+                    reached_upstream: Some(true),
+                    outcome_class: Some("succeeded".into()),
+                    speed: Some("standard".into()),
+                    cache_miss_reason: Some("none".into()),
+                    stop_reason: Some("refusal".into()),
+                    refusal_category: Some("cyber".into()),
+                    input_tokens: Some(5),
+                    output_tokens: Some(7),
+                    cache_read_tokens: None,
+                    cache_write_tokens: None,
+                    cost_usd: None,
+                },
+                ..request("r1")
+            },
+            "the written members read back beside the facts the landing took from the second attempt"
+        );
         assert_eq!(
             attempts,
             vec![
@@ -1512,7 +1635,7 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(worker, caller, "the closure ran on a blocking worker");
-        assert_eq!(version, 2, "and answered what the connection holds");
+        assert_eq!(version, 3, "and answered what the connection holds");
     }
 
     #[tokio::test]
@@ -1549,7 +1672,7 @@ mod tests {
                     beside
                         .expect("a read never waited behind an unrelated held read")
                         .unwrap(),
-                    2
+                    3
                 );
             }
         }
@@ -1588,7 +1711,7 @@ mod tests {
         })
         .await;
         let (a, b) = both.expect("two returns woke two waiters");
-        assert_eq!((a.unwrap(), b.unwrap()), (2, 2));
+        assert_eq!((a.unwrap(), b.unwrap()), (3, 3));
         for release in releases {
             release.send(()).unwrap();
         }
@@ -1598,7 +1721,7 @@ mod tests {
         let short = "every connection came back to the pool";
         for (release, task) in hold_every_reader(&db, short).await {
             release.send(()).unwrap();
-            assert_eq!(task.await.unwrap().unwrap(), 2);
+            assert_eq!(task.await.unwrap().unwrap(), 3);
         }
     }
 
@@ -1614,12 +1737,12 @@ mod tests {
         fake_upstream::stays_for(Duration::from_millis(200), || !blocked.is_finished()).await;
         let (release, task) = held.pop().unwrap();
         release.send(()).unwrap();
-        assert_eq!(task.await.unwrap().unwrap(), 2);
+        assert_eq!(task.await.unwrap().unwrap(), 3);
         fake_upstream::wait_for(Duration::from_secs(1), || {
             blocked.is_finished().then_some(())
         })
         .await;
-        assert_eq!(blocked.join().unwrap().unwrap(), 2);
+        assert_eq!(blocked.join().unwrap().unwrap(), 3);
         for (release, task) in held {
             release.send(()).unwrap();
             task.await.unwrap().unwrap();
@@ -1814,11 +1937,11 @@ mod tests {
             "{failed:?}"
         );
         std::fs::rename(&away, &path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 2);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 3);
         let short = "the reader whose reopen failed came back to the pool";
         for (release, task) in hold_every_reader(&db, short).await {
             release.send(()).unwrap();
-            assert_eq!(task.await.unwrap().unwrap(), 2);
+            assert_eq!(task.await.unwrap().unwrap(), 3);
         }
     }
 
@@ -1833,7 +1956,7 @@ mod tests {
         assert!(matches!(panicked, Err(LedgerError::ReadCanceled)));
         assert_eq!(
             db.read_blocking(read_version).unwrap(),
-            2,
+            3,
             "the poisoned guard recovered rather than turning every later read into ReadCanceled too"
         );
         let dir = tempfile::tempdir().unwrap();
@@ -1847,7 +1970,7 @@ mod tests {
         let short = "the panicked closure's connection came back to the pool";
         for (release, task) in hold_every_reader(&db, short).await {
             release.send(()).unwrap();
-            assert_eq!(task.await.unwrap().unwrap(), 2);
+            assert_eq!(task.await.unwrap().unwrap(), 3);
         }
     }
 
@@ -1962,7 +2085,7 @@ mod tests {
                 refused,
                 LedgerError::SchemaTooNew {
                     found: 99,
-                    supported: 2,
+                    supported: 3,
                     ..
                 }
             ),
@@ -2047,7 +2170,7 @@ mod tests {
         );
         assert_eq!(
             (estimated_columns(&conn), read_version(&conn).unwrap()),
-            (0, 2)
+            (0, 3)
         );
     }
 

@@ -222,6 +222,7 @@ mod tests {
             guardrail_id: None,
             guardrails: Vec::new(),
             received_at: 1,
+            fallback_digest: None,
         })
     }
 

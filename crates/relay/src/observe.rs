@@ -6,7 +6,7 @@ use axum::http::{header, HeaderMap};
 use phoebis_bus::{header_published, ResponseFacts, Usage};
 use serde_json::Value;
 
-use crate::credit::{digest_of, CreditDigest};
+use crate::credit::{digest_of, hex_of, CreditDigest};
 
 /// The caller's headers as the bus carries them: everything the denylist does not name, which is what a
 /// keepalive recipe replays. A request the relay inflated is published as the plain body it holds, so a recipe
@@ -102,6 +102,10 @@ pub(crate) fn answer_from_json(body: &[u8], path: &[&str], named: bool) -> Answe
         Some(delta) => delta.get("stop_details"),
         None => at.get("stop_details"),
     };
+    let credit_digest = details
+        .and_then(|d| d.get("fallback_credit_token"))
+        .and_then(Value::as_str)
+        .map(digest_of);
     let response = ResponseFacts {
         stop_reason: stop("stop_reason"),
         stop_sequence: stop("stop_sequence"),
@@ -121,11 +125,8 @@ pub(crate) fn answer_from_json(body: &[u8], path: &[&str], named: bool) -> Answe
             }),
         refusal_category: text(details.and_then(|d| d.get("category"))),
         refusal_recommended_model: text(details.and_then(|d| d.get("recommended_model"))),
+        issued_digest: credit_digest.as_ref().map(hex_of),
     };
-    let credit_digest = details
-        .and_then(|d| d.get("fallback_credit_token"))
-        .and_then(Value::as_str)
-        .map(digest_of);
     Answer {
         usage,
         response,

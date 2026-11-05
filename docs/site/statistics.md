@@ -55,7 +55,10 @@ refusal named. The request's shape is recorded as the effort, the thinking mode 
 system-block and message counts, the context edits, the temperature, and the requested speed and service tier. The row
 also names a session that branched from another conversation: that conversation's root and the matched depth. The
 session the row names is the client's own, and the Sessions view groups a row by it. The request row records who put the
-cache diagnostics member on the body the upstream compared: the client, the router, or none.
+cache diagnostics member on the body the upstream compared: the client, the router, or none. The request row carries its
+serving attempt's account, speed, outcome, token counts and priced cost, written when the request lands. A row an
+earlier version wrote fills on the starts that follow, up to 10,000 rows per start, the oldest first, and the start's
+log line names the rows it filled and the rows left.
 
 The attempt row names the account and its kind, whether the account is a usage-based seat, the upstream status, request
 id and message id, the outcome, the cooldown the attempt set, the stop reason, the model the answer names when it
@@ -63,8 +66,9 @@ differs from the one the router resolved, the speed, the region inference ran in
 a refusal's category and recommended model. It carries the five token counts, with the thinking share of the output and
 the web search and fetch calls the answer made, the cache miss reason the diagnostics beta reports, the unified
 rate-limit window readings, overage, and the serving account's rate-limit tier where the router prices by it (none for a
-free organization, a usage-based seat or an account with no plan). No dollar is stored: every price is computed when it
-is read, from these counts, at the price revision in force when the request arrived.
+free organization, a usage-based seat or an account with no plan). The attempt row stores no dollar: its price is
+computed when it is read, from these counts, at the price revision in force when the request arrived. The request row
+stores its one priced figure, written when the request lands at the revision in force when it arrived.
 
 Placements are counted by rung, with a hit share from the trace and the response's cache-read tokens. A `content`
 placement, by the conversation's own messages, is a hit when the response read the prefix the entry promised. A
@@ -126,10 +130,10 @@ figures count it as any served request. `GET /admin/requests` filters on `stop_r
 read off the serving attempt with `-` for a request whose serving attempt carries none or that no attempt served, and on
 `agent_id`, which keeps one agent's requests, as `GET /admin/routing-log` keeps one agent's decisions and events and
 leaves out a session-level event, which names no agent. `GET /admin/analytics/refusal_categories` counts the refused
-requests in range per category, `-` for a refusal with none, read off the attempts at the request. It narrows by
-`clients` and `user_agents` as the analytics series do, over the client label and the agent's first product token, so a
-version picked from a breakdown counts that version's refusals, and it holds `user_agent_groups` to the two lists' bound
-and narrows nothing by its patterns.
+requests in range per category, `-` for a refusal with none, read off the request row's columns, which hold the serving
+attempt's facts written when the request lands. It narrows by `clients` and `user_agents` as the analytics series do,
+over the client label and the agent's first product token, so a version picked from a breakdown counts that version's
+refusals, and it holds `user_agent_groups` to the two lists' bound and narrows nothing by its patterns.
 
 ## Quota samples
 
@@ -183,7 +187,8 @@ retention shows more weeks.
 
 ## Pricing
 
-A request's cost is an estimate at list prices per million tokens, computed from its token counts when a page or a route
+A request's cost is an estimate at list prices per million tokens, computed from its token counts. The request row's
+figure is computed once, when the request lands, and the figure of a rollup or an attempt each time a page or a route
 reads it: an estimate rather than a bill, since tier and batch modifiers are not known here and subscription quota is
 the rate-limit windows, never this number. The shipped price table (`crates/ledger/api_prices.yaml`) is embedded in the
 binary. `stats.api_prices_path` replaces its whole list with a file of the operator's own, Settings names each table's
@@ -194,7 +199,8 @@ cost estimate and is counted in `phoebis_pricing_unknown_model_total`.
 The file is a list of revisions under its one key, `revisions`: each entry carries an `effective` date in `YYYY-MM-DD`
 form and the whole table of that date, `models`. An entry is in force from 00:00 UTC of its date to the next entry's,
 and an instant before the first entry reads the first. A request is priced at the entry in force when it arrived, so all
-its attempts price under one entry. An entry added late re-prices the ledger's rows from its date on at their next read.
+its attempts price under one entry. An entry added late re-prices the rollups and the attempts from its date on at their
+next read. A request row keeps its landed cost, and a start prices an earlier version's row at the entry it arrived in.
 An entry dated after the one in force is held: every read takes it from its date on, and the burn rates the router
 builds at start for the shedding round take it at the first start after that date. A correction of a figure the file had
 wrong edits every entry that carries the row and adds no entry, since the correction says what was always true, while a

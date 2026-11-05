@@ -2988,6 +2988,7 @@ fn headed(
             guardrail_id: None,
             guardrails: Vec::new(),
             received_at: at,
+            fallback_digest: None,
         }),
         Event::AccountSelected(AccountSelected {
             request_id: id.into(),

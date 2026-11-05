@@ -535,7 +535,9 @@ writer](statistics.md#the-ledger-writer)). The analytics series and burn routes 
 with the ledger's own words for a range that needs more points than a chart carries, a trailing partial bucket counted
 as one ([API reference](api-reference.md)). A model filter that names a model's `[1m]` spelling selects that model's
 rows on the request log, the analytics reads and the cache placements ([Requests](console.md#requests),
-[Analytics](console.md#analytics)).
+[Analytics](console.md#analytics)). A request row carries the serving attempt's account, speed, outcome, token counts
+and cost, priced when it lands, and the start fills the rows written before the columns existed a slice at a time,
+logging the rows left ([Statistics](statistics.md#the-ledger)).
 
 Every price is computed when it is read, from the token counts the ledger stores, at the price revision in force when
 the request arrived. The price table and the subscription cost model are revision lists keyed by effective date, the
@@ -546,7 +548,9 @@ cost model names each model's tier ([statistics](statistics.md#pricing), [instal
 shipped price table carries Claude Sonnet 4.6 and Claude Sonnet 4.5 and reads Claude Fable 5's cache read at $1 per
 million tokens in every revision ([statistics](statistics.md#pricing)). The subscription cost model weighs Claude Fable
 5, Opus 5, Opus 4.8 and Sonnet 4.6 as the plan meter measured them on 2026-10-29, the measurement confirming Sonnet 5's
-weight ([statistics](statistics.md#plan-meter)).
+weight ([statistics](statistics.md#plan-meter)). A request row's cost is the one priced figure the ledger stores,
+written when the request lands at the entry in force when it arrived, so an entry added late re-prices the rollups and
+the attempts and leaves a landed request's cost as it was ([Pricing](statistics.md#pricing)).
 
 The console prices every figure in the unit the shell's Unit switch names, one of four positions, Native, All in
 dollars, Billed dollars and Dollar equivalent, Native by default (a subscription request as a share of the chosen week,

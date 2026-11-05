@@ -21,7 +21,7 @@ use crate::query::{LEDGER_GAP, MODEL_PERMITTED, MODEL_REJECTED, STREAM_INTERRUPT
 use crate::quota::samples_from_unified;
 use crate::record::{
     AttemptRecord, BodyRecord, CacheMapWrite, DecisionRow, EventRecord, ExtraUsageSampleRecord,
-    GuardrailMatchRecord, KeepaliveDelta, QuotaSampleRecord, RequestRecord,
+    GuardrailMatchRecord, KeepaliveDelta, QuotaSampleRecord, RequestRecord, ServingFacts,
 };
 
 /// A completion is published on every path, the handler's drop guard included, so an entry silent this long belongs
@@ -527,6 +527,7 @@ fn finish(entry: InFlight, mut complete: RequestComplete, now: i64) -> Vec<Recor
         last.cleared_input_tokens = response.cleared_input_tokens;
         last.refusal_category = response.refusal_category;
         last.refusal_recommended_model = response.refusal_recommended_model;
+        last.issued_digest = response.issued_digest;
         // No transport failed a headless attempt of a request that ended canceled, so it files as canceled over its
         // row's `transport_error` default.
         if last.upstream_status.is_none() && complete.outcome == Outcome::Canceled {
@@ -707,6 +708,8 @@ fn finish(entry: InFlight, mut complete: RequestComplete, now: i64) -> Vec<Recor
             })
             .collect(),
         refused,
+        fallback_digest: observed.fallback_digest,
+        serving: ServingFacts::default(),
     };
     records.push(Record::Request {
         request,
@@ -780,6 +783,7 @@ mod tests {
             guardrail_id: None,
             guardrails: Vec::new(),
             received_at: 1_000,
+            fallback_digest: None,
         })
     }
     fn chunk(id: &str, index: u32) -> Event {

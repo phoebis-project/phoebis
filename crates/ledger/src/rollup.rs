@@ -99,6 +99,16 @@ fn unanswered_speed<'a>(a: Option<&'a AttemptRecord>, requested: Option<&str>) -
         .unwrap_or_else(|| Speed::of(requested).as_str())
 }
 
+/// The speed a request files under, read off its serving attempt `last`: the answer's own where it answered with
+/// usage, `unanswered_speed` where it did not. The request row's `speed` column and the serving delta read this one
+/// rule.
+pub(crate) fn fold_speed<'a>(last: Option<&'a AttemptRecord>, requested: Option<&str>) -> &'a str {
+    match last.filter(|a| a.has_usage()) {
+        Some(a) => answered_speed(a),
+        None => unanswered_speed(last, requested),
+    }
+}
+
 /// One of `EFFORT_LEVELS`, `NO_EFFORT` for a request that asked for none, else `OTHER_DIMENSION`.
 pub fn fold_effort(raw: Option<&str>) -> &'static str {
     match raw {
@@ -587,22 +597,14 @@ pub fn deltas_of(
     // A fast request refused before any attempt served (the fast lane spent, the credits unavailable, a local
     // refusal) still asked for fast: its counters file under that speed, while its funding reads the served answer,
     // which spent nothing.
-    let d = match last.filter(|a| a.has_usage()) {
-        Some(a) => delta_for(
-            &mut deltas,
-            &base,
-            band_of(a),
-            answered_speed(a),
-            funding_word(Some(a)),
-        ),
-        None => delta_for(
-            &mut deltas,
-            &base,
-            STANDARD_BAND,
-            unanswered_speed(last, request.requested_speed.as_deref()),
-            funding_word(last),
-        ),
-    };
+    let d = delta_for(
+        &mut deltas,
+        &base,
+        last.filter(|a| a.has_usage())
+            .map_or(STANDARD_BAND, band_of),
+        fold_speed(last, request.requested_speed.as_deref()),
+        funding_word(last),
+    );
     // The attempts that never answered count beside the request's other counters, so a request's attempts sum to
     // every attempt it made whichever rows its answers landed in.
     d.attempts += attempts.iter().filter(|a| !a.has_usage()).count() as u64;

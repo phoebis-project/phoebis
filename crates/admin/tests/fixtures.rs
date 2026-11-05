@@ -1613,7 +1613,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             )
             .unwrap();
         let request_id = format!("k-{agent}");
-        parts.keepalive.observe(Event::RequestObserved(RequestObserved { request_id: request_id.clone(), origin: Origin::Client, kind: Kind::Inference, key_id: Some("desktop".into()), key_generation, pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some(agent.into()), parent_agent_id: Some("main".into()), owner_id: None, model: model.into(), canonical_model: model.into(), wire_model: model.into(), stream: false, headers: vec![], body: bytes::Bytes::from(format!(r#"{{"model":"{model}","max_tokens":10,"messages":[{{"role":"user","content":"hi"}}]}}"#)), body_capture_hours: 0, shape: RequestShape::default(), static_hash: None, boundaries: Vec::new().into(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, guardrail_id: None, guardrails: Vec::new(), received_at: now }));
+        parts.keepalive.observe(Event::RequestObserved(RequestObserved { request_id: request_id.clone(), origin: Origin::Client, kind: Kind::Inference, key_id: Some("desktop".into()), key_generation, pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some(agent.into()), parent_agent_id: Some("main".into()), owner_id: None, model: model.into(), canonical_model: model.into(), wire_model: model.into(), stream: false, headers: vec![], body: bytes::Bytes::from(format!(r#"{{"model":"{model}","max_tokens":10,"messages":[{{"role":"user","content":"hi"}}]}}"#)), body_capture_hours: 0, shape: RequestShape::default(), static_hash: None, boundaries: Vec::new().into(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, guardrail_id: None, guardrails: Vec::new(), received_at: now, fallback_digest: None }));
         parts
             .keepalive
             .observe(Event::AccountSelected(AccountSelected {
@@ -1661,7 +1661,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 finished_at: now,
             }));
     }
-    parts.keepalive.observe(Event::RequestObserved(RequestObserved { request_id: "k1".into(), origin: Origin::Client, kind: Kind::Inference, key_id: Some("desktop".into()), key_generation, pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some("main".into()), parent_agent_id: None, owner_id: None, model: "claude-sonnet-5".into(), canonical_model: "claude-sonnet-5".into(), wire_model: "claude-sonnet-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: RequestShape::default(), static_hash: None, boundaries: Vec::new().into(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, guardrail_id: None, guardrails: Vec::new(), received_at: now }));
+    parts.keepalive.observe(Event::RequestObserved(RequestObserved { request_id: "k1".into(), origin: Origin::Client, kind: Kind::Inference, key_id: Some("desktop".into()), key_generation, pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some("main".into()), parent_agent_id: None, owner_id: None, model: "claude-sonnet-5".into(), canonical_model: "claude-sonnet-5".into(), wire_model: "claude-sonnet-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: RequestShape::default(), static_hash: None, boundaries: Vec::new().into(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, guardrail_id: None, guardrails: Vec::new(), received_at: now, fallback_digest: None }));
     parts
         .keepalive
         .observe(Event::AccountSelected(AccountSelected {
@@ -1781,6 +1781,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             guardrail_id: None,
             guardrails: Vec::new(),
             received_at: now,
+            fallback_digest: None,
         }));
     parts
         .attention

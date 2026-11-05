@@ -8,7 +8,9 @@ use phoebis_routing::{CacheMapEntry, DecisionRecord, DecisionSummary, PinUsage};
 use phoebis_store::AccountKind;
 
 use crate::plan::{funding_of, Funding};
-use crate::pricing::Speed;
+use crate::price::price_usd;
+use crate::pricing::{PriceRevisions, Speed};
+use crate::rollup::{deltas_of, fold_speed};
 use crate::LedgerError;
 
 // A parked row outlives the build that wrote it, so a field a later build adds reads at its default.
@@ -108,6 +110,80 @@ pub struct RequestRecord {
     /// The router refused the request before it asked any account, for the client's or a policy's cause, so the
     /// figures leave it out and the logs keep it. A row from before the column reads what the step's backfill set.
     pub refused: bool,
+    /// The SHA-256 of the fallback credit token the body presented, lowercase hex, `None` where it presented none and
+    /// on a row from before the column.
+    pub fallback_digest: Option<String>,
+    /// The serving attempt's facts as the landing wrote them, every field `None` on a row from before the columns
+    /// until the start's backfill reaches it. The assembler leaves them at their default, and the landing derives
+    /// them from the attempts it writes.
+    pub serving: ServingFacts,
+}
+
+/// The serving attempt's facts the request row carries: the last attempt by number, the one the rollups file the
+/// request under. Every field `None` for a request no attempt served.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ServingFacts {
+    pub account_id: Option<String>,
+    pub reached_upstream: Option<bool>,
+    pub outcome_class: Option<String>,
+    /// `rollup::fold_speed`'s word, the one speed rule.
+    pub speed: Option<String>,
+    pub cache_miss_reason: Option<String>,
+    pub stop_reason: Option<String>,
+    pub refusal_category: Option<String>,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cache_read_tokens: Option<u64>,
+    /// The 5-minute and 1-hour writes summed.
+    pub cache_write_tokens: Option<u64>,
+    pub cost_usd: Option<f64>,
+}
+
+impl ServingFacts {
+    /// The facts of `attempts`' last attempt, the cost priced as the rollup fold prices the request: each of its
+    /// `deltas_of` rows at the cells the row's band, speed and model select on the revision in force at the request's
+    /// `received_at`, summed, `None` where no attempt answered or no row priced.
+    pub(crate) fn of(
+        request: &RequestRecord,
+        attempts: &[AttemptRecord],
+        prices: &PriceRevisions,
+    ) -> ServingFacts {
+        let Some(last) = attempts.last() else {
+            return ServingFacts::default();
+        };
+        let cache_write_tokens = match (last.cache_write_5m_tokens, last.cache_write_1h_tokens) {
+            (None, None) => None,
+            (five_minute, hour) => Some(five_minute.unwrap_or(0) + hour.unwrap_or(0)),
+        };
+        let cost_usd = attempts
+            .iter()
+            .any(AttemptRecord::has_usage)
+            .then(|| {
+                deltas_of(request, attempts, prices)
+                    .iter()
+                    .filter_map(|row| {
+                        price_usd(prices, &row.price_key(request.received_at), row.usage())
+                    })
+                    .map(|split| split.total())
+                    .reduce(|sum, usd| sum + usd)
+            })
+            .flatten();
+        ServingFacts {
+            account_id: Some(last.account_id.clone()),
+            reached_upstream: Some(last.upstream_status.is_some()),
+            outcome_class: Some(last.outcome.clone()),
+            speed: Some(fold_speed(Some(last), request.requested_speed.as_deref()).to_string()),
+            cache_miss_reason: last.cache_miss_reason.clone(),
+            stop_reason: last.stop_reason.clone(),
+            refusal_category: last.refusal_category.clone(),
+            input_tokens: last.input_tokens,
+            output_tokens: last.output_tokens,
+            cache_read_tokens: last.cache_read_tokens,
+            cache_write_tokens,
+            cost_usd,
+        }
+    }
 }
 
 /// One row of `request_guardrails`: a guardrail that matched the request, its place in the evaluation order and
@@ -177,6 +253,9 @@ pub struct AttemptRecord {
     pub written_at: Option<i64>,
     /// The serving account's class as the registry held it at the attempt, false on a row from before the column.
     pub usage_based: bool,
+    /// The SHA-256 of the fallback credit token a refused attempt issued, lowercase hex, `None` elsewhere and on a row
+    /// from before the column.
+    pub issued_digest: Option<String>,
 }
 
 impl AttemptRecord {

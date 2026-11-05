@@ -359,12 +359,6 @@ pub(crate) fn pattern_any(
     clauses.push(format!("({})", parts.join(" OR ")));
 }
 
-/// `expr` read off the serving attempt of the request whose id `request_id` names: its last attempt, the one the
-/// rollups file the request under.
-fn serving_attempt(expr: &str, request_id: &str) -> String {
-    format!("(SELECT {expr} FROM attempts a WHERE a.request_id = {request_id} ORDER BY a.attempt DESC LIMIT 1)")
-}
-
 /// The `WHERE` clauses `filter` sets on the requests table with the values they bind, numbered in the order bound.
 /// The key filter reads the selectors the analytics do, against the row's `(key_id, key_generation)`, and `live` says
 /// which generation a bare id names.
@@ -406,56 +400,41 @@ fn filter_clauses(
     in_list("kind", &filter.kinds, &mut args, &mut clauses);
     in_list("outcome", &filter.outcomes, &mut args, &mut clauses);
     in_list("status", &filter.statuses, &mut args, &mut clauses);
-    // The serving attempt is the last, the account the rollups file a request under, so a request that failed over
-    // lists under the account that answered it. A request no attempt served reads as the reserved id.
+    // The column holds the serving attempt's account written at the landing: the last attempt, the account the rollups
+    // file a request under, so a request that failed over lists under the account that answered it. A request no
+    // attempt served reads as the reserved id.
     in_list(
-        &format!(
-            "COALESCE({}, '{UNATTRIBUTED}')",
-            serving_attempt("a.account_id", "requests.id")
-        ),
+        &format!("COALESCE(requests.serving_account_id, '{UNATTRIBUTED}')"),
         &filter.accounts,
         &mut args,
         &mut clauses,
     );
-    // The serving attempt is the last: an earlier 429 carries no speed and must not read as standard. The speed
-    // follows the rollups' fold: the speed the serving attempt's answer reported, `standard` for an answer with
-    // usage that reported none, and the speed the request asked for where no attempt answered.
-    let speed = serving_attempt(
-        "COALESCE(a.speed, CASE WHEN COALESCE(a.input_tokens, a.output_tokens, a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens) IS NOT NULL THEN 'standard' END)",
-        "requests.id",
-    );
+    // The column holds the serving attempt's speed written at the landing under the rollups' fold. A request no
+    // attempt served files under the speed it asked for.
     in_list(
-        &format!(
-            "COALESCE({speed}, CASE WHEN requests.requested_speed = 'fast' THEN 'fast' ELSE 'standard' END)"
-        ),
+        "COALESCE(requests.speed, CASE WHEN requests.requested_speed = 'fast' THEN 'fast' ELSE 'standard' END)",
         &filter.speeds,
         &mut args,
         &mut clauses,
     );
-    // The serving attempt is the last, the one the rollups count a request's reason on. A request with no attempt or a
-    // null serving reason matches nothing.
+    // The column holds the serving attempt's reason written at the landing, the one the rollups count a request's
+    // reason on. A request with no attempt or a null serving reason matches nothing.
     in_list(
-        &serving_attempt("a.cache_miss_reason", "requests.id"),
+        "requests.cache_miss_reason",
         &filter.cache_miss_reasons,
         &mut args,
         &mut clauses,
     );
-    // The serving attempt is the last, as for the accounts. A NULL matches no list, so a serving attempt that names no
-    // word, or a request no attempt served, reads as `-`.
+    // The two columns hold the serving attempt's words written at the landing. A NULL matches no list, so a serving
+    // attempt that names no word, or a request no attempt served, reads as `-`.
     in_list(
-        &format!(
-            "COALESCE({}, '-')",
-            serving_attempt("a.stop_reason", "requests.id")
-        ),
+        "COALESCE(requests.stop_reason, '-')",
         &filter.stop_reasons,
         &mut args,
         &mut clauses,
     );
     in_list(
-        &format!(
-            "COALESCE({}, '-')",
-            serving_attempt("a.refusal_category", "requests.id")
-        ),
+        "COALESCE(requests.refusal_category, '-')",
         &filter.refusal_categories,
         &mut args,
         &mut clauses,
@@ -647,9 +626,10 @@ pub fn list_request_page(
 }
 
 /// The requests in `[from, to]` under `filter` whose serving attempt's `stop_reason` is `refusal`, counted per
-/// category (`-` for a refusal with none), the largest count first and then the category. Read off the attempts at the
-/// request, since no rollup carries the category. The `clients` and `user_agents` patterns match each row's client and
-/// agent folded as the rollups fold them, so the count narrows as the series do.
+/// category (`-` for a refusal with none), the largest count first and then the category. Read off the request row's
+/// columns, the serving attempt's facts written at the landing, since no rollup carries the category. The `clients`
+/// and `user_agents` patterns match each row's client and agent folded as the rollups fold them, so the count narrows
+/// as the series do.
 pub fn refusal_categories(
     conn: &Connection,
     filter: &RequestFilter,
@@ -663,16 +643,12 @@ pub fn refusal_categories(
         ..filter.clone()
     };
     let (args, mut clauses) = filter_clauses(&filter, live);
-    clauses.push(format!(
-        "{} = 'refusal'",
-        serving_attempt("a.stop_reason", "requests.id")
-    ));
+    clauses.push("requests.stop_reason = 'refusal'".into());
     // SQL does not express the fold, so the patterns match each raw pair in memory, grouped first so a pair repeated
     // across many refusals folds once per category.
     let sql = format!(
-        "SELECT COALESCE({}, '-') AS category, \
+        "SELECT COALESCE(requests.refusal_category, '-') AS category, \
          client, user_agent, COUNT(*) FROM requests WHERE {} GROUP BY category, client, user_agent",
-        serving_attempt("a.refusal_category", "requests.id"),
         clauses.join(" AND ")
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -3629,19 +3605,18 @@ pub fn session_activity(
     conn: &Connection,
     since: i64,
 ) -> Result<Vec<SessionActivity>, LedgerError> {
-    let mut stmt = conn.prepare(&format!(
+    let mut stmt = conn.prepare(
         "WITH recent AS (SELECT id, key_id, key_generation, session_id AS grp, received_at, canonical_model, \
-         presented_retired, rotation_at FROM requests \
+         presented_retired, rotation_at, serving_account_id FROM requests \
          WHERE key_id IS NOT NULL AND session_id IS NOT NULL AND kind != 'probe' AND received_at >= ?1), \
          ranked AS (SELECT recent.*, \
          ROW_NUMBER() OVER (PARTITION BY key_id, key_generation, grp ORDER BY received_at DESC, id DESC) AS nth \
          FROM recent) \
          SELECT key_id, key_generation, grp, received_at, canonical_model, \
-         {}, \
+         serving_account_id, \
          presented_retired, rotation_at \
          FROM ranked WHERE nth = 1 ORDER BY received_at DESC",
-        serving_attempt("a.account_id", "ranked.id")
-    ))?;
+    )?;
     let rows = stmt.query_map(params![since], |r| {
         Ok(SessionActivity {
             key_id: r.get(0)?,
@@ -5076,6 +5051,12 @@ const SESSION_SPEND_COLUMNS: &str =
 /// The column `PRICED_ATTEMPT_COLUMNS` starts at in the session spend reads.
 const SESSION_SPEND_PRICED_FROM: usize = 9;
 
+/// The number of request `r`'s serving attempt, its last by number, the attempt the landing takes the row's serving
+/// facts from. The spend reads join that attempt's own row, since its price reads members the request row does not
+/// carry: the completion, the two cache writes apart, the account kind, the overage flag and the tier.
+const SERVING_ATTEMPT_NUMBER: &str =
+    "(SELECT a.attempt FROM attempts a WHERE a.request_id = r.id ORDER BY a.attempt DESC LIMIT 1)";
+
 impl SessionSpendRow {
     /// A request no account served joins no attempt, so its attempt half reads null and must not reach
     /// `PricedAttempt::read`. Its model, receipt and kind are request columns inside `PRICED_ATTEMPT_COLUMNS`, read by
@@ -5113,11 +5094,10 @@ impl SessionSpendRow {
 pub(crate) fn session_spend_since_statement(
     landed_after: i64,
 ) -> (String, Vec<rusqlite::types::Value>) {
-    let serving = serving_attempt("a.attempt", "r.id");
     let sql = format!(
         "SELECT {SESSION_SPEND_COLUMNS}, {PRICED_ATTEMPT_COLUMNS} \
          FROM requests r INDEXED BY requests_landed_at \
-         LEFT JOIN attempts a ON a.request_id = r.id AND a.attempt = {serving} \
+         LEFT JOIN attempts a ON a.request_id = r.id AND a.attempt = {SERVING_ATTEMPT_NUMBER} \
          WHERE r.landed_at > ? AND r.key_id IS NOT NULL AND r.session_id IS NOT NULL AND r.refused = 0 \
          ORDER BY r.landed_at, r.id"
     );
@@ -5134,13 +5114,12 @@ pub(crate) fn session_spend_of_statement(
     sessions: &[(String, i64, String)],
 ) -> (String, Vec<rusqlite::types::Value>) {
     let (named, binds) = named_sessions(sessions);
-    let serving = serving_attempt("a.attempt", "r.id");
     let sql = format!(
         "WITH {named} \
          SELECT {SESSION_SPEND_COLUMNS}, {PRICED_ATTEMPT_COLUMNS} \
          FROM named n CROSS JOIN requests r INDEXED BY requests_session ON r.session_id = n.session_id \
          AND r.key_id = n.key_id AND r.key_generation = n.key_generation \
-         LEFT JOIN attempts a ON a.request_id = r.id AND a.attempt = {serving} \
+         LEFT JOIN attempts a ON a.request_id = r.id AND a.attempt = {SERVING_ATTEMPT_NUMBER} \
          WHERE r.refused = 0 \
          ORDER BY r.session_id, r.received_at, r.id"
     );

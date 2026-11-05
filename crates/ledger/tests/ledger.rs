@@ -1147,6 +1147,7 @@ fn observed_event(id: &str) -> BusEvent {
         guardrail_id: None,
         guardrails: Vec::new(),
         received_at: 0,
+        fallback_digest: None,
     })
 }
 
@@ -1274,6 +1275,281 @@ async fn a_probe_the_relay_refused_at_admission_folds_as_held_and_not_as_failed_
         "the rejection's code alone"
     );
     up.shutdown().await;
+}
+
+/// The digest a refused attempt issued lands on its attempt row and the digest a later request presented on that
+/// request's row, each null on the other row.
+#[tokio::test]
+async fn a_refused_attempt_lands_its_issued_digest_and_a_presenting_request_its_fallback_digest() {
+    const DIGEST: &str = "36df6527d0041aa2c3dea0f6e8490bbe05a17e2e41529298d4244f308118662a";
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    h.bus.publish(observed_event("refused"));
+    h.bus.publish(selected_event("refused", 1, "a", 0));
+    let BusEvent::RequestComplete(mut refusal) = complete_event("refused") else {
+        unreachable!()
+    };
+    refusal.attempt = 1;
+    refusal.account_id = Some("a".into());
+    refusal.response = ResponseFacts {
+        stop_reason: Some("refusal".into()),
+        issued_digest: Some(DIGEST.into()),
+        ..ResponseFacts::default()
+    };
+    h.bus.publish(BusEvent::RequestComplete(refusal));
+    let BusEvent::RequestObserved(mut presenting) = observed_event("presenting") else {
+        unreachable!()
+    };
+    presenting.fallback_digest = Some(DIGEST.into());
+    h.bus.publish(BusEvent::RequestObserved(presenting));
+    h.bus.publish(selected_event("presenting", 1, "a", 0));
+    let BusEvent::RequestComplete(mut served) = complete_event("presenting") else {
+        unreachable!()
+    };
+    served.attempt = 1;
+    served.account_id = Some("a".into());
+    h.bus.publish(BusEvent::RequestComplete(served));
+    let (refused, refused_attempts) = ledgered(&h, "refused").await;
+    let (presenting, presenting_attempts) = ledgered(&h, "presenting").await;
+    assert_eq!(
+        (
+            refused_attempts[0].issued_digest.as_deref(),
+            refused.fallback_digest.as_deref(),
+            presenting.fallback_digest.as_deref(),
+            presenting_attempts[0].issued_digest.as_deref(),
+        ),
+        (Some(DIGEST), None, Some(DIGEST), None)
+    );
+    up.shutdown().await;
+}
+
+/// The request list's reads of the serving attempt before the columns existed, one subquery per fact, run over a
+/// seeded file as the oracle the backfilled columns are held against: the account, the speed under the requested
+/// one's fallback, the cache-miss reason, the stop reason and the refusal category.
+const PRE_COLUMN_SERVING_FACTS: &str = "SELECT id, \
+    (SELECT a.account_id FROM attempts a WHERE a.request_id = requests.id ORDER BY a.attempt DESC LIMIT 1), \
+    COALESCE((SELECT COALESCE(a.speed, CASE WHEN COALESCE(a.input_tokens, a.output_tokens, a.cache_read_tokens, \
+    a.cache_write_5m_tokens, a.cache_write_1h_tokens) IS NOT NULL THEN 'standard' END) FROM attempts a \
+    WHERE a.request_id = requests.id ORDER BY a.attempt DESC LIMIT 1), \
+    CASE WHEN requests.requested_speed = 'fast' THEN 'fast' ELSE 'standard' END), \
+    (SELECT a.cache_miss_reason FROM attempts a WHERE a.request_id = requests.id ORDER BY a.attempt DESC LIMIT 1), \
+    (SELECT a.stop_reason FROM attempts a WHERE a.request_id = requests.id ORDER BY a.attempt DESC LIMIT 1), \
+    (SELECT a.refusal_category FROM attempts a WHERE a.request_id = requests.id ORDER BY a.attempt DESC LIMIT 1) \
+    FROM requests WHERE attempts > 0 ORDER BY id";
+
+/// The serving facts of a request as `PRE_COLUMN_SERVING_FACTS` answers them: the id, then the five facts.
+type FiveFacts = (
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
+/// Rows written before the columns existed, their columns null, take the facts the request list derived per row from
+/// their attempts: a failover's second account, a refusal's category, a cache-miss reason, the standard speed of an
+/// answer that named none and the fast speed of a request that asked for it and was never answered. The other seven
+/// facts read the seeded attempt's own figures, the cost priced on the test's price list by hand, and a request no
+/// attempt served keeps every fact null.
+#[tokio::test]
+async fn the_backfill_fills_old_rows_with_the_facts_the_list_derived_from_their_attempts() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    let db = Arc::new(LedgerDb::open(&path).unwrap());
+    let seed = rusqlite::Connection::open(&path).unwrap();
+    // The first entry of the test price list prices claude-sonnet-5-5 at 3, 0.3, 3.75, 6 and 15 dollars per million
+    // input, cache-read, 5-minute write, 1-hour write and output tokens, and the counts below price to whole halves.
+    seed.execute_batch(&format!(
+        "INSERT INTO requests (id, received_at, model, canonical_model, stream, kind, origin, outcome, attempts, \
+         requested_speed, refused) VALUES \
+         ('failover', {at}, 'claude-sonnet-5-5', 'claude-sonnet-5-5', 0, 'inference', 'client', 'succeeded', 2, NULL, 0), \
+         ('missed', {at}, 'claude-sonnet-5-5', 'claude-sonnet-5-5', 0, 'inference', 'client', 'succeeded', 1, NULL, 0), \
+         ('refusal', {at}, 'claude-sonnet-5-5', 'claude-sonnet-5-5', 0, 'inference', 'client', 'succeeded', 1, NULL, 0), \
+         ('unanswered', {at}, 'claude-sonnet-5-5', 'claude-sonnet-5-5', 0, 'inference', 'client', 'failed', 1, 'fast', 0), \
+         ('unattempted', {at}, 'claude-sonnet-5-5', 'claude-sonnet-5-5', 0, 'inference', 'client', 'rejected', 0, NULL, 1), \
+         ('unspoken', {at}, 'claude-sonnet-5-5', 'claude-sonnet-5-5', 0, 'inference', 'client', 'succeeded', 1, NULL, 0); \
+         INSERT INTO attempts (request_id, attempt, account_id, account_kind, started_at, upstream_status, outcome, \
+         input_tokens, output_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, speed, \
+         cache_miss_reason, stop_reason, refusal_category) VALUES \
+         ('failover', 1, 'a', 'oauth', {at}, 429, 'rate_limited', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL), \
+         ('failover', 2, 'b', 'oauth', {at}, 200, 'succeeded', 1000000, 200000, 10000000, 400000, 250000, 'standard', \
+          NULL, 'end_turn', NULL), \
+         ('missed', 1, 'a', 'oauth', {at}, 200, 'succeeded', 1000000, NULL, NULL, 400000, NULL, 'standard', \
+          'tools_changed', 'end_turn', NULL), \
+         ('refusal', 1, 'b', 'oauth', {at}, 200, 'succeeded', 2000000, 0, NULL, NULL, NULL, 'standard', NULL, \
+          'refusal', 'cyber'), \
+         ('unanswered', 1, 'a', 'oauth', {at}, NULL, 'transport_error', NULL, NULL, NULL, NULL, NULL, NULL, NULL, \
+          NULL, NULL), \
+         ('unspoken', 1, 'a', 'oauth', {at}, 200, 'succeeded', 1000000, NULL, NULL, NULL, NULL, NULL, NULL, \
+          'end_turn', NULL);",
+        at = phoebis_ledger::test_tables::JANUARY_2026,
+    ))
+    .unwrap();
+    let derived: Vec<FiveFacts> = seed
+        .prepare(PRE_COLUMN_SERVING_FACTS)
+        .unwrap()
+        .query_map([], |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+            ))
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    phoebis_ledger::backfill_serving_facts(&db, &phoebis_ledger::test_tables::api_prices())
+        .unwrap();
+    let mut filled: Vec<FiveFacts> = Vec::new();
+    let mut figures = Vec::new();
+    for (id, ..) in &derived {
+        let (row, _) = db.request(id).await.unwrap().unwrap();
+        let s = row.serving;
+        figures.push((
+            id.clone(),
+            s.reached_upstream,
+            s.outcome_class,
+            s.input_tokens,
+            s.output_tokens,
+            s.cache_read_tokens,
+            s.cache_write_tokens,
+            s.cost_usd,
+        ));
+        filled.push((
+            id.clone(),
+            s.account_id,
+            s.speed,
+            s.cache_miss_reason,
+            s.stop_reason,
+            s.refusal_category,
+        ));
+    }
+    assert_eq!(filled, derived, "the columns hold what the list derived");
+    let succeeded = || Some("succeeded".to_string());
+    assert_eq!(
+        figures,
+        [
+            (
+                "failover".to_string(),
+                Some(true),
+                succeeded(),
+                Some(1_000_000),
+                Some(200_000),
+                Some(10_000_000),
+                Some(650_000),
+                Some(12.0)
+            ),
+            (
+                "missed".to_string(),
+                Some(true),
+                succeeded(),
+                Some(1_000_000),
+                None,
+                None,
+                Some(400_000),
+                Some(4.5)
+            ),
+            (
+                "refusal".to_string(),
+                Some(true),
+                succeeded(),
+                Some(2_000_000),
+                Some(0),
+                None,
+                None,
+                Some(6.0)
+            ),
+            (
+                "unanswered".to_string(),
+                Some(false),
+                Some("transport_error".to_string()),
+                None,
+                None,
+                None,
+                None,
+                None
+            ),
+            (
+                "unspoken".to_string(),
+                Some(true),
+                succeeded(),
+                Some(1_000_000),
+                None,
+                None,
+                None,
+                Some(3.0)
+            ),
+        ],
+        "the serving attempt's own figures, the cost priced on every answered attempt"
+    );
+    let (unattempted, _) = db.request("unattempted").await.unwrap().unwrap();
+    assert_eq!(unattempted.serving, phoebis_ledger::ServingFacts::default());
+}
+
+/// A start fills one slice of the rows written before the columns, the oldest first behind a filled prefix ten slices
+/// long, and the next start fills the rest. A refused request no attempt served stays null and out of the pending
+/// index.
+#[tokio::test]
+async fn a_start_fills_one_slice_of_pending_rows_and_unattempted_refusals_stay_out_of_the_index() {
+    use phoebis_ledger::{backfill_serving_facts, Backfilled, BACKFILL_SLICE};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    let db = Arc::new(LedgerDb::open(&path).unwrap());
+    let seed = rusqlite::Connection::open(&path).unwrap();
+    let filled = 10 * BACKFILL_SLICE;
+    let pending = BACKFILL_SLICE + 1;
+    seed.execute_batch(&format!(
+        "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < {last_filled}) \
+         INSERT INTO requests (id, received_at, model, canonical_model, stream, kind, origin, outcome, attempts, \
+         serving_account_id, reached_upstream, outcome_class, speed) \
+         SELECT 'filled-' || i, i, 'm', 'm', 0, 'inference', 'client', 'succeeded', 1, 'a', 1, 'succeeded', \
+         'standard' FROM n; \
+         WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < {last_pending}) \
+         INSERT INTO requests (id, received_at, model, canonical_model, stream, kind, origin, outcome, attempts) \
+         SELECT 'pending-' || i, {filled} + 2 * i, 'm', 'm', 0, 'inference', 'client', 'succeeded', 1 FROM n; \
+         WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 9) \
+         INSERT INTO requests (id, received_at, model, canonical_model, stream, kind, origin, outcome, attempts, \
+         refused) \
+         SELECT 'refused-' || i, {filled} + 2 * i + 1, 'm', 'm', 0, 'inference', 'client', 'rejected', 0, 1 FROM n; \
+         INSERT INTO attempts (request_id, attempt, account_id, account_kind, started_at, outcome) \
+         SELECT id, 1, 'a', 'oauth', received_at, 'succeeded' FROM requests WHERE attempts = 1;",
+        last_filled = filled - 1,
+        last_pending = pending - 1,
+    ))
+    .unwrap();
+    let prices = phoebis_ledger::test_tables::api_prices();
+    let first = backfill_serving_facts(&db, &prices).unwrap();
+    let second = backfill_serving_facts(&db, &prices).unwrap();
+    assert_eq!(
+        (first, second),
+        (
+            Backfilled {
+                written: BACKFILL_SLICE,
+                left: 1
+            },
+            Backfilled {
+                written: 1,
+                left: 0
+            }
+        )
+    );
+    let (refused, _) = db.request("refused-0").await.unwrap().unwrap();
+    let indexed: i64 = seed
+        .query_row(
+            "SELECT COALESCE(SUM(ncell), 0) FROM dbstat WHERE name = 'requests_serving_pending'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        (refused.serving.account_id, indexed),
+        (None, 0),
+        "the refusal keeps a null account and the pending index holds no entry"
+    );
 }
 
 /// A request's `held` names each of its waits with the reason: the hourly row sums the `slow_down` waits under

@@ -611,6 +611,7 @@ impl Rig {
             guardrail_id: None,
             guardrails: Vec::new(),
             received_at: self.now(),
+            fallback_digest: None,
         })
     }
 
@@ -667,6 +668,7 @@ impl Rig {
             guardrail_id: None,
             guardrails: Vec::new(),
             received_at: self.now(),
+            fallback_digest: None,
         })
     }
 

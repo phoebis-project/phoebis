@@ -1,7 +1,8 @@
 //! The ledger schema at version 1: `account_rollups_hourly`, `attempts`, `bodies`, `cooldown_segments`,
 //! `cooldown_spans`, `decisions`, `events`, `extra_usage_samples`, `kept_warm_marks`, `parked_records`,
 //! `quota_samples`, `request_guardrails`, `requests`, `rollups_hourly`, `routing_conditions` and
-//! `window_reconciliations`, plus `meta` for the schema marker.
+//! `window_reconciliations`, plus `meta` for the schema marker. `MIGRATIONS` steps it to version 3, the last step
+//! carrying the fallback credit's digests and the serving attempt's facts onto the rows.
 
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -403,9 +404,35 @@ CREATE TABLE IF NOT EXISTS window_reconciliations (
 );
 "#;
 
+/// Step 3 carries the fallback credit's digests and the serving attempt's facts onto the rows, so the request list
+/// reads a column where it ran a subquery per row. A row written before the step reads null until the start's
+/// backfill reaches it. The partial index holds the rows with attempts whose serving account is null, so a slice
+/// seeks the oldest of them without reading the filled rows before them, and a request no attempt served, whose
+/// account stays null, never enters it. The rare row whose trail lost every attempt stays in it, and the backfill's
+/// reads skip it.
+const STEP_3: &str = "ALTER TABLE attempts ADD COLUMN issued_digest TEXT; \
+    ALTER TABLE requests ADD COLUMN fallback_digest TEXT; \
+    ALTER TABLE requests ADD COLUMN serving_account_id TEXT; \
+    ALTER TABLE requests ADD COLUMN reached_upstream INTEGER; \
+    ALTER TABLE requests ADD COLUMN outcome_class TEXT; \
+    ALTER TABLE requests ADD COLUMN speed TEXT; \
+    ALTER TABLE requests ADD COLUMN cache_miss_reason TEXT; \
+    ALTER TABLE requests ADD COLUMN stop_reason TEXT; \
+    ALTER TABLE requests ADD COLUMN refusal_category TEXT; \
+    ALTER TABLE requests ADD COLUMN input_tokens INTEGER; \
+    ALTER TABLE requests ADD COLUMN output_tokens INTEGER; \
+    ALTER TABLE requests ADD COLUMN cache_read_tokens INTEGER; \
+    ALTER TABLE requests ADD COLUMN cache_write_tokens INTEGER; \
+    ALTER TABLE requests ADD COLUMN cost_usd REAL; \
+    CREATE INDEX requests_serving_pending ON requests (received_at) \
+        WHERE serving_account_id IS NULL AND attempts > 0";
+
 /// Applied in order above the stored `schema_version`, each inside one transaction. A migration may drop or rebuild a
 /// table, so an older build refuses a newer ledger rather than misreading it.
-pub const MIGRATIONS: &[(u32, &str)] = &[(
-    2,
-    "ALTER TABLE window_reconciliations DROP COLUMN estimated",
-)];
+pub const MIGRATIONS: &[(u32, &str)] = &[
+    (
+        2,
+        "ALTER TABLE window_reconciliations DROP COLUMN estimated",
+    ),
+    (3, STEP_3),
+];
