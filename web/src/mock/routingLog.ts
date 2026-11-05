@@ -4,7 +4,7 @@ import type {
 } from '@/api/types';
 import { shareIn, weightOf } from '@/lib/costs';
 import { placementHit } from '@/lib/format';
-import { endOf } from '@/lib/quota';
+import { MODEL_SCOPE_PREFIX, endOf } from '@/lib/quota';
 import { compareRows } from '@/lib/routingLog';
 import { hoursOfKey } from '@/lib/windows';
 import { ACCOUNTS, LEDGER_WINDOW, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT, SUNSET_WEEK_RESETS_IN, accountById, isPaidSource, kindTier, windowsOf } from './accounts';
@@ -254,7 +254,7 @@ interface CooldownRow {
 
 const cooldownRows: CooldownRow[] = [
   ...ACCOUNTS.flatMap((a) =>
-    a.cooldowns.map((c) => ({ accountId: a.id, reason: c.reason.startsWith('rate_limit') ? 'rate_limit' : c.reason, scope: c.scope, setAt: Date.parse(c.setAt), until: Date.parse(c.until), window: c.scope === 'fast' ? 'fast' : c.windowId === '5h' ? 'five_hour' : c.scope.startsWith('model:') ? 'model_rejection' : (c.windowId ?? 'retry_after') })),
+    a.cooldowns.map((c) => ({ accountId: a.id, reason: c.reason.startsWith('rate_limit') ? 'rate_limit' : c.reason, scope: c.scope, setAt: Date.parse(c.setAt), until: Date.parse(c.until), window: c.scope === 'fast' ? 'fast' : c.windowId === '5h' ? 'five_hour' : c.scope.startsWith(MODEL_SCOPE_PREFIX) ? 'model_rejection' : (c.windowId ?? 'retry_after') })),
   ),
   ...REQUESTS.flatMap((r) =>
     r.attempts.flatMap((a) => {

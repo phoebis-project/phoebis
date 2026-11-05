@@ -78,10 +78,11 @@ export function meterTone(remaining: number): MeterTone {
   return 'low';
 }
 
-export const remainingOf = (w: RateLimitWindow) => Math.max(0, Math.min(1, 1 - w.utilization));
+const shareLeft = (utilization: number): number => Math.max(0, Math.min(1, 1 - utilization));
+export const remainingOf = (w: RateLimitWindow) => shareLeft(w.utilization);
 /** A spend reading's share left, clamped as a window's is, and null without a share or under no limit. */
 export const spendLeftOf = (spend: Spend): number | null =>
-  spend.utilization === null || (spend.amounts !== null && spend.amounts.limitMinor === null) ? null : Math.max(0, Math.min(1, 1 - spend.utilization));
+  spend.utilization === null || (spend.amounts !== null && spend.amounts.limitMinor === null) ? null : shareLeft(spend.utilization);
 
 /** An account's window by its id, the Fable week from `fableWindow`, which the decoder files apart from `windows`. */
 export const windowOf = (account: Account, id: WindowId): RateLimitWindow | null => (id === '7d_fable' ? account.fableWindow : (account.windows.find((w) => w.id === id) ?? null));

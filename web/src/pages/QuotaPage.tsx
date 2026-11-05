@@ -9,7 +9,7 @@ import { SpeedChip } from '@/components/ui/SpeedChip';
 import { IconChevronLeft, IconChevronRight, IconRefresh, IconUser } from '@/components/ui/icons';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Badge, ErrorState, Meter, MeterAbsent, Pill, Segmented, Select, Skeleton } from '@/components/ui/primitives';
-import { CELL_MIN_PX, cellsFit, fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinor, fmtMinute, fmtPct, fmtRelative, fmtShortHour, fmtShortTime, getTimeFormat, noun, plural, upperFirst } from '@/lib/format';
+import { CELL_MIN_PX, cellsFit, fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinor, fmtMinute, fmtPct, fmtRelative, fmtShortHour, fmtShortTime, formatIn, getTimeFormat, noun, plural, upperFirst } from '@/lib/format';
 import { useAsync, useHashSection, useNow, useResizeObserver } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, burnWords, endOf, extraUsageState, hasSpendReading, isExpired, isQuotaListed, meterTone, onTimeline, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, slowedOf, soonestReset, soonestResetAt, sortByPace, spendLeftOf, spendResetTitle, timelineLanes, windowOf, type ExtraUsageState } from '@/lib/quota';
 import { speedHover } from '@/lib/selection';
@@ -679,8 +679,8 @@ function ResetTimeline({ accounts, now, slotOf }: { accounts: Account[]; now: nu
         const at = span.startMs + i * span.cellMs;
         const d = new Date(at);
         const dayStart = d.getHours() === 0;
-        const head = mode === 'weekly' ? d.toLocaleDateString('en-US', { weekday: 'short' }) : dayStart ? fmtDayShort(at) : '';
-        const day = d.toLocaleDateString('en-US', { day: 'numeric' });
+        const head = mode === 'weekly' ? formatIn({ weekday: 'short' }, at) : dayStart ? fmtDayShort(at) : '';
+        const day = formatIn({ day: 'numeric' }, at);
         const time = fmtShortTime(at);
         return {
           at,

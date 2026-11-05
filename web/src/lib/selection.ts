@@ -1,6 +1,7 @@
 import type { Account, AccountSlowDown, MemberEligibility, Pool, PoolMember, PoolStrategy } from '@/api/types';
-import { fmtAbsolute, fmtDuration, fmtPeriodEnd, fmtRelative, fmtShortTime, instant } from './format';
+import { fmtAbsolute, fmtDuration, fmtPeriodEnd, fmtRelative, fmtShortTime, instant, sameLocalDay } from './format';
 import { endOf, minuteSpan, planExtraUsage, planOverage, slowedOf } from './quota';
+import { MINUTE } from './time';
 
 export const STRATEGY_LABEL: Record<PoolStrategy, string> = { pace: 'Pace', priority: 'Priority, then random', round_robin: 'Round robin' };
 /** The kind tiers, in the order selection walks them. The third holds the API-key and the usage-based accounts, the
@@ -60,8 +61,7 @@ export function cooldownBadge(until: string | undefined, now: number): StandingB
  * than `now` in the viewer's zone, so a reset days out never reads as today's.
  */
 function untilResetBadge(word: string, sentence: string, reset: string, now: number): StandingBadge {
-  const sameDay = new Date(reset).toDateString() === new Date(now).toDateString();
-  return { text: `${word} until ${sameDay ? fmtShortTime(reset) : fmtPeriodEnd(reset)}`, title: `${sentence} until ${fmtAbsolute(reset)}` };
+  return { text: `${word} until ${sameLocalDay(reset, now) ? fmtShortTime(reset) : fmtPeriodEnd(reset)}`, title: `${sentence} until ${fmtAbsolute(reset)}` };
 }
 
 /** An overage verdict's badge, until the overage resets where the account knows when. */
@@ -129,7 +129,7 @@ function keyOf(member: PoolMember | undefined, strategy: PoolStrategy): number {
 }
 
 /** Whether a member is inside the pool's wind-down before its window's end, which a member with no end never is. */
-export const windingDown = (pool: Pick<Pool, 'windDownMinutes'>, end: number | null, now: number): boolean => end !== null && now >= end - pool.windDownMinutes * 60_000;
+export const windingDown = (pool: Pick<Pool, 'windDownMinutes'>, end: number | null, now: number): boolean => end !== null && now >= end - pool.windDownMinutes * MINUTE;
 
 /**
  * Where a member falls in the router's fall-through for a fresh session, lowest first: not winding down, then winding

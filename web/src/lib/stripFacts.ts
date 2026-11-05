@@ -1,9 +1,10 @@
 import type { DecisionRecord, DecisionSummary, PrefixEntry, WalkFact, WalkStep } from '@/api/types';
-import { has, lookup } from '@/lib/counts';
+import { lookup } from '@/lib/counts';
 import { LEGACY_PARTITION_FACTS, PARTITION_FACTS, type Leaf, type Renderer, type Station, type StripAnchor, type StripModel, type Terminus } from '@/lib/decisionStrip';
 import { fmtCompact, fmtInt, fmtPct } from '@/lib/format';
 import type { BadgeTone } from '@/lib/quota';
-import { accountChip, ageWord, candidateCells, type Chip, factChips, formatFact, hashTitle, keyWord, outcomeRows, paceHeader, PLACE_WORD, plain, rungEntry, shortHash, STEP_NAME, valueText, verdictTone, type VerdictTone, verdictWord, walkLines, warmUntil, WINDOW_WORD, words } from '@/lib/routingLog';
+import { accountChip, ageWord, candidateCells, type Chip, factChips, formatFact, hashTitle, keyWord, outcomeRows, paceHeader, PLACE_WORD, plain, rungEntry, shortHash, STEP_NAME, valueText, verdictTone, type VerdictTone, verdictWord, walkLines, warmUntil, WINDOW_WORD, wordOf, words } from '@/lib/routingLog';
+import { knownWindowsFirst } from '@/lib/windows';
 
 // A popover's plan: the facts of one station, leaf or terminus as plain data in the console's words, which
 // `StripPopover` draws and the unit tests read.
@@ -249,7 +250,7 @@ function holdOf(step: WalkStep, record: DecisionRecord, at: number): Pick<Popove
   const take = taker(step, placed);
   const rows: PlanRow[] = take('place').map((f) => {
     const place = String(f.value);
-    return { chips: [plain(lookup(PLACE_WORD, place) ?? words(place), keyWord(f.key))], label: keyWord(f.key) };
+    return { chips: [plain(wordOf(PLACE_WORD, place), keyWord(f.key))], label: keyWord(f.key) };
   });
   for (const f of take('account_id')) {
     rows.push(...rowsOf(f, record, at, unplaced));
@@ -363,8 +364,7 @@ function leafPlan(leaf: Leaf, model: StripModel, record: DecisionRecord, now: nu
     ...(entry === null ? [] : [{ label: 'prefix', mono: true, title: hashTitle(entry), value: shortHash(entry.hash) }]),
   ];
   // The console's three windows in their order, then any other the account reports, a key's worst bucket among them.
-  const keys = [...Object.keys(WINDOW_WORD).filter((k) => has(member.windows, k)), ...Object.keys(member.windows).filter((k) => !has(WINDOW_WORD, k))];
-  const windows: WindowRow[] = keys.map((k) => {
+  const windows: WindowRow[] = knownWindowsFirst(Object.keys(member.windows)).map((k) => {
     const w = member.windows[k];
     return { age: ageWord(w.ageMs), left: fmtPct(1 - w.utilization), reset: w.reset === null ? 'no reset' : formatFact(w.reset, 'time', now), source: w.source, used: fmtPct(w.utilization), window: lookup(WINDOW_WORD, k) ?? keyWord(k) };
   });

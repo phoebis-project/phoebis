@@ -10,13 +10,12 @@ import { Button, Card, ErrorState, Skeleton, toggleRow } from '@/components/ui/p
 import { accountHref, METER_CODEC } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { METER_DIMENSIONS, notLoadedReason } from '@/lib/filterBar';
-import { fmtAbsolute, fmtDated, fmtInt, fmtShare, instant, noun } from '@/lib/format';
+import { fmtAbsolute, fmtCount, fmtDated, fmtInt, fmtShare, instant } from '@/lib/format';
 import { toggled, useAsync, useQueryFilters } from '@/lib/hooks';
 import { GROUP_PAGE, GROUP_STEP, METER_HINT, meterGroups, SPARK, sparkOf, sparkY, type MeterGroup } from '@/lib/meter';
 import { windowWord } from '@/lib/windows';
 
 const COLUMNS = 8;
-const plural = (n: number, one: string) => `${fmtInt(n)} ${noun(n, one)}`;
 const groupKey = (g: Pick<MeterGroup, 'accountId' | 'window'>) => `${g.accountId}:${g.window}`;
 
 /** The group's judged windows over the trailing 30 days to the answer's newest window, the band shaded behind them. */
@@ -226,7 +225,7 @@ export function MeterPage(): JSX.Element {
   const more = (first: number) => (key: string) => setShown((was) => new Map(was).set(key, (was.get(key) ?? first) + GROUP_STEP));
 
   const error = rows === null ? read.error : null;
-  const count = rows === null ? '' : `${plural((groups?.weekly.length ?? 0) + (groups?.fiveHour.length ?? 0), 'group')}, ${plural(rows.length, 'window')}`;
+  const count = rows === null ? '' : `${fmtCount((groups?.weekly.length ?? 0) + (groups?.fiveHour.length ?? 0), 'group')}, ${fmtCount(rows.length, 'window')}`;
   const options: Record<string, Option[]> = { accounts: (accounts.data ?? []).map((a) => ({ label: a.label, value: a.id })) };
   const now = clock.now();
   const card = { accounts: filters.accounts, error, newest, now, onExpand: expand, onRetry: read.reload, onToggle: toggle, open, shown };

@@ -12,7 +12,7 @@ import { CACHE_TTL_DEFAULTS, METERED_TTL_DEFAULTS, PLAN_TTL_DEFAULTS, POOL_AFFIN
 import type { GuardrailInput, GuardrailTestInput } from './client';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { emptyCounts } from '@/lib/counts';
-import { earlierHolderLabel, fmtDate } from '@/lib/format';
+import { earlierHolderLabel, fmtDate, formatIn } from '@/lib/format';
 import { BUCKET_COUNT, emptyHistogram } from '@/lib/histogram';
 import { accountStatusOf, planWordLabel } from '@/lib/quota';
 import { WINDOW_HOURS, WINDOW_LABEL, hoursOfKey, windowKeyId, windowRank } from '@/lib/windows';
@@ -947,7 +947,7 @@ export const effectiveDateOf = (effective: string): string | null => {
 export const effectiveLabel = (effective: string): string => {
   const at = effectiveDateOf(effective);
   if (at === null) return effective;
-  return /^\d{4}-\d{2}-\d{2}$/.test(effective) ? new Date(at).toLocaleDateString('en-US', { day: '2-digit', month: 'short', timeZone: 'UTC', year: 'numeric' }) : fmtDate(at);
+  return /^\d{4}-\d{2}-\d{2}$/.test(effective) ? formatIn({ day: '2-digit', month: 'short', timeZone: 'UTC', year: 'numeric' }, at) : fmtDate(at);
 };
 const pricedModels = (content: Rec): ModelPrice[] => Object.entries(rec(content.models)).map(([model, row]) => price(model, rec(row)));
 /** One dated entry of the price table, read as leniently as the entry in force. */

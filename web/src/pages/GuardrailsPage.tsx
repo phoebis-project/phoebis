@@ -12,7 +12,7 @@ import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Field, Grou
 import { poolKeysHref, requestHref } from '@/lib/address';
 import { effectiveCaptureHours } from '@/lib/capture';
 import type { PauseCause } from '@/lib/follow';
-import { fmtAbsolute, fmtInt, messageOf, noun } from '@/lib/format';
+import { fmtAbsolute, fmtCount, fmtInt, messageOf } from '@/lib/format';
 import { derivedId, refusalsView, sameMembers, sameValues, saveStatus } from '@/lib/forms';
 import { guardrailRefusals, MODE_TONE, presetBadges, presetBadgeTone, verdictWords } from '@/lib/guardrails';
 import { useAsync } from '@/lib/hooks';
@@ -36,7 +36,6 @@ const GROUP_LABEL: Record<GuardrailGroup, string> = { applies: 'Applies to', con
 /** The rail's order, which the dialog's work follows: what it is, what it checks, where it runs, how it would fare. */
 const GROUPS: GuardrailGroup[] = ['identity', 'conditions', 'applies', 'test'];
 
-const counted = (n: number, one: string, many: string) => `${fmtInt(n)} ${noun(n, one, many)}`;
 const byPosition = (list: GuardrailAttachment[]) => [...list].sort((a, b) => a.position - b.position);
 
 /** A create from a preset, as the dialog fills it: the preset's name, mode and conditions, and no description. */
@@ -161,7 +160,7 @@ export function GuardrailsPage(): JSX.Element {
           const attachedPools = byPosition(g.pools);
           const attachedKeys = byPosition(g.keys);
           const nowhere = attachedPools.length === 0 && attachedKeys.length === 0;
-          const where = `${counted(attachedPools.length, 'pool', 'pools')}, ${counted(attachedKeys.length, 'key', 'keys')}`;
+          const where = `${fmtCount(attachedPools.length, 'pool')}, ${fmtCount(attachedKeys.length, 'key')}`;
           const names = [...attachedPools.map((p) => `pool ${p.label}`), ...attachedKeys.map((k) => `key ${k.label}`)].join(', ');
           const count = counts.data?.guardrails.find((c) => c.id === g.id);
           const presetName = g.preset === null ? null : `${presetList.find((p) => p.id === g.preset?.id)?.name ?? g.preset.id} v${g.preset.version}`;
@@ -226,7 +225,7 @@ export function GuardrailsPage(): JSX.Element {
       <div className="stack">
         <FilterBar
           address="/guardrails"
-          count={list === null ? '' : counted(list.length, 'guardrail', 'guardrails')}
+          count={list === null ? '' : fmtCount(list.length, 'guardrail')}
           filters={{}}
           refresh={{ intervalMs, onIntervalChange: setIntervalMs, onRefresh: reload, paused: pauseCause, refreshTitle: 'Reads the list again now' }}
           update={() => undefined}
@@ -313,14 +312,14 @@ function formOf(existing: Guardrail | null, source: Guardrail | undefined): Guar
 }
 
 /** A pool or key picker: the button reads the count and opens the filter bar's list, as Add filter opens its own. */
-function Picker({ empty, label, many, one, onChange, options, value }: { empty: string; label: string; many: string; one: string; onChange: (next: string[]) => void; options: Option[]; value: string[] }) {
+function Picker({ empty, label, one, onChange, options, value }: { empty: string; label: string; one: string; onChange: (next: string[]) => void; options: Option[]; value: string[] }) {
   const boxId = useId();
   const [anchor, setAnchor] = useState<HTMLButtonElement | null>(null);
   const [open, setOpen] = useState(false);
   return (
     <>
-      <Button ref={setAnchor} aria-haspopup="dialog" aria-expanded={open} aria-label={`${label}: ${value.length === 0 ? empty : counted(value.length, one, many)}`} onClick={() => setOpen((o) => !o)}>
-        {value.length === 0 ? empty : counted(value.length, one, many)}
+      <Button ref={setAnchor} aria-haspopup="dialog" aria-expanded={open} aria-label={`${label}: ${value.length === 0 ? empty : fmtCount(value.length, one)}`} onClick={() => setOpen((o) => !o)}>
+        {value.length === 0 ? empty : fmtCount(value.length, one)}
         <IconChevron size={12} strokeWidth={1.5} />
       </Button>
       <Popover anchor={anchor} id={boxId} label={label} onClose={() => setOpen(false)} open={open}>
@@ -553,12 +552,12 @@ export function GuardrailDialog({ existing, existingIds, keys, onClose, onSaved,
         <p className="field__hint">{APPLIES_HINT}</p>
         <Field label="Pools" plain className="cell--half">
           <div>
-            <Picker label="Pools" empty="No pools" one="pool" many="pools" options={poolOptions} value={form.pools} onChange={(next) => edit({ pools: next })} />
+            <Picker label="Pools" empty="No pools" one="pool" options={poolOptions} value={form.pools} onChange={(next) => edit({ pools: next })} />
           </div>
         </Field>
         <Field label="Keys" plain className="cell--half">
           <div>
-            <Picker label="Keys" empty="No keys" one="key" many="keys" options={keyOptions} value={form.keys} onChange={(next) => edit({ keys: next })} />
+            <Picker label="Keys" empty="No keys" one="key" options={keyOptions} value={form.keys} onChange={(next) => edit({ keys: next })} />
           </div>
         </Field>
       </div>

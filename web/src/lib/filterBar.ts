@@ -1,6 +1,7 @@
 // A type-only import, so the API bundle the unit tests load stays free of React.
 import type { Option } from '@/components/ui/OptionList';
 import { NO_CLASS } from './dimensions';
+import { failedFirst } from './follow';
 import { listed, shortId } from './format';
 import { kindsChipText } from './routingLog';
 
@@ -185,7 +186,7 @@ const STATUS: Dimension = { anyLabel: 'All statuses', defaultValue: 'all', field
  * else nothing. A list that loaded keeps it through a refresh that fails.
  */
 export function notLoadedReason(field: string, name: string, read: { data: unknown; error: string | null }): Record<string, string> {
-  return read.data === null && read.error !== null ? { [field]: `The ${name} list did not load: ${read.error}` } : {};
+  return failedFirst(read) ? { [field]: `The ${name} list did not load: ${read.error}` } : {};
 }
 
 /** Routing, Outcome, Request, Subject. A status chip prints the codes alone, since an option's label adds the code's name. */

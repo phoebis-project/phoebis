@@ -3,7 +3,7 @@ import type { SubscriptionCosts } from '@/api/types';
 import { useFormatVersion } from '@/app/settings';
 import { Card } from '@/components/ui/primitives';
 import { bandCaption, bandNow, bandSentence, bandWeek, COST_WINDOWS, hhmm, nextLocalChange, partsIn, regimeNames, regimeWord, zoneCity } from '@/lib/costs';
-import { figure, fmtPct, fmtShortTime, getTimeFormat, viewingZone } from '@/lib/format';
+import { figure, fmtPct, fmtShortTime, formatIn, getTimeFormat, viewingZone } from '@/lib/format';
 import { MINUTE } from '@/lib/time';
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -12,7 +12,7 @@ const pad = (n: number) => String(n).padStart(2, '0');
 export const minuteClock = (minutes: number): string => {
   // The band's end at the day's last minute reads 24:00, which no formatter prints.
   if (getTimeFormat() === '24h') return hhmm(minutes);
-  return new Date(Date.UTC(2000, 0, 1, 0, minutes)).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h12', minute: '2-digit', timeZone: 'UTC' });
+  return formatIn({ hour: '2-digit', hourCycle: 'h12', minute: '2-digit', timeZone: 'UTC' }, Date.UTC(2000, 0, 1, 0, minutes));
 };
 
 const clockAt = (at: number) => fmtShortTime(at);

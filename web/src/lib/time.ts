@@ -9,8 +9,8 @@ export function span(ms: number): string {
   if (abs < MINUTE) return `${(abs / 1_000).toFixed(abs >= 10_000 ? 0 : 1)} s`;
   const pair = (major: number, majorUnit: string, minor: number, minorUnit: string) => (minor > 0 ? `${major} ${majorUnit} ${minor} ${minorUnit}` : `${major} ${majorUnit}`);
   if (abs < HOUR) return pair(Math.floor(abs / MINUTE), 'min', Math.floor((abs % MINUTE) / 1_000), 's');
-  if (abs < 24 * HOUR) return pair(Math.floor(abs / HOUR), 'h', Math.floor((abs % HOUR) / MINUTE), 'min');
-  return pair(Math.floor(abs / (24 * HOUR)), 'd', Math.floor((abs % (24 * HOUR)) / HOUR), 'h');
+  if (abs < DAY) return pair(Math.floor(abs / HOUR), 'h', Math.floor((abs % HOUR) / MINUTE), 'min');
+  return pair(Math.floor(abs / DAY), 'd', Math.floor((abs % DAY) / HOUR), 'h');
 }
 
 /** A reading's age, whole seconds under a minute. */

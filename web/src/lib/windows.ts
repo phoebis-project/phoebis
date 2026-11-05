@@ -12,6 +12,11 @@ export const WINDOW_SHORT: ByWindow<string> = { '5h': '5h', '7d': '7d', '7d_fabl
 export const WINDOW_ORDER: KnownWindowId[] = ['5h', '7d', '7d_fable'];
 /** The wire keys of the three windows the router reads, in the order the pages draw them. */
 export const WINDOW_KEYS: readonly string[] = ['five_hour', 'seven_day', 'seven_day_fable'];
+/**
+ * The three windows `keys` holds in `WINDOW_KEYS` order, then its other keys as listed. An alias spelling (`5h`,
+ * `fable`) trails with the others, where a sort by `windowRank` would file it among the three.
+ */
+export const knownWindowsFirst = (keys: readonly string[]): string[] => [...WINDOW_KEYS.filter((k) => keys.includes(k)), ...keys.filter((k) => !WINDOW_KEYS.includes(k))];
 
 /** The period of a window the pages do not know, read from its key's family: a week, five hours, or none. */
 export function hoursOfKey(id: WindowId): number {

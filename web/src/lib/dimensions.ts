@@ -1,4 +1,4 @@
-import type { Attempt, AttemptResponse, CacheMissReason, RequestLog } from '@/api/types';
+import type { Attempt, AttemptResponse, CacheMissReason, RequestKind, RequestLog } from '@/api/types';
 
 /**
  * The folds the router's rollups and its request filters apply to a request, so a console control and the mock file a
@@ -10,6 +10,8 @@ export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 export const NO_EFFORT = 'none';
 export const NO_CLASS = '-';
 export const OTHER_DIMENSION = 'other';
+/** A request kind's label, one for the Requests kind filter and the guardrail editor's kind condition alike. */
+export const REQUEST_KIND_LABEL: Record<RequestKind, string> = { count_tokens: 'Count tokens', inference: 'Inference', probe: 'Probe' };
 
 const FILED_EFFORTS: readonly string[] = [...EFFORT_LEVELS, NO_EFFORT];
 // The relay's identifier charset is ASCII, so a match's length in characters is its length in bytes.

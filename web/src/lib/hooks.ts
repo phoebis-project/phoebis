@@ -23,8 +23,7 @@ export interface Loaded<T> {
   stale: boolean;
 }
 
-/** A read that failed before it ever answered, so the view has nothing to draw but the failure. */
-export const failedFirst = (read: Pick<Loaded<unknown>, 'data' | 'error'>): boolean => read.data === null && read.error !== null;
+export { failedFirst } from './follow';
 
 /** A copy of `set` with `key` flipped, for a state setter that opens or shuts one row. */
 export function toggled<T>(set: ReadonlySet<T>, key: T): Set<T> {

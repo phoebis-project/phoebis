@@ -79,6 +79,10 @@ export const percentText = (share: number) => `${Math.round(share * 100)} %`;
 export const noun = (n: number, one: string, many = `${one}s`): string => (n === 1 ? one : many);
 /** A count with its noun, `1 day`, `3 days`, `2 cache-map entries` where the plural is not the noun with an s. */
 export const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${noun(n, one, many)}`;
+/** `plural` with the count grouped as `fmtInt` groups it: `1,204 requests`. */
+export const fmtCount = (n: number, one: string, many = `${one}s`): string => `${fmtInt(n)} ${noun(n, one, many)}`;
+/** The parts that hold text, joined by `separator`: an absent or empty part leaves no stray separator. */
+export const joinPresent = (parts: readonly (string | null | undefined)[], separator: string): string => parts.filter((p): p is string => typeof p === 'string' && p !== '').join(separator);
 /** "a", "a and b", "a, b and c". */
 export const listWords = (words: string[]): string => (words.length < 2 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`);
 /** The values a list chip prints before it counts the rest. */
@@ -129,10 +133,10 @@ export const fmtBytes = (bytes: number) => {
 
 export function fmtDuration(ms: number): string {
   const abs = Math.abs(ms);
-  const m = Math.floor(abs / 60_000);
+  const m = Math.floor(abs / MINUTE);
   const h = Math.floor(m / 60);
   const d = Math.floor(h / 24);
-  if (abs < 60_000) return `${Math.max(1, Math.round(abs / 1000))}s`;
+  if (abs < MINUTE) return `${Math.max(1, Math.round(abs / 1000))}s`;
   if (h < 1) return `${m}m`;
   if (d < 1) return m % 60 === 0 ? `${h}h` : `${h}h ${m % 60}m`;
   return h % 24 === 0 ? `${d}d` : `${d}d ${h % 24}h`;
@@ -143,7 +147,7 @@ export function fmtDuration(ms: number): string {
  * than it is: `44h` for 44.1 hours, `46m` for 46 minutes.
  */
 export function fmtHours(ms: number): string {
-  const m = Math.floor(Math.abs(ms) / 60_000);
+  const m = Math.floor(Math.abs(ms) / MINUTE);
   return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h`;
 }
 
@@ -175,21 +179,22 @@ export const upperFirst = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 // A formatter costs far more to build than to use, and the polled logs format a few instants per row on every render.
 const dateTimeFormats = new Map<string, Intl.DateTimeFormat>();
+/** The options `formatIn` takes, each one its cache key spells, so an option the key would miss does not compile. */
+export type FormatOptions = Pick<Intl.DateTimeFormatOptions, 'day' | 'hour' | 'hourCycle' | 'minute' | 'month' | 'second' | 'timeZone' | 'weekday' | 'year'>;
 /**
  * `at` through the formatter of one set of options, built once. The cache key spells every option, the hour cycle and
  * the zone among them, since the time format switches at run time and a chart names its own zone. A formatter without
  * a zone keeps the one it resolved when built, so the instant's offset joins the key too, and a tab whose machine moves
  * to a zone with another offset reads the new zone.
  */
-export function formatIn(options: Intl.DateTimeFormatOptions, at: number | string): string {
+export function formatIn(o: FormatOptions, at: number | string): string {
   const d = new Date(at);
   // `format` throws on an invalid instant, where the `toLocale*String` methods read "Invalid Date".
   if (Number.isNaN(d.getTime())) return 'Invalid Date';
-  // The sorted array replacer fixes the order the keys print in, whatever order a literal lists them.
-  const cached = `${JSON.stringify(options, Object.keys(options).sort())} ${d.getTimezoneOffset()}`;
+  const cached = `${o.day}|${o.hour}|${o.hourCycle}|${o.minute}|${o.month}|${o.second}|${o.timeZone}|${o.weekday}|${o.year}|${d.getTimezoneOffset()}`;
   let f = dateTimeFormats.get(cached);
   if (f === undefined) {
-    f = new Intl.DateTimeFormat('en-US', options);
+    f = new Intl.DateTimeFormat('en-US', o);
     dateTimeFormats.set(cached, f);
   }
   return f.format(d);
@@ -275,16 +280,20 @@ export function fmtDated(ms: number): string {
  */
 export function fmtDatedTime(isoTime: string, now: number): string {
   const ms = Date.parse(isoTime);
-  if (Math.abs(ms - now) < DAY) return fmtTime(isoTime);
-  return `${fmtDayMonth(ms)} ${fmtTime(isoTime)}`;
+  if (Math.abs(ms - now) < DAY) return fmtTime(ms);
+  return `${fmtDayMonth(ms)} ${fmtTime(ms)}`;
+}
+
+/** Whether two instants fall on one calendar day in the browser's zone, false where either is no instant. */
+export function sameLocalDay(a: number | string, b: number | string): boolean {
+  const x = new Date(a);
+  const y = new Date(b);
+  return x.getFullYear() === y.getFullYear() && x.getMonth() === y.getMonth() && x.getDate() === y.getDate();
 }
 
 /** A custom span's words: the times alone inside one local calendar day, the date before each time across days. */
 export function spanText(fromMs: number, toMs: number): string {
-  const from = new Date(fromMs);
-  const to = new Date(toMs);
-  const sameDay = from.getFullYear() === to.getFullYear() && from.getMonth() === to.getMonth() && from.getDate() === to.getDate();
-  return sameDay ? `${fmtShortTime(fromMs)} to ${fmtShortTime(toMs)}` : `${fmtDayMonth(fromMs)} ${fmtShortTime(fromMs)} to ${fmtDayMonth(toMs)} ${fmtShortTime(toMs)}`;
+  return sameLocalDay(fromMs, toMs) ? `${fmtShortTime(fromMs)} to ${fmtShortTime(toMs)}` : `${fmtDated(fromMs)} to ${fmtDated(toMs)}`;
 }
 
 export function fmtDate(isoTime: string): string {

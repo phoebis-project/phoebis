@@ -1,7 +1,7 @@
 import type { Attempt, ModelTiers, SubscriptionCosts, TypeMultiplier, WindowFactors } from '@/api/types';
 import type { WeekReading } from '@/lib/analytics';
 import { has, lookup } from '@/lib/counts';
-import { formatIn, listWords, undatedModel } from '@/lib/format';
+import { type FormatOptions, formatIn, listWords, undatedModel } from '@/lib/format';
 import { planLabel } from '@/lib/quota';
 import { DAY, HOUR, MINUTE } from '@/lib/time';
 import { WEEK_TIER, type WeekPosition } from '@/lib/unit';
@@ -43,10 +43,8 @@ export const sizedTiers = (costs: SubscriptionCosts): string[] => Object.keys(co
 /** The shared window `window` prices on and the model-week divisor, as the ledger reads it; null for no plan window. */
 export const pricedWindow = (costs: SubscriptionCosts, window: string): { divisor: number; priced: CostWindow } | null => {
   if (window === 'five_hour' || window === 'seven_day') return { divisor: 1, priced: window };
-  if (has(costs.modelWindows, window)) {
-    const row = costs.modelWindows[window];
-    return row.of === 'seven_day' ? { divisor: row.capacityFactor, priced: 'seven_day' } : null;
-  }
+  const row = lookup(costs.modelWindows, window);
+  if (row !== undefined) return row.of === 'seven_day' ? { divisor: row.capacityFactor, priced: 'seven_day' } : null;
   // Any other week prices as the 7-day share once, as the ledger's window claims allow.
   return window.startsWith('seven_day') ? { divisor: 1, priced: 'seven_day' } : null;
 };
@@ -90,8 +88,8 @@ export const regimeOf = (costs: SubscriptionCosts, entrypoint: string | null): s
 /** The model as the named regime prices it: its capacity rows over the base's, a tier it does not name keeping the
  *  base row, and its band factors in place of the base's. The base itself for null or an unknown name. */
 export const withRegime = (costs: SubscriptionCosts, name: string | null): SubscriptionCosts => {
-  if (name === null || !has(costs.regimes, name)) return costs;
-  const regime = costs.regimes[name];
+  const regime = name === null ? undefined : lookup(costs.regimes, name);
+  if (regime === undefined) return costs;
   return { ...costs, capacity: { ...costs.capacity, ...regime.capacity }, peak: { ...costs.peak, capacityFactor: regime.peakCapacityFactor } };
 };
 
@@ -114,10 +112,8 @@ export const weightOf = (costs: SubscriptionCosts, model: string, window: string
  *  star-exports beside this module. */
 export const modelTierOf = (costs: ModelTiers, model: string): string | null => {
   const undated = undatedModel(model);
-  if (has(costs.modelTier, model)) return costs.modelTier[model];
-  if (has(costs.modelTier, undated)) return costs.modelTier[undated];
   const named = undated.startsWith('claude-') ? undated.slice('claude-'.length).split('-')[0] : '';
-  return costs.tierOrder.includes(named) ? named : null;
+  return lookup(costs.modelTier, model) ?? lookup(costs.modelTier, undated) ?? (costs.tierOrder.includes(named) ? named : null);
 };
 
 /** The model weeks a model carries: `seven_day_fable` for a Fable model, by the family its undated id names. */
@@ -300,7 +296,7 @@ const daysBetween = (from: string, to: string): number => Math.round((dayStart(t
 const weekdayOf = (date: string): string => WEEKDAYS[(new Date(dayStart(date)).getUTCDay() + 6) % 7];
 const dayLabel = (date: string): string => {
   const noon = `${date}T12:00:00Z`;
-  const part = (o: Intl.DateTimeFormatOptions) => formatIn({ ...o, timeZone: 'UTC' }, noon);
+  const part = (o: FormatOptions) => formatIn({ ...o, timeZone: 'UTC' }, noon);
   return `${part({ weekday: 'short' })} ${part({ day: 'numeric' })} ${part({ month: 'short' })}`;
 };
 export const hhmm = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;

@@ -14,6 +14,8 @@ export const RELOAD_INTERVALS = [
 export const FOLLOW_OVERRUN = 'More rows arrived than auto reload could fetch. Reload to read them.';
 /** Why Refresh is off while a custom span has ended, on every view that reads one. */
 export const ENDED_RANGE = 'A custom range that has ended has nothing new to read';
+/** A read that failed before it ever answered, so the view has nothing to draw but the failure. */
+export const failedFirst = (read: { data: unknown; error: string | null }): boolean => read.data === null && read.error !== null;
 /** A log's count beside its filters: the rows shown and whether a next page waits, nothing before the first answer. */
 export const shownCount = (rows: readonly unknown[], nextCursor: string | null, loaded: boolean): string =>
   rows.length > 0 ? `${fmtInt(rows.length)} shown${nextCursor ? ', more available' : ''}` : loaded ? 'No rows' : '';

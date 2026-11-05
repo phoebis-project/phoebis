@@ -27,7 +27,7 @@ import { CACHE_MISS_REASONS, isDivergence, missLabel } from '@/lib/cache';
 import { AGENT_TYPES, TURN_ORIGINS } from '@/lib/client';
 import { clock } from '@/lib/clock';
 import { weekReadingOf } from '@/lib/costs';
-import { EFFORT_LEVELS, foldRequestClass, NO_CLASS, NO_EFFORT, OTHER_DIMENSION, servedMissReason, servingAttempt, servingResponse } from '@/lib/dimensions';
+import { EFFORT_LEVELS, foldRequestClass, NO_CLASS, NO_EFFORT, OTHER_DIMENSION, REQUEST_KIND_LABEL, servedMissReason, servingAttempt, servingResponse } from '@/lib/dimensions';
 import { notLoadedReason, REQUESTS_DIMENSIONS } from '@/lib/filterBar';
 import { effectiveInterval, ENDED_RANGE, FOLLOW_OVERRUN, pollQuery, readEnd, shownCount, spanEnded } from '@/lib/follow';
 import { bytesDropped, earlierHolderLabel, fmtAbsolute, fmtCompact, fmtDatedTime, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, fmtWeek, forkLabel, keyGenerationOf, parseKeyLifetime, shortAgent, shortId, shortModel, tokensTotal } from '@/lib/format';
@@ -338,11 +338,7 @@ export function RequestsPage() {
       efforts: [...EFFORT_LEVELS, NO_EFFORT, OTHER_DIMENSION].map((v) => ({ label: v, value: v })),
       guardrails: guardrailOptions(guardrails.data, rows, filters.guardrails),
       keys: keyOptions(keys.data, filters.keys),
-      kind: [
-        { label: 'Inference', value: 'inference' },
-        { label: 'Count tokens', value: 'count_tokens' },
-        { label: 'Probe', value: 'probe' },
-      ],
+      kind: (['inference', 'count_tokens', 'probe'] as const).map((value) => ({ label: REQUEST_KIND_LABEL[value], value })),
       models: (catalog.data ?? []).map((m) => ({ label: m.id, value: m.id })),
       outcomes: REQUEST_OUTCOME_VALUES.map((o) => ({ label: REQUEST_OUTCOME_LABEL[o], value: o })),
       pools: (pools.data ?? []).map((p) => ({ label: p.name, value: p.id })),

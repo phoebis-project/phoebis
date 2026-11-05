@@ -1,6 +1,7 @@
 import type { DecisionKind, DecisionRecord, WalkStep } from '@/api/types';
-import { has, lookup } from '@/lib/counts';
-import { candidateVerdict, DECISION_KIND_LABEL, DECISION_KIND_TONE, formatFact, PLACE_WORD, STEP_NAME, strategyWord, tierOf, verdictTone, verdictWord, words } from '@/lib/routingLog';
+import { lookup } from '@/lib/counts';
+import { joinPresent } from '@/lib/format';
+import { candidateVerdict, DECISION_KIND_LABEL, DECISION_KIND_TONE, formatFact, PLACE_WORD, STEP_NAME, strategyWord, tierOf, verdictTone, verdictWord, WAIT_REASON_WORD, wordOf, words } from '@/lib/routingLog';
 import type { Chip, VerdictTone } from '@/lib/routingLog';
 
 export type Renderer = 'candidate' | 'chips' | 'hold' | 'list' | 'outcome' | 'rung' | 'sentence' | 'table';
@@ -79,8 +80,8 @@ export const PARTITION_WORD: Record<'fell_through' | 'held' | 'off', string> = {
  * under Rungs, "spent" under Moves). The popover's head is the station's `head`.
  */
 export function stationWord(stepId: string): string {
-  if (!has(STEP_NAME, stepId)) return stepId;
-  const name = STEP_NAME[stepId];
+  const name = lookup(STEP_NAME, stepId);
+  if (name === undefined) return stepId;
   // A step both tables hold sits in one group in each, and the cool reading in none.
   const kind = lookup(STATION_KINDS, stepId) ?? lookup(LEGACY_STATION_KINDS, stepId) ?? null;
   const group = kind?.group ?? null;
@@ -131,7 +132,14 @@ export interface Station {
 }
 export interface Leaf { accountId: string | null; badge: string; chip: Chip | null; chosen: boolean; more: number; tone: 'accent' | 'neutral' | 'warning' } // `more` > 0 and `accountId` null on the "and N more" leaf
 export type TerminusKind = 'chosen' | 'held' | 'held_reset' | 'held_rewrite' | 'held_slow_down' | 'refused';
-export const TERMINUS_WORD: Record<TerminusKind, string> = { chosen: 'Chosen', held: 'Held for a slot', held_reset: 'Held for the reset', held_rewrite: 'Held for the rewrite in flight', held_slow_down: 'Held for the slow-down', refused: 'Refused' };
+export const TERMINUS_WORD: Record<TerminusKind, string> = {
+  chosen: 'Chosen',
+  held: `Held ${WAIT_REASON_WORD.cap}`,
+  held_reset: `Held ${WAIT_REASON_WORD.reset}`,
+  held_rewrite: `Held ${WAIT_REASON_WORD.rewrite}`,
+  held_slow_down: `Held ${WAIT_REASON_WORD.slow_down}`,
+  refused: 'Refused',
+};
 export interface Terminus { badge: string | null; drawn: boolean; kind: TerminusKind; state: PathState; tone: VerdictTone; word: string }
 export interface Bracket { group: StripGroup; level: 'line' | 'track'; recorded: boolean; stations: string[]; word: string } // word "Rungs" or "Rungs, not recorded"
 export interface Branch { from: string; kind: 'move' | 'rung' }
@@ -157,7 +165,7 @@ const HELD_TERMINI: ReadonlySet<TerminusKind> = new Set(Object.values(HELD_FOR))
  */
 const terminusOf = (outcome: DecisionRecord['outcome']): TerminusKind => {
   const reason = outcome.kind === 'held' ? outcome.hold?.reason : undefined;
-  return reason !== undefined && has(HELD_FOR, reason) ? HELD_FOR[reason] : TERMINUS_OF[outcome.kind];
+  return (reason === undefined ? undefined : lookup(HELD_FOR, reason)) ?? TERMINUS_OF[outcome.kind];
 };
 const MAX_LEAVES = 8;
 const UNKNOWN_KIND: StationKind = { group: null, renderer: 'chips', stub: null };
@@ -220,7 +228,7 @@ function secondOf(s: WalkStep, now: number): string[] {
     case 'hold': {
       const place = factOf(s, 'place');
       const bound = factOf(s, 'bound_ms');
-      return [...(typeof place === 'string' ? [lookup(PLACE_WORD, place) ?? words(place)] : []), ...(typeof bound === 'number' ? [`bound ${formatFact(bound, 'ms', now)}`] : [])];
+      return [...(typeof place === 'string' ? [wordOf(PLACE_WORD, place)] : []), ...(typeof bound === 'number' ? [`bound ${formatFact(bound, 'ms', now)}`] : [])];
     }
     case 'exhausted': {
       const kind = factOf(s, 'kind');
@@ -236,7 +244,7 @@ function partitionBadge(s: WalkStep | null, key: string): { badge: string; tone:
   if (value === undefined) return { badge: 'not recorded', tone: 'neutral', verdict: null };
   if (typeof value === 'number') return { badge: `${value} out`, tone: value === 0 ? 'good' : 'warning', verdict: String(value) };
   const word = String(value);
-  return { badge: lookup(PARTITION_WORD, word) ?? words(word), tone: verdictTone(word, 'partitions'), verdict: word };
+  return { badge: wordOf(PARTITION_WORD, word), tone: verdictTone(word, 'partitions'), verdict: word };
 }
 
 /** A station with the walk's verdict it reads its state by: the step's own, the Move station's badge word. */
@@ -279,11 +287,12 @@ function draftsOf(walk: WalkStep[], entries: Entry[], shape: StripShape, now: nu
       }
       continue;
     }
-    const known = has(maps.kinds, step);
+    const kind = lookup(maps.kinds, step);
+    const known = kind !== undefined;
     // A step the walk records twice keeps one id per station.
     const id = seen.has(step) ? `${step}#${index}` : step;
     seen.add(id);
-    const station = blank(id, step, index, known ? maps.kinds[step] : UNKNOWN_KIND, known);
+    const station = blank(id, step, index, kind ?? UNKNOWN_KIND, known);
     if (known) {
       station.word = stationWord(step);
       station.head = STEP_NAME[step];
@@ -309,8 +318,9 @@ function branchOf(walk: WalkStep[], drafts: Draft[], shape: StripShape, kind: De
     const fired = walk[firedAt].step;
     const cap = walk.find((s, i) => i > firedAt && s.step === 'cap_filter');
     const raw = kind === 'moved' ? 'moved' : (cap?.verdict ?? walk[firedAt].verdict);
+    const firedKind = lookup(kinds, fired);
     const move: Station = {
-      ...blank('move', fired, null, kinds[fired] ?? UNKNOWN_KIND, has(kinds, fired)),
+      ...blank('move', fired, null, firedKind ?? UNKNOWN_KIND, firedKind !== undefined),
       badge: verdictWord(raw),
       group: null,
       head: 'Move',
@@ -470,7 +480,7 @@ export function stationModel(record: DecisionRecord, now: number): StripModel {
   };
 }
 
-const joined = (parts: (string | null | undefined)[]) => parts.filter((p): p is string => typeof p === 'string' && p !== '').join(', ');
+const joined = (parts: (string | null | undefined)[]) => joinPresent(parts, ', ');
 
 /**
  * The accessible name of a station button, from `head`: "Pick, chosen, Pace P0", "Shed, fired", "Eligible, not

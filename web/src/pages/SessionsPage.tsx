@@ -17,7 +17,7 @@ import { accountHref, ANALYTICS_CODEC, REQUESTS_CODEC, SESSION_SORT_KEYS, SESSIO
 import { clock } from '@/lib/clock';
 import { failed } from '@/lib/costs';
 import { SESSIONS_DIMENSIONS } from '@/lib/filterBar';
-import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtMiB, fmtPct, fmtRelative, keyGenerationOf, keyLifetime, messageOf, noun, plural, shortId, shortModel } from '@/lib/format';
+import { SESSION_CHARS, fmtAbsolute, fmtCount, fmtDuration, fmtInt, fmtMiB, fmtPct, fmtRelative, keyGenerationOf, keyLifetime, messageOf, plural, shortId, shortModel } from '@/lib/format';
 import { CAUSE_HINT, CAUSE_LABEL, contextCell, firstFailedRead, isFinished, isReleasedLine, orderLines, orderRows, pinTtlMs, releasedCount, requestsRange, sessionLines, type SessionLine, type TileRead, WARNING_CAUSES } from '@/lib/keepalive';
 import { failedFirst, toggled, useAsync, useNow, useQueryFilters } from '@/lib/hooks';
 import { minuteSpan, type BadgeTone } from '@/lib/quota';
@@ -293,7 +293,7 @@ export function SessionsPage() {
     [listed, filters.companion, filters.finished],
   );
   const hiddenRows = listed !== null && rows !== null ? listed.length - rows.length : 0;
-  const hiddenTitle = hiddenRows > 0 ? `${fmtInt(hiddenRows)} ${noun(hiddenRows, 'session')} hidden by the filters` : undefined;
+  const hiddenTitle = hiddenRows > 0 ? `${fmtCount(hiddenRows, 'session')} hidden by the filters` : undefined;
   const o = overview.data;
   // A refresh that fails keeps the tiles it drew, so only a read that never answered draws them as failed.
   const overviewError = o === null ? overview.error : null;

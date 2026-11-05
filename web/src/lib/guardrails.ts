@@ -1,5 +1,6 @@
 import type { Condition, ConditionOperator, ConditionSubject, Guardrail, GuardrailMode, GuardrailPresetState, GuardrailTestResult, MessageSelector, RequestLog } from '@/api/types';
 import type { Option } from '@/components/ui/OptionList';
+import { REQUEST_KIND_LABEL } from './dimensions';
 import type { BadgeTone } from './quota';
 
 /** The route's bounds: the conditions one guardrail holds and the characters of one pattern. */
@@ -13,10 +14,7 @@ const PATH_MAX_SEGMENTS = 32;
 const RESERVED_IDS: readonly string[] = ['presets', 'test'];
 
 /** The two words a `kind` condition compares against, as the route spells them. */
-export const KIND_VALUES: { label: string; value: string }[] = [
-  { label: 'Count tokens', value: 'count_tokens' },
-  { label: 'Inference', value: 'inference' },
-];
+export const KIND_VALUES: { label: string; value: string }[] = (['count_tokens', 'inference'] as const).map((value) => ({ label: REQUEST_KIND_LABEL[value], value }));
 
 /**
  * A subject's words: the extra cell it takes (a header name, a body path, a message selector or none) and the operators

@@ -12,7 +12,7 @@ import { countOf, emptyCounts } from '@/lib/counts';
 import { NO_CLASS, NO_EFFORT, foldClassifier, foldEffort, foldRequestClass } from '@/lib/dimensions';
 import { byteOrder, tokensTotal } from '@/lib/format';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
-import { endOf } from '@/lib/quota';
+import { MODEL_SCOPE_PREFIX, endOf } from '@/lib/quota';
 import { ACCOUNTS, LEDGER_WINDOW, QUOTA_HISTORY, accountById, isPaidSource, kindTier, sharedWindowsOf, windowsOf } from './accounts';
 import type { HourlyRollup } from './analytics';
 import { cellsFor, promptOf } from './catalog';
@@ -338,7 +338,7 @@ export function servable(accountId: string, atMs: number, model: string, fast: b
   const within = (from: number, to: number) => atMs >= from && atMs < to;
   if (accountId === 'secondary') return !within(clock(14, 2, 11), clock(14, 55));
   // Primary's two spans are its seed's cooldowns: a fast scope holds a fast request, a model scope that model.
-  if (accountId === 'primary') return !accountById.get('primary')!.cooldowns.some((c) => (c.scope === 'fast' ? fast : c.scope === `model:${model}`) && within(Date.parse(c.setAt), Date.parse(c.until)));
+  if (accountId === 'primary') return !accountById.get('primary')!.cooldowns.some((c) => (c.scope === 'fast' ? fast : c.scope === `${MODEL_SCOPE_PREFIX}${model}`) && within(Date.parse(c.setAt), Date.parse(c.until)));
   if (accountId === 'nightly') return !fast || atMs >= NIGHTLY_CAP_RAISED;
   if (accountId === 'overflow') return atMs < OVERFLOW_LAPSED_AT;
   if (accountId === 'research') return atMs < RESEARCH_BUDGET_AT;
@@ -778,7 +778,7 @@ const windowOfReason = (reason: string) => (reason.startsWith('429 on 5h') ? 'fi
  */
 export const cooldownOf = (reason: string, model: string): { reason: string; scope: string; window: string } =>
   reason === 'model_rejected'
-    ? { reason, scope: `model:${model}`, window: 'model_rejection' }
+    ? { reason, scope: `${MODEL_SCOPE_PREFIX}${model}`, window: 'model_rejection' }
     : reason === 'fast_rate_limit'
       ? { reason, scope: 'fast', window: 'fast' }
       : { reason: 'rate_limit', scope: 'account', window: windowOfReason(reason) };
@@ -786,7 +786,7 @@ export const cooldownOf = (reason: string, model: string): { reason: string; sco
 export const PLAN_WINDOWS = ['five_hour', 'seven_day'] as const;
 
 /** Whether a live row keeps this request off its account: a plan-window row holds a standard request alone. */
-export const holds = (c: { scope: string; window: string }, model: string, fast: boolean) => (c.scope === 'account' ? !(fast && PLAN_WINDOWS.some((w) => w === c.window)) : c.scope === 'fast' ? fast : c.scope === `model:${model}`);
+export const holds = (c: { scope: string; window: string }, model: string, fast: boolean) => (c.scope === 'account' ? !(fast && PLAN_WINDOWS.some((w) => w === c.window)) : c.scope === 'fast' ? fast : c.scope === `${MODEL_SCOPE_PREFIX}${model}`);
 
 /**
  * Whether a cooldown an answer set holds a request: a model's refusal holds that model, a fast lane's a fast request,

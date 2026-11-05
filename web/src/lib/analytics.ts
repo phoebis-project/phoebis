@@ -2,7 +2,7 @@ import type { Api } from '@/api/client';
 import type { Account, AccountRollup, AnalyticsGroup, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, HeldPoint, PinMigrationReason, Placement, PlacementRow, Reconciliation, RewritesAnswer, SubscriptionCosts, WindowSample } from '@/api/types';
 import { MODEL_WEEK_TIERS, tierCapacity, type CostWindow } from '@/lib/costs';
 import { has, lookup } from '@/lib/counts';
-import { earlierHolderLabel, fmtCompact, fmtInt, fmtPct, fmtShare, fmtUsd, fmtWeek, parseKeyLifetime, weekShort } from '@/lib/format';
+import { earlierHolderLabel, fmtCompact, fmtCount, fmtInt, fmtPct, fmtShare, fmtUsd, fmtWeek, joinPresent, parseKeyLifetime, weekShort } from '@/lib/format';
 import { planLabel, pricedTier } from '@/lib/quota';
 import { ageWord, HOUR } from '@/lib/time';
 import type { UnitPosition, WeekPosition } from '@/lib/unit';
@@ -40,7 +40,7 @@ export const heldSpan = (ms: number): string => ageWord(Math.max(1_000, ms));
 
 /** A held bar's hover, `12 requests held 14 min in all`, and `no request held` for a bucket that held none. */
 export const heldHover = (bar: Pick<HeldPoint, 'heldMs' | 'requests'>): string =>
-  bar.requests === 0 ? 'no request held' : `${fmtInt(bar.requests)} ${bar.requests === 1 ? 'request' : 'requests'} held ${heldSpan(bar.heldMs)} in all`;
+  bar.requests === 0 ? 'no request held' : `${fmtCount(bar.requests, 'request')} held ${heldSpan(bar.heldMs)} in all`;
 
 /** The classes that refresh a pin's warmth, the routing crate's `REFRESHING_CLASSES`: the conversation itself. */
 export const CONVERSATION_CLASSES = ['compaction', 'main', 'subagent'] as const;
@@ -213,7 +213,7 @@ export const HINT_WINDOW: Readonly<Record<string, string>> = { five_hour: 'the 5
  */
 export function shareHintLines(plan: string, shares: Record<string, number | null> | null, tier: string | null, inBand: boolean | null): string[] {
   if (shares === null) return [];
-  const weeks = Object.keys(shares).filter((key) => !SHARED_WINDOWS.includes(key) && tier !== null && (has(MODEL_WEEK_TIERS, key) ? MODEL_WEEK_TIERS[key].includes(tier) : false));
+  const weeks = Object.keys(shares).filter((key) => !SHARED_WINDOWS.includes(key) && tier !== null && (lookup(MODEL_WEEK_TIERS, key)?.includes(tier) ?? false));
   const lines = [...SHARED_WINDOWS, ...weeks].flatMap((key) => {
     const share = lookup(shares, key) ?? null;
     if (share === null) return [];
@@ -335,7 +335,7 @@ export const failureHead = (failure: { unpriced: boolean }, what: string): strin
  */
 export const equivalentOrDash = (v: number | null | undefined, week: WeekPosition, scale: number): string => (v === null || v === undefined ? '-' : fmtWeek(v * scale, week));
 /** Parts of a title as sentences, an absent part left out. */
-export const sentences = (parts: (string | null)[]): string => parts.filter((part): part is string => part !== null && part !== '').join('. ');
+export const sentences = (parts: (string | null)[]): string => joinPresent(parts, '. ');
 /**
  * A native table cell, short enough that the table's columns fit its card: the figure in the chosen week's short form
  * ("0.0244% Ultra week") and for a cell that sums both fundings the billed dollars under it. `undefined` leaves out a
@@ -432,7 +432,7 @@ export function unpricedNote(labels: readonly string[], buckets: number): string
   // The middle dot joins the labels, since a deleted holder's label carries a comma of its own ("desktop (deleted,
   // created Oct 11, 2026, 12:15)") and the console already sets a bar's share and its reset apart with it.
   const named = labels.length > 3 ? `${fmtInt(labels.length)} groups` : labels.join(' · ');
-  return `${named} unpriced in ${fmtInt(buckets)} ${buckets === 1 ? 'bucket, drawn as a gap' : 'buckets, drawn as gaps'}`;
+  return `${named} unpriced in ${fmtCount(buckets, 'bucket, drawn as a gap', 'buckets, drawn as gaps')}`;
 }
 /** The Cost section's head under a position, as `costHeadOf` reads it. */
 export interface CostHead {
