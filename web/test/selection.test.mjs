@@ -453,6 +453,7 @@ test("an overage member returns at its overage window's reset", () => {
 test("a spent member returns at its spend cap's reset", () => {
   const seat = account('seat', { spend: { resetsAt: hoursFromNow(4) } });
   assert.equal(read(at(pool('pace', 'allow', [member('seat', 0, 'spent')]), 'exhausted'), [seat]), `Exhausted: no member can take a request until seat's spend cap resets ${fmtRelative(hoursFromNow(4), NOW)}.`);
+  assert.equal(read(at(pool('pace', 'allow', [member('seat', 0, 'spent')]), 'exhausted'), [account('seat', { spend: { resetsAt: null } })]), 'Exhausted: no member can take a request, and none reports when it returns.', 'a spend cap without a reset gives no return');
 });
 
 test('a usage-based member is a metered source: behind every plan account under the kind order, by priority otherwise, never deferred and never held for overage', () => {
