@@ -17,7 +17,7 @@ export function WindowBar({ window: w, now, soon = false, showLabel = true, comp
   return (
     <div className="wbar">
       <div className="wbar__head">
-        {showLabel && <span className="wbar__label">{w.label}</span>}
+        {showLabel && <span className="wbar__label ellipsis">{w.label}</span>}
         {slowDown && <SpeedChip factor={slowDown.factor} hover={speedHover(slowDown, now)} />}
         <span className="wbar__pct num">{fmtPct(remaining)}</span>
       </div>
@@ -60,7 +60,7 @@ export function SpendBar({ spend, now, compact = false }: { compact?: boolean; n
   return (
     <div className="wbar wbar--spend">
       <div className="wbar__head">
-        <span className="wbar__label">{label}</span>
+        <span className="wbar__label ellipsis">{label}</span>
         {head !== null && <span className="wbar__pct num">{head}</span>}
       </div>
       {utilization !== null && (amounts === null || limited) && <Meter value={Math.min(1, Math.max(0, utilization))} tone={meterTone(1 - utilization)} thin label={`${label} used`} />}
@@ -88,7 +88,7 @@ export function WindowBarAbsent({ compact = false, label, words }: { compact?: b
   return (
     <div className="wbar wbar--absent" title={words}>
       <div className="wbar__head">
-        <span className="wbar__label">{label}</span>
+        <span className="wbar__label ellipsis">{label}</span>
         <span className="wbar__pct muted">{compact ? COMPACT_ABSENT : words}</span>
       </div>
       <MeterAbsent thin />

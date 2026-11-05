@@ -919,7 +919,7 @@ function ReturnRate({ buckets, error, loading, onRange, range }: ReturnRateProps
       ) : buckets.every((b) => b.reached === 0) ? (
         <p className="muted">No idle windows recorded yet</p>
       ) : (
-        <ul className="return-rate__rows">
+        <ul className="plain-list return-rate__rows">
           {buckets.map((b) => {
             const rate = b.reached > 0 ? b.returned / b.reached : 0;
             return (

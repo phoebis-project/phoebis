@@ -219,27 +219,6 @@
   background: var(--surface-3);
 }
 
-/* Two classes, since `.popover` sets its own padding later in this file at one class. */
-.popover.unit-legend {
-  width: 360px;
-  max-width: calc(100vw - 32px);
-  padding: 12px 14px;
-}
-
-.unit-legend__line {
-  margin: 0;
-  font-size: 12px;
-  color: var(--ink-2);
-}
-
-.unit-legend__line + .unit-legend__line {
-  margin-top: 6px;
-}
-
-.unit-legend b {
-  color: var(--ink);
-}
-
 /* The Settings row's position select, week select and legend button keep one line where the card has room for them. */
 .unit-setting {
   display: flex;
@@ -809,6 +788,7 @@ textarea.input {
   border-radius: var(--radius-xs);
 }
 
+.add-filter__row:focus-visible,
 .add-filter__row:hover,
 .mselect__option:hover,
 .menu__list button:hover {
@@ -897,6 +877,26 @@ textarea.input {
   outline: none;
 }
 
+.unit-legend {
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  padding: 12px 14px;
+}
+
+.unit-legend__line {
+  margin: 0;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.unit-legend__line + .unit-legend__line {
+  margin-top: 6px;
+}
+
+.unit-legend b {
+  color: var(--ink);
+}
+
 .popover__head {
   display: flex;
   gap: 8px;
@@ -936,10 +936,6 @@ textarea.input {
 
 .add-filter__row {
   gap: 12px;
-}
-
-.add-filter__row:focus-visible {
-  background: var(--surface-2);
 }
 
 /* A disabled row's reason takes a line of its own under the label. */
@@ -1019,7 +1015,6 @@ textarea.input {
 
 /* Pattern editor and conditions editor: one bordered row per rule or condition, the pattern editor's inherited rows
    after them in the muted ink */
-.conditions-editor,
 .pattern-editor {
   display: flex;
   flex-direction: column;
@@ -1027,12 +1022,10 @@ textarea.input {
   min-width: 0;
 }
 
-.conditions-editor__rows,
 .pattern-editor__rows {
   gap: 6px;
 }
 
-.conditions-editor__row,
 .pattern-editor__row {
   display: flex;
   flex-direction: column;
@@ -1042,7 +1035,6 @@ textarea.input {
   border-radius: var(--radius-sm);
 }
 
-.conditions-editor__row.is-refused,
 .pattern-editor__row.is-refused {
   border-color: var(--critical-border);
 }
@@ -1054,9 +1046,7 @@ textarea.input {
   min-width: 0;
 }
 
-.conditions-editor__actions,
-.pattern-editor__line .segmented,
-.pattern-editor__actions {
+.pattern-editor__line .segmented {
   flex: none;
 }
 
@@ -1070,18 +1060,16 @@ textarea.input {
   flex: 1;
 }
 
-.conditions-editor__actions,
 .pattern-editor__actions {
   display: inline-flex;
+  flex: none;
   gap: 2px;
 }
 
-.conditions-editor__up svg,
 .pattern-editor__up svg {
   transform: rotate(180deg);
 }
 
-.conditions-editor__refusal,
 .pattern-editor__refusal {
   margin: 0;
   font-size: 12px;
@@ -1172,19 +1160,6 @@ textarea.input {
   color: var(--ink-2);
 }
 
-.dialog__close {
-  padding: 4px;
-  color: var(--ink-3);
-  background: none;
-  border: 0;
-  border-radius: var(--radius-xs);
-}
-
-.dialog__close:hover {
-  color: var(--ink);
-  background: var(--surface-3);
-}
-
 .dialog__body {
   display: flex;
   flex-direction: column;
@@ -1203,9 +1178,7 @@ textarea.input {
 
 /* One fixed height for the grouped dialogs, the cost reference and the wide body dialog keeps each frame still between
    its groups or tabs. */
-.dialog--costs,
-.dialog--grouped,
-.dialog--wide {
+.dialog--fixed {
   height: min(800px, calc(100vh - 48px));
 }
 
@@ -1216,20 +1189,18 @@ textarea.input {
 
 /* The child combinator keeps a dialog opened from inside a group on its own capped height, so its body scrolls under a
    footer that stays in view. */
-.dialog--costs > .dialog__inner,
-.dialog--grouped > .dialog__inner,
-.dialog--wide > .dialog__inner {
+.dialog--fixed > .dialog__inner {
   height: 100%;
   max-height: none;
 }
 
-/* The wide body dialog's body grows so the footer stays at the dialog's foot, and the text fills the body and scrolls
-   inside it rather than the dialog. */
-.dialog--wide .dialog__body {
+/* The body takes the frame's fixed height, so the footer stays at the dialog's foot whatever the body holds. */
+.dialog--fixed > .dialog__inner > .dialog__body {
   flex: 1 1 auto;
   min-height: 0;
 }
 
+/* The wide body dialog's text fills the body and scrolls inside it rather than the dialog. */
 .dialog--wide .body-block__pre {
   flex: 1;
   max-height: none;
@@ -1786,8 +1757,6 @@ textarea.input {
 
 .attention-line__cut {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 /* The Replay button sits in a badge row, so it takes the badges' 22 px and the row keeps its height. */
@@ -2310,11 +2279,6 @@ textarea.input {
   border-radius: 50%;
 }
 
-.chip--removable .chip__remove:hover {
-  color: var(--ink);
-  background: var(--surface-3);
-}
-
 /* Without centring, the min-height below stretches a child shorter than the
    row, such as a badge, past the size it has everywhere else. */
 .chips {
@@ -2409,18 +2373,24 @@ textarea.input {
   padding-inline: 0;
 }
 
+.dialog__close,
 .icon-btn {
-  display: inline-grid;
-  place-items: center;
   padding: 4px;
-  margin-left: 6px;
   color: var(--ink-3);
-  vertical-align: middle;
   background: none;
   border: 0;
   border-radius: var(--radius-xs);
 }
 
+.icon-btn {
+  display: inline-grid;
+  place-items: center;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.chip--removable .chip__remove:hover,
+.dialog__close:hover,
 .icon-btn:hover {
   color: var(--ink);
   background: var(--surface-3);

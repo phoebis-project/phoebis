@@ -31,9 +31,7 @@
 }
 
 .wbar__label {
-  overflow: hidden;
   color: var(--ink-2);
-  text-overflow: ellipsis;
 }
 
 /* The 22 px badge would push the 5-hour meter under its two neighbors, and the auto margin keeps it by the label. */
@@ -437,8 +435,6 @@
 .qcard__reason,
 .qcard__extra-reason {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 /*
@@ -1322,8 +1318,6 @@
 
 .key-row__badge-label {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .pool__head {
@@ -1650,7 +1644,8 @@
   font-size: 13px;
 }
 
-.hbars__track {
+.hbars__track,
+.ubar__track {
   height: 8px;
   background: var(--surface-3);
   border-radius: var(--radius-xs);
@@ -1696,9 +1691,6 @@
 
 .ubar__track {
   position: relative;
-  height: 8px;
-  background: var(--surface-3);
-  border-radius: var(--radius-xs);
 }
 
 .ubar__tick {
@@ -1832,7 +1824,8 @@
   min-width: 0;
 }
 
-/* The conditions editor shares the pattern editor's box, rows, actions and refusal line, and its own line wraps. */
+/* The conditions editor draws its box, rows, actions and refusal line with the pattern editor's classes, and its own
+   line wraps. */
 .conditions-editor__line {
   display: flex;
   flex-wrap: wrap;
@@ -1899,12 +1892,6 @@
   display: inline-block;
   max-width: 100%;
   vertical-align: bottom;
-}
-
-.requests__client .sub {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* Time is the fill, the row's identity: it takes the free width, and the request id under the time ends in an ellipsis
@@ -2390,8 +2377,6 @@
 /* A leaf no wider than the room left of its host cuts its account short, and its name and popover keep the whole id. */
 .strip-candidate__account {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .strip-candidate.is-chosen {
@@ -2590,12 +2575,9 @@
   background: var(--accent-soft);
 }
 
-.decision-card__candidates .sub {
-  white-space: nowrap;
-}
-
-.decision-card__window,
-.decision-card__candidates td.num {
+.decision-card__candidates .sub,
+.decision-card__candidates td.num,
+.decision-card__window {
   white-space: nowrap;
 }
 
@@ -3287,7 +3269,6 @@
 
 @media (max-width: 720px) {
   .wbars,
-  .wbars--3,
   .req-totals {
     grid-template-columns: 1fr;
   }
@@ -3469,13 +3450,9 @@
 /* One line per idle-age bucket: the ages, the count and a bar of the rate, in columns wide enough for `16h to 32h`
    and `999 of 999` so the bars line up down the list. */
 .return-rate__rows {
-  display: flex;
-  flex-direction: column;
   gap: 4px;
-  padding: 0;
   margin: 4px 0 0;
   font-size: 12.5px;
-  list-style: none;
 }
 
 .return-rate__row {
@@ -3778,9 +3755,7 @@
   gap: 16px;
 }
 
-/* The body takes the frame's fixed height, so the footer stays at its foot whichever tab is shown. */
 .dialog--costs .dialog__body {
-  flex: 1 1 auto;
   padding-top: 0;
 }
 
@@ -3945,14 +3920,16 @@
   height: 8px;
 }
 
-.cost-ref__bar {
+.cost-ref__bar,
+.cost-ref__factor-bar {
   position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  min-width: 4px;
+  inset: 0 auto 0 0;
   background: var(--series-1);
   border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
+}
+
+.cost-ref__bar {
+  min-width: 4px;
 }
 
 /* Inside the band a 5-hour window holds part of its capacity: the whole window is the light bar, what it holds the
@@ -4086,13 +4063,6 @@
 .cost-ref__factor .cost-ref__val {
   grid-column: 2;
   margin-top: -4px;
-}
-
-.cost-ref__factor-bar {
-  position: absolute;
-  inset: 0 auto 0 0;
-  background: var(--series-1);
-  border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
 }
 
 @container (max-width: 760px) {

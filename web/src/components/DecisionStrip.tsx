@@ -276,7 +276,7 @@ export function DecisionStrip({ now, record, row }: { now: number; record: Decis
                   style={{ left: p.x, maxWidth: p.maxWidth, top: p.y - LEAF_HALF }}
                   {...handlers(anchor)}
                 >
-                  {l.accountId !== null && <span className="strip-candidate__account">{l.accountId}</span>}
+                  {l.accountId !== null && <span className="strip-candidate__account ellipsis">{l.accountId}</span>}
                   <Badge tone={l.tone}>{l.badge}</Badge>
                   {l.chip !== null && <ChipView chip={l.chip} />}
                 </button>

@@ -10222,7 +10222,7 @@ await readsAgain('/guardrails', 'listGuardrails', 5_000);
   const dlg = await editGuardrail(page, 'Subagent status summary');
   const labels = [...(dlg?.querySelectorAll('section.dialog-group') ?? [])].map((s) => s.getAttribute('aria-label'));
   const conditions = group(dlg, 'Conditions');
-  const subjects = [...(conditions?.querySelectorAll('.conditions-editor__row') ?? [])].map((row) => row.querySelector('select')?.value);
+  const subjects = [...(conditions?.querySelectorAll('.pattern-editor__row') ?? [])].map((row) => row.querySelector('select')?.value);
   const identity = group(dlg, 'Identity');
   const line = identity?.querySelector('.guardrails__preset > p');
   const pickers = [...(group(dlg, 'Applies to')?.querySelectorAll('button[aria-haspopup="dialog"]') ?? [])].map((b) => b.textContent?.trim());
@@ -10260,7 +10260,7 @@ await readsAgain('/guardrails', 'listGuardrails', 5_000);
   const notice = dlg?.querySelector('.guardrails__preset .callout')?.textContent ?? '';
   buttonIn(dlg, 'Update to the current preset')?.click();
   await page.settle(150);
-  const rows = group(dlg, 'Conditions')?.querySelectorAll('.conditions-editor__row').length ?? 0;
+  const rows = group(dlg, 'Conditions')?.querySelectorAll('.pattern-editor__row').length ?? 0;
   results.push({
     name: '/guardrails a stamp behind the build reads customized and update available, and the update takes the current conditions',
     ok: JSON.stringify(badges) === JSON.stringify(['customized', 'update available']) && notice.includes('This build ships version 2 of the preset.') && rows === 3 && (dlg?.textContent ?? '').includes('Saving takes version 2.'),
@@ -10364,7 +10364,7 @@ const conditionRead = (row, n) => {
   const read = (cell) => row?.querySelector(`[aria-label="Condition ${n} ${cell}"]`)?.value;
   return { name: read('header name'), operator: read('operator'), path: read('path'), selector: read('selector'), subject: read('subject'), value: read('value') };
 };
-const conditionRows = (dlg) => [...(group(dlg, 'Conditions')?.querySelectorAll('.conditions-editor__row') ?? [])];
+const conditionRows = (dlg) => [...(group(dlg, 'Conditions')?.querySelectorAll('.pattern-editor__row') ?? [])];
 {
   // The story's Large auxiliary requests holds two conditions, the second its body's max_tokens over 4096, so its copy
   // is a create with two. The route refuses a row it cannot read as `conditions[{i}]: {reason}`, here the reason its
@@ -10380,7 +10380,7 @@ const conditionRows = (dlg) => [...(group(dlg, 'Conditions')?.querySelectorAll('
   const rows = conditionRows(dlg);
   const read = {
     open: dlg?.hasAttribute('open') === true,
-    refusals: rows.map((r) => r.querySelector('.conditions-editor__refusal')?.textContent?.trim() ?? null),
+    refusals: rows.map((r) => r.querySelector('.pattern-editor__refusal')?.textContent?.trim() ?? null),
     refused: rows.map((r) => r.classList.contains('is-refused')),
     shown: [...(dlg?.querySelectorAll('section.dialog-group:not([hidden])') ?? [])].map((s) => s.getAttribute('aria-label')),
     toasts: page.container.querySelectorAll('.toast').length,

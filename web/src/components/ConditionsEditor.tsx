@@ -39,9 +39,9 @@ export function ConditionsEditor({ onChange, refusals, value }: { onChange: (c: 
   const { add, idOf, keys, move, remove, update } = useKeyedRows(value, onChange, blankCondition);
 
   return (
-    <div className="conditions-editor" role="group" aria-label="Conditions">
+    <div className="pattern-editor conditions-editor" role="group" aria-label="Conditions">
       {value.length > 0 && (
-        <ol className="plain-list conditions-editor__rows">
+        <ol className="plain-list pattern-editor__rows">
           {value.map((c, i) => {
             const key = keys[i];
             const n = i + 1;
@@ -50,7 +50,7 @@ export function ConditionsEditor({ onChange, refusals, value }: { onChange: (c: 
             const invalid = refusal === null ? undefined : true;
             const described = refusal === null ? undefined : `${refusalId}-${n}`;
             return (
-              <li key={key} className={`conditions-editor__row ${refusal ? 'is-refused' : ''}`}>
+              <li key={key} className={`pattern-editor__row ${refusal ? 'is-refused' : ''}`}>
                 <div className="conditions-editor__line">
                   <Select id={idOf(key)} aria-label={`Condition ${n} subject`} value={c.subject} onChange={(e) => update(i, withSubject(c, e.target.value as ConditionSubject))}>
                     {SUBJECTS.map((s) => (
@@ -97,12 +97,12 @@ export function ConditionsEditor({ onChange, refusals, value }: { onChange: (c: 
                     ) : (
                       <Input className="mono" aria-label={`Condition ${n} value`} placeholder={c.operator === 'matches' ? '^Describe' : 'Value'} spellCheck={false} autoComplete="off" value={c.value ?? ''} aria-invalid={invalid} aria-describedby={described} onChange={(e) => update(i, { ...c, value: e.target.value })} />
                     ))}
-                  <span className="conditions-editor__actions">
-                    <RowActions count={value.length} index={i} noun="condition" onMove={move} onRemove={remove} upClass="conditions-editor__up" />
+                  <span className="pattern-editor__actions conditions-editor__actions">
+                    <RowActions count={value.length} index={i} noun="condition" onMove={move} onRemove={remove} upClass="pattern-editor__up" />
                   </span>
                 </div>
                 {refusal && (
-                  <p id={`${refusalId}-${n}`} className="conditions-editor__refusal">
+                  <p id={`${refusalId}-${n}`} className="pattern-editor__refusal">
                     {refusal}
                   </p>
                 )}

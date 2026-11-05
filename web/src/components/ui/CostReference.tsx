@@ -79,7 +79,7 @@ export function CostReferenceLink({ tab }: { tab: CostTab }) {
           title="Cost reference"
           subtitle="What a million tokens costs: in dollars at list price, and as a share of a subscription window."
           width={1200}
-          className="dialog--costs"
+          className="dialog--costs dialog--fixed"
           footer={
             <>
               {union.length > 1 && (

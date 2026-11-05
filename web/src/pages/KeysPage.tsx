@@ -325,7 +325,7 @@ export function KeysPage() {
                           <td className="col-fit" title={k.expiresAt ? fmtAbsolute(k.expiresAt) : undefined}>{k.expiresAt ? fmtDate(k.expiresAt) : <span className="muted">Never</span>}</td>
                           <td className="col-fill">
                             <Badge tone={KEY_STATUS_TONE[k.status]} dot title={k.status} describe={false}>
-                              <span className="key-row__badge-label">{k.status}</span>
+                              <span className="key-row__badge-label ellipsis">{k.status}</span>
                             </Badge>
                             {k.lastUsedAt && <span className="sub" title={`used ${fmtRelative(k.lastUsedAt, now)}`}>used {fmtRelative(k.lastUsedAt, now)}</span>}
                             {/* The route answers 0 once the rotation grace has passed, so the page needs no clock of its own. */}

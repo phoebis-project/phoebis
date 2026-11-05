@@ -647,7 +647,7 @@ function AccountDetail({ account, awaitingReading, generation, now, onToast, onP
               {planExtra?.enabled && (
                 <>
                   <div className="wbar__head">
-                    <span className="wbar__label">
+                    <span className="wbar__label ellipsis">
                       Extra usage this month
                       {extra.inUse && (
                         <Badge tone="serious" title="Requests are currently billed as overage">
@@ -874,7 +874,7 @@ function AllowanceColumn({ account, costs, holder, week, window: w }: { account:
   return (
     <div className="allowance__col">
       <div className="wbar__head">
-        <span className="wbar__label">{windowLabelOf(w.window)}</span>
+        <span className="wbar__label ellipsis">{windowLabelOf(w.window)}</span>
         <AllowanceText className="wbar__pct num" figure={figure(latest)} />
       </div>
       {latest && (

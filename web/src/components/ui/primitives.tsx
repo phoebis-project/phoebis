@@ -869,7 +869,7 @@ export function GroupedDialog({
     <GroupChoice.Provider value={(id) => choose(id)}>
       <dialog
         ref={ref}
-        className="dialog dialog--grouped"
+        className="dialog dialog--grouped dialog--fixed"
         aria-labelledby={titleId}
         style={{ '--dialog-w': `${width}px` } as CSSProperties}
         onClick={onBackdrop}

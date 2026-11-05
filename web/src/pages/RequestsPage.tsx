@@ -458,7 +458,7 @@ export function RequestsPage() {
                             <td className="mono requests__client col-fit" title={r.client ?? undefined}>
                               {r.client === null ? <span className="muted">-</span> : <span className="requests__client-text ellipsis" title={r.client}>{r.client}</span>}
                               {r.agentType && (
-                                <span className="sub" title={r.agentType}>
+                                <span className="sub ellipsis" title={r.agentType}>
                                   {r.agentType}
                                 </span>
                               )}
@@ -970,7 +970,7 @@ function BodyBlock({ dropped, label, requestId, value }: { dropped?: number; lab
           onClose={() => setWide(false)}
           title={`${label} of ${shortId(requestId, HEAD_ID_CHARS)}`}
           width={1040}
-          className="dialog--wide"
+          className="dialog--wide dialog--fixed"
           footer={<CopyButton text={textOf} label="Copy all" />}
         >
           {findGroup(dialogFind, true)}

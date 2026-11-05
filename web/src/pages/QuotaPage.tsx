@@ -164,7 +164,7 @@ function ExtraUsageLine({ extra }: { extra: ExtraUsage | null }) {
         {extra && extra.enabled && extra.usedCredits !== null && extra.monthlyLimitCredits !== null && `${fmtCredits(extra.usedCredits)} / ${fmtCredits(extra.monthlyLimitCredits)}`}
         {state === 'in_use' ? <span className="chip__flag">{EXTRA_USAGE_WORD.in_use}</span> : <span>{EXTRA_USAGE_WORD[state]}</span>}
       </span>
-      {reason && <span className="qcard__extra-reason">{reason}</span>}
+      {reason && <span className="qcard__extra-reason ellipsis">{reason}</span>}
     </div>
   );
 }
@@ -266,7 +266,7 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
           {reading.lines.map((line, i) => (
             <span key={i} className={`qcard__poll ${line.tone === 'serious' ? 'qcard__backoff' : 'muted'}`} title={i === 0 && reading.title ? reading.title : undefined}>
               {line.text}
-              {line.reason !== undefined && <span className="qcard__reason">{line.reason}</span>}
+              {line.reason !== undefined && <span className="qcard__reason ellipsis">{line.reason}</span>}
             </span>
           ))}
         </div>

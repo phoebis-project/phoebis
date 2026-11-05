@@ -117,7 +117,7 @@ export function AttentionLine({ error, items, loadedAt, now, refresh }: { error:
     return (
       <div className="attention-line">
         <Badge tone="warning" title={title}>
-          <span className="attention-line__cut">Attention unavailable: {error}</span>
+          <span className="attention-line__cut ellipsis">Attention unavailable: {error}</span>
         </Badge>
       </div>
     );
