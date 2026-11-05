@@ -226,13 +226,6 @@ export function isReleasedLine(line: Pick<SessionLine, 'lifecycle'>): boolean {
 }
 
 /**
- * How many of a list's lines the view hides, which the Agents column and the Agents tile take off the engine's counts.
- */
-export function releasedCount(lines: readonly Pick<SessionLine, 'lifecycle'>[]): number {
-  return lines.filter(isReleasedLine).length;
-}
-
-/**
  * A session the engine is done with: the row's recipe summary reads the cause `session_ended` or `released`, each of
  * which drops every recipe of the session, or every line it draws is a released one. Such a session keeps its lines,
  * so its probe facts stay in view once it is shown.

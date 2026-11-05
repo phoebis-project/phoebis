@@ -120,17 +120,6 @@ test('requestsRange picks the narrowest range that covers the last request, with
   assert.equal(d.requestsRange(null, NOW), null);
 });
 
-test('releasedCount counts the released lines and nothing else, whatever released them', () => {
-  const at = ms(14, 20);
-  const live = [{ lifecycle: 'busy' }, { lifecycle: 'idle' }, { lifecycle: 'parked' }, { lifecycle: 'registered' }, { lifecycle: 'unknown' }, { lifecycle: null }];
-  assert.equal(d.releasedCount(live), 0);
-  assert.equal(d.releasedCount([live[0], { lifecycle: 'released' }, live[2], { lifecycle: 'released' }, live[5]]), 2);
-  assert.equal(d.releasedCount([{ lifecycle: 'released' }, { lifecycle: 'released' }, { lifecycle: 'released' }]), 3);
-  // The session's end released this line's agent, which the word alone tells.
-  const endedWith = line({ ...recipe('3e', 'released', at), cause: 'session_ended' }, null, 'released');
-  assert.deepEqual([d.isReleasedLine(endedWith), d.isReleasedLine(line(recipe('b4', 'busy', at), null, 'busy'))], [true, false]);
-});
-
 test('isFinished reads a session whose main ended with it or was released, or whose every line the mod released', () => {
   const session = (state, cause) => ({ keepalive: { cause, lastGuard: null, nextProbeAt: null, state } });
   assert.equal(d.isFinished(session('idle', 'session_ended'), [{ agentId: 'main', lifecycle: 'idle' }, { agentId: '3e', lifecycle: 'released' }]), true);
