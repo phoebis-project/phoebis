@@ -25,7 +25,8 @@ pub const PURGE_SLICE: usize = 1_000;
 /// writer's lock, and 32 MiB holds it well under `BUSY_TIMEOUT` at the slowest disk read, where an hourly pass of 1
 /// to 3 MB bodies held it 11 to 52 s. A body above the budget goes alone in a slice of its own, since a slice always
 /// takes its first body: up to `proxy.max_request_bytes` and the 8 MiB response cap, 40 MiB at the defaults, still
-/// well under the busy timeout.
+/// well under the busy timeout. A waiting write stops the slice after the body in progress, so the budget caps a
+/// slice in an idle hour.
 pub const PURGE_SLICE_BYTES: usize = 32 << 20;
 
 const DAY_S: i64 = 86_400;
@@ -158,18 +159,15 @@ pub fn run_retention_blocking(
     Ok(purged)
 }
 
-/// The bodies slice, ordered by the cutoff column the expiry index covers with `rowid` breaking ties: `ORDER BY rowid`
-/// alone plans as a scan of the table whatever index the filter has, and the slice would walk every row for its
-/// oldest thousand.
-pub(crate) const PURGE_BODIES: &str = "DELETE FROM bodies WHERE rowid IN (SELECT rowid FROM bodies WHERE expires_at <= ?1 ORDER BY expires_at, rowid LIMIT ?2)";
-
-/// The bodies `PURGE_BODIES` takes next, in its order, with their request rows' request counts and the stored
-/// responses' lengths. The join reads the bodies record's first column and the request row by its key, and SQLite
-/// answers `length()` of a blob from the record's header, so no blob is read: the record's own `request_len_seen` sits
-/// behind both blobs, and reading it would walk each row's overflow pages under the lock the budget exists to shorten.
-/// The request row's `response_bytes` counts what the caller received, while the bodies row keeps what the bus
-/// delivered up to the capture's bound, so a stored response counts at its own length.
-pub(crate) const EXPIRED_BODY_BYTES: &str = "SELECT r.id IS NOT NULL, r.request_bytes, length(b.response_body) FROM bodies b LEFT JOIN requests r ON r.id = b.request_id WHERE b.expires_at <= ?1 ORDER BY b.expires_at, b.rowid LIMIT ?2";
+/// The bodies the slice takes next with their rowids, their request rows' request counts and the stored responses'
+/// lengths, ordered by the cutoff column the expiry index covers with `rowid` breaking ties: `ORDER BY rowid` alone
+/// plans as a scan of the table whatever index the filter has, and the slice would walk every row for its oldest
+/// thousand. The join reads the bodies record's first column and the request row by its key, and SQLite answers
+/// `length()` of a blob from the record's header, so no blob is read: the record's own `request_len_seen` sits behind
+/// both blobs, and reading it would walk each row's overflow pages under the lock the budget exists to shorten. The
+/// request row's `response_bytes` counts what the caller received, while the bodies row keeps what the bus delivered
+/// up to the capture's bound, so a stored response counts at its own length.
+pub(crate) const EXPIRED_BODY_BYTES: &str = "SELECT b.rowid, r.id IS NOT NULL, r.request_bytes, length(b.response_body) FROM bodies b LEFT JOIN requests r ON r.id = b.request_id WHERE b.expires_at <= ?1 ORDER BY b.expires_at, b.rowid LIMIT ?2";
 
 /// What one body frees: the request as its row counts it, received whole since the capture never cuts it, at
 /// `MAX_CAPTURED_BODY` where the count is null, and the stored response at its length, 0 where none was stored. A body
@@ -188,20 +186,39 @@ fn body_bytes(request_row: bool, request: Option<i64>, response: Option<i64>) ->
     request.saturating_add(response)
 }
 
-/// How many of the bodies `PURGE_BODIES` takes next fit the byte budget, at least one, and whether a body read past
-/// them was left outside it.
-fn bodies_within_budget(tx: &Transaction<'_>, now: i64) -> Result<(usize, bool), LedgerError> {
-    let mut stmt = tx.prepare(EXPIRED_BODY_BYTES)?;
-    let mut rows = stmt.query(params![now, PURGE_SLICE as i64])?;
-    let (mut within, mut bytes) = (0, 0usize);
-    while let Some(row) = rows.next()? {
-        bytes = bytes.saturating_add(body_bytes(row.get(0)?, row.get(1)?, row.get(2)?));
-        if within > 0 && bytes > PURGE_SLICE_BYTES {
-            return Ok((within, true));
+/// Deletes the expired bodies the byte budget admits, oldest first, one statement per body, and stops after the body
+/// in progress once `waiting` answers true. The budget admits the longest prefix within `PURGE_SLICE_BYTES`, at least
+/// one body. Answers the bodies deleted and whether this read left expired bodies behind, a body read past the budget
+/// or an admitted one the yield left. A read of a full `PURGE_SLICE` sees no body past it, so the caller's count
+/// answers that case.
+fn delete_bodies(
+    tx: &Transaction<'_>,
+    now: i64,
+    waiting: &dyn Fn() -> bool,
+) -> Result<(usize, bool), LedgerError> {
+    // The read ends before the first delete: a row deleted under a running select leaves undefined what it reads next.
+    let (mut admitted, mut left_outside) = (Vec::new(), false);
+    {
+        let mut stmt = tx.prepare(EXPIRED_BODY_BYTES)?;
+        let mut rows = stmt.query(params![now, PURGE_SLICE as i64])?;
+        let mut bytes = 0usize;
+        while let Some(row) = rows.next()? {
+            bytes = bytes.saturating_add(body_bytes(row.get(1)?, row.get(2)?, row.get(3)?));
+            if !admitted.is_empty() && bytes > PURGE_SLICE_BYTES {
+                left_outside = true;
+                break;
+            }
+            admitted.push(row.get::<_, i64>(0)?);
         }
-        within += 1;
     }
-    Ok((within, false))
+    let mut delete = tx.prepare("DELETE FROM bodies WHERE rowid = ?1")?;
+    for (deleted, rowid) in admitted.iter().enumerate() {
+        if deleted > 0 && waiting() {
+            return Ok((deleted, true));
+        }
+        delete.execute([rowid])?;
+    }
+    Ok((admitted.len(), left_outside))
 }
 
 /// The attempts of the requests `PURGE_REQUESTS` selects next in the same transaction, so a request row never
@@ -223,8 +240,9 @@ pub(crate) const PURGE_DECISIONS: &str = "DELETE FROM decisions WHERE rowid IN (
 /// One transaction under the purger over at most `PURGE_SLICE` rows of one family, selected by rowid, a bodies slice
 /// freeing about `PURGE_SLICE_BYTES` with the stored response counted at its length, a body above it alone in its
 /// slice, so the writer waits behind one slice at most and the slice holds the lock for a fraction of the busy timeout.
-/// Adds what it deleted to `purged` and answers whether the family has more rows to purge in this pass: a full slice
-/// means another may follow.
+/// A bodies slice ends after the body in progress once a write is waiting, so that write waits for one body at most.
+/// Adds what it deleted to `purged` and answers whether the family has more rows to purge in this pass: a full slice,
+/// or a bodies slice cut short, means another may follow.
 fn purge_slice(
     db: &LedgerDb,
     family: Family,
@@ -233,7 +251,7 @@ fn purge_slice(
     now: i64,
     purged: &mut Purged,
 ) -> Result<bool, LedgerError> {
-    db.purge(|conn| {
+    db.purge_yielding(|conn, waiting| {
         let tx = begin_write(conn)?;
         let slice = PURGE_SLICE as i64;
         let cut = |sql: &str, counter: &mut usize| -> Result<usize, LedgerError> {
@@ -241,15 +259,14 @@ fn purge_slice(
             *counter += n;
             Ok(n)
         };
-        // A bodies slice that stopped at the byte budget left rows it read, so its family repeats short of a full
-        // slice.
+        // A bodies slice that stopped at the byte budget or for a waiting write left expired bodies behind, so its
+        // family repeats short of a full slice.
         let mut over_budget = false;
         // Each arm adds to its family's counters and yields the count of the statement its slice bounds.
         let selected = match family {
             Family::Bodies => {
-                let (within, left_outside) = bodies_within_budget(&tx, now)?;
-                over_budget = left_outside;
-                let bodies = tx.execute(PURGE_BODIES, params![now, within as i64])?;
+                let (bodies, left) = delete_bodies(&tx, now, waiting)?;
+                over_budget = left;
                 purged.bodies += bodies;
                 bodies
             }
@@ -361,7 +378,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = LedgerDb::open(&dir.path().join("ledger.sqlite")).unwrap();
         for (sql, index) in [
-            (PURGE_BODIES, "INDEX bodies_expires"),
             (EXPIRED_BODY_BYTES, "INDEX bodies_expires"),
             (PURGE_ATTEMPTS, "INDEX requests_received"),
             (PURGE_REQUESTS, "INDEX requests_received"),
@@ -583,5 +599,36 @@ mod tests {
             ],
         );
         assert_eq!(take(&db), (owned(&["no-response", "byte"]), false));
+    }
+
+    #[test]
+    fn a_write_begun_after_the_handoff_ends_a_bodies_slice_after_the_body_in_progress() {
+        let (_dir, db) = ledger();
+        let ids = ["b1", "b2", "b3", "b4", "b5"];
+        let bodies: Vec<_> = ids.iter().map(|id| (*id, Some(Some(1)), None)).collect();
+        expired(&db, &bodies);
+        // On a file ledger the write takes the writer's mutex, apart from the purger's the slice holds.
+        let slice = |write: bool| {
+            db.purge_yielding(|conn, waiting| {
+                let tx = begin_write(conn)?;
+                if write {
+                    db.write(|_| Ok(()))?;
+                }
+                let deleted = delete_bodies(&tx, NOW, waiting)?;
+                tx.commit()?;
+                Ok(deleted)
+            })
+            .unwrap()
+        };
+        assert_eq!(
+            slice(true),
+            (1, true),
+            "the write waits for one body, and the other four wait for the next slice"
+        );
+        assert_eq!(
+            slice(false),
+            (4, false),
+            "with no write begun, the next slice takes the rest"
+        );
     }
 }

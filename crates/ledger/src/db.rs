@@ -96,9 +96,10 @@ pub(crate) struct ParkedRow {
 /// SQLite's busy handler retries a waiting write on a backoff that grows to 100 ms, while back-to-back slices free
 /// the lock for microseconds between them: a write left to the handler alone waits out most of a pass, and past the
 /// busy timeout its batch fails into the writer's retries. So a slice starts only once every write begun before it
-/// has ended, and a batch waits one slice at most. The handoff works in one direction: after its wait the purge's
-/// `BEGIN IMMEDIATE` competes with the next batch under SQLite's busy backoff, so a writer landing batches back to
-/// back can push a slice past the 5 s busy timeout, and the pass ends logged until the next hour.
+/// has ended, and a batch waits one slice at most. The handoff works in one direction, a bodies slice alone giving
+/// way between two bodies to a write that began after its handoff: after its wait the purge's `BEGIN IMMEDIATE`
+/// competes with the next batch under SQLite's busy backoff, so a writer landing batches back to back can push a
+/// slice past the 5 s busy timeout, and the pass ends logged until the next hour.
 #[derive(Default)]
 struct Writes {
     begun: AtomicU64,
@@ -319,14 +320,25 @@ impl LedgerDb {
         &self,
         f: impl FnOnce(&mut Connection) -> Result<T, LedgerError>,
     ) -> Result<T, LedgerError> {
-        // A write that met the previous slice's lock goes first; see `Writes`.
+        self.purge_yielding(|conn, _| f(conn))
+    }
+
+    /// `purge` with the handoff's reading passed in: `waiting()` answers whether a write began through `write` past
+    /// the count the handoff waited on, so a write that began during the wait, which the wait did not cover, counts
+    /// as waiting too. A slice that reads it between two rows can commit and let that write go first.
+    pub fn purge_yielding<T>(
+        &self,
+        f: impl FnOnce(&mut Connection, &dyn Fn() -> bool) -> Result<T, LedgerError>,
+    ) -> Result<T, LedgerError> {
+        // A write that met the previous slice's lock goes first, as `Writes` says.
         let begun = self.writes.begun.load(Ordering::SeqCst);
         while self.writes.ended.load(Ordering::SeqCst) < begun {
             std::thread::sleep(Duration::from_millis(1));
         }
+        let waiting = || self.writes.begun.load(Ordering::SeqCst) > begun;
         let purger = self.purger.as_ref().unwrap_or(&self.writer);
         let mut conn = recovered(purger);
-        f(&mut conn)
+        f(&mut conn, &waiting)
     }
 
     /// Runs `PRAGMA optimize` on the purger connection under the purge handoff, answers whether `sqlite_stat1` changed,

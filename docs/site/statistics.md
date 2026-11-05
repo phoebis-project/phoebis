@@ -465,9 +465,10 @@ the new figures.
 A routing decision leaves in the purge that takes its request. One whose request never landed leaves at the same age.
 
 The purge that enforces these runs once an hour on its own connection, in slices of 1,000 rows per transaction. A slice
-of captured bodies frees about 32 MiB beside the 1,000 rows, so the writer waits behind one slice at most and never
-behind a whole pass, and the day's cut costs the WAL one slice at a time. A body above 32 MiB goes alone in a slice of
-its own, since a slice always takes its first body, at most `proxy.max_request_bytes` plus the 8 MiB response cap. Every
+of captured bodies frees about 32 MiB beside the 1,000 rows and deletes its bodies one at a time, ending after the body
+in progress once a write is waiting, so the writer waits behind one slice of rows or one body at most and never behind a
+whole pass, and the day's cut costs the WAL one slice at a time. A body above 32 MiB goes alone in a slice of its own,
+since a slice always takes its first body, at most `proxy.max_request_bytes` plus the 8 MiB response cap. Every
 five-minute poll's reading is kept for `stats.retention_days`, so an idle account adds 288 quota rows per window per
 day. The same pass cuts the registry's history at the requests' cutoff, in slices of 1,000 rows: its resolved credential
 refresh attempts and its change log. It keeps what is read whatever its age: an attempt whose outcome is still

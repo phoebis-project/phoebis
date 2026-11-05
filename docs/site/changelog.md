@@ -542,7 +542,9 @@ and the count answers the fallbacks in range, a request that presented a refusal
 digest beside the refused attempt's, and the request log filters on it ([Refused
 requests](statistics.md#refused-requests)). The `slowed_long` condition holds on the time the slow-down held the
 account's requests over the trailing day, against twice the stretch and at least an hour, and names the held time and
-the requests held ([Conditions and gauges](statistics.md#conditions-and-gauges)).
+the requests held ([Conditions and gauges](statistics.md#conditions-and-gauges)). The hourly purge's slice of captured
+bodies ends after the body in progress once a write is waiting, so a write waits for one body at most
+([Retention](statistics.md#retention)).
 
 Every price is computed when it is read, from the token counts the ledger stores, at the price revision in force when
 the request arrived. The price table and the subscription cost model are revision lists keyed by effective date, the

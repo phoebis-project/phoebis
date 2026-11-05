@@ -16,8 +16,7 @@ use phoebis_store::AccountKind;
 use rusqlite::{params, params_from_iter};
 
 use crate::bodies::{
-    EXPIRED_BODY_BYTES, PURGE_ATTEMPTS, PURGE_BODIES, PURGE_DECISIONS, PURGE_REQUESTS,
-    PURGE_REQUEST_GUARDRAILS,
+    EXPIRED_BODY_BYTES, PURGE_ATTEMPTS, PURGE_DECISIONS, PURGE_REQUESTS, PURGE_REQUEST_GUARDRAILS,
 };
 use crate::db::{begin_write, insert_decision_in, ANALYSIS_LIMIT, LANDING_STAMP_SQL};
 use crate::query::{
@@ -473,14 +472,12 @@ const PURGE_BINDS: (i64, i64) = (TO, 1_000);
 #[test]
 fn the_bodies_purge_slice_keeps_its_plan_under_statistics() {
     let (_dir, db) = seeded();
-    for sql in [PURGE_BODIES, EXPIRED_BODY_BYTES] {
-        let steps = plan(&db, sql, PURGE_BINDS);
-        assert!(
-            seeks(&steps, "bodies_expires", &["expires_at<?"])
-                && !walks(&steps, &["bodies", "b", "requests", "r"]),
-            "{sql}: {steps:?}"
-        );
-    }
+    let steps = plan(&db, EXPIRED_BODY_BYTES, PURGE_BINDS);
+    assert!(
+        seeks(&steps, "bodies_expires", &["expires_at<?"])
+            && !walks(&steps, &["bodies", "b", "requests", "r"]),
+        "{steps:?}"
+    );
 }
 
 #[test]
