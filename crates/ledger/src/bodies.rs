@@ -607,14 +607,17 @@ mod tests {
         let ids = ["b1", "b2", "b3", "b4", "b5"];
         let bodies: Vec<_> = ids.iter().map(|id| (*id, Some(Some(1)), None)).collect();
         expired(&db, &bodies);
-        // On a file ledger the write takes the writer's mutex, apart from the purger's the slice holds.
+        // On a file ledger the write takes the writer's mutex, apart from the purger's the slice holds. The slice reads
+        // inside the write's closure, so the write has begun and not ended while it reads, as a batch blocked on the
+        // slice's lock has.
         let slice = |write: bool| {
             db.purge_yielding(|conn, waiting| {
                 let tx = begin_write(conn)?;
-                if write {
-                    db.write(|_| Ok(()))?;
-                }
-                let deleted = delete_bodies(&tx, NOW, waiting)?;
+                let deleted = if write {
+                    db.write(|_| delete_bodies(&tx, NOW, waiting))?
+                } else {
+                    delete_bodies(&tx, NOW, waiting)?
+                };
                 tx.commit()?;
                 Ok(deleted)
             })
