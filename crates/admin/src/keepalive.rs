@@ -7,8 +7,13 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use phoebis_keepalive::{IdleReturns, Wasted, IDLE_AGE_BOUNDS_SECONDS};
+use phoebis_attention::{KeepaliveCap, KeepaliveFacts, KeepaliveStanding};
+use phoebis_keepalive::{
+    Engine, EngineStats, IdleReturns, KeepaliveLimits, KeepalivePolicy, Wasted,
+    IDLE_AGE_BOUNDS_SECONDS,
+};
 use phoebis_ledger::{hour_of, read_overview_rollups, UNATTRIBUTED};
+use phoebis_routing::RouterHandle;
 use utoipa::ToSchema;
 
 use crate::analytics::ledger_failure;
@@ -27,6 +32,8 @@ pub(crate) struct KeepaliveOverview {
     /// The times the keepalive engine found it had missed bus events.
     pub bus_gaps: u64,
     pub expired_between_turns_24h: u64,
+    /// The last gap's instant, null before the first gap.
+    pub last_bus_gap_at: Option<i64>,
     /// `agents`, `retained_bytes` and `sessions`, each a `count` of what its cap bounds, where an ended session
     /// holds no slot, beside the `max` the bootstrap file's `keepalive` block sets.
     pub limits: OverviewLimits,
@@ -78,6 +85,43 @@ pub(crate) struct IdleReturn {
     pub returned: u64,
     /// Null on the last bucket.
     pub to_seconds: Option<u64>,
+}
+
+/// The engine as the attention reader sees it: the counters and the caps the overview answers, and whether a pool's
+/// policy warms caches, read off the router's snapshot as the engine reads a pool's policy
+/// (`KeepalivePolicy::from_json`).
+pub struct EngineFacts {
+    pub engine: Arc<Engine>,
+    pub router: RouterHandle,
+}
+
+impl KeepaliveFacts for EngineFacts {
+    fn standing(&self) -> KeepaliveStanding {
+        let stats = self.engine.stats();
+        KeepaliveStanding {
+            bus_gaps: stats.bus_gaps,
+            last_bus_gap_at: stats.last_bus_gap_at,
+            caps: caps_of(&stats, self.engine.limits())
+                .into_iter()
+                .map(|(name, count, max)| KeepaliveCap { name, count, max })
+                .collect(),
+            warming: self
+                .router
+                .snapshot()
+                .pools()
+                .any(|pool| KeepalivePolicy::from_json(&pool.keepalive_json).enabled),
+        }
+    }
+}
+
+/// The three caps as `(name, count, max)`, which the overview's `limits` and the reader's standing both read, so the
+/// two never count a cap differently.
+fn caps_of(stats: &EngineStats, limits: &KeepaliveLimits) -> [(&'static str, usize, usize); 3] {
+    [
+        ("sessions", stats.live_sessions, limits.max_sessions),
+        ("agents", stats.agents, limits.max_agents),
+        ("retained", stats.retained_bytes, limits.max_retained_bytes),
+    ]
 }
 
 /// `recipes`, one row per agent that has sent a real request.
@@ -217,24 +261,17 @@ pub(crate) async fn overview(
         })
         .collect();
     let stats = state.keepalive.stats();
-    let limits = state.keepalive.limits();
+    let [sessions, agents, retained] =
+        caps_of(&stats, state.keepalive.limits()).map(|(_, count, max)| Limit { count, max });
     Json(KeepaliveOverview {
         agents: state.keepalive.agent_counts(),
         bus_gaps: stats.bus_gaps,
         expired_between_turns_24h: expired,
+        last_bus_gap_at: stats.last_bus_gap_at,
         limits: OverviewLimits {
-            agents: Limit {
-                count: stats.agents,
-                max: limits.max_agents,
-            },
-            retained_bytes: Limit {
-                count: stats.retained_bytes,
-                max: limits.max_retained_bytes,
-            },
-            sessions: Limit {
-                count: stats.live_sessions,
-                max: limits.max_sessions,
-            },
+            agents,
+            retained_bytes: retained,
+            sessions,
         },
         pools,
         probes_24h: probes,
@@ -254,6 +291,7 @@ mod tests {
         agents: AgentCountsView,
         bus_gaps: u64,
         expired_between_turns_24h: u64,
+        last_bus_gap_at: Option<i64>,
         limits: super::OverviewLimits,
         pools: Vec<super::PoolKeepalive>,
         probes_24h: ProbeCountsView,

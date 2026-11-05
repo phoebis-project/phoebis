@@ -10,8 +10,8 @@ use axum::Router;
 use fake_upstream::{wait_for, FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_admin::{
-    router, AdminState, OldTotals, PairingVault, Readiness, SessionSpendFold, Sessions,
-    SettingsView, TlsReload,
+    router, AdminState, EngineFacts, OldTotals, PairingVault, Readiness, SessionSpendFold,
+    Sessions, SettingsView, TlsReload,
 };
 use phoebis_attention::{Attention, AttentionHandles, AttentionParts, TlsPairs};
 use phoebis_bus::Bus;
@@ -1218,6 +1218,10 @@ async fn build_app_bounded(
     let (attention, attention_handles) = phoebis_attention::spawn(AttentionParts {
         bus: bus.clone(),
         clock: clock.clone(),
+        keepalive: Some(Arc::new(EngineFacts {
+            engine: keepalive.clone(),
+            router: router_handle.clone(),
+        })),
         ledger: Some(ledger.clone()),
         router: router_handle.clone(),
         store: store.clone(),

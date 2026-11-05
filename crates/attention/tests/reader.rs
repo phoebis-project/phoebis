@@ -1,7 +1,8 @@
-//! The sixteen conditions through the reader: each kind's hold and clear, the series at 0 for a subject in the clear,
+//! The nineteen conditions through the reader: each kind's hold and clear, the series at 0 for a subject in the clear,
 //! the router's own components among them, a deleted subject's series gone unless a parked record still names it, a
 //! refresh run read back by a second reader, a listener's pair read on the read's clock, an unpriced model the
-//! ledger's landing saw, and the gauge the metrics listener scrapes from the same read.
+//! ledger's landing saw, the keepalive engine's standing, and the gauge the metrics listener scrapes from the same
+//! read.
 mod common;
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,8 +12,8 @@ use axum::http::Request;
 use common::*;
 use http_body_util::BodyExt;
 use phoebis_attention::{
-    Attention, AttentionError, Condition, Kind, Link, PairFacts, Subject, SubjectKind,
-    BACKOFF_ATTENTION_AFTER_MS,
+    Attention, AttentionError, Condition, KeepaliveCap, Kind, Link, PairFacts, Subject,
+    SubjectKind, BACKOFF_ATTENTION_AFTER_MS,
 };
 use phoebis_bus::{Event, Kind as RequestKind, Origin, Outcome, ResponseChunk};
 use phoebis_ledger::{
@@ -2379,5 +2380,163 @@ async fn a_revision_that_weights_the_model_clears_its_item_at_the_next_landing_a
     assert!(
         text.contains(r#"phoebis_attention{kind="model_unpriced",subject="claude-opus-5"} 0"#),
         "the cleared model reads 0 under the same labels rather than vanishing: {text}"
+    );
+}
+
+#[tokio::test]
+async fn a_keepalive_cap_holds_its_item_from_ninety_percent_of_its_max() {
+    let rig = rig().await;
+    let standing = Arc::new(Standing::default());
+    let (attention, _arm) = rig.attention_with_keepalive(standing.clone());
+    let fill = |count| {
+        standing.0.lock().unwrap().caps = vec![KeepaliveCap {
+            name: "sessions",
+            count,
+            max: 100,
+        }];
+    };
+    fill(89);
+    assert!(
+        !find(
+            &read(&attention, NOW),
+            Kind::KeepaliveCap,
+            "keepalive.sessions"
+        )
+        .unwrap()
+        .holds,
+        "89 of 100 sits under the bar"
+    );
+    fill(90);
+    let conditions = read(&attention, NOW + MINUTE);
+    let cap = find(&conditions, Kind::KeepaliveCap, "keepalive.sessions").unwrap();
+    assert_eq!(
+        (
+            cap.holds,
+            cap.since,
+            &cap.subject,
+            cap.pools.is_empty(),
+            &cap.link,
+            &cap.detail
+        ),
+        (
+            true,
+            Some(NOW + MINUTE),
+            &Subject {
+                kind: SubjectKind::Router,
+                id: "keepalive.sessions".into(),
+                label: "Keepalive".into(),
+            },
+            true,
+            &None,
+            &json!({ "cap": "sessions", "count": 90, "max": 100, "pct": 0.9 })
+        ),
+        "90 of 100 raises the item, dated by the read that first saw it"
+    );
+}
+
+#[tokio::test]
+async fn a_bus_gap_holds_its_item_for_a_day_and_clears_after() {
+    let rig = rig().await;
+    let standing = Arc::new(Standing::default());
+    let (attention, _arm) = rig.attention_with_keepalive(standing.clone());
+    let gap_at = |at| {
+        let mut standing = standing.0.lock().unwrap();
+        standing.bus_gaps = 1;
+        standing.last_bus_gap_at = Some(at);
+    };
+    let holds = |at| {
+        find(&read(&attention, at), Kind::KeepaliveBusGaps, "keepalive")
+            .unwrap()
+            .holds
+    };
+    assert!(!holds(NOW), "no gap raises nothing");
+    gap_at(NOW - DAY - MINUTE);
+    assert!(!holds(NOW), "a gap a day and a minute old raises nothing");
+    gap_at(NOW - DAY + MINUTE);
+    let conditions = read(&attention, NOW);
+    let gap = find(&conditions, Kind::KeepaliveBusGaps, "keepalive").unwrap();
+    assert_eq!(
+        (gap.holds, gap.since, &gap.detail),
+        (
+            true,
+            Some(NOW),
+            &json!({ "gaps": 1, "last_at": NOW - DAY + MINUTE })
+        ),
+        "a gap 23 hours and 59 minutes old raises the item, dated by the read that first saw it"
+    );
+    let later = read(&attention, NOW + 2 * MINUTE);
+    let gap = find(&later, Kind::KeepaliveBusGaps, "keepalive").unwrap();
+    assert_eq!(
+        (gap.holds, gap.since),
+        (false, None),
+        "a day after the last gap the item clears"
+    );
+}
+
+/// A finished request of pool `main` whose serving attempt read nothing from the cache under the miss reason `none`,
+/// which the ledger's rollup counts as a cache entry that expired between turns.
+fn expired_turn(id: &str) -> Record {
+    Record::Request {
+        request: RequestRecord {
+            id: id.into(),
+            received_at: NOW,
+            finished_at: Some(NOW + 500),
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            canonical_model: "claude-sonnet-5".into(),
+            model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        attempts: vec![AttemptRecord {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: "business".into(),
+            account_kind: AccountKind::Oauth,
+            started_at: NOW,
+            outcome: "succeeded".into(),
+            input_tokens: Some(1_000),
+            cache_read_tokens: Some(0),
+            cache_miss_reason: Some("none".into()),
+            ..Default::default()
+        }],
+        bodies: None,
+    }
+}
+
+#[tokio::test]
+async fn expiries_between_turns_hold_their_item_only_while_a_pool_warms_caches() {
+    let rig = rig().await;
+    let standing = Arc::new(Standing::default());
+    standing.0.lock().unwrap().warming = true;
+    let (attention, _arm) = rig.attention_with_keepalive(standing.clone());
+    rig.ledger.record_request(expired_turn("r1")).await;
+    // The rollup lands after the call returns, so the read waits for the item rather than for the call.
+    let warm = fake_upstream::wait_for(Duration::from_secs(5), || {
+        let conditions = read(&attention, NOW);
+        find(&conditions, Kind::ExpiredBetweenTurns, "keepalive")
+            .is_some_and(|c| c.holds)
+            .then_some(conditions)
+    })
+    .await;
+    assert_eq!(
+        find(&warm, Kind::ExpiredBetweenTurns, "keepalive")
+            .unwrap()
+            .detail,
+        json!({ "expired": 1 })
+    );
+    standing.0.lock().unwrap().warming = false;
+    assert!(
+        !find(
+            &read(&attention, NOW),
+            Kind::ExpiredBetweenTurns,
+            "keepalive"
+        )
+        .unwrap()
+        .holds,
+        "with no pool warming caches the same expiry raises nothing"
     );
 }

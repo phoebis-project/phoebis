@@ -45,6 +45,7 @@ use phoebis_store::{NewBundle, Store};
 use phoebis_transport::control::ControlClient;
 
 pub use guardrails::SAMPLE_PAGE;
+pub use keepalive::EngineFacts;
 pub use lifetime::OldTotals;
 pub use pricing::table_envelopes;
 pub use readiness::Readiness;

@@ -9,7 +9,8 @@ use std::time::Duration;
 use anyhow::{anyhow, Context};
 use axum::Router;
 use phoebis_admin::{
-    AdminState, OldTotals, PairingVault, Readiness, SessionSpendFold, Sessions, SettingsView,
+    AdminState, EngineFacts, OldTotals, PairingVault, Readiness, SessionSpendFold, Sessions,
+    SettingsView,
 };
 use phoebis_bus::Bus;
 use phoebis_keepalive::{
@@ -357,6 +358,10 @@ pub async fn run_until(
         phoebis_attention::spawn(phoebis_attention::AttentionParts {
             bus: bus.clone(),
             clock: clock.clone(),
+            keepalive: Some(Arc::new(EngineFacts {
+                engine: keepalive.clone(),
+                router: router_task.clone(),
+            })),
             ledger: Some(ledger.clone()),
             router: router_task.clone(),
             store: store.clone(),

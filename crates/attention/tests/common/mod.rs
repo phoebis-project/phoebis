@@ -7,7 +7,10 @@ use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
 use fake_upstream::FakeUpstream;
-use phoebis_attention::{Attention, AttentionHandles, AttentionParts, PairFacts, TlsPairs};
+use phoebis_attention::{
+    Attention, AttentionHandles, AttentionParts, KeepaliveFacts, KeepaliveStanding, PairFacts,
+    TlsPairs,
+};
 use phoebis_bus::{
     Bus, Event, Kind as RequestKind, Origin, Outcome, RequestComplete, RequestObserved,
     RequestShape, ResponseFacts,
@@ -69,9 +72,27 @@ impl Rig {
         usage: Option<Arc<UsageService>>,
         tls: Option<Arc<dyn TlsPairs>>,
     ) -> (Arc<Attention>, AttentionHandles) {
+        self.attention_over(usage, tls, None)
+    }
+
+    /// The reader over a keepalive standing the case holds.
+    pub fn attention_with_keepalive(
+        &self,
+        keepalive: Arc<dyn KeepaliveFacts>,
+    ) -> (Arc<Attention>, AttentionHandles) {
+        self.attention_over(None, None, Some(keepalive))
+    }
+
+    fn attention_over(
+        &self,
+        usage: Option<Arc<UsageService>>,
+        tls: Option<Arc<dyn TlsPairs>>,
+        keepalive: Option<Arc<dyn KeepaliveFacts>>,
+    ) -> (Arc<Attention>, AttentionHandles) {
         phoebis_attention::spawn(AttentionParts {
             bus: self.bus.clone(),
             clock: self.clock(),
+            keepalive,
             ledger: Some(self.ledger.clone()),
             router: self.router.clone(),
             store: self.store.clone(),
@@ -97,6 +118,16 @@ impl Pairs {
 
 impl TlsPairs for Pairs {
     fn pairs(&self) -> Vec<PairFacts> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+/// The engine's standing as a case sets it, read whole on every call as the engine's would be.
+#[derive(Default)]
+pub struct Standing(pub Mutex<KeepaliveStanding>);
+
+impl KeepaliveFacts for Standing {
+    fn standing(&self) -> KeepaliveStanding {
         self.0.lock().unwrap().clone()
     }
 }

@@ -10832,6 +10832,7 @@ export const FIXTURES: Record<string, Fixture> = {
       },
       "bus_gaps": 0,
       "expired_between_turns_24h": 0,
+      "last_bus_gap_at": null,
       "limits": {
         "agents": {
           "count": 3,

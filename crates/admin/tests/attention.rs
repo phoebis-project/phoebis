@@ -378,6 +378,27 @@ async fn nothing_held_answers_an_empty_list() {
 }
 
 #[tokio::test]
+async fn a_bus_gap_of_the_running_engine_raises_the_keepalive_item_with_its_count_and_instant() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = parts.clock_cell.load(Ordering::SeqCst);
+    parts.keepalive.bus_gap(1, 0);
+    let body = json(get(&parts.app, "/admin/attention", Some(&cookie)).await).await;
+    assert_eq!(
+        body,
+        j!({ "items": [{
+            "kind": "keepalive_bus_gaps",
+            "subject": { "type": "router", "id": "keepalive", "label": "Keepalive" },
+            "link": null,
+            "pools": [],
+            "since": now,
+            "detail": { "gaps": 1, "last_at": now },
+        }] }),
+        "the route reads the gap off the engine the harness runs, dated by the engine's clock"
+    );
+}
+
+#[tokio::test]
 async fn a_failed_holder_read_answers_500_rather_than_an_empty_list() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;

@@ -472,6 +472,8 @@ pub struct EngineParts {
 pub struct EngineStats {
     pub agents: usize,
     pub bus_gaps: u64,
+    /// The last bus gap's instant, `None` before the first.
+    pub last_bus_gap_at: Option<i64>,
     /// The request events (a selection, a head, a chunk, a completion, a new request) and the reports refused because
     /// they arrived after the shutdown's quiesce, so the state the last save holds is the state at the quiesce.
     pub late_updates: u64,
@@ -1358,6 +1360,8 @@ pub(crate) struct Inner {
     pub skipped: Vec<Skipped>,
     /// Bus gaps seen by the observer; each one discarded every observation that was still pending.
     pub bus_gaps: u64,
+    /// The last gap's instant, so a reader can tell a recent gap from one long past.
+    pub last_bus_gap_at: Option<i64>,
     pub next_incarnation: u64,
     /// The engine's timing, copied onto every agent it creates.
     pub timing: KeepaliveTiming,
@@ -1539,6 +1543,7 @@ impl Engine {
         EngineStats {
             agents: inner.agent_count(),
             bus_gaps: inner.bus_gaps,
+            last_bus_gap_at: inner.last_bus_gap_at,
             late_updates: inner.late_updates,
             live_sessions: inner.sessions.values().filter(|s| !s.ended).count(),
             retained_bytes: inner.retained,
@@ -1631,6 +1636,7 @@ impl Inner {
             settlements_after_save: Vec::new(),
             skipped: Vec::new(),
             bus_gaps: 0,
+            last_bus_gap_at: None,
             next_incarnation: 0,
             timing,
             limits,
@@ -2666,6 +2672,7 @@ impl Engine {
     pub fn bus_gap(&self, dropped: u64, backlog: usize) {
         let mut inner = self.lock();
         inner.bus_gaps += 1;
+        inner.last_bus_gap_at = Some(self.now());
         self.gap_backlog.store(backlog, Ordering::SeqCst);
         tracing::warn!(
             dropped,

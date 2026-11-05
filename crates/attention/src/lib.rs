@@ -8,8 +8,9 @@ use std::sync::{Arc, Mutex};
 
 use phoebis_bus::{spawn_subscriber, Bus, Delivery, Event};
 use phoebis_ledger::{
-    parked_summary, routing_conditions, AttentionGaugeSource, AttentionGauges, Ledger, LedgerError,
-    ParkedSummary, RoutingCondition,
+    hour_end, hour_of, parked_summary, read_overview_rollups, routing_conditions,
+    AttentionGaugeSource, AttentionGauges, Connection, Ledger, LedgerError, ParkedSummary,
+    RoutingCondition,
 };
 use phoebis_oauth::{Clock, UsageService};
 use phoebis_routing::RouterHandle;
@@ -47,13 +48,40 @@ pub trait TlsPairs: Send + Sync {
     fn pairs(&self) -> Vec<PairFacts>;
 }
 
+/// What the keepalive engine stands at when a read runs: the gap counter and the last gap's instant, the three caps
+/// and whether a pool's policy warms caches. Behind a trait, so this crate names no keepalive type, as `TlsPairs`
+/// keeps the listeners out of it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct KeepaliveStanding {
+    pub bus_gaps: u64,
+    pub last_bus_gap_at: Option<i64>,
+    /// `sessions`, `agents`, `retained`, in that order, each its count against its max.
+    pub caps: Vec<KeepaliveCap>,
+    /// A pool whose keepalive policy is on exists.
+    pub warming: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeepaliveCap {
+    pub name: &'static str,
+    pub count: usize,
+    pub max: usize,
+}
+
+pub trait KeepaliveFacts: Send + Sync {
+    fn standing(&self) -> KeepaliveStanding;
+}
+
 pub struct AttentionParts {
     pub bus: Bus,
     pub clock: Clock,
-    /// The ledger's degraded flag, its parked rows, the unpriced models its landing saw and the routing conditions
-    /// its fold wrote. `None` where a harness builds no ledger, and then `writer_degraded` for the ledger reads 0 and
-    /// none of `ledger_record_parked`, `model_unpriced`, `meter_drift`, `wall_reached`, `destination_spent`,
-    /// `shed_no_runway` and `slowed_long` has a series.
+    /// The keepalive engine's standing, `None` where a harness builds no engine, and then none of
+    /// `keepalive_bus_gaps`, `keepalive_cap` and `expired_between_turns` has a series.
+    pub keepalive: Option<Arc<dyn KeepaliveFacts>>,
+    /// The ledger's degraded flag, its parked rows, the unpriced models its landing saw, the routing conditions its
+    /// fold wrote and the expiries between turns its rollups count. `None` where a harness builds no ledger, and then
+    /// `writer_degraded` for the ledger reads 0 and none of `ledger_record_parked`, `model_unpriced`, `meter_drift`,
+    /// `wall_reached`, `destination_spent`, `shed_no_runway`, `slowed_long` and `expired_between_turns` has a series.
     pub ledger: Option<Ledger>,
     pub router: RouterHandle,
     pub store: Arc<Store>,
@@ -82,6 +110,7 @@ pub enum AttentionError {
 /// The one reader both the metrics listener and the admin route ask, with the request-fed state the bus arm writes.
 pub struct Attention {
     clock: Clock,
+    keepalive: Option<Arc<dyn KeepaliveFacts>>,
     ledger: Option<Ledger>,
     router: RouterHandle,
     state: Mutex<ReaderState>,
@@ -95,19 +124,14 @@ impl Attention {
     /// on the runtime: the ledger read waits for its connection there, where a wait holds no blocking worker, and the
     /// rest runs on a blocking worker, since the registry's reads are SQLite reads that stay off the runtime thread.
     pub async fn conditions(self: &Arc<Self>, now: i64) -> Result<Vec<Condition>, AttentionError> {
-        // The parked rows and the fold's table share one read, so a call waits on the reader pool once. The parked
-        // rows are read from the file on every call, as `refresh_failed` reads the registry, so the condition holds
-        // across a restart and clears on its own when the next start or a replay lands the rows. The fold's table is
-        // one lookup, since the ledger folds the routing log into it hourly and at start rather than on this read. A
-        // read that fails fails the whole answer, as the refresh read's does: a scrape never reports clear what it
-        // could not read.
+        // The parked rows, the fold's table and the expiries between turns share one read, so a call waits on the
+        // reader pool once. The parked rows are read from the file on every call, as `refresh_failed` reads the
+        // registry, so the condition holds across a restart and clears on its own when the next start or a replay
+        // lands the rows. The fold's table is one lookup, since the ledger folds the routing log into it hourly and at
+        // start rather than on this read. A read that fails fails the whole answer, as the refresh read's does: a
+        // scrape never reports clear what it could not read.
         let ledger = match &self.ledger {
-            Some(ledger) => Some(
-                ledger
-                    .db()
-                    .read(|c| Ok((parked_summary(c)?, routing_conditions(c)?)))
-                    .await?,
-            ),
+            Some(ledger) => Some(ledger.db().read(move |c| ledger_facts(c, now)).await?),
             None => None,
         };
         let attention = Arc::clone(self);
@@ -123,23 +147,22 @@ impl Attention {
         let ledger = self
             .ledger
             .as_ref()
-            .map(|ledger| {
-                ledger
-                    .db()
-                    .read_blocking(|c| Ok((parked_summary(c)?, routing_conditions(c)?)))
-            })
+            .map(|ledger| ledger.db().read_blocking(|c| ledger_facts(c, now)))
             .transpose()?;
         self.conditions_over(ledger, now)
     }
 
-    /// The conditions over the ledger's parked rows and routing conditions, read before this runs so a read waiting on
-    /// a reader connection never holds the bus arm's `observe` behind the state lock.
+    /// The conditions over the ledger's parked rows, routing conditions and expiries between turns, read before this
+    /// runs so a read waiting on a reader connection never holds the bus arm's `observe` behind the state lock.
     fn conditions_over(
         &self,
-        ledger: Option<(Vec<ParkedSummary>, Vec<RoutingCondition>)>,
+        ledger: Option<LedgerFacts>,
         now: i64,
     ) -> Result<Vec<Condition>, AttentionError> {
-        let (parked, routing) = ledger.unzip();
+        let (parked, routing, expired) = match ledger {
+            Some((parked, routing, expired)) => (Some(parked), Some(routing), Some(expired)),
+            None => (None, None, None),
+        };
         // The registry's reads come before the lock for the same reason: a stalled registry file holds the store's
         // connection mutex, and `observe` waits on this lock.
         let accounts = self.store.accounts()?;
@@ -147,6 +170,8 @@ impl Attention {
         // The pairs before the lock too: their lock is the router's, which a reload holds across a whole load from
         // disk.
         let pairs = self.tls.as_ref().map(|tls| tls.pairs());
+        // The engine's standing before the lock too, since it waits on the engine's own lock.
+        let keepalive = self.keepalive.as_ref().map(|k| k.standing());
         let unpriced = self
             .ledger
             .as_ref()
@@ -164,6 +189,8 @@ impl Attention {
             routing.as_deref(),
             pairs.as_deref(),
             self.usage.as_deref(),
+            keepalive.as_ref(),
+            expired,
             now,
         )
     }
@@ -194,6 +221,20 @@ impl Attention {
     }
 }
 
+/// What a read takes from the ledger: the parked rows, the fold's routing conditions and the expiries between turns.
+type LedgerFacts = (Vec<ParkedSummary>, Vec<RoutingCondition>, u64);
+
+/// The ledger's part of a read, on one connection. The expiries span the hours the keepalive overview sums, so the item
+/// and the overview count the same rows.
+fn ledger_facts(c: &Connection, now: i64) -> Result<LedgerFacts, LedgerError> {
+    let hour = hour_of(now);
+    Ok((
+        parked_summary(c)?,
+        routing_conditions(c)?,
+        read_overview_rollups(c, hour - 24 * 3_600, hour_end(hour))?.0,
+    ))
+}
+
 /// The bus arm's task, so the binary's teardown can end it.
 pub struct AttentionHandles {
     arm: JoinHandle<()>,
@@ -220,6 +261,7 @@ pub fn spawn(parts: AttentionParts) -> (Arc<Attention>, AttentionHandles) {
     let subscriber = parts.bus.subscribe("attention", Delivery::BestEffort);
     let attention = Arc::new(Attention {
         clock: parts.clock,
+        keepalive: parts.keepalive,
         ledger: parts.ledger,
         router: parts.router,
         state: Mutex::new(ReaderState::default()),

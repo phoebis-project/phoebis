@@ -100,7 +100,7 @@ pub use record::{
 pub use refold::refold_bands;
 pub use rollup::{
     bucket_of, deltas_of, detail_json, fold_account, fold_effort, fold_event, fold_identifier,
-    fold_keepalive, fold_request, fold_routing_conditions, fold_user_agent, hour_of,
+    fold_keepalive, fold_request, fold_routing_conditions, fold_user_agent, hour_end, hour_of,
     read_account_rollups, read_overview_rollups, read_rollups, read_rollups_paged,
     AccountRollupRow, CostSplit, KeySelector, OverviewRollupRow, RollupRow, RollupSelect,
     RoutingKind, BILLED_FUNDING, CEILING_SETTING, DIMENSION_MAX_BYTES, EXPIRED_BETWEEN_TURNS,

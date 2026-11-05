@@ -1,8 +1,9 @@
-//! The sixteen conditions, read fresh on every call: the account states and the pools from the registry, the refresh
-//! runs from the store, the parked records, the ledger's degraded state, the unpriced models its landing saw and
-//! the routing conditions its hourly fold wrote from the ledger, the routing state writer's and the listeners' pairs
-//! from the router, the poll's standing from the usage service, and the exhaustions and drift refusals from the
-//! request outcomes the bus arm keeps.
+//! The nineteen conditions, read fresh on every call: the account states and the pools from the registry, the refresh
+//! runs from the store, the parked records, the ledger's degraded state, the unpriced models its landing saw, the
+//! routing conditions its hourly fold wrote and the expiries between turns its rollups count from the ledger, the
+//! routing state writer's and the listeners' pairs from the router, the bus gaps and the caps from the keepalive
+//! engine, the poll's standing from the usage service, and the exhaustions and drift refusals from the request
+//! outcomes the bus arm keeps.
 
 use std::collections::{HashMap, HashSet};
 
@@ -19,7 +20,7 @@ use phoebis_store::{
 };
 use serde_json::json;
 
-use crate::{AttentionError, PairFacts};
+use crate::{AttentionError, KeepaliveStanding, PairFacts};
 
 /// How long after a run's first 429 the poll backoff condition holds, so a single 429 or a short run never reads 1.
 pub const BACKOFF_ATTENTION_AFTER_MS: i64 = 30 * 60 * 1_000;
@@ -38,6 +39,9 @@ const UNKNOWN_VERSION: &str = "unknown";
 /// The subject of the parked records served under no pool; no pool id can read `-`.
 const NO_POOL: &str = "-";
 
+/// The keepalive engine's subject, and the stem of its caps' subjects.
+const KEEPALIVE: &str = "keepalive";
+
 /// The subject of a drift refusal whose version does not read as a release, so a malformed or oversized label shares
 /// one series.
 const OTHER_VERSION: &str = "other";
@@ -53,12 +57,14 @@ const RELEASE_VERSION_MAX_BYTES: usize = 32;
 /// back), a listener serving a pair whose replacement did not load (the next start would refuse the files as they
 /// stand), an account that serves nothing until the operator acts, an account's credential about to lapse, the
 /// router's own certificate about to lapse, priced records the ledger file keeps until the next start or a replay
-/// lands them, windows that read stale, a model that served plan-funded traffic and prices nothing, while nothing is
-/// broken, and an account whose meter charged its windows off the cost model's figures. That last one names a pricing
-/// that is off and ranks above the four routing conditions, whose causes it can explain. Those four stop no
-/// traffic and rank under every kind that does, worst first among themselves: an account that reached its wall, a move
-/// whose destination was spent within the hour, a pool whose rounds found no destination with runway, and an account
-/// slowed past twice its pool's stretch threshold in the day, a slow-down that worked for long.
+/// lands them, a keepalive engine that missed bus events in the last day, windows that read stale, a model that served
+/// plan-funded traffic and prices nothing, while nothing is broken, and an account whose meter charged its windows off
+/// the cost model's figures. That last one names a pricing that is off and ranks above the four routing conditions,
+/// whose causes it can explain. Those four stop no traffic and rank under every kind that does, worst first among
+/// themselves: an account that reached its wall, a move whose destination was spent within the hour, a pool whose
+/// rounds found no destination with runway, and an account slowed past twice its pool's stretch threshold in the day,
+/// a slow-down that worked for long. The keepalive engine's two warnings rank last: a cap filled to 90 percent or
+/// more, then cache entries that expired between turns while a pool warms caches.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind {
     PoolExhausted,
@@ -70,6 +76,7 @@ pub enum Kind {
     RefreshFailed,
     CertificateExpiring,
     LedgerRecordParked,
+    KeepaliveBusGaps,
     PollBackoff,
     ModelUnpriced,
     MeterDrift,
@@ -77,6 +84,8 @@ pub enum Kind {
     DestinationSpent,
     ShedNoRunway,
     SlowedLong,
+    KeepaliveCap,
+    ExpiredBetweenTurns,
 }
 
 impl Kind {
@@ -91,6 +100,7 @@ impl Kind {
             Kind::RefreshFailed => "refresh_failed",
             Kind::CertificateExpiring => "certificate_expiring",
             Kind::LedgerRecordParked => "ledger_record_parked",
+            Kind::KeepaliveBusGaps => "keepalive_bus_gaps",
             Kind::PollBackoff => "poll_backoff",
             Kind::ModelUnpriced => "model_unpriced",
             Kind::MeterDrift => RoutingKind::MeterDrift.as_str(),
@@ -98,6 +108,8 @@ impl Kind {
             Kind::DestinationSpent => RoutingKind::DestinationSpent.as_str(),
             Kind::ShedNoRunway => RoutingKind::ShedNoRunway.as_str(),
             Kind::SlowedLong => RoutingKind::SlowedLong.as_str(),
+            Kind::KeepaliveCap => "keepalive_cap",
+            Kind::ExpiredBetweenTurns => "expired_between_turns",
         }
     }
 
@@ -114,7 +126,8 @@ pub enum SubjectKind {
     Client,
     Pool,
     /// One of the process's own components: the ledger or the routing state writer, a listener's pair by its key
-    /// (`proxy.tls`, `admin.tls`), or `-` for a parked record served under no pool.
+    /// (`proxy.tls`, `admin.tls`), the keepalive engine (`keepalive`, and `keepalive.<cap>` for one of its caps), or
+    /// `-` for a parked record served under no pool.
     Router,
     /// A model by its undated id.
     Model,
@@ -133,7 +146,8 @@ impl SubjectKind {
 }
 
 /// What a condition is about: the account's or the pool's id and label, the client version as both, the router's own
-/// component as both, or a model's undated id as both.
+/// component as both, except the keepalive engine's subjects, which share the label `Keepalive`, or a model's undated
+/// id as both.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Subject {
     pub kind: SubjectKind,
@@ -175,6 +189,14 @@ impl Subject {
             kind: SubjectKind::Router,
             id: component.into(),
             label: component.into(),
+        }
+    }
+
+    fn keepalive(id: &str) -> Subject {
+        Subject {
+            kind: SubjectKind::Router,
+            id: id.into(),
+            label: "Keepalive".into(),
         }
     }
 
@@ -501,7 +523,9 @@ pub(crate) fn refresh_runs(
 /// (`wall_reached`, `destination_spent`, `shed_no_runway` and `slowed_long`) then have a series. Where one is built,
 /// `destination_spent` stops holding once a `window_cleared` followed its spent window. `pairs` is `None`
 /// where no listener is built, and neither certificate kind then has a series. `unpriced` is the ledger's map, empty
-/// where no ledger is built.
+/// where no ledger is built. `keepalive` is `None` where no engine is built, and none of `keepalive_bus_gaps`,
+/// `keepalive_cap` and `expired_between_turns` then has a series. `expired` is the ledger's count of expiries between
+/// turns over the last 24 hours, `None` where no ledger is built, and `expired_between_turns` then has no series.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn conditions(
     state: &mut ReaderState,
@@ -514,6 +538,8 @@ pub(crate) fn conditions(
     routing: Option<&[RoutingCondition]>,
     pairs: Option<&[PairFacts]>,
     usage: Option<&UsageService>,
+    keepalive: Option<&KeepaliveStanding>,
+    expired: Option<u64>,
     now: i64,
 ) -> Result<Vec<Condition>, AttentionError> {
     let snapshot = router.snapshot();
@@ -744,6 +770,63 @@ pub(crate) fn conditions(
     }
     if let Some(rows) = routing {
         out.extend(routing_conditions(&snapshot, &pools_of, accounts, rows));
+    }
+    if let Some(standing) = keepalive {
+        // `bus_gaps` counts since the start, so the item reads the last gap's instant: on the counter alone it would
+        // stand until a restart.
+        let gapped = standing.last_bus_gap_at.is_some_and(|at| now - at < DAY_MS);
+        out.push(condition_for(
+            Kind::KeepaliveBusGaps,
+            Subject::keepalive(KEEPALIVE),
+            None,
+            gapped,
+            since_of(
+                state,
+                &mut seen,
+                Kind::KeepaliveBusGaps,
+                KEEPALIVE,
+                gapped,
+                now,
+            ),
+            json!({ "gaps": standing.bus_gaps, "last_at": standing.last_bus_gap_at }),
+        ));
+        for cap in &standing.caps {
+            let id = format!("{KEEPALIVE}.{}", cap.name);
+            let full = cap.max > 0 && cap.count * 100 >= cap.max * 90;
+            // NaN has no JSON number, so a max of 0 reads 0.
+            let pct = if cap.max == 0 {
+                0.0
+            } else {
+                cap.count as f64 / cap.max as f64
+            };
+            out.push(condition_for(
+                Kind::KeepaliveCap,
+                Subject::keepalive(&id),
+                None,
+                full,
+                since_of(state, &mut seen, Kind::KeepaliveCap, &id, full, now),
+                json!({ "cap": cap.name, "count": cap.count, "max": cap.max, "pct": pct }),
+            ));
+        }
+        if let Some(expired) = expired {
+            // Without a pool that warms caches, an entry expiring between turns is the expected course.
+            let holds = expired > 0 && standing.warming;
+            out.push(condition_for(
+                Kind::ExpiredBetweenTurns,
+                Subject::keepalive(KEEPALIVE),
+                None,
+                holds,
+                since_of(
+                    state,
+                    &mut seen,
+                    Kind::ExpiredBetweenTurns,
+                    KEEPALIVE,
+                    holds,
+                    now,
+                ),
+                json!({ "expired": expired }),
+            ));
+        }
     }
     // A cleared state, a deleted account and an account that changed kind all lose their first-seen time, so the
     // next holding read dates the state afresh.

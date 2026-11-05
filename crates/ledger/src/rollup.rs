@@ -129,6 +129,13 @@ pub fn hour_of(at_ms: i64) -> i64 {
     at_ms.div_euclid(1_000).div_euclid(3_600) * 3_600
 }
 
+/// The end of the hour that starts at `hour`, where a read up to the current hour ends rather than at
+/// `hour_ceil(now)`, which is `now` itself on the hour's first millisecond and would leave out the hour a request just
+/// landed in.
+pub fn hour_end(hour: i64) -> i64 {
+    hour + 3_600
+}
+
 pub fn bucket_of(at_ms: i64) -> i64 {
     at_ms.div_euclid(1_000).div_euclid(300) * 300
 }
