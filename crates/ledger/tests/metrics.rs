@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use common::*;
-use fake_upstream::{FakeUpstream, Rule};
+use fake_upstream::{FakeUpstream, Respond, Rule};
 use phoebis_bus::SubscriberStats;
 use phoebis_ledger::{
     AttemptRecord, AttentionGaugeSource, AttentionGauges, LedgerConfig, Metrics, PriceRevisions,
@@ -822,6 +822,78 @@ fn a_heads_shared_window_the_newest_clean_polls_set_lacks_sets_no_series() {
         ),
         "a head sets the 5-hour window once a clean poll carries it again"
     );
+}
+
+#[tokio::test]
+async fn a_heads_7d_oi_reading_and_a_later_polls_fable_week_leave_one_fable_series_at_the_polls_value(
+) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![
+                (
+                    "anthropic-ratelimit-unified-5h-utilization".into(),
+                    "0.4".into(),
+                ),
+                (
+                    "anthropic-ratelimit-unified-7d_oi-utilization".into(),
+                    "0.9".into(),
+                ),
+            ],
+            body:
+                br#"{"id":"msg_1","type":"message","usage":{"input_tokens":1,"output_tokens":1}}"#
+                    .to_vec(),
+        },
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-opus-4-7[1m]", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let gauges = RoutingGauges {
+        live_accounts: BTreeSet::from(["a".to_string()]),
+        ..RoutingGauges::default()
+    };
+    let utilization = || -> BTreeSet<String> {
+        h.metrics
+            .render(&gauges, &[], 0)
+            .lines()
+            .filter(|l| l.starts_with("phoebis_account_ratelimit_utilization{"))
+            .map(str::to_string)
+            .collect()
+    };
+    let five_hour = r#"phoebis_account_ratelimit_utilization{account="a",window="five_hour"} 0.4"#;
+    // The head's windows land in one batch, and its 5-hour series is set whichever key its week takes, so the wait
+    // ends at the landing under either filing.
+    wait_for(Duration::from_secs(5), || {
+        utilization().contains(five_hour).then_some(())
+    })
+    .await;
+    h.metrics.observe_samples(
+        &[QuotaSampleRecord {
+            account_id: "a".into(),
+            window: "seven_day_fable".into(),
+            utilization: Some(0.6),
+            source: SampleSource::Poll,
+            ..Default::default()
+        }],
+        true,
+    );
+    assert_eq!(
+        utilization(),
+        BTreeSet::from([
+            five_hour.to_string(),
+            r#"phoebis_account_ratelimit_utilization{account="a",window="seven_day_fable"} 0.6"#
+                .to_string(),
+        ]),
+        "the head's week and the poll's are one series, which the later poll sets"
+    );
+    up.shutdown().await;
 }
 
 #[test]

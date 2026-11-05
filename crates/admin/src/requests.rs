@@ -274,8 +274,9 @@ pub(crate) struct Attempt {
     pub service_tier: Option<String>,
     pub client_drift: Option<String>,
     pub cooldown_set: Option<CooldownSet>,
-    /// The head's `5h`, `7d` and `7d_oi`, answered under the usage endpoint's keys as the quota samples are, each
-    /// present only when the head carried it.
+    /// The head's `5h`, `7d` and `7d_oi`, answered under the usage endpoint's keys, each present only when the head
+    /// carried it. The `7d_oi` pair answers under `seven_day_overage_included`, the key its row's columns are named
+    /// for, while the quota samples file the head's `7d_oi` as the Fable week.
     pub windows: Vec<AttemptWindow>,
     pub overage_in_use: Option<bool>,
     /// The serving account's class at the attempt, false on a row from before the router recorded it.
@@ -750,8 +751,9 @@ fn attempt_json(a: &AttemptRecord, r: &RequestRecord, prices: &PriceRevisions) -
             resets_at: reset,
         })
     };
-    // The attempt's columns hold the head's `5h`, `7d` and `7d_oi`, answered under the usage endpoint's keys as
-    // the quota samples are.
+    // The attempt's columns hold the head's `5h`, `7d` and `7d_oi`, answered under the usage endpoint's keys. The
+    // `7d_oi` pair keeps `seven_day_overage_included`, the key the columns are named for, while the quota samples file
+    // the head's `7d_oi` as the Fable week.
     let windows: Vec<AttemptWindow> = [
         window(FIVE_HOUR, a.ratelimit_5h_utilization, a.ratelimit_5h_reset),
         window(SEVEN_DAY, a.ratelimit_7d_utilization, a.ratelimit_7d_reset),

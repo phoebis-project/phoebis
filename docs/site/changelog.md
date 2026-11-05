@@ -544,7 +544,9 @@ requests](statistics.md#refused-requests)). The `slowed_long` condition holds on
 account's requests over the trailing day, against twice the stretch and at least an hour, and names the held time and
 the requests held ([Conditions and gauges](statistics.md#conditions-and-gauges)). The hourly purge's slice of captured
 bodies ends after the body in progress once a write is waiting, so a write waits for one body at most
-([Retention](statistics.md#retention)).
+([Retention](statistics.md#retention)). A response head's `7d_oi` window is filed as the Fable week, so a head and a
+poll of one bucket write one Fable row and the gauge holds one Fable series ([Quota
+samples](statistics.md#quota-samples)).
 
 Every price is computed when it is read, from the token counts the ledger stores, at the price revision in force when
 the request arrived. The price table and the subscription cost model are revision lists keyed by effective date, the

@@ -146,8 +146,8 @@ endpoint, every five minutes (300 seconds) per OAuth account with each account o
 fills the gaps an idle account leaves, is the only source of extra-usage credit totals, and hands every clean reading
 to the router. The poll's lines on each account card, Refresh and Refresh all are on [Quota](console.md#quota).
 
-A sample's window is one of the endpoint's keys: `five_hour`, `seven_day`, `seven_day_overage_included` (the head's
-overage-included week), `seven_day_fable` (the `limits` window) and any other `seven_day_*` key the poll reports. The
+A sample's window is one of the endpoint's keys: `five_hour`, `seven_day`, `seven_day_fable` (the poll's `limits` window
+and the head's `7d_oi` week, which share one row per bucket) and any other `seven_day_*` key the poll reports. The
 metric's `window` label uses the same spelling, and the console draws the windows it knows under its own labels and any
 other key as it is. A head and a poll of the same five-minute bucket write one row per window, the head's where both
 read it. The extra-usage rows are keyed by the source too, so a head and a poll of one bucket each keep a row, and
@@ -155,10 +155,8 @@ read it. The extra-usage rows are keyed by the source too, so a head and a poll 
 share as a fraction from both sources, the poll's percent divided by a hundred as on its quota rows. A poll's row also
 carries the body's `spend` figures where the body has the object: the cap and the spend in minor units, the percent, the
 currency and its exponent. A usage-based seat's head row carries no in-use flag, since the seat's overage family is its
-spend window. The account view answers the head's `seven_day_overage_included` and the poll's `seven_day_fable` under
-the one id `seven_day_fable`, the newest reading winning, while the ledger keeps the head's key as stored. The head's
-overage-included week is read as the 7-day Fable until a second model week arrives by head, since the upstream's name
-for it is generic.
+spend window. The account view answers the head's and the poll's Fable week under the one id `seven_day_fable`, the
+newest reading winning, and a row an earlier build stored under `seven_day_overage_included` answers under the same id.
 
 The usage endpoint is also read once at startup for every OAuth account with a credential, before the proxy listener
 accepts requests and bounded by `routing.startup_fetch_seconds`, so selection holds a sample per account from the first
