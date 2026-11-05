@@ -25,7 +25,7 @@ const OUTCOME_LABEL: Record<AttemptOutcome, string> = {
   upstream_error: 'upstream error',
 };
 
-export const statusTone = (status: number | null): BadgeTone => (status === null ? 'neutral' : status === 200 ? 'good' : status === 429 ? 'warning' : status === 529 ? 'serious' : 'critical');
+const statusTone = (status: number | null): BadgeTone => (status === null ? 'neutral' : status === 200 ? 'good' : status === 429 ? 'warning' : status === 529 ? 'serious' : 'critical');
 
 export function StatusBadge({ status, attempts = 1 }: { attempts?: number; status: number | null }) {
   return (
