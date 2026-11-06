@@ -184,8 +184,8 @@ the sessions block ([API reference](api-reference.md), [Installation](installati
 [Keepalive](keepalive.md#in-the-console)). A row also carries the newest client request's `user_agent`, the session's
 spend over its life under its key as `spend`, its client requests of the last 24 hours by class and their spend as
 `day`, whether its pin's account still holds the prompt cache as `warm`, its requests per agent and model as
-`agent_requests` and main's lifecycle word as `lifecycle`, and each agent line carries its agent's own `lifecycle` and
-its pin's burn per hour as `burn`, `burn_unit`, `burn_window`, `burn_equivalent` and `burn_at` ([API
+`agent_requests` and main's lifecycle word as `lifecycle`, and each agent line carries its pin's burn per hour as
+`burn`, `burn_unit`, `burn_window`, `burn_equivalent` and `burn_at` and its agent's own `lifecycle` ([API
 reference](api-reference.md)). The admin API is documented by an OpenAPI document the router serves, with an interactive
 reference page on the admin listener ([API reference](api-reference.md)). The account's `has_extra_usage_enabled` reads
 the stored profile's `organization` member, as its rate-limit tier does ([API reference](api-reference.md)). The account
@@ -379,96 +379,97 @@ out, with its last request's age under it ([Sessions](console.md#sessions)). The
 lifecycle word, `busy`, `idle`, `parked`, `registered`, `released` or `unknown`, `finished` on a finished session and
 `unreported` where no mod reports it or the engine holds no record of main, with `seen {ago}` or `silent {span}` under
 it on a companion session, and its Agents cell counts the agents by their words ([Sessions](console.md#sessions)). The
-Sessions view lists the sessions the router lists, a session no companion reports only while the later of its last use
-and its last request is within the non-companion timeout, one row each, with Session, Status, Agents, Model, Account,
-Requests, Cost, Last used and Cache shown by default and Companion, Context, Created, Effort, Key, Last request, Next
-probe and Runway through the Columns control, Context and Effort read from main's conversation pin
-([Sessions](console.md#sessions)). The Sessions view orders its rows through the filter bar's sort control by Created,
-Last activity, Cost or Requests, newest or largest first by default ([Sessions](console.md#sessions)). The Sessions
-view's filters, carried in its address, stand in two groups under one rule: a session is listed when it passes every
-Session filter (Active within, Client, Companion, Finished sessions, Forked sessions, Key, Pool and Slowed) and one of
-its agent lines passes every Agents filter (Account, Agent type, Cache, Effort, Model, Released agents and Status), a
-finished session staying hidden unless Finished sessions stands ([Sessions](console.md#sessions)). While an Agents
-filter stands on the Sessions view, its chip ends in `(any agent)`, the count reads `{k} matching agents`, and an open
-row lists its matching agents with the others under `{k} agents hidden by the filters`, which opens them
-([Sessions](console.md#sessions)). The cost reference's Windows by tier draws the Interactive regime's rows first under
-a headline naming its clients and the base rows under Headless, its Peak band card says which traffic the band applies
-to, and Plan rates' Regime control reads Interactive and Headless ([The cost reference](console.md#the-cost-reference)).
-The Settings page's About card lists the session expiry and the non-companion timeout, the two keys of the `sessions`
-block, each as a duration with its seconds beside it and its hover naming the key ([Settings](console.md#settings)). The
-Settings page's About card names the bootstrap's body capture limit beside its two retention lines
-([Settings](console.md#settings)). A decision card's cache-map row folds a record of four entries or more to one chip
-per tier with the count and the depth range and the latest three depths, behind a control that lists every entry
-([Routing log](console.md#routing-log)). An event panel's When reads in the viewer's zone, and a shedding round's
-Rewrite cell names the window as the cost figures do ([Routing log](console.md#routing-log)). A renewal after a hold
-carries the wait it followed on its card ([Routing log](console.md#routing-log)). A guardrail's update records each
-changed field with its value before and after, as an account's, a key's or a pool's update does ([Routing
-log](console.md#routing-log)). A request refused before it resolved a model reads a dash in the Routing log's Model
-cell, as it does on the Requests view ([Routing log](console.md#routing-log)). The candidate table of a routing
-decision, "Candidates, by rank", lists the chosen member first and the ranked members by rank ([Routing
-log](console.md#routing-log)). The pick line of a decision names the tied accounts, the runway that narrowed them and
-whether a draw chose among them ([Routing log](console.md#routing-log)). The registry's change log records an edit of a
-pool, a key or an account as each changed field's value before and after, an account edit that replaced the secret says
-so without its value, and a registry change's Account cell links the account or the key it edited ([Routing
-log](console.md#routing-log)). A pool save that changes nothing writes no change row and no event, so the change log
-shows real changes alone ([Routing log](console.md#routing-log)). The Routing log draws a guardrail block's refusal
-record with the guardrail's name as a second chip ([Routing log](console.md#routing-log)). The Routing log draws a pool
-save's keepalive policy as dotted fields ([Routing log](console.md#routing-log)). The routing log lists a failed usage
-poll as `poll failed` and a stream cut after its head as `stream interrupted`, and a shedding round that walks no pin
-and leaves one out off the window that fired reads `off window` ([Routing log](console.md#routing-log)). The routing log
-lists an account whose plan ended as `plan ended` and the plan's return as `plan restored`, each with the read's source
-and the profile's organization type, rate-limit tier and subscription status ([Routing log](console.md#routing-log)).
-The Routing log reads a backoff's close by its cause, Resumed under a clean poll and Ended by the plan's end under the
-plan's end ([Routing log](console.md#routing-log)). The Routing log's Pace cell and hover read a lapsed usage-based
-seat's remaining share as a percent ([Routing log](console.md#routing-log)). The Routing log's window reset panel reads
-Read from, the usage sample or the clock walk ([Routing log](console.md#routing-log)). The Meter view badges a ratio
-only where the priced share reaches the rise's floor ([Meter](console.md#meter)). The Meter view in the Diagnostics
-group lists every subscription account's completed windows of the last 30 days grouped by account and window kind, the
-weekly windows apart, each group collapsed to its latest ratio, its off count and a 30-day ratio spark, and the Meter
-drift condition opens it on the account ([Dashboard](console.md#dashboard), [Meter](console.md#meter)). A confirmation
-toast shows ahead of the failures queued behind the one on screen. A whole-day or whole-hour duration drops its zero
-part, so three whole days read `3d` and an hour `1h`. Every data table alternates its row tone, with a hovered or
-selected row reading over it ([The console](console.md)). The page behind an open dialog holds still and keeps its
-scroll position. The embedded console builds on Node 26 or later, which the build script checks before npm runs
-([Installation](installation.md#build)). A pool's change rows name each keepalive policy member they moved as
-`keepalive.<member>`, and a new pool's row lists the policy ([Console](console.md#routing-log)). A Team or Enterprise
-seat prices under its tier word where the cost table holds it, and the log says when it does not
-([Pairing](pairing.md#account-states)). A plan-ended account answers the plan and the tier its last profile named, its
-earlier readings keeping the plan they were priced under ([Pairing](pairing.md#account-states)). `POST /admin/keys` and
-the key edit refuse an unknown member with `400` as the pool routes do ([API reference](api-reference.md)). A pool or
-key edit, or a guardrail create or edit, that would also take a list past 64 guardrails answers its stale stamp, its
-missing id or its refused member before the bound ([Pools](routing.md#pools), [Keys](routing.md#keys)). The Dashboard's
-account cards and the Accounts list keep a slot for a window the account's poll does not carry, "none" muted in the
-share's place with the window's words on hover, "no 5-hour window" on an approved Ultra account, the Quota cards keep
-the window's row with the same words muted, and an account whose poll has read no window reads "not read" on the
-Dashboard's cards and the Accounts list ([Dashboard](console.md#dashboard), [Accounts](console.md#accounts),
-[Quota](console.md#quota)). The top bar's Week control reads a subscription figure as a share of the Pro, Max or Ultra
-week, Ultra week until you pick one, stored in the browser beside the unit position, mirrored on the Settings view's
-Unit row and disabled under the dollar positions ([The shell](console.md#the-shell), [Settings](console.md#settings)). A
-cost model that sizes no 7-day capacity for the chosen week's plan draws the unpriced dash on every cost figure in that
-week, titled "Unpriced: the cost model holds no 7-day capacity for the {plan} week", the tiles' note reading "unpriced"
-([The shell](console.md#the-shell)). The Accounts view's lifetime figures and the Keys view's lifetime tiles and card
-re-read their rows older than the week once an hour ([Accounts](console.md#accounts), [Keys](console.md#keys)). Auto
-reload skips a tick while the view's previous read is still in flight, and a read with no answer after a minute fails
-and frees the next tick ([The console](console.md)). The Dashboard's attention line skips a tick or a focus that finds
-its previous read still out, so a slow read lands and the next tick reads again ([Dashboard](console.md#dashboard)). On
-Requests and the Routing log auto reload also waits while the list for the view's filters is still loading, unless its
-last read failed ([The console](console.md)). Auto reload's read at once, when a wait ends or the interval changes a
-full interval after the last answer, also waits for a read still in flight and leaves the read to the next tick ([The
-console](console.md)). An account's Cooling down table draws a model scope's id and a scope the console does not know
-in the mono face and Whole account, Fast mode and Fast mode credits in the text face ([Accounts](console.md#accounts)).
-The Routing log draws an id that links to its account, key, model or pool in the mono face where the chip asks for it,
-as it draws a session's or a request's link, so a decision's Request facts read the Key row's id in the face of the
-Session row's ([Routing log](console.md#routing-log)). A dialog draws its fields afresh at each opening, so a picker's
-search text starts empty ([The shell](console.md#the-shell)). The login screen's session read fails after a minute with
-no answer, as a view's read does, so a router that never answers it brings the card that says the router did not answer
-([The shell](console.md#the-shell)). The Accounts view reads the settings once per visit, whichever account opens, and
-the allowance card's Try again reads them again ([Accounts](console.md#accounts)). The Analytics view reads the account
-list with the window: when a new bucket moves a preset's end, on Refresh and Try again, and at each interval under a
-custom range whose end has not passed ([Analytics](console.md#analytics)). The Pools view reads the sessions and the
-keepalive overview its pool dialog draws when the dialog opens on a saved pool and again after a key write from it, the
-overview also when the return rate's range is picked, and the Guardrails view reads the pools and keys its dialog lists
-once per visit and again after a write, a dialog close and Refresh, neither at the interval ([Pools](console.md#pools),
+Sessions view lists the sessions the router lists, a session no companion reports only while the latest of its last use,
+its last request and, where its companion ended the session, that end is within the non-companion timeout, one row each,
+with Session, Status, Agents, Model, Account, Requests, Cost, Last used and Cache shown by default and Companion,
+Context, Created, Effort, Key, Last request, Next probe and Runway through the Columns control, Context and Effort read
+from main's conversation pin ([Sessions](console.md#sessions)). The Sessions view orders its rows through the filter
+bar's sort control by Created, Last activity, Cost or Requests, newest or largest first by default
+([Sessions](console.md#sessions)). The Sessions view's filters, carried in its address, stand in two groups under one
+rule: a session is listed when it passes every Session filter (Active within, Client, Companion, Finished sessions,
+Forked sessions, Key, Pool and Slowed) and one of its agent lines passes every Agents filter (Account, Agent type,
+Cache, Effort, Model, Released agents and Status), a finished session staying hidden unless Finished sessions stands
+([Sessions](console.md#sessions)). While an Agents filter stands on the Sessions view, its chip ends in `(any agent)`,
+the count reads `{k} matching agents`, and an open row lists its matching agents with the others under
+`{k} agents hidden by the filters`, which opens them ([Sessions](console.md#sessions)). The cost reference's Windows by
+tier draws the Interactive regime's rows first under a headline naming its clients and the base rows under Headless, its
+Peak band card says which traffic the band applies to, and Plan rates' Regime control reads Interactive and Headless
+([The cost reference](console.md#the-cost-reference)). The Settings page's About card lists the session expiry and the
+non-companion timeout, the two keys of the `sessions` block, each as a duration with its seconds beside it and its hover
+naming the key ([Settings](console.md#settings)). The Settings page's About card names the bootstrap's body capture
+limit beside its two retention lines ([Settings](console.md#settings)). A decision card's cache-map row folds a record
+of four entries or more to one chip per tier with the count and the depth range and the latest three depths, behind a
+control that lists every entry ([Routing log](console.md#routing-log)). An event panel's When reads in the viewer's
+zone, and a shedding round's Rewrite cell names the window as the cost figures do ([Routing
+log](console.md#routing-log)). A renewal after a hold carries the wait it followed on its card ([Routing
+log](console.md#routing-log)). A guardrail's update records each changed field with its value before and after, as an
+account's, a key's or a pool's update does ([Routing log](console.md#routing-log)). A request refused before it resolved
+a model reads a dash in the Routing log's Model cell, as it does on the Requests view ([Routing
+log](console.md#routing-log)). The candidate table of a routing decision, "Candidates, by rank", lists the chosen member
+first and the ranked members by rank ([Routing log](console.md#routing-log)). The pick line of a decision names the tied
+accounts, the runway that narrowed them and whether a draw chose among them ([Routing log](console.md#routing-log)). The
+registry's change log records an edit of a pool, a key or an account as each changed field's value before and after, an
+account edit that replaced the secret says so without its value, and a registry change's Account cell links the account
+or the key it edited ([Routing log](console.md#routing-log)). A pool save that changes nothing writes no change row and
+no event, so the change log shows real changes alone ([Routing log](console.md#routing-log)). The Routing log draws a
+guardrail block's refusal record with the guardrail's name as a second chip ([Routing log](console.md#routing-log)). The
+Routing log draws a pool save's keepalive policy as dotted fields ([Routing log](console.md#routing-log)). The routing
+log lists a failed usage poll as `poll failed` and a stream cut after its head as `stream interrupted`, and a shedding
+round that walks no pin and leaves one out off the window that fired reads `off window` ([Routing
+log](console.md#routing-log)). The routing log lists an account whose plan ended as `plan ended` and the plan's return
+as `plan restored`, each with the read's source and the profile's organization type, rate-limit tier and subscription
+status ([Routing log](console.md#routing-log)). The Routing log reads a backoff's close by its cause, Resumed under a
+clean poll and Ended by the plan's end under the plan's end ([Routing log](console.md#routing-log)). The Routing log's
+Pace cell and hover read a lapsed usage-based seat's remaining share as a percent ([Routing
+log](console.md#routing-log)). The Routing log's window reset panel reads Read from, the usage sample or the clock walk
+([Routing log](console.md#routing-log)). The Meter view badges a ratio only where the priced share reaches the rise's
+floor ([Meter](console.md#meter)). The Meter view in the Diagnostics group lists every subscription account's completed
+windows of the last 30 days grouped by account and window kind, the weekly windows apart, each group collapsed to its
+latest ratio, its off count and a 30-day ratio spark, and the Meter drift condition opens it on the account
+([Dashboard](console.md#dashboard), [Meter](console.md#meter)). A confirmation toast shows ahead of the failures queued
+behind the one on screen. A whole-day or whole-hour duration drops its zero part, so three whole days read `3d` and an
+hour `1h`. Every data table alternates its row tone, with a hovered or selected row reading over it ([The
+console](console.md)). The page behind an open dialog holds still and keeps its scroll position. The embedded console
+builds on Node 26 or later, which the build script checks before npm runs ([Installation](installation.md#build)). A
+pool's change rows name each keepalive policy member they moved as `keepalive.<member>`, and a new pool's row lists the
+policy ([Console](console.md#routing-log)). A Team or Enterprise seat prices under its tier word where the cost table
+holds it, and the log says when it does not ([Pairing](pairing.md#account-states)). A plan-ended account answers the
+plan and the tier its last profile named, its earlier readings keeping the plan they were priced under
+([Pairing](pairing.md#account-states)). `POST /admin/keys` and the key edit refuse an unknown member with `400` as the
+pool routes do ([API reference](api-reference.md)). A pool or key edit, or a guardrail create or edit, that would also
+take a list past 64 guardrails answers its stale stamp, its missing id or its refused member before the bound
+([Pools](routing.md#pools), [Keys](routing.md#keys)). The Dashboard's account cards and the Accounts list keep a slot
+for a window the account's poll does not carry, "none" muted in the share's place with the window's words on hover, "no
+5-hour window" on an approved Ultra account, the Quota cards keep the window's row with the same words muted, and an
+account whose poll has read no window reads "not read" on the Dashboard's cards and the Accounts list
+([Dashboard](console.md#dashboard), [Accounts](console.md#accounts), [Quota](console.md#quota)). The top bar's Week
+control reads a subscription figure as a share of the Pro, Max or Ultra week, Ultra week until you pick one, stored in
+the browser beside the unit position, mirrored on the Settings view's Unit row and disabled under the dollar positions
+([The shell](console.md#the-shell), [Settings](console.md#settings)). A cost model that sizes no 7-day capacity for the
+chosen week's plan draws the unpriced dash on every cost figure in that week, titled "Unpriced: the cost model holds no
+7-day capacity for the {plan} week", the tiles' note reading "unpriced" ([The shell](console.md#the-shell)). The
+Accounts view's lifetime figures and the Keys view's lifetime tiles and card re-read their rows older than the week once
+an hour ([Accounts](console.md#accounts), [Keys](console.md#keys)). Auto reload skips a tick while the view's previous
+read is still in flight, and a read with no answer after a minute fails and frees the next tick ([The
+console](console.md)). The Dashboard's attention line skips a tick or a focus that finds its previous read still out, so
+a slow read lands and the next tick reads again ([Dashboard](console.md#dashboard)). On Requests and the Routing log
+auto reload also waits while the list for the view's filters is still loading, unless its last read failed ([The
+console](console.md)). Auto reload's read at once, when a wait ends or the interval changes a full interval after the
+last answer, also waits for a read still in flight and leaves the read to the next tick ([The console](console.md)). An
+account's Cooling down table draws a model scope's id and a scope the console does not know in the mono face and Whole
+account, Fast mode and Fast mode credits in the text face ([Accounts](console.md#accounts)). The Routing log draws an id
+that links to its account, key, model or pool in the mono face where the chip asks for it, as it draws a session's or a
+request's link, so a decision's Request facts read the Key row's id in the face of the Session row's ([Routing
+log](console.md#routing-log)). A dialog draws its fields afresh at each opening, so a picker's search text starts empty
+([The shell](console.md#the-shell)). The login screen's session read fails after a minute with no answer, as a view's
+read does, so a router that never answers it brings the card that says the router did not answer ([The
+shell](console.md#the-shell)). The Accounts view reads the settings once per visit, whichever account opens, and the
+allowance card's Try again reads them again ([Accounts](console.md#accounts)). The Analytics view reads the account list
+with the window: when a new bucket moves a preset's end, on Refresh and Try again, and at each interval under a custom
+range whose end has not passed ([Analytics](console.md#analytics)). The Pools view reads the sessions and the keepalive
+overview its pool dialog draws when the dialog opens on a saved pool and again after a key write from it, the overview
+also when the return rate's range is picked, and the Guardrails view reads the pools and keys its dialog lists once per
+visit and again after a write, a dialog close and Refresh, neither at the interval ([Pools](console.md#pools),
 [Guardrails](console.md#guardrails)). An account's catalog dialog draws a failed Refresh's failure over the list it
 kept, until a read answers ([Accounts](console.md#accounts)).
 
