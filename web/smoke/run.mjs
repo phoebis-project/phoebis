@@ -24065,9 +24065,13 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     // The Session and Routing facts read the row they open on: the written session for the plain words, studio's
     // slowed notebook session (`SLOWED_PINS`) for the speed chip and the measured cycle, and the silent session for the
     // fork, whose base the list holds on another account. No story row carries a shed mark, so the written session is
-    // handed one from a shedding round. Each Companion fact draws the chip the Companion column draws.
+    // handed one from a shedding round. The mock dates main's pin at its session's creation (`datedLines`), so the
+    // written session's main pin moves to ten minutes after the row's, which sets Pinned since apart from Created. Each
+    // Companion fact draws the chip the Companion column draws.
     const { listSessions } = api;
-    api.listSessions = async () => (await listSessions.call(api)).map((s) => (at(written)(s) ? { ...s, shedFrom: 'overflow', shedReason: 'round' } : s));
+    const mainPinned = written === undefined || written.createdAt === null ? null : isoAt(Date.parse(written.createdAt) + 10 * 60_000);
+    const pinnedLater = (c) => (c.agentId === 'main' ? { ...c, createdAt: mainPinned } : c);
+    api.listSessions = async () => (await listSessions.call(api)).map((s) => (at(written)(s) ? { ...s, agentContexts: s.agentContexts.map(pinnedLater), shedFrom: 'overflow', shedReason: 'round' } : s));
     const page = await mount('/sessions', { now: CLOCK_ORIGIN });
     await showColumn(page, 'Companion');
     const chipOf = (el) => (el === null || el === undefined ? null : { badge: el.querySelector('.badge')?.className ?? null, text: textOf(el), title: (el.querySelector('.badge') ?? el.querySelector('.muted'))?.getAttribute('title') ?? null });
@@ -24104,7 +24108,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
       written: {
         companion: true,
         labels: LABELS,
-        routing: { Account: 'primary subscription', 'Pinned since': since(written?.createdAt ?? null), 'Shed mark': 'leaving overflow (round)', Runway: 'none', Speed: 'full speed', Cycle: 'not measured yet' },
+        routing: { Account: 'primary subscription', 'Pinned since': since(mainPinned), 'Shed mark': 'leaving overflow (round)', Runway: 'none', Speed: 'full speed', Cycle: 'not measured yet' },
         session: { Created: since(written?.createdAt ?? null), Key: `desktop in pool ${poolOf(written)}`, Client: 'Claude Code 2.1.310', Fork: 'none', Epoch: '1' },
         links: { account: '/accounts/primary', fork: null, forkTitle: null, key: '/keys#desktop', log: written === undefined ? null : window(written), logText: 'View in routing log' },
         speed: false,
@@ -24243,13 +24247,14 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     });
   }
   {
-    // The Cache warming details stand closed under the agents, their line reading the drawn recipes' states: the story's
-    // first session holds main retained, c21e paused and e4b7 ended. Opened, the grid reads the probe columns, one line
-    // per agent of the table. Studio's slowed notebook session holds no recipe, so its line reads no recipe and the
-    // details its cause.
+    // The Cache warming details stand closed under the agents, their line reading the drawn recipes' states: the
+    // story's first session holds main retained, c21e paused and e4b7 ended. The bare address hides the written
+    // session's three released subagents (`WRITTEN_SUBAGENTS`), so its line reads 3 retained, 1 held, where its seven
+    // recipes read 3 retained, 1 held, 3 ended. Opened, the grid reads the probe columns, one line per agent of the
+    // table. Studio's slowed notebook session holds no recipe, so its line reads no recipe and the details its cause.
     const page = await mount('/sessions', { now: CLOCK_ORIGIN });
     const read = {};
-    for (const key of ['story', 'slowed']) {
+    for (const key of ['story', 'slowed', 'written']) {
       const detail = await openRow(page, subjects[key]);
       const closed = disclosureOf(detail, 'srow__warming');
       const body = closed.controls === null ? null : detail?.querySelector(`[id="${closed.controls}"]`);
@@ -24279,7 +24284,8 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
       read.story?.none === null &&
       JSON.stringify(read.slowed?.closed) === JSON.stringify({ expanded: 'false', hidden: true, hint: 'no recipe', label: 'Cache warming' }) &&
       read.slowed?.noneBadge === 'no recipe' &&
-      (read.slowed?.none ?? '').startsWith('Nothing is scheduled because ');
+      (read.slowed?.none ?? '').startsWith('Nothing is scheduled because ') &&
+      JSON.stringify(read.written?.closed) === JSON.stringify({ expanded: 'false', hidden: true, hint: '3 retained, 1 held', label: 'Cache warming' });
     results.push({
       name: '/sessions the Cache warming details stand closed under the agents with the recipes\' states or no recipe, and open on the probe columns with a line per agent or the missing recipe\'s cause',
       ok,
