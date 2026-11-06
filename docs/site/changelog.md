@@ -181,9 +181,13 @@ reference](api-reference.md)). Each `GET /admin/sessions` row reads from the mai
 newest conversation pin of another agent where main holds none, and lists the row's conversation pins as agent lines
 with their effort and their warmth, a session no companion reports leaving the list after the non-companion timeout of
 the sessions block ([API reference](api-reference.md), [Installation](installation.md#sessions),
-[Keepalive](keepalive.md#in-the-console)). The admin API is documented by an OpenAPI document the router serves, with an
-interactive reference page on the admin listener ([API reference](api-reference.md)). The account's
-`has_extra_usage_enabled` reads the stored profile's `organization` member, as its rate-limit tier does ([API
+[Keepalive](keepalive.md#in-the-console)). A row also carries main's lifecycle word as `lifecycle`, whether its pin's
+account still holds the prompt cache as `warm`, the newest client request's `user_agent`, the session's spend over its
+life under its key as `spend`, its last 24 hours as `day` and its requests per agent and model as `agent_requests`, and
+each agent line carries its agent's own `lifecycle` and its pin's burn per hour as `burn`, `burn_unit`, `burn_window`,
+`burn_equivalent` and `burn_at` ([API reference](api-reference.md)). The admin API is documented by an OpenAPI document
+the router serves, with an interactive reference page on the admin listener ([API reference](api-reference.md)). The
+account's `has_extra_usage_enabled` reads the stored profile's `organization` member, as its rate-limit tier does ([API
 reference](api-reference.md)). The account create and edit refuse a body that is not a JSON object with
 `body must be a JSON object`, and the pool members route answers `body must carry a members list` to an object without
 one ([API reference](api-reference.md)). A key or pool create that loses the race for its id to another create answers
@@ -195,13 +199,22 @@ Guardrails, Pools and Settings views fit a 360 px window with no horizontal scro
 account cards and the Accounts list read `No window since the plan ended {ago}` on an account whose plan ended
 ([Dashboard](console.md#dashboard), [Accounts](console.md#accounts)). The Dashboard's attention line keeps one row and
 folds the items past it behind a "+N more" badge, and a pool card's attention rows end with their age
-([Dashboard](console.md#dashboard), [Pools](console.md#pools)). The Dashboard's Estimated cost tile reads the day's
-subscription traffic in the chosen week under Native ([Dashboard](console.md#dashboard)). The Dashboard's two rings, 7d
-remaining and Fable week remaining, weigh each subscription account by its tier's 7-day capacity over the chosen week's
-tier's and read their lines in the chosen week, such as 0.39 of 1.30 Ultra weeks left, and the rings and the Plan per
-hour card price a Team or Enterprise seat at its tier where the cost model holds the row, the rings naming an account
-whose poll lacks the window, a free plan, a usage-based seat or an unheld tier under the ring with the reason, and the
-card reading an account the router prices no tier for whose range holds no priced bucket as tier unknown
+([Dashboard](console.md#dashboard), [Pools](console.md#pools)). The Dashboard's attention line reads the keepalive
+engine's three conditions, each opening the Sessions view, and `GET /admin/attention` and the `phoebis_attention` gauge
+carry them as kinds: `keepalive_bus_gaps` while the engine missed bus events in the last 24 hours, `keepalive_cap` while
+one of its caps stands at 90 percent of its max or more, and `expired_between_turns` while prompt caches expired between
+turns of a session a pool warms ([Dashboard](console.md#dashboard), [Conditions and
+gauges](statistics.md#conditions-and-gauges)). The Dashboard's Estimated cost tile reads the day's subscription traffic
+in the chosen week under Native ([Dashboard](console.md#dashboard)). The Dashboard's Sessions card counts the live
+sessions' agents, busy, idle and parked by lifecycle word, as the Sessions view's summary line does, and its Keepalive
+engine block reads the engine's three caps, the day's cache probes by outcome and the requests that expired between
+turns beside the bus gaps, the bus gaps' hover reading the last gap's instant from `last_bus_gap_at` on
+`GET /admin/keepalive/overview` ([Dashboard](console.md#dashboard), [API reference](api-reference.md)). The Dashboard's
+two rings, 7d remaining and Fable week remaining, weigh each subscription account by its tier's 7-day capacity over the
+chosen week's tier's and read their lines in the chosen week, such as 0.39 of 1.30 Ultra weeks left, and the rings and
+the Plan per hour card price a Team or Enterprise seat at its tier where the cost model holds the row, the rings naming
+an account whose poll lacks the window, a free plan, a usage-based seat or an unheld tier under the ring with the
+reason, and the card reading an account the router prices no tier for whose range holds no priced bucket as tier unknown
 ([Dashboard](console.md#dashboard), [Analytics](console.md#analytics)). The Dashboard's rings list each account with the
 most of its own window left first ([Dashboard](console.md#dashboard)). A Quota card's Refresh draws its reading the
 moment it answers, at the reading's instant ([Quota](console.md#quota)). A usage-based seat draws one spend bar wherever
@@ -307,13 +320,16 @@ it, and an empty list keeps its meaning ([Requests](console.md#requests), [Routi
 deleted key's group reads `<id> (deleted, created <time>)`, its creation instant in the viewer's zone
 ([Analytics](console.md#analytics)). The Accounts section's card "Unused allowance by account" ranks the subscription
 accounts by the figure of their weekly windows left unused over the last four weeks, in the chosen week, with the
-fleet's figures ([Analytics](console.md#analytics)). The Analytics session view reads the session's rows through the
-route's session filter, and each auto reload re-reads the first page alone ([Analytics](console.md#analytics)). The
-Analytics view's Burn tab draws one Plan per hour card, the subscription traffic per hour in the chosen week, a bucket
-the cost model could not price staying a gap under a "model unlisted" entry ([Analytics](console.md#analytics)). The
-Analytics view's Cache warming tab spans its last card across the row where that card would sit alone, as the Burn tab
-does ([Analytics](console.md#analytics)). The Analytics view's model grouping lists a request refused before it resolved
-a model under "no model" ([Analytics](console.md#analytics)). The Burn section closes on Member budgets, its
+fleet's figures ([Analytics](console.md#analytics)). The Analytics session view narrows to one agent under the Agent
+filter of the Subject group, carried in the address as `agent_id` and written by the Sessions view's agent menu, its
+links to the request log carrying the agent, the filter disabled until a session is picked and leaving with the session
+([Analytics](console.md#analytics)). The Analytics session view reads the session's rows through the route's session
+filter, and each auto reload re-reads the first page alone ([Analytics](console.md#analytics)). The Analytics view's
+Burn tab draws one Plan per hour card, the subscription traffic per hour in the chosen week, a bucket the cost model
+could not price staying a gap under a "model unlisted" entry ([Analytics](console.md#analytics)). The Analytics view's
+Cache warming tab spans its last card across the row where that card would sit alone, as the Burn tab does
+([Analytics](console.md#analytics)). The Analytics view's model grouping lists a request refused before it resolved a
+model under "no model" ([Analytics](console.md#analytics)). The Burn section closes on Member budgets, its
 reconciliation rows listed on the Meter view ([Analytics](console.md#analytics), [Meter](console.md#meter)). The Cache
 warming tab shows what the probes saved and the net saving after their cost, as tiles, a chart and a Saved column per
 pool ([Analytics](console.md#analytics)). The Client and User agent filters list the range's values and take a typed
@@ -330,19 +346,49 @@ the Accounts detail's allowance block read their figures in the chosen week unde
 model, so a failed settings read draws their error ([Analytics](console.md#analytics), [Accounts](console.md#accounts)).
 Under the Analytics classifier grouping the requests with no classifier call are labeled `none`, as the Requests facet
 names them ([Analytics](console.md#analytics)). The Burn tab's Plan per hour and Spend per minute cards share one row
-where the grid fits two columns ([Analytics](console.md#analytics)). On the Sessions view a released subagent's record
-keeps its slot of the agent cap for one cache TTL after the release and then leaves the engine
-([Sessions](console.md#sessions)). The Sessions row's "+N" badge counts every agent pinned on another model, a pin
-without a recipe among them ([Sessions](console.md#sessions)). The Sessions view offers Companion only, Finished
-sessions (Show finished sessions) and Released agents (Show released agents) as filters in its address, hides a finished
-session by default, and counts the rows the filters keep on its tiles ([Sessions](console.md#sessions)). The Sessions
-view orders its rows and their lines by the session's creation time, newest first, or by its last activity through the
-filter bar's sort control ([Sessions](console.md#sessions)). The Sessions view reads each row from main's conversation
-pin with an Effort column, draws a line for every pin of every session, main's among them, with Effort, Context and a
-warm or cold state on a pin no recipe stands on, links each line's agent to the request log and its account to the
-Accounts view, and lists the sessions the router lists within its non-companion timeout
-([Sessions](console.md#sessions)). The Sessions view reads the context in tokens from main's conversation pin on every
-row and from each line's own pin, and the Requests column shows through the Columns control to make room
+where the grid fits two columns ([Analytics](console.md#analytics)). A session that branched from another conversation
+at depth 2 or deeper reads a `fork` badge in its Sessions row, its hover naming the base, the depth and the base's
+account, and a click on the badge scrolls to the base's row where the list holds it ([Sessions](console.md#sessions)).
+An open Sessions row ends on its Cache warming details, shut by default with the recipes' states on their line, which
+read each agent's TTL, last request, last and next probe, the probes sent and the requests they kept warm, and its
+recipe state, or `warm` or `cold` by the cache TTL on a pin no recipe stands on ([Sessions](console.md#sessions)). An
+open Sessions row lists the agents the ledger holds requests of that draw no line, such as a subagent whose pin and
+recipe are gone, on one earlier agents line under its Agents table with their requests and their cost, and the line
+opens to one row per agent ([Sessions](console.md#sessions)). At a phone's width the Sessions table scrolls sideways
+inside its card while an open row's detail keeps to the card's visible width at its left edge, the Session facts above
+the Routing facts and the Agents table scrolling on its own ([Sessions](console.md#sessions)). On the Sessions view a
+released subagent's record keeps its slot of the agent cap for one cache TTL after the release and then leaves the
+engine ([Sessions](console.md#sessions)). Opening a Sessions row reads the session's facts in a Session grid and a
+Routing grid, then the Agents table, one line per agent with its type, model, account, context, burn, requests, cost,
+status and cache, the agent linking to the request log and the account to its page, and each line's menu opens the
+analytics session view, the request log and the routing log on the session and the agent
+([Sessions](console.md#sessions)). The Sessions card's summary line counts the agents of the rows the filters keep by
+lifecycle word, with the client requests of the last 24 hours and their spend, and the bar's count reads
+`{n} sessions · {k} agents` ([Sessions](console.md#sessions)). The Sessions row's "+N" badges count every agent pinned
+on another model in the Model cell and on another account in the Account cell, a pin without a recipe among them
+([Sessions](console.md#sessions)). The Sessions row's Cache reads `warm` or `cold` by the pin's cache TTL with the
+recipe state word under it, from main's recipe or, where main holds none, the newest other agent's, as the row's
+`keepalive` summary on `GET /admin/sessions` carries it ([Sessions](console.md#sessions)). The Sessions row's Cost reads
+the spend of the requests its Requests cell counts, under Native the session's share of the chosen week and under the
+other positions its dollars, with a `+$` badge where they billed dollars beside a plan figure and the pin's burn per
+hour under it ([Sessions](console.md#sessions)). The Sessions row's Last used reads the newest use across the session's
+conversation pins, main's and its agents' ([Sessions](console.md#sessions)). The Sessions row's Requests counts the
+session's client requests over its life under its key, the ones the router refused before any account was asked left
+out, with its last request's age under it ([Sessions](console.md#sessions)). The Sessions row's Status reads main's
+lifecycle word, `busy`, `idle`, `parked`, `registered`, `released` or `unknown`, `finished` on a finished session and
+`unreported` where no mod reports it or the engine holds no record of main, with `seen {ago}` or `silent {span}` under
+it on a companion session, and its Agents cell counts the agents by their words ([Sessions](console.md#sessions)). The
+Sessions view lists the sessions the router lists within its non-companion timeout, one row each, with Session, Status,
+Agents, Model, Account, Requests, Cost, Last used and Cache shown by default and Companion, Context, Created, Effort,
+Key, Last request, Next probe and Runway through the Columns control, Context and Effort read from main's conversation
+pin ([Sessions](console.md#sessions)). The Sessions view orders its rows through the filter bar's sort control by
+Created, Last activity, Cost or Requests, newest or largest first by default ([Sessions](console.md#sessions)). The
+Sessions view's filters, carried in its address, stand in two groups under one rule: a session is listed when it passes
+every Session filter (Active within, Client, Companion, Finished sessions, Forked sessions, Key, Pool and Slowed) and
+one of its agent lines passes every Agents filter (Account, Agent type, Cache, Effort, Model, Released agents and
+Status), a finished session staying hidden unless Finished sessions stands ([Sessions](console.md#sessions)). While an
+Agents filter stands on the Sessions view, its chip ends in `(any agent)`, the count reads `{k} matching agents`, and an
+open row lists its matching agents with the others under `{k} agents hidden by the filters`, which opens them
 ([Sessions](console.md#sessions)). The cost reference's Windows by tier draws the Interactive regime's rows first under
 a headline naming its clients and the base rows under Headless, its Peak band card says which traffic the band applies
 to, and Plan rates' Regime control reads Interactive and Headless ([The cost reference](console.md#the-cost-reference)).

@@ -625,7 +625,11 @@ run is thirty minutes old. The conditions read from the registry, and `ledger_re
 hold again at the first read. The four routing conditions, `wall_reached`, `destination_spent`, `shed_no_runway` and
 `slowed_long`, read a table the ledger folds from its events of the trailing 24 hours once an hour and at start, so a
 restart holds them again at the first fold. `meter_drift` lands in the same table by the same fold, from the reconciled
-windows rather than the events, so a restart holds it again at the first fold too.
+windows rather than the events, so a restart holds it again at the first fold too. Of the keepalive engine's three
+conditions, `keepalive_bus_gaps` starts over, since the engine keeps its gaps in memory alone, `keepalive_cap` holds
+again once the engine has read its saved sessions, agents and recipes back from the registry at start ([A router
+restart](keepalive.md#a-router-restart)), and `expired_between_turns`, read from the ledger's hourly rollups, holds
+again at the first read.
 
 | Kind | Tone | Subject | Clears when |
 | --- | --- | --- | --- |
@@ -639,6 +643,7 @@ windows rather than the events, so a restart holds it again at the first fold to
 | `refresh_failed` | serious | the OAuth account | a refresh commits, or a newer credential supersedes a pending one |
 | `certificate_expiring` | warning | the listener key | a pair with more than 30 days left is loaded |
 | `ledger_record_parked` | serious | the pool, or `-` for a record without one | the next start or the Replay button lands them |
+| `keepalive_bus_gaps` | serious | the keepalive engine | 24 hours pass without a gap, or the router restarts |
 | `poll_backoff` | warning | the polled account | a poll answers clean, or the account is flagged plan ended |
 | `model_unpriced` | info | the model | a later plan-funded request on the model is priced at a cost model entry that weighs it, or the router restarts |
 | `meter_drift` | warning | the OAuth account | the newest reconciled window of each kind that ended in the last eight days with a rise of at least 5% reads a ratio inside 0.8 to 1.25 or a priced share under 5%, or no such window remains |
@@ -646,6 +651,8 @@ windows rather than the events, so a restart holds it again at the first fold to
 | `destination_spent` | warning | the destination account | no move onto the account was followed by a spent window within an hour in the last 24 hours, or a `window_cleared` on the same window followed each such spent window |
 | `shed_no_runway` | warning | the pool | no round of the pool marked nothing for want of a destination in the last 24 hours |
 | `slowed_long` | warning | the account | the slow-down spans of the last 24 hours sum at or under twice the pool's `slow_down_stretch_seconds`, at least an hour |
+| `keepalive_cap` | warning | the crossed cap | the count falls under 90 percent of its max |
+| `expired_between_turns` | warning | the keepalive engine | no expiry between turns stands in the last 24 hours, or no pool warms caches |
 
 Of the tones, critical, serious, warning and info, `info` is the mildest, a condition that holds while nothing is
 broken: the dashboard's line draws such an item in the place the route ranks it, and no pool card draws it, since a
@@ -707,6 +714,15 @@ which the dashboard's line words as `expires in 12 days` or `expired 3 days ago`
 tried again once at the next start or on the dashboard's Replay, and the condition clears when the table empties. The
 subject is the pool the record was served under, or `-` for a record without one. A pool deleted since shows under its
 id with nothing to open. The item dates from the oldest row, and the detail counts the rows and names the accounts.
+
+**`keepalive_bus_gaps`** holds while the keepalive engine missed bus events in the last 24 hours. Such a gap means the
+keepalive subscriber fell behind the router's in-process request bus and discarded the observations it had open, so
+those agents wait for their next request while an armed recipe keeps its schedule
+([Keepalive](keepalive.md#what-the-ledger-records)). The engine counts the gaps since the start and keeps the last one's
+instant in memory, so the condition clears once 24 hours pass without a gap or the router restarts. The subject is the
+engine, `keepalive`, and the item dates from the first read of this process that saw it. The detail gives the count and
+the last gap's instant, which the dashboard's line reads as `Keepalive bus gaps: {n} since the start` in the serious
+tone with the last gap on hover, and the item opens the [Sessions](console.md#sessions) view.
 
 **`poll_backoff`** holds once the usage poll has been backing off from the endpoint's 429 answers on the account for
 thirty minutes, counted from the run's first 429. The condition clears with the account's plan-ended pause as well,
@@ -786,6 +802,23 @@ twice the stretch" as
 `studio: slowed 2 h 8 min of the last 24 h, over 1 h, slowest 0.35x, slow_down_stretch_seconds 1800, since 09:12`. The
 item opens the routing log on the account's slow-down starts and ends since the condition began
 ([Slow-down](routing.md#slow-down)).
+
+**`keepalive_cap`** holds while one of the keepalive engine's caps, its live sessions, its agent records or its retained
+prompts' bytes, stands at 90 percent of its max or more, each cap a series of its own. At a max the engine refuses what
+would pass it, a new session, agent record or recipe, the retained bytes once its evictions cannot make room ([Holds and
+lapses](keepalive.md#holds-and-lapses)), and the maxes are the bootstrap file's `keepalive` block
+([keepalive](installation.md#keepalive)). The subject is the cap, `keepalive.sessions`, `keepalive.agents` or
+`keepalive.retained`, and the item dates from the first read of this process that saw it. The detail names the cap with
+its count, its max and the share, which the dashboard's line reads as `Keepalive cap at {pct}: {cap}` in the warning
+tone, and the item opens the [Sessions](console.md#sessions) view.
+
+**`expired_between_turns`** holds while a request of the last 24 hours missed the cache because its entry expired
+between two turns, the miss probing exists to prevent, and a pool's keepalive policy is on. Without a pool that warms
+caches such an expiry is the expected course, so the condition clears once no pool warms caches. The count is the
+ledger's, from its hourly rollups, the figure `GET /admin/keepalive/overview` answers as `expired_between_turns_24h`.
+The subject is the engine, `keepalive`, and the item dates from the first read of this process that saw it. The detail
+gives the count, which the dashboard's line reads as `Expired between turns: {n} in 24h` in the warning tone, and the
+item opens the [Sessions](console.md#sessions) view.
 
 A threshold is a Prometheus rule over the gauge:
 

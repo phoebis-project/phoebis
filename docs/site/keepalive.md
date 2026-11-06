@@ -440,12 +440,17 @@ version, `phoebis_keepalive_probes_total` by pool and outcome (`landed`, `cold`,
 ## In the console
 
 The Sessions view reads each session's standing, the mod's word for it and a recipe summary: main's recipe, or the
-newest other agent's where main holds none. A row's expanded detail reads each agent's state and cause with the sentence
-of each on hover (see [Sessions](console.md#sessions)). A pool card that keeps caches warm reads the pool's three
-resolved ceilings after its `keepalive` chip, and the pool dialog's Keepalive group reads, under each field, the
-break-even a ceiling left off resolves to and the figure in effect under one switched on past it (see
-[Pools](console.md#pools)). The Analytics view's Cache warming tab draws the probes by outcome and the wasted probes by
-reason (see [Analytics](console.md#analytics)).
+newest other agent's where main holds none. A row's Cache cell reads `warm` while the row's pin is within its cache TTL
+or `cold` past it, with that summary's state word under it. A row's expanded detail reads each agent's state and cause
+with the sentence of each on hover, and its Cache warming details read each agent's TTL, last request, last and next
+probe, and the probes sent and the requests they kept warm since midnight UTC (see [Sessions](console.md#sessions)). The
+Dashboard's Sessions card reads the engine under "Keepalive engine": the sessions, the agent records and the retained
+bytes against their caps, the cache probes of the last 24 hours by outcome, and the requests that expired between turns
+in that day beside the bus gaps since the start (see [Dashboard](console.md#dashboard)). A pool card that keeps caches
+warm reads the pool's three resolved ceilings after its `keepalive` chip, and the pool dialog's Keepalive group reads,
+under each field, the break-even a ceiling left off resolves to and the figure in effect under one switched on past it
+(see [Pools](console.md#pools)). The Analytics view's Cache warming tab draws the probes by outcome and the wasted
+probes by reason (see [Analytics](console.md#analytics)).
 
 A session's row reads main's conversation pin, the newest by last use where main holds two, else the newest conversation
 pin of another agent of the session, else no pin, and never a pin only auxiliary requests have used, such as the one a
