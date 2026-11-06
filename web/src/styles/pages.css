@@ -200,14 +200,16 @@
   border-top: 1px solid var(--hairline);
 }
 
-.sess-summary__grid dt,
-.pool__stats dt {
+.pool__stats dt,
+.sess-summary__caps dt,
+.sess-summary__grid dt {
   font-size: 12px;
   color: var(--ink-2);
 }
 
-.sess-summary__grid dd,
-.pool__stats dd {
+.pool__stats dd,
+.sess-summary__caps dd,
+.sess-summary__grid dd {
   margin: 0;
   font-weight: 600;
 }
@@ -229,7 +231,7 @@
 }
 
 /* One cap to a row: a quarter of the card's narrow column, the grid's track, cannot hold a figure such as
-   "235.5 MiB of 256 MiB" on one line. The type is the grid's, whose rules the Pools page's stats share. */
+   "235.5 MiB of 256 MiB" on one line. */
 .sess-summary__caps {
   display: flex;
   flex-direction: column;
@@ -244,14 +246,7 @@
   justify-content: space-between;
 }
 
-.sess-summary__caps dt {
-  font-size: 12px;
-  color: var(--ink-2);
-}
-
 .sess-summary__caps dd {
-  margin: 0;
-  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -266,16 +261,6 @@
 
 .sess-summary__line .is-warning {
   color: var(--warning-ink);
-}
-
-/* A read that failed, its Try again inline, in the Sessions view's notice ink. */
-.sess-summary__notice {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  font-size: 12.5px;
-  color: var(--critical-ink);
 }
 
 /* The shared `.sub` rule reaches table cells alone, so a tile's line under its figure takes the same type here. */
@@ -2218,6 +2203,10 @@
   padding: 6px 16px 16px;
 }
 
+.decision-card .table-wrap {
+  border-top: 1px solid var(--hairline);
+}
+
 .event-detail {
   gap: 8px;
   margin: 0 12px 14px;
@@ -3586,16 +3575,21 @@
   color: var(--critical-ink);
 }
 
-/* A read that failed, on one line under the bar, 12px from it and from the head below, its Try again inline. The
-   negative margin takes the page stack's 18px gap down to that. */
+/* A read that failed, its Try again inline. */
+.sess-summary__notice,
 .sessions__notice {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
-  margin: -6px 0;
   font-size: 12.5px;
   color: var(--critical-ink);
+}
+
+/* On the Sessions view the notice sits on one line under the bar, 12px from it and from the head below. The negative
+   margin takes the page stack's 18px gap down to that. */
+.sessions__notice {
+  margin: -6px 0;
 }
 
 /* Per-agent columns left no room for a wrapped model id or timestamp, so the
@@ -3659,16 +3653,24 @@
   background: var(--surface-2);
 }
 
+.disclosure__chevron,
 .srow__chevron {
   display: inline-flex;
-  color: var(--ink-3);
   transition: transform 140ms ease-out;
   transform: rotate(-90deg);
 }
 
+.srow__chevron {
+  color: var(--ink-3);
+}
+
+.disclosure__toggle[aria-expanded='true'] .disclosure__chevron,
+.srow.is-open .srow__chevron {
+  transform: none;
+}
+
 .srow.is-open .srow__chevron {
   color: var(--accent-ink);
-  transform: none;
 }
 
 .srow.is-open td {
@@ -3680,20 +3682,16 @@
   font-family: var(--font-sans);
 }
 
-/* The id line and the client line under it: the column's free width cuts each with an ellipsis, the whole id on the
-   cell's title and the user agent on the line's. */
-.srow__client,
+/* The id line: the column's free width cuts it with an ellipsis, the whole id on the cell's title. */
 .srow__id {
   display: block;
 }
 
-/* The Session cell is monospace for the id, and the fork badge takes the other badges' face. It reads `fork` alone at
-   the head of the client line under the id, never wider than the column, so a cut line never clips it or its link. */
+/* The fork badge reads `fork` alone at the head of the client line under the id, never wider than the column, so a cut
+   line never clips it or its link. */
 .sessions-table .srow__fork {
   max-width: 100%;
   margin-top: 2px;
-  font-family: var(--font-sans);
-  text-align: left;
 }
 
 .srow[aria-current='true'] td {
@@ -3727,13 +3725,6 @@
   gap: 12px;
   white-space: normal;
   container-type: inline-size;
-}
-
-.srow__finished {
-  margin: 0;
-  padding: 8px 12px;
-  color: var(--ink-2);
-  border-left: 2px solid var(--hairline-strong);
 }
 
 .srow__facts {
@@ -3785,18 +3776,8 @@
   padding: 6px 0 6px 8px;
 }
 
-.sessions-table .agents-table td {
+.sessions-table .agents-table td:not(.col-fit) {
   white-space: normal;
-}
-
-.sessions-table .agents-table td.col-fit {
-  white-space: nowrap;
-}
-
-/* The card's hairline over a table wrap is for a table at the card's level, and this wrap sits inside an open row's
-   panel. */
-.card--table .agents-table__wrap {
-  border-top: 0;
 }
 
 /* A hint with no room beside its label wraps under it, as it does at a phone's width. */
@@ -3812,17 +3793,6 @@
   gap: 4px;
   align-items: center;
   font-weight: 600;
-}
-
-/* The chevron turns as the session row's gutter does. */
-.disclosure__chevron {
-  display: inline-flex;
-  transition: transform 140ms ease-out;
-  transform: rotate(-90deg);
-}
-
-.disclosure__toggle[aria-expanded='true'] .disclosure__chevron {
-  transform: none;
 }
 
 .disclosure__hint {
@@ -3851,7 +3821,6 @@
   .sessions-table .srow__panel {
     position: sticky;
     left: 0;
-    box-sizing: border-box;
     width: 100cqw;
     padding: 12px;
   }
@@ -3870,7 +3839,6 @@
   grid-template-columns: max-content 44px 76px 68px 96px 64px minmax(130px, 1fr);
   column-gap: 6px;
   overflow-x: auto;
-  white-space: normal;
   border-left: 2px solid var(--accent);
 }
 
@@ -3926,13 +3894,17 @@
   border-bottom: 1px solid var(--hairline);
 }
 
+.agents__none,
+.srow__finished {
+  padding: 8px 12px;
+  color: var(--ink-2);
+  border-left: 2px solid var(--hairline-strong);
+}
+
 .agents__none {
   display: flex;
   gap: 8px;
   align-items: center;
-  padding: 8px 12px;
-  color: var(--ink-2);
-  border-left: 2px solid var(--hairline-strong);
 }
 
 /* Attempt trail */

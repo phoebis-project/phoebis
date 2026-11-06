@@ -2200,7 +2200,7 @@ textarea.input {
   margin-bottom: 12px;
 }
 
-.card--table .table-wrap {
+.card--table > .table-wrap {
   border-top: 1px solid var(--hairline);
 }
 
@@ -2330,7 +2330,9 @@ textarea.input {
   border-radius: 0;
 }
 
-/* The values give way to a narrow chip, so the word keeps one line rather than wrapping beside them. */
+/* The values give way to a narrow chip, so the word and the suffix each keep one line rather than wrapping beside
+   them. */
+.chip--filter .chip__suffix,
 .chip--filter .chip__word {
   flex: none;
   color: var(--ink-2);
@@ -2340,13 +2342,6 @@ textarea.input {
 /* The ellipsis draws on the values span, never on the inline-flex body. */
 .chip--filter .chip__values {
   min-width: 0;
-}
-
-/* The suffix holds its line as the word does, so at a phone's width the values give way before it wraps. */
-.chip--filter .chip__suffix {
-  flex: none;
-  color: var(--ink-2);
-  white-space: nowrap;
 }
 
 /* The pill clips at its round end, so the x stands as far in from it as the body's text stands from the start. */
