@@ -3438,6 +3438,13 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     // that holds any, so the slot the block pairs last is put with no window before the page reads the list.
     const spare = (await api.listAccounts()).find((a) => a.id === 'spare');
     api.putAccount({ ...spare, fableWindow: null, windows: [] });
+    // The shared mount's auto reload lands inside the ticked span when the run is young, so the spy would count its
+    // reads. Its Refresh first reads the list without fresh-desk, the pairing it confirmed above, so Off arms no
+    // re-read for that pairing's first reading.
+    const sharedInterval = intervalWord(m);
+    m.container.querySelector('.refresh-control__body[aria-label="Refresh"]')?.click();
+    await m.settle();
+    await chooseInterval(m, 'Off');
     const first = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
     const HINT = 'The first quota reading is in flight';
     const fieldIn = (dlg, label) => [...(dlg?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === label)?.querySelector('input') ?? null;
@@ -3555,6 +3562,7 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     });
     api.putAccount(spare);
     first.unmount();
+    await chooseInterval(m, sharedInterval);
     for (const id of ['fresh-desk', 'fresh-shelf', 'fresh-attic']) {
       await api.deleteAccount(id).catch((e) => {
         if (e?.status !== 404) throw e;
