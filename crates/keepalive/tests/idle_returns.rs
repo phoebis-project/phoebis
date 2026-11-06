@@ -1139,12 +1139,13 @@ async fn the_contradiction_line_names_no_hash() {
     assert!(longest_hex_run < 64, "a 64-hex run in the log: {text}");
 }
 
-/// Main's turn on five messages whose first, third, fourth and last carry the cache marker, so the deepest marked
-/// boundary before its last two is the third's.
+/// Main's turn on five messages whose first, third and fourth carry the cache marker, so the deepest marked
+/// boundary before its last two is the third's. With `BODY`'s system marker the request holds four breakpoints,
+/// the most the upstream takes.
 fn marked_turns() -> String {
     BODY.replace(
         r#"{"role":"user","content":"hello"}]"#,
-        r#"{"role":"user","content":[{"type":"text","text":"hello","cache_control":{"type":"ephemeral"}}]},{"role":"assistant","content":"hi"},{"role":"user","content":[{"type":"text","text":"and then","cache_control":{"type":"ephemeral"}}]},{"role":"assistant","content":[{"type":"text","text":"working","cache_control":{"type":"ephemeral"}}]},{"role":"user","content":[{"type":"text","text":"steer","cache_control":{"type":"ephemeral"}}]}]"#,
+        r#"{"role":"user","content":[{"type":"text","text":"hello","cache_control":{"type":"ephemeral"}}]},{"role":"assistant","content":"hi"},{"role":"user","content":[{"type":"text","text":"and then","cache_control":{"type":"ephemeral"}}]},{"role":"assistant","content":[{"type":"text","text":"working","cache_control":{"type":"ephemeral"}}]},{"role":"user","content":"steer"}]"#,
     )
 }
 
