@@ -2209,6 +2209,18 @@ fn a_fast_request_passes_a_plan_window_cooldown_and_is_blocked_by_a_fast_a_model
         "a fast request draws no plan window, so the five-hour row is no obstacle"
     );
     assert_eq!(skipped_as(&result), [("b", "cooldown"), ("c", "cooldown")]);
+    let record = decide(&mut st, &s, &at(1_000), &mut rng()).record;
+    let scope_of = |id: &str| {
+        candidate(&record, id)
+            .obstacle
+            .as_ref()
+            .and_then(|obstacle| obstacle.scope.clone())
+    };
+    assert_eq!(
+        (scope_of("b"), scope_of("c")),
+        (Some("fast".into()), Some("model:claude-opus-5".into())),
+        "a cooldown obstacle names the scope of the row that holds the account"
+    );
     for plan in ["seven_day", "seven_day_opus"] {
         let mut st = RoutingState::from_load(RoutingLoad::default());
         st.record_cooldown(cooled("a", "account", HOUR, plan, "rate_limit"));

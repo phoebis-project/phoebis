@@ -232,7 +232,7 @@ pub struct Placement {
 
 /// Why a request waits before its next selection. The record and the trace write its snake-case word, the word the
 /// routing log and the ledger read.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HoldReason {
     Cap,
@@ -6923,28 +6923,31 @@ fn window_facts(
 }
 
 fn obstacle_facts(obstacle: &Obstacle) -> ObstacleFacts {
-    let scope = match obstacle {
-        Obstacle::Cooldown { scope, .. } => Some(scope.to_string()),
-        _ => None,
-    };
-    let (reason, window, until) = match obstacle {
+    let (reason, scope, window, until) = match obstacle {
         Obstacle::Cooldown {
             reason,
             until,
             window,
-            ..
-        } => (Some(reason.clone()), Some(window.clone()), Some(*until)),
+            scope,
+        } => (
+            Some(reason.clone()),
+            Some(scope.to_string()),
+            Some(window.clone()),
+            Some(*until),
+        ),
         Obstacle::Budget { until, period } => {
-            (Some(period.as_str().to_string()), None, Some(*until))
+            (Some(period.as_str().to_string()), None, None, Some(*until))
         }
-        Obstacle::Credits { reason } => (Some(reason.clone()), None, None),
+        Obstacle::Credits { reason } => (Some(reason.clone()), None, None, None),
         Obstacle::Overage { until } => (
             Some("overage".to_string()),
+            None,
             Some("overage".to_string()),
             Some(*until),
         ),
         Obstacle::Spent { until, window } => (
             Some("spent".to_string()),
+            None,
             Some(window.clone()),
             Some(*until),
         ),
@@ -6953,7 +6956,7 @@ fn obstacle_facts(obstacle: &Obstacle) -> ObstacleFacts {
         | Obstacle::Deleted
         | Obstacle::Ended
         | Obstacle::Paused
-        | Obstacle::Unready => (None, None, None),
+        | Obstacle::Unready => (None, None, None, None),
     };
     ObstacleFacts {
         name: obstacle_name(obstacle),
@@ -7310,10 +7313,9 @@ fn finish(
             outcome.hold = Some(HoldOutcome {
                 account_id: hold.account_id.clone(),
                 cohort: hold.cohort.clone(),
-                bound_ms: pool.map_or(0, |p| {
-                    if slowed || hold.reason == HoldReason::Rewrite {
-                        slow_down_hold_ms(p)
-                    } else {
+                bound_ms: pool.map_or(0, |p| match hold.reason {
+                    HoldReason::SlowDown | HoldReason::Rewrite => slow_down_hold_ms(p),
+                    HoldReason::Reset | HoldReason::Cap => {
                         seconds_ms(p.failover.retry_in_place_seconds)
                     }
                 }),
