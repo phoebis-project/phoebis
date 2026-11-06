@@ -16,7 +16,7 @@ import { IconChevron } from '@/components/ui/icons';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, KeyValue, Menu, ReadNotice, Skeleton, toggleRow, useHostedDescription } from '@/components/ui/primitives';
 import { accountHref, ACTIVE_WITHIN, ANALYTICS_CODEC, keyHref, REQUESTS_CODEC, requestsHref as requestsAddressHref, SESSION_SORT_KEYS, SESSIONS_CODEC, type SessionsAddress, sortAddressOf, sortDirOf, type SortDir } from '@/lib/address';
-import { HINT_WINDOW, sentences, type WeekReading } from '@/lib/analytics';
+import { HINT_WINDOW, UNPRICED_TITLE, sentences, type WeekReading } from '@/lib/analytics';
 import { AGENT_TYPES, clientVersion } from '@/lib/client';
 import { clock } from '@/lib/clock';
 import { tierOrder, weekReadingOf } from '@/lib/costs';
@@ -283,13 +283,14 @@ function filterOptions(rows: readonly Row[], keys: ApiKey[] | null, pools: Pool[
 }
 
 /** The kept rows' figures the card's summary line reads, each agent counted as the Agents cell counts it. */
-function daySummary(rows: readonly Row[]): { agents: number; billed: number; busy: number; equivalent: number; idle: number; parked: number; requests: number } {
+function daySummary(rows: readonly Row[]): { agents: number; billed: number; busy: number; equivalent: number | null; idle: number; parked: number; requests: number } {
   const sum = (values: number[]) => values.reduce((n, v) => n + v, 0);
   return {
     ...lineTotals(rows),
     billed: sum(rows.flatMap((r) => Object.values(r.session.day.billedUsd))),
-    // A day the cost model priced nothing for adds nothing to the figure.
-    equivalent: sum(rows.flatMap((r) => (r.session.day.equivalent === null ? [] : [r.session.day.equivalent]))),
+    // A day the cost model priced nothing for leaves the sum unknown, as a null figure leaves a spend's, so the line
+    // never passes a lower figure off as the whole.
+    equivalent: rows.reduce<number | null>((total, r) => (total === null || r.session.day.equivalent === null ? null : total + r.session.day.equivalent), 0),
     requests: sum(rows.flatMap((r) => Object.values(r.session.day.requests))),
   };
 }
@@ -484,7 +485,7 @@ export function SessionsPage() {
               <>
                 {`${fmtCount(summary.agents, 'agent')}: ${fmtInt(summary.busy)} busy, ${fmtInt(summary.idle)} idle, ${fmtInt(summary.parked)} parked · ${fmtCount(summary.requests, 'request')} and `}
                 {/* The figure is a Pro-week figure read in the chosen week, so it waits on the cost model's scale. */}
-                {weekReading.scale !== null ? weekShort(summary.equivalent * weekReading.scale, week) : weekReading.failure === null ? <Skeleton width={64} /> : <span title={weekReading.failure.text}>-</span>}
+                {summary.equivalent === null ? <span title={UNPRICED_TITLE}>-</span> : weekReading.scale !== null ? weekShort(summary.equivalent * weekReading.scale, week) : weekReading.failure === null ? <Skeleton width={64} /> : <span title={weekReading.failure.text}>-</span>}
                 {summary.billed > 0 && ` + ${fmtUsd(summary.billed)}`}
                 {' in 24 h'}
               </>

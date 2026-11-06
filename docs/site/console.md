@@ -1089,15 +1089,17 @@ states](keepalive.md#the-five-states).
 The card "Sessions", its title carrying "One row per session. Open a row for its agents, its routing and its cache
 warming." on hover, offers "Expand all" or "Collapse all", and its summary line reads the rows the filters keep: `{k}
 agents: {b} busy, {i} idle, {p} parked · {r} requests and {spend} in 24 h`, the agents counted as the Agents cell
-counts them, the busy, idle and parked ones by their lifecycle word, the client requests of the last 24 hours, and their
-spend as a share of the chosen week, with `+ {dollars}` after it where the day billed dollars, the probes left out. The
-Session column is always drawn, and the sixteen others, which the bar's Columns control shows or hides, are Status,
-Agents, Model, Account, Requests, Cost, Last used and Cache, shown by default, then Companion, Context, Created, Effort,
-Key, Last request, Next probe and Runway, hidden by default. The rows follow the sort control: by the session's creation
-time, its first placement, by its last activity, the later of its last use and its last request, by the list dollars of
-its requests, which add across units, or by its requests, newest or largest first by default, ties by session id and a
-row without the value last, and the five-second re-read keeps a row's place under Created. Session takes the card's free
-width and keeps at least 74 px, and a set of columns wider than the card scrolls inside it.
+counts them, the busy, idle and parked ones by their lifecycle word, the client requests of the last 24 hours, and
+their spend as a share of the chosen week, or a dash where a kept row's day holds a request the cost model priced
+nothing for, since a partial sum would read as the whole, with `+ {dollars}` after it where the day billed dollars, the
+probes left out. The Session column is always drawn, and the sixteen others, which the bar's Columns control shows or
+hides, are Status, Agents, Model, Account, Requests, Cost, Last used and Cache, shown by default, then Companion,
+Context, Created, Effort, Key, Last request, Next probe and Runway, hidden by default. The rows follow the sort
+control: by the session's creation time, its first placement, by its last activity, the later of its last use and its
+last request, by the list dollars of its requests, which add across units, or by its requests, newest or largest first
+by default, ties by session id and a row without the value last, and the five-second re-read keeps a row's place under
+Created. Session takes the card's free width and keeps at least 74 px, and a set of columns wider than the card scrolls
+inside it.
 
 The Session cell cuts a long id with an ellipsis, whole on hover, and a line under it reads a `fork` badge on a session
 that branched from another conversation at depth 2 or deeper, then the client version and the epoch from 2 on, `Claude

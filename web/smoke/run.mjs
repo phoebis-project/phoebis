@@ -24337,7 +24337,8 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     // The summary line under the card's title, over the rows the filters keep: the 35 agents the Agents cells count, 10
     // busy, 6 idle and 4 parked among them, nightly's notebook row (`sessionSpec[19]`) counted in none of the three,
     // since no mod reports it and its main reads unreported over the idle word the engine holds, the 86 client requests
-    // of the last 24 hours the rows' `day` folds and their spend, the figure in the chosen week, then the $1.40 the day
+    // of the last 24 hours the rows' `day` folds and a dash for their spend, since thirteen of the rows' days hold a
+    // plan request the cost model priced nothing for and a partial sum would read as the whole, then the $1.40 the day
     // billed in dollars, $1.4036 over these rows of the request seed (mock/requests.ts): e4b7's row the seed draws onto
     // the story's first session (`SESSION_IDS[0]`) on desktop, on overflow's API key on claude-fable-5-1 ($0.7747), the
     // written session's row on overflow's API key that the Cost case names ($0.4812), the fleet session's three written
@@ -24350,7 +24351,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     const parts = /^(.*) · (.*) requests and (.*) \+ (\$[\d.]+) in 24 h$/.exec(subtitle);
     results.push({
       name: "/sessions the card's summary line reads the agents by word, the day's requests and spend, and the dollars billed beside it, and the title its sentence on hover",
-      ok: card?.querySelector('.card__title [title]')?.getAttribute('title') === 'One row per session. Open a row for its agents, its routing and its cache warming.' && parts !== null && parts[1] === '35 agents: 10 busy, 6 idle, 4 parked' && parts[2] === '86' && /^\d[\d.]*% Ultra week$/.test(parts[3]) && parts[4] === '$1.40',
+      ok: card?.querySelector('.card__title [title]')?.getAttribute('title') === 'One row per session. Open a row for its agents, its routing and its cache warming.' && parts !== null && parts[1] === '35 agents: 10 busy, 6 idle, 4 parked' && parts[2] === '86' && parts[3] === '-' && parts[4] === '$1.40',
       missing: [subtitle, card?.querySelector('.card__title')?.outerHTML ?? 'no title'],
     });
   }
@@ -24371,6 +24372,24 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     });
   }
   page.unmount();
+  {
+    // The other side of the dash above: with every row whose day holds a plan request the cost model priced nothing
+    // for out of the listing, the kept rows' days are all priced and the line reads their sum as the figure in the
+    // chosen week. The read mounts its own page once the shared one is gone, so its settle moves no clock an earlier
+    // case reads.
+    const { listSessions } = api;
+    api.listSessions = async () => (await listSessions.call(api)).filter((s) => s.day.equivalent !== null);
+    const priced = await mount('/sessions', { now: CLOCK_ORIGIN });
+    const subtitle = priced.container.querySelector('.card--table .card__subtitle')?.textContent ?? '';
+    priced.unmount();
+    api.listSessions = listSessions;
+    const parts = /^(.*) · (.*) requests and (.*) \+ (\$[\d.]+) in 24 h$/.exec(subtitle);
+    results.push({
+      name: "/sessions the card's summary line reads the day's spend as a figure once every kept row's day is priced",
+      ok: parts !== null && /^\d[\d.]*% Ultra week$/.test(parts[3]),
+      missing: [subtitle],
+    });
+  }
   {
     // No story row carries a shed mark or the engine's unknown word, so two reads hand them: the written session marked
     // to leave overflow by a shedding round, and the story's first session, whose mod reports it, with main's word
