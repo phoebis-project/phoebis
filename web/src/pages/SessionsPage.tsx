@@ -1463,7 +1463,8 @@ function AgentRow({
   const tokens = pin?.lastInputTokens ?? null;
   const context = contextCell(tokens);
   const burn = burnReading(pin, cost);
-  // Main reads unreported on a session no mod reports, as its row does, whatever word the engine holds for it.
+  // Main reads unreported on a session no mod reports, as its row does, whatever word the engine holds for it but the
+  // release a session's end leaves.
   const word = line === null ? null : lineWordOf(session, line);
   const park = word === 'parked' && recipe !== null ? parkDetail(recipe, now).replace(/^ · /, '') : '';
   const hint = LIFECYCLE_HINT[word ?? 'unreported'];

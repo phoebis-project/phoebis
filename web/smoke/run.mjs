@@ -23077,8 +23077,8 @@ await forView('/sessions', async () => {
   });
   {
     // While the filters hide every row the router lists, the card says so with the hidden count and no expiry sentence:
-    // the route's eleven rows no companion reports inside the non-companion timeout, read under the Companion filter on
-    // reporting.
+    // the route's twelve rows no companion reports inside the non-companion timeout, the session the mod ended among
+    // them, read under the Companion filter on reporting.
     const { listSessions } = api;
     api.listSessions = async (...args) => (await listSessions.apply(api, args)).filter((s) => s.companion === 'none');
     const page = await mount('/sessions?companion=reporting', { now: CLOCK_ORIGIN });
@@ -23088,15 +23088,17 @@ await forView('/sessions', async () => {
     api.listSessions = listSessions;
     results.push({
       name: '/sessions with every row hidden by the filters the card reads No sessions kept by the filters with the hidden count',
-      ok: got.rows === 0 && (got.body ?? '').includes('No sessions kept by the filters') && (got.body ?? '').includes('11 sessions hidden by the filters.') && !(got.body ?? '').includes('session expiry') && !(got.body ?? '').includes('No live sessions'),
+      ok: got.rows === 0 && (got.body ?? '').includes('No sessions kept by the filters') && (got.body ?? '').includes('12 sessions hidden by the filters.') && !(got.body ?? '').includes('session expiry') && !(got.body ?? '').includes('No live sessions'),
       missing: [JSON.stringify(got)],
     });
   }
   {
     // A finished session keeps its lines once shown: the finished sentence opens its detail above the facts, and each
     // line of the Cache warming details reads its ended state with the probes and credits the engine last read. The
-    // filter lists all 27 rows, the three finished ones adding one agent to the bare page's 35, the ended session's
-    // main, since the Agents count leaves the released lines out.
+    // filter lists all 27 rows, the three finished ones adding no agent to the bare page's 35, since the end released
+    // the ended session's main with its subagents and the Agents count leaves the released lines out. No companion
+    // reports the session after its end, and its main keeps the released word: its Agents cell counts none with no word
+    // under it, and main's line in its Agents table reads released.
     const page = await mount('/sessions?finished=1', { now: CLOCK_ORIGIN });
     const chips = chipsOn(page);
     const count = { text: page.container.querySelector('.filter-bar__count')?.textContent ?? null, title: page.container.querySelector('.filter-bar__count [title]')?.getAttribute('title') ?? null };
@@ -23106,19 +23108,26 @@ await forView('/sessions', async () => {
     const detail = row?.nextElementSibling?.classList.contains('srow__detail') ? row.nextElementSibling : null;
     const sentence = detail?.querySelector('p.srow__finished') ?? null;
     const lines = [...(detail?.querySelectorAll('.agents__row:not(.agents__row--head)') ?? [])];
+    const headsOf = (table) => [...(table?.querySelectorAll(':scope > thead > tr > th') ?? [])].map((th) => th.textContent?.trim() ?? '');
+    const agentsCell = row?.children[headsOf(page.container.querySelector('.sessions-table')).indexOf('Agents')] ?? null;
+    const agentsTable = detail?.querySelector('table.agents-table') ?? null;
+    const mainLine = [...(agentsTable?.querySelectorAll(':scope > tbody > tr') ?? [])].find((tr) => tr.firstElementChild?.textContent?.trim() === 'main') ?? null;
     const got = {
       above: sentence !== null && sentence.parentElement?.firstElementChild === sentence && sentence.nextElementSibling?.classList.contains('srow__facts') === true,
+      agents: { count: agentsCell?.firstChild?.textContent?.trim() ?? null, split: agentsCell?.querySelector('.srow__split')?.textContent?.trim() ?? null },
       counts: lines.map((l) => l.querySelector('.agents__counts')?.textContent?.trim() ?? ''),
+      companion: finished?.companion ?? null,
+      main: mainLine?.children[headsOf(agentsTable).indexOf('Status')]?.textContent?.trim() ?? null,
       sentences: detail?.querySelectorAll('.srow__finished').length ?? 0,
       states: lines.map((l) => l.querySelector('.agents__state > .badge:first-child')?.textContent?.trim() ?? ''),
       text: sentence?.textContent?.trim() ?? null,
     };
     page.unmount();
     results.push({
-      name: '/sessions ?finished=1 lists the finished session under the chip finished sessions, its expanded row the finished sentence above its facts and its three lines each ended with its probes and credits, and the count names every listed row',
+      name: '/sessions ?finished=1 lists the finished session under the chip finished sessions, its expanded row the finished sentence above its facts and its three lines each ended with its probes and credits, its main released and counted in no Agents word, and the count names every listed row',
       ok:
         JSON.stringify(chips) === JSON.stringify(['finished sessions']) &&
-        count.text === '27 sessions · 36 agents' &&
+        count.text === '27 sessions · 35 agents' &&
         count.title === null &&
         row !== null &&
         got.text === RELEASED_SENTENCE &&
@@ -23126,7 +23135,11 @@ await forView('/sessions', async () => {
         got.above &&
         got.states.length === 3 &&
         got.states.every((s) => s === 'ended') &&
-        got.counts.every((c) => /^\d+ \/ \d+$/.test(c) && c !== '0 / 0'),
+        got.counts.every((c) => /^\d+ \/ \d+$/.test(c) && c !== '0 / 0') &&
+        got.companion === 'none' &&
+        got.agents.count === '0' &&
+        got.agents.split === null &&
+        got.main === 'released',
       missing: [JSON.stringify(chips), JSON.stringify(count), row === null ? 'no finished row' : JSON.stringify(got)],
     });
   }
@@ -24151,8 +24164,8 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
   {
     // The summary line under the card's title, over the rows the filters keep: the 35 agents the Agents cells count,
     // 10 busy, 6 idle and 4 parked among them, nightly's notebook row (`sessionSpec[19]`) counted in none of the three,
-    // since no mod reports it and its main reads unreported whatever word the engine holds, the 86 client requests of
-    // the last 24 hours the rows' `day` folds and
+    // since no mod reports it and its main reads unreported over the idle word the engine holds, the 86 client
+    // requests of the last 24 hours the rows' `day` folds and
     // their spend, the figure in the chosen week, then the $1.40 the day billed in dollars, $1.4036 over these rows of
     // the request seed (mock/requests.ts): e4b7's row the seed draws onto the story's first session (`SESSION_IDS[0]`)
     // on desktop, on overflow's API key on claude-fable-5-1 ($0.7747), the written session's row on overflow's API key
@@ -24761,10 +24774,11 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
   // The sessions the mod released whole are finished, so these read with the finished sessions shown.
   await m.navigate('/sessions?finished=1');
   {
-    // The two sessions the mod released whole keep their rows, each finished in its Status cell.
+    // The two sessions the mod released whole keep their rows, each finished in its Status cell. The session the mod
+    // ended reads every record released as well, by its end, so its main's cause leaves it out.
     const whole = new Map();
     const recipes = await api.listKeepaliveRecipes();
-    for (const r of recipes) whole.set(r.sessionId, (whole.get(r.sessionId) ?? true) && r.agentState === 'released');
+    for (const r of recipes) whole.set(r.sessionId, (whole.get(r.sessionId) ?? true) && r.agentState === 'released' && r.cause !== 'session_ended');
     const released = [...whole].filter(([, all]) => all).map(([id]) => id);
     const rowOf = (id) => rows().find((r) => cell(r, 'Session')?.getAttribute('title') === id);
     const badges = released.map((id) => (rowOf(id) ? cell(rowOf(id), 'Status')?.querySelector('.badge')?.textContent?.trim() : undefined));

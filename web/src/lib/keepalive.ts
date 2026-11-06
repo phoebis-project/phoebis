@@ -243,13 +243,14 @@ export const STATUS_TONE: Record<Lifecycle, BadgeTone> = { busy: 'accent', idle:
 
 /**
  * The word the row and main's line read for main, null where it reads `unreported`: the engine writes main's word for
- * any session it holds, and a session no mod reports keeps that word off the view.
+ * any session it holds, and a session no mod reports keeps that word off the view. `released` is the mod's last word,
+ * which the engine keeps after the session's end while the companion reads `none`, so it stands.
  */
-export const reportedWord = (session: Pick<Session, 'companion'>, lifecycle: Lifecycle | null): Lifecycle | null => (session.companion === 'none' ? null : lifecycle);
+export const reportedWord = (session: Pick<Session, 'companion'>, lifecycle: Lifecycle | null): Lifecycle | null => (session.companion === 'none' && lifecycle !== 'released' ? null : lifecycle);
 
 /**
  * The row's Status word and tone: `finished` first (`isFinished` over the session and its lines), `unreported` where
- * the lifecycle is null or no mod reports the session, else the lifecycle word. `muted` is the ink `unreported` takes.
+ * `reportedWord` reads none, else the lifecycle word. `muted` is the ink `unreported` takes.
  */
 export function statusOf(session: Pick<Session, 'companion' | 'keepalive' | 'lifecycle'>, lines: readonly Pick<SessionLine, 'lifecycle'>[]): { tone: BadgeTone | 'muted'; word: StatusWord } {
   if (isFinished(session, lines)) return { tone: 'neutral', word: 'finished' };

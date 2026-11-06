@@ -1011,7 +1011,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual(exhausted.map((r) => [r.sessionId, r.agentId, r.state]), [[rows[1].sessionId, rows[1].agentId, 'held']], "the written session's second line is the pool exhausted one");
     assert.ok(Date.parse(exhausted[0].nextProbeAt) > s.now, `its next probe ${exhausted[0].nextProbeAt} lies ahead of the story's now`);
     const overview = await s.api.getKeepaliveOverview();
-    assert.deepEqual([overview.agents.busy, overview.agents.idle, overview.agents.parked], [10, 9, 4], 'the tiles count the recipe rows by lifecycle word, released ones left out');
+    // The session the mod ended releases its main with every other agent, so no tile counts it.
+    assert.deepEqual([overview.agents.busy, overview.agents.idle, overview.agents.parked], [10, 8, 4], 'the tiles count the recipe rows by lifecycle word, released ones left out');
     // The engine's cap counts every record it holds, the idle recipe of the row two hours back among them, which the
     // route's list leaves out. The session specs the mod registered or a recipe warms hold 31 agents, the
     // registration-only row none, and the auxiliary-only row its one subagent.
@@ -1023,7 +1024,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const recipes = await s.api.listKeepaliveRecipes();
     const bySession = new Map();
     for (const r of recipes) bySession.set(`${r.keyId}|${r.sessionId}`, [...(bySession.get(`${r.keyId}|${r.sessionId}`) ?? []), r]);
-    const whole = [...bySession.values()].filter((rows) => rows.every((r) => r.agentState === 'released'));
+    // The session the mod ended reads every record released as well, by its end, so its main's cause sets it apart.
+    const whole = [...bySession.values()].filter((rows) => rows.every((r) => r.agentState === 'released') && !rows.some((r) => r.cause === 'session_ended'));
     // The other session the mod released whole is the line past its window, which holds no request of the ledger.
     const kept = whole.filter((rows) => rows.some((r) => s.now - lastUseOf(r) <= affinityOf(s, r)));
     assert.deepEqual([whole.length, kept.length], [2, 1], 'two sessions the mod released whole, one inside its window');
@@ -1093,9 +1095,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (const line of lines) assert.ok(words.includes(line.effort), `${line.agentId} reads the effort ${line.effort}`);
     assert.ok(lines.some((l) => l.warm) && lines.some((l) => !l.warm), 'warm and cold lines both');
     // The written rows' lines on a five-minute TTL: the session no mod reports used main 2 minutes back and its
-    // subagent 25, the auxiliary-only session's subagent 3, and the finished row, the row two hours back and the
-    // notebook row used main 21, 120 and 20 minutes back. The slowed session's lines sit on the hour's TTL, main last
-    // used at 14:05 and its Haiku subagent at 13:59:05, so both read warm where five minutes would read them cold.
+    // subagent 25, the auxiliary-only session's subagent 3, the finished row main 21 and its released subagents 47 and
+    // 34, whose pins it lists since no companion reports it after its end, and the row two hours back and the notebook
+    // row main 120 and 20 minutes back. The slowed session's lines sit on the hour's TTL, main last used at 14:05 and its
+    // Haiku subagent at 13:59:05, so both read warm where five minutes would read them cold.
     const written = ['b7e2d5a9-6c13-4f80-a4d2-9e1f3c7b0a68', '3e9b7c21-4d58-4a06-8f1e-6c2a9d0b5e74', '9b4e2f71-6c3d-4a85-b0e2-5d7f8a1c3e96', 'e5a17c3d-8f20-4b6e-9d41-2c7b0a9f6e58', '6d2f8b40-1e7a-4c95-a3d8-7b5e0c9f2a61', '5f8a3c1e-9d27-4b6e-8c04-2a7e9b3d1f65'];
     const warmOf = (sessionId) => seeded.find((x) => x.sessionId === sessionId)?.agentContexts.map((c) => [c.agentId, c.warm]);
     assert.deepEqual(written.map(warmOf), [
@@ -1104,7 +1107,11 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
         ['5c8e', false],
       ],
       [['d41c', true]],
-      [['main', false]],
+      [
+        ['main', false],
+        ['5d0e', false],
+        ['a7f3', false],
+      ],
       [['main', false]],
       [['main', false]],
       [

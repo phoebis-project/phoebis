@@ -26,6 +26,8 @@ interface WrittenFigures {
   burn: number;
   burnAtMinutes: number;
   createdMinutes: number;
+  /** A finished row's end in seconds, the mod's last report, after every agent's last probe. */
+  endedSeconds?: number;
   lastInputTokens: number;
   lastRefreshMinutes: number;
 }
@@ -50,8 +52,8 @@ const WRITTEN_SUBAGENTS: Partial<KeepaliveRecipe>[] = [
 // `state: null` marks a session with no cache-warming recipe: the `ci` key opts
 // out and `jobs` keeps no caches warm.
 // `companion` is independent of that: it says whether the keepalive mod ever
-// registered for the session and is still reporting. A silent
-// companion changes neither, because the retained prompts stay and are probed
+// registered for the session and is still reporting, and a session the mod
+// ended reads none. A silent companion changes neither, because the retained prompts stay and are probed
 // under the idle window. `subagents` pins the agents below main, which may run another
 // model and, with that, land on another account. `idleMinutes` overrides the
 // random idle on the few sessions that exist to straddle the expiry presets:
@@ -76,8 +78,8 @@ const sessionSpec: ({
   compactedAgent?: number;
   companion: CompanionState;
   /**
-   * The row is finished: the builder writes main's cause `session_ended` and every subagent `agent_released` in
-   * `released` state.
+   * The row is finished: the builder writes main's cause `session_ended`, every subagent's `agent_released` and every
+   * agent in `released` state.
    */
   finished?: true;
   idleMinutes?: number;
@@ -133,16 +135,17 @@ const sessionSpec: ({
   // cache TTL, since the router lists a released record for one TTL after its release and then not at all.
   { keyId: 'desktop', accountId: 'primary', model: 'claude-sonnet-5', state: 'idle', agents: 3, companion: 'reporting', released: true, sessionId: RELEASED_SESSION_ID },
   { keyId: 'laptop', accountId: 'primary', model: 'claude-sonnet-4-5', state: 'busy', agents: 1, companion: 'reporting', sessionId: CLIENT_SESSION_ID },
-  // One session the mod ended, which keeps its lines, its released subagents' last probes dating their release inside
-  // all's one-hour cache TTL, and which the Sessions view's default filters hide, and one no companion reports, last
-  // used two hours ago, past the one-hour non-companion timeout, so the route's list leaves it out.
+  // One session the mod ended, whose companion reads none since its end, which keeps its lines, its released
+  // subagents' last probes dating their release inside all's one-hour cache TTL, and which the Sessions view's default
+  // filters hide, and one no companion reports, last used two hours ago, past the one-hour non-companion timeout, so the
+  // route's list leaves it out.
   {
     keyId: 'desktop',
     accountId: 'nightly',
     model: 'claude-opus-5',
     state: 'idle',
     agents: 3,
-    companion: 'reporting',
+    companion: 'none',
     finished: true,
     fixed: true,
     idleMinutes: 21,
@@ -156,6 +159,7 @@ const sessionSpec: ({
       burn: 0.18,
       burnAtMinutes: 22,
       createdMinutes: 140,
+      endedSeconds: 30,
       lastInputTokens: 14_200,
       lastRefreshMinutes: 22,
     },
@@ -461,7 +465,8 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     agentContexts: [],
     agents: spec.agents,
     companion: spec.companion,
-    companionSince: spec.companion === 'silent' ? ago(rng.int(12, 150) * MINUTE) : null,
+    // The companion's last report, as the engine dates a companion that stopped: a silent one's lapse, the session's end.
+    companionSince: written?.endedSeconds !== undefined ? ago(written.endedSeconds * 1000) : spec.companion === 'silent' ? ago(rng.int(12, 150) * MINUTE) : null,
     keepalive: {
       state: spec.state,
       // Filled in from the recipes below, so a row and its agents cannot disagree.
@@ -544,10 +549,10 @@ const RELEASED_BY_THE_MOD: Partial<KeepaliveRecipe> = { agentState: 'released', 
  */
 const COMPACTED: Partial<KeepaliveRecipe> = { cause: 'compacted', lastGuard: 'compaction', nextProbeAt: null, state: 'ended' };
 /**
- * What main reads on a session the mod ended, written over the drawn row. Its lifecycle word stays its session's, as
- * an ended main's does, and its subagents read as the mod released them.
+ * What main reads on a session the mod ended, written over the drawn row. The end releases every agent, so main reads
+ * released as an ended main does, and its subagents read as the mod released them.
  */
-const ENDED_WITH_THE_SESSION: Partial<KeepaliveRecipe> = { cause: 'session_ended', deadline: null, nextProbeAt: null, parkKind: null, state: 'ended', wakeAt: null };
+const ENDED_WITH_THE_SESSION: Partial<KeepaliveRecipe> = { agentState: 'released', cause: 'session_ended', deadline: null, nextProbeAt: null, parkKind: null, state: 'ended', wakeAt: null };
 
 /**
  * A drawn story's pinned subagent at place `j` past main: the story's own, the one its request rows name. A uuid is
@@ -672,17 +677,19 @@ for (const pin of SESSIONS) {
  * keep their rolls.
  */
 const agentTokens = (i: number, j: number) => 2_000 + ((i * 31 + j * 17) % 23) * 1_000;
-// The route lists one line per pin of an agent the engine holds and has not released, main's reading the row's own pin,
-// so a session the mod released whole lists none. Every recipe the story writes stands on a pin, and a session no
-// companion reports holds main's alone. The subagents' pins take the companion's five-minute TTL, their place's effort
-// word and their last request as their last use. The row reads warm off main's pin, the cache its Cache cell names,
-// before its last use moves to the newest across its pins.
+// The route lists one line per pin: on a row a companion reports, one of an agent the engine holds and has not
+// released, main's reading the row's own pin, so a session the mod released whole lists none, and on any other row
+// every pin the listing keeps inside the non-companion timeout, released or not, so the session the mod ended lists its
+// released agents. Every recipe the story writes stands on a pin, and a session no companion ever reported holds main's
+// alone. The subagents' pins take the companion's five-minute TTL, their place's effort word and their last request as
+// their last use. The row reads warm off main's pin, the cache its Cache cell names, before its last use moves to the
+// newest across its pins.
 SESSIONS.forEach((pin, i) => {
   pin.agentContexts = datedLines(
     pin.createdAt,
     activityOf(pin.keyId, pin.keyGeneration, pin.sessionId),
     RECIPES.filter((r) => r.keyId === pin.keyId && r.sessionId === pin.sessionId).flatMap((r, j) => {
-      if (r.agentState === 'released' || r.accountId === null) return [];
+      if ((r.agentState === 'released' && pin.companion !== 'none') || r.accountId === null) return [];
       const own = { accountId: r.accountId, agentId: r.agentId, model: r.model };
       if (r.agentId === 'main') {
         const line = { ...own, cacheTtlMs: pin.cacheTtlMs, effort: pin.effort, lastInputTokens: pin.lastInputTokens, lastUsedAt: pin.lastUsedAt ?? r.lastRequestAt, lifecycle: r.agentState };

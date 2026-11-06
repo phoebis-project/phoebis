@@ -306,6 +306,12 @@ test('hiddenLines counts the lines the Agents filters hide and the earlier agent
   assert.deepEqual([hidden, shown.map((l) => l.agentId)], [3, ['a1']]);
 });
 
+test("lineWordOf reads main's line on a session no mod reports as unreported, and a main the session's end released as released", () => {
+  const session = { companion: 'none' };
+  assert.equal(d.lineWordOf(session, matchLine('main', 'claude-sonnet-5', 'idle')), 'unreported', "the engine's own word for main");
+  assert.equal(d.lineWordOf(session, matchLine('main', 'claude-sonnet-5', 'released')), 'released', 'the release the end left');
+});
+
 test("pinTtlMs reads the time left to the pin's last use plus its cache TTL, and none once that has passed or with no TTL", () => {
   const pin = { cacheTtlMs: 5 * MINUTE, lastUsedAt: iso(NOW - 5 * MINUTE + SECOND) };
   assert.equal(d.pinTtlMs(pin, NOW), SECOND, 'one second inside the TTL');
