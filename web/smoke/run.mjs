@@ -24269,8 +24269,9 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     // request seed draws onto its session (`SESSION_IDS[9]` in mock/requests.ts, its probe left out), cost $1.15
     // together: main's on primary on claude-fable-5-1 ($0.3881), main's on overflow's API key on claude-fable-5-1
     // ($0.4812), main's ($0.0551) and e7c1's two ($0.0438 and $0.1846) on secondary on claude-sonnet-4-5, and b2d8's
-    // 429 on claude-sonnet-4-5 that no account served ($0). The figure reads over "equivalent" since the secondary rows
-    // priced no share, then the neutral +$ for the $0.4812 overflow's row billed and the neutral +1 for secondary,
+    // 429 on claude-sonnet-4-5 that no account served ($0). The figure reads the plan rows' $0.67 over "equivalent",
+    // since the secondary rows priced no share and the billed row's dollars sit on the badge, then the neutral +$ for
+    // the $0.4812 overflow's row billed and the neutral +1 for secondary,
     // whose plan windows the three secondary rows spent on beside the row's primary. Under Native the cell draws its
     // figure, no placeholder. The laptop row the ledger never saw reads a muted dash with the sentence, and the sub
     // line reads the pin's burn per hour: the fleet session's usage-based seat at $0.36 an hour (`FLEET_BURN`), and
@@ -24290,7 +24291,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
       name: "/sessions the Cost cell reads the written session's dollars over equivalent with its +$ and +N badges under Dollar equivalent, a figure under Native, a muted dash with none, and the pin's burn per hour under it",
       ok:
         absent.length === 0 &&
-        dollars.main === '$1.15' &&
+        dollars.main === '$0.67' &&
         dollars.sub[0] === 'equivalent' &&
         JSON.stringify(dollars.badges) === JSON.stringify([{ cls: 'badge badge--neutral', text: '+$', title: '$0.48 billed in dollars' }, { cls: 'badge badge--neutral', text: '+1', title: 'Other accounts the requests spent on:\nsecondary' }]) &&
         (dollars.title ?? '').startsWith('6 requests. ') &&
@@ -24628,7 +24629,8 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     // the busy subagent 4d1a on its own pin (22,000 tokens), whose one seed row ledgered no request. The table closes
     // on the agent's menu, labeled with the agent. An agent's "+N" counts the accounts other than its line's: on the
     // story's first session, a primary one, e4b7's line sits on nightly and its seed rows spent $1.31 on primary and
-    // secondary, $0.77 of it billed, so its Cost cell reads +$ and +2, where the session's account would leave +1.
+    // secondary, $0.77 of it billed on overflow's API key, so its Cost cell reads the plan rows' $0.54 over equivalent
+    // with +$ and +2, where the session's account would leave +1.
     const page = await mount('/sessions', { now: CLOCK_ORIGIN });
     const { heads, rows } = agentsOf(await openRow(page, written));
     const elsewhere = agentsOf(await openRow(page, story)).rows.find((r) => r.agent === 'e4b7');
@@ -24682,7 +24684,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
         JSON.stringify(heads) === JSON.stringify(['Agent', 'Type', 'Model', 'Account', 'Context', 'Burn', 'Requests', 'Cost', 'Status', 'Cache', '']) &&
         rows[0]?.agent === 'main' &&
         JSON.stringify(read) === JSON.stringify({ busy: want.busy, main: want.main }) &&
-        JSON.stringify(elsewhereRead) === JSON.stringify({ badges: ['+$', '+2'], figure: '$1.31', sub: 'equivalent' }),
+        JSON.stringify(elsewhereRead) === JSON.stringify({ badges: ['+$', '+2'], figure: '$0.54', sub: 'equivalent' }),
       missing: [JSON.stringify(heads), JSON.stringify(read), `want ${JSON.stringify(want)}`, `e4b7 ${JSON.stringify(elsewhereRead)}`],
     });
   }

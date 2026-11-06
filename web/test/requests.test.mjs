@@ -246,3 +246,9 @@ test('the request order puts the newer request first and the higher id first at 
   ];
   assert.deepEqual([...rows].sort(d.compareRequests).map((r) => r.id), ['req_0', 'req_b', 'req_a']);
 });
+
+test("a session spend with plan and billed requests reads the plan requests' list dollars as its equivalent and the billed ones on the badge", () => {
+  const spend = { billedUsd: { api_key: 3 }, equivalent: 0.01, requests: 2, shares: { a: {} }, usd: 5 };
+  const reading = d.spendUnitOf(spend, 'equivalent', null, null);
+  assert.deepEqual([reading.billed, reading.unit], [3, { figure: 0.01, hint: null, kind: 'equivalent_dollars', reason: null, usd: 2 }]);
+});

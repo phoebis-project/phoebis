@@ -146,9 +146,12 @@ export function spendUnitOf(spend: SessionSpendPart, unit: UnitPosition, account
   const billed = billedSum(spend);
   const figures = { dollars: billed, figure: spend.equivalent, hint, reason: null, usd: spend.usd };
   if (planFunded(spend)) {
-    if (unit !== 'usd') return { accounts, billed, unit: fundedUnit('plan', unit, figures) };
+    // The plan requests' list dollars: `usd` sums every served request's, and `billedUsd` holds the billed ones' by
+    // funding, which the `+$` badge carries.
+    const plan = { ...figures, usd: spend.usd - billed };
+    if (unit !== 'usd') return { accounts, billed, unit: fundedUnit('plan', unit, plan) };
     const funding = largestFunding(spend.billedUsd);
-    return { accounts, billed: 0, unit: funding === null ? fundedUnit('plan', unit, figures) : { funding, kind: 'dollars', usd: billed } };
+    return { accounts, billed: 0, unit: funding === null ? fundedUnit('plan', unit, plan) : { funding, kind: 'dollars', usd: billed } };
   }
   const funding = largestFunding(spend.billedUsd);
   if (funding === null) return { accounts, billed: 0, unit: { kind: 'unserved', usd: spend.usd } };
@@ -201,7 +204,7 @@ function spendFigure(part: SessionSpendPart, week: WeekPosition, scale: number |
   const plan = planFunded(part);
   if (plan && part.equivalent !== null && scale !== null) return fmtWeek(part.equivalent * scale, week);
   const billed = billedSum(part);
-  return fmtUsd(plan || billed === 0 ? part.usd : billed);
+  return fmtUsd(plan ? part.usd - billed : billed === 0 ? part.usd : billed);
 }
 
 /**
