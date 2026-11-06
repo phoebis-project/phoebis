@@ -23644,6 +23644,33 @@ fn a_purge_tick_after_a_reset_drops_the_deadlines_the_accounts_pins_stood_before
 }
 
 #[test]
+fn a_purge_tick_on_a_switched_off_pool_keeps_the_deadline_the_pins_next_request_rejoins() {
+    // At the ceiling under a reset ten minutes out, the pin's part is the pool's cap of a minute.
+    let (off, on) = held_pools(60);
+    let mut st = rounding(vec![burning("s1", "a", 15.0, true, T)]);
+    reading(&mut st, "a", 0.96, 10 * MINUTE, T);
+    reading(&mut st, "b", 0.1, 2 * HOUR, T);
+    cycled(&mut st, &off, "s1", 10 * SECOND, T + 10 * SECOND);
+    let first = main_turn(&on, "s1", T + 20 * SECOND);
+    assert_eq!(
+        held_on(&decide(&mut st, &on, &first, &mut rng())).1.until,
+        Some(T + 80 * SECOND)
+    );
+    // The switch goes off and the tick removes the entry of a window that still runs.
+    st.purge(&off, T + 30 * SECOND);
+    let retry = SelectRequest {
+        request_id: "r-2".into(),
+        ..main_turn(&off, "s1", T + 40 * SECOND)
+    };
+    let (_, hold) = held_on(&decide(&mut st, &off, &retry, &mut rng()));
+    assert_eq!(
+        (hold.reason, hold.until),
+        ("slow_down", Some(T + 80 * SECOND)),
+        "the hold was answered under the switch then in force, so the retry waits to the same instant"
+    );
+}
+
+#[test]
 fn a_placement_after_a_slow_down_hold_names_the_hold_it_followed() {
     let (off, on) = held_pools(120);
     let mut st = slowed_s1(0.80);
