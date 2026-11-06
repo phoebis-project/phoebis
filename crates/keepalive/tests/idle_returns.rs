@@ -1,7 +1,8 @@
 //! The idle-age counters: per pool and idle-age bucket, the idle windows of the main conversation that reached the
 //! bucket's start and those whose next request continued the prefix the window opened on. The windows are counted at
 //! every tick and at the request that ends one, whether or not a recipe is still retained. Beside them, the chain
-//! watch: a refreshing request whose chain holds neither boundary of that prefix while its answer reads the cache.
+//! watch: a refreshing request whose chain holds none of the boundaries of that prefix while its answer reads the
+//! cache.
 mod common;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -927,7 +928,7 @@ async fn a_main_class_request_that_continues_the_prefix_counts_as_a_return() {
 }
 
 const VERSION: &str = "2.1.305";
-const WATCH_LINE: &str = "a refreshing request's chain holds neither anchor boundary";
+const WATCH_LINE: &str = "a refreshing request's chain holds none of the anchor's boundaries";
 
 /// A conversation of its own under the rig's static prefix, whose chain holds no boundary of another.
 fn conversation(n: u32) -> String {
@@ -955,6 +956,7 @@ fn arrive(r: &Rig, id: &str, class: &str, body: &str, facts: impl FnOnce(&mut Cl
     ) else {
         unreachable!("observed_with builds an observation")
     };
+    observed.marked = chains.marked.clone();
     facts(&mut observed.client);
     r.engine.observe(BusEvent::RequestObserved(observed));
 }
@@ -1135,6 +1137,62 @@ async fn the_contradiction_line_names_no_hash() {
         .max()
         .unwrap_or(0);
     assert!(longest_hex_run < 64, "a 64-hex run in the log: {text}");
+}
+
+/// Main's turn on five messages whose first, third and last carry the cache marker, so the deepest marked boundary
+/// before its last two is the third's.
+fn marked_turns() -> String {
+    BODY.replace(
+        r#"{"role":"user","content":"hello"}]"#,
+        r#"{"role":"user","content":[{"type":"text","text":"hello","cache_control":{"type":"ephemeral"}}]},{"role":"assistant","content":"hi"},{"role":"user","content":[{"type":"text","text":"and then","cache_control":{"type":"ephemeral"}}]},{"role":"assistant","content":"working"},{"role":"user","content":[{"type":"text","text":"steer","cache_control":{"type":"ephemeral"}}]}]"#,
+    )
+}
+
+/// The request after `marked_turns` was interrupted: the first three messages re-sent and the interrupt in place of
+/// the last two, so the chain holds the third's boundary and neither of the last two.
+fn after_the_interrupt() -> String {
+    BODY.replace(
+        r#"{"role":"user","content":"hello"}]"#,
+        r#"{"role":"user","content":"hello"},{"role":"assistant","content":"hi"},{"role":"user","content":"and then"},{"role":"user","content":"[Request interrupted by user]"}]"#,
+    )
+}
+
+/// A request that rewinds past the third message of `marked_turns`: its chain holds the first two boundaries alone,
+/// the first of them marked.
+fn past_the_marked_boundary() -> String {
+    BODY.replace(
+        r#"{"role":"user","content":"hello"}]"#,
+        r#"{"role":"user","content":"hello"},{"role":"assistant","content":"hi"},{"role":"user","content":"something else"}]"#,
+    )
+}
+
+/// The upstream reads the cache through the deepest marked boundary, so an interrupted turn's next request, which drops
+/// the last two messages, continues the prefix. The anchor's request goes through the relay, so the marked positions
+/// are the ones it publishes. A request that rewinds past that boundary holds none of the anchor's, the shallower
+/// marked one it shares included.
+#[tokio::test]
+async fn an_interrupted_turns_next_request_counts_a_return_and_marks_nothing_while_a_rewind_past_the_marked_boundary_marks(
+) {
+    let mut r = rig(RigSpec::default()).await;
+    let start = idle_after_request_with(&mut r, &marked_turns()).await;
+    tick_to(&mut r, start, 12).await;
+    observe_classed(&mut r, "main", &after_the_interrupt()).await;
+    assert_eq!(
+        (returned(&r), contradictions(&r)),
+        ([0, 1, 0, 0, 0, 0, 0, 0, 0, 0], Vec::<String>::new()),
+        "after the interrupt"
+    );
+    let r = rig(RigSpec::default()).await;
+    arrive(&r, "first", "main", &marked_turns(), |_| {});
+    answer(&r, "first", VERSION, reading(1_800));
+    r.advance(MINUTE);
+    arrive(&r, "rewound", "main", &past_the_marked_boundary(), |_| {});
+    answer(&r, "rewound", VERSION, reading(1_800));
+    assert_eq!(
+        contradictions(&r),
+        [series(VERSION, 1)],
+        "past the marked boundary"
+    );
 }
 
 #[tokio::test]
@@ -1404,6 +1462,7 @@ fn continues_prefix_holds_either_of_the_anchors_two_boundaries() {
         static_hash: "static".into(),
         last: "tail".into(),
         before_last: Some("before".into()),
+        marked: None,
     };
     let one = PrefixAnchor {
         before_last: None,

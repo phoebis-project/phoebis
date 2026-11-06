@@ -187,7 +187,9 @@ until its first request, and a first request over either cap is not kept and rea
 holds a probe due within its interval of the end ([How a probe works](keepalive.md#how-a-probe-works)). A request on a
 pool with the keepalive off or from an opted-out key is recorded at its arrival with no body kept ([The five
 states](keepalive.md#the-five-states)), and a kept-warm credit files under the tier its request row files under ([What
-the ledger records](keepalive.md#what-the-ledger-records)).
+the ledger records](keepalive.md#what-the-ledger-records)). An idle return also counts where the request carries the
+deepest boundary the earlier request marked for the cache, so an interrupted turn's next request reads as a return and
+the chain watch stays quiet ([The return rate by idle age](keepalive.md#the-return-rate-by-idle-age)).
 
 The admin listener serves the web console behind a login with the admin secret, with the views in the sidebar's order,
 Dashboard, Quota, Accounts, Pools, Keys, Guardrails, Requests, Analytics, Sessions and Settings, and under them the

@@ -26,6 +26,10 @@ pub struct Chains {
     pub static_boundaries: Arc<[String]>,
     /// One boundary per entry of `messages`, on a seed of its own; shared as the static chain is.
     pub message_boundaries: Arc<[String]>,
+    /// The positions in `message_boundaries` of the messages that carry a `cache_control` marker, ascending: on a
+    /// block of the message's content or on a block of such a block's own `content` (a `tool_result`'s), the two
+    /// levels the upstream caches through.
+    pub marked: Arc<[usize]>,
     /// Parallel to `static_boundaries`: the estimated token size of the blocks up to and including each
     /// boundary, the canonical bytes the chain hashed over four; 0 at the empty-tools boundary of a request
     /// without tools.
@@ -53,16 +57,21 @@ impl Chains {
             static_sizes.push(running_bytes / 4);
         }
         let mut message_boundaries = Vec::new();
+        let mut marked = Vec::new();
         let mut previous = Sha256::digest(MESSAGE_SEED);
         if let Some(Value::Array(messages)) = root.get("messages") {
-            for message in messages {
+            for (at, message) in messages.iter().enumerate() {
                 previous = boundary(&previous, message, &mut scratch).0;
                 message_boundaries.push(format!("{previous:x}"));
+                if carries_marker(message) {
+                    marked.push(at);
+                }
             }
         }
         Some(Chains {
             static_boundaries: static_boundaries.into(),
             message_boundaries: message_boundaries.into(),
+            marked: marked.into(),
             static_sizes,
         })
     }
@@ -197,6 +206,20 @@ fn boundary(previous: &Link, block: &Value, scratch: &mut Vec<u8>) -> (Link, u64
     hasher.update(previous);
     hasher.update(&*scratch);
     (hasher.finalize(), scratch.len() as u64)
+}
+
+/// Whether `message` carries a `cache_control` marker at one of the two levels `Chains::marked` reads, the ones
+/// `schema_cache_controls` reads a message's markers at.
+fn carries_marker(message: &Value) -> bool {
+    blocks(message.get("content")).any(|block| {
+        block.get("cache_control").is_some()
+            || blocks(block.get("content")).any(|inner| inner.get("cache_control").is_some())
+    })
+}
+
+/// The items of a content array, none for a string or an absent member.
+fn blocks(content: Option<&Value>) -> impl Iterator<Item = &Value> {
+    content.and_then(Value::as_array).into_iter().flatten()
 }
 
 /// `system`'s blocks in the order the static chain hashes them: a string is one block, an array's own blocks in
@@ -449,6 +472,16 @@ mod tests {
             result(json!([marked("ok")])).message_boundaries,
             result(json!("ok")).message_boundaries
         );
+    }
+
+    #[test]
+    fn a_marker_on_a_tool_results_own_block_marks_its_message_and_an_unmarked_message_stays_unmarked(
+    ) {
+        let chains = read(json!({"messages": [
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": [marked("ok")]}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t2", "content": [unmarked("ok")]}]},
+        ]}));
+        assert_eq!(chains.marked[..], [0]);
     }
 
     #[test]

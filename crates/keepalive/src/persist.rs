@@ -82,6 +82,10 @@ pub(crate) struct PersistedAgent {
     pub idle_episode: Option<PersistedEpisode>,
     pub idle_window_floor: Option<i64>,
     pub last_prefix: Option<PersistedAnchor>,
+    /// `last_prefix`'s marked boundary. Absent from a row saved before anchors carried one, which loads as `None`, so
+    /// the anchor holds its last two boundaries alone until main's next request.
+    #[serde(default)]
+    pub last_prefix_marked: Option<String>,
     /// Absent from a row saved before agents carried one, which loads as `None`, so the watch marks nothing until the
     /// next main completion reports a prompt.
     #[serde(default)]
@@ -135,6 +139,10 @@ pub(crate) struct PersistedEpisode {
     pub started: i64,
     pub bucket: Option<usize>,
     pub anchor: Option<PersistedAnchor>,
+    /// `anchor`'s marked boundary, absent and loaded as `None` as `PersistedAgent.last_prefix_marked` is, so the
+    /// window judges its return on the last two boundaries alone.
+    #[serde(default)]
+    pub anchor_marked: Option<String>,
     pub prompt_at: Option<i64>,
     pub pool_key: String,
     /// Absent from a row saved before windows carried one, which loads as `None`. That window's reach was counted
@@ -145,7 +153,9 @@ pub(crate) struct PersistedEpisode {
 }
 
 /// Saved as `[static_hash, last, before_last]`, read from that or from the saved `[static_hash, last]` pair, so a row
-/// an earlier build saved loads under the same record version with no boundary before the last.
+/// an earlier build saved loads under the same record version with no boundary before the last. The marked boundary
+/// sits beside the array in a field of the host's own, so the array keeps the two shapes a binary of the same record
+/// version reads.
 #[derive(Serialize, Deserialize)]
 #[serde(untagged)]
 pub(crate) enum PersistedAnchor {
@@ -162,17 +172,19 @@ impl PersistedAnchor {
         )
     }
 
-    fn restore(self) -> PrefixAnchor {
+    fn restore(self, marked: Option<String>) -> PrefixAnchor {
         match self {
             PersistedAnchor::Anchor(static_hash, last, before_last) => PrefixAnchor {
                 static_hash,
                 last,
                 before_last,
+                marked,
             },
             PersistedAnchor::Tail(static_hash, last) => PrefixAnchor {
                 static_hash,
                 last,
                 before_last: None,
+                marked,
             },
         }
     }
@@ -442,12 +454,14 @@ impl PersistedAgent {
                 started: episode.started,
                 bucket: episode.bucket,
                 anchor: episode.anchor.as_ref().map(PersistedAnchor::of),
+                anchor_marked: episode.anchor.as_ref().and_then(|a| a.marked.clone()),
                 prompt_at: episode.prompt_at,
                 pool_key: episode.pool_key.clone(),
                 bucket_day: episode.bucket_day,
             }),
             idle_window_floor: agent.idle_window_floor,
             last_prefix: agent.last_prefix.as_ref().map(PersistedAnchor::of),
+            last_prefix_marked: agent.last_prefix.as_ref().and_then(|a| a.marked.clone()),
             last_prompt_tokens: agent.last_prompt_tokens,
             generation: agent.generation,
             current: agent.current.as_ref().map(|o| PersistedObservation {
@@ -564,13 +578,17 @@ impl PersistedAgent {
         agent.idle_episode = self.idle_episode.map(|episode| IdleEpisode {
             started: episode.started,
             bucket: episode.bucket,
-            anchor: episode.anchor.map(PersistedAnchor::restore),
+            anchor: episode
+                .anchor
+                .map(|anchor| anchor.restore(episode.anchor_marked)),
             prompt_at: episode.prompt_at,
             pool_key: episode.pool_key,
             bucket_day: episode.bucket_day,
         });
         agent.idle_window_floor = self.idle_window_floor;
-        agent.last_prefix = self.last_prefix.map(PersistedAnchor::restore);
+        agent.last_prefix = self
+            .last_prefix
+            .map(|anchor| anchor.restore(self.last_prefix_marked));
         agent.last_prompt_tokens = self.last_prompt_tokens;
         agent.generation = self.generation;
         agent.expires = self.expires;

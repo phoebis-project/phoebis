@@ -685,6 +685,7 @@ impl Trace {
         shape: RequestShape,
         static_hash: Option<String>,
         boundaries: Arc<[String]>,
+        marked: Arc<[usize]>,
         client: ClientFacts,
         auto_mode: Option<AutoMode>,
         presented_retired: bool,
@@ -725,6 +726,7 @@ impl Trace {
             shape,
             static_hash,
             boundaries,
+            marked,
             client,
             auto_mode,
             fork: identity
@@ -1515,6 +1517,7 @@ impl Relay {
                         facts.shape.clone(),
                         None,
                         Arc::default(),
+                        Arc::default(),
                         client_facts(&parts.headers, &hints, None, Some(&facts)),
                         auto_mode,
                         retired,
@@ -1629,6 +1632,11 @@ impl Relay {
                     .chains
                     .as_ref()
                     .map(|c| c.message_boundaries.clone())
+                    .unwrap_or_default(),
+                facts
+                    .chains
+                    .as_ref()
+                    .map(|c| c.marked.clone())
                     .unwrap_or_default(),
                 client,
                 auto_mode,
@@ -3831,6 +3839,7 @@ impl Relay {
                 capture_hours,
                 RequestShape::default(),
                 None,
+                Arc::default(),
                 Arc::default(),
                 client_facts(headers, &ClientHints::read(headers), None, None),
                 None,

@@ -214,6 +214,7 @@ mod tests {
             shape: RequestShape::default(),
             static_hash: None,
             boundaries: Arc::default(),
+            marked: Arc::default(),
             client: ClientFacts::default(),
             auto_mode: None,
             fork: Fork::default(),

@@ -621,6 +621,15 @@ fn two_messages() -> String {
     )
 }
 
+/// Main's request on three messages whose first carries the cache marker, so its prefix holds a marked boundary before
+/// the last two.
+fn marked_first_of_three() -> String {
+    BODY.replace(
+        r#"{"role":"user","content":"hello"}]"#,
+        r#"{"role":"user","content":[{"type":"text","text":"hello","cache_control":{"type":"ephemeral"}}]},{"role":"user","content":"and then"},{"role":"user","content":"more"}]"#,
+    )
+}
+
 /// The static hash and the message boundaries the relay reads off `body`.
 fn chain_of(body: &str) -> (String, Vec<String>) {
     let chains = phoebis_relay::Chains::read(&serde_json::from_str(body).unwrap()).unwrap();
@@ -639,15 +648,21 @@ fn lapse_while_down(r: &Rig) {
 #[tokio::test]
 async fn the_anchor_pair_round_trips_in_the_last_prefix_and_the_open_windows_anchor() {
     let mut r = rig(on_disk()).await;
-    r.observe_with("main", &two_messages()).await;
+    r.observe_with("main", &marked_first_of_three()).await;
     r.state("main", "idle");
-    let (static_hash, boundaries) = chain_of(&two_messages());
-    let pair = serde_json::json!([static_hash, boundaries[1], boundaries[0]]);
+    let (static_hash, boundaries) = chain_of(&marked_first_of_three());
+    let pair = serde_json::json!([static_hash, boundaries[2], boundaries[1]]);
+    let marked = serde_json::json!(boundaries[0]);
     r.engine.flush_persisted().await;
     assert_eq!(saved_field(&r, "session", "main", "last_prefix"), pair);
     assert_eq!(
-        saved_field(&r, "session", "main", "idle_episode")["anchor"],
-        pair
+        saved_field(&r, "session", "main", "last_prefix_marked"),
+        marked
+    );
+    let episode = saved_field(&r, "session", "main", "idle_episode");
+    assert_eq!(
+        (&episode["anchor"], &episode["anchor_marked"]),
+        (&pair, &marked)
     );
     lapse_while_down(&r);
     let second = r.restart().await;
@@ -663,9 +678,15 @@ async fn the_anchor_pair_round_trips_in_the_last_prefix_and_the_open_windows_anc
         "the loaded pair"
     );
     assert_eq!(
-        saved_field(&r, "session", "main", "idle_episode")["anchor"],
-        pair,
-        "the loaded window's pair"
+        saved_field(&r, "session", "main", "last_prefix_marked"),
+        marked,
+        "the loaded marked boundary"
+    );
+    let episode = saved_field(&r, "session", "main", "idle_episode");
+    assert_eq!(
+        (&episode["anchor"], &episode["anchor_marked"]),
+        (&pair, &marked),
+        "the loaded window's anchor"
     );
 }
 

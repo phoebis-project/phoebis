@@ -2985,6 +2985,7 @@ fn headed(
             shape: phoebis_bus::RequestShape::default(),
             static_hash: None,
             boundaries: Vec::new().into(),
+            marked: Vec::new().into(),
             client: phoebis_bus::ClientFacts::default(),
             auto_mode: None,
             fork: phoebis_bus::Fork::default(),

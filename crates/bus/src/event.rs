@@ -380,6 +380,8 @@ pub struct RequestObserved {
     pub static_hash: Option<String>,
     /// Every message boundary, lowercase hex; empty without a chain.
     pub boundaries: Arc<[String]>,
+    /// The positions in `boundaries` of the message boundaries the request marked with `cache_control`, ascending.
+    pub marked: Arc<[usize]>,
     /// The class and hint facts read at admission, structured; `headers` carries the same hint headers
     /// unstructured, as the caller spelled them.
     pub client: ClientFacts,

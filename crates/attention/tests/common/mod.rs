@@ -370,6 +370,7 @@ pub fn observed_as(
         shape: RequestShape::default(),
         static_hash: None,
         boundaries: Vec::new().into(),
+        marked: Vec::new().into(),
         client: phoebis_bus::ClientFacts::default(),
         auto_mode: None,
         fork: phoebis_bus::Fork::default(),

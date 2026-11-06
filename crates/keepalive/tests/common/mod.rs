@@ -603,6 +603,7 @@ impl Rig {
             shape: RequestShape::default(),
             static_hash: None,
             boundaries: Vec::new().into(),
+            marked: Vec::new().into(),
             client: phoebis_bus::ClientFacts::default(),
             auto_mode: None,
             fork: phoebis_bus::Fork::default(),
@@ -657,6 +658,7 @@ impl Rig {
             shape: RequestShape::default(),
             static_hash: static_hash.map(String::from),
             boundaries: boundaries.iter().map(|b| b.to_string()).collect(),
+            marked: Vec::new().into(),
             client: phoebis_bus::ClientFacts {
                 request_class: request_class.map(String::from),
                 ..phoebis_bus::ClientFacts::default()

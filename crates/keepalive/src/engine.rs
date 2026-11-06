@@ -237,8 +237,8 @@ impl<'de> serde::Deserialize<'de> for Reason {
     }
 }
 
-/// The share of the previous main prompt a completion must read from the cache, under a chain that holds neither
-/// anchor boundary, for the engine to read a contradiction between its chain model and the upstream's.
+/// The share of the previous main prompt a completion must read from the cache, under a chain that holds none of the
+/// anchor's boundaries, for the engine to read a contradiction between its chain model and the upstream's.
 pub const CHAIN_CONTRADICTION_COVERAGE: f64 = 0.9;
 
 /// The UTC day `ms` falls on, counted from the epoch. The day counters and their reader both go through it, so the
@@ -347,24 +347,31 @@ pub(crate) struct IdleEpisode {
     pub bucket_day: Option<i64>,
 }
 
-/// The prefix an idle window judges a return against: the request's static hash, its last message boundary and
-/// the one before it, `None` for a one-message chain. A return holds either boundary.
+/// The prefix an idle window judges a return against: the request's static hash, its last message boundary, the one
+/// before it (`None` for a one-message chain) and the deepest marked one before those two. A return holds any of the
+/// three.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PrefixAnchor {
     pub static_hash: String,
     pub last: String,
     pub before_last: Option<String>,
+    /// The deepest boundary before the last two that the request marked with `cache_control`, which the upstream
+    /// reads the cache through.
+    pub marked: Option<String>,
 }
 
 /// Whether a request continues the prefix `anchor` names: one of its message boundaries equals the anchor's last
-/// boundary or the one before it, so a return counts when the client re-sent the last message in a shape the
-/// canonical form does not restore and the message before it held. The chain is the only evidence, and the request's
-/// class is none: a refreshing class whose chain holds neither answers false where `guard` re-arms it, as do a request
-/// with no chain and an absent anchor.
+/// boundary, the one before it or its marked one, so a return counts when the client re-sent the last message in a
+/// shape the canonical form does not restore and the message before it held, and when an interrupted turn's next
+/// request dropped both and kept the marked boundary the upstream reads the cache through. The chain is the only
+/// evidence, and the request's class is none: a refreshing class whose chain holds none of them answers false where
+/// `guard` re-arms it, as do a request with no chain and an absent anchor.
 pub fn continues_prefix(anchor: Option<&PrefixAnchor>, boundaries: &[String]) -> bool {
     anchor.is_some_and(|anchor| {
         boundaries.iter().any(|boundary| {
-            *boundary == anchor.last || anchor.before_last.as_ref() == Some(boundary)
+            *boundary == anchor.last
+                || anchor.before_last.as_ref() == Some(boundary)
+                || anchor.marked.as_ref() == Some(boundary)
         })
     })
 }
@@ -563,8 +570,8 @@ pub(crate) struct Agent {
     /// A close that restarts the window on purpose (a request, presence, a park's end, a revival) clears it: the
     /// floor orders starts, and a clock that stepped back before the restart is no ordering.
     pub idle_window_floor: Option<i64>,
-    /// The static hash and the last two message boundaries of main's last admitted request, retained or not, which the
-    /// next idle window judges a return against and the chain watch reads the next request's chain against.
+    /// The anchor of main's last admitted request, retained or not, which the next idle window judges a return against
+    /// and the chain watch reads the next request's chain against.
     pub last_prefix: Option<PrefixAnchor>,
     /// The previous main request's prompt as its completion reported it: uncached input, cache reads and both
     /// cache writes, set by every pending main completion and every marked one, so a refused recipe's unmarked
@@ -1157,7 +1164,7 @@ pub(crate) struct Observation {
     pub funding: AttemptFunding,
 }
 
-/// A main request whose chain held neither anchor boundary at its arrival, kept until its completion.
+/// A main request whose chain held none of the anchor's boundaries at its arrival, kept until its completion.
 pub(crate) struct ChainMark {
     pub session: SessionKey,
     pub previous_prompt: u64,
@@ -2334,9 +2341,9 @@ impl Inner {
         }
     }
 
-    /// Marks main's refreshing request whose chain holds neither boundary of main's last prefix, for its completion to
-    /// read against the previous prompt. A compaction and the first request after one rewrite the context the chain
-    /// hashes, so their chains move with no contradiction to read.
+    /// Marks main's refreshing request whose chain holds none of the boundaries of main's last prefix, for its
+    /// completion to read against the previous prompt. A compaction and the first request after one rewrite the context
+    /// the chain hashes, so their chains move with no contradiction to read.
     fn mark_chain(&mut self, key: &SessionKey, observed: &RequestObserved, now: i64) {
         let refreshing = observed
             .client
@@ -3004,6 +3011,12 @@ impl Engine {
                         .len()
                         .checked_sub(2)
                         .map(|at| observed.boundaries[at].clone()),
+                    marked: observed
+                        .marked
+                        .iter()
+                        .rev()
+                        .find(|at| **at + 2 < observed.boundaries.len())
+                        .and_then(|at| observed.boundaries.get(*at).cloned()),
                 });
         }
         // A turn still pending here had no completion observed, since a success takes it off `pending` and a failure
@@ -3489,7 +3502,7 @@ impl Engine {
                     session = %mark.session.1,
                     cache_read_tokens = read,
                     previous_prompt_tokens = mark.previous_prompt,
-                    "a refreshing request's chain holds neither anchor boundary while its completion read the cache as a continuation would"
+                    "a refreshing request's chain holds none of the anchor's boundaries while its completion read the cache as a continuation would"
                 );
             }
         }
