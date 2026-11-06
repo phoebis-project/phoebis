@@ -21838,14 +21838,18 @@ await forView('/analytics', async () => {
   }
 });
 
+// A route whose first render redirects draws its target in a transition, which the mount's settle can read past, so
+// each case waits on its landing.
 await forView('/keepalive', async () => {
 m = await mount('/keepalive');
+await until(m, () => m.text().includes('Every session the router lists'));
 results.push({ name: '/keepalive redirects to /sessions', ok: m.text().includes('Every session the router lists'), missing: [m.text().slice(0, 120)] });
 m.unmount();
 });
 await forView('/models', async () => {
 for (const path of ['/models', '/models#claude-sonnet-4-5']) {
   m = await mount(path);
+  await until(m, () => m.location().pathname === '/keys' && m.container.querySelector('.topbar__title')?.textContent === 'Keys');
   results.push({ name: `${path} redirects to /keys`, ok: m.location().pathname === '/keys' && m.container.querySelector('.topbar__title')?.textContent === 'Keys', missing: [JSON.stringify(m.location()), m.container.querySelector('.topbar__title')?.textContent ?? 'no title'] });
   m.unmount();
 }
