@@ -24304,9 +24304,9 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     });
   }
   {
-    // An agent's menu offers the row's three views narrowed to the agent: the analytics session view and the request log
-    // with its id, and the routing log on the session and the agent an hour either side of its last request. The story's
-    // first session's c21e last sent a request at the newest of its seed rows.
+    // An agent's menu offers the row's three views narrowed to the agent: the analytics session view and the request
+    // log with its id, and the routing log on the session and the agent an hour either side of its last request. The
+    // story's first session's c21e last sent a request at the newest of its seed rows.
     const agent = 'c21e';
     const last = story?.agentRequests.filter((e) => e.agentId === agent && e.lastRequestAt !== null).map((e) => Date.parse(e.lastRequestAt)).sort((a, b) => a - b).pop() ?? null;
     const followed = {};
@@ -24688,8 +24688,8 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     {
       // Every line of the session the mod released whole is a released one, so the session is finished: the bare
       // address hides it, and under the finished filter its expanded detail opens on the sentence once, every line of
-      // its Cache warming details in its ended state with its probe facts, its Status reads finished with the same sentence on hover, and its
-      // Agents cell counts none, since it counts the lines less the released ones.
+      // its Cache warming details in its ended state with its probe facts, its Status reads finished with the same
+      // sentence on hover, and its Agents cell counts none, since it counts the lines less the released ones.
       const whole = new Map();
       for (const r of await api.listKeepaliveRecipes()) whole.set(r.sessionId, (whole.get(r.sessionId) ?? true) && r.agentState === 'released');
       const id = [...whole].find(([, all]) => all)?.[0];

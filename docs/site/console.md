@@ -1134,13 +1134,13 @@ Opening a row reads, on a finished session, "The mod released every agent of thi
 slots of the cap for one cache TTL after the release and then leave the engine." first, then two grids of facts side by
 side, one above the other where the open row is narrower than 620 px. Session reads Created (`{time}, {ago}`, the
 session's first placement, kept until its last pin leaves, or `unknown`), Key (`{key} in pool {pool}`, the key a link to
-its row in the Keys view, or `deleted holder` on an earlier holder's), Client (the client version, the user agent on
-hover), Fork (the base cut to 13 characters and whole on hover, a link to its row where the list holds it, the depth and
-the relation to the base's account, or `none`), Epoch and Companion, the Companion column's badge with `seen {ago}` or
-the time since it went silent. Routing reads Account (the link and `subscription` or `API key`, or `none`), Pinned since
-(main's pin's creation, else the session's), Shed mark (the `leaving` badge with the account and the reason, or `none`),
-Runway, Speed (the speed chip on a slowed session, else `full speed`) and Cycle (or `not measured yet`), and its title
-carries "View in routing log", the row menu's link.
+its row in the Keys view, or `{key}, deleted holder` on an earlier holder's), Client (the client version, the user agent
+on hover), Fork (the base cut to 13 characters and whole on hover, a link to its row where the list holds it, the depth
+and the relation to the base's account, or `none`), Epoch and Companion, the Companion column's badge with `seen {ago}`
+or the time since it went silent. Routing reads Account (the link and `subscription` or `API key`, or `none`), Pinned
+since (main's pin's creation, else the session's), Shed mark (the `leaving` badge with the account and the reason, or
+`none`), Runway, Speed (the speed chip on a slowed session, else `full speed`) and Cycle (or `not measured yet`), and
+its title carries "View in routing log", the row menu's link.
 
 The Agents table under the facts lists one line per agent, main first (from its conversation pin or its recipe, or from
 the row where neither names main), then the lines with a lifecycle word grouped by that word (`busy` with `registered`,
@@ -1165,8 +1165,8 @@ The earlier agents, the ones the ledger holds requests of that draw no line, suc
 gone, share one line under the table, `{n} earlier agents · {k} requests · {cost}`, with a `+$` badge where they
 billed dollars beside a plan figure and their ids on hover. The line opens to one row per earlier agent in the table:
 its type, the model and account of its newest request, its requests and its cost, `no pin` in Status and dashes for a
-pin's figures, with the same menu. The Cache warming details close the row, shut by default with the recipes' states on
-their line (`1 retained, 1 paused, 1 ended`) or `no recipe`. Open, they read one line per agent as Agent, TTL, Last
+pin's figures, with the same menu. The Cache warming details end the open row, shut by default with the recipes' states
+on their line (`1 retained, 1 paused, 1 ended`) or `no recipe`. Open, they read one line per agent as Agent, TTL, Last
 request, Last probe, Next probe ("on first stream event" or "not scheduled"), Probes / credited and State. A pin no
 recipe stands on reads its TTL as the time left on its cache, its last use as Last request, dashes in the probe cells
 and a State of `warm` or `cold` by its cache TTL, the word carrying its own sentence on hover. On a recipe's line State

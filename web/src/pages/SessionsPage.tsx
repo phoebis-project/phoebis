@@ -1211,12 +1211,13 @@ function SessionRows({
 
 /**
  * The earlier agents line: how many agents the ledger holds rows of with no line, their requests and their spend as the
- * Cost cell reads it, `+$` where dollars were billed beside a plan figure, and their ids on its title. Opened, each joins
- * the Agents table the line controls.
+ * Cost cell reads it, `+$` where dollars were billed beside a plan figure, and their ids on its title. Opened, each
+ * joins the Agents table the line controls.
  */
 function EarlierLine({ agents, controls, cost, onToggle, open, session }: { agents: (AgentFigures & { agentId: string })[]; controls: string; cost: CostContext; onToggle: () => void; open: boolean; session: Session }) {
   const [first, ...rest] = agents;
   const spend = rest.reduce((sum, agent) => addSpend(sum, agent.spend), first.spend);
+  const requests = rest.reduce((n, agent) => n + agent.requests, first.requests);
   const reading = spendUnitOf(spend, cost.unit, session.accountId, null);
   const cell = reading === null ? null : costCellOf(reading.unit, cost.week, cost.scale);
   return (
@@ -1225,7 +1226,7 @@ function EarlierLine({ agents, controls, cost, onToggle, open, session }: { agen
       controls={controls}
       hint={
         <>
-          {`· ${fmtCount(spend.requests, 'request')} · ${cell?.main ?? '-'}`}
+          {`· ${fmtCount(requests, 'request')} · ${cell?.main ?? '-'}`}
           {reading !== null && reading.billed > 0 && (
             <>
               {' '}
@@ -1398,9 +1399,9 @@ function LineAccount({ account, id, now, row }: { account: Account | null; id: s
 }
 
 /**
- * One row of the Agents table: a line's agent, read off its pin and its recipe, or an earlier agent, which holds no line
- * and reads its newest ledger entry, dashes for a pin's figures and `no pin`. Requests and Cost read every entry of the
- * agent summed, and the menu opens the session's views narrowed to the agent.
+ * One row of the Agents table: a line's agent, read off its pin and its recipe, or an earlier agent, which holds no
+ * line and reads its newest ledger entry, dashes for a pin's figures and `no pin`. Requests and Cost read every entry
+ * of the agent summed, and the menu opens the session's views narrowed to the agent.
  */
 function AgentRow({
   accountById,

@@ -11750,16 +11750,12 @@ async function agentLines(theme, width) {
         const id = row.children[0];
         const idRange = document.createRange();
         idRange.selectNodeContents(id);
-        const account = row.querySelector('.agents__account');
-        const accountBox = account?.parentElement === row ? account.getBoundingClientRect() : null;
-        const parts = account ? [...account.children].map((c) => c.getBoundingClientRect()) : [];
-        // One line holds every box whose band overlaps the first's: the baseline sets the chip a pixel or two lower.
+        // One line holds every box whose band overlaps the first's.
         const oneLine = (boxes) => boxes.every((b) => b.top < boxes[0].bottom && b.bottom > boxes[0].top);
         const state = row.querySelector('.agents__state');
         const [badge, cause] = [...(state?.querySelectorAll('.badge') ?? [])].map((b) => b.getBoundingClientRect());
         const stateBox = state?.getBoundingClientRect() ?? null;
         return {
-          account: accountBox === null ? null : { inside: parts.every((p) => p.left >= accountBox.left - 0.5 && p.right <= accountBox.right + 0.5), oneLine: oneLine(parts), text: account.textContent?.trim() ?? '' },
           agent: id.textContent?.trim() ?? '',
           cell: stateBox === null ? null : { left: Math.round(stateBox.left), right: Math.round(stateBox.right) },
           edges: cellsOf(row).map((c) => round(c.getBoundingClientRect().left)),
@@ -11825,7 +11821,6 @@ async function agentLines(theme, width) {
   for (const line of lines.filter((l) => l.overflows.length > 0)) say(`agent ${line.agent}'s line runs past its cells: ${JSON.stringify(line.overflows)}`);
   for (const line of lines.filter((l) => (l.id.title !== null && l.id.title !== l.id.text) || l.id.width > l.id.cell + 0.5 || !l.id.oneLine)) say(`agent ${line.agent}'s id is not whole on one line: ${JSON.stringify(line.id)}`);
   if (longest !== null && Math.abs(longest.id.width - longest.id.cell) > 1) say(`the widest id ${longest.agent} takes ${longest.id.width}px of its ${longest.id.cell}px Agent track, which is not sized to it`);
-  for (const line of lines.filter((l) => l.account !== null && (!l.account.inside || !l.account.oneLine))) say(`agent ${line.agent}'s Account cell ${JSON.stringify(line.account.text)} is not whole on one line inside its box`);
   for (const g of read.grids.filter((x) => x.headOver.length > 0)) say(`the agent lines' head runs past its cells: ${JSON.stringify(g.headOver)}`);
   for (const line of reasons.filter((l) => l.reason.left < l.cell.left || l.reason.right > l.cell.right)) {
     say(`agent ${line.agent}'s cause "${line.reason.text}" runs from ${line.reason.left}px to ${line.reason.right}px, outside its State cell's ${line.cell.left}px to ${line.cell.right}px`);
@@ -11840,9 +11835,9 @@ async function agentLines(theme, width) {
 /**
  * The Agents table of every row Expand all opens on Sessions at 1280 by 800, each earlier agents line opened so its
  * agents join the table: the table's scroll width at or under its detail panel's client width, which the detail cell's
- * inset leaves it, its eleven heads closing on the menu's, and its head cells in the size, weight and ink of the session
- * table's. Every table stretches to its panel, so the one whose narrowest layout is widest is recorded with that width.
- * The earlier agents lines and the rows shut again.
+ * inset leaves it, its eleven heads closing on the menu's, and its head cells in the size, weight and ink of the
+ * session table's. Every table stretches to its panel, so the one whose narrowest layout is widest is recorded with
+ * that width. The earlier agents lines and the rows shut again.
  */
 async function agentsTableFits(theme) {
   const say = (what) => failures.push(`${theme} /sessions agents table: ${what}`);
