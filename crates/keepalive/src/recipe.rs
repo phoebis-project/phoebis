@@ -321,4 +321,20 @@ mod tests {
             );
         }
     }
+
+    /// The billing line's only `cch=` begins inside the escape `\u00cc`, whose last two hex digits spell its `cc`, so
+    /// the server reads no stamp where a restamp would write one.
+    #[test]
+    fn a_body_whose_only_cch_sits_inside_an_escape_is_not_retained() {
+        let swallowed = concat!(
+            r#"{"model":"routing-alias","max_tokens":1024,"stream":true,"system":[{"type":"text","#,
+            r#""text":"x-anthropic-billing-header: cc_version=2.1.220.test; \u00cch=01234;"},"#,
+            r#"{"type":"text","text":"private prompt","cache_control":{"type":"ephemeral"}}],"#,
+            r#""messages":[{"role":"user","content":"hello"}]}"#,
+        );
+        assert_eq!(
+            make_recipe(&[], swallowed.as_bytes(), "routing-alias", 1 << 20).err(),
+            Some(Reason::InvalidRequest)
+        );
+    }
 }

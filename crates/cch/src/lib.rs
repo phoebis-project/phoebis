@@ -93,14 +93,6 @@ pub fn stamp(body: &[u8]) -> Stamp {
     stamp_in(body, string_member_span(body, &LINE_PATH))
 }
 
-/// The stamp a body carries as the relay reads it: the raw walk's stamp, `Unreadable` where the raw bytes hold a
-/// `cch=` (readable or not) while the decoded line holds none, since that `cch=` sits inside an escape a restamp would
-/// write over. A stamp only the decoded walk reaches answers as the raw walk reads the line, so refusing it is the
-/// caller's count check (`decoded_stamp_count`).
-pub fn reachable_stamp(body: &[u8]) -> Stamp {
-    TopLevelMembers::read(body).reachable_stamp()
-}
-
 /// The stamp of the billing line at `text`, the span of the string at `system[0].text`.
 fn stamp_in(body: &[u8], text: Option<(usize, usize)>) -> Stamp {
     let Some((line, digits_start)) = billing_line(body, text) else {
@@ -353,12 +345,10 @@ impl<'a> TopLevelMembers<'a> {
         number_at(&self.raw_value(name)?.1)
     }
 
-    /// `stamp` of the body.
-    pub fn stamp(&self) -> Stamp {
-        stamp_in(self.body, self.string_member_span(&LINE_PATH))
-    }
-
-    /// `reachable_stamp` of the body.
+    /// The stamp the body carries as the relay reads it: the raw walk's stamp, `Unreadable` where the raw bytes hold a
+    /// `cch=` (readable or not) while the decoded line holds none, since that `cch=` begins inside an escape and the
+    /// server reads no stamp where a restamp would write one. A stamp only the decoded walk reaches answers as the raw
+    /// walk reads the line, so refusing it is the caller's count check (`decoded_stamp_count`).
     pub fn reachable_stamp(&self) -> Stamp {
         let text = self.string_member_span(&LINE_PATH);
         let stamp = stamp_in(self.body, text);
@@ -2053,10 +2043,16 @@ mod tests {
             0,
             "the decoded line holds none"
         );
-        assert!(matches!(reachable_stamp(&swallowed), Stamp::Unreadable));
+        assert!(matches!(
+            TopLevelMembers::read(&swallowed).reachable_stamp(),
+            Stamp::Unreadable
+        ));
 
         let plain = body("x-anthropic-billing-header: cc_version=2.1.220.test; cch=01234;");
-        assert!(matches!(reachable_stamp(&plain), Stamp::Hash(_)));
+        assert!(matches!(
+            TopLevelMembers::read(&plain).reachable_stamp(),
+            Stamp::Hash(_)
+        ));
     }
 
     #[test]

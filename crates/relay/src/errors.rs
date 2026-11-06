@@ -41,10 +41,10 @@ pub(crate) enum FailureClass {
     Canceled,
     Exhausted,
     Failed,
-    /// Conclusive at any attempt.
-    Rejected,
     /// Rejected before any attempt, failed after one, since the attempt may have been billed.
     Refused,
+    /// Conclusive at any attempt.
+    Rejected,
 }
 
 impl FailureClass {

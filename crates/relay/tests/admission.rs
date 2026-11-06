@@ -16,7 +16,8 @@ use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_bus::{Bus, Delivery, Event, Outcome, ResponseChunk, QUEUE_DEPTH};
-use phoebis_relay::{Accounting, AccountingSource, Limits, Probe, ProbeObstacle};
+use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
+use phoebis_relay::{Accounting, AccountingSource, DriftKind, Limits, Probe, ProbeObstacle};
 use tower::ServiceExt;
 
 const A: &str = "sk-ant-oat01-AAAA";
@@ -454,5 +455,45 @@ async fn an_oauth_account_whose_stored_uuid_is_malformed_answers_503_and_files_r
         (complete.outcome, complete.error_code.as_deref()),
         (Outcome::Rejected, Some("accounts_unavailable"))
     );
+    up.shutdown().await;
+}
+
+/// The billing line's only `cch=` begins inside the escape `\u00cc`, signed at that offset, so the raw bytes
+/// alone read a hash that reproduces while the server reads no stamp there: admission refuses a hash it cannot verify.
+#[tokio::test]
+async fn a_hash_whose_cch_begins_inside_an_escape_is_refused_as_drift() {
+    let up = FakeUpstream::start(vec![ok_rule()]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    let swallowed = String::from_utf8(body(BodyFixture::FirstParty).to_vec())
+        .unwrap()
+        .replacen("cch=91984", r"\u00cch=00000", 1);
+    assert_ne!(
+        swallowed.as_bytes(),
+        body(BodyFixture::FirstParty),
+        "the edit reached the fixture's stamp"
+    );
+    let signed = phoebis_cch::sign(swallowed.as_bytes()).unwrap();
+    let response = h
+        .app
+        .clone()
+        .oneshot(request_from_fixture(
+            inference_head(FixtureKind::OauthFirstParty),
+            &signed,
+            KEY,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            response.status().as_u16(),
+            response
+                .headers()
+                .get("x-phoebis-error-code")
+                .map(|code| code.to_str().unwrap())
+        ),
+        (403, Some("client_drift"))
+    );
+    assert_eq!(outcome(&response).client_drift, Some(DriftKind::Hash));
+    assert!(up.requests().is_empty(), "nothing reached the upstream");
     up.shutdown().await;
 }
