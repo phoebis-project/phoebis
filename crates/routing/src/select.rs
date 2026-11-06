@@ -2644,8 +2644,8 @@ pub const SHED_MARK_SHARE: f64 = 0.1;
 /// refuses such a destination, the round's destination pick refuses it, and the spent, overage, return-to-plan and
 /// drain gates drop it to the rewrite-only order, which they take only where no sibling fits. A fresh placement keeps
 /// the ceiling. One half, since the burn the recorded projection implies reads a median 1.07 times the decayed average
-/// a pin's burn is priced from, p10 0.62 and p90 2.81, so a pin's burn under-reads by more than half at least one
-/// record in ten.
+/// a pin's burn is priced from, p10 0.62 and p90 2.81, so a pin's burn under-reads by more than half in at least
+/// one record in ten.
 pub const SHED_FIT_BAND: f64 = 0.5;
 
 /// Milliseconds as the seconds a share-per-second burn multiplies.
@@ -3174,10 +3174,10 @@ pub(crate) enum Judge {
 }
 
 /// The fit of `pin` (or a fresh session) on `candidate`: the runway per window the request's model draws (a move's
-/// to `SHED_FIT_BAND`'s line under the ceiling), the predicate of the three verdicts and the end exclusion, with the
-/// unknowns read as `judge` says. `planned` holds the reservations a shedding round planned before this read, summed
-/// into the candidate's prediction and burn as the live ones are, and is empty for a move rule, the partition and
-/// rung 4. `own` is the request's pin key on a placement's own read, whose row the account's burn leaves out since
+/// runway read to `SHED_FIT_BAND`'s line under the ceiling), the predicate of the three verdicts and the end exclusion,
+/// with the unknowns read as `judge` says. `planned` holds the reservations a shedding round planned before this read,
+/// summed into the candidate's prediction and burn as the live ones are, and is empty for a move rule, the partition
+/// and rung 4. `own` is the request's pin key on a placement's own read, whose row the account's burn leaves out since
 /// the placement replaces it, and `None` for a move.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn fit_of(
