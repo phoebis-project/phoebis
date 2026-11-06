@@ -22597,6 +22597,27 @@ await forView(['/analytics', '/keys', '/pools', '/quota', '/routing-log', '/sess
     });
   }
   {
+    // A preset's end moves to the clock at every commit, so a preset reads again on its own and would hide an agent
+    // missing from the session log's keys. This span is custom and ended before the clock, so removing the Agent chip
+    // moves no other key of the read. It holds three of the first session's rows, none a probe: c21e's
+    // req_96461df2-61a, main's req_285f44c1-b48 and e4b7's req_2e25caf4-526.
+    const name = "/analytics removing the Agent chip under a custom range that has ended reads the session's requests again";
+    const agent = 'c21e';
+    const session = requests.find((r) => r.agentId === agent)?.sessionId ?? '';
+    const FROM = '2026-09-16T02:30:00.000Z';
+    const TO = '2026-09-16T09:30:00.000Z';
+    const page = await mount(`/analytics?session=${encodeURIComponent(session)}&agent_id=${agent}&from=${FROM}&to=${TO}`, { now: CLOCK_ORIGIN });
+    const narrowed = total(page);
+    await removeChip(page, 'agent');
+    const whole = { chips: [...page.container.querySelectorAll('.chip--filter')].map((c) => c.textContent?.trim()), query: Object.entries(query(page)).sort(), requests: total(page) };
+    page.unmount();
+    results.push({
+      name,
+      ok: narrowed === 1 && JSON.stringify(whole) === JSON.stringify({ chips: [`session: ${session.slice(0, 8)}…`], query: [['from', FROM], ['session', session], ['to', TO]], requests: 3 }),
+      missing: [`narrowed ${narrowed}`, JSON.stringify(whole)],
+    });
+  }
+  {
     // Clear all writes every dimension's empty value in one patch, the session's among them, and the key lifetime
     // belongs to the session it arrived with, so it leaves with the session. The grouping and the range stay.
     const name = '/analytics Clear all clears every chip with and without a session, and a session change drops the key lifetime';
