@@ -35,6 +35,7 @@ const budgetPeriod = (v: unknown): BudgetPeriod => oneOf(BUDGET_PERIOD_VALUES, v
 const rulesMode = (v: unknown): ModelRulesMode => oneOf(MODEL_RULES_MODE_VALUES, v) ?? 'extend';
 /** A map the route keys by data (a move reason, a model id), with every entry that is not a number dropped. */
 const numberMap = (v: unknown): Record<string, number> => Object.fromEntries(Object.entries(rec(v)).filter((e): e is [string, number] => numOrNull(e[1]) !== null));
+const numberMaps = (v: unknown): Record<string, Record<string, number>> => Object.fromEntries(Object.entries(rec(v)).map(([k, x]) => [k, numberMap(x)]));
 /** A map the route keys by data whose value may be null (a window the cost model could not price), each value read
  *  through `numOrNull`, so an unpriced window decodes null rather than zero. */
 const nullableNumberMap = (v: unknown): Record<string, number | null> => Object.fromEntries(Object.entries(rec(v)).map(([k, x]) => [k, numOrNull(x)]));
@@ -734,7 +735,7 @@ export const decodeRefusalCategories = (v: unknown): RefusalCategoriesAnswer => 
 export const decodeRewrites = (v: unknown): RewritesAnswer => ({
   held: list(rec(v).held).map(rec).map((p) => ({ at: isoOr(p.at, epoch), heldMs: num(p.held_ms), requests: num(p.requests) })),
   moves: numberMap(rec(v).moves),
-  movesByReasonAndFit: Object.fromEntries(Object.entries(rec(rec(v).moves_by_reason_and_fit)).map(([reason, fits]) => [reason, numberMap(fits)])),
+  movesByReasonAndFit: numberMaps(rec(v).moves_by_reason_and_fit),
   points: list(rec(v).points).map(rec).map((p) => ({ at: isoOr(p.at, epoch), rewriteTokens: num(p.rewrite_tokens) })),
 });
 
@@ -819,17 +820,17 @@ const burnUnit = (v: unknown): BurnUnit | null => oneOf(BURN_UNIT_VALUES, v);
 
 function decodeAgentContext(v: unknown): AgentContext {
   const c = rec(v);
-  return { accountId: str(c.account_id), agentId: str(c.agent_id), burn: numOrNull(c.burn), burnAt: isoOrNull(c.burn_at), burnEquivalent: numOrNull(c.burn_equivalent), burnUnit: burnUnit(c.burn_unit), burnWindow: strOrNull(c.burn_window), cacheTtlMs: numOrNull(c.cache_ttl_ms), createdAt: isoOrNull(c.created_at), effort: strOrNull(c.effort), lastInputTokens: numOrNull(c.last_input_tokens), lastUsedAt: isoOrNull(c.last_used_at), lifecycle: agentState(c.lifecycle), model: str(c.model), warm: bool(c.warm) };
+  return { accountId: str(c.account_id), agentId: str(c.agent_id), burn: numOrNull(c.burn), burnEquivalent: numOrNull(c.burn_equivalent), burnUnit: burnUnit(c.burn_unit), burnWindow: strOrNull(c.burn_window), cacheTtlMs: numOrNull(c.cache_ttl_ms), createdAt: isoOrNull(c.created_at), effort: strOrNull(c.effort), lastInputTokens: numOrNull(c.last_input_tokens), lastUsedAt: isoOrNull(c.last_used_at), lifecycle: agentState(c.lifecycle), model: str(c.model), warm: bool(c.warm) };
 }
 
 function decodeSessionSpendPart(v: unknown): SessionSpendPart {
   const p = rec(v);
-  return { billedUsd: numberMap(p.billed_usd), equivalent: numOrNull(p.equivalent), requests: num(p.requests), shares: Object.fromEntries(Object.entries(rec(p.shares)).map(([account, windows]) => [account, numberMap(windows)])), usd: num(p.usd) };
+  return { billedUsd: numberMap(p.billed_usd), equivalent: numOrNull(p.equivalent), requests: num(p.requests), shares: numberMaps(p.shares), usd: num(p.usd) };
 }
 const decodeSessionSpend = (v: unknown): SessionSpend => ({ ...decodeSessionSpendPart(v), probes: decodeSessionSpendPart(rec(v).probes) });
 function decodeSessionDay(v: unknown): SessionDay {
   const d = rec(v);
-  return { billedUsd: numberMap(d.billed_usd), equivalent: numOrNull(d.equivalent), requests: numberMap(d.requests), usd: num(d.usd) };
+  return { billedUsd: numberMap(d.billed_usd), equivalent: numOrNull(d.equivalent), requests: numberMap(d.requests) };
 }
 function decodeAgentRequests(v: unknown): AgentRequests {
   const a = rec(v);
@@ -839,7 +840,7 @@ function decodeAgentRequests(v: unknown): AgentRequests {
 export function decodeSession(v: unknown): Session {
   const s = rec(v);
   const k = rec(s.keepalive);
-  return { accountId: strOrNull(s.account_id), agentContexts: list(s.agent_contexts).map(decodeAgentContext), agentId: strOrNull(s.agent_id), agentRequests: list(s.agent_requests).map(decodeAgentRequests), burn: numOrNull(s.burn), burnAt: isoOrNull(s.burn_at), burnEquivalent: numOrNull(s.burn_equivalent), burnUnit: burnUnit(s.burn_unit), burnWindow: strOrNull(s.burn_window), cacheTtlMs: numOrNull(s.cache_ttl_ms), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), cycleMs: numOrNull(s.cycle_ms), day: decodeSessionDay(s.day), effort: strOrNull(s.effort), epoch: numOrNull(s.epoch), forkDepth: numOrNull(s.fork_depth), forkedFrom: strOrNull(s.forked_from), historical: bool(s.historical), keepalive: { cause: recipeCause(k.cause), lastGuard: guardVerdict(k.last_guard), nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastInputTokens: numOrNull(s.last_input_tokens), lastRefreshAt: isoOrNull(s.last_refresh_at), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), lifecycle: lifecycle(s.lifecycle), model: strOrNull(s.model), pinned: bool(s.pinned), presenceAgeSeconds: numOrNull(s.presence_age_seconds), requests: num(s.requests), runwayBounded: boolOrNull(s.runway_bounded), runwayMs: numOrNull(s.runway_ms), sessionId: str(s.session_id), shedFrom: strOrNull(s.shed_from), shedReason: strOrNull(s.shed_reason), speed: numOrNull(s.speed), spend: orNull(s.spend, decodeSessionSpend), userAgent: strOrNull(s.user_agent), warm: boolOrNull(s.warm) };
+  return { accountId: strOrNull(s.account_id), agentContexts: list(s.agent_contexts).map(decodeAgentContext), agentId: strOrNull(s.agent_id), agentRequests: list(s.agent_requests).map(decodeAgentRequests), burn: numOrNull(s.burn), burnAt: isoOrNull(s.burn_at), burnEquivalent: numOrNull(s.burn_equivalent), burnUnit: burnUnit(s.burn_unit), burnWindow: strOrNull(s.burn_window), cacheTtlMs: numOrNull(s.cache_ttl_ms), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), cycleMs: numOrNull(s.cycle_ms), day: decodeSessionDay(s.day), effort: strOrNull(s.effort), epoch: numOrNull(s.epoch), forkDepth: numOrNull(s.fork_depth), forkedFrom: strOrNull(s.forked_from), historical: bool(s.historical), keepalive: { cause: recipeCause(k.cause), nextProbeAt: isoOrNull(k.next_probe_at) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastInputTokens: numOrNull(s.last_input_tokens), lastRefreshAt: isoOrNull(s.last_refresh_at), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), lifecycle: lifecycle(s.lifecycle), model: strOrNull(s.model), pinned: bool(s.pinned), presenceAgeSeconds: numOrNull(s.presence_age_seconds), requests: num(s.requests), runwayBounded: boolOrNull(s.runway_bounded), runwayMs: numOrNull(s.runway_ms), sessionId: str(s.session_id), shedFrom: strOrNull(s.shed_from), shedReason: strOrNull(s.shed_reason), speed: numOrNull(s.speed), spend: orNull(s.spend, decodeSessionSpend), userAgent: strOrNull(s.user_agent), warm: boolOrNull(s.warm) };
 }
 
 const recipeCause = (v: unknown): RecipeCause | null => oneOf(RECIPE_CAUSE_VALUES, v);

@@ -161,7 +161,7 @@ const CLOSED = {
     // A client that sends no class header, an SDK runner among them, reads null.
     '.requests[].requestClass': [...REQUEST_CLASS_VALUES, null],
   },
-  sessions: { '[].keepalive.cause': [...d.RECIPE_CAUSE_VALUES, null], '[].keepalive.state': [...d.AGENT_STATE_VALUES, null] },
+  sessions: { '[].keepalive.cause': [...d.RECIPE_CAUSE_VALUES, null] },
 };
 
 /** Every value `path` names in `value`, beside the concrete path it sits at; `[]` fans out over a list's rows. */

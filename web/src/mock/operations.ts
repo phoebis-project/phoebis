@@ -90,7 +90,7 @@ const sessionSpec: ({
   noEffort?: true;
   released?: true;
   sessionId?: string;
-  state: Session['keepalive']['state'];
+  state: KeepaliveState | null;
   /** A held or paused subagent under a main agent that keeps probing, which is the case the state hints describe. */
   subagentHold?: RecipeCause;
   subagents?: { accountId?: string; model: string };
@@ -304,20 +304,20 @@ const burnUnitOf = (accountId: string): BurnUnit | null => {
 };
 /**
  * The served burn of a line beside its row's display pin, set from the row's figures rather than drawn, so the rows
- * after it keep their rolls: the display pin's burn scaled by the line's last prompt over the display pin's, with
- * `burnAt` the line's last use, none where the display pin burns none or where a window share has no weight for the
- * line's model to price it at. A pin whose last use is its session's first sighting was never renewed with usage, so it
- * burns 0 and names no instant. The display pin's own line reads the row's figures instead.
+ * after it keep their rolls: the display pin's burn scaled by the line's last prompt over the display pin's, none where
+ * the display pin burns none or where a window share has no weight for the line's model to price it at. A pin whose
+ * last use is its session's first sighting was never renewed with usage, so it burns 0. The display pin's own line
+ * reads the row's figures instead.
  */
 const servedBeside = (
   display: Pick<Session, 'burn' | 'lastInputTokens'>,
   line: Pick<AgentContext, 'accountId' | 'lastInputTokens' | 'lastUsedAt' | 'model'>,
   sessionCreatedAt: string | null,
-): { burn: number | null; burnAt: string | null } => {
-  if (line.lastUsedAt !== null && line.lastUsedAt === sessionCreatedAt) return { burn: 0, burnAt: null };
+): { burn: number | null } => {
+  if (line.lastUsedAt !== null && line.lastUsedAt === sessionCreatedAt) return { burn: 0 };
   const priced = burnUnitOf(line.accountId) !== 'window_share' || weightOf(TABLES, line.model, 'seven_day') !== null;
   const burn = !priced || display.burn === null || display.lastInputTokens === null || line.lastInputTokens === null ? null : (display.burn * line.lastInputTokens) / display.lastInputTokens;
-  return { burn, burnAt: line.lastUsedAt };
+  return { burn };
 };
 
 /**
@@ -351,8 +351,8 @@ const warmAt = (lastUsedAt: string | null, cacheTtlMs: number | null): boolean =
  * served burn priced on the pin's own account, in that account's unit and window, as the row's is for the display pin.
  */
 const pinLine = (
-  line: Omit<AgentContext, 'burn' | 'burnAt' | 'burnEquivalent' | 'burnUnit' | 'burnWindow' | 'createdAt' | 'warm'>,
-  served: { burn: number | null; burnAt: string | null },
+  line: Omit<AgentContext, 'burn' | 'burnEquivalent' | 'burnUnit' | 'burnWindow' | 'createdAt' | 'warm'>,
+  served: { burn: number | null },
 ): Omit<AgentContext, 'createdAt'> => {
   const unit = burnUnitOf(line.accountId);
   const window = unit === 'window_share' ? burnWindowOf(line.accountId) : null;
@@ -360,7 +360,6 @@ const pinLine = (
   return {
     ...line,
     burn,
-    burnAt: served.burnAt,
     burnEquivalent: window === null ? null : burnEquivalentOf(burn, line.accountId, window),
     burnUnit: unit,
     burnWindow: window,
@@ -394,7 +393,7 @@ const datedLines = (createdAt: string | null, session: string, lines: readonly O
   });
 };
 /** The summary of a row main holds no recipe for. A factory, since the summary loop below writes into a row's own. */
-const noRecipe = (): Session['keepalive'] => ({ cause: null, lastGuard: null, nextProbeAt: null, state: null });
+const noRecipe = (): Session['keepalive'] => ({ cause: null, nextProbeAt: null });
 
 export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   // An entry past the story's session ids draws one the ledger never saw. The draw runs where the spec writes its id
@@ -467,10 +466,8 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     // The companion's last report, as the engine dates one that stopped: a silent one's lapse, the session's end.
     companionSince: written?.endedSeconds !== undefined ? ago(written.endedSeconds * 1000) : spec.companion === 'silent' ? ago(rng.int(12, 150) * MINUTE) : null,
     keepalive: {
-      state: spec.state,
       // Filled in from the recipes below, so a row and its agents cannot disagree.
       cause: null,
-      lastGuard: null,
       nextProbeAt: null,
     },
     // Set from the row's index rather than drawn, so the rows after this one keep their rolls: a reporting mod saw the
@@ -565,7 +562,8 @@ function storySubagent(i: number, j: number): string {
 }
 
 export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
-  const mainState = pin.keepalive.state;
+  // The registered session, listed after the spec's rows, holds no recipe.
+  const mainState = i < sessionSpec.length ? sessionSpec[i].state : null;
   if (mainState === null) return [];
   const sub = sessionSpec[i].subagents;
   const spec = sessionSpec[i];
@@ -659,11 +657,8 @@ for (const pin of SESSIONS) {
     .sort();
   pin.keepalive.nextProbeAt = scheduled[0] ?? null;
   const own = RECIPES.filter((r) => r.sessionId === pin.sessionId);
-  // The session's own summary reads its recipe's lifecycle word, guard note and cause, the way the admin route does, so
-  // a session the mod released whole reads released.
+  // The session's own summary reads its recipe's cause, the way the admin route does.
   const summary = summaryRecipe(own);
-  pin.keepalive.state = summary?.agentState ?? null;
-  pin.keepalive.lastGuard = summary?.lastGuard ?? null;
   pin.keepalive.cause = summary?.cause ?? null;
   // The row's word is main's alone, so a row whose main holds no recipe keeps the word it was written with: the
   // registered-only session's `registered`, none elsewhere.
@@ -691,7 +686,7 @@ SESSIONS.forEach((pin, i) => {
       const own = { accountId: r.accountId, agentId: r.agentId, model: r.model };
       if (r.agentId === 'main') {
         const line = { ...own, cacheTtlMs: pin.cacheTtlMs, effort: pin.effort, lastInputTokens: pin.lastInputTokens, lastUsedAt: pin.lastUsedAt ?? r.lastRequestAt, lifecycle: r.agentState };
-        return [pinLine(line, { burn: pin.burn, burnAt: pin.burnAt })];
+        return [pinLine(line, { burn: pin.burn })];
       }
       const line = { ...own, cacheTtlMs: 5 * MINUTE, effort: effortAt(j), lastInputTokens: agentTokens(i, j), lastUsedAt: r.lastRequestAt, lifecycle: r.agentState };
       return [pinLine(line, servedBeside(pin, line, pin.createdAt))];
@@ -809,7 +804,6 @@ SLOWED_PINS.forEach((pin, k) => {
   const rows = REQUESTS.filter((r) => r.kind !== 'probe' && r.keyId === 'notebook' && r.sessionId === pin.sessionId);
   const main = rows.filter((r) => r.agentId === 'main');
   const last = main[0];
-  const lastAttempt = last.attempts[last.attempts.length - 1];
   const effort = effortAt(k);
   const createdAt = main[main.length - 1].at;
   const display = { burn: pin.burn, lastInputTokens: promptOf(last.usage) };
@@ -827,7 +821,7 @@ SLOWED_PINS.forEach((pin, k) => {
       lifecycle: null,
       model,
     };
-    return pinLine(line, agentId === 'main' ? { burn: pin.burn, burnAt: lastAttempt.startedAt } : servedBeside(display, line, createdAt));
+    return pinLine(line, agentId === 'main' ? { burn: pin.burn } : servedBeside(display, line, createdAt));
   });
   SESSIONS.push({
     ...writtenRow({ accountId: 'studio', agentId: 'main', burn: pin.burn, createdAt, keyId: 'notebook', sessionId: pin.sessionId }, lines),
@@ -872,7 +866,7 @@ if (FLEET_PINS.length > 0) {
   const lines = FLEET_PINS.map((pin, j) => {
     const attempt = pin.attempts[pin.attempts.length - 1];
     const line = { accountId: attempt.accountId, agentId: 'main', cacheTtlMs: 5 * MINUTE, effort: effortAt(j + 1), lastInputTokens: promptOf(pin.usage), lastUsedAt: attempt.startedAt, lifecycle: null, model: pin.canonicalModel };
-    return pinLine(line, j === 0 ? { burn: FLEET_BURN, burnAt: lastAttempt.startedAt } : servedBeside(display, line, firstSeen.at));
+    return pinLine(line, j === 0 ? { burn: FLEET_BURN } : servedBeside(display, line, firstSeen.at));
   });
   SESSIONS.push(writtenRow({ accountId: lastAttempt.accountId, agentId: 'main', burn: FLEET_BURN, createdAt: firstSeen.at, keyId: 'fleet', sessionId: FLEET_SESSION_ID }, lines));
 }
@@ -891,7 +885,7 @@ const WORKSHOP_BURN = 0.0021;
   const createdAt = workshopRows[workshopRows.length - 1].at;
   const line = pinLine(
     { accountId: 'workshop', agentId: 'main', cacheTtlMs: HOUR, effort: effortAt(1), lastInputTokens: promptOf(WORKSHOP_PIN.usage), lastUsedAt: lastAttempt.startedAt, lifecycle: null, model: WORKSHOP_PIN.canonicalModel },
-    { burn: WORKSHOP_BURN, burnAt: lastAttempt.startedAt },
+    { burn: WORKSHOP_BURN },
   );
   SESSIONS.push(writtenRow({ accountId: 'workshop', agentId: 'main', burn: WORKSHOP_BURN, createdAt, keyId: 'bench', sessionId: WORKSHOP_SESSION_ID }, [line]));
 }
@@ -970,14 +964,14 @@ const auxiliaryOnlyLine = pinLine(
     lifecycle: auxiliaryOnlyRecipe.agentState,
     model: auxiliaryOnlyRecipe.model,
   },
-  { burn: AUXILIARY_ONLY_BURN, burnAt: auxiliaryOnlyRecipe.lastRequestAt },
+  { burn: AUXILIARY_ONLY_BURN },
 );
 const NO_MOD_CREATED_AT = ago(47 * MINUTE);
 const NO_MOD_BURN = 0.22;
 const noModMain = { accountId: 'contract', agentId: 'main', cacheTtlMs: 5 * MINUTE, effort: 'max', lastInputTokens: 41_200, lastUsedAt: ago(2 * MINUTE), lifecycle: null, model: 'claude-sonnet-5-5' };
 const noModSubagent = { accountId: 'contract', agentId: '5c8e', cacheTtlMs: 5 * MINUTE, effort: 'low', lastInputTokens: 7_900, lastUsedAt: ago(25 * MINUTE), lifecycle: null, model: HAIKU };
 const noModLines = [
-  pinLine(noModMain, { burn: NO_MOD_BURN, burnAt: noModMain.lastUsedAt }),
+  pinLine(noModMain, { burn: NO_MOD_BURN }),
   pinLine(noModSubagent, servedBeside({ burn: NO_MOD_BURN, lastInputTokens: noModMain.lastInputTokens }, noModSubagent, NO_MOD_CREATED_AT)),
 ];
 const WRITTEN_SESSIONS = [
@@ -989,7 +983,7 @@ const WRITTEN_SESSIONS = [
       companion: 'reporting',
       createdAt: AUXILIARY_ONLY_CREATED_AT,
       // Main holds no recipe, so the summary reads the subagent's recipe, its next probe included.
-      keepalive: { cause: auxiliaryOnlyRecipe.cause, lastGuard: auxiliaryOnlyRecipe.lastGuard, nextProbeAt: auxiliaryOnlyRecipe.nextProbeAt, state: auxiliaryOnlyRecipe.agentState },
+      keepalive: { cause: auxiliaryOnlyRecipe.cause, nextProbeAt: auxiliaryOnlyRecipe.nextProbeAt },
       keyId: 'laptop',
       presenceAgeSeconds: 9,
       sessionId: AUXILIARY_ONLY_SESSION_ID,
@@ -1034,7 +1028,8 @@ export function foldSessionSpend(rows: readonly RequestLog[], session: Pick<Sess
   const newer = (r: RequestLog, than: RequestLog | null) => than === null || compareRequests(r, than) < 0;
   const spend = emptyPart();
   const probes = emptyPart();
-  const day: SessionDay = { billedUsd: {}, equivalent: 0, requests: {}, usd: 0 };
+  // `addMoney` writes the list dollars as well, which the route's day leaves out.
+  const day: SessionDay & { usd: number } = { billedUsd: {}, equivalent: 0, requests: {}, usd: 0 };
   const dayFrom = startOfHour(now - 24 * HOUR);
   const agents = new Map<string, { agentId: string; model: string; newest: RequestLog | null; probes: SessionSpendPart; spend: SessionSpendPart }>();
   const agentOf = (agentId: string, model: string) => {
@@ -1077,7 +1072,7 @@ export function foldSessionSpend(rows: readonly RequestLog[], session: Pick<Sess
     }));
   return {
     agentRequests,
-    day,
+    day: { billedUsd: day.billedUsd, equivalent: day.equivalent, requests: day.requests },
     requests: spend.requests,
     spend: spend.requests > 0 || probes.requests > 0 ? { ...spend, probes } : null,
     userAgent: newest?.userAgent ?? null,
@@ -1153,8 +1148,9 @@ export const largestCohort = (keyIds: ReadonlySet<string>): number => {
 // analytics Cache section agree on what "expired between turns" counts.
 const EXPIRED_BETWEEN_TURNS_24H = REQUESTS.filter((r) => r.status === 200 && r.usage.cacheRead === 0 && servedMissReason(r) === 'none').length;
 
-// The keepalive engine holds a session once the mod registered it or a request retained a recipe for it.
-const ENGINE_SESSIONS = SESSIONS.filter((s) => s.companion !== 'none' || s.keepalive.state !== null);
+// The keepalive engine holds a session once the mod registered it or a request retained a recipe for it. SESSIONS
+// lists the spec's rows first, in its order, and the one written row a recipe warms is one the mod reports.
+const ENGINE_SESSIONS = SESSIONS.filter((s, i) => s.companion !== 'none' || (i < sessionSpec.length && sessionSpec[i].state !== null));
 
 // Router-wide, so every probe counted here belongs to a pool that keeps caches
 // warm, and `jobs` has warming off and contributes none. Hand-set at a busier

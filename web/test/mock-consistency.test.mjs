@@ -530,9 +530,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     const rows = s.requests.filter((r) => r.keyId === 'fleet');
     const [session] = new Set(rows.map((r) => r.sessionId));
-    // The last decision places an Opus pin inside the pool's affinity window, and no recipe warms the session.
-    const listed = s.sessions.filter((x) => x.sessionId === session).map((x) => [x.keyId, x.accountId, x.model, x.pinned, x.keepalive.state]);
-    assert.deepEqual(listed, [['fleet', 'contract', 'claude-opus-5-5', true, null]], 'the session is listed once, pinned on the seat');
+    // The last decision places an Opus pin inside the pool's affinity window.
+    const listed = s.sessions.filter((x) => x.sessionId === session).map((x) => [x.keyId, x.accountId, x.model, x.pinned]);
+    assert.deepEqual(listed, [['fleet', 'contract', 'claude-opus-5-5', true]], 'the session is listed once, pinned on the seat');
     const pool = s.pools.find((p) => p.id === 'contract');
     // The seat also holds the two pins of the fleet session no mod reports, which has reached no ledger.
     assert.deepEqual([pool.activePins, pool.members.map((m) => [m.accountId, m.activePins])], [3, [['contract', 3]]], 'the pool and its member count the pin beside the two');
@@ -1043,8 +1043,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (const r of rows) assert.deepEqual([r.cause, r.state, r.nextProbeAt, r.deadline, r.wakeAt], ['agent_released', 'ended', null, null, null], `${r.agentId} reads as a released agent`);
     const row = s.sessions.find((x) => !x.historical && x.keyId === rows[0].keyId && x.sessionId === rows[0].sessionId);
     assert.ok(row !== undefined, 'the session keeps its row');
-    // The engine's session view takes the state off main's record, which the release moved to released.
-    assert.deepEqual([row.keepalive.state, row.keepalive.cause], ['released', 'agent_released'], "the row reads main's lifecycle word and cause");
+    // The engine's session view takes the cause off main's record, which the release set.
+    assert.equal(row.keepalive.cause, 'agent_released', "the row reads main's cause");
     const own = s.requests.filter((r) => r.kind !== 'probe' && r.keyId === row.keyId && r.sessionId === row.sessionId);
     assert.equal(own.length, 1, 'the ledger holds the one request the session routed');
     assert.deepEqual([row.pinned, row.requests, row.lastRequestAt], [true, 1, own[0].at], 'the row reads that request as its activity');
@@ -1195,12 +1195,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const aux = s.sessions.filter((x) => x.companion !== 'none' && x.pinned && x.agentId !== 'main');
     assert.equal(aux.length, 1, 'one companion row reads a subagent pin');
     const [row] = aux;
-    // Main holds no recipe, so the session's summary reads the subagent's.
-    assert.deepEqual(
-      [ownOf(row).map((r) => r.agentId), row.keepalive.state],
-      [[row.agentId], ownOf(row)[0]?.agentState],
-      "one subagent recipe and none of main, the subagent's read by the summary",
-    );
+    // Main holds no recipe, so the session's one recipe is the subagent's.
+    assert.deepEqual(ownOf(row).map((r) => r.agentId), [row.agentId], 'one subagent recipe and none of main');
     const read = (f) => [f.agentId, f.model, f.accountId, f.lastInputTokens, f.effort];
     assert.deepEqual(row.agentContexts.map(read), [read(row)], "the subagent's line, the one the row reads");
   });

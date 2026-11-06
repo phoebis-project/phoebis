@@ -2096,8 +2096,8 @@ test("a session row reads main's effort and every agent line with all its member
   const created = new Date(1_791_717_340_000).toISOString();
   const used = new Date(1_791_721_000_000).toISOString();
   assert.deepEqual(s.agentContexts, [
-    { accountId: 'business', agentId: '7b2e', burn: 0.00104, burnAt: used, burnEquivalent: 0.0017333333333333335, burnUnit: 'window_share', burnWindow: 'five_hour', cacheTtlMs: 300_000, createdAt: created, effort: 'low', lastInputTokens: 12_000, lastUsedAt: used, lifecycle: 'idle', model: 'claude-haiku-4-5', warm: false },
-    { accountId: 'direct', agentId: '4f0c', burn: 0.074, burnAt: used, burnEquivalent: null, burnUnit: 'usd', burnWindow: null, cacheTtlMs: 300_000, createdAt: created, effort: 'high', lastInputTokens: 31_000, lastUsedAt: used, lifecycle: 'busy', model: 'claude-sonnet-5', warm: true },
+    { accountId: 'business', agentId: '7b2e', burn: 0.00104, burnEquivalent: 0.0017333333333333335, burnUnit: 'window_share', burnWindow: 'five_hour', cacheTtlMs: 300_000, createdAt: created, effort: 'low', lastInputTokens: 12_000, lastUsedAt: used, lifecycle: 'idle', model: 'claude-haiku-4-5', warm: false },
+    { accountId: 'direct', agentId: '4f0c', burn: 0.074, burnEquivalent: null, burnUnit: 'usd', burnWindow: null, cacheTtlMs: 300_000, createdAt: created, effort: 'high', lastInputTokens: 31_000, lastUsedAt: used, lifecycle: 'busy', model: 'claude-sonnet-5', warm: true },
   ]);
 });
 
@@ -2131,8 +2131,8 @@ test('a recipe and a session row decode the compaction verdict and the compacted
   const recipe = d.decodeRecipe({ ...wire, cause: 'compacted', last_guard: 'compaction', next_probe_at: null, state: 'ended' });
   assert.deepEqual([recipe.cause, recipe.lastGuard, recipe.nextProbeAt, recipe.state], ['compacted', 'compaction', null, 'ended']);
   const row = fixture('sessions').sessions.find((s) => s.session_id === 's1');
-  const session = d.decodeSession({ ...row, keepalive: { ...row.keepalive, cause: 'compacted', last_guard: 'compaction' } });
-  assert.deepEqual([session.keepalive.cause, session.keepalive.lastGuard], ['compacted', 'compaction']);
+  const session = d.decodeSession({ ...row, keepalive: { ...row.keepalive, cause: 'compacted' } });
+  assert.equal(session.keepalive.cause, 'compacted');
 });
 
 test("the downstream snippet is the seven recommended lines, its base URL the proxy listener's scheme and port on a placeholder host", () => {
@@ -2340,7 +2340,6 @@ test('the dashboard, sessions, recipes, and overview decode', () => {
   assert.equal(sessions.find((s) => s.sessionId === 's0').historical, true, 'the row of an earlier holder of the same key id reads historical');
   assert.equal(s1.keyGeneration, fixture('sessions').sessions.find((s) => s.session_id === 's1').key_generation, 'the live holder names the generation its key row carries');
   assert.equal(s1.companion, 'reporting');
-  assert.equal(s1.keepalive.state, 'busy');
   assert.equal(s1.keepalive.cause, 'scheduled');
   assert.equal(s1.presenceAgeSeconds, null, 'the captured mod reported no presence');
   assert.equal(s1.requests, 5);
@@ -2773,7 +2772,7 @@ test('a session decodes its burn unit and window, and a pin the cost model canno
   const unpinned = rows.find((s) => s.burn === null);
   assert.equal(d.decodeSession(unpinned).burnEquivalent, null, 'a session with no pin burns nothing');
   assert.equal(d.decodeSession({ ...rows[0], burn_unit: 'tokens' }).burnUnit, null, 'a unit outside the two reads as none');
-  assert.deepEqual(Object.keys(d.decodeSession(rows[0]).keepalive).sort(), ['cause', 'lastGuard', 'nextProbeAt', 'state'], 'the keepalive summary carries no balance');
+  assert.deepEqual(Object.keys(d.decodeSession(rows[0]).keepalive).sort(), ['cause', 'nextProbeAt'], 'the keepalive summary carries no balance');
   assert.equal(Object.keys(d.decodeRecipe(fixture('keepalive_recipes').recipes[0])).some((k) => k.startsWith('net')), false, 'nor does a recipe');
 });
 

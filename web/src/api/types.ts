@@ -1784,8 +1784,6 @@ export interface AgentContext {
   agentId: string;
   /** The pin's typed burn per hour in `burnUnit`, priced as the row's `burn` is for this pin. */
   burn: number | null;
-  /** The instant the pin's served burn is decayed to, null for a pin never renewed with usage. */
-  burnAt: string | null;
   /** The pin's burn per hour as the Pro-week figure, as the row's `burnEquivalent`. */
   burnEquivalent: number | null;
   burnUnit: BurnUnit | null;
@@ -1826,12 +1824,9 @@ export interface SessionSpend extends SessionSpendPart {
 }
 
 /** A session's client requests of the last 24 hours by class, and their spend. */
-export interface SessionDay {
-  billedUsd: Record<string, number>;
-  equivalent: number | null;
+export interface SessionDay extends Pick<SessionSpendPart, 'billedUsd' | 'equivalent'> {
   /** By request class as the ledger holds it, `other` for a request with none. */
   requests: Record<string, number>;
-  usd: number;
 }
 
 /** A session's requests of one agent on one canonical model, from the ledger. */
@@ -1894,9 +1889,7 @@ export interface Session {
   /** Main's recipe, or the newest other agent's where main holds none, every member null while no agent holds one. */
   keepalive: {
     cause: RecipeCause | null;
-    lastGuard: GuardVerdict | null;
     nextProbeAt: string | null;
-    state: KeepaliveState | null;
   };
   /** The `created_at` of the key that owns the session. */
   keyGeneration: number;
