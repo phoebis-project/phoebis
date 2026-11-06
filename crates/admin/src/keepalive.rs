@@ -32,8 +32,9 @@ pub(crate) struct KeepaliveOverview {
     pub expired_between_turns_24h: u64,
     /// The last gap's instant, null before the first gap.
     pub last_bus_gap_at: Option<i64>,
-    /// `agents`, `retained_bytes` and `sessions`, each a `count` of what its cap bounds, where an ended session
-    /// holds no slot, beside the `max` the bootstrap file's `keepalive` block sets.
+    /// `agents`, `retained_bytes` and `sessions`, each a `count` of what its cap bounds, where a session holds a slot
+    /// from its first request until its end, and an agent's record from that request until it leaves, beside the
+    /// `max` the bootstrap file's `keepalive` block sets.
     pub limits: OverviewLimits,
     pub pools: Vec<PoolKeepalive>,
     /// `ok`, `plan_ok`, `failed`, `held`, `migrated`, `skipped`, where `plan_ok` counts the plan-funded probes of

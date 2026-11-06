@@ -1098,6 +1098,7 @@ impl Inner {
         // Raised at each insert, so it counts the agents of the session in the making before that session joins
         // the map.
         let mut agent_count = self.agent_count();
+        let mut live_sessions = self.live_sessions();
         for row in sessions {
             let stored: PersistKey = (
                 row.key_id.clone(),
@@ -1150,7 +1151,13 @@ impl Inner {
                 self.file_removed_session(stored);
                 continue;
             }
-            let over = if self.sessions.len() >= limits.max_sessions {
+            // A session that has sent no real request holds no slot of either cap, as in the running engine, so it
+            // passes both bounds and counts toward neither. The ended ones left above, so `last_real_at` alone reads
+            // the slot.
+            let holds_slot = payload.last_real_at.is_some();
+            let over = if !holds_slot {
+                None
+            } else if live_sessions >= limits.max_sessions {
                 Some(&mut by_sessions)
             } else if agent_count >= limits.max_agents {
                 Some(&mut by_agents)
@@ -1188,7 +1195,7 @@ impl Inner {
                 // Read off the row rather than the opened body, so a blob that no longer opens is cleared by the
                 // agent's next save.
                 agent.body_saved = agent_row.body_size > 0;
-                if agent_count >= limits.max_agents {
+                if holds_slot && agent_count >= limits.max_agents {
                     self.dispose_loaded(
                         &key,
                         &agent_row,
@@ -1219,7 +1226,12 @@ impl Inner {
                     (Some(_), None) => unopened.push((key.clone(), agent_id.clone())),
                 }
                 session.agents.insert(agent_id, agent);
-                agent_count += 1;
+                if holds_slot {
+                    agent_count += 1;
+                }
+            }
+            if holds_slot {
+                live_sessions += 1;
             }
             self.sessions.insert(key, session);
         }

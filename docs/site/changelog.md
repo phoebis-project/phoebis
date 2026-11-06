@@ -181,7 +181,9 @@ console shows the probe cost and the saving in the chosen week ([The four fields
 the ledger records](keepalive.md#what-the-ledger-records)). The keepalive reads a request's cache markers at the five
 positions the Messages API takes one from, a block inside a tool result's content among them, so a marker there that is
 not ephemeral or names an unknown TTL leaves the request not retained under `invalid_cache_control` ([The five
-states](keepalive.md#the-five-states)).
+states](keepalive.md#the-five-states)). A session the mod registered holds no slot under the session and agent caps
+until its first request, and a first request over either cap is not kept and reads `session_limit` or `agent_limit`
+([Turning it on](keepalive.md#turning-it-on)).
 
 The admin listener serves the web console behind a login with the admin secret, with the views in the sidebar's order,
 Dashboard, Quota, Accounts, Pools, Keys, Guardrails, Requests, Analytics, Sessions and Settings, and under them the

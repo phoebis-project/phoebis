@@ -7,6 +7,7 @@ import type { BadgeTone } from '@/lib/quota';
 
 export const CAUSE_LABEL: Record<RecipeCause, string> = {
   affinity_too_short: 'affinity too short',
+  agent_limit: 'agent limit',
   agent_released: 'agent released',
   agent_unknown: 'agent unknown',
   awaiting_cache_evidence: 'awaiting cache evidence',
@@ -63,6 +64,7 @@ export const CAUSE_LABEL: Record<RecipeCause, string> = {
   scheduled: 'scheduled',
   session_ended: 'session ended',
   session_expired: 'session expired',
+  session_limit: 'session limit',
   slow_probe: 'slow probe',
   storage_limit: 'storage limit',
   structured_output: 'structured output',
@@ -73,6 +75,7 @@ export const CAUSE_LABEL: Record<RecipeCause, string> = {
 
 export const CAUSE_HINT: Record<RecipeCause, string> = {
   affinity_too_short: "The pool's session affinity ends before this recipe's probe is due (the cache TTL less the lead), so the session could move away from the account the probe would warm.",
+  agent_limit: "The session's first request found the engine's agent cap full, so the request was not kept.",
   agent_released: 'The keepalive mod reported this subagent finished, so its recipe was dropped.',
   agent_unknown: "The keepalive mod could not tell this agent's state, so the engine keeps no recipe for it.",
   awaiting_cache_evidence:
@@ -132,6 +135,7 @@ export const CAUSE_HINT: Record<RecipeCause, string> = {
   scheduled: 'The next probe is scheduled before the cache entry expires.',
   session_ended: 'The session ended, by the mod reporting it or by its key being deleted, so its recipes were dropped.',
   session_expired: 'The session passed the session expiry with no request and no report.',
+  session_limit: "The session's first request found the engine's session cap full, so the request was not kept.",
   slow_probe: 'The last probe took its whole refresh interval, so the next one is scheduled on the retry ladder before the entry expires rather than starting at once.',
   storage_limit: 'The engine was at its retained-bytes cap with nothing idle to evict, so this recipe was not kept.',
   structured_output: 'The request asked for structured output, which a probe cannot replay, so it was not kept.',

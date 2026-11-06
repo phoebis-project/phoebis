@@ -151,6 +151,7 @@ macro_rules! reasons {
 
 reasons! {
     AffinityTooShort => "affinity_too_short",
+    AgentLimit => "agent_limit",
     AgentReleased => "agent_released",
     AgentUnknown => "agent_unknown",
     AwaitingCacheEvidence => "awaiting_cache_evidence",
@@ -207,6 +208,7 @@ reasons! {
     Scheduled => "scheduled",
     SessionEnded => "session_ended",
     SessionExpired => "session_expired",
+    SessionLimit => "session_limit",
     SlowProbe => "slow_probe",
     StorageLimit => "storage_limit",
     StructuredOutput => "structured_output",
@@ -477,7 +479,8 @@ pub struct EngineStats {
     /// The request events (a selection, a head, a chunk, a completion, a new request) and the reports refused because
     /// they arrived after the shutdown's quiesce, so the state the last save holds is the state at the quiesce.
     pub late_updates: u64,
-    /// The sessions `max_sessions` bounds: an ended session keeps its entry until the expiry and holds no slot.
+    /// The sessions `max_sessions` bounds: a registered session that has sent no real request holds no slot, and an
+    /// ended session keeps its entry until the expiry and holds none.
     pub live_sessions: usize,
     pub retained_bytes: usize,
     pub running_probes: usize,
@@ -515,6 +518,17 @@ impl Session {
     /// one lease length after a load.
     pub(crate) fn attended_at(&self, now: i64) -> bool {
         self.attended || self.restored_until.is_some_and(|until| now < until)
+    }
+
+    /// Whether the session has carried a real request: from then on its agents' records hold slots of `max_agents`
+    /// until each leaves, a record its end released included.
+    pub(crate) fn requested(&self) -> bool {
+        self.last_real_at.is_some()
+    }
+
+    /// Holds a slot of `max_sessions`: past its first real request, with `last_real_at` set, and not ended.
+    pub(crate) fn holds_slot(&self) -> bool {
+        !self.ended && self.requested()
     }
 }
 
@@ -1555,7 +1569,7 @@ impl Engine {
             bus_gaps: inner.bus_gaps,
             last_bus_gap_at: inner.last_bus_gap_at,
             late_updates: inner.late_updates,
-            live_sessions: inner.sessions.values().filter(|s| !s.ended).count(),
+            live_sessions: inner.live_sessions(),
             retained_bytes: inner.retained,
             running_probes: inner.running,
             sessions: inner.sessions.len(),
@@ -1671,9 +1685,19 @@ impl Inner {
         self.touch_agent(key, agent_id);
     }
 
-    /// Every agent of every session, which `max_agents` bounds.
+    /// The agents `max_agents` bounds: every record of a session that has carried a real request. A registered
+    /// session's agents hold no slot until its first request.
     pub(crate) fn agent_count(&self) -> usize {
-        self.sessions.values().map(|s| s.agents.len()).sum()
+        self.sessions
+            .values()
+            .filter(|s| s.requested())
+            .map(|s| s.agents.len())
+            .sum()
+    }
+
+    /// The sessions `max_sessions` bounds, those that hold a slot.
+    pub(crate) fn live_sessions(&self) -> usize {
+        self.sessions.values().filter(|s| s.holds_slot()).count()
     }
 
     /// Discards every agent of the session under `reason`, each one's probes settled under `wasted`.
@@ -2995,6 +3019,25 @@ impl Engine {
         // The recipe set aside waits for this request's completion, so each return below that takes no observation
         // drops it: nothing would complete to restore it.
         inner.set_aside(&key, &agent_id, now);
+        // A session takes its slots at its first real request, so both caps are read here, the session cap first as a
+        // registration reads them, and the session's agents join the agent count only where they all fit. A first
+        // request over either cap is refused the slot as a registration over it is: it keeps nothing and writes no
+        // request time, so the session's next request reads the caps again.
+        if !inner.sessions[&key].requested() {
+            let joining = inner.sessions[&key].agents.len();
+            let refused = if inner.live_sessions() >= inner.limits.max_sessions {
+                Some(Reason::SessionLimit)
+            } else if inner.agent_count() + joining > inner.limits.max_agents {
+                Some(Reason::AgentLimit)
+            } else {
+                None
+            };
+            if let Some(reason) = refused {
+                inner.drop_aside(&key, &agent_id);
+                inner.set_reason(&key, &agent_id, reason);
+                return;
+            }
+        }
         inner.sessions.get_mut(&key).unwrap().last_real_at = Some(now);
         inner.touch_session(&key);
         let agent = agent_mut(&mut inner.sessions, &key, &agent_id).expect(AGENT_HELD);

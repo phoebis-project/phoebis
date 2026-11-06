@@ -76,7 +76,8 @@ the router still pins and whose requests it still sees. The router reads the own
 every model request of its process, `X-Keepalive-Owner-Id`, to tell that process's requests from another process's on
 the same session id, leaving the session's recipes as they were and counting the mismatch when the header names another
 owner, and strips the header before a request leaves. Once the holder's lease has lapsed, a real request naming another
-owner takes the session over for that owner.
+owner takes the session over for that owner. A registration starts main `busy` under the cause `awaiting_request` until
+the session's first request.
 
 ## Turning it on
 
@@ -92,7 +93,10 @@ warm", with the policy's three numbers under it (see [Pools](console.md#pools)).
 
 The bootstrap file's `keepalive` block holds the process-wide bounds alone, `max_agents`, `max_retained_bytes` and
 `max_sessions`, read once at start, so changing one takes a restart (see [keepalive](installation.md#keepalive)). The
-lease and the four probe workers are fixed.
+lease and the four probe workers are fixed. A session holds a slot of `max_sessions` from its first real request until
+its end, and its agents hold slots of `max_agents` from that request until their records leave. A first request over
+the session cap is not kept and reads `session_limit`, and one over the agent cap reads `agent_limit`, the words a
+registration over either cap answers.
 
 ## Which requests re-arm a recipe
 
@@ -298,9 +302,9 @@ Each state reads these causes:
   `probe_quota_exhausted`, `probe_transport_error`, `reauth`, `retryable_probe_error`, `slow_probe`.
 - `paused`: `invalid_probe_usage`, `missing_account`, `partial_cache_coverage`, `probe_authentication_error`,
   `probe_retry_limit`, `repeated_cold_probe`, `request_rejected`, `unexpected_output`, `unsupported_probe`.
-- `not_retained`: `awaiting_request`, `fixed_thinking`, `forced_tool`, `headers_too_large`, `invalid_cache_control`,
-  `invalid_model`, `invalid_request`, `no_cache_evidence`, `owner_mismatch`, `request_limit`, `request_too_large`,
-  `storage_limit`, `structured_output`, `unsupported_shape`.
+- `not_retained`: `agent_limit`, `awaiting_request`, `fixed_thinking`, `forced_tool`, `headers_too_large`,
+  `invalid_cache_control`, `invalid_model`, `invalid_request`, `no_cache_evidence`, `owner_mismatch`, `request_limit`,
+  `request_too_large`, `session_limit`, `storage_limit`, `structured_output`, `unsupported_shape`.
 - `ended`: `agent_released`, `agent_unknown`, `bus_gap`, `compacted`, `evicted`, `expired`, `expired_at_restart`,
   `idle_limit`, `instance_replaced`, `key_opted_out`, `opted_out`, `parked_limit`, `released`, `reset`, `session_ended`,
   `session_expired`.
@@ -461,6 +465,7 @@ The state's cause on the Sessions view reads a label in place of the engine's id
 | Label | Cause id |
 | --- | --- |
 | affinity too short | `affinity_too_short` |
+| agent limit | `agent_limit` |
 | agent released | `agent_released` |
 | agent unknown | `agent_unknown` |
 | awaiting cache evidence | `awaiting_cache_evidence` |
@@ -517,6 +522,7 @@ The state's cause on the Sessions view reads a label in place of the engine's id
 | scheduled | `scheduled` |
 | session ended | `session_ended` |
 | session expired | `session_expired` |
+| session limit | `session_limit` |
 | slow probe | `slow_probe` |
 | storage limit | `storage_limit` |
 | structured output | `structured_output` |

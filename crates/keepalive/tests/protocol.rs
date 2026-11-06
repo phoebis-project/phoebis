@@ -868,6 +868,10 @@ async fn the_acknowledgment_and_the_refusals_follow_the_json_contract() {
         ..RigSpec::default()
     })
     .await;
+    // The rig's session takes the one session slot and the one agent slot at its first request.
+    bounded
+        .engine
+        .observe(bounded.observed("bounded", "main", BODY));
     let small = keepalive_router(bounded.engine.clone());
     for (body, expected) in [
         (
@@ -1020,6 +1024,7 @@ async fn a_registration_acknowledgment_carries_the_sessions_agents_and_nothing_e
 #[tokio::test]
 async fn a_released_agent_answers_agent_released_for_one_cache_ttl_and_then_registers_anew() {
     let mut r = rig(RigSpec::default()).await;
+    r.observe("main").await;
     agent_start(&mut r, "worker", None).unwrap();
     r.state("worker", "released");
     let released = r.status("worker").request_generation;
@@ -1063,6 +1068,7 @@ async fn a_released_agent_answers_agent_released_for_one_cache_ttl_and_then_regi
 #[tokio::test]
 async fn a_start_before_a_released_agent_leaves_reuses_its_record_and_clears_the_leave() {
     let mut r = rig(RigSpec::default()).await;
+    r.observe("main").await;
     agent_start(&mut r, "worker", None).unwrap();
     r.state("worker", "released");
     let released = r.status("worker").request_generation;
@@ -1611,6 +1617,7 @@ async fn a_same_instance_start_revives_an_ended_session_so_a_clear_then_a_resume
 #[tokio::test]
 async fn a_revival_inside_the_cache_ttl_keeps_main_and_clears_its_leave() {
     let mut r = rig(RigSpec::default()).await;
+    r.observe("main").await;
     r.event(session_end("session")).unwrap();
     r.advance(1_000);
     r.reregister();
@@ -1628,6 +1635,7 @@ async fn a_revival_inside_the_cache_ttl_keeps_main_and_clears_its_leave() {
 #[tokio::test]
 async fn a_revival_after_mains_record_left_registers_main_anew() {
     let mut r = rig(RigSpec::default()).await;
+    r.observe("main").await;
     r.event(session_end("session")).unwrap();
     r.advance(3_600_000);
     r.step().await;
@@ -1669,6 +1677,12 @@ async fn a_revival_that_would_register_main_past_the_agent_cap_answers_agent_lim
     r.step().await;
     r.event(session_start("other"))
         .expect("the slot main's record left takes another session");
+    // The other session's main takes the agent slot at its first request.
+    let mut first = r.observed("other", "main", BODY);
+    if let phoebis_bus::Event::RequestObserved(request) = &mut first {
+        request.session_id = Some("other".into());
+    }
+    r.engine.observe(first);
     let refused = r.event(session_start("session")).unwrap_err();
     assert_eq!((refused.code, refused.status), ("agent_limit", 429));
     assert!(

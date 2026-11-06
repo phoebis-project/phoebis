@@ -490,7 +490,7 @@ without a registration. The eighteen codes, by status:
 | `unknown_previous_instance` | 409 | A `session_start` naming a `previous_instance_id` for a session the router does not hold |
 | `event_too_large` | 413 | The body exceeds 16 KiB |
 | `agent_limit` | 429 | The engine's agent cap is reached, on an `agent_start` or on a `session_start` that would add main |
-| `session_limit` | 429 | The engine's live session cap is reached on a `session_start` that would bring a session to life |
+| `session_limit` | 429 | The engine's session cap is reached on a `session_start`, counting the sessions that hold a slot |
 | `quiesced` | 503 | The engine is closing, so a late report is counted and not applied |
 
 The mod sends one request at a time. Reports queue in order, the next goes out when the answer to the one in flight

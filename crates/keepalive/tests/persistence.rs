@@ -1230,6 +1230,34 @@ async fn a_restart_under_smaller_limits_restores_the_newest_rows_and_disposes_th
     );
 }
 
+/// A session holds a slot from its first real request, so a restart under a session cap of one restores the session
+/// that sent one with its recipe, though the load reaches the newer session that registered and sent nothing first,
+/// and the newer one keeps its entry.
+#[tokio::test]
+async fn a_restart_under_the_session_cap_restores_the_session_that_sent_a_request_beside_a_newer_one_that_sent_none(
+) {
+    let mut r = rig(on_disk()).await;
+    r.observe("main").await;
+    r.engine.flush_persisted().await;
+    r.advance(MINUTE);
+    r.event(session_start("newer")).unwrap();
+    r.engine.flush_persisted().await;
+    let second = r
+        .restart_with_limits(KeepaliveLimits {
+            max_sessions: 1,
+            ..KeepaliveLimits::default()
+        })
+        .await;
+    second.load_persisted().await;
+    assert_eq!(
+        (
+            second.recipes_for("desktop", "session"),
+            second.stats().sessions
+        ),
+        (vec!["main".to_string()], 2)
+    );
+}
+
 /// A session the load admits can still carry more agents than the limit leaves room for: the subagent past it is
 /// disposed on its own, and the probe it paid for and nobody answered settles under the eviction.
 #[tokio::test]
@@ -1318,6 +1346,7 @@ async fn a_session_at_the_agent_limit_frees_a_slot_when_its_released_record_leav
         ..RigSpec::default()
     })
     .await;
+    r.observe("main").await;
     agent_start(&mut r, "worker").unwrap();
     assert_eq!(
         agent_start(&mut r, "other"),
@@ -1418,6 +1447,7 @@ async fn a_restart_restores_an_unanswered_probe_with_what_its_credit_and_its_set
 #[tokio::test]
 async fn a_restored_released_record_leaves_at_the_first_tick_past_its_saved_leave() {
     let mut r = rig(on_disk()).await;
+    r.observe("main").await;
     agent_start(&mut r, "sub").unwrap();
     let released_at = r.now();
     r.state("sub", "released");
@@ -1462,6 +1492,7 @@ async fn a_restored_released_record_leaves_at_the_first_tick_past_its_saved_leav
 #[tokio::test]
 async fn a_saved_released_record_whose_leave_passed_while_the_router_was_down_does_not_load() {
     let mut r = rig(on_disk()).await;
+    r.observe("main").await;
     agent_start(&mut r, "worker").unwrap();
     r.engine.flush_persisted().await;
     // Saved after the worker, so the load reaches the released records before it.

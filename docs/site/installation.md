@@ -540,8 +540,9 @@ is on the [Keepalive](keepalive.md) page. Every bound below refuses with `keepal
 | `max_retained_bytes` | `268435456` | `proxy.max_request_bytes` (the body bound a recipe follows) to 536870912 |
 | `max_sessions` | `128` | 1 to 4096 |
 
-`max_sessions` counts live sessions only: an ended session holds no slot, though its entry stays until the session
-expiry sweeps it. The mod's lease is 90 seconds and four probes run at once. Neither is a key.
+`max_sessions` counts the sessions that hold a slot, from a session's first request until its end, so neither a
+registered session that has sent nothing nor an ended one holds one, though an ended session's entry stays until the
+session expiry sweeps it. The mod's lease is 90 seconds and four probes run at once. Neither is a key.
 
 ### proxy
 

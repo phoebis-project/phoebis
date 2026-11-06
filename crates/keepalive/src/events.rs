@@ -701,12 +701,13 @@ impl Inner {
             .sessions
             .get(&key)
             .is_some_and(|s| s.key_generation == key_generation);
-        // An ended session keeps its entry until the expiry and holds no slot. The bound is about what is live,
-        // and it is met by every start that brings a session to life, an instance replacement included. A
-        // same-instance recovery of a live session consumes nothing.
+        // An ended session keeps its entry until the expiry and holds no slot, and a registered one holds none
+        // until its first real request, so a session that has sent nothing never fills the count. The bound is met
+        // by every start that brings a session to life, an instance replacement included. A same-instance recovery
+        // of a live session consumes nothing.
         let becomes_live = self.sessions.get(&key).is_none_or(|s| s.ended);
         if becomes_live {
-            let live = self.sessions.values().filter(|s| !s.ended).count();
+            let live = self.live_sessions();
             if live >= self.limits.max_sessions {
                 return Err(err("session_limit", 429));
             }
@@ -780,7 +781,14 @@ impl Inner {
         } else if previous_instance_id.is_some() {
             return Err(err("unknown_previous_instance", 409));
         }
-        let held = self.sessions.get(&key).map(|s| s.agents.len()).unwrap_or(0);
+        // The replaced session's agents as `agent_count` counts them, none before its first request, so the
+        // subtraction leaves the other sessions' count.
+        let held = self
+            .sessions
+            .get(&key)
+            .filter(|s| s.requested())
+            .map(|s| s.agents.len())
+            .unwrap_or(0);
         if self.agent_count() - held >= self.limits.max_agents {
             return Err(err("agent_limit", 429));
         }

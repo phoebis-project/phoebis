@@ -49,11 +49,10 @@ pub fn recipe_state(reason: Reason, paused: bool) -> RecipeState {
         | RequestCanceled
         | RequestFailed
         | Scheduled => RecipeState::Retained,
-        AwaitingRequest | FixedThinking | ForcedTool | HeadersTooLarge | InvalidCacheControl
-        | InvalidModel | InvalidRequest | NoCacheEvidence | OwnerMismatch | RequestLimit
-        | RequestTooLarge | StorageLimit | StructuredOutput | UnsupportedShape => {
-            RecipeState::NotRetained
-        }
+        AgentLimit | AwaitingRequest | FixedThinking | ForcedTool | HeadersTooLarge
+        | InvalidCacheControl | InvalidModel | InvalidRequest | NoCacheEvidence | OwnerMismatch
+        | RequestLimit | RequestTooLarge | SessionLimit | StorageLimit | StructuredOutput
+        | UnsupportedShape => RecipeState::NotRetained,
         // A probe's transient failure, and a probe that read no cache, keep the prompt and retry on the ladder until
         // the entry's expiry would come first.
         AffinityTooShort | Budget | Cooled | Horizon | IneligibleCredential | KeepaliveOff

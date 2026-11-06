@@ -5,6 +5,17 @@ use phoebis_keepalive::{
     AgentState, CompanionState, Event, EventError, KeepaliveLimits, ParkKind, Reason, RecipeState,
 };
 
+/// A real request on main of `session` under `key_id`, the first of which gives the session its slot.
+fn first_request(r: &Rig, key_id: &str, session: &str) {
+    let mut observed = r.observed(&format!("{key_id}/{session}"), "main", BODY);
+    if let phoebis_bus::Event::RequestObserved(request) = &mut observed {
+        request.key_id = Some(key_id.into());
+        request.key_generation = r.generation(key_id);
+        request.session_id = Some(session.into());
+    }
+    r.engine.observe(observed);
+}
+
 #[tokio::test]
 async fn the_session_bound_counts_live_sessions_only() {
     let mut rig = rig(RigSpec {
@@ -21,10 +32,13 @@ async fn the_session_bound_counts_live_sessions_only() {
     }
     let ack = rig.event(session_start("s-128"));
     assert!(ack.is_ok(), "128 ended sessions hold no slot: {ack:?}");
-    // The rig's own bootstrap session and "s-128" already hold two of the 128 slots, so the rest of the
-    // budget is 126 before the next live-bringing start is refused.
+    // The rig's own bootstrap session and "s-128" hold two of the 128 slots once each sends a request, so the rest
+    // of the budget is 126 before the next live-bringing start is refused.
+    first_request(&rig, "desktop", "session");
+    first_request(&rig, "desktop", "s-128");
     for i in 0..126 {
         rig.event(session_start(&format!("t-{i}"))).unwrap();
+        first_request(&rig, "desktop", &format!("t-{i}"));
     }
     let refused = rig.event(session_start("t-126")).unwrap_err();
     assert_eq!(refused.code, "session_limit");
@@ -39,8 +53,8 @@ async fn the_session_bound_counts_live_sessions_only() {
 
 #[tokio::test]
 async fn a_restart_of_an_ended_session_under_a_new_instance_takes_a_slot() {
-    // The rig's own bootstrap session holds one slot already, so the cap here is two: one for it, one for
-    // "a" or "b".
+    // The rig's own bootstrap session holds one slot once it sends a request, so the cap here is two: one for
+    // it, one for "a" or "b".
     let mut rig = rig(RigSpec {
         limits: KeepaliveLimits {
             max_sessions: 2,
@@ -49,9 +63,11 @@ async fn a_restart_of_an_ended_session_under_a_new_instance_takes_a_slot() {
         ..RigSpec::default()
     })
     .await;
+    first_request(&rig, "desktop", "session");
     rig.event(session_start_as("a", "i1", None)).unwrap();
     rig.event(session_end("a")).unwrap();
     rig.event(session_start_as("b", "i-b", None)).unwrap();
+    first_request(&rig, "desktop", "b");
     // The tombstone's entry exists, so a bound over "adds an entry" would let this through.
     let refused = rig
         .event(session_start_as("a", "i2", Some("i1")))
@@ -69,7 +85,9 @@ async fn a_same_instance_recovery_of_a_live_session_takes_no_slot() {
         ..RigSpec::default()
     })
     .await;
+    first_request(&rig, "desktop", "session");
     rig.event(session_start_as("a", "i1", None)).unwrap();
+    first_request(&rig, "desktop", "a");
     rig.advance(rig.lease_ms() + 1_000); // the lease lapsed; the session is live and unattended
     let ack = rig.event(session_start_as("a", "i1", None));
     assert!(
@@ -238,6 +256,8 @@ async fn sessions_are_scoped_to_the_key_and_bounded_process_wide() {
         )
         .unwrap();
     assert_eq!(laptop.instance_id, "elsewhere");
+    first_request(&r, "desktop", "session");
+    first_request(&r, "laptop", "session");
     assert_eq!(
         r.engine
             .sessions()

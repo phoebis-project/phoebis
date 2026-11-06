@@ -10,8 +10,8 @@ use phoebis_bus::{
     AttemptOutcome, Event as BusEvent, Kind, Outcome, Phase, ResponseChunk, ResponseHead, Usage,
 };
 use phoebis_keepalive::{
-    AgentState, Event, Guard, KeepaliveLimits, KeepalivePolicy, KeepaliveSummary, Reason,
-    RecipeState,
+    recipe_state, AgentState, Event, Guard, KeepaliveLimits, KeepalivePolicy, KeepaliveSummary,
+    Reason, RecipeState,
 };
 use phoebis_ledger::{hour_of, read_rollups, RollupRow, RollupSelect};
 
@@ -737,6 +737,78 @@ fn start_agent(r: &mut Rig, agent: &str) {
         ..Default::default()
     })
     .unwrap();
+}
+
+/// A session holds a slot of `max_sessions` from its first real request, so under a cap of one a second session
+/// registers beside the rig's, which has sent nothing, and the first of the two to send a request takes the slot. The
+/// other's first request is then refused as a registration over the cap is, and keeps nothing.
+#[tokio::test]
+async fn a_registered_session_holds_no_slot_until_its_first_request_and_one_over_the_session_cap_keeps_nothing(
+) {
+    let mut r = rig(RigSpec {
+        limits: KeepaliveLimits {
+            max_sessions: 1,
+            ..KeepaliveLimits::default()
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    r.event(session_start("other"))
+        .expect("the rig's session has sent nothing, so it holds no slot");
+    arm(&r, "first", "session", "main", 1_000);
+    let held = r.engine.stats().retained_bytes;
+    arm(&r, "second", "other", "main", 1_000);
+    let other = r.engine.agent_status("desktop", "other", "main").unwrap();
+    assert_eq!(
+        (
+            other.reason,
+            recipe_state(other.reason, other.paused),
+            r.engine.recipes_for("desktop", "session"),
+            r.engine.stats().retained_bytes,
+            r.engine.stats().live_sessions,
+        ),
+        (
+            Reason::SessionLimit,
+            RecipeState::NotRetained,
+            vec!["main".to_string()],
+            held,
+            1
+        )
+    );
+}
+
+/// The agent cap is read at the same first request. Under a cap of one agent, a second session registers its main
+/// beside the rig's while neither has sent anything, and the first request takes the agent slot. The other session's
+/// first request would add its main past the cap, so it is refused as a registration over the cap is, keeps nothing
+/// and leaves its session without a slot.
+#[tokio::test]
+async fn a_first_request_whose_agents_pass_the_agent_cap_keeps_nothing_and_takes_no_slot() {
+    let mut r = rig(RigSpec {
+        limits: KeepaliveLimits {
+            max_agents: 1,
+            max_sessions: 2,
+            ..KeepaliveLimits::default()
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    r.event(session_start("other"))
+        .expect("the rig's main holds no agent slot before its session's first request");
+    arm(&r, "first", "session", "main", 1_000);
+    let held = r.engine.stats().retained_bytes;
+    arm(&r, "second", "other", "main", 1_000);
+    let other = r.engine.agent_status("desktop", "other", "main").unwrap();
+    let stats = r.engine.stats();
+    assert_eq!(
+        (
+            other.reason,
+            recipe_state(other.reason, other.paused),
+            stats.retained_bytes,
+            stats.live_sessions,
+            stats.agents,
+        ),
+        (Reason::AgentLimit, RecipeState::NotRetained, held, 1, 1)
+    );
 }
 
 /// With room for two recipes and a half, a third evicts one: the oldest idle recipe before a newer one, an unattended
