@@ -1354,8 +1354,9 @@ impl Eligibility {
 fn member_word(projection: Option<&AccountProjection>) -> Eligibility {
     // The router answers no projection for a member it has not loaded (a registry write before its reload) or while
     // it does not answer, and routes that member nothing at that instant. A member with no usage reading still has a
-    // projection, so it reads its obstacle's word. No account is attempted and the fast lane is off for a projection,
-    // so the attempted and credits obstacles never arise, and neither takes a member out of the pool's standard set.
+    // projection, so it reads `eligible` or its obstacle's word. No account is attempted and the fast lane is off for
+    // a projection, so the attempted and credits obstacles never arise, and neither takes a member out of the pool's
+    // standard set.
     let Some(projection) = projection else {
         return Eligibility::Unknown;
     };
