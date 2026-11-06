@@ -398,8 +398,8 @@ of them, and in the analytics an account on a tier the file lacks reads tier unk
 The file is a revision list in the price table's shape: `revisions`, each entry an `effective` date and the whole model
 of that date, in force from 00:00 UTC of its date to the next entry's, an instant before the first entry reading the
 first. The shipped file carries one entry, and `stats.subscription_costs_path` replaces the whole list. A weight that
-corrects an entry's figure edits that entry and every later one that carries the same figure, since it says what the
-weight was from that entry's date.
+corrects an entry's figure edits that entry and each later one that carried the figure on, up to the first entry that
+names another, since it says what the weight was from that entry's date.
 
 Two members of each entry name the model tiers: `tier_order`, the tiers in display order (`fable`, `opus`, `sonnet` and
 `haiku` on the shipped file), and `model_tier`, each model's tier by undated id. The tiers order the cost reference's
