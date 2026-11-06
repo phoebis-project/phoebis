@@ -1,19 +1,77 @@
 # The preamble scripts/capture-baseline.sh, scripts/capture-control.sh and scripts/capture-count-tokens.sh share, so
 # one loopback-only namespace, one credential refusal, one set of client state directories, and one runcli serve
 # every capture and a change to any of them cannot land in one script and not the others.
+# scripts/capture-through-router.sh shares the namespace alone: it keeps its own checks and state.
 #
 # Sourced, never run on its own: it reads the sourcing script's own arguments and re-executes that script
-# inside the namespace.
+# inside the namespace. A script that sets PHOEBIS_CAPTURE_LIB_FUNCTIONS_ONLY=1 for the source gets
+# enter_capture_namespace alone, the file returning before its checks and state.
 #
 # What a sourcing script may read from here, since a shell file declares no interface of its own: BINARY,
 # CAPTURE_DIR, CLEAN_DURATION, CLIENT_CWD, CLIENT_ENV, CONNECT_PORT, CONTROL_RECEIVER_PID, CONTROL_RECEIVER_PORT,
 # DUMMY_API_KEY, DUMMY_OAUTH_TOKEN, HTTP_PORT, OUT, RECEIVER_PID, ROOT, RUN_COUNT, RUN_FAILURES, SCRIPT_NAME, SELF,
-# SHORT_DURATION, STATE, and the functions client_env, runcli, start_control_receiver, start_receiver,
-# stop_control_receiver, and stop_receiver.
+# SHORT_DURATION, STATE, and the functions client_env, enter_capture_namespace, runcli, start_control_receiver,
+# start_receiver, stop_control_receiver, and stop_receiver.
 
 # shellcheck shell=bash
 # The sourcing scripts read the values defined here, as the header lists, so a lint of this file alone flags them.
 # shellcheck disable=SC2034
+
+# Re-executes the calling script inside a user, network and mount namespace with the loopback up and name lookups
+# kept to the hosts file. A network namespace alone stops every connection off the host but no lookup: glibc's
+# resolve module reaches systemd-resolved over its UNIX socket, and resolved asks its upstream for any name the hosts
+# file lacks. Refuses to capture where a name outside the hosts file still resolves.
+enter_capture_namespace() { # $1 the script's name for its messages, $2 the script's path, then its arguments
+  local name=$1 self=$2
+  shift 2
+  # The re-executed script calls this again inside, and a caller that cannot build a namespace, such as a CI runner,
+  # exports PHOEBIS_CAPTURE_NETNS=1 to skip it.
+  [[ "${PHOEBIS_CAPTURE_NETNS:-}" != "1" ]] || return 0
+  if ! command -v unshare >/dev/null || ! command -v ip >/dev/null; then
+    echo "$name: unshare and ip are needed to build the loopback-only namespace" >&2
+    exit 1
+  fi
+  if ! unshare -rnm true 2>/dev/null; then
+    echo "$name: unshare -rnm does not work here, refusing to capture with the internet reachable" >&2
+    exit 1
+  fi
+  export PHOEBIS_CAPTURE_NETNS=1
+  # The mounts and the check run in the namespace's own shell ahead of the script, so a caller's
+  # PHOEBIS_CAPTURE_NETNS=1 skips them with the namespace. The bind closes every resolver path the host's
+  # nsswitch.conf names, and the tmpfs, where the bind is refused, hides resolved's socket and the stub resolv.conf.
+  # unshare -m keeps both mounts off the host's mount table, and the bind holds its file after the directory goes.
+  # shellcheck disable=SC2016 # the inner shell expands its own variables
+  exec unshare -rnm bash -c '
+    set -eu
+    self=$1
+    shift
+    ip link set lo up
+    conf=$(mktemp -d)
+    printf "hosts: files\n" >"$conf/nsswitch.conf"
+    PHOEBIS_CAPTURE_RESOLVER=
+    if mount --bind "$conf/nsswitch.conf" /etc/nsswitch.conf 2>/dev/null; then
+      PHOEBIS_CAPTURE_RESOLVER=nsswitch
+    elif mount -t tmpfs tmpfs /run/systemd/resolve 2>/dev/null; then
+      PHOEBIS_CAPTURE_RESOLVER=tmpfs
+    fi
+    rm -rf "$conf"
+    if [[ -z "$PHOEBIS_CAPTURE_RESOLVER" ]]; then
+      echo "$0: neither the nsswitch bind nor the resolve tmpfs holds here," \
+        "refusing to capture with name lookups reachable" >&2
+      exit 1
+    fi
+    export PHOEBIS_CAPTURE_RESOLVER
+    if getent hosts api.anthropic.com >/dev/null; then
+      echo "$0: name lookups leave the namespace, refusing to capture" >&2
+      exit 1
+    fi
+    echo "capture namespace: name lookups kept to the hosts file through $PHOEBIS_CAPTURE_RESOLVER" >&2
+    exec bash "$self" "$@"
+  ' "$name" "$self" "$@"
+}
+
+[[ "${PHOEBIS_CAPTURE_LIB_FUNCTIONS_ONLY:-}" != "1" ]] || return 0
+
 set -euo pipefail
 
 # BASH_SOURCE[1] is the sourcing script, where BASH_SOURCE[0] would be this file. The re-exec below has to
@@ -50,19 +108,7 @@ if [[ ! -x "$BINARY" ]]; then
   exit 1
 fi
 
-if [[ "${PHOEBIS_CAPTURE_NETNS:-}" != "1" ]]; then
-  if ! command -v unshare >/dev/null || ! command -v ip >/dev/null; then
-    echo "$SCRIPT_NAME: unshare and ip are needed to build the loopback-only namespace" >&2
-    exit 1
-  fi
-  if ! unshare -rn true 2>/dev/null; then
-    echo "$SCRIPT_NAME: unshare -rn does not work here; refusing to capture with the internet reachable" >&2
-    exit 1
-  fi
-  export PHOEBIS_CAPTURE_NETNS=1
-  # shellcheck disable=SC2016 # $0 and $@ are expanded by the inner shell, not this one
-  exec unshare -rn bash -c 'ip link set lo up && exec bash "$0" "$@"' "$SELF" "$@"
-fi
+enter_capture_namespace "$SCRIPT_NAME" "$SELF" "$@"
 
 # runcli and client_env read these two from a call's prefix, and a value exported in the operator's shell would
 # otherwise reach every run of the baseline and count scripts too.

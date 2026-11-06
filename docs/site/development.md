@@ -190,7 +190,10 @@ control call tunneled through `HTTPS_PROXY` to a TLS-terminating receiver that a
 recording what it received.
 
 `scripts/capture-baseline.sh` reproduces the inference-plane half of this recipe in one command. It re-executes itself
-under `unshare -rn`, so the client runs with loopback as its only route, then drives seven runs: the three credential
+under `unshare -rnm`, so the client runs with loopback as its only route and looks names up in the hosts file alone. A
+network namespace by itself still lets glibc ask systemd-resolved, which asks its upstream for any name the hosts file
+lacks, so inside the mount namespace the script bind-mounts an `nsswitch.conf` reading `hosts: files` over the host's,
+or mounts a tmpfs over `/run/systemd/resolve` where the bind is refused. It then drives seven runs: the three credential
 modes, the first-party override a second time as a second hash vector, a gzip-forced run and a probe run, each past
 `scripts/capture/http_raw.py`, and one more run past `scripts/capture/connect_capture.py` over `HTTPS_PROXY` for the
 ClientHello. The probe run alone leaves `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` unset, since the client sends
@@ -302,13 +305,15 @@ re-pinned to the client. To re-pin the profile against a new build:
 1. With the build installed under `~/.local/share/claude/versions/<version>`, run
    `scripts/capture-baseline.sh <path-to-claude-binary> <output-dir>`. It refuses to start with a real
    `ANTHROPIC_API_KEY` or a real `CLAUDE_CODE_OAUTH_TOKEN` in the environment
-   (`capture-baseline.sh: refusing to run with a real ANTHROPIC_API_KEY set`) and where `unshare -rn` does not work,
-   and otherwise re-executes itself in the loopback-only namespace, drives the three credential modes, the first-party
-   override a second time, a gzip-forced run and a probe run without the nonessential-traffic switch past the recording
-   receiver, records the ClientHello through the CONNECT receiver, and ends with
-   `python3 -I scripts/build-fixtures.py --check <output-dir>`, exiting with that command's status. The system prompt
-   the client sends embeds the current date, so a re-capture taken on another day differs there, and `--check` prints
-   a bounded diff per body so that shows as a date difference rather than a shape change.
+   (`capture-baseline.sh: refusing to run with a real ANTHROPIC_API_KEY set`), where `unshare -rnm` does not work or
+   neither of its mounts holds, and where a name outside the hosts file still resolves inside the namespace
+   (`capture-baseline.sh: name lookups leave the namespace, refusing to capture`). Otherwise it re-executes itself in
+   the loopback-only namespace, drives the three credential modes, the first-party override a second time, a gzip-forced
+   run and a probe run without the nonessential-traffic switch past the recording receiver, records the ClientHello
+   through the CONNECT receiver, and ends with `python3 -I scripts/build-fixtures.py --check <output-dir>`, exiting with
+   that command's status. The system prompt the client sends embeds the current date, so a re-capture taken on another
+   day differs there, and `--check` prints a bounded diff per body so that shows as a date difference rather than a
+   shape change.
 2. Read the diff. A header added or renamed, a beta list that changed, or a new body field is the signal that the
    client has moved past the pinned profile.
 3. `scripts/capture-control.sh <path-to-claude-binary> <output-dir>` records the control plane (the code and refresh

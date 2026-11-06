@@ -6,9 +6,10 @@
 #        PHOEBIS_ADMIN_SECRET=<secret> [PHOEBIS_CAPTURE_BASELINE=<dir>] \
 #        scripts/capture-through-router.sh <path-to-claude-binary> <output-dir> <config.yaml>
 #
-# Mirrors scripts/capture-baseline.sh: the same credential refusal, the same `unshare -rn` re-exec (so this
-# capture instance cannot reach the real internet even if the interception below were bypassed), and the same
-# five client runs under the same cfg names. It differs in these ways:
+# Mirrors scripts/capture-baseline.sh: the same credential refusal, the same `unshare -rnm` re-exec through
+# scripts/capture/lib.sh's enter_capture_namespace (so this capture instance can neither reach the real internet
+# nor have a name looked up off the host, even if the interception below were bypassed), and the same five client
+# runs under the same cfg names. It differs in these ways:
 #
 # - PHOEBIS_CAPTURE_OAUTH_KEY must name a router key whose pool holds exactly one paired oauth account, and
 #   PHOEBIS_CAPTURE_API_KEY a key whose pool holds one api_key account toward api.anthropic.com. Both are router
@@ -95,19 +96,9 @@ if [[ ! -x "$PHOEBIS_BIN" ]]; then
   exit 1
 fi
 
-if [[ "${PHOEBIS_CAPTURE_NETNS:-}" != "1" ]]; then
-  if ! command -v unshare >/dev/null || ! command -v ip >/dev/null; then
-    echo "capture-through-router.sh: unshare and ip are needed to build the loopback-only namespace" >&2
-    exit 1
-  fi
-  if ! unshare -rn true 2>/dev/null; then
-    echo "capture-through-router.sh: unshare -rn does not work here; refusing to capture with the internet reachable" >&2
-    exit 1
-  fi
-  export PHOEBIS_CAPTURE_NETNS=1
-  # shellcheck disable=SC2016 # $0 and $@ are expanded by the inner shell, not this one
-  exec unshare -rn bash -c 'ip link set lo up && exec bash "$0" "$@"' "$SELF" "$@"
-fi
+# The namespace alone: the rest of lib.sh serves the native captures, and this script keeps its own.
+PHOEBIS_CAPTURE_LIB_FUNCTIONS_ONLY=1 source "$CAPTURE_DIR/lib.sh"
+enter_capture_namespace capture-through-router.sh "$SELF" "$@"
 
 STATE=/tmp/cc-capture
 CLIENT_CWD="$STATE/cwd"

@@ -4,11 +4,15 @@
 #
 # Usage: scripts/capture-baseline.sh <path-to-claude-binary> <output-dir>
 #
-# The whole capture runs in a loopback-only network namespace: the script re-executes itself under `unshare -rn`
-# and brings `lo` up inside, so a client build that ignored ANTHROPIC_BASE_URL or HTTPS_PROXY could not reach the
-# internet at all. Measured on this host: `unshare -rn` works for an unprivileged user, loopback connects succeed
-# inside it, and an outbound connect fails with `Network is unreachable`. The script refuses to start where
-# `unshare -rn` does not work, rather than trusting the caller's environment.
+# The whole capture runs in a loopback-only namespace: the script re-executes itself under `unshare -rnm` and
+# brings `lo` up inside, so a client build that ignored ANTHROPIC_BASE_URL or HTTPS_PROXY could not reach the
+# internet at all. The network namespace alone stops no name lookup, since glibc's resolve module asks
+# systemd-resolved over its UNIX socket, so inside the mount namespace an nsswitch.conf reading `hosts: files` is
+# bind-mounted over /etc/nsswitch.conf, and a tmpfs is mounted over /run/systemd/resolve where the bind is refused.
+# Measured on this host: `unshare -rn` works for an unprivileged user, loopback connects succeed inside it, and an
+# outbound connect fails with `Network is unreachable`. Under `unshare -rnm` the bind holds and
+# `getent hosts api.anthropic.com` exits 2. The script refuses to start where `unshare -rnm` does not work, where
+# neither mount holds, or where that lookup still answers inside, rather than trusting the caller's environment.
 #
 # Two loopback receivers in scripts/capture/ record the traffic. http_raw.py answers each HTTP/1.1 request with a
 # canned 400 and writes <output-dir>/clean_modes.json plus one clean_body_<i>.json per request, which is the
