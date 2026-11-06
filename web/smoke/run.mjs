@@ -22597,10 +22597,10 @@ await forView(['/analytics', '/keys', '/pools', '/quota', '/routing-log', '/sess
     });
   }
   {
-    // A preset's end moves to the clock at every commit, so a preset reads again on its own and would hide an agent
-    // missing from the session log's keys. This span is custom and ended before the clock, so removing the Agent chip
-    // moves no other key of the read. It holds three of the first session's rows, none a probe: c21e's
-    // req_96461df2-61a, main's req_285f44c1-b48 and e4b7's req_2e25caf4-526.
+    // A preset's end moves to the clock at every commit, and a custom span that has not ended polls, so either reads
+    // again on its own and would hide an agent missing from the session log's keys. This span is custom and has
+    // ended, so removing the Agent chip moves no other key and starts no poll. It holds three of the first session's
+    // rows, none a probe: c21e's req_96461df2-61a, main's req_285f44c1-b48 and e4b7's req_2e25caf4-526.
     const name = "/analytics removing the Agent chip under a custom range that has ended reads the session's requests again";
     const agent = 'c21e';
     const session = requests.find((r) => r.agentId === agent)?.sessionId ?? '';
