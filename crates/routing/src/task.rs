@@ -630,6 +630,12 @@ pub enum Report {
         degraded: bool,
     },
     Affinity(AffinityReport),
+    /// The companion reported the agent released.
+    AgentEnded {
+        key_id: String,
+        session_id: String,
+        agent_id: String,
+    },
     Cooldown {
         account_id: String,
         row: CooldownRow,
@@ -707,6 +713,9 @@ pub enum Report {
         /// which `latest_turn_pin` answers. False for a compaction and every auxiliary call, the classifier's among
         /// them. A probe that replays such a request carries it too, so the task reads it beside `keepalive`.
         turn: bool,
+        /// The answer stopped with `end_turn` on a subagent's turn: its agent ended. A probe replays the turn's class,
+        /// so the task reads it beside `keepalive` as it reads `turn`.
+        ended: bool,
     },
     Sample {
         account_id: String,
@@ -772,6 +781,7 @@ impl Report {
         "account_state",
         "accounting",
         "affinity",
+        "agent_ended",
         "cooldown",
         "credits",
         "ended",
@@ -793,6 +803,7 @@ impl Report {
             Report::AccountState { .. } => "account_state",
             Report::Accounting { .. } => "accounting",
             Report::Affinity(_) => "affinity",
+            Report::AgentEnded { .. } => "agent_ended",
             Report::Cooldown { .. } => "cooldown",
             Report::Credits { .. } => "credits",
             Report::Ended { .. } => "ended",
@@ -924,6 +935,7 @@ impl Report {
                 reset: reset.is_some(),
             }),
             Report::Affinity(_)
+            | Report::AgentEnded { .. }
             | Report::Cooldown { .. }
             | Report::Ended { .. }
             | Report::Head { .. }
@@ -3014,6 +3026,12 @@ impl Task {
                     request.agent_id = agent_id;
                 }
                 let pin_key = request.pin_key();
+                // The agent's own request is its return, cleared ahead of the round it may run so that round walks the
+                // pin. A probe replays a request and a classifier call judges a turn, the ended one among them, so
+                // neither is a return.
+                if !(request.probe || request.classifier) {
+                    self.state.clear_ended(&pin_key);
+                }
                 let before = self.state.pin(&pin_key).cloned();
                 // A failover inside the window lands on the row its source lost: the selection prices the session's
                 // own burn and names the cause on the record. A key that holds a pin again is no landing, and the
@@ -3577,6 +3595,24 @@ impl Task {
                     self.write(vec![StateWrite::UpsertAffinity(rows)]);
                 }
             }
+            Report::AgentEnded {
+                key_id,
+                session_id,
+                agent_id,
+            } => {
+                // The companion names no model, so every pin the agent holds under the key and session ends with it.
+                let keys: Vec<PinKey> = self
+                    .state
+                    .pin_rows()
+                    .filter(|p| {
+                        p.key_id == key_id && p.session_id == session_id && p.agent_id == agent_id
+                    })
+                    .map(PinRow::key)
+                    .collect();
+                for key in &keys {
+                    self.state.mark_ended(key);
+                }
+            }
             Report::MemberSpend(rows) => {
                 let snapshot = self.snapshot();
                 self.state.record_member_spend(&snapshot, rows);
@@ -3941,6 +3977,7 @@ impl Task {
                 fast,
                 classifier,
                 turn,
+                ended,
             } => {
                 let key = self.canonical_pin(&mut pin);
                 if let Some(current) = self.state.pin(&key) {
@@ -3966,6 +4003,11 @@ impl Task {
                     // clearing early only shortens a hold. The backstop for a `Head` the closed mailbox refused.
                     if same_epoch {
                         self.state.clear_head_mark_of(&key);
+                    }
+                    // The agent's end does not hang on the placement that served its last turn, so a pin moved
+                    // since is marked as well. A probe replays a turn and ends no agent.
+                    if ended && !keepalive {
+                        self.state.mark_ended(&key);
                     }
                     let renewed = (same_epoch && !left_lane)
                         .then(|| self.state.pin_mut(&key))

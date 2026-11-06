@@ -1349,6 +1349,7 @@ mod tests {
                 burn_sum: 5.0,
                 excess: 3.0,
                 target: 2.5,
+                mark_share: 0.1,
                 removed: 4.0,
                 warm_sessions: "when_needed",
                 pins: vec![ShedPinFacts {
@@ -1444,6 +1445,7 @@ mod tests {
                 "excess",
                 "factor",
                 "horizon",
+                "mark_share",
                 "marks",
                 "outcome",
                 "persisted",

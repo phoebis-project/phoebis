@@ -2635,6 +2635,10 @@ pub const SLOW_DOWN_WAIT_MS: i64 = 120_000;
 /// the hold buys, so the pin renews unslowed and the next request reads again.
 pub const SLOW_DOWN_MIN_HOLD_MS: i64 = 1_000;
 
+/// The least share of the rest a fallback mark's burn covers: a pin under it relieves too little of the rest to be worth
+/// its move, so it stays under `sliver`, warm or cold. A tenth of the rest, the owner's default.
+pub const SHED_MARK_SHARE: f64 = 0.1;
+
 /// Milliseconds as the seconds a share-per-second burn multiplies.
 fn seconds(ms: i64) -> f64 {
     ms as f64 / 1_000.0
@@ -4916,14 +4920,17 @@ fn destination_of(
 /// A shedding round over the pool's pins on the account `current` sits on: every pin of it under one of the pool's
 /// keys, ordered in a window-share round by the span's average share of the trigger's window the walk prices them by,
 /// and in a `usd` round by the dollar burn at `now` (cold first by burn, then warm by burn over rewrite cost, bounded
-/// by `warm_sessions`, a fast-lane pin out of a window-share round and a pin whose model does not draw the trigger's
-/// window out of any round, since neither burns a share of it), then walked while the removed burn is under the
-/// target, `min(excess, shed_cap x burn_sum)` on the trigger's window. Once one pin's burn covers what the target still
-/// asks, the walk marks the covering pin whose move costs the least, `cheapest` on the record, rather than the next in
-/// the order. A standing mark is a move pending, so its burn counts as removed and the pin is skipped. The last
-/// unmarked pin and an unpriced one are never marked, and a pin with no fitting destination counts nothing. Each mark
-/// plans a reservation on its destination, which the next pin's fit counts, so a sibling's headroom is taken once. The
-/// current pin's warmth and lane are this request's, every other pin's the stored ones.
+/// by `warm_sessions`, a fast-lane pin out of a window-share round, and a pin whose model does not draw the trigger's
+/// window, a pin whose agent ended and a pin with no priced burn on the window out of any round, since none of them
+/// has a share of it to shed), then walked while the removed burn is under the target, `min(excess, shed_cap x
+/// burn_sum)` on the trigger's window. Once one pin's burn covers what the target still asks, the walk marks the
+/// covering pin whose move costs the least, `cheapest` on the record, rather than the next in the order. Where no
+/// covering pin has a destination, the walk marks the pin at its position only where its burn covers
+/// `SHED_MARK_SHARE` of the rest, `sliver` otherwise. A standing mark is a move pending, so its burn counts as removed
+/// and the pin is skipped. The last unmarked pin and an unpriced one are never marked, and a pin with no fitting
+/// destination counts nothing. Each mark plans a reservation on its destination, which the next pin's fit counts, so a
+/// sibling's headroom is taken once. The current pin's warmth and lane are this request's, every other pin's the stored
+/// ones.
 #[allow(clippy::too_many_arguments)]
 fn shed_round(
     state: &RoutingState,
@@ -4986,6 +4993,13 @@ fn shed_round(
     let off_window = |p: &PinRow| !plan_windows(&p.model).any(|window| window == trigger.window);
     let (off, kept): (Vec<_>, Vec<_>) = pins.into_iter().partition(|(p, _)| off_window(p));
     left_out.extend(off.into_iter().map(|(p, _)| (p, "off_window")));
+    pins = kept;
+    // A pin whose agent ended burns its decayed average and no new turn, so marking it relieves nothing: it leaves
+    // before the order and the last-pin count, its pin and cache kept for a respawn. A pin off the window keeps that
+    // word whatever its agent did.
+    let (ended, kept): (Vec<_>, Vec<_>) =
+        pins.into_iter().partition(|(p, _)| state.ended(&p.key()));
+    left_out.extend(ended.into_iter().map(|(p, _)| (p, "ended")));
     pins = kept;
 
     // The walk's figures: each pin's burn on the trigger's window in share per second, `None` for a pin the pricer
@@ -5056,6 +5070,13 @@ fn shed_round(
             }
         })
         .collect();
+    // A pin with no priced burn on the window (a classifier pin, whose calls fold into the unmetered copy alone) has
+    // nothing to shed, so it leaves before the order and the last-pin count as an off-window pin does. An unpriced
+    // pin stays walked, since its burn is unknown rather than none.
+    let (burnless, pins): (Vec<_>, Vec<_>) = pins
+        .into_iter()
+        .partition(|p| p.share.is_some_and(|share| share == 0.0));
+    left_out.extend(burnless.into_iter().map(|p| (p.row, "no_burn")));
     let (mut cold, mut warm_pins): (Vec<_>, Vec<_>) =
         pins.into_iter().partition(|p| is_cold(&p.row));
     // A pin whose burn cannot be priced ranks after every priced pin of its group: a guess never orders a shed.
@@ -5216,14 +5237,19 @@ fn shed_round(
                 met = true;
             } else if burn < rest {
                 // No covering pin has a destination, so the order marks this pin where its own gate finds one. A
-                // covering pin here already reads the `no_runway` its gate found.
-                let (own, booking) = plan_of(p, &planned);
-                read = own;
-                if let Some(booking) = booking {
-                    marks.push(Mark { key: p.key() });
-                    destinations[index] = Some(booking.account_id.clone());
-                    removed += burn;
-                    planned.push(booking);
+                // covering pin here already reads the `no_runway` its gate found. A pin under the floor relieves too
+                // little of the rest to be worth its move, warm or cold, so it stays.
+                if burn >= SHED_MARK_SHARE * rest {
+                    let (own, booking) = plan_of(p, &planned);
+                    read = own;
+                    if let Some(booking) = booking {
+                        marks.push(Mark { key: p.key() });
+                        destinations[index] = Some(booking.account_id.clone());
+                        removed += burn;
+                        planned.push(booking);
+                    }
+                } else {
+                    read.skip = Some("sliver");
                 }
             }
         } else {
@@ -5234,16 +5260,21 @@ fn shed_round(
         reads[index] = read;
     }
     let (outcome, reason) = if marks.is_empty() {
-        // The deepest class in the order `no_runway`, `off_window`, `unpriced`, `last_pin`, `standing`: a walked pin's
-        // skip, or `off_window` where no pin was walked and a pin left out was off the window that fired. `unpriced`
-        // where neither names a class, since no priced burn was there to remove.
+        // The deepest class in the order `no_runway`, `sliver`, `off_window`, `ended`, `no_burn`, `unpriced`,
+        // `last_pin`, `standing`: a walked pin's skip, or where no pin was walked a left-out pin's own word.
+        // `unpriced` where neither names a class, since no priced burn was there to remove. `no_runway` leads, the
+        // word the attention list's shed condition reads.
         let mut skips: Vec<&'static str> = reads.iter().filter_map(|read| read.skip).collect();
-        if ordered.is_empty() && left_out.iter().any(|(_, word)| *word == "off_window") {
-            skips.push("off_window");
+        if ordered.is_empty() {
+            // `fast_lane` names no class of the list.
+            skips.extend(left_out.iter().map(|(_, word)| *word));
         }
         let reason = [
             "no_runway",
+            "sliver",
             "off_window",
+            "ended",
+            "no_burn",
             "unpriced",
             "last_pin",
             "standing",
@@ -5255,8 +5286,8 @@ fn shed_round(
     } else {
         (format!("marked {}", marks.len()), None)
     };
-    // A left-out pin's row carries no share and no read, so its figures follow the partition's word and never what the
-    // pricer answers for a model off the window.
+    // A left-out pin's row (`fast_lane`, `off_window`, `ended` or `no_burn`) carries no share and no read, so its
+    // figures follow the partition's word and never what the pricer answers for it.
     let pin_facts = |p: &PinRow, walked: Option<(usize, &RoundPin)>, left: Option<&'static str>| {
         let position = walked.map(|(i, _)| i);
         let read = position.map(|i| &reads[i]);
@@ -5327,6 +5358,7 @@ fn shed_round(
         burn_sum: per_hour(burn_sum),
         excess: per_hour(trigger.excess),
         target: per_hour(target),
+        mark_share: SHED_MARK_SHARE,
         removed: per_hour(removed),
         warm_sessions: pool.shedding.warm_sessions.as_str(),
         pins,

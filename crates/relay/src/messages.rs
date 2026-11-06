@@ -1568,6 +1568,7 @@ impl Relay {
         );
         let auxiliary = crate::identity::is_auxiliary(hints.request_class.as_deref());
         let turn = matches!(hints.request_class.as_deref(), Some("main" | "subagent"));
+        let subagent = hints.request_class.as_deref() == Some("subagent");
         crate::facts::note_entrypoint_disagreement(
             &trace.request_id,
             identity.entrypoint.as_deref(),
@@ -1913,6 +1914,7 @@ impl Relay {
             raw: &raw,
             restore,
             retry_in_place: Duration::from_secs(failover.retry_in_place_seconds),
+            subagent,
             target: &target,
             trace: &trace,
             turn,
@@ -3495,7 +3497,14 @@ impl Relay {
     ) -> Response {
         let mut waiting = Waiting::default();
         if let Some(release) = release {
-            release.send((self.clock)(), head.status, None, false, &mut waiting);
+            release.send(
+                (self.clock)(),
+                head.status,
+                None,
+                false,
+                false,
+                &mut waiting,
+            );
         }
         ctx.ending(EXHAUSTED);
         outcome.error_code = Some(exhaustion_code(&Exhaustion::Untimed).to_string());
@@ -3544,6 +3553,7 @@ impl Relay {
             fresh: ctx.fresh_pin,
             classifier: ctx.free_of_plan(),
             turn: ctx.admitted.turn,
+            subagent: ctx.admitted.subagent,
             renews: ctx.admitted.trace.kind != Kind::CountTokens,
             generations: (
                 ctx.account.incarnation,
@@ -4388,6 +4398,7 @@ impl Relay {
             None => (None, ResponseFacts::default()),
         };
         let fast = facts.speed.as_deref() == Some("fast");
+        let end_turn = facts.stop_reason.as_deref() == Some("end_turn");
         let mut waiting = Waiting::default();
         if let Some(renewal) = renewal {
             renewal.send(
@@ -4395,6 +4406,7 @@ impl Relay {
                 head.status,
                 usage.as_ref(),
                 fast,
+                end_turn,
                 &mut waiting,
             );
         }
@@ -4920,6 +4932,9 @@ struct Admitted<'a> {
     /// The pool's `retry_in_place_seconds`: the longest throttle waited out on the same account, and the
     /// longest a held selection waits for a slot.
     retry_in_place: Duration,
+    /// The request's class is `subagent`, read once at admission beside `turn` and carried to every leg's renewal: an
+    /// answer under it that stops with `end_turn` ends the agent.
+    subagent: bool,
     target: &'a str,
     trace: &'a Trace,
     /// The request's class is a turn's, `main` or `subagent`, read once at admission and carried to every leg's

@@ -1773,6 +1773,7 @@
           "burn_sum": 0.12,
           "excess": 0.06,
           "target": 0.024,
+          "mark_share": 0.1,
           "removed": 0.07,
           "warm_sessions": "when_needed",
           "pins": [

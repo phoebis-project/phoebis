@@ -350,6 +350,7 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             "account_state",
             "accounting",
             "affinity",
+            "agent_ended",
             "cooldown",
             "credits",
             "ended",

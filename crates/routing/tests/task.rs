@@ -864,6 +864,11 @@ async fn every_report_kind_is_named_in_the_drop_counters_list_in_its_order() {
         },
         Report::Accounting { degraded: true },
         Report::Affinity(affinity_report(&handle, "a", 1_000)),
+        Report::AgentEnded {
+            key_id: "k".into(),
+            session_id: "s1".into(),
+            agent_id: "main".into(),
+        },
         model_cooldown("a", "model:claude-sonnet-5", 1_000),
         credits_at(true, None, None, 1_000),
         Report::Ended {
@@ -922,6 +927,7 @@ async fn every_report_kind_is_named_in_the_drop_counters_list_in_its_order() {
             Report::AccountState { .. }
             | Report::Accounting { .. }
             | Report::Affinity(_)
+            | Report::AgentEnded { .. }
             | Report::Cooldown { .. }
             | Report::Credits { .. }
             | Report::Ended { .. }
@@ -6928,6 +6934,7 @@ async fn a_probe_after_a_compacted_request_refreshes_warmth() {
             fast: false,
             classifier: false,
             turn: false,
+            ended: false,
         })
         .await;
     let pin = handle.pins().await.unwrap().remove(0);
@@ -6969,6 +6976,7 @@ fn renewal(pin: PinRef, now: i64, usage: PinUsage, keepalive: bool, cache_ttl_ms
         fast: false,
         classifier: false,
         turn: true,
+        ended: false,
     }
 }
 
@@ -7120,6 +7128,7 @@ async fn a_renewal_with_usage_folds_the_typed_rates_and_the_banded_copy_and_a_pr
             fast: false,
             classifier: false,
             turn: true,
+            ended: false,
         })
         .await;
     let pins = handle.pins().await.unwrap();
@@ -7226,6 +7235,7 @@ async fn a_fast_renewal_lands_in_the_pins_fast_usage_and_lets_both_copies_of_its
             fast: true,
             classifier: false,
             turn: true,
+            ended: false,
         })
         .await;
     handle
@@ -7523,6 +7533,7 @@ fn classifier_renewal(pin: PinRef, now: i64, input: u64) -> Report {
         fast: false,
         classifier: true,
         turn: false,
+        ended: false,
     }
 }
 
@@ -7634,6 +7645,7 @@ fn speed_renewal(pin: PinRef, now: i64, fast: bool, input: u64) -> Report {
         fast,
         classifier: false,
         turn: true,
+        ended: false,
     }
 }
 
@@ -8674,6 +8686,165 @@ async fn a_shedding_round_emits_its_pins_and_marks_once() {
         .unwrap();
     assert_eq!(next_decision(&mut events).await.0.kind, "renewed");
     no_further_event(&mut events).await;
+}
+
+/// The round the events name, the first one among them.
+fn round_among(events: &[phoebis_routing::RouterEvent]) -> phoebis_routing::ShedRoundFacts {
+    events
+        .iter()
+        .find_map(|event| match event {
+            phoebis_routing::RouterEvent::SheddingRound { round, .. } => Some((**round).clone()),
+            _ => None,
+        })
+        .expect("a round ran")
+}
+
+#[tokio::test]
+async fn a_round_leaves_out_a_pin_whose_agent_ended_until_the_agent_sends_again() {
+    use phoebis_routing::{burn_average_ms, PinKeyFacts};
+    let store = averaged(shedding_store(&["a", "b"]));
+    with_tier(&store, "a");
+    with_tier(&store, "b");
+    let pool = store.pool("p").unwrap().expect("the pool");
+    // Two burn averages, so each round's stamp stands past the trigger's wait.
+    let waited = 2 * burn_average_ms(&pool);
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), priced_config()).unwrap();
+    let subagent = |at: i64| SelectRequest {
+        agent_id: "sub".into(),
+        ..request(&handle, Some("s1"), at)
+    };
+    // Three pins on `a`: s1's main, the requester, s1's subagent, whose answer ended its turn, and s2's main, a live
+    // sibling. The subagent burns the most and reads cold at the round, so a walk that priced it would mark it first.
+    let requester = selected_pin(
+        handle
+            .select(request(&handle, Some("s1"), AT))
+            .await
+            .unwrap(),
+    );
+    let sibling = selected_pin(
+        handle
+            .select(request(&handle, Some("s2"), AT))
+            .await
+            .unwrap(),
+    );
+    let ended = selected_pin(handle.select(subagent(AT)).await.unwrap());
+    for (pin, input) in [(requester, 1_000), (sibling, 2_000)] {
+        handle
+            .report(renewal(
+                pin,
+                AT + 1_000,
+                PinUsage {
+                    input,
+                    ..PinUsage::default()
+                },
+                false,
+                300_000,
+            ))
+            .await;
+    }
+    handle
+        .report(Report::PinRenewed {
+            pin: ended,
+            now: AT + 1_000,
+            usage: Some(PinUsage {
+                input: 4_000,
+                ..PinUsage::default()
+            }),
+            keepalive: false,
+            cache_ttl_ms: 300_000,
+            fast: false,
+            classifier: false,
+            turn: true,
+            ended: true,
+        })
+        .await;
+    handle
+        .report(observed("a", sample_with(AT + 1_000, FIVE_HOUR, 0.9, None)))
+        .await;
+    handle.report(windows("b", 0.1, 0.1, AT + 1_000)).await;
+    handle.samples().await.unwrap();
+    let key = |session: &str, agent: &str| PinKeyFacts {
+        key_id: "k".into(),
+        session_id: session.into(),
+        agent_id: agent.into(),
+        model: "claude-sonnet-5".into(),
+    };
+    let rows = |round: &phoebis_routing::ShedRoundFacts| {
+        round
+            .pins
+            .iter()
+            .map(|p| {
+                (
+                    p.session_id.clone(),
+                    p.agent_id.clone(),
+                    p.marked,
+                    p.skip,
+                    p.burn.is_some(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let row = |session: &str, agent: &str, marked: bool, skip: Option<&'static str>, burn: bool| {
+        (session.to_string(), agent.to_string(), marked, skip, burn)
+    };
+
+    // Ten minutes on, every cache but the requester's has lapsed.
+    let at = AT + 600_000;
+    now.store(at, Ordering::SeqCst);
+    handle
+        .stamp_projection_over("p", "a", FIVE_HOUR, at - waited, None)
+        .await;
+    let mut events = handle.subscribe_events();
+    handle
+        .select(request(&handle, Some("s1"), at))
+        .await
+        .unwrap();
+    let round = round_among(&drained(&mut events).await);
+    assert_eq!(
+        rows(&round),
+        [
+            row("s2", "main", true, None, true),
+            row("s1", "main", false, None, true),
+            row("s1", "sub", false, Some("ended"), false),
+        ],
+        "the ended pin leaves the walk before the order with no burn, and the walk marks the live sibling"
+    );
+    assert_eq!(round.marks, vec![key("s2", "main")]);
+    assert!(
+        (round.removed - round.pins[0].burn.unwrap()).abs() < 1e-12,
+        "the mark relieves the sibling's own burn: {round:?}"
+    );
+
+    // The subagent sends again inside the dwell, so the next round past it walks its pin.
+    handle.select(subagent(at + 1_000)).await.unwrap();
+    let later = at + shed_dwell_ms(&pool) + 1_000;
+    now.store(later, Ordering::SeqCst);
+    handle
+        .report(observed(
+            "a",
+            sample_with(later - 1_000, FIVE_HOUR, 0.94, None),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    handle
+        .stamp_projection_over("p", "a", FIVE_HOUR, later - waited, None)
+        .await;
+    drained(&mut events).await;
+    handle
+        .select(request(&handle, Some("s1"), later))
+        .await
+        .unwrap();
+    let round = round_among(&drained(&mut events).await);
+    let returned = round
+        .pins
+        .iter()
+        .find(|p| p.session_id == "s1" && p.agent_id == "sub")
+        .expect("the subagent's pin is on the account");
+    assert!(
+        returned.skip != Some("ended") && returned.burn.is_some(),
+        "the subagent's request cleared the mark, so its pin is walked and priced again: {round:?}"
+    );
 }
 
 /// A clock past the cache TTL, so a pin last refreshed an hour before it reads cold.
@@ -15273,6 +15444,7 @@ async fn a_client_renewal_writes_the_effort_its_pin_names_to_the_row_and_a_probe
         fast: false,
         classifier: false,
         turn: true,
+        ended: false,
     };
     let stored = || async { handle.pins().await.unwrap().remove(0).effort };
     assert_eq!(stored().await, "high", "the placement stamped the word");
@@ -15830,6 +16002,7 @@ async fn an_auxiliary_calls_end_on_another_agents_turn_pin_does_not_redirect_the
             fast: false,
             classifier: false,
             turn: false,
+            ended: false,
         })
         .await;
     let call = SelectRequest {
@@ -15910,6 +16083,7 @@ async fn a_probes_renewal_of_another_agents_turn_pin_does_not_redirect_the_class
             fast: false,
             classifier: false,
             turn: true,
+            ended: false,
         })
         .await;
     let call = SelectRequest {

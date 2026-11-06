@@ -2325,6 +2325,7 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
                 burn_sum: 0.1,
                 excess: 0.01,
                 target: 0.01,
+                mark_share: 0.1,
                 removed: 0.02,
                 warm_sessions: "when_needed",
                 pins: Vec::new(),

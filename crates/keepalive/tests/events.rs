@@ -357,3 +357,70 @@ async fn a_lapsed_lease_marks_the_session_unattended_and_a_same_instance_start_r
         Some(1)
     );
 }
+
+#[tokio::test]
+async fn a_released_subagent_reaches_the_router_so_its_pin_leaves_the_next_round() {
+    use phoebis_routing::{
+        burn_average_ms, Report, RouterEvent, UtilizationSample, WindowReading, WindowSource,
+        FIVE_HOUR,
+    };
+    let mut r = rig(RigSpec {
+        accounts: vec![oauth("a", "sk-ant-oat01-AAAA", 0)],
+        tier: Some("default_claude_max_20x"),
+        ..RigSpec::default()
+    })
+    .await;
+    let pool = r.h.store.pool("main").unwrap().expect("the rig's pool");
+    // Two burn averages on, so the window's stamp below stands past the trigger's wait at the round.
+    let since = r.now();
+    r.advance_attended(2 * burn_average_ms(&pool));
+    r.event(Event {
+        event: "agent_start".into(),
+        agent_id: Some("sub".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    r.observe("main").await;
+    r.observe("sub").await;
+    r.state("sub", "released");
+    r.h.router
+        .report(Report::Sample {
+            account_id: "a".into(),
+            sample: UtilizationSample::default().with(
+                FIVE_HOUR,
+                WindowReading {
+                    utilization: 0.99,
+                    reset: None,
+                    observed_at: r.now(),
+                    source: WindowSource::Poll,
+                    plan: None,
+                    tier: None,
+                },
+            ),
+            incarnation: 1,
+            source_request_id: None,
+        })
+        .await;
+    r.h.router.samples().await.unwrap();
+    r.h.router
+        .stamp_projection_over("main", "a", FIVE_HOUR, since, None)
+        .await;
+    let mut events = r.h.router.subscribe_events();
+    r.observe("main").await;
+    let seen = relay_common::router_events_until(&mut events, |event| {
+        matches!(event, RouterEvent::SheddingRound { .. })
+    })
+    .await;
+    let Some(RouterEvent::SheddingRound { round, .. }) = seen.last() else {
+        unreachable!("the wait ends on the round");
+    };
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .find(|p| p.agent_id == "sub")
+            .map(|p| p.skip),
+        Some(Some("ended")),
+        "the release reached the router as the agent's end: {round:?}"
+    );
+}

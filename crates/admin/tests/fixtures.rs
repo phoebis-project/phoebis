@@ -1588,6 +1588,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 fast: false,
                 classifier: false,
                 turn: true,
+                ended: false,
             })
             .await;
         parts
@@ -1676,6 +1677,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             fast: false,
             classifier: false,
             turn: true,
+            ended: false,
         })
         .await;
     // The two agents register and each sends one turn, so the keepalive's view carries their recipes and the row lists
@@ -2933,6 +2935,7 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
                 burn_sum: 0.12,
                 excess: 0.06,
                 target: 0.024,
+                mark_share: 0.1,
                 removed: 0.07,
                 warm_sessions: "when_needed",
                 pins: vec![phoebis_routing::ShedPinFacts {

@@ -16652,6 +16652,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "burn_sum": 0.12,
             "excess": 0.06,
             "target": 0.024,
+            "mark_share": 0.1,
             "removed": 0.07,
             "warm_sessions": "when_needed",
             "pins": [
@@ -17958,6 +17959,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "account_state": 0,
           "accounting": 0,
           "affinity": 0,
+          "agent_ended": 0,
           "cooldown": 0,
           "credits": 0,
           "ended": 0,

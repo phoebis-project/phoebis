@@ -19993,18 +19993,21 @@ fn the_shed_rule_takes_the_fitting_destination_the_strategy_ranks_first_or_none(
     assert_eq!(
         landed(d.result.clone()),
         ("a".into(), None),
-        "nothing fits the heavy pin, so the round marks the light one instead and the heavy pin renews in place"
+        "nothing fits the heavy pin, so it renews in place, and the light one burns under a tenth of the rest"
     );
     let shed = line(&d.record, "move:shed");
     assert_eq!(shed.verdict, "no");
     assert_eq!(fact(shed, "marked"), &FactValue::Bool(false));
     assert_eq!(
         fact(shed, "skipped"),
-        &FactValue::List(vec!["k/s1/main/claude-sonnet-5: no_runway".into()])
+        &FactValue::List(vec![
+            "k/s1/main/claude-sonnet-5: no_runway".into(),
+            "k/s0/main/claude-sonnet-5: sliver".into(),
+        ])
     );
     assert!(
-        !marked(&st, "s1") && marked(&st, "s0"),
-        "no mark without a destination that fits: the light pin fits b to its horizon, the heavy one does not"
+        !marked(&st, "s1") && !marked(&st, "s0"),
+        "no mark without a destination that fits the heavy pin, and none for a sliver"
     );
     assert!(
         d.record.walk.iter().all(|w| w.step != "fit"),
@@ -26032,6 +26035,109 @@ fn a_covering_pin_without_a_destination_leaves_the_pick_to_the_order() {
         &FactValue::List(vec!["k/wide/main/claude-sonnet-5: no_runway".into()])
     );
     assert_eq!((round.outcome.as_str(), round.reason), ("marked 1", None));
+}
+
+#[test]
+fn a_pin_with_no_burn_on_the_fired_window_leaves_the_walk_and_the_last_pin_count_while_any_burn_stays(
+) {
+    let s = tiered(shedding_pool(Shedding::default()));
+    // `hot` burns a tenth of the window an hour, which takes a at 0.94 over the ceiling at its reset and covers the
+    // target, and b at 0.1 fits it.
+    let round_beside = |other: PinRow| {
+        let mut st = rounding(vec![burning("hot", "a", 10.0, false, T), other]);
+        over_a_fitting_b(&mut st, T - 500);
+        past_the_wait(&mut st, &s, "p", "a", T);
+        let d = decide(&mut st, &s, &auxiliary(&s, "hot", T), &mut rng());
+        let round = d.shed_round.expect("the round ran").facts;
+        (landed(d.result), round)
+    };
+    let rows = |round: &phoebis_routing::ShedRoundFacts| {
+        round
+            .pins
+            .iter()
+            .map(|p| (p.session_id.clone(), p.marked, p.skip, p.burn.is_some()))
+            .collect::<Vec<_>>()
+    };
+    // A classifier pin: its calls folded into the unmetered copy alone, so it burns no share of the window.
+    let judge = PinRow {
+        burn_unmetered: input_rate(5.0),
+        auxiliary_only: true,
+        last_classifier: true,
+        ..burning("judge", "a", 0.0, false, T)
+    };
+    let (landed_on, round) = round_beside(judge);
+    assert_eq!(
+        landed_on,
+        ("a".into(), None),
+        "with the classifier pin out of the count, hot is the account's last pin"
+    );
+    assert_eq!(
+        rows(&round),
+        [
+            ("hot".to_string(), false, Some("last_pin"), true),
+            ("judge".to_string(), false, Some("no_burn"), false),
+        ]
+    );
+    assert_eq!(
+        (round.outcome.as_str(), round.reason),
+        ("nothing_to_mark", Some("last_pin"))
+    );
+
+    // A thousandth of a token a second is a burn, however far under the share floor, so the pin stays walked and
+    // counted, and hot is not the last pin.
+    let (landed_on, round) = round_beside(burning("idle", "a", 0.001, false, T));
+    assert_eq!(landed_on, ("b".into(), Some(MigrateReason::Shed)));
+    assert_eq!(
+        rows(&round),
+        [
+            ("hot".to_string(), true, None, true),
+            ("idle".to_string(), false, None, true),
+        ]
+    );
+}
+
+#[test]
+fn a_pin_marked_in_place_of_a_covering_one_needs_a_tenth_of_the_rest_so_a_warm_sliver_keeps_its_cache(
+) {
+    let s = projection_pool(vec![("a", 0), ("b", 1)]);
+    // The cold `wide` covers the target and b at 0.9 cannot carry it to its reset, so the walk reaches the warm
+    // `narrow` with the whole target left, the cap's half of the burn: a at 0.94 projects 1.14 at its reset, an excess
+    // of 0.19 an hour over a target of 0.1. No pin from narrow on covers it, and b carries narrow.
+    let round_of = |wide: f64, narrow: f64| {
+        let mut st = rounding(vec![
+            burning("wide", "a", wide, false, T),
+            burning("narrow", "a", narrow, true, T),
+        ]);
+        st.record_sample("a", refreshing(0.94, T + HOUR, T + 72 * HOUR, T - 500), 0);
+        st.record_sample("b", refreshing(0.9, T + HOUR, T + 72 * HOUR, T - 500), 0);
+        past_the_wait(&mut st, &s, "p", "a", T);
+        let d = decide(&mut st, &s, &auxiliary(&s, "wide", T), &mut rng());
+        let round = d.shed_round.expect("the round ran").facts;
+        let narrow = round
+            .pins
+            .iter()
+            .find(|p| p.session_id == "narrow")
+            .expect("narrow is walked")
+            .clone();
+        (
+            narrow.marked,
+            narrow.planned,
+            narrow.skip,
+            marked(&st, "narrow"),
+        )
+    };
+    // 0.9 token a second burns 0.009 of the window an hour beside wide's 0.191: 0.09 of the target.
+    assert_eq!(
+        round_of(19.1, 0.9),
+        (false, None, Some("sliver"), false),
+        "a pin under the floor keeps its cache"
+    );
+    // One token a second burns 0.01 beside wide's 0.19, a tenth of the target to the bit in these figures.
+    assert_eq!(
+        round_of(19.0, 1.0),
+        (true, Some("b".to_string()), None, true),
+        "a pin at the floor is marked"
+    );
 }
 
 /// Two warm pins of one prompt size on `a`, a Fable pin burning twice what an Opus pin burns, so the order walks the

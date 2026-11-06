@@ -505,3 +505,123 @@ async fn the_credit_digest_rides_the_refusal_and_the_next_body_and_the_token_rid
     }
     up.shutdown().await;
 }
+
+/// The rate-limit tier the round case puts its account on, which its pricer keys on.
+const ROUND_TIER: &str = "default_claude_max_20x";
+
+/// An answer whose stop reason ends the turn.
+fn end_turn_answer() -> Respond {
+    Respond::Json {
+        status: 200,
+        headers: vec![("content-type".into(), "application/json".into())],
+        body: br#"{"id":"msg_turn","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":1}}"#.to_vec(),
+    }
+}
+
+/// The OAuth fixture's body under `session` and the turn class `class`, for the agent `agent` where one is named.
+fn classed_turn(session: &str, class: &str, agent: Option<&str>) -> Request<Body> {
+    let mut req = turn(session, None);
+    set_header(&mut req, "x-claude-code-request-class", class);
+    if let Some(agent) = agent {
+        set_header(&mut req, "x-claude-code-agent-id", agent);
+    }
+    req
+}
+
+#[tokio::test]
+async fn a_subagents_answer_that_ends_its_turn_leaves_its_pin_out_of_a_round_and_a_mains_does_not()
+{
+    use phoebis_routing::{
+        burn_average_ms, Report, RouterConfig, SharePricer, UtilizationSample, WindowReading,
+        WindowSource, FIVE_HOUR,
+    };
+    let up = FakeUpstream::start(Vec::new()).await;
+    up.add_credential_rule(A, MESSAGES, end_turn_answer());
+    // Every pin on the tier burns a tenth of the 5-hour window an hour, so each one the round walks is priced.
+    let h = harness_with_router_config(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec::default(),
+        RouterConfig {
+            share: SharePricer::new(|_, _, _, _, _, _| None).with_rate(
+                |window, _, tier, _, _, _| {
+                    (window == FIVE_HOUR && tier == ROUND_TIER).then_some(0.1 / 3_600.0)
+                },
+            ),
+            ..RouterConfig::default()
+        },
+    )
+    .await;
+    h.store
+        .set_profile(
+            "a",
+            "{}",
+            &phoebis_store::SubscriptionRow {
+                tier: Some(ROUND_TIER.into()),
+                ..phoebis_store::SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+    h.router.reload().await.unwrap();
+    let pool = h.store.pool("main").unwrap().expect("the harness pool");
+    // Two burn averages on, so the window's stamp below stands past the trigger's wait at the round.
+    let at = NOW + 2 * burn_average_ms(&pool);
+    h.clock.store(at, Ordering::SeqCst);
+    // s2's main places the pin whose next request runs the round. In s1 the main turn and a subagent's each end
+    // with `end_turn`.
+    let s1 = fresh_session();
+    let s2 = fresh_session();
+    served(&h, classed_turn(&s2, "main", None)).await;
+    served(&h, classed_turn(&s1, "main", None)).await;
+    served(&h, classed_turn(&s1, "subagent", Some("sub"))).await;
+    h.router
+        .report(Report::Sample {
+            account_id: "a".into(),
+            sample: UtilizationSample::default().with(
+                FIVE_HOUR,
+                WindowReading {
+                    utilization: 0.9,
+                    reset: None,
+                    observed_at: at,
+                    source: WindowSource::Poll,
+                    plan: None,
+                    tier: None,
+                },
+            ),
+            incarnation: 1,
+            source_request_id: None,
+        })
+        .await;
+    h.router.samples().await.unwrap();
+    h.router
+        .stamp_projection_over("main", "a", FIVE_HOUR, NOW, None)
+        .await;
+    let mut events = h.router.subscribe_events();
+    served(&h, classed_turn(&s2, "main", None)).await;
+    let seen = router_events_until(&mut events, |event| {
+        matches!(event, RouterEvent::SheddingRound { .. })
+    })
+    .await;
+    let Some(RouterEvent::SheddingRound { round, .. }) = seen.last() else {
+        unreachable!("the wait ends on the round");
+    };
+    let skip_of = |agent: &str| {
+        round
+            .pins
+            .iter()
+            .find(|p| p.session_id == s1 && p.agent_id == agent)
+            .unwrap_or_else(|| panic!("s1's {agent} pin is on the account: {round:?}"))
+            .skip
+    };
+    assert_eq!(
+        skip_of("sub"),
+        Some("ended"),
+        "the subagent's end_turn ended its agent"
+    );
+    assert_ne!(
+        skip_of("main"),
+        Some("ended"),
+        "a main turn's end_turn ends no agent"
+    );
+    up.shutdown().await;
+}

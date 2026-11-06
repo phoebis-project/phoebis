@@ -32,6 +32,7 @@
         "account_state": 0,
         "accounting": 0,
         "affinity": 0,
+        "agent_ended": 0,
         "cooldown": 0,
         "credits": 0,
         "ended": 0,

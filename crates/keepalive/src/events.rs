@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 
 use phoebis_relay::is_valid_id as valid_id;
-use phoebis_routing::RegistrySnapshot;
+use phoebis_routing::{RegistrySnapshot, Report};
 
 use crate::config::LEASE_MS;
 use crate::engine::{
@@ -394,6 +394,8 @@ impl Engine {
         let now = self.now();
         // The pool an idle window a report opens counts under, read as the tick reads it.
         let snapshot = self.parts.router.snapshot();
+        let session_id = report.session_id.clone();
+        let mut released = Vec::new();
         let acked = {
             let mut inner = self.lock();
             if inner.closed {
@@ -401,14 +403,39 @@ impl Engine {
                 return Err(err("quiesced", 503));
             }
             inner.expire(now);
-            inner.apply(key_id, key_generation, report, now, &snapshot)
+            inner.apply(
+                key_id,
+                key_generation,
+                report,
+                now,
+                &snapshot,
+                &mut released,
+            )
         };
+        // Told after the lock, which the router's mailbox must never hold up. A full mailbox drops the end, and the
+        // pin reads live until its next request or its idle expiry.
+        for agent_id in released {
+            let ended = Report::AgentEnded {
+                key_id: key_id.to_string(),
+                session_id: session_id.clone(),
+                agent_id: agent_id.clone(),
+            };
+            if self.parts.router.try_report(ended).is_err() {
+                tracing::warn!(
+                    key_id,
+                    session_id = %session_id,
+                    agent_id = %agent_id,
+                    "the router's mailbox is full, so the agent's release does not reach its pin"
+                );
+            }
+        }
         self.flush();
         acked
     }
 }
 
 impl Inner {
+    /// `released` gains each agent the report released, for the router to hear once the lock is let go.
     fn apply(
         &mut self,
         key_id: &str,
@@ -416,6 +443,7 @@ impl Inner {
         report: EventReport,
         now: i64,
         snapshot: &RegistrySnapshot,
+        released: &mut Vec<String>,
     ) -> Result<Ack, EventError> {
         let key: SessionKey = (key_id.to_string(), report.session_id.clone());
         // A start registers the session every other report is checked against, so it takes none of the checks.
@@ -599,6 +627,7 @@ impl Inner {
                             Some(Wasted::Released),
                         );
                         self.release_record(&key, &agent_id, now, snapshot);
+                        released.push(agent_id.clone());
                     }
                     AgentState::Unknown => {
                         self.discard(&key, &agent_id, Reason::AgentUnknown, None)

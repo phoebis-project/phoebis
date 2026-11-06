@@ -195,6 +195,8 @@ pub(crate) struct Renewal {
     pub classifier: bool,
     /// The request's class is a turn's, `main` or `subagent`, so its stream's end is the turn's end the router notes.
     pub turn: bool,
+    /// The request's class is `subagent`, so an answer that stops with `end_turn` ends the agent.
+    pub subagent: bool,
     /// False for a token count: it writes no cache, so its answer renews nothing, though a client error on a
     /// pin it created still releases that pin.
     pub renews: bool,
@@ -212,13 +214,14 @@ impl Renewal {
         self.fresh && RELEASING_STATUSES.contains(&status)
     }
 
-    /// `fast` is whether the answer reported `usage.speed` `fast`.
+    /// `fast` is whether the answer reported `usage.speed` `fast`, `end_turn` whether its stop reason read `end_turn`.
     pub(crate) fn send(
         self,
         now: i64,
         status: u16,
         usage: Option<&Usage>,
         fast: bool,
+        end_turn: bool,
         waiting: &mut Waiting,
     ) {
         if self.releases(status) {
@@ -248,6 +251,7 @@ impl Renewal {
                 fast,
                 classifier: self.classifier,
                 turn: self.turn,
+                ended: self.subagent && end_turn,
             },
         );
     }
@@ -668,8 +672,16 @@ impl Publish {
             .map(|at| at - self.outcome.received_at);
         let usage = (!self.usage.is_empty()).then(|| self.usage.clone());
         let fast = self.response.speed.as_deref() == Some("fast");
+        let end_turn = self.response.stop_reason.as_deref() == Some("end_turn");
         if let Some(renewal) = self.renewal.take() {
-            renewal.send((self.clock)(), self.status, usage.as_ref(), fast, waiting);
+            renewal.send(
+                (self.clock)(),
+                self.status,
+                usage.as_ref(),
+                fast,
+                end_turn,
+                waiting,
+            );
         }
         let usage_sent = match self.affinity.take() {
             Some(affinity) => affinity.send(

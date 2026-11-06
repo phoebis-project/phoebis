@@ -1377,6 +1377,9 @@ pub struct RoutingState {
     cooldowns: HashMap<(String, CooldownScope), CooldownRow>,
     /// The poll's newest extra-usage state per account, loaded at startup from the rows the last run persisted.
     credits: HashMap<String, CreditsState>,
+    /// The pins whose agent ended, by key: a subagent's turn answered with `end_turn`, or an agent the companion
+    /// released. Memory only, so a restart reads every such pin as live until its next request.
+    ended: HashSet<PinKey>,
     /// Each agent's first placement by key id and session id, then agent id. It outlives `take_pin`, since a move, a
     /// failover and a rekey take a session's one pin before its new row lands, and leaves once the session's last pin
     /// leaves for good.
@@ -1518,6 +1521,7 @@ impl RoutingState {
                     )
                 })
                 .collect(),
+            ended: HashSet::new(),
             first_seen,
             funding_ordinals: HashMap::new(),
             funding_retries: HashMap::new(),
@@ -1672,6 +1676,25 @@ impl RoutingState {
         self.renewed.contains(&*self.canonical_key(key))
     }
 
+    /// Marks the pin whose agent ended (a subagent's `end_turn`, the companion's release). The shed walk reads the
+    /// mark, the pin and its cache stay, and the pin's next request clears it.
+    pub(crate) fn mark_ended(&mut self, key: &PinKey) {
+        let key = self.canonical_key(key);
+        if self.pins.contains_key(&*key) && !self.ended.contains(&*key) {
+            self.ended.insert(key.into_owned());
+        }
+    }
+
+    pub(crate) fn clear_ended(&mut self, key: &PinKey) {
+        let key = self.canonical_key(key);
+        self.ended.remove(&*key);
+    }
+
+    /// Whether the agent of the pin under the key ended since the pin's last request.
+    pub fn ended(&self, key: &PinKey) -> bool {
+        self.ended.contains(&*self.canonical_key(key))
+    }
+
     /// Whether only auxiliary requests have used the pin held under the key (resolved as `pin` resolves it) since
     /// its placement, read from the row, false where no pin stands.
     pub fn auxiliary_only(&self, key: &PinKey) -> bool {
@@ -1744,6 +1767,7 @@ impl RoutingState {
     /// with its mark, which the caller reads off the answer to say what cleared it.
     fn take_pin(&mut self, key: &PinKey) -> Option<PinRow> {
         let pin = self.pins.remove(key)?;
+        self.ended.remove(key);
         self.renewed.remove(key);
         self.head_marks.remove(key);
         Some(pin)

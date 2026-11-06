@@ -127,7 +127,9 @@ the stored one still lies ahead replaces it with no `window_reset`, and a clean 
 records the end of the account's slow-down in the routing log at the drop ([The windows the router works
 from](routing.md#the-windows-the-router-works-from)). A pin placed on another account after the selection released its
 earlier pin names the released pin's account as its source in the routing log, and one placed after the purge took the
-earlier pin names none ([Moves](routing.md#moves)).
+earlier pin names none ([Moves](routing.md#moves)). A shedding round leaves out a pin whose agent ended and a pin with
+no burn on the fired window, and marks a pin in place of a covering one only where its burn covers a tenth of what is
+left to shed, so a round never rewrites a session for a sliver ([Moves](routing.md#moves)).
 
 With `keepalive.enabled` on a pool the router keeps a replayable copy of every eligible request a session sends and,
 shortly before the cache entry would expire, sends a probe that reads it ([Keepalive](keepalive.md)). The policy's
