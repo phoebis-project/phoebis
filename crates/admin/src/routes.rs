@@ -2323,7 +2323,8 @@ pub(crate) struct AccountSlowDownView {
     pub factor: f64,
     /// The speed the holds realized, which the demand divides the pins' burn by.
     pub speed: f64,
-    /// Epoch milliseconds: when the factor first read under 1 since it last read 1, null outside a span.
+    /// Epoch milliseconds: when the factor first read under 1 since the span last closed, the instant the ramp grows
+    /// from, kept through a return to 1 shorter than the span's two-minute wait. Null outside a span.
     pub since: Option<i64>,
     /// The share of the factor the holds apply, from 0 to 1 by the selection's own rule: 1 at the ceiling or once one
     /// burn average has passed since `since`, 0 at a factor of 1. Null outside a span.

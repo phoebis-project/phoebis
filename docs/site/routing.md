@@ -837,10 +837,10 @@ reset is not refused by a clock a hair behind.
 
 A shared window is healthy when its status reads `allowed` or `allowed_warning`, or when the status is absent and the
 window's own utilization reads below 1.0. An absent status with no utilization, or any other status value, is not
-evidence that the window is fine, and the rejection cools the whole account. A reading taken after the rejection lifts
-an account-wide rate-limit row before its deadline: a claim on the 5-hour or the 7-day window recovers once that window
-reads under 1.0, and a claim on another week, or on a shared window the account's window set no longer holds, once every
-shared window the set still holds reads under 1.0.
+evidence that the window is fine, and the rejection cools the whole account. Where the rejection named a window, a
+reading taken after it lifts the account-wide rate-limit row before its deadline: a claim on the 5-hour or the 7-day
+window recovers once that window reads under 1.0, and a claim on another week, or on a shared window the account's
+window set no longer holds, once every shared window the set still holds reads under 1.0.
 
 The two model-scoped rows apply to a model whose family has a week of its own in the family table (Fable, whose week is
 `seven_day_fable`). The row cools that model on the account and recovers once a reading of that week is under 1.0. The

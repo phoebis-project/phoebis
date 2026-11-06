@@ -1240,7 +1240,8 @@ pub struct AccountSlowDown {
     pub factor: f64,
     /// The realized speed the demand divides the pins' burn by.
     pub speed: f64,
-    /// When the factor first read under 1 since it last read 1, `None` outside a span.
+    /// When the factor first read under 1 since the span last closed, the instant the ramp grows from, kept through a
+    /// return to 1 shorter than `SLOW_DOWN_WAIT_MS`. `None` outside a span.
     pub since: Option<i64>,
     /// The share of the factor the holds apply at the ask's instant, by the selection's own rule, `None` outside a
     /// span.
