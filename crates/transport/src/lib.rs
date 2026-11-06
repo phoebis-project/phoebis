@@ -26,9 +26,10 @@ pub enum TransportError {
     Io(#[from] std::io::Error),
     #[error("malformed response: {0}")]
     Response(String),
-    /// The upstream went silent mid-body past the reader's idle bound.
-    #[error("io: upstream stopped sending")]
-    Stalled,
+    /// The upstream went silent mid-body past the reader's idle bound, which it carries.
+    // In fractional seconds, since a bound under a second would read 0 in whole ones.
+    #[error("no chunk for {} s", .0.as_secs_f64())]
+    Stalled(std::time::Duration),
     #[error("response body exceeds {0} bytes")]
     TooLarge(usize),
     /// The request never left intact, so nothing upstream can have acted on it: no address for the host, a

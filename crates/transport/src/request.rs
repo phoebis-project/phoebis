@@ -1,6 +1,5 @@
 //! HTTP/1.1 request serialization that emits headers exactly in the order and casing it is given.
 
-use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use bytes::Bytes;
@@ -15,13 +14,11 @@ pub struct RawRequest {
     pub body: Bytes,
 }
 
-/// How far `write_request` got before it failed. `NothingWritten` covers a partial head as well: an incomplete
-/// head is never dispatched upstream, so the request did not happen.
+/// Whether the upstream can have acted on the request: not before it took the whole request.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WriteProgress {
-    NothingWritten,
-    HeadWritten,
-    BodyWritten,
+    Unsent,
+    Written,
 }
 
 /// Whether a `write_request` call has handed its whole body to the writer, published for a caller whose timeout drops
@@ -69,34 +66,14 @@ pub async fn write_request<W: AsyncWrite + Unpin>(
     progress: Option<&ProgressCell>,
 ) -> Result<(), WriteFailure> {
     // One buffer for the head and the body, offered to the writer whole, at the cost of one copy of a body the
-    // request limit bounds: no write is issued for the head alone. The loop counts what the writer took, which
-    // `write_all` does not report, so a failure still tells a head the upstream cannot have acted on (fewer
-    // bytes than the head) from one it may have.
+    // request limit bounds: no write is issued for the head alone.
     let mut wire = serialize_head(req);
-    let head_len = wire.len();
     wire.extend_from_slice(&req.body);
-    let mut written = 0;
-    while written < wire.len() {
-        let reached = if written < head_len {
-            WriteProgress::NothingWritten
-        } else {
-            WriteProgress::HeadWritten
-        };
-        match w.write(&wire[written..]).await {
-            Ok(0) => {
-                return Err(WriteFailure {
-                    progress: reached,
-                    error: io::ErrorKind::WriteZero.into(),
-                })
-            }
-            Ok(n) => written += n,
-            Err(error) => {
-                return Err(WriteFailure {
-                    progress: reached,
-                    error,
-                })
-            }
-        }
+    if let Err(error) = w.write_all(&wire).await {
+        return Err(WriteFailure {
+            progress: WriteProgress::Unsent,
+            error,
+        });
     }
     // Every byte entered the writer before the flush is attempted, and the upstream may have read the whole
     // request, so a flush failure is never sent again.
@@ -105,7 +82,7 @@ pub async fn write_request<W: AsyncWrite + Unpin>(
     }
     if let Err(error) = w.flush().await {
         return Err(WriteFailure {
-            progress: WriteProgress::BodyWritten,
+            progress: WriteProgress::Written,
             error,
         });
     }

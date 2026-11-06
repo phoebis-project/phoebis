@@ -803,12 +803,8 @@ pub(crate) fn relay_body(relayed: Relayed, tracker: &TaskTracker) -> Body {
                 };
                 let next = match read {
                     Err(_) => {
-                        let _ = send(&tx, &cancel, Err(TransportError::Stalled)).await;
-                        // In fractional seconds, since a bound under a second would read 0 in whole ones.
-                        break 'body BodyEnd::Failed {
-                            cut: Cut::Stalled,
-                            text: format!("no chunk for {} s", idle_timeout.as_secs_f64()),
-                        };
+                        break 'body failed(&tx, &cancel, TransportError::Stalled(idle_timeout))
+                            .await
                     }
                     Ok(Err(error)) => break 'body failed(&tx, &cancel, error).await,
                     Ok(Ok(next)) => next,
@@ -947,7 +943,7 @@ impl Cut {
     /// among them, so a streamed body and a buffered one file each error alike.
     pub(crate) fn of(error: &TransportError) -> Cut {
         match error {
-            TransportError::Stalled => Cut::Stalled,
+            TransportError::Stalled(_) => Cut::Stalled,
             TransportError::Decode(_) => Cut::Undecodable,
             _ => Cut::Transport,
         }
@@ -1009,7 +1005,7 @@ pub(crate) async fn drain_bounded<C: AsyncRead + Unpin>(
     loop {
         let next = tokio::time::timeout(idle_timeout, reader.next_chunk())
             .await
-            .map_err(|_| TransportError::Stalled)??;
+            .map_err(|_| TransportError::Stalled(idle_timeout))??;
         let Some(chunk) = next else {
             return Ok(Drained::Complete(out.freeze()));
         };

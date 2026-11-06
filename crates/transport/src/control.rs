@@ -90,13 +90,11 @@ impl ControlClient {
         write_request(&mut conn, &req, Some(progress))
             .await
             .map_err(|failure| match failure.progress {
-                WriteProgress::NothingWritten | WriteProgress::HeadWritten => {
-                    TransportError::Unreachable(format!(
-                        "request to {host} was not sent: {}",
-                        failure.error
-                    ))
-                }
-                WriteProgress::BodyWritten => TransportError::Io(failure.error),
+                WriteProgress::Unsent => TransportError::Unreachable(format!(
+                    "request to {host} was not sent: {}",
+                    failure.error
+                )),
+                WriteProgress::Written => TransportError::Io(failure.error),
             })?;
         let mut buf = BytesMut::new();
         let head = read_head(&mut conn, &mut buf).await?;

@@ -122,13 +122,13 @@ async fn send_and_read<C: AsyncRead + AsyncWrite + Unpin>(
     write_request(&mut conn, request, None)
         .await
         .map_err(|failure| match failure.progress {
-            WriteProgress::NothingWritten | WriteProgress::HeadWritten => AttemptFailure::Unsent {
+            WriteProgress::Unsent => AttemptFailure::Unsent {
                 detail: failure.error.to_string(),
                 connect: false,
             },
             // The body is already in the socket and only the flush failed, so the upstream may well have
             // read the whole request.
-            WriteProgress::BodyWritten => AttemptFailure::Lost(failure.error.to_string()),
+            WriteProgress::Written => AttemptFailure::Lost(failure.error.to_string()),
         })?;
     let written_at = clock();
     let mut leftover = BytesMut::new();

@@ -104,11 +104,11 @@ async fn every_write_failure_reports_the_progress_it_reached() {
     };
     let head = serialize_head(&req).len();
     let cases = [
-        (0, false, WriteProgress::NothingWritten),
-        (head - 1, false, WriteProgress::NothingWritten),
-        (head, false, WriteProgress::HeadWritten),
-        (head + 3, false, WriteProgress::HeadWritten),
-        (head + req.body.len(), true, WriteProgress::BodyWritten),
+        (0, false, WriteProgress::Unsent),
+        (head - 1, false, WriteProgress::Unsent),
+        (head, false, WriteProgress::Unsent),
+        (head + 3, false, WriteProgress::Unsent),
+        (head + req.body.len(), true, WriteProgress::Written),
     ];
     for (limit, fail_flush, want) in cases {
         let mut w = Budget::new(limit, fail_flush);
@@ -116,7 +116,7 @@ async fn every_write_failure_reports_the_progress_it_reached() {
             .await
             .expect_err("the writer fails");
         assert_eq!(err.progress, want, "limit {limit}");
-        if want == WriteProgress::BodyWritten {
+        if want == WriteProgress::Written {
             let mut wire = serialize_head(&req);
             wire.extend_from_slice(&req.body);
             assert_eq!(w.taken, wire, "the head and then the body, every byte");
