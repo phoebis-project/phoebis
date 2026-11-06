@@ -209,10 +209,10 @@ page as wide as the window), its columns (Time the fill, the Status, Attempts an
 usage-based Cost cell (mock pass: `usage-based` under its dollars in the tag, size, weight and ink of a billed row's
 funding word, its hover `Billed in dollars: usage-based`), the Status cell's refusal chip against the code's badge (mock
 pass, on the refused answers' list: the `cyber` chip in the badge's font size and height from its left edge and under it
-at the cell's gap, its text and the upstream's hover recorded), the Agent filter's chip on both logs (mock pass, on a
-story session's address with `agent_id=main`: the `agent: main` chip against the `session:` chip in height, top edge and
-its values' font family and size, its text recorded, and no `user agent:` chip), the table with Time turned off
-(`table--no-fill` at its content width at 1280 by 800 and 1920 by 1080), the Cache warming grid (an odd last card
+at the cell's gap, its text and the upstream's hover recorded), the Agent filter's chip on both logs and Analytics (mock
+pass, on a story session's address with `agent_id=main`: the `agent: main` chip against the `session:` chip in height,
+top edge and its values' font family and size, its text recorded, and no `user agent:` chip), the table with Time turned
+off (`table--no-fill` at its content width at 1280 by 800 and 1920 by 1080), the Cache warming grid (an odd last card
 spanning its row, its title in the type of the card before it), the Analytics tiles rows and the Cache warming grid at
 1280 by 800 and 1440 by 900 (no figure on the Cost and Cache warming tiles rows, the Wasted probes card's among them,
 wider than its tile, each row holding a figure in the Ultra week in the mock pass under the Accounts filter naming

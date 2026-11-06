@@ -18,6 +18,7 @@ export interface RequestsLinkInput {
   /** The Analytics page's filters the Requests page reads the same way. */
   filters: {
     accountIds: string[];
+    agentId: string | null;
     clientPattern: string;
     includeProbes: boolean;
     /** The page's key selection, or a session view's key lifetime alone (`linkedKeyIds`). */
@@ -93,11 +94,11 @@ export function linkedKeyIds(selected: string[], sessionKey: string | null): str
  * the reason where one is given, `stop_reasons` set to `refusal` and `refusal_categories` to the category where one is
  * given, the window as two ISO instants (the start of the hour holding the panel's start to one millisecond before the
  * hour ceiling of its end, capped at now, or the exact window where `exact` is set), the page's selections as
- * `accounts`, `keys`, `models` and `pools`, the class pattern as `client`, a session id as `session`, and a breakdown
- * row's group as its own filter: `accounts`, `classifiers`, `client`, `efforts`, `keys`, `kind`, `models`, `pools`,
- * `request_classes` or `speeds`. A client group keyed `other`, or keyed with a class the rollups would fold, answers
- * no address, and outside the client grouping neither does a class pattern that matches `other`, unless it is stars
- * alone, which matches the raw and the folded alike.
+ * `accounts`, `keys`, `models` and `pools`, the class pattern as `client`, a session id as `session`, an agent id as
+ * `agent_id`, and a breakdown row's group as its own filter: `accounts`, `classifiers`, `client`, `efforts`, `keys`,
+ * `kind`, `models`, `pools`, `request_classes` or `speeds`. A client group keyed `other`, or keyed with a class the
+ * rollups would fold, answers no address, and outside the client grouping neither does a class pattern that matches
+ * `other`, unless it is stars alone, which matches the raw and the folded alike.
  */
 export function requestsLink({ count, filters, group, reason, refusalCategory, window }: RequestsLinkInput): RequestsLinkTarget {
   if (count === 0) return { href: null, title: NOTHING_TO_LIST };
@@ -110,6 +111,7 @@ export function requestsLink({ count, filters, group, reason, refusalCategory, w
   const address: RequestsAddress = {
     ...REQUESTS_CODEC.defaults,
     accounts: filters.accountIds,
+    agentId: filters.agentId ?? '',
     cacheMissReasons: reason === undefined ? [] : [reason],
     client: filters.clientPattern,
     keys: filters.keyIds,
@@ -132,12 +134,12 @@ export function requestsLink({ count, filters, group, reason, refusalCategory, w
 }
 
 /** A count of the refusals card: its category's refused answers over the exact window the route counted, since the
- *  route reads the attempts at the request rather than the rollups' whole hours, with no session, which the route does
- *  not read. The two patterns pass through as the route reads them, so the count reads plain under a user agent pattern
- *  or a client pattern the request log cannot list, as the reasons panel's counts do, and its link never lists more
- *  rows than the bar counts. */
+ *  route reads the attempts at the request rather than the rollups' whole hours, with no session and no agent, neither
+ *  of which the route reads. The two patterns pass through as the route reads them, so the count reads plain under a
+ *  user agent pattern or a client pattern the request log cannot list, as the reasons panel's counts do, and its link
+ *  never lists more rows than the bar counts. */
 export function refusalLink(input: Omit<RequestsLinkInput, 'count' | 'group' | 'reason' | 'refusalCategory'>, category: string, count: number): RequestsLinkTarget {
-  return requestsLink({ ...input, count, filters: { ...input.filters, sessionId: null }, refusalCategory: category, window: { ...input.window, exact: true } });
+  return requestsLink({ ...input, count, filters: { ...input.filters, agentId: null, sessionId: null }, refusalCategory: category, window: { ...input.window, exact: true } });
 }
 
 /** One link of the drawer's "Widen to" line. */

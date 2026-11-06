@@ -87,6 +87,12 @@ test("a session read under a key lifetime links with that lifetime alone, in pla
   assert.equal(read.session, SESSION);
 });
 
+test("a session view's link under an agent lists that agent's rows alone, and a refusal count's link names no agent, which the refusal route does not read", () => {
+  const input = { filters: { ...BASE.filters, agentId: 'c21e', sessionId: SESSION }, window: { ...BASE.window, exact: true } };
+  assert.equal(target(link(input).href).agent_id, 'c21e', 'the reasons panel count');
+  assert.equal(target(d.refusalLink(input, 'cyber', 3).href).agent_id, undefined, 'the refusal count');
+});
+
 test("a link reads back through the Requests page's address as its custom span, its reason and its filters", () => {
   const href = link({ filters: { accountIds: ['primary'], keyIds: ['desktop@1000'], sessionId: SESSION }, group: { by: 'request_class', key: 'conversation' } }).href;
   const read = d.REQUESTS_CODEC.fromParams(new URL(href, 'http://console.test').searchParams);

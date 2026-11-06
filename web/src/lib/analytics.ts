@@ -1,5 +1,6 @@
 import type { Api } from '@/api/client';
 import type { Account, AccountRollup, AnalyticsGroup, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, HeldPoint, PinMigrationReason, Placement, PlacementRow, Reconciliation, RewritesAnswer, SubscriptionCosts, WindowSample } from '@/api/types';
+import type { AnalyticsAddress } from '@/lib/address';
 import { MODEL_WEEK_TIERS, tierCapacity, type CostWindow } from '@/lib/costs';
 import { has, lookup } from '@/lib/counts';
 import { earlierHolderLabel, fmtCompact, fmtCount, fmtInt, fmtPct, fmtShare, fmtUsd, fmtWeek, joinPresent, parseKeyLifetime, weekShort } from '@/lib/format';
@@ -720,3 +721,12 @@ export const judged = (row: Pick<Reconciliation, 'observedRise' | 'predictedShar
  * Off once the rise and the priced share each reach MIN_RISE and the ratio leaves the band, as the engine badges it.
  */
 export const ratioOff = (row: Pick<Reconciliation, 'observedRise' | 'predictedShare' | 'ratio'>): boolean => judged(row) && (row.ratio < RATIO_LOW || row.ratio > RATIO_HIGH);
+
+/** The patch the bar commits: a patch that moves the session drops the key lifetime and the agent, since each names one
+ *  session's. */
+export function analyticsPatch(
+  current: Pick<AnalyticsAddress, 'session'>,
+  patch: Partial<AnalyticsAddress>,
+): Partial<AnalyticsAddress> {
+  return 'session' in patch && patch.session !== current.session ? { ...patch, agentId: '', key: '' } : patch;
+}

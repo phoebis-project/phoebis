@@ -6574,12 +6574,12 @@ async function requestsRefusalChip(theme) {
 }
 
 /**
- * The Agent filter's chip on both logs, in the mock pass alone since the session it loads is the mock story's:
- * `d7167642-751d-475e-b0bf-2f24fe70245e`, whose main agent's requests in `web/src/mock/requests.ts` fall inside the
- * last hour, so both logs list its rows at their default range under `agent_id=main`. On each log the `agent: main`
- * chip reads against the `session:` chip in height and top edge and in its values' font family and size, its text
- * recorded, and a `user agent:` chip standing is a failure. The bare request log loads again after, as the view loop's
- * shot reads it.
+ * The Agent filter's chip on both logs and on Analytics, in the mock pass alone since the session it loads is the mock
+ * story's: `d7167642-751d-475e-b0bf-2f24fe70245e`, whose main agent's requests in `web/src/mock/requests.ts` fall
+ * inside the last hour, so both logs list its rows at their default range under `agent_id=main` and the analytics
+ * session view folds them. On each page the `agent: main` chip reads against the `session:` chip in height and top edge
+ * and in its values' font family and size, its text recorded, and a `user agent:` chip standing is a failure. The bare
+ * request log loads again after, as the view loop's shot reads it.
  */
 async function agentChips(theme) {
   if (!mock) return;
@@ -6588,6 +6588,7 @@ async function agentChips(theme) {
     for (const [path, wait] of [
       ['/routing-log', '.routing-log__table'],
       ['/requests', '.requests__table'],
+      ['/analytics', '.analytics-section#traffic'],
     ]) {
       await loadAtOrigin(`${path}?session=${session}&agent_id=main`, wait);
       const read = await page.evaluate(() => {

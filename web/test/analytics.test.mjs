@@ -904,3 +904,10 @@ test("a failed surface heads the week reading's unpriced sentence unpriced and a
   assert.equal(d.failureHead(unpriced, 'cost split'), 'Unpriced: cost split', 'no retry clears an unpriced week');
   assert.equal(d.failureHead({ text: 'HTTP 503', unpriced: false }, 'cost split'), 'Could not load cost split');
 });
+
+test("a patch that moves the session drops the key lifetime and the agent, since each names the earlier session's", () => {
+  assert.deepEqual(d.analyticsPatch({ session: 'a' }, { session: 'b' }), { agentId: '', key: '', session: 'b' }, 'a new session');
+  assert.deepEqual(d.analyticsPatch({ session: 'a' }, { session: 'a' }), { session: 'a' }, 'the same session chosen again keeps both');
+  const range = { from: '', preset: '7d', to: '' };
+  assert.deepEqual(d.analyticsPatch({ session: 'a' }, { range }), { range }, 'a patch that names no session keeps both');
+});

@@ -22562,6 +22562,41 @@ await forView(['/analytics', '/keys', '/pools', '/quota', '/routing-log', '/sess
     }
   }
   {
+    // The story's first session (`STORY_AGENTS[0]`) runs main, the fork c21e and e4b7, and c21e's one request of the
+    // default day is req_96461df2-61a, a history edited miss eleven hours back, beside a probe the page leaves out. The
+    // rollups carry no agent, so Add filter offers Agent under a session alone.
+    const name = '/analytics an agent narrows the session view to its requests and its reasons links, and Add filter offers Agent under a session alone';
+    const agent = 'c21e';
+    const session = requests.find((r) => r.agentId === agent)?.sessionId ?? '';
+    const agentRow = async (page) => {
+      addFilterButton(page)?.click();
+      await page.settle(100);
+      const row = filterRows().find((r) => r.firstElementChild?.textContent?.trim() === 'Agent');
+      const read = [row?.getAttribute('aria-disabled') ?? null, row?.getAttribute('title') ?? null];
+      await closeBoxes(page);
+      return read;
+    };
+    let page = await mount('/analytics', { now: CLOCK_ORIGIN });
+    const bare = await agentRow(page);
+    page.unmount();
+    page = await mount(`/analytics?session=${encodeURIComponent(session)}&agent_id=${agent}`, { now: CLOCK_ORIGIN });
+    const read = { chips: [...page.container.querySelectorAll('.chip--filter')].map((c) => c.textContent?.trim()), requests: total(page), row: await agentRow(page) };
+    await tab(page, 'Cache');
+    const links = [...page.container.querySelectorAll('.hbars--reasons li .num > a')].map((a) => {
+      const t = logTarget(a.getAttribute('href'));
+      return { agent: t.agent_id ?? null, reason: t.cache_miss_reasons ?? null, session: t.session ?? null };
+    });
+    page.unmount();
+    results.push({
+      name,
+      ok:
+        JSON.stringify(bare) === JSON.stringify(['true', "An agent narrows one session's view, so pick a session first."]) &&
+        JSON.stringify(read) === JSON.stringify({ chips: ['agent: c21e', `session: ${session.slice(0, 8)}…`], requests: 1, row: [null, null] }) &&
+        JSON.stringify(links) === JSON.stringify([{ agent, reason: 'messages_changed', session }]),
+      missing: [JSON.stringify(bare), JSON.stringify(read), JSON.stringify(links)],
+    });
+  }
+  {
     // Clear all writes every dimension's empty value in one patch, the session's among them, and the key lifetime
     // belongs to the session it arrived with, so it leaves with the session. The grouping and the range stay.
     const name = '/analytics Clear all clears every chip with and without a session, and a session change drops the key lifetime';

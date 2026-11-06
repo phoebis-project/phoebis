@@ -22,7 +22,7 @@ import { GroupBy as GroupByControl, GroupsButton } from '@/components/GroupBy';
 import { SectionBar } from '@/components/SectionBar';
 import { accountHref, addressWindow, ANALYTICS_CODEC, type AnalyticsAddress } from '@/lib/address';
 import { ALLOWANCE_WEEKS, allowanceRows, allowanceSpan, fleetFigures, resetInstant, weeklyKeys, weeklyResetsKey, type AllowanceFigure } from '@/lib/allowance';
-import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, failureHead, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, moveLabel, nativeCellOf, nativeFiguresOf, netSaving, niceAxisTop, oneAccountGroupOf, ownShareHint, peakLines, placementCells, placementRungLabel, readBurn, sampledWindows, sidesLine, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, analyticsPatch, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, failureHead, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, moveLabel, nativeCellOf, nativeFiguresOf, netSaving, niceAxisTop, oneAccountGroupOf, ownShareHint, peakLines, placementCells, placementRungLabel, readBurn, sampledWindows, sidesLine, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
@@ -68,6 +68,7 @@ const SESSION_PAGE_SIZE = 500;
 const SESSION_PAGE_LIMIT = 20;
 const SESSION_SOURCE_NOTE = 'From the request log, since rollups carry no session. Cache warming figures are unavailable per session';
 const SESSION_COST_NOTE = 'Cost split is not available for a session view.';
+const AGENT_NEEDS_SESSION = "An agent narrows one session's view, so pick a session first.";
 // The rings' centers read bare, so the subtitle names the week the subscription ring's percents are of.
 const NATIVE_SPLIT_NOTE = `By token kind, ${NATIVE_SUBSET}`;
 const UNAVAILABLE_NOTE = 'not in the request log';
@@ -275,12 +276,11 @@ export function AnalyticsPage() {
       rawUpdate(patch);
     });
   /**
-   * The bar's one writer, so the chips, Add filter and the address cannot disagree. A key lifetime belongs to the
-   * session it arrived with, so a patch that moves the session drops it, and Clear all's one patch commits whole. A
-   * patch that changes nothing, such as a flag chosen again, moves no end and reads nothing.
+   * The bar's one writer, so the chips, Add filter and the address cannot disagree. Clear all's one patch commits whole.
+   * A patch that changes nothing, such as a flag chosen again, moves no end and reads nothing.
    */
   const update = (patch: Partial<AnalyticsAddress>) => {
-    const next = 'session' in patch && patch.session !== a.session ? { ...patch, key: '' } : patch;
+    const next = analyticsPatch(a, patch);
     if (Object.entries(next).every(([field, value]) => JSON.stringify(value) === JSON.stringify(a[field as keyof AnalyticsAddress]))) return;
     commit(next);
   };
@@ -322,7 +322,7 @@ export function AnalyticsPage() {
   // the later pages stand as the walk loaded them. Other deps walk the pages again. The ref names the current deps from
   // the moment a read starts, so a read under earlier deps that settles later keeps nothing.
   const heldLog = useRef<{ answer: SessionRequests | null; deps: string } | null>(null);
-  const logDeps = JSON.stringify([logClient, filters, fromIso, includeProbes, sessionId, sessionKey, toIso, generation]);
+  const logDeps = JSON.stringify([a.agentId, logClient, filters, fromIso, includeProbes, sessionId, sessionKey, toIso, generation]);
   // The load runs unscoped as well, so its reset drops the held answer there and a session view entered again walks its
   // pages again.
   const log = useAsync(
@@ -333,7 +333,7 @@ export function AnalyticsPage() {
       return loadSessionRequests(
         (cursor) =>
           api
-            .listRequests({ accountIds: filters.accountId, client: logClient, cursor, from: fromIso, includeProbes, keyIds: sessionKey && filters.keyId.length === 0 ? [sessionKey] : filters.keyId, limit: SESSION_PAGE_SIZE, models: filters.model, poolIds: filters.poolId, session: sessionId, to: toIso })
+            .listRequests({ accountIds: filters.accountId, agentId: a.agentId || undefined, client: logClient, cursor, from: fromIso, includeProbes, keyIds: sessionKey && filters.keyId.length === 0 ? [sessionKey] : filters.keyId, limit: SESSION_PAGE_SIZE, models: filters.model, poolIds: filters.poolId, session: sessionId, to: toIso })
             // The route reads one key list, so a lifetime beside a key filter is applied here as well.
             .then((page) => ({ ...page, requests: page.requests.filter((r) => sessionKey === null || (r.keyId !== null && keyLifetime(r.keyId, r.keyGeneration) === sessionKey)) })),
         SESSION_PAGE_LIMIT,
@@ -343,7 +343,7 @@ export function AnalyticsPage() {
         return answer;
       });
     },
-    [logClient, filters, fromIso, includeProbes, sessionId, sessionKey, toIso, generation],
+    [a.agentId, logClient, filters, fromIso, includeProbes, sessionId, sessionKey, toIso, generation],
     { paused: paused || sessionId === null, refreshMs: reload.refreshMs },
   );
   const accountRollups = useGatedRead(tab === 'accounts', () => api.listAccountRollups(fromIso, toIso), [fromIso, toIso, tab, generation], reload);
@@ -606,17 +606,19 @@ export function AnalyticsPage() {
   const fastSpend = speedPoints.reduce((n, p) => n + (p.groups.find((g) => g.key === 'fast')?.costUsd ?? 0), 0);
   const groupLabel = GROUP_LABEL[groupBy];
   // The reasons panel's counts link under one window and the page's filters. A session view's log read keeps the
-  // session's key lifetime alone, so its links carry that lifetime. The request log takes one client pattern, so
-  // several draw every count plain. The user agent patterns ride joined, so any of them keeps a count plain, since the
-  // request log matches the raw header.
+  // session's key lifetime alone, and its agent where one stands, so its links carry both. The request log takes one
+  // client pattern, so several draw every count plain. The user agent patterns ride joined, so any of them keeps a
+  // count plain, since the request log matches the raw header.
   const linkInput: ReasonLink = {
-    filters: { accountIds: filters.accountId, clientPattern: a.clients.length === 1 ? a.clients[0] : '', includeProbes, keyIds: linkedKeyIds(filters.keyId, sessionId === null ? null : sessionKey), models: filters.model, poolIds: filters.poolId, sessionId, userAgentPattern: a.userAgents.join('\n') },
+    filters: { accountIds: filters.accountId, agentId: sessionId === null ? null : a.agentId || null, clientPattern: a.clients.length === 1 ? a.clients[0] : '', includeProbes, keyIds: linkedKeyIds(filters.keyId, sessionId === null ? null : sessionKey), models: filters.model, poolIds: filters.poolId, sessionId, userAgentPattern: a.userAgents.join('\n') },
     window: { exact: sessionId !== null, fromMs: span.fromMs, nowMs: now, toMs: span.toMs },
   };
   const plainLinks = a.clients.length > 1;
   // The refusal route reads the page's own key selection, never a session view's key lifetime, and `refusalLink` sets
-  // the exact window and leaves the session out.
+  // the exact window and leaves the session and the agent out.
   const refusalInput: ReasonLink = { ...linkInput, filters: { ...linkInput.filters, keyIds: filters.keyId } };
+  // With no session the page reads the rollups, which carry no agent, so an Agent chip would narrow nothing.
+  const disabled: Record<string, string> = sessionId === null ? { agentId: AGENT_NEEDS_SESSION } : {};
 
   return (
     <PopoverHost.Provider value={host}>
@@ -624,6 +626,7 @@ export function AnalyticsPage() {
         <FilterBar
           address={address}
           dimensions={dimensions}
+          disabled={disabled}
           filters={a}
           options={barOptions}
           range={{ now: clock.now, window: { from: span.fromMs, to: span.toMs } }}
