@@ -204,14 +204,17 @@ codes](client.md#refusal-codes)):
 | `version_suffix` | `the client's version suffix does not reproduce from any text block of the first user message or the version the user agent names, the anchors this build tries for every request. Where the session's main turns pass, re-pinning the router does not help: the refused body shows where this client anchored the suffix, and its billing line's cc_is_subagent and the x-claude-code-agent-id, x-claude-code-request-class and x-claude-code-agent-type headers, where the client sends them, tell a subagent's request apart` |
 | `version_suffix`, resumed conversation | `the conversation was resumed, and the client's version suffix does not reproduce from the resume placeholder, the empty prompt or the user agent. Re-pin the router to this client version` |
 
-The suffix check tries the same anchors for every request, each text block of the first user message and the version
-the user agent names, and the `version_suffix` message names them. A custom agent of Claude Code 2.1.318, captured in
-print mode, anchors its suffix on the last text block of the first wire user message, as the main turn does, so its
-suffix reproduces. The custom agents refused on 2026-10-30 (client 2.1.314, the `cli` entrypoint, the model
-`claude-fable-5-1`, with 10 and 40 tools) anchored theirs outside those blocks, and their case is open. The message
-also names the marks that tell a subagent's request apart from a moved client's: `cc_is_subagent` on the billing line,
-the `x-claude-code-agent-id` header, and the hint headers `x-claude-code-agent-type` and `x-claude-code-request-class`
-where the client sends them. The refused body shows where the client anchored the suffix, so the operator captures it.
+The suffix check tries the same anchors for every request, each text block of the first user message and the version the
+user agent names, and the `version_suffix` message names them. A custom agent of Claude Code 2.1.318, captured in print
+mode, anchors its suffix on the last text block of the first wire user message, as the main turn does, so its suffix
+reproduces. The custom agents refused on 2026-10-30 (client 2.1.314, the `cli` entrypoint, the model `claude-fable-5-1`,
+with 10 and 40 tools) anchored theirs outside those blocks, and their case is open. The message also names the marks
+that tell a subagent's request apart from a moved client's: `cc_is_subagent` on the billing line, the
+`x-claude-code-agent-id` header, and the hint headers `x-claude-code-agent-type` and `x-claude-code-request-class` where
+the client sends them. The refused body shows where the client anchored the suffix, so the operator captures it. With
+[body capture](statistics.md#body-capture) on for the key or its pool, the ledger keeps the body of a request this check
+refuses, since the relay records the body before the check runs. A capture holds the requests observed after it is asked
+for, so the operator turns it on before the refusal recurs.
 
 The refusal logs `a caller stamped a billing line this build cannot reproduce. Re-pin the router to that client` at
 warn level with the drift kind, the user agent and the profile name, and records itself as the request's one decision,
