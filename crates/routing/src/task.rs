@@ -85,8 +85,8 @@ struct Invalidated {
 
 /// How far apart two readings' resets may lie and still name one reset: a head names its resets in whole seconds and
 /// the poll in milliseconds, so the two sources disagree about one reset by under a second, while a window's next
-/// reset lands hours after the last. A reading taken within it before the stored reset counts as past that reset,
-/// since the upstream's clock and the poll's lag put a reading that close to the reset on either side of its instant.
+/// reset lands hours after the last. A reading that names a later reset, taken within it before the stored reset,
+/// counts as past that reset, since the upstream's clock and the poll's lag put a reading that close on either side.
 pub const RESET_SLACK_MS: i64 = 60_000;
 
 /// Whether two readings' resets name one reset.
