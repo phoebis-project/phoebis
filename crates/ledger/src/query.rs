@@ -5468,6 +5468,71 @@ mod tests {
         assert_eq!(served(since), [("r2".to_string(), Some(150))]);
     }
 
+    /// The fold prices the requests an account served under a key and a session, so a refused request, a request with
+    /// no key and a request with no session stay out of both reads: the incremental read drops each in its statement,
+    /// and the fill's key join leaves the keyless and the sessionless ones out on its own.
+    #[test]
+    fn the_session_spend_reads_leave_refused_keyless_and_sessionless_requests_out() {
+        let db = LedgerDb::open_in_memory().unwrap();
+        let request = |id: &str, key: Option<&str>, session: Option<&str>| RequestRecord {
+            id: id.into(),
+            received_at: 1_000,
+            key_id: key.map(String::from),
+            session_id: session.map(String::from),
+            canonical_model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            ..Default::default()
+        };
+        let attempt = |id: &str| AttemptRecord {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: "a".into(),
+            started_at: 100,
+            ..Default::default()
+        };
+        db.insert_request(
+            &request("served", Some("k"), Some("s")),
+            &[attempt("served")],
+            None,
+        )
+        .unwrap();
+        db.insert_request(
+            &RequestRecord {
+                refused: true,
+                ..request("refused", Some("k"), Some("s"))
+            },
+            &[],
+            None,
+        )
+        .unwrap();
+        db.insert_request(
+            &request("keyless", None, Some("s")),
+            &[attempt("keyless")],
+            None,
+        )
+        .unwrap();
+        db.insert_request(
+            &request("sessionless", Some("k"), None),
+            &[attempt("sessionless")],
+            None,
+        )
+        .unwrap();
+        let ids = |rows: Vec<SessionSpendRow>| {
+            rows.into_iter()
+                .map(|row| row.request_id)
+                .collect::<Vec<_>>()
+        };
+        let sessions = [("k".to_string(), 0, "s".to_string())];
+        let filled = db
+            .read_blocking(|c| session_spend_rows_of(c, &sessions))
+            .unwrap();
+        assert_eq!(ids(filled), ["served"]);
+        let since = db
+            .read_blocking(|c| session_spend_rows_since(c, 0))
+            .unwrap();
+        assert_eq!(ids(since), ["served"]);
+    }
+
     #[test]
     fn the_newest_events_of_a_kind_are_read_by_seeking_to_the_kind() {
         let plan = plan_of(
