@@ -1053,7 +1053,8 @@ await forView('/', async () => {
 
 // Declared out here because each view's call below assigns its own mount.
 let m;
-await forView('/', async () => {
+// The Sessions card's count check below reads the Sessions view's summary line, so the call names /sessions too.
+await forView(['/', '/sessions'], async () => {
 m = await mount('/');
 expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost, 24h', 'Error rate, 24h', 'Refused, 24h', '7d remaining', 'Fable week remaining', 'remaining', 'primary', 'nightly', 'Cooling down', 'Overage active', 'Needs re-auth', 'Recent requests', 'Sessions, their agents and the engine that keeps their caches warm', 'active pins', 'Keepalive engine', 'of 128', 'of 1,024', 'Retained', 'of 256 MiB', 'Cache probes, 24h', 'ok (', 'expired between turns', 'bus gaps', 'Fable', 'none']);
 {
