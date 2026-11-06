@@ -330,7 +330,8 @@ holds the session's live pin, and the record's `pin` step reads `match` with the
 relay](relay.md#admission)). A Claude Code client's marked classifier call is the second such read: it goes to the
 account of the session's turn that ended last where that account is eligible and holds allowance, the cap not read since
 the call belongs to a session already there, and the `pin` step reads `match` with the fact `judged` naming it, the move
-rules, the rungs and the pick naming the reason `classifier` ([Clients](#clients)).
+rules, the rungs and the pick naming the reason `classifier`. On a classifier call with no turn to judge the fact reads
+`none` ([Clients](#clients)).
 
 A fresh request with no live pin lands where its prefix is already warm. The deepest message boundary any account still
 holds wins first, for a main conversation and a subagent alike. Both rungs read entries of the request's own cache lane

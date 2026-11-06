@@ -1448,8 +1448,9 @@ pub struct RoutingState {
     /// account id. Memory only, with no column: the share a restart loads takes the estimate over its own instant.
     spend_shares: HashMap<String, SpendShare>,
     /// The pin of each session's turn that ended last, by key and session id, as the renewal report at a client
-    /// stream's end names it, with the account it ran on: what a classifier call that follows within milliseconds
-    /// judges. Memory only: after a restart the pins' own stamps stand in until the session's next turn ends.
+    /// stream's end names it, with the account and incarnation it ran on: what a classifier call that follows within
+    /// milliseconds judges. Memory only: after a restart the pins' own stamps stand in until the session's next turn
+    /// ends.
     turn_ends: HashMap<(String, String), TurnEnd>,
 }
 

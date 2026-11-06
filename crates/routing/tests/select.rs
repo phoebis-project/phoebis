@@ -4,14 +4,14 @@ use phoebis_routing::{
     AffinityMap, AffinityRow, BandSegment, Banded, BudgetFacts, BurnRates, BurnUnit,
     CandidateFacts, ChainFacts, ClientClass, CohortHold, CreditAccount, CreditsState, Decided,
     DecisionRecord, EvidenceSource, Exhaustion, FactEntity, FactValue, FailedOver, HeadMark,
-    HoldFacts, HoldOutcome, HoldWait, JudgedCharge, LaneFacts, LongContextRates, MemberSpend,
-    MigrateReason, MoveCause, OverageEvidence, PinKeyFacts, PinRef, PinShed, PinnedObstacle,
-    Placement, RateTable, Rates, RefusalFacts, RefusedRequest, RegimeRates, RegistrySnapshot,
-    RequestFlags, Reservation, RoutingState, SelectRequest, SelectResult, SharePricer,
-    SlowDownEdge, SlowDownRead, SlowDownState, StateWrite, UtilizationSample, WalkStep, Warmth,
-    WarmthCause, WindowFacts, WindowReading, WindowSource, FAST_CREDITS_REASON,
-    FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, MODEL_REJECTED_REASON, SEVEN_DAY,
-    SEVEN_DAY_FABLE, SLOW_DOWN_MIN_HOLD_MS, WEEK_MS,
+    HoldFacts, HoldOutcome, HoldWait, LaneFacts, LongContextRates, MemberSpend, MigrateReason,
+    MoveCause, OverageEvidence, PinKeyFacts, PinRef, PinShed, PinnedObstacle, Placement, RateTable,
+    Rates, RefusalFacts, RefusedRequest, RegimeRates, RegistrySnapshot, RequestFlags, Reservation,
+    RoutingState, SelectRequest, SelectResult, SharePricer, SlowDownEdge, SlowDownRead,
+    SlowDownState, StateWrite, UtilizationSample, WalkStep, Warmth, WarmthCause, WindowFacts,
+    WindowReading, WindowSource, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR,
+    IN_FLIGHT_RECLAIM_MS, MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE, SLOW_DOWN_MIN_HOLD_MS,
+    WEEK_MS,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
@@ -18179,6 +18179,8 @@ fn a_classifier_call_on_a_pin_a_classifier_call_renewed_last_prices_no_rewrite_f
     );
 }
 
+use phoebis_routing::JudgedCharge;
+
 /// The account a selection landed on and its answer on the classifier call's charge.
 fn judged_on(result: &SelectResult) -> (&str, Option<JudgedCharge>) {
     match result {
@@ -18264,8 +18266,10 @@ fn a_classifier_call_on_its_judged_pin_under_a_standing_mark_lands_on_the_judged
 #[test]
 fn a_classifier_call_whose_judged_pin_names_an_earlier_incarnation_of_the_account_lands_by_the_strategy(
 ) {
+    // b ranks first, so the strategy lands the call on the id the turn ran on, and only the incarnation tells the
+    // holders apart.
     let s = snapshot(Pool {
-        members: vec![("a", 0), ("b", 1)],
+        members: vec![("b", 0), ("a", 1)],
         ..Pool::default()
     });
     // s1's turn ran on b under incarnation 0, a holder of the id the registry's b, incarnation 1, replaced.
@@ -18275,7 +18279,11 @@ fn a_classifier_call_whose_judged_pin_names_an_earlier_incarnation_of_the_accoun
         ..seeded_pin("s1", "b", 1_000)
     }]);
     let d = decide(&mut st, &s, &classifier_call(&s, "s1", 1_100), &mut rng());
-    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    assert_eq!(
+        judged_on(&d.result),
+        ("b", Some(JudgedCharge::Off)),
+        "the call lands by the strategy on another holder of the id, off the one the turn ran on"
+    );
     assert!(
         line(&d.record, "pin")
             .facts

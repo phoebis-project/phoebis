@@ -171,13 +171,12 @@ writes the field on its conversation sites alone. The prompt id comes from the `
 the client sets from the same id it writes into the line, so a request without the header gets no `cc_prompt_id`, as the
 native client writes none. The auto mode classifier requests are side queries, so the restoration writes no line field
 on them beyond the `cch` placeholder where the line lacks it, and the router records the ones that carry the classifier
-marker as the client's classifier calls, which take no share of a plan window on the account their judged turn ended
-on ([Auto mode behind the router](#auto-mode-behind-the-router)). Three things are not restored, because the router
-cannot: the
-`advanced-tool-use-2025-11-20` beta, since the client has to run its tool search (`ENABLE_TOOL_SEARCH=true` selects it),
-the global cache scope on the static system block, and `cc_turn_origin` with the five fields after it in the client's
-order (the turn position, the gateway and the project fields), which the router never writes and whose turn origin it
-records when the line carries it.
+marker as the client's classifier calls, which take no share of a plan window on the account their judged turn ended on
+([Auto mode behind the router](#auto-mode-behind-the-router)). Three things are not restored, because the router cannot:
+the `advanced-tool-use-2025-11-20` beta, since the client has to run its tool search (`ENABLE_TOOL_SEARCH=true` selects
+it), the global cache scope on the static system block, and `cc_turn_origin` with the five fields after it in the
+client's order (the turn position, the gateway and the project fields), which the router never writes and whose turn
+origin it records when the line carries it.
 
 ## Client drift
 

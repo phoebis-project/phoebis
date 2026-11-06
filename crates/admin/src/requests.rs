@@ -169,8 +169,9 @@ pub(crate) struct RequestSummary {
     /// price, a model without a weight. Else the serving attempt's usage as the share of the Pro 7-day window, the
     /// cost model's units over the Pro capacity under the request's regime, whatever account tier served it.
     pub cost_equivalent: Option<f64>,
-    /// `client_classifier` where `cost_shares` and `cost_equivalent` read zero by rule, for the client's own
-    /// classifier call under a subscription window. Null for a figure priced from the request's counts.
+    /// `client_classifier` where `cost_shares` and `cost_equivalent` read zero by rule, for a request whose
+    /// `classifier` reads `client` under a subscription window. Null for a figure priced from the request's counts, a
+    /// `client_off` call's among them.
     pub share_reason: Option<String>,
     /// The serving attempt's account tier the router priced by when the request landed, null as on the attempt.
     pub tier: Option<String>,
