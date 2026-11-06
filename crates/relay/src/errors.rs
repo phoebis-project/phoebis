@@ -6,6 +6,7 @@ use std::borrow::Cow;
 use axum::body::Body;
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::Response;
+use phoebis_bus::Outcome;
 use phoebis_routing::{exhaustion_status, Exhaustion, KeyRefusal};
 
 use crate::auth::AuthError;
@@ -29,6 +30,34 @@ pub(crate) struct Failure {
     /// Writes `x-should-retry: false`, so a client that retries its 4xx answers resends neither a refused
     /// credential nor what a guardrail, the contract or the drift check refused.
     pub no_retry: bool,
+    /// The outcome the ledger files the request under, carried by the answer itself so no reader infers it from the
+    /// code.
+    pub class: FailureClass,
+}
+
+/// The outcome class of a `Failure`, read against the attempt the answer comes at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FailureClass {
+    Canceled,
+    Exhausted,
+    Failed,
+    /// Conclusive at any attempt.
+    Rejected,
+    /// Rejected before any attempt, failed after one, since the attempt may have been billed.
+    Refused,
+}
+
+impl FailureClass {
+    pub(crate) fn outcome(self, attempt: u8) -> Outcome {
+        match self {
+            FailureClass::Canceled => Outcome::Canceled,
+            FailureClass::Exhausted => Outcome::Exhausted,
+            FailureClass::Failed => Outcome::Failed,
+            FailureClass::Rejected => Outcome::Rejected,
+            FailureClass::Refused if attempt == 0 => Outcome::Rejected,
+            FailureClass::Refused => Outcome::Failed,
+        }
+    }
 }
 
 pub fn anthropic_error(
@@ -100,6 +129,7 @@ pub(crate) fn body_budget_exhausted() -> Failure {
         message: Cow::Borrowed("the router holds as many request bytes as it allows"),
         retry_after: None,
         no_retry: false,
+        class: FailureClass::Refused,
     }
 }
 
@@ -116,6 +146,7 @@ pub(crate) fn ledger_behind() -> Failure {
         message: Cow::Borrowed("the router is not accepting requests right now"),
         retry_after: Some(5),
         no_retry: false,
+        class: FailureClass::Refused,
     }
 }
 
@@ -132,6 +163,7 @@ pub(crate) fn key_body_reads() -> Failure {
         message: Cow::Borrowed("this key has as many request bodies arriving as it allows"),
         retry_after: Some(1),
         no_retry: false,
+        class: FailureClass::Refused,
     }
 }
 
@@ -156,6 +188,9 @@ pub(crate) fn accounts_at_cap(retry_after_seconds: u64) -> Failure {
         message: Cow::Borrowed("every account in this pool is at its in-flight cap"),
         retry_after: Some(retry_after_seconds.clamp(1, AT_CAP_RETRY_AFTER_MAX)),
         no_retry: false,
+        // The pool had nothing to place the request on either, so the attention gauge and the rollups count it with
+        // the other exhaustions.
+        class: FailureClass::Exhausted,
     }
 }
 
@@ -176,6 +211,7 @@ pub(crate) fn auth_failure(error: &AuthError) -> Failure {
         // None of the three heals between resends, and the client's query loop stops at the first refusal it is
         // told not to resend.
         no_retry: true,
+        class: FailureClass::Refused,
     }
 }
 
@@ -221,6 +257,8 @@ fn contract_message(item: &str) -> &'static str {
 
 pub(crate) fn relay_failure(error: &RelayError) -> Failure {
     match error {
+        // The account's own stored uuid is what fails, which no wait and no resend heals, so the request files as
+        // rejected rather than as the pool's exhaustion the code names elsewhere.
         RelayError::AccountUuid => Failure {
             status: StatusCode::SERVICE_UNAVAILABLE,
             error_type: "api_error",
@@ -228,6 +266,7 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             message: Cow::Borrowed("the bound account cannot serve requests"),
             retry_after: None,
             no_retry: false,
+            class: FailureClass::Rejected,
         },
         // The caller is already gone; the answer exists so the request still gets a row in the ledger.
         RelayError::BodyIncomplete => Failure {
@@ -237,6 +276,7 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             message: Cow::Borrowed("the request body ended before it was complete"),
             retry_after: None,
             no_retry: false,
+            class: FailureClass::Refused,
         },
         RelayError::BodyNotGzip => Failure {
             status: StatusCode::BAD_REQUEST,
@@ -245,6 +285,7 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             message: Cow::Borrowed("the request body is not valid gzip"),
             retry_after: None,
             no_retry: false,
+            class: FailureClass::Refused,
         },
         // Naming the member is what lets a client author see which part of its body the relay has to find;
         // no value of the body is echoed back.
@@ -275,6 +316,7 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             },
             retry_after: None,
             no_retry: false,
+            class: FailureClass::Refused,
         },
         RelayError::BodyTimeout => Failure {
             status: StatusCode::REQUEST_TIMEOUT,
@@ -283,6 +325,7 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             message: Cow::Borrowed("the request body did not arrive in time"),
             retry_after: None,
             no_retry: false,
+            class: FailureClass::Refused,
         },
         RelayError::BodyTooLarge => Failure {
             status: StatusCode::PAYLOAD_TOO_LARGE,
@@ -291,6 +334,7 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             message: Cow::Borrowed("the request body is too large"),
             retry_after: None,
             no_retry: false,
+            class: FailureClass::Refused,
         },
         // An unfinished scan proves nothing about the members past where it stopped, so it is refused rather
         // than admitted on what was read so far.
@@ -301,6 +345,7 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             message: Cow::Borrowed("the request body nests deeper than the relay reads"),
             retry_after: None,
             no_retry: false,
+            class: FailureClass::Refused,
         },
         RelayError::Cch(_) | RelayError::NotAnObject => Failure {
             status: StatusCode::BAD_REQUEST,
@@ -309,6 +354,7 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             message: Cow::Borrowed("the request body is not a valid Messages request"),
             retry_after: None,
             no_retry: false,
+            class: FailureClass::Refused,
         },
         // The client refusals answer the 403 `permission_error` Claude Code reads as final. The 2.1.310 client
         // heals a 400 whose message it does not recognize: it sends the request again without one feature after
@@ -323,6 +369,8 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             retry_after: None,
             // The fix is the client's environment, so a retry resends what was refused.
             no_retry: true,
+            // Answered at attempt 0 and conclusive, named so no change to the attempt rule of `Refused` moves it.
+            class: FailureClass::Rejected,
         },
         // Fail closed: a hash or a version suffix the pinned rules cannot reproduce means the client moved past
         // the profile. A stamp the router cannot verify never travels under an account's credential, so the
@@ -357,6 +405,7 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             }),
             retry_after: None,
             no_retry: true,
+            class: FailureClass::Refused,
         },
         RelayError::ClientRefused => Failure {
             status: StatusCode::FORBIDDEN,
@@ -365,6 +414,8 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             message: Cow::Borrowed("the router admits Claude Code clients only"),
             retry_after: None,
             no_retry: true,
+            // Answered at attempt 0 and conclusive, named so no change to the attempt rule of `Refused` moves it.
+            class: FailureClass::Rejected,
         },
         // The client's query loop treats a 403 as final and heals none. The name rule refuses the two phrases the
         // client reads in a 403, `model:` and `OAuth token has been revoked`, since the message carries the name.
@@ -375,6 +426,8 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             message: error.to_string().into(),
             retry_after: None,
             no_retry: true,
+            // Answered at attempt 0 and conclusive, named so no change to the attempt rule of `Refused` moves it.
+            class: FailureClass::Rejected,
         },
         RelayError::InvalidModel => Failure {
             status: StatusCode::BAD_REQUEST,
@@ -383,6 +436,7 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             message: Cow::Borrowed("the request body's model is not a usable model name"),
             retry_after: None,
             no_retry: false,
+            class: FailureClass::Refused,
         },
         RelayError::LedgerBehind => ledger_behind(),
         RelayError::NoModel => Failure {
@@ -392,6 +446,7 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             message: Cow::Borrowed("the request body has no model"),
             retry_after: None,
             no_retry: false,
+            class: FailureClass::Refused,
         },
         // Relaying a body the relay cannot inflate would carry bytes it can neither read nor edit under an
         // account's credential, so it is refused from the head instead.
@@ -402,6 +457,7 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             message: Cow::Borrowed("the request body's content-encoding is not supported. Send gzip or identity"),
             retry_after: None,
             no_retry: false,
+            class: FailureClass::Refused,
         },
     }
 }
@@ -418,6 +474,8 @@ pub(crate) fn key_refusal(_: &KeyRefusal) -> Failure {
         // No registry refusal heals between resends, and the client's query loop stops at the first refusal it is
         // told not to resend.
         no_retry: true,
+        // Conclusive whether it is caught at admission or at the reselect after an attempt.
+        class: FailureClass::Rejected,
     }
 }
 
@@ -458,6 +516,7 @@ pub(crate) const ACCOUNT_CANCELED: Failure = Failure {
     message: Cow::Borrowed("the bound account was disconnected while the request was in flight"),
     retry_after: None,
     no_retry: false,
+    class: FailureClass::Canceled,
 };
 
 pub(crate) const METHOD_NOT_ALLOWED: Failure = Failure {
@@ -467,6 +526,7 @@ pub(crate) const METHOD_NOT_ALLOWED: Failure = Failure {
     message: Cow::Borrowed("the method is not supported on this route"),
     retry_after: None,
     no_retry: false,
+    class: FailureClass::Refused,
 };
 
 pub(crate) const MODEL_NOT_ALLOWED: Failure = Failure {
@@ -476,6 +536,8 @@ pub(crate) const MODEL_NOT_ALLOWED: Failure = Failure {
     message: Cow::Borrowed("model not allowed for this key"),
     retry_after: None,
     no_retry: false,
+    // Conclusive whether it is caught at admission or at the reselect after an attempt.
+    class: FailureClass::Rejected,
 };
 
 pub(crate) const MODEL_REJECTED: Failure = Failure {
@@ -485,6 +547,9 @@ pub(crate) const MODEL_REJECTED: Failure = Failure {
     message: Cow::Borrowed("every account in this pool rejected the model"),
     retry_after: None,
     no_retry: false,
+    // Caught before any attempt (an obstacle at selection) or after one, where a portable rejection fails over and
+    // ends at the selector's exhaustion: the accounts that answered it are conclusive, not a transport failure.
+    class: FailureClass::Rejected,
 };
 
 pub(crate) const NOT_FOUND: Failure = Failure {
@@ -494,6 +559,7 @@ pub(crate) const NOT_FOUND: Failure = Failure {
     message: Cow::Borrowed("the requested resource was not found"),
     retry_after: None,
     no_retry: false,
+    class: FailureClass::Refused,
 };
 
 pub(crate) const ROUTER_UNAVAILABLE: Failure = Failure {
@@ -503,6 +569,7 @@ pub(crate) const ROUTER_UNAVAILABLE: Failure = Failure {
     message: Cow::Borrowed("the router is not available"),
     retry_after: None,
     no_retry: false,
+    class: FailureClass::Refused,
 };
 
 /// The upstream sent a head and then the connection was cut before the body ended, or the body ran past its bound.
@@ -513,6 +580,7 @@ pub(crate) const UPSTREAM_CUT: Failure = Failure {
     message: Cow::Borrowed("the upstream response could not be read after its head"),
     retry_after: None,
     no_retry: false,
+    class: FailureClass::Failed,
 };
 
 /// The upstream sent a head and then went silent past the idle bound.
@@ -523,6 +591,7 @@ pub(crate) const UPSTREAM_STALLED: Failure = Failure {
     message: Cow::Borrowed("the upstream stalled after its head"),
     retry_after: None,
     no_retry: false,
+    class: FailureClass::Failed,
 };
 
 /// The upstream sent a head and then an answer the relay could not decode: a content coding it cannot read, or a
@@ -534,6 +603,7 @@ pub(crate) const UPSTREAM_UNDECODABLE: Failure = Failure {
     message: Cow::Borrowed("the upstream response could not be decoded after its head"),
     retry_after: None,
     no_retry: false,
+    class: FailureClass::Failed,
 };
 
 /// The upstream sent no head at all: it may or may not have received the request, and either way the relay has no
@@ -545,6 +615,7 @@ pub(crate) const UPSTREAM_UNREACHABLE: Failure = Failure {
     message: Cow::Borrowed("the upstream did not answer"),
     retry_after: None,
     no_retry: false,
+    class: FailureClass::Failed,
 };
 
 #[cfg(test)]

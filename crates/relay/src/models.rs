@@ -15,7 +15,7 @@ use phoebis_store::{AccountRow, ModelRule};
 use serde_json::json;
 
 use crate::catalog::is_ready;
-use crate::{anthropic_error, authenticated_key, new_request_id, no_store, Relay};
+use crate::{anthropic_error, authenticated_key, new_request_id, Relay};
 
 /// The default `limit`, and the bounds a query outside them is refused for.
 const DEFAULT_LIMIT: usize = 20;
@@ -109,7 +109,7 @@ pub(crate) async fn list(
     Query(query): Query<HashMap<String, String>>,
     headers: HeaderMap,
 ) -> Response {
-    no_store(list_answer(&relay, &query, &headers).await)
+    list_answer(&relay, &query, &headers).await
 }
 
 async fn list_answer(
@@ -147,7 +147,7 @@ pub(crate) async fn show(
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    no_store(show_answer(&relay, &id, &headers).await)
+    show_answer(&relay, &id, &headers).await
 }
 
 async fn show_answer(relay: &Relay, id: &str, headers: &HeaderMap) -> Response {

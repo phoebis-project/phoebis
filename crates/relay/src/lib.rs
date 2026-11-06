@@ -59,7 +59,7 @@ pub use messages::{
 pub use portability::portable_of;
 pub use ratelimit::{retry_after, UnifiedHeaders, FAST_INPUT, FAST_OUTPUT};
 pub use serve::{
-    accept_loop, handshake, http1_builder, serve, Accepted, Limits as ListenLimits, LiveAcceptor,
+    accept_loop, http1_builder, serve, Accepted, Limits as ListenLimits, LiveAcceptor,
 };
 pub use sse::SseEvent;
 

@@ -5,7 +5,7 @@ use axum::response::Response;
 use phoebis_routing::{KeyRefusal, Presented, RegistrySnapshot};
 use phoebis_store::ApiKeyRow;
 
-use crate::errors::{auth_failure, key_refusal, no_store, Failure};
+use crate::errors::{auth_failure, key_refusal, Failure};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
@@ -55,8 +55,8 @@ pub fn is_json(headers: &HeaderMap) -> bool {
 }
 
 /// The key the request presents, resolved exactly as `/v1/messages` resolves it, for a side route on the proxy
-/// listener: either refusal answers the relay's own 401 body, marked `no-store`, so a wrong key learns nothing there
-/// it would not learn on the messages route.
+/// listener: either refusal answers the relay's own 401 body, which the route's `no-store` layer marks, so a wrong
+/// key learns nothing there it would not learn on the messages route.
 #[allow(clippy::result_large_err)]
 pub fn authenticated_key<'a>(
     snapshot: &'a RegistrySnapshot,
@@ -66,7 +66,7 @@ pub fn authenticated_key<'a>(
 ) -> Result<&'a ApiKeyRow, Response> {
     resolve_key(snapshot, headers, now)
         .map(|(key, _)| key)
-        .map_err(|refused| no_store(refused.failure().response(request_id)))
+        .map_err(|refused| refused.failure().response(request_id))
 }
 
 pub(crate) enum KeyRefused {
@@ -90,9 +90,12 @@ pub(crate) fn resolve_key<'a>(
     now: i64,
 ) -> Result<(&'a ApiKeyRow, Presented), KeyRefused> {
     let presented = presented_key(headers).map_err(KeyRefused::Header)?;
-    snapshot
-        .authenticate(presented, now)
-        .map_err(KeyRefused::Key)
+    snapshot.authenticate(presented, now).map_err(|refusal| {
+        // Here rather than on each route, so a side route's 401 leaves the same trace on the host as the messages
+        // route's. The refusal names its reason alone, never the presented secret.
+        tracing::debug!(%refusal, "a presented key was refused");
+        KeyRefused::Key(refusal)
+    })
 }
 
 fn bearer_token(raw: &str) -> Result<&str, AuthError> {

@@ -6,6 +6,7 @@ use std::sync::Arc;
 use axum::extract::State;
 use axum::http::header::{ACCEPT, CONTENT_SECURITY_POLICY, CONTENT_TYPE, X_CONTENT_TYPE_OPTIONS};
 use axum::http::{HeaderMap, StatusCode};
+use axum::middleware::map_response;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
@@ -185,6 +186,10 @@ pub fn usage_router(
 ) -> Router {
     Router::new()
         .route(USAGE_PATH, get(usage))
+        // On the router rather than in the handler, so an answer no handler builds carries it too.
+        .layer(map_response(|response: Response| async move {
+            no_store(response)
+        }))
         .with_state(Arc::new(UsageState {
             clock,
             db,
@@ -194,7 +199,7 @@ pub fn usage_router(
 }
 
 async fn usage(State(state): State<Arc<UsageState>>, headers: HeaderMap) -> Response {
-    no_store(usage_answer(&state, &headers).await)
+    usage_answer(&state, &headers).await
 }
 
 async fn usage_answer(state: &UsageState, headers: &HeaderMap) -> Response {

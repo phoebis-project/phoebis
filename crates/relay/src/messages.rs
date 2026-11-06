@@ -12,6 +12,7 @@ use axum::http::response::Builder;
 use axum::http::{
     header, header::CONTENT_ENCODING, HeaderMap, HeaderName, HeaderValue, StatusCode,
 };
+use axum::middleware::map_response;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, head, post};
 use axum::{Json, Router};
@@ -48,7 +49,7 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use crate::auth::{resolve_key, KeyRefused};
+use crate::auth::resolve_key;
 use crate::billing::Restore;
 use crate::body::{marker_ttls, AccountUuidEdit, RepeatedMember, VersionCheck};
 use crate::budget::{BodyBudget, BodyReads};
@@ -62,13 +63,13 @@ use crate::classify::{
 use crate::credit::{hex_of, CreditDigest, CreditStore};
 use crate::dispatch::{self, until_canceled, AttemptFailure, Sent};
 use crate::errors::{
-    accounts_at_cap, body_budget_exhausted, key_body_reads, key_refusal, relay_failure, Failure,
-    ACCOUNTS_AT_CAP, ACCOUNTS_EXHAUSTED, ACCOUNTS_UNAVAILABLE, ACCOUNT_CANCELED,
-    ACCOUNT_CANCELED_CODE, AUTH_UNKNOWN, CLIENT_CONTRACT, CLIENT_GONE_CODE, CLIENT_NOT_ALLOWED,
-    GUARDRAIL_BLOCKED, METHOD_NOT_ALLOWED, MODEL_NOT_ALLOWED, MODEL_NOT_ALLOWED_CODE,
-    MODEL_REJECTED_CODE, NOT_FOUND, ROUTER_SHUTDOWN_CODE, ROUTER_UNAVAILABLE, UPSTREAM_UNREACHABLE,
+    accounts_at_cap, body_budget_exhausted, key_body_reads, key_refusal, no_store, relay_failure,
+    Failure, ACCOUNT_CANCELED, CLIENT_GONE_CODE, GUARDRAIL_BLOCKED, METHOD_NOT_ALLOWED,
+    MODEL_NOT_ALLOWED, NOT_FOUND, ROUTER_SHUTDOWN_CODE, ROUTER_UNAVAILABLE, UPSTREAM_UNREACHABLE,
 };
-use crate::exhaustion::{exhaustion_code, exhaustion_response, pool_moved_response};
+use crate::exhaustion::{
+    exhaustion_class, exhaustion_code, exhaustion_response, pool_moved_response,
+};
 use crate::facts::{AttributionLine, BodyFacts, ClientHints};
 use crate::headers::{outbound_headers, starts_with_ignoring_case, CredentialKind};
 use crate::hold::{hold, Commit, Held, Inspect, INSPECT_BUFFER};
@@ -189,6 +190,9 @@ pub struct RelayOutcome {
     pub client_contract: Option<&'static str>,
     pub client_version: Option<String>,
     pub error_code: Option<String>,
+    /// The outcome a local answer files under, set beside `error_code` by the answer that names the code. `None` for
+    /// an answer the upstream's status decides.
+    pub class: Option<Outcome>,
     pub pin_epoch: Option<u64>,
     pub received_at: i64,
     /// When the head that answered the caller arrived, which a local answer never has.
@@ -1049,36 +1053,11 @@ fn inflate_request(raw: &[u8], bound: usize) -> Result<Vec<u8>, RelayError> {
     Ok(plain)
 }
 
-/// The request outcome a local answer implies; a body that ends badly overrides it at the end of the body.
+/// The request outcome an answer implies: a local answer's class, else the upstream's status. A body that ends badly
+/// overrides it at the end of the body.
 fn outcome_of(outcome: &RelayOutcome) -> Outcome {
-    match outcome.error_code.as_deref() {
-        Some(ACCOUNT_CANCELED_CODE) => Outcome::Canceled,
-        // A probe answered on its pinned member's standing (`Exhaustion::Pinned`, the one untimed answer that
-        // names an obstacle) is refused for the probe alone, whatever its siblings hold: conclusive, and no
-        // exhaustion of the pool for the attention gauge or the rollups to count.
-        Some(ACCOUNTS_UNAVAILABLE) if outcome.obstacle.is_some() => Outcome::Rejected,
-        // A pool whose every account is at its in-flight cap had nothing to place the request on either, and the
-        // attention gauge and the rollups count it with the other exhaustions.
-        Some(ACCOUNTS_EXHAUSTED | ACCOUNTS_UNAVAILABLE | ACCOUNTS_AT_CAP) => Outcome::Exhausted,
-        // A model rejection is a refusal whether it is caught before any attempt (an obstacle at
-        // selection) or after one, where a portable rejection fails over and ends at the selector's
-        // exhaustion: the account that answered it is conclusive either way, not a transport or upstream
-        // failure.
-        Some(MODEL_REJECTED_CODE) => Outcome::Rejected,
-        // A key's refusal of the key itself or of the model is conclusive whether it is caught at admission or at
-        // the reselect after an attempt, so the ledger row reads rejected rather than failed. A guardrail's block is
-        // conclusive too: it is answered at attempt 0, and naming it here keeps a later change to the attempt-count
-        // rule below from moving it. The gate's refusal and the contract's are answered at attempt 0 and named here
-        // for the same reason.
-        Some(
-            AUTH_UNKNOWN
-            | CLIENT_CONTRACT
-            | CLIENT_NOT_ALLOWED
-            | GUARDRAIL_BLOCKED
-            | MODEL_NOT_ALLOWED_CODE,
-        ) => Outcome::Rejected,
-        Some(_) if outcome.attempt == 0 => Outcome::Rejected,
-        Some(_) => Outcome::Failed,
+    match outcome.class {
+        Some(class) => class,
         None if outcome.upstream_status < 400 => Outcome::Succeeded,
         None => Outcome::Failed,
     }
@@ -1168,15 +1147,22 @@ fn cooldown_set(cooldown: Option<&Cooldown>, canonical_model: &str) -> Option<Co
 /// The relayed surface. A known path asked with an unsupported method answers an Anthropic-shaped 405 rather
 /// than the 404 an unknown path gets, so a client can tell a wrong method from a wrong route.
 pub fn router(relay: Arc<Relay>) -> Router {
+    // The listing answers the caller's key with what its pool may route to, so a client that sizes its context
+    // window by the id sees the `[1m]` twins. Layered apart, so the mark reaches an extractor's refusal, which no
+    // handler sees, and the wrong method's answer is set inside the layer.
+    let models = Router::new()
+        .route("/v1/models", get(crate::models::list))
+        .route("/v1/models/{*id}", get(crate::models::show))
+        .method_not_allowed_fallback(wrong_method)
+        .layer(map_response(|response: Response| async move {
+            no_store(response)
+        }));
     Router::new()
         .route("/api/hello", head(hello))
         .route("/api/ready", get(ready).head(ready))
         .route("/v1/messages", post(messages))
         .route("/v1/messages/count_tokens", post(messages))
-        // The listing answers the caller's key with what its pool may route to, so a client that sizes its
-        // context window by the id sees the `[1m]` twins.
-        .route("/v1/models", get(crate::models::list))
-        .route("/v1/models/{*id}", get(crate::models::show))
+        .merge(models)
         .method_not_allowed_fallback(wrong_method)
         .fallback(unknown_route)
         .with_state(relay)
@@ -1285,12 +1271,7 @@ impl Relay {
                 }),
             None => resolve_key(&snapshot, &parts.headers, received_at)
                 .map(|(key, presented)| (key.clone(), presented))
-                .map_err(|refused| {
-                    if let KeyRefused::Key(refusal) = &refused {
-                        tracing::debug!(%refusal, "a presented key was refused");
-                    }
-                    refused.failure()
-                }),
+                .map_err(|refused| refused.failure()),
         };
         let (key, presented) = match admitted {
             Ok(admitted) => admitted,
@@ -1814,12 +1795,13 @@ impl Relay {
         // meets them, and the refusal's row keeps the model, the session and the agent. The hash goes first, so a
         // stamp only the decoded walk reaches is refused before the suffix's stamp gate reads past it. Only a
         // stamped line is judged for its suffix; a reduced-shape line has its missing fields restored instead.
-        let (stamped, drifted) = match crate::body::stamp_of(&members) {
+        let (stamped, client_hash, drifted) = match crate::body::stamp_of(&members) {
             Ok(stamp) => (
                 !matches!(stamp, Stamp::None),
+                matches!(stamp, Stamp::Hash(_)),
                 crate::body::drift_of(&raw, stamp),
             ),
-            Err(error) => (false, Err(error)),
+            Err(error) => (false, false, Err(error)),
         };
         let drifted = drifted.map(|hash| {
             hash.or_else(|| {
@@ -1905,6 +1887,7 @@ impl Relay {
             classifier,
             client_diagnostics,
             client_gzip,
+            client_hash,
             client_version,
             deadline,
             diagnostics,
@@ -2288,13 +2271,18 @@ impl Relay {
     ) -> Response {
         // Each builder takes its status from `exhaustion_status` for its arm, the status the routing log's exhausted
         // row records as its `answer`.
-        let (code, response) = match exhaustion {
+        let (code, class, response) = match exhaustion {
             Exhaustion::Untimed if at_cap => {
                 let failure = accounts_at_cap(admitted.retry_in_place.as_secs());
-                (failure.code, failure.response(&admitted.trace.request_id))
+                (
+                    failure.code,
+                    failure.class,
+                    failure.response(&admitted.trace.request_id),
+                )
             }
             _ => (
                 exhaustion_code(exhaustion),
+                exhaustion_class(exhaustion),
                 exhaustion_response(exhaustion, now, &admitted.trace.request_id),
             ),
         };
@@ -2314,6 +2302,12 @@ impl Relay {
             Exhaustion::Pinned { obstacle } => Some((*obstacle).into()),
             _ => None,
         };
+        // A probe held on the mark its leg wrote is refused for the probe alone, as one held on its pinned member's
+        // standing is, so the pool's exhaustion gauge and rollups never count it.
+        outcome.class = Some(match outcome.obstacle {
+            Some(ProbeObstacle::ReauthRequired) => Outcome::Rejected,
+            _ => class.outcome(attempt),
+        });
         self.answer(admitted.trace, response, outcome).await
     }
 
@@ -2364,9 +2358,9 @@ impl Relay {
                 None,
                 None,
             );
-            // `outcome_of` files an `accounts_unavailable` that carries an obstacle as rejected, so the pool's
-            // exhaustion gauge and rollups never count a moved key as the pool's.
+            // Filed as rejected, so the pool's exhaustion gauge and rollups never count a moved key as the pool's.
             outcome.obstacle = Some(ProbeObstacle::PoolMoved);
+            outcome.class = Some(Outcome::Rejected);
             ending(end_guard, REFUSED);
             return Leg::Respond(
                 self.answer(
@@ -2543,6 +2537,7 @@ impl Relay {
                     } else {
                         SafeguardsEdit::Drop
                     },
+                    client_hash: admitted.client_hash,
                     sign_placeholder: self.sign_cch_placeholder,
                     detach_diagnostics: detach,
                 },
@@ -3523,9 +3518,12 @@ impl Relay {
         }
         ctx.ending(EXHAUSTED);
         outcome.error_code = Some(exhaustion_code(&Exhaustion::Untimed).to_string());
-        // A probe bound to its account never reaches the selector's exhaustion, so its own answer names the mark.
+        outcome.class = Some(exhaustion_class(&Exhaustion::Untimed).outcome(outcome.attempt));
+        // A probe bound to its account never reaches the selector's exhaustion, so its own answer names the mark,
+        // which refuses the probe alone.
         if ctx.admitted.trace.kind == Kind::Probe && ctx.auth_marked {
             outcome.obstacle = Some(ProbeObstacle::ReauthRequired);
+            outcome.class = Some(Outcome::Rejected);
         }
         let response = self
             .answer(
@@ -3911,6 +3909,7 @@ impl Relay {
         mut outcome: RelayOutcome,
     ) -> Response {
         outcome.error_code = Some(failure.code.to_string());
+        outcome.class = Some(failure.class.outcome(outcome.attempt));
         self.answer(trace, failure.response(&trace.request_id), outcome)
             .await
     }
@@ -4471,6 +4470,7 @@ impl Relay {
 fn unreachable_outcome(outcome: RelayOutcome, code: &str) -> RelayOutcome {
     RelayOutcome {
         error_code: Some(code.to_string()),
+        class: Some(Outcome::Failed),
         ..outcome
     }
 }
@@ -4907,6 +4907,8 @@ struct Admitted<'a> {
     client_diagnostics: bool,
     /// The client sent its body gzip, which `upstream_gzip: auto` mirrors toward the upstream.
     client_gzip: bool,
+    /// The client stamped a hash the drift check verified, which every leg re-signs (`NativeEdit::client_hash`).
+    client_hash: bool,
     client_version: Option<String>,
     /// The relay's clock past which the attempt loop answers the exhaustion rather than selecting again, and at
     /// which a wait on an account's backoff ends: admission plus `head_timeout` less `ATTEMPT_DEADLINE_MARGIN`.
@@ -5020,6 +5022,7 @@ fn relay_outcome(
         client_contract: None,
         client_version,
         error_code: error_code.map(str::to_string),
+        class: None,
         pin_epoch,
         received_at: trace.received_at,
         head_at: None,
@@ -5280,37 +5283,12 @@ mod tests {
 
     /// A guardrail's refusal is conclusive, so the row reads rejected whatever attempt count the outcome carries.
     #[test]
-    fn outcome_of_reads_a_guardrail_block_as_rejected_at_attempt_0_and_1() {
-        let outcome = |attempt: u8| RelayOutcome {
-            request_id: "r-1".into(),
-            key_id: Some("desktop".into()),
-            pool_id: Some("main".into()),
-            session_id: None,
-            canonical_model: None,
-            account_id: String::new(),
-            upstream_status: 0,
-            attempt,
-            written: false,
-            client_drift: None,
-            client_contract: None,
-            client_version: None,
-            error_code: Some("guardrail_blocked".into()),
-            pin_epoch: None,
-            received_at: 0,
-            head_at: None,
-            upstream_request_id: None,
-            cache_ttl_ms: None,
-            overage_in_use: None,
-            account_kind: None,
-            usage_based: false,
-            diagnostics: None,
-            diagnostics_named: false,
-            obstacle: None,
-            held: None,
-            judged: None,
-        };
-        assert_eq!(outcome_of(&outcome(0)), Outcome::Rejected);
-        assert_eq!(outcome_of(&outcome(1)), Outcome::Rejected);
+    fn a_guardrail_block_files_as_rejected_at_attempt_0_and_1() {
+        let blocked = relay_failure(&RelayError::GuardrailBlocked {
+            name: "Large auxiliary".into(),
+        });
+        assert_eq!(blocked.class.outcome(0), Outcome::Rejected);
+        assert_eq!(blocked.class.outcome(1), Outcome::Rejected);
     }
 
     #[test]

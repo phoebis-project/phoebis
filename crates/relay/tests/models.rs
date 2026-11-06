@@ -398,7 +398,8 @@ async fn a_bad_limit_with_no_key_answers_the_authentication_refusal_first() {
     assert_eq!(should_retry(&resp), Some("false"));
 }
 
-/// The key check marks its own refusals, so the cases take the two refusals only the handlers mark.
+/// The mark is the routes' layer, so it reaches the refusal of a path whose id is not UTF-8, which the extractor
+/// answers before any handler runs, beside the two refusals the handlers answer.
 #[tokio::test]
 async fn every_models_answer_is_marked_no_store_its_refusals_included() {
     let up = FakeUpstream::start(vec![]).await;
@@ -408,6 +409,7 @@ async fn every_models_answer_is_marked_no_store_its_refusals_included() {
     for (path, status) in [
         ("/v1/models?limit=0", axum::http::StatusCode::BAD_REQUEST),
         ("/v1/models/claude-nope", axum::http::StatusCode::NOT_FOUND),
+        ("/v1/models/%FF", axum::http::StatusCode::BAD_REQUEST),
     ] {
         let resp = h
             .app

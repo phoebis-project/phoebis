@@ -93,6 +93,14 @@ pub fn stamp(body: &[u8]) -> Stamp {
     stamp_in(body, string_member_span(body, &LINE_PATH))
 }
 
+/// The stamp a body carries as the relay reads it: the raw walk's stamp, `Unreadable` where the raw bytes hold a
+/// `cch=` (readable or not) while the decoded line holds none, since that `cch=` sits inside an escape a restamp would
+/// write over. A stamp only the decoded walk reaches answers as the raw walk reads the line, so refusing it is the
+/// caller's count check (`decoded_stamp_count`).
+pub fn reachable_stamp(body: &[u8]) -> Stamp {
+    TopLevelMembers::read(body).reachable_stamp()
+}
+
 /// The stamp of the billing line at `text`, the span of the string at `system[0].text`.
 fn stamp_in(body: &[u8], text: Option<(usize, usize)>) -> Stamp {
     let Some((line, digits_start)) = billing_line(body, text) else {
@@ -350,6 +358,20 @@ impl<'a> TopLevelMembers<'a> {
         stamp_in(self.body, self.string_member_span(&LINE_PATH))
     }
 
+    /// `reachable_stamp` of the body.
+    pub fn reachable_stamp(&self) -> Stamp {
+        let text = self.string_member_span(&LINE_PATH);
+        let stamp = stamp_in(self.body, text);
+        match text {
+            Some((start, end))
+                if !matches!(stamp, Stamp::None) && !reads_as_a_stamp(&self.body[start..end]) =>
+            {
+                Stamp::Unreadable
+            }
+            _ => stamp,
+        }
+    }
+
     /// `decoded_stamp_count` of the body.
     pub fn decoded_stamp_count(&self) -> usize {
         let mut count = 0;
@@ -604,29 +626,6 @@ fn number_at(s: &Scanner<'_>) -> Option<(usize, usize)> {
     (end > start && body[start].is_ascii_digit()
         || body.get(start) == Some(&b'-') && end > start + 1)
         .then_some((start, end))
-}
-
-/// Raw span of element `index` inside the array at `path`, walked as `string_member_span` walks:
-/// `walk_to_last_segment` positions at the array's `[`, then this skips to `index` the way an array-index path
-/// segment already does, and `Scanner::value(false)` reads the element's own span. A caller deletes the span
-/// itself and its trailing comma.
-pub fn array_member_span(body: &[u8], path: &[&str], index: usize) -> Option<(usize, usize)> {
-    let mut s = Scanner::at_path(body, path)?;
-    enter_element(&mut s, index)?;
-    s.value_span().ok()
-}
-
-/// The position of the closing `]` of the array at `path` when it holds no element, or `None` when it holds one,
-/// when `path` does not resolve to an array, or when it resolves to one at the depth `value` refuses.
-/// `array_member_span` already covers an array with at least one element, and this is the empty case it has nothing
-/// to return for.
-pub fn empty_array_member_end(body: &[u8], path: &[&str]) -> Option<usize> {
-    let mut s = Scanner::at_path(body, path)?;
-    // An empty array is a container like any other, so the 128th answers `None` where `value` refuses the body.
-    enter_element(&mut s, 0)?;
-    let end = (s.body.get(s.pos) == Some(&b']')).then_some(s.pos);
-    s.leave();
-    end
 }
 
 /// Raw span of the whole member (key quote to value end) at `path`, so a caller can insert a sibling before it.
@@ -2034,6 +2033,30 @@ mod tests {
         let plain = body("x-anthropic-billing-header: v=1 cch=01234;");
         assert!(find_cch(&plain).is_some());
         assert_eq!(decoded_stamp_count(&plain), 1);
+    }
+
+    /// `\u00cc` decodes to one character, and the last two hex digits of the escape spell the `cc` of a raw `cch=`
+    /// whose digits read, so the raw walk alone would answer a hash the server never sees.
+    #[test]
+    fn a_cch_an_escape_swallows_is_unreadable_where_the_decoded_line_holds_none() {
+        let body = |line: &str| {
+            format!(r#"{{"system":[{{"type":"text","text":"{line}"}}],"model":"m"}}"#).into_bytes()
+        };
+        let swallowed =
+            body(r"x-anthropic-billing-header: cc_version=2.1.220.test; \u00cch=01234;");
+        assert!(
+            matches!(stamp(&swallowed), Stamp::Hash(_)),
+            "the raw bytes spell a readable cch="
+        );
+        assert_eq!(
+            decoded_stamp_count(&swallowed),
+            0,
+            "the decoded line holds none"
+        );
+        assert!(matches!(reachable_stamp(&swallowed), Stamp::Unreadable));
+
+        let plain = body("x-anthropic-billing-header: cc_version=2.1.220.test; cch=01234;");
+        assert!(matches!(reachable_stamp(&plain), Stamp::Hash(_)));
     }
 
     #[test]

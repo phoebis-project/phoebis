@@ -44,7 +44,10 @@ classifier call that lands on another account than the turn it judges
 ([Refusal codes](client.md#refusal-codes)). The router is measured against Claude Code 2.1.310 on Linux x64, the build
 the profile and the fixtures come from ([The pinned client build](development.md#the-pinned-client-build)). A version
 suffix refusal names the anchors the router tried and the marks a subagent's request carries, and says that a re-pin
-does not help where the session's main turns pass ([Client drift](relay.md#client-drift)).
+does not help where the session's main turns pass ([Client drift](relay.md#client-drift)). A request refused for an
+account's malformed stored uuid files as rejected, and every answer of the side routes carries
+`Cache-Control: no-store`, a refusal of a malformed path among them ([When nothing can
+serve](routing.md#when-nothing-can-serve), [What the proxy accepts](client.md#what-the-proxy-accepts)).
 
 A key routes into one pool ([Pools, keys and routing](routing.md)), and every request it presents is placed on one
 account by the session's pin, the pool's strategy and each account's quota. A live pin moves only by one of five rules,
@@ -191,7 +194,9 @@ pool with the keepalive off or from an opted-out key is recorded at its arrival 
 states](keepalive.md#the-five-states)), and a kept-warm credit files under the tier its request row files under ([What
 the ledger records](keepalive.md#what-the-ledger-records)). An idle return also counts where the request carries the
 deepest boundary the earlier request marked for the cache, so an interrupted turn's next request reads as a return and
-the chain watch stays quiet ([The return rate by idle age](keepalive.md#the-return-rate-by-idle-age)).
+the chain watch stays quiet ([The return rate by idle age](keepalive.md#the-return-rate-by-idle-age)). A request whose
+billing line holds a `cch=` the replay cannot read or reach is not retained ([The five
+states](keepalive.md#the-five-states)).
 
 The admin listener serves the web console behind a login with the admin secret, with the views in the sidebar's order,
 Dashboard, Quota, Accounts, Pools, Keys, Guardrails, Requests, Analytics, Sessions and Settings, and under them the

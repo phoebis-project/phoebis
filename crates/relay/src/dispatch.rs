@@ -95,18 +95,17 @@ pub(crate) async fn attempt(
         send_and_read(conn, request, &sending, &relay.clock).await
     };
     let work = tokio::time::timeout(relay.limits.head_timeout, once);
-    tokio::select! {
-        result = work => match result {
-            Ok(result) => result,
-            Err(_) if !sending.load(Ordering::SeqCst) => {
-                Err(unsent("timed out before a connection was ready"))
-            }
-            Err(_) => Err(AttemptFailure::Lost(
-                "timed out sending the request or waiting for the response head".into(),
-            )),
-        },
-        // The account was disconnected or deleted under this request; the connection goes with the future.
-        _ = cancel.cancelled() => Err(AttemptFailure::Canceled),
+    // Raced through the shared helper, so a cancellation that ties with the head or the timeout answers `Canceled`.
+    // The account was disconnected or deleted under this request, and the connection goes with the future.
+    match until_canceled(work, cancel).await {
+        None => Err(AttemptFailure::Canceled),
+        Some(Ok(result)) => result,
+        Some(Err(_)) if !sending.load(Ordering::SeqCst) => {
+            Err(unsent("timed out before a connection was ready"))
+        }
+        Some(Err(_)) => Err(AttemptFailure::Lost(
+            "timed out sending the request or waiting for the response head".into(),
+        )),
     }
 }
 

@@ -43,6 +43,10 @@ pub struct NativeEdit<'a> {
     /// What the TTL rewrite does to a body carrying no marker at all.
     pub markerless: Markerless,
     pub safeguards: SafeguardsEdit,
+    /// Admission's read of the client's stamp: a hash it checked, which the edit re-signs over the bytes it moves.
+    /// The client's own placeholder (its unpatched paths send `00000`, which the server accepts) is none. Read once
+    /// on the body as sent, so no offset into bytes an edit moves reaches a leg.
+    pub client_hash: bool,
     /// Whether a restored `cch=00000` is signed with this build's formula; off, the placeholder travels as the
     /// client's own unpatched paths send it.
     pub sign_placeholder: bool,
@@ -100,8 +104,8 @@ pub enum BodyMember {
     /// A billing line at `system[0].text` the strict decoder cannot read, a lone surrogate escape among its causes:
     /// the restoration decodes the line to fill its absent fields.
     BillingLine,
-    /// A billing stamp in `system[0].text` the decoded walk reads and the raw walk cannot reach. `stamp_of` says why
-    /// such a body is refused.
+    /// A billing stamp in `system[0].text` the decoded walk reads and the raw walk cannot reach, refused at admission.
+    /// `stamp_of` says why.
     BillingStamp,
     /// A `cache_control` marker the decoder reads and the raw walk cannot reach, or one it reaches and cannot
     /// read.
@@ -223,9 +227,6 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
     if !starts_with_object(body) {
         return Err(RelayError::NotAnObject);
     }
-    // Read before any edit moves the line: a client hash is checked and re-signed, the client's own placeholder
-    // (its unpatched paths send `00000`, which the server accepts) is neither.
-    let client_hash = matches!(stamp_of(&TopLevelMembers::read(body))?, Stamp::Hash(_));
     // Judged at admission on the body the client sent; a leg never meets a drift.
     debug_assert!(
         matches!(drift(body), Ok(None)),
@@ -294,7 +295,7 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
     // the client, travels unsigned, as the client's unpatched paths send it and the server accepts it; the switch
     // signs a restored one with this build's formula, for a server that rejects the placeholder.
     let cch_restamped =
-        if client_hash || (edit.sign_placeholder && restored.contains(&Injected::Cch)) {
+        if edit.client_hash || (edit.sign_placeholder && restored.contains(&Injected::Cch)) {
             phoebis_cch::restamp_if_present(body)?
         } else {
             false
@@ -595,8 +596,8 @@ pub(crate) fn drift(body: &[u8]) -> Result<Option<DriftKind>, RelayError> {
     drift_of(body, stamp_of(&TopLevelMembers::read(body))?)
 }
 
-/// `drift` on the stamp `stamp_of` read, for admission, which reads the stamp once for this check and for the
-/// suffix check's gate.
+/// `drift` on the stamp `stamp_of` read, for admission, which reads the stamp once for this check, the suffix check's
+/// gate and every leg's re-sign.
 pub(crate) fn drift_of(body: &[u8], stamp: Stamp) -> Result<Option<DriftKind>, RelayError> {
     let location = match stamp {
         Stamp::None | Stamp::Placeholder(_) => return Ok(None),
@@ -634,12 +635,12 @@ pub(crate) fn version_drift(
     (!reproduced).then_some(DriftKind::VersionSuffix)
 }
 
-/// The billing block's stamp as the raw walk the restamp edits through reads `system[0].text`.
+/// The billing block's stamp as `reachable_stamp` reads `system[0].text`, the one read of it admission makes.
 /// `Err(BodyShape(BillingStamp))` when the decoded walk, which sees a key spelled with an escape, finds a stamp
 /// the raw walk cannot reach: edited, such a body would carry the client's hash over bytes it was not computed
 /// for; unedited, a hash nothing verified.
 pub(crate) fn stamp_of(members: &TopLevelMembers<'_>) -> Result<Stamp, RelayError> {
-    let stamp = members.stamp();
+    let stamp = members.reachable_stamp();
     if members.decoded_stamp_count() > usize::from(!matches!(stamp, Stamp::None)) {
         return Err(RelayError::BodyShape(BodyMember::BillingStamp));
     }
@@ -876,6 +877,7 @@ mod tests {
         let edits = edit_body(
             &mut body,
             &NativeEdit {
+                client_hash: true,
                 detach_diagnostics: true,
                 ..drop_edit(SafeguardsEdit::Keep)
             },
@@ -903,6 +905,7 @@ mod tests {
         let with_flag = edit_body(
             &mut flagged,
             &NativeEdit {
+                client_hash: true,
                 detach_diagnostics: true,
                 ..drop_edit(SafeguardsEdit::Keep)
             },
@@ -912,6 +915,7 @@ mod tests {
         let without_flag = edit_body(
             &mut plain,
             &NativeEdit {
+                client_hash: true,
                 detach_diagnostics: false,
                 ..drop_edit(SafeguardsEdit::Keep)
             },
@@ -1219,6 +1223,7 @@ mod tests {
             cache_ttl: None,
             markerless: Markerless::TakesTheMember,
             safeguards,
+            client_hash: false,
             sign_placeholder: false,
             detach_diagnostics: false,
         }
@@ -1232,8 +1237,14 @@ mod tests {
     #[test]
     fn edit_body_cuts_the_safeguards_member_under_drop_and_restamps() {
         let mut body = stamped_with_safeguards();
-        let edits =
-            edit_body(&mut body, &drop_edit(SafeguardsEdit::Drop)).expect("the member is cut");
+        let edits = edit_body(
+            &mut body,
+            &NativeEdit {
+                client_hash: true,
+                ..drop_edit(SafeguardsEdit::Drop)
+            },
+        )
+        .expect("the member is cut");
         assert!(edits.cch_restamped);
         let root: serde_json::Value = serde_json::from_slice(&body).expect("the cut body parses");
         assert!(root.get("safeguards").is_none());
@@ -1279,7 +1290,14 @@ mod tests {
     fn blank_empties_the_uuid_keeps_the_other_members_and_re_signs() {
         let sent = stamped_with_a_uuid();
         let mut body = sent.clone();
-        let edits = edit_body(&mut body, &blank_edit()).expect("a signed body is editable");
+        let edits = edit_body(
+            &mut body,
+            &NativeEdit {
+                client_hash: true,
+                ..blank_edit()
+            },
+        )
+        .expect("a signed body is editable");
         let (before, after) = (user_id_of(&sent), user_id_of(&body));
         assert_eq!(after["account_uuid"], "", "the uuid is blanked");
         assert_eq!(after["device_id"], before["device_id"]);
@@ -1345,7 +1363,14 @@ mod tests {
     fn edit_body_keeps_the_member_under_keep() {
         let stamped = stamped_with_safeguards();
         let mut body = stamped.clone();
-        edit_body(&mut body, &drop_edit(SafeguardsEdit::Keep)).expect("editable");
+        edit_body(
+            &mut body,
+            &NativeEdit {
+                client_hash: true,
+                ..drop_edit(SafeguardsEdit::Keep)
+            },
+        )
+        .expect("editable");
         assert!(body == stamped, "no byte moved");
     }
 
@@ -1523,7 +1548,7 @@ mod tests {
     }
 
     #[test]
-    fn a_stamp_the_raw_walk_cannot_reach_is_refused_edited_or_not() {
+    fn a_stamp_the_raw_walk_cannot_reach_is_refused_at_admissions_read() {
         let sent = escaped_stamp_with_safeguards();
         assert!(
             phoebis_cch::find_cch(&sent).is_none(),
@@ -1554,38 +1579,6 @@ mod tests {
                 client_stamp(&cut)
             ),
             ("7c7db".into(), "7c7db".into(), "00eea".into())
-        );
-
-        let mut body = sent.clone();
-        assert!(matches!(
-            edit_body(&mut body, &drop_edit(SafeguardsEdit::Drop)),
-            Err(RelayError::BodyShape(BodyMember::BillingStamp))
-        ));
-        assert!(body == sent, "refused before the cut moved a byte");
-
-        // Nothing to edit, and still refused: the client's digits are ones the drift check never read.
-        let mut body = sent.clone();
-        assert!(
-            matches!(
-                edit_body(&mut body, &drop_edit(SafeguardsEdit::Keep)),
-                Err(RelayError::BodyShape(BodyMember::BillingStamp))
-            ),
-            "an unedited body is refused as an edited one is"
-        );
-
-        let mut body = sent.clone();
-        assert!(
-            matches!(
-                edit_body(
-                    &mut body,
-                    &NativeEdit {
-                        upstream_model: "claude-opus-4-1",
-                        ..drop_edit(SafeguardsEdit::Keep)
-                    }
-                ),
-                Err(RelayError::BodyShape(BodyMember::BillingStamp))
-            ),
-            "a model edit is refused as well"
         );
     }
 

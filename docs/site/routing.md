@@ -1135,7 +1135,9 @@ and any other moves the request to a sibling or ends in one of these answers.
 
 A model every account in the pool has rejected within the rejection window answers `404` `model_rejected`, and the
 [cooldowns table](#cooldowns-and-failover) says how a rejection is recorded. A pool with no member answers `503`
-`accounts_unavailable`, since only an operator can add one.
+`accounts_unavailable`, since only an operator can add one. A request routed to an OAuth account whose stored uuid is
+malformed is answered `503` `accounts_unavailable` on that account's leg, since the uuid cannot be written into the
+body, and its request row reads rejected.
 
 While the ledger's writer channel is at least half full, a request, a keepalive probe included, is refused before any
 account is chosen with `503` `ledger_behind` and `Retry-After: 5`, so the router never accepts a request the ledger

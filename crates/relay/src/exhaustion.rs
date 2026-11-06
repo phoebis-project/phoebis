@@ -9,7 +9,8 @@ use axum::response::Response;
 use phoebis_routing::{Exhaustion, BUDGET_WINDOW, FIVE_HOUR, RETRY_AFTER_WINDOW};
 
 use crate::errors::{
-    exhaustion_status_code, Failure, ACCOUNTS_EXHAUSTED, ACCOUNTS_UNAVAILABLE, MODEL_REJECTED,
+    exhaustion_status_code, Failure, FailureClass, ACCOUNTS_EXHAUSTED, ACCOUNTS_UNAVAILABLE,
+    MODEL_REJECTED,
 };
 use crate::ratelimit::{
     UNIFIED_OVERAGE_DISABLED_REASON, UNIFIED_REPRESENTATIVE_CLAIM, UNIFIED_RESET, UNIFIED_STATUS,
@@ -87,6 +88,19 @@ fn exhaustion_failure(exhaustion: &Exhaustion, now: i64) -> Failure {
         message: Cow::Borrowed(message),
         retry_after,
         no_retry: false,
+        class: exhaustion_class(exhaustion),
+    }
+}
+
+/// The class an exhaustion files under, read by the answer and the request's outcome alike.
+pub(crate) fn exhaustion_class(exhaustion: &Exhaustion) -> FailureClass {
+    match exhaustion {
+        Exhaustion::ModelRejected => MODEL_REJECTED.class,
+        // A probe answered on its pinned member's standing is refused for the probe alone, whatever its siblings
+        // hold: conclusive, and no exhaustion of the pool for the attention gauge or the rollups to count.
+        Exhaustion::Pinned { .. } => FailureClass::Rejected,
+        Exhaustion::Timed { .. } | Exhaustion::Untimed => FailureClass::Exhausted,
+        Exhaustion::FastCredits { .. } | Exhaustion::FastLane { .. } => FailureClass::Refused,
     }
 }
 
@@ -108,6 +122,8 @@ pub(crate) fn exhaustion_code(exhaustion: &Exhaustion) -> &'static str {
 pub(crate) fn pool_moved_response(request_id: &str) -> Response {
     Failure {
         retry_after: Some(1),
+        // The request is refused for the move alone, so the pool's exhaustion gauge and rollups never count it.
+        class: FailureClass::Rejected,
         ..exhaustion_failure(&Exhaustion::Untimed, 0)
     }
     .response(request_id)

@@ -139,9 +139,12 @@ pub fn make_recipe(
             .top_level_member_count(name)
             .map_err(|_| Reason::InvalidRequest)
     };
-    let stamp = members.stamp();
-    let stamp_hidden = members.decoded_stamp_count()
-        > usize::from(matches!(stamp, Stamp::Placeholder(_) | Stamp::Hash(_)));
+    let stamp = members.reachable_stamp();
+    // An unreadable stamp is refused by name, since no restamp reaches it: its digits do not parse, or its only `cch=`
+    // sits inside an escape. The count refuses a stamp only the decoded walk reaches.
+    let stamp_hidden = matches!(stamp, Stamp::Unreadable)
+        || members.decoded_stamp_count()
+            > usize::from(matches!(stamp, Stamp::Placeholder(_) | Stamp::Hash(_)));
     let stream_hidden =
         decoded("stream")? > usize::from(members.bool_member_span("stream").is_some());
     // Read off the client's bytes, which the copy edited below still holds unchanged when the span is used.

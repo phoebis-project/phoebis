@@ -345,6 +345,7 @@ recipes with it within a second of the deletion, rather than leaving them to the
 A request whose `system`, `text`, `stream` or `max_tokens` member the replay's edits cannot reach, such as one whose key
 is spelled with a JSON escape, is not retained and reads `not_retained` under `invalid_request`: a probe built from it
 would travel with a stale stamp or a doubled member.
+A request whose billing line holds a `cch=` the replay cannot read or reach is not retained under the same reason.
 
 The engine reads a request's cache markers at the five positions the Messages API takes one from, a block inside a tool
 result's content among them: a marker that is not ephemeral or names a TTL other than `5m` or `1h` leaves the request

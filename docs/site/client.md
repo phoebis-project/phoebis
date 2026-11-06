@@ -219,7 +219,8 @@ the listener, the wrong-method and unknown-path answers included, carries an Ant
 ([Refusal codes](#refusal-codes)), with two exceptions. The not-ready `503` of `/api/ready` carries the readiness body
 instead, and the keepalive route answers a report it refuses with a JSON body whose `code` the mod reads, under the
 codes [The keepalive protocol](relay.md#the-keepalive-protocol) lists, while a key it refuses gets the answer
-`/v1/messages` gives.
+`/v1/messages` gives. Every answer of `/v0/keepalive/events`, `/v1/models`, `/v1/models/{*id}` and `/v1/usage` carries
+`Cache-Control: no-store`, a refusal of a malformed path among them.
 
 The key is presented as exactly one of `Authorization: Bearer <secret>` or `x-api-key: <secret>`. No credential
 header, two of them, one twice, or a malformed one is refused `401` under its own code, and so is a well-formed key

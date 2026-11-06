@@ -7,6 +7,7 @@ use axum::body::Body;
 use axum::extract::State;
 use axum::http::header::CONTENT_TYPE;
 use axum::http::{Request, StatusCode};
+use axum::middleware::map_response;
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::Router;
@@ -21,6 +22,10 @@ pub const MAX_BODY_BYTES: usize = 16 << 10;
 pub fn keepalive_router(engine: Arc<Engine>) -> Router {
     Router::new()
         .route(EVENTS_PATH, post(events))
+        // On the router rather than in the handlers, so an answer no handler builds carries it too.
+        .layer(map_response(|response: Response| async move {
+            no_store(response)
+        }))
         .with_state(engine)
 }
 
@@ -37,7 +42,7 @@ fn authenticate(engine: &Engine, request: &Request<Body>) -> Result<(String, i64
 }
 
 fn json(status: StatusCode, body: String) -> Response {
-    no_store((status, [(CONTENT_TYPE, "application/json")], body).into_response())
+    (status, [(CONTENT_TYPE, "application/json")], body).into_response()
 }
 
 fn event_error(error: EventError) -> Response {

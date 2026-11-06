@@ -1,7 +1,7 @@
 //! What the relay refuses on the router's own standing before any dial: the ledger behind its writer at admission,
 //! and a key moved to another pool between its admission and its selection, which answers the exhaustion `503` with
 //! `Retry-After: 1` under the outcome's obstacle `pool_moved` and files the request `rejected` with
-//! `accounts_unavailable`.
+//! `accounts_unavailable`, as an account whose stored uuid the body cannot carry does.
 
 mod common;
 
@@ -413,5 +413,46 @@ async fn a_key_moved_between_pools_mid_flight_is_refused_and_the_next_request_ad
         .unwrap();
     assert_eq!(response.status(), 200, "{}", text_of(response).await);
     assert_eq!(credentials_seen(&up), [B], "served under q's member");
+    up.shutdown().await;
+}
+
+/// The uuid is spliced into an escaped string, so a stored one holding a space refuses the leg rather than corrupting
+/// the body, and the refusal is the account's own standing, never the pool's exhaustion its code names elsewhere.
+#[tokio::test]
+async fn an_oauth_account_whose_stored_uuid_is_malformed_answers_503_and_files_rejected() {
+    let up = FakeUpstream::start(vec![ok_rule()]).await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    let malformed = TestAccount {
+        uuid: Some("00000000-0000 4000-8000-000000000001"),
+        ..oauth("a", A, 0)
+    };
+    let h = harness_with_bus(&up, &[malformed], PoolSpec::default(), bus).await;
+    let response = h
+        .app
+        .clone()
+        .oneshot(request_to("/v1/messages"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            response.status().as_u16(),
+            response.headers()["x-phoebis-error-code"].to_str().unwrap()
+        ),
+        (503, "accounts_unavailable")
+    );
+    assert!(up.requests().is_empty(), "nothing reached the upstream");
+    let complete = drain_until_complete(&mut sub)
+        .await
+        .into_iter()
+        .find_map(|event| match event {
+            Event::RequestComplete(complete) => Some(complete),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        (complete.outcome, complete.error_code.as_deref()),
+        (Outcome::Rejected, Some("accounts_unavailable"))
+    );
     up.shutdown().await;
 }
