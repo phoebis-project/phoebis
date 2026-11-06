@@ -3,7 +3,7 @@
 mod common;
 use common::*;
 use fake_upstream::{install, Captured};
-use phoebis_keepalive::{Event, KeepalivePolicy, KeepaliveTiming, Reason, LEASE_MS};
+use phoebis_keepalive::{Event, KeepalivePolicy, KeepaliveTiming, Reason, RecipeState, LEASE_MS};
 use phoebis_ledger::{
     hour_of, member_spends, read_rollups, BudgetedMember, PriceRevisions, RollupSelect,
 };
@@ -934,6 +934,47 @@ async fn a_probe_whose_interval_passes_the_subscription_end_is_held_and_one_endi
         r.up.requests().len(),
         1,
         "nothing more went upstream than the arming request"
+    );
+}
+
+/// A gate's hold that lands on a paused recipe re-arms nothing, and the row reads `paused` with the hold's cause. A
+/// paused recipe has no due time for the interval hold to read, so the ended term alone gives it the cause
+/// `ineligible_credential`.
+#[tokio::test]
+async fn a_paused_recipe_on_an_account_whose_term_ended_reads_paused_under_ineligible_credential() {
+    let mut r = armed(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    r.up.push_credential_rule(A, "/v1/messages", probe_answer(100, 0));
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").paused, r.status("main").reason),
+        (true, Reason::PartialCacheCoverage),
+        "the probe's answer paused the recipe"
+    );
+    r.h.store
+        .set_canceled("a", true, Some(r.now() + 1_000))
+        .unwrap();
+    r.h.router.reload().await.unwrap();
+    r.advance(10_000);
+    r.step().await;
+    let row = r
+        .engine
+        .recipes()
+        .into_iter()
+        .find(|v| v.agent_id == "main")
+        .expect("a row for main");
+    assert_eq!(
+        (row.state, row.cause),
+        (RecipeState::Paused, Reason::IneligibleCredential)
+    );
+    assert_eq!(
+        r.up.requests().len(),
+        2,
+        "nothing more went upstream than the arming request and the paused probe"
     );
 }
 
