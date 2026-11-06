@@ -1171,6 +1171,7 @@ mod tests {
                 "    wall_reached Business since 11:56",
                 "    destination_spent Business since 11:26",
                 "    shed_no_runway Main since 11:21",
+                "    slowed_long Business since 06:16",
             ],
             "{screen}"
         );
