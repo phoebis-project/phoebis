@@ -62,57 +62,44 @@ export const DELETED_HOLDER_GENERATION = Date.parse(daysAgo(120));
  * fixed row, whose agents its figures write, hold none. Story 0 is the busy desktop session, story 4 carries an earlier
  * agent beside its pin, story 9 is the written session, and story 15 is the session the mod released whole.
  */
-export const STORY_AGENTS: readonly (readonly { id: string; type: string }[])[] = [
-  [
+export const STORY_AGENTS: Readonly<Partial<Record<number, readonly { id: string; type: string }[]>>> = {
+  0: [
     { id: 'c21e', type: 'fork' },
     { id: 'e4b7', type: 'general-purpose' },
   ],
-  [],
-  [{ id: 'a7f3', type: 'Plan' }],
-  [],
-  [
+  2: [{ id: 'a7f3', type: 'Plan' }],
+  4: [
     { id: 'e90b', type: 'general-purpose' },
     { id: '0b7f', type: 'Explore' },
   ],
-  [],
-  [],
-  [{ id: 'e90b', type: 'general-purpose' }],
-  [],
-  [
+  7: [{ id: 'e90b', type: 'general-purpose' }],
+  9: [
     { id: '4d1a', type: 'teammate' },
     { id: 'e7c1', type: 'general-purpose' },
+    // An id of the length Claude Code gives a subagent.
     { id: '4f0c2a9e7b61d3c58', type: 'general-purpose' },
     { id: 'b2d8', type: 'general-purpose' },
     { id: '91aa', type: 'general-purpose' },
     { id: 'c3a9', type: 'general-purpose' },
   ],
-  [],
-  [],
-  [],
-  [],
-  [],
-  [
+  15: [
     { id: '2f9d', type: 'general-purpose' },
     { id: '8c1a', type: 'Explore' },
   ],
-  [],
-  [],
-  [],
-  [],
-  [],
-];
-/** A drawn row's agent slots: main on three of the seven, a subagent of the row's story on the other four. */
-const AGENT_SLOTS = [0, 1, 2, 3, 4, 5, 6];
+};
+const storyAgentsOf = (sessionId: string | null) => (sessionId === null ? undefined : STORY_AGENTS[SESSION_IDS.indexOf(sessionId)]) ?? [];
 /**
- * A drawn row's agent on its session's story, from one pick per row so every later roll stays: main on three slots of
- * seven, else the story's subagent the slot names, main where the story holds none. `subagentSlot` is the slot's side,
- * which the hint stream's draws follow.
+ * A drawn row's agent on its session's story, from one draw per row so every later roll stays: main on three slots of
+ * seven, else the story's subagent the slot names, main where the story holds none.
  */
-function storyAgent(sessionId: string): { id: string; subagentSlot: boolean; type: string | null } {
-  const slot = rng.pick(AGENT_SLOTS);
-  const agents = STORY_AGENTS[SESSION_IDS.indexOf(sessionId)] ?? [];
+function storyAgent(sessionId: string, hints: Rng): { id: string; type: string | null } {
+  const slot = rng.int(0, 6);
+  // The hint stream draws a type on every subagent slot and leaves it unused, the story naming the type, since the
+  // hints drawn after it read the stream from there.
+  if (slot >= 3) hints.pick(AGENT_TYPES);
+  const agents = storyAgentsOf(sessionId);
   const agent = slot < 3 || agents.length === 0 ? null : agents[(slot - 3) % agents.length];
-  return { id: agent?.id ?? 'main', subagentSlot: slot >= 3, type: agent?.type ?? null };
+  return { id: agent?.id ?? 'main', type: agent?.type ?? null };
 }
 
 /** One client per key, the way a machine runs one build of Claude Code and a runner its job on the Agent SDK. */
@@ -645,10 +632,7 @@ function buildRequests(): RequestLog[] {
     const ttftMs = ttfbMs === null || kind !== 'inference' || transport !== 'sse' ? ttfbMs : ttfbMs + Math.min(phaseRng.int(40, 600), Math.max(0, durationMs - STREAM_TAIL - ttfbMs));
     const id = `req_${rng.uuid().slice(0, 12)}`;
     const sessionId = rng.pick(SESSION_IDS);
-    const agent = storyAgent(sessionId);
-    // The hint stream draws a type on every subagent slot and leaves it unused, the story naming the type, since the
-    // hints drawn after it read the stream from there.
-    if (agent.subagentSlot) hints.pick(AGENT_TYPES);
+    const agent = storyAgent(sessionId, hints);
     rows.push({
       ...REQUEST_SAMPLE,
       guardrailId: null,
@@ -955,8 +939,6 @@ type StoryGeo = 'not_available';
 interface StorySeed {
   /** The agent the client named, null for a request refused before its body was read. */
   agentId: string | null;
-  /** The subagent's type, where its story names one other than general-purpose. */
-  agentType?: string;
   at: number;
   attempts: StoryAttempt[];
   canonical?: string;
@@ -996,6 +978,13 @@ interface StorySeed {
   status?: number;
   /** The tier the answer ran on, where it is not the standard one. */
   tier?: 'priority';
+  /**
+   * A story row the routing log derives its records for, as it does a drawn row's, that takes no draw from the streams
+   * the drawn rows read and none of the events the story seats on a drawn row, so it keeps its written class and
+   * instants and every drawn figure stays where it was: the contract seat's rows on fleet, the approved Ultra's rows on
+   * bench, the last turns of the desktop session the mod ended and the one turn of story 4's Explore subagent.
+   */
+  unseeded?: true;
   usage?: Partial<Usage>;
   userAgent?: string;
 }
@@ -1057,22 +1046,20 @@ export const CLIENT_SESSION_ID = '7d3e1c20-5b4a-4e8f-9c61-0a2b3c4d5e6f';
 /** The desktop session the mod released whole after its one turn, written out as its row lists past the drawn ids. */
 export const RELEASED_SESSION_ID = '3c36d663-d074-42f6-8738-f54da7c9f026';
 /** The desktop session the mod ended on nightly, whose row writes its agents' figures out. */
-const FINISHED_SESSION_ID = '9b4e2f71-6c3d-4a85-b0e2-5d7f8a1c3e96';
+export const FINISHED_SESSION_ID = '9b4e2f71-6c3d-4a85-b0e2-5d7f8a1c3e96';
+/**
+ * That session's pinned agents, main first, each with its last turn in minutes before the mock's now, the one table its
+ * seeds and its row's written figures read.
+ */
+export const FINISHED_AGENTS = [
+  { agentId: 'main', minutes: 21 },
+  { agentId: 'a7f3', minutes: 34 },
+  { agentId: '5d0e', minutes: 47 },
+] as const;
 /** The contract seat's batch session on fleet. */
 export const FLEET_SESSION_ID = '8b1f4c2e-6a93-4d07-b5e2-3c9a7f1d4e68';
 /** The approved Ultra's session on bench, on the 7-day window and the Fable week alone. */
 export const WORKSHOP_SESSION_ID = '4a7c2e9b-1d58-4f36-b0e3-7c5a9d2f1e84';
-/**
- * The contract seat's rows on fleet, the approved Ultra's rows on bench, the last turns of the desktop session the mod
- * ended and the one turn of story 4's Explore subagent: story rows the routing log derives its records for, as it does
- * a drawn row's, that take no draw from the streams the drawn rows read and none of the events the story seats on a
- * drawn row, so each keeps its written class and instants and every drawn figure stays where it was.
- */
-export const UNSEEDED_IDS: ReadonlySet<string> = new Set([
-  'req_0b7f2c58-e43', 'req_1c7e4a9d-f52', 'req_3f6a9c21-d48', 'req_4c8e2a17-b39', 'req_7b2e5d93-a16', 'req_7f3d1b95-e62', 'req_9d3b6f2a-c81',
-  'req_a2e9c6d4-f17', 'req_c94d1e07-b35', 'req_d41e5b80-c26',
-]);
-
 const sessionOf = (prefix: string) => SESSION_IDS.find((id) => id.startsWith(prefix)) ?? prefix;
 
 function storyRow(seed: StorySeed): RequestLog {
@@ -1134,7 +1121,7 @@ function storyRow(seed: StorySeed): RequestLog {
     ...REQUEST_SAMPLE,
     accountId: answered ? last.accountId : null,
     agentId: seed.agentId,
-    agentType: seed.agentId === null || seed.agentId === 'main' ? null : (seed.agentType ?? 'general-purpose'),
+    agentType: seed.agentId === null || seed.agentId === 'main' ? null : (storyAgentsOf(sessionId).find((a) => a.id === seed.agentId)?.type ?? 'general-purpose'),
     at: iso(seed.at),
     attempts,
     autoMode: null,
@@ -1183,15 +1170,27 @@ function storyRow(seed: StorySeed): RequestLog {
  * routing log draws is on the page, the morning's shedding round and its move, the jobs request whose completion
  * crossed the budget, and the four-attempt failover whose first account refused the model.
  */
-function storyRequests(): RequestLog[] {
+function storySeeds(): StorySeed[] {
   const t = clock;
   const rateLimited = (until: number) => ({ reason: '429 on 5h window', until });
   // A 429 whose head rejects no plan window cools its account for the retry-after alone.
   const retryAfter = (answeredAt: number) => ({ reason: '429, retry after 20 s', until: answeredAt + 20_000 });
+  const finishedTurn = (agentId: string, minutes: number, ms: number, id: string, usage: Partial<Usage>): StorySeed => ({
+    agentId,
+    at: NOW - minutes * MINUTE,
+    attempts: [{ accountId: 'nightly', at: NOW - minutes * MINUTE, ms, status: 200 }],
+    id,
+    keyId: 'desktop',
+    model: 'claude-opus-5',
+    requestClass: agentId === 'main' ? 'main' : 'subagent',
+    session: FINISHED_SESSION_ID,
+    unseeded: true,
+    usage,
+  });
   // The job's earlier runner, a raw Messages client the gate refuses before reading its body: the row carries
   // the code, the user agent and the label, no model and no session, as the relay lands one.
   const BATCH_AGENT = 'phoebis-batch/0.9 (external, ci)';
-  const seeds: StorySeed[] = [
+  return [
     // An answer the upstream ran on its priority tier.
     { agentId: 'main', at: t(14, 27, 28), attempts: [{ accountId: 'primary', at: t(14, 27, 28), ms: 6_400, status: 200 }], id: 'req_f8085653-422', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'd7167642', tier: 'priority', usage: { cacheRead: 48_100, cacheWrite1h: 2_100, input: 3_900, output: 1_250 } },
     {
@@ -1509,28 +1508,28 @@ function storyRequests(): RequestLog[] {
     // The contract seat's batch workers on fleet, billed in dollars at API rates. Last, so every seed above keeps the
     // upstream ids it draws. The first reads the workers' shared prefix, so no row of the seat counts as a miss
     // between turns.
-    { agentId: 'main', at: t(14, 8, 20), attempts: [{ accountId: 'contract', at: t(14, 8, 20), ms: 7_400, status: 200 }], id: 'req_c94d1e07-b35', keyId: 'fleet', model: 'claude-sonnet-5-5', requestClass: 'main', session: FLEET_SESSION_ID, usage: { cacheRead: 12_400, cacheWrite5m: 6_200, input: 2_900, output: 1_120 } },
-    { agentId: 'main', at: t(14, 19, 30), attempts: [{ accountId: 'contract', at: t(14, 19, 30), ms: 5_900, status: 200 }], id: 'req_7b2e5d93-a16', keyId: 'fleet', model: 'claude-sonnet-5-5', requestClass: 'main', session: FLEET_SESSION_ID, usage: { cacheRead: 18_600, cacheWrite5m: 1_400, input: 1_700, output: 860 } },
-    { agentId: 'main', at: t(14, 25, 30), attempts: [{ accountId: 'contract', at: t(14, 25, 30), ms: 11_200, status: 200 }], id: 'req_3f6a9c21-d48', keyId: 'fleet', model: 'claude-opus-5-5', requestClass: 'main', session: FLEET_SESSION_ID, usage: { cacheRead: 20_000, cacheWrite5m: 2_200, input: 2_400, output: 1_540 } },
+    { agentId: 'main', at: t(14, 8, 20), attempts: [{ accountId: 'contract', at: t(14, 8, 20), ms: 7_400, status: 200 }], id: 'req_c94d1e07-b35', keyId: 'fleet', model: 'claude-sonnet-5-5', requestClass: 'main', session: FLEET_SESSION_ID, unseeded: true, usage: { cacheRead: 12_400, cacheWrite5m: 6_200, input: 2_900, output: 1_120 } },
+    { agentId: 'main', at: t(14, 19, 30), attempts: [{ accountId: 'contract', at: t(14, 19, 30), ms: 5_900, status: 200 }], id: 'req_7b2e5d93-a16', keyId: 'fleet', model: 'claude-sonnet-5-5', requestClass: 'main', session: FLEET_SESSION_ID, unseeded: true, usage: { cacheRead: 18_600, cacheWrite5m: 1_400, input: 1_700, output: 860 } },
+    { agentId: 'main', at: t(14, 25, 30), attempts: [{ accountId: 'contract', at: t(14, 25, 30), ms: 11_200, status: 200 }], id: 'req_3f6a9c21-d48', keyId: 'fleet', model: 'claude-opus-5-5', requestClass: 'main', session: FLEET_SESSION_ID, unseeded: true, usage: { cacheRead: 20_000, cacheWrite5m: 2_200, input: 2_400, output: 1_540 } },
     // The approved Ultra's session on bench, a Fable turn and a Sonnet one, priced on its 7-day window and the Fable
     // week alone, since its poll names no 5-hour window. Last, so every seed above keeps the upstream ids it draws.
-    { agentId: 'main', at: t(14, 16, 30), attempts: [{ accountId: 'workshop', at: t(14, 16, 30), ms: 9_800, status: 200 }], id: 'req_1c7e4a9d-f52', keyId: 'bench', model: 'claude-fable-5-1', requestClass: 'main', session: WORKSHOP_SESSION_ID, usage: { cacheWrite1h: 42_600, input: 2_100, output: 1_380 } },
-    { agentId: 'main', at: t(14, 24, 10), attempts: [{ accountId: 'workshop', at: t(14, 24, 10), ms: 6_300, status: 200 }], id: 'req_9d3b6f2a-c81', keyId: 'bench', model: 'claude-sonnet-5-5', requestClass: 'main', session: WORKSHOP_SESSION_ID, usage: { cacheRead: 44_000, cacheWrite1h: 1_900, input: 1_600, output: 720 } },
+    { agentId: 'main', at: t(14, 16, 30), attempts: [{ accountId: 'workshop', at: t(14, 16, 30), ms: 9_800, status: 200 }], id: 'req_1c7e4a9d-f52', keyId: 'bench', model: 'claude-fable-5-1', requestClass: 'main', session: WORKSHOP_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 42_600, input: 2_100, output: 1_380 } },
+    { agentId: 'main', at: t(14, 24, 10), attempts: [{ accountId: 'workshop', at: t(14, 24, 10), ms: 6_300, status: 200 }], id: 'req_9d3b6f2a-c81', keyId: 'bench', model: 'claude-sonnet-5-5', requestClass: 'main', session: WORKSHOP_SESSION_ID, unseeded: true, usage: { cacheRead: 44_000, cacheWrite1h: 1_900, input: 1_600, output: 720 } },
     // The last turns of the desktop session the mod ended, on nightly at the minutes its written figures date main's
     // and its subagents' last requests, and the one turn of a subagent the mod never pinned there, before the others.
     // Each reads a cached prefix, so none counts as a miss between turns. Last, so every seed above keeps the upstream
     // ids it draws.
-    { agentId: 'main', at: NOW - 21 * MINUTE, attempts: [{ accountId: 'nightly', at: NOW - 21 * MINUTE, ms: 5_200, status: 200 }], id: 'req_4c8e2a17-b39', keyId: 'desktop', model: 'claude-opus-5', requestClass: 'main', session: FINISHED_SESSION_ID, usage: { cacheRead: 13_400, input: 800, output: 240 } },
-    { agentId: 'a7f3', at: NOW - 34 * MINUTE, attempts: [{ accountId: 'nightly', at: NOW - 34 * MINUTE, ms: 3_800, status: 200 }], id: 'req_7f3d1b95-e62', keyId: 'desktop', model: 'claude-opus-5', requestClass: 'subagent', session: FINISHED_SESSION_ID, usage: { cacheRead: 9_600, input: 700, output: 180 } },
-    { agentId: '5d0e', at: NOW - 47 * MINUTE, attempts: [{ accountId: 'nightly', at: NOW - 47 * MINUTE, ms: 4_100, status: 200 }], id: 'req_a2e9c6d4-f17', keyId: 'desktop', model: 'claude-opus-5', requestClass: 'subagent', session: FINISHED_SESSION_ID, usage: { cacheRead: 8_900, input: 600, output: 210 } },
-    { agentId: 'd41e', at: NOW - 60 * MINUTE, attempts: [{ accountId: 'nightly', at: NOW - 60 * MINUTE, ms: 3_300, status: 200 }], id: 'req_d41e5b80-c26', keyId: 'desktop', model: 'claude-opus-5', requestClass: 'subagent', session: FINISHED_SESSION_ID, usage: { cacheRead: 7_200, input: 500, output: 160 } },
+    finishedTurn(FINISHED_AGENTS[0].agentId, FINISHED_AGENTS[0].minutes, 5_200, 'req_4c8e2a17-b39', { cacheRead: 13_400, input: 800, output: 240 }),
+    finishedTurn(FINISHED_AGENTS[1].agentId, FINISHED_AGENTS[1].minutes, 3_800, 'req_7f3d1b95-e62', { cacheRead: 9_600, input: 700, output: 180 }),
+    finishedTurn(FINISHED_AGENTS[2].agentId, FINISHED_AGENTS[2].minutes, 4_100, 'req_a2e9c6d4-f17', { cacheRead: 8_900, input: 600, output: 210 }),
+    finishedTurn('d41e', 60, 3_300, 'req_d41e5b80-c26', { cacheRead: 7_200, input: 500, output: 160 }),
     // A turn of story 4's Explore subagent on its desktop row, a subagent its recipes never pin, so the row lists it
     // as an earlier agent. It reads a cached prefix, so it counts as no miss between turns. Last, so every seed above
     // keeps the upstream ids it draws.
-    { agentId: '0b7f', agentType: 'Explore', at: NOW - 40 * MINUTE, attempts: [{ accountId: 'nightly', at: NOW - 40 * MINUTE, ms: 3_600, status: 200 }], id: 'req_0b7f2c58-e43', keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'subagent', session: '89cd1c92', usage: { cacheRead: 11_800, input: 600, output: 190 } },
+    { agentId: '0b7f', at: NOW - 40 * MINUTE, attempts: [{ accountId: 'nightly', at: NOW - 40 * MINUTE, ms: 3_600, status: 200 }], id: 'req_0b7f2c58-e43', keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'subagent', session: '89cd1c92', unseeded: true, usage: { cacheRead: 11_800, input: 600, output: 190 } },
   ];
-  return seeds.map(storyRow);
 }
+const storyRequests = () => storySeeds().map(storyRow);
 
 /** The laptop session whose subagent the client forks every 30 seconds for a status line. */
 const FORK_SESSION_ID = '9e4c2b7a-5d31-4f86-a0b9-3c7e1d5f2a48';
@@ -1600,6 +1599,7 @@ const FORK_IDS: ReadonlySet<string> = new Set(guardrailSeeds().filter((s) => s.f
 // Seeded by hand as the routing log's rows are, so the draws after the rows leave them as the story wrote them, and the
 // routing log derives no decision for them: a block is refused before any selection.
 for (const id of GUARDRAIL_STORY_IDS) STORY_IDS.add(id);
+export const UNSEEDED_IDS: ReadonlySet<string> = new Set(storySeeds().filter((s) => s.unseeded).map((s) => s.id));
 
 /** A summary fork rides its subagent's pin, so each fork's one attempt renewed the pin the subagent's turns hold. */
 function traceForks() {

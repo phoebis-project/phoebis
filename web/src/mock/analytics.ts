@@ -12,9 +12,9 @@ import { servingResponse } from '@/lib/dimensions';
 import { byteOrder, earlierHolderLabel, placementHit } from '@/lib/format';
 import { mergeHistograms, quartet } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
-import { endOf, isPaidSource } from '@/lib/quota';
+import { endOf } from '@/lib/quota';
 import { WINDOW_KEY, hoursOfKey } from '@/lib/windows';
-import { accountById, sharedWindowsOf } from './accounts';
+import { accountById, burnUnitOf, sharedWindowsOf } from './accounts';
 import { earliest } from './lead';
 import { keyById } from './pools';
 import { bandAt, requestsIn, sumEach, sumOf, sumSplit, tokensIn } from './requests';
@@ -551,12 +551,11 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
   const points = groups.flatMap((group) => {
     const byAt = sums.get(group);
     const account = shareAccountOf(group, groupBy, filters.accountIds);
-    const holder = account === null ? undefined : accountById.get(account);
     const share = (list: (number | null)[]) => (account === null ? null : bucketShare(list));
     // The route answers no 5-hour share where the account's window set lacks the window, a billed row's zero included.
     const noFiveHour = account !== null && !sharedWindowsOf(account).includes('five_hour');
     // A usage-based seat is a paid source, so its burn reads in dollars as an API key's does.
-    const unit = holder === undefined ? null : isPaidSource(holder) ? 'usd' : 'window_share';
+    const unit = account === null ? null : burnUnitOf(account);
     return starts.map((at): BurnPoint => {
       const s = byAt?.get(at) ?? emptyBurn();
       return {

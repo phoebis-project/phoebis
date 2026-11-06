@@ -1,6 +1,6 @@
 import { planName } from '@/api/decode';
-import type { Account, PlanWord, QuotaHistory, QuotaSample, QuotaSnapshot, RateLimitWindow, Subscription, WindowId } from '@/api/types';
-import { endOf, readWindows } from '@/lib/quota';
+import type { Account, BurnUnit, PlanWord, QuotaHistory, QuotaSample, QuotaSnapshot, RateLimitWindow, Subscription, WindowId } from '@/api/types';
+import { endOf, isPaidSource, readWindows } from '@/lib/quota';
 import { kindGroup } from '@/lib/selection';
 import { WINDOW_HOURS, WINDOW_LABEL, hoursOfKey, windowKeyId } from '@/lib/windows';
 import { leadOf } from './lead';
@@ -493,6 +493,14 @@ export const ACCOUNTS: Account[] = SEEDS.map((a) => {
 });
 
 export const accountById = new Map(ACCOUNTS.map((a) => [a.id, a]));
+/**
+ * The unit a pin's burn reads on the account it sits on: dollars on an API key or a usage-based seat, which has no plan
+ * window, else a share of the account's own window, and none on an account the registry lacks.
+ */
+export const burnUnitOf = (accountId: string): BurnUnit | null => {
+  const account = accountById.get(accountId);
+  return account === undefined ? null : isPaidSource(account) ? 'usd' : 'window_share';
+};
 
 /**
  * The kind tier the engine files a member in where its pool prefers subscriptions: the plan-funded subscriptions, the

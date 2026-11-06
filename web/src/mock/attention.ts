@@ -21,6 +21,7 @@ const ofAccount = (id: string): Pick<AttentionItem, 'link' | 'pools' | 'subject'
   pools: POOLS.filter((p) => p.members.some((m) => m.accountId === id)).map((p) => p.id),
   subject: { id, label: accountById.get(id)?.label ?? id, type: 'account' },
 });
+const ofRouter = (id: string, label: string): Pick<AttentionItem, 'link' | 'pools' | 'subject'> => ({ link: null, pools: [], subject: { id, label, type: 'router' } });
 
 const secondaryPoll = accountById.get('secondary')?.usage?.poll ?? null;
 
@@ -260,12 +261,10 @@ export const ATTENTION: AttentionItem[] = [
   },
   {
     ...ATTENTION_ITEM_SAMPLE,
+    ...ofRouter('routing', 'routing'),
     detail: { component: 'routing' },
     kind: 'writer_degraded',
-    link: null,
-    pools: [],
     since: ago(12 * MINUTE),
-    subject: { id: 'routing', label: 'routing', type: 'router' },
   },
   {
     ...ATTENTION_ITEM_SAMPLE,
@@ -290,12 +289,10 @@ export const ATTENTION: AttentionItem[] = [
   },
   {
     ...ATTENTION_ITEM_SAMPLE,
+    ...ofRouter('proxy.tls', 'proxy.tls'),
     detail: { cert_file: '/etc/phoebis/proxy.pem', days_left: 12, expires: NOW + 12 * DAY },
     kind: 'certificate_expiring',
-    link: null,
-    pools: [],
     since: ago(18 * DAY),
-    subject: { id: 'proxy.tls', label: 'proxy.tls', type: 'router' },
   },
   {
     ...ATTENTION_ITEM_SAMPLE,
@@ -308,12 +305,10 @@ export const ATTENTION: AttentionItem[] = [
   },
   {
     ...ATTENTION_ITEM_SAMPLE,
+    ...ofRouter('keepalive', 'Keepalive'),
     detail: { gaps: KEEPALIVE_OVERVIEW.busGaps, last_at: ms(KEEPALIVE_OVERVIEW.lastBusGapAt) },
     kind: 'keepalive_bus_gaps',
-    link: null,
-    pools: [],
     since: ago(5 * HOUR + 40 * MINUTE),
-    subject: { id: 'keepalive', label: 'Keepalive', type: 'router' },
   },
   {
     ...ATTENTION_ITEM_SAMPLE,
@@ -337,11 +332,9 @@ export const ATTENTION: AttentionItem[] = [
   ...CONDITIONS,
   {
     ...ATTENTION_ITEM_SAMPLE,
-    detail: { cap: 'retained', count: KEEPALIVE_OVERVIEW.limits.retainedBytes.count, max: KEEPALIVE_OVERVIEW.limits.retainedBytes.max, pct: 0.92 },
+    ...ofRouter('keepalive.retained', 'Keepalive'),
+    detail: { cap: 'retained', count: KEEPALIVE_OVERVIEW.limits.retainedBytes.count, max: KEEPALIVE_OVERVIEW.limits.retainedBytes.max, pct: roundTo(KEEPALIVE_OVERVIEW.limits.retainedBytes.count / KEEPALIVE_OVERVIEW.limits.retainedBytes.max, 2) },
     kind: 'keepalive_cap',
-    link: null,
-    pools: [],
     since: ago(3 * HOUR + 15 * MINUTE),
-    subject: { id: 'keepalive.retained', label: 'Keepalive', type: 'router' },
   },
 ];

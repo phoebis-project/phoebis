@@ -327,6 +327,11 @@ const ledger = () => {
   };
 };
 /**
+ * The rows the ledger has written by `now`: it lists a request once it has written it, so a row whose landing the
+ * clock has not reached stays out of the request log and of the sessions' folds alike.
+ */
+const writtenBy = (now: number): RequestLog[] => REQUESTS.filter((r) => landedAt(r) <= now);
+/**
  * The key the unpriced request lands on, its lifetime and its week read null under the switch, since the request
  * prices nothing and falls inside the week. The keys' fold runs once at load, so the null lands at the read, and the
  * key's other figures stay the story's.
@@ -1268,11 +1273,10 @@ export class MockApi implements Api {
   listRequests(query: RequestQuery = {}): Promise<RequestPage> {
     if (emptyStore()) return latency({ landedThrough: 0, nextCursor: null, requests: [] });
     const live = new Map(this.keys.map((k) => [k.id, Date.parse(k.createdAt)]));
-    // The ledger lists a request once it has written it, so a row whose landing the mock's clock has not reached
-    // stays out. The newest stamp is over the rows the query's filters admit, its `to` included, with its
-    // `landedAfter` as the floor and capped at its `to` unless the query marks a fixed end, as the route reads it.
+    // The newest stamp is over the rows the query's filters admit, its `to` included, with its `landedAfter` as the
+    // floor and capped at its `to` unless the query marks a fixed end, as the route reads it.
     const now = mockClock.now();
-    const written = REQUESTS.filter((r) => landedAt(r) <= now);
+    const written = writtenBy(now);
     const since = query.landedAfter;
     const matched = written.filter((r) => matchesQuery(r, query, live) && (since === undefined || landedAt(r) > since)).sort(compareRequests);
     const newest = matched.reduce((stamp, r) => Math.max(stamp, landedAt(r)), since ?? 0);
@@ -1296,9 +1300,7 @@ export class MockApi implements Api {
 
   listSessions() {
     if (sessionsFail()) return Promise.reject(new ApiError(503, 'store busy', null));
-    // The fold reads the rows the ledger has written by the mock's clock, the ones the request log lists.
-    const now = mockClock.now();
-    return latency(sessionsListedAt(NOW, this.registry().sessions, this.settings.sessions.nonCompanionIdleSeconds, REQUESTS.filter((r) => landedAt(r) <= now)));
+    return latency(sessionsListedAt(NOW, this.registry().sessions, this.settings.sessions.nonCompanionIdleSeconds, writtenBy(mockClock.now())));
   }
 
   login(secret: string, stayLoggedIn = false): Promise<SessionInfo> {
