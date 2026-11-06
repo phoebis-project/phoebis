@@ -6,7 +6,7 @@ use tokio::io::duplex;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Notify;
 
-async fn collect(raw: &'static [u8]) -> (u16, Vec<Vec<u8>>) {
+async fn collect(raw: &'static [u8]) -> Vec<Vec<u8>> {
     let (mut tx, mut rx) = duplex(64);
     tokio::spawn(async move {
         tx.write_all(raw).await.unwrap();
@@ -19,7 +19,7 @@ async fn collect(raw: &'static [u8]) -> (u16, Vec<Vec<u8>>) {
     while let Some(c) = body.next_chunk().await.unwrap() {
         chunks.push(c.to_vec());
     }
-    (head.status, chunks)
+    chunks
 }
 
 #[tokio::test]
@@ -55,7 +55,7 @@ async fn chunked_body_streams_payload_before_the_terminator_arrives() {
 async fn sse_events_split_across_chunks_arrive_in_order() {
     // 0x16 is the 22 bytes of the first fragment, 0xd the 13 bytes of the second.
     let raw = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n16\r\nevent: ping\ndata: {\"ty\r\nd\r\npe\":\"ping\"}\n\n\r\n0\r\n\r\n";
-    let (_, chunks) = collect(raw).await;
+    let chunks = collect(raw).await;
     assert_eq!(
         chunks.concat(),
         b"event: ping\ndata: {\"type\":\"ping\"}\n\n"

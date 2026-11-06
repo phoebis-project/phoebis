@@ -308,11 +308,11 @@ Ultra account has no 5-hour window, so nothing is priced on it there:
 | `default_claude_max_20x` (Ultra) | 150,000,000 | 900,000,000 |
 
 The interactive regime's capacities, in the same units, twice the base 5-hour window and 1.25 times the base 7-day
-window on every tier, the Pro row assumed from the Ultra factor:
+window on every tier:
 
 | Tier | 5-hour | 7-day |
 | --- | --- | --- |
-| `default_claude_ai` (Pro, assumed) | 15,000,000 | 112,500,000 |
+| `default_claude_ai` (Pro) | 15,000,000 | 112,500,000 |
 | `default_claude_max_5x` (Max) | 75,000,000 | 562,500,000 |
 | `default_claude_max_20x` (Ultra) | 300,000,000 | 1,125,000,000 |
 
@@ -330,30 +330,25 @@ plan the router does not price records no tier, so the requests of a free organi
 with no plan take no share of a plan window, while a Team or Enterprise seat records its tier word whether or not the
 cost model holds it and prices no share until it does.
 
-The weights of the same file, in units per plain input token, each with the date the plan meter measured it, and the
-share one million input tokens spend outside the band, derived from the weight over the capacity: of the Pro 5-hour
-window, the window the hint's 5-hour line reads in on a Pro account, and of the Pro, Max and Ultra weeks, the figures
-the week control shows:
+The weights of the same file, in units per plain input token, and the share one million input tokens spend outside the
+band, derived from the weight over the capacity: of the Pro 5-hour window, the window the hint's 5-hour line reads in
+on a Pro account, and of the Pro, Max and Ultra weeks, the figures the week control shows:
 
-| Model | Weight | Measured | Pro 5-hour, input per million | Pro week | Max week | Ultra week |
-| --- | --- | --- | --- | --- | --- | --- |
-| `claude-fable-5-1` | 10 | 2026-09-30 | 133% | 11.1% | 2.22% | 1.11% |
-| `claude-fable-5` | 10 | 2026-10-29 | 133% | 11.1% | 2.22% | 1.11% |
-| `claude-opus-5-5` | 2.2 | 2026-10-04 | 29.3% | 2.44% | 0.489% | 0.244% |
-| `claude-opus-5` | 2.75 | 2026-10-29 | 36.7% | 3.06% | 0.611% | 0.306% |
-| `claude-opus-4-8` | 3.25 | 2026-10-29 | 43.3% | 3.61% | 0.722% | 0.361% |
-| `claude-sonnet-5-5` | 1.5 | 2026-09-30 | 20.0% | 1.67% | 0.333% | 0.167% |
-| `claude-sonnet-5` | 1.5 | 2026-10-29 | 20.0% | 1.67% | 0.333% | 0.167% |
-| `claude-sonnet-4-6` | 3 | 2026-10-29 | 40.0% | 3.33% | 0.667% | 0.333% |
-| `claude-haiku-5-5` | 0.1 | 2026-10-08 | 1.33% | 0.111% | 0.0222% | 0.0111% |
-| `claude-haiku-4-5` | 1 | 2026-10-05 | 13.3% | 1.11% | 0.222% | 0.111% |
+| Model | Weight | Pro 5-hour, input per million | Pro week | Max week | Ultra week |
+| --- | --- | --- | --- | --- | --- |
+| `claude-fable-5-1` | 10 | 133% | 11.1% | 2.22% | 1.11% |
+| `claude-fable-5` | 10 | 133% | 11.1% | 2.22% | 1.11% |
+| `claude-opus-5-5` | 2.2 | 29.3% | 2.44% | 0.489% | 0.244% |
+| `claude-opus-5` | 2.75 | 36.7% | 3.06% | 0.611% | 0.306% |
+| `claude-opus-4-8` | 3.25 | 43.3% | 3.61% | 0.722% | 0.361% |
+| `claude-sonnet-5-5` | 1.5 | 20.0% | 1.67% | 0.333% | 0.167% |
+| `claude-sonnet-5` | 1.5 | 20.0% | 1.67% | 0.333% | 0.167% |
+| `claude-sonnet-4-6` | 3 | 40.0% | 3.33% | 0.667% | 0.333% |
+| `claude-haiku-5-5` | 0.1 | 1.33% | 0.111% | 0.0222% | 0.0111% |
+| `claude-haiku-4-5` | 1 | 13.3% | 1.11% | 0.222% | 0.111% |
 
-Every priced model of the shipped table but one carries a weight. The plan meter measured Fable 5, Opus 5, Opus 4.8,
-Sonnet 5 and Sonnet 4.6 on 2026-10-29 under the interactive regime on a Max account, each weight the measured 5-hour
-rate, a percent of that account's interactive 5-hour window per million tokens, times 2 for the regime, over 4 for the
-tier and times 1.5 for the units, the Ultra 5-hour window's 150,000,000 units over a hundred per million tokens, the
-Sonnet 5 figure equal to Sonnet 5.5's weight. `claude-sonnet-4-5`, priced and tiered, has no weight row and prices
-nothing.
+Every priced model of the shipped table but one carries a weight. `claude-sonnet-4-5`, priced and tiered, has no weight
+row and prices nothing.
 
 Under the interactive regime a request spends half the table's 5-hour share and 0.8 of its 7-day share, since the regime
 doubles the 5-hour capacity and raises the 7-day by a quarter while the weights stay the same.
@@ -402,8 +397,9 @@ of them, and in the analytics an account on a tier the file lacks reads tier unk
 
 The file is a revision list in the price table's shape: `revisions`, each entry an `effective` date and the whole model
 of that date, in force from 00:00 UTC of its date to the next entry's, an instant before the first entry reading the
-first. The shipped file carries one entry, and `stats.subscription_costs_path` replaces the whole list. A measured
-weight that replaces an assumed one edits every entry, since it says what the weight always was.
+first. The shipped file carries one entry, and `stats.subscription_costs_path` replaces the whole list. A weight that
+corrects an entry's figure edits that entry and every later one that carries the same figure, since it says what the
+weight was from that entry's date.
 
 Two members of each entry name the model tiers: `tier_order`, the tiers in display order (`fable`, `opus`, `sonnet` and
 `haiku` on the shipped file), and `model_tier`, each model's tier by undated id. The tiers order the cost reference's

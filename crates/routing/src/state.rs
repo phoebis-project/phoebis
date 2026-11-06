@@ -2520,7 +2520,7 @@ impl RoutingState {
     /// round reads it. The start lies at or after `now` for a reset more than a window's length ahead, which the hold
     /// reads as no age.
     pub fn window_started(&self, account_id: &str, window: &str, now: i64) -> Option<i64> {
-        let reset = self.samples.get(account_id)?.reading(window)?.reset?;
+        let reset = self.samples.get(account_id)?.windows.get(window)?.reset?;
         Some(if window.starts_with(SEVEN_DAY) {
             // A weekly reset names every later one, so a passed reset rolls forward as `predicted` rolls it.
             let next = if reset > now {

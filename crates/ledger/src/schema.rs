@@ -86,7 +86,7 @@ CREATE INDEX IF NOT EXISTS requests_landed_at ON requests (landed_at);
 CREATE INDEX IF NOT EXISTS requests_received ON requests (received_at);
 CREATE INDEX IF NOT EXISTS requests_session ON requests (session_id, received_at);
 -- An attempt keeps counts and no dollar figure, since a reader prices them at the revision in force when the request
--- arrived. tier is the serving account's tier as the registry held it at the landing, usage_based its class, so a
+-- arrived. tier is the tier the router prices the serving account by at the landing, usage_based its class, so a
 -- usage-based seat's attempts file under a funding of their own, and upstream_message_id joins a client transcript.
 CREATE TABLE IF NOT EXISTS attempts (
   request_id TEXT NOT NULL,

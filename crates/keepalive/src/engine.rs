@@ -3755,8 +3755,8 @@ impl Engine {
     pub async fn step(self: &Arc<Self>) {
         let now = self.now();
         // The five asks behind `router_view` (canonicals, pins, cooldowns, overages, member spends) are a round
-        // trip apiece, and a tick with nothing due pays none of them. `drop_sessions_of_dead_keys` reads the snapshot
-        // alone, which `RouterHandle::snapshot` answers without a command.
+        // trip apiece, and a tick with no retained recipe pays none of them. `drop_sessions_of_dead_keys` reads the
+        // snapshot alone, which `RouterHandle::snapshot` answers without a command.
         let snapshot = self.parts.router.snapshot();
         // A deleted account's failing streak goes with it, so a later account under the same id warns afresh.
         // Pruned on every tick, since a probe orphaned while nothing is retained still writes the set.

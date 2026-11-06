@@ -718,6 +718,52 @@ fn a_deleted_accounts_utilization_series_leaves_the_gauge() {
 }
 
 #[test]
+fn a_deleted_accounts_newest_clean_poll_bounds_no_head_of_a_later_account_under_its_id() {
+    let sample = |account: &str, window: &str, utilization: f64| QuotaSampleRecord {
+        account_id: account.into(),
+        window: window.into(),
+        utilization: Some(utilization),
+        ..Default::default()
+    };
+    let metrics = Metrics::new();
+    metrics.observe_samples(
+        &[sample("a", "seven_day", 0.2), sample("b", "seven_day", 0.1)],
+        true,
+    );
+    metrics.render(
+        &RoutingGauges {
+            live_accounts: BTreeSet::from(["b".to_string()]),
+            ..RoutingGauges::default()
+        },
+        &[],
+        0,
+    );
+    metrics.observe_samples(
+        &[sample("a", "five_hour", 0.6), sample("b", "five_hour", 0.7)],
+        false,
+    );
+    let text = metrics.render(
+        &RoutingGauges {
+            live_accounts: BTreeSet::from(["a".to_string(), "b".to_string()]),
+            ..RoutingGauges::default()
+        },
+        &[],
+        0,
+    );
+    assert!(
+        text.contains(
+            r#"phoebis_account_ratelimit_utilization{account="a",window="five_hour"} 0.6"#
+        ),
+        "a head of an account re-added under a deleted id sets both shared windows until its own first clean poll: \
+         {text}"
+    );
+    assert!(
+        !text.contains(r#"phoebis_account_ratelimit_utilization{account="b",window="five_hour"}"#),
+        "a live account's newest clean poll still bounds its heads: {text}"
+    );
+}
+
+#[test]
 fn a_polls_samples_lacking_five_hour_remove_its_series_and_a_heads_remove_nothing() {
     let sample = |window: &str, utilization: f64| QuotaSampleRecord {
         account_id: "a".into(),

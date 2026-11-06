@@ -244,7 +244,7 @@ mod tests {
         let sleeper = bus.subscribe("sleeper", Delivery::Durable);
         for i in 0..QUEUE_DEPTH {
             bus.publish(observed(&format!("r{i}")));
-            // The reader keeps up; the sleeper never reads.
+            // The reader keeps up and the sleeper never reads.
             if let Ok(event) = reader.events.try_recv() {
                 assert_eq!(event.request_id(), format!("r{i}"));
             }

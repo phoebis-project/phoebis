@@ -1885,19 +1885,20 @@ async fn a_saved_session_of_record_version_two_is_dropped_at_the_load_with_one_l
         "unit": "usd",
         "pending": null,
     });
-    dropped_at_the_load_with_one_line(r, 2, kept).await;
+    dropped_at_the_load_with_one_line(r, kept).await;
 }
 
-/// The rig's session as a save writes it, its main agent holding no recipe, rewritten to `version` with `kept` as
-/// its one kept probe, then loaded by a restart: nothing comes back, nothing settles, and one warn line names it.
-async fn dropped_at_the_load_with_one_line(r: Rig, version: u32, kept: serde_json::Value) {
+/// The rig's session as a save writes it, its main agent holding no recipe, rewritten to record version 2 with
+/// `kept` as its one kept probe, then loaded by a restart: nothing comes back, nothing settles, and one warn line
+/// names it.
+async fn dropped_at_the_load_with_one_line(r: Rig, kept: serde_json::Value) {
     let (mut sessions, mut agents) = r.engine.persist_rows();
     assert_eq!((sessions.len(), agents.len()), (1, 1));
     let mut payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
     payload["kept"] = serde_json::json!([kept]);
     agents[0].payload = payload.to_string();
-    sessions[0].record_version = version;
-    agents[0].record_version = version;
+    sessions[0].record_version = 2;
+    agents[0].record_version = 2;
     r.h.store
         .save_keepalive(&KeepaliveBatch {
             sessions,

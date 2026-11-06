@@ -256,7 +256,7 @@ impl Metrics {
         bus: &[(&'static str, Arc<SubscriberStats>)],
         pricing_unknown: u64,
     ) -> String {
-        let inner = self.inner.lock().expect(LOCK_POISONED);
+        let mut inner = self.inner.lock().expect(LOCK_POISONED);
         let mut out = String::new();
         for family in Family::ALL.iter().copied() {
             let name = family.name();
@@ -356,6 +356,11 @@ impl Metrics {
                     }
                 }
                 Family::AccountRatelimitUtilization => {
+                    // An account added later under a deleted id has had no clean poll of its own, so the deleted
+                    // account's set must not bound its heads.
+                    inner
+                        .polled_windows
+                        .retain(|account, _| gauges.live_accounts.contains(account));
                     for ((account, window), value) in &inner.utilization {
                         // A deleted account's last reading would otherwise scrape forever. The registry is
                         // the list of accounts that exist.

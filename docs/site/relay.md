@@ -408,7 +408,8 @@ alone never reaches the endpoint's per-account limit. No key or field turns the 
 
 **The profile.** On every third poll of an account, a quarter hour apart, the router reads the account's profile again.
 The reads are that far apart because the profile endpoint shares the usage endpoint's per-account limit and a profile
-429 pauses the account's usage poll for up to fifteen minutes. It rides on the poll and has no switch of its own.
+429 pauses the account's usage poll for up to fifteen minutes. The profile read rides on the poll and has no switch of
+its own.
 
 **The catalog fetch.** The router reads each enabled account's model listing with `GET /v1/models?limit=1000`, its head
 measured from the one Claude Code release the profile records, every `routing.catalog_refresh_seconds` (default 21600,

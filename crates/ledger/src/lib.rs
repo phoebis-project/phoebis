@@ -81,7 +81,6 @@ pub use query::{
     DECISION_KINDS, EVENT_KINDS, GROUP_BYS, GUARDRAIL_BLOCKED_BYTES_SQL, GUARDRAIL_COUNTS_SQL,
     MAX_POINTS, MAX_RANGE_MS, PROBE_KIND,
 };
-pub use query::{agent_models, AgentModel};
 pub use query::{guardrail_sample_page, request_body, request_body_held, SampleRow};
 pub use query::{list_request_page, refusal_categories, RefusalCount, Refusals, RequestPage};
 pub use query::{Direction, RequestOrder};
