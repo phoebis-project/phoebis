@@ -22600,22 +22600,24 @@ await forView(['/analytics', '/keys', '/pools', '/quota', '/routing-log', '/sess
   {
     // A preset's end moves to the clock at every commit, and a custom span that has not ended polls, so either reads
     // again on its own and would hide an agent missing from the session log's keys. This span is custom and has
-    // ended, so removing the Agent chip moves no other key and starts no poll. It holds three of the first session's
-    // rows, none a probe: c21e's req_96461df2-61a, main's req_285f44c1-b48 and e4b7's req_2e25caf4-526.
-    const name = "/analytics removing the Agent chip under a custom range that has ended reads the session's requests again";
+    // ended, so adding the Agent chip moves no other key and starts no poll. The chip is added, not removed: a read
+    // that never reruns and a held answer merged under an unchanged key both leave the session's count, so either
+    // key missing the agent shows. The span holds three of the first session's rows, none a probe: c21e's
+    // req_96461df2-61a, main's req_285f44c1-b48 and e4b7's req_2e25caf4-526.
+    const name = "/analytics adding the Agent chip under a custom range that has ended reads the agent's requests alone";
     const agent = 'c21e';
     const session = requests.find((r) => r.agentId === agent)?.sessionId ?? '';
     const FROM = '2026-09-16T02:30:00.000Z';
     const TO = '2026-09-16T09:30:00.000Z';
-    const page = await mount(`/analytics?session=${encodeURIComponent(session)}&agent_id=${agent}&from=${FROM}&to=${TO}`, { now: CLOCK_ORIGIN });
-    const narrowed = total(page);
-    await removeChip(page, 'agent');
-    const whole = { chips: [...page.container.querySelectorAll('.chip--filter')].map((c) => c.textContent?.trim()), query: Object.entries(query(page)).sort(), requests: total(page) };
+    const page = await mount(`/analytics?session=${encodeURIComponent(session)}&from=${FROM}&to=${TO}`, { now: CLOCK_ORIGIN });
+    const whole = total(page);
+    const added = await applyText(page, 'Agent', agent);
+    const narrowed = { chips: [...page.container.querySelectorAll('.chip--filter')].map((c) => c.textContent?.trim()), query: Object.entries(query(page)).sort(), requests: total(page) };
     page.unmount();
     results.push({
       name,
-      ok: narrowed === 1 && JSON.stringify(whole) === JSON.stringify({ chips: [`session: ${session.slice(0, 8)}…`], query: [['from', FROM], ['session', session], ['to', TO]], requests: 3 }),
-      missing: [`narrowed ${narrowed}`, JSON.stringify(whole)],
+      ok: whole === 3 && added && JSON.stringify(narrowed) === JSON.stringify({ chips: [`agent: ${agent}`, `session: ${session.slice(0, 8)}…`], query: [['agent_id', agent], ['from', FROM], ['session', session], ['to', TO]], requests: 1 }),
+      missing: [`whole ${whole}`, `added ${added}`, JSON.stringify(narrowed)],
     });
   }
   {
