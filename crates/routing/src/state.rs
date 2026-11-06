@@ -409,6 +409,13 @@ pub enum StateWrite {
     },
     DeleteAffinity(Vec<(String, String)>),
     DeleteCooldown(String, CooldownScope),
+    /// One first-seen record of a session that ended, by its agent, so a record the session writes again under the
+    /// same instant stays.
+    DeleteFirstSeen {
+        key_id: String,
+        session_id: String,
+        agent_id: String,
+    },
     DeletePin(PinKey),
     /// A shared window a clean poll dropped: its stored reading leaves, fenced by the incarnation.
     DeleteWindow {
@@ -416,19 +423,9 @@ pub enum StateWrite {
         window: String,
         incarnation: u64,
     },
-    /// A session's end alone: its first-seen rows written at or before `ended`, the pins untouched. The deferred fold
-    /// holds one beside each `EndPin` that carries an end, so a pin upsert that replaces the pin's deletion leaves
-    /// the cascade standing.
-    EndFirstSeen {
-        key_id: String,
-        session_id: String,
-        ended: i64,
-    },
-    /// A pin that leaves for good (an expiry, a release, the purge): its row, and where memory dropped the session's
-    /// records with this pin (the session's last), the end's instant, under which the store deletes the session's
-    /// first-seen rows written at or before it, whatever a backlog's write order. A replacement's removal writes
-    /// `DeletePin`, which keeps them.
-    EndPin(PinKey, Option<i64>),
+    /// A pin that leaves for good (a release, a client error, the purge's expiry). A replacement's removal writes
+    /// `DeletePin`.
+    EndPin(PinKey),
     InsertFirstSeen(FirstSeenRow),
     /// `before` is `now` less the longest `shed_dwell_seconds` of the snapshot's pools, computed at the purge tick.
     PurgeShedRounds {
@@ -1723,19 +1720,28 @@ impl RoutingState {
             .copied()
     }
 
-    /// Drops the session's records where no pin of the session remains and answers whether it did, so the caller's
-    /// `EndPin` carries the end's instant. Called by the removals that end a pin for good, never inside a
-    /// replacement, whose new row reaches `put_pin` after the old one left.
-    pub(crate) fn end_first_seen(&mut self, key_id: &str, session_id: &str) -> bool {
-        let held = self
-            .pins
-            .keys()
-            .any(|key| key.key_id == key_id && key.session_id == session_id);
-        !held
-            && self
-                .first_seen
-                .remove(&(key_id.to_string(), session_id.to_string()))
-                .is_some()
+    /// Drops the session's records where no pin of the session remains, `held` counting a pin the caller still
+    /// holds outside the map, and answers the agent ids it dropped, empty where the session is held. A pin in a
+    /// failover gap is such a pin, since it has not left. Called by the removals that end a pin for good, never
+    /// inside a replacement, whose new row reaches `put_pin` after the old one left.
+    pub(crate) fn end_first_seen(
+        &mut self,
+        key_id: &str,
+        session_id: &str,
+        held: bool,
+    ) -> Vec<String> {
+        let held = held
+            || self
+                .pins
+                .keys()
+                .any(|key| key.key_id == key_id && key.session_id == session_id);
+        if held {
+            return Vec::new();
+        }
+        self.first_seen
+            .remove(&(key_id.to_string(), session_id.to_string()))
+            .map(|agents| agents.into_keys().collect())
+            .unwrap_or_default()
     }
 
     /// The one way a pin leaves the map, by a move, a fail-over, an expiry, a release or the purge. The row leaves

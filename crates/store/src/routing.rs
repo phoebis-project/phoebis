@@ -564,17 +564,17 @@ impl Store {
 
     /// One transaction, as `upsert_pin` takes.
     pub fn delete_pin(&self, key: &PinKey) -> Result<bool, StoreError> {
-        self.routing_transaction(|tx| delete_pin_on(tx, key, None))
+        self.routing_transaction(|tx| delete_pin_on(tx, key))
     }
 
     /// `delete_pin` for a pin that leaves for good, one transaction.
-    pub fn end_pin(&self, key: &PinKey, ended: Option<i64>) -> Result<bool, StoreError> {
-        self.routing_transaction(|tx| delete_pin_on(tx, key, ended))
+    pub fn end_pin(&self, key: &PinKey) -> Result<bool, StoreError> {
+        self.routing_transaction(|tx| delete_pin_on(tx, key))
     }
 
     /// `INSERT OR REPLACE`: the router writes a record's row only when it creates the record, so a second write under
-    /// a key, session and agent follows a terminal removal whose cascade a deferred write's fold may have dropped,
-    /// and the new instant wins.
+    /// a key, session and agent follows the session's end, whose delete of the record a deferred write's fold may
+    /// have replaced with this write, and the new instant wins.
     pub fn insert_first_seen(&self, row: &FirstSeenRow) -> Result<(), StoreError> {
         self.routing_transaction(|tx| insert_first_seen_on(tx, row))
     }
@@ -582,17 +582,6 @@ impl Store {
     /// Every agent's row of the session, answering how many left.
     pub fn delete_first_seen(&self, key_id: &str, session_id: &str) -> Result<usize, StoreError> {
         self.routing_transaction(|tx| delete_first_seen_on(tx, key_id, session_id))
-    }
-
-    /// A session's end alone, one transaction: its rows written at or before `ended`, the pins untouched, answering
-    /// how many left.
-    pub fn end_first_seen(
-        &self,
-        key_id: &str,
-        session_id: &str,
-        ended: i64,
-    ) -> Result<usize, StoreError> {
-        self.routing_transaction(|tx| end_first_seen_on(tx, key_id, session_id, ended))
     }
 
     /// Every row lands or none does; a row under an existing (model, hash) replaces it.
@@ -712,21 +701,22 @@ impl RoutingTx<'_> {
         delete_first_seen_on(self.tx, key_id, session_id)
     }
 
-    pub fn delete_pin(&mut self, key: &PinKey) -> Result<bool, StoreError> {
-        delete_pin_on(self.tx, key, None)
-    }
-
-    pub fn end_first_seen(
+    /// One agent's row of the session. Only the router's batches write it, so `Store` has no single-write form.
+    pub fn delete_first_seen_record(
         &mut self,
         key_id: &str,
         session_id: &str,
-        ended: i64,
+        agent_id: &str,
     ) -> Result<usize, StoreError> {
-        end_first_seen_on(self.tx, key_id, session_id, ended)
+        delete_first_seen_record_on(self.tx, key_id, session_id, agent_id)
     }
 
-    pub fn end_pin(&mut self, key: &PinKey, ended: Option<i64>) -> Result<bool, StoreError> {
-        delete_pin_on(self.tx, key, ended)
+    pub fn delete_pin(&mut self, key: &PinKey) -> Result<bool, StoreError> {
+        delete_pin_on(self.tx, key)
+    }
+
+    pub fn end_pin(&mut self, key: &PinKey) -> Result<bool, StoreError> {
+        delete_pin_on(self.tx, key)
     }
 
     pub fn insert_first_seen(&mut self, row: &FirstSeenRow) -> Result<(), StoreError> {
@@ -954,31 +944,13 @@ fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
     Ok(())
 }
 
-/// Deletes the pin, and under `ended` the session's first-seen rows written at or before that instant, so the
-/// cascade holds whatever order a backlog writes in. `delete_pin`, `RoutingTx::delete_pin` and
-/// `rekey_resolution_on` pass `None`, so a replacement keeps them.
-fn delete_pin_on(conn: &Connection, key: &PinKey, ended: Option<i64>) -> Result<bool, StoreError> {
+/// The pin's row alone, whether it leaves for good or for a replacement: the session's first-seen rows leave by
+/// their records' own deletes.
+fn delete_pin_on(conn: &Connection, key: &PinKey) -> Result<bool, StoreError> {
     let mut stmt = conn.prepare_cached(
         "DELETE FROM pins WHERE key_id = ?1 AND session_id = ?2 AND agent_id = ?3 AND model = ?4",
     )?;
-    let deleted = stmt.execute(params![key.key_id, key.session_id, key.agent_id, key.model])? > 0;
-    if let Some(ended) = ended {
-        end_first_seen_on(conn, &key.key_id, &key.session_id, ended)?;
-    }
-    Ok(deleted)
-}
-
-fn end_first_seen_on(
-    conn: &Connection,
-    key_id: &str,
-    session_id: &str,
-    ended: i64,
-) -> Result<usize, StoreError> {
-    let mut stmt = conn.prepare_cached(
-        "DELETE FROM session_first_seen \
-         WHERE key_id = ?1 AND session_id = ?2 AND first_seen_at <= ?3",
-    )?;
-    Ok(stmt.execute(params![key_id, session_id, ended])?)
+    Ok(stmt.execute(params![key.key_id, key.session_id, key.agent_id, key.model])? > 0)
 }
 
 fn sweep_first_seen_on(conn: &Connection) -> Result<usize, StoreError> {
@@ -1011,6 +983,18 @@ fn delete_first_seen_on(
         "DELETE FROM session_first_seen WHERE key_id = ?1 AND session_id = ?2",
         params![key_id, session_id],
     )?)
+}
+
+fn delete_first_seen_record_on(
+    conn: &Connection,
+    key_id: &str,
+    session_id: &str,
+    agent_id: &str,
+) -> Result<usize, StoreError> {
+    let mut stmt = conn.prepare_cached(
+        "DELETE FROM session_first_seen WHERE key_id = ?1 AND session_id = ?2 AND agent_id = ?3",
+    )?;
+    Ok(stmt.execute(params![key_id, session_id, agent_id])?)
 }
 
 fn upsert_cooldown_on(conn: &Connection, row: &CooldownRow) -> Result<(), StoreError> {
@@ -1195,7 +1179,7 @@ fn rekey_resolution_on(conn: &Connection, rekey: &RekeyWrite) -> Result<(), Stor
             rekey.resolution.resolved_at
         ])?;
     for key in &rekey.delete_pins {
-        delete_pin_on(conn, key, None)?;
+        delete_pin_on(conn, key)?;
     }
     for pin in &rekey.upsert_pins {
         upsert_pin_on(conn, pin)?;

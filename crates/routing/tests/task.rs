@@ -1562,7 +1562,7 @@ async fn a_delete_arriving_while_the_backlog_holds_the_pins_upsert_never_recreat
 }
 
 #[tokio::test]
-async fn a_sessions_end_in_the_backlog_drops_the_first_seen_record_it_holds_so_none_lands_behind_the_cascade(
+async fn a_sessions_end_in_the_backlog_replaces_the_first_seen_record_it_holds_with_the_records_delete(
 ) {
     let store = seeded(&["a", "b"]);
     let now = Arc::new(AtomicI64::new(1_000));
@@ -1584,7 +1584,7 @@ async fn a_sessions_end_in_the_backlog_drops_the_first_seen_record_it_holds_so_n
     assert_eq!(
         handle.writer_status().deferred,
         2,
-        "the end replaces the pin's upsert, drops the record its cascade takes and holds that cascade under the session"
+        "the end replaces the pin's upsert, and the record's delete replaces the record under its key"
     );
     hold.release();
     wait_for(DRAINED, || {
@@ -14484,6 +14484,181 @@ async fn a_failover_with_no_landing_inside_the_migration_window_ends_the_session
     );
 }
 
+/// Session "s1"'s main and subagent placements at `1_000` and `1_100`, landed, then main's pin failed over at
+/// `invalidated_at`, so its only pin sits in the gap. Answers the router and the subagent's pin.
+async fn main_in_a_gap_beside_a_subagent(
+    store: &Arc<Store>,
+    now: &Arc<AtomicI64>,
+    config: RouterConfig,
+    invalidated_at: i64,
+) -> (RouterHandle, PinRef) {
+    let handle = spawn(store.clone(), clock(now), config).unwrap();
+    let main = selected_pin(
+        handle
+            .select(turn_of(&handle, "s1", "main", "claude-sonnet-5", 1_000))
+            .await
+            .unwrap(),
+    );
+    now.store(1_100, Ordering::SeqCst);
+    let worker = selected_pin(
+        handle
+            .select(turn_of(&handle, "s1", "worker-1", "claude-sonnet-5", 1_100))
+            .await
+            .unwrap(),
+    );
+    let from = handle
+        .pins()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|p| p.agent_id == "main")
+        .unwrap()
+        .account_id;
+    wait_for(WRITTEN, || {
+        (stored_first_seen(store) == [seen("s1", "main", 1_000), seen("s1", "worker-1", 1_100)])
+            .then_some(())
+    })
+    .await;
+    now.store(invalidated_at, Ordering::SeqCst);
+    handle
+        .report(rejected(&from, main, invalidated_at + HOUR))
+        .await;
+    wait_for(WRITTEN, || {
+        (store.load_routing().unwrap().pins.len() == 1).then_some(())
+    })
+    .await;
+    (handle, worker)
+}
+
+#[tokio::test]
+async fn mains_record_stands_through_its_failover_gap_while_a_subagents_pin_leaves_by_a_client_error(
+) {
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let (handle, worker) =
+        main_in_a_gap_beside_a_subagent(&store, &now, RouterConfig::default(), 1_200).await;
+    now.store(1_300, Ordering::SeqCst);
+    handle
+        .report(Report::PinReleased {
+            pin: worker,
+            incarnation: 1,
+            lifecycle_generation: 1,
+            credential_generation: 1,
+        })
+        .await;
+    wait_for(WRITTEN, || {
+        store.load_routing().unwrap().pins.is_empty().then_some(())
+    })
+    .await;
+    now.store(1_400, Ordering::SeqCst);
+    handle
+        .select(turn_of(&handle, "s1", "main", "claude-sonnet-5", 1_400))
+        .await
+        .unwrap();
+    assert_eq!(
+        creation_times(&handle).await,
+        vec![standing(
+            "s1",
+            "main",
+            "claude-sonnet-5",
+            Some(1_000),
+            Some(1_000)
+        )],
+        "main's landing finds its record, which the subagent's error left while main's pin sat in the gap"
+    );
+    restarted(handle, &store, &now).await;
+    assert_eq!(
+        stored_first_seen(&store),
+        [seen("s1", "main", 1_000), seen("s1", "worker-1", 1_100)],
+        "the session's rows stand in the store"
+    );
+}
+
+#[tokio::test]
+async fn mains_record_stands_through_its_failover_gap_while_a_subagents_pin_expires_at_the_purge() {
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    // Inside the subagent's hour of idle affinity, so its pin still stands when main's fails over.
+    let invalidated_at = 1_100 + HOUR - 30_000;
+    let (handle, _) = main_in_a_gap_beside_a_subagent(
+        &store,
+        &now,
+        RouterConfig {
+            purge_interval: Duration::from_millis(50),
+            ..RouterConfig::default()
+        },
+        invalidated_at,
+    )
+    .await;
+    // Past the subagent's idle hour and inside the minute after main's failover.
+    let expired_at = 1_100 + HOUR + 10_000;
+    now.store(expired_at, Ordering::SeqCst);
+    wait_for(WRITTEN, || {
+        store.load_routing().unwrap().pins.is_empty().then_some(())
+    })
+    .await;
+    handle
+        .select(turn_of(
+            &handle,
+            "s1",
+            "main",
+            "claude-sonnet-5",
+            expired_at,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        creation_times(&handle).await,
+        vec![standing(
+            "s1",
+            "main",
+            "claude-sonnet-5",
+            Some(1_000),
+            Some(1_000)
+        )],
+        "main's landing finds its record, which the subagent's expiry left while main's pin sat in the gap"
+    );
+    restarted(handle, &store, &now).await;
+    assert_eq!(
+        stored_first_seen(&store),
+        [seen("s1", "main", 1_000), seen("s1", "worker-1", 1_100)],
+        "the session's rows stand in the store"
+    );
+}
+
+#[tokio::test]
+async fn a_release_while_every_pin_of_the_session_sits_in_a_failover_gap_deletes_the_gapped_subagents_row(
+) {
+    // A third account, so the return lands wherever the two failovers left.
+    let store = seeded(&["a", "b", "c"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let (handle, worker) =
+        main_in_a_gap_beside_a_subagent(&store, &now, RouterConfig::default(), 1_200).await;
+    let on = handle.pins().await.unwrap()[0].account_id.clone();
+    handle.report(rejected(&on, worker, 1_200 + HOUR)).await;
+    wait_for(WRITTEN, || {
+        store.load_routing().unwrap().pins.is_empty().then_some(())
+    })
+    .await;
+    now.store(1_300, Ordering::SeqCst);
+    assert_eq!(
+        handle.release_session("k", "s1").await.unwrap(),
+        0,
+        "the release takes no pin"
+    );
+    now.store(1_400, Ordering::SeqCst);
+    handle
+        .select(turn_of(&handle, "s1", "main", "claude-sonnet-5", 1_400))
+        .await
+        .unwrap();
+    restarted(handle, &store, &now).await;
+    assert_eq!(
+        stored_first_seen(&store),
+        [seen("s1", "main", 1_400)],
+        "the return's row loads and the gapped subagent's row is gone"
+    );
+}
+
 #[tokio::test]
 async fn mains_record_stands_while_main_holds_an_auxiliary_only_pin_alone() {
     let store = seeded(&["a"]);
@@ -14572,8 +14747,8 @@ async fn a_backlog_holding_a_sessions_end_and_its_return_lands_the_new_instant_a
         .unwrap();
     assert_eq!(
         handle.writer_status().deferred,
-        9,
-        "the filler, then per session its ends, its end's cascade, its return's pin and its return's record, s2's return folding its main pin's end away"
+        8,
+        "the filler, then per session its ends and its records' deletes, and s1's return pin, each return's record replacing its delete and s2's return pin its main pin's end"
     );
     hold.release();
     wait_for(DRAINED, || {
@@ -14605,7 +14780,7 @@ async fn a_sessions_end_takes_an_earlier_subagents_record_though_a_same_key_retu
     let now = Arc::new(AtomicI64::new(1_000));
     let (handle, hold) = parked_writer(&store, &now).await;
     // These land ahead of the backlog: both placements, then the subagent's pin leaving while main's stands, so its
-    // end carries no cascade.
+    // end deletes no record.
     handle
         .select(turn_of(&handle, "s1", "main", "claude-sonnet-5", 1_000))
         .await
@@ -14653,7 +14828,7 @@ async fn a_sessions_end_takes_an_earlier_subagents_record_though_a_same_key_retu
     assert_eq!(
         stored_first_seen(&store),
         [seen("s1", "main", 3_000)],
-        "the end's cascade takes the subagent's row though the return replaced the end's pin write"
+        "the end's delete takes the subagent's row though the return's record replaced main's delete in the backlog"
     );
     now.store(4_000, Ordering::SeqCst);
     handle
@@ -14673,6 +14848,57 @@ async fn a_sessions_end_takes_an_earlier_subagents_record_though_a_same_key_retu
             ),
         ],
         "the subagent's return after the restart reads a new creation time"
+    );
+}
+
+#[tokio::test]
+async fn sessions_that_end_and_return_within_one_instant_in_the_backlog_keep_each_returning_record_across_a_restart(
+) {
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let (handle, hold) = parked_writer(&store, &now).await;
+    // A backlog segment lands in map order, so sixteen sessions put each end on both sides of its return's record.
+    let sessions: Vec<String> = (0..16).map(|i| format!("s{i:02}")).collect();
+    // These land ahead of the backlog.
+    for session in &sessions {
+        handle
+            .select(turn_of(&handle, session, "main", "claude-sonnet-5", 1_000))
+            .await
+            .unwrap();
+    }
+    for index in 0..WRITER_DEPTH - sessions.len() + 1 {
+        fill(&handle, index).await;
+    }
+    // Asked behind the fillers, so the loop has handled every one of them.
+    handle.pins().await.unwrap();
+    assert_eq!(
+        handle.writer_status().deferred,
+        1,
+        "the last filler finds the channel full"
+    );
+    now.store(2_000, Ordering::SeqCst);
+    for session in &sessions {
+        assert_eq!(handle.release_session("k", session).await.unwrap(), 1);
+        handle
+            .select(turn_of(&handle, session, "main", "claude-sonnet-5", 2_000))
+            .await
+            .unwrap();
+    }
+    hold.release();
+    wait_for(DRAINED, || {
+        let landed = store.load_routing().unwrap().cooldowns.len();
+        (handle.writer_status().deferred == 0 && landed == WRITER_DEPTH - sessions.len() + 1)
+            .then_some(())
+    })
+    .await;
+    let handle = restarted(handle, &store, &now).await;
+    assert_eq!(
+        creation_times(&handle).await,
+        sessions
+            .iter()
+            .map(|session| standing(session, "main", "claude-sonnet-5", Some(2_000), Some(2_000)))
+            .collect::<Vec<_>>(),
+        "every return's record loads, whichever side of it the backlog landed its end"
     );
 }
 

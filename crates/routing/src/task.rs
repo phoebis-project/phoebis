@@ -72,6 +72,8 @@ const EVENTS: usize = 1_024;
 const MIGRATION_WINDOW_MS: i64 = 60_000;
 
 /// The pin a failover invalidated, kept for `MIGRATION_WINDOW_MS` so the landing reads its figures and names its cause.
+/// An entry holds its session's first-seen records while it stands inside `MIGRATION_WINDOW_MS`, since a pin in the
+/// gap has not left.
 struct Invalidated {
     account_id: String,
     /// `cooldown`, `fast_lane` or `mark`.
@@ -2423,6 +2425,13 @@ fn apply_in(tx: &mut RoutingTx<'_>, batch: &[StateWrite]) -> Result<Marks, Store
             StateWrite::DeleteCooldown(account_id, scope) => {
                 tx.delete_cooldown(account_id, scope)?;
             }
+            StateWrite::DeleteFirstSeen {
+                key_id,
+                session_id,
+                agent_id,
+            } => {
+                tx.delete_first_seen_record(key_id, session_id, agent_id)?;
+            }
             StateWrite::DeletePin(key) => {
                 tx.delete_pin(key)?;
             }
@@ -2433,15 +2442,8 @@ fn apply_in(tx: &mut RoutingTx<'_>, batch: &[StateWrite]) -> Result<Marks, Store
             } => {
                 tx.delete_window(account_id, window, *incarnation)?;
             }
-            StateWrite::EndFirstSeen {
-                key_id,
-                session_id,
-                ended,
-            } => {
-                tx.end_first_seen(key_id, session_id, *ended)?;
-            }
-            StateWrite::EndPin(key, ended) => {
-                tx.end_pin(key, *ended)?;
+            StateWrite::EndPin(key) => {
+                tx.end_pin(key)?;
             }
             StateWrite::InsertFirstSeen(row) => tx.insert_first_seen(row)?,
             StateWrite::PurgeShedRounds { before } => {
@@ -3322,7 +3324,9 @@ impl Task {
                 // Every agent's pin of the session leaves together: the session's next request starts fresh
                 // wherever each of its agents lands, not only its main turn's.
                 let gone = self.state.release_session(&key_id, &session_id);
-                let ended = self.state.end_first_seen(&key_id, &session_id);
+                // The deletes follow the records memory dropped, not the pins the release took, so a subagent whose
+                // pin sits in a failover gap loses its row too.
+                let deletes = self.first_seen_deletes(&key_id, &session_id, false);
                 let count = gone.len();
                 let now = (self.clock)();
                 for row in &gone {
@@ -3338,11 +3342,10 @@ impl Task {
                         self.emit(event);
                     }
                 }
-                // Every end carries the session's, since a backlog may fold any one of them away under a later write
-                // of its key.
                 self.write(
                     gone.iter()
-                        .map(|row| StateWrite::EndPin(row.key(), ended.then_some(now)))
+                        .map(|row| StateWrite::EndPin(row.key()))
+                        .chain(deletes)
                         .collect(),
                 );
                 let _ = reply.send(count);
@@ -3880,8 +3883,9 @@ impl Task {
                 // Nothing enters `invalidated`: the pin never served, so the session's next request is a fresh
                 // placement rather than a move away from it.
                 self.state.remove_pin(&key);
-                let ended = self.state.end_first_seen(&key.key_id, &key.session_id);
                 let now = (self.clock)();
+                let held = self.gapped(&key.key_id, &key.session_id, now);
+                let deletes = self.first_seen_deletes(&key.key_id, &key.session_id, held);
                 self.emit(RouterEvent::pin_expired(
                     &key,
                     &current.account_id,
@@ -3891,7 +3895,11 @@ impl Task {
                 if let Some(event) = released_mark(&current, now) {
                     self.emit(event);
                 }
-                self.write(vec![StateWrite::EndPin(key, ended.then_some(now))]);
+                self.write(
+                    std::iter::once(StateWrite::EndPin(key))
+                        .chain(deletes)
+                        .collect(),
+                );
             }
             Report::PinRenewed {
                 mut pin,
@@ -4471,6 +4479,34 @@ impl Task {
         cleared
     }
 
+    /// Whether a pin of the session sits in a failover gap at `now`. Reads the window itself, since the purge's
+    /// expiry asks before the retain drops the lapsed entries.
+    fn gapped(&self, key_id: &str, session_id: &str, now: i64) -> bool {
+        self.invalidated.iter().any(|(key, entry)| {
+            key.key_id == key_id
+                && key.session_id == session_id
+                && now - entry.at <= MIGRATION_WINDOW_MS
+        })
+    }
+
+    /// One delete per first-seen record the session's end dropped from memory, `held` as `end_first_seen` reads it.
+    fn first_seen_deletes(
+        &mut self,
+        key_id: &str,
+        session_id: &str,
+        held: bool,
+    ) -> Vec<StateWrite> {
+        self.state
+            .end_first_seen(key_id, session_id, held)
+            .into_iter()
+            .map(|agent_id| StateWrite::DeleteFirstSeen {
+                key_id: key_id.to_string(),
+                session_id: session_id.to_string(),
+                agent_id,
+            })
+            .collect()
+    }
+
     fn purge(&mut self) {
         let snapshot = self.snapshot();
         let now = (self.clock)();
@@ -4491,12 +4527,11 @@ impl Task {
         }
         let purged = self.state.purge(&snapshot, now);
         // After the takes, so a session whose last pin the purge took ends with it.
-        let ended: HashSet<(String, String)> = purged
-            .pins
-            .iter()
-            .filter(|(row, _)| self.state.end_first_seen(&row.key_id, &row.session_id))
-            .map(|(row, _)| (row.key_id.clone(), row.session_id.clone()))
-            .collect();
+        let mut deletes = Vec::new();
+        for (row, _) in &purged.pins {
+            let held = self.gapped(&row.key_id, &row.session_id, now);
+            deletes.extend(self.first_seen_deletes(&row.key_id, &row.session_id, held));
+        }
         self.slow_down_edges(now);
         tracing::debug!(
             affinity = purged.affinity.len(),
@@ -4512,9 +4547,12 @@ impl Task {
             }
             within
         });
-        // A failover whose landing never came ends its session as an expiry does. The invalidation already took the
-        // pin's row, so the end carries the cascade alone.
-        lapsed.retain(|key| self.state.end_first_seen(&key.key_id, &key.session_id));
+        // A failover whose landing never came ends its session as an expiry does, unless another of its pins still
+        // sits in a gap. The invalidation already took the pin's row, so only the records leave.
+        for key in &lapsed {
+            let held = self.gapped(&key.key_id, &key.session_id, now);
+            deletes.extend(self.first_seen_deletes(&key.key_id, &key.session_id, held));
+        }
         for (account_id, scope) in &purged.cooldowns {
             self.emit(RouterEvent::CooldownCleared {
                 account_id: account_id.clone(),
@@ -4535,11 +4573,7 @@ impl Task {
             if let Some(event) = released_mark(row, now) {
                 self.emit(event);
             }
-            let session = (row.key_id.clone(), row.session_id.clone());
-            pin_ends.push(StateWrite::EndPin(
-                key,
-                ended.contains(&session).then_some(now),
-            ));
+            pin_ends.push(StateWrite::EndPin(key));
         }
         let restored = !std::mem::replace(&mut self.purged, true);
         self.clock_resets(now, restored);
@@ -4551,11 +4585,7 @@ impl Task {
             .map(|(a, s)| StateWrite::DeleteCooldown(a, s))
             .collect();
         writes.extend(pin_ends);
-        writes.extend(
-            lapsed
-                .into_iter()
-                .map(|key| StateWrite::EndPin(key, Some(now))),
-        );
+        writes.extend(deletes);
         if !purged.affinity.is_empty() {
             writes.push(StateWrite::DeleteAffinity(purged.affinity));
         }
@@ -5025,8 +5055,6 @@ enum DeferredKey {
     Pin(PinKey),
     PurgeShedRounds,
     PurgeStaleWindows,
-    /// A session's end by key id and session id, apart from its pins' rows, so no pin write replaces it.
-    SessionEnd(String, String),
     /// A pool's round on an account: a later round replaces the held one, as the store's write does.
     ShedRound {
         pool_id: String,
@@ -5043,18 +5071,14 @@ enum DeferredKey {
 }
 
 /// Writes the channel had no room for, the last write per row: a pin's last upsert, delete or end, an agent's
-/// first-seen record, a session's last end, a window's last upsert or delete, a window set's last upsert per account,
-/// a cooldown's last upsert or delete per scope, an overage, credits or account state per account, an affinity row's
-/// last upsert or delete per key, a pool's last round per account, one round purge, one stale-window sweep, and every
-/// rekey in order. A rekey closes the rows before it into a segment of their own, so a pin's write dated after a
-/// resolution never lands ahead of the rekey that moved its rows. A round may land on either side of the pin writes
-/// held beside it: a mark is read back only for the pin and the epoch its row names. A session's end drops the open
-/// segment's first-seen records of the session at or before its instant, since a segment lands in map order and such
-/// a record landing after the end's cascade would bring its row back. The end's cascade is held under the session as
-/// well as in the pin's end, since the session's return can replace that end with an upsert under the same key, and an
-/// earlier subagent's row, whose own end carried no cascade, would then outlive the session. The cascade may land on
-/// either side of the return's record: it takes rows at or before the end's instant, and a returning session's record
-/// is stamped after it.
+/// first-seen record's last insert or delete, a window's last upsert or delete, a window set's last upsert per
+/// account, a cooldown's last upsert or delete per scope, an overage, credits or account state per account, an
+/// affinity row's last upsert or delete per key, a pool's last round per account, one round purge, one stale-window
+/// sweep, and every rekey in order. A rekey closes the rows before it into a segment of their own, so a pin's write
+/// dated after a resolution never lands ahead of the rekey that moved its rows. A round may land on either side of the
+/// pin writes held beside it: a mark is read back only for the pin and the epoch its row names. A segment lands in map
+/// order, so a record's delete and its insert share the record's key: a session that ends and returns writes the
+/// return's record over the end's delete, and the end never lands behind the return to take its row.
 #[derive(Default)]
 struct Deferred {
     /// Oldest first: each closed segment's rows and the rekey that closed it.
@@ -5095,14 +5119,6 @@ impl Deferred {
                                     *marked_ordinal = *held;
                                 }
                             }
-                        }
-                        if let StateWrite::EndPin(pin, Some(ended)) = &write {
-                            self.open.retain(|_, held| {
-                                !matches!(held, StateWrite::InsertFirstSeen(row)
-                                    if row.key_id == pin.key_id
-                                        && row.session_id == pin.session_id
-                                        && row.first_seen_at <= *ended)
-                            });
                         }
                         self.open.insert(key, write);
                     }
@@ -5169,6 +5185,14 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
             },
             write,
         ),
+        StateWrite::DeleteFirstSeen {
+            ref key_id,
+            ref session_id,
+            ref agent_id,
+        } => one(
+            DeferredKey::FirstSeen(key_id.clone(), session_id.clone(), agent_id.clone()),
+            write,
+        ),
         StateWrite::DeletePin(ref key) => one(DeferredKey::Pin(key.clone()), write),
         StateWrite::DeleteWindow {
             ref account_id,
@@ -5181,32 +5205,7 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
             },
             write,
         ),
-        StateWrite::EndFirstSeen {
-            ref key_id,
-            ref session_id,
-            ..
-        } => one(
-            DeferredKey::SessionEnd(key_id.clone(), session_id.clone()),
-            write,
-        ),
-        StateWrite::EndPin(key, ended) => {
-            let session_end = ended.map(|ended| {
-                (
-                    DeferredKey::SessionEnd(key.key_id.clone(), key.session_id.clone()),
-                    StateWrite::EndFirstSeen {
-                        key_id: key.key_id.clone(),
-                        session_id: key.session_id.clone(),
-                        ended,
-                    },
-                )
-            });
-            Ok(std::iter::once((
-                DeferredKey::Pin(key.clone()),
-                StateWrite::EndPin(key, ended),
-            ))
-            .chain(session_end)
-            .collect())
-        }
+        StateWrite::EndPin(ref key) => one(DeferredKey::Pin(key.clone()), write),
         StateWrite::InsertFirstSeen(ref row) => one(
             DeferredKey::FirstSeen(
                 row.key_id.clone(),

@@ -551,6 +551,30 @@ fn the_first_seen_rows_keep_the_last_write_load_whole_and_leave_by_session_and_w
     assert!(store.load_routing().unwrap().first_seen.is_empty());
 }
 
+#[test]
+fn a_first_seen_records_delete_keeps_the_sessions_other_agent_and_the_agents_row_in_another_session(
+) {
+    let store = store_with(&["a"]);
+    for row in [
+        first_seen("k", "s", "main", 1_000),
+        first_seen("k", "s", "sub-1", 2_000),
+        first_seen("k", "t", "sub-1", 3_000),
+    ] {
+        store.insert_first_seen(&row).unwrap();
+    }
+    store
+        .write_routing(|tx| tx.delete_first_seen_record("k", "s", "sub-1"))
+        .unwrap();
+    assert_eq!(
+        store.load_routing().unwrap().first_seen,
+        [
+            first_seen("k", "s", "main", 1_000),
+            first_seen("k", "t", "sub-1", 3_000)
+        ],
+        "the record's row leaves alone"
+    );
+}
+
 /// A guard: the plain delete is a replacement's, a move's or a failover's, whose new row lands after it.
 #[test]
 fn delete_pin_of_a_sessions_last_pin_keeps_its_first_seen_rows() {
@@ -573,54 +597,7 @@ fn delete_pin_of_a_sessions_last_pin_keeps_its_first_seen_rows() {
     );
 }
 
-#[test]
-fn end_pin_under_an_end_takes_the_sessions_first_seen_rows_written_at_or_before_it_and_keeps_a_later_one(
-) {
-    let store = store_with(&["a"]);
-    let ended = pin("k", "s", "claude-opus-5-5", "a");
-    store.upsert_pin(&ended).unwrap();
-    for row in [
-        first_seen("k", "s", "main", 1_000),
-        first_seen("k", "s", "sub-1", 3_000),
-        first_seen("k", "s", "sub-2", 3_001),
-        first_seen("k", "t", "main", 1_000),
-    ] {
-        store.insert_first_seen(&row).unwrap();
-    }
-    assert!(store.end_pin(&ended.key(), Some(3_000)).unwrap());
-    let load = store.load_routing().unwrap();
-    assert_eq!(
-        (load.pins, load.first_seen),
-        (
-            Vec::new(),
-            vec![
-                first_seen("k", "s", "sub-2", 3_001),
-                first_seen("k", "t", "main", 1_000)
-            ]
-        ),
-        "the session's rows up to the end leave with its pin, a later placement's row and another session's stay"
-    );
-    let other = pin("k", "t", "claude-opus-5-5", "a");
-    store.upsert_pin(&other).unwrap();
-    assert!(store
-        .write_routing(|tx| tx.end_pin(&other.key(), Some(1_000)))
-        .unwrap());
-    assert_eq!(
-        store.load_routing().unwrap().first_seen,
-        [first_seen("k", "s", "sub-2", 3_001)],
-        "the writer's transaction cascades as the single write does"
-    );
-    assert!(
-        !store.end_pin(&ended.key(), Some(3_001)).unwrap(),
-        "no pin row stands under the key"
-    );
-    assert!(
-        store.load_routing().unwrap().first_seen.is_empty(),
-        "an end whose pin already left still takes the session's rows"
-    );
-}
-
-/// A guard: memory carries no end on a pin whose session still holds another.
+/// A guard: a pin's end takes its row alone, and the session's records leave by their own deletes.
 #[test]
 fn end_pin_without_an_end_keeps_the_sessions_first_seen_rows() {
     let store = store_with(&["a"]);
@@ -637,7 +614,7 @@ fn end_pin_without_an_end_keeps_the_sessions_first_seen_rows() {
     ] {
         store.insert_first_seen(&row).unwrap();
     }
-    assert!(store.end_pin(&sub.key(), None).unwrap());
+    assert!(store.end_pin(&sub.key()).unwrap());
     let load = store.load_routing().unwrap();
     assert_eq!(
         (load.pins, load.first_seen),
