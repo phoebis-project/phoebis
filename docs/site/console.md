@@ -130,10 +130,11 @@ with the ratio the meter charged against the cost model, under the label "Meter 
 bus gaps: {n} since the start` in the serious tone while the engine missed bus events in the last 24 hours, `Keepalive
 cap at {pct}: {cap}` in the warning tone while one of its caps (sessions, agent records or retained prompts) stands at
 90 percent of its max or more, and `Expired between turns: {n} in 24h` in the warning tone while prompt caches expired
-between turns of a session a pool warms. A parked ledger record adds "Replay parked records", which answers `Landed {n},
-{n} still parked`. Where the line is too narrow for its lead, the "+N more" badge and that button with its answer
-together, the button and its answer take a second row. The line also reads again when the window regains focus, and a
-tick or a focus that finds its previous read still out is skipped, so a slow read lands and the next tick reads again.
+between turns and a pool's keepalive policy is on. A parked ledger record adds "Replay parked records", which answers
+`Landed {n}, {n} still parked`. Where the line is too narrow for its lead, the "+N more" badge and that button with its
+answer together, the button and its answer take a second row. The line also reads again when the window regains focus,
+and a tick or a focus that finds its previous read still out is skipped, so a slow read lands and the next tick reads
+again.
 
 Five tiles follow, each with a sparkline over the last 24 hours: "Requests, 24h" with `{n} per hour`, "Tokens, 24h"
 with `{pct} served from cache`, "Estimated cost, 24h" in the top bar's unit, "Error rate, 24h" with "No requests",

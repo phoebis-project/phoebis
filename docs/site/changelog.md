@@ -203,7 +203,7 @@ folds the items past it behind a "+N more" badge, and a pool card's attention ro
 engine's three conditions, each opening the Sessions view, and `GET /admin/attention` and the `phoebis_attention` gauge
 carry them as kinds: `keepalive_bus_gaps` while the engine missed bus events in the last 24 hours, `keepalive_cap` while
 one of its caps stands at 90 percent of its max or more, and `expired_between_turns` while prompt caches expired between
-turns of a session a pool warms ([Dashboard](console.md#dashboard), [Conditions and
+turns and a pool's keepalive policy is on ([Dashboard](console.md#dashboard), [Conditions and
 gauges](statistics.md#conditions-and-gauges)). The Dashboard's Estimated cost tile reads the day's subscription traffic
 in the chosen week under Native ([Dashboard](console.md#dashboard)). The Dashboard's Sessions card counts the live
 sessions' agents, busy, idle and parked by lifecycle word, as the Sessions view's summary line does, and its Keepalive

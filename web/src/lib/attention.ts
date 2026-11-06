@@ -192,7 +192,7 @@ export function attentionDetail(item: AttentionItem, now: number): string {
     case 'keepalive_cap':
       return 'The engine is near its cap and will refuse new records at it. Opens the Sessions view.';
     case 'expired_between_turns':
-      return 'Prompt caches expired between two turns of a session a pool warms, so a probe came too late or not at all. Opens the Sessions view.';
+      return "Prompt caches expired between two turns while a pool's keepalive policy was on, so a probe came too late or not at all. Opens the Sessions view.";
     case 'unknown':
       return `a condition this console does not know (${item.rawKind ?? 'unknown'})`;
   }
