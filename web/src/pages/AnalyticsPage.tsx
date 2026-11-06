@@ -276,8 +276,8 @@ export function AnalyticsPage() {
       rawUpdate(patch);
     });
   /**
-   * The bar's one writer, so the chips, Add filter and the address cannot disagree. Clear all's one patch commits whole.
-   * A patch that changes nothing, such as a flag chosen again, moves no end and reads nothing.
+   * The bar's one writer, so the chips, Add filter and the address cannot disagree. Clear all's one patch commits
+   * whole. A patch that changes nothing, such as a flag chosen again, moves no end and reads nothing.
    */
   const update = (patch: Partial<AnalyticsAddress>) => {
     const next = analyticsPatch(a, patch);
