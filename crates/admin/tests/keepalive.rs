@@ -1579,10 +1579,10 @@ async fn a_session_row_on_a_usage_based_seat_reads_its_burn_in_dollars() {
             static_hash: None,
             tail_hash: None,
             lane: phoebis_routing::lane_key("claude-opus-5", "standard", "none", "-"),
-            entrypoint: String::new(),
+            entrypoint: None,
             mark: None,
             auxiliary_only: false,
-            effort: String::new(),
+            effort: None,
         })
         .unwrap();
     let parts = common::admin_parts_full_on(seed.store.clone()).await;
@@ -1629,10 +1629,10 @@ fn line_pin(session: &str, agent: &str, model: &str, key_generation: i64) -> pho
         static_hash: None,
         tail_hash: None,
         lane: phoebis_routing::lane_key(model, "standard", "none", "-"),
-        entrypoint: String::new(),
+        entrypoint: None,
         mark: None,
         auxiliary_only: false,
-        effort: String::new(),
+        effort: None,
     }
 }
 

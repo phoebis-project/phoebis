@@ -15,8 +15,8 @@ use http_body_util::BodyExt;
 use phoebis_bus::{Bus, Delivery, Event};
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
 use phoebis_routing::{
-    DecisionRecord, FactValue, HoldOutcome, Report, RouterConfig, RouterEvent, SharePricer,
-    UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY,
+    DecisionRecord, FactValue, HoldOutcome, HoldReason, Report, RouterConfig, RouterEvent,
+    SharePricer, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY,
 };
 use phoebis_store::{CooldownScope, Failover, SlowDown, SubscriptionRow};
 use tokio::sync::broadcast;
@@ -1854,7 +1854,7 @@ async fn a_slowed_pins_request_waits_before_the_head_and_the_completion_names_th
     let hold = next_hold(&mut events).await;
     assert_eq!(
         (hold.account_id.as_str(), hold.reason, hold.until),
-        ("a", "slow_down", Some(NOW + 22_000)),
+        ("a", HoldReason::SlowDown, Some(NOW + 22_000)),
         "the pin waits the two-second cap from its arrival"
     );
     // The runtime's time runs on while the harness's clock stands short of the deadline: nothing is dialed.
@@ -1911,8 +1911,8 @@ async fn a_second_request_of_the_same_pin_joins_the_standing_deadline() {
     assert_eq!(
         untils,
         [
-            ("slow_down", Some(NOW + 22_000)),
-            ("slow_down", Some(NOW + 22_000))
+            (HoldReason::SlowDown, Some(NOW + 22_000)),
+            (HoldReason::SlowDown, Some(NOW + 22_000))
         ],
         "the second request of the pin waits to the first one's deadline"
     );
@@ -2148,7 +2148,11 @@ async fn the_moved_pins_turn_waits_for_the_forks_commit_and_goes_out_when_it_com
     let hold = held.outcome.hold.expect("a held outcome");
     assert_eq!(
         (hold.reason, hold.waits_for.as_deref(), hold.until),
-        ("rewrite", Some(fork_id.as_str()), Some(NOW + 22_000)),
+        (
+            HoldReason::Rewrite,
+            Some(fork_id.as_str()),
+            Some(NOW + 22_000)
+        ),
         "the turn waits for the fork's head, the cap from the fork's dispatch"
     );
     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -2210,7 +2214,7 @@ async fn the_bound_ends_the_wait_with_ran_out_and_a_later_head_holds_nothing_mor
     let turn = sent(&h, request_for(KEY, MODEL, "s1"));
     let held = next_held(&mut events).await;
     let hold = held.outcome.hold.clone().expect("a held outcome");
-    assert_eq!(hold.reason, "rewrite");
+    assert_eq!(hold.reason, HoldReason::Rewrite);
     tokio::time::sleep(Duration::from_secs(2)).await;
     still_held(&up, &turn, 2);
     h.clock.store(NOW + 22_000, Ordering::SeqCst);
@@ -2228,7 +2232,7 @@ async fn the_bound_ends_the_wait_with_ran_out_and_a_later_head_holds_nothing_mor
     assert_eq!(value["waits"].as_array().map(Vec::len), Some(1));
     assert_eq!(
         last_wait(&after_the_wait(&mut events, &held.request.request_id).await),
-        Some(("rewrite", true)),
+        Some((HoldReason::Rewrite, true)),
         "the bound ended the wait"
     );
     drain(turn).await;
@@ -2262,7 +2266,7 @@ async fn the_first_requests_end_without_a_head_releases_the_waiter_at_once() {
     let turn = sent(&h, request_for(KEY, MODEL, "s1"));
     let held = next_held(&mut events).await;
     let hold = held.outcome.hold.clone().expect("a held outcome");
-    assert_eq!(hold.reason, "rewrite");
+    assert_eq!(hold.reason, HoldReason::Rewrite);
     tokio::time::sleep(Duration::from_millis(500)).await;
     still_held(&up, &turn, 2);
     up.release();
@@ -2291,7 +2295,7 @@ async fn the_first_requests_end_without_a_head_releases_the_waiter_at_once() {
     assert_eq!(completion["waits"][0]["reason"], "rewrite");
     assert_eq!(
         last_wait(&after_the_wait(&mut events, &held.request.request_id).await),
-        Some(("rewrite", false)),
+        Some((HoldReason::Rewrite, false)),
         "the fork's end ended the wait inside its bound"
     );
     drain(turn).await;
@@ -2376,7 +2380,7 @@ async fn a_retry_in_place_after_the_wait_dials_with_no_second_wait() {
         .outcome
         .hold
         .expect("a held outcome");
-    assert_eq!(hold.reason, "rewrite");
+    assert_eq!(hold.reason, HoldReason::Rewrite);
     tokio::time::sleep(Duration::from_secs(1)).await;
     still_held(&up, &turn, 2);
     h.clock.store(NOW + 22_000, Ordering::SeqCst);
@@ -2427,7 +2431,7 @@ async fn after_the_wait(
 }
 
 /// Whether the last wait the decision carries ran out, with its reason.
-fn last_wait(record: &DecisionRecord) -> Option<(&'static str, bool)> {
+fn last_wait(record: &DecisionRecord) -> Option<(HoldReason, bool)> {
     record
         .request
         .holds
@@ -2463,7 +2467,11 @@ async fn the_first_requests_retry_in_place_keeps_its_waiters_until_the_retrys_he
     let hold = held.outcome.hold.expect("a held outcome");
     assert_eq!(
         (hold.reason, hold.waits_for.as_deref(), hold.until),
-        ("rewrite", Some(fork_id.as_str()), Some(NOW + 30_000)),
+        (
+            HoldReason::Rewrite,
+            Some(fork_id.as_str()),
+            Some(NOW + 30_000)
+        ),
         "the turn waits for the fork's head before the fork's throttle comes"
     );
     still_held(&up, &turn, 2);
@@ -2496,7 +2504,7 @@ async fn the_first_requests_retry_in_place_keeps_its_waiters_until_the_retrys_he
     let after = after_the_wait(&mut events, &held.request.request_id).await;
     assert_eq!(
         last_wait(&after),
-        Some(("rewrite", false)),
+        Some((HoldReason::Rewrite, false)),
         "the retry's head ended the wait inside its bound"
     );
     drain(turn).await;
@@ -2613,7 +2621,7 @@ async fn the_forks_commit_alone_releases_the_waiter_and_an_error_event_releases_
     );
     assert_eq!(
         last_wait(&after_the_wait(&mut events, &held.request.request_id).await),
-        Some(("rewrite", false)),
+        Some((HoldReason::Rewrite, false)),
         "the fork's answer ended the wait inside its bound"
     );
     assert_eq!(
@@ -2667,7 +2675,7 @@ async fn a_probe_that_moved_the_pin_and_was_lost_before_its_commit_frees_the_pin
         .expect("a held outcome");
     assert_eq!(
         (hold.reason, hold.waits_for.as_deref()),
-        ("rewrite", Some(probe_id.as_str()))
+        (HoldReason::Rewrite, Some(probe_id.as_str()))
     );
     tokio::time::sleep(Duration::from_millis(500)).await;
     still_held(&up, &turn, 2);
@@ -2719,7 +2727,7 @@ async fn a_canceled_first_request_frees_the_waiter_at_once() {
     );
     assert_eq!(
         last_wait(&after_the_wait(&mut events, &held.request.request_id).await),
-        Some(("rewrite", false)),
+        Some((HoldReason::Rewrite, false)),
         "the cancel ended the wait inside its bound"
     );
     drain(turn).await;
@@ -2779,7 +2787,7 @@ async fn the_held_decisions_record_names_the_rewrites_hold() {
             hold.bound_ms
         ),
         (
-            "rewrite",
+            HoldReason::Rewrite,
             Some(fork_id.as_str()),
             Some(NOW + 22_000),
             i64::from(MOVED_HOLD_SECONDS) * 1_000
@@ -2807,7 +2815,7 @@ async fn the_held_decisions_record_names_the_rewrites_hold() {
     let record = next_held(&mut events).await;
     assert_eq!(
         record.outcome.hold.as_ref().map(|hold| hold.reason),
-        Some("slow_down")
+        Some(HoldReason::SlowDown)
     );
     let value = serde_json::to_value(&record).unwrap();
     assert!(

@@ -15,10 +15,10 @@ use phoebis_ledger::{
     AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, GuardrailMatchRecord,
     QuotaSampleRecord, Record, RequestRecord,
 };
-use phoebis_routing::{lane_key, ClientClass};
+use phoebis_routing::{lane_key, ClientClass, HoldReason};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, CooldownScope, Identity, NewBundle, Secret, StateCause,
-    SubscriptionRow,
+    AccountKind, AccountRow, AccountState, CooldownScope, Identity, NewBundle, PinKey, Secret,
+    StateCause, SubscriptionRow,
 };
 use serde_json::{json as j, Value};
 
@@ -744,7 +744,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 attempt: 1,
                 seq: 1,
                 ran_out: false,
-                reason: "cap",
+                reason: HoldReason::Cap,
                 until: None,
                 waits_for: None,
             }],
@@ -2914,10 +2914,7 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
             account_id: "business".into(),
             pool_id: "main".into(),
             request_id: "r-failover".into(),
-            key_id: "desktop".into(),
-            session_id: "s1".into(),
-            agent_id: "main".into(),
-            model: "claude-sonnet-5".into(),
+            pin: PinKey::new("desktop", "s1", "main", "claude-sonnet-5"),
             round: Box::new(phoebis_routing::ShedRoundFacts {
                 window: "five_hour".into(),
                 utilization: 0.71,
@@ -2970,10 +2967,7 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
         },
         RouterEvent::MarkCleared {
             account_id: "business".into(),
-            key_id: "desktop".into(),
-            session_id: "s0".into(),
-            agent_id: "main".into(),
-            model: "claude-sonnet-5".into(),
+            pin: PinKey::new("desktop", "s0", "main", "claude-sonnet-5"),
             reason: "moved",
             marked_at: at(2),
             marked_on: "business".into(),

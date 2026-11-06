@@ -2849,6 +2849,11 @@ fn the_lead_over_pace_reads_the_sample_against_its_window_s_elapsed_share() {
         (fable - (0.2 - 0.5)).abs() < 1e-9,
         "the model week is a seven_day window a week long: {fable}"
     );
+    let codename = lead_over_pace("cinder_cove", 0.2, Some(at + week / 2), None, at);
+    assert!(
+        (codename + 0.3).abs() < 1e-9,
+        "a week under a name outside seven_day is a week long as well: {codename}"
+    );
     let half = lead_over_pace("five_hour", 0.6, Some(at + 9_000_000), None, at);
     assert!(
         (half - 0.1).abs() < 1e-9,

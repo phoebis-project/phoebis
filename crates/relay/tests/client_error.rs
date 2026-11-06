@@ -15,7 +15,7 @@ use phoebis_ledger::{Assembler, Record};
 use phoebis_routing::{
     lane_key, resolve, ClientClass, RouterEvent, SelectRequest, SelectResult, SelectionTrace,
 };
-use phoebis_store::AccountState;
+use phoebis_store::{AccountState, PinKey};
 use tokio::sync::broadcast;
 use tower::ServiceExt;
 
@@ -131,11 +131,14 @@ async fn released(
     loop {
         match next_event(events).await {
             RouterEvent::PinExpired {
-                session_id,
+                pin: PinKey { session_id, .. },
                 reasons,
                 ..
             } if session_id == session => return reasons,
-            RouterEvent::PinMigrated { session_id, .. } if session_id == session => {
+            RouterEvent::PinMigrated {
+                pin: PinKey { session_id, .. },
+                ..
+            } if session_id == session => {
                 panic!("the pin moved rather than being released")
             }
             _ => {}
@@ -230,7 +233,7 @@ async fn a_fresh_pins_401_fails_over_and_the_sessions_next_placement_moves_off_i
     loop {
         match next_event(&mut events).await {
             RouterEvent::PinMigrated {
-                session_id,
+                pin: PinKey { session_id, .. },
                 reason,
                 cause,
                 ..
@@ -335,7 +338,7 @@ async fn a_429_on_a_fresh_pin_takes_the_cooldown_path_as_before() {
     loop {
         match next_event(&mut events).await {
             RouterEvent::PinMigrated {
-                session_id,
+                pin: PinKey { session_id, .. },
                 from_account,
                 to_account,
                 reason,
@@ -348,7 +351,10 @@ async fn a_429_on_a_fresh_pin_takes_the_cooldown_path_as_before() {
                 );
                 break;
             }
-            RouterEvent::PinExpired { session_id, .. } if session_id == "s1" => {
+            RouterEvent::PinExpired {
+                pin: PinKey { session_id, .. },
+                ..
+            } if session_id == "s1" => {
                 panic!("the throttle released the pin rather than moving it")
             }
             _ => {}
@@ -380,7 +386,7 @@ async fn no_release_within(
         match tokio::time::timeout_at(until, events.recv()).await {
             Err(_) => return,
             Ok(Ok(RouterEvent::PinExpired {
-                session_id,
+                pin: PinKey { session_id, .. },
                 reasons,
                 ..
             })) if session_id == session => panic!("the pin was released: {reasons:?}"),
@@ -569,7 +575,7 @@ async fn pin_events_until_created_on(
         let event = next_event(events).await;
         let (ours, done) = match &event {
             RouterEvent::PinCreated {
-                session_id,
+                pin: PinKey { session_id, .. },
                 account_id,
                 ..
             } => (
@@ -577,14 +583,17 @@ async fn pin_events_until_created_on(
                 session_id == session && account_id == to,
             ),
             RouterEvent::PinMigrated {
-                session_id,
+                pin: PinKey { session_id, .. },
                 to_account,
                 ..
             } => (
                 session_id == session,
                 session_id == session && to_account == to,
             ),
-            RouterEvent::PinExpired { session_id, .. } => (session_id == session, false),
+            RouterEvent::PinExpired {
+                pin: PinKey { session_id, .. },
+                ..
+            } => (session_id == session, false),
             _ => (false, false),
         };
         if ours {

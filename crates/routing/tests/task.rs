@@ -7,12 +7,12 @@ use phoebis_oauth::{Clock, ExtraUsage, UsageSnapshot, UsageWindow};
 use phoebis_routing::{
     credits_from_usage, decide, lane_key, resolve, sample_from_usage, shed_dwell_ms, spawn,
     AffinityReport, BandWeight, BurnRates, BurnUnit, ClientClass, ConversationLookup, CreditsState,
-    DecisionRecord, DecisionSummary, Exhaustion, HoldFacts, KeyRefusal, LongContextRates,
-    MemberSpend, MoveCause, PinRef, PinUsage, PredecessorQuery, Presented, RateTable, Rates,
-    Refusal, RefusalFacts, RefusedRequest, RegimeRates, ReloadError, Report, ResolveError,
-    RouterConfig, RouterHandle, RoutingState, SelectAnswer, SelectRequest, SelectResult,
-    SharePricer, SpendResetSource, SpendWindow, UtilizationSample, WindowReading, WindowSource,
-    WriterStatus, COMMANDS, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR,
+    DecisionRecord, DecisionSummary, Exhaustion, HoldFacts, HoldReason, KeyRefusal,
+    LongContextRates, MemberSpend, MoveCause, PinRef, PinUsage, PredecessorQuery, Presented,
+    RateTable, Rates, Refusal, RefusalFacts, RefusedRequest, RegimeRates, ReloadError, Report,
+    ResolveError, RouterConfig, RouterHandle, RoutingState, SelectAnswer, SelectRequest,
+    SelectResult, SharePricer, SpendResetSource, SpendWindow, UtilizationSample, WindowReading,
+    WindowSource, WriterStatus, COMMANDS, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR,
     IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WRITER_DEPTH,
 };
 use phoebis_store::{
@@ -848,7 +848,7 @@ async fn every_report_kind_is_named_in_the_drop_counters_list_in_its_order() {
         model: "claude-sonnet-5".into(),
         epoch: 1,
         lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
-        entrypoint: String::new(),
+        entrypoint: None,
         effort: None,
     };
     let reports = [
@@ -2122,7 +2122,7 @@ async fn pin_of(handle: &phoebis_routing::RouterHandle) -> phoebis_routing::PinR
         model: row.model,
         epoch: row.epoch,
         lane: row.lane,
-        entrypoint: String::new(),
+        entrypoint: None,
         effort: None,
     }
 }
@@ -3076,7 +3076,7 @@ async fn a_key_created_again_under_its_id_before_one_reload_inherits_no_pin() {
         "the account is the same one, but the session belonged to the key that is gone"
     );
     assert!(
-        matches!(next_event(&mut events).await, RouterEvent::PinExpired { session_id, reasons, .. } if session_id == "s" && reasons == vec!["deleted"])
+        matches!(next_event(&mut events).await, RouterEvent::PinExpired { pin: PinKey { session_id, .. }, reasons, .. } if session_id == "s" && reasons == vec!["deleted"])
     );
 }
 
@@ -3827,7 +3827,7 @@ async fn a_selection_emits_its_decision_before_its_pin_event() {
     assert_eq!(summary.kind, "placed");
     assert_eq!(pin_events_of(&record), [("pin_created", None)]);
     assert!(
-        matches!(next_event(&mut events).await, RouterEvent::PinCreated { session_id, account_id, .. } if session_id == "s1" && account_id == "a"),
+        matches!(next_event(&mut events).await, RouterEvent::PinCreated { pin: PinKey { session_id, .. }, account_id, .. } if session_id == "s1" && account_id == "a"),
         "the pin event the record names follows the decision"
     );
 }
@@ -3862,10 +3862,10 @@ async fn an_expired_idle_pin_the_selection_replaces_emits_the_decision_then_both
         [("pin_expired", Some("expired")), ("pin_created", None)]
     );
     assert!(
-        matches!(next_event(&mut events).await, RouterEvent::PinExpired { session_id, reasons, .. } if session_id == "s1" && reasons == vec!["expired"])
+        matches!(next_event(&mut events).await, RouterEvent::PinExpired { pin: PinKey { session_id, .. }, reasons, .. } if session_id == "s1" && reasons == vec!["expired"])
     );
     assert!(
-        matches!(next_event(&mut events).await, RouterEvent::PinCreated { session_id, account_id, .. } if session_id == "s1" && account_id == "a")
+        matches!(next_event(&mut events).await, RouterEvent::PinCreated { pin: PinKey { session_id, .. }, account_id, .. } if session_id == "s1" && account_id == "a")
     );
 }
 
@@ -4230,7 +4230,7 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
     let a = picked(&first);
     assert_eq!(next_decision(&mut events).await.0.kind, "placed");
     assert!(
-        matches!(next_event(&mut events).await, RouterEvent::PinCreated { session_id, account_id, at: 1_000, .. } if session_id == "s1" && account_id == a)
+        matches!(next_event(&mut events).await, RouterEvent::PinCreated { pin: PinKey { session_id, .. }, account_id, at: 1_000, .. } if session_id == "s1" && account_id == a)
     );
     // A 429 on the pinned account: the cooldown lands, the pin goes, and the next select migrates the session.
     let pin = match &first.result {
@@ -4257,7 +4257,7 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
         })
         .await;
     assert!(
-        matches!(next_event(&mut events).await, RouterEvent::CooldownSet { account_id, scope, until, source_request_id: Some(r), .. } if account_id == a && scope == "account" && until == 1_000 + HOUR && r == "req_1")
+        matches!(next_event(&mut events).await, RouterEvent::CooldownSet { account_id, scope, until, source_request_id: Some(r), .. } if account_id == a && scope == CooldownScope::Account && until == 1_000 + HOUR && r == "req_1")
     );
     let second = handle
         .select(request(&handle, Some("s1"), 1_100))
@@ -4350,7 +4350,7 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
     );
     assert_eq!(handle.release_session("k", "s1").await.unwrap(), 1);
     assert!(
-        matches!(next_event(&mut events).await, RouterEvent::PinReleased { session_id, account_id, .. } if session_id == "s1" && account_id == b)
+        matches!(next_event(&mut events).await, RouterEvent::PinReleased { pin: PinKey { session_id, .. }, account_id, .. } if session_id == "s1" && account_id == b)
     );
     handle
         .select(request(&handle, Some("s2"), 2_000))
@@ -4358,7 +4358,7 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
         .unwrap();
     assert_eq!(next_decision(&mut events).await.0.kind, "placed");
     assert!(
-        matches!(next_event(&mut events).await, RouterEvent::PinCreated { session_id, .. } if session_id == "s2")
+        matches!(next_event(&mut events).await, RouterEvent::PinCreated { pin: PinKey { session_id, .. }, .. } if session_id == "s2")
     );
     handle
         .report(cooled(
@@ -4379,7 +4379,7 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
         "the purge tick reached the deadline the rejection announced"
     );
     assert!(
-        matches!(next_event(&mut events).await, RouterEvent::PinExpired { session_id, reasons, .. } if session_id == "s2" && reasons == vec!["expired"]),
+        matches!(next_event(&mut events).await, RouterEvent::PinExpired { pin: PinKey { session_id, .. }, reasons, .. } if session_id == "s2" && reasons == vec!["expired"]),
         "and the idle pin went with it"
     );
     // Last, because a fresh reading below the limit releases the rate-limit cooldown the assertions above
@@ -4669,7 +4669,7 @@ async fn a_sample_that_shows_the_cooled_window_below_its_limit_releases_the_acco
         .report(observed("a", sample_with(2_000, FIVE_HOUR, 0.4, None)))
         .await;
     assert!(
-        matches!(next_event(&mut events).await, RouterEvent::CooldownCleared { account_id, scope, cause, at } if account_id == "a" && scope == "account" && cause == "recovered" && at == 2_000)
+        matches!(next_event(&mut events).await, RouterEvent::CooldownCleared { account_id, scope, cause, at } if account_id == "a" && scope == CooldownScope::Account && cause == "recovered" && at == 2_000)
     );
     wait_for(WRITTEN, || {
         store
@@ -5342,7 +5342,7 @@ async fn a_fast_row_with_a_pin_invalidates_it_under_fast_lane() {
         .await;
     assert!(matches!(
         next_event(&mut events).await,
-        RouterEvent::CooldownSet { scope, .. } if scope == "fast"
+        RouterEvent::CooldownSet { scope, .. } if scope == CooldownScope::Fast
     ));
     // The relay's next selection of the same request, with the account it just tried.
     let second = handle
@@ -5590,7 +5590,7 @@ async fn an_enabled_credits_state_with_room_lifts_a_fast_credits_row_and_a_plan_
         .await;
     assert!(matches!(
         next_event(&mut events).await,
-        RouterEvent::CooldownSet { scope, .. } if scope == "fast_credits"
+        RouterEvent::CooldownSet { scope, .. } if scope == CooldownScope::FastCredits
     ));
     now.store(2_000, Ordering::SeqCst);
     handle
@@ -5633,8 +5633,8 @@ async fn an_enabled_credits_state_with_room_lifts_a_fast_credits_row_and_a_plan_
                 ..
             } => {
                 assert_eq!(
-                    (account_id.as_str(), scope.as_str(), cause),
-                    ("a", "fast_credits", "recovered")
+                    (account_id.as_str(), scope, cause),
+                    ("a", CooldownScope::FastCredits, "recovered")
                 );
                 break;
             }
@@ -5734,8 +5734,8 @@ async fn a_credits_reading_with_room_lifts_the_spent_window_rows_and_leaves_a_mo
     assert_eq!(
         cleared,
         [
-            ("account".to_string(), "recovered"),
-            ("model:claude-fable-5-1".to_string(), "recovered"),
+            (CooldownScope::Account, "recovered"),
+            (CooldownScope::Model("claude-fable-5-1".into()), "recovered"),
         ]
     );
     // Set after the last reading and read before the next, so the row's window alone decides the lift.
@@ -6873,7 +6873,7 @@ async fn a_siblings_fresh_placement_in_the_window_never_consumes_another_agents_
     );
     assert!(matches!(
         next_event(&mut events).await,
-        RouterEvent::PinCreated { agent_id, .. } if agent_id == "worker"
+        RouterEvent::PinCreated { pin: PinKey { agent_id, .. }, .. } if agent_id == "worker"
     ));
     let main_next = handle
         .select(request(&handle, Some("s1"), 1_100))
@@ -6887,7 +6887,7 @@ async fn a_siblings_fresh_placement_in_the_window_never_consumes_another_agents_
     assert_eq!((placed.kind, placed.rule), ("placed", Some("cooldown")));
     assert!(matches!(
         next_event(&mut events).await,
-        RouterEvent::PinMigrated { agent_id, reason, .. } if agent_id == "main" && reason == "cooldown"
+        RouterEvent::PinMigrated { pin: PinKey { agent_id, .. }, reason, .. } if agent_id == "main" && reason == "cooldown"
     ));
 }
 
@@ -8554,7 +8554,7 @@ async fn a_shedding_round_emits_its_pins_and_marks_once() {
     };
     match next_event(&mut events).await {
         RouterEvent::PinMigrated {
-            session_id,
+            pin: PinKey { session_id, .. },
             from_account,
             to_account,
             reason,
@@ -8573,7 +8573,7 @@ async fn a_shedding_round_emits_its_pins_and_marks_once() {
     match next_event(&mut events).await {
         RouterEvent::MarkCleared {
             account_id,
-            session_id,
+            pin: PinKey { session_id, .. },
             reason,
             marked_at,
             marked_on,
@@ -8603,10 +8603,13 @@ async fn a_shedding_round_emits_its_pins_and_marks_once() {
             account_id,
             pool_id,
             request_id,
-            key_id,
-            session_id,
-            agent_id,
-            model,
+            pin:
+                PinKey {
+                    key_id,
+                    session_id,
+                    agent_id,
+                    model,
+                },
             round,
             at: emitted,
         } => {
@@ -9043,10 +9046,10 @@ fn stored_pin(store: &Store, session: &str, account: &str, epoch: u64, burn: f64
         static_hash: None,
         tail_hash: None,
         lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
-        entrypoint: String::new(),
+        entrypoint: None,
         mark: None,
         auxiliary_only: false,
-        effort: String::new(),
+        effort: None,
     }
 }
 
@@ -9257,7 +9260,7 @@ async fn the_marks_and_the_dwell_gate_survive_a_restart() {
         later.iter().any(|event| matches!(
             event,
             phoebis_routing::RouterEvent::MarkCleared {
-                session_id,
+                pin: PinKey { session_id, .. },
                 reason: "moved",
                 marked_at,
                 ..
@@ -9394,7 +9397,7 @@ async fn a_released_and_recreated_pin_s_mark_does_not_survive_a_restart() {
     ));
     match next_event(&mut events).await {
         phoebis_routing::RouterEvent::MarkCleared {
-            session_id,
+            pin: PinKey { session_id, .. },
             reason,
             marked_at,
             marked_on,
@@ -9509,7 +9512,7 @@ async fn a_marked_pin_released_inside_a_decision_clears_its_mark_as_released() {
             event,
             RouterEvent::MarkCleared {
                 account_id,
-                session_id,
+                pin: PinKey { session_id, .. },
                 reason: "released",
                 marked_at,
                 marked_on,
@@ -9557,7 +9560,7 @@ async fn a_cooldown_report_naming_a_marked_pin_clears_its_mark_as_released() {
                 model: "claude-sonnet-5".into(),
                 epoch: 1,
                 lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
-                entrypoint: String::new(),
+                entrypoint: None,
                 effort: None,
             }),
             incarnation: 1,
@@ -9581,7 +9584,7 @@ async fn a_cooldown_report_naming_a_marked_pin_clears_its_mark_as_released() {
             event,
             RouterEvent::MarkCleared {
                 account_id,
-                session_id,
+                pin: PinKey { session_id, .. },
                 reason: "released",
                 marked_at,
                 marked_on,
@@ -9615,7 +9618,7 @@ fn released_clears(events: &[phoebis_routing::RouterEvent]) -> Vec<(String, Stri
         .filter_map(|event| match event {
             phoebis_routing::RouterEvent::MarkCleared {
                 account_id,
-                model,
+                pin: PinKey { model, .. },
                 reason: "released",
                 marked_on,
                 ..
@@ -9767,7 +9770,7 @@ async fn a_mark_a_round_makes_on_the_requests_own_pin_is_released_with_it_in_the
             event,
             RouterEvent::MarkCleared {
                 account_id,
-                session_id,
+                pin: PinKey { session_id, .. },
                 reason: "released",
                 marked_at,
                 marked_on,
@@ -12735,7 +12738,7 @@ async fn a_cooldown_set_at_the_wall_stands_through_a_head_within_the_margin() {
         ))
         .await;
     assert!(
-        matches!(next_event(&mut events).await, RouterEvent::CooldownCleared { account_id, scope, cause, at } if account_id == "a" && scope == "account" && cause == "recovered" && at == 3_000)
+        matches!(next_event(&mut events).await, RouterEvent::CooldownCleared { account_id, scope, cause, at } if account_id == "a" && scope == CooldownScope::Account && cause == "recovered" && at == 3_000)
     );
     let event = next_window_edge(&mut events).await;
     assert_eq!(
@@ -13749,7 +13752,7 @@ async fn a_quiet_accounts_slow_down_entry_and_a_gone_pins_pace_leave_at_the_purg
                 model: "claude-sonnet-5".into(),
                 epoch: 1,
                 lane: s1.lane.clone(),
-                entrypoint: String::new(),
+                entrypoint: None,
                 effort: None,
             },
             "a",
@@ -13880,7 +13883,7 @@ async fn a_factor_under_one_emits_slow_down_started_once_and_a_return_to_one_end
         SelectResult::Held(hold) => hold,
         other => panic!("the pin with a cycle waits: {other:?}"),
     };
-    assert_eq!(hold.reason, "slow_down");
+    assert_eq!(hold.reason, HoldReason::SlowDown);
     let until = hold
         .until
         .expect("a slow-down hold names the pin's deadline");
@@ -14207,6 +14210,7 @@ async fn a_members_projection_answers_its_account_wide_cooldown_and_a_clean_memb
                 reason: "rate_limit".into(),
                 until: 1_000 + 48 * HOUR,
                 window: "seven_day".into(),
+                scope: CooldownScope::Account,
             }),
             None
         ),
@@ -14393,7 +14397,7 @@ async fn a_restarted_router_reads_each_pins_flag_and_effort_from_its_row_and_a_r
     // auxiliary requests used.
     let conversation = PinRow {
         last_refresh_at: AT - HOUR,
-        effort: "high".into(),
+        effort: Some("high".into()),
         ..stored_pin(&store, "s1", "a", 1, 0.0)
     };
     let auxiliary = PinRow {
@@ -15598,23 +15602,27 @@ async fn a_client_renewal_writes_the_effort_its_pin_names_to_the_row_and_a_probe
         ended: false,
     };
     let stored = || async { handle.pins().await.unwrap().remove(0).effort };
-    assert_eq!(stored().await, "high", "the placement stamped the word");
+    assert_eq!(
+        stored().await.as_deref(),
+        Some("high"),
+        "the placement stamped the word"
+    );
     handle.report(renewed(Some("low"), false, 2_000)).await;
     assert_eq!(
-        stored().await,
-        "low",
+        stored().await.as_deref(),
+        Some("low"),
         "a client's renewal writes the word its pin names"
     );
     handle.report(renewed(Some("max"), true, 3_000)).await;
     assert_eq!(
-        stored().await,
-        "low",
+        stored().await.as_deref(),
+        Some("low"),
         "a probe replays another request's body, so its renewal keeps the stored word"
     );
     handle.report(renewed(None, false, 4_000)).await;
     assert_eq!(
         stored().await,
-        "",
+        None,
         "a client's renewal whose pin names none writes none"
     );
 }
@@ -15767,7 +15775,7 @@ fn rewrite_hold(answer: phoebis_routing::SelectAnswer) -> HoldFacts {
         SelectResult::Held(hold) => {
             assert_eq!(
                 (hold.reason, hold.waits_for.as_deref()),
-                ("rewrite", Some("r-1"))
+                (HoldReason::Rewrite, Some("r-1"))
             );
             hold
         }
@@ -16051,7 +16059,7 @@ async fn a_classifier_call_renewing_a_pin_a_shed_moved_after_its_turn_ended_answ
         model: "claude-sonnet-5".into(),
         epoch: 1,
         lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
-        entrypoint: String::new(),
+        entrypoint: None,
         effort: None,
     };
     let usage = PinUsage {

@@ -7,7 +7,9 @@ use std::collections::BTreeMap;
 
 use phoebis_store::PoolRow;
 
-use crate::select::{lane_parts, ClientClass, CohortHold, HoldFacts, Placement, SelectRequest};
+use crate::select::{
+    lane_parts, ClientClass, CohortHold, HoldFacts, HoldReason, Placement, SelectRequest,
+};
 use crate::state::Tier;
 use crate::RegistrySnapshot;
 
@@ -428,6 +430,8 @@ pub struct PrefixEntry {
 pub struct ObstacleFacts {
     pub name: &'static str,
     pub reason: Option<String>,
+    /// A cooldown's scope word (`account`, `fast`, `fast_credits` or `model:<id>`), `None` on every other obstacle.
+    pub scope: Option<String>,
     pub window: Option<String>,
     pub until: Option<i64>,
 }
@@ -598,7 +602,7 @@ pub struct HoldOutcome {
     pub bound_ms: i64,
     /// `cap` for a hold on a slot, `reset` for a spent window about to reset, `slow_down` for a slowed pin's wait
     /// before its head, `rewrite` for a moved pin's wait for the head of the request that carried the move.
-    pub reason: &'static str,
+    pub reason: HoldReason,
     /// The instant the request waits for: under `reset` the later of the spent window's reset and the end of the
     /// account's cooldown, under `slow_down` the pin's deadline, under `rewrite` the first request's dispatch plus the
     /// cap. `None` under `cap`.

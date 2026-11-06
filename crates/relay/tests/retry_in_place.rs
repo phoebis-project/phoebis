@@ -11,10 +11,10 @@ use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
 use phoebis_bus::{Bus, Delivery, Event};
 use phoebis_routing::{
-    DecisionRecord, DecisionSummary, HoldOutcome, Report, RouterConfig, RouterEvent, SharePricer,
-    UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY,
+    DecisionRecord, DecisionSummary, HoldOutcome, HoldReason, Report, RouterConfig, RouterEvent,
+    SharePricer, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY,
 };
-use phoebis_store::{CooldownRow, CooldownScope, Failover, SlowDown, SubscriptionRow};
+use phoebis_store::{CooldownRow, CooldownScope, Failover, PinKey, SlowDown, SubscriptionRow};
 use tokio::sync::broadcast;
 use tower::ServiceExt;
 
@@ -341,7 +341,7 @@ async fn a_spent_window_resetting_inside_the_bound_is_waited_out_in_place_and_th
             hold.reason,
             hold.until
         )),
-        Some(("a", "reset", Some(NOW + 3_000))),
+        Some(("a", HoldReason::Reset, Some(NOW + 3_000))),
         "the hold runs to the cooldown's end, a margin past the reset"
     );
     assert_eq!(
@@ -356,7 +356,7 @@ async fn a_spent_window_resetting_inside_the_bound_is_waited_out_in_place_and_th
                 hold.ran_out
             ))
             .collect::<Vec<_>>(),
-        [("a", "reset", Some(NOW + 3_000), false)],
+        [("a", HoldReason::Reset, Some(NOW + 3_000), false)],
         "the renewal's decision carries the one wait with its reason"
     );
     assert_eq!(credentials_seen(&up), [A, A, B, A]);
@@ -844,7 +844,7 @@ async fn a_pinned_sessions_retry_in_place_keeps_its_pin_and_a_sibling_sees_the_c
         assert!(
             !matches!(
                 &event,
-                RouterEvent::PinMigrated { session_id, .. } if session_id == "s1"
+                RouterEvent::PinMigrated { pin: PinKey { session_id, .. }, .. } if session_id == "s1"
             ),
             "no pin_migrated for the waiting session: {event:?}"
         );
@@ -1351,7 +1351,10 @@ async fn a_slow_down_hold_is_cut_at_the_request_deadline_and_a_slot_wait_after_i
     let waiting =
         tokio::spawn(async move { app.oneshot(request_for(KEY, MODEL, "s1")).await.unwrap() });
     let hold = next_hold(&mut events).await;
-    assert_eq!((hold.reason, hold.until), ("slow_down", Some(NOW + 22_000)));
+    assert_eq!(
+        (hold.reason, hold.until),
+        (HoldReason::SlowDown, Some(NOW + 22_000))
+    );
     tokio::time::sleep(Duration::from_millis(1_000)).await;
     h.clock.store(NOW + 21_000, Ordering::SeqCst);
     tokio::time::resume();
@@ -1418,7 +1421,10 @@ async fn a_slow_down_hold_is_cut_at_the_request_deadline_and_a_slot_wait_after_i
     let waiting =
         tokio::spawn(async move { app.oneshot(request_for(KEY, MODEL, "s1")).await.unwrap() });
     let hold = next_hold(&mut events).await;
-    assert_eq!((hold.account_id.as_str(), hold.reason), ("a", "slow_down"));
+    assert_eq!(
+        (hold.account_id.as_str(), hold.reason),
+        ("a", HoldReason::SlowDown)
+    );
     tokio::time::sleep(Duration::from_millis(1_500)).await;
     // a cools during the hold, so the selection after it places the request afresh, where b is at its cap.
     h.router
@@ -1444,7 +1450,7 @@ async fn a_slow_down_hold_is_cut_at_the_request_deadline_and_a_slot_wait_after_i
     let hold = next_hold(&mut events).await;
     assert_eq!(
         (hold.account_id.as_str(), hold.reason, hold.bound_ms),
-        ("b", "cap", 2_000)
+        ("b", HoldReason::Cap, 2_000)
     );
     tokio::time::resume();
     let resp = tokio::time::timeout(Duration::from_secs(10), waiting)
@@ -1495,7 +1501,7 @@ async fn a_slow_down_hold_under_a_short_head_timeout_runs_out_at_the_head_timeou
     let hold = next_hold(&mut events).await;
     assert_eq!(
         (hold.reason, hold.until, hold.bound_ms),
-        ("slow_down", Some(NOW + 45_000), 25_000)
+        (HoldReason::SlowDown, Some(NOW + 45_000), 25_000)
     );
     // Both clocks run with the hold: a second short of the head timeout the request still waits.
     tokio::time::sleep(Duration::from_millis(19_000)).await;
@@ -1520,7 +1526,7 @@ async fn a_slow_down_hold_under_a_short_head_timeout_runs_out_at_the_head_timeou
         held.iter()
             .map(|(reason, ran_out, _)| (*reason, *ran_out))
             .collect::<Vec<_>>(),
-        [("slow_down", true)],
+        [(HoldReason::SlowDown, true)],
         "the head timeout ended the hold short of its cap"
     );
     assert!(
@@ -1582,7 +1588,10 @@ async fn a_slot_that_frees_inside_the_bound_dispatches_the_pin_at_the_admission_
     let waiting =
         tokio::spawn(async move { app.oneshot(request_for(KEY, MODEL, "s1")).await.unwrap() });
     let hold = next_hold(&mut events).await;
-    assert_eq!((hold.account_id.as_str(), hold.reason), ("a", "slow_down"));
+    assert_eq!(
+        (hold.account_id.as_str(), hold.reason),
+        ("a", HoldReason::SlowDown)
+    );
     tokio::time::sleep(Duration::from_millis(1_500)).await;
     h.router
         .report(Report::Cooldown {
@@ -1605,7 +1614,10 @@ async fn a_slot_that_frees_inside_the_bound_dispatches_the_pin_at_the_admission_
         .await;
     h.clock.store(NOW + 22_000, Ordering::SeqCst);
     let hold = next_hold(&mut events).await;
-    assert_eq!((hold.account_id.as_str(), hold.reason), ("b", "cap"));
+    assert_eq!(
+        (hold.account_id.as_str(), hold.reason),
+        ("b", HoldReason::Cap)
+    );
     tokio::time::resume();
     // b's slot frees three seconds after the slow-down hold's end on the relay's clock.
     h.clock.store(NOW + 25_000, Ordering::SeqCst);
@@ -1619,7 +1631,10 @@ async fn a_slot_that_frees_inside_the_bound_dispatches_the_pin_at_the_admission_
             .iter()
             .map(|hold| (hold.reason, hold.ran_out, hold.until.is_some()))
             .collect::<Vec<_>>(),
-        [("slow_down", false, true), ("cap", false, true)]
+        [
+            (HoldReason::SlowDown, false, true),
+            (HoldReason::Cap, false, true)
+        ]
     );
     assert_eq!(
         admitted.request.holds[1].until,
@@ -1681,7 +1696,10 @@ async fn a_slow_down_hold_then_a_spent_window_waits_out_the_reset_under_its_own_
     let waiting =
         tokio::spawn(async move { app.oneshot(request_for(KEY, MODEL, "s1")).await.unwrap() });
     let hold = next_hold(&mut events).await;
-    assert_eq!((hold.reason, hold.until), ("slow_down", Some(NOW + 22_000)));
+    assert_eq!(
+        (hold.reason, hold.until),
+        (HoldReason::SlowDown, Some(NOW + 22_000))
+    );
     // a's window reads spent during the hold with its reset seven seconds after the hold ends: inside an eight-second
     // bound that starts with the reset wait, past one that started with the slow-down hold, and before the harness's
     // ten-second head timeout runs out.
@@ -1690,7 +1708,7 @@ async fn a_slow_down_hold_then_a_spent_window_waits_out_the_reset_under_its_own_
     let hold = next_hold(&mut events).await;
     assert_eq!(
         (hold.reason, hold.until, hold.bound_ms),
-        ("reset", Some(NOW + 29_000), 8_000)
+        (HoldReason::Reset, Some(NOW + 29_000), 8_000)
     );
     h.clock.store(NOW + 29_000, Ordering::SeqCst);
     tokio::time::resume();

@@ -5141,10 +5141,10 @@ fn burning_opus_pin(
         static_hash: None,
         tail_hash: None,
         lane: phoebis_routing::lane_key("claude-opus-5", "standard", "none", "-"),
-        entrypoint: String::new(),
+        entrypoint: None,
         mark: None,
         auxiliary_only: false,
-        effort: String::new(),
+        effort: None,
     }
 }
 
@@ -5438,7 +5438,7 @@ async fn a_session_row_prices_the_burn_at_the_set_the_pins_last_prompt_selects()
             model: "claude-haiku-5-5".into(),
             epoch: 1,
             lane: phoebis_routing::lane_key("claude-opus-5", "standard", "none", "-"),
-            entrypoint: String::new(),
+            entrypoint: None,
             effort: None,
         },
         now,
@@ -5501,7 +5501,7 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
                 model: "claude-opus-5-5".into(),
                 epoch: 1,
                 lane: phoebis_routing::lane_key("claude-opus-5", "standard", "none", "-"),
-                entrypoint: String::new(),
+                entrypoint: None,
                 effort: None,
             },
             now,
@@ -6817,10 +6817,10 @@ async fn every_session_row_answers_its_fork_members_and_a_forked_session_names_i
             static_hash: None,
             tail_hash: None,
             lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
-            entrypoint: String::new(),
+            entrypoint: None,
             mark: None,
             auxiliary_only: false,
-            effort: String::new(),
+            effort: None,
         })
         .unwrap();
     // A live pin the ledger has never recorded a request for at all, not merely one older than the cutoff:
@@ -6857,10 +6857,10 @@ async fn every_session_row_answers_its_fork_members_and_a_forked_session_names_i
             static_hash: None,
             tail_hash: None,
             lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
-            entrypoint: String::new(),
+            entrypoint: None,
             mark: None,
             auxiliary_only: false,
-            effort: String::new(),
+            effort: None,
         })
         .unwrap();
     // The router task loads its pins at spawn, so the pins above need the store written before this call.
@@ -7061,10 +7061,10 @@ async fn a_request_groups_under_its_own_session_with_that_sessions_pin_and_relea
             static_hash: None,
             tail_hash: None,
             lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
-            entrypoint: String::new(),
+            entrypoint: None,
             mark: None,
             auxiliary_only: false,
-            effort: String::new(),
+            effort: None,
         })
         .unwrap();
     let parts = common::admin_parts_full_on(seed.store.clone()).await;
@@ -7325,7 +7325,7 @@ async fn a_plain_session_row_answers_its_pins_prompt_and_effort_and_lists_the_pi
     let parts = sessions_harness_with(|generation| {
         vec![
             phoebis_store::PinRow {
-                effort: "high".into(),
+                effort: Some("high".into()),
                 ..context_pin(
                     "s-plain",
                     "main",
@@ -7429,13 +7429,13 @@ async fn a_companion_session_lists_main_and_each_unreleased_agents_conversation_
         };
         vec![
             phoebis_store::PinRow {
-                effort: "high".into(),
+                effort: Some("high".into()),
                 ..pin("s1", "main", "claude-opus-5", "business", 80_000, NOW - 5)
             },
             // Main's older conversation pin on another model draws a line of its own.
             pin("s1", "main", "claude-sonnet-5", "business", 5_000, NOW - 50),
             phoebis_store::PinRow {
-                effort: "low".into(),
+                effort: Some("low".into()),
                 ..pin("s1", "worker-1", "claude-opus-5", "direct", 30_000, NOW - 5)
             },
             pin("s1", "worker-1", "claude-sonnet-5", "direct", 0, NOW - 5),
@@ -7628,7 +7628,7 @@ async fn a_session_row_reads_mains_conversation_pin_beside_a_later_auxiliary_onl
     let parts = sessions_harness_with(|generation| {
         vec![
             phoebis_store::PinRow {
-                effort: "high".into(),
+                effort: Some("high".into()),
                 ..context_pin(
                     "s1",
                     "main",
@@ -7642,7 +7642,7 @@ async fn a_session_row_reads_mains_conversation_pin_beside_a_later_auxiliary_onl
             // A title request renewed main's auxiliary-only pin after the conversation's last turn.
             phoebis_store::PinRow {
                 auxiliary_only: true,
-                effort: "low".into(),
+                effort: Some("low".into()),
                 ..context_pin(
                     "s1",
                     "main",
@@ -7721,7 +7721,7 @@ async fn a_session_whose_main_holds_an_auxiliary_pin_alone_reads_its_subagents_c
                 )
             },
             phoebis_store::PinRow {
-                effort: "low".into(),
+                effort: Some("low".into()),
                 ..context_pin(
                     "s1",
                     "worker-1",

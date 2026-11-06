@@ -35,7 +35,7 @@ pub use resolve::{resolve, Candidate, ResolveError};
 pub use select::{
     cohort_hold, decide, effective_warm, elapsed_share_at, exhaustion_status, lane_key,
     release_reasons, routed_agent, seconds_ms, select, warmth_of, Banded, ClientClass, CohortHold,
-    CreditAccount, Decided, Exhaustion, FailedOver, HoldFacts, HoldWait, JudgedCharge,
+    CreditAccount, Decided, Exhaustion, FailedOver, HoldFacts, HoldReason, HoldWait, JudgedCharge,
     MigrateReason, Obstacle, PinHold, PinnedObstacle, Placement, Refusal, SelectRequest,
     SelectResult, Selection, SelectionTrace, Skipped, SlowDownRead, Warmth, WarmthCause,
     BUDGET_WINDOW, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, MAIN_AGENT, MODEL_REJECTED_REASON,
@@ -44,17 +44,17 @@ pub use select::{
 };
 pub use snapshot::{paid_source, KeyRefusal, Presented, RegistrySnapshot};
 pub use state::{
-    budget_deadline, burn_average_ms, burn_decayed, ceiling, cooldown_holds, entrypoint_of,
-    is_plan_window, latest_full_reset, load_shedding, plan_windows, return_to_plan_dwell_ms,
-    shed_cap, shed_dwell_ms, slow_down, slow_down_hold_ms, slow_down_stretch_ms,
-    spend_reading_reset, spend_reset_estimate, wait_until, warm, AccountTicket, BandSegment,
-    BurnUnit, CreditsState, EvidenceSource, HeadMark, InFlight, KeyPermit, LongContextRates,
-    MemberSpend, OverageEvidence, PinPace, PinRef, PinUsage, Purged, RateTable, Rates, Reservation,
-    RoutingState, SharePricer, SlowDownEdge, SlowDownState, SpendResetSource, SpendWindow,
-    StateWrite, UtilizationSample, WindowReading, WindowSource, BUCKET_LIFE_MS, BUCKET_TTL_MS,
-    CYCLE_GAPS, DAY_MS, FAST_INPUT, FAST_OUTPUT, FIVE_HOUR, HOUR_MS, INPUT_TOKENS_BUCKET,
-    IN_FLIGHT_RECLAIM_MS, MAX_BUCKETS_PER_ACCOUNT, OUTPUT_TOKENS_BUCKET, REQUESTS_BUCKET,
-    SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
+    budget_deadline, burn_average_ms, burn_decayed, ceiling, cooldown_holds, is_plan_window,
+    latest_full_reset, load_shedding, plan_windows, return_to_plan_dwell_ms, shed_cap,
+    shed_dwell_ms, slow_down, slow_down_hold_ms, slow_down_stretch_ms, spend_reading_reset,
+    spend_reset_estimate, wait_until, warm, AccountTicket, BandSegment, BurnUnit, CreditsState,
+    EvidenceSource, HeadMark, InFlight, KeyPermit, LongContextRates, MemberSpend, OverageEvidence,
+    PinPace, PinRef, PinUsage, Purged, RateTable, Rates, Reservation, RoutingState, SharePricer,
+    SlowDownEdge, SlowDownState, SpendResetSource, SpendWindow, StateWrite, UtilizationSample,
+    WindowReading, WindowSource, BUCKET_LIFE_MS, BUCKET_TTL_MS, CYCLE_GAPS, DAY_MS, FAST_INPUT,
+    FAST_OUTPUT, FIVE_HOUR, HOUR_MS, INPUT_TOKENS_BUCKET, IN_FLIGHT_RECLAIM_MS,
+    MAX_BUCKETS_PER_ACCOUNT, OUTPUT_TOKENS_BUCKET, REQUESTS_BUCKET, SEVEN_DAY, SEVEN_DAY_FABLE,
+    WEEK_MS,
 };
 pub use task::{
     credits_from_usage, same_reset, sample_from_usage, spawn, AccountProjection, AccountSlowDown,

@@ -1343,7 +1343,7 @@ async fn a_request_answers_its_hold_with_its_wait_and_held_filters_the_list() {
             attempt: 1,
             seq: 1,
             ran_out: false,
-            reason: "cap",
+            reason: phoebis_routing::HoldReason::Cap,
             until: None,
             waits_for: None,
         },

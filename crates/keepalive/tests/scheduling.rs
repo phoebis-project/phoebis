@@ -1213,7 +1213,7 @@ async fn a_pin_the_router_moved_on_the_agents_own_request_moves_the_next_probe()
                 model: pin.model.clone(),
                 epoch: pin.epoch,
                 lane: pin.lane.clone(),
-                entrypoint: String::new(),
+                entrypoint: None,
                 effort: None,
             }),
             lifecycle_generation: 1,

@@ -107,16 +107,18 @@ pub struct PinRow {
     /// The lane of the request that created the pin, stamped again by each request that refreshed or colded it;
     /// `""` on a pin written before pins carried a lane, which adopts the next request's lane.
     pub lane: String,
-    /// The entrypoint of the request that placed the pin, stamped again by each client renewal. `""` for none and on
-    /// a pin written before pins carried one, which adopts the next request's, and the base regime prices `""`.
-    pub entrypoint: String,
+    /// The entrypoint of the request that placed the pin, stamped again by each client renewal. `None` for none and
+    /// on a pin written before pins carried one, which adopts the next request's, and the base regime prices `None`.
+    /// The column spells none as the empty text.
+    pub entrypoint: Option<String>,
     pub mark: Option<PinMark>,
     /// Only auxiliary requests have used the pin since its placement: written true at such a placement, cleared by
     /// the first refreshing turn that renews the pin, so a restart reads the flag rather than deriving it.
     pub auxiliary_only: bool,
     /// The effective effort of the request that placed or last renewed the pin, the word as the client sent it,
-    /// `""` for none and on a row written before the column. A probe's renewal keeps it.
-    pub effort: String,
+    /// `None` for none and on a row written before the column, which spells none as the empty text. A probe's renewal
+    /// keeps it.
+    pub effort: Option<String>,
 }
 
 impl PinRow {
@@ -440,8 +442,8 @@ impl Store {
                     lane: r.get(18)?, burn: burn_from(r, 19)?, burn_banded: burn_from(r, 24)?,
                     burn_fast: burn_from(r, 29)?, burn_unmetered: burn_from(r, 34)?,
                     mark: mark_from(r, 39)?,
-                    entrypoint: r.get(42)?,
-                    auxiliary_only: r.get(45)?, effort: r.get(46)?,
+                    entrypoint: none_if_empty(r.get(42)?),
+                    auxiliary_only: r.get(45)?, effort: none_if_empty(r.get(46)?),
                 }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             resolutions: all_resolutions(&tx)?,
@@ -935,13 +937,18 @@ fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
         pin.mark.as_ref().map(|mark| mark.at),
         pin.mark.as_ref().map(|mark| &mark.on),
         pin.mark.as_ref().map(|mark| &mark.window),
-        pin.entrypoint,
+        pin.entrypoint.as_deref().unwrap_or_default(),
         pin.last_classifier,
         pin.shed.as_ref().and_then(|shed| shed.reason.as_ref()),
         pin.auxiliary_only,
-        pin.effort
+        pin.effort.as_deref().unwrap_or_default()
     ])?;
     Ok(())
+}
+
+/// An optional pin column read back: the write stores `None` as the empty text, since the column is `NOT NULL`.
+fn none_if_empty(text: String) -> Option<String> {
+    Some(text).filter(|text| !text.is_empty())
 }
 
 /// The pin's row alone, whether it leaves for good or for a replacement: the session's first-seen rows leave by

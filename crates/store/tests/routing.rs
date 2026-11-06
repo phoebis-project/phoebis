@@ -36,10 +36,10 @@ fn pin(key_id: &str, session_id: &str, model: &str, account_id: &str) -> PinRow 
         static_hash: None,
         tail_hash: None,
         lane: lane_key(model, "standard", "none", "-"),
-        entrypoint: String::new(),
+        entrypoint: None,
         mark: None,
         auxiliary_only: false,
-        effort: String::new(),
+        effort: None,
     }
 }
 
@@ -344,7 +344,7 @@ fn a_pins_auxiliary_mark_and_effort_survive_a_reopen() {
     let storage_key = StorageKey::generate();
     let auxiliary = PinRow {
         auxiliary_only: true,
-        effort: "high".into(),
+        effort: Some("high".into()),
         ..pin("k", "s", "claude-opus-5-5", "a")
     };
     {
@@ -364,21 +364,39 @@ fn a_pins_auxiliary_mark_and_effort_survive_a_reopen() {
     };
     assert_eq!(
         marks(),
-        [("s".to_string(), true, "high".to_string())],
+        [("s".to_string(), true, Some("high".to_string()))],
         "the written mark and effort read back after a reopen"
     );
     Store::open(&path, &storage_key)
         .unwrap()
         .upsert_pin(&PinRow {
             auxiliary_only: false,
-            effort: "low".into(),
+            effort: Some("low".into()),
             ..auxiliary
         })
         .unwrap();
     assert_eq!(
         marks()[0],
-        ("s".to_string(), false, "low".to_string()),
+        ("s".to_string(), false, Some("low".to_string())),
         "the renewal's mark and effort replace the stored ones"
+    );
+    Store::open(&path, &storage_key)
+        .unwrap()
+        .upsert_pin(&PinRow {
+            entrypoint: None,
+            effort: None,
+            ..pin("k", "s", "claude-opus-5-5", "a")
+        })
+        .unwrap();
+    let bare = Store::open(&path, &storage_key)
+        .unwrap()
+        .load_routing()
+        .unwrap()
+        .pins;
+    assert_eq!(
+        (bare[0].entrypoint.as_deref(), bare[0].effort.as_deref()),
+        (None, None),
+        "a pin written with neither field reads none for both after a reopen"
     );
 }
 

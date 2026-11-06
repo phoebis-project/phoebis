@@ -239,7 +239,7 @@ async fn the_pin_carries_the_effort_its_turn_named_by_the_newest_control_entry_o
     answered(h.app.clone().oneshot(turn(&first)).await.unwrap()).await;
     assert_eq!(
         pin_at(&h, NOW).await.effort,
-        "",
+        None,
         "a turn naming no effort stamps none"
     );
 
@@ -247,8 +247,8 @@ async fn the_pin_carries_the_effort_its_turn_named_by_the_newest_control_entry_o
     let low_at = h.clock.fetch_add(1_000, Ordering::SeqCst) + 1_000;
     answered(h.app.clone().oneshot(per_turn(&low)).await.unwrap()).await;
     assert_eq!(
-        pin_at(&h, low_at).await.effort,
-        "low",
+        pin_at(&h, low_at).await.effort.as_deref(),
+        Some("low"),
         "a control entry names the turn's effort"
     );
 
@@ -256,8 +256,8 @@ async fn the_pin_carries_the_effort_its_turn_named_by_the_newest_control_entry_o
     let high_at = h.clock.fetch_add(1_000, Ordering::SeqCst) + 1_000;
     answered(h.app.clone().oneshot(per_turn(&high)).await.unwrap()).await;
     assert_eq!(
-        pin_at(&h, high_at).await.effort,
-        "high",
+        pin_at(&h, high_at).await.effort.as_deref(),
+        Some("high"),
         "the newest control entry wins over the one before it"
     );
 
@@ -268,8 +268,20 @@ async fn the_pin_carries_the_effort_its_turn_named_by_the_newest_control_entry_o
     let top_level_at = h.clock.fetch_add(1_000, Ordering::SeqCst) + 1_000;
     answered(h.app.clone().oneshot(turn(&top_level)).await.unwrap()).await;
     assert_eq!(
-        pin_at(&h, top_level_at).await.effort,
-        "medium",
+        pin_at(&h, top_level_at).await.effort.as_deref(),
+        Some("medium"),
         "with no control entry the top-level member names the effort"
+    );
+
+    let mut empty: serde_json::Value =
+        serde_json::from_slice(&continued(&top_level, "and quietly")).unwrap();
+    empty["output_config"] = serde_json::json!({"effort": ""});
+    let empty = serde_json::to_vec(&empty).unwrap();
+    let empty_at = h.clock.fetch_add(1_000, Ordering::SeqCst) + 1_000;
+    answered(h.app.clone().oneshot(turn(&empty)).await.unwrap()).await;
+    assert_eq!(
+        pin_at(&h, empty_at).await.effort,
+        None,
+        "an empty top-level effort stamps none"
     );
 }

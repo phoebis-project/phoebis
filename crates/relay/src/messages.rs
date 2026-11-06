@@ -28,10 +28,10 @@ use phoebis_guardrails::{evaluate_all, Evaluation, HeaderLookup, Lookup, Request
 use phoebis_oauth::{AccessToken, AcquireError, Clock, CredentialManager};
 use phoebis_routing::{
     cohort_hold, latest_full_reset, resolve, AccountTicket, ChainFacts, ClientClass, CohortHold,
-    ConversationLookup, EvidenceSource, Exhaustion, HoldFacts, JudgedCharge, KeyPermit, LaneFacts,
-    OverageEvidence, PinRef, PinnedObstacle, PredecessorQuery, Presented, Refusal, RefusalFacts,
-    RefusedRequest, Report, RequestFlags, ResolveError, RouterHandle, SelectRequest, SelectResult,
-    Selection, SelectionTrace, BUDGET_WINDOW, MAIN_AGENT,
+    ConversationLookup, EvidenceSource, Exhaustion, HoldFacts, HoldReason, JudgedCharge, KeyPermit,
+    LaneFacts, OverageEvidence, PinRef, PinnedObstacle, PredecessorQuery, Presented, Refusal,
+    RefusalFacts, RefusedRequest, Report, RequestFlags, ResolveError, RouterHandle, SelectRequest,
+    SelectResult, Selection, SelectionTrace, BUDGET_WINDOW, MAIN_AGENT,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, CooldownScope, MemoryStore,
@@ -2040,7 +2040,9 @@ impl Relay {
                     fast: admitted.fast,
                     classifier: admitted.classifier,
                     body_tokens,
-                    effort: facts.shape.effort.clone(),
+                    // The store reads an empty word back as none, so the live pin carries none as well and
+                    // reads the same before a restart as after it.
+                    effort: facts.shape.effort.clone().filter(|e| !e.is_empty()),
                 })
                 .await
             {
@@ -2092,7 +2094,7 @@ impl Relay {
                     // selects again with the hold on the request, which answers no second one. The hold is its own
                     // stage: it starts no retry bound and passes no account over, so a slot or reset wait after it
                     // keeps its whole bound and a pool that exhausts after it answers as it would have without it.
-                    if hold.reason == "slow_down" {
+                    if hold.reason == HoldReason::SlowDown {
                         let started = tokio::time::Instant::now();
                         let waited = self
                             .wait_out(
@@ -2112,7 +2114,7 @@ impl Relay {
                     // relay, which owns both streams: the waiter wakes at that request's final answer, past any retry
                     // in place or replay, or when it ends without one, and never polls the routing. The hold is its
                     // own stage, as the slow-down's is.
-                    if hold.reason == "rewrite" {
+                    if hold.reason == HoldReason::Rewrite {
                         let started = tokio::time::Instant::now();
                         // No entry means the request it waits for ended before this selection, so there is no head
                         // to wait for and the waiter goes out at once, as one the sender's drop woke does.
@@ -2163,7 +2165,7 @@ impl Relay {
                     // sibling as the retry-in-place path does: where the head timeout is the bound the wait could not
                     // end inside the head guard, and under the shipped 600 s guard `wait_bound` is the request's
                     // `deadline`, at which the loop head answers the pool exhausted.
-                    if hold.reason == "reset" {
+                    if hold.reason == HoldReason::Reset {
                         if hold.until.is_some_and(|until| until >= admitted.wait_bound) {
                             held_out = true;
                             attempted.push(account_id);

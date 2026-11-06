@@ -12,7 +12,7 @@ use phoebis_routing::{
     FactValue, MoveCause, Report, RouterConfig, RouterEvent, SharePricer, UtilizationSample,
     WindowReading, WindowSource, FIVE_HOUR,
 };
-use phoebis_store::{AccountState, CooldownScope, Failover, StateCause, SubscriptionRow};
+use phoebis_store::{AccountState, CooldownScope, Failover, PinKey, StateCause, SubscriptionRow};
 use tokio::sync::broadcast;
 use tower::ServiceExt;
 
@@ -179,7 +179,7 @@ async fn a_429_migrates_the_session_and_it_stays_on_the_replacement_after_recove
     assert_eq!(credentials_seen(&up), [A, B]);
     let seen = router_events_until(
         &mut events,
-        |event| matches!(event, RouterEvent::PinMigrated { session_id, .. } if session_id == "s1"),
+        |event| matches!(event, RouterEvent::PinMigrated { pin: PinKey { session_id, .. }, .. } if session_id == "s1"),
     )
     .await;
     match seen.last() {
@@ -1211,7 +1211,7 @@ async fn a_credit_balance_refusal_moves_the_pin_with_the_marks_state_as_its_caus
     );
     let seen = router_events_until(
         &mut events,
-        |event| matches!(event, RouterEvent::PinMigrated { session_id, .. } if session_id == "s1"),
+        |event| matches!(event, RouterEvent::PinMigrated { pin: PinKey { session_id, .. }, .. } if session_id == "s1"),
     )
     .await;
     match seen.last() {

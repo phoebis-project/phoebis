@@ -48,10 +48,10 @@ pub struct PinRef {
     /// The lane the pin held once the selection that handed this out placed or renewed it. A renewal keeps the
     /// epoch across a lane change, so a report whose effect is bound to a lane checks this as well.
     pub lane: String,
-    /// The pin's entrypoint as the selection stamped it, `""` for none: a client renewal writes it back to the row.
-    pub entrypoint: String,
-    /// The pin's effort as the selection that handed this out left it on the row, `None` for `""`: a client
-    /// renewal writes it back to the row beside `entrypoint`.
+    /// The pin's entrypoint as the selection stamped it, `None` for none: a client renewal writes it back to the row.
+    pub entrypoint: Option<String>,
+    /// The pin's effort as the selection that handed this out left it on the row, `None` for none: a client renewal
+    /// writes it back to the row beside `entrypoint`.
     pub effort: Option<String>,
 }
 
@@ -71,16 +71,6 @@ pub fn latest_full_reset(
         .filter(|(utilization, _)| utilization.is_some_and(|u| u >= 1.0))
         .filter_map(|(_, reset)| reset)
         .max()
-}
-
-/// The pin's entrypoint as the pricers take it: `None` for a pin that carries none.
-pub fn entrypoint_of(pin: &PinRow) -> Option<&str> {
-    Some(pin.entrypoint.as_str()).filter(|entrypoint| !entrypoint.is_empty())
-}
-
-/// The pin's effort, `None` for a pin that carries none.
-pub(crate) fn effort_of(pin: &PinRow) -> Option<&str> {
-    Some(pin.effort.as_str()).filter(|effort| !effort.is_empty())
 }
 
 /// Where a window's reading came from: a response head, the usage poll, the registry at start (which keeps no
@@ -3375,13 +3365,17 @@ impl RoutingState {
             {
                 // The plain average, since the banded copy weighs past renewals' bands and the rate reads the band
                 // of now. Every type decays by one factor, so decaying the share equals pricing the decayed rates.
-                if let Some(rate) =
-                    self.share
-                        .rate(window, entrypoint_of(pin), tier, &pin.model, &pin.burn, now)
-                {
+                if let Some(rate) = self.share.rate(
+                    window,
+                    pin.entrypoint.as_deref(),
+                    tier,
+                    &pin.model,
+                    &pin.burn,
+                    now,
+                ) {
                     add(
                         window,
-                        entrypoint_of(pin),
+                        pin.entrypoint.as_deref(),
                         burn_decayed(rate, pin.burn_at, now, average_ms),
                     );
                 }
@@ -4168,10 +4162,10 @@ mod tests {
             static_hash: None,
             tail_hash: None,
             lane: crate::lane_key("m", "standard", "none", "-"),
-            entrypoint: String::new(),
+            entrypoint: None,
             mark: None,
             auxiliary_only: false,
-            effort: String::new(),
+            effort: None,
         };
         (pin, Some(burn))
     }

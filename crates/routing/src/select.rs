@@ -24,14 +24,14 @@ use crate::record::{
     WalkStep, WarmthFacts, WindowFacts, RECORD_VERSION, WALK_STEPS,
 };
 use crate::state::{
-    all_plan_windows, budget_reached, burn_average_ms, burn_decayed, ceiling, effort_of,
-    entrypoint_of, keeps_off, load_shedding, mark_holds, plan_windows, return_to_plan_dwell_ms,
-    round_in_dwell, shed_cap, shed_dwell_ms, slow_down, slow_down_hold_ms, slow_down_stretch_ms,
-    standing_mark, warm, BandSegment, BurnUnit, MemberSpend, PinPace, PinRef, PinUsage,
-    Reservation, RoutingState, SlowDownState, StateWrite, Tier, WindowReading, FAST_INPUT,
-    FAST_OUTPUT, FIVE_HOUR, HOUR_MS, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
+    all_plan_windows, budget_reached, burn_average_ms, burn_decayed, ceiling, keeps_off,
+    load_shedding, mark_holds, plan_windows, return_to_plan_dwell_ms, round_in_dwell, shed_cap,
+    shed_dwell_ms, slow_down, slow_down_hold_ms, slow_down_stretch_ms, standing_mark, warm,
+    BandSegment, BurnUnit, MemberSpend, PinPace, PinRef, PinUsage, Reservation, RoutingState,
+    SlowDownState, StateWrite, Tier, WindowReading, FAST_INPUT, FAST_OUTPUT, FIVE_HOUR, HOUR_MS,
+    IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
-use crate::windows::{window_for, MODEL_WINDOWS};
+use crate::windows::{window_for, window_length_ms, MODEL_WINDOWS};
 use crate::{paid_source, term, Candidate, KeyRefusal, RegistrySnapshot, ResolveError};
 
 /// Who sent the request, as the record and a refused request carry it: `claude-code/*` is Claude Code,
@@ -230,6 +230,29 @@ pub struct Placement {
     pub prefix_tokens: u64,
 }
 
+/// Why a request waits before its next selection. The record and the trace write its snake-case word, the word the
+/// routing log and the ledger read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HoldReason {
+    Cap,
+    Reset,
+    Rewrite,
+    SlowDown,
+}
+
+impl HoldReason {
+    /// The word the record and the trace write, for the summary's text facts.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            HoldReason::Cap => "cap",
+            HoldReason::Reset => "reset",
+            HoldReason::Rewrite => "rewrite",
+            HoldReason::SlowDown => "slow_down",
+        }
+    }
+}
+
 /// What a hold decided, carried across the wait by the relay.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct HoldFacts {
@@ -249,7 +272,7 @@ pub struct HoldFacts {
     pub ran_out: bool,
     /// `cap` for a hold on a slot, `reset` for a spent window about to reset, `slow_down` for a slowed pin's wait
     /// before its head, `rewrite` for a moved pin's wait for the head of the request that carried the move.
-    pub reason: &'static str,
+    pub reason: HoldReason,
     /// The instant the request waits for: under `reset` the later of the spent window's reset and the end of the
     /// account's cooldown, under `slow_down` the pin's deadline, under `rewrite` the first request's dispatch plus the
     /// pool's hold cap. Under `cap` the admission, which the relay fills once a slot freed, and `None` on the hold the
@@ -263,7 +286,7 @@ pub struct HoldFacts {
 /// One wait of a request, oldest first: `cap`, `reset`, `slow_down` or `rewrite` and how long it lasted.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct HoldWait {
-    pub reason: &'static str,
+    pub reason: HoldReason,
     pub held_ms: u64,
 }
 
@@ -734,6 +757,7 @@ pub enum Obstacle {
         reason: String,
         until: i64,
         window: String,
+        scope: CooldownScope,
     },
     /// The poll reads the account's usage credits as unavailable for fast mode.
     Credits {
@@ -892,9 +916,9 @@ pub(crate) fn pin_figures<'a>(
             .map(|rate| burn_decayed(rate, p.burn_at, now, average_ms))
     };
     let regime = match figures {
-        Figures::Pin(pin) => entrypoint_of(pin),
+        Figures::Pin(pin) => pin.entrypoint.as_deref(),
         Figures::Fresh(_) => match &request.failed_over {
-            Some(failed_over) => entrypoint_of(&failed_over.row),
+            Some(failed_over) => failed_over.row.entrypoint.as_deref(),
             None => request.entrypoint.as_deref(),
         },
     };
@@ -1255,7 +1279,7 @@ pub struct Decided {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShedRoundRecord {
     pub account_id: String,
-    pub pin: PinKeyFacts,
+    pub pin: PinKey,
     pub facts: ShedRoundFacts,
 }
 
@@ -1504,7 +1528,7 @@ fn run(
         if let Some(until) = request
             .holds
             .iter()
-            .filter(|hold| hold.reason == "cap")
+            .filter(|hold| hold.reason == HoldReason::Cap)
             .filter_map(|hold| hold.until)
             .max()
         {
@@ -1589,7 +1613,7 @@ fn run(
                 && request
                     .holds
                     .last()
-                    .is_some_and(|hold| hold.reason == "rewrite")
+                    .is_some_and(|hold| hold.reason == HoldReason::Rewrite)
             {
                 // The head released the wait where it came, not at the bound, so the dispatch is this selection's
                 // instant and the pin's next gap is measured from it.
@@ -1924,7 +1948,13 @@ fn run(
             // pin renews in place then.
             if let MoveVerdict::Wait { until } = moved {
                 state.pace_held_until(&current_key, until);
-                let hold = hold_facts(request, &current.account_id, "reset", Some(until), None);
+                let hold = hold_facts(
+                    request,
+                    &current.account_id,
+                    HoldReason::Reset,
+                    Some(until),
+                    None,
+                );
                 return (SelectResult::Held(hold), writes);
             }
             // A hold is for a fresh placement: with every destination at its cap the move is not made, the pin
@@ -1936,7 +1966,9 @@ fn run(
                     .iter()
                     .map(|c| state.in_flight().account(&c.account_id))
                     .collect();
-                let open = set.iter().any(|c| under_cap(state, pool, &c.account_id));
+                // The verdict reads the counts the step prints, so a count that moves mid-selection cannot leave a
+                // record that contradicts its own verdict.
+                let open = loads.iter().any(|n| *n < cap);
                 rec.step(
                     "cap_filter",
                     if open { "passed" } else { "dropped" },
@@ -2328,7 +2360,7 @@ fn run(
                     ..hold_facts(
                         request,
                         &cohort.unwrap_or(strategy_choice).account_id,
-                        "cap",
+                        HoldReason::Cap,
                         None,
                         None,
                     )
@@ -2577,10 +2609,10 @@ fn fresh_pin(
         static_hash: None,
         tail_hash: None,
         lane: request.lane.clone(),
-        entrypoint: request.entrypoint.clone().unwrap_or_default(),
+        entrypoint: request.entrypoint.clone(),
         mark: None,
         auxiliary_only: placed_auxiliary_only(request),
-        effort: request.effort.clone().unwrap_or_default(),
+        effort: request.effort.clone(),
     };
     stamp_hashes(&mut row, request);
     row
@@ -3124,7 +3156,14 @@ pub(crate) fn slow_down_of(
                 .filter(|cycle| *cycle > 0.0);
             let weight = state
                 .share()
-                .rate(FIVE_HOUR, entrypoint_of(p), tier, &p.model, &p.burn, now)
+                .rate(
+                    FIVE_HOUR,
+                    p.entrypoint.as_deref(),
+                    tier,
+                    &p.model,
+                    &p.burn,
+                    now,
+                )
                 .map_or(0.0, |rate| burn_decayed(rate, p.burn_at, now, average_ms));
             (p.key(), cycle, weight)
         })
@@ -3534,17 +3573,13 @@ fn account_end(snapshot: &RegistrySnapshot, account_id: &str, now: i64) -> Optio
         .and_then(|term| term::end_of(term, now))
 }
 
-/// The share of `window` that has elapsed at `at`, from the window's start (its reset `reset_at` less a week for a
-/// `seven_day*` window, five hours otherwise) to the earlier of the reset and the account's `end`, clamped to the
-/// range 0 to 1. An end at or past the reset leaves the share to the reset, an end at or before the window's start
-/// reads 1, and without a reset the share is 0. The one arithmetic behind the engine's pace reading and the
-/// ledger's lead over a raw sample, so the two readings cannot drift apart.
+/// The share of `window` that has elapsed at `at`, from the window's start (its reset `reset_at` less the window's
+/// length, `window_length_ms`'s five hours for the 5-hour window and a week for any other name) to the earlier of the
+/// reset and the account's `end`, clamped to the range 0 to 1. An end at or past the reset leaves the share to the
+/// reset, an end at or before the window's start reads 1, and without a reset the share is 0. The one arithmetic behind
+/// the engine's pace reading and the ledger's lead over a raw sample, so the two readings cannot drift apart.
 pub fn elapsed_share_at(window: &str, reset_at: Option<i64>, end: Option<i64>, at: i64) -> f64 {
-    let length = if window.starts_with(SEVEN_DAY) {
-        WEEK_MS
-    } else {
-        FIVE_HOUR_MS
-    };
+    let length = window_length_ms(window);
     reset_at.map_or(0.0, |reset| {
         let start = reset.saturating_sub(length);
         let deadline = end.map_or(reset, |end| end.min(reset));
@@ -3815,7 +3850,8 @@ fn move_of<'a>(
         // a window spent after it still waits for its reset.
         let held_on = request.attempted.contains(&current.account_id)
             || request.holds.iter().any(|hold| {
-                hold.account_id == current.account_id && matches!(hold.reason, "cap" | "reset")
+                hold.account_id == current.account_id
+                    && matches!(hold.reason, HoldReason::Cap | HoldReason::Reset)
             });
         if let Some((reset, spent_window, until)) =
             refunded_at(state, snapshot, &current.account_id, window, now)
@@ -4192,7 +4228,7 @@ fn move_of<'a>(
             }
             rec.shed_round = Some(ShedRoundRecord {
                 account_id: source.to_string(),
-                pin: pin_key_facts(key),
+                pin: key.clone(),
                 facts: round.facts,
             });
             state.record_shed(&pool.id, source, now);
@@ -4433,7 +4469,7 @@ fn rewrite_answer(
     Some(hold_facts(
         request,
         &current.account_id,
-        "rewrite",
+        HoldReason::Rewrite,
         Some(until),
         Some(mark.request_id.clone()),
     ))
@@ -4482,7 +4518,7 @@ fn slow_down_answer(
     let hold = hold_facts(
         request,
         &current.account_id,
-        "slow_down",
+        HoldReason::SlowDown,
         Some(plan.until),
         None,
     );
@@ -4495,7 +4531,7 @@ fn slow_down_answer(
 fn hold_facts(
     request: &SelectRequest,
     account_id: &str,
-    reason: &'static str,
+    reason: HoldReason,
     until: Option<i64>,
     waits_for: Option<String>,
 ) -> HoldFacts {
@@ -4936,7 +4972,7 @@ fn pin_request(request: &SelectRequest, pin: &PinRow, current: bool) -> SelectRe
         folded_model: pin.model.clone(),
         lane: pin.lane.clone(),
         fast: lane_is_fast(&pin.lane),
-        entrypoint: entrypoint_of(pin).map(String::from),
+        entrypoint: pin.entrypoint.clone(),
         body_tokens: 0,
         ..request.clone()
     }
@@ -5126,7 +5162,7 @@ fn shed_round(
                 .share()
                 .rate(
                     trigger.window,
-                    entrypoint_of(&p),
+                    p.entrypoint.as_deref(),
                     tier,
                     &p.model,
                     &p.burn,
@@ -5135,7 +5171,7 @@ fn shed_round(
                 .map(|rate| {
                     let segments = state.share().band_segments(
                         trigger.window,
-                        entrypoint_of(&p),
+                        p.entrypoint.as_deref(),
                         now,
                         horizon,
                     );
@@ -5510,6 +5546,7 @@ pub(crate) fn obstacle(
         reason: row.reason.clone(),
         until: row.until,
         window: row.window.clone(),
+        scope: row.scope.clone(),
     };
     // A fast rate limit dates the fast lane alone: where the account's credits (their row or the poll's state) or
     // its budget block the request too, that blocker answers, since the fast reset would pass with the request
@@ -5624,8 +5661,8 @@ fn renew(
     // A probe replays another request's headers and body, so the row keeps the entrypoint and the effort its own
     // requests stamped.
     if !request.probe {
-        renewed.entrypoint = request.entrypoint.clone().unwrap_or_default();
-        renewed.effort = request.effort.clone().unwrap_or_default();
+        renewed.entrypoint.clone_from(&request.entrypoint);
+        renewed.effort.clone_from(&request.effort);
     }
     let renewed = renewed.clone();
     let handed = pin_ref(&renewed);
@@ -5692,7 +5729,7 @@ fn pin_ref(row: &PinRow) -> PinRef {
         epoch: row.epoch,
         lane: row.lane.clone(),
         entrypoint: row.entrypoint.clone(),
-        effort: effort_of(row).map(String::from),
+        effort: row.effort.clone(),
     }
 }
 
@@ -6635,9 +6672,11 @@ fn exhaustion_of(obstacles: Vec<Obstacle>) -> Exhaustion {
     let fast_reset = obstacles
         .iter()
         .filter_map(|o| match o {
-            Obstacle::Cooldown { reason, until, .. } if reason == FAST_RATE_LIMIT_REASON => {
-                Some(*until)
-            }
+            Obstacle::Cooldown {
+                scope: CooldownScope::Fast,
+                until,
+                ..
+            } => Some(*until),
             _ => None,
         })
         .min();
@@ -6647,8 +6686,8 @@ fn exhaustion_of(obstacles: Vec<Obstacle>) -> Exhaustion {
     let credits: Vec<Option<&str>> = obstacles
         .iter()
         .filter_map(|o| match o {
-            Obstacle::Cooldown { reason, window, .. } => {
-                Some((reason == FAST_CREDITS_REASON).then_some(window.as_str()))
+            Obstacle::Cooldown { scope, window, .. } => {
+                Some((*scope == CooldownScope::FastCredits).then_some(window.as_str()))
             }
             Obstacle::Credits { reason } => Some(Some(reason.as_str())),
             Obstacle::Budget { .. }
@@ -6671,13 +6710,17 @@ fn exhaustion_of(obstacles: Vec<Obstacle>) -> Exhaustion {
             Obstacle::Budget { until, .. } => Some((until, "overage".into(), "budget".into())),
             // A credits row's window is the upstream's refusal reason, a claim the client does not know; the
             // credits it refused are the overage the client does.
-            Obstacle::Cooldown { until, reason, .. } if reason == FAST_CREDITS_REASON => {
-                Some((until, "overage".into(), reason))
-            }
+            Obstacle::Cooldown {
+                until,
+                reason,
+                scope: CooldownScope::FastCredits,
+                ..
+            } => Some((until, "overage".into(), reason)),
             Obstacle::Cooldown {
                 until,
                 window,
                 reason,
+                ..
             } => Some((until, window, reason)),
             Obstacle::Overage { until } => Some((until, "overage".into(), "overage".into())),
             Obstacle::Spent { until, window } => Some((until, window, "spent".into())),
@@ -6880,11 +6923,16 @@ fn window_facts(
 }
 
 fn obstacle_facts(obstacle: &Obstacle) -> ObstacleFacts {
+    let scope = match obstacle {
+        Obstacle::Cooldown { scope, .. } => Some(scope.to_string()),
+        _ => None,
+    };
     let (reason, window, until) = match obstacle {
         Obstacle::Cooldown {
             reason,
             until,
             window,
+            ..
         } => (Some(reason.clone()), Some(window.clone()), Some(*until)),
         Obstacle::Budget { until, period } => {
             (Some(period.as_str().to_string()), None, Some(*until))
@@ -6910,6 +6958,7 @@ fn obstacle_facts(obstacle: &Obstacle) -> ObstacleFacts {
     ObstacleFacts {
         name: obstacle_name(obstacle),
         reason,
+        scope,
         window,
         until,
     }
@@ -7256,13 +7305,13 @@ fn finish(
                 .filter(|pick| pick.account_id == hold.account_id)
                 .map(|pick| pick.tier);
             // A slow-down hold copies the read it was answered from, so the outcome states what the engine read.
-            let slowed = hold.reason == "slow_down";
+            let slowed = hold.reason == HoldReason::SlowDown;
             let read = slow_down.as_ref().filter(|_| slowed);
             outcome.hold = Some(HoldOutcome {
                 account_id: hold.account_id.clone(),
                 cohort: hold.cohort.clone(),
                 bound_ms: pool.map_or(0, |p| {
-                    if slowed || hold.reason == "rewrite" {
+                    if slowed || hold.reason == HoldReason::Rewrite {
                         slow_down_hold_ms(p)
                     } else {
                         seconds_ms(p.failover.retry_in_place_seconds)
@@ -7411,7 +7460,7 @@ impl Readings<'_> {
             // rewrite in flight it followed and how long it lasted.
             "renewed" if self.held_wait().is_some() => {
                 let hold = self.held_wait().expect("the guard read a wait");
-                (by("hold", hold.reason), vec![held_fact(hold)])
+                (by("hold", hold.reason.as_str()), vec![held_fact(hold)])
             }
             "renewed" => (by("none", ""), self.renewal_fact()),
             "moved" => {
@@ -7460,9 +7509,11 @@ impl Readings<'_> {
                     // A reset wait, a slow-down hold and a wait for a rewrite in flight are named by their reason,
                     // as the renewal names the slow-down, so `strategy_pick` stays the cap wait's word.
                     let place = match hold.reason {
-                        "reset" | "slow_down" | "rewrite" => hold.reason,
-                        _ if hold.cohort.is_some() => "cohort",
-                        _ => "strategy_pick",
+                        HoldReason::Reset | HoldReason::Rewrite | HoldReason::SlowDown => {
+                            hold.reason.as_str()
+                        }
+                        HoldReason::Cap if hold.cohort.is_some() => "cohort",
+                        HoldReason::Cap => "strategy_pick",
                     };
                     (by("hold", place), vec![held_fact(hold)])
                 }
@@ -7484,10 +7535,10 @@ impl Readings<'_> {
                 if outcome
                     .hold
                     .as_ref()
-                    .is_some_and(|hold| hold.reason == "rewrite") =>
+                    .is_some_and(|hold| hold.reason == HoldReason::Rewrite) =>
             {
                 (
-                    by("hold", "rewrite"),
+                    by("hold", HoldReason::Rewrite.as_str()),
                     outcome
                         .hold
                         .as_ref()
@@ -7502,16 +7553,23 @@ impl Readings<'_> {
                 if outcome
                     .hold
                     .as_ref()
-                    .is_some_and(|hold| hold.reason == "slow_down") =>
+                    .is_some_and(|hold| hold.reason == HoldReason::SlowDown) =>
             {
-                (by("hold", "slow_down"), self.slow_down_fact())
+                (
+                    by("hold", HoldReason::SlowDown.as_str()),
+                    self.slow_down_fact(),
+                )
             }
             // A wait for a reset names the wait's end, since no slot and no pick explain it. The end is the later of
             // the reset and a blocking cooldown's end, so the fact is named for the wait: the walk's `move:spent`
             // line keeps the reset itself.
-            "held" => match outcome.hold.as_ref().filter(|hold| hold.reason == "reset") {
+            "held" => match outcome
+                .hold
+                .as_ref()
+                .filter(|hold| hold.reason == HoldReason::Reset)
+            {
                 Some(hold) => (
-                    by("hold", "reset"),
+                    by("hold", HoldReason::Reset.as_str()),
                     hold.until
                         .map(|until| summary_fact("until", FactValue::Int(until), "time"))
                         .into_iter()
@@ -7728,7 +7786,7 @@ impl Readings<'_> {
     /// The slow-down hold or the wait for a rewrite in flight this selection follows, as `attempt_hold` reads it.
     fn held_wait(&self) -> Option<&HoldFacts> {
         self.attempt_hold()
-            .filter(|hold| hold.reason == "slow_down" || hold.reason == "rewrite")
+            .filter(|hold| matches!(hold.reason, HoldReason::Rewrite | HoldReason::SlowDown))
     }
 
     /// A slow-down hold's `until` and the factor its read sized it under, a bare fraction as the walk states it.

@@ -406,13 +406,13 @@ pub(crate) struct DecisionRecord {
     /// `static_match`, each `hash` (64 lowercase hex characters, the boundary as the cache map keys it), `depth`,
     /// `prefix_tokens`, `written_at`, `ttl_ms`, `live`, `refused_by`, the gate that refused it, and beside the
     /// four `with_main`), `obstacle` (`name`, `reason` (a cooldown's or a credits refusal's reason, and for
-    /// `budget` the period of the reached budget that ends last, `day` or `month`), `window`, `until`),
-    /// `partition`, `rank`, `score`, `verdict` (`chosen`, `renewed`, `held_on`, `source`, `destination`,
-    /// `eligible`, `ranked`, `out` or `not_needed`), `runway_ms`, `fit` (`ending`, `fits`, `least_bad` or
-    /// `rewrite_only`) and `binding` (the request's fit where a move's gate or the `no_fit` partition read it, the
-    /// runway null when unbounded), `burn` (the pins' burn by plan window, share per hour), `factor` (the member's
-    /// slow-down factor as the last pinned selection on it read it, null with no read or on a pool whose slow-down is
-    /// off).
+    /// `budget` the period of the reached budget that ends last, `day` or `month`), `scope` (a cooldown's scope word,
+    /// null elsewhere), `window`, `until`), `partition`, `rank`, `score`, `verdict` (`chosen`, `renewed`, `held_on`,
+    /// `source`, `destination`, `eligible`, `ranked`, `out` or `not_needed`), `runway_ms`, `fit` (`ending`, `fits`,
+    /// `least_bad` or `rewrite_only`) and `binding` (the request's fit where a move's gate or the `no_fit` partition
+    /// read it, the runway null when unbounded), `burn` (the pins' burn by plan window, share per hour), `factor` (the
+    /// member's slow-down factor as the last pinned selection on it read it, null with no read or on a pool whose
+    /// slow-down is off).
     #[schema(value_type = Vec<Object>)]
     pub candidates: Vec<Value>,
     /// The steps in the order the engine ran them, each `step`, `verdict` and `facts`, each fact `key`, `value`,

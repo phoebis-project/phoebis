@@ -3442,10 +3442,10 @@ async fn a_changed_listing_lands_a_catalog_row_and_the_released_first_purge_expi
                 static_hash: None,
                 tail_hash: None,
                 lane: String::new(),
-                entrypoint: String::new(),
+                entrypoint: None,
                 mark: None,
                 auxiliary_only: false,
-                effort: String::new(),
+                effort: None,
             })
             .unwrap();
     }

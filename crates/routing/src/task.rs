@@ -31,12 +31,11 @@ use crate::select::{
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, burn_folded, ceiling, default_burn_average_ms,
-    effort_of, entrypoint_of, is_plan_window, latest_full_reset, mark_holds, plan_windows,
-    round_in_dwell, shed_dwell_ms, slow_down_hold_ms, spend_reset_estimate, standing_mark,
-    wait_until, AccountTicket, BurnUnit, CreditsState, EvidenceSource, InFlight, MemberSpend,
-    OverageEvidence, PinRef, PinUsage, RateTable, Recorded, RoutingState, SharePricer,
-    SlowDownEdge, SpendWindow, StateWrite, UtilizationSample, WindowReading, WindowSource,
-    FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
+    is_plan_window, latest_full_reset, mark_holds, plan_windows, round_in_dwell, shed_dwell_ms,
+    slow_down_hold_ms, spend_reset_estimate, standing_mark, wait_until, AccountTicket, BurnUnit,
+    CreditsState, EvidenceSource, InFlight, MemberSpend, OverageEvidence, PinRef, PinUsage,
+    RateTable, Recorded, RoutingState, SharePricer, SlowDownEdge, SpendWindow, StateWrite,
+    UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use crate::{model_week, resolve, term, window_length_ms, Candidate, Presented, RegistrySnapshot};
 
@@ -111,14 +110,14 @@ pub const PIN_MIGRATED: &str = "pin_migrated";
 pub enum RouterEvent {
     CooldownCleared {
         account_id: String,
-        scope: String,
+        scope: CooldownScope,
         /// What released the row: `admin`, `expired`, or `recovered`.
         cause: &'static str,
         at: i64,
     },
     CooldownSet {
         account_id: String,
-        scope: String,
+        scope: CooldownScope,
         until: i64,
         reason: String,
         window: String,
@@ -132,10 +131,7 @@ pub enum RouterEvent {
     /// the pin sat on when the mark cleared.
     MarkCleared {
         account_id: String,
-        key_id: String,
-        session_id: String,
-        agent_id: String,
-        model: String,
+        pin: PinKey,
         reason: &'static str,
         marked_at: i64,
         marked_on: String,
@@ -155,19 +151,13 @@ pub enum RouterEvent {
         at: i64,
     },
     PinCreated {
-        key_id: String,
-        session_id: String,
-        agent_id: String,
-        model: String,
+        pin: PinKey,
         account_id: String,
         epoch: u64,
         at: i64,
     },
     PinExpired {
-        key_id: String,
-        session_id: String,
-        agent_id: String,
-        model: String,
+        pin: PinKey,
         account_id: String,
         /// What the selection found against the account, in its own order (see `release_reasons`), or
         /// `client_error` alone for a pin the relay released after the request that created it failed.
@@ -175,10 +165,7 @@ pub enum RouterEvent {
         at: i64,
     },
     PinMigrated {
-        key_id: String,
-        session_id: String,
-        agent_id: String,
-        model: String,
+        pin: PinKey,
         from_account: String,
         to_account: String,
         epoch: u64,
@@ -194,10 +181,7 @@ pub enum RouterEvent {
         at: i64,
     },
     PinReleased {
-        key_id: String,
-        session_id: String,
-        agent_id: String,
-        model: String,
+        pin: PinKey,
         account_id: String,
         at: i64,
     },
@@ -238,10 +222,7 @@ pub enum RouterEvent {
         account_id: String,
         pool_id: String,
         request_id: String,
-        key_id: String,
-        session_id: String,
-        agent_id: String,
-        model: String,
+        pin: PinKey,
         /// Boxed: the round's facts carry every pin of the round, and the broadcast copies the enum whole.
         round: Box<ShedRoundFacts>,
         at: i64,
@@ -371,10 +352,7 @@ pub enum RouterEvent {
 impl RouterEvent {
     fn pin_created(key: &PinKey, account_id: &str, epoch: u64, at: i64) -> RouterEvent {
         RouterEvent::PinCreated {
-            key_id: key.key_id.clone(),
-            session_id: key.session_id.clone(),
-            agent_id: key.agent_id.clone(),
-            model: key.model.clone(),
+            pin: key.clone(),
             account_id: account_id.to_string(),
             epoch,
             at,
@@ -388,10 +366,7 @@ impl RouterEvent {
         at: i64,
     ) -> RouterEvent {
         RouterEvent::PinExpired {
-            key_id: key.key_id.clone(),
-            session_id: key.session_id.clone(),
-            agent_id: key.agent_id.clone(),
-            model: key.model.clone(),
+            pin: key.clone(),
             account_id: account_id.to_string(),
             reasons,
             at,
@@ -409,10 +384,7 @@ impl RouterEvent {
     ) -> RouterEvent {
         let (fit, runway_ms, binding) = destination_fit(record, &to.account_id);
         RouterEvent::PinMigrated {
-            key_id: key.key_id.clone(),
-            session_id: key.session_id.clone(),
-            agent_id: key.agent_id.clone(),
-            model: key.model.clone(),
+            pin: key.clone(),
             from_account,
             to_account: to.account_id.clone(),
             epoch: to.epoch,
@@ -540,11 +512,9 @@ impl BurnRates {
     /// window, so neither reaches the plan's figure, while an account in overage or on an API key pays the dollars of
     /// both. `None` where a type the pin burns has no rate.
     pub fn price_pin(&self, unit: BurnUnit, pin: &PinRow, window: &str) -> Option<f64> {
-        let own = unit.table(self, entrypoint_of(pin), window).price_burn(
-            &pin.model,
-            &unit.read(pin, window),
-            pin.last_input_tokens,
-        )?;
+        let own = unit
+            .table(self, pin.entrypoint.as_deref(), window)
+            .price_burn(&pin.model, &unit.read(pin, window), pin.last_input_tokens)?;
         match unit {
             BurnUnit::Usd => Some(
                 own + self
@@ -2543,10 +2513,7 @@ fn released_mark(row: &PinRow, at: i64) -> Option<RouterEvent> {
     let mark = standing_mark(row)?;
     Some(RouterEvent::MarkCleared {
         account_id: row.account_id.clone(),
-        key_id: row.key_id.clone(),
-        session_id: row.session_id.clone(),
-        agent_id: row.agent_id.clone(),
-        model: row.model.clone(),
+        pin: row.key(),
         reason: "released",
         marked_at: mark.at,
         marked_on: mark.on.clone(),
@@ -2771,7 +2738,7 @@ fn pins_standing(state: &RoutingState, snapshot: &RegistrySnapshot, now: i64) ->
                 .map(|entry| (entry.factor, entry.speed));
             let cycle_ms = state.pin_pace(&pin.key()).and_then(|pace| pace.cycle_ms);
             let auxiliary_only = state.auxiliary_only(&pin.key());
-            let effort = effort_of(&pin).map(String::from);
+            let effort = pin.effort.clone();
             let first_seen_at = state.first_seen(&pin.key_id, &pin.session_id, &pin.agent_id);
             let session_first_seen_at = state.first_seen(&pin.key_id, &pin.session_id, MAIN_AGENT);
             PinStanding {
@@ -3176,10 +3143,7 @@ impl Task {
                     match cleared {
                         Some(facts) => Some(RouterEvent::MarkCleared {
                             account_id,
-                            key_id: pin_key.key_id.clone(),
-                            session_id: pin_key.session_id.clone(),
-                            agent_id: pin_key.agent_id.clone(),
-                            model: pin_key.model.clone(),
+                            pin: pin_key.clone(),
                             reason: facts.reason,
                             marked_at: facts.marked_at,
                             marked_on: facts.marked_on.clone(),
@@ -3212,10 +3176,7 @@ impl Task {
                     account_id: round.account_id,
                     pool_id: record.request.pool_id.clone(),
                     request_id: request.request_id.clone(),
-                    key_id: round.pin.key_id,
-                    session_id: round.pin.session_id,
-                    agent_id: round.pin.agent_id,
-                    model: round.pin.model,
+                    pin: round.pin,
                     round: Box::new(round.facts),
                     at: request.now,
                 });
@@ -3380,10 +3341,7 @@ impl Task {
                 let now = (self.clock)();
                 for row in &gone {
                     self.emit(RouterEvent::PinReleased {
-                        key_id: row.key_id.clone(),
-                        session_id: row.session_id.clone(),
-                        agent_id: row.agent_id.clone(),
-                        model: row.model.clone(),
+                        pin: row.key(),
                         account_id: row.account_id.clone(),
                         at: now,
                     });
@@ -3657,7 +3615,7 @@ impl Task {
                 if self.state.record_cooldown(row.clone()) {
                     self.emit(RouterEvent::CooldownSet {
                         account_id: account_id.clone(),
-                        scope: row.scope.to_string(),
+                        scope: row.scope.clone(),
                         until: row.until,
                         reason: row.reason.clone(),
                         window: row.window.clone(),
@@ -4028,8 +3986,8 @@ impl Task {
                         } else {
                             // A probe replays another request's headers and body, so the row keeps its entrypoint
                             // and its effort as it keeps its lane.
-                            renewed.entrypoint = pin.entrypoint.clone();
-                            renewed.effort = pin.effort.clone().unwrap_or_default();
+                            renewed.entrypoint.clone_from(&pin.entrypoint);
+                            renewed.effort.clone_from(&pin.effort);
                             if let Some(usage) = usage {
                                 // Every copy folds whatever the account's kind and nothing is priced here: the
                                 // reader prices the copies its funding selects on the account the pin sits on when
@@ -4040,8 +3998,11 @@ impl Task {
                                 // factor, so the banded copy weighs it by the band of the row's regime at the
                                 // renewal, the row's entrypoint as the renewal leaves it. Dollars cost the same at
                                 // every hour.
-                                let band =
-                                    self.config.band.at(FIVE_HOUR, entrypoint_of(renewed), now);
+                                let band = self.config.band.at(
+                                    FIVE_HOUR,
+                                    renewed.entrypoint.as_deref(),
+                                    now,
+                                );
                                 let at = renewed.burn_at;
                                 let prompt = usage.prompt_tokens();
                                 // Every copy decays from the same `burn_at`, so a copy this renewal adds nothing
@@ -4548,7 +4509,7 @@ impl Task {
         if cleared {
             self.emit(RouterEvent::CooldownCleared {
                 account_id: account_id.clone(),
-                scope: scope.to_string(),
+                scope: scope.clone(),
                 cause,
                 at: (self.clock)(),
             });
@@ -4634,7 +4595,7 @@ impl Task {
         for (account_id, scope) in &purged.cooldowns {
             self.emit(RouterEvent::CooldownCleared {
                 account_id: account_id.clone(),
-                scope: scope.to_string(),
+                scope: scope.clone(),
                 cause: "expired",
                 at: now,
             });
@@ -5604,10 +5565,10 @@ mod tests {
             static_hash: None,
             tail_hash: None,
             lane: crate::lane_key("m", "standard", "none", "-"),
-            entrypoint: String::new(),
+            entrypoint: None,
             mark: None,
             auxiliary_only: false,
-            effort: String::new(),
+            effort: None,
         };
         assert_eq!(
             rates.price_pin(BurnUnit::Usd, &pin, FIVE_HOUR),
@@ -5971,10 +5932,10 @@ mod tests {
                 static_hash: None,
                 tail_hash: None,
                 lane: crate::lane_key(model, "standard", "none", "-"),
-                entrypoint: String::new(),
+                entrypoint: None,
                 mark: None,
                 auxiliary_only: false,
-                effort: String::new(),
+                effort: None,
             }],
             ..RoutingLoad::default()
         });

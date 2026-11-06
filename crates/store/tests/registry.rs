@@ -121,10 +121,10 @@ fn a_version_one_registry_opens_at_four_with_the_new_columns_at_their_defaults_a
                 static_hash: None,
                 tail_hash: None,
                 lane: String::new(),
-                entrypoint: String::new(),
+                entrypoint: None,
                 mark: None,
                 auxiliary_only: true,
-                effort: "high".into(),
+                effort: Some("high".into()),
             })
             .unwrap();
         let incarnation = store.account("a").unwrap().unwrap().incarnation;
@@ -172,9 +172,9 @@ fn a_version_one_registry_opens_at_four_with_the_new_columns_at_their_defaults_a
     assert_eq!(
         load.pins
             .iter()
-            .map(|p| (p.session_id.as_str(), p.auxiliary_only, p.effort.as_str()))
+            .map(|p| (p.session_id.as_str(), p.auxiliary_only, p.effort.as_deref()))
             .collect::<Vec<_>>(),
-        [("s", false, "")],
+        [("s", false, None)],
         "a pin from before the step reads the two columns' defaults"
     );
     assert_eq!(
@@ -253,10 +253,10 @@ fn every_burn_copy_of_a_pin_and_the_columns_after_them_read_back_as_written() {
         static_hash: None,
         tail_hash: None,
         lane: String::new(),
-        entrypoint: String::new(),
+        entrypoint: None,
         mark: None,
         auxiliary_only: false,
-        effort: String::new(),
+        effort: None,
     };
     store.upsert_pin(&before).unwrap();
     assert_eq!(
@@ -282,7 +282,7 @@ fn every_burn_copy_of_a_pin_and_the_columns_after_them_read_back_as_written() {
             on: "a".into(),
             window: "five_hour".into(),
         }),
-        entrypoint: "cli".into(),
+        entrypoint: Some("cli".into()),
         ..before
     };
     store.upsert_pin(&pin).unwrap();
@@ -323,10 +323,10 @@ fn a_pins_last_classifier_flag_reads_back_as_written_and_a_standard_renewal_clea
         static_hash: None,
         tail_hash: None,
         lane: String::new(),
-        entrypoint: String::new(),
+        entrypoint: None,
         mark: None,
         auxiliary_only: false,
-        effort: String::new(),
+        effort: None,
     };
     store.upsert_pin(&before).unwrap();
     assert_eq!(

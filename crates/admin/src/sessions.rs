@@ -7,9 +7,7 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use phoebis_routing::{
-    entrypoint_of, BurnRates, BurnUnit, PinStanding, FIVE_HOUR, MAIN_AGENT, SEVEN_DAY,
-};
+use phoebis_routing::{BurnRates, BurnUnit, PinStanding, FIVE_HOUR, MAIN_AGENT, SEVEN_DAY};
 use utoipa::ToSchema;
 
 use crate::openapi::{ErrorBody, LedgerFailure, RouterUnavailable};
@@ -709,7 +707,7 @@ fn price_pin_burn(p: &phoebis_store::PinRow, pricing: &BurnPricing) -> PricedBur
             // An account tier the cost model does not size prices nothing, as does a model without a weight, so
             // the figure reads null rather than a guess.
             let burn = tier
-                .and_then(|t| tables.tier_factor(t, window, entrypoint_of(p), now))
+                .and_then(|t| tables.tier_factor(t, window, p.entrypoint.as_deref(), now))
                 .and_then(|factor| {
                     rates
                         .price_pin(BurnUnit::WindowShare, p, window)

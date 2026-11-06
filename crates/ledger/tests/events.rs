@@ -12,7 +12,9 @@ use phoebis_ledger::{
     LedgerDb, QuotaSampleRecord, SampleSource, WriterRead,
 };
 use phoebis_routing::RouterEvent;
-use phoebis_store::{AccountState, MemberWrite, PoolRow, StateCause, StorageKey, Store};
+use phoebis_store::{
+    AccountState, CooldownScope, MemberWrite, PinKey, PoolRow, StateCause, StorageKey, Store,
+};
 use tower::ServiceExt;
 
 #[tokio::test]
@@ -696,7 +698,7 @@ fn a_model_scoped_cooldown_lands_with_its_model_in_the_model_column() {
     let db = LedgerDb::open_in_memory().unwrap();
     let set = event_of(&RouterEvent::CooldownSet {
         account_id: "a".into(),
-        scope: "model:claude-sonnet-4-5".into(),
+        scope: CooldownScope::Model("claude-sonnet-4-5".into()),
         until: 2_000,
         reason: "rate_limit".into(),
         window: "five_hour".into(),
@@ -2138,10 +2140,7 @@ fn a_pool_under_half_an_hour_holds_slowed_long_past_the_floor() {
 #[test]
 fn two_agents_pin_created_rows_differ_in_their_detail() {
     let pin_created = |agent_id: &str| RouterEvent::PinCreated {
-        key_id: "k".into(),
-        session_id: "s".into(),
-        agent_id: agent_id.into(),
-        model: "m".into(),
+        pin: PinKey::new("k", "s", agent_id, "m"),
         account_id: "a".into(),
         epoch: 1,
         at: 1,
@@ -2205,13 +2204,13 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
         },
         RouterEvent::CooldownCleared {
             account_id: "a".into(),
-            scope: "account".into(),
+            scope: CooldownScope::Account,
             cause: "expired",
             at: 1,
         },
         RouterEvent::CooldownSet {
             account_id: "a".into(),
-            scope: "account".into(),
+            scope: CooldownScope::Account,
             until: 2,
             reason: "rate_limit".into(),
             window: "five_hour".into(),
@@ -2228,10 +2227,7 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
         },
         RouterEvent::MarkCleared {
             account_id: "a".into(),
-            key_id: "k".into(),
-            session_id: "s".into(),
-            agent_id: "main".into(),
-            model: "m".into(),
+            pin: PinKey::new("k", "s", "main", "m"),
             reason: "moved",
             marked_at: 1,
             marked_on: "a".into(),
@@ -2251,28 +2247,19 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
             at: 1,
         },
         RouterEvent::PinCreated {
-            key_id: "k".into(),
-            session_id: "s".into(),
-            agent_id: "main".into(),
-            model: "m".into(),
+            pin: PinKey::new("k", "s", "main", "m"),
             account_id: "a".into(),
             epoch: 1,
             at: 1,
         },
         RouterEvent::PinExpired {
-            key_id: "k".into(),
-            session_id: "s".into(),
-            agent_id: "main".into(),
-            model: "m".into(),
+            pin: PinKey::new("k", "s", "main", "m"),
             account_id: "a".into(),
             reasons: Vec::new(),
             at: 1,
         },
         RouterEvent::PinMigrated {
-            key_id: "k".into(),
-            session_id: "s".into(),
-            agent_id: "main".into(),
-            model: "m".into(),
+            pin: PinKey::new("k", "s", "main", "m"),
             from_account: "a".into(),
             to_account: "b".into(),
             epoch: 2,
@@ -2284,10 +2271,7 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
             at: 1,
         },
         RouterEvent::PinReleased {
-            key_id: "k".into(),
-            session_id: "s".into(),
-            agent_id: "main".into(),
-            model: "m".into(),
+            pin: PinKey::new("k", "s", "main", "m"),
             account_id: "a".into(),
             at: 1,
         },
@@ -2304,10 +2288,7 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
             account_id: "a".into(),
             pool_id: "p".into(),
             request_id: "r".into(),
-            key_id: "k".into(),
-            session_id: "s".into(),
-            agent_id: "main".into(),
-            model: "m".into(),
+            pin: PinKey::new("k", "s", "main", "m"),
             round: Box::new(ShedRoundFacts {
                 window: "five_hour".into(),
                 utilization: 0.5,
