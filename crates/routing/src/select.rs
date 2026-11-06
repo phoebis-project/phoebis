@@ -4014,8 +4014,8 @@ fn move_of<'a>(
     // threshold after the safety wait, every other window's the projection at its horizon over the ceiling after the
     // projection's wait, a window inside its wait yielding to the next, as a 5-hour window inside its hold does. A wait
     // or the hold holds back the round alone, so a standing mark moves below while a window waits or is held as it does
-    // under a fired one. The line names every projection it read whether or not one fired, with its horizon and the wall
-    // its burn reaches, the stamp and the wait of each window inside its wait and the 5-hour window's age and hold
+    // under a fired one. The line names every projection it read whether or not one fired, with its horizon and the
+    // wall its burn reaches, the stamp and the wait of each window inside its wait and the 5-hour window's age and hold
     // inside the hold.
     let source = current.account_id.as_str();
     let tier = snapshot.priced_tier(source).unwrap_or_default();

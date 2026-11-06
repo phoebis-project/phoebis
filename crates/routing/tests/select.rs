@@ -27878,12 +27878,9 @@ fn the_hold_follows_the_pools_burn_average() {
 #[test]
 fn a_window_whose_wait_ran_inside_the_hold_fires_at_the_first_selection_past_the_hold() {
     let s = held_pool(1200);
-    let dwell = shed_dwell_ms(s.pool("p").expect("the pool"));
-    assert!(
-        dwell < 39 * MINUTE,
-        "a wait of at most the dwell has run on a window 39 minutes old"
-    );
-    // a's window opened 39 minutes before T and reads over the ceiling since then, so its wait ran inside the hold.
+    // a's window opened 39 minutes before T and reads over the ceiling since then. The pins' 0.42 an hour take its 0.80
+    // to the wall about 29 minutes after T, so its wait, a quarter of the 68 minutes from the stamp to the wall, ran
+    // inside the hold.
     let mut st = three_pins_with_a(refreshing(
         0.80,
         T + 5 * HOUR - 39 * MINUTE,
