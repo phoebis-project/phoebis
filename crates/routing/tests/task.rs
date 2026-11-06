@@ -14575,6 +14575,47 @@ async fn mains_record_stands_through_its_failover_gap_while_a_subagents_pin_leav
 }
 
 #[tokio::test]
+async fn a_client_error_past_mains_failover_window_ends_the_session_though_no_purge_has_dropped_the_entry(
+) {
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    // The default purge interval's next tick comes a minute after the spawn, so none runs here and main's entry still
+    // stands past its window.
+    let (handle, worker) =
+        main_in_a_gap_beside_a_subagent(&store, &now, RouterConfig::default(), 1_200).await;
+    // The first instant past the window of main's failover.
+    now.store(1_200 + 60_001, Ordering::SeqCst);
+    handle
+        .report(Report::PinReleased {
+            pin: worker,
+            incarnation: 1,
+            lifecycle_generation: 1,
+            credential_generation: 1,
+        })
+        .await;
+    wait_for(WRITTEN, || {
+        store.load_routing().unwrap().pins.is_empty().then_some(())
+    })
+    .await;
+    now.store(61_300, Ordering::SeqCst);
+    handle
+        .select(turn_of(&handle, "s1", "main", "claude-sonnet-5", 61_300))
+        .await
+        .unwrap();
+    assert_eq!(
+        creation_times(&handle).await,
+        vec![standing(
+            "s1",
+            "main",
+            "claude-sonnet-5",
+            Some(61_300),
+            Some(61_300)
+        )],
+        "main's return is a new session, since its gap closed with the window"
+    );
+}
+
+#[tokio::test]
 async fn mains_record_stands_through_its_failover_gap_while_a_subagents_pin_expires_at_the_purge() {
     let store = seeded(&["a", "b"]);
     let now = Arc::new(AtomicI64::new(1_000));
@@ -14656,6 +14697,68 @@ async fn a_release_while_every_pin_of_the_session_sits_in_a_failover_gap_deletes
         stored_first_seen(&store),
         [seen("s1", "main", 1_400)],
         "the return's row loads and the gapped subagent's row is gone"
+    );
+}
+
+#[tokio::test]
+async fn a_lapsed_failover_keeps_the_sessions_records_while_another_of_its_pins_still_sits_in_a_gap(
+) {
+    // A third account, so the return lands wherever the two failovers left.
+    let store = seeded(&["a", "b", "c"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let (handle, worker) = main_in_a_gap_beside_a_subagent(
+        &store,
+        &now,
+        RouterConfig {
+            purge_interval: Duration::from_millis(50),
+            ..RouterConfig::default()
+        },
+        1_200,
+    )
+    .await;
+    now.store(31_200, Ordering::SeqCst);
+    let on = handle.pins().await.unwrap()[0].account_id.clone();
+    handle.report(rejected(&on, worker, 31_200 + HOUR)).await;
+    // A held lapse writes nothing, so this row, which ends at 51_200, shows the lapse's tick landed when it leaves.
+    handle
+        .report(model_cooldown("a", "model:tick", 51_200 - HOUR))
+        .await;
+    let tick_row = |load: &RoutingLoad| {
+        load.cooldowns
+            .iter()
+            .any(|row| row.scope.to_string() == "model:tick")
+    };
+    wait_for(WRITTEN, || {
+        let load = store.load_routing().unwrap();
+        (load.pins.is_empty() && tick_row(&load)).then_some(())
+    })
+    .await;
+    // Main's entry lapses at 70 s while the subagent's stands at 40 s.
+    now.store(71_200, Ordering::SeqCst);
+    wait_for(WRITTEN, || {
+        (!tick_row(&store.load_routing().unwrap())).then_some(())
+    })
+    .await;
+    handle
+        .select(turn_of(&handle, "s1", "main", "claude-sonnet-5", 71_200))
+        .await
+        .unwrap();
+    assert_eq!(
+        creation_times(&handle).await,
+        vec![standing(
+            "s1",
+            "main",
+            "claude-sonnet-5",
+            Some(1_000),
+            Some(1_000)
+        )],
+        "main's return finds its record, which its lapse left while the subagent's pin sat in its gap"
+    );
+    restarted(handle, &store, &now).await;
+    assert_eq!(
+        stored_first_seen(&store),
+        [seen("s1", "main", 1_000), seen("s1", "worker-1", 1_100)],
+        "the session's rows stand in the store"
     );
 }
 
@@ -14857,7 +14960,8 @@ async fn sessions_that_end_and_return_within_one_instant_in_the_backlog_keep_eac
     let store = seeded(&["a", "b"]);
     let now = Arc::new(AtomicI64::new(1_000));
     let (handle, hold) = parked_writer(&store, &now).await;
-    // A backlog segment lands in map order, so sixteen sessions put each end on both sides of its return's record.
+    // A backlog segment lands in map order, so across sixteen sessions the ends land on both sides of their returns'
+    // records.
     let sessions: Vec<String> = (0..16).map(|i| format!("s{i:02}")).collect();
     // These land ahead of the backlog.
     for session in &sessions {
