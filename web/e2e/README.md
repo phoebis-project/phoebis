@@ -326,53 +326,66 @@ and open, the button on the sentence's last line or flush left on the next, the 
 above the card's top, Cost reference one line at the head's top right), the stripes on every view with a table (the
 first four data rows plain, `--stripe`, plain, `--stripe`, a `table--plain` table plain, `--stripe` a tone of its own
 apart from no fill, the surface, `--surface-2` and `--accent-soft`, an expanded Sessions row's detail and the Routing
-log's open panel on their parent's tone, the open row itself on `--surface-3`, a striped Requests row on `--surface-2`
-under the pointer and on `--accent-soft` once selected on every cell, and the pool dialog's form tables plain), the
-scroll lock behind a modal dialog (in the mock pass, on the Pools page in a browser that shows scrollbars: a wheel over
-the page moves it, a wheel over the open dialog's backdrop leaves the page's scroll and its content box where they
-stood, and the close returns the page to the scroll it had), the cost reference, its headline words (mock pass, at 1280
-by 800: the tabs reading Tiers and peak band, Plan rates and API prices, the Windows by tier group rows reading the
-Interactive title, then the Headless title, the first one's cell in the type size of the table's first head and heavier,
-both weights recorded, the Peak band card's subtitle reading the shipped band sentence after "This week.", Plan rates'
+log's open panel on their parent's tone, the open row itself on `--surface-3`, in the mock pass the written session's
+Agents table opened under a plain and under a striped session row (its first four rows showing the table's own
+`--surface`, then `--stripe`, `--surface` and `--stripe` behind every cell, its eleven heads closing on the menu's, and
+a type with a hyphen breaking after it in the table's narrowest layout), a striped Requests row on `--surface-2` under
+the pointer and on `--accent-soft` once selected on every cell, and the pool dialog's form tables plain), the scroll
+lock behind a modal dialog (in the mock pass, on the Pools page in a browser that shows scrollbars: a wheel over the
+page moves it, a wheel over the open dialog's backdrop leaves the page's scroll and its content box where they stood,
+and the close returns the page to the scroll it had), the cost reference, its headline words (mock pass, at 1280 by 800:
+the tabs reading Tiers and peak band, Plan rates and API prices, the Windows by tier group rows reading the Interactive
+title, then the Headless title, the first one's cell in the type size of the table's first head and heavier, both
+weights recorded, the Peak band card's subtitle reading the shipped band sentence after "This week.", Plan rates'
 pressed Regime option reading Interactive and its Tier chooser's first option reading Pro, pressed and in the Regime
-control's first option's height, top edge and type, the caption recorded), the session table's fit (inside the card at
-1280 by 800 and 1440 by 900 with the Cost column among the defaults and a slowed session's speed chip inside its Account
-cell, and at 375 by 800 scrolling inside its wrap with Session at its 74 px floor and the page as wide as the window)
-and its columns (each fit column as wide as its content, the Model and Cost cells' badges wrapping under their figure,
-the Session column the fill), the session id's width, the session row menu, the agent lines of the Cache warming details
-(each opened on every row Expand all opens, at 1280 by 800 and 1440 by 900: the head's, main's and the longest subagent
-id's cells on one left edge per column within 1 px on the companion session that holds that id, seven columns closing on
-State, every id whole on one line, each state badge inside its grid's scroll width at 1280 px and inside its visible box
-at 1440 px, where no grid scrolls, the widest grid's scroll and client widths recorded, the expanded table inside its
-wrap at both widths, the wrap's scroll and client widths recorded, and the first text line of the Model, Requests and
-Last used cells of the first row whose Status reads unreported on its session id's line, its top and its height), the
-Agents tables (on every row Expand all opens at 1280 by 800, each earlier agents line opened: each table inside its
-detail panel's client width with its eleven heads closing on the menu's, its head cells in the type size, weight and ink
-of the session table's, the table whose narrowest layout is widest recorded with that width), the agent menu (mock pass,
-at 1280 by 800 on the open row of a session whose Agents table lists main alone: the open list's last item takes the
-pointer at its center, so the table's wrap clips none of the list), the Sessions bar's sort control and its order (on
-loads of its own that end on the bare view: the Sort button in the height, top edge, type size and weight of the Columns
-control beside it, reading "Sort: Created" on the bare address and "Sort: Last activity" under `?sort=activity`, the
-first five rows' session ids recorded under each), the Sessions fold line (on a load of its own under
-`?model=claude-sonnet-5` that ends on the bare view: every row Expand all opens listing the lines on that model alone, a
-row whose other agents the filter hides reading the fold line's count, its toggle in the type size, weight and ink of
-the Cache warming line's, and the model chip's `(any agent)` suffix in the type size and ink of the chip's word), the
-fork badge's face (under the session id, in the face of the Status badges), the fork badges (inside their cell and
-whole), the row's badges (on the first row whose Status and Cache cells both draw one, the two in one face and height,
-and the Agents, Requests, Cost and Cache cells' sub lines in the type of the Status cell's), the session row's chevron
-(14 px square at the icon's 1.75 stroke), the Sessions read error (mock pass, on loads of its own under the mock's
-sessions failure switch: the notice 12 px under the bar naming the sessions with the read's message, and the card's
-error state, whose Try again the notice's matches in height, type size and weight), a finished session's line, found by
-its Status, the first line of its open detail, its words against the detail's type (mock pass, on a load of its own
-under the finished filter once the session list's shot is taken), the fork link, which is followed once the session
-list's shot is taken, the copy fallback (Copied on the Settings snippet with the clipboard API removed, on the Settings
-view's own load, and on a Key created dialog's secret in the mock pass, on a load of its own), the login screen's Stay
-logged in row (on both logins, the light theme's and the dark one's after the Log out: the secret field's, the row's,
-its box's, its label's and its hint's edges inside the card recorded, asserting nothing)). A check that opens an editor,
-a dialog or a row closes it again before the view's shot, and one that turns a column on turns it off again. The recent
-requests' table is fitted in the router pass and recorded in the mock pass, whose story's subscription rows read their
-figure in the Ultra week in the Cost cell, wider than the card leaves at 1280 by 800, so the table scrolls inside its
-wrap there. The script exits non-zero with the list of failures when any of that does not hold.
+control's first option's height, top edge and type, the caption recorded), the session table's fit (the nine default
+columns and the menu's inside the card at 1280 by 800 and 1440 by 900 with a slowed session's speed chip inside its
+Account cell, at 1440 by 900 every column the Columns control lists turned on, the head reading each of them in the
+control's order with Context among them and the menu's last and the page as wide as the window, the table's and the
+wrap's widths recorded, and after a load that draws the defaults again, at 375 by 800 scrolling inside its wrap with
+Session at its 74 px floor and the page as wide as the window) and its columns (each fit column as wide as its content,
+the Model and Cost cells' badges wrapping under their figure, the Session column the fill), the session id's width, the
+session row menu, the agent lines of the Cache warming details (each opened on every row Expand all opens, at 1280 by
+800 and 1440 by 900: the head's, main's and the longest subagent id's cells on one left edge per column within 1 px on
+the companion session that holds that id, seven columns closing on State, every id whole on one line, each state badge
+inside its grid's scroll width at 1280 px and inside its visible box at 1440 px, where no grid scrolls, the widest
+grid's scroll and client widths recorded, the expanded table inside its wrap at both widths, the wrap's scroll and
+client widths recorded, and the first text line of the Model, Requests and Last used cells of the first row whose Status
+reads unreported on its session id's line, its top and its height), the Agents tables (on every row Expand all opens at
+1280 by 800, each earlier agents line opened: each table inside its detail panel's client width with its eleven heads
+closing on the menu's, its head cells in the type size, weight and ink of the session table's, the table whose narrowest
+layout is widest recorded with that width), the agent menu (mock pass, at 1280 by 800 on the open row of a session whose
+Agents table lists main alone: the open list's last item takes the pointer at its center, so the table's wrap clips none
+of the list), the open row's facts (the written session's row in the mock pass and the first row in the router's: the
+Session and Routing grids on one row of tops at 1280 by 800, and one above the other on one left edge at 599 by 800),
+the open row at a phone's 375 by 800 (on a load of its own that ends on the bare view: its panel as wide as the session
+table's wrap and at the wrap's left edge before and after the wrap scrolls 200 px, the Session facts above the Routing
+facts, and the Agents table scrolling in a wrap of its own under a sideways wheel that leaves the session table's wrap
+where it stood), the Sessions bar's sort control and its order (on loads of its own that end on the bare view: the Sort
+button in the height, top edge, type size and weight of the Columns control beside it, reading "Sort: Created" on the
+bare address and "Sort: Last activity" under `?sort=activity`, the first five rows' session ids recorded under each),
+the Sessions fold line (on a load of its own under `?model=claude-sonnet-5` that ends on the bare view: every row Expand
+all opens listing the lines on that model alone, a row whose other agents the filter hides reading the fold line's
+count, its toggle in the type size, weight and ink of the Cache warming line's, and the model chip's `(any agent)`
+suffix in the type size and ink of the chip's word), the fork badge's face (under the session id, in the face of the
+Status badges), the fork badges (inside their cell and whole), the row's badges (on the first row whose Status and Cache
+cells both draw one, the two in one face and height, and the Agents, Requests, Cost and Cache cells' sub lines in the
+type of the Status cell's), the badges' tones (on the bare view `busy` accent, `idle` and `warm` good, `parked`,
+`registered`, `cold`, `+$` and "+N" neutral, the `silent` sub line in `--warning-ink`, the `unreported` and `no pin`
+words in the ink of the bar's muted count, and the fork badge carrying `.srow__fork`), the session row's chevron (14 px
+square at the icon's 1.75 stroke), the Sessions read error (mock pass, on loads of its own under the mock's sessions
+failure switch: the notice 12 px under the bar naming the sessions with the read's message, and the card's error state,
+whose Try again the notice's matches in height, type size and weight), a finished session's line, found by its Status,
+the first line of its open detail, its words against the detail's type (mock pass, on a load of its own under the
+finished filter once the session list's shot is taken), the fork link, which is followed once the session list's shot is
+taken, the copy fallback (Copied on the Settings snippet with the clipboard API removed, on the Settings view's own
+load, and on a Key created dialog's secret in the mock pass, on a load of its own), the login screen's Stay logged in
+row (on both logins, the light theme's and the dark one's after the Log out: the secret field's, the row's, its box's,
+its label's and its hint's edges inside the card recorded, asserting nothing)). A check that opens an editor, a dialog
+or a row closes it again before the view's shot, and one that turns a column on turns it off again. The recent requests'
+table is fitted in the router pass and recorded in the mock pass, whose story's subscription rows read their figure in
+the Ultra week in the Cost cell, wider than the card leaves at 1280 by 800, so the table scrolls inside its wrap there.
+The script exits non-zero with the list of failures when any of that does not hold.
 
 The screenshot directory has to lie outside the repository, which the script enforces against every worktree `git
 worktree list` reports, and against the tree holding the nearest `Cargo.toml` when git cannot answer.
@@ -413,13 +426,14 @@ admin secret and the clock pinned at `2026-09-16T14:30:00Z`, the weekday afterno
 draws are seeded, so two runs write the same screenshots byte for byte, which `diff -r` over the two directories shows.
 Beside the views' shots it writes the open catalog popup's as `<theme>/accounts-catalog.png`, the open cost reference's
 three tabs as `<theme>/cost-reference-tiers.png`, `cost-reference-plan-rates.png` and `cost-reference-api-prices.png`,
-and the Analytics page's Burn tab, its plan card drawing its lines, as `<theme>/analytics-burn.png`. Its views
-include the Analytics page's Cache warming tab as `<theme>/analytics-cache-warming.png` and the Quota page's Quota
-windows section as `<theme>/quota-windows.png`. The router's pass writes none of these: one shot per view it runs, which
-its test counts. The dashboard's remaining cards and its empty state are checked against the router's seeded registry
-alone (`PHOEBIS_E2E_MOCK=1` skips them), since the mock's story has subscription accounts and no empty list on the
-dashboard. The subscription end editor needs the story's OAuth account, so against the router's seed that part stands
-down.
+the Analytics page's Burn tab, its plan card drawing its lines, as `<theme>/analytics-burn.png`, and the written
+session's open row on the Sessions view as `<theme>/sessions-open.png` and again at 375 by 800 as
+`<theme>/sessions-phone.png`. Its views include the Analytics page's Cache warming tab as
+`<theme>/analytics-cache-warming.png` and the Quota page's Quota windows section as `<theme>/quota-windows.png`. The
+router's pass writes none of these: one shot per view it runs, which its test counts. The dashboard's remaining cards
+and its empty state are checked against the router's seeded registry alone (`PHOEBIS_E2E_MOCK=1` skips them), since the
+mock's story has subscription accounts and no empty list on the dashboard. The subscription end editor needs the story's
+OAuth account, so against the router's seed that part stands down.
 
 ## The API reference page
 

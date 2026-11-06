@@ -10881,6 +10881,19 @@ async function tableStripes(theme, path) {
   if (path === '/pools') await poolFormTables(theme);
 }
 
+/** The mock story's written session, `sessionSpec[9]`, the one row whose Agents table lists four agents at rest. */
+const WRITTEN_SESSION = '7bea4514-4087-4b6a-a410-0dd5cd31cfad';
+
+/**
+ * Two addresses that put the written session on a plain and on a striped session row: third under the last activity's
+ * order, and second once the search keeps the ids that start with 7, where only the session with the newest activity
+ * stands before it.
+ */
+const WRITTEN_PLACES = ['/sessions?sort=activity', '/sessions?search=7&sort=activity'];
+
+/** The session row an open-row measure opens: the written session's in the mock pass, the router seed's first. */
+const openRowTarget = () => (mock ? page.locator('.sessions-table > tbody > tr.srow', { has: page.locator(`td[title="${WRITTEN_SESSION}"]`) }) : page.locator('.sessions-table > tbody > tr.srow').first());
+
 /**
  * The elements that cut a long value with an ellipsis, each named by its own class rather than by the shared cut
  * class, so one that lost the cut class still counts.
@@ -10945,7 +10958,12 @@ async function hiddenNodes(theme, where) {
 /**
  * An expanded session's detail row takes its parent's tone: under the first row, a plain one, it reads plain, and under
  * the second, a striped one, it reads --stripe. Each row opens from its chevron, is read with the pointer away, since
- * a hovered row paints itself --surface-2, and shuts again.
+ * a hovered row paints itself --surface-2, and shuts again. In the mock pass the written session's Agents table then
+ * keeps its own stripes, read on a load of each of its two places, under a plain and under a striped session row: its
+ * first four rows show --surface, the table's own fill, then --stripe, --surface and --stripe behind every cell, since
+ * a striped row's detail cell is itself --stripe and a row with no fill of its own would read striped there. Its eleven
+ * heads close on the menu's, and in the table's narrowest layout, where the Type cell is narrower than its word, a type
+ * with a hyphen breaks after the hyphen. The bare view loads again after, its rows shut.
  */
 async function sessionDetailStripes(theme, tones) {
   const say = (what) => failures.push(`${theme} /sessions: ${what}`);
@@ -10984,6 +11002,112 @@ async function sessionDetailStripes(theme, tones) {
     await settle();
   }
   await atRest();
+  if (!mock) return;
+  const places = [];
+  try {
+    for (const path of WRITTEN_PLACES) {
+      await loadAtOrigin(path, '.sessions-table');
+      const row = openRowTarget();
+      if ((await row.count()) !== 1) {
+        say(`${path} lists ${await row.count()} rows of session ${WRITTEN_SESSION}, not one`);
+        continue;
+      }
+      await row.locator('.srow__chevron').click();
+      await settle();
+      await page.mouse.move(0, 0);
+      await settle();
+      const got = await row.evaluate((tr) => {
+        // What a cell shows: its own fill, else the nearest ancestor's that paints one.
+        const shown = (el) => {
+          for (let at = el; at; at = at.parentElement) {
+            const fill = getComputedStyle(at).backgroundColor;
+            if (fill !== 'rgba(0, 0, 0, 0)') return fill;
+          }
+          return null;
+        };
+        const detail = tr.nextElementSibling?.classList.contains('srow__detail') ? tr.nextElementSibling : null;
+        const table = detail?.querySelector('table.agents-table') ?? null;
+        const index = [...tr.parentElement.rows].filter((r) => !r.classList.contains('table__detail')).indexOf(tr) + 1;
+        if (table === null) return { drawn: false, index };
+        const heads = [...table.querySelectorAll(':scope > thead > tr > th')].map((th) => th.textContent?.trim() ?? '');
+        const body = [...table.querySelectorAll(':scope > tbody > tr')];
+        const typeCell = body.map((r) => r.children[heads.indexOf('Type')]).find((td) => td && /\w-\w/.test(td.textContent ?? '')) ?? null;
+        let type = null;
+        if (typeCell !== null) {
+          const s = getComputedStyle(typeCell);
+          const range = document.createRange();
+          const widthOf = () => {
+            range.selectNodeContents(typeCell);
+            return Math.round(range.getBoundingClientRect().width * 10) / 10;
+          };
+          const word = typeCell.textContent?.trim() ?? '';
+          typeCell.style.whiteSpace = 'nowrap';
+          const whole = widthOf();
+          typeCell.style.whiteSpace = '';
+          // The table's narrowest layout narrows the Type column to the widest piece its cells can break into.
+          table.style.width = 'min-content';
+          try {
+            const text = [...typeCell.childNodes].find((n) => n.nodeType === Node.TEXT_NODE && n.textContent.trim() !== '') ?? null;
+            let first = word;
+            let lines = 1;
+            if (text !== null) {
+              range.selectNodeContents(text);
+              lines = range.getClientRects().length;
+              const topAt = (i) => {
+                range.setStart(text, i);
+                range.setEnd(text, i + 1);
+                return range.getBoundingClientRect().top;
+              };
+              const top = topAt(0);
+              for (let i = 1; i < text.length; i += 1) {
+                if (topAt(i) > top + 1) {
+                  first = text.data.slice(0, i);
+                  break;
+                }
+              }
+            }
+            const content = Math.round((typeCell.getBoundingClientRect().width - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight)) * 10) / 10;
+            type = { content, first, lines, whole, word };
+          } finally {
+            table.style.width = '';
+          }
+        }
+        return {
+          detail: getComputedStyle(detail.querySelector(':scope > td')).backgroundColor,
+          drawn: true,
+          heads,
+          index,
+          rows: body.slice(0, 4).map((r, i) => [i + 1, [...new Set([...r.querySelectorAll(':scope > td')].map(shown))]]),
+          type,
+        };
+      });
+      measurements.push(`${theme} ${path} the written session's Agents table stripes ${JSON.stringify(got)}`);
+      places.push(got.index);
+      if (!got.drawn) {
+        say(`the written session's open row under ${path} draws no Agents table`);
+        continue;
+      }
+      const where = `the written session's Agents table under ${got.index % 2 === 0 ? 'a striped' : 'a plain'} row ${got.index}`;
+      const detailWant = got.index % 2 === 0 ? tones.stripe : CLEAR;
+      if (got.detail !== detailWant) say(`${where} sits in a detail cell on ${got.detail}, not ${detailWant === CLEAR ? 'plain' : `--stripe (${detailWant})`}`);
+      if (got.rows.length < 4) say(`${where} lists ${got.rows.length} rows, short of the four the stripes are read on`);
+      for (const [n, fills] of got.rows) {
+        const want = n % 2 === 1 ? tones.surface : tones.stripe;
+        if (fills.length !== 1 || fills[0] !== want) say(`${where}: row ${n} shows ${fills.join(' and ')} behind its cells, not ${n % 2 === 1 ? `the table's --surface (${want})` : `--stripe (${want})`}`);
+      }
+      if (got.heads.length !== 11 || got.heads[10] !== '') say(`${where} reads the heads ${JSON.stringify(got.heads)}, not eleven closing on the menu's`);
+      if (got.type === null) say(`${where} draws no Type cell with a hyphen to break`);
+      else {
+        const want = got.type.word.slice(0, got.type.word.indexOf('-') + 1);
+        if (!(got.type.content < got.type.whole)) say(`${where}: the narrowest layout leaves the Type cell ${got.type.content}px, room for the whole ${JSON.stringify(got.type.word)} at ${got.type.whole}px`);
+        else if (got.type.first !== want) say(`${where}: the Type cell's ${JSON.stringify(got.type.word)} reads ${JSON.stringify(got.type.first)} on its first line in ${got.type.content}px, not breaking after its hyphen`);
+      }
+    }
+    if (places.length === 2 && places[0] % 2 === places[1] % 2) say(`the written session stands on rows ${places.join(' and ')} under ${WRITTEN_PLACES.join(' and ')}, not on a plain and a striped row`);
+  } finally {
+    await loadAtOrigin('/sessions', '.sessions-table');
+    await atRest();
+  }
 }
 
 /**
@@ -11456,13 +11580,20 @@ async function burnShot(theme) {
   await page.screenshot({ fullPage: true, path: join(shots, theme, 'analytics-burn.png') });
 }
 
+/** The Sessions table's head with the default columns: the gutter, the nine defaults, then the menu's. */
+const SESSION_DEFAULT_HEADS = ['', 'Session', 'Status', 'Agents', 'Model', 'Account', 'Requests', 'Cost', 'Last used', 'Cache', ''];
+
 /**
- * The Sessions table's default columns, the Cost column among them, fit its card at the pass's 1280 by 800 and at 1440
- * by 900: the table needs no more than its wrap's width, so nothing scrolls sideways and the status and the cache state
- * stay in view. A slowed session's speed chip stands inside its Account cell, which the mock pass requires on studio's
- * sessions, read at 1280. At 375 by 800 the set is wider than the phone's card: it scrolls inside its wrap with
- * Session, the fill, at its floor within 1 px, and the document stays as wide as the window. The viewport returns to
- * the pass's 1280 by 800 after.
+ * The Sessions table's nine default columns and the menu's fit its card at the pass's 1280 by 800 and at 1440 by 900:
+ * the table needs no more than its wrap's width, so nothing scrolls sideways and the status and the cache state stay in
+ * view. A slowed session's speed chip stands inside its Account cell, which the mock pass requires on studio's
+ * sessions, read at 1280. At 1440 by 900 the Columns control's checkboxes then turn every column on: the head reads
+ * each column the control lists, in its order between Session and the menu's, Context among them, and the document
+ * stays as wide as the window. The eight optional columns need more than the card's width, so the table's and the
+ * wrap's widths are recorded rather than held to the card. The control holds its set in the page's state, so the bare
+ * view loads again for the defaults, and at 375 by 800 the set is wider than the phone's card: it scrolls inside its
+ * wrap with Session, the fill, at its floor within 1 px, and the document stays as wide as the window. The viewport
+ * returns to the pass's 1280 by 800 after.
  */
 async function sessionsTableFits(theme) {
   const measure = () =>
@@ -11499,35 +11630,59 @@ async function sessionsTableFits(theme) {
   measurements.push(`${theme} /sessions table ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px, at least ${read.least}px (slack ${read.client - read.least}px), ${read.rows} rows, columns ${JSON.stringify(read.columns)}, speed chips ${JSON.stringify(read.speed)}`}`);
   if (read === null) failures.push(`${theme} /sessions: no session table to measure`);
   else {
-    if (!read.columns.some(([label]) => label === 'Cost')) failures.push(`${theme} /sessions: the default columns draw no Cost column, so the fit is read without it`);
+    const heads = read.columns.map(([label]) => label);
+    if (JSON.stringify(heads) !== JSON.stringify(SESSION_DEFAULT_HEADS)) failures.push(`${theme} /sessions: the default head reads ${JSON.stringify(heads)}, not ${JSON.stringify(SESSION_DEFAULT_HEADS)}`);
     if (read.scroll > read.client || read.wrapScroll > read.client) failures.push(`${theme} /sessions: the default columns need ${Math.max(read.scroll, read.wrapScroll)}px of the wrap's ${read.client}px, so the table scrolls sideways`);
     if (mock && read.speed.length === 0) failures.push(`${theme} /sessions: the story slows studio's sessions, yet no Account cell draws a speed chip`);
     for (const chip of read.speed.filter((c) => !c.inside || !c.line)) failures.push(`${theme} /sessions: the speed chip ${JSON.stringify(chip.text)} stands ${chip.inside ? 'outside the Account cell' : 'past its cell'}`);
   }
-  try {
-    for (const { height, width } of [
-      { height: 900, width: 1440 },
-      { height: 800, width: 375 },
-    ]) {
-      const where = `at ${width} by ${height}`;
-      const say = (what) => failures.push(`${theme} /sessions ${where}: ${what}`);
-      await page.setViewportSize({ height, width });
-      await settle();
-      const got = await measure();
-      measurements.push(`${theme} /sessions table ${where} ${got === null ? 'not drawn' : `${got.scroll} of ${got.client}px, at least ${got.least}px, the wrap ${got.wrapScroll}px, the document ${JSON.stringify(got.document)}, Session ${JSON.stringify(got.session)}, columns ${JSON.stringify(got.columns)}`}`);
-      if (got === null) {
-        say('no session table to measure');
-        continue;
-      }
-      if (got.session === null) say('the table draws no Session column');
-      if (got.document.scroll > got.document.inner) say(`the document needs ${got.document.scroll}px of the ${got.document.inner}px window, so the page scrolls sideways`);
-      if (width > 900) {
-        if (got.scroll > got.client || got.wrapScroll > got.client) say(`the default columns need ${Math.max(got.scroll, got.wrapScroll)}px of the wrap's ${got.client}px, so the table scrolls sideways`);
-        continue;
-      }
-      if (got.wrapScroll <= got.client) say(`the table takes ${got.scroll}px of its ${got.client}px wrap without scrolling inside it`);
-      if (got.session !== null && Math.abs(got.session.width - got.session.floor) > 1) say(`the Session column is ${got.session.width}px, not at its ${got.session.floor}px floor`);
+  const defaultsAt = async ({ height, width }) => {
+    const where = `at ${width} by ${height}`;
+    const say = (what) => failures.push(`${theme} /sessions ${where}: ${what}`);
+    await page.setViewportSize({ height, width });
+    await settle();
+    const got = await measure();
+    measurements.push(`${theme} /sessions table ${where} ${got === null ? 'not drawn' : `${got.scroll} of ${got.client}px, at least ${got.least}px, the wrap ${got.wrapScroll}px, the document ${JSON.stringify(got.document)}, Session ${JSON.stringify(got.session)}, columns ${JSON.stringify(got.columns)}`}`);
+    if (got === null) return say('no session table to measure');
+    if (got.session === null) say('the table draws no Session column');
+    if (got.document.scroll > got.document.inner) say(`the document needs ${got.document.scroll}px of the ${got.document.inner}px window, so the page scrolls sideways`);
+    if (width > 900) {
+      if (got.scroll > got.client || got.wrapScroll > got.client) say(`the default columns need ${Math.max(got.scroll, got.wrapScroll)}px of the wrap's ${got.client}px, so the table scrolls sideways`);
+      return;
     }
+    if (got.wrapScroll <= got.client) say(`the table takes ${got.scroll}px of its ${got.client}px wrap without scrolling inside it`);
+    if (got.session !== null && Math.abs(got.session.width - got.session.floor) > 1) say(`the Session column is ${got.session.width}px, not at its ${got.session.floor}px floor`);
+  };
+  try {
+    await defaultsAt({ height: 900, width: 1440 });
+    const where = 'at 1440 by 900 with every column';
+    const say = (what) => failures.push(`${theme} /sessions ${where}: ${what}`);
+    const button = page.locator('.filter-bar button[aria-label="Columns"]');
+    await button.click();
+    await settle();
+    const boxes = page.locator('.popover .cols-popover label');
+    const listed = await boxes.evaluateAll((labels) => labels.map((label) => label.textContent?.trim() ?? ''));
+    for (let i = 0; i < listed.length; i += 1) {
+      const box = boxes.nth(i).locator('input[type="checkbox"]');
+      if (!(await box.isChecked())) await box.click();
+      await settle();
+    }
+    await button.click();
+    await settle();
+    const every = await measure();
+    measurements.push(`${theme} /sessions table ${where} ${every === null ? 'not drawn' : `${every.scroll} of ${every.client}px, at least ${every.least}px, the wrap ${every.wrapScroll}px, the document ${JSON.stringify(every.document)}, columns ${JSON.stringify(every.columns)}`}`);
+    if (every === null) say('no session table to measure');
+    else {
+      const heads = every.columns.map(([label]) => label);
+      const want = ['', 'Session', ...listed, ''];
+      if (JSON.stringify(heads) !== JSON.stringify(want)) say(`the head reads ${JSON.stringify(heads)}, not every column the Columns control lists, ${JSON.stringify(want)}`);
+      if (!listed.includes('Context')) say(`the Columns control lists ${JSON.stringify(listed)}, without Context`);
+      if (every.document.scroll > every.document.inner) say(`the document needs ${every.document.scroll}px of the ${every.document.inner}px window, so the page scrolls sideways`);
+    }
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await settle();
+    await loadAtOrigin('/sessions', '.sessions-table');
+    await defaultsAt({ height: 800, width: 375 });
   } finally {
     await page.setViewportSize({ height: 800, width: 1280 });
     await settle();
@@ -12026,6 +12181,145 @@ async function agentRowMenu(theme) {
 }
 
 /**
+ * An open row's Session and Routing facts side by side at 1280 by 800, on one row of tops with the Routing grid past
+ * the Session grid's right edge, and one above the other at 599 by 800, the widest width the phone rules cover, where
+ * the panel holds the wrap's width under the facts' 620 px container bound: the Routing grid under the Session grid,
+ * on its left edge. The mock pass opens the written session's row and the router's pass its first row, which shuts
+ * again at 1280 by 800.
+ */
+async function sessionFactsLayout(theme) {
+  const say = (what) => failures.push(`${theme} /sessions facts: ${what}`);
+  const row = openRowTarget();
+  if ((await row.count()) !== 1) {
+    if (mock) say(`the story lists ${await row.count()} rows of session ${WRITTEN_SESSION}, not one`);
+    else measurements.push(`${theme} /sessions facts skipped: the seed lists no session`);
+    return;
+  }
+  const read = () =>
+    row.evaluate((tr) => {
+      const detail = tr.nextElementSibling?.classList.contains('srow__detail') ? tr.nextElementSibling : null;
+      const panel = detail?.querySelector('.srow__panel') ?? null;
+      const r = (n) => Math.round(n * 10) / 10;
+      const box = (el) => {
+        const b = el.getBoundingClientRect();
+        return { bottom: r(b.bottom), left: r(b.left), right: r(b.right), top: r(b.top) };
+      };
+      return { grids: [...(panel?.querySelectorAll('.srow__facts dl.facts') ?? [])].map(box), panel: panel?.clientWidth ?? null };
+    });
+  await row.locator('.srow__chevron').click();
+  await settle();
+  try {
+    const wide = await read();
+    await page.setViewportSize({ height: 800, width: 599 });
+    await settle();
+    const narrow = await read();
+    measurements.push(`${theme} /sessions facts ${JSON.stringify({ at1280: wide, at599: narrow })}`);
+    for (const [at, got] of [
+      ['1280 by 800', wide],
+      ['599 by 800', narrow],
+    ]) {
+      if (got.grids.length !== 2) say(`at ${at} the open row draws ${got.grids.length} fact grids, not the Session and the Routing ones`);
+    }
+    if (wide.grids.length === 2) {
+      const [session, routing] = wide.grids;
+      for (const what of compare(routing, session, ['top'], 'at 1280 by 800 the Routing facts against the Session facts')) say(what);
+      if (routing.left < session.right) say(`at 1280 by 800 the Routing facts start at ${routing.left}px, inside the Session facts ending at ${session.right}px`);
+    }
+    if (narrow.grids.length === 2) {
+      const [session, routing] = narrow.grids;
+      for (const what of compare(routing, session, ['left'], 'at 599 by 800 the Routing facts against the Session facts')) say(what);
+      if (routing.top < session.bottom) say(`at 599 by 800 the Routing facts start at ${routing.top}px, above the Session facts' bottom at ${session.bottom}px, in a ${narrow.panel}px panel`);
+    }
+  } finally {
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await settle();
+    await row.locator('.srow__chevron').click();
+    await settle();
+    await atRest();
+  }
+}
+
+/**
+ * An open row at a phone's 375 by 800, where the session table scrolls inside its wrap: the row's panel is as wide as
+ * the wrap's client width and stands at the wrap's left edge before and after the wrap scrolls 200 px, so the detail
+ * stays in view while the table moves under it. The Session facts' top stands above the Routing facts', and the Agents
+ * table scrolls in a wrap of its own: wider than that wrap, it takes a sideways wheel over it while the session table's
+ * wrap keeps its scroll. The mock pass opens the written session's row and the router's pass its first row. The bare
+ * view loads again at 1280 by 800 after.
+ */
+async function sessionDetailSticky(theme) {
+  const say = (what) => failures.push(`${theme} /sessions at 375 by 800: ${what}`);
+  try {
+    await page.setViewportSize({ height: 800, width: 375 });
+    await settle();
+    const row = openRowTarget();
+    if ((await row.count()) !== 1) {
+      if (mock) say(`the story lists ${await row.count()} rows of session ${WRITTEN_SESSION}, not one`);
+      else measurements.push(`${theme} /sessions open row at 375 by 800 skipped: the seed lists no session`);
+      return;
+    }
+    await row.locator('.srow__chevron').click();
+    await settle();
+    const read = () =>
+      row.evaluate((tr) => {
+        const wrap = tr.closest('.table-wrap');
+        const detail = tr.nextElementSibling?.classList.contains('srow__detail') ? tr.nextElementSibling : null;
+        const panel = detail?.querySelector('.srow__panel') ?? null;
+        if (!wrap || !panel) return null;
+        const inner = panel.querySelector('.agents-table__wrap');
+        const box = panel.getBoundingClientRect();
+        return {
+          facts: [...panel.querySelectorAll('.srow__facts dl.facts')].map((dl) => Math.round(dl.getBoundingClientRect().top * 10) / 10),
+          inner: inner === null ? null : { client: inner.clientWidth, scroll: inner.scrollWidth, scrolled: inner.scrollLeft },
+          panel: { left: Math.round(box.left), width: Math.round(box.width) },
+          wrap: { client: wrap.clientWidth, left: Math.round(wrap.getBoundingClientRect().left + wrap.clientLeft), scroll: wrap.scrollWidth, scrolled: wrap.scrollLeft },
+        };
+      });
+    const before = await read();
+    if (before === null) return say('the open row draws no panel inside a table wrap');
+    await row.evaluate((tr) => {
+      tr.closest('.table-wrap').scrollLeft = 200;
+    });
+    await settle();
+    const scrolled = await read();
+    // A wheel lands on what lies under the pointer, so the Agents table's wrap is brought to the window's middle first.
+    await row.evaluate((tr) => {
+      const top = tr.nextElementSibling?.querySelector('.agents-table__wrap')?.getBoundingClientRect().top;
+      if (top !== undefined) window.scrollBy(0, top - 400);
+    });
+    await settle();
+    const inner = await row.locator('xpath=following-sibling::tr[1]').locator('.agents-table__wrap').boundingBox();
+    if (inner !== null) {
+      await page.mouse.move(Math.round(inner.x + inner.width / 2), Math.round(inner.y + Math.min(inner.height / 2, 40)));
+      await page.mouse.wheel(120, 0);
+      await page.waitForTimeout(WHEEL_MS);
+      await advance(CLOCK_STEP_MS);
+    }
+    const wheeled = await read();
+    measurements.push(`${theme} /sessions open row at 375 by 800 ${JSON.stringify({ before, scrolled, wheeled })}`);
+    for (const [when, got] of [
+      ['before the scroll', before],
+      ['after the wrap scrolls 200 px', scrolled],
+    ]) {
+      for (const what of compare(got.panel, { left: got.wrap.left, width: got.wrap.client }, ['left', 'width'], `the open row's panel ${when} against the wrap's client box`)) say(what);
+    }
+    if (scrolled.wrap.scrolled !== 200) say(`the session table's wrap scrolled to ${scrolled.wrap.scrolled}px of its ${scrolled.wrap.scroll}px, not 200`);
+    if (before.facts.length !== 2) say(`the open row draws ${before.facts.length} fact grids, not the Session and the Routing ones`);
+    else if (!(before.facts[0] < before.facts[1])) say(`the Session facts' top at ${before.facts[0]}px stands at or under the Routing facts' at ${before.facts[1]}px`);
+    if (before.inner === null || inner === null) say('the open row draws no Agents table wrap');
+    else {
+      if (before.inner.scroll <= before.inner.client) say(`the Agents table takes ${before.inner.scroll}px of its ${before.inner.client}px wrap without scrolling inside it`);
+      if (wheeled.inner.scrolled === 0) say(`a sideways wheel over the Agents table's wrap left it at ${wheeled.inner.scrolled}px`);
+      if (wheeled.wrap.scrolled !== scrolled.wrap.scrolled) say(`a sideways wheel over the Agents table's wrap moved the session table's wrap from ${scrolled.wrap.scrolled}px to ${wheeled.wrap.scrolled}px`);
+    }
+  } finally {
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await settle();
+    await loadAtOrigin('/sessions', '.sessions-table');
+  }
+}
+
+/**
  * The Sessions bar's sort control and the order it gives the rows: the Sort button in the height, top edge, type size
  * and weight of the Columns control beside it, its text "Sort: Created" on the bare address and "Sort: Last activity"
  * under `?sort=activity`, and the session ids of the first five rows under each recorded. The bare view loads again
@@ -12254,6 +12548,78 @@ async function sessionsRowBadges(theme) {
   }
 }
 
+/** The tone each badge word of a Sessions row takes, `+N` standing for every count of other agents or accounts. */
+const SESSION_BADGE_TONES = { '+$': 'neutral', '+N': 'neutral', busy: 'accent', cold: 'neutral', idle: 'good', parked: 'neutral', registered: 'neutral', warm: 'good' };
+
+/**
+ * The Sessions rows' badges on the bare view take `.badge`'s tones: in the Status cell `busy` accent, `idle` good,
+ * `parked` and `registered` neutral, in the Cache cell `warm` good and `cold` neutral, and the `+$` and "+N" badges of
+ * the Model, Account and Cost cells neutral while no filter stands on their column, every drawn instance of a word in
+ * one tone. The Status cell's `silent {span}` sub line reads in the warning ink, `--warning-ink` as `:root` defines it,
+ * and the `unreported` and `no pin` words in the muted ink of the bar's count, and the fork badge carries
+ * `.srow__fork`. The story draws every word, so only the mock's pass fails where one is missing.
+ */
+async function sessionBadgeTones(theme) {
+  const say = (what) => failures.push(`${theme} /sessions badge tones: ${what}`);
+  const read = await page.evaluate(() => {
+    const heads = [...document.querySelectorAll('.sessions-table > thead > tr > th')].map((th) => th.textContent?.trim() ?? '');
+    const rows = [...document.querySelectorAll('.sessions-table > tbody > tr.srow')];
+    const cellsOf = (head) => (heads.includes(head) ? rows.map((tr) => tr.children[heads.indexOf(head)]).filter(Boolean) : []);
+    const tones = {};
+    const note = (word, badge) => {
+      const tone = [...badge.classList].find((c) => c.startsWith('badge--'))?.slice('badge--'.length) ?? 'none';
+      tones[word] = [...new Set([...(tones[word] ?? []), tone])].sort();
+    };
+    for (const td of [...cellsOf('Status'), ...cellsOf('Cache')]) for (const badge of td.querySelectorAll(':scope > .badge')) note(badge.textContent?.trim() ?? '', badge);
+    for (const td of [...cellsOf('Model'), ...cellsOf('Account'), ...cellsOf('Cost')]) {
+      for (const badge of td.querySelectorAll('.badge')) {
+        const text = badge.textContent?.trim() ?? '';
+        if (text === '+$') note('+$', badge);
+        else if (/^\+\d+$/.test(text)) note('+N', badge);
+      }
+    }
+    const inks = (els) => [...new Set(els.map((el) => getComputedStyle(el).color))];
+    const words = (cells, word) => cells.flatMap((td) => [...td.children].filter((el) => el.textContent?.trim() === word));
+    // The token reads back as written, so a probe resolves it to the computed color the inks compare with.
+    const probe = document.createElement('span');
+    probe.style.color = getComputedStyle(document.documentElement).getPropertyValue('--warning-ink').trim();
+    document.body.append(probe);
+    const warning = getComputedStyle(probe).color;
+    probe.remove();
+    const count = document.querySelector('.filter-bar .filter-bar__count.muted');
+    return {
+      forks: [...document.querySelectorAll('.sessions-table > tbody > tr.srow .badge')].filter((b) => b.textContent?.trim() === 'fork').map((b) => b.classList.contains('srow__fork')),
+      muted: count === null ? null : getComputedStyle(count).color,
+      noPin: inks(words(cellsOf('Cache'), 'no pin')),
+      silent: inks(cellsOf('Status').flatMap((td) => [...td.querySelectorAll('.sub')].filter((sub) => sub.textContent?.trim().startsWith('silent ')))),
+      tones,
+      unreported: inks(words(cellsOf('Status'), 'unreported')),
+      warning,
+    };
+  });
+  measurements.push(`${theme} /sessions badge tones ${JSON.stringify(read)}`);
+  for (const [word, want] of Object.entries(SESSION_BADGE_TONES)) {
+    const got = read.tones[word];
+    if (got === undefined) {
+      if (mock) say(`the story draws no ${word} badge`);
+    } else if (got.length !== 1 || got[0] !== want) say(`the ${word} badges read ${got.join(' and ')}, not ${want}`);
+  }
+  for (const [what, drawn, neighbour, name] of [
+    ['the silent sub line', read.silent, read.warning, '--warning-ink'],
+    ['the unreported word', read.unreported, read.muted, "the bar's count"],
+    ['the no pin word', read.noPin, read.muted, "the bar's count"],
+  ]) {
+    if (drawn.length === 0) {
+      if (mock) say(`the story draws no ${what.replace(/^the /, '')}`);
+      continue;
+    }
+    for (const ink of drawn) for (const finding of compare({ color: ink }, neighbour === null ? null : { color: neighbour }, ['color'], `${what} against ${name}`)) say(finding);
+  }
+  if (read.forks.length === 0) {
+    if (mock) say('the story forks a session, yet no fork badge is drawn');
+  } else if (read.forks.some((kept) => !kept)) say(`${read.forks.filter((kept) => !kept).length} of ${read.forks.length} fork badges lack srow__fork`);
+}
+
 /** The mock's switch that fails every sessions read, as a store that refuses the list, and the message it answers. */
 const SESSIONS_FAIL_SWITCH = 'phoebis.mockSessionsFail';
 const SESSIONS_FAIL_MESSAGE = 'store busy';
@@ -12294,6 +12660,39 @@ async function sessionsReadError(theme) {
     if (read.gap !== 12) say(`the notice's top lies ${read.gap}px under the bar's bottom, not 12px`);
   } finally {
     await page.evaluate((key) => localStorage.removeItem(key), SESSIONS_FAIL_SWITCH);
+    await loadAtOrigin('/sessions', '.sessions-table');
+  }
+}
+
+/**
+ * The mock pass's review shots of an open row, taken after the view's shot: the written session's row opened by its
+ * chevron as `<theme>/sessions-open.png`, then at 375 by 800, where its panel holds the wrap's width, as
+ * `<theme>/sessions-phone.png`. The bare view loads again at 1280 by 800 for the measures after it.
+ */
+async function sessionsOpenShots(theme) {
+  const row = openRowTarget();
+  if ((await row.count()) !== 1) {
+    failures.push(`${theme} /sessions open shots: the story lists ${await row.count()} rows of session ${WRITTEN_SESSION}, not one`);
+    return;
+  }
+  try {
+    await row.locator('.srow__chevron').click();
+    await settle();
+    for (const [size, slug] of [
+      [{ height: 800, width: 1280 }, 'sessions-open'],
+      [{ height: 800, width: 375 }, 'sessions-phone'],
+    ]) {
+      await page.setViewportSize(size);
+      await settle();
+      await atRest();
+      // As the view shots do: a full-page capture paints the fixed header and sidebar at the window's scroll offset.
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await page.waitForFunction(() => !document.querySelector('.skeleton'), null, { timeout: 3_000 }).catch(() => {});
+      await page.screenshot({ fullPage: true, path: join(shots, theme, `${slug}.png`) });
+    }
+  } finally {
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await settle();
     await loadAtOrigin('/sessions', '.sessions-table');
   }
 }
@@ -12607,6 +13006,9 @@ try {
         await agentLines(theme, 1280);
         await agentsTableFits(theme);
         if (mock) await agentRowMenu(theme);
+        await sessionFactsLayout(theme);
+        // Its load ends on the bare view, so the measures after it read the view as it first drew.
+        await sessionDetailSticky(theme);
         try {
           await page.setViewportSize({ height: 900, width: 1440 });
           await settle();
@@ -12622,6 +13024,7 @@ try {
         await sessionForkMark(theme);
         await sessionForkBadges(theme);
         await sessionsRowBadges(theme);
+        await sessionBadgeTones(theme);
         for (const what of await chevronWeight(`${theme} /sessions row`, page.locator('.srow__chevron > svg'), 14, 1.75)) failures.push(`${theme} /sessions row: ${what}`);
       }
       if (view.path === '/pools') {
@@ -12802,6 +13205,8 @@ try {
       if (view.path === '/routing-log') await freshRowTint(theme, view.path);
       if (view.path === '/routing-log' && mock) await routingLogPickLine(theme);
       if (view.path === '/routing-log' && mock) await routingLogPaceHover(theme);
+      // Before the fork link, whose base row stays marked current: the shots draw the rows at rest.
+      if (view.path === '/sessions' && mock) await sessionsOpenShots(theme);
       if (view.path === '/sessions') await forkLink(theme);
       if (view.path === '/sessions' && mock) await sessionsReleasedLine(theme);
       if (view.path === '/settings') await copyFallback(theme);
