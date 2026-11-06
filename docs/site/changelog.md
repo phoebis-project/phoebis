@@ -125,7 +125,9 @@ failover](routing.md#cooldowns-and-failover)). A slow-down hold never runs past 
 after the reset is read afresh ([Slow-down](routing.md#slow-down)). A reading that moves a window's reset later while
 the stored one still lies ahead replaces it with no `window_reset`, and a clean poll that drops the 5-hour window
 records the end of the account's slow-down in the routing log at the drop ([The windows the router works
-from](routing.md#the-windows-the-router-works-from)).
+from](routing.md#the-windows-the-router-works-from)). A pin placed on another account after its earlier pin was released
+by a pause, a cooldown, a pool change, a subscription end or an idle expiry names the released pin's account as its
+source in the routing log ([Moves](routing.md#moves)).
 
 With `keepalive.enabled` on a pool the router keeps a replayable copy of every eligible request a session sends and,
 shortly before the cache entry would expire, sends a probe that reads it ([Keepalive](keepalive.md)). The policy's

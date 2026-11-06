@@ -105,7 +105,8 @@ pub(crate) struct DecisionRow {
     pub agent_id: Option<String>,
     pub model: Option<String>,
     pub account_id: Option<String>,
-    /// A move's source.
+    /// The released or moved pin's account, where the pin landed on another account, null where the release took the
+    /// row before the session's next request.
     pub from_account_id: Option<String>,
     /// What decided the row.
     pub by: SummaryBy,

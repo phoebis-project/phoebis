@@ -3913,6 +3913,82 @@ async fn a_pin_whose_account_left_the_pool_is_replaced_with_both_events_in_order
 }
 
 #[tokio::test]
+async fn a_placement_off_a_paused_account_names_it_as_the_source_and_a_replaced_pin_on_the_same_account_names_none(
+) {
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    // No purge tick runs, so the row past its TTL below stays for the selection to replace.
+    let handle = spawn(
+        store.clone(),
+        clock(&now),
+        RouterConfig {
+            hold_first_purge: true,
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let first = handle
+        .select(request(&handle, Some("s1"), 1_000))
+        .await
+        .unwrap();
+    let from = match &first.result {
+        SelectResult::Selected(s) => s.account.id.clone(),
+        other => panic!("{other:?}"),
+    };
+    let to = if from == "a" { "b" } else { "a" };
+    store.set_enabled(&from, false, "test").unwrap();
+    handle.reload().await.unwrap();
+    let mut events = handle.subscribe_events();
+    handle
+        .select(request(&handle, Some("s1"), 1_100))
+        .await
+        .unwrap();
+    let (summary, record) = next_decision(&mut events).await;
+    assert_eq!(
+        (
+            summary.kind,
+            record.outcome.account_id.as_deref(),
+            pin_events_of(&record)
+        ),
+        (
+            "placed",
+            Some(to),
+            vec![("pin_expired", Some("paused")), ("pin_created", None)]
+        ),
+        "the selection replaced the pin the pause left"
+    );
+    assert_eq!(
+        record.outcome.from_account_id.as_deref(),
+        Some(from.as_str()),
+        "the placement names the paused account the pin left"
+    );
+    let mut events = handle.subscribe_events();
+    // One millisecond past the pool's hour-long affinity TTL, the paused account still out of the set.
+    handle
+        .select(request(&handle, Some("s1"), 1_100 + HOUR + 1))
+        .await
+        .unwrap();
+    let (summary, record) = next_decision(&mut events).await;
+    assert_eq!(
+        (
+            summary.kind,
+            record.outcome.account_id.as_deref(),
+            pin_events_of(&record)
+        ),
+        (
+            "placed",
+            Some(to),
+            vec![("pin_expired", Some("expired")), ("pin_created", None)]
+        ),
+        "the selection replaced the idle pin on the account it lands on again"
+    );
+    assert_eq!(
+        record.outcome.from_account_id, None,
+        "a pin replaced on its own account names no source"
+    );
+}
+
+#[tokio::test]
 async fn a_refusal_emits_a_decision_with_a_two_line_walk() {
     let store = seeded(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));

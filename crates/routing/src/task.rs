@@ -3108,6 +3108,13 @@ impl Task {
                         if let SelectResult::Selected(selection) = &result {
                             match selection.migrated {
                                 None => {
+                                    // Whatever reason the selection released the pin for, a placement on another
+                                    // account names the account it left, as a failover's landing does. A row taken
+                                    // before this request left no pin to read, so that placement is a fresh one.
+                                    if old.account_id != new.account_id {
+                                        record.outcome.from_account_id =
+                                            Some(old.account_id.clone());
+                                    }
                                     pin_events.push(RouterEvent::pin_expired(
                                         &pin_key,
                                         &old.account_id,
