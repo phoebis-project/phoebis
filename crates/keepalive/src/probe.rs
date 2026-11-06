@@ -697,14 +697,15 @@ impl Inner {
     /// without a pause, since only a raised budget or the period's end clears it, never a wait. A probe the router
     /// refused with `ledger_behind` holds under it for the answer's wait, counting no failure and no idle tick. A
     /// probe the selector answered on its pinned member's standing holds under that standing: `Paused` for the
-    /// operator's pause, `IneligibleCredential` for an ended subscription (both read `paused` in the console), a
-    /// retry for a member this probe already tried, or for one whose budget the degraded ledger leaves unknown,
-    /// which the ledger's recovery clears without a real request. A pinned member a leg of the probe marked for
-    /// re-authentication pauses under the authentication reason. The untimed exhaustion 503, when every account of
-    /// the pool was unusable at selection, retries under its own reason. A 5xx forwarded from upstream retries. A 403
-    /// under `client_contract` or `client_drift` refuses the probe's own request shape and pauses as an unsupported
-    /// probe, any other 401 or 403 pauses under the authentication reason, any other 4xx is a shape the upstream
-    /// refuses, and a canceled, timed-out, or lost exchange (status 0) retries as a transport error.
+    /// operator's pause, `IneligibleCredential` for a subscription that ended between the gate's read and the
+    /// selection (both read `paused` in the console), a retry for a member this probe already tried, or for one whose
+    /// budget the degraded ledger leaves unknown, which the ledger's recovery clears without a real request. A pinned
+    /// member a leg of the probe marked for re-authentication pauses under the authentication reason. The untimed
+    /// exhaustion 503, when every account of the pool was unusable at selection, retries under its own reason. A 5xx
+    /// forwarded from upstream retries. A 403 under `client_contract` or `client_drift` refuses the probe's own request
+    /// shape and pauses as an unsupported probe, any other 401 or 403 pauses under the authentication reason, any other
+    /// 4xx is a shape the upstream refuses, and a canceled, timed-out, or lost exchange (status 0) retries as a
+    /// transport error.
     pub(crate) fn probe_error(
         &mut self,
         key: &SessionKey,

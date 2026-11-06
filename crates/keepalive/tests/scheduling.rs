@@ -896,6 +896,47 @@ async fn a_paused_or_reauth_marked_account_serves_no_probe() {
     assert_eq!(r.engine.reasons().get(&Reason::Paused).copied(), Some(1));
 }
 
+/// The rig's five-minute recipe is due 270 s after its request, and its interval, the TTL less the lead, is 270 s. A
+/// probe whose interval ends at the pinned account's subscription end goes out and stays on `a`, and one whose
+/// interval passes the end is held, since the cache it would write dies at the end.
+#[tokio::test]
+async fn a_probe_whose_interval_passes_the_subscription_end_is_held_and_one_ending_at_it_is_sent() {
+    let mut r = armed(RigSpec::default()).await;
+    let due = r.now() + 270_000;
+    r.h.store
+        .set_canceled("a", true, Some(due + 270_000))
+        .unwrap();
+    r.h.router.reload().await.unwrap();
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (1, Reason::Scheduled),
+        "the probe whose interval ends at the end went out"
+    );
+    assert_eq!(r.up.requests().len(), 2, "the probe reached the upstream");
+    assert!(named_a(&r).await, "the pin still names a");
+
+    let mut r = armed(RigSpec::default()).await;
+    let due = r.now() + 270_000;
+    r.h.store
+        .set_canceled("a", true, Some(due + 269_999))
+        .unwrap();
+    r.h.router.reload().await.unwrap();
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (0, Reason::IneligibleCredential),
+        "the probe whose interval passes the end was held"
+    );
+    assert_eq!(
+        r.up.requests().len(),
+        1,
+        "nothing more went upstream than the arming request"
+    );
+}
+
 #[tokio::test]
 async fn affinity_off_or_short_stops_probing_until_raised() {
     let mut r = armed(RigSpec::default()).await;

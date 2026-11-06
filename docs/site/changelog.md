@@ -183,7 +183,8 @@ positions the Messages API takes one from, a block inside a tool result's conten
 not ephemeral or names an unknown TTL leaves the request not retained under `invalid_cache_control` ([The five
 states](keepalive.md#the-five-states)). A session the mod registered holds no slot under the session and agent caps
 until its first request, and a first request over either cap is not kept and reads `session_limit` or `agent_limit`
-([Turning it on](keepalive.md#turning-it-on)).
+([Turning it on](keepalive.md#turning-it-on)). No probe goes out past an account's subscription end, and the wind-down
+holds a probe due within its interval of the end ([How a probe works](keepalive.md#how-a-probe-works)).
 
 The admin listener serves the web console behind a login with the admin secret, with the views in the sidebar's order,
 Dashboard, Quota, Accounts, Pools, Keys, Guardrails, Requests, Analytics, Sessions and Settings, and under them the

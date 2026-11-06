@@ -25,10 +25,14 @@ renews it. A probe whose pinned member is at its spend budget, on an account the
 subscription's end, or already tried by this probe while a sibling could take it is answered rather than placed on a
 sibling, since a sibling would move the session's pin onto a member no request asked for. A probe never moves the pin
 for those standings, and the agent reads `budget`, `paused` (a disabled account), `ineligible_credential` (an ended
-subscription) or `retryable_probe_error` until the next real request lands. A probe whose pinned account was deleted is
-held as `paused` before it is sent, as one on a disabled account is. A 429 on the pinned account, a credits block,
-overage under `never`, an account that is disconnected or unpaired, and the pool's move rules move it as they move a
-real request.
+subscription, or the last interval before its end) or `retryable_probe_error` until the next real request lands. A probe
+whose pinned account was deleted is held as `paused` before it is sent, as one on a disabled account is. A probe whose
+pinned account's subscription ended is held before it is sent too, and so is one due nearer to the end than its own
+interval, the entry's TTL less the lead. That last interval falls inside the pool's wind-down, or reaches before it
+where the interval is longer than `wind_down_minutes`, so no probe writes a cache the end discards and the pin turns
+cold at the end ([Subscription end](routing.md#subscription-end)). A 429 on the pinned account, a credits block, overage
+under `never`, an account that is disconnected or unpaired, and the pool's move rules move it as they move a real
+request.
 
 A usage-based Enterprise seat's probes hold under its member budget as an API-key member's do, and never for overage:
 the router reads no overage on such a seat ([Overage](routing.md#overage)).

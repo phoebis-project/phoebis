@@ -3931,7 +3931,7 @@ impl Engine {
                 let (held, moved) = {
                     let agent = agent_mut(&mut inner.sessions, &key, &agent_id).expect(AGENT_HELD);
                     let before = agent.account.clone();
-                    let held = gate(&view, agent, &key.1, pool, &policy);
+                    let held = gate(&view, agent, &key.1, pool, &policy, now);
                     (held, before != agent.account)
                 };
                 if moved {
@@ -4250,13 +4250,17 @@ pub(crate) fn ceilings_for(
 
 /// The spec's "Scheduling against router state" row, in its order, after `refresh_policy` answered `pool`. `Err`
 /// names why the due probe waits, or why the recipe goes. `Ok` lets the probe run on the account it names, the one
-/// the snapshot holds.
+/// the snapshot holds. The pinned account's subscription term holds the probe under `ineligible_credential` once it
+/// ended, and while the probe's due time plus its interval (the TTL less the lead) passes the end, since the cache
+/// that probe writes dies at the end. The end is `term::end_of`'s, the one the router's wind-down reads, so the last
+/// interval before a trial end still ahead holds too and probing resumes once the trial end passes.
 pub(crate) fn gate(
     view: &RouterView,
     agent: &mut Agent,
     session_id: &str,
     pool: &PoolRow,
     policy: &KeepalivePolicy,
+    now: i64,
 ) -> Result<String, Gate> {
     let key_id = agent.key_id.clone();
     // A probe keeps the session on the account it warmed only while the pin outlives the probe's due time:
@@ -4295,6 +4299,17 @@ pub(crate) fn gate(
         AccountState::ReauthRequired | AccountState::FundingRequired
     ) {
         return Err(Gate::Hold(Reason::Reauth));
+    }
+    // A hold rather than a pause, read live on every poll like the budget below: an operator who turns the cancel
+    // off, or a profile read that clears the plan-ended flag, releases the probe on the next tick.
+    if let Some(term) = view.snapshot.term(&account.id) {
+        let last_interval = agent
+            .due_at()
+            .zip(phoebis_routing::term::end_of(term, now))
+            .is_some_and(|(due, end)| due + due_after_ms > end);
+        if last_interval || phoebis_routing::term::ended(term, now) {
+            return Err(Gate::Hold(Reason::IneligibleCredential));
+        }
     }
     let fast = agent
         .current
@@ -4622,7 +4637,7 @@ mod tests {
         agent.canonical_model = "claude-opus-5-5".into();
         agent.current = Some(observation(fast));
         refresh_policy(view, &mut agent)
-            .and_then(|(pool, policy, _)| gate(view, &mut agent, "s", pool, &policy))
+            .and_then(|(pool, policy, _)| gate(view, &mut agent, "s", pool, &policy, 0))
             .err()
     }
 

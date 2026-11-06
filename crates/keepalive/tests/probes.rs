@@ -1449,14 +1449,15 @@ async fn an_exhaustion_503_whose_first_retry_would_reach_the_expiry_pauses_under
     );
 }
 
-/// The gate reads no subscription term, so a probe due after the pinned account's subscription ended reaches
-/// the selection, which answers the obstacle rather than placing the probe on `b`: the relay hands the name over,
-/// the agent pauses under the ended subscription, and the pin still names `a`.
+/// The gate reads the pinned account's subscription term on every poll, so a probe due after the term ended is held
+/// before it is sent, ahead of the selection, rather than placed on `b`: no probe is dispatched, the schedule stays
+/// for the tick that finds the term cleared, the agent reads the ended subscription, and the pin still names `a`.
 #[tokio::test]
 async fn a_probe_on_a_pin_whose_subscription_ended_holds_the_agent_and_keeps_the_pin() {
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
     assert_eq!(r.status("main").account_id.as_deref(), Some("a"));
+    let due = r.now() + 270_000;
     let sent = r.up.requests().len();
     r.h.store
         .set_canceled("a", true, Some(r.now() + 1_000))
@@ -1464,9 +1465,11 @@ async fn a_probe_on_a_pin_whose_subscription_ended_holds_the_agent_and_keeps_the
     r.h.router.reload().await.unwrap();
     r.advance(270_000);
     r.step().await;
+    let status = r.status("main");
     assert_eq!(
-        (r.status("main").reason, r.status("main").next_probe_at),
-        (Reason::IneligibleCredential, None)
+        (status.reason, status.next_probe_at, status.probes),
+        (Reason::IneligibleCredential, Some(due), 0),
+        "{status:?}"
     );
     assert_eq!(r.up.requests().len(), sent, "the probe reached no upstream");
     assert!(
