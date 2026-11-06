@@ -8632,6 +8632,41 @@ fn an_unread_window_is_skipped_for_a_placement_and_reads_least_bad_for_a_move() 
 }
 
 #[test]
+fn a_move_reads_a_window_the_destination_s_set_lacks_as_no_window_and_one_it_holds_unread_as_least_bad(
+) {
+    // a winds down toward its end with a cold pin the drain rule moves. b and c read the week alone, b from a head,
+    // which leaves both shared windows in its set, c from a clean poll, which settles its set to the week. b outranks
+    // c, and every member is on the tier.
+    let mut terms = tier_terms(&["a", "b", "c"]);
+    terms[0].canceled = true;
+    terms[0].ends_at = Some(T + 10 * MINUTE);
+    let s = snapshot_with_terms(gate_pool(), terms);
+    let mut st = priced(vec![PinRow {
+        last_input_tokens: 500_000,
+        ..burning("cold", "a", 100.0, false, T)
+    }]);
+    st.record_sample("a", sample(0.3, 0.1, T - 500), 0);
+    st.record_sample("b", sample_of(&[SEVEN_DAY], 0.1, T - 500, false), 0);
+    st.record_sample("c", sample_of(&[SEVEN_DAY], 0.1, T - 500, true), 0);
+    let d = decide(&mut st, &s, &auxiliary(&s, "cold", T), &mut rng());
+    // c has no 5-hour window to read, so it fits on its week and takes the pin, while b's set holds the 5-hour window
+    // it never read.
+    assert_eq!(
+        landed(d.result.clone()),
+        ("c".into(), Some(MigrateReason::Drain))
+    );
+    let fit = line(&d.record, "fit");
+    assert_eq!(
+        fact_of(fit, "verdict", "c"),
+        &FactValue::Text("fits".into())
+    );
+    assert_eq!(
+        fact_of(fit, "verdict", "b"),
+        &FactValue::Text("least_bad".into())
+    );
+}
+
+#[test]
 fn a_placement_after_a_move_the_cap_stopped_reads_its_candidates_again() {
     // c carries no tier, so a move reads it least bad and a placement reads it as fitting. Both siblings sit at their
     // cap of one, b outranks c, and b's 5-hour window at the ceiling leaves it no room either way.

@@ -555,13 +555,14 @@ speaks and the session moves to the fitting sibling with the most spare rate, un
 runway takes the place of the random draw inside it, and under round robin none, since the cursor picks the turn. Where
 none fits, the one rewrite-only sibling with the longest runway takes the move, a tie left to the strategy, and the
 least bad otherwise. A sibling at the pool's `in_flight_cap` stays out of the first two orders, so a move does not pick
-a full account while a free fitting one exists. A sibling without a reading of a window the model draws, or whose tier
-the profile has not named, reads least bad for a move, since its rewrite cannot be priced there. A placement reads such
-an account as untouched instead: an OAuth account without a tier fits with an unbounded runway, so of its windows only a
-spent one keeps a fresh session off it, however high its utilization reads. The shed rule moves a marked pin only to a
-destination it fits, in the same order, the strategy first and the longest runway among its ties, and keeps the mark
-otherwise. The decision record names the order the gate took, lists every sibling it read with its projection, rewrite,
-runway and verdict, and names the siblings the runway kept where it narrowed the strategy's tie.
+a full account while a free fitting one exists. A move's fit reads the windows the destination's window set holds, so a
+window the set lacks is no window. A sibling without a reading of a window the model draws that its set holds, or whose
+tier the profile has not named, reads least bad for a move, since its rewrite cannot be priced there. A placement reads
+such an account as untouched instead: an OAuth account without a tier fits with an unbounded runway, so of its windows
+only a spent one keeps a fresh session off it, however high its utilization reads. The shed rule moves a marked pin only
+to a destination it fits, in the same order, the strategy first and the longest runway among its ties, and keeps the
+mark otherwise. The decision record names the order the gate took, lists every sibling it read with its projection,
+rewrite, runway and verdict, and names the siblings the runway kept where it narrowed the strategy's tie.
 
 **Spent** The pinned account's allowance for the session's model is spent: the model's own week and both shared windows
 for a model with a week of its own, the shared plan windows otherwise (any of those readings at or above 1.0), while

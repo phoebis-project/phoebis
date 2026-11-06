@@ -136,7 +136,8 @@ quarter of the time from its first reading over the ceiling to the wall instant 
 averages, so a burst toward a near wall instant fires early and a slow climb waits, and the routing log names the wall
 instant ([Moves](routing.md#moves)). A shedding round and the heal of a standing mark test a window against the wall
 where its horizon is the account's end or the window's own reset, since the quota left there is lost, and against the
-ceiling elsewhere ([Subscription end](routing.md#subscription-end)).
+ceiling elsewhere ([Subscription end](routing.md#subscription-end)). A move's fit reads the windows the destination's
+window set holds, so an account whose set lacks the 5-hour window can take a shed move ([Moves](routing.md#moves)).
 
 With `keepalive.enabled` on a pool the router keeps a replayable copy of every eligible request a session sends and,
 shortly before the cache entry would expire, sends a probe that reads it ([Keepalive](keepalive.md)). The policy's

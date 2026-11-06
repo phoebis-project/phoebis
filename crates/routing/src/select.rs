@@ -3214,22 +3214,22 @@ pub(crate) struct FitRead {
 }
 
 /// How `fit_of` reads a window with no reading and an account with no tier. `Move` reads either gap as least bad: a
-/// move pays a cold rewrite on its destination, so it trusts only one it can price on every window the model draws.
-/// `Placement` skips a window with no reading and reads an untiered account as fitting with an unbounded runway and no
-/// binding window, since a fresh session counts an unsampled account as untouched and nothing prices an untiered
-/// account's rewrite or burn.
+/// move pays a cold rewrite on its destination, so it trusts only one it can price on every window the model draws
+/// that the destination's set holds. `Placement` skips a window with no reading and reads an untiered account as
+/// fitting with an unbounded runway and no binding window, since a fresh session counts an unsampled account as
+/// untouched and nothing prices an untiered account's rewrite or burn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Judge {
     Move,
     Placement,
 }
 
-/// The fit of `pin` (or a fresh session) on `candidate`: the runway per window the request's model draws (a move's
-/// runway read to `SHED_FIT_BAND`'s line under the ceiling), the predicate of the three verdicts and the end exclusion,
-/// with the unknowns read as `judge` says. `planned` holds the reservations a shedding round planned before this read,
-/// summed into the candidate's prediction and burn as the live ones are, and is empty for a move rule, the partition
-/// and rung 4. `own` is the request's pin key on a placement's own read, whose row the account's burn leaves out since
-/// the placement replaces it, and `None` for a move.
+/// The fit of `pin` (or a fresh session) on `candidate`: the runway per window the request's model draws that the
+/// candidate's set holds (a move's runway read to `SHED_FIT_BAND`'s line under the ceiling), the predicate of the three
+/// verdicts and the end exclusion, with the unknowns read as `judge` says. `planned` holds the reservations a shedding
+/// round planned before this read, summed into the candidate's prediction and burn as the live ones are, and is empty
+/// for a move rule, the partition and rung 4. `own` is the request's pin key on a placement's own read, whose row the
+/// account's burn leaves out since the placement replaces it, and `None` for a move.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn fit_of(
     state: &RoutingState,
@@ -3305,7 +3305,11 @@ pub(crate) fn fit_of(
     // reads a runway no burn bounds, while the verdict and the rank read every bounded window.
     let mut bounded: Vec<(&str, i64, bool)> = Vec::new();
     let mut shown: Vec<(&str, i64, bool)> = Vec::new();
-    for window in plan_windows(&request.canonical_model) {
+    // A shared window the account's newest clean poll lacked has no reading to wait for, so the fit walks the windows
+    // the set holds, as `pin_figures` prices them.
+    for window in
+        plan_windows(&request.canonical_model).filter(|window| state.has_window(candidate, window))
+    {
         let Some(projection) = projections.get(window) else {
             if judge == Judge::Move {
                 unread = true;
@@ -3619,13 +3623,14 @@ fn longest<'a, 'r>(
 }
 
 /// The three orders over the siblings `keep` admits: the candidates the pin fits to the horizon on every window its
-/// model draws, else those where the rewrite alone fits at the longest runway, every tie kept, else the rest. The
-/// `fits` order goes to the strategy whole: the strategy ranks it, and the longest runway on the binding window
-/// breaks the strategy's tie. A tie inside the other two orders is the strategy's alone to break: the fit has read
-/// every window the model draws, so no second reading of a week orders the candidates again. A candidate at its
-/// in-flight cap leaves the first two orders, so a move does not pick a full account while a free fitting one exists,
-/// and reaches the last, where the cap filter reads it as today. The shed rule (`fits_only`) takes the first order
-/// alone and answers none when nothing fits. Every read lands on the member's row of the record too.
+/// model draws that the candidate's set holds, else those where the rewrite alone fits at the longest runway, every tie
+/// kept, else the rest. The `fits` order goes to the strategy whole: the strategy ranks it, and the longest runway on
+/// the binding window breaks the strategy's tie. A tie inside the other two orders is the strategy's alone to break:
+/// the fit has read every window the model draws that the candidate's set holds, so no second reading of a week orders
+/// the candidates again. A candidate at its in-flight cap leaves the first two orders, so a move does not pick a full
+/// account while a free fitting one exists, and reaches the last, where the cap filter reads it as today. The shed rule
+/// (`fits_only`) takes the first order alone and answers none when nothing fits. Every read lands on the member's row
+/// of the record too.
 #[allow(clippy::too_many_arguments)]
 fn gate<'a>(
     state: &RoutingState,
