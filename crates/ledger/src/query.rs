@@ -159,7 +159,7 @@ pub struct RequestFilter {
     /// Keep the requests whose class, folded as the rollups fold it (`-` for none, `other` outside the
     /// identifier charset or past the bound), is in the list.
     pub request_classes: Vec<String>,
-    /// Keep the requests whose classifier standing, `client` or `-` for none, is in the list.
+    /// Keep the requests whose classifier standing, `client`, `client_off` or `-` for none, is in the list.
     pub classifiers: Vec<String>,
     /// Keep the requests a listed guardrail matched, `-` the requests no guardrail matched.
     pub guardrails: Vec<String>,

@@ -9,14 +9,18 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::http::{HeaderMap, HeaderValue, Request};
 use common::*;
-use fake_upstream::{FakeUpstream, Rule};
+use fake_upstream::{wait_for_async, FakeUpstream, Rule};
 use http_body_util::BodyExt;
 use phoebis_bus::{
     Bus, Classifier, Delivery, Event, Outcome, RequestComplete, RequestObserved, Subscriber,
 };
 use phoebis_profile::fixtures::{inference_head, FixtureKind};
 use phoebis_relay::{Probe, CLASSIFIER_BETA};
-use phoebis_routing::{RefusalFacts, RouterEvent};
+use phoebis_routing::{
+    RefusalFacts, Report, RouterConfig, RouterEvent, SharePricer, UtilizationSample, WindowReading,
+    WindowSource, FIVE_HOUR,
+};
+use phoebis_store::SubscriptionRow;
 use tokio::sync::broadcast;
 use tower::ServiceExt;
 
@@ -207,6 +211,129 @@ async fn a_claude_code_request_with_the_auxiliary_class_and_the_beta_is_observed
         answer.observed().client.classifier,
         Some(Classifier::Client)
     );
+    up.shutdown().await;
+}
+
+/// The classifier body of `session` on the first-party head under the class header `class`, the beta appended when
+/// `beta` is set, the session named alike in its header and its metadata.
+fn in_session(session: &str, class: &str, beta: bool) -> Request<Body> {
+    let body = classifier_body_with(|v| v["metadata"]["user_id"] = user_id_for(session).into());
+    let mut req = shaped(FixtureKind::OauthFirstParty, &body, Some(class));
+    set_header(&mut req, "x-claude-code-session-id", session);
+    if beta {
+        req.headers_mut()
+            .append("anthropic-beta", HeaderValue::from_static(CLASSIFIER_BETA));
+    }
+    req
+}
+
+/// The tier the charge case names on its account, the one tier its pricer prices.
+const CHARGED_TIER: &str = "default_claude_max_20x";
+
+#[tokio::test]
+async fn a_classifier_call_off_its_judged_turns_account_is_reported_as_any_call_and_completes_client_off(
+) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: ok_with_id("msg_1"),
+    }])
+    .await;
+    let (h, mut sub) = observing(&up, &[oauth("a", A, 0)]).await;
+    // s-1's turn ends on a, so its classifier call runs on the judged turn's account. s-2 holds no turn to judge.
+    send(&h, &mut sub, in_session("s-1", "main", false)).await;
+    let on = send(&h, &mut sub, in_session("s-1", "auxiliary", true)).await;
+    let off = send(&h, &mut sub, in_session("s-2", "auxiliary", true)).await;
+    assert_eq!(
+        (on.complete().classifier, off.complete().classifier),
+        (None, Some(Classifier::ClientOff)),
+        "the call off the judged turn completes with the second word, the one on it with the observation's"
+    );
+    let mut renewed: Vec<(String, bool)> = h
+        .router
+        .pins()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|p| (p.session_id, p.last_classifier))
+        .collect();
+    renewed.sort();
+    assert_eq!(
+        renewed,
+        [("s-1".to_string(), true), ("s-2".to_string(), false)],
+        "the call off the judged turn renews its pin as a standard answer"
+    );
+    up.shutdown().await;
+
+    // Every token a thousandth of the 5-hour window on the tier, so the usage report of a call charged as any call
+    // moves the account's prediction off its reading of a half, taken a second before the call.
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: ok_with_id("msg_1"),
+    }])
+    .await;
+    let charging = SharePricer::new(|window, _, tier, _, usage, _| {
+        (window == FIVE_HOUR && tier == CHARGED_TIER)
+            .then(|| (usage.input + usage.output) as f64 / 1_000.0)
+    });
+    let h = harness_with_router_config(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec::default(),
+        RouterConfig {
+            share: charging,
+            ..RouterConfig::default()
+        },
+    )
+    .await;
+    h.store
+        .set_profile(
+            "a",
+            "{}",
+            &SubscriptionRow {
+                tier: Some(CHARGED_TIER.into()),
+                ..SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+    h.router.reload().await.unwrap();
+    h.router
+        .report(Report::Sample {
+            account_id: "a".into(),
+            sample: UtilizationSample::default().with(
+                FIVE_HOUR,
+                WindowReading {
+                    utilization: 0.5,
+                    reset: Some(NOW + 3_600_000),
+                    observed_at: NOW - 1_000,
+                    source: WindowSource::Poll,
+                    plan: None,
+                    tier: None,
+                },
+            ),
+            incarnation: 1,
+            source_request_id: None,
+        })
+        .await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(in_session("s-2", "auxiliary", true))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let _ = resp.into_body().collect().await;
+    // The answer's two tokens charge 0.002 of the window.
+    wait_for_async(Duration::from_secs(5), || async {
+        h.router
+            .samples()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|(id, _)| id == "a")
+            .and_then(|(_, sample)| sample.reading(FIVE_HOUR).map(|r| r.utilization))
+            .filter(|utilization| (utilization - 0.502).abs() < 1e-9)
+    })
+    .await;
     up.shutdown().await;
 }
 

@@ -171,8 +171,9 @@ writes the field on its conversation sites alone. The prompt id comes from the `
 the client sets from the same id it writes into the line, so a request without the header gets no `cc_prompt_id`, as the
 native client writes none. The auto mode classifier requests are side queries, so the restoration writes no line field
 on them beyond the `cch` placeholder where the line lacks it, and the router records the ones that carry the classifier
-marker as the client's classifier calls, which take no share of a plan window ([Auto mode behind the
-router](#auto-mode-behind-the-router)). Three things are not restored, because the router cannot: the
+marker as the client's classifier calls, which take no share of a plan window on the account their judged turn ended
+on ([Auto mode behind the router](#auto-mode-behind-the-router)). Three things are not restored, because the router
+cannot: the
 `advanced-tool-use-2025-11-20` beta, since the client has to run its tool search (`ENABLE_TOOL_SEARCH=true` selects it),
 the global cache scope on the static system block, and `cc_turn_origin` with the five fields after it in the client's
 order (the turn position, the gateway and the project fields), which the router never writes and whose turn origin it
@@ -255,13 +256,16 @@ dialog's Access group ([Pools](routing.md#pools)).
   its own per reviewed tool use, on its Sonnet default rather than the session's model, which, where it carries the
   classifier marker (the `auxiliary` class with the beta `auto-mode-classifier-2026-07-16` the client sends under the
   first-party assumption with experimental betas allowed), the router records with the standing `client` under
-  Classifier and prices at no share of a plan window on a subscription account, as the client's documentation says a
-  Pro, Max or Team plan is never charged for them, and at its model's price in the account's overage and on an API-key
-  account ([Requests](console.md#requests), [Statistics](statistics.md#plan-meter)), while the
-  `dangerous-tool-use-2026-09-03` beta stays in its header and the router keeps dropping it. The first session post
-  under the off state still asks, so a session that starts there costs one asking round. The request log records each
-  request whose member the router dropped as `stripped`, and the client's marked classifier requests under Classifier
-  `client` ([The console](console.md)).
+  Classifier and prices at no share of a plan window on a subscription account where its committed attempt runs on the
+  account and incarnation its judged turn ended on, as the client's documentation says a Pro, Max or Team plan is never
+  charged for them, and at its model's price in the account's overage and on an API-key account
+  ([Requests](console.md#requests), [Statistics](statistics.md#plan-meter)), while the `dangerous-tool-use-2026-09-03`
+  beta stays in its header and the router keeps dropping it. One whose committed attempt runs off that account and
+  incarnation, or in a session with no turn to judge, is charged as any call, recorded with the standing `client_off`
+  and priced at its model's weight ([Clients](routing.md#clients)). The first session post under the off state still
+  asks, so a session that starts there costs one asking round. The request log records each request whose member the
+  router dropped as `stripped`, and the client's marked classifier requests under Classifier `client` or `client_off`
+  ([The console](console.md)).
 
 `CLAUDE_CODE_AUTO_MODE_SERVER=0` in the client's environment is the client-side equivalent of the off state, with no
 first asking round, and `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` does the same in first-party mode.

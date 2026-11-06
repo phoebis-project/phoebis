@@ -691,7 +691,11 @@ fn finish(entry: InFlight, mut complete: RequestComplete, now: i64) -> Vec<Recor
         prev_tool_ms: observed.client.prev_tool_ms,
         turn_origin: observed.client.turn_origin,
         request_class: observed.client.request_class,
-        classifier: observed.client.classifier.map(|c| c.as_str().to_string()),
+        // The completion carries the router's answer on the leg that answered, which the admission's mark predates.
+        classifier: complete
+            .classifier
+            .or(observed.client.classifier)
+            .map(|c| c.as_str().to_string()),
         forked_from: observed.fork.forked_from,
         fork_depth: observed.fork.fork_depth,
         auto_mode,
@@ -917,6 +921,7 @@ mod tests {
             message_id: None,
             skipped_events: 0,
             interruption: None,
+            classifier: None,
             finished_at: 1_500,
         })
     }
@@ -960,6 +965,7 @@ mod tests {
             message_id: None,
             skipped_events: 0,
             interruption: None,
+            classifier: None,
             finished_at: 1_500,
         }
     }

@@ -1204,6 +1204,7 @@ fn complete_event(id: &str) -> BusEvent {
         message_id: None,
         skipped_events: 0,
         interruption: None,
+        classifier: None,
         finished_at: 1,
     })
 }
@@ -4054,6 +4055,32 @@ async fn a_request_observed_as_a_classifier_call_round_trips_the_standing_and_fi
         [("-".to_string(), 1), ("client".to_string(), 1)],
         "the classifier call files on a rollup row of its own"
     );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_classifier_call_whose_completion_carries_the_off_answer_lands_client_off_over_the_observed_word(
+) {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let BusEvent::RequestObserved(mut observed) = observed_event("off-call") else {
+        unreachable!()
+    };
+    observed.client.classifier = Some(Classifier::Client);
+    h.bus.publish(BusEvent::RequestObserved(observed));
+    h.bus.publish(selected_event("off-call", 1, "a", 10));
+    h.bus.publish(head_event("off-call", 200, 20));
+    let BusEvent::RequestComplete(complete) =
+        answered_event("off-call", 200, ResponseFacts::default())
+    else {
+        unreachable!()
+    };
+    h.bus.publish(BusEvent::RequestComplete(RequestComplete {
+        classifier: Some(Classifier::ClientOff),
+        ..complete
+    }));
+    let (row, _) = ledgered(&h, "off-call").await;
+    assert_eq!(row.classifier.as_deref(), Some("client_off"));
     up.shutdown().await;
 }
 

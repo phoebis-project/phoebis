@@ -718,6 +718,7 @@ impl Rig {
             message_id: None,
             skipped_events: 0,
             interruption: None,
+            classifier: None,
             finished_at: self.now(),
         })
     }

@@ -110,7 +110,9 @@ burn, while a head drops nothing and a head's reading of a window the account la
 router works from](routing.md#the-windows-the-router-works-from)).
 A decision record names a seat its spend cap holds out `spent` and an account the `never` policy holds out until its
 overage ends `overage`, in its standing facts, its trace, its candidates' obstacles and its probe line, as its
-exhausted line does ([Overage](routing.md#overage)).
+exhausted line does ([Overage](routing.md#overage)). A client classifier call that runs off the account its judged turn
+ended on, or in a session with no turn to judge, is charged as any call and recorded `client_off`, and a classifier call
+never moves a pin ([Selection](routing.md#selection)).
 
 With `keepalive.enabled` on a pool the router keeps a replayable copy of every eligible request a session sends and,
 shortly before the cache entry would expire, sends a probe that reads it ([Keepalive](keepalive.md)). The policy's

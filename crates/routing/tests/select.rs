@@ -4,14 +4,14 @@ use phoebis_routing::{
     AffinityMap, AffinityRow, BandSegment, Banded, BudgetFacts, BurnRates, BurnUnit,
     CandidateFacts, ChainFacts, ClientClass, CohortHold, CreditAccount, CreditsState, Decided,
     DecisionRecord, EvidenceSource, Exhaustion, FactEntity, FactValue, FailedOver, HeadMark,
-    HoldFacts, HoldOutcome, HoldWait, LaneFacts, LongContextRates, MemberSpend, MigrateReason,
-    MoveCause, OverageEvidence, PinKeyFacts, PinRef, PinShed, PinnedObstacle, Placement, RateTable,
-    Rates, RefusalFacts, RefusedRequest, RegimeRates, RegistrySnapshot, RequestFlags, Reservation,
-    RoutingState, SelectRequest, SelectResult, SharePricer, SlowDownEdge, SlowDownRead,
-    SlowDownState, StateWrite, UtilizationSample, WalkStep, Warmth, WarmthCause, WindowFacts,
-    WindowReading, WindowSource, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR,
-    IN_FLIGHT_RECLAIM_MS, MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE, SLOW_DOWN_MIN_HOLD_MS,
-    WEEK_MS,
+    HoldFacts, HoldOutcome, HoldWait, JudgedCharge, LaneFacts, LongContextRates, MemberSpend,
+    MigrateReason, MoveCause, OverageEvidence, PinKeyFacts, PinRef, PinShed, PinnedObstacle,
+    Placement, RateTable, Rates, RefusalFacts, RefusedRequest, RegimeRates, RegistrySnapshot,
+    RequestFlags, Reservation, RoutingState, SelectRequest, SelectResult, SharePricer,
+    SlowDownEdge, SlowDownRead, SlowDownState, StateWrite, UtilizationSample, WalkStep, Warmth,
+    WarmthCause, WindowFacts, WindowReading, WindowSource, FAST_CREDITS_REASON,
+    FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, MODEL_REJECTED_REASON, SEVEN_DAY,
+    SEVEN_DAY_FABLE, SLOW_DOWN_MIN_HOLD_MS, WEEK_MS,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
@@ -18131,9 +18131,18 @@ fn a_classifier_call_on_a_pin_a_classifier_call_renewed_last_prices_no_rewrite_f
         classifier: true,
         ..auxiliary(&s, "cold", T)
     };
+    // A pin only auxiliary calls use, as a classifier call's own pin is: it names no turn, so the call is directed to
+    // no judged account and its move rules run. Such a pin reads its warmth off its last use, ten minutes ago here,
+    // past its cache's TTL, so it stays cold.
+    let classifiers_own = |classifier: bool| PinRow {
+        auxiliary_only: true,
+        created_at: T - 10 * MINUTE,
+        last_used_at: T - 10 * MINUTE,
+        ..classified_pin("cold", classifier)
+    };
     // The stored prompt is a classifier body, which the plan windows never see, and the call's own body prices
     // nothing, so b at 0.9 fits the move and outranks c.
-    let mut st = priced(vec![classified_pin("cold", true)]);
+    let mut st = priced(vec![classifiers_own(true)]);
     b_filled_c_free(&mut st, T - 500);
     let d = decide(&mut st, &s, &req, &mut rng());
     assert_eq!(
@@ -18157,7 +18166,7 @@ fn a_classifier_call_on_a_pin_a_classifier_call_renewed_last_prices_no_rewrite_f
     );
     // A pin whose last prompt is the session's own keeps it as the move's rewrite, whatever the request: b has no
     // room for a tenth of the window and c takes the move.
-    let mut st = priced(vec![classified_pin("cold", false)]);
+    let mut st = priced(vec![classifiers_own(false)]);
     b_filled_c_free(&mut st, T - 500);
     let d = decide(&mut st, &s, &req, &mut rng());
     assert_eq!(
@@ -18167,6 +18176,113 @@ fn a_classifier_call_on_a_pin_a_classifier_call_renewed_last_prices_no_rewrite_f
     assert_eq!(
         fact_of(line(&d.record, "fit"), "verdict", "b"),
         &FactValue::Text("least_bad".into())
+    );
+}
+
+/// The account a selection landed on and its answer on the classifier call's charge.
+fn judged_on(result: &SelectResult) -> (&str, Option<JudgedCharge>) {
+    match result {
+        SelectResult::Selected(sel) => (sel.account.id.as_str(), sel.judged),
+        other => panic!("expected a selection, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_classifier_call_answers_on_where_it_runs_on_its_judged_turns_account_and_off_in_a_session_with_no_turn(
+) {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let mut r = rng();
+    // s1's turn runs on b, past the strategy's pick, and its classifier call follows it there.
+    let turn = opus_turn(&s, "s1", "main", "main", &["a"], 1_000);
+    assert_eq!(picked(&select(&mut st, &s, &turn, &mut r).0), "b");
+    let call = routed(&st, classifier_call(&s, "s1", 1_100));
+    assert_eq!(
+        judged_on(&select(&mut st, &s, &call, &mut r).0),
+        ("b", Some(JudgedCharge::On))
+    );
+    // s2 holds no turn end and no turn pin, so the call has nothing to run on free and lands by the strategy.
+    let call = classifier_call(&s, "s2", 1_200);
+    assert_eq!(
+        judged_on(&select(&mut st, &s, &call, &mut r).0),
+        ("a", Some(JudgedCharge::Off))
+    );
+    // A call the client does not mark carries no answer.
+    let plain = SelectRequest {
+        classifier: false,
+        ..classifier_call(&s, "s3", 1_300)
+    };
+    assert_eq!(
+        judged_on(&select(&mut st, &s, &plain, &mut r).0),
+        ("a", None)
+    );
+}
+
+#[test]
+fn a_classifier_call_on_its_judged_pin_under_a_standing_mark_lands_on_the_judged_account_and_leaves_the_mark(
+) {
+    let s = projection_pool(vec![("a", 0), ("b", 1)]);
+    // s1's only pin, the one its turn runs on, marked by a round that left b fitting.
+    let marked_on_a = || {
+        let mut st = rounding(vec![PinRow {
+            mark: Some(PinMark {
+                at: T - 60_000,
+                on: "a".into(),
+                window: FIVE_HOUR.into(),
+            }),
+            ..burning("s1", "a", 4.0, false, T)
+        }]);
+        over_a_fitting_b(&mut st, T - 500);
+        past_the_wait(&mut st, &s, "p", "a", T);
+        st
+    };
+    let plain = SelectRequest {
+        classifier: false,
+        ..classifier_call(&s, "s1", T)
+    };
+    let mut st = marked_on_a();
+    assert_eq!(
+        landed(select(&mut st, &s, &plain, &mut rng()).0),
+        ("b".into(), Some(MigrateReason::Shed)),
+        "a call of the conversation moves it on the mark"
+    );
+    let mut st = marked_on_a();
+    assert_eq!(
+        landed(select(&mut st, &s, &classifier_call(&s, "s1", T), &mut rng()).0),
+        ("a".into(), None),
+        "the classifier call stays with the turn it judges"
+    );
+    assert!(
+        marked(&st, "s1"),
+        "the mark stands for the conversation's next turn to move"
+    );
+}
+
+#[test]
+fn a_classifier_call_whose_judged_pin_names_an_earlier_incarnation_of_the_account_lands_by_the_strategy(
+) {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    // s1's turn ran on b under incarnation 0, a holder of the id the registry's b, incarnation 1, replaced.
+    let mut st = loaded(vec![PinRow {
+        model: "claude-opus-5-5".into(),
+        incarnation: 0,
+        ..seeded_pin("s1", "b", 1_000)
+    }]);
+    let d = decide(&mut st, &s, &classifier_call(&s, "s1", 1_100), &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    assert!(
+        line(&d.record, "pin")
+            .facts
+            .iter()
+            .all(|f| f.key != "judged"),
+        "the call follows no holder but the one the turn ran on: {:?}",
+        line(&d.record, "pin").facts
     );
 }
 
@@ -18262,17 +18378,21 @@ fn a_shed_round_reads_no_rewrite_for_a_pin_a_classifier_call_renewed_last() {
 
 /// Three warm pins on `a`, two of them last renewed by a classifier call with a prompt of 400 000 tokens: `current`,
 /// whose request the round runs on, burning twenty, `other` a tenth, and `plain`, whose last prompt of 10 000 tokens is
-/// the session's own, burning 0.4. Together they take `a`'s 5-hour projection over the ceiling.
+/// the session's own, burning 0.4. Together they take `a`'s 5-hour projection over the ceiling. The two a classifier
+/// call renewed are pins only auxiliary calls use, as a classifier call's own pin is, so neither names a turn and a
+/// classifier request on `current` runs the move rules, the round among them.
 fn classifier_renewed_round() -> RoutingState {
     let mut st = rounding(vec![
         PinRow {
             last_input_tokens: 400_000,
             last_classifier: true,
+            auxiliary_only: true,
             ..burning("current", "a", 20.0, true, T)
         },
         PinRow {
             last_input_tokens: 400_000,
             last_classifier: true,
+            auxiliary_only: true,
             ..burning("other", "a", 0.1, true, T)
         },
         PinRow {

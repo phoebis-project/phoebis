@@ -266,10 +266,13 @@ the class `main` or `subagent`: the end of an auxiliary call, the subagent summa
 read is best effort: the call names no agent, so the router infers the judged turn from the order of the session's
 stream ends. Two turns that end within the gap before a call, a selection repeated by a failover or a hold, and the
 calls after a restart before the session's next turn ends can follow the other turn, and such a call is charged by the
-upstream while the router's meter reads it free. Where that account cannot serve the call, or the session's turn runs
-on the Sonnet default itself and shares the pin, the call is placed and moved like any request. A marked call takes no
+upstream while the router's meter reads it free. Where that account cannot serve the call, the call is placed and moved
+like any request. Otherwise it goes to that turn's account whether or not it shares the turn's pin, as it does where the
+session's turn runs on the Sonnet default itself, and never moves the pin: the conversation's next turn makes the move.
+A marked call whose committed attempt runs on the account and incarnation the judged turn's stream ended on takes no
 share of a plan window on a subscription account and the normal price of its model in the account's overage and on an
-API-key account ([Plan meter](statistics.md#plan-meter)).
+API-key account ([Plan meter](statistics.md#plan-meter)). A call whose committed attempt runs off that account and
+incarnation, or in a session with no turn to judge, is charged as any call and recorded `client_off`.
 A body whose `safeguards` member the router cannot cut under an off setting (spelled with an escape, or carried twice)
 is refused `400` with the error code `body_shape` before anything reaches the upstream. The mechanism is on [Auto mode
 behind the router](relay.md#auto-mode-behind-the-router).

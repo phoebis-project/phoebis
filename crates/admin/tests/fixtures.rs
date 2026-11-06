@@ -1281,6 +1281,35 @@ async fn every_route_is_captured_and_holds_its_shape() {
         )],
         bodies: None,
     });
+    // A classifier call whose committed attempt ran off the account its judged turn ended on, charged as any call and
+    // priced from its counts. Between the call above and the refusal below, so the list's first rows keep their
+    // places, and in no session, so the session rows keep their counts.
+    let classifier_off_at = classifier_at - 300;
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            session_id: None,
+            request_class: Some("auxiliary".into()),
+            classifier: Some("client_off".into()),
+            ..request(
+                key_generation,
+                "r-classifier-off",
+                classifier_off_at,
+                "desktop",
+                "s2",
+                200,
+                "succeeded",
+            )
+        },
+        attempts: vec![attempt(
+            "r-classifier-off",
+            1,
+            "business",
+            200,
+            "succeeded",
+            classifier_off_at,
+        )],
+        bodies: None,
+    });
     let refused_at = blocked_at - 1_200;
     parts.ledger.record(Record::Request {
         request: RequestRecord {
@@ -1712,6 +1741,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 message_id: Some(format!("msg_{request_id}_1")),
                 skipped_events: 0,
                 interruption: None,
+                classifier: None,
                 finished_at: now,
             }));
     }
@@ -1755,10 +1785,11 @@ async fn every_route_is_captured_and_holds_its_shape() {
             message_id: Some("msg_k1_1".into()),
             skipped_events: 0,
             interruption: None,
+            classifier: None,
             finished_at: now,
         }));
     let ready = wait_json(app, "/admin/requests", &cookie, |v| {
-        v["requests"].as_array().unwrap().len() == 18
+        v["requests"].as_array().unwrap().len() == 19
     })
     .await;
     hold(&planted, "requests", "GET /admin/requests", ready);
@@ -1860,6 +1891,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             message_id: None,
             skipped_events: 0,
             interruption: None,
+            classifier: None,
             finished_at: now,
         }));
     // The replay's counts while the parked table is still empty.

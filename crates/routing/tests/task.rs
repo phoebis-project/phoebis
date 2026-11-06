@@ -15133,6 +15133,69 @@ async fn a_classifier_call_follows_the_turn_that_ended_last_rather_than_the_requ
 }
 
 #[tokio::test]
+async fn a_classifier_call_renewing_a_pin_a_shed_moved_after_its_turn_ended_answers_off() {
+    use phoebis_routing::{JudgedCharge, MigrateReason};
+    let store = shedding_store(&["a", "b"]);
+    with_tier(&store, "a");
+    with_tier(&store, "b");
+    // s1's pin on a carries the mark of a round on a a minute ago, inside the pool's dwell, so the conversation's
+    // next request moves it on that mark alone.
+    store
+        .upsert_pin(&marked(stored_pin(&store, "s1", "a", 1, 0.0), AT - 60_000))
+        .unwrap();
+    store.replace_shed_round("p", "a", 1, AT - 60_000).unwrap();
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    past_the_wait(&handle, &store, "a", AT).await;
+    handle.report(windows("a", 0.96, 0.3, AT)).await;
+    handle.report(windows("b", 0.1, 0.1, AT)).await;
+    handle.samples().await.unwrap();
+    // s1's turn ends on a.
+    let pin = PinRef {
+        key_id: "k".into(),
+        session_id: "s1".into(),
+        agent_id: "main".into(),
+        model: "claude-sonnet-5".into(),
+        epoch: 1,
+        lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
+        entrypoint: String::new(),
+        effort: None,
+    };
+    let usage = PinUsage {
+        input: 10,
+        cache_read: 0,
+        write_5m: 0,
+        write_1h: 0,
+        output: 5,
+    };
+    handle.report(renewal(pin, AT, usage, false, 300_000)).await;
+    assert_eq!(
+        landed_on(
+            handle
+                .select(turn(&handle, false, AT + 1_000))
+                .await
+                .unwrap()
+        ),
+        ("b".into(), Some(MigrateReason::Shed)),
+        "the conversation's next turn moves the pin on its mark, its stream still running"
+    );
+    let call = SelectRequest {
+        classifier: true,
+        request_class: Some("auxiliary".into()),
+        ..request(&handle, Some("s1"), AT + 2_000)
+    };
+    let answer = handle.select(call).await.unwrap();
+    let SelectResult::Selected(sel) = answer.result else {
+        panic!("{:?}", answer.result);
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.judged),
+        ("b", Some(JudgedCharge::Off)),
+        "the call renews the moved pin on b, off the account the judged turn ended on"
+    );
+}
+
+#[tokio::test]
 async fn an_auxiliary_calls_end_on_another_agents_turn_pin_does_not_redirect_the_classifier_call() {
     let store = seeded(&["a", "b", "c"]);
     let now = Arc::new(AtomicI64::new(1_000));

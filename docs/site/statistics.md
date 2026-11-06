@@ -50,7 +50,8 @@ gateway hints it sent (the agent type, the compaction and context-compacted mark
 the turn before), the turn origin off its attribution line, and its auto-mode standing as admission read it: a
 server-side check asked for under an on setting, the `safeguards` member carried under an off setting, which the
 dispatch drops, or a refusal for the body's shape before any upstream saw it. It names its classifier standing, `client`
-for the client's own auto-mode classifier call (the class `auxiliary` with the beta), and the item a `client_contract`
+for the client's own auto-mode classifier call (the class `auxiliary` with the beta), `client_off` for one whose
+committed attempt ran off its judged turn's account, or one with no turn to judge, and the item a `client_contract`
 refusal named. The request's shape is recorded as the effort, the thinking mode and budget, the output limit, the tool,
 system-block and message counts, the context edits, the temperature, and the requested speed and service tier. The row
 also names a session that branched from another conversation: that conversation's root and the matched depth. The
@@ -269,7 +270,9 @@ burn route names its group's unit `usd`, as an API-key account's. A member's bud
 cells, a subscription member's as an API-key member's.
 
 A client classifier call reads a zero share and a zero Pro-week figure on a subscription account, with the reason
-`client_classifier` on the request, and its dollars in the overage, on an API key and on a usage-based seat.
+`client_classifier` on the request, and its dollars in the overage, on an API key and on a usage-based seat. A call
+recorded `client_off`, charged off its judged turn's account, prices at its model's weight as any call does
+([Clients](routing.md#clients)).
 
 The subscription cost model (`crates/ledger/subscription_costs.yaml`) ships beside the price table and holds constants:
 a token costs its model's weight times its type's multiplier in units on every window, a window holds a capacity in
@@ -740,7 +743,8 @@ many 429s the endpoint answered in a row. The `poll_backoff_ended` event that cl
 **`model_unpriced`** holds while a model the cost model does not weigh has served plan-funded requests since the start,
 each priced at no window share, its figure null ([Plan meter](#plan-meter)). The ledger keeps the run in memory, so it
 starts over at a restart, and the next plan-funded request on the model raises it again. A later plan-funded request
-priced at a cost model entry that weighs the model clears it, and a client classifier call raises nothing. The subject
+priced at a cost model entry that weighs the model clears it, and a client classifier call raises nothing, where a call
+recorded `client_off` on a model the cost model does not weigh raises it as any plan-funded call does. The subject
 is the model, the dashboard's line reads the item as "Model unpriced" in the info tone, and it carries no link, since
 the cost reference dialog shows the model's cells as dashes with the weight cell "not weighed". It dates from the run's
 first request, and the detail names the model and the requests served since.

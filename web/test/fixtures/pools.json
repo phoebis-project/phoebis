@@ -152,8 +152,8 @@
           }
         ],
         "status": "active",
-        "requests_24h": 14,
-        "cost_24h": 0.0498,
+        "requests_24h": 15,
+        "cost_24h": 0.053349999999999995,
         "billed_24h": 0.014249999999999999,
         "equivalent_24h": null,
         "active_pins": 6,
@@ -367,12 +367,12 @@
           },
           {
             "at": 1791716400000,
-            "requests": 10,
+            "requests": 11,
             "failed": 1,
-            "tokens": 19800,
-            "cost_usd": 0.039099999999999996,
+            "tokens": 21600,
+            "cost_usd": 0.042649999999999993,
             "billed_usd": 0.01065,
-            "equivalent": 0.00016450000000000001
+            "equivalent": 0.00018800000000000002
           },
           {
             "at": 1791720000000,

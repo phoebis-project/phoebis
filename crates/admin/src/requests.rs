@@ -108,7 +108,10 @@ pub(crate) struct RequestSummary {
     #[schema(example = "server")]
     pub auto_mode: Option<String>,
     /// `client` for a request the class header `auxiliary` and the beta `auto-mode-classifier-2026-07-16` mark as
-    /// the client's own auto-mode classifier call, which takes no share of a plan window. Null otherwise.
+    /// the client's own auto-mode classifier call, which takes no share of a plan window on the account and
+    /// incarnation its judged turn ended on. `client_off` for such a call whose committed attempt ran off that account
+    /// and incarnation, or in a session with no turn to judge, which the upstream charges as any call and which
+    /// prices at its model's weight. Null otherwise.
     #[schema(example = "client")]
     pub classifier: Option<String>,
     /// A request that continued another conversation at depth 2 or deeper: that conversation's root.
@@ -898,7 +901,7 @@ pub(crate) struct RequestsQuery {
     pub efforts: Option<String>,
     /// A comma list of classes as the rollups fold them: the class, `-`, `other`.
     pub request_classes: Option<String>,
-    /// A comma list of `client`, `-` for a request the marker does not hold.
+    /// A comma list of `client`, `client_off`, `-` for a request the marker does not hold.
     pub classifiers: Option<String>,
     /// A comma list of guardrail ids, `-` for a request no guardrail matched.
     pub guardrails: Option<String>,

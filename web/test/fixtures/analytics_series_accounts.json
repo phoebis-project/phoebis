@@ -104,43 +104,43 @@
           {
             "key": "business",
             "label": "business",
-            "requests": 9,
-            "succeeded": 8,
+            "requests": 10,
+            "succeeded": 9,
             "rate_limited": 0,
             "failed": 0,
             "exhausted": 0,
             "rejected": 0,
-            "attempts": 10,
+            "attempts": 11,
             "failovers": 1,
             "incomplete": 1,
-            "cache_hits": 9,
+            "cache_hits": 10,
             "cache_misses": 0,
             "uncached": 0,
             "expired_between_turns": 0,
             "tokens": {
-              "cache_read": 5000,
+              "cache_read": 5500,
               "cache_write_1h": 0,
-              "cache_write_5m": 2000,
-              "output": 1000,
-              "thinking": 400,
-              "uncached_input": 10000,
+              "cache_write_5m": 2200,
+              "output": 1100,
+              "thinking": 440,
+              "uncached_input": 11000,
               "web_fetch": 0,
               "web_search": 0
             },
             "cost": {
-              "cache_read": 0.00055,
-              "cache_write": 0.005000000000000001,
-              "input": 0.020000000000000004,
-              "output": 0.010000000000000002
+              "cache_read": 0.0006000000000000001,
+              "cache_write": 0.005500000000000001,
+              "input": 0.022000000000000006,
+              "output": 0.011000000000000003
             },
-            "cost_usd": 0.035550000000000005,
+            "cost_usd": 0.03910000000000001,
             "errors": {
               "stream_incomplete": 1
             },
             "refused": 0,
             "refusals": {},
             "cache_miss_reasons": {
-              "none": 9
+              "none": 10
             },
             "histograms": {
               "duration_ms": [
@@ -181,7 +181,7 @@
                 0,
                 0,
                 0,
-                9,
+                10,
                 0,
                 0,
                 0,
@@ -238,7 +238,7 @@
                 0,
                 0,
                 0,
-                8,
+                9,
                 0,
                 0,
                 0,
@@ -302,7 +302,7 @@
                 0,
                 0,
                 0,
-                8,
+                9,
                 0,
                 0,
                 0,
@@ -373,7 +373,7 @@
                 0,
                 0,
                 0,
-                8,
+                9,
                 0,
                 0,
                 0,
@@ -417,19 +417,19 @@
               },
               "output_tps": {
                 "p50": 168.48548794358348,
-                "p90": 495.8068241684641,
+                "p90": 168.48548794358348,
                 "p95": 495.8068241684641,
                 "p99": 495.8068241684641
               },
               "ttfb_ms": {
                 "p50": 117.57432659207082,
-                "p90": 495.8068241684641,
+                "p90": 117.57432659207082,
                 "p95": 495.8068241684641,
                 "p99": 495.8068241684641
               },
               "ttft_ms": {
                 "p50": 289.0263910022442,
-                "p90": 710.4974114426765,
+                "p90": 289.0263910022442,
                 "p95": 710.4974114426765,
                 "p99": 710.4974114426765
               }
@@ -455,15 +455,15 @@
             "wasted_probe_usd": 0.0,
             "wasted_probe_reasons": {},
             "cost_shares": {
-              "five_hour": 0.0000616875,
-              "seven_day": 0.00001645
+              "five_hour": 0.0000705,
+              "seven_day": 0.0000188
             },
-            "plan_requests": 8,
-            "plan_output_tokens": 800,
-            "cost_equivalent": 0.0001645,
+            "plan_requests": 9,
+            "plan_output_tokens": 900,
+            "cost_equivalent": 0.000188,
             "cache_equivalent": {
-              "read": 1.1666666666666668e-6,
-              "write": 0.000023333333333333336
+              "read": 1.3333333333333334e-6,
+              "write": 0.00002666666666666667
             },
             "probe_equivalent": {
               "cost": 0.0,
@@ -479,10 +479,10 @@
               "output": 0.002
             },
             "equivalent_split": {
-              "input": 0.00009333333333333334,
-              "cache_read": 1.1666666666666668e-6,
-              "cache_write": 0.000023333333333333336,
-              "output": 0.00004666666666666667
+              "input": 0.00010666666666666668,
+              "cache_read": 1.3333333333333334e-6,
+              "cache_write": 0.00002666666666666667,
+              "output": 0.00005333333333333334
             }
           },
           {

@@ -92,7 +92,9 @@ pub struct RequestRecord {
     pub fork_depth: Option<u32>,
     /// `server`, `stripped`, `body_shape`; null for every other request.
     pub auto_mode: Option<String>,
-    /// `client` for the client's own auto-mode classifier call, null otherwise and on a row from before the column.
+    /// `client` for the client's own auto-mode classifier call, `client_off` for one whose committed attempt ran off
+    /// the account and incarnation its judged turn ended on, or in a session with no turn to judge, null otherwise
+    /// and on a row from before the column.
     pub classifier: Option<String>,
     /// The `CohortHold` JSON of the holds the request waited through; `None` for a request never held.
     pub held: Option<String>,

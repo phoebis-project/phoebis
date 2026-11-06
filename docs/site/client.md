@@ -418,8 +418,10 @@ with that request is the pool's `auto_mode_server` (on by default), which a key 
 the classifier's two stages and the client's notice are on [Auto mode behind the
 router](relay.md#auto-mode-behind-the-router). The client's classifier calls that carry the classifier marker, the
 `auxiliary` class with the beta `auto-mode-classifier-2026-07-16` sent under the first-party assumption with
-experimental betas allowed, take no share of a plan window on a subscription account, and the Requests view lists them
-under Classifier `client` ([Statistics](statistics.md#plan-meter)).
+experimental betas allowed, take no share of a plan window on a subscription account where they run on the account
+their judged turn ended on, and the Requests view lists them under Classifier `client`. One that runs off that account,
+or in a session with no turn to judge, is charged as any call and listed under `client_off`
+([Statistics](statistics.md#plan-meter)).
 
 ## Headers and transport
 

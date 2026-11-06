@@ -692,8 +692,10 @@ pub enum Report {
         cache_ttl_ms: i64,
         /// The answer reported `usage.speed` `fast`.
         fast: bool,
-        /// The request is the client's own classifier call, which charges no plan window and enters the pin's
-        /// unmetered copy alone.
+        /// The request is the client's own classifier call on the account and incarnation its judged turn ended on
+        /// (`Selection::judged` reads `On`), which charges no plan window and enters the pin's unmetered copy alone.
+        /// False for a classifier call the router answered off, which folds as a standard answer and leaves its body
+        /// as the pin's last prompt, the rewrite the pin's next move prices.
         classifier: bool,
         /// The request's class is a turn's, `main` or `subagent`: its stream's end is the end of the agent's turn,
         /// which `latest_turn_pin` answers. False for a compaction and every auxiliary call, the classifier's among
@@ -728,8 +730,9 @@ pub enum Report {
         usage: PinUsage,
         /// The answer reported `usage.speed` `fast`.
         fast: bool,
-        /// The request is the client's own classifier call, which charges no plan window, so the report only
-        /// releases its booking.
+        /// The request is the client's own classifier call on the account and incarnation its judged turn ended on,
+        /// which charges no plan window, so the report only releases its booking. False for a classifier call the
+        /// router answered off, which the upstream charges as any call.
         classifier: bool,
         /// The request whose booking the usage releases before it charges, and the wire attempt that answered.
         request_id: String,
@@ -3981,11 +3984,13 @@ impl Task {
                                     }
                                 };
                                 // A fast answer is usage credits: its tokens land in the row's fast copy, priced
-                                // later through the fast table (`BurnRates::fast`). The client's classifier call
-                                // takes no share of a plan window, so its tokens land in the unmetered copy alone,
-                                // priced in dollars and never under the window share. A standard answer folds into
-                                // the plain and banded copies, the banded one weighed by the band. Every copy an
-                                // answer does not land in only decays.
+                                // later through the fast table (`BurnRates::fast`). The client's classifier call on
+                                // its judged turn's account takes no share of a plan window, so its tokens land in
+                                // the unmetered copy alone, priced in dollars and never under the window share. A
+                                // standard answer folds into the plain and banded copies, the banded one weighed by
+                                // the band, and so does a classifier call the router answered off, which the relay
+                                // reports unmarked: its body then stands as the pin's last prompt, which the pin's
+                                // next move prices as its rewrite. Every copy an answer does not land in only decays.
                                 let (plain, fast_weight, unmetered_weight) =
                                     match (classifier, fast) {
                                         (true, _) => (0.0, 0.0, 1.0),
@@ -4005,7 +4010,8 @@ impl Task {
                         let row = renewed.clone();
                         self.state.mark_renewed(&key);
                         if turn_ended {
-                            self.state.note_turn_end(&key);
+                            self.state
+                                .note_turn_end(&key, &row.account_id, row.incarnation);
                         }
                         self.write(vec![StateWrite::UpsertPin(row)]);
                     }
@@ -4165,8 +4171,8 @@ impl Task {
                 let Some(account) = holder(&snapshot, &account_id, incarnation) else {
                     return;
                 };
-                // A fast completion draws usage credits, and the client's classifier call takes no share of a plan
-                // window, so neither charges one.
+                // A fast completion draws usage credits, and the client's classifier call on its judged turn's
+                // account takes no share of a plan window, so neither charges one.
                 if fast || classifier {
                     return;
                 }

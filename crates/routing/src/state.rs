@@ -1448,9 +1448,18 @@ pub struct RoutingState {
     /// account id. Memory only, with no column: the share a restart loads takes the estimate over its own instant.
     spend_shares: HashMap<String, SpendShare>,
     /// The pin of each session's turn that ended last, by key and session id, as the renewal report at a client
-    /// stream's end names it: what a classifier call that follows within milliseconds judges. Memory only: after a
-    /// restart the pins' own stamps stand in until the session's next turn ends.
-    turn_ends: HashMap<(String, String), PinKey>,
+    /// stream's end names it, with the account it ran on: what a classifier call that follows within milliseconds
+    /// judges. Memory only: after a restart the pins' own stamps stand in until the session's next turn ends.
+    turn_ends: HashMap<(String, String), TurnEnd>,
+}
+
+/// The pin a client turn's stream end renewed, with the account and incarnation it ran on then, which a later move
+/// of the pin does not rewrite.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TurnEnd {
+    pub key: PinKey,
+    pub account_id: String,
+    pub incarnation: u64,
 }
 
 impl RoutingState {
@@ -3697,23 +3706,37 @@ impl RoutingState {
             })
     }
 
-    /// Records that a client turn under `key` ended now, the turn `latest_turn_pin` answers.
-    pub(crate) fn note_turn_end(&mut self, key: &PinKey) {
+    /// Records that a client turn under `key` ended now on `account_id` under `incarnation`, the turn
+    /// `latest_turn_pin` answers. The account is kept beside the key, since a move of the pin before the classifier
+    /// call that judges the turn leaves the pin answering its new account.
+    pub(crate) fn note_turn_end(&mut self, key: &PinKey, account_id: &str, incarnation: u64) {
+        self.turn_ends.insert(
+            (key.key_id.clone(), key.session_id.clone()),
+            TurnEnd {
+                key: key.clone(),
+                account_id: account_id.to_string(),
+                incarnation,
+            },
+        );
+    }
+
+    /// The session's last recorded turn end under one key (`note_turn_end`), while its pin stands and is not only
+    /// auxiliary calls', the reading `latest_turn_pin` takes ahead of the pins' stamps.
+    pub(crate) fn latest_turn_end(&self, key_id: &str, session_id: &str) -> Option<&TurnEnd> {
         self.turn_ends
-            .insert((key.key_id.clone(), key.session_id.clone()), key.clone());
+            .get(&(key_id.to_string(), session_id.to_string()))
+            .filter(|end| self.pins.get(&end.key).is_some_and(|p| !p.auxiliary_only))
     }
 
     /// The session's pin whose turn ended last under one key, any agent and model: the pin the last client stream's
-    /// end renewed (`note_turn_end`) while that pin stands and is not only auxiliary calls', else the pin with the
-    /// greatest `last_used_at` among the session's pins that are not `auxiliary_only`, a stamp a stream's end moves
-    /// too, so a restart or a session whose first turn has not ended still reads a turn. A pin only auxiliary calls
-    /// use is left out, so a classifier pin never names itself. Rows stamped at one instant answer the later
-    /// placement, then the greater agent and model ids, so the answer never rests on the map's order.
+    /// end renewed (`latest_turn_end`), else the pin with the greatest `last_used_at` among the session's pins that
+    /// are not `auxiliary_only`, a stamp a stream's end moves too, so a restart or a session whose first turn has not
+    /// ended still reads a turn. A pin only auxiliary calls use is left out, so a classifier pin never names itself.
+    /// Rows stamped at one instant answer the later placement, then the greater agent and model ids, so the answer
+    /// never rests on the map's order.
     pub(crate) fn latest_turn_pin(&self, key_id: &str, session_id: &str) -> Option<&PinRow> {
-        self.turn_ends
-            .get(&(key_id.to_string(), session_id.to_string()))
-            .and_then(|key| self.pins.get(key))
-            .filter(|p| !p.auxiliary_only)
+        self.latest_turn_end(key_id, session_id)
+            .and_then(|end| self.pins.get(&end.key))
             .or_else(|| {
                 self.pins
                     .values()
@@ -3782,7 +3805,7 @@ impl RoutingState {
         // comes on a later selection, so a tick between the two drops the pace and the landed pin starts a new one.
         let held = &self.pins;
         self.pin_paces.retain(|key, _| held.contains_key(key));
-        self.turn_ends.retain(|_, key| held.contains_key(key));
+        self.turn_ends.retain(|_, end| held.contains_key(&end.key));
         let slow_downs = self.purge_slow_downs(snapshot, now);
         self.purge_projection_over(snapshot);
         // None of these needs a deletion written: the overage rows cascade with the account and the next holder's

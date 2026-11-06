@@ -28,7 +28,7 @@ use phoebis_guardrails::{evaluate_all, Evaluation, HeaderLookup, Lookup, Request
 use phoebis_oauth::{AccessToken, AcquireError, Clock, CredentialManager};
 use phoebis_routing::{
     cohort_hold, latest_full_reset, resolve, AccountTicket, ChainFacts, ClientClass, CohortHold,
-    ConversationLookup, EvidenceSource, Exhaustion, HoldFacts, KeyPermit, LaneFacts,
+    ConversationLookup, EvidenceSource, Exhaustion, HoldFacts, JudgedCharge, KeyPermit, LaneFacts,
     OverageEvidence, PinRef, PinnedObstacle, PredecessorQuery, Presented, Refusal, RefusalFacts,
     RefusedRequest, Report, RequestFlags, ResolveError, RouterHandle, SelectRequest, SelectResult,
     Selection, SelectionTrace, BUDGET_WINDOW, MAIN_AGENT,
@@ -220,6 +220,10 @@ pub struct RelayOutcome {
     pub obstacle: Option<ProbeObstacle>,
     /// The holds this request waited through, the summary `phoebis_routing::cohort_hold` gives; `None` for none.
     pub held: Option<CohortHold>,
+    /// The router's answer on a classifier call's charge for the leg that answered (`Selection::judged`), which the
+    /// completion names `client_off` where it reads `Off`. `None` for every other request and for an answer the
+    /// relay built before any leg.
+    pub judged: Option<JudgedCharge>,
 }
 
 /// The obstacle `RelayOutcome` names for a probe the keepalive holds on rather than pausing as an exhausted pool.
@@ -633,14 +637,14 @@ impl Trace {
     }
 
     /// A no-op once the guard left the slot.
-    fn on_leg(&self, attempt: u8, account_id: Option<&str>) {
+    fn on_leg(&self, attempt: u8, account_id: Option<&str>, judged: Option<JudgedCharge>) {
         if let Some(guard) = self
             .completion
             .lock()
             .expect("completion lock poisoned")
             .as_mut()
         {
-            guard.on_leg(attempt, account_id);
+            guard.on_leg(attempt, account_id, judged);
         }
     }
 
@@ -841,6 +845,7 @@ impl Trace {
             message_id,
             skipped_events,
             interruption,
+            classifier: client_off(outcome.judged),
             finished_at,
         }))
         .await;
@@ -859,9 +864,9 @@ impl Trace {
 struct CompletionGuard {
     /// `Trace::detached`: the guard sits in the trace's slot, so a clone holding that slot would keep itself alive.
     trace: Trace,
-    /// The last leg a `Responding` named, `(attempt, account_id)`, and `(0, None)` before the first. A client that
-    /// leaves between legs or during the `selected` fact's await is completed on it.
-    leg: (u8, Option<String>),
+    /// The last leg a `Responding` named, `(attempt, account_id, judged)`, and `(0, None, None)` before the first. A
+    /// client that leaves between legs or during the `selected` fact's await is completed on it.
+    leg: (u8, Option<String>, Option<JudgedCharge>),
     armed: bool,
 }
 
@@ -869,13 +874,13 @@ impl CompletionGuard {
     fn arm(trace: &Trace) -> CompletionGuard {
         CompletionGuard {
             trace: trace.detached(),
-            leg: (0, None),
+            leg: (0, None, None),
             armed: true,
         }
     }
 
-    fn on_leg(&mut self, attempt: u8, account_id: Option<&str>) {
-        self.leg = (attempt, account_id.map(str::to_string));
+    fn on_leg(&mut self, attempt: u8, account_id: Option<&str>, judged: Option<JudgedCharge>) {
+        self.leg = (attempt, account_id.map(str::to_string), judged);
     }
 
     fn disarm(&mut self) {
@@ -883,12 +888,18 @@ impl CompletionGuard {
     }
 }
 
+/// The completion's word for a classifier call the router answered off on the leg that answered, `None` for every
+/// other request, whose row keeps the observation's word.
+fn client_off(judged: Option<JudgedCharge>) -> Option<Classifier> {
+    (judged == Some(JudgedCharge::Off)).then_some(Classifier::ClientOff)
+}
+
 impl Drop for CompletionGuard {
     fn drop(&mut self) {
         if !self.armed {
             return;
         }
-        let (attempt, account_id) = std::mem::take(&mut self.leg);
+        let (attempt, account_id, judged) = std::mem::take(&mut self.leg);
         let event = Event::RequestComplete(RequestComplete {
             request_id: self.trace.request_id.clone(),
             attempt,
@@ -913,6 +924,7 @@ impl Drop for CompletionGuard {
             message_id: None,
             skipped_events: 0,
             interruption: None,
+            classifier: client_off(judged),
             finished_at: (self.trace.clock)(),
         });
         // `Drop` cannot await, so the durable publish runs on the runtime that is dropping the handler, under the body
@@ -2685,7 +2697,9 @@ impl Relay {
                 )
                 .is_some();
             // After the selection's fact, so a client that leaves from here completes an attempt the ledger holds.
-            admitted.trace.on_leg(*attempt, Some(&account.id));
+            admitted
+                .trace
+                .on_leg(*attempt, Some(&account.id), selection.judged);
             let responding = Responding {
                 account,
                 admitted,
@@ -2704,6 +2718,7 @@ impl Relay {
                 funding_ordinal,
                 head: &mut leg_head,
                 injected: &injected,
+                judged: selection.judged,
                 key_permit: &mut *key_permit,
                 // A probe's answer is never remembered: the id it was given belongs to the turn it replayed,
                 // and recording it would make the next real turn name a probe.
@@ -2906,6 +2921,7 @@ impl Relay {
         outcome.overage_in_use = reading.unified.as_ref().and_then(|u| u.overage_in_use);
         outcome.diagnostics = ctx.diagnostics;
         outcome.diagnostics_named = ctx.diagnostics_named;
+        outcome.judged = ctx.judged;
         self.report_overage(ctx.account, reading.unified.as_ref(), observed_at)
             .await;
         self.report_head_sample(
@@ -3526,7 +3542,7 @@ impl Relay {
                 .or(ctx.admitted.markers_ttl_ms)
                 .unwrap_or(DEFAULT_CACHE_TTL_MS),
             fresh: ctx.fresh_pin,
-            classifier: ctx.admitted.classifier,
+            classifier: ctx.free_of_plan(),
             turn: ctx.admitted.turn,
             renews: ctx.admitted.trace.kind != Kind::CountTokens,
             generations: (
@@ -3561,7 +3577,7 @@ impl Relay {
             key_generation: ctx.admitted.key.created_at,
             canonical_model: ctx.admitted.identity.canonical_model.clone(),
             entrypoint: ctx.admitted.identity.entrypoint.clone(),
-            classifier: ctx.admitted.classifier,
+            classifier: ctx.free_of_plan(),
             lane: ctx.admitted.lane.clone(),
             root,
             static_boundaries: ctx
@@ -4109,6 +4125,7 @@ impl Relay {
         // member's source as the head's outcome does.
         outcome.diagnostics = ctx.diagnostics;
         outcome.diagnostics_named = ctx.diagnostics_named;
+        outcome.judged = ctx.judged;
         self.answer_failure(ctx.admitted.trace, ACCOUNT_CANCELED, outcome)
             .await
     }
@@ -4507,6 +4524,9 @@ struct Responding<'a> {
     head: &'a mut Option<HeadGuard>,
     /// The attempt's own additions, body and head, that a 400 might name.
     injected: &'a [Injected],
+    /// The router's answer on a classifier call's charge for this leg's account (`Selection::judged`): the call is
+    /// free of a plan window only where it reads `On`.
+    judged: Option<JudgedCharge>,
     /// The request's permit, which a committed stream takes into its body.
     key_permit: &'a mut Option<KeyPermit>,
     memory_key: Option<&'a MemoryKey>,
@@ -4521,6 +4541,13 @@ struct Responding<'a> {
 }
 
 impl Responding<'_> {
+    /// Whether the request is the client's classifier call on the account and incarnation its judged turn ended on,
+    /// the one call the upstream keeps free of a plan window. A call the router answered off reports as any call, so
+    /// its usage charges the window and its renewal folds as a standard answer.
+    fn free_of_plan(&self) -> bool {
+        self.admitted.classifier && self.judged == Some(JudgedCharge::On)
+    }
+
     /// Both counts and the end report for a body that outlives the response half, so they are released when it
     /// ends.
     fn guards(&mut self) -> Guards {
@@ -4845,7 +4872,8 @@ struct Admitted<'a> {
     /// chain.
     chains: Option<&'a Chains>,
     /// The request is the client's own auto-mode classifier call (`ClientFacts.classifier`), read once at admission
-    /// and shared by every leg: its usage reports and its selection carry the flag.
+    /// and shared by every leg: its selection carries the flag, and its usage reports carry it where the leg's
+    /// account is the judged turn's (`Responding::free_of_plan`).
     classifier: bool,
     /// The client's body carries its own top-level `diagnostics` member, which the edit never rewrites.
     client_diagnostics: bool,
@@ -4973,6 +5001,7 @@ fn relay_outcome(
         diagnostics_named: false,
         obstacle: None,
         held: trace.held(),
+        judged: None,
     }
 }
 
@@ -5247,6 +5276,7 @@ mod tests {
             diagnostics_named: false,
             obstacle: None,
             held: None,
+            judged: None,
         };
         assert_eq!(outcome_of(&outcome(0)), Outcome::Rejected);
         assert_eq!(outcome_of(&outcome(1)), Outcome::Rejected);

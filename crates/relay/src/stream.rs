@@ -190,7 +190,8 @@ pub(crate) struct Renewal {
     pub cache_ttl_ms: i64,
     /// Whether this request created the pin rather than renewing one that already served.
     pub fresh: bool,
-    /// The request is the client's own classifier call, so the renewal enters the unmetered copy.
+    /// The request is the client's own classifier call on the account its judged turn ended on, so the renewal enters
+    /// the unmetered copy. False for a classifier call the router answered off, which renews as a standard answer.
     pub classifier: bool,
     /// The request's class is a turn's, `main` or `subagent`, so its stream's end is the turn's end the router notes.
     pub turn: bool,
@@ -268,7 +269,8 @@ pub(crate) struct AffinityFacts {
     /// The request's entrypoint as the identity read it, what the usage report's charge prices under: `None` for a
     /// client that is not Claude Code.
     pub entrypoint: Option<String>,
-    /// The request is the client's own classifier call, so its usage report charges no plan window.
+    /// The request is the client's own classifier call on the account its judged turn ended on, so its usage report
+    /// charges no plan window. False for a classifier call the router answered off, which charges as any call.
     pub classifier: bool,
     pub lane: String,
     /// The identity's session id, which the contract guarantees.

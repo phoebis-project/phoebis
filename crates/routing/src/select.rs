@@ -568,6 +568,17 @@ pub struct Selection {
     /// `None` on a count's bound and a placement the routing holds no previous landing for. The relay names no
     /// previous message on a request that carries it, since the account cannot find one.
     pub left: Option<String>,
+    /// `Some` for the client's classifier call alone: `On` where the selected account and incarnation are the ones
+    /// the judged turn's stream ended on, `Off` elsewhere and in a session with no turn to judge.
+    pub judged: Option<JudgedCharge>,
+}
+
+/// A classifier call's standing against the turn it judges: the upstream keeps the call free on the account and
+/// incarnation that turn's stream ended on, and charges it as any call elsewhere.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JudgedCharge {
+    On,
+    Off,
 }
 
 /// The reason a rejection cooldown row carries; the verdict writes it and the report below reads it.
@@ -1263,7 +1274,25 @@ pub fn decide(
     };
     let key = snapshot.key(&request.key_id);
     let pool = key.and_then(|k| snapshot.pool(&k.pool_id));
-    let (result, writes) = run(state, snapshot, pool, request, rng, &mut rec);
+    // Read ahead of the run, whose writes stamp and move the session's pins: the call judges the turn that stood when
+    // it arrived, the one `judged_candidate` directs it by.
+    let judged_turn = request.classifier.then(|| judged_turn(state, request));
+    let (mut result, writes) = run(state, snapshot, pool, request, rng, &mut rec);
+    if let Some(turn) = judged_turn {
+        if turn.is_none() {
+            rec.judged_absent();
+        }
+        if let SelectResult::Selected(selection) = &mut result {
+            let on = turn.is_some_and(|(account_id, incarnation)| {
+                account_id == selection.account.id && incarnation == selection.account.incarnation
+            });
+            selection.judged = Some(if on {
+                JudgedCharge::On
+            } else {
+                JudgedCharge::Off
+            });
+        }
+    }
     // The reserve station draws on every walk. A placement and a move record it where they book, and an answer that
     // never reached the booking states here that it booked nothing, naming the account it landed or waits on.
     if rec.walk.iter().all(|step| step.step != "reserve") {
@@ -1420,6 +1449,14 @@ impl Recorder {
             pin.verdict = "match";
             pin.facts
                 .push(Fact::text(key, account_id).about(account_id));
+        }
+    }
+
+    /// A classifier call in a session with no turn to judge carries the judged turn's fact under the `pin` step all
+    /// the same, reading `none`, so the record names what the call's charge lacked.
+    fn judged_absent(&mut self) {
+        if let Some(pin) = self.walk.iter_mut().find(|w| w.step == "pin") {
+            pin.facts.push(Fact::text(JUDGED_WORDS.fact, "none"));
         }
     }
 }
@@ -1676,14 +1713,7 @@ fn run(
         state,
         pool,
     );
-    let judged = judged_candidate(
-        state,
-        snapshot,
-        request,
-        pin.as_ref().map(|(current, _)| current),
-        &eligible,
-        window,
-    );
+    let judged = judged_candidate(state, snapshot, request, &eligible, window);
     let directed = credit
         .map(|c| (c, CREDIT_WORDS))
         .or(judged.map(|c| (c, JUDGED_WORDS)));
@@ -2322,9 +2352,9 @@ fn run(
     // retry in place renews and never reaches here, so its booking stands. Then the selection books its rewrite and
     // burn on the destination until the usage replaces it or the request ends. A count writes no cache, a probe
     // replays a recipe the account carries, a fast request draws usage credits and no plan window, and the client's
-    // classifier call takes no share of a plan window, so none of them books. A destination without a tier prices
-    // nothing, and nothing priced is nothing to book, so an unpriced destination leaves no entry to expire or
-    // release.
+    // classifier call takes no share of a plan window on its judged turn's account and charges at its usage alone
+    // elsewhere, so none of them books. A destination without a tier prices nothing, and nothing priced is nothing to
+    // book, so an unpriced destination leaves no entry to expire or release.
     state.release_reservation(&request.request_id);
     if !(request.count || request.probe || request.fast || request.classifier) {
         if let Some(tier) = snapshot.priced_tier(&chosen.account_id) {
@@ -2441,6 +2471,7 @@ fn run(
             },
             pool_id: pool.id.clone(),
             left,
+            judged: None,
         }),
         writes,
     )
@@ -5485,6 +5516,7 @@ fn renew(
         left: previous_landing
             .filter(|account| *account != current.account_id)
             .map(String::from),
+        judged: None,
     }
 }
 
@@ -5702,16 +5734,13 @@ const JUDGED_WORDS: DirectedWords = DirectedWords {
 /// incarnation its pin names, among the eligible set and holding allowance, as the `with_main` rung admits a parent's
 /// account. The cap does not bound it, as it bounds no renewal: the call belongs to a session already on that
 /// account. `None` for every other request, for a non-portable call, and for a judged account that cannot serve the
-/// call, which is then placed like any request. `None` too where `own`, the call's live pin, is the judged pin itself:
-/// the session's turn runs on the classifier's model and the two share the pin, so the call stays a request of that
-/// conversation and renews or moves as any request does. A move rule that fires on such a call moves the conversation,
-/// and the calls left for the judged turn then renew the moved pin off that turn's account and are charged until the
-/// conversation's next turn runs there.
+/// call, which is then placed and moved like any request. The call goes to the judged account ahead of the moves
+/// whether or not it shares the judged pin, as it does where the session's turn runs on the classifier's model, so a
+/// call directed here never moves a pin: the conversation's next turn makes the move.
 fn judged_candidate<'a>(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
     request: &SelectRequest,
-    own: Option<&PinRow>,
     eligible: &[&'a Candidate],
     window: &str,
 ) -> Option<&'a Candidate> {
@@ -5721,14 +5750,24 @@ fn judged_candidate<'a>(
     let judged = state.latest_turn_pin(&request.key_id, &request.session_id)?;
     // The task routed the request as the judged agent ahead of this read (`routed_agent`), so the pin the call is held
     // under and the account it is directed to never disagree. A request still under another agent follows no one.
-    if judged.agent_id != request.agent_id
-        || own.is_some_and(|own| own.key_parts() == judged.key_parts())
-    {
+    if judged.agent_id != request.agent_id {
         return None;
     }
     candidate_in(eligible, &judged.account_id)
         .filter(|c| c.incarnation == judged.incarnation)
         .filter(|c| holds_allowance(state, snapshot, &c.account_id, window, request.now))
+}
+
+/// The account and incarnation the classifier call's judged turn ran on: the recorded stream end's, which a move of
+/// the turn's pin since leaves as it was, else the pin `latest_turn_pin` answers as it stands, the reading after a
+/// restart. `None` in a session with no turn to judge.
+fn judged_turn(state: &RoutingState, request: &SelectRequest) -> Option<(String, u64)> {
+    match state.latest_turn_end(&request.key_id, &request.session_id) {
+        Some(end) => Some((end.account_id.clone(), end.incarnation)),
+        None => state
+            .latest_turn_pin(&request.key_id, &request.session_id)
+            .map(|pin| (pin.account_id.clone(), pin.incarnation)),
+    }
 }
 
 /// A fresh request with no live pin lands where its prefix is already warm: the deepest message boundary

@@ -33,8 +33,8 @@ pub struct RowKey<'a> {
     pub tier: Option<&'a str>,
     /// The request's entrypoint from its `client` label, `None` the base regime.
     pub entrypoint: Option<&'a str>,
-    /// The row is the client's own classifier call, which takes no share of a plan window and the normal dollars
-    /// elsewhere.
+    /// The row is the client's own classifier call on the account its judged turn ended on (the word `client`), which
+    /// takes no share of a plan window and the normal dollars elsewhere. A `client_off` row is priced as any call.
     pub classifier: bool,
     pub at: i64,
     pub band_at: Option<i64>,

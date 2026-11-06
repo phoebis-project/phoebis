@@ -58,17 +58,22 @@ impl AutoMode {
 }
 
 /// The client's own auto-mode classifier call, marked by the class header `auxiliary` with the beta
-/// `auto-mode-classifier-2026-07-16` under the Claude Code client class. One word, so the row and the console
-/// spell the standing alike.
+/// `auto-mode-classifier-2026-07-16` under the Claude Code client class. One word per standing, so the row and the
+/// console spell it alike.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Classifier {
+    /// The marked call, which takes no share of a plan window on the account its judged turn ended on.
     Client,
+    /// A classifier call whose committed attempt ran off the account and incarnation the judged turn's stream ended
+    /// on, or in a session with no turn to judge: the upstream charges it as any call.
+    ClientOff,
 }
 
 impl Classifier {
     pub fn as_str(self) -> &'static str {
         match self {
             Classifier::Client => "client",
+            Classifier::ClientOff => "client_off",
         }
     }
 }
@@ -293,8 +298,9 @@ pub struct ClientFacts {
     pub class: String,
     /// `x-claude-code-agent-type`, on a subagent's own turns.
     pub agent_type: Option<String>,
-    /// `Some(Classifier::Client)` for the client's own auto-mode classifier call, which takes no share of a plan
-    /// window. `None` otherwise, and for every client outside the Claude Code class.
+    /// `Some(Classifier::Client)` for the client's own auto-mode classifier call, as the headers mark it at admission,
+    /// before the router answers whether it runs on the judged turn's account (`RequestComplete::classifier`). `None`
+    /// otherwise, and for every client outside the Claude Code class.
     pub classifier: Option<Classifier>,
     /// `x-claude-code-compaction`, on the summarization request.
     pub compaction: Option<String>,
@@ -486,6 +492,10 @@ pub struct RequestComplete {
     /// `None` for a clean end, a client that left, a local answer, and a stream that carried an `error` event, whose
     /// code is the error's own type.
     pub interruption: Option<Interruption>,
+    /// `Some(ClientOff)` for a classifier call the router answered off on the leg that answered, `None` for every
+    /// other request, a marked call that ended before any leg answered among them, which has no counts to price: the
+    /// landing writes it over the observation's word.
+    pub classifier: Option<Classifier>,
     pub finished_at: i64,
 }
 
