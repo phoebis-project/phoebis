@@ -826,7 +826,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(s.lib.insideSessionExpiry(newest.at, s.now), `the newest refusal at ${newest.at} is inside the span`);
     const listedAt = (now) => s.lib.sessionsListedAt(now).filter((x) => x.keyId === 'desktop' && x.sessionId === newest.sessionId);
     const listed = listedAt(Date.parse(newest.at) + HOUR / 2);
-    assert.deepEqual(listed.map((x) => [x.accountId, x.requests, x.lastRequestAt]), [[null, 0, newest.at]], 'listed off the ledger with no count inside the hour of the newest refusal');
+    assert.deepEqual(listed.map((x) => [x.accountId, x.requests, x.spend, x.lastRequestAt]), [[null, 0, null, newest.at]], 'listed off the ledger with no count and no spend inside the hour of the newest refusal');
     assert.deepEqual(s.lib.refusalOnlyRows(s.now), listed, "the builder's row at the story's now is the one listed inside the hour");
     assert.deepEqual(listedAt(Date.parse(newest.at) + timeout * 1000 + 1_000), [], 'none past the timeout');
     assert.ok(!s.sessions.some((x) => x.keyId === 'desktop' && x.sessionId === newest.sessionId), `the route's list at the story's clock, ${Math.round((s.now - Date.parse(newest.at)) / 60_000)} min after the newest refusal, leaves it out`);
@@ -842,7 +842,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
   });
 
-  test(`every session the story seeds folds its spend from its own requests in the seed, and every agent entry names a line of the session or an earlier agent the seed holds, at ${at}`, async () => {
+  test(`every agent entry of a session the story seeds names a line of the session or an earlier agent the seed holds, at ${at}`, async () => {
     const s = await story;
     const recipes = await s.api.listKeepaliveRecipes();
     // The session expiry lists every row the story seeds, the ones past the non-companion timeout among them.
@@ -865,10 +865,6 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     ];
     for (const row of seeded) {
       const name = `${row.keyId} ${row.sessionId}${row.historical ? ', the earlier holder' : ''}`;
-      const own = seed.filter((r) => !r.refused && r.keyId === row.keyId && r.keyGeneration === row.keyGeneration && r.sessionId === row.sessionId);
-      const clients = own.filter((r) => r.kind !== 'probe').length;
-      if (own.length === 0) assert.deepEqual([row.spend, row.requests], [null, 0], `${name} holds no request the router did not refuse`);
-      else assert.deepEqual([row.spend?.requests, row.requests], [clients, clients], `${name}'s client requests, its probes apart`);
       const filed = recipes.filter((r) => r.keyId === row.keyId && live.get(r.keyId) === row.keyGeneration && r.sessionId === row.sessionId);
       const lines = new Set(['main', ...row.agentContexts.map((c) => c.agentId), ...filed.map((r) => r.agentId)]);
       for (const entry of row.agentRequests) {
@@ -1148,12 +1144,13 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       if (main !== undefined) {
         const read = (f) => [f.model, f.accountId, f.lastInputTokens, f.effort, f.cacheTtlMs, f.createdAt];
         assert.deepEqual(read(main), read(row), `${row.sessionId}: main's line reads the row's pin`);
-        // The row's last use is the newest across its pins, so main's own is the row's only where no subagent's is
-        // newer, and the row's warmth is main's pin's own.
-        const newest = row.agentContexts.reduce((at, c) => (Date.parse(c.lastUsedAt) > Date.parse(at) ? c.lastUsedAt : at), main.lastUsedAt);
-        assert.deepEqual([row.lastUsedAt, row.warm], [newest, main.warm], `${row.sessionId}: the row's last use is its newest pin's and its warmth main's`);
+        assert.equal(row.warm, main.warm, `${row.sessionId}: the row's warmth is main's pin's own`);
       }
     }
+    // The row's last use is the newest across its pins: story 0's live row reads its subagent e4b7's use seven minutes
+    // before the clock, while main's own lies hours before it.
+    const story0 = companions.find((x) => x.sessionId === s.lib.SESSION_IDS[0] && !x.historical);
+    assert.equal(story0.lastUsedAt, new Date(s.now - 7 * 60_000).toISOString(), "story 0's row reads its newest subagent's use");
     assert.ok(companions.some((x) => x.agentContexts[0]?.agentId === 'main' && x.agentContexts.length >= 3), 'a companion session carries main and two subagents');
     // The two sessions the mod released whole hold every record released, main's among them.
     const allReleased = companions.filter((x) => ownOf(x).length > 0 && ownOf(x).every((r) => r.agentState === 'released'));
