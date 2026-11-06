@@ -15842,20 +15842,23 @@ fn a_horizon_at_the_end_or_the_window_s_own_reset_fires_a_round_and_keeps_a_mark
         );
     }
 
-    // A week's own reset an hour out sets its horizon in the same way: the pins' 0.05 / 6 an hour take 0.995 to 1.0033
-    // there, past the wall, while the 5-hour window at 0.1 with no reset projects 0.35 five hours out.
-    let week = sample(0.1, 0.995, T).with(
-        SEVEN_DAY,
-        WindowReading {
-            utilization: 0.995,
-            reset: Some(T + HOUR),
-            observed_at: T,
-            source: WindowSource::Poll,
-            plan: None,
-            tier: None,
-        },
-    );
-    let round = run(None, week, false)
+    // A week's own reset sets its horizon in the same way: the pins' 0.05 / 6 an hour take 0.995 to 1.0033 at a reset
+    // an hour out and to 1.0367 at one five hours out, past the wall either way, while the 5-hour window at 0.1 with no
+    // reset projects 0.35 five hours out.
+    let week = |reset: i64| {
+        sample(0.1, 0.995, T).with(
+            SEVEN_DAY,
+            WindowReading {
+                utilization: 0.995,
+                reset: Some(reset),
+                observed_at: T,
+                source: WindowSource::Poll,
+                plan: None,
+                tier: None,
+            },
+        )
+    };
+    let round = run(None, week(T + HOUR), false)
         .shed_round
         .expect("a week past the wall at its reset fires")
         .facts;
@@ -15863,6 +15866,26 @@ fn a_horizon_at_the_end_or_the_window_s_own_reset_fires_a_round_and_keeps_a_mark
         (round.window.as_str(), round.horizon, round.ceiling),
         ("seven_day", T + HOUR, 1.0),
         "the week's round reads the wall at its own reset"
+    );
+    // The ties: a week's reset exactly five hours out is the reset, and an end exactly there under a 5-hour reading
+    // that names no reset is the end, so each round reads the wall. A 5-hour reading of 0.8 projects 1.05 there.
+    let round = run(None, week(T + 5 * HOUR), false)
+        .shed_round
+        .expect("a week past the wall at a reset on the five-hour bound fires")
+        .facts;
+    assert_eq!(
+        (round.window.as_str(), round.horizon, round.ceiling),
+        ("seven_day", T + 5 * HOUR, 1.0),
+        "a reset on the five-hour bound reads the wall"
+    );
+    let round = run(Some(T + 5 * HOUR), sample(0.8, 0.1, T), false)
+        .shed_round
+        .expect("a 5-hour window past the wall at an end on the five-hour bound fires")
+        .facts;
+    assert_eq!(
+        (round.window.as_str(), round.horizon, round.ceiling),
+        ("five_hour", T + 5 * HOUR, 1.0),
+        "an end on the five-hour bound reads the wall"
     );
 }
 
@@ -18514,9 +18537,9 @@ fn a_shed_round_reads_no_rewrite_for_a_pin_a_classifier_call_renewed_last() {
 
 /// Three warm pins on `a`, two of them last renewed by a classifier call with a prompt of 400 000 tokens: `current`,
 /// whose request the round runs on, burning twenty, `other` a tenth, and `plain`, whose last prompt of 10 000 tokens is
-/// the session's own, burning 0.4. Together they take `a`'s 5-hour projection at the reset over the wall. The two a classifier
-/// call renewed are pins only auxiliary calls use, as a classifier call's own pin is, so neither names a turn and a
-/// classifier request on `current` runs the move rules, the round among them.
+/// the session's own, burning 0.4. Together they take `a`'s 5-hour projection at the reset over the wall. The two a
+/// classifier call renewed are pins only auxiliary calls use, as a classifier call's own pin is, so neither names a
+/// turn and a classifier request on `current` runs the move rules, the round among them.
 fn classifier_renewed_round() -> RoutingState {
     let mut st = rounding(vec![
         PinRow {
@@ -20901,7 +20924,7 @@ fn past_the_wait(
 }
 
 #[test]
-fn a_five_hour_round_fires_on_the_projection_over_the_wall_at_its_reset_and_marks_until_the_removed_burn_covers_the_excess(
+fn a_five_hour_round_fires_on_the_projection_over_the_wall_and_marks_until_the_removed_burn_covers_the_excess(
 ) {
     let s = projection_pool(vec![("a", 0), ("b", 1)]);
     // The round pins' 0.42 of the window an hour take a at 0.85 to 1.27 at its reset an hour out, an excess of 0.27 an
@@ -25367,6 +25390,49 @@ fn a_round_under_the_slow_down_fires_on_the_stretch_after_the_safety_wait_and_no
 }
 
 #[test]
+fn a_stretch_rounds_renewal_names_the_five_hour_window_over_the_ceiling_short_of_the_wall() {
+    let (_, s) = stretch_pools(1800);
+    // Two pins burn 0.06 of a's 5-hour window an hour, which from 0.9 passes the ceiling 50 minutes before the reset an
+    // hour and a half out: at T the stretch reads 40 minutes, over the half hour threshold, and the projection at the
+    // reset 0.99, under the wall, both easing as the pins' burn decays over the safety wait. The stretch round tests
+    // the ceiling at the reset less the threshold, so s0's renewal past the wait names the window it fired on.
+    let mut st = rounding(vec![
+        burning("s1", "a", 4.0, false, T),
+        burning("s0", "a", 2.0, true, T),
+    ]);
+    st.record_sample("a", refreshing(0.9, T + 90 * MINUTE, T + 72 * HOUR, T), 0);
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T), 0);
+    for at in [T, T + MINUTE] {
+        decide(&mut st, &s, &auxiliary(&s, "s0", at), &mut rng());
+    }
+    let d = decide(
+        &mut st,
+        &s,
+        &auxiliary(&s, "s0", T + 2 * MINUTE),
+        &mut rng(),
+    );
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(
+        (fact(shed, "fired_by"), fact(shed, "round")),
+        (
+            &FactValue::Text("slow_down".into()),
+            &FactValue::Text("ran".into())
+        )
+    );
+    let projection = number(fact(shed, "projection_five_hour"));
+    assert!(
+        projection > 0.95 && projection < 1.0,
+        "between the ceiling and the wall at the reset: {projection}"
+    );
+    assert_eq!(d.record.outcome.kind, "renewed");
+    assert_eq!(
+        summary_facts(&d),
+        vec![(FIVE_HOUR, FactValue::Number(0.9), Some("percent"))],
+        "the renewal names the window the stretch round fired on"
+    );
+}
+
+#[test]
 fn a_reset_nearer_than_the_threshold_fires_no_round_however_long_the_stretch() {
     let (off, on) = stretch_pools(1800);
     // The round fixture's three pins at 0.42 of the window an hour on a at 0.99, over the ceiling, its reset 29 minutes
@@ -27135,9 +27201,9 @@ fn a_window_inside_its_wait_yields_to_the_next_window_past_its_wait() {
     let s = waiting_pool();
     let cap = 2 * burn_average_ms(s.pool("p").expect("the pool"));
     // Both of a's windows read over their lines: the 5-hour window at 0.72 for the first time at this selection, which
-    // the pins' 0.42 an hour take to the wall 40 minutes out and to 1.14 at its reset an hour out, so it waits a quarter
-    // of those 40 minutes, and the week over the ceiling since two burn averages ago, the wait's cap, past its wait
-    // whatever its wall instant.
+    // the pins' 0.42 an hour take to the wall 40 minutes out and to 1.14 at its reset an hour out, so it waits a
+    // quarter of those 40 minutes, and the week over the ceiling since two burn averages ago, the wait's cap, past its
+    // wait whatever its wall instant.
     let mut st = three_pins_over_the_week(0.72);
     st.stamp_projection_over("p", "a", SEVEN_DAY, T - cap, None);
     let d = decide(&mut st, &s, &auxiliary(&s, "s3", T), &mut rng());

@@ -749,8 +749,8 @@ window's reset, and the window that binds it, and a failover's move adds its `ca
 (`account`, `fast`, `fast_credits` or `model:<id>`), its `reason` (the cooldown row's own word, such as `rate_limit`)
 and its `window`, and for a mark the account's `state` and the state's `cause`. A failover with neither, a 401 whose
 refresh failed with a transient error the request could not wait out, carries none. A mark that clears records
-`mark_cleared` with the reason `healed` (the account's projection on the marked window read under its line again, or
-its stretch under the threshold for a mark the stretch made), `moved` or `released`. A reservation that leaves without
+`mark_cleared` with the reason `healed` (the account's projection on the marked window read under its line again, or its
+stretch under the threshold for a mark the stretch made), `moved` or `released`. A reservation that leaves without
 the usage that would have replaced it records `reservation_expired`, with the relay's word for a request that ended
 without usage (`canceled`, `exhausted`, `refused` or `transport_error`) or `timeout` for a booking an hour old. A pin
 released without a move records `pin_expired` with `reasons`, every fact the selection found against the account:
