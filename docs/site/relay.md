@@ -474,9 +474,10 @@ subagent the mod holds as parked stays released on the router until its next rep
 which registers it anew where the record left one pool cache TTL after the release ([The five
 states](keepalive.md#the-five-states)). When a later answer omits an entry the router named `released` for a subagent
 the mod still holds, the subagent stays unannounced until its next report, so the record's departure frees its slot. If
-the mod releases it before then, it sends no report, since the router released it already. An agent the answer names
-while the mod's release of it still waits in the queue stays unannounced, so the agent's next run starts it again with
-`agent_start`.
+the mod releases it before then, it sends no report, since the router released it already. An `agent_released` answer
+marks the subagent as released by the router where no report for it waits, so the mod does not send that release again,
+and the agent's next report starts it with `agent_start`. An agent the answer names while the mod's release of it still
+waits in the queue stays unannounced, so the agent's next run starts it again with `agent_start`.
 
 A refusal takes one of two shapes. A missing, malformed, ambiguous or refused key is answered the relay's way, the same
 `401` in Anthropic's error shape that `/v1/messages` answers, with `x-phoebis-error-code` naming an `auth_*` code

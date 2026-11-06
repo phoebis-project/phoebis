@@ -199,7 +199,8 @@ the ledger records](keepalive.md#what-the-ledger-records)). An idle return also 
 deepest boundary the earlier request marked for the cache, so an interrupted turn's next request reads as a return and
 the chain watch stays quiet ([The return rate by idle age](keepalive.md#the-return-rate-by-idle-age)). A request whose
 billing line holds a `cch=` the replay cannot read or reach is not retained ([The five
-states](keepalive.md#the-five-states)).
+states](keepalive.md#the-five-states)). The keepalive mod records a release the router named for a subagent and does not
+send it again ([The keepalive protocol](relay.md#the-keepalive-protocol)).
 
 The admin listener serves the web console behind a login with the admin secret, with the views in the sidebar's order,
 Dashboard, Quota, Accounts, Pools, Keys, Guardrails, Requests, Analytics, Sessions and Settings, and under them the
