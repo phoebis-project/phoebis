@@ -3960,7 +3960,7 @@ async fn a_pool_edit_with_a_stale_expected_revision_answers_409_and_writes_nothi
 async fn a_stale_pool_edit_answers_404_when_the_pool_is_deleted_while_it_is_saved() {
     let (app, _up, store, _router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
-    // No key, so the delete lands under the parked edit.
+    // A pool with keys refuses the delete (`PoolInUse`), so with none the delete lands under the parked edit.
     assert_eq!(
         post(
             &app,

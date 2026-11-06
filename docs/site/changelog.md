@@ -114,7 +114,7 @@ exhausted line does ([Overage](routing.md#overage)). A client classifier call th
 ended on, or in a session with no turn to judge, is charged as any call and recorded `client_off`, and a classifier call
 directed to the account its judged turn ended on moves no pin ([Clients](routing.md#clients)). A guardrail create that
 loses the race for its id to another create answers the route's 409 for a taken id, as the key and pool creates do, and
-a key, pool or guardrail edit whose row is deleted while it is being saved answers 404 ahead of a stale stamp's 409
+a guardrail, key or pool edit whose row is deleted while it is being saved answers 404 ahead of a stale stamp's 409
 ([API reference](api-reference.md)).
 
 With `keepalive.enabled` on a pool the router keeps a replayable copy of every eligible request a session sends and,
