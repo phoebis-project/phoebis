@@ -44,8 +44,6 @@ fn agent_list(q: &HashMap<String, String>, name: &str) -> Result<Patterns, Respo
     .map_err(|m| failure(StatusCode::BAD_REQUEST, m))
 }
 
-pub(crate) use phoebis_ledger::hour_end;
-
 /// The filter both rollup reads take, or the 400 a pattern list past the bounds answers.
 // The error is the rendered 400, as `selection`'s is.
 #[allow(clippy::result_large_err)]

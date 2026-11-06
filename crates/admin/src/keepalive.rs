@@ -12,7 +12,7 @@ use phoebis_keepalive::{
     Engine, EngineStats, IdleReturns, KeepaliveLimits, KeepalivePolicy, Wasted,
     IDLE_AGE_BOUNDS_SECONDS,
 };
-use phoebis_ledger::{hour_of, read_overview_rollups, UNATTRIBUTED};
+use phoebis_ledger::{read_overview_rollups, trailing_day_hours, UNATTRIBUTED};
 use phoebis_routing::RouterHandle;
 use utoipa::ToSchema;
 
@@ -190,8 +190,7 @@ pub(crate) async fn overview(
         _ => return failure(StatusCode::BAD_REQUEST, "range is 7d or 30d"),
     };
     let now = (state.clock)();
-    let day = hour_of(now) - 24 * 3_600;
-    let to = crate::analytics::hour_end(hour_of(now));
+    let (day, to) = trailing_day_hours(now);
     let (expired, rows) = match state
         .ledger
         .db()

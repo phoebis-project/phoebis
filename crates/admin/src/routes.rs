@@ -2040,7 +2040,7 @@ fn slow_down_view(ctx: &AccountContext, account_id: &str) -> Option<AccountSlowD
 pub(crate) async fn account_context(state: &AdminState, rows: &[AccountRow]) -> AccountContext {
     let now = (state.clock)();
     let hour = phoebis_ledger::hour_of(now);
-    let to = crate::analytics::hour_end(hour);
+    let to = phoebis_ledger::hour_end(hour);
     let week_start = crate::lifetime::week_start(hour);
     let day_start = hour - 24 * 3_600;
     // The projections ask each member's pool, so the registry is read before the join.

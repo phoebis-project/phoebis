@@ -1253,7 +1253,7 @@ pub(crate) async fn pool_context(
     let guardrails = AttachmentIndex::from_load(&registry);
     let now = (state.clock)();
     let hour = phoebis_ledger::hour_of(now);
-    let to = crate::analytics::hour_end(hour);
+    let to = phoebis_ledger::hour_end(hour);
     let prices = state.pricing.revisions();
     let tables = state.tables.clone();
     let pool_ids: Vec<String> = match pool {

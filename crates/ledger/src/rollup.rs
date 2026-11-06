@@ -136,6 +136,13 @@ pub fn hour_end(hour: i64) -> i64 {
     hour + 3_600
 }
 
+/// The hours `[from, to)` of the day up to the current hour, one span so the keepalive overview and the attention
+/// item's expired count sum the same rows.
+pub fn trailing_day_hours(now: i64) -> (i64, i64) {
+    let hour = hour_of(now);
+    (hour - 24 * 3_600, hour_end(hour))
+}
+
 pub fn bucket_of(at_ms: i64) -> i64 {
     at_ms.div_euclid(1_000).div_euclid(300) * 300
 }
@@ -2129,6 +2136,13 @@ fn counts_at(r: &rusqlite::Row<'_>, i: usize) -> rusqlite::Result<BTreeMap<Strin
     Ok(serde_json::from_str(r.get_ref(i)?.as_str()?).unwrap_or_default())
 }
 
+fn expired_at(r: &rusqlite::Row<'_>, i: usize) -> rusqlite::Result<u64> {
+    Ok(counts_at(r, i)?
+        .get(EXPIRED_BETWEEN_TURNS)
+        .copied()
+        .unwrap_or(0))
+}
+
 fn row_to_account(r: &rusqlite::Row<'_>) -> rusqlite::Result<AccountRollupRow> {
     Ok(AccountRollupRow {
         hour: r.get(0)?,
@@ -2258,10 +2272,7 @@ pub fn read_overview_rollups(
     let mut expired = 0u64;
     let mut kept = Vec::new();
     while let Some(r) = rows.next()? {
-        expired += counts_at(r, 2)?
-            .get(EXPIRED_BETWEEN_TURNS)
-            .copied()
-            .unwrap_or(0);
+        expired += expired_at(r, 2)?;
         let u = |i: usize| -> rusqlite::Result<u64> { Ok(r.get::<_, i64>(i)? as u64) };
         let kept_warm_requests = u(1)?;
         let kind = r.get_ref(0)?.as_str().map_err(rusqlite::Error::from)?;
@@ -2288,6 +2299,22 @@ pub fn read_overview_rollups(
         });
     }
     Ok((expired, kept))
+}
+
+/// The count `read_overview_rollups` answers beside its rows, for a poll that wants the count alone and so decodes
+/// one column of each row.
+pub fn read_expired_between_turns(
+    conn: &Connection,
+    from_hour: i64,
+    to_hour: i64,
+) -> Result<u64, LedgerError> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT cache_miss_reasons_json FROM rollups_hourly WHERE hour >= ?1 AND hour < ?2",
+    )?;
+    let expired = stmt
+        .query_map(params![from_hour, to_hour], |r| expired_at(r, 0))?
+        .sum::<rusqlite::Result<u64>>()?;
+    Ok(expired)
 }
 
 /// The rows of `[from_hour, to_hour)` under `select`, one `PAGE_HOURS` page per `read`, handed to `visit` in the

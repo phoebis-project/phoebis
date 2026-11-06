@@ -289,7 +289,7 @@ async fn totals(
 ) {
     let now = (state.clock)();
     let hour = phoebis_ledger::hour_of(now);
-    let to = crate::analytics::hour_end(hour);
+    let to = phoebis_ledger::hour_end(hour);
     let week_start = crate::lifetime::week_start(hour);
     let live = phoebis_ledger::LiveKeys::from_snapshot(&state.router.snapshot());
     let prices = state.pricing.revisions();

@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use phoebis_bus::{spawn_subscriber, Bus, Delivery, Event};
 use phoebis_ledger::{
-    hour_end, hour_of, parked_summary, read_overview_rollups, routing_conditions,
+    parked_summary, read_expired_between_turns, routing_conditions, trailing_day_hours,
     AttentionGaugeSource, AttentionGauges, Connection, Ledger, LedgerError, ParkedSummary,
     RoutingCondition,
 };
@@ -224,14 +224,14 @@ impl Attention {
 /// What a read takes from the ledger: the parked rows, the fold's routing conditions and the expiries between turns.
 type LedgerFacts = (Vec<ParkedSummary>, Vec<RoutingCondition>, u64);
 
-/// The ledger's part of a read, on one connection. The expiries span the hours the keepalive overview sums, so the item
-/// and the overview count the same rows.
+/// The ledger's part of a read, on one connection. The expiries span `trailing_day_hours`, the hours the keepalive
+/// overview sums, so the item and the overview count the same rows.
 fn ledger_facts(c: &Connection, now: i64) -> Result<LedgerFacts, LedgerError> {
-    let hour = hour_of(now);
+    let (from, to) = trailing_day_hours(now);
     Ok((
         parked_summary(c)?,
         routing_conditions(c)?,
-        read_overview_rollups(c, hour - 24 * 3_600, hour_end(hour))?.0,
+        read_expired_between_turns(c, from, to)?,
     ))
 }
 

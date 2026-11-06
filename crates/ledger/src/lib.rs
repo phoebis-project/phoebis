@@ -101,12 +101,13 @@ pub use refold::refold_bands;
 pub use rollup::{
     bucket_of, deltas_of, detail_json, fold_account, fold_effort, fold_event, fold_identifier,
     fold_keepalive, fold_request, fold_routing_conditions, fold_user_agent, hour_end, hour_of,
-    read_account_rollups, read_overview_rollups, read_rollups, read_rollups_paged,
-    AccountRollupRow, CostSplit, KeySelector, OverviewRollupRow, RollupRow, RollupSelect,
-    RoutingKind, BILLED_FUNDING, CEILING_SETTING, DIMENSION_MAX_BYTES, EXPIRED_BETWEEN_TURNS,
-    FAST_FUNDING, KEY_RANGE_PREDICATE, LONG_BAND, NO_CLASS, OTHER_DIMENSION, OVERAGE_FUNDING,
-    PAGE_HOURS, PLAN_FUNDING, SHED_CAP_SETTING, SLOW_DOWN_STRETCH_SETTING, SLOW_SETTINGS,
-    STANDARD_BAND, UNATTRIBUTED, USAGE_BASED_FUNDING, WALL_SETTINGS, WINDOW_CEILING_SETTING,
+    read_account_rollups, read_expired_between_turns, read_overview_rollups, read_rollups,
+    read_rollups_paged, trailing_day_hours, AccountRollupRow, CostSplit, KeySelector,
+    OverviewRollupRow, RollupRow, RollupSelect, RoutingKind, BILLED_FUNDING, CEILING_SETTING,
+    DIMENSION_MAX_BYTES, EXPIRED_BETWEEN_TURNS, FAST_FUNDING, KEY_RANGE_PREDICATE, LONG_BAND,
+    NO_CLASS, OTHER_DIMENSION, OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, SHED_CAP_SETTING,
+    SLOW_DOWN_STRETCH_SETTING, SLOW_SETTINGS, STANDARD_BAND, UNATTRIBUTED, USAGE_BASED_FUNDING,
+    WALL_SETTINGS, WINDOW_CEILING_SETTING,
 };
 /// The type `LedgerDb::read` and `read_blocking` lend a closure, so a caller can name it in a signature.
 pub use rusqlite::Connection;
