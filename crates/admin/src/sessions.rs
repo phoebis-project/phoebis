@@ -24,7 +24,7 @@ pub(crate) struct SessionList {
 }
 
 /// One session row. On a row with no pin the keys from `burn` to `shed_reason` read null.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(Default, serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Session {
     pub key_id: String,
@@ -58,8 +58,8 @@ pub(crate) struct Session {
     pub burn: Option<f64>,
     /// `window_share` or `usd`, also null when the pin's account has left the registry, with no kind left to pick
     /// a unit from.
-    #[schema(example = "window_share")]
-    pub burn_unit: Option<String>,
+    #[schema(value_type = Option<String>, example = "window_share")]
+    pub burn_unit: Option<BurnUnit>,
     /// `five_hour` where the account's shared window set has it, `seven_day` otherwise, null where `burn_unit` is not
     /// `window_share`.
     #[schema(example = "five_hour")]
@@ -157,8 +157,8 @@ pub(crate) struct AgentContext {
     /// The pin's typed burn per hour in `burn_unit`, priced as the row's `burn` is for this pin.
     pub burn: Option<f64>,
     /// `window_share` or `usd` for this pin, as the row's `burn_unit`.
-    #[schema(example = "window_share")]
-    pub burn_unit: Option<String>,
+    #[schema(value_type = Option<String>, example = "window_share")]
+    pub burn_unit: Option<BurnUnit>,
     /// The window `burn` is a share of for this pin, as the row's `burn_window`.
     #[schema(example = "five_hour")]
     pub burn_window: Option<String>,
@@ -179,8 +179,10 @@ pub(crate) struct AgentContext {
 #[derive(Default, serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SessionKeepalive {
-    pub cause: Option<String>,
-    pub last_guard: Option<String>,
+    #[schema(value_type = Option<String>)]
+    pub cause: Option<phoebis_keepalive::Reason>,
+    #[schema(value_type = Option<String>)]
+    pub last_guard: Option<phoebis_keepalive::Guard>,
     pub next_probe_at: Option<i64>,
     pub state: Option<String>,
 }
@@ -188,10 +190,10 @@ pub(crate) struct SessionKeepalive {
 impl From<&phoebis_keepalive::KeepaliveSummary> for SessionKeepalive {
     fn from(summary: &phoebis_keepalive::KeepaliveSummary) -> Self {
         SessionKeepalive {
-            cause: summary.cause.map(word),
-            last_guard: summary.last_guard.map(word),
+            cause: summary.cause,
+            last_guard: summary.last_guard,
             next_probe_at: summary.next_probe_at,
-            state: summary.state.map(word),
+            state: summary.state.map(|state| lifecycle_word(state).into()),
         }
     }
 }
@@ -344,7 +346,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
     // unmetered usage at that same set, or the share of the account's own window its shared window set picks, the
     // 5-hour window where the set has it and the 7-day window otherwise, through the model's anchor rates on that
     // window over its tier's capacity ratio there, both under the pin's regime. The 7-day anchor rates alone are the
-    // Pro-week figure. Each account's tier and window set are read once per request.
+    // Pro-week figure. Each account's window set is read once per request.
     let revisions = state.pricing.revisions();
     // Both spend reads are in, so the fold applies the poll's rows in one call, and before the passes, so a session
     // the fill named reads its figures in this poll.
@@ -365,8 +367,6 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         now,
         fallback_ms,
     };
-    let mut tiers: std::collections::HashMap<String, Option<String>> =
-        std::collections::HashMap::new();
     // Every standing carries its session's creation time, an auxiliary-only one and one past the expiry among them,
     // so a row reads it whichever pin, if any, the row shows.
     let created: std::collections::BTreeMap<(String, i64, String), i64> = pins
@@ -376,49 +376,42 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
     // The router decays each pin's copies to the read and reads its runway in the same ask, so the burn priced below
     // and the runway are one instant's, and this crate projects nothing.
     for standing in pins.into_iter().filter(|s| s.pin.last_used_at >= cutoff) {
-        let p = &standing.pin;
-        let Some(key @ (_, generation, _)) = pin_key(p) else {
+        let Some(key) = pin_key(&standing.pin) else {
             continue;
         };
         agents_by_session
             .entry(key.clone())
             .or_default()
-            .insert(p.agent_id.clone());
+            .insert(standing.pin.agent_id.clone());
         // A pin only auxiliary requests have used holds no conversation: it neither stands for the row nor draws a
         // line, though its agent counts among the session's.
         if standing.auxiliary_only {
             continue;
         }
-        let is_main = p.agent_id == MAIN_AGENT;
-        agent_pins
-            .entry(key.clone())
-            .or_default()
-            .push(standing.clone());
-        // A session holds a pin per agent and the row shows one of its conversation pins: the main agent's once one
-        // exists (replaced only by a newer one of its own), else whichever the caller used last.
-        let keep = rows.get(&key).is_none_or(|held| {
-            let newer = held.last_used_at.unwrap_or(0) < p.last_used_at;
-            if held.agent_id.as_deref() == Some(MAIN_AGENT) {
-                is_main && newer
-            } else {
-                is_main || newer
-            }
-        });
-        if !keep {
+        agent_pins.entry(key).or_default().push(standing);
+    }
+    // A session holds a pin per agent and the row shows one of its conversation pins: main's newest where main holds
+    // one, else the newest of its agents'.
+    let rank = |s: &PinStanding| (s.pin.agent_id == MAIN_AGENT, s.pin.last_used_at);
+    for (key, standings) in &agent_pins {
+        let Some(standing) = standings
+            .iter()
+            .reduce(|best, s| if rank(s) > rank(best) { s } else { best })
+        else {
             continue;
-        }
-        let priced = price_pin_burn(p, &pricing, &mut tiers);
-        let created_at = created.get(&key).copied();
+        };
+        let p = &standing.pin;
+        let priced = price_pin_burn(p, &pricing);
         rows.insert(
-            key,
+            key.clone(),
             Session {
                 agent_id: Some(p.agent_id.clone()),
                 account_id: Some(p.account_id.clone()),
                 epoch: Some(p.epoch),
-                last_used_at: Some(p.last_used_at),
+                last_used_at: standings.iter().map(|s| s.pin.last_used_at).max(),
                 pinned: true,
                 burn: priced.burn,
-                burn_unit: priced.unit.map(|unit| unit.as_str().into()),
+                burn_unit: priced.unit,
                 burn_window: priced.window.map(String::from),
                 burn_equivalent: priced.equivalent,
                 burn_at: priced.at,
@@ -427,8 +420,6 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                 speed: standing.speed,
                 cycle_ms: standing.cycle_ms,
                 cache_ttl_ms: Some(p.cache_ttl_ms),
-                // The display pin's own use, read before the pass below moves the row's `last_used_at` to the
-                // newest use across the session's pins, since the cache the row names is this pin's.
                 warm: Some(now - p.last_used_at < p.cache_ttl_ms),
                 last_input_tokens: Some(p.last_input_tokens),
                 effort: standing.effort.clone(),
@@ -436,23 +427,14 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                 shed_from: p.shed.as_ref().map(|shed| shed.from.clone()),
                 shed_reason: p.shed.as_ref().and_then(|shed| shed.reason.clone()),
                 ..unpinned_row(
-                    &p.key_id,
-                    generation,
-                    &p.session_id,
+                    &key.0,
+                    key.1,
+                    &key.2,
                     Some(&p.model),
-                    created_at,
+                    created.get(key).copied(),
                 )
             },
         );
-    }
-    // The row's last use is the newest across the session's conversation pins, main's and its agents', so a
-    // subagent's turn in flight keeps the row live and the retention and the order read the row's own figure.
-    for (key, standings) in &agent_pins {
-        if let Some(newest) = standings.iter().map(|s| s.pin.last_used_at).max() {
-            if let Some(entry) = rows.get_mut(key) {
-                entry.last_used_at = Some(newest);
-            }
-        }
     }
     // Every row is keyed by its own session, as the pins are, so a session's requests land on the row of its pin.
     for a in activity {
@@ -477,11 +459,18 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         let entry = rows.entry(key.clone()).or_insert_with(|| {
             unpinned_row(&key.0, key.1, &key.2, None, created.get(key).copied())
         });
+        // A row whose generation no live key holds is read-only: the engine's sessions and recipes are keyed
+        // under the live generation alone and cannot belong to it, so it carries no companion or recipe. A
+        // deleted key's session outlives the key in the engine until the engine's next tick ends it, so a session
+        // the engine still holds is skipped on `historical` as well.
+        if live.get(&key.0) != Some(&key.1) {
+            continue;
+        }
         entry.companion = word(view.companion);
         entry.companion_since = view.companion_since;
         entry.agents = view.agents as u64;
         entry.keepalive = SessionKeepalive::from(&view.keepalive);
-        entry.lifecycle = view.lifecycle.map(|state| {
+        entry.lifecycle = view.lifecycles.get(MAIN_AGENT).map(|&state| {
             if view.registered {
                 "registered".into()
             } else {
@@ -490,20 +479,11 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         });
         entry.presence_age_seconds = view.presence_age_seconds;
     }
-    // A row whose generation no live key holds is read-only: the engine's sessions and recipes are keyed
-    // under the live generation alone and cannot belong to it, so it carries no companion or recipe. A
-    // deleted key's session outlives the key in the engine until the engine's next tick ends it, so the
-    // clearing is on `historical` as well as on the engine's own map, not on the map alone.
     for (key, entry) in rows.iter_mut() {
         let historical = live.get(&key.0) != Some(&key.1);
         entry.historical = historical;
         if historical || !engine.contains_key(key) {
-            entry.companion = "none".into();
-            entry.companion_since = None;
             entry.agents = agents_by_session.get(key).map_or(0, |a| a.len() as u64);
-            entry.keepalive = SessionKeepalive::default();
-            entry.lifecycle = None;
-            entry.presence_age_seconds = None;
         }
     }
     // Once the historical pass has settled `companion`: a session no companion reports leaves the list once the later
@@ -512,7 +492,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
     // request in flight with no ledger row yet keeps the row. An ended session the engine still holds is measured by
     // its end as well, its `companion_since`, so one that sent no request leaves after the timeout too.
     rows.retain(|_, entry| {
-        entry.companion != "none"
+        entry.companion != NO_COMPANION
             || entry
                 .last_used_at
                 .max(entry.last_request_at)
@@ -539,7 +519,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         }
     }
     for (key, entry) in rows.iter_mut() {
-        let companion = entry.companion != "none";
+        let companion = entry.companion != NO_COMPANION;
         let mut lines: Vec<&PinStanding> = agent_pins
             .get(key)
             .into_iter()
@@ -565,11 +545,12 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                 &b.model,
             ))
         });
+        let view = engine.get(key);
         entry.agent_contexts = lines
             .into_iter()
             .map(|standing| {
                 let pin = &standing.pin;
-                let priced = price_pin_burn(pin, &pricing, &mut tiers);
+                let priced = price_pin_burn(pin, &pricing);
                 AgentContext {
                     agent_id: pin.agent_id.clone(),
                     model: pin.model.clone(),
@@ -580,13 +561,12 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                     last_used_at: pin.last_used_at,
                     warm: now - pin.last_used_at < pin.cache_ttl_ms,
                     burn: priced.burn,
-                    burn_unit: priced.unit.map(|unit| unit.as_str().into()),
+                    burn_unit: priced.unit,
                     burn_window: priced.window.map(String::from),
                     burn_equivalent: priced.equivalent,
                     burn_at: priced.at,
                     created_at: standing.first_seen_at,
-                    lifecycle: engine
-                        .get(key)
+                    lifecycle: view
                         .and_then(|view| view.lifecycles.get(&pin.agent_id))
                         .map(|&state| lifecycle_word(state).into()),
                 }
@@ -638,8 +618,9 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
     }
     // The count is the fold's over the session's life, so Requests and Cost read the same requests. The activity's
     // `last_request_at` stays, which the listing's cutoff and the retention above read.
+    let fold = state.spend.read();
     for (key, entry) in rows.iter_mut() {
-        let Some(figures) = state.spend.answer(key, now) else {
+        let Some(figures) = fold.answer(key, now) else {
             continue;
         };
         entry.user_agent = figures.user_agent;
@@ -648,8 +629,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         entry.agent_requests = figures.agent_requests;
         entry.requests = figures.requests;
     }
-    let listed: std::collections::BTreeSet<(String, i64, String)> = rows.keys().cloned().collect();
-    state.spend.retain(&listed, now, state.session_expiry);
+    fold.retain(|key| rows.contains_key(key), now, state.session_expiry);
     let mut out: Vec<Session> = rows.into_values().collect();
     let latest = |row: &Session| {
         row.last_used_at
@@ -682,11 +662,7 @@ struct PricedBurn {
 }
 
 /// Prices the row's display pin and each line's pin alike, so a row and its display pin's line answer the same figures.
-fn price_pin_burn(
-    p: &phoebis_store::PinRow,
-    pricing: &BurnPricing,
-    tiers: &mut std::collections::HashMap<String, Option<String>>,
-) -> PricedBurn {
+fn price_pin_burn(p: &phoebis_store::PinRow, pricing: &BurnPricing) -> PricedBurn {
     let BurnPricing {
         snapshot,
         overages,
@@ -706,46 +682,46 @@ fn price_pin_burn(
             .any(|(id, e)| *id == p.account_id && e.stands(now, fallback_ms));
         BurnUnit::of(kind, snapshot.usage_based(&p.account_id), in_overage)
     });
-    let window = if reported
-        .get(&p.account_id)
-        .is_none_or(|sample| sample.has_window(FIVE_HOUR))
-    {
-        FIVE_HOUR
-    } else {
-        SEVEN_DAY
-    };
-    let burn_window = (unit == Some(BurnUnit::WindowShare)).then_some(window);
-    let equivalent = (unit == Some(BurnUnit::WindowShare))
-        .then(|| rates.price_pin(BurnUnit::WindowShare, p, SEVEN_DAY))
-        .flatten()
-        .map(|b| b * 3_600.0);
-    let burn = match unit {
-        None => None,
-        Some(BurnUnit::Usd) => rates
-            .price_pin(BurnUnit::Usd, p, FIVE_HOUR)
-            .map(|b| b * 3_600.0),
+    let (burn, window, equivalent) = match unit {
+        None => (None, None, None),
+        Some(BurnUnit::Usd) => (
+            rates
+                .price_pin(BurnUnit::Usd, p, FIVE_HOUR)
+                .map(|b| b * 3_600.0),
+            None,
+            None,
+        ),
         Some(BurnUnit::WindowShare) => {
-            if !tiers.contains_key(&p.account_id) {
-                // The selector's own read of the plan, so a plan the cost model does not price (a free
-                // organization) reads unpriced here as it does there.
-                let tier = snapshot.priced_tier(&p.account_id).map(String::from);
-                tiers.insert(p.account_id.clone(), tier);
-            }
-            let tier = tiers.get(&p.account_id).and_then(Option::as_deref);
+            let window = if reported
+                .get(&p.account_id)
+                .is_none_or(|sample| sample.has_window(FIVE_HOUR))
+            {
+                FIVE_HOUR
+            } else {
+                SEVEN_DAY
+            };
+            // The selector's own read of the plan, so a plan the cost model does not price (a free
+            // organization) reads unpriced here as it does there.
+            let tier = snapshot.priced_tier(&p.account_id);
             // An account tier the cost model does not size prices nothing, as does a model without a weight, so
             // the figure reads null rather than a guess.
-            tier.and_then(|t| tables.tier_factor(t, window, entrypoint_of(p), now))
+            let burn = tier
+                .and_then(|t| tables.tier_factor(t, window, entrypoint_of(p), now))
                 .and_then(|factor| {
                     rates
                         .price_pin(BurnUnit::WindowShare, p, window)
                         .map(|b| b * 3_600.0 / factor)
-                })
+                });
+            let equivalent = rates
+                .price_pin(BurnUnit::WindowShare, p, SEVEN_DAY)
+                .map(|b| b * 3_600.0);
+            (burn, Some(window), equivalent)
         }
     };
     PricedBurn {
         burn,
         unit,
-        window: burn_window,
+        window,
         equivalent,
         at: p.burn_at,
     }
@@ -769,45 +745,10 @@ fn unpinned_row(
         key_id: key_id.into(),
         key_generation,
         session_id: session_id.into(),
-        agent_id: None,
         model: model.map(String::from),
-        account_id: None,
-        epoch: None,
         created_at,
-        last_used_at: None,
-        last_request_at: None,
-        requests: 0,
-        user_agent: None,
-        spend: None,
-        day: SessionDay::default(),
-        pinned: false,
-        burn: None,
-        burn_unit: None,
-        burn_window: None,
-        burn_equivalent: None,
-        burn_at: None,
-        runway_ms: None,
-        runway_bounded: None,
-        speed: None,
-        cycle_ms: None,
-        cache_ttl_ms: None,
-        warm: None,
-        last_input_tokens: None,
-        effort: None,
-        last_refresh_at: None,
-        shed_from: None,
-        shed_reason: None,
-        historical: false,
-        companion: "none".into(),
-        companion_since: None,
-        agents: 0,
-        agent_contexts: Vec::new(),
-        agent_requests: Vec::new(),
-        keepalive: SessionKeepalive::default(),
-        lifecycle: None,
-        presence_age_seconds: None,
-        forked_from: None,
-        fork_depth: None,
+        companion: NO_COMPANION.into(),
+        ..Session::default()
     }
 }
 
@@ -822,6 +763,9 @@ fn lifecycle_word(state: phoebis_keepalive::AgentState) -> &'static str {
         Unknown => "unknown",
     }
 }
+
+/// `CompanionState::None`'s serde word, the one the retention and the lines pass test a row's `companion` against.
+const NO_COMPANION: &str = "none";
 
 /// The word serde writes for a member of one of the engine's closed sets, so the row spells it as the engine does.
 fn word(value: impl serde::Serialize) -> String {

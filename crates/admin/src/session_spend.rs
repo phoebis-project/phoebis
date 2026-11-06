@@ -538,22 +538,31 @@ impl SessionSpendFold {
         inner.watermark = Some(newest);
     }
 
+    /// The fold held for one poll's answers and the retain after them, so the poll takes the lock once.
+    pub(crate) fn read(&self) -> FoldRead<'_> {
+        FoldRead(self.lock())
+    }
+}
+
+pub(crate) struct FoldRead<'a>(MutexGuard<'a, Inner>);
+
+impl FoldRead<'_> {
     /// The row's four members and its count at `now`, `None` where the fold holds nothing for the session.
     pub(crate) fn answer(&self, key: &(String, i64, String), now: i64) -> Option<SessionFigures> {
-        Some(self.lock().sessions.get(key)?.figures(now))
+        Some(self.0.sessions.get(key)?.figures(now))
     }
 
     /// Drops the sessions not listed for `expiry` and the buckets older than 25 hours.
     pub(crate) fn retain(
-        &self,
-        listed: &BTreeSet<(String, i64, String)>,
+        mut self,
+        listed: impl Fn(&(String, i64, String)) -> bool,
         now: i64,
         expiry: Duration,
     ) {
         let kept_from = kept_from(now);
         let expiry = expiry.as_millis() as i64;
-        self.lock().sessions.retain(|key, accumulator| {
-            if listed.contains(key) {
+        self.0.sessions.retain(|key, accumulator| {
+            if listed(key) {
                 accumulator.listed_at = accumulator.listed_at.max(now);
             }
             accumulator.hours.retain(|&hour, _| hour >= kept_from);
@@ -703,7 +712,7 @@ mod tests {
             &tables,
             at,
         );
-        let figures = fold.answer(&s, at).expect("s is held");
+        let figures = fold.read().answer(&s, at).expect("s is held");
         assert_eq!(
             figures.requests, 2,
             "the rows the first poll folded are at or below the watermark it moved"
@@ -738,7 +747,7 @@ mod tests {
             at,
         );
         assert!(
-            fold.answer(&t, at).is_none(),
+            fold.read().answer(&t, at).is_none(),
             "a poll older than the fold applies nothing"
         );
         assert_eq!(
@@ -763,6 +772,7 @@ mod tests {
             at,
         );
         let spend = alone
+            .read()
             .answer(&s, at)
             .and_then(|figures| figures.spend)
             .expect("r1 is a client request");
@@ -794,12 +804,12 @@ mod tests {
             at,
         );
         assert_eq!(
-            fold.answer(&s, at).map(|figures| figures.requests),
+            fold.read().answer(&s, at).map(|figures| figures.requests),
             Some(2),
             "the fill read r2 in the same snapshot"
         );
         assert!(
-            fold.answer(&t, at).is_none(),
+            fold.read().answer(&t, at).is_none(),
             "a session the fold does not hold waits for its first fill"
         );
         let cursor = fold.cursor(&tables, at);
@@ -854,7 +864,8 @@ mod tests {
         let cursor = fold.cursor(&tables, JANUARY_2026);
         fold.fold(poll(&cursor), &prices, &tables, JANUARY_2026);
         let equivalent = |now: i64| {
-            fold.answer(&s, now)
+            fold.read()
+                .answer(&s, now)
                 .and_then(|figures| figures.spend)
                 .and_then(|spend| spend.equivalent)
         };
@@ -872,7 +883,7 @@ mod tests {
         // A poll whose clock read the old revision folds after the reset, as an overlapping poll can.
         fold.fold(poll(&cursor), &prices, &tables, JANUARY_2026);
         assert!(
-            fold.answer(&s, JANUARY_2026).is_none(),
+            fold.read().answer(&s, JANUARY_2026).is_none(),
             "a poll priced under the old anchor applies nothing once the fold reset"
         );
         fold.fold(poll(&cursor), &prices, &tables, FEBRUARY_2026);
@@ -908,7 +919,7 @@ mod tests {
         );
         fold.fold(first, &prices, &tables, JANUARY_2026);
         assert!(
-            fold.answer(&u, JANUARY_2026).is_none(),
+            fold.read().answer(&u, JANUARY_2026).is_none(),
             "u is not listed yet"
         );
         let cursor = fold.cursor(&tables, JANUARY_2026);
@@ -919,7 +930,8 @@ mod tests {
         let second = poll(&[s, u.clone()]);
         fold.fold(second, &prices, &tables, JANUARY_2026);
         assert_eq!(
-            fold.answer(&u, JANUARY_2026)
+            fold.read()
+                .answer(&u, JANUARY_2026)
                 .map(|figures| figures.requests),
             Some(1),
             "the first fill reads a session landed before the start whole"
@@ -950,7 +962,7 @@ mod tests {
             &tables,
             now,
         );
-        let day = fold.answer(&s, now).expect("s is held").day;
+        let day = fold.read().answer(&s, now).expect("s is held").day;
         assert_eq!(day.requests.values().sum::<u64>(), 1, "{:?}", day.requests);
     }
 }

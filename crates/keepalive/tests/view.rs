@@ -411,7 +411,11 @@ async fn mains_lifecycle_word_stands_beside_an_empty_summary_while_main_holds_no
     assert_eq!(r.status("main").reason, Reason::AwaitingRequest);
     let view = &r.engine.sessions()[0];
     assert_eq!(
-        (view.lifecycle, view.keepalive.state, view.registered),
+        (
+            view.lifecycles.get("main").copied(),
+            view.keepalive.state,
+            view.registered
+        ),
         (Some(AgentState::Idle), None, false),
         "{view:?}"
     );
@@ -428,7 +432,10 @@ async fn a_registered_main_reads_registered_until_its_first_real_request() {
     r.observe("main").await;
     let requested = &r.engine.sessions()[0];
     assert_eq!(
-        (requested.registered, requested.lifecycle),
+        (
+            requested.registered,
+            requested.lifecycles.get("main").copied()
+        ),
         (false, Some(AgentState::Busy)),
         "{requested:?}"
     );
