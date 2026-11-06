@@ -85,7 +85,8 @@ struct Invalidated {
 
 /// How far apart two readings' resets may lie and still name one reset: a head names its resets in whole seconds and
 /// the poll in milliseconds, so the two sources disagree about one reset by under a second, while a window's next
-/// reset lands hours after the last.
+/// reset lands hours after the last. A reading taken within it before the stored reset counts as past that reset,
+/// since the upstream's clock and the poll's lag put a reading that close to the reset on either side of its instant.
 pub const RESET_SLACK_MS: i64 = 60_000;
 
 /// Whether two readings' resets name one reset.
@@ -307,9 +308,9 @@ pub enum RouterEvent {
     },
     /// A window's reset passed: the sample's own instant has passed it, within `RESET_SLACK_MS` where the sample names
     /// a later reset and outright where it names none (`observed` `sample`), or the purge tick found the clock past a
-    /// stored reset with no newer sample (`clock`), once per account, window and reset. A sample taken ahead of the
-    /// stored reset that names a later one is a slide, as an idle account's 5-hour reset moves with every poll, and
-    /// emits nothing.
+    /// stored reset with no newer sample (`clock`), once per account, window and reset. A sample taken more than
+    /// `RESET_SLACK_MS` ahead of the stored reset that names a later one is a slide, as an idle account's 5-hour reset
+    /// moves with every poll, and emits no reset event.
     WindowReset {
         account_id: String,
         window: String,
@@ -4662,8 +4663,8 @@ impl Task {
             let reset_at = stored.reset?;
             let next_reset = match reading.reset {
                 // A reset is passed once the reading's own instant has passed it, within the slack. An idle account's
-                // 5-hour reset slides later with every poll, so a reading taken ahead of the stored reset that names a
-                // later one replaces it with no event.
+                // 5-hour reset slides later with every poll, so a reading taken more than `RESET_SLACK_MS` ahead of the
+                // stored reset that names a later one replaces it with no reset event.
                 Some(next) => (next > reset_at.saturating_add(RESET_SLACK_MS)
                     && reset_at <= reading.observed_at.saturating_add(RESET_SLACK_MS))
                 .then_some(Some(next)),

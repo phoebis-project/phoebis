@@ -11890,10 +11890,12 @@ async fn a_predicted_wall_with_no_reset_holds_back_the_samples_of_its_own_window
             .any(|event| matches!(event, RouterEvent::WindowSpent { .. })),
         "the open window's wall is announced once: {quiet:?}"
     );
-    // A window whose reset falls past the open window's length is a later one, and its wall is announced.
+    // A window whose reset falls past the open window's length is a later one, and its wall is announced. Its heads
+    // are taken past the open window's reset, which passes with no clear, so the wall's announcement stands and the
+    // cycle test alone tells the later window apart.
     handle
         .report(head_reading(
-            reset + 4_000,
+            announced + 4 * HOUR + 1_000,
             0.5,
             Some(announced + 7 * HOUR),
             "r-3",
@@ -11903,7 +11905,7 @@ async fn a_predicted_wall_with_no_reset_holds_back_the_samples_of_its_own_window
     handle.samples().await.unwrap();
     handle
         .report(head_reading(
-            reset + 5_000,
+            announced + 4 * HOUR + 2_000,
             1.0,
             Some(announced + 7 * HOUR),
             "r-4",

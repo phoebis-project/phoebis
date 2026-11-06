@@ -451,8 +451,9 @@ lacks does not land, so the window comes back with the next clean poll that carr
 all is no reading of the account and settles nothing, and a poll older than the one that named the set neither drops a
 window nor rewrites it. The set persists in the registry beside the readings and is restored at startup, so a restart
 keeps the account's windows as its last clean poll named them. A model week is booked and read whatever the set holds.
-The drop logs one line at info naming the account and the window and raises no routing log event, and the account's
-cards draw the missing window's slot as "none" with the window's words on hover, "no 5-hour window" on an approved Ultra
+The drop logs one line at info naming the account and the window and raises no routing log event of its own, though a
+5-hour drop ends the account's open slow-down in the routing log at once ([Slow-down](#slow-down)). The account's cards
+draw the missing window's slot as "none" with the window's words on hover, "no 5-hour window" on an approved Ultra
 account ([Dashboard](console.md#dashboard), [Quota](console.md#quota)).
 
 **Spent and cleared** A plan window read at 1.0 or above emits `window_spent` once per reset cycle, whether a head, a
