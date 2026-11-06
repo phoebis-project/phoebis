@@ -135,9 +135,9 @@ const sessionSpec: ({
   // cache TTL, since the router lists a released record for one TTL after its release and then not at all.
   { keyId: 'desktop', accountId: 'primary', model: 'claude-sonnet-5', state: 'idle', agents: 3, companion: 'reporting', released: true, sessionId: RELEASED_SESSION_ID },
   { keyId: 'laptop', accountId: 'primary', model: 'claude-sonnet-4-5', state: 'busy', agents: 1, companion: 'reporting', sessionId: CLIENT_SESSION_ID },
-  // One session the mod ended, whose companion reads none since its end, which keeps its lines, its released
-  // subagents' last probes dating their release inside all's one-hour cache TTL, and which the Sessions view's default
-  // filters hide, and one no companion reports, last used two hours ago, past the one-hour non-companion timeout, so the
+  // One session the mod ended, whose companion reads none since its end, which keeps its lines, its released subagents'
+  // last probes dating their release inside all's one-hour cache TTL, and which the Sessions view's default filters
+  // hide, and one no companion reports, last used two hours ago, past the one-hour non-companion timeout, so the
   // route's list leaves it out.
   {
     keyId: 'desktop',
@@ -465,7 +465,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     agentContexts: [],
     agents: spec.agents,
     companion: spec.companion,
-    // The companion's last report, as the engine dates a companion that stopped: a silent one's lapse, the session's end.
+    // The companion's last report, as the engine dates one that stopped: a silent one's lapse, the session's end.
     companionSince: written?.endedSeconds !== undefined ? ago(written.endedSeconds * 1000) : spec.companion === 'silent' ? ago(rng.int(12, 150) * MINUTE) : null,
     keepalive: {
       state: spec.state,
