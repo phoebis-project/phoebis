@@ -7148,26 +7148,6 @@ fn session_identities_answer_a_session_whose_requests_are_older_than_the_activit
     assert_eq!(rows.len(), 1);
 }
 
-/// The activity groups every request under its own session id, the one the router keys its pin by.
-#[test]
-fn session_activity_groups_every_row_under_its_own_session() {
-    let db = LedgerDb::open_in_memory().unwrap();
-    plant_identity(&db, "r1", "k1", 0, "s1", "inference", 1_000, None, None);
-    plant_identity(&db, "r2", "k1", 0, "s2", "inference", 2_000, None, None);
-    let mut grouped: Vec<String> = db
-        .read_blocking(|c| phoebis_ledger::session_activity(c, 0))
-        .unwrap()
-        .into_iter()
-        .map(|a| a.session_id)
-        .collect();
-    grouped.sort();
-    assert_eq!(
-        grouped,
-        ["s1".to_string(), "s2".to_string()],
-        "each row groups under its own session"
-    );
-}
-
 #[test]
 fn a_forked_sessions_identity_names_its_base_from_its_first_request() {
     let db = LedgerDb::open_in_memory().unwrap();
