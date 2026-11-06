@@ -104,7 +104,7 @@ const results = [];
  * Mounts `path` on the frozen clock and counts `method`'s calls across two ticks of the page's period: one read per
  * period, and none from a real wait, which the frozen clock never lets fire a timer.
  */
-async function readsAgain(path, method, periodMs) {
+const readsAgain = (path, method, periodMs) => forView(path, async () => {
   const page = await mount(path, { now: CLOCK_ORIGIN });
   const spy = countCalls(method);
   tick(periodMs);
@@ -115,11 +115,29 @@ async function readsAgain(path, method, periodMs) {
   results.push({ name: `${path} reads again every ${periodMs / 1000} seconds`, ok: once === 1 && spy.calls.length === 2, missing: [`${method}: ${once} after one period, ${spy.calls.length} after two`] });
   spy.restore();
   page.unmount();
-}
+});
 function expect(name, text, needles) {
   const missing = needles.filter((n) => !text.includes(n));
   results.push({ name, ok: missing.length === 0, missing, length: text.length });
 }
+/**
+ * A whole run takes 15 to 30 minutes. `SMOKE_ONLY`, a comma-separated list of view paths such as `/sessions,/keys`,
+ * runs the blocks of those views and skips the others. A block names the view it mounts or the views it walks, and
+ * also any view whose checks expect what it writes. Each view's shared mount `m` runs as one block with the statements
+ * and blocks that read it, down to its unmount, and those lines stay unindented so their blame stays with the checks.
+ * A path that no block names fails the run, so a typo cannot pass as an empty run.
+ */
+const SMOKE_ONLY = (process.env.SMOKE_ONLY ?? '').split(',').map((p) => p.trim()).filter(Boolean);
+const viewsNamed = new Set();
+let blockCount = 0;
+let skippedBlocks = 0;
+const forView = async (views, block) => {
+  const named = [views].flat();
+  for (const path of named) viewsNamed.add(path);
+  blockCount += 1;
+  if (SMOKE_ONLY.length === 0 || named.some((path) => SMOKE_ONLY.includes(path))) await block();
+  else skippedBlocks += 1;
+};
 /** A grouped dialog's group section by its label; hidden groups stay mounted, so a lookup reaches every one. */
 const group = (dlg, label) => [...(dlg?.querySelectorAll('section.dialog-group') ?? [])].find((s) => s.getAttribute('aria-label') === label);
 /**
@@ -520,12 +538,12 @@ const burnPoint = (over) => ({ cachedTokens: 0, equivalent: null, fiveHourShare:
 // shape each check needs rather than by position.
 const laptopRow = requests.find((r) => r.keyId === 'laptop' && r.status === 200) ?? requests.find((r) => r.keyId === 'laptop');
 const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.length > 1) ?? requests.find((r) => r.keyId === 'desktop');
-{
+await forView('/requests', async () => {
   const ciProbes = requests.filter((r) => r.keyId === 'ci' && r.kind === 'probe').length;
   results.push({ name: 'fixture: a key that opts out of cache warming has no probe rows', ok: ciProbes === 0 && requests.some((r) => r.kind === 'probe'), missing: [`ci ${ciProbes}`, `router-wide ${requests.filter((r) => r.kind === 'probe').length}`] });
-}
+});
 
-{
+await forView('/pools', async () => {
   // The attention poll is one per page load and keeps its last list through a failed read, so a first read that fails
   // can only be met here, before any page has read the conditions.
   const { getAttention } = api;
@@ -561,9 +579,9 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   window.dispatchEvent(new window.Event('focus'));
   await p.settle(300);
   p.unmount();
-}
+});
 
-{
+await forView('/', async () => {
   localStorage.removeItem('phoebis.mockSession');
   const login = await mount('/');
   expect('login screen without a session', login.text(), ['Admin secret', 'Log in']);
@@ -625,9 +643,9 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   results.push({ name: "the login block's closing Log out returns to the login screen", ok: signedOut, missing: [] });
   login.unmount();
   localStorage.setItem('phoebis.mockSession', 'admin');
-}
+});
 
-{
+await forView('/settings', async () => {
   // The time format is a stored preference the toggle lives on Settings alone; a fresh mount of the Accounts
   // list picks up the change from there, read off its first list row's timestamp title.
   const titleOf = async (path) => {
@@ -647,9 +665,9 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   [...reset.container.querySelectorAll('[aria-label="Time format"] button')].find((b) => b.textContent?.trim() === '24h')?.click();
   await reset.settle(100);
   reset.unmount();
-}
+});
 
-{
+await forView('/', async () => {
   // The line reads one shared poll whose schedule is the interval it registers at ATTENTION_REFRESH_MS. The check
   // records that callback as the poll starts and fires it by hand, a refresh tick without the half-minute wait.
   const ticks = [];
@@ -942,9 +960,9 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
       missing: [JSON.stringify(loneFirst), JSON.stringify(loneSecond), ...raised.map((p) => p.slice(0, 160))],
     });
   }
-}
+});
 
-{
+await forView('/', async () => {
   // The story holds one parked record, so the line carries the Replay button after its badges. The held writer's
   // refusal reads in the slot beside it and in no toast, and a replay then lands the record: its counts read in the
   // slot, and the read the button asks for afterwards takes the parked badge and the button off the line.
@@ -991,8 +1009,8 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   // it back.
   api.parkedLanded = false;
   dash.unmount();
-}
-{
+});
+await forView('/', async () => {
   // The exhausted pool's item opens the routing log on the pool's exhausted decisions from the moment the condition
   // began to now, read on the frozen clock so the range is the one the page computed.
   const exhausted = (await api.getAttention()).find((i) => i.kind === 'pool_exhausted');
@@ -1014,9 +1032,12 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
     missing: [href ?? 'no badge', last ?? '', JSON.stringify(landed)],
   });
   page.unmount();
-}
+});
 
-let m = await mount('/');
+// Declared out here because each view's call below assigns its own mount.
+let m;
+await forView('/', async () => {
+m = await mount('/');
 expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost, 24h', 'Error rate, 24h', 'Refused, 24h', '7d remaining', 'Fable week remaining', 'remaining', 'primary', 'nightly', 'Cooling down', 'Overage active', 'Needs re-auth', 'Recent requests', 'Sticky pins and cache-warming agents', 'active pins', 'Fable', 'none']);
 {
   const tiles = [...m.container.querySelectorAll('.stat-grid > .stat')];
@@ -1454,6 +1475,7 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   });
 }
 m.unmount();
+});
 
 /** Picks a section from the Quota page's bar on the given mount and lets the page draw it. */
 const quotaSection = async (page, label) => {
@@ -1465,6 +1487,8 @@ const quotaSection = async (page, label) => {
  * account whose status reads neither `reauth_required` nor `unpaired` and whose plan-ended flag is clear.
  */
 const quotaListed = (a) => a.kind === 'oauth' && a.status !== 'reauth_required' && a.status !== 'unpaired' && a.planEndedAt === null;
+let quotaStoryCount;
+await forView('/quota', async () => {
 m = await mount('/quota');
 // secondary's backoff and reserve's failed poll are the listed rows needing attention, legacy's failing poll leaving
 // with its card. The sunset seed's plan ended, so its card and its place in the count leave too.
@@ -1473,7 +1497,7 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter(quotaListed).le
  * The story's count on the bar, `{n} accounts, {n} need attention`, as its two figures. A funding_required account
  * under an override keeps its place in both, read against these after the shared mount has gone.
  */
-const quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.container.querySelector('.filter-bar__count')?.textContent ?? '')?.slice(1).map(Number) ?? [NaN, NaN];
+quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.container.querySelector('.filter-bar__count')?.textContent ?? '')?.slice(1).map(Number) ?? [NaN, NaN];
 {
   const byLabel = new Map((await api.listAccounts()).map((a) => [a.label, a.id]));
   await emailLines('/quota each card names its email on hover, and nothing for one without', [...m.container.querySelectorAll('.qcard__name')].map((n) => [byLabel.get(n.textContent?.trim() ?? '') ?? '', n.getAttribute('title')]));
@@ -2186,7 +2210,8 @@ expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour li
   });
 }
 m.unmount();
-{
+});
+await forView('/quota', async () => {
   // An address that names the timeline lands on it, drawn once the list has loaded.
   const windows = await mount('/quota#quota-windows');
   const selected = [...windows.container.querySelectorAll('.section-bar [role="tab"]')].filter((b) => b.getAttribute('aria-selected') === 'true').map((b) => b.textContent?.trim());
@@ -2196,8 +2221,8 @@ m.unmount();
     missing: [JSON.stringify(selected), `${windows.container.querySelectorAll('.lane').length} lanes`, windows.container.querySelector('.qcard') ? 'a card is drawn' : 'no card'],
   });
   windows.unmount();
-}
-{
+});
+await forView('/quota', async () => {
   // jsdom lays nothing out, so the cells row reads a browser's width here and each cell its equal share of it. At 316
   // px twelve cells of 26 px hold the 24-hour "06" and print it short, under the 40 px of the full label, while under
   // the 12-hour setting they would cut "12 AM", so six cells draw: at 316 px six cells of 52.67 px sit under the 53 px
@@ -2248,8 +2273,8 @@ m.unmount();
       twoDigits.every(([sub, title], i) => sub === ['00', '06', '12', '18'][i % 4] && title === `${dated(i, 4)}${sub}:00`),
     missing: [`12-hour at 316 px ${fewer.length} cells`, JSON.stringify(fewer), `12-hour at 318 px ${fewerWhole.length} cells`, JSON.stringify(fewerWhole), `24-hour ${twoDigits.length} cells`, JSON.stringify(twoDigits)],
   });
-}
-{
+});
+await forView('/quota', async () => {
   // A period paged past a canceled account's end draws none of its windows, the one that opened before the end and
   // spans the period's start among them. The story's end falls inside the current period, so the check moves it into
   // the week that straddles the next period's start.
@@ -2269,12 +2294,12 @@ m.unmount();
   });
   api.listAccounts = listAccounts;
   paged.unmount();
-}
+});
 
 // The router holds the fast pair in memory until the next fast answer, and its buckets reset within minutes, so a
 // reading past its reset reads as refilled rather than as the share the last answer reported. The account page's
 // Usage card draws the fast lane.
-{
+await forView('/accounts', async () => {
   const { listAccounts } = api;
   const past = new Date(Date.now() - 2 * 3_600_000).toISOString();
   const soon = new Date(Date.now() + 5 * 60_000).toISOString();
@@ -2312,11 +2337,11 @@ m.unmount();
     missing: [`primary: ${lanes.primary.title}`, `overflow: ${lanes.overflow.title}`, `secondary: ${lanes.secondary.title}`],
   });
   api.listAccounts = listAccounts;
-}
+});
 
 // A block's error can stand beside windows the ledger sampled, as before the poll's first read after a restart; the
 // card draws what it holds.
-{
+await forView('/quota', async () => {
   // primary's snapshot is overridden to an error with no poll beside the windows it holds.
   const { listAccounts } = api;
   api.listAccounts = async () => (await listAccounts.call(api)).map((a) => (a.id === 'primary' ? { ...a, usage: { ...a.usage, error: 'the admin API timed out', poll: null } } : a));
@@ -2329,13 +2354,13 @@ m.unmount();
   });
   api.listAccounts = listAccounts;
   held.unmount();
-}
+});
 
 // The router answers a held account's deadline as the snapshot's own member, so a card with no windows prints the
 // next attempt beside its error, to the minute in the viewer's zone. The same mount reads nightly as a funding_required
 // account whose read failed with no window, which keeps its error card and its place in the attention count, beside
 // secondary, which counts for its backoff in the story already.
-{
+await forView('/quota', async () => {
   const heldUntil = new Date(Date.now() + 4 * 60_000).toISOString();
   const { listAccounts } = api;
   api.listAccounts = async () =>
@@ -2372,10 +2397,10 @@ m.unmount();
   });
   api.listAccounts = listAccounts;
   held.unmount();
-}
+});
 
 // A failed read draws the error state where the cards are, instead of leaving placeholders up for ever.
-{
+await forView('/quota', async () => {
   failNextCall('listAccounts', '/admin/accounts', 'the registry is unavailable');
   const failed = await mount('/quota');
   const t = failed.text();
@@ -2385,10 +2410,10 @@ m.unmount();
     missing: [t.slice(0, 200)],
   });
   failed.unmount();
-}
+});
 await readsAgain('/quota', 'listAccounts', 5_000);
 await readsAgain('/', 'getOverview', 30_000);
-{
+await forView('/', async () => {
   const page = await mount('/', { now: CLOCK_ORIGIN });
   const line = () => page.container.querySelector('.dash__asof');
   const tiles = () => [...page.container.querySelectorAll('.stat-grid > .stat .stat__value')].map((v) => v.textContent);
@@ -2407,8 +2432,8 @@ await readsAgain('/', 'getOverview', 30_000);
     missing: [`title ${before} then ${after}`, failed || 'no line', JSON.stringify(drawn), JSON.stringify(tiles())],
   });
   page.unmount();
-}
-{
+});
+await forView('/', async () => {
   // The line reads the oldest of the page's five reads, so a refresh of the sessions that fails holds the line at the
   // sessions' last answer and names them, though the 24-hour figures refreshed.
   const page = await mount('/', { now: CLOCK_ORIGIN });
@@ -2425,8 +2450,8 @@ await readsAgain('/', 'getOverview', 30_000);
     missing: [text || 'no line', `title ${first} then ${held}`],
   });
   page.unmount();
-}
-{
+});
+await forView('/', async () => {
   // A read whose first load failed holds nothing to be as old as, and its card names the error already.
   failNextCall('getOverview', '/admin/dashboard', 'ledger locked');
   const page = await mount('/', { now: CLOCK_ORIGIN });
@@ -2438,8 +2463,8 @@ await readsAgain('/', 'getOverview', 30_000);
     missing: [text || 'no line', JSON.stringify(errors)],
   });
   page.unmount();
-}
-{
+});
+await forView('/', async () => {
   // The refresh that opens the streak reports it; the toast's dwell ends inside the next period, and the refreshes
   // that continue the streak run quiet, so no toast comes back until the streak ends.
   const page = await mount('/', { now: CLOCK_ORIGIN });
@@ -2462,8 +2487,8 @@ await readsAgain('/', 'getOverview', 30_000);
     missing: [JSON.stringify(seen), line || 'no line'],
   });
   page.unmount();
-}
-{
+});
+await forView('/', async () => {
   // A page loaded as its own chunk answers a load that fails again after the reload with its own element, drawn in the
   // shell's outlet, and every other route keeps the router's default screen for a render error.
   const { PageLoadFailed, routes } = await import('./dist/entry.js');
@@ -2474,7 +2499,7 @@ await readsAgain('/', 'getOverview', 30_000);
     ok: JSON.stringify(carried) === JSON.stringify([['accounts', true], ['accounts/:accountId', true], ['analytics', true], ['pools', true]]) && routes.every((r) => r.errorElement === undefined),
     missing: [JSON.stringify(carried), `${children.length} child routes`],
   });
-}
+});
 
 // The memory router exposes no location, so the page in place is read off what the route drew: the heading, the
 // active nav link, and the selected row's link.
@@ -2483,6 +2508,9 @@ const accountsInPlace = (page) => ({
   nav: page.container.querySelector('.nav__link.is-active')?.getAttribute('href') ?? '',
   row: page.container.querySelector('a.account-row.is-active')?.getAttribute('href') ?? '',
 });
+// Also runs for /pools, whose checks expect spare deleted as the last block here leaves it, and so for /keys, which
+// runs the pool checks.
+await forView(['/accounts', '/keys', '/pools'], async () => {
 m = await mount('/accounts');
 {
   // Without an account id the page itself lands on the first account, primary.
@@ -4141,7 +4169,8 @@ await m.navigate('/accounts/spare');
   });
 }
 m.unmount();
-{
+});
+await forView('/accounts', async () => {
   // A mount of its own on the frozen clock: a toast there stays until a tick takes it down, so a toast one check raised
   // never reaches another check's read.
   const page = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
@@ -4427,8 +4456,8 @@ m.unmount();
   await api.renameAccount('primary', 'primary');
   await api.updateAccount('primary', { canceled: false, subscriptionEndsAt: null });
   page.unmount();
-}
-{
+});
+await forView('/accounts', async () => {
   // The detail is left for another account while a save there is held, so the save answers once the other account's
   // editor is open on the same token. That editor keeps the token it opened with: its save lands at that token, and a
   // write by another operator in between still meets the fence. Both directions run, a label save under the other
@@ -4581,8 +4610,8 @@ m.unmount();
   });
   await reset();
   page.unmount();
-}
-{
+});
+await forView('/accounts', async () => {
   // An end save held while the operator selects another account, then refused as stale: its callout left with the
   // detail, so the shell's toast names the account the save was for and the router's reason.
   const page = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
@@ -4615,8 +4644,8 @@ m.unmount();
     missing: [`path ${read.path}`, read.toast || 'no toast', `stored canceled ${read.stored}`],
   });
   page.unmount();
-}
-{
+});
+await forView('/accounts', async () => {
   // A mount of its own, whose provider holds the shell's toast: a refused create reads in the Add account dialog's own
   // callout and raises no toast.
   const page = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
@@ -4653,8 +4682,8 @@ m.unmount();
   [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
   await page.settle(200);
   page.unmount();
-}
-{
+});
+await forView('/accounts', async () => {
   // The create path's toast, on a frozen mount so the toast's own timer cannot take it down before the read.
   const page = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
   [...page.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Add account')?.click();
@@ -4683,8 +4712,8 @@ m.unmount();
   await api.deleteAccount('toast-workspace').catch((e) => {
     if (e?.status !== 404) throw e;
   });
-}
-{
+});
+await forView('/accounts', async () => {
   // The mock stamps the link's expiry off its load-time anchor, a moment past CLOCK_ORIGIN, while the page reads the
   // frozen clock, so the remaining time at the mount sits just past a whole minute. The first step leaves it 30 s short
   // of one, and no later step crosses a boundary it does not mean to.
@@ -4736,8 +4765,8 @@ m.unmount();
   [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
   await page.settle(200);
   page.unmount();
-}
-{
+});
+await forView('/accounts', async () => {
   // The Requests card counts the account's traffic, so its action opens the routing log on the account for the last
   // hour, the log's default preset, which the address leaves out.
   const page = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
@@ -4757,8 +4786,8 @@ m.unmount();
     missing: [`${actions.length} actions`, href ?? 'no link', JSON.stringify(landed)],
   });
   page.unmount();
-}
-{
+});
+await forView('/accounts', async () => {
   // "Allowance left at reset" over the story's weekly resets (`WEEKLY_RESETS` in mock/routingLog.ts), each a week
   // before the window's current reset: primary's 7-day window left 0.32, 0.41, 0.27 and 0.38 of its week at its last
   // four resets, newest first, and its Fable week 0.05, 0.12, 0.08 and 0.03. A figure prices in the chosen week
@@ -5042,8 +5071,8 @@ m.unmount();
     ok: endAt > weekStart && endAt < CLOCK_ORIGIN && afterEnd.reads === 1 && afterEnd.reset === `left at ${instantOf(endAt)} term ended` && afterEnd.resetBadge === 'term ended' && restored?.canceled === false && restored?.subscription?.endsAt === null,
     missing: [`the end ${typed} after the week's start ${new Date(weekStart).toISOString()}`, JSON.stringify(afterEnd), `restored canceled ${restored?.canceled}, ends ${restored?.subscription?.endsAt}`],
   });
-}
-{
+});
+await forView('/accounts', async () => {
   // "Meter drift" over the mock's reconciled windows (`RECONCILIATIONS` in mock/analytics.ts), second in the grid beside
   // "Allowance left at reset": primary's newest 5-hour window ended at the 11:44 reset (0.52 over 0.5), its newest 7-day
   // and Fable weeks where its current ones began, and nightly's newest 5-hour window ended at the 13:11 reset, charged
@@ -5186,7 +5215,7 @@ m.unmount();
     missing: [`${polled} after the poll, ${reads.calls.length} after Refresh`, ...reads.calls.map((c) => JSON.stringify(c))],
   });
   watched.unmount();
-}
+});
 await readsAgain('/accounts', 'listAccounts', 5_000);
 
 // Picks an Analytics tab on the given mount and lets its section's reads land; a check reads its counts afterwards.
@@ -5195,7 +5224,7 @@ const tab = async (page, label) => {
   await page.settle(700);
 };
 
-{
+await forView('/analytics', async () => {
   // Read while the story stands: the pool checks below write both budgeted pools, and a write answers no spend until
   // the ledger reports again, which would leave no figure for the word to qualify. The card sits on the Burn tab.
   const early = await mount('/analytics');
@@ -5216,8 +5245,10 @@ const tab = async (page, label) => {
     missing: [metered?.textContent ?? 'no primary row', whole?.textContent ?? 'no overflow row'],
   });
   early.unmount();
-}
+});
 
+// Also runs for /keys, whose checks expect laptop in jobs, where a pool check here moves it.
+await forView(['/keys', '/pools'], async () => {
 // The pool dialog checks below read every field, the expert ones included; the plain view's checks come further on.
 localStorage.setItem('phoebis.expertView', 'on');
 m = await mount('/pools');
@@ -8261,10 +8292,11 @@ m.unmount();
 }
 m.unmount();
 localStorage.removeItem('phoebis.expertView');
+});
 
 // Until the key list is read, an empty list says nothing about a pool's keys: the count line and the Keys tile wait
 // while the read is out, and a failed read says the list is unavailable rather than "No keys yet" in the warning ink.
-{
+await forView('/pools', async () => {
   const lineOf = (page) => [...page.container.querySelectorAll('.pool')].map((c) => {
     const line = c.querySelector('.pool__keys');
     return line ? [line.tagName, line.className.trim(), line.textContent?.trim()] : null;
@@ -8325,12 +8357,12 @@ localStorage.removeItem('phoebis.expertView');
     missing: [...failed, ...failedTiles].map((l) => JSON.stringify(l)),
   });
   p.unmount();
-}
+});
 
 // The page keeps the old key list through a refresh and after a failed one, so after the first key of a pool the count
 // line and the Keys tiles wait for the refresh rather than read "No keys yet" and 0, and a failed refresh reads
 // unavailable rather than the list from before it.
-{
+await forView('/pools', async () => {
   // No member, since each of the story's accounts already belongs to a pool.
   const work = (await api.listPools()).find((p) => p.id === 'work');
   await api.createPool({ ...poolInput(work), members: [], name: 'keyless' });
@@ -8392,11 +8424,11 @@ localStorage.removeItem('phoebis.expertView');
   });
   await dropKeys();
   await api.deletePool('keyless');
-}
+});
 
 // A member the accounts list does not carry still gets a row after the tiers, its verdict in the chips the listed rows
 // use and a sentence saying why selection passes it over.
-{
+await forView('/pools', async () => {
   const listAccounts = api.listAccounts;
   api.listAccounts = () => listAccounts.call(api).then((list) => list.filter((a) => a.id !== 'secondary'));
   let p;
@@ -8416,11 +8448,11 @@ localStorage.removeItem('phoebis.expertView');
     missing: [row ? 'row' : 'no row', chips ? 'chips' : 'no chips', why],
   });
   p.unmount();
-}
+});
 
 // The address opens a dialog on a named group: a link, a reload or a typed address lands on the group, and the
 // entry is replaced by the bare route.
-{
+await forView('/pools', async () => {
   const dialogOf = (page) => page.container.querySelector('dialog[open]');
   const titleOf = (page) => dialogOf(page)?.querySelector('.dialog__title')?.textContent?.trim() ?? 'no dialog';
   const shown = (page) => [...(dialogOf(page)?.querySelectorAll('section.dialog-group:not([hidden])') ?? [])].map((s) => s.getAttribute('aria-label')).join();
@@ -8512,11 +8544,11 @@ localStorage.removeItem('phoebis.expertView');
   await q.settle(200);
   results.push({ name: '/keys?edit=nope opens nothing, toasts and clears the address', ok: dialogOf(q) === null && q.text().includes('Key nope not found') && q.location().search === '', missing: [titleOf(q), q.location().search] });
   q.unmount();
-}
+});
 
 // On create the rail marks what a first pool needs; the marks are decoration with a hidden description, so an entry's
 // name stays its label, and they stay while the refusal dots come and go.
-{
+await forView('/pools', async () => {
   const c = await mount('/pools');
   [...c.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Create pool')?.click();
   await c.settle(300);
@@ -8574,10 +8606,10 @@ localStorage.removeItem('phoebis.expertView');
   results.push({ name: "/keys with no pool to choose a new key's Pool control reads refused", ok: poolControl?.getAttribute('aria-invalid') === 'true', missing: [poolControl ? String(poolControl.getAttribute('aria-invalid')) : 'no Pool control'] });
   bare.unmount();
   api.listPools = listPools;
-}
+});
 
 // The expert view: a browser preference switched from the sidebar, read by the dialogs alone.
-{
+await forView('/pools', async () => {
   const sw = (page) => page.container.querySelector('.sidebar__status button[role="switch"][aria-label="Expert view"]');
   localStorage.removeItem('phoebis.expertView');
   let x = await mount('/pools');
@@ -8664,12 +8696,12 @@ localStorage.removeItem('phoebis.expertView');
   });
   x.unmount();
   localStorage.removeItem('phoebis.expertView');
-}
+});
 
 // The plain view of the two dialogs: each group draws its plain fields and ends with the line where the expert view
 // adds some, the groups whose every field is expert leave the rail, a hidden field keeps its value through a save, and
 // a refusal on a hidden field shows it whatever the mode.
-{
+await forView('/pools', async () => {
   localStorage.removeItem('phoebis.expertView');
   const sw = (page) => page.container.querySelector('.sidebar__status button[role="switch"][aria-label="Expert view"]');
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
@@ -9049,8 +9081,9 @@ localStorage.removeItem('phoebis.expertView');
   await k.settle(200);
   k.unmount();
   localStorage.removeItem('phoebis.expertView');
-}
+});
 
+await forView('/keys', async () => {
 // As on the pools, the key dialog checks below read the expert fields too.
 localStorage.setItem('phoebis.expertView', 'on');
 m = await mount('/keys');
@@ -10038,9 +10071,10 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
 }
 m.unmount();
 localStorage.removeItem('phoebis.expertView');
+});
 
 await readsAgain('/keys', 'listKeys', 5_000);
-{
+await forView('/keys', async () => {
   // The key dialog resets its fields whenever the pool list changes, so a read landing under it would wipe the name.
   const typeName = async (page, value) => {
     [...page.container.querySelectorAll('button')].find((b) => b.textContent?.includes('Create key'))?.click();
@@ -10072,8 +10106,8 @@ await readsAgain('/keys', 'listKeys', 5_000);
   results.push({ name: '/keys a refresh answering after the key dialog opened keeps the typed name', ok: held.calls.length === 1 && typed(late) === 'Laptop 2', missing: [String(typed(late)), `listPools ${held.calls.length}`] });
   held.restore();
   late.unmount();
-}
-{
+});
+await forView('/keys', async () => {
   // Create key opened before the pools land has no pool to start on, so the first pool fills the Pool select once they
   // do, and the dialog's opening values take it too: an outside click then closes it without asking.
   const held = deferNextCall('listPools');
@@ -10096,8 +10130,8 @@ await readsAgain('/keys', 'listKeys', 5_000);
   );
   held.restore();
   page.unmount();
-}
-{
+});
+await forView('/keys', async () => {
   const page = await mount('/keys', { now: CLOCK_ORIGIN });
   const spy = countCalls('listKeys');
   const trigger = page.container.querySelector('tbody .menu__trigger');
@@ -10119,7 +10153,7 @@ await readsAgain('/keys', 'listKeys', 5_000);
   results.push({ name: '/keys a row menu holds the refresh only while open', ok: listed === 1 && closed === 1 && whileOpen === 0 && reopened === 1, missing: [`list ${listed}`, `closed ${closed}, open ${whileOpen}, closed again ${reopened}`] });
   spy.restore();
   page.unmount();
-}
+});
 
 // The Guardrails view over the story's two guardrails: the pool's observed preset and the desktop key's enforced one,
 // whose 24-hour figures the story's fork and blocked rows hold.
@@ -10140,7 +10174,7 @@ const editGuardrail = async (page, name) => {
   await page.settle(400);
   return openDialogs(page).pop() ?? null;
 };
-{
+await forView('/guardrails', async () => {
   const page = await mount('/guardrails');
   await page.settle(400);
   const day = await api.getAnalyticsGuardrails('24h');
@@ -10188,9 +10222,9 @@ const editGuardrail = async (page, name) => {
     missing: entries,
   });
   page.unmount();
-}
+});
 await readsAgain('/guardrails', 'listGuardrails', 5_000);
-{
+await forView('/guardrails', async () => {
   // The dialog's pickers alone draw the pools and the keys, so the page reads them once per visit and again after a
   // write, a dialog close and Refresh, never at the interval.
   const name = '/guardrails two periods pass and no pools or keys read goes out, and a dialog close reads both again';
@@ -10215,8 +10249,8 @@ await readsAgain('/guardrails', 'listGuardrails', 5_000);
     ok: dlg !== null && JSON.stringify(periods) === JSON.stringify({ keys: 0, pools: 0 }) && JSON.stringify(closed) === JSON.stringify({ keys: 1, pools: 1 }),
     missing: [dlg === null ? 'no dialog' : 'a dialog', JSON.stringify(periods), JSON.stringify(closed)],
   });
-}
-{
+});
+await forView('/guardrails', async () => {
   const page = await mount('/guardrails');
   await page.settle(400);
   const dlg = await editGuardrail(page, 'Subagent status summary');
@@ -10248,8 +10282,8 @@ await readsAgain('/guardrails', 'listGuardrails', 5_000);
   buttonIn(dlg, 'Cancel')?.click();
   await page.settle(200);
   page.unmount();
-}
-{
+});
+await forView('/guardrails', async () => {
   // A stamp behind the build's version: the line carries both badges, and the update takes the current conditions.
   const [stored] = (await api.listGuardrails()).filter((g) => g.id === 'subagent-status-summary');
   const preset = (await api.listGuardrailPresets()).find((p) => p.id === 'subagent-status-summary');
@@ -10267,8 +10301,8 @@ await readsAgain('/guardrails', 'listGuardrails', 5_000);
     missing: [JSON.stringify(badges), notice, `${rows} rows`],
   });
   page.unmount();
-}
-{
+});
+await forView('/guardrails', async () => {
   const page = await mount('/guardrails');
   await page.settle(400);
   const dlg = await editGuardrail(page, 'Subagent status summary');
@@ -10298,8 +10332,8 @@ await readsAgain('/guardrails', 'listGuardrails', 5_000);
   buttonIn(dlg, 'Cancel')?.click();
   await page.settle(200);
   page.unmount();
-}
-{
+});
+await forView('/guardrails', async () => {
   // A run still in flight when its dialog closes: its answer lands after the next guardrail's dialog opened, which has
   // to show none of it, and a run there shows that guardrail's own totals until an input it ran on changes.
   const page = await mount('/guardrails');
@@ -10351,7 +10385,7 @@ await readsAgain('/guardrails', 'listGuardrails', 5_000);
   buttonIn(dlg, 'Cancel')?.click();
   await page.settle(200);
   page.unmount();
-}
+});
 /** The row's Duplicate, through its menu: the dialog it opens. */
 const duplicateGuardrail = async (page, name) => {
   await guardrailMenu(page, guardrailRow(page, name));
@@ -10365,7 +10399,7 @@ const conditionRead = (row, n) => {
   return { name: read('header name'), operator: read('operator'), path: read('path'), selector: read('selector'), subject: read('subject'), value: read('value') };
 };
 const conditionRows = (dlg) => [...(group(dlg, 'Conditions')?.querySelectorAll('.pattern-editor__row') ?? [])];
-{
+await forView('/guardrails', async () => {
   // The story's Large auxiliary requests holds two conditions, the second its body's max_tokens over 4096, so its copy
   // is a create with two. The route refuses a row it cannot read as `conditions[{i}]: {reason}`, here the reason its
   // check gives a value that is not a number. A frozen mount keeps any toast up until a tick takes it down, so the
@@ -10399,8 +10433,8 @@ const conditionRows = (dlg) => [...(group(dlg, 'Conditions')?.querySelectorAll('
     missing: [`${before} rows before`, JSON.stringify(read), `${stored} stored`],
   });
   page.unmount();
-}
-{
+});
+await forView('/guardrails', async () => {
   // Duplicate on the story's Subagent status summary, the one row with a preset stamp, observed on the pool all.
   const page = await mount('/guardrails');
   await page.settle(400);
@@ -10435,8 +10469,8 @@ const conditionRows = (dlg) => [...(group(dlg, 'Conditions')?.querySelectorAll('
     missing: [JSON.stringify(read), JSON.stringify(want)],
   });
   page.unmount();
-}
-{
+});
+await forView('/guardrails', async () => {
   // The story's Large auxiliary requests: its second row reads the body's max_tokens over 4096. A move to Header and
   // back to Body takes each subject's first operator, so the value cell leaves with it, and the path the move to Header
   // cleared stays empty.
@@ -10466,7 +10500,7 @@ const conditionRows = (dlg) => [...(group(dlg, 'Conditions')?.querySelectorAll('
     missing: [JSON.stringify(read), JSON.stringify(want)],
   });
   page.unmount();
-}
+});
 
 // The Guardrails group of the pool and key dialogs and the pool card's badge over the story's attachments, every figure
 // read through the mock: the pool all runs the preset's guardrail, and its key desktop adds the enforcing one after it.
@@ -10490,7 +10524,7 @@ const optionNamed = (box, name) => [...(box?.querySelectorAll(CHOICE) ?? [])].fi
 /** The names an Attach box shows checked, in its order: the row selected and its check drawn. */
 const checkedNames = (box) =>
   [...(box?.querySelectorAll(CHOICE) ?? [])].filter((o) => o.getAttribute('aria-selected') === 'true' && o.querySelector('.mselect__check svg') !== null).map((o) => o.textContent?.trim());
-{
+await forView('/pools', async () => {
   const pool = (await api.listPools()).find((p) => p.id === 'all');
   const registry = await api.listGuardrails();
   // The save is answered without a write, so the story's attachments stand for the checks after this one.
@@ -10558,8 +10592,8 @@ const checkedNames = (box) =>
     ok: sent.length === 2 && JSON.stringify(sent[0]?.guardrails) === JSON.stringify([...ids.slice(0, -1), added?.id, ids.at(-1)]) && !('guardrails' in (sent[1] ?? { guardrails: null })),
     missing: sent.map((input) => JSON.stringify(input?.guardrails ?? 'no guardrails member')),
   });
-}
-{
+});
+await forView('/pools', async () => {
   const pools = await api.listPools();
   const word = (n) => (n === 1 ? '1 guardrail' : `${n} guardrails`);
   const page = await mount('/pools');
@@ -10582,8 +10616,8 @@ const checkedNames = (box) =>
     missing: [JSON.stringify(read), JSON.stringify(opened)],
   });
   page.unmount();
-}
-{
+});
+await forView('/keys', async () => {
   const desktop = (await api.listKeys()).find((k) => k.id === 'desktop');
   // Two guardrails no list holds join the registry the dialog reads, so the box has two to pick in turn and shows what
   // it leaves out: the pool's.
@@ -10691,7 +10725,7 @@ const checkedNames = (box) =>
     ok: (pool?.guardrails.length ?? 0) > 0 && JSON.stringify(freshRead) === JSON.stringify({ attach: false, rows: guardrailRefRows(pool?.guardrails ?? [], true), sentence: 'Guardrails can be attached once the key is saved.' }),
     missing: [pool?.id ?? 'no pool', JSON.stringify(freshRead)],
   });
-}
+});
 
 // A helper that cannot find the control a check needs fails that check by name, so a control that disappears
 // fails the run rather than leaving the check to read a page nothing narrowed.
@@ -10723,6 +10757,7 @@ const closeCustom = async (page, button) => {
   await page.settle();
 };
 
+await forView('/requests', async () => {
 m = await mount('/requests');
 expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', 'fable-5-1', 'desktop', 'laptop', 'shown']);
 {
@@ -12542,10 +12577,11 @@ expect('/requests/:desktop drawer', m.text(), ['Not captured for this key']);
   }
 }
 m.unmount();
+});
 
 // The two links into the routing log open it on the request a quarter hour either side of it, its end at most now,
 // read on the frozen clock so the range is the one the page computed.
-{
+await forView('/requests', async () => {
   const QUARTER = 15 * 60_000;
   const byId = new Map(requests.map((r) => [r.id, r]));
   const expectedOf = (r) => ({
@@ -12615,10 +12651,10 @@ m.unmount();
     missing: [`${rows.length} rows, ${capped} ending at now`, ...wrong.slice(0, 3).map((w) => JSON.stringify(w)), ...heads.map((h) => `${h.row} against ${h.href}`), JSON.stringify(landed)],
   });
   page.unmount();
-}
+});
 
 // A key pressed on a link inside a row is the link's, so Enter on Routing opens the log alone, never the drawer first.
-{
+await forView('/requests', async () => {
   const page = await mount('/requests', { now: CLOCK_ORIGIN });
   const routing = [...(page.container.querySelector('.requests__table tbody tr')?.lastElementChild?.querySelectorAll('a') ?? [])].find((a) => a.textContent?.trim() === 'Routing');
   routing?.focus();
@@ -12628,11 +12664,11 @@ m.unmount();
   const drawer = page.container.querySelector('.drawer') !== null;
   results.push({ name: "/requests Enter on a row's Routing link leaves the drawer shut", ok: routing !== undefined && after.pathname === '/requests' && !drawer, missing: [JSON.stringify(after), `drawer ${drawer}`] });
   page.unmount();
-}
+});
 
 // The story's requests span the day before its clock, so the 7-day range read at that clock dates no row, and read a
 // day and an hour later dates every one. A row is paired with the story's by the id under its time.
-{
+await forView('/requests', async () => {
   const HOUR = 3_600_000;
   const clockText = (at) => new Date(at).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h23', minute: '2-digit', second: '2-digit' });
   const datedText = (at) => `${new Date(at).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })} ${clockText(at)}`;
@@ -12655,10 +12691,10 @@ m.unmount();
     ok: story.length > 0 && later.length > 0 && wrong(story, clockText).length === 0 && wrong(later, datedText).length === 0 && later.every((c) => /^[A-Z][a-z]{2} \d{1,2} \d{2}:\d{2}:\d{2}$/.test(c.text)),
     missing: [`${story.length} rows at the story's clock, ${later.length} a day and an hour later`, ...wrong(story, clockText).slice(0, 3), ...wrong(later, datedText).slice(0, 3)],
   });
-}
+});
 
 // The open drawer narrows the table to the columns that leave it room, and the chosen set returns when it closes.
-{
+await forView('/requests', async () => {
   const COMPACT = ['Time', 'Model', 'Status', 'Attempts', ''];
   const page = await mount('/requests', { now: CLOCK_ORIGIN });
   const heads = () => [...page.container.querySelectorAll('.requests__table thead th')].map((th) => th.textContent?.trim() ?? '');
@@ -12695,11 +12731,11 @@ m.unmount();
     missing: [JSON.stringify(chosen), JSON.stringify(open), JSON.stringify(closed)],
   });
   page.unmount();
-}
+});
 
 // The search commits as the pattern fields do: once typing pauses, or at once on Enter. The clock stands still, so only
 // a tick fires the pause's timer and a commit without one can only come from the key.
-{
+await forView('/requests', async () => {
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   const typeInto = (input, text) => {
     setter.call(input, text);
@@ -12738,11 +12774,11 @@ m.unmount();
     spy.restore();
   }
   pressing.unmount();
-}
+});
 
 // Every filter, the range and the page size live in the address: a mount reads them, a change writes them, and the
 // drawer's route keeps them on its way in and out.
-{
+await forView('/requests', async () => {
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   const typeInto = (input, text) => {
     setter.call(input, text);
@@ -12865,11 +12901,11 @@ m.unmount();
     results.push({ name: replacedCheck, ok: field.value === 'other' && !searched.includes('abc') && searched.includes('other'), missing: [`field ${JSON.stringify(field.value)}`, JSON.stringify(searched)] });
   }
   replaced.unmount();
-}
+});
 
 // The cache miss reason, effort and request class filters and the custom range live in the address beside the other
 // filters: each control narrows the table to the rows the rollups file under its value and writes its own key.
-{
+await forView('/requests', async () => {
   // A list stays open across a choice, so its values are opened only while the box shows another step.
   const openOptions = async (page, label) => {
     if (filterBox()?.querySelector('.popover__title')?.textContent?.trim() !== label) await addFilter(page, label);
@@ -13167,14 +13203,14 @@ m.unmount();
     });
   }
   facet.unmount();
-}
+});
 
 // The upstream's refusals on the Requests view: the Status cell's chip on a refused answer, read off the serving
 // attempt, and the Stop reason and Refusal category lists of Add filter's Outcome group. The story's refused answers,
 // read off the mock's `REQUESTS`, are drawn laptop rows before the story hour, `cyber` three times, `harmful` twice and
 // one the upstream gave no category, so the bare list's first page holds none and the checks mount an address that
 // lists them.
-{
+await forView('/requests', async () => {
   const served = (r) => r.attempts.at(-1)?.response ?? null;
   const refused = requests.filter((r) => served(r)?.stopReason === 'refusal');
   const idsOf = (list) => list.map((r) => r.id).sort();
@@ -13292,13 +13328,13 @@ m.unmount();
       JSON.stringify(lists(sent.paged)) === JSON.stringify([['end_turn'], ['-']]),
     missing: [`read ${JSON.stringify(lists(sent.read))}`, `polls ${JSON.stringify(sent.polled.map(lists))}`, `next page ${sent.paged === null ? 'none' : JSON.stringify(lists(sent.paged))}`],
   });
-}
+});
 
 // Auto reload starts off on this view and reads the list again at the interval the split button's menu sets, over the
 // page's filters with a preset range sending no end, so the route reads to its own clock, and lands what arrived at the
 // top in the accent tint. The open drawer, an older page and an open menu or popover under the bar pause it with the
 // interval kept and the cause in the part's title, and the address never holds it.
-{
+await forView('/requests', async () => {
   const HOUR = 3_600_000;
   const requestRows = (page) => [...page.container.querySelectorAll('.requests__table tbody tr')];
   // The time cell carries the whole id on its title, the one place a row names its request.
@@ -13892,11 +13928,11 @@ m.unmount();
       missing: read.map((r) => JSON.stringify(r)),
     });
   }
-}
+});
 
 // A dimension fed by a list that did not load offers nothing to pick, so its Add filter row is disabled and says why on
 // its title and its description, and a click on it leaves the list where it is. The rows beside it stay as they are.
-{
+await forView('/requests', async () => {
   const sentence = 'The key list did not load: the registry is unavailable';
   failNextCall('listKeys', '/admin/keys', 'the registry is unavailable');
   const page = await mount('/requests');
@@ -13917,10 +13953,10 @@ m.unmount();
     missing: [JSON.stringify(read), `stayed on the list ${stayed}`],
   });
   page.unmount();
-}
+});
 // A disabled dimension still holds what the address lists, so a link to that address reads the same rows, and its
 // chip's x still lets the value go.
-{
+await forView('/requests', async () => {
   const keptCheck = '/requests a disabled filter keeps the value its address carries and can still be cleared';
   failNextCall('listKeys', '/admin/keys', 'the registry is unavailable');
   const spy = countCalls('listRequests');
@@ -13940,11 +13976,11 @@ m.unmount();
     missing: [String(summary), `sent ${sent.join(' ')}`, `key cells ${[...new Set(keyCells)].join(',')}`, `clear ${clear ? (clear.disabled ? 'disabled' : 'enabled') : 'missing'}`, JSON.stringify(cleared)],
   });
   page.unmount();
-}
+});
 
 // A click that follows typing at once moves the focus first, so the search's blur commits before the click acts; the
 // click must act on the address that commit wrote, not on the one the page drew before it.
-{
+await forView('/requests', async () => {
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   const typeFocused = (field, text) => {
     field.focus();
@@ -14005,11 +14041,11 @@ m.unmount();
     });
   }
   opened.unmount();
-}
+});
 
 // A request that did not succeed names how it ended, in the ledger's own words, beside its status, in the drawer and as
 // a filter; the status filter offers the codes the router and Anthropic answer.
-{
+await forView('/requests', async () => {
   const openOptions = async (page, label) => ((await addFilter(page, label)) === null ? null : boxOptions());
 
   const canceledCheck = '/requests a canceled request names its outcome in the list and the drawer';
@@ -14137,11 +14173,11 @@ m.unmount();
   }
   await closeBoxes(held);
   held.unmount();
-}
+});
 
 // The bar on Requests: its slots, its chips in each form, the fold, the Add filter popover's two steps, a chip's
 // values, the drawer's widenings, the subject chips on the route and the count.
-{
+await forView('/requests', async () => {
   const HOUR = 3_600_000;
   const idOf = (tr) => tr?.querySelector('.sub.mono')?.getAttribute('title') ?? null;
   const rowIds = (page) => [...page.container.querySelectorAll('.requests__table tbody tr')].map(idOf).filter((id) => id !== null);
@@ -14518,12 +14554,12 @@ m.unmount();
       missing: [JSON.stringify(waiting), several, empty, alone],
     });
   }
-}
+});
 
 // The routing log's Models filter lists the catalog in the cost model's tier order, which the shell reads off its
 // settings answer. Here that answer lands after the catalog and orders the tiers the other way round from the pair
 // the mounts before it left, so the filter's order can only come from it.
-{
+await forView('/routing-log', async () => {
   const { getSettings } = api;
   let reversed = null;
   api.getSettings = async (...args) => {
@@ -14564,11 +14600,11 @@ m.unmount();
       JSON.stringify(back) === JSON.stringify(tierOrder(ids, shipped)),
     missing: [JSON.stringify(before), JSON.stringify(after), reversed === null ? 'no settings answer' : JSON.stringify(tierOrder(ids, reversed)), JSON.stringify(back)],
   });
-}
+});
 
 // The routing log on the pinned clock. Every figure a check names is read from the mock's own answer to the query the
 // page sent, so the story's counts are the route's rules over the story rather than a number kept here.
-{
+await forView('/routing-log', async () => {
   const HOUR = 3_600_000;
   const MINUTE = 60_000;
   const iso = (ms) => new Date(ms).toISOString();
@@ -17274,14 +17310,14 @@ m.unmount();
     results.push({ name: '/routing-log no chip, value or cell joins values with a comma or a semicolon, the user agent and the When excepted', ok: scanned.length > 40 && read > 1000 && wrong.length === 0, missing: [`${scanned.length} panels, ${read} read`, ...wrong.slice(0, 8)] });
   }
   m.unmount();
-}
+});
 
 // The Meter view in the Diagnostics group over the mock's reconciled windows (`RECONCILIATIONS` in mock/analytics.ts):
 // nightly's newest 5-hour window ended at the 13:11 reset charged twice the table, three of its 5-hour windows off the
 // band, and studio's 5-hour group none. Every count and figure is read off the answer the page was handed through the
 // call layer, so the story's figures are the fold's over the route's rows. The smoke runs under TZ=UTC, so an end reads
 // its UTC text, where a viewer's zone would move its day and hour.
-{
+await forView('/meter', async () => {
   const METER_HINT =
     "Each subscription account's completed windows of the last 30 days, grouped by account and window kind: the rise the upstream's readings showed against the share the router priced for its own requests in it. 1.1 means the meter charged 1.1 times the table. A ratio under 0.8 or over 1.25 after a rise of at least 5% is marked.";
   const UNJUDGED = 'the rise or the priced share is under 5%, so the band does not judge this ratio';
@@ -17567,11 +17603,11 @@ m.unmount();
     ok: JSON.stringify(errors) === JSON.stringify([['Could not load the meter reconciliation', 'ledger locked', 'Try again'], ['Could not load the meter reconciliation', 'ledger locked', 'Try again']]) && JSON.stringify(back) === JSON.stringify(fiveWant),
     missing: [JSON.stringify(errors), JSON.stringify(back)],
   });
-}
+});
 
 // A read that fails for new filters draws the error state alone, none of the sections and none of the rows the filters
 // before the change read; Try again reads the new filters again.
-{
+await forView('/analytics', async () => {
   const page = await mount('/analytics');
   const keyRows = () => [...([...page.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Traffic by key'))?.querySelectorAll('tbody tr') ?? [])].map((tr) => tr.children[0]?.textContent?.trim() ?? '');
   const before = keyRows();
@@ -17598,8 +17634,8 @@ m.unmount();
   await page.settle(900);
   results.push({ name: '/analytics Try again reads the new filters again', ok: !page.text().includes('Could not load the analytics for these filters') && JSON.stringify(keyRows()) === JSON.stringify(['desktop']), missing: keyRows() });
   page.unmount();
-}
-{
+});
+await forView('/analytics', async () => {
   // Two lifetimes of one key id can share a label, and the Key list names the older first. The story holds no such
   // pair, so the key answer here gains two, the newer handed over first, and the first of them drawn is the one a
   // click picks.
@@ -17625,12 +17661,12 @@ m.unmount();
     missing: [`${twins.length} options named twin`, `the first picks ${picked ?? 'nothing'}, the older is twin@${OLDER}`],
   });
   page.unmount();
-}
+});
 
 // An outage of the ledger fails every analytics read at once, the section and filter-choice reads beside the three
 // the error state names, and Try again is the one control that reads again, so it has to reach all of them. A section
 // whose tab is not chosen reads nothing, so Try again reads the shown one's and the next tab reads its own.
-{
+await forView('/analytics', async () => {
   const outage = failCalls({ getAnalyticsBreakdown: '/admin/analytics/breakdown', getAnalyticsSeries: '/admin/analytics/series', listAccountRollups: '/admin/analytics/accounts' }, 'the ledger is unavailable');
   const page = await mount('/analytics');
   const choices = async () => {
@@ -17679,11 +17715,11 @@ m.unmount();
     missing: [`down ${downChoices.join(',')}`, `up ${upChoices.join(',')}`, `traffic ${traffic}`, `also mounted ${others.join(',')}`, `Traffic by key ${trafficRows}`, JSON.stringify(reads), `rollups on Accounts ${rollupsOnAccounts}`, `Accounts in range ${accountRows}`, t.includes('Could not load this breakdown') ? 'a breakdown still failed' : ''],
   });
   page.unmount();
-}
+});
 
 // A pattern typed in Add filter's step commits on Enter alone. The clock stands still and a tick passes the pause a
 // field elsewhere commits on, so a read before the key could only come from a timer.
-{
+await forView('/analytics', async () => {
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   const typeInto = (input, text) => {
     setter.call(input, text);
@@ -17735,12 +17771,12 @@ m.unmount();
     spy.restore();
   }
   pressing.unmount();
-}
+});
 
 // The window's end follows the clock. The page looks at the auto reload interval, 5 s when it opens, and moves the end
 // only when the range's bucket boundary has passed, so the reads stay put between boundaries, and Try again moves it
 // to the instant it runs.
-{
+await forView('/analytics', async () => {
   const groupingsOf = (calls) => JSON.stringify(calls.map(([q]) => q?.groupBy).sort());
   const boundaryCheck = "/analytics the window's end moves past the next hour boundary";
   const open = await mount('/analytics', { now: CLOCK_ORIGIN });
@@ -17787,12 +17823,12 @@ m.unmount();
     missing: [`error state ${errorShown}`, ...retried.map(([q]) => `${q?.groupBy} to ${q?.to}`)],
   });
   failed.unmount();
-}
+});
 
 // The speed series feeds Traffic's speed card and Cost's Fast mode spend tile, so a tab that draws neither sends no
 // speed read. Each tab mounts a page of its own, since a switch to Latency sends no speed read whether the page gates
 // it or not.
-{
+await forView('/analytics', async () => {
   const speedReadsOn = async (path) => {
     const spy = countCalls('getAnalyticsSeries');
     const page = await mount(path, { now: CLOCK_ORIGIN });
@@ -17809,12 +17845,12 @@ m.unmount();
     ok: onLatency === 0 && onTraffic === 1,
     missing: [`${onLatency} speed reads on Latency`, `${onTraffic} speed reads on Traffic`],
   });
-}
+});
 
 // Every filter control moves the window's end, and a custom range that has ended keeps its window while the clock runs
 // on, so there only the retry's generation sends the reads again. The account rollups on the Accounts tab and the burn
 // read on the Burn tab read the window alone, so a read of either is a moved end.
-{
+await forView('/analytics', async () => {
   const at14 = Date.UTC(2026, 8, 16, 14);
   // 12:00 to the end of the window the popover opens on, the mount's instant, which Apply keeps: an hour bucket at
   // 14:00 holds the end.
@@ -17929,11 +17965,11 @@ m.unmount();
   delete api.getAnalyticsBurn;
   results.push({ name: wiringCheck, ok: JSON.stringify([atEnd, later, pastBoundary]) === JSON.stringify(['$0.90', '$0.60', '$0.30']), missing: [`at the end ${atEnd}`, `ten minutes on ${later}`, `past 15:00 ${pastBoundary}`] });
   burnPage.unmount();
-}
+});
 
 // The running burn bucket keeps its rate, and until it covers a tenth of its width it does not set the axis. jsdom lays
 // nothing out, so the chart containers read a browser's size here.
-{
+await forView('/analytics', async () => {
   const at13 = Date.UTC(2026, 8, 16, 13);
   const burnAt = (usd) => async () => ({
     bucketSeconds: 3_600,
@@ -17990,9 +18026,9 @@ m.unmount();
   opened.unmount();
   delete api.getAnalyticsBurn;
   window.HTMLElement.prototype.getBoundingClientRect = measure;
-}
+});
 
-{
+await forView('/analytics', async () => {
   // The route's answer with three refusals in its first group's map and its counts as they were: the Traffic line
   // reads as it did, the Refused column and the Refusals by code card read the three, and Errors by code holds none.
   const refusedCheck = '/analytics the Refused column, the Refusals by code card and the Traffic line read a refused group apart from the counts';
@@ -18017,9 +18053,9 @@ m.unmount();
   });
   delete api.getAnalyticsBreakdown;
   refused.unmount();
-}
+});
 
-{
+await forView('/analytics', async () => {
   // The story's two rows the router's own stop cut, `req_7a2c4e91-d03` and `req_c58d1f3a-e67`, sit inside the default
   // day, so the card lists their code with its count, apart from the client's `client_gone`.
   const cutCheck = "/analytics the Errors by code card lists the router's own cut under its code";
@@ -18028,12 +18064,12 @@ m.unmount();
   const bars = [...(card?.querySelectorAll('.hbars li') ?? [])].map((li) => [li.querySelector('.mono')?.textContent?.trim(), li.querySelector('.num')?.firstChild?.textContent?.trim()]);
   results.push({ name: cutCheck, ok: bars.some(([code, count]) => code === 'router_shutdown' && count === '2'), missing: [JSON.stringify(bars)] });
   page.unmount();
-}
+});
 
 // The Traffic section's Refusals by category card over the story's refused answers, read off the mock's `REQUESTS`:
 // `cyber` three times, `harmful` twice and one the upstream gave no category, all inside the default day. Each bar
 // links the Requests view on its category's refused answers over the page's range to the millisecond, with no session.
-{
+await forView('/analytics', async () => {
   const DAY = 86_400_000;
   const TITLE = 'Refusals by category';
   const SUBTITLE = 'Answers the upstream refused in range, by category, each a request that succeeded';
@@ -18211,8 +18247,9 @@ m.unmount();
     missing: [JSON.stringify(missedRead), subtitleOf(matched) ?? 'no subtitle', JSON.stringify(countsOf(matched)), JSON.stringify(matchedLinks)],
   });
   matched.unmount();
-}
+});
 
+await forView('/analytics', async () => {
 m = await mount('/analytics');
 // The page opens on Traffic and shows one section at a time, so each list holds the words its own tab draws.
 expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', 'Requests by outcome', 'Failovers', 'Errors by code', 'Failed and incomplete responses in range, the refused requests left out', 'Refusals by code', 'rate_limit_error', 'Traffic by key', 'Exhausted', 'Rejected', 'Refused', 'desktop', 'laptop', 'in range']);
@@ -21165,8 +21202,9 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   }
 }
 m.unmount();
+});
 
-{
+await forView('/analytics', async () => {
   // The session view answers from the request log, so the class pattern has to reach its read and its fold
   // the way it reaches the rollup reads.
   const seed = requests.find((r) => r.keyId === 'desktop' && r.sessionId !== null && r.kind !== 'probe');
@@ -21231,12 +21269,12 @@ m.unmount();
     missing: [`while loading ${pending}`, `reads ${reads.map((q) => q.client ?? '-').join(',')}`, `after sdk/* ${restarted}`, `cleared ${cleared} of ${whole}`],
   });
   page.unmount();
-}
+});
 
 // The Client and User agent filters list the values the range holds and take a typed pattern under their rows. A pick
 // travels as a pattern that matches itself in full, each value draws a chip of its own in the mono face, and the counts
 // that link into the request log carry one client pattern and read plain under several, since that log takes one.
-{
+await forView('/analytics', async () => {
   const PLAIN = 'Several client patterns are set, and the request log takes one';
   const sent = recordedCalls('getAnalyticsBreakdown');
   const page = await mount('/analytics#cache', { now: CLOCK_ORIGIN });
@@ -21370,11 +21408,11 @@ m.unmount();
     missing: [JSON.stringify(long)],
   });
   page.unmount();
-}
+});
 
 // The Analytics bar: the sticky bar first in the page with its slots, the Groups (N) button and its popover, auto
 // reload at 5 s over the registry read and the bucket boundary, and the Partial note under the bar.
-{
+await forView('/analytics', async () => {
   const setSelect = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
   const setArea = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
   const chooseGroup = async (page, value) => {
@@ -21767,18 +21805,22 @@ m.unmount();
     results.push({ name, ok: seed !== undefined && JSON.stringify(read) === JSON.stringify({ inBar: false, muted: true, next: true, tag: 'p', text: 'Partial: the first 10,000 requests of the range' }), missing: [seed?.sessionId ?? 'no session in the default range', JSON.stringify(read)] });
     page.unmount();
   }
-}
+});
 
+await forView('/keepalive', async () => {
 m = await mount('/keepalive');
 results.push({ name: '/keepalive redirects to /sessions', ok: m.text().includes('One row per session'), missing: [m.text().slice(0, 120)] });
 m.unmount();
+});
+await forView('/models', async () => {
 for (const path of ['/models', '/models#claude-sonnet-4-5']) {
   m = await mount(path);
   results.push({ name: `${path} redirects to /keys`, ok: m.location().pathname === '/keys' && m.container.querySelector('.topbar__title')?.textContent === 'Keys', missing: [JSON.stringify(m.location()), m.container.querySelector('.topbar__title')?.textContent ?? 'no title'] });
   m.unmount();
 }
+});
 
-{
+await forView('/sessions', async () => {
   // The page reads the accounts, the overview, the recipes and the sessions again at its one auto reload interval, 5 s
   // at the start, which keeps a session that is still sending requests on it and a line's slow-down chip current, and
   // the keys, pools and settings once.
@@ -21796,8 +21838,8 @@ for (const path of ['/models', '/models#claude-sonnet-4-5']) {
     missing: [JSON.stringify(counts)],
   });
   page.unmount();
-}
-{
+});
+await forView('/sessions', async () => {
   // A failed overview read draws every tile it feeds as a dash, not a placeholder, and the row offers one Try again.
   failNextCall('getKeepaliveOverview', '/admin/keepalive/overview', 'ledger locked');
   const page = await mount('/sessions', { now: CLOCK_ORIGIN });
@@ -21837,8 +21879,8 @@ for (const path of ['/models', '/models#claude-sonnet-4-5']) {
     missing: [JSON.stringify(tiles()), away],
   });
   page.unmount();
-}
-{
+});
+await forView('/sessions', async () => {
   // The notice under the tiles and the card's error state read their failed reads in one order, so with the recipes
   // and the keys failed and the sessions answered both name the recipes.
   failNextCall('listKeepaliveRecipes', '/admin/keepalive/recipes', 'recipes locked');
@@ -21853,8 +21895,8 @@ for (const path of ['/models', '/models#claude-sonnet-4-5']) {
     missing: [line || 'no line under the tiles', card ?? 'no error body in the card'],
   });
   page.unmount();
-}
-{
+});
+await forView('/sessions', async () => {
   // The Sessions and Agents figures count the rows the sessions read builds, so a failed sessions read ends their
   // placeholder with its error while the four tiles that read the overview alone keep their figures. The card's own
   // error state draws a Try again of its own on the same failure, so the notice's is counted inside the notice and the
@@ -21903,8 +21945,8 @@ for (const path of ['/models', '/models#claude-sonnet-4-5']) {
     missing: [JSON.stringify(counts), JSON.stringify(tiles())],
   });
   page.unmount();
-}
-{
+});
+await forView('/sessions', async () => {
   // A gap discarded every observation the keepalive engine still had open, so any count warns.
   const read = (page) => {
     const tile = [...page.container.querySelectorAll('.stat-grid > .stat')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === 'Bus gaps');
@@ -21928,8 +21970,8 @@ for (const path of ['/models', '/models#claude-sonnet-4-5']) {
     ok: overview.busGaps === 0 && quiet.value === '0' && !quiet.warn && quiet.note === 'times the keepalive engine missed bus events' && gapped.value === '2' && gapped.warn,
     missing: [`mock ${overview.busGaps}`, JSON.stringify(quiet), JSON.stringify(gapped)],
   });
-}
-{
+});
+await forView('/sessions', async () => {
   // A lapsed recipe keeps its row, read `ended` under `expired`. The stub makes the story's first recipe one, so its
   // label and hint are read on a row the check knows.
   const { listKeepaliveRecipes } = api;
@@ -21950,8 +21992,8 @@ for (const path of ['/models', '/models#claude-sonnet-4-5']) {
     ok: hint === 'The cache entry expired before its probe was due, so no probe was sent. The next real request starts a new recipe.',
     missing: [hint ?? 'no entry expired badge'],
   });
-}
-{
+});
+await forView('/sessions', async () => {
   // A request refused before any account served it leaves an agent row with no account, which is no pin: the Model
   // cell's "+N" badge does not count it, and its line reads none under Account.
   const { listKeepaliveRecipes } = api;
@@ -21978,8 +22020,8 @@ for (const path of ['/models', '/models#claude-sonnet-4-5']) {
     ok: line !== undefined && account === 'none' && pins.every((title) => !title.includes('zz01') && !title.includes('null')),
     missing: [account ?? 'no zz01 line', ...pins],
   });
-}
-{
+});
+await forView('/sessions', async () => {
   // Without the pools a session's missing recipe has no cause the page can name but the read that failed.
   failNextCall('listPools', '/admin/pools', 'store locked');
   const page = await mount('/sessions');
@@ -21993,8 +22035,8 @@ for (const path of ['/models', '/models#claude-sonnet-4-5']) {
     missing: [...new Set(causes)],
   });
   page.unmount();
-}
-{
+});
+await forView('/sessions', async () => {
   // A failed accounts read leaves every account cell bare, so one line between the tiles and the table says why.
   failNextCall('listAccounts', '/admin/accounts', 'registry locked');
   const page = await mount('/sessions');
@@ -22016,8 +22058,8 @@ for (const path of ['/models', '/models#claude-sonnet-4-5']) {
   await page.settle();
   results.push({ name: '/sessions Try again on the accounts notice reads the accounts again', ok: button !== undefined && button !== null && notices().length === 0 && page.container.querySelectorAll('tbody tr.srow').length > 0, missing: notices().map((n) => n.textContent ?? '') });
   page.unmount();
-}
-{
+});
+await forView('/sessions', async () => {
   // A row's session is its own key, so every row's menu offers the routing log, which opens on the session an
   // hour either side of its last request with the end at most now, or on the last hour for a row with none. Read on
   // the frozen clock so each range is the one the page computed.
@@ -22079,7 +22121,7 @@ for (const path of ['/models', '/models#claude-sonnet-4-5']) {
     missing: [`${offered.filter((o) => !o.enabled || o.session === null).length} of ${offered.length} rows without the entry or a session`, ...followed.map((f) => JSON.stringify(f))],
   });
   page.unmount();
-}
+});
 /**
  * The mock's sessions whole, the rows the route's non-companion timeout leaves out among them, answered after the
  * mock's own latency. A case that reads such a row's drawing installs it in place of `api.listSessions`.
@@ -22088,7 +22130,7 @@ const seedSessions = (listSessions) => async () => {
   await listSessions.call(api);
   return [...api.sessions];
 };
-{
+await forView('/sessions', async () => {
   // The request log reads the ledger, so its entry waits on a ledgered request, and it opens on the session the client
   // sent under the row's key lifetime inside the narrowest of the log's ranges that covers the row's last request. A
   // session id outlives a key id created again, so the session alone would answer both holders' requests. The page's
@@ -22287,11 +22329,11 @@ const seedSessions = (listSessions) => async () => {
       `the shared pair ${pair.length === 0 ? 'not found' : pair.map((p) => JSON.stringify(p)).join(' ')}`,
     ],
   });
-}
+});
 
 // Every filtered view reads its filters from the address under one grammar: a link sets the controls, a preset reads
 // from the load, and a control's change rewrites the address with every other key and the hash kept.
-{
+await forView('/analytics', async () => {
   const HOUR = 3_600_000;
   const chooseIn = async (page, select, value) => {
     Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(select, value);
@@ -22571,7 +22613,7 @@ const seedSessions = (listSessions) => async () => {
       missing: landed.map((l) => JSON.stringify(l)),
     });
   }
-}
+});
 
 // The five card views on the filter bar: the slots, the address of the two that filter, auto reload at 5 s with its
 // pauses, and the count. Each mounts on the pinned clock, so only a check's own ticks fire the auto reload.
@@ -22582,7 +22624,7 @@ const CARD_VIEWS = [
   ['/quota', 'listAccounts'],
   ['/sessions', 'listSessions'],
 ];
-{
+await forView('/accounts', async () => {
   // The Accounts list's search, sort and status are its address: a link lands on the filtered rows, the redirect to the
   // router's first account the list shows and a row's link keep the query and the hash, and a remount reads the same.
   const name = '/accounts keeps its search, sort and status in the address and a remount reads them';
@@ -22621,8 +22663,8 @@ const CARD_VIEWS = [
       JSON.stringify(remounted) === JSON.stringify({ ...view, at: clicked }),
     missing: [`wanted ${wanted.join(',')}, landing on ${landing}`, `landed ${JSON.stringify(landed)}`, `clicked ${JSON.stringify(clicked)}`, `remounted ${JSON.stringify(remounted)}`],
   });
-}
-{
+});
+await forView('/accounts', async () => {
   // The bar's sort control on a bare /accounts. Each order is read off the story's accounts (`ACCOUNTS` in
   // `web/src/mock/accounts.ts`) through `api.listAccounts`, the next reset at the mount's frozen clock as the page
   // reads it. A key's own direction leaves the address, so a pick of Most used writes `sort=usage` alone.
@@ -22696,8 +22738,8 @@ const CARD_VIEWS = [
     ok: story && JSON.stringify(bare) === JSON.stringify(shown('up', want.name, '', 'Name', 'ascending')) && JSON.stringify(radios) === JSON.stringify(wantRadios) && ruled && JSON.stringify(picks) === JSON.stringify(wantPicks),
     missing: [`story ${story}`, `bare ${JSON.stringify(bare)}`, `radios ${JSON.stringify(radios)}, the rule between them ${ruled}`, ...Object.entries(picks).map(([key, read]) => `${key} ${JSON.stringify(read)} against ${JSON.stringify(wantPicks[key])}`)],
   });
-}
-{
+});
+await forView('/accounts', async () => {
   // The sort control from the keyboard. jsdom moves no focus on Tab and fires no click for Enter on a button, so a Tab
   // here is the focus moved to the next stop in the bar's or the popover's order, and an Enter on a button its click.
   const name = '/accounts the sort control walks from the keyboard: its stop follows Add filter, Enter opens onto the first key, Tab moves through the six radios, Enter on one picks and closes onto the button, and Escape closes onto the button';
@@ -22744,8 +22786,8 @@ const CARD_VIEWS = [
       JSON.stringify(escaped) === JSON.stringify({ expanded: 'false', focus: 'Sort', open: false, search: '?dir=desc' }),
     missing: [`the bar's stops from Add filter ${JSON.stringify(after)}`, `opened ${JSON.stringify(opened)}`, `walk ${JSON.stringify(walk)}`, `picked ${JSON.stringify(picked)}`, `reopened ${JSON.stringify(reopened)}`, `escaped ${JSON.stringify(escaped)}`],
   });
-}
-{
+});
+await forView('/keys', async () => {
   const name = '/keys two pools in the address draw a chip each and filter to both';
   const stored = await api.listKeys();
   const both = stored.filter((k) => k.poolId === 'jobs' || k.poolId === 'all');
@@ -22759,8 +22801,8 @@ const CARD_VIEWS = [
     ok: both.length > 0 && both.length < stored.length && JSON.stringify(chips) === JSON.stringify(['pool: jobs', 'pool: all']) && cells.length === both.length && cells.includes('jobs') && cells.includes('all') && cells.every((c) => c === 'jobs' || c === 'all') && count === `${both.length} ${both.length === 1 ? 'key' : 'keys'}`,
     missing: [JSON.stringify(chips), `${cells.length} rows of ${both.length} in jobs or all, ${stored.length} listed`, `count ${count}`, ...new Set(cells)],
   });
-}
-{
+});
+await forView(CARD_VIEWS.map(([path]) => path), async () => {
   const name = 'the five card views mount the bar first with their slots in order and no empty slot';
   // A slot by what it shows: the search by its placeholder, a control by its name, and the right edge by the split
   // Refresh button and the count it holds.
@@ -22789,8 +22831,8 @@ const CARD_VIEWS = [
     ok: Object.entries(SLOTS).every(([path, slots]) => read[path].first && JSON.stringify(read[path].slots) === JSON.stringify(slots)),
     missing: Object.entries(read).map(([path, r]) => `${path} ${JSON.stringify(r)}`),
   });
-}
-{
+});
+await forView(CARD_VIEWS.map(([path]) => path), async () => {
   const name = 'the five card views start auto reload at 5 s and read again at the tick';
   const read = [];
   for (const [path, method] of CARD_VIEWS) {
@@ -22804,8 +22846,8 @@ const CARD_VIEWS = [
     page.unmount();
   }
   results.push({ name, ok: read.length === 5 && read.every((r) => r.word === '5 s' && r.title === 'Auto reload every 5 s' && r.reads === 1), missing: read.map((r) => JSON.stringify(r)) });
-}
-{
+});
+await forView('/keys', async () => {
   const name = '/keys an open dialog or an open interval menu pauses auto reload and the title names it';
   const page = await mount('/keys', { now: CLOCK_ORIGIN });
   const spy = countCalls('listKeys');
@@ -22840,8 +22882,8 @@ const CARD_VIEWS = [
       JSON.stringify(after) === JSON.stringify({ open: false, state: 'on', title: 'Auto reload every 5 s' }),
     missing: [JSON.stringify(dialog), JSON.stringify(closed), JSON.stringify(menu), JSON.stringify(after)],
   });
-}
-{
+});
+await forView('/pools', async () => {
   const name = '/pools an open Delete pool confirm pauses auto reload, and the reads resume once it is canceled';
   const page = await mount('/pools', { now: CLOCK_ORIGIN });
   const spy = countCalls('listPools');
@@ -22870,8 +22912,8 @@ const CARD_VIEWS = [
       ticked === 1,
     missing: [JSON.stringify(confirm), JSON.stringify(closed), `${ticked} reads at the tick after the cancel`],
   });
-}
-{
+});
+await forView('/pools', async () => {
   // The dialog alone draws the sessions and the keepalive overview, so neither is read while it is closed: each opening
   // of a saved pool reads both once, and a key write from it reads both again. A stub answers the revoke and leaves the
   // story alone, so the keys the later checks read stay as they are.
@@ -22918,8 +22960,8 @@ const CARD_VIEWS = [
     ok: revoked && JSON.stringify(closed) === JSON.stringify({ overview: 0, sessions: 0 }) && JSON.stringify(opened) === JSON.stringify({ overview: 1, sessions: 1 }) && JSON.stringify(written) === JSON.stringify({ overview: 2, sessions: 2 }),
     missing: [revoked ? 'a key revoked' : 'no key to revoke', JSON.stringify(closed), JSON.stringify(opened), JSON.stringify(written)],
   });
-}
-{
+});
+await forView('/sessions', async () => {
   const name = '/sessions an open Cost reference dialog pauses auto reload, and the reads resume once it closes';
   const page = await mount('/sessions', { now: CLOCK_ORIGIN });
   const spy = countCalls('listSessions');
@@ -22950,8 +22992,8 @@ const CARD_VIEWS = [
       ticked === 1,
     missing: [JSON.stringify(open), JSON.stringify(closed), `${ticked} reads at the tick after the close`],
   });
-}
-{
+});
+await forView(CARD_VIEWS.map(([path]) => path), async () => {
   const name = "the count slot reads the view's words";
   const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
   const [accounts, keys, pools] = [await api.listAccounts(), await api.listKeys(), await api.listPools()];
@@ -22975,9 +23017,9 @@ const CARD_VIEWS = [
       read['/quota'].text === `${plural(accounts.filter(quotaListed).length, 'account', 'accounts')}${attention}`,
     missing: Object.entries(read).map(([path, r]) => `${path} ${JSON.stringify(r)}`),
   });
-}
+});
 
-{
+await forView(CARD_VIEWS.map(([path]) => path), async () => {
   // The count reads what the list answered, so it stays empty while the first read is out and after it failed, as the
   // logs' counts do, rather than read 0 beside a placeholder or an error.
   const name = 'the five card views draw an empty count while the first read is out, then the count once it answers';
@@ -22998,8 +23040,8 @@ const CARD_VIEWS = [
   const wanted = { '/accounts': `${accounts.length} accounts`, '/keys': `${keys.length} keys`, '/pools': `${pools.length} pools` };
   const answered = (r) => (r.path === '/quota' ? r.answered?.startsWith(`${subscriptions} accounts`) === true : r.path === '/sessions' ? r.sessions > 0 && r.answered === `${r.sessions} sessions` : r.answered === wanted[r.path]);
   results.push({ name, ok: read.length === 5 && read.every((r) => r.held > 0 && r.waiting === '' && answered(r)), missing: read.map((r) => JSON.stringify(r)) });
-}
-{
+});
+await forView(CARD_VIEWS.map(([path]) => path), async () => {
   const name = 'the five card views draw an empty count beside the error when the first read fails';
   const ERRORS = { '/accounts': 'Could not load the accounts', '/keys': 'Could not load the keys', '/pools': 'Could not load the pools', '/quota': 'Could not load the accounts', '/sessions': 'Could not load the sessions' };
   const ROUTES = { listAccounts: '/admin/accounts', listKeys: '/admin/keys', listPools: '/admin/pools', listSessions: '/admin/sessions' };
@@ -23011,9 +23053,9 @@ const CARD_VIEWS = [
     page.unmount();
   }
   results.push({ name, ok: read.length === 5 && read.every((r) => r.count === '' && r.error), missing: read.map((r) => JSON.stringify(r)) });
-}
+});
 
-{
+await forView('/sessions', async () => {
   // The Sessions view's three filters live in its address: each draws its chip and narrows the rows, the bare address
   // reads the defaults, and the chip line's clear returns to it. Each view is read on the story's instant, so a row's
   // age is its seed's. The row idle for two hours is found by the id the mock's seeds write out for it, in the seed,
@@ -23212,9 +23254,9 @@ const CARD_VIEWS = [
       missing: [JSON.stringify(three), JSON.stringify(cleared)],
     });
   }
-}
+});
 
-{
+await forView('/sessions', async () => {
   // The Sessions view's order through the bar's sort control, read on the story's instant. The rows are the story's
   // sessions as `api.listSessions()` answers them (`SESSIONS` in `web/src/mock/operations.ts`), ordered by the rule the
   // page reads: the session's creation time under Created, the default, or the later of its last use and its last
@@ -23408,9 +23450,9 @@ const CARD_VIEWS = [
       missing: [`created ${JSON.stringify(brief(created))}`, `activity ${JSON.stringify(brief(activity))}`],
     });
   }
-}
+});
 
-{
+await forView('/sessions', async () => {
   // The row reads main's conversation pin and every session draws its lines from its recipes and its pins, read on the
   // story's instant. The figures are the seeds the mock answers, the two written sessions among them: the
   // auxiliary-only session, whose main has sent auxiliary calls alone, so its row reads its subagent's pin, and the
@@ -23635,8 +23677,9 @@ const CARD_VIEWS = [
       missing: lines.map((l) => JSON.stringify({ account: l.account, agent: l.agent, context: l.context, effort: l.effort, model: l.model, ttl: l.ttl })),
     });
   }
-}
+});
 
+await forView('/sessions', async () => {
 m = await mount('/sessions');
 expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 'of 1,024', 'busy', 'idle', 'parked', 'Retained', 'of 256 MiB', 'prompts kept for probes', 'presence ', 's ago', 'Cache probes, 24h', 'ok (', 'migrated', 'skipped', 'failed', 'Expired between turns, 24h', 'misses cache warming exists to prevent', 'Cost reference', 'Key', 'Session', 'Model', 'Context', 'Effort', 'Last used', 'expires in', 'Companion', 'Cache warming', 'Expand all', 'epoch 2', 'reporting', 'silent', 'since ', 'none', 'no recipe', 'fable-5-1']);
 {
@@ -24831,12 +24874,13 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   }
 }
 m.unmount();
+});
 
 // The cost reference, opened from each of its six entry points on the tab each names. Every figure it draws is read
 // against the decoded settings the mock answers, the files the fixtures captured, through lib/costs.ts and the page's
 // own formatting, never against a literal, while the console's own words for the regimes and the band are pinned as
 // literals.
-{
+await forView('/sessions', async () => {
   const wired = decodeSettings(SETTINGS_WIRE);
   // The dialog draws each file's entry in force at its instant, here the mount's pinned clock.
   const pricesAt = revisionAt(wired.apiPrices.revisions, CLOCK_ORIGIN);
@@ -25964,13 +26008,13 @@ m.unmount();
       missing: [JSON.stringify(first), JSON.stringify(outside)],
     });
   }
-}
+});
 
 
 // A failed settings read draws About's error state with Try again rather than a skeleton for ever. Without the answer
 // the client block reads its placeholder base URL with no port, and the scheme and the port arrive with the listener
 // hint once a read lands.
-{
+await forView('/settings', async () => {
   failNextCall('getSettings', '/admin/settings', 'the configuration store is unavailable');
   const failed = await mount('/settings');
   const about = () => [...failed.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
@@ -25991,13 +26035,13 @@ m.unmount();
     missing: [...rows, (failed.container.querySelector('pre.snippet')?.textContent ?? 'no block').split('\n')[0]],
   });
   failed.unmount();
-}
+});
 
 // Every registry list and ledger read answers nothing under the switch, so each view meets the store a fresh
 // installation has. A view settled with a skeleton still drawn waits for ever, and a needle only an empty store draws
 // proves the switch reached the view's reads: its empty sentence, or the zero it counts where it has none. Settings
 // reads no list and no ledger, so it can only show it still draws whole.
-{
+await forView('/keys', async () => {
   localStorage.setItem('phoebis.mockEmpty', '1');
   const zeroTiles = (c) => [...c.querySelectorAll('.stat-grid .stat__value')].map((v) => v.textContent);
   const pairLines = (c) => [...c.querySelectorAll('.stat-grid .stat__pair-line')].map((l) => `${l.querySelector('.cost-figure')?.textContent} ${l.querySelector('.stat__pair-word')?.textContent}`);
@@ -26057,9 +26101,9 @@ m.unmount();
     accounts.unmount();
   }
   localStorage.removeItem('phoebis.mockEmpty');
-}
+});
 
-{
+await forView('/settings', async () => {
   // The settings answer feeds the shell's version line as well as the page, so a decoder that threw on the date would
   // blank both.
   const { getSettings } = api;
@@ -26074,9 +26118,9 @@ m.unmount();
   results.push({ name: "/settings a free-text price file date shows as sent on its About row and still draws the sidebar version", ok: sidebar.includes(MOCK_VERSION) && row === `${SETTINGS_WIRE.storage.api_prices_path}, effective v3, 1 revision`, missing: [sidebar.slice(0, 120), row || 'no API prices path row'] });
   api.getSettings = getSettings;
   page.unmount();
-}
+});
 
-{
+await forView('/settings', async () => {
   // A pending entry: the row names the date in force, the count with the pending entry among it, and the next date.
   const { getSettings } = api;
   const wired = decodeSettings(SETTINGS_WIRE);
@@ -26089,11 +26133,11 @@ m.unmount();
   results.push({ name: '/settings a pending price entry reads on its About row after the date in force and the revision count as the next date', ok: row === want, missing: [row || 'no API prices path row', want] });
   api.getSettings = getSettings;
   page.unmount();
-}
+});
 
 // A zero on a retention key keeps its rows forever, so About reads "kept forever" on that line, and one day reads in
 // the singular. The body capture line reads the limit the answer carries, here one the seed does not hold.
-{
+await forView('/settings', async () => {
   const { getSettings } = api;
   api.getSettings = async (...args) => {
     const settings = await getSettings.apply(api, args);
@@ -26105,9 +26149,9 @@ m.unmount();
   results.push({ name: '/settings a zero retention reads kept forever, a one-day retention kept for 1 day, and the body capture limit its own hours', ok: JSON.stringify(kept) === JSON.stringify(['Requests, samples and the routing log=kept forever', 'Rollups=kept for 1 day', 'Body capture=at most 6 hours']), missing: kept });
   api.getSettings = getSettings;
   page.unmount();
-}
+});
 // A one-hour body capture limit reads in the singular on the About card.
-{
+await forView('/settings', async () => {
   const { getSettings } = api;
   api.getSettings = async (...args) => {
     const settings = await getSettings.apply(api, args);
@@ -26122,8 +26166,9 @@ m.unmount();
   } finally {
     api.getSettings = getSettings;
   }
-}
+});
 
+await forView('/settings', async () => {
 m = await mount('/settings', { now: CLOCK_ORIGIN });
 expect('/settings', m.text(), ['Downstream client configuration', 'Appearance', 'About', 'Theme', 'Time format', 'Unit', 'Admin secret', 'ANTHROPIC_BASE_URL=http://router.example.com:8080', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1', 'Inference is served on 127.0.0.1:8080', 'Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', "prints this router's"]);
 results.push({ name: '/settings has no statusline mention', ok: !/statusline/i.test(m.text()), missing: [] });
@@ -26223,11 +26268,12 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   results.push({ name: 'theme toggle -> dark', ok: document.documentElement.getAttribute('data-theme') === 'dark' && localStorage.getItem('phoebis.theme') === 'dark', missing: [document.documentElement.getAttribute('data-theme'), localStorage.getItem('phoebis.theme')] });
 }
 m.unmount();
+});
 
 // The unit switch: one select in the top bar sets the unit every view prices in, kept in this browser alone and
 // mirrored on the Settings page, and the week control beside it sets the week a subscription figure reads in. On
 // /settings two selects share each label, so every read names its host.
-{
+await forView('/', async () => {
   localStorage.removeItem('phoebis.unit');
   localStorage.removeItem('phoebis.week');
   const setValue = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
@@ -26353,10 +26399,10 @@ m.unmount();
       missing: [`button ${read.button}`, `closed at first ${read.closed}`, `expanded ${read.expanded}`, `kept on a click inside ${read.keptOnInside}`, `Escape ${read.closedOnEscape}`, `outside ${read.closedOnOutside}`, ...missing, ...read.lines],
     });
   }
-}
+});
 
 // Fixtures mounted alone pin the grouped dialog's contract apart from any one page's form.
-{
+await forView(['/guardrails', '/keys', '/pools'], async () => {
   const { createElement: h, Fragment, useEffect, useState } = React;
   function Fixture({ expertOnly = false, held, hold = null, initialGroup = null, refused = false, start = 'one', status = 'Every group saves together.' }) {
     const [chosen, setChosen] = useState(start);
@@ -26568,10 +26614,10 @@ m.unmount();
     results.push({ name: 'grouped dialog: a plain field frames its control in a div', ok: plain?.querySelector('.field__control')?.tagName === 'DIV' && root?.querySelector('.field__control')?.tagName === 'LABEL', missing: [plain?.outerHTML?.slice(0, 160) ?? 'no plain field'] });
   }
   f.unmount();
-}
+});
 
 
-{
+await forView('/requests', async () => {
   // The popups from the keyboard, late in the run like the checks after them, so the real time their mounts take moves
   // none of the story's relative times the earlier checks read. jsdom has no Tab navigation, so a Tab out is a focus
   // moved to a control outside the popup.
@@ -26740,9 +26786,9 @@ m.unmount();
     missing: [keyMenu ? `focus in the menu ${inMenu}` : 'no key menu in any pool dialog', `menu closed ${menuClosed}`, `on the trigger ${onOpener}`, `dialog kept ${dialogKept}`, `a second Escape closed it ${dialogClosed}`],
   });
   page.unmount();
-}
+});
 
-{
+await forView(['/analytics', '/requests', '/routing-log'], async () => {
   // The Select all row of every list, one case per picker on the pinned clock, late in the run like the keyboard checks
   // before it, so the real time the clicks' reads take moves none of the story's relative times the earlier checks
   // read. The checked marks read the address back, so a row that handed its options over one change at a time would
@@ -26985,9 +27031,9 @@ m.unmount();
     }
     page.unmount();
   }
-}
+});
 
-{
+await forView('/', async () => {
   // The shell's toast queue, each check on the frozen clock with its failures set before the mount unless it says
   // otherwise. Like the login checks after them, these run late, so the real time their mounts take moves none of the
   // story's relative times the earlier checks read.
@@ -27156,9 +27202,9 @@ m.unmount();
     ok: withBanner.banner && withBanner.toasts.length === 1 && withBanner.toasts[0].startsWith('/admin/keys failed') && endedUnderBanner && relogged.banner && relogged.keys,
     missing: [JSON.stringify(withBanner), `ended ${endedUnderBanner}`, JSON.stringify(relogged)],
   });
-}
+});
 
-{
+await forView('/', async () => {
   // A Dashboard card whose first read failed draws the route's message and Try again, which reads again what that card
   // lost. Each mount runs on the frozen clock, so no refresh lands between the presses, and late in the run like the
   // toast checks, so the real time the mounts take moves none of the story's relative times the earlier checks read.
@@ -27250,9 +27296,9 @@ m.unmount();
     ok: JSON.stringify(ringTitles) === JSON.stringify(['Could not load the settings', 'Could not load the settings']) && ringBodies.every((b) => b === 'ledger locked') && pressed && settingsAfter === settingsBefore + 1 && rings.every(Boolean),
     missing: [JSON.stringify(ringTitles), JSON.stringify(ringBodies), `getSettings ${settingsBefore} then ${settingsAfter}`, `rings drawn ${JSON.stringify(rings)}`],
   });
-}
+});
 
-{
+await forView('/', async () => {
   // The story's newest ten requests at the pinned clock carry undated ids alone, each one the Model column holds whole
   // once its prefix is dropped, so the recent list leads with the newest request whose model is dated, picked by shape;
   // the first undated row reads a short id with no prefix to drop, and the second one an id too long for the column.
@@ -27310,9 +27356,9 @@ m.unmount();
     ok: cut.length > 0 && whole.length > 0 && [...cut, ...whole].every((c) => !wrong(c)) && new Set(modelCells.map((c) => c.capped?.style.maxWidth)).size === 1,
     missing: [`${cut.length} cut, ${whole.length} shown as sent`, ...[...cut, ...whole].filter(wrong).map(said)],
   });
-}
+});
 
-{
+await forView('/', async () => {
   // With no tier's 7-day capacity in the cost model no account of the story is sized for that window, nor for the
   // Fable week, a factor of it, so both rings weigh nobody. Their accounts carry the window, so each ring says no tier
   // is sized and names every account with its own tier, the Pro seeds without a Fable week by that reason, and the
@@ -27352,9 +27398,9 @@ m.unmount();
         }),
     missing: [JSON.stringify(drawn)],
   });
-}
+});
 
-{
+await forView('/', async () => {
   // An account whose poll has read no window yet is named "not read yet" under both rings, where its compact card
   // reads "not read" with "Not read yet" on its title while an API-key account's card, which no poll reads, keeps "No
   // quota windows", and a fleet whose polls carry no Fable week reads that sentence over the Fable ring's list in
@@ -27394,9 +27440,9 @@ m.unmount();
       }),
     missing: [JSON.stringify(drawn)],
   });
-}
+});
 
-{
+await forView('/requests', async () => {
   // The descriptions beside titles, late in the run like the checks after them, so the real time their mounts take
   // moves none of the story's relative times the earlier checks read.
   // React's ids carry colons, which a selector would have to escape, so a reference is resolved by id.
@@ -27510,9 +27556,9 @@ m.unmount();
     missing: [why(trail), node ? JSON.stringify(node.textContent) : 'no node', JSON.stringify(trail?.textContent ?? '')],
   });
   lone.unmount();
-}
+});
 
-{
+await forView('/', async () => {
   // The login checks below start signed out, each on a fresh mount, and put the stored session back at the end. They
   // run last, so the real time their mounts take does not move the story's relative times the checks above read.
   localStorage.removeItem('phoebis.mockSession');
@@ -27611,11 +27657,15 @@ m.unmount();
   attempted.unmount();
 
   localStorage.setItem('phoebis.mockSession', 'admin');
-}
+});
 
+for (const path of SMOKE_ONLY.filter((p) => !viewsNamed.has(p))) {
+  results.push({ name: `SMOKE_ONLY names ${path}, which no block names`, ok: false, missing: [`the blocks name ${[...viewsNamed].sort().join(' ')}`] });
+}
 const failed = results.filter((r) => !r.ok);
 for (const r of results) console.log(`${r.ok ? 'PASS' : 'FAIL'}  ${r.name}${r.ok ? '' : `  missing: ${JSON.stringify(r.missing)}`}`);
 console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
+if (SMOKE_ONLY.length > 0) console.log(`SMOKE_ONLY=${SMOKE_ONLY.join(',')}: ${skippedBlocks} of ${blockCount} blocks skipped`);
 console.log(`fixture rows: ${requests.length} requests`);
 if (problems.length) {
   console.log(`\n${problems.length} console problems:`);

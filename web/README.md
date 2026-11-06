@@ -28,7 +28,8 @@ The other scripts:
 - `npm run e2e:mock` runs `build:mock`, then the browser pass against that bundle on a loopback port. Its shots go to
   `PHOEBIS_SCREENSHOT_DIR`, or to `phoebis-screenshots` under the system's temporary directory when that is unset.
 - `npm run lint` runs ESLint over the sources, the tests, the smoke checks, the browser pass and the scripts.
-- `npm run smoke` mounts every view in jsdom against the mock and checks what it draws.
+- `npm run smoke` mounts every view in jsdom against the mock and checks what it draws, or only the views listed in
+  `SMOKE_ONLY`, a comma-separated list of view paths such as `/sessions,/keys`.
 - `npm run sync-mock` regenerates the mock's fixture module from the admin fixtures (see below).
 - `npm test` builds the test bundle and runs the unit tests under `test/`.
 
