@@ -1970,7 +1970,7 @@ fn run(
     // deadline stands on it.
     if let Some(((current, current_key), warmth)) = pin.as_ref().zip(warmth) {
         // Step 1 read the pace before step 4's read could drop its deadline at a passed reset, so the record names the
-        // deadline as the decision leaves it, whichever answer follows.
+        // deadline the pace holds once step 4 has read the account.
         if let Some(facts) = rec.pin.as_mut() {
             facts.slow_down_until = state
                 .pin_pace(current_key)
