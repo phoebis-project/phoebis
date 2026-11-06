@@ -18,7 +18,7 @@ export interface RequestsLinkInput {
   /** The Analytics page's filters the Requests page reads the same way. */
   filters: {
     accountIds: string[];
-    agentId: string | null;
+    agentId: string;
     clientPattern: string;
     includeProbes: boolean;
     /** The page's key selection, or a session view's key lifetime alone (`linkedKeyIds`). */
@@ -111,7 +111,7 @@ export function requestsLink({ count, filters, group, reason, refusalCategory, w
   const address: RequestsAddress = {
     ...REQUESTS_CODEC.defaults,
     accounts: filters.accountIds,
-    agentId: filters.agentId ?? '',
+    agentId: filters.agentId,
     cacheMissReasons: reason === undefined ? [] : [reason],
     client: filters.clientPattern,
     keys: filters.keyIds,
@@ -139,7 +139,7 @@ export function requestsLink({ count, filters, group, reason, refusalCategory, w
  *  user agent pattern or a client pattern the request log cannot list, as the reasons panel's counts do, and its link
  *  never lists more rows than the bar counts. */
 export function refusalLink(input: Omit<RequestsLinkInput, 'count' | 'group' | 'reason' | 'refusalCategory'>, category: string, count: number): RequestsLinkTarget {
-  return requestsLink({ ...input, count, filters: { ...input.filters, agentId: null, sessionId: null }, refusalCategory: category, window: { ...input.window, exact: true } });
+  return requestsLink({ ...input, count, filters: { ...input.filters, agentId: '', sessionId: null }, refusalCategory: category, window: { ...input.window, exact: true } });
 }
 
 /** One link of the drawer's "Widen to" line. */

@@ -251,6 +251,7 @@ export function AnalyticsPage() {
   // A session id is one session per key lifetime, so a drill-down from a session row names the lifetime too. A session
   // without one reads unscoped.
   const sessionKey = a.session && a.key ? a.key : null;
+  const sessionAgent = a.session && a.agentId ? a.agentId : null;
   const { setUnit, unit, week } = useAppSettings();
   const dollars = dollarsOf(unit);
   const funding = UNIT_FUNDING[unit];
@@ -322,7 +323,8 @@ export function AnalyticsPage() {
   // the later pages stand as the walk loaded them. Other deps walk the pages again. The ref names the current deps from
   // the moment a read starts, so a read under earlier deps that settles later keeps nothing.
   const heldLog = useRef<{ answer: SessionRequests | null; deps: string } | null>(null);
-  const logDeps = JSON.stringify([a.agentId, logClient, filters, fromIso, includeProbes, sessionId, sessionKey, toIso, generation]);
+  const logKey = [sessionAgent, logClient, filters, fromIso, includeProbes, sessionId, sessionKey, toIso, generation];
+  const logDeps = JSON.stringify(logKey);
   // The load runs unscoped as well, so its reset drops the held answer there and a session view entered again walks its
   // pages again.
   const log = useAsync(
@@ -333,7 +335,7 @@ export function AnalyticsPage() {
       return loadSessionRequests(
         (cursor) =>
           api
-            .listRequests({ accountIds: filters.accountId, agentId: a.agentId || undefined, client: logClient, cursor, from: fromIso, includeProbes, keyIds: sessionKey && filters.keyId.length === 0 ? [sessionKey] : filters.keyId, limit: SESSION_PAGE_SIZE, models: filters.model, poolIds: filters.poolId, session: sessionId, to: toIso })
+            .listRequests({ accountIds: filters.accountId, agentId: sessionAgent ?? undefined, client: logClient, cursor, from: fromIso, includeProbes, keyIds: sessionKey && filters.keyId.length === 0 ? [sessionKey] : filters.keyId, limit: SESSION_PAGE_SIZE, models: filters.model, poolIds: filters.poolId, session: sessionId, to: toIso })
             // The route reads one key list, so a lifetime beside a key filter is applied here as well.
             .then((page) => ({ ...page, requests: page.requests.filter((r) => sessionKey === null || (r.keyId !== null && keyLifetime(r.keyId, r.keyGeneration) === sessionKey)) })),
         SESSION_PAGE_LIMIT,
@@ -343,7 +345,7 @@ export function AnalyticsPage() {
         return answer;
       });
     },
-    [a.agentId, logClient, filters, fromIso, includeProbes, sessionId, sessionKey, toIso, generation],
+    logKey,
     { paused: paused || sessionId === null, refreshMs: reload.refreshMs },
   );
   const accountRollups = useGatedRead(tab === 'accounts', () => api.listAccountRollups(fromIso, toIso), [fromIso, toIso, tab, generation], reload);
@@ -610,7 +612,7 @@ export function AnalyticsPage() {
   // client pattern, so several draw every count plain. The user agent patterns ride joined, so any of them keeps a
   // count plain, since the request log matches the raw header.
   const linkInput: ReasonLink = {
-    filters: { accountIds: filters.accountId, agentId: sessionId === null ? null : a.agentId || null, clientPattern: a.clients.length === 1 ? a.clients[0] : '', includeProbes, keyIds: linkedKeyIds(filters.keyId, sessionId === null ? null : sessionKey), models: filters.model, poolIds: filters.poolId, sessionId, userAgentPattern: a.userAgents.join('\n') },
+    filters: { accountIds: filters.accountId, agentId: sessionAgent ?? '', clientPattern: logClient ?? '', includeProbes, keyIds: linkedKeyIds(filters.keyId, sessionKey), models: filters.model, poolIds: filters.poolId, sessionId, userAgentPattern: a.userAgents.join('\n') },
     window: { exact: sessionId !== null, fromMs: span.fromMs, nowMs: now, toMs: span.toMs },
   };
   const plainLinks = a.clients.length > 1;
