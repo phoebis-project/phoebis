@@ -5,7 +5,6 @@ use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
 use phoebis_guardrails::{Condition, GuardrailAction, GuardrailMode};
-use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
 use rusqlite::{params, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 
@@ -421,21 +420,16 @@ pub enum AttachmentSubject {
     Pool(String),
 }
 
-/// The kind of subject an attachment names, stored under the words `key` and `pool`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum SubjectKind {
-    Key,
-    Pool,
+text_enum! {
+    /// The kind of subject an attachment names, stored under the words `key` and `pool`.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    pub enum SubjectKind {
+        Key => "key",
+        Pool => "pool",
+    }
 }
 
 impl SubjectKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            SubjectKind::Key => "key",
-            SubjectKind::Pool => "pool",
-        }
-    }
-
     fn table(self) -> &'static str {
         match self {
             SubjectKind::Key => "api_keys",
@@ -454,23 +448,6 @@ impl SubjectKind {
         match self {
             SubjectKind::Key => AttachmentSubject::Key(id),
             SubjectKind::Pool => AttachmentSubject::Pool(id),
-        }
-    }
-}
-
-impl ToSql for SubjectKind {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        Ok(self.as_str().into())
-    }
-}
-
-/// A word outside the two fails the read of its row, as an unknown word in any other column does.
-impl FromSql for SubjectKind {
-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        match value.as_str()? {
-            "key" => Ok(SubjectKind::Key),
-            "pool" => Ok(SubjectKind::Pool),
-            word => Err(FromSqlError::Other(format!("unknown word {word:?}").into())),
         }
     }
 }

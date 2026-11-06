@@ -2338,7 +2338,7 @@ pub async fn read_rollups_paged(
 /// `rollups_hourly` is a rowid table, so the page after `after_rowid` is the next `limit` rows in rowid order and
 /// the caller carries the last rowid forward. `from_hour` narrows to the rows at or after an hour, for an id whose
 /// earlier holder's rows sit at generation 0 too.
-pub(crate) fn read_rollups_of_key_generation(
+pub(crate) fn read_unstamped_rollups_of_key(
     conn: &Connection,
     key_id: &str,
     from_hour: Option<i64>,

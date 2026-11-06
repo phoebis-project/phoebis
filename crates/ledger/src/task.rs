@@ -697,10 +697,8 @@ async fn writer(
         let priced = priced_attempts(&records);
         records.extend(spends.take_pending());
         let batch = Arc::new(records);
-        match handles
-            .land(&router.snapshot(), &batch, 0..batch.len())
-            .await
-        {
+        let snapshot = router.snapshot();
+        match handles.land(&snapshot, &batch, 0..batch.len()).await {
             // A degraded ledger reads the spend after any batch that lands, since that read is what clears it.
             Landed::Written => {
                 if !priced.is_empty() || stats.degraded.load(Ordering::Relaxed) {
@@ -719,6 +717,7 @@ async fn writer(
                     records: batch,
                     from: 0,
                     retried: false,
+                    snapshot,
                 });
                 continue;
             }
@@ -782,6 +781,8 @@ struct Held {
     from: usize,
     /// The in-place retries are behind it, so its next try waits out `BATCH_RETRY_HOLD`.
     retried: bool,
+    /// The registry snapshot the batch's first try read, so its retries, its replays and the drain stamp one tier.
+    snapshot: Arc<RegistrySnapshot>,
 }
 
 /// What one `land` did with its records.
@@ -842,13 +843,12 @@ async fn wait_on_clock(
 /// A failed batch is retried in place, then replayed one record at a time. Nothing new is taken from the channel
 /// while this runs, so order holds and admission's mark fires behind the held batch.
 async fn retry_held(handles: &Handles, stopped: &mut watch::Receiver<bool>, held: Held) -> Retry {
-    let snapshot = handles.router.snapshot();
     for delay in BATCH_RETRY_DELAYS {
         if wait_on_clock(delay, &handles.clock, stopped).await == Wait::Stopped {
             return Retry::Stopped(held);
         }
         let rest = held.from..held.records.len();
-        match handles.land(&snapshot, &held.records, rest).await {
+        match handles.land(&held.snapshot, &held.records, rest).await {
             Landed::Written | Landed::Lost => return Retry::Settled,
             Landed::Refused { .. } => {}
         }
@@ -869,7 +869,7 @@ impl Handles {
     /// One record per transaction. A record the database as a whole refuses is held with everything after it. One
     /// refused on its own row is a poison row, parked when it carries money and dropped with its gap otherwise.
     async fn replay(&self, held: Held) -> Retry {
-        let snapshot = self.router.snapshot();
+        let snapshot = held.snapshot;
         for index in held.from..held.records.len() {
             let one = index..index + 1;
             let error = match self.land(&snapshot, &held.records, one).await {
@@ -884,6 +884,7 @@ impl Handles {
                         records: held.records,
                         from: index,
                         retried: true,
+                        snapshot,
                     })
                 }
                 Landed::Refused { error, .. } => error,
@@ -905,6 +906,7 @@ impl Handles {
                             records: held.records.clone(),
                             from: index,
                             retried: true,
+                            snapshot,
                         });
                     }
                 }
@@ -1770,10 +1772,9 @@ async fn fold_conditions(
     tables: &Arc<PlanTables>,
     now: i64,
 ) {
-    let db = db.clone();
     let prices = pricing.revisions();
     let tables = tables.clone();
-    let folded = tokio::task::spawn_blocking(move || {
+    let folded = blocking(db, move |db| {
         db.purge(|conn| {
             let tx = crate::db::begin_write(conn)?;
             crate::reconcile::reconcile(&tx, &prices, &tables, now)?;
@@ -1783,10 +1784,8 @@ async fn fold_conditions(
         })
     })
     .await;
-    match folded {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => tracing::warn!(%error, "the routing conditions could not be folded"),
-        Err(error) => tracing::warn!(%error, "the routing conditions' fold did not finish"),
+    if let Err(error) = folded {
+        tracing::warn!(%error, "the routing conditions could not be folded");
     }
 }
 

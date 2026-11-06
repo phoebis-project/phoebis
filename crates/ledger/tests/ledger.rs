@@ -6528,6 +6528,59 @@ async fn a_full_disk_holds_the_batch_and_recovers_with_the_spend_refreshed() {
 }
 
 #[tokio::test]
+async fn a_held_batch_lands_on_the_tier_its_first_try_read_after_a_reload_moved_it() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let h = harness_on(
+        fresh_store(),
+        Arc::new(LedgerDb::open(&dir.path().join("ledger.sqlite")).unwrap()),
+        &up,
+        &[oauth("a", A, 0)],
+        (0, None),
+        quick(),
+        false,
+    )
+    .await;
+    set_tier(&h.store, "a", "default_claude_max_20x");
+    h.router.reload().await.unwrap();
+    h.db.fill_the_disk();
+    // A user agent that spans many pages, so the row needs pages the cap refuses.
+    h.ledger
+        .record_request(Record::Request {
+            request: RequestRecord {
+                user_agent: Some("x".repeat(512 << 10)),
+                ..finished_row("r1")
+            },
+            attempts: vec![AttemptRecord {
+                account_kind: AccountKind::Oauth,
+                ..serving_attempt("r1", true)
+            }],
+            bodies: None,
+        })
+        .await;
+    wait_for(Duration::from_secs(5), || {
+        (write_failures(&h) == 1).then_some(())
+    })
+    .await;
+    set_tier(&h.store, "a", "default_claude_max_5x");
+    h.router.reload().await.unwrap();
+    through_the_retries(&h).await;
+    // The replay after the last in-place retry met the full disk too, so the batch waits out the hold.
+    wait_for(Duration::from_secs(5), || {
+        (write_failures(&h) == 6).then_some(())
+    })
+    .await;
+    h.db.free_the_disk();
+    step(&h, BATCH_RETRY_HOLD);
+    assert_eq!(
+        ledgered(&h, "r1").await.1[0].tier.as_deref(),
+        Some("default_claude_max_20x"),
+        "the hold's replay stamps the tier the batch's first try read"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_parking_insert_the_database_refuses_keeps_the_record_held() {
     let up = FakeUpstream::start(vec![]).await;
     let dir = tempfile::tempdir().unwrap();

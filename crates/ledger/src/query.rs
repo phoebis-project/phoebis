@@ -2227,72 +2227,28 @@ impl RollupFilter {
     }
 }
 
-/// A dimension the analytics group their rows by.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GroupBy {
-    Account,
-    All,
-    Classifier,
-    Client,
-    Effort,
-    Key,
-    Kind,
-    Model,
-    Pool,
-    RequestClass,
-    Speed,
-    UserAgent,
-}
-
-impl GroupBy {
-    const EVERY: [GroupBy; 12] = [
-        GroupBy::Account,
-        GroupBy::All,
-        GroupBy::Classifier,
-        GroupBy::Client,
-        GroupBy::Effort,
-        GroupBy::Key,
-        GroupBy::Kind,
-        GroupBy::Model,
-        GroupBy::Pool,
-        GroupBy::RequestClass,
-        GroupBy::Speed,
-        GroupBy::UserAgent,
-    ];
-
-    /// The dimension a `group_by` word names, `None` for a word no dimension takes.
-    pub fn parse(name: &str) -> Option<GroupBy> {
-        GroupBy::EVERY.into_iter().find(|by| by.as_str() == name)
-    }
-
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            GroupBy::Account => "account",
-            GroupBy::All => "all",
-            GroupBy::Classifier => "classifier",
-            GroupBy::Client => "client",
-            GroupBy::Effort => "effort",
-            GroupBy::Key => "key",
-            GroupBy::Kind => "kind",
-            GroupBy::Model => "model",
-            GroupBy::Pool => "pool",
-            GroupBy::RequestClass => "request_class",
-            GroupBy::Speed => "speed",
-            GroupBy::UserAgent => "user_agent",
-        }
+phoebis_store::text_enum! {
+    plain
+    /// A dimension the analytics group their rows by.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum GroupBy {
+        Account => "account",
+        All => "all",
+        Classifier => "classifier",
+        Client => "client",
+        Effort => "effort",
+        Key => "key",
+        Kind => "kind",
+        Model => "model",
+        Pool => "pool",
+        RequestClass => "request_class",
+        Speed => "speed",
+        UserAgent => "user_agent",
     }
 }
 
 /// The `group_by` words, one per `GroupBy` in its order.
-pub const GROUP_BYS: &[&str] = &{
-    let mut words = [""; GroupBy::EVERY.len()];
-    let mut i = 0;
-    while i < words.len() {
-        words[i] = GroupBy::EVERY[i].as_str();
-        i += 1;
-    }
-    words
-};
+pub const GROUP_BYS: &[&str] = GroupBy::WORDS;
 
 /// The group a pattern list files an agent under when no pattern matches.
 pub const OTHER_AGENTS: &str = "other";
@@ -3716,8 +3672,8 @@ pub fn key_request_totals(
 /// Request, token, and cost totals per key and generation over `[since_hour, to_hour)`, probe rows left out: the pair
 /// is grouped in SQL beside the price columns and the hour, one query per span of `revision_spans`. Every generation
 /// is answered, so a caller that keeps the answer across a key's creation or deletion filters the live generations
-/// itself, and a key created again under an id reads none of its earlier holder's rows. `now` is the read's instant,
-/// whose anchor row divides the Pro-week figure.
+/// through [`LiveKeys::live_totals`], and a key created again under an id reads none of its earlier holder's rows.
+/// `now` is the read's instant, whose anchor row divides the Pro-week figure.
 pub fn key_request_totals_by_generation(
     conn: &Connection,
     since_hour: i64,

@@ -120,28 +120,19 @@ impl Kind {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SubjectKind {
-    Account,
-    Client,
-    Pool,
-    /// One of the process's own components: the ledger or the routing state writer, a listener's pair by its key
-    /// (`proxy.tls`, `admin.tls`), the keepalive engine (`keepalive`, and `keepalive.<cap>` for one of its caps), or
-    /// `-` for a parked record served under no pool.
-    Router,
-    /// A model by its undated id.
-    Model,
-}
-
-impl SubjectKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            SubjectKind::Account => "account",
-            SubjectKind::Client => "client",
-            SubjectKind::Pool => "pool",
-            SubjectKind::Router => "router",
-            SubjectKind::Model => "model",
-        }
+phoebis_store::text_enum! {
+    plain
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum SubjectKind {
+        Account => "account",
+        Client => "client",
+        Pool => "pool",
+        /// One of the process's own components: the ledger or the routing state writer, a listener's pair by its key
+        /// (`proxy.tls`, `admin.tls`), the keepalive engine (`keepalive`, and `keepalive.<cap>` for one of its caps),
+        /// or `-` for a parked record served under no pool.
+        Router => "router",
+        /// A model by its undated id.
+        Model => "model",
     }
 }
 

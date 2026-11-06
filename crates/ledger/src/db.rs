@@ -374,14 +374,16 @@ impl LedgerDb {
     ) -> Result<T, LedgerError> {
         #[cfg(any(test, feature = "debug-hooks"))]
         self.page_reads.fetch_add(1, Ordering::SeqCst);
-        let db = Arc::clone(self);
         let task = match &self.readers {
             Some(readers) => {
                 let reader = readers.take().await;
                 let pool = Arc::clone(readers);
-                tokio::task::spawn_blocking(move || db.lend(&pool, reader, f))
+                tokio::task::spawn_blocking(move || LedgerDb::lend(&pool, reader, f))
             }
-            None => tokio::task::spawn_blocking(move || db.read_blocking(f)),
+            None => {
+                let db = Arc::clone(self);
+                tokio::task::spawn_blocking(move || db.read_blocking(f))
+            }
         };
         task.await.map_err(|_| LedgerError::ReadCanceled)?
     }
@@ -402,7 +404,7 @@ impl LedgerDb {
         // rather than propagating the poisoning, keeps one panicked read from turning every later read into a
         // `ReadCanceled`.
         match &self.readers {
-            Some(readers) => self.lend(readers, readers.take_blocking(), f),
+            Some(readers) => LedgerDb::lend(readers, readers.take_blocking(), f),
             None => f(&recovered(&self.writer)),
         }
     }
@@ -417,7 +419,6 @@ impl LedgerDb {
     /// this reader behind and its next read reopens it again. A reopen that fails puts the old reader back and answers
     /// the error, so the pool never shrinks and the next read tries again.
     fn lend<T>(
-        &self,
         pool: &Readers,
         reader: Reader,
         f: impl FnOnce(&Connection) -> Result<T, LedgerError>,

@@ -1,12 +1,15 @@
 //! SQLite registry and encrypted credentials.
 
-/// A closed set of words one text column stores. Each variant sits beside its one word, so the column's reader and
-/// its writer cannot drift apart, and a stored word outside the set fails the read. Exported for the ledger's columns,
-/// whose expansion resolves the `rusqlite` paths against the ledger's own dependency.
+/// A closed set of words, each variant beside its one word, with `WORDS` listing them in declaration order. The enum
+/// reads and writes one text column, so the column's reader and its writer cannot drift apart, and a stored word
+/// outside the set fails the read with the word named. Exported for the ledger's columns, whose expansion resolves the
+/// `rusqlite` paths against the ledger's own dependency. A leading `plain` leaves the column conversions out, so its
+/// expansion names no `rusqlite` path and serves a crate without that dependency, such as `phoebis-attention`.
 #[macro_export]
 #[doc(hidden)]
 macro_rules! text_enum {
     (
+        plain
         $(#[$meta:meta])*
         pub enum $name:ident {
             $($(#[$variant_meta:meta])* $variant:ident => $word:literal),* $(,)?
@@ -18,12 +21,16 @@ macro_rules! text_enum {
         }
 
         impl $name {
-            pub fn as_str(self) -> &'static str {
+            /// Every word of the set, in declaration order.
+            pub const WORDS: &[&str] = &[$($word),*];
+
+            pub const fn as_str(self) -> &'static str {
                 match self {
                     $($name::$variant => $word),*
                 }
             }
 
+            /// The variant `value` names, `None` for a word outside the set.
             pub fn parse(value: &str) -> Option<$name> {
                 match value {
                     $($word => Some($name::$variant),)*
@@ -31,12 +38,29 @@ macro_rules! text_enum {
                 }
             }
         }
+    };
+    (
+        $(#[$meta:meta])*
+        pub enum $name:ident {
+            $($(#[$variant_meta:meta])* $variant:ident => $word:literal),* $(,)?
+        }
+    ) => {
+        $crate::text_enum! {
+            plain
+            $(#[$meta])*
+            pub enum $name {
+                $($(#[$variant_meta])* $variant => $word),*
+            }
+        }
 
         impl rusqlite::types::FromSql for $name {
             fn column_result(
                 value: rusqlite::types::ValueRef<'_>,
             ) -> rusqlite::types::FromSqlResult<Self> {
-                $name::parse(value.as_str()?).ok_or(rusqlite::types::FromSqlError::InvalidType)
+                let word = value.as_str()?;
+                $name::parse(word).ok_or_else(|| {
+                    rusqlite::types::FromSqlError::Other(format!("unknown word {word:?}").into())
+                })
             }
         }
 

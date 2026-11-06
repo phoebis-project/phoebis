@@ -1,9 +1,9 @@
 //! The one-time stamp of live keys' generations onto rows written before the rollup key carried one.
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection};
 
 use crate::query::hour_ceil;
-use crate::rollup::{delete_rollup, fold_delta, read_rollups_of_key_generation, RollupRow};
+use crate::rollup::{delete_rollup, fold_delta, read_unstamped_rollups_of_key, RollupRow};
 use crate::{LedgerDb, LedgerError};
 
 /// The `meta` key that says the generation-0 rows were stamped once.
@@ -52,7 +52,7 @@ pub fn reconcile_key_generations(
             let mut after_rowid = 0;
             loop {
                 let page =
-                    read_rollups_of_key_generation(&tx, &key.id, from_hour, after_rowid, PAGE)?;
+                    read_unstamped_rollups_of_key(&tx, &key.id, from_hour, after_rowid, PAGE)?;
                 let Some((last_rowid, _)) = page.last() else {
                     break;
                 };
@@ -91,14 +91,8 @@ pub fn key_generations_reconciled(db: &LedgerDb) -> Result<bool, LedgerError> {
     db.write(|conn| Ok(reconciled(conn)?))
 }
 
-/// The `meta` mark the stamp leaves after its last key.
+/// The `meta` mark the stamp leaves after its last key. Any text under the key reads as done, since the mark is a
+/// presence flag whose value nothing reads.
 fn reconciled(conn: &Connection) -> rusqlite::Result<bool> {
-    let done: Option<String> = conn
-        .query_row(
-            "SELECT value FROM meta WHERE key = ?1",
-            params![GENERATIONS_RECONCILED_KEY],
-            |r| r.get(0),
-        )
-        .optional()?;
-    Ok(done.is_some())
+    Ok(phoebis_store::migrations::meta_value(conn, GENERATIONS_RECONCILED_KEY)?.is_some())
 }

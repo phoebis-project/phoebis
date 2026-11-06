@@ -1422,8 +1422,8 @@ fn a_stored_word_outside_the_list_fails_the_read() {
     assert!(
         matches!(
             &error,
-            StoreError::Sqlite(rusqlite::Error::InvalidColumnType(_, column, _))
-                if column == "state_cause"
+            StoreError::Sqlite(rusqlite::Error::FromSqlConversionFailure(_, _, cause))
+                if cause.to_string() == r#"unknown word "nonsense""#
         ),
         "{error:?}"
     );
