@@ -25392,10 +25392,11 @@ fn a_round_under_the_slow_down_fires_on_the_stretch_after_the_safety_wait_and_no
 #[test]
 fn a_stretch_rounds_renewal_names_the_five_hour_window_over_the_ceiling_short_of_the_wall() {
     let (_, s) = stretch_pools(1800);
-    // Two pins burn 0.06 of a's 5-hour window an hour, which from 0.9 passes the ceiling 50 minutes before the reset an
-    // hour and a half out: at T the stretch reads 40 minutes, over the half hour threshold, and the projection at the
-    // reset 0.99, under the wall, both easing as the pins' burn decays over the safety wait. The stretch round tests
-    // the ceiling at the reset less the threshold, so s0's renewal past the wait names the window it fired on.
+    // Two pins burn 0.06 of a's 5-hour window an hour, which from 0.9 passes the ceiling 50 minutes in, 40 minutes
+    // before the reset an hour and a half out: at T the stretch reads 40 minutes, over the half hour threshold, and the
+    // projection at the reset 0.99, under the wall, both easing as the pins' burn decays over the safety wait. The
+    // stretch round tests the ceiling at the reset less the threshold, so s0's renewal past the wait names the window
+    // it fired on.
     let mut st = rounding(vec![
         burning("s1", "a", 4.0, false, T),
         burning("s0", "a", 2.0, true, T),

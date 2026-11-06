@@ -4753,14 +4753,14 @@ struct Waiting {
 /// burn_average_ms)`, `wall` being the wall instant, where the projection's burn reaches 1.0 as `wall_of` reads it now,
 /// and the wait the cap alone while no burn reaches it, so a burst toward a near wall instant fires early, a slow climb
 /// waits, and one large turn's charge, which moves the prediction before the burn average has absorbed it, fires no
-/// round at the selection it lands on. The stamp stays the first reading over the ceiling, so a window that crosses
-/// the wall at an end or a reset horizon has spent the part of its wait it read between the two lines, which confirms
-/// the climb as the wait would. Replayed over the recorded projection at the default burn average, with the ceiling as
-/// the line at every horizon, this wait fires 12 rounds while the window reads under the ceiling (2 on a window still
-/// under it at the horizon) where a quarter of the time to the horizon capped at the dwell fires 56 (33), falsely fires
-/// on 1 window of 32 against 11, costs 170,044 tokens of rewrites and missed wall instants against 6,990,451, and fires
-/// 2 minutes before a wall instant the horizon's quarter misses and 159 minutes before another. A window inside its
-/// wait yields to the next.
+/// round at the selection it lands on. The stamp stays the first reading over the ceiling, so a window that crosses the
+/// wall at an end or a reset horizon has spent the part of its wait it read between the two lines, which confirms the
+/// climb as the wait would. Replayed over the recorded projection at the default burn average, with the ceiling as the
+/// line at every horizon, this wait fires 12 rounds while the window reads under the ceiling (2 on a window still under
+/// it at the horizon) where a quarter of the time to the horizon capped at the dwell fires 56 (33), falsely fires on 1
+/// window of 32 against 11, costs 170,044 tokens of rewrites and missed wall instants against 6,990,451, and fires 2
+/// minutes before a wall instant the horizon's quarter misses and 159 minutes before another. A window inside its wait
+/// yields to the next.
 ///
 /// A 5-hour window whose age `young` names, under twice the pool's burn average, fires under neither test and yields to
 /// the next window as a waiting one does, since the burn average still carries the previous window's burst over the
