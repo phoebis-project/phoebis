@@ -790,7 +790,7 @@ function SessionRows({
   current,
   filtered,
   fold,
-  lines: { drawn: rowLines, shown: drawn },
+  lines: { drawn: drawnLines, shown: shownLines },
   listedRows,
   onFollowFork,
   onRelease,
@@ -823,23 +823,23 @@ function SessionRows({
   const { expiresAt, lastUsed, recipe, session, status } = row;
   const account = cost.accountById.get(session.accountId ?? '') ?? null;
   const noRecipe = noRecipeText(row, now);
-  const shown = drawn.flatMap((l) => (l.recipe === null ? [] : [l.recipe]));
+  const recipes = shownLines.flatMap((l) => (l.recipe === null ? [] : [l.recipe]));
   // A line takes its account from its pin, or from its recipe where no pin stands, and a recipe whose request was
   // refused before any account served it names none, so that line is left out. A "+N" counts every other line the row
   // draws on another model or account, recipe or not, whatever the Agents filters match, and its hover reads them in
   // the order the expanded row draws them. It takes the accent where its column's filter stands and one of its lines
-  // matches the filters, a line `drawn` holds.
-  const placed = rowLines.flatMap((l) => {
+  // matches the filters, a line `shownLines` holds.
+  const placed = drawnLines.flatMap((l) => {
     const accountId = l.pin?.accountId ?? l.recipe?.accountId ?? null;
-    return accountId !== null && l.model !== null ? [{ accountId, agentId: l.agentId, matched: drawn.includes(l), model: l.model }] : [];
+    return accountId !== null && l.model !== null ? [{ accountId, agentId: l.agentId, matched: shownLines.includes(l), model: l.model }] : [];
   });
   const otherModels = placed.filter((l) => l.model !== session.model);
   const otherAccounts = placed.filter((l) => l.accountId !== session.accountId);
   // Opened, the fold line draws the lines the filters hide and then the earlier agents, the agents it counts.
-  const hiddenHere = open && fold !== null ? rowLines.filter((l) => !drawn.includes(l)) : [];
+  const hiddenHere = open && fold !== null ? drawnLines.filter((l) => !shownLines.includes(l)) : [];
   // A retained agent with no time is waiting on its first stream event, which is
   // a different thing from a session nothing probes.
-  const pendingProbe = shown.some((a) => a.state === 'retained' && a.nextProbeAt === null);
+  const pendingProbe = recipes.some((a) => a.state === 'retained' && a.nextProbeAt === null);
   // The lines' request log links open under the check the menu's ledger items read.
   const hasTraffic = session.lastRequestAt !== null;
   const activity = lastActivity(session);
@@ -1156,7 +1156,7 @@ function SessionRows({
                     </tr>
                   </thead>
                   <tbody>
-                    {[...drawn, ...(unfolded ? hiddenHere : [])].map((line) => agentRow(line.agentId, line, agentFigures(session, line.agentId)))}
+                    {[...shownLines, ...(unfolded ? hiddenHere : [])].map((line) => agentRow(line.agentId, line, agentFigures(session, line.agentId)))}
                     {(fold === null ? earlierOpen : unfolded) && earlier.map((agent) => agentRow(agent.agentId, null, agent))}
                   </tbody>
                 </table>
@@ -1167,7 +1167,7 @@ function SessionRows({
               <div className="srow__warming">
                 <Disclosure
                   controls={warmingId}
-                  hint={noRecipe !== null ? 'no recipe' : stateSummary(shown) || 'no recipe'}
+                  hint={noRecipe !== null ? 'no recipe' : stateSummary(recipes) || 'no recipe'}
                   label="Cache warming"
                   onToggle={() => setWarmingOpen((v) => !v)}
                   open={warmingOpen}
@@ -1182,7 +1182,7 @@ function SessionRows({
                     </p>
                   )}
                   {/* The union's length, so a session no mod reports draws its pins' lines. */}
-                  {drawn.length > 0 && (
+                  {shownLines.length > 0 && (
                     <div className="agents">
                       <div className="agents__row agents__row--head">
                         <span>Agent</span>
@@ -1193,7 +1193,7 @@ function SessionRows({
                         <span title={COUNTS_HINT}>Probes / credited</span>
                         <span>State</span>
                       </div>
-                      {drawn.map((line) => (
+                      {shownLines.map((line) => (
                         <AgentLine key={`${line.agentId}|${line.model}`} line={line} now={now} requestsTo={hasTraffic ? requestsHref(session, lineLastRequestAt(line) ?? session.lastRequestAt, line.agentId) : null} />
                       ))}
                     </div>
