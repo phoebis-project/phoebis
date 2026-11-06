@@ -1168,7 +1168,7 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
 }
 {
   // The Sessions card's grid counts the live sessions' lines as the Sessions view's summary line counts the rows its
-  // bare address keeps, both read on the story's instant: 35 agents, the lines less the released ones with main counted
+  // bare address keeps, both read at the clock origin: 35 agents, the lines less the released ones with main counted
   // where no line names it, and 10 busy, 6 idle and 4 parked by lifecycle word. The three finished sessions stay out of
   // both, and nightly's notebook row (`sessionSpec[19]`), whose main reads unreported, counts in none of the three.
   const cardOf = (page) => [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === 'Sessions');
@@ -1270,9 +1270,12 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
       (failed.notice ?? '').startsWith('Could not load the keepalive overview: ledger locked') &&
       role === 'status' &&
       drawn.grid === 4 &&
+      // The hero's `41` is the mock overview's active pins, which the failed keepalive read leaves drawn.
       drawn.hero === '41' &&
       retry !== undefined &&
       calls === 1 &&
+      // `18 of 128` is the Sessions cap after Try again: `ENGINE_SESSIONS.length` of `KEEPALIVE_OVERVIEW.limits.sessions`
+      // in the mock's operations.
       JSON.stringify([again.caps[0], again.notice]) === JSON.stringify(['18 of 128', null]),
     missing: [JSON.stringify(failed), String(role), JSON.stringify(drawn), `Try again ${retry !== undefined}, ${calls} reads`, JSON.stringify(again)],
   });

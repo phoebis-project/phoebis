@@ -31,8 +31,10 @@ import type { UnitPosition, WeekPosition } from '@/lib/unit';
 /**
  * The as-of line over the page's reads, each named as its card's error names it: the figures are as old as the oldest
  * answer any card draws, and a read whose refresh failed after an answer is named with its error. A read that never
- * answered is left to its card, which names the error already. Where both the accounts and the settings reads fail
- * first, the ring names the accounts error, and the settings error shows once the accounts answer.
+ * answered is left to its card, which names the error already. The pools read has no card: it feeds the expired
+ * part's ink alone, so one that never answered shows nowhere and leaves that ink off. Where both the accounts and
+ * the settings reads fail first, the ring names the accounts error, and the settings error shows once the
+ * accounts answer.
  */
 function asOfLine(reads: [string, Loaded<unknown>][], now: number): { text: string; title: string } | null {
   const answered = reads.flatMap(([, r]) => (r.fetchedAt === null ? [] : [r.fetchedAt]));

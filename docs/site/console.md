@@ -197,14 +197,14 @@ under the position. Where the table runs wider than its card it scrolls inside i
 `active pins across {n} accounts`. Its grid counts the live sessions as the [Sessions](#sessions) view's summary line
 does, the sessions inside the session expiry that have not finished: Agents counts each session's agents less the
 released ones, main among them where no line names it, and Busy, Idle and Parked count them by lifecycle word, a
-registered or unreported agent in none of the three. Under the grid, "Keepalive engine" reads the engine's three caps as
-`{n} of {max}`: Sessions, Agent records, whose hover says that a released record keeps its slot for one cache TTL after
-the release, and Retained in MiB. "Cache probes, 24h" reads `{ok} ok ({pct}) of {total}` over a bar of the day's probes
-by outcome (ok, migrated, held, skipped and failed), and a line reads `expired between turns {n} · bus gaps {n}`. The
-expired part takes the warning ink above zero while a pool's keepalive policy is on, and the bus gaps part while the
-engine missed bus events in the last 24 hours, the last gap's instant on hover. Where the keepalive overview's first
-read fails, the caps, the probes and the line read a dash each under `Could not load the keepalive overview: {error}`
-and a "Try again" button. What each figure means is on [Statistics](statistics.md).
+registered, unknown or unreported agent in none of the three. Under the grid, "Keepalive engine" reads the engine's
+three caps as `{n} of {max}`: Sessions, Agent records, whose hover says that a released record keeps its slot for one
+cache TTL after the release, and Retained in MiB. "Cache probes, 24h" reads `{ok} ok ({pct}) of {total}` over a bar of
+the day's probes by outcome (ok, migrated, held, skipped and failed), and a line reads `expired between turns {n} · bus
+gaps {n}`. The expired part takes the warning ink above zero while a pool's keepalive policy is on, and the bus gaps
+part while the engine missed bus events in the last 24 hours, the last gap's instant on hover. Where the keepalive
+overview's first read fails, the caps, the probes and the line read a dash each under `Could not load the keepalive
+overview: {error}` and a "Try again" button. What each figure means is on [Statistics](statistics.md).
 
 ## Quota
 

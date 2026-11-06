@@ -42,92 +42,92 @@ the Requests, 24h tile's hover, the two labels in one type), the Dashboard's Ses
 engine and Cache probes, 24h headings, the three caps each with its label and figure on one line in the type and ink of
 the grid's labels and figures above them, the Agent records cap's hover on a released record's slot, the probes line and
 the expired and bus gaps line in their forms, and the probe bar from the hero's left edge to the card's content edge),
-the top bar's controls (Log out and the theme control 32 px
-at one top), the week control beside the unit switch (at 1280 by 800 and 1440 by 900 the Week select between the Unit
-select and the legend's button in the bar's right group, its three long labels whole, in the Unit select's height, top
-edge, type and ink, at 900 by 800 and 360 by 800 its three short labels whole on the Unit select's line with no legend
-button at 360, the bar one 52 px line at 1280, 1440 and 900 and 90 px over two lines at 360, disabled with its title
-under All in dollars and enabled with none under Native, and on the Settings page's Unit row at 1280, 400 and 360 px the
-two selects and the legend's button inside the Appearance card's content box, the week select on the position select's
-line to its right at 1280 and 400, and the controls under the row's label at 400 and 360), the sidebar's Expert view row
-above the version line, the routing log's columns at 1280 by 800, 1440 by 900, 1920 by 1080 and 375 by 800 (the chevron
-24 px, Kind 166, Session 70, By 152, Fact 189 and Link 64 px at every width, Account 178 px under 1420 px and 146 px
-from it, Model at 192 px from 1420 px alone with the model beneath the account under it, and Time the fill: on the three
-wide viewports the table its card's width with nothing to scroll sideways and Time the card less the other columns, 147
-px at 1280 and 1440, with no request link under a time cut at 1920, and at 375 the table at its 990 px minimum scrolling
-inside its wrap with the page's width the window's and its table card's, the top bar's title on at most two lines inside
-the bar and its last control inside its padding, each column as wide as its longest cell with no slack, the morning
-dated time under the 12-hour setting among Time's, a line cut on purpose behind an ellipsis, and again under the 7-day
-range on the state changes with each dated Time cell on one line), an account edit's Account cell under the 24-hour
-range on the registry and state changes (the link the cell reads off the change's target, against the account link of a
-state change in type, ink, height, left edge and top, and against the pool's and the key's links of the other registry
-rows in all but their left edge, which their muted word moves), a cleared window's By chip under the 7-day range on the
-cleared and spent windows (against a spent window's chip in type, ink, height, padding and top, the width its text needs
-recorded, and the By column as wide as its longest cell), the Shed mark of the two pins the story stamps in the mock
-pass alone (on the next request of the shed session and of the failed-over session, the origin chip opening on `shed
-from` or `failed over from`, against the chip of the instant beside it in box, type, ink and top, its label against that
-chip's label in type and ink, and its text whole), the routing log's event panels (mock pass, under the 24-hour range on
-their kinds: the pool edit's `keepalive idle window seconds` row against the settings row above it, sunset's backoff
-close reading Ended by the plan's end with no Resumed row against its Backed off row in the label and its Attempts row
-in the value, the window reset's Read from row against its Before the reset row, each in the label's type and left edge
-and the value's type, and the guardrail record's two chips on its Answer row against the `key` chip on their line in
-height, top edge and font size, every text recorded), the shedding round panel's Rewrite cells (mock pass, under the
-24-hour range on the two rounds that mark pins: studio's 14:05 round, which names its rewrite unit, reading each marked
-pin's Pro-week rewrite in the week the top bar's Week select names, titled with the 7-day window the pick compared on,
-and secondary's 11:00 round, an earlier build's, reading each stored figure under its 20x label with no title, each cell
-against its row's Burn cell in type and top edge, the texts and titles recorded), the usage-based seat's Pace hover in
-the decision card (mock pass: on the seat's record that carries no spend window, the spend sentence its pace's shape
-names, equal to the hover on its record that carries the window, both recorded), the Diagnostics group (neither its
-heading nor a link of it on the dashboard with the expert view off, and with the Routing log or the Meter view open the
-heading over the two links in that order and the open view's link active), the Meter view's group tables at 1280 by 800,
-1440 by 900, 1920 by 1080 and 375 by 800 (mock pass: each fit column as wide as its widest cell past the 30 px gutter,
-Account the fill at its 132 px floor or wider, each table inside its wrap on the three wide viewports, and at 375 the
-document as wide as the window with each table scrolling inside its wrap and the first Latest ratio cell in view, a
-collapsed line 37.8 px at 1280 by 800 badged or plain, an open group's height recorded, that group on an even line with
-its nested rows alternating two tones, and the nested windows table's fill column free of the group column's floor),
-pool chips, the caching controls, the Load shedding switch against Migrate when spent, the Burn average field's hint in
-the expert view (ending on the preset that unlocks the field, against the Window ceiling field's hint beside it in type,
-ink, line height, margin, left edge and top, and as wide as its field), the Wind down and Retention hints of the pool
-dialog (the Wind down hint naming the canceled subscription against the Return dwell hint beside it, and the Retention
-hint naming the limit and the Settings page's About card against the capture switch's hint beside it, each in type, ink
-and left edge), the load groups (the overage grace field against the window ceiling field, the utilization bar's ceiling
-handle and the shedding preview line), the pool dialog's ceiling handle in the plain view (on the track at the field's
-value, centered on the track and taller than it), the pool dialog's return rate range (mock pass: its select against the
-Strategy select in height and font size, beside the "Return rate by idle age" label, their vertical centers within 1 px,
-opening on "7 days", the hint's text recorded), the Active pins tile's line under its figure (in the mock pass on the
-work card alone, "1 on a former member" inside its tile below the figure, in the labels' ink and the type of the serving
-table's sub line at a normal weight), the contract member's Tier cell (mock pass: `metered P1` in the text, face, size,
-weight and ink of the all pool's API-key member's), the pool card's serving table and its seven tiles, its attention
-rows ending with their age (the row's last cell, on the detail's line in the detail's ink and size, uncut and inside the
-card, at the pass's viewport and at 400 px), the serving table's columns (Account the fill), the chevron of the pool
-dialog's Identity select (12 px square at a 1.5 stroke), the pool dialog's members table (Account the fill, each
-Priority and budget input at least its column's 96, 140 or 150 px less the cell's padding) and keys table (Key the
-fill), each read while its group shows, and in the mock pass's expert view its model rules table (Model the fill, each
-select holding its widest option's text inside its padding), which the router's seed draws no override for, the Create
-key dialog's Key group (the Name input, the Pool select and the footer's buttons 32 px, the Notes field 72 px, each
-label above its control), the settings cards' order, the listener hint's gaps and size and About's lines (their order,
-one type and one gap), About's three retention lines (the label's type and ink, the value's ink and the row's height of
-the Storage path line above them, the label's and the value's type and ink of the Admin secret line below them, and in
-the 720 px strip and at 400 px those types and inks again with the label column at most half the list's width), About's
-Session expiry and Non-companion timeout lines (the label's type and ink, the value's type, the row's height and the
-label's and the value's left edges of the Body capture line above them, each line's text and hover recorded), the
-Settings page's Unit row at 1280 and 400 px (the legend's button on the select's line, and its popover inside the
-viewport's width, at or below its button's bottom, uncovered, in the legend's 12 px type and closed by Escape), the
-Appearance card's Theme, Time format and Unit rows at 400 px (each control under its label), the cooling-down block's
-columns (Reason the fill), the Delete account button, the window bars on the dashboard and the Accounts page (each bar's
-line inside its bar, a compact bar's projection in its reset's place as two parts, its share and its horizon, a whole
-bar's reset and projection as two parts, each part whole on its line, and a window the account does not carry named
-muted in its slot's share place, on the line and in the ink of the neighboring bar's label (its own label where the 400
-px window stacks the slots), whole inside its slot with the window's words on its title, a whole slot drawing them and a
-compact one its short form, at 1280 by 800 and, after the view's shot, in a 400 px window, mock pass: the approved Ultra
-account's "no 5-hour window"), the usage-based seat's spend bar there at 1280 and 400 by 800 (mock pass: its row as wide
-as a window triple's beside it, from its left edge where the two share a column, the amount spent of the limit in its
-head, and its reset on one line inside the bar with the estimate's word muted and its sentence on hover), the approved
-Ultra account's own Accounts page (mock pass, at 1280 by 800 after the view's shot: its Usage card's whole slot reading
-"no 5-hour window" muted in the share's place, the words on its title, read as the triples' absent slots are), the plan
-badges' words on the seat's row and the plan-ended account's row against the first other row's, the Accounts bar's sort
-control (its button in the height, top edge, type size and weight of the Add filter button beside it, and once opened
-its popover inside the window under the button, its six radio rows one height, a mark on the checked key and direction
+the top bar's controls (Log out and the theme control 32 px at one top), the week control beside the unit switch (at
+1280 by 800 and 1440 by 900 the Week select between the Unit select and the legend's button in the bar's right group,
+its three long labels whole, in the Unit select's height, top edge, type and ink, at 900 by 800 and 360 by 800 its three
+short labels whole on the Unit select's line with no legend button at 360, the bar one 52 px line at 1280, 1440 and 900
+and 90 px over two lines at 360, disabled with its title under All in dollars and enabled with none under Native, and on
+the Settings page's Unit row at 1280, 400 and 360 px the two selects and the legend's button inside the Appearance
+card's content box, the week select on the position select's line to its right at 1280 and 400, and the controls under
+the row's label at 400 and 360), the sidebar's Expert view row above the version line, the routing log's columns at 1280
+by 800, 1440 by 900, 1920 by 1080 and 375 by 800 (the chevron 24 px, Kind 166, Session 70, By 152, Fact 189 and Link 64
+px at every width, Account 178 px under 1420 px and 146 px from it, Model at 192 px from 1420 px alone with the model
+beneath the account under it, and Time the fill: on the three wide viewports the table its card's width with nothing to
+scroll sideways and Time the card less the other columns, 147 px at 1280 and 1440, with no request link under a time cut
+at 1920, and at 375 the table at its 990 px minimum scrolling inside its wrap with the page's width the window's and its
+table card's, the top bar's title on at most two lines inside the bar and its last control inside its padding, each
+column as wide as its longest cell with no slack, the morning dated time under the 12-hour setting among Time's, a line
+cut on purpose behind an ellipsis, and again under the 7-day range on the state changes with each dated Time cell on one
+line), an account edit's Account cell under the 24-hour range on the registry and state changes (the link the cell reads
+off the change's target, against the account link of a state change in type, ink, height, left edge and top, and against
+the pool's and the key's links of the other registry rows in all but their left edge, which their muted word moves), a
+cleared window's By chip under the 7-day range on the cleared and spent windows (against a spent window's chip in type,
+ink, height, padding and top, the width its text needs recorded, and the By column as wide as its longest cell), the
+Shed mark of the two pins the story stamps in the mock pass alone (on the next request of the shed session and of the
+failed-over session, the origin chip opening on `shed from` or `failed over from`, against the chip of the instant
+beside it in box, type, ink and top, its label against that chip's label in type and ink, and its text whole), the
+routing log's event panels (mock pass, under the 24-hour range on their kinds: the pool edit's `keepalive idle window
+seconds` row against the settings row above it, sunset's backoff close reading Ended by the plan's end with no Resumed
+row against its Backed off row in the label and its Attempts row in the value, the window reset's Read from row against
+its Before the reset row, each in the label's type and left edge and the value's type, and the guardrail record's two
+chips on its Answer row against the `key` chip on their line in height, top edge and font size, every text recorded),
+the shedding round panel's Rewrite cells (mock pass, under the 24-hour range on the two rounds that mark pins: studio's
+14:05 round, which names its rewrite unit, reading each marked pin's Pro-week rewrite in the week the top bar's Week
+select names, titled with the 7-day window the pick compared on, and secondary's 11:00 round, an earlier build's,
+reading each stored figure under its 20x label with no title, each cell against its row's Burn cell in type and top
+edge, the texts and titles recorded), the usage-based seat's Pace hover in the decision card (mock pass: on the seat's
+record that carries no spend window, the spend sentence its pace's shape names, equal to the hover on its record that
+carries the window, both recorded), the Diagnostics group (neither its heading nor a link of it on the dashboard with
+the expert view off, and with the Routing log or the Meter view open the heading over the two links in that order and
+the open view's link active), the Meter view's group tables at 1280 by 800, 1440 by 900, 1920 by 1080 and 375 by 800
+(mock pass: each fit column as wide as its widest cell past the 30 px gutter, Account the fill at its 132 px floor or
+wider, each table inside its wrap on the three wide viewports, and at 375 the document as wide as the window with each
+table scrolling inside its wrap and the first Latest ratio cell in view, a collapsed line 37.8 px at 1280 by 800 badged
+or plain, an open group's height recorded, that group on an even line with its nested rows alternating two tones, and
+the nested windows table's fill column free of the group column's floor), pool chips, the caching controls, the Load
+shedding switch against Migrate when spent, the Burn average field's hint in the expert view (ending on the preset that
+unlocks the field, against the Window ceiling field's hint beside it in type, ink, line height, margin, left edge and
+top, and as wide as its field), the Wind down and Retention hints of the pool dialog (the Wind down hint naming the
+canceled subscription against the Return dwell hint beside it, and the Retention hint naming the limit and the Settings
+page's About card against the capture switch's hint beside it, each in type, ink and left edge), the load groups (the
+overage grace field against the window ceiling field, the utilization bar's ceiling handle and the shedding preview
+line), the pool dialog's ceiling handle in the plain view (on the track at the field's value, centered on the track and
+taller than it), the pool dialog's return rate range (mock pass: its select against the Strategy select in height and
+font size, beside the "Return rate by idle age" label, their vertical centers within 1 px, opening on "7 days", the
+hint's text recorded), the Active pins tile's line under its figure (in the mock pass on the work card alone, "1 on a
+former member" inside its tile below the figure, in the labels' ink and the type of the serving table's sub line at a
+normal weight), the contract member's Tier cell (mock pass: `metered P1` in the text, face, size, weight and ink of the
+all pool's API-key member's), the pool card's serving table and its seven tiles, its attention rows ending with their
+age (the row's last cell, on the detail's line in the detail's ink and size, uncut and inside the card, at the pass's
+viewport and at 400 px), the serving table's columns (Account the fill), the chevron of the pool dialog's Identity
+select (12 px square at a 1.5 stroke), the pool dialog's members table (Account the fill, each Priority and budget input
+at least its column's 96, 140 or 150 px less the cell's padding) and keys table (Key the fill), each read while its
+group shows, and in the mock pass's expert view its model rules table (Model the fill, each select holding its widest
+option's text inside its padding), which the router's seed draws no override for, the Create key dialog's Key group (the
+Name input, the Pool select and the footer's buttons 32 px, the Notes field 72 px, each label above its control), the
+settings cards' order, the listener hint's gaps and size and About's lines (their order, one type and one gap), About's
+three retention lines (the label's type and ink, the value's ink and the row's height of the Storage path line above
+them, the label's and the value's type and ink of the Admin secret line below them, and in the 720 px strip and at 400
+px those types and inks again with the label column at most half the list's width), About's Session expiry and
+Non-companion timeout lines (the label's type and ink, the value's type, the row's height and the label's and the
+value's left edges of the Body capture line above them, each line's text and hover recorded), the Settings page's Unit
+row at 1280 and 400 px (the legend's button on the select's line, and its popover inside the viewport's width, at or
+below its button's bottom, uncovered, in the legend's 12 px type and closed by Escape), the Appearance card's Theme,
+Time format and Unit rows at 400 px (each control under its label), the cooling-down block's columns (Reason the fill),
+the Delete account button, the window bars on the dashboard and the Accounts page (each bar's line inside its bar, a
+compact bar's projection in its reset's place as two parts, its share and its horizon, a whole bar's reset and
+projection as two parts, each part whole on its line, and a window the account does not carry named muted in its slot's
+share place, on the line and in the ink of the neighboring bar's label (its own label where the 400 px window stacks the
+slots), whole inside its slot with the window's words on its title, a whole slot drawing them and a compact one its
+short form, at 1280 by 800 and, after the view's shot, in a 400 px window, mock pass: the approved Ultra account's "no
+5-hour window"), the usage-based seat's spend bar there at 1280 and 400 by 800 (mock pass: its row as wide as a window
+triple's beside it, from its left edge where the two share a column, the amount spent of the limit in its head, and its
+reset on one line inside the bar with the estimate's word muted and its sentence on hover), the approved Ultra account's
+own Accounts page (mock pass, at 1280 by 800 after the view's shot: its Usage card's whole slot reading "no 5-hour
+window" muted in the share's place, the words on its title, read as the triples' absent slots are), the plan badges'
+words on the seat's row and the plan-ended account's row against the first other row's, the Accounts bar's sort control
+(its button in the height, top edge, type size and weight of the Add filter button beside it, and once opened its
+popover inside the window under the button, its six radio rows one height, a mark on the checked key and direction
 alone, and Escape closing it with the focus back on the button), the Accounts detail's allowance grid at 1280 by 800,
 1440 by 900 and 375 by 800 (mock pass: "Allowance left at reset" and "Meter drift" stacked across the pane's content box
 at 1280 and 375 px, each as wide as the Usage and Requests cards and in their title's type, and at 1440 px side by side
