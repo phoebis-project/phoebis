@@ -9,11 +9,9 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_attention::{KeepaliveCap, KeepaliveFacts, KeepaliveStanding};
 use phoebis_keepalive::{
-    Engine, EngineStats, IdleReturns, KeepaliveLimits, KeepalivePolicy, Wasted,
-    IDLE_AGE_BOUNDS_SECONDS,
+    Engine, EngineStats, IdleReturns, KeepaliveLimits, Wasted, IDLE_AGE_BOUNDS_SECONDS,
 };
 use phoebis_ledger::{read_overview_rollups, trailing_day_hours, UNATTRIBUTED};
-use phoebis_routing::RouterHandle;
 use utoipa::ToSchema;
 
 use crate::analytics::ledger_failure;
@@ -88,11 +86,9 @@ pub(crate) struct IdleReturn {
 }
 
 /// The engine as the attention reader sees it: the counters and the caps the overview answers, and whether a pool's
-/// policy warms caches, read off the router's snapshot as the engine reads a pool's policy
-/// (`KeepalivePolicy::from_json`).
+/// policy warms caches.
 pub struct EngineFacts {
     pub engine: Arc<Engine>,
-    pub router: RouterHandle,
 }
 
 impl KeepaliveFacts for EngineFacts {
@@ -101,26 +97,31 @@ impl KeepaliveFacts for EngineFacts {
         KeepaliveStanding {
             bus_gaps: stats.bus_gaps,
             last_bus_gap_at: stats.last_bus_gap_at,
-            caps: caps_of(&stats, self.engine.limits())
-                .into_iter()
-                .map(|(name, count, max)| KeepaliveCap { name, count, max })
-                .collect(),
-            warming: self
-                .router
-                .snapshot()
-                .pools()
-                .any(|pool| KeepalivePolicy::from_json(&pool.keepalive_json).enabled),
+            caps: caps_of(&stats, self.engine.limits()).into(),
+            warming: self.engine.warming(),
         }
     }
 }
 
-/// The three caps as `(name, count, max)`, which the overview's `limits` and the reader's standing both read, so the
-/// two never count a cap differently.
-fn caps_of(stats: &EngineStats, limits: &KeepaliveLimits) -> [(&'static str, usize, usize); 3] {
+/// The three caps, which the overview's `limits` and the reader's standing both read, so the two never count a cap
+/// differently.
+fn caps_of(stats: &EngineStats, limits: &KeepaliveLimits) -> [KeepaliveCap; 3] {
     [
-        ("sessions", stats.live_sessions, limits.max_sessions),
-        ("agents", stats.agents, limits.max_agents),
-        ("retained", stats.retained_bytes, limits.max_retained_bytes),
+        KeepaliveCap {
+            name: "sessions",
+            count: stats.live_sessions,
+            max: limits.max_sessions,
+        },
+        KeepaliveCap {
+            name: "agents",
+            count: stats.agents,
+            max: limits.max_agents,
+        },
+        KeepaliveCap {
+            name: "retained",
+            count: stats.retained_bytes,
+            max: limits.max_retained_bytes,
+        },
     ]
 }
 
@@ -260,8 +261,10 @@ pub(crate) async fn overview(
         })
         .collect();
     let stats = state.keepalive.stats();
-    let [sessions, agents, retained] =
-        caps_of(&stats, state.keepalive.limits()).map(|(_, count, max)| Limit { count, max });
+    let [sessions, agents, retained] = caps_of(&stats, state.keepalive.limits()).map(|c| Limit {
+        count: c.count,
+        max: c.max,
+    });
     Json(KeepaliveOverview {
         agents: state.keepalive.agent_counts(),
         bus_gaps: stats.bus_gaps,

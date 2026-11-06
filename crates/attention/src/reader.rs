@@ -9,8 +9,8 @@ use std::collections::{HashMap, HashSet};
 
 use phoebis_bus::{Event, Kind as RequestKind, Origin, Outcome};
 use phoebis_ledger::{
-    polled, ParkedSummary, RoutingCondition, RoutingKind, UnpricedModel, CEILING_SETTING,
-    IN_FLIGHT_TTL_MS, SHED_CAP_SETTING, SLOW_DOWN_STRETCH_SETTING, SLOW_SETTINGS, WALL_SETTINGS,
+    polled, RoutingCondition, RoutingKind, UnpricedModel, CEILING_SETTING, IN_FLIGHT_TTL_MS,
+    SHED_CAP_SETTING, SLOW_DOWN_STRETCH_SETTING, SLOW_SETTINGS, WALL_SETTINGS,
     WINDOW_CEILING_SETTING,
 };
 use phoebis_oauth::UsageService;
@@ -20,7 +20,7 @@ use phoebis_store::{
 };
 use serde_json::json;
 
-use crate::{AttentionError, KeepaliveStanding, PairFacts};
+use crate::{AttentionError, KeepaliveStanding, LedgerFacts, PairFacts};
 
 /// How long after a run's first 429 the poll backoff condition holds, so a single 429 or a short run never reads 1.
 pub const BACKOFF_ATTENTION_AFTER_MS: i64 = 30 * 60 * 1_000;
@@ -462,6 +462,20 @@ fn since_of(
     })
 }
 
+/// A condition about a subject that joins no card, dated by `since_of` under the subject's own id.
+fn dated_condition(
+    state: &mut ReaderState,
+    seen: &mut HashSet<(Kind, String)>,
+    kind: Kind,
+    subject: Subject,
+    holds: bool,
+    now: i64,
+    detail: serde_json::Value,
+) -> Condition {
+    let since = since_of(state, seen, kind, &subject.id, holds, now);
+    condition_for(kind, subject, None, holds, since, detail)
+}
+
 /// Each live subject as `(id, label, true)`, then each id the rows name that none of them has, labeled by its id and
 /// marked gone, so a deleted subject keeps its condition until its row goes.
 fn with_orphans<'a>(
@@ -518,14 +532,13 @@ pub(crate) fn refresh_runs(
 /// a cleared condition reads 0 on the scrape rather than vanishing. The metrics listener and the admin route read this
 /// one function, so a scrape and the dashboard never disagree. The caller reads the registry's `accounts` and their
 /// `refresh_runs`, and the parked rows, before it takes the reader's state, and a read that fails fails the whole
-/// answer, since a series answered without its evidence could clear a real alarm. `parked` and `routing` are `None`
-/// where no ledger is built, and neither `ledger_record_parked`, `meter_drift` nor the four routing conditions
-/// (`wall_reached`, `destination_spent`, `shed_no_runway` and `slowed_long`) then have a series. Where one is built,
-/// `destination_spent` stops holding once a `window_cleared` followed its spent window. `pairs` is `None`
-/// where no listener is built, and neither certificate kind then has a series. `unpriced` is the ledger's map, empty
-/// where no ledger is built. `keepalive` is `None` where no engine is built, and none of `keepalive_bus_gaps`,
-/// `keepalive_cap` and `expired_between_turns` then has a series. `expired` is the ledger's count of expiries between
-/// turns over the last 24 hours, `None` where no ledger is built, and `expired_between_turns` then has no series.
+/// answer, since a series answered without its evidence could clear a real alarm. `ledger` carries the parked rows,
+/// the fold's routing conditions and the count of expiries between turns over the last 24 hours. It is `None` where
+/// no ledger is built, and none of `ledger_record_parked`, `meter_drift`, the four routing conditions
+/// (`wall_reached`, `destination_spent`, `shed_no_runway` and `slowed_long`) and `expired_between_turns` then has a
+/// series. Where one is built, `destination_spent` stops holding once a `window_cleared` followed its spent window.
+/// `pairs` is `None` where no listener is built, and neither certificate kind then has a series. `unpriced` is the
+/// ledger's map, empty where no ledger is built.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn conditions(
     state: &mut ReaderState,
@@ -533,13 +546,11 @@ pub(crate) fn conditions(
     refresh_runs: &HashMap<String, Vec<ResolvedAttempt>>,
     router: &RouterHandle,
     ledger_degraded: bool,
-    parked: Option<&[ParkedSummary]>,
+    ledger: Option<&LedgerFacts>,
     unpriced: &[UnpricedModel],
-    routing: Option<&[RoutingCondition]>,
     pairs: Option<&[PairFacts]>,
     usage: Option<&UsageService>,
-    keepalive: Option<&KeepaliveStanding>,
-    expired: Option<u64>,
+    keepalive: &KeepaliveStanding,
     now: i64,
 ) -> Result<Vec<Condition>, AttentionError> {
     let snapshot = router.snapshot();
@@ -565,19 +576,13 @@ pub(crate) fn conditions(
         ("ledger", ledger_degraded),
         ("routing", router.writer_status().degraded),
     ] {
-        out.push(condition_for(
+        out.push(dated_condition(
+            state,
+            &mut seen,
             Kind::WriterDegraded,
             Subject::router(component),
-            None,
             degraded,
-            since_of(
-                state,
-                &mut seen,
-                Kind::WriterDegraded,
-                component,
-                degraded,
-                now,
-            ),
+            now,
             json!({ "component": component }),
         ));
     }
@@ -613,7 +618,7 @@ pub(crate) fn conditions(
             json!({ "cert_file": cert_file, "days_left": days_left, "expires": pair.not_after_ms }),
         ));
     }
-    if let Some(parked) = parked {
+    if let Some(parked) = ledger.map(|l| l.parked.as_slice()) {
         // The snapshot's pools, then the pools the parked rows name that the snapshot no longer holds: a pool deleted
         // under a parked record keeps the condition, labeled by its id and opening nothing, until the next start or
         // a replay lands the row.
@@ -768,65 +773,54 @@ pub(crate) fn conditions(
             }),
         ));
     }
-    if let Some(rows) = routing {
+    if let Some(rows) = ledger.map(|l| l.routing.as_slice()) {
         out.extend(routing_conditions(&snapshot, &pools_of, accounts, rows));
     }
-    if let Some(standing) = keepalive {
-        // `bus_gaps` counts since the start, so the item reads the last gap's instant: on the counter alone it would
-        // stand until a restart.
-        let gapped = standing.last_bus_gap_at.is_some_and(|at| now - at < DAY_MS);
-        out.push(condition_for(
-            Kind::KeepaliveBusGaps,
-            Subject::keepalive(KEEPALIVE),
-            None,
-            gapped,
-            since_of(
-                state,
-                &mut seen,
-                Kind::KeepaliveBusGaps,
-                KEEPALIVE,
-                gapped,
-                now,
-            ),
-            json!({ "gaps": standing.bus_gaps, "last_at": standing.last_bus_gap_at }),
+    // `bus_gaps` counts since the start, so the item reads the last gap's instant: on the counter alone it would
+    // stand until a restart.
+    let gapped = keepalive
+        .last_bus_gap_at
+        .is_some_and(|at| now - at < DAY_MS);
+    out.push(dated_condition(
+        state,
+        &mut seen,
+        Kind::KeepaliveBusGaps,
+        Subject::keepalive(KEEPALIVE),
+        gapped,
+        now,
+        json!({ "gaps": keepalive.bus_gaps, "last_at": keepalive.last_bus_gap_at }),
+    ));
+    for cap in &keepalive.caps {
+        let id = format!("{KEEPALIVE}.{}", cap.name);
+        let full = cap.max > 0 && cap.count * 100 >= cap.max * 90;
+        // NaN has no JSON number, so a max of 0 reads 0.
+        let pct = if cap.max == 0 {
+            0.0
+        } else {
+            cap.count as f64 / cap.max as f64
+        };
+        out.push(dated_condition(
+            state,
+            &mut seen,
+            Kind::KeepaliveCap,
+            Subject::keepalive(&id),
+            full,
+            now,
+            json!({ "cap": cap.name, "count": cap.count, "max": cap.max, "pct": pct }),
         ));
-        for cap in &standing.caps {
-            let id = format!("{KEEPALIVE}.{}", cap.name);
-            let full = cap.max > 0 && cap.count * 100 >= cap.max * 90;
-            // NaN has no JSON number, so a max of 0 reads 0.
-            let pct = if cap.max == 0 {
-                0.0
-            } else {
-                cap.count as f64 / cap.max as f64
-            };
-            out.push(condition_for(
-                Kind::KeepaliveCap,
-                Subject::keepalive(&id),
-                None,
-                full,
-                since_of(state, &mut seen, Kind::KeepaliveCap, &id, full, now),
-                json!({ "cap": cap.name, "count": cap.count, "max": cap.max, "pct": pct }),
-            ));
-        }
-        if let Some(expired) = expired {
-            // Without a pool that warms caches, an entry expiring between turns is the expected course.
-            let holds = expired > 0 && standing.warming;
-            out.push(condition_for(
-                Kind::ExpiredBetweenTurns,
-                Subject::keepalive(KEEPALIVE),
-                None,
-                holds,
-                since_of(
-                    state,
-                    &mut seen,
-                    Kind::ExpiredBetweenTurns,
-                    KEEPALIVE,
-                    holds,
-                    now,
-                ),
-                json!({ "expired": expired }),
-            ));
-        }
+    }
+    if let Some(expired) = ledger.map(|l| l.expired) {
+        // Without a pool that warms caches, an entry expiring between turns is the expected course.
+        let holds = expired > 0 && keepalive.warming;
+        out.push(dated_condition(
+            state,
+            &mut seen,
+            Kind::ExpiredBetweenTurns,
+            Subject::keepalive(KEEPALIVE),
+            holds,
+            now,
+            json!({ "expired": expired }),
+        ));
     }
     // A cleared state, a deleted account and an account that changed kind all lose their first-seen time, so the
     // next holding read dates the state afresh.

@@ -56,7 +56,9 @@ async fn every_subject_a_kind_applies_to_has_a_series_at_zero_while_nothing_hold
         series(&read(&attention, NOW)),
         [
             ("destination_spent", "business".to_string(), false),
+            ("expired_between_turns", "keepalive".to_string(), false),
             ("funding_required", "direct".to_string(), false),
+            ("keepalive_bus_gaps", "keepalive".to_string(), false),
             ("ledger_record_parked", "main".to_string(), false),
             ("meter_drift", "business".to_string(), false),
             ("poll_backoff", "business".to_string(), false),
@@ -73,7 +75,8 @@ async fn every_subject_a_kind_applies_to_has_a_series_at_zero_while_nothing_hold
         "every account carries its re-auth state, an API key its funding, and an OAuth account its refresh run, \
          its spent destinations, its walls, its slowed spans and its meter drift and, before any poll status exists, \
          its backoff, \
-         while every pool carries its parked records and its rounds without runway, and each writer its state"
+         while every pool carries its parked records and its rounds without runway, each writer its state, \
+         and the keepalive engine its bus gaps and its expiries between turns"
     );
 }
 
@@ -94,7 +97,9 @@ async fn each_loaded_pair_has_a_series_of_both_certificate_kinds_at_zero_while_n
             ("certificate_reload_failed", "admin.tls".to_string(), false),
             ("certificate_reload_failed", "proxy.tls".to_string(), false),
             ("destination_spent", "business".to_string(), false),
+            ("expired_between_turns", "keepalive".to_string(), false),
             ("funding_required", "direct".to_string(), false),
+            ("keepalive_bus_gaps", "keepalive".to_string(), false),
             ("ledger_record_parked", "main".to_string(), false),
             ("meter_drift", "business".to_string(), false),
             ("poll_backoff", "business".to_string(), false),

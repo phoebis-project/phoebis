@@ -358,10 +358,9 @@ pub async fn run_until(
         phoebis_attention::spawn(phoebis_attention::AttentionParts {
             bus: bus.clone(),
             clock: clock.clone(),
-            keepalive: Some(Arc::new(EngineFacts {
+            keepalive: Arc::new(EngineFacts {
                 engine: keepalive.clone(),
-                router: router_task.clone(),
-            })),
+            }),
             ledger: Some(ledger.clone()),
             router: router_task.clone(),
             store: store.clone(),

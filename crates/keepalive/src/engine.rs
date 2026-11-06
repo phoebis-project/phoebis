@@ -1538,6 +1538,16 @@ impl Engine {
         &self.parts.limits
     }
 
+    /// Whether a pool's policy warms caches, read off the router's snapshot as the scheduler reads a pool's policy
+    /// (`KeepalivePolicy::from_json`).
+    pub fn warming(&self) -> bool {
+        self.parts
+            .router
+            .snapshot()
+            .pools()
+            .any(|pool| KeepalivePolicy::from_json(&pool.keepalive_json).enabled)
+    }
+
     pub fn stats(&self) -> EngineStats {
         let inner = self.lock();
         EngineStats {

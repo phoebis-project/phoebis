@@ -1218,10 +1218,9 @@ async fn build_app_bounded(
     let (attention, attention_handles) = phoebis_attention::spawn(AttentionParts {
         bus: bus.clone(),
         clock: clock.clone(),
-        keepalive: Some(Arc::new(EngineFacts {
+        keepalive: Arc::new(EngineFacts {
             engine: keepalive.clone(),
-            router: router_handle.clone(),
-        })),
+        }),
         ledger: Some(ledger.clone()),
         router: router_handle.clone(),
         store: store.clone(),

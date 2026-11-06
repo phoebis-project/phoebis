@@ -92,7 +92,7 @@ impl Rig {
         phoebis_attention::spawn(AttentionParts {
             bus: self.bus.clone(),
             clock: self.clock(),
-            keepalive,
+            keepalive: keepalive.unwrap_or_else(|| Arc::new(Standing::idle())),
             ledger: Some(self.ledger.clone()),
             router: self.router.clone(),
             store: self.store.clone(),

@@ -75,9 +75,7 @@ pub trait KeepaliveFacts: Send + Sync {
 pub struct AttentionParts {
     pub bus: Bus,
     pub clock: Clock,
-    /// The keepalive engine's standing, `None` where a harness builds no engine, and then none of
-    /// `keepalive_bus_gaps`, `keepalive_cap` and `expired_between_turns` has a series.
-    pub keepalive: Option<Arc<dyn KeepaliveFacts>>,
+    pub keepalive: Arc<dyn KeepaliveFacts>,
     /// The ledger's degraded flag, its parked rows, the unpriced models its landing saw, the routing conditions its
     /// fold wrote and the expiries between turns its rollups count. `None` where a harness builds no ledger, and then
     /// `writer_degraded` for the ledger reads 0 and none of `ledger_record_parked`, `model_unpriced`, `meter_drift`,
@@ -110,7 +108,7 @@ pub enum AttentionError {
 /// The one reader both the metrics listener and the admin route ask, with the request-fed state the bus arm writes.
 pub struct Attention {
     clock: Clock,
-    keepalive: Option<Arc<dyn KeepaliveFacts>>,
+    keepalive: Arc<dyn KeepaliveFacts>,
     ledger: Option<Ledger>,
     router: RouterHandle,
     state: Mutex<ReaderState>,
@@ -159,10 +157,6 @@ impl Attention {
         ledger: Option<LedgerFacts>,
         now: i64,
     ) -> Result<Vec<Condition>, AttentionError> {
-        let (parked, routing, expired) = match ledger {
-            Some((parked, routing, expired)) => (Some(parked), Some(routing), Some(expired)),
-            None => (None, None, None),
-        };
         // The registry's reads come before the lock for the same reason: a stalled registry file holds the store's
         // connection mutex, and `observe` waits on this lock.
         let accounts = self.store.accounts()?;
@@ -171,7 +165,7 @@ impl Attention {
         // disk.
         let pairs = self.tls.as_ref().map(|tls| tls.pairs());
         // The engine's standing before the lock too, since it waits on the engine's own lock.
-        let keepalive = self.keepalive.as_ref().map(|k| k.standing());
+        let keepalive = self.keepalive.standing();
         let unpriced = self
             .ledger
             .as_ref()
@@ -184,13 +178,11 @@ impl Attention {
             &refresh_runs,
             &self.router,
             self.ledger.as_ref().is_some_and(Ledger::degraded),
-            parked.as_deref(),
+            ledger.as_ref(),
             &unpriced,
-            routing.as_deref(),
             pairs.as_deref(),
             self.usage.as_deref(),
-            keepalive.as_ref(),
-            expired,
+            &keepalive,
             now,
         )
     }
@@ -222,17 +214,21 @@ impl Attention {
 }
 
 /// What a read takes from the ledger: the parked rows, the fold's routing conditions and the expiries between turns.
-type LedgerFacts = (Vec<ParkedSummary>, Vec<RoutingCondition>, u64);
+struct LedgerFacts {
+    parked: Vec<ParkedSummary>,
+    routing: Vec<RoutingCondition>,
+    expired: u64,
+}
 
 /// The ledger's part of a read, on one connection. The expiries span `trailing_day_hours`, the hours the keepalive
 /// overview sums, so the item and the overview count the same rows.
 fn ledger_facts(c: &Connection, now: i64) -> Result<LedgerFacts, LedgerError> {
     let (from, to) = trailing_day_hours(now);
-    Ok((
-        parked_summary(c)?,
-        routing_conditions(c)?,
-        read_expired_between_turns(c, from, to)?,
-    ))
+    Ok(LedgerFacts {
+        parked: parked_summary(c)?,
+        routing: routing_conditions(c)?,
+        expired: read_expired_between_turns(c, from, to)?,
+    })
 }
 
 /// The bus arm's task, so the binary's teardown can end it.
