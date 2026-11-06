@@ -8170,8 +8170,7 @@ fn the_breakdown_answers_refused_and_refusals_per_group() {
 /// The refused rows stay in the window that picks a session's newest request, so a session whose every request was
 /// refused is still listed.
 #[test]
-fn a_sessions_count_leaves_its_refused_requests_out_and_a_session_of_refusals_alone_is_still_listed(
-) {
+fn a_session_of_refusals_alone_is_still_listed() {
     let db = LedgerDb::open_in_memory().unwrap();
     plant_asked_and_refused(&db);
     let sessions = db
