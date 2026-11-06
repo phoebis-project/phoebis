@@ -1098,7 +1098,8 @@ struct SealedRow {
 }
 
 impl SealedRow {
-    /// The plaintext is a credential or a secret, so it is wiped as soon as the open has proved the key.
+    /// The plaintext is a credential, a secret or a recipe body, so it is wiped as soon as the open has proved the
+    /// key.
     fn opens_under(&self, key: &StorageKey) -> bool {
         crypto::open(key, &self.aad, &self.nonce, &self.sealed)
             .map(Zeroizing::new)

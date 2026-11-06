@@ -171,7 +171,7 @@ pub enum Settled {
 }
 
 /// An attempt row's outcome word, decoded once at the row read and read into `Settled` with the row's detail. Any
-/// other stored word reads as `Failed` at the row read, and `Superseded` under that detail.
+/// other stored word reads as `Failed` at the row read, and `Superseded` under the `superseded` detail.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OutcomeWord {
     Committed,
