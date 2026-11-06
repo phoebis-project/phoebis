@@ -5,7 +5,7 @@ import type { Account, KeepaliveOverview, Overview, RequestLog, Session, Setting
 import { useAppSettings } from '@/app/settings';
 import { Donut, DonutLegend } from '@/components/charts/Donut';
 import { Sparkline } from '@/components/charts/Sparkline';
-import { accountColor, accountSlots } from '@/components/charts/theme';
+import { PROBE_SERIES, accountColor, accountSlots } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { StatusBadge } from '@/components/ui/AttemptTrail';
 import { AttentionLine } from '@/components/ui/AttentionLine';
@@ -414,11 +414,12 @@ function RecentTable({ accounts, rows, error, reading, settings }: { accounts: A
  * recipes.
  */
 function SessionsSummary({ activePins, expireAfterSeconds, keepalive, now, sessions, warming }: { activePins: number | null; expireAfterSeconds: number | null; keepalive: Loaded<KeepaliveOverview>; now: number; sessions: Session[] | null; warming: boolean }) {
-  if (!sessions || activePins === null) return <Skeleton height={80} />;
-  const live = sessions.flatMap((session) => {
+  const built = useMemo(() => (sessions ?? []).map((session) => {
     const lines = sessionLines(session, []);
-    return isFinished(session, lines) || !withinExpiry(session, expireAfterSeconds, now) ? [] : [{ lines, session }];
-  });
+    return { finished: isFinished(session, lines), lines, session };
+  }), [sessions]);
+  if (!sessions || activePins === null) return <Skeleton height={80} />;
+  const live = built.filter((r) => !r.finished && withinExpiry(r.session, expireAfterSeconds, now));
   const totals = lineTotals(live);
   return (
     <div className="sess-summary">
@@ -460,9 +461,9 @@ function KeepaliveEngine({ now, read, warming }: { now: number; read: Loaded<Kee
   const k = read.data;
   const failed = failedFirst(read);
   if (k === null && !failed) return <Skeleton height={140} />;
-  const cap = (limit: { count: number; max: number }) => `${fmtInt(limit.count)} of ${fmtInt(limit.max)}`;
+  const cap = (limit: { count: number; max: number }, fmt = fmtInt) => `${fmt(limit.count)} of ${fmt(limit.max)}`;
   const probes = k?.probes24h ?? null;
-  const total = probes ? probes.ok + probes.migrated + probes.held + probes.skipped + probes.failed : 0;
+  const total = probes ? PROBE_SERIES.reduce((n, s) => n + probes[s.key], 0) : 0;
   const gap = k?.lastBusGapAt ?? null;
   return (
     <section className="sess-summary__engine">
@@ -479,7 +480,7 @@ function KeepaliveEngine({ now, read, warming }: { now: number; read: Loaded<Kee
         </div>
         <div>
           <dt>Retained</dt>
-          <dd className="num">{k ? `${fmtMiB(k.limits.retainedBytes.count)} of ${fmtMiB(k.limits.retainedBytes.max)}` : '-'}</dd>
+          <dd className="num">{k ? cap(k.limits.retainedBytes, fmtMiB) : '-'}</dd>
         </div>
       </dl>
       <h3 className="section-title">Cache probes, 24h</h3>
