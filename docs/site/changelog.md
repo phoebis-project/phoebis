@@ -131,7 +131,10 @@ earlier pin names none ([Moves](routing.md#moves)). A shedding round leaves out 
 no burn on the fired window, and marks a pin in place of a covering one only where its burn covers a tenth of what is
 left to shed, so a round never rewrites a session for a sliver ([Moves](routing.md#moves)). A move fits a destination
 only where its room covers half the moved pin's burn beyond the pin's own, a fresh placement keeping the ceiling, and an
-ended pin's burn leaves the projection until its next request ([Moves](routing.md#moves)).
+ended pin's burn leaves the projection until its next request ([Moves](routing.md#moves)). A window's round waits a
+quarter of the time from its first reading over the ceiling to the wall its burn projects, at most two burn averages, so
+a burst toward a near wall fires early and a slow climb waits, and the routing log names the wall
+([Moves](routing.md#moves)).
 
 With `keepalive.enabled` on a pool the router keeps a replayable copy of every eligible request a session sends and,
 shortly before the cache entry would expire, sends a probe that reads it ([Keepalive](keepalive.md)). The policy's

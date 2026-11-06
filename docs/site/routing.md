@@ -479,13 +479,15 @@ window the account's set lacks is not projected, since nothing is read or charge
 the earlier of its reset and the account's subscription end. A weekly window's, the 7-day window's and a model's own
 week's, is the earliest of five hours from now, its reset and the end, so a weekly projection looks five hours ahead at
 most. A 5-hour reading past its reset with no new reset looks five hours ahead too, since the window opens with the next
-request. `burn_average_seconds` (default 1800) is the time constant of each session's burn average, the figure the
-projection carries forward (see **Burn**, below). A burn the cost model cannot price adds nothing, so an account whose
-plan the cost model does not price (a free organization, a Team or Enterprise organization whose tier the cost model
-does not hold, or a tier the profile has not named) projects its prediction alone. An API-key account has no plan window
-and no projection, and neither has a usage-based seat, so the plan readings a seat kept from before it converted project
-nothing. A pin whose agent ended (see **Shed**, below) adds no burn until its next request, since its agent sends no new
-turn, while the pin and its cache stay.
+request. A projection's wall is the instant the burn it implies over the time to its horizon takes the prediction to
+1.0, past the horizon where the projection reads under 1.0 there, and a projection with no burn names none (see
+**Shed**, below). `burn_average_seconds` (default 1800) is the time constant of each session's burn average, the figure
+the projection carries forward (see **Burn**, below). A burn the cost model cannot price adds nothing, so an account
+whose plan the cost model does not price (a free organization, a Team or Enterprise organization whose tier the cost
+model does not hold, or a tier the profile has not named) projects its prediction alone. An API-key account has no plan
+window and no projection, and neither has a usage-based seat, so the plan readings a seat kept from before it converted
+project nothing. A pin whose agent ended (see **Shed**, below) adds no burn until its next request, since its agent
+sends no new turn, while the pin and its cache stay.
 
 **The demand** What the slow-down holds back is still wanted: a session held before each request burns less than it asks
 to, and the moment the hold lifts it burns at its own pace again, so the router keeps two readings of a session's burn.
@@ -599,19 +601,23 @@ readings project nothing (see **The projection**, above). The windows are tested
 then each model week a pin of the pool on the account draws, and the first that crosses fires and is the round's window.
 A weekly window, and the 5-hour window of a pool whose `slow_down` is off, crosses when the account's projection on it
 reads over `window_ceiling` at the window's horizon (see **The projection**, above) at a pinned selection and still
-reads over at a pinned selection a wait later, a quarter of the time from the first reading over to the window's horizon
-and at most `shed_dwell_seconds`, since one large turn's charge moves the prediction before the burn average has
-absorbed it. The wait's stamp, the first reading over, belongs to the window whose reset it was set under, so a reading
-whose reset lies an hour or more from that one, earlier or later, opens a new window whose wait starts at that reading,
-while a smaller move is the upstream's drift inside one window. The wait holds the round back and nothing else: the
-request is served as before, a mark already standing moves at its pin's next request, and a window inside its wait
-yields to the next in the order. The 5-hour window of a pool whose `slow_down` is on crosses when the stretch the
-slow-down reads has stood over `slow_down_stretch_seconds` for its safety wait, and the round's horizon moves earlier by
-the threshold (see [Slow-down](#slow-down), below). No 5-hour round fires while the window is younger than twice
-`burn_average_seconds` (an hour at the default), whatever fired the trigger, because each session's burn average still
-carries the previous window's last half hour over the reset and the projection would apply that rate to a horizon of up
-to five hours. While the hold runs, the routing log's record of the selection reads the shed rule `no` with the window's
-age (`age_five_hour`) against the hold (`hold_five_hour`), the stamp and the wait keep running, a weekly window past its
+reads over at a pinned selection a wait later, a quarter of the time from the first reading over to the window's wall as
+that selection reads it, and at most twice `burn_average_seconds` (an hour at the default), the cap alone while the
+projection's burn reads nothing. A burst toward a near wall fires early and a slow climb waits, and one large turn's
+charge, which moves the prediction before the burn average has absorbed it, fires no round at the selection it lands on,
+since the wait starts there. The routing log's record of the selection names each projected window's wall beside its
+horizon, `wall_seven_day` beside `horizon_seven_day` for the week, and no wall where the window's burn reads nothing.
+The wait's stamp, the first reading over, belongs to the window whose reset it was set under, so a reading whose reset
+lies an hour or more from that one, earlier or later, opens a new window whose wait starts at that reading, while a
+smaller move is the upstream's drift inside one window. The wait holds the round back and nothing else: the request is
+served as before, a mark already standing moves at its pin's next request, and a window inside its wait yields to the
+next in the order. The 5-hour window of a pool whose `slow_down` is on crosses when the stretch the slow-down reads has
+stood over `slow_down_stretch_seconds` for its safety wait, and the round's horizon moves earlier by the threshold (see
+[Slow-down](#slow-down), below). No 5-hour round fires while the window is younger than twice `burn_average_seconds` (an
+hour at the default), whatever fired the trigger, because each session's burn average still carries the previous
+window's last half hour over the reset and the projection would apply that rate to a horizon of up to five hours. While
+the hold runs, the routing log's record of the selection reads the shed rule `no` with the window's age
+(`age_five_hour`) against the hold (`hold_five_hour`), the stamp and the wait keep running, a weekly window past its
 wait fires in the 5-hour window's place, and a standing mark still moves. The weekly windows take no hold, since the
 same burst after a weekly reset is a small share of a week over a weekly horizon. A weekly window's horizon lies five
 hours ahead at most, so a weekly wall is shed only in its last five hours, when the gate also stops placing new sessions

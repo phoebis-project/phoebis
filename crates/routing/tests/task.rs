@@ -9189,13 +9189,13 @@ fn no_round(events: &[phoebis_routing::RouterEvent]) -> bool {
         .any(|event| matches!(event, phoebis_routing::RouterEvent::SheddingRound { .. }))
 }
 
-/// Stamps the 5-hour window of `account` on the pool `p` as over the ceiling since a dwell of the pool before `now`,
-/// so the selection at `now` finds it past its wait and a round case reads its round at its first selection over the
-/// ceiling.
+/// Stamps the 5-hour window of `account` on the pool `p` as over the ceiling since two burn averages of the pool before
+/// `now`, the wait's cap, so the selection at `now` finds it past its wait whatever its wall and a round case reads its
+/// round at its first selection over the ceiling.
 async fn past_the_wait(handle: &RouterHandle, store: &Store, account: &str, now: i64) {
-    let dwell = shed_dwell_ms(&store.pool("p").unwrap().expect("the pool"));
+    let cap = 2 * phoebis_routing::burn_average_ms(&store.pool("p").unwrap().expect("the pool"));
     handle
-        .stamp_projection_over("p", account, FIVE_HOUR, now - dwell, None)
+        .stamp_projection_over("p", account, FIVE_HOUR, now - cap, None)
         .await;
 }
 

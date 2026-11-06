@@ -2703,6 +2703,17 @@ pub(crate) fn horizon_of(window: &str, reading: &WindowReading, end: Option<i64>
     end.map_or(horizon, |end| horizon.min(end)).max(now)
 }
 
+/// The instant the burn `projection` implies over the time to its horizon, `(at_horizon - predicted) / (horizon -
+/// now)`, takes the window from its prediction to the wall, 1.0. `None` where that burn reads at or under zero, or
+/// where the horizon is at or before `now`, which leaves no span to read a burn over. A tiny burn's far wall saturates.
+fn wall_of(projection: &Projection, now: i64) -> Option<i64> {
+    if projection.horizon <= now {
+        return None;
+    }
+    let burn = (projection.at_horizon - projection.predicted) / (projection.horizon - now) as f64;
+    (burn > 0.0).then(|| now.saturating_add(((1.0 - projection.predicted) / burn).round() as i64))
+}
+
 /// Whether a runway of `runway_ms` from `now` reaches past `reset`: such a runway is displayed as unbounded.
 pub(crate) fn passes_reset(runway_ms: i64, reset: Option<i64>, now: i64) -> bool {
     reset.is_some_and(|reset| now.saturating_add(runway_ms) > reset)
@@ -3358,6 +3369,9 @@ fn fit_key(kind: &str, window: &str) -> Option<&'static str> {
         ("horizon", FIVE_HOUR) => "horizon_five_hour",
         ("horizon", SEVEN_DAY) => "horizon_seven_day",
         ("horizon", SEVEN_DAY_FABLE) => "horizon_seven_day_fable",
+        ("wall", FIVE_HOUR) => "wall_five_hour",
+        ("wall", SEVEN_DAY) => "wall_seven_day",
+        ("wall", SEVEN_DAY_FABLE) => "wall_seven_day_fable",
         ("projection", FIVE_HOUR) => "projection_five_hour",
         ("projection", SEVEN_DAY) => "projection_seven_day",
         ("projection", SEVEN_DAY_FABLE) => "projection_seven_day_fable",
@@ -3702,7 +3716,6 @@ fn move_of<'a>(
             && !state.in_overage(&c.account_id, now, fallback_ms)
             && holds_allowance(state, snapshot, &c.account_id, window, now)
     };
-    let dwell_ms = shed_dwell_ms(pool);
 
     // A spent window is not a hover: the pinned account cannot serve the request until the window resets, so
     // the pin moves outside the round's budget as soon as a sibling is known to hold allowance, rather than
@@ -4001,8 +4014,9 @@ fn move_of<'a>(
     // threshold after the safety wait, every other window's the projection at its horizon over the ceiling after the
     // projection's wait, a window inside its wait yielding to the next, as a 5-hour window inside its hold does. A wait
     // or the hold holds back the round alone, so a standing mark moves below while a window waits or is held as it does
-    // under a fired one. The line names every projection it read whether or not one fired, with the stamp and the wait
-    // of each window inside its wait and the 5-hour window's age and hold inside the hold.
+    // under a fired one. The line names every projection it read whether or not one fired, with its horizon and the wall
+    // its burn reaches, the stamp and the wait of each window inside its wait and the 5-hour window's age and hold
+    // inside the hold.
     let source = current.account_id.as_str();
     let tier = snapshot.priced_tier(source).unwrap_or_default();
     let projections = projections_of(
@@ -4059,7 +4073,7 @@ fn move_of<'a>(
         young,
         &windows,
         &|window| state.projection_over_since(&pool.id, source, window),
-        dwell_ms,
+        burn_average_ms(pool),
         now,
     );
     let mut facts = Vec::new();
@@ -4073,6 +4087,9 @@ fn move_of<'a>(
         };
         facts.push(Fact::number(at, projection.at_horizon).unit("percent"));
         facts.push(Fact::int(until, projection.horizon).unit("time"));
+        if let (Some(wall), Some(key)) = (wall_of(projection, now), fit_key("wall", window)) {
+            facts.push(Fact::int(key, wall).unit("time"));
+        }
         if let (Some(waits), Some(since), Some(wait)) = (
             waiting.iter().find(|waits| waits.window == *window),
             fit_key("over_since", window),
@@ -4689,9 +4706,15 @@ struct Waiting {
 /// threshold puts that horizon at or before `now` and fires nothing, since the slow-down alone holds the window to its
 /// reset, and an account with no read fires nothing on the window. Every other window's test is the projection at its
 /// horizon over the window's ceiling, strictly, on the achieved burn, and it fires once the window has read over since
-/// `stamp` names for `min((horizon - over_since) / 4, dwell_ms)`: a quarter of the time from the first reading over to
-/// the horizon read now, at most the dwell, so one large turn's charge, which moves the prediction before the burn
-/// average has absorbed it, does not fire a round on its own. A window inside its wait yields to the next.
+/// `stamp` names for `min((wall - over_since) / 4, 2 * burn_average_ms)`, `wall` being the instant the projection's
+/// burn reaches 1.0 as `wall_of` reads it now and the wait the cap alone while no burn reaches it, so a burst toward a
+/// near wall fires early, a slow climb waits, and one large turn's charge, which moves the prediction before the burn
+/// average has absorbed it, fires no round at the selection it lands on. Replayed over the recorded projection at the
+/// default burn average, this wait fires 12 rounds while the window reads under the ceiling (2 on a window still under
+/// it at the horizon) where a quarter of the time to the horizon capped at the dwell fires 56 (33), falsely fires on 1
+/// window of 32 against 11, costs 170,044 tokens of rewrites and missed walls against 6,990,451, and fires 2 minutes
+/// before a wall the horizon's quarter misses and 159 minutes before another. A window inside its wait yields to the
+/// next.
 ///
 /// A 5-hour window whose age `young` names, under twice the pool's burn average, fires under neither test and yields to
 /// the next window as a waiting one does, since the burn average still carries the previous window's burst over the
@@ -4705,7 +4728,7 @@ fn trigger_of(
     young: Option<i64>,
     windows: &[&'static str],
     stamp: &dyn Fn(&str) -> Option<i64>,
-    dwell_ms: i64,
+    burn_average_ms: i64,
     now: i64,
 ) -> TriggerRead {
     let mut waiting = Vec::new();
@@ -4740,7 +4763,9 @@ fn trigger_of(
             .filter(|projection| projection.at_horizon > limit)?;
         // The shed rule stamped every window over the ceiling before the test, so a missing stamp starts the wait now.
         let since = stamp(window).unwrap_or(now);
-        let wait_ms = ((projection.horizon - since) / 4).min(dwell_ms);
+        let cap = burn_average_ms.saturating_mul(2);
+        let wait_ms =
+            wall_of(projection, now).map_or(cap, |wall| (wall.saturating_sub(since) / 4).min(cap));
         if now - since < wait_ms {
             waiting.push(Waiting {
                 window,
