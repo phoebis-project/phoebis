@@ -1055,7 +1055,7 @@ await forView('/', async () => {
 let m;
 await forView('/', async () => {
 m = await mount('/');
-expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost, 24h', 'Error rate, 24h', 'Refused, 24h', '7d remaining', 'Fable week remaining', 'remaining', 'primary', 'nightly', 'Cooling down', 'Overage active', 'Needs re-auth', 'Recent requests', 'Sticky pins and cache-warming agents', 'active pins', 'Fable', 'none']);
+expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost, 24h', 'Error rate, 24h', 'Refused, 24h', '7d remaining', 'Fable week remaining', 'remaining', 'primary', 'nightly', 'Cooling down', 'Overage active', 'Needs re-auth', 'Recent requests', 'Sessions, their agents and the engine that keeps their caches warm', 'active pins', 'Keepalive engine', 'of 128', 'of 1,024', 'Retained', 'of 256 MiB', 'Cache probes, 24h', 'ok (', 'expired between turns', 'bus gaps', 'Fable', 'none']);
 {
   const tiles = [...m.container.querySelectorAll('.stat-grid > .stat')];
   const read = (t) => [t?.querySelector('.stat__label')?.textContent ?? null, t?.querySelector('.stat__value')?.textContent ?? null, t?.querySelector('.stat__note')?.textContent ?? null];
@@ -1165,6 +1165,117 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   const primary = [...m.container.querySelectorAll('a.account-mini')].find((c) => idOf(c) === 'primary');
   const cooldownLine = [...(primary?.querySelectorAll('.account-mini__foot .muted') ?? [])].map((e) => e.textContent?.trim() ?? '').find((t) => t.startsWith('cooldown ends'));
   results.push({ name: "/ an account's cooldown line reads the row that cools it, never its fast lane's", ok: /^cooldown ends in 5[34]m$/.test(cooldownLine ?? ''), missing: [cooldownLine ?? 'no cooldown line on primary'] });
+}
+{
+  // The Sessions card's grid counts the live sessions' lines as the Sessions view's summary line counts the rows its
+  // bare address keeps, both read on the story's instant: 35 agents, the lines less the released ones with main counted
+  // where no line names it, and 10 busy, 6 idle and 4 parked by lifecycle word. The three finished sessions stay out of
+  // both, and nightly's notebook row (`sessionSpec[19]`), whose main reads unreported, counts in none of the three.
+  const cardOf = (page) => [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === 'Sessions');
+  const dash = await mount('/', { now: CLOCK_ORIGIN });
+  const grid = Object.fromEntries([...(cardOf(dash)?.querySelectorAll('.sess-summary__grid > div') ?? [])].map((d) => [d.querySelector('dt')?.textContent ?? '', d.querySelector('dd')?.textContent ?? '']));
+  dash.unmount();
+  const view = await mount('/sessions', { now: CLOCK_ORIGIN });
+  const subtitle = view.container.querySelector('.card--table .card__subtitle')?.textContent ?? '';
+  view.unmount();
+  const line = /^(\d+) agents?: (\d+) busy, (\d+) idle, (\d+) parked · /.exec(subtitle);
+  const summary = line === null ? null : { Agents: line[1], Busy: line[2], Idle: line[3], Parked: line[4] };
+  results.push({
+    name: "/ the Sessions card's Agents, Busy, Idle and Parked count the live sessions' lines as the Sessions view's summary line counts them",
+    ok: JSON.stringify(grid) === JSON.stringify({ Agents: '35', Busy: '10', Idle: '6', Parked: '4' }) && JSON.stringify(summary) === JSON.stringify(grid),
+    missing: [JSON.stringify(grid), subtitle || 'no summary line'],
+  });
+}
+{
+  // The Keepalive engine block reads the mock's keepalive overview (`KEEPALIVE_OVERVIEW` in mock/operations.ts): the 18
+  // sessions the engine holds and its 32 agent records, one per recipe the story writes, against the bootstrap file's
+  // caps of 128 and 1,024, the retained prompts hand-set at 92 percent of 256 MiB, the day's probes `PROBES_24H` (225
+  // ok of 295), the 50 expiries between turns the ledger rows of the day hold and the three bus gaps, the last two hours
+  // back. Two of the seeded pools keep caches warm (`all` and `work` in mock/pools.ts), so the expired part takes the
+  // warning ink, and with every pool's policy off it takes none. The last gap is inside the day, so the bus gaps part
+  // takes the warning ink with that gap's instant on its hover. The card is read at the story's own instant, which the
+  // mock anchors as it loads, a moment past the clock's origin, so the gap lies two hours back.
+  const overview = await api.getKeepaliveOverview();
+  const storyNow = Date.parse(overview.lastBusGapAt) + 2 * 3_600_000;
+  const readCard = async () => {
+    const page = await mount('/', { now: storyNow });
+    const engine = page.container.querySelector('.sess-summary__engine');
+    const parts = [...(engine?.querySelectorAll('.sess-summary__line > span') ?? [])].map((s) => ({ text: s.textContent, title: s.getAttribute('title'), warning: s.classList.contains('is-warning') }));
+    const got = {
+      bar: engine?.querySelector('.probe-bar')?.getAttribute('aria-label') ?? null,
+      caps: [...(engine?.querySelectorAll('.sess-summary__caps > div') ?? [])].map((d) => [d.querySelector('dt')?.textContent ?? '', d.querySelector('dd')?.textContent ?? '', d.getAttribute('title')]),
+      heads: [...(engine?.querySelectorAll('h3') ?? [])].map((h) => h.textContent),
+      line: engine?.querySelector('.sess-summary__line')?.textContent ?? null,
+      parts,
+      probes: engine?.querySelector('.sess-summary__probes')?.textContent ?? null,
+    };
+    page.unmount();
+    return got;
+  };
+  const warm = await readCard();
+  const { listPools } = api;
+  api.listPools = async () => (await listPools.call(api)).map((p) => ({ ...p, keepalive: { ...p.keepalive, enabled: false } }));
+  const cold = await readCard();
+  api.listPools = listPools;
+  const want = {
+    bar: 'Probes in the last 24h: 225 ok, 18 migrated, 4 held, 45 skipped, 3 failed',
+    caps: [
+      ['Sessions', '18 of 128', null],
+      ['Agent records', '32 of 1,024', 'A released record keeps its slot for one cache TTL after the release'],
+      ['Retained', '235.5 MiB of 256 MiB', null],
+    ],
+    heads: ['Keepalive engine', 'Cache probes, 24h'],
+    line: 'expired between turns 50 · bus gaps 3',
+    parts: [
+      { text: 'expired between turns 50', title: null, warning: true },
+      { text: 'bus gaps 3', title: `The last gap was 2h ago, at ${fmtAbsolute(overview.lastBusGapAt)}.`, warning: true },
+    ],
+    probes: '225 ok (76%) of 295',
+  };
+  results.push({
+    name: "/ the Sessions card's Keepalive engine block reads the caps, the day's probes over their bar, and the line whose expired part takes the warning ink while a pool warms caches and whose bus gaps part takes it while the last gap is inside the day, its instant on hover",
+    ok: JSON.stringify(warm) === JSON.stringify(want) && JSON.stringify(cold.parts.map((p) => p.warning)) === JSON.stringify([false, true]),
+    missing: [JSON.stringify(warm), JSON.stringify(cold.parts)],
+  });
+}
+{
+  // A keepalive overview read whose first answer failed leaves the hero and the grid to the sessions, and the engine
+  // block reads a dash in each cap, the probes line and the line, under the notice that names the read, whose Try again
+  // reads the overview again.
+  failNextCall('getKeepaliveOverview', '/admin/keepalive/overview', 'ledger locked');
+  const page = await mount('/', { now: CLOCK_ORIGIN });
+  const engine = () => page.container.querySelector('.sess-summary__engine');
+  const read = () => ({
+    caps: [...(engine()?.querySelectorAll('.sess-summary__caps dd') ?? [])].map((dd) => dd.textContent),
+    line: engine()?.querySelector('.sess-summary__line')?.textContent ?? null,
+    notice: engine()?.querySelector('.sess-summary__notice')?.textContent ?? null,
+    probes: engine()?.querySelector('.sess-summary__probes')?.textContent ?? null,
+  });
+  const failed = read();
+  const notice = engine()?.querySelector('.sess-summary__notice');
+  const role = notice?.getAttribute('role') ?? null;
+  const drawn = { grid: page.container.querySelectorAll('.sess-summary__grid > div').length, hero: page.container.querySelector('.sess-summary__hero .stat__value')?.textContent ?? null };
+  const spy = countCalls('getKeepaliveOverview');
+  const retry = [...(notice?.querySelectorAll('button') ?? [])].find((b) => b.textContent === 'Try again');
+  retry?.click();
+  await page.settle();
+  const again = read();
+  const calls = spy.calls.length;
+  spy.restore();
+  page.unmount();
+  results.push({
+    name: "/ a failed first keepalive overview read draws a dash in the engine block's caps, probes line and line under a notice naming the read, the hero and the grid drawn, and Try again reads it again",
+    ok:
+      JSON.stringify([failed.caps, failed.probes, failed.line]) === JSON.stringify([['-', '-', '-'], '-', '-']) &&
+      (failed.notice ?? '').startsWith('Could not load the keepalive overview: ledger locked') &&
+      role === 'status' &&
+      drawn.grid === 4 &&
+      drawn.hero === '41' &&
+      retry !== undefined &&
+      calls === 1 &&
+      JSON.stringify([again.caps[0], again.notice]) === JSON.stringify(['18 of 128', null]),
+    missing: [JSON.stringify(failed), String(role), JSON.stringify(drawn), `Try again ${retry !== undefined}, ${calls} reads`, JSON.stringify(again)],
+  });
 }
 {
   // Each remaining list reads in its ring's order, the account with the most of its own window left first, so the
@@ -2430,6 +2541,8 @@ await forView('/quota', async () => {
 });
 await readsAgain('/quota', 'listAccounts', 5_000);
 await readsAgain('/', 'getOverview', 30_000);
+await readsAgain('/', 'getKeepaliveOverview', 30_000);
+await readsAgain('/', 'listPools', 30_000);
 await forView('/', async () => {
   const page = await mount('/', { now: CLOCK_ORIGIN });
   const line = () => page.container.querySelector('.dash__asof');
@@ -2451,22 +2564,29 @@ await forView('/', async () => {
   page.unmount();
 });
 await forView('/', async () => {
-  // The line reads the oldest of the page's five reads, so a refresh of the sessions that fails holds the line at the
-  // sessions' last answer and names them, though the 24-hour figures refreshed.
-  const page = await mount('/', { now: CLOCK_ORIGIN });
-  const line = () => page.container.querySelector('.dash__asof');
-  const first = line()?.getAttribute('title') ?? null;
-  failNextCall('listSessions', '/admin/sessions', 'store busy');
-  tick(30_000);
-  await page.settle();
-  const text = line()?.textContent ?? '';
-  const held = line()?.getAttribute('title') ?? null;
+  // The line reads the oldest of the page's seven reads, so a refresh that fails holds the line at the failed read's
+  // last answer and names it, though the 24-hour figures refreshed: the sessions, and the keepalive overview and the
+  // pools the Sessions card reads.
+  const read = [];
+  for (const [method, path, name] of [
+    ['listSessions', '/admin/sessions', 'sessions'],
+    ['getKeepaliveOverview', '/admin/keepalive/overview', 'keepalive overview'],
+    ['listPools', '/admin/pools', 'pools'],
+  ]) {
+    const page = await mount('/', { now: CLOCK_ORIGIN });
+    const line = () => page.container.querySelector('.dash__asof');
+    const first = line()?.getAttribute('title') ?? null;
+    failNextCall(method, path, 'store busy');
+    tick(30_000);
+    await page.settle();
+    read.push({ first, held: line()?.getAttribute('title') ?? null, name, text: line()?.textContent ?? '' });
+    page.unmount();
+  }
   results.push({
-    name: '/ the as-of line names a failed read and reads the oldest of the five',
-    ok: first !== null && text.startsWith('Last refresh of the sessions failed: store busy. Showing data as of ') && held === first,
-    missing: [text || 'no line', `title ${first} then ${held}`],
+    name: '/ the as-of line names a failed read and reads the oldest of the seven',
+    ok: read.every((r) => r.first !== null && r.text.startsWith(`Last refresh of the ${r.name} failed: store busy. Showing data as of `) && r.held === r.first),
+    missing: read.map((r) => JSON.stringify(r)),
   });
-  page.unmount();
 });
 await forView('/', async () => {
   // A read whose first load failed holds nothing to be as old as, and its card names the error already.

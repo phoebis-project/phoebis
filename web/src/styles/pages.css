@@ -212,6 +212,72 @@
   font-weight: 600;
 }
 
+.sess-summary__engine {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline);
+}
+
+.sess-summary__engine .section-title {
+  margin: 0;
+}
+
+.sess-summary__engine .section-title:not(:first-child) {
+  margin-top: 6px;
+}
+
+/* One cap to a row: a quarter of the card's narrow column, the grid's track, cannot hold a figure such as
+   "235.5 MiB of 256 MiB" on one line. The type is the grid's, whose rules the Pools page's stats share. */
+.sess-summary__caps {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+}
+
+.sess-summary__caps > div {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.sess-summary__caps dt {
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.sess-summary__caps dd {
+  margin: 0;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.sess-summary__probes,
+.sess-summary__line {
+  font-size: 12.5px;
+}
+
+.sess-summary__line {
+  color: var(--ink-2);
+}
+
+.sess-summary__line .is-warning {
+  color: var(--warning-ink);
+}
+
+/* A read that failed, its Try again inline, in the Sessions view's notice ink. */
+.sess-summary__notice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  font-size: 12.5px;
+  color: var(--critical-ink);
+}
+
 /* The shared `.sub` rule reaches table cells alone, so a tile's line under its figure takes the same type here. */
 .pool__stats .sub {
   display: block;

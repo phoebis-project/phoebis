@@ -376,7 +376,18 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
   test(`each pool's warnings are what the eight checks give on its own settings and its largest live cohort, at ${at}`, async () => {
     const s = await story;
     const poolOfKey = new Map(s.keys.map((k) => [k.id, k.poolId]));
-    const cohortOf = (poolId) => Math.max(0, ...s.sessions.filter((x) => x.pinned && poolOfKey.get(x.keyId) === poolId).map((x) => x.agents));
+    const recipes = await s.api.listKeepaliveRecipes();
+    // The route's cohort is the most agents of one session among the pins under the pool's keys: here the pins the
+    // recipes hold and the pinned rows' lines.
+    const cohortOf = (poolId) => {
+      const agents = new Map();
+      const add = (keyId, sessionId, agentId) => {
+        if (poolOfKey.get(keyId) === poolId) agents.set(`${keyId}|${sessionId}`, (agents.get(`${keyId}|${sessionId}`) ?? new Set()).add(agentId));
+      };
+      for (const r of pinnedRecipesOf(s, recipes)) add(r.keyId, r.sessionId, r.agentId);
+      for (const x of s.sessions.filter((x) => x.pinned)) for (const c of x.agentContexts) add(x.keyId, x.sessionId, c.agentId);
+      return Math.max(0, ...[...agents.values()].map((a) => a.size));
+    };
     for (const p of s.pools) assert.deepEqual(p.warnings, s.lib.poolWarnings(p, cohortOf(p.id)), p.id);
     const codes = new Map(s.pools.map((p) => [p.id, p.warnings.map((w) => w.code)]));
     assert.deepEqual([codes.get('all'), codes.get('jobs'), codes.get('work')], [['affinity_under_cache_ttl', 'ceiling_low'], ['spent_moves_off', 'warm_never'], []]);
@@ -795,7 +806,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual([held.requests, held.lastRequestAt], [own.length, own[0].at], "the row's figures are its own rows'");
     assert.equal(held.lastRequestAt, holders[0].at, "the holder's last request ran on this session");
     assert.ok(Date.parse(held.lastRequestAt) < created, 'before the live key');
-    assert.deepEqual([held.lastUsedAt, held.pinned, held.agents], [null, false, 0], 'no pin and no activity of its own past the ledger');
+    assert.deepEqual([held.lastUsedAt, held.pinned], [null, false], 'no pin and no activity of its own past the ledger');
     assert.ok(Date.parse(held.lastRequestAt) + s.settings.sessions.expireAfterSeconds * 1000 > s.now, 'still inside the session expiry');
     assert.ok(s.sessions.some((x) => !x.historical && x.keyId === 'desktop' && x.sessionId === held.sessionId), 'the live key holds the same session id');
   });
@@ -944,8 +955,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const poolOf = new Map(s.keys.map((k) => [k.id, k.poolId]));
     const recipes = await s.api.listKeepaliveRecipes();
     const live = pinnedRecipesOf(s, recipes);
-    // A pinned session whose main no recipe warms holds one pin per agent all the same.
-    const unwarmed = (poolId, accountId) => sum(s.sessions.filter((x) => x.pinned && mainUnwarmed(recipes, x) && poolOf.get(x.keyId) === poolId && (accountId === undefined || x.accountId === accountId)), (x) => x.agents);
+    // A pinned session whose main no recipe warms holds a pin per line all the same.
+    const unwarmed = (poolId, accountId) => sum(s.sessions.filter((x) => x.pinned && mainUnwarmed(recipes, x) && poolOf.get(x.keyId) === poolId && (accountId === undefined || x.accountId === accountId)), (x) => x.agentContexts.length);
     const pins = (poolId, accountId) => new Set(live.filter((r) => poolOf.get(r.keyId) === poolId && (accountId === undefined || r.accountId === accountId)).map(pinOf)).size + unwarmed(poolId, accountId);
     const above = {};
     for (const p of s.pools) {
@@ -999,7 +1010,6 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual(released.map((r) => r.cause).sort(), ['agent_released', 'agent_released', 'session_ended'], 'two agents the mod released and one ended with the session');
     for (const r of released) assert.deepEqual([r.state, r.nextProbeAt], ['ended', null], `${r.agentId} reads as the route answers a released agent`);
     assert.equal(recipes.filter((r) => r.agentId.length === 17).length, 1, 'one id of the length Claude Code gives a subagent');
-    assert.equal(s.sessions.find((x) => x.sessionId === rows[0].sessionId).agents, rows.length, 'the session row counts every record, the released ones too');
     // The list's order is not the view's: the parked row precedes the idle one, whose last request is newer than the
     // busy one's.
     const words = rows.filter((r) => r.agentState !== 'released').map((r) => (r.agentId === 'main' ? 'main' : r.agentState));
@@ -1011,8 +1021,6 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual(exhausted.map((r) => [r.sessionId, r.agentId, r.state]), [[rows[1].sessionId, rows[1].agentId, 'held']], "the written session's second line is the pool exhausted one");
     assert.ok(Date.parse(exhausted[0].nextProbeAt) > s.now, `its next probe ${exhausted[0].nextProbeAt} lies ahead of the story's now`);
     const overview = await s.api.getKeepaliveOverview();
-    // The session the mod ended releases its main with every other agent, so no tile counts it.
-    assert.deepEqual([overview.agents.busy, overview.agents.idle, overview.agents.parked], [10, 8, 4], 'the tiles count the recipe rows by lifecycle word, released ones left out');
     // The engine's cap counts every record it holds, the idle recipe of the row two hours back among them, which the
     // route's list leaves out. The session specs the mod registered or a recipe warms hold 31 agents, the
     // registration-only row none, and the auxiliary-only row its one subagent.
@@ -1035,7 +1043,6 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (const r of rows) assert.deepEqual([r.cause, r.state, r.nextProbeAt, r.deadline, r.wakeAt], ['agent_released', 'ended', null, null, null], `${r.agentId} reads as a released agent`);
     const row = s.sessions.find((x) => !x.historical && x.keyId === rows[0].keyId && x.sessionId === rows[0].sessionId);
     assert.ok(row !== undefined, 'the session keeps its row');
-    assert.equal(row.agents, rows.length, 'the row counts every record');
     // The engine's session view takes the state off main's record, which the release moved to released.
     assert.deepEqual([row.keepalive.state, row.keepalive.cause], ['released', 'agent_released'], "the row reads main's lifecycle word and cause");
     const own = s.requests.filter((r) => r.kind !== 'probe' && r.keyId === row.keyId && r.sessionId === row.sessionId);
@@ -1064,7 +1071,6 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(others.length > 0, 'the session holds subagents');
     for (const r of others) assert.deepEqual([r.agentState, r.cause, r.state, r.nextProbeAt], ['released', 'agent_released', 'ended', null], `${r.agentId} reads as a released agent`);
     for (const r of lines) assert.ok(r.lastProbeAt !== null && r.probesToday > 0, `${r.agentId} keeps its probe facts`);
-    assert.equal(row.agents, lines.length, 'the row counts every record');
   });
 
   test(`every released line dates its release inside its pool's longest cache TTL, past which the router lists it no more, at ${at}`, async () => {
@@ -1164,7 +1170,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       if (row.pinned) assert.ok(main !== undefined && main.lastInputTokens === row.lastInputTokens && main.effort === row.effort, `${row.keyId} ${row.sessionId}: the row's pin draws its line`);
     }
     // The slowed notebook session holds main's pin and its subagent's on Haiku.
-    const slowed = plain.filter((x) => x.keyId === 'notebook' && x.agents === 2);
+    const slowed = plain.filter((x) => x.keyId === 'notebook' && x.agentContexts.length === 2);
     assert.deepEqual(
       slowed.map((x) => x.agentContexts.map((c) => [c.agentId, c.model])),
       [
@@ -1294,8 +1300,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.equal(lines.length, 3, 'three released lines');
     for (const r of lines) assert.ok(inside(r), `${r.agentId}'s last use is inside its pool's window`);
     assert.ok(lines.some((r) => s.now - Date.parse(r.lastRequestAt) > affinityOf(s, r)), 'a line whose last request is past the window counts by its probe');
-    // A pinned session whose main no recipe warms holds one pin per agent all the same.
-    const unwarmed = (poolId, accountId) => sum(s.sessions.filter((x) => x.pinned && mainUnwarmed(recipes, x) && poolOf.get(x.keyId) === poolId && x.accountId === accountId), (x) => x.agents);
+    // A pinned session whose main no recipe warms holds a pin per line all the same.
+    const unwarmed = (poolId, accountId) => sum(s.sessions.filter((x) => x.pinned && mainUnwarmed(recipes, x) && poolOf.get(x.keyId) === poolId && x.accountId === accountId), (x) => x.agentContexts.length);
     for (const p of s.pools) {
       for (const m of p.members) {
         const own = recipes.filter((r) => poolOf.get(r.keyId) === p.id && r.accountId === m.accountId);
@@ -1318,7 +1324,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(line.lastProbeAt !== null && Date.parse(line.lastProbeAt) <= Date.parse(line.lastRequestAt), `probed at ${line.lastProbeAt}, before its last request at ${line.lastRequestAt}`);
     const poolId = s.keys.find((k) => k.id === line.keyId).poolId;
     const own = recipes.filter((r) => s.keys.find((k) => k.id === r.keyId)?.poolId === poolId && r.accountId === line.accountId);
-    const unwarmed = sum(s.sessions.filter((x) => x.pinned && mainUnwarmed(recipes, x) && s.keys.find((k) => k.id === x.keyId)?.poolId === poolId && x.accountId === line.accountId), (x) => x.agents);
+    const unwarmed = sum(s.sessions.filter((x) => x.pinned && mainUnwarmed(recipes, x) && s.keys.find((k) => k.id === x.keyId)?.poolId === poolId && x.accountId === line.accountId), (x) => x.agentContexts.length);
     const member = s.pools.find((p) => p.id === poolId).members.find((m) => m.accountId === line.accountId);
     assert.equal(member.activePins, new Set(pinnedRecipesOf(s, own).map(pinOf)).size + unwarmed, `${line.accountId}'s figure`);
     assert.ok(!pinnedRecipesOf(s, own).some((r) => pinOf(r) === pinOf(line)), 'the pin left with the window');

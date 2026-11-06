@@ -1036,6 +1036,83 @@ async function dashboardTileWords(theme) {
   for (const what of compare(read.refused.label, read.requests.label, ['color', 'family', 'size', 'weight'], "the Refused, 24h tile's label against the Requests, 24h tile's")) say(what);
 }
 
+/** The Agent records cap's hover. The pass reads no module of the console, so it spells the page's sentence here. */
+const AGENT_RECORDS_TITLE = 'A released record keeps its slot for one cache TTL after the release';
+
+/**
+ * The Dashboard's Sessions card at the pass's viewport: its subtitle, the Keepalive engine and Cache probes, 24h
+ * headings, the three caps each with its label and figure on one line and in the type and ink of the grid's labels and
+ * figures above them, the Agent records cap's hover on a released record's slot, the probes line and the expired and bus
+ * gaps line in their forms, and the probe bar from the hero's left edge to the card's content edge.
+ */
+async function dashboardSessionsCard(theme) {
+  const say = (what) => failures.push(`${theme} /: the Sessions card ${what}`);
+  const read = await page.evaluate(() => {
+    const card = [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === 'Sessions');
+    if (!card) return null;
+    const round = (n) => Math.round(n * 10) / 10;
+    const type = (el) => {
+      if (!el) return null;
+      const s = getComputedStyle(el);
+      return { color: s.color, fontSize: s.fontSize, fontWeight: s.fontWeight };
+    };
+    const rects = (el) => {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      return [...range.getClientRects()].filter((r) => r.width > 0);
+    };
+    const lines = (el) => new Set(rects(el).map((r) => Math.round(r.top))).size;
+    const cap = (row) => {
+      const [dt, dd] = [row.querySelector('dt'), row.querySelector('dd')];
+      if (!dt || !dd) return { text: row.textContent };
+      const [a, b] = [dt.getBoundingClientRect(), dd.getBoundingClientRect()];
+      return { figure: dd.textContent, label: dt.textContent, lines: [lines(dt), lines(dd)], sameRow: a.top < b.bottom && b.top < a.bottom, title: row.getAttribute('title') };
+    };
+    const engine = card.querySelector('.sess-summary__engine');
+    const s = getComputedStyle(card);
+    const box = card.getBoundingClientRect();
+    const bar = engine?.querySelector('.probe-bar')?.getBoundingClientRect() ?? null;
+    const hero = card.querySelector('.sess-summary__hero')?.getBoundingClientRect() ?? null;
+    return {
+      bar: bar && { left: round(bar.left), right: round(bar.right) },
+      caps: [...(engine?.querySelectorAll('.sess-summary__caps > div') ?? [])].map(cap),
+      content: { left: round(box.left + parseFloat(s.paddingLeft) + parseFloat(s.borderLeftWidth)), right: round(box.right - parseFloat(s.paddingRight) - parseFloat(s.borderRightWidth)) },
+      engine: { dd: type(engine?.querySelector('.sess-summary__caps dd')), dt: type(engine?.querySelector('.sess-summary__caps dt')) },
+      grid: { dd: type(card.querySelector('.sess-summary__grid dd')), dt: type(card.querySelector('.sess-summary__grid dt')) },
+      heads: [...(engine?.querySelectorAll('h3') ?? [])].map((h) => h.textContent),
+      hero: hero && { left: round(hero.left) },
+      line: engine?.querySelector('.sess-summary__line')?.textContent ?? null,
+      probes: engine?.querySelector('.sess-summary__probes')?.textContent ?? null,
+      subtitle: card.querySelector('.card__subtitle')?.textContent ?? null,
+    };
+  });
+  measurements.push(`${theme} / Dashboard Sessions card ${JSON.stringify(read)}`);
+  if (!read) {
+    say('is not drawn');
+    return;
+  }
+  if (read.subtitle !== 'Sessions, their agents and the engine that keeps their caches warm') say(`reads the subtitle ${JSON.stringify(read.subtitle)}`);
+  if (JSON.stringify(read.heads) !== JSON.stringify(['Keepalive engine', 'Cache probes, 24h'])) say(`draws the engine block's headings ${JSON.stringify(read.heads)}`);
+  const forms = [
+    ['Sessions', /^\d[\d,]* of \d[\d,]*$/],
+    ['Agent records', /^\d[\d,]* of \d[\d,]*$/],
+    ['Retained', /^\d[\d.]* MiB of \d[\d.]* MiB$/],
+  ];
+  if (read.caps.length !== forms.length) say(`draws ${read.caps.length} caps, not three`);
+  for (const [i, [label, form]] of forms.entries()) {
+    const c = read.caps[i];
+    if (c?.label !== label || !form.test(c?.figure ?? '')) say(`draws its ${label} cap as ${JSON.stringify(c ?? null)}`);
+    else if (JSON.stringify(c.lines) !== '[1,1]' || !c.sameRow) say(`draws its ${label} cap's label and figure over ${JSON.stringify(c.lines)} lines, on one row ${c.sameRow}`);
+  }
+  if (read.caps[1]?.title !== AGENT_RECORDS_TITLE) say(`titles its Agent records cap ${JSON.stringify(read.caps[1]?.title ?? null)}`);
+  if (!/^\d[\d,]* ok \(\d+%\) of \d[\d,]*$/.test(read.probes ?? '')) say(`reads the probes line ${JSON.stringify(read.probes)}`);
+  if (!/^expired between turns \d[\d,]* · bus gaps \d[\d,]*$/.test(read.line ?? '')) say(`reads the engine's line ${JSON.stringify(read.line)}`);
+  for (const what of compare(read.engine.dt, read.grid.dt, ['color', 'fontSize', 'fontWeight'], "a cap's label against the grid's")) say(what);
+  for (const what of compare(read.engine.dd, read.grid.dd, ['color', 'fontSize', 'fontWeight'], "a cap's figure against the grid's")) say(what);
+  for (const what of compare(read.bar && { left: read.bar.left }, read.hero, ['left'], "the probe bar's left edge against the hero's")) say(what);
+  for (const what of compare(read.bar && { right: read.bar.right }, { right: read.content.right }, ['right'], "the probe bar's right edge against the card's content box")) say(what);
+}
+
 /** The top bar's controls under the one control height: "Log out" and the theme control at 32 px, one top edge. */
 async function topbarHeights(theme) {
   const read = await page.evaluate(() => {
@@ -12486,6 +12563,7 @@ try {
         await dashboardTiles(theme);
         if (mock) await dashboardWidestFigure(theme);
         await dashboardTileWords(theme);
+        await dashboardSessionsCard(theme);
         await diagnosticsNav(theme, view.path);
       }
       if (view.path === '/' && !mock) {

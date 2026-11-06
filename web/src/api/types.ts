@@ -1856,7 +1856,6 @@ export interface Session {
   /** The session's requests per agent and model, main's among them, each with its type, its newest request's account
    *  and instant and its spend. */
   agentRequests: AgentRequests[];
-  agents: number;
   /** The pin's typed burn per hour in `burnUnit`, priced when read, on plan quota the share of the account's own window
    *  `burnWindow` names. It reads 0 for a pin never renewed with usage, and null with no pin at all, with one whose
    *  account left the registry, on a subscription account whose tier is unknown, or on a model it has no weight for, or
@@ -1992,7 +1991,6 @@ export interface KeepaliveRecipe {
 }
 
 export interface KeepaliveOverview {
-  agents: Record<'busy' | 'idle' | 'parked', number>;
   /** Times the keepalive engine found it had missed bus events; each gap discarded every observation still open. */
   busGaps: number;
   /** Requests whose prefix expired between turns in the last 24 hours. */

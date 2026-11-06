@@ -23,7 +23,7 @@ import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, reconciliationsOf, 
 import { ATTENTION } from './attention';
 import { CATALOG } from './catalog';
 import { GUARDRAIL_RESERVED_IDS, GUARDRAIL_STALE, GUARDRAIL_TAKEN, GUARDRAILS, PRESETS, boundRefusal, conditionsRefusal, dryRunVerdict, repeatedId, sameConditions, withAttachments } from './guardrails';
-import { KEEPALIVE_OVERVIEW, KEEPALIVE_OVERVIEW_30D, RECIPES, SESSIONS, SETTINGS_WIRE, memberPins, pinsUnderPool, sessionsListedAt } from './operations';
+import { KEEPALIVE_OVERVIEW, KEEPALIVE_OVERVIEW_30D, RECIPES, SESSIONS, SETTINGS_WIRE, largestCohort, memberPins, pinsUnderPool, sessionsListedAt } from './operations';
 import { KEYS, POOLS, composedFor, resolvedFor, servedFigures, type KeyRow, type PoolRow } from './pools';
 import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, UNPRICED_REQUEST, UNPRICED_ROLLUPS, capturedBodiesFor, landedAt, requestById, requestSidesOf } from './requests';
 import { GUARDRAIL_STORY_IDS } from './requests';
@@ -344,7 +344,6 @@ const cutsOf = (requestId: string) => ROUTING_EVENTS.filter((e) => e.kind === 's
 
 /** The keepalive overview of a router with no session and no probe yet. */
 const EMPTY_KEEPALIVE_OVERVIEW: KeepaliveOverview = {
-  agents: { busy: 0, idle: 0, parked: 0 },
   busGaps: 0,
   expiredBetweenTurns24h: 0,
   lastBusGapAt: null,
@@ -568,12 +567,12 @@ export class MockApi implements Api {
 
   /**
    * The pool as the route answers it, with its keys listed from the key registry at the time of the read, and its
-   * warnings the route's checks on the saved settings and the largest cohort among the pinned sessions under its keys.
+   * warnings the route's checks on the saved settings and the largest cohort among the pins under its keys.
    */
   private poolView(p: StoredPool): Pool {
     const keys = this.keys.filter((k) => k.poolId === p.id).map((k) => ({ enabled: k.enabled, id: k.id, label: k.name, prefix: k.prefix }));
     const ids = new Set(keys.map((k) => k.id));
-    const cohort = Math.max(0, ...this.sessions.filter((s) => s.pinned && ids.has(s.keyId)).map((s) => s.agents));
+    const cohort = largestCohort(ids);
     // A member's pins are read under the keys the pool holds at the read, as its figure is, so a key that moved here
     // counts its pins on the member cells too.
     const members = p.members.map((m) => ({ ...m, activePins: memberPins(ids, m.accountId) }));

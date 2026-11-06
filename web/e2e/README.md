@@ -38,7 +38,11 @@ the widths of both figures on one line at 15 px, which the day grid's width comm
 the wider form a smaller share draws, recorded), the Dashboard's tile words (the Estimated cost, 24h tile's subscription
 line a share of an Ultra week, `0%` on a day without subscription cost, or the dash under the unpriced title on the
 story's day, and its note a figure per hour, and the Refused, 24h tile's hover naming the router's own refusals beside
-the Requests, 24h tile's hover, the two labels in one type), the top bar's controls (Log out and the theme control 32 px
+the Requests, 24h tile's hover, the two labels in one type), the Dashboard's Sessions card (its subtitle, the Keepalive
+engine and Cache probes, 24h headings, the three caps each with its label and figure on one line in the type and ink of
+the grid's labels and figures above them, the Agent records cap's hover on a released record's slot, the probes line and
+the expired and bus gaps line in their forms, and the probe bar from the hero's left edge to the card's content edge),
+the top bar's controls (Log out and the theme control 32 px
 at one top), the week control beside the unit switch (at 1280 by 800 and 1440 by 900 the Week select between the Unit
 select and the legend's button in the bar's right group, its three long labels whole, in the Unit select's height, top
 edge, type and ink, at 900 by 800 and 360 by 800 its three short labels whole on the Unit select's line with no legend

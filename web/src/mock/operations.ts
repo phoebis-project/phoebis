@@ -463,7 +463,6 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     ...(pinned ? runwayOf(i) : { runwayBounded: null, runwayMs: null }),
     // A row's lines are written once the recipes exist, so every row starts with none.
     agentContexts: [],
-    agents: spec.agents,
     companion: spec.companion,
     // The companion's last report, as the engine dates one that stopped: a silent one's lapse, the session's end.
     companionSince: written?.endedSeconds !== undefined ? ago(written.endedSeconds * 1000) : spec.companion === 'silent' ? ago(rng.int(12, 150) * MINUTE) : null,
@@ -488,7 +487,6 @@ SESSIONS.push({
   ...SESSION_SAMPLE,
   accountId: null,
   agentContexts: [],
-  agents: 0,
   companion: 'reporting',
   companionSince: null,
   createdAt: null,
@@ -573,7 +571,7 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
   const spec = sessionSpec[i];
   // A fixed row's agents are written, so they draw nothing.
   const fixedAgents = spec.fixed ? spec.figures.agents : null;
-  const agents = fixedAgents ? fixedAgents.map((a) => a.agentId) : Array.from({ length: pin.agents }, (_, j) => (j === 0 ? 'main' : storySubagent(i, j)));
+  const agents = fixedAgents ? fixedAgents.map((a) => a.agentId) : Array.from({ length: spec.agents }, (_, j) => (j === 0 ? 'main' : storySubagent(i, j)));
   return agents.map((agentId, j) => {
     // A parked agent is probed like a busy one until one of the park's ceilings stops it.
     const held = j === 0 ? (spec.cause ?? null) : j === 1 ? (spec.subagentHold ?? null) : null;
@@ -711,7 +709,7 @@ SESSIONS.forEach((pin, i) => {
  * or a recipe warms.
  */
 const writtenRow = (
-  row: Pick<Session, 'agentId' | 'agents' | 'burn' | 'createdAt' | 'keyId' | 'sessionId'> & Partial<Pick<Session, 'companion' | 'keepalive' | 'presenceAgeSeconds'>> & { accountId: string },
+  row: Pick<Session, 'agentId' | 'burn' | 'createdAt' | 'keyId' | 'sessionId'> & Partial<Pick<Session, 'companion' | 'keepalive' | 'presenceAgeSeconds'>> & { accountId: string },
   lines: Omit<AgentContext, 'createdAt'>[],
 ): Session => {
   const keyGeneration = Date.parse(keyById.get(row.keyId)!.createdAt);
@@ -765,7 +763,6 @@ const ledgerOnlyRow = (fields: Pick<Session, 'accountId' | 'historical' | 'keyGe
   ...SESSION_SAMPLE,
   agentContexts: [],
   agentId: null,
-  agents: 0,
   burn: null,
   burnAt: null,
   burnEquivalent: null,
@@ -833,7 +830,7 @@ SLOWED_PINS.forEach((pin, k) => {
     return pinLine(line, agentId === 'main' ? { burn: pin.burn, burnAt: lastAttempt.startedAt } : servedBeside(display, line, createdAt));
   });
   SESSIONS.push({
-    ...writtenRow({ accountId: 'studio', agentId: 'main', agents: pin.agents.length, burn: pin.burn, createdAt, keyId: 'notebook', sessionId: pin.sessionId }, lines),
+    ...writtenRow({ accountId: 'studio', agentId: 'main', burn: pin.burn, createdAt, keyId: 'notebook', sessionId: pin.sessionId }, lines),
     cycleMs: pin.cycleMs,
     lastRequestAt: rows[0].at,
     requests: rows.length,
@@ -877,7 +874,7 @@ if (FLEET_PINS.length > 0) {
     const line = { accountId: attempt.accountId, agentId: 'main', cacheTtlMs: 5 * MINUTE, effort: effortAt(j + 1), lastInputTokens: promptOf(pin.usage), lastUsedAt: attempt.startedAt, lifecycle: null, model: pin.canonicalModel };
     return pinLine(line, j === 0 ? { burn: FLEET_BURN, burnAt: lastAttempt.startedAt } : servedBeside(display, line, firstSeen.at));
   });
-  SESSIONS.push(writtenRow({ accountId: lastAttempt.accountId, agentId: 'main', agents: 1, burn: FLEET_BURN, createdAt: firstSeen.at, keyId: 'fleet', sessionId: FLEET_SESSION_ID }, lines));
+  SESSIONS.push(writtenRow({ accountId: lastAttempt.accountId, agentId: 'main', burn: FLEET_BURN, createdAt: firstSeen.at, keyId: 'fleet', sessionId: FLEET_SESSION_ID }, lines));
 }
 
 /**
@@ -896,7 +893,7 @@ const WORKSHOP_BURN = 0.0021;
     { accountId: 'workshop', agentId: 'main', cacheTtlMs: HOUR, effort: effortAt(1), lastInputTokens: promptOf(WORKSHOP_PIN.usage), lastUsedAt: lastAttempt.startedAt, lifecycle: null, model: WORKSHOP_PIN.canonicalModel },
     { burn: WORKSHOP_BURN, burnAt: lastAttempt.startedAt },
   );
-  SESSIONS.push(writtenRow({ accountId: 'workshop', agentId: 'main', agents: 1, burn: WORKSHOP_BURN, createdAt, keyId: 'bench', sessionId: WORKSHOP_SESSION_ID }, [line]));
+  SESSIONS.push(writtenRow({ accountId: 'workshop', agentId: 'main', burn: WORKSHOP_BURN, createdAt, keyId: 'bench', sessionId: WORKSHOP_SESSION_ID }, [line]));
 }
 
 // The earlier holder of the `desktop` key id, which the analytics story draws as `desktop (deleted, created ...)`
@@ -988,7 +985,6 @@ const WRITTEN_SESSIONS = [
     {
       accountId: 'overflow',
       agentId: auxiliaryOnlyLine.agentId,
-      agents: 1,
       burn: AUXILIARY_ONLY_BURN,
       companion: 'reporting',
       createdAt: AUXILIARY_ONLY_CREATED_AT,
@@ -1000,7 +996,7 @@ const WRITTEN_SESSIONS = [
     },
     [auxiliaryOnlyLine],
   ),
-  writtenRow({ accountId: 'contract', agentId: 'main', agents: noModLines.length, burn: NO_MOD_BURN, createdAt: NO_MOD_CREATED_AT, keyId: 'fleet', sessionId: NO_MOD_SESSION_ID }, noModLines),
+  writtenRow({ accountId: 'contract', agentId: 'main', burn: NO_MOD_BURN, createdAt: NO_MOD_CREATED_AT, keyId: 'fleet', sessionId: NO_MOD_SESSION_ID }, noModLines),
 ];
 SESSIONS.push(...WRITTEN_SESSIONS);
 
@@ -1138,6 +1134,20 @@ export const memberPins = (keyIds: ReadonlySet<string>, accountId: string): numb
  * account or not. A pin on an account that left the pool counts here and in no member's figure.
  */
 export const pinsUnderPool = (keyIds: ReadonlySet<string>): number => [...PINS.values()].reduce((n, pins) => n + underKeys(pins, keyIds).length, 0);
+/**
+ * The largest cohort under a pool's current keys, which its in-flight cap check reads: the most agents of one session
+ * among the pins, as the route counts them, so an agent pinned on two models counts once.
+ */
+export const largestCohort = (keyIds: ReadonlySet<string>): number => {
+  const agents = new Map<string, Set<string>>();
+  for (const pins of PINS.values()) {
+    for (const pin of underKeys(pins, keyIds)) {
+      const [keyId, sessionId, agentId] = pin.split('|');
+      agents.set(`${keyId}|${sessionId}`, (agents.get(`${keyId}|${sessionId}`) ?? new Set()).add(agentId));
+    }
+  }
+  return Math.max(0, ...[...agents.values()].map((a) => a.size));
+};
 
 // Read off the ledger rows, which cover the last 24 hours, so the tile and the
 // analytics Cache section agree on what "expired between turns" counts.
@@ -1160,20 +1170,15 @@ const IDLE_RETURNED_30D = [107, 72, 51, 57, 33, 20, 10, 10, 7, 1];
 
 export const KEEPALIVE_OVERVIEW: KeepaliveOverview = {
   ...KEEPALIVE_OVERVIEW_SAMPLE,
-  // Counted off the recipes so the tiles cannot drift from the table below them.
-  agents: {
-    busy: RECIPES.filter((r) => r.agentState === 'busy').length,
-    idle: RECIPES.filter((r) => r.agentState === 'idle').length,
-    parked: RECIPES.filter((r) => r.agentState === 'parked').length,
-  },
   // Three gaps since the start, the last two hours back, so the Dashboard's card and the bus gaps item read one story.
   busGaps: 3,
   expiredBetweenTurns24h: EXPIRED_BETWEEN_TURNS_24H,
   lastBusGapAt: ago(2 * HOUR),
   // The caps are the bootstrap file's defaults. The retained bytes are hand-set like the probe counts, at 92 percent of
-  // their cap, so the cap item holds on the retained prompts alone.
+  // their cap, so the cap item holds on the retained prompts alone. Every agent record the story's engine holds carries
+  // a recipe, the released ones among them, so the records count the recipes.
   limits: {
-    agents: { count: ENGINE_SESSIONS.reduce((n, s) => n + s.agents, 0), max: 1_024 },
+    agents: { count: RECIPES.length, max: 1_024 },
     retainedBytes: { count: Math.round(0.92 * 256 * 1_048_576), max: 256 * 1_048_576 },
     sessions: { count: ENGINE_SESSIONS.length, max: 128 },
   },

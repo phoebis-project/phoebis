@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '@/api';
-import type { Account, KeepaliveState, Overview, RequestLog, Session, Settings, SubscriptionCosts } from '@/api/types';
+import type { Account, KeepaliveOverview, Overview, RequestLog, Session, Settings, SubscriptionCosts } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { Donut, DonutLegend } from '@/components/charts/Donut';
 import { Sparkline } from '@/components/charts/Sparkline';
@@ -11,18 +11,21 @@ import { StatusBadge } from '@/components/ui/AttemptTrail';
 import { AttentionLine } from '@/components/ui/AttentionLine';
 import { CostReferenceLink } from '@/components/ui/CostReference';
 import { CostTd } from '@/components/ui/CostTd';
-import { Badge, Card, EmptyState, ErrorState, Skeleton, SkeletonRows, StateRow } from '@/components/ui/primitives';
+import { Badge, Button, Card, EmptyState, ErrorState, Skeleton, SkeletonRows, StateRow } from '@/components/ui/primitives';
+import { ProbeBar } from '@/components/ui/ProbeBar';
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { sumTileOf } from '@/components/ui/Tile';
 import { accountHref, requestHref } from '@/lib/address';
 import { daySumOf, dollarsUnder, equivalentOrDash, nativeSidesOf, type WeekReading } from '@/lib/analytics';
-import { fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortModel, tokensTotal } from '@/lib/format';
+import { fmtAbsolute, fmtCompact, fmtInt, fmtMiB, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortModel, tokensTotal } from '@/lib/format';
 import { failedFirst, refreshAttention, useAsync, useAttention, useNow, useWeekReading, type Loaded } from '@/lib/hooks';
+import { agentCount, isFinished, lifecycleSplit, sessionLines, withinExpiry } from '@/lib/keepalive';
 import { STATUS_LABEL, STATUS_TONE, accountCooldown, planExtraUsage, slowedOf } from '@/lib/quota';
 import { REFUSED_TITLE, costHeaderTitle, glanceCellOf, requestCostUnit, revisionsTitle } from '@/lib/requests';
 import { ringFigures, ringLine, ringRowTitle, type RingFigures, type RingLeftOut, type RingRow, type RingWindow } from '@/lib/rings';
 import { speedHover } from '@/lib/selection';
+import { DAY } from '@/lib/time';
 import type { UnitPosition, WeekPosition } from '@/lib/unit';
 
 /**
@@ -89,6 +92,11 @@ export function DashboardPage() {
   const requests = useAsync(() => api.listRequests({ limit: 10 }), [], { refreshMs: 30_000 });
   const sessions = useAsync(() => api.listSessions(), [], { refreshMs: 30_000 });
   const { reading, settings } = useWeekReading(week, { refreshMs: 30_000 });
+  const keepalive = useAsync(() => api.getKeepaliveOverview(), [], { refreshMs: 30_000 });
+  // The expired part's warning asks whether a pool's policy warms caches now, which the overview's pools cannot tell:
+  // they list the pools with keepalive activity in the day, missing one switched on with no probe yet and keeping one
+  // switched off since.
+  const pools = useAsync(() => api.listPools(), [], { refreshMs: 30_000 });
   const attention = useAttention();
   const now = useNow();
   const ink = useChartInk();
@@ -109,6 +117,8 @@ export function DashboardPage() {
     [
       ['24-hour figures', overview],
       ['accounts', accounts],
+      ['keepalive overview', keepalive],
+      ['pools', pools],
       ['recent requests', requests],
       ['sessions', sessions],
       ['settings', settings],
@@ -187,11 +197,18 @@ export function DashboardPage() {
         <Card title="Recent requests" subtitle="Last 10 across every pool" actions={<Link to="/requests">All requests</Link>} padded={false} className="card--table">
           <RecentTable rows={requests.data?.requests ?? null} error={requests.error} settings={settings.data} accounts={accounts.data} reading={reading} />
         </Card>
-        <Card title="Sessions" subtitle="Sticky pins and cache-warming agents" actions={<Link to="/sessions">Open</Link>}>
+        <Card title="Sessions" subtitle="Sessions, their agents and the engine that keeps their caches warm" actions={<Link to="/sessions">Open</Link>}>
           {overviewFailed || failedFirst(sessions) ? (
             <ErrorState title="Could not load the sessions" body={overviewFailed ? overview.error : sessions.error} retry={retrySessions} />
           ) : (
-            <SessionsSummary activePins={o?.activePins ?? null} sessions={sessions.data} />
+            <SessionsSummary
+              activePins={o?.activePins ?? null}
+              expireAfterSeconds={settings.data?.sessions.expireAfterSeconds ?? null}
+              keepalive={keepalive}
+              now={now}
+              sessions={sessions.data}
+              warming={(pools.data ?? []).some((p) => p.keepalive.enabled)}
+            />
           )}
         </Card>
       </div>
@@ -389,16 +406,21 @@ function RecentTable({ accounts, rows, error, reading, settings }: { accounts: A
 
 /**
  * The hero is the router's own pin count: the session rows also hold sessions the ledger or the keepalive engine
- * alone knows and earlier key holders' ones, so only the rows still pinned name the accounts.
+ * alone knows and earlier key holders' ones, so only the rows still pinned name the accounts. The grid counts the live
+ * sessions' lines as the Sessions view's summary line counts the rows its bare address keeps, the finished sessions and
+ * the ones past the expiry left out, so the two agree. The lines come off the pins alone, since the page reads no
+ * recipes.
  */
-function SessionsSummary({ activePins, sessions }: { activePins: number | null; sessions: Session[] | null }) {
+function SessionsSummary({ activePins, expireAfterSeconds, keepalive, now, sessions, warming }: { activePins: number | null; expireAfterSeconds: number | null; keepalive: Loaded<KeepaliveOverview>; now: number; sessions: Session[] | null; warming: boolean }) {
   if (!sessions || activePins === null) return <Skeleton height={80} />;
-  const byState: Record<KeepaliveState, number> = { busy: 0, idle: 0, parked: 0, released: 0, unknown: 0 };
-  let agents = 0;
-  for (const p of sessions) {
-    if (p.keepalive.state) byState[p.keepalive.state] += 1;
-    agents += p.agents;
-  }
+  const live = sessions.flatMap((session) => {
+    const lines = sessionLines(session, []);
+    return isFinished(session, lines) || !withinExpiry(session, expireAfterSeconds, now) ? [] : [{ lines, session }];
+  });
+  const sum = (values: number[]) => values.reduce((n, v) => n + v, 0);
+  const splits = live.map((r) => lifecycleSplit(r.session, r.lines));
+  const agents = sum(live.map((r) => agentCount(r.lines)));
+  const byState = { busy: sum(splits.map((s) => s.busy)), idle: sum(splits.map((s) => s.idle)), parked: sum(splits.map((s) => s.parked)) };
   return (
     <div className="sess-summary">
       <div className="sess-summary__hero">
@@ -423,6 +445,68 @@ function SessionsSummary({ activePins, sessions }: { activePins: number | null; 
           <dd className="num">{byState.parked}</dd>
         </div>
       </dl>
+      <KeepaliveEngine now={now} read={keepalive} warming={warming} />
     </div>
+  );
+}
+
+/** The span a bus gap keeps the line's bus gaps part in the warning ink, the attention item's day. */
+const BUS_GAP_WARNING_MS = DAY;
+
+/**
+ * The engine's caps, the day's probes and the misses beside them. A read whose first answer failed draws a dash in
+ * each figure under a notice naming it, so the hero and the grid above keep the sessions' figures.
+ */
+function KeepaliveEngine({ now, read, warming }: { now: number; read: Loaded<KeepaliveOverview>; warming: boolean }) {
+  const k = read.data;
+  const failed = failedFirst(read);
+  if (k === null && !failed) return <Skeleton height={140} />;
+  const cap = (limit: { count: number; max: number }) => `${fmtInt(limit.count)} of ${fmtInt(limit.max)}`;
+  const probes = k?.probes24h ?? null;
+  const total = probes ? probes.ok + probes.migrated + probes.held + probes.skipped + probes.failed : 0;
+  const gap = k?.lastBusGapAt ?? null;
+  return (
+    <section className="sess-summary__engine">
+      <h3 className="section-title">Keepalive engine</h3>
+      {failed && (
+        <p className="sess-summary__notice" role="status">
+          Could not load the keepalive overview: {read.error}{' '}
+          <Button size="sm" onClick={read.reload}>
+            Try again
+          </Button>
+        </p>
+      )}
+      <dl className="sess-summary__caps">
+        <div>
+          <dt>Sessions</dt>
+          <dd className="num">{k ? cap(k.limits.sessions) : '-'}</dd>
+        </div>
+        <div title="A released record keeps its slot for one cache TTL after the release">
+          <dt>Agent records</dt>
+          <dd className="num">{k ? cap(k.limits.agents) : '-'}</dd>
+        </div>
+        <div>
+          <dt>Retained</dt>
+          <dd className="num">{k ? `${fmtMiB(k.limits.retainedBytes.count)} of ${fmtMiB(k.limits.retainedBytes.max)}` : '-'}</dd>
+        </div>
+      </dl>
+      <h3 className="section-title">Cache probes, 24h</h3>
+      <p className="sess-summary__probes num">{probes ? `${fmtInt(probes.ok)} ok (${fmtPct(total ? probes.ok / total : 0)}) of ${fmtInt(total)}` : '-'}</p>
+      {probes && <ProbeBar probes={probes} />}
+      <p className="sess-summary__line">
+        {k ? (
+          <>
+            {/* A count of expiries says nothing where no pool warms caches, since no probe was there to prevent them. */}
+            <span className={k.expiredBetweenTurns24h > 0 && warming ? 'is-warning' : undefined}>expired between turns {fmtInt(k.expiredBetweenTurns24h)}</span>
+            {' · '}
+            <span className={gap !== null && now - Date.parse(gap) <= BUS_GAP_WARNING_MS ? 'is-warning' : undefined} title={gap === null ? undefined : `The last gap was ${fmtRelative(gap, now)}, at ${fmtAbsolute(gap)}.`}>
+              bus gaps {fmtInt(k.busGaps)}
+            </span>
+          </>
+        ) : (
+          '-'
+        )}
+      </p>
+    </section>
   );
 }

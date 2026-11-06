@@ -126,10 +126,14 @@ its spans and the pool's threshold. Each opens the [routing log](#routing-log) o
 account's moves and spent windows, its spent windows, or its slow-down starts and ends, from the moment the condition
 began. An account whose meter drifted reads `acct-a: 5h charged 2.0x the table, 7d 1.3x, since 14:20`, each off window
 with the ratio the meter charged against the cost model, under the label "Meter drift against the table", and opens the
-[Meter](#meter) view on the account. A parked ledger record adds "Replay parked records", which answers `Landed {n}, {n}
-still parked`. Where the line is too narrow for its lead, the "+N more" badge and that button with its answer together,
-the button and its answer take a second row. The line also reads again when the window regains focus, and a tick or a
-focus that finds its previous read still out is skipped, so a slow read lands and the next tick reads again.
+[Meter](#meter) view on the account. The keepalive engine's three items open the [Sessions](#sessions) view: `Keepalive
+bus gaps: {n} since the start` in the serious tone while the engine missed bus events in the last 24 hours, `Keepalive
+cap at {pct}: {cap}` in the warning tone while one of its caps (sessions, agent records or retained prompts) stands at
+90 percent of its max or more, and `Expired between turns: {n} in 24h` in the warning tone while prompt caches expired
+between turns of a session a pool warms. A parked ledger record adds "Replay parked records", which answers `Landed {n},
+{n} still parked`. Where the line is too narrow for its lead, the "+N more" badge and that button with its answer
+together, the button and its answer take a second row. The line also reads again when the window regains focus, and a
+tick or a focus that finds its previous read still out is skipped, so a slow read lands and the next tick reads again.
 
 Five tiles follow, each with a sparkline over the last 24 hours: "Requests, 24h" with `{n} per hour`, "Tokens, 24h"
 with `{pct} served from cache`, "Estimated cost, 24h" in the top bar's unit, "Error rate, 24h" with "No requests",
@@ -150,7 +154,7 @@ Billed dollars it reads those dollars with `{usd} per hour`, and under Dollar eq
 dollars at the API price list. Under the tiles a line says when the
 figures were read, `As of {ago}`, by the oldest of the page's reads, or names the read whose last refresh failed and
 why: `Last refresh of the {read} failed: {error}. Showing data as of {ago}`, the read being the 24-hour figures, the
-accounts, the recent requests, the sessions or the settings.
+accounts, the keepalive overview, the pools, the recent requests, the sessions or the settings.
 
 Two rings, "7d remaining" and "Fable week remaining", show how much of the pooled 7-day and Fable week capacity is left,
 under the subtitles "Subscription accounts, 7-day window, weighed by tier" and "Subscription accounts, Fable week,
@@ -187,9 +191,20 @@ the three but Dollar equivalent, where it reads a dash. Under Native a subscript
 chosen week alone, with the hint the Requests view's column describes, the dollar equivalent and the price list and cost
 model in force on hover, a client classifier call's hover leading with "Free on the plan: a client classifier call takes
 no window share", and a billed request its dollars. The column header's hover names what each kind of request reads
-under the position. Where the table runs wider than its card it scrolls inside it. "Sessions" ("Sticky pins and
-cache-warming agents", with "Open") reads the active pins as `active pins across {n} accounts` and the agents as Agents,
-Busy, Idle and Parked. What each figure means is on [Statistics](statistics.md).
+under the position. Where the table runs wider than its card it scrolls inside it.
+
+"Sessions" ("Sessions, their agents and the engine that keeps their caches warm", with "Open") reads the active pins as
+`active pins across {n} accounts`. Its grid counts the live sessions as the [Sessions](#sessions) view's summary line
+does, the sessions inside the session expiry that have not finished: Agents counts each session's agents less the
+released ones, main among them where no line names it, and Busy, Idle and Parked count them by lifecycle word, a
+registered or unreported agent in none of the three. Under the grid, "Keepalive engine" reads the engine's three caps as
+`{n} of {max}`: Sessions, Agent records, whose hover says that a released record keeps its slot for one cache TTL after
+the release, and Retained in MiB. "Cache probes, 24h" reads `{ok} ok ({pct}) of {total}` over a bar of the day's probes
+by outcome (ok, migrated, held, skipped and failed), and a line reads `expired between turns {n} · bus gaps {n}`. The
+expired part takes the warning ink above zero while a pool's keepalive policy is on, and the bus gaps part while the
+engine missed bus events in the last 24 hours, the last gap's instant on hover. Where the keepalive overview's first
+read fails, the caps, the probes and the line read a dash each under `Could not load the keepalive overview: {error}`
+and a "Try again" button. What each figure means is on [Statistics](statistics.md).
 
 ## Quota
 

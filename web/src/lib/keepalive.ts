@@ -442,6 +442,24 @@ export interface MatchRow {
   session: Session;
 }
 
+/**
+ * The instant the router forgets an idle session: its last use, or its last request where it holds no use, plus the
+ * session expiry. Null while the expiry is unknown or the session holds neither.
+ */
+export function expiryOf(session: Pick<Session, 'lastRequestAt' | 'lastUsedAt'>, expireAfterSeconds: number | null): number | null {
+  const lastUsed = session.lastUsedAt ?? session.lastRequestAt;
+  return expireAfterSeconds === null || lastUsed === null ? null : Date.parse(lastUsed) + expireAfterSeconds * 1000;
+}
+
+/**
+ * The router forgets a session once it sat idle for the session expiry, so a view forgets it then too, between its
+ * reads: a session stays while its `expiryOf` lies after `now`, and every session stays while it has none.
+ */
+export function withinExpiry(session: Pick<Session, 'lastRequestAt' | 'lastUsedAt'>, expireAfterSeconds: number | null, now: number): boolean {
+  const expiresAt = expiryOf(session, expireAfterSeconds);
+  return expiresAt === null || expiresAt > now;
+}
+
 /** The later of the row's last use and last request is inside `spanMs` of `now`. */
 export function activeWithin(session: Pick<Session, 'lastRequestAt' | 'lastUsedAt'>, spanMs: number, now: number): boolean {
   const last = lastActivity(session);

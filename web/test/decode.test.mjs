@@ -2348,7 +2348,7 @@ test('the dashboard, sessions, recipes, and overview decode', () => {
   const [recipe] = fixture('keepalive_recipes').recipes.map(d.decodeRecipe);
   assert.deepEqual([recipe.state, recipe.cause, recipe.agentState, recipe.parkKind, recipe.probesToday, recipe.creditedToday], ['retained', 'scheduled', 'busy', null, 0, 0]);
   const ov = d.decodeKeepaliveOverview(fixture('keepalive_overview'));
-  assert.deepEqual(Object.keys(ov).sort(), ['agents', 'busGaps', 'expiredBetweenTurns24h', 'lastBusGapAt', 'limits', 'pools', 'probes24h']);
+  assert.deepEqual(Object.keys(ov).sort(), ['busGaps', 'expiredBetweenTurns24h', 'lastBusGapAt', 'limits', 'pools', 'probes24h']);
   assert.equal(ov.busGaps, 0, 'the captured router saw no gap');
   assert.deepEqual(ov.limits, { agents: { count: 3, max: 1024 }, retainedBytes: { count: fixture('keepalive_overview').limits.retained_bytes.count, max: 268_435_456 }, sessions: { count: 1, max: 128 } }, 'each count beside the cap the bootstrap file sets');
   const [pool] = ov.pools;

@@ -22,7 +22,7 @@ import { tierOrder, weekReadingOf } from '@/lib/costs';
 import { groupInto, lookup } from '@/lib/counts';
 import { SESSIONS_DIMENSIONS } from '@/lib/filterBar';
 import { SESSION_CHARS, fmtAbsolute, fmtCount, fmtDuration, fmtInt, fmtRelative, fmtShare, fmtUsd, joinPresent, keyGenerationOf, keyLifetime, messageOf, shortId, shortModel, weekShort } from '@/lib/format';
-import { ACTIVE_WITHIN, addSpend, agentCount, type AgentFigures, agentFigures, agentFiltersStand, CAUSE_HINT, CAUSE_LABEL, contextCell, drawnLines, earlierAgents, hiddenLines, isFinished, lastActivity, lifecycleSplit, lineWordOf, MAIN_AGENT, matches, matchingAgents, orderLines, orderRows, pinTtlMs, presenceOf, requestsRange, sessionLines, type SessionLine, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES } from '@/lib/keepalive';
+import { ACTIVE_WITHIN, addSpend, agentCount, type AgentFigures, agentFigures, agentFiltersStand, CAUSE_HINT, CAUSE_LABEL, contextCell, drawnLines, earlierAgents, expiryOf, hiddenLines, isFinished, lastActivity, lifecycleSplit, lineWordOf, MAIN_AGENT, matches, matchingAgents, orderLines, orderRows, pinTtlMs, presenceOf, requestsRange, sessionLines, type SessionLine, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES, withinExpiry } from '@/lib/keepalive';
 import { failedFirst, toggled, useAsync, useNow, useQueryFilters } from '@/lib/hooks';
 import { minuteSpan, type BadgeTone } from '@/lib/quota';
 import { costCellOf, spendHintArgs, spendHover, spendUnitOf } from '@/lib/requests';
@@ -141,10 +141,6 @@ interface Row {
   status: ReturnType<typeof statusOf>;
 }
 
-/** The instant the router forgets an idle session, null without an expiry or a use. */
-const expiryOf = (lastUsed: string | null, expireAfterSeconds: number | null): number | null =>
-  expireAfterSeconds === null || lastUsed === null ? null : Date.parse(lastUsed) + expireAfterSeconds * 1000;
-
 /** Why a session carries no recipe at all, its causes joined into one clause, null while it has one. */
 const noRecipeText = ({ idleLimit, noRecipe }: Pick<Row, 'idleLimit' | 'noRecipe'>, now: number): string | null => {
   if (noRecipe === null) return null;
@@ -229,7 +225,7 @@ function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], keys: ApiKey
     const lines = sessionLines(session, agents);
     return {
       agents,
-      expiresAt: expiryOf(lastUsed, expireAfterSeconds),
+      expiresAt: expiryOf(session, expireAfterSeconds),
       finished: isFinished(session, lines),
       idleLimit,
       lastUsed,
@@ -380,7 +376,7 @@ export function SessionsPage() {
     [sessionData, recipeData, keys.data, pools.data, poolsFailed, filters.sort, dir, expireAfterSeconds],
   );
   // The router forgets a session once it has been idle for the expiry, so this list has to as well.
-  const listed = useMemo(() => built?.filter((r) => r.expiresAt === null || r.expiresAt > now) ?? null, [built, now]);
+  const listed = useMemo(() => built?.filter((r) => withinExpiry(r.session, expireAfterSeconds, now)) ?? null, [built, expireAfterSeconds, now]);
   // The expiry stays the outer bound, and the filters narrow the list inside it.
   const rows = useMemo(() => listed?.filter((r) => matches(r, filters, now)) ?? null, [listed, filters, now]);
   // The lines each kept row draws under the filters and how many the filters fold away, which its detail, its Next
