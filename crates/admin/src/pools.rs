@@ -1140,8 +1140,9 @@ pub(crate) struct PoolMemberView {
     /// The pins' burn on the member's 7-day window under this pool, in share per hour, null for an api_key member and
     /// a member with no reading of the window.
     pub burn: Option<f64>,
-    /// The member's factor under the slow-down, the projection's `slow_down.factor`, null where `slow_down` is: the
-    /// figure the speed chip draws as `0.5x`.
+    /// The account's factor under the slow-down, the projection's `slow_down.factor`, null where `slow_down` is.
+    pub factor: Option<f64>,
+    /// The speed the holds realized, from 0 to 1, beside `factor`, null where `factor` is.
     pub speed: Option<f64>,
 }
 
@@ -1214,9 +1215,12 @@ fn member_json(
         burn: projection
             .and_then(|p| p.windows.get(phoebis_routing::SEVEN_DAY))
             .map(|w| w.burn),
-        speed: projection
+        factor: projection
             .and_then(|p| p.slow_down)
             .map(|slow_down| slow_down.factor),
+        speed: projection
+            .and_then(|p| p.slow_down)
+            .map(|slow_down| slow_down.speed),
     }
 }
 

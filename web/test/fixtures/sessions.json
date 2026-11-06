@@ -12,36 +12,8 @@
         "epoch": 1,
         "created_at": 1791721000000,
         "last_used_at": 1791721000000,
-        "last_request_at": 1791721000000,
-        "requests": 1,
-        "user_agent": "claude-cli/2.1.310 (external, cli)",
-        "spend": {
-          "requests": 1,
-          "usd": 0.0036,
-          "billed_usd": {},
-          "equivalent": 0.0000235,
-          "shares": {
-            "business": {
-              "five_hour": 8.8125e-6,
-              "seven_day": 2.35e-6
-            }
-          },
-          "probes": {
-            "requests": 0,
-            "usd": 0.0,
-            "billed_usd": {},
-            "equivalent": 0.0,
-            "shares": {}
-          }
-        },
-        "day": {
-          "requests": {
-            "other": 1
-          },
-          "usd": 0.0036,
-          "billed_usd": {},
-          "equivalent": 0.0000235
-        },
+        "last_request_at": null,
+        "requests": null,
         "pinned": true,
         "burn": 0.0,
         "burn_unit": "window_share",
@@ -50,10 +22,10 @@
         "burn_at": null,
         "runway_ms": null,
         "runway_bounded": null,
+        "cache_ttl_ms": 300000,
+        "factor": null,
         "speed": null,
         "cycle_ms": null,
-        "cache_ttl_ms": 300000,
-        "warm": true,
         "last_input_tokens": 0,
         "effort": null,
         "last_refresh_at": 1791721000000,
@@ -63,6 +35,13 @@
         "companion": "none",
         "companion_since": null,
         "agents": 1,
+        "keepalive": {
+          "cause": null,
+          "last_guard": null,
+          "next_probe_at": null,
+          "state": null
+        },
+        "presence_age_seconds": null,
         "agent_contexts": [
           {
             "agent_id": "main",
@@ -73,52 +52,9 @@
             "cache_ttl_ms": 300000,
             "last_used_at": 1791721000000,
             "warm": true,
-            "burn": 0.0,
-            "burn_unit": "window_share",
-            "burn_window": "five_hour",
-            "burn_equivalent": 0.0,
-            "burn_at": null,
-            "created_at": 1791721000000,
-            "lifecycle": null
+            "created_at": 1791721000000
           }
         ],
-        "agent_requests": [
-          {
-            "agent_id": "main",
-            "model": "claude-sonnet-5",
-            "agent_type": null,
-            "account_id": "business",
-            "requests": 1,
-            "last_request_at": 1791721000000,
-            "spend": {
-              "requests": 1,
-              "usd": 0.0036,
-              "billed_usd": {},
-              "equivalent": 0.0000235,
-              "shares": {
-                "business": {
-                  "five_hour": 8.8125e-6,
-                  "seven_day": 2.35e-6
-                }
-              },
-              "probes": {
-                "requests": 0,
-                "usd": 0.0,
-                "billed_usd": {},
-                "equivalent": 0.0,
-                "shares": {}
-              }
-            }
-          }
-        ],
-        "keepalive": {
-          "cause": null,
-          "last_guard": null,
-          "next_probe_at": null,
-          "state": null
-        },
-        "lifecycle": null,
-        "presence_age_seconds": null,
         "forked_from": null,
         "fork_depth": null
       },
@@ -133,15 +69,7 @@
         "created_at": 1791721000000,
         "last_used_at": 1791721000000,
         "last_request_at": null,
-        "requests": 0,
-        "user_agent": null,
-        "spend": null,
-        "day": {
-          "requests": {},
-          "usd": 0.0,
-          "billed_usd": {},
-          "equivalent": 0.0
-        },
+        "requests": null,
         "pinned": true,
         "burn": 0.0,
         "burn_unit": "usd",
@@ -150,10 +78,10 @@
         "burn_at": null,
         "runway_ms": null,
         "runway_bounded": null,
+        "cache_ttl_ms": 300000,
+        "factor": null,
         "speed": null,
         "cycle_ms": null,
-        "cache_ttl_ms": 300000,
-        "warm": true,
         "last_input_tokens": 0,
         "effort": null,
         "last_refresh_at": 1791721000000,
@@ -163,6 +91,13 @@
         "companion": "none",
         "companion_since": null,
         "agents": 1,
+        "keepalive": {
+          "cause": null,
+          "last_guard": null,
+          "next_probe_at": null,
+          "state": null
+        },
+        "presence_age_seconds": null,
         "agent_contexts": [
           {
             "agent_id": "main",
@@ -173,24 +108,9 @@
             "cache_ttl_ms": 300000,
             "last_used_at": 1791721000000,
             "warm": true,
-            "burn": 0.0,
-            "burn_unit": "usd",
-            "burn_window": null,
-            "burn_equivalent": null,
-            "burn_at": null,
-            "created_at": 1791721000000,
-            "lifecycle": null
+            "created_at": 1791721000000
           }
         ],
-        "agent_requests": [],
-        "keepalive": {
-          "cause": null,
-          "last_guard": null,
-          "next_probe_at": null,
-          "state": null
-        },
-        "lifecycle": null,
-        "presence_age_seconds": null,
         "forked_from": null,
         "fork_depth": null
       },
@@ -205,47 +125,7 @@
         "created_at": 1791717340000,
         "last_used_at": 1791721000000,
         "last_request_at": 1791720940000,
-        "requests": 5,
-        "user_agent": "claude-cli/2.1.310 (external, cli)",
-        "spend": {
-          "requests": 5,
-          "usd": 0.017800000000000003,
-          "billed_usd": {
-            "api_key": 0.00355,
-            "fast": 0.00355
-          },
-          "equivalent": 0.00007049999999999999,
-          "shares": {
-            "business": {
-              "five_hour": 0.000026437500000000002,
-              "seven_day": 7.05e-6
-            }
-          },
-          "probes": {
-            "requests": 1,
-            "usd": 0.00355,
-            "billed_usd": {},
-            "equivalent": 0.0000235,
-            "shares": {
-              "business": {
-                "five_hour": 8.8125e-6,
-                "seven_day": 2.35e-6
-              }
-            }
-          }
-        },
-        "day": {
-          "requests": {
-            "other": 3,
-            "subagent": 2
-          },
-          "usd": 0.017800000000000003,
-          "billed_usd": {
-            "api_key": 0.00355,
-            "fast": 0.00355
-          },
-          "equivalent": 0.00007049999999999999
-        },
+        "requests": 3,
         "pinned": true,
         "burn": 0.00104,
         "burn_unit": "window_share",
@@ -254,19 +134,26 @@
         "burn_at": 1791721000000,
         "runway_ms": null,
         "runway_bounded": null,
+        "cache_ttl_ms": 300000,
+        "factor": null,
         "speed": null,
         "cycle_ms": null,
-        "cache_ttl_ms": 300000,
-        "warm": true,
         "last_input_tokens": 52000,
         "effort": "high",
         "last_refresh_at": 1791717340000,
         "shed_from": null,
         "shed_reason": null,
-        "historical": false,
         "companion": "reporting",
         "companion_since": null,
         "agents": 3,
+        "keepalive": {
+          "cause": "scheduled",
+          "last_guard": "rearm",
+          "next_probe_at": 1791721240000,
+          "state": "busy"
+        },
+        "presence_age_seconds": null,
+        "historical": false,
         "agent_contexts": [
           {
             "agent_id": "main",
@@ -277,13 +164,7 @@
             "cache_ttl_ms": 300000,
             "last_used_at": 1791721000000,
             "warm": true,
-            "burn": 0.00104,
-            "burn_unit": "window_share",
-            "burn_window": "five_hour",
-            "burn_equivalent": 0.0017333333333333335,
-            "burn_at": 1791721000000,
-            "created_at": 1791717340000,
-            "lifecycle": "busy"
+            "created_at": 1791717340000
           },
           {
             "agent_id": "worker-1",
@@ -294,13 +175,7 @@
             "cache_ttl_ms": 300000,
             "last_used_at": 1791721000000,
             "warm": true,
-            "burn": 0.0006199999999999999,
-            "burn_unit": "window_share",
-            "burn_window": "five_hour",
-            "burn_equivalent": 0.0010333333333333334,
-            "burn_at": 1791721000000,
-            "created_at": 1791717340000,
-            "lifecycle": "busy"
+            "created_at": 1791717340000
           },
           {
             "agent_id": "worker-2",
@@ -311,110 +186,9 @@
             "cache_ttl_ms": 300000,
             "last_used_at": 1791721000000,
             "warm": true,
-            "burn": 0.07400000000000001,
-            "burn_unit": "usd",
-            "burn_window": null,
-            "burn_equivalent": null,
-            "burn_at": 1791721000000,
-            "created_at": 1791717340000,
-            "lifecycle": "busy"
+            "created_at": 1791717340000
           }
         ],
-        "agent_requests": [
-          {
-            "agent_id": "main",
-            "model": "claude-sonnet-5-5",
-            "agent_type": null,
-            "account_id": "business",
-            "requests": 3,
-            "last_request_at": 1791720940000,
-            "spend": {
-              "requests": 3,
-              "usd": 0.01065,
-              "billed_usd": {
-                "fast": 0.00355
-              },
-              "equivalent": 0.000047,
-              "shares": {
-                "business": {
-                  "five_hour": 0.000017625,
-                  "seven_day": 4.7e-6
-                }
-              },
-              "probes": {
-                "requests": 1,
-                "usd": 0.00355,
-                "billed_usd": {},
-                "equivalent": 0.0000235,
-                "shares": {
-                  "business": {
-                    "five_hour": 8.8125e-6,
-                    "seven_day": 2.35e-6
-                  }
-                }
-              }
-            }
-          },
-          {
-            "agent_id": "worker-1",
-            "model": "claude-sonnet-5",
-            "agent_type": null,
-            "account_id": "business",
-            "requests": 1,
-            "last_request_at": 1791717401000,
-            "spend": {
-              "requests": 1,
-              "usd": 0.0036,
-              "billed_usd": {},
-              "equivalent": 0.0000235,
-              "shares": {
-                "business": {
-                  "five_hour": 8.8125e-6,
-                  "seven_day": 2.35e-6
-                }
-              },
-              "probes": {
-                "requests": 0,
-                "usd": 0.0,
-                "billed_usd": {},
-                "equivalent": 0.0,
-                "shares": {}
-              }
-            }
-          },
-          {
-            "agent_id": "worker-2",
-            "model": "claude-sonnet-5-5",
-            "agent_type": null,
-            "account_id": "direct",
-            "requests": 1,
-            "last_request_at": 1791717401000,
-            "spend": {
-              "requests": 1,
-              "usd": 0.00355,
-              "billed_usd": {
-                "api_key": 0.00355
-              },
-              "equivalent": 0.0,
-              "shares": {},
-              "probes": {
-                "requests": 0,
-                "usd": 0.0,
-                "billed_usd": {},
-                "equivalent": 0.0,
-                "shares": {}
-              }
-            }
-          }
-        ],
-        "keepalive": {
-          "cause": "scheduled",
-          "last_guard": "rearm",
-          "next_probe_at": 1791721240000,
-          "state": "busy"
-        },
-        "lifecycle": "busy",
-        "presence_age_seconds": null,
         "forked_from": "s0",
         "fork_depth": 2
       },
@@ -430,33 +204,6 @@
         "last_used_at": null,
         "last_request_at": 1791720970000,
         "requests": 1,
-        "user_agent": "claude-cli/2.1.310 (external, cli)",
-        "spend": {
-          "requests": 1,
-          "usd": 0.0036,
-          "billed_usd": {
-            "api_key": 0.0036
-          },
-          "equivalent": 0.0,
-          "shares": {},
-          "probes": {
-            "requests": 0,
-            "usd": 0.0,
-            "billed_usd": {},
-            "equivalent": 0.0,
-            "shares": {}
-          }
-        },
-        "day": {
-          "requests": {
-            "other": 1
-          },
-          "usd": 0.0036,
-          "billed_usd": {
-            "api_key": 0.0036
-          },
-          "equivalent": 0.0
-        },
         "pinned": false,
         "burn": null,
         "burn_unit": null,
@@ -465,12 +212,12 @@
         "burn_at": null,
         "runway_ms": null,
         "runway_bounded": null,
-        "speed": null,
-        "cycle_ms": null,
         "cache_ttl_ms": null,
-        "warm": null,
         "last_input_tokens": null,
         "effort": null,
+        "factor": null,
+        "speed": null,
+        "cycle_ms": null,
         "last_refresh_at": null,
         "shed_from": null,
         "shed_reason": null,
@@ -478,41 +225,14 @@
         "companion": "none",
         "companion_since": null,
         "agents": 0,
-        "agent_contexts": [],
-        "agent_requests": [
-          {
-            "agent_id": "main",
-            "model": "claude-sonnet-5",
-            "agent_type": null,
-            "account_id": "direct",
-            "requests": 1,
-            "last_request_at": 1791720970000,
-            "spend": {
-              "requests": 1,
-              "usd": 0.0036,
-              "billed_usd": {
-                "api_key": 0.0036
-              },
-              "equivalent": 0.0,
-              "shares": {},
-              "probes": {
-                "requests": 0,
-                "usd": 0.0,
-                "billed_usd": {},
-                "equivalent": 0.0,
-                "shares": {}
-              }
-            }
-          }
-        ],
         "keepalive": {
           "cause": null,
           "last_guard": null,
           "next_probe_at": null,
           "state": null
         },
-        "lifecycle": null,
         "presence_age_seconds": null,
+        "agent_contexts": [],
         "forked_from": null,
         "fork_depth": null
       },
@@ -528,35 +248,6 @@
         "last_used_at": null,
         "last_request_at": 1791720880000,
         "requests": 2,
-        "user_agent": "claude-cli/2.1.310 (external, cli)",
-        "spend": {
-          "requests": 2,
-          "usd": 0.0071,
-          "billed_usd": {},
-          "equivalent": 0.0000235,
-          "shares": {
-            "business": {
-              "five_hour": 8.8125e-6,
-              "seven_day": 2.35e-6
-            }
-          },
-          "probes": {
-            "requests": 0,
-            "usd": 0.0,
-            "billed_usd": {},
-            "equivalent": 0.0,
-            "shares": {}
-          }
-        },
-        "day": {
-          "requests": {
-            "auxiliary": 1,
-            "other": 1
-          },
-          "usd": 0.0071,
-          "billed_usd": {},
-          "equivalent": 0.0000235
-        },
         "pinned": false,
         "burn": null,
         "burn_unit": null,
@@ -565,12 +256,12 @@
         "burn_at": null,
         "runway_ms": null,
         "runway_bounded": null,
-        "speed": null,
-        "cycle_ms": null,
         "cache_ttl_ms": null,
-        "warm": null,
         "last_input_tokens": null,
         "effort": null,
+        "factor": null,
+        "speed": null,
+        "cycle_ms": null,
         "last_refresh_at": null,
         "shed_from": null,
         "shed_reason": null,
@@ -578,44 +269,14 @@
         "companion": "none",
         "companion_since": null,
         "agents": 0,
-        "agent_contexts": [],
-        "agent_requests": [
-          {
-            "agent_id": "main",
-            "model": "claude-sonnet-5-5",
-            "agent_type": null,
-            "account_id": "business",
-            "requests": 2,
-            "last_request_at": 1791720880000,
-            "spend": {
-              "requests": 2,
-              "usd": 0.0071,
-              "billed_usd": {},
-              "equivalent": 0.0000235,
-              "shares": {
-                "business": {
-                  "five_hour": 8.8125e-6,
-                  "seven_day": 2.35e-6
-                }
-              },
-              "probes": {
-                "requests": 0,
-                "usd": 0.0,
-                "billed_usd": {},
-                "equivalent": 0.0,
-                "shares": {}
-              }
-            }
-          }
-        ],
         "keepalive": {
           "cause": null,
           "last_guard": null,
           "next_probe_at": null,
           "state": null
         },
-        "lifecycle": null,
         "presence_age_seconds": null,
+        "agent_contexts": [],
         "forked_from": null,
         "fork_depth": null
       },
@@ -631,34 +292,6 @@
         "last_used_at": null,
         "last_request_at": 1791717400500,
         "requests": 1,
-        "user_agent": "claude-cli/2.1.310 (external, cli)",
-        "spend": {
-          "requests": 1,
-          "usd": 0.00355,
-          "billed_usd": {},
-          "equivalent": 0.0000235,
-          "shares": {
-            "business": {
-              "five_hour": 8.8125e-6,
-              "seven_day": 2.35e-6
-            }
-          },
-          "probes": {
-            "requests": 0,
-            "usd": 0.0,
-            "billed_usd": {},
-            "equivalent": 0.0,
-            "shares": {}
-          }
-        },
-        "day": {
-          "requests": {
-            "other": 1
-          },
-          "usd": 0.00355,
-          "billed_usd": {},
-          "equivalent": 0.0000235
-        },
         "pinned": false,
         "burn": null,
         "burn_unit": null,
@@ -667,12 +300,12 @@
         "burn_at": null,
         "runway_ms": null,
         "runway_bounded": null,
-        "speed": null,
-        "cycle_ms": null,
         "cache_ttl_ms": null,
-        "warm": null,
         "last_input_tokens": null,
         "effort": null,
+        "factor": null,
+        "speed": null,
+        "cycle_ms": null,
         "last_refresh_at": null,
         "shed_from": null,
         "shed_reason": null,
@@ -680,44 +313,14 @@
         "companion": "none",
         "companion_since": null,
         "agents": 0,
-        "agent_contexts": [],
-        "agent_requests": [
-          {
-            "agent_id": "main",
-            "model": "claude-sonnet-5-5",
-            "agent_type": null,
-            "account_id": "business",
-            "requests": 1,
-            "last_request_at": 1791717400500,
-            "spend": {
-              "requests": 1,
-              "usd": 0.00355,
-              "billed_usd": {},
-              "equivalent": 0.0000235,
-              "shares": {
-                "business": {
-                  "five_hour": 8.8125e-6,
-                  "seven_day": 2.35e-6
-                }
-              },
-              "probes": {
-                "requests": 0,
-                "usd": 0.0,
-                "billed_usd": {},
-                "equivalent": 0.0,
-                "shares": {}
-              }
-            }
-          }
-        ],
         "keepalive": {
           "cause": null,
           "last_guard": null,
           "next_probe_at": null,
           "state": null
         },
-        "lifecycle": null,
         "presence_age_seconds": null,
+        "agent_contexts": [],
         "forked_from": null,
         "fork_depth": null
       }

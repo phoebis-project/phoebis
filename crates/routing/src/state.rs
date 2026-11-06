@@ -974,8 +974,9 @@ pub struct SlowDownState {
     pub read_at: i64,
     /// When the stretch first read over the threshold, cleared once it reads at or under it.
     pub over_since: Option<i64>,
-    /// When the factor first read under 1 since the span last closed. A return to 1 keeps it through the
-    /// `SLOW_DOWN_WAIT_MS` wait, so a dip back under 1 inside the wait continues the span.
+    /// When the factor first read under 1 since the span last closed, the instant the ramp grows from. A return to 1
+    /// keeps it through the `SLOW_DOWN_WAIT_MS` wait, so a dip back under 1 inside the wait continues the span and its
+    /// ramp.
     pub slowed_since: Option<i64>,
     /// When the factor last returned to 1 inside the span. A dip back under 1 clears it, and the span's close keeps
     /// it as the instant the factor returned.
@@ -992,11 +993,6 @@ pub struct SlowDownState {
     /// The 5-hour reading's reset at the read, `None` where the reading named none or its reset had passed: the
     /// window the entry was read in, which the stale test compares `read_at` against once the reset has passed.
     pub reset: Option<i64>,
-    /// When the read's factor first read under 1 since it last read 1, cleared at a read whose factor reads 1: the
-    /// ramp's stamp, from which the factor the holds realize is pulled from 1 to the read's over one burn average.
-    /// Unlike `slowed_since` it clears at once, so a burst that ends and comes back ramps again from nothing, and
-    /// unlike `over_since` it stamps the stretch's zero crossing, not the threshold's.
-    pub ramp_since: Option<i64>,
 }
 
 /// One edge of an account's slow-down span, which the task announces as an event.
@@ -1817,8 +1813,10 @@ impl RoutingState {
     /// The live rate-limit rows on the account that `sample` shows recovered: the window the row answers for (a
     /// model row's is the model's own week) has allowance again, read from a sample taken after the rejection that
     /// set the row. A window the sample never read is not evidence, and neither is a row no usage window answers
-    /// for. A row already past its deadline is left to the purge tick, which says so. Only an OAuth account is ever
-    /// sampled, which is what keeps an api-key account's rows out of here without a registry lookup.
+    /// for. A claim on a shared window the account's set lacks recovers as an unnamed claim does, once every shared
+    /// window the set still has reads under 1.0. A row already past its deadline is left to the purge tick, which says
+    /// so. Only an OAuth account is ever sampled, which is what keeps an api-key account's rows out of here without a
+    /// registry lookup.
     pub fn recovered_cooldowns(
         &self,
         account_id: &str,
@@ -1837,9 +1835,10 @@ impl RoutingState {
             if let CooldownScope::Model(model) = &row.scope {
                 return below(window_for(model));
             }
+            // A claim on a window the set has since dropped waits for a reading that never comes, so it falls through.
             match row.window.as_str() {
-                "five_hour" => below(FIVE_HOUR),
-                "seven_day" => below(SEVEN_DAY),
+                "five_hour" if self.has_window(account_id, FIVE_HOUR) => below(FIVE_HOUR),
+                "seven_day" if self.has_window(account_id, SEVEN_DAY) => below(SEVEN_DAY),
                 // Any other representative claim: it does not say which shared window was exhausted, so the
                 // account is only back once every shared window of its set has allowance.
                 _ => [FIVE_HOUR, SEVEN_DAY]
@@ -2715,13 +2714,13 @@ impl RoutingState {
     /// The read's write, once per pinned selection on the account: the factor from the read, the speed folded toward
     /// `realized` (`speed x w + realized x (1 - w)` with `w = exp(-(now - read_at) / average_ms)`, the first write
     /// taking `realized` whole), `over_since` stamped while the read's stretch is over its threshold and cleared at or
-    /// under it, `ramp_since` stamped while the factor reads under 1 and cleared at 1, and the span the factor reads
-    /// under 1 for opened and tracked. A read of 1 stamps `clear_since` and leaves the span open, so a dip back under 1
-    /// inside `SLOW_DOWN_WAIT_MS` continues it and `take_slow_down_edges` closes it once the factor has read 1 for the
-    /// wait. A span that opens records its start from this read, after the end of a span whose wait ran out before any
-    /// drain closed it. An entry read before its window's passed reset is replaced: its open span ends by that reset,
-    /// and this read writes the entry afresh as a first write does. Answers the entry as written, the read's stretch
-    /// and threshold beside its factor.
+    /// under it, and the span the factor reads under 1 for opened and tracked, its `slowed_since` the instant the ramp
+    /// grows from. A read of 1 stamps `clear_since` and leaves the span open, so a dip back under 1 inside
+    /// `SLOW_DOWN_WAIT_MS` continues it and its ramp, and `take_slow_down_edges` closes it once the factor has read 1
+    /// for the wait. A span that opens records its start from this read, after the end of a span whose wait ran out
+    /// before any drain closed it. An entry read before its window's passed reset is replaced: its open span ends by
+    /// that reset, and this read writes the entry afresh as a first write does. Answers the entry as written, the
+    /// read's stretch and threshold beside its factor.
     pub fn write_slow_down(
         &mut self,
         pool_id: &str,
@@ -2776,7 +2775,6 @@ impl RoutingState {
                 entry.read_at = now;
                 entry.reset = read.reset;
                 entry.over_since = over.then(|| entry.over_since.unwrap_or(now));
-                entry.ramp_since = slowed.then(|| entry.ramp_since.unwrap_or(now));
                 // A span whose factor has read 1 for the wait ended at the return, though no drain has closed it yet: a
                 // selection can land before the purge tick that would, and the dip it reads opens a span of its own.
                 if let (true, Some(since), Some(clear)) =
@@ -2816,7 +2814,6 @@ impl RoutingState {
                 read_at: now,
                 reset: read.reset,
                 over_since: over.then_some(now),
-                ramp_since: slowed.then_some(now),
                 slowed_since: slowed.then_some(now),
                 clear_since: None,
                 factor_min: read.factor.min(1.0),
@@ -5391,6 +5388,41 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["account"],
             "the account's one shared window has allowance again, and it has no 5-hour window to wait for"
+        );
+    }
+
+    #[test]
+    fn a_five_hour_claim_on_an_account_whose_set_dropped_the_window_recovers_once_its_week_reads_under_one(
+    ) {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        state.record_sample("a", sampled(&[FIVE_HOUR, SEVEN_DAY], 1.0, 500, true), 500);
+        state.record_cooldown(CooldownRow {
+            account_id: "a".into(),
+            scope: CooldownScope::Account,
+            until: 10_000,
+            set_at: 1_000,
+            reason: "rate_limit".into(),
+            window: FIVE_HOUR.into(),
+            source_request_id: None,
+            incarnation: 1,
+        });
+        let recovered = |state: &mut RoutingState, poll: UtilizationSample| {
+            state.record_sample("a", poll.clone(), poll.observed_at);
+            state
+                .recovered_cooldowns("a", &poll, 3_000)
+                .into_iter()
+                .map(|row| row.scope.to_string())
+                .collect::<Vec<_>>()
+        };
+        // The polls after the rejection carry no 5-hour window, so the set drops it and no reading of it comes.
+        assert!(
+            recovered(&mut state, sampled(&[SEVEN_DAY], 1.0, 2_000, true)).is_empty(),
+            "the week the set still has reads spent"
+        );
+        assert_eq!(
+            recovered(&mut state, sampled(&[SEVEN_DAY], 0.5, 2_500, true)),
+            ["account"],
+            "the claim recovers once the week the set still has reads under 1.0"
         );
     }
 

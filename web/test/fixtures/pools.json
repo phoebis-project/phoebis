@@ -106,6 +106,7 @@
             "active_pins": 4,
             "pace_score": 0.005952380952380952,
             "burn": null,
+            "factor": null,
             "speed": null
           },
           {
@@ -126,6 +127,7 @@
             "active_pins": 2,
             "pace_score": 1.0,
             "burn": null,
+            "factor": null,
             "speed": null
           },
           {
@@ -140,6 +142,7 @@
             "active_pins": 0,
             "pace_score": 1.0,
             "burn": null,
+            "factor": null,
             "speed": null
           }
         ],
@@ -494,6 +497,7 @@
             "active_pins": 0,
             "pace_score": 60.0,
             "burn": null,
+            "factor": null,
             "speed": null
           }
         ],

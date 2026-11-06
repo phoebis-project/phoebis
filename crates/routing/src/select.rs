@@ -28,8 +28,8 @@ use crate::state::{
     entrypoint_of, keeps_off, load_shedding, mark_holds, plan_windows, return_to_plan_dwell_ms,
     round_in_dwell, shed_cap, shed_dwell_ms, slow_down, slow_down_hold_ms, slow_down_stretch_ms,
     standing_mark, warm, BandSegment, BurnUnit, MemberSpend, PinPace, PinRef, PinUsage,
-    Reservation, RoutingState, StateWrite, Tier, WindowReading, FAST_INPUT, FAST_OUTPUT, FIVE_HOUR,
-    HOUR_MS, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
+    Reservation, RoutingState, SlowDownState, StateWrite, Tier, WindowReading, FAST_INPUT,
+    FAST_OUTPUT, FIVE_HOUR, HOUR_MS, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
 use crate::windows::{window_for, MODEL_WINDOWS};
 use crate::{paid_source, term, Candidate, KeyRefusal, RegistrySnapshot, ResolveError};
@@ -2925,9 +2925,9 @@ pub struct SlowDownRead {
     /// The pool's `slow_down_stretch_seconds`.
     pub threshold_ms: i64,
     pub factor: f64,
-    /// The share of the read's slow-down the holds apply: the time the stretch has read over zero over one burn
-    /// average, clamped to [0, 1], 1 on a window at or past the ceiling, whose standing is measured and not a
-    /// projection a short burst could still retract, and 0 at a factor of 1, which holds nothing.
+    /// The share of the read's slow-down the holds apply, by the ramp's one rule (`slow_down_ramp`): the time since the
+    /// account's span opened over one burn average, clamped to [0, 1], 1 on a window at or past the ceiling and 0 at a
+    /// factor of 1.
     pub ramp: f64,
     /// The factor the plan received, `1 - (1 - factor) x ramp`: the hold's outcome names it.
     pub ramped: f64,
@@ -3031,24 +3031,14 @@ pub(crate) fn slow_down_of(
             (room / banded.increase()).clamp(0.0, 1.0),
         )
     };
-    // The ramp: the share of the read's factor the holds apply, grown over one burn average from the instant the
-    // stretch first read over zero, so a burst of a few minutes whose demand projects past the ceiling costs holds in
-    // proportion to how long it has stood, and a demand that lasts gets the full factor once the average has absorbed
-    // it. A window at or past the ceiling is a measured fact and not a projection a burst could retract, so it takes
-    // the full factor at once. A factor of 1 applies no hold, so it applies no share. The entry of a passed window
-    // reads no stamp, so the ramp restarts with every window.
     let average_ms = burn_average_ms(pool);
-    let stood = state
-        .slow_down_in_force(pool, account_id, now)
-        .and_then(|entry| entry.ramp_since)
-        .map_or(0, |since| (now - since).max(0));
-    let ramp = if at_ceiling {
-        1.0
-    } else if factor >= 1.0 {
-        0.0
-    } else {
-        (stood as f64 / average_ms.max(1) as f64).clamp(0.0, 1.0)
-    };
+    let ramp = slow_down_ramp(
+        state.slow_down_in_force(pool, account_id, now),
+        at_ceiling,
+        factor,
+        average_ms,
+        now,
+    );
     let ramped = 1.0 - (1.0 - factor) * ramp;
     // Every kept pin, each weighted by its own priced burn on the window: a pin without a cycle is never held, but its
     // burn runs at full speed and weighs in the speed the demand divides by.
@@ -3083,6 +3073,39 @@ pub(crate) fn slow_down_of(
         plan,
         realized,
     })
+}
+
+/// The share of the slow-down's factor the holds apply at `now`, the ramp's one rule for the selection and the
+/// account's projection: 1 on a window at or past the ceiling, a measured fact and not a projection a burst could
+/// retract, 0 at a factor of 1, which holds nothing, and between them the share of one burn average `average_ms` that
+/// has passed since the span of `entry`, the entry in force, opened, clamped to [0, 1]. A burst of a few minutes whose
+/// demand projects past the ceiling so costs holds in proportion to how long it has stood, and a demand that lasts gets
+/// the full factor once the average has absorbed it. The ramp lives and ends with the span: a return to 1 shorter than
+/// `SLOW_DOWN_WAIT_MS` keeps the span's start and so continues the ramp, a return that lasts the wait closes both, and
+/// the entry of a passed window is not in force, so the ramp restarts with every window.
+pub(crate) fn slow_down_ramp(
+    entry: Option<&SlowDownState>,
+    at_ceiling: bool,
+    factor: f64,
+    average_ms: i64,
+    now: i64,
+) -> f64 {
+    if at_ceiling {
+        return 1.0;
+    }
+    if factor >= 1.0 {
+        return 0.0;
+    }
+    // A span whose factor has read 1 for the wait has closed, though the drain that closes it may not have run yet.
+    let stood = entry
+        .filter(|entry| {
+            entry
+                .clear_since
+                .is_none_or(|clear| now - clear < SLOW_DOWN_WAIT_MS)
+        })
+        .and_then(|entry| entry.slowed_since)
+        .map_or(0, |since| (now - since).max(0));
+    (stood as f64 / average_ms.max(1) as f64).clamp(0.0, 1.0)
 }
 
 /// Whether the slow-down may hold this request on a pin whose account is of `kind`: a main or subagent turn, or one

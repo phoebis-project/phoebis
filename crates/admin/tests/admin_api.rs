@@ -6144,7 +6144,7 @@ async fn the_account_routes_answer_slow_down_null_on_an_api_key_account_and_unde
 }
 
 #[tokio::test]
-async fn a_slowed_account_answers_its_slow_down_on_the_account_route_and_its_factor_as_its_members_and_sessions_speed(
+async fn a_slowed_account_answers_its_slow_down_on_the_account_route_and_its_factor_and_speed_on_its_member_and_session(
 ) {
     use common::{get, json, login, NOW};
     const HOUR: i64 = 3_600_000;
@@ -6172,16 +6172,18 @@ async fn a_slowed_account_answers_its_slow_down_on_the_account_route_and_its_fac
         (
             &slow_down["speed"],
             &slow_down["since"],
+            &slow_down["ramp"],
             &slow_down["threshold_ms"],
             &slow_down["hold_ms"]
         ),
         (
             &serde_json::json!(1.0),
             &serde_json::json!(NOW),
+            &serde_json::json!(0.0),
             &serde_json::json!(600_000),
             &serde_json::json!(60_000)
         ),
-        "no pin has a cycle yet, so none is held, and the span opened at the read: {slow_down}"
+        "no pin has a cycle yet, so none is held, and the span opened at the read with no time for its ramp: {slow_down}"
     );
     assert!(
         slow_down["stretch_ms"]
@@ -6196,20 +6198,23 @@ async fn a_slowed_account_answers_its_slow_down_on_the_account_route_and_its_fac
         "an api_key account has no 5-hour window to slow, whatever its pool's switch reads: {direct}"
     );
     let pools = json(get(&parts.app, "/admin/pools", Some(&cookie)).await).await;
+    let null = serde_json::Value::Null;
     assert_eq!(
         (
+            pool_member(&pools, "business")["factor"].as_f64(),
             pool_member(&pools, "business")["speed"].as_f64(),
+            pool_member(&pools, "direct").get("factor"),
             pool_member(&pools, "direct").get("speed")
         ),
-        (Some(factor), Some(&serde_json::Value::Null)),
-        "the member's speed is its account's factor, and null where no entry is in force"
+        (Some(factor), Some(1.0), Some(&null), Some(&null)),
+        "the member names its account's factor and realized speed, and null where no entry is in force"
     );
     let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
     let s1 = session_row(&sessions, "s1");
     assert_eq!(
-        (s1["speed"].as_f64(), s1.get("cycle_ms")),
-        (Some(factor), Some(&serde_json::Value::Null)),
-        "the pin reads its account's factor, and no cycle before a second request of the pin: {s1}"
+        (s1["factor"].as_f64(), s1["speed"].as_f64(), s1.get("cycle_ms")),
+        (Some(factor), Some(1.0), Some(&null)),
+        "the pin reads its account's factor and realized speed, and no cycle before a second request of the pin: {s1}"
     );
 }
 
@@ -7847,6 +7852,7 @@ async fn a_session_whose_one_pin_is_mains_auxiliary_one_reads_a_pinless_row_from
         "burn_at",
         "runway_ms",
         "runway_bounded",
+        "factor",
         "speed",
         "cycle_ms",
         "cache_ttl_ms",

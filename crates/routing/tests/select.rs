@@ -11,7 +11,7 @@ use phoebis_routing::{
     SlowDownState, StateWrite, UtilizationSample, WalkStep, Warmth, WarmthCause, WindowFacts,
     WindowReading, WindowSource, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR,
     IN_FLIGHT_RECLAIM_MS, MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE, SLOW_DOWN_MIN_HOLD_MS,
-    WEEK_MS,
+    SLOW_DOWN_WAIT_MS, WEEK_MS,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
@@ -23123,7 +23123,7 @@ fn stamped_over(
     let account = pinned(st, session).account_id;
     assert!(
         st.slow_down_state("p", &account)
-            .and_then(|entry| entry.ramp_since)
+            .and_then(|entry| entry.slowed_since)
             .is_some(),
         "the stamp turn read a factor under 1"
     );
@@ -24420,7 +24420,7 @@ fn the_ramp_pulls_the_factor_toward_one_over_one_burn_average_after_the_stretch_
     );
     assert_eq!(
         st.slow_down_state("p", "a")
-            .and_then(|entry| entry.ramp_since),
+            .and_then(|entry| entry.slowed_since),
         Some(started)
     );
     let edges = st.take_slow_down_edges(started);
@@ -24502,21 +24502,18 @@ fn the_ramp_pulls_the_factor_toward_one_over_one_burn_average_after_the_stretch_
 }
 
 #[test]
-fn a_read_whose_factor_is_one_clears_the_stamp_and_the_next_burst_ramps_from_nothing() {
+fn a_return_to_full_speed_inside_the_wait_continues_the_ramp_from_the_spans_start_and_one_past_it_ramps_from_nothing(
+) {
     let (off, on) = paced_pools(120, AVERAGE_MS);
     let mut st = slowed_s1(0.80);
     cycled(&mut st, &off, "s1", 10 * SECOND, T + 10 * SECOND);
-    let ramp_since = |st: &RoutingState| {
-        st.slow_down_state("p", "a")
-            .and_then(|entry| entry.ramp_since)
-    };
+    // The span opens at T + 20 s.
     decide(
         &mut st,
         &on,
         &main_turn(&on, "s1", T + 20 * SECOND),
         &mut rng(),
     );
-    assert_eq!(ramp_since(&st), Some(T + 20 * SECOND));
 
     // The burst ends: the window reads far under the ceiling and the factor returns to 1.
     reading(&mut st, "a", 0.1, 2 * HOUR, T + 30 * SECOND);
@@ -24532,9 +24529,8 @@ fn a_read_whose_factor_is_one_clears_the_stamp_and_the_next_burst_ramps_from_not
         (&FactValue::Number(1.0), &FactValue::Number(0.0)),
         "a factor of 1 applies no share of a slow-down"
     );
-    assert_eq!(ramp_since(&st), None, "a read of 1 clears the stamp");
 
-    // The burst comes back and ramps again from nothing.
+    // The burst comes back 10 s after the return, inside the wait, so the span and its ramp continue.
     reading(&mut st, "a", 0.80, 2 * HOUR, T + 40 * SECOND);
     let d = decide(
         &mut st,
@@ -24542,15 +24538,32 @@ fn a_read_whose_factor_is_one_clears_the_stamp_and_the_next_burst_ramps_from_not
         &main_turn(&on, "s1", T + 40 * SECOND),
         &mut rng(),
     );
-    assert!(
-        matches!(d.result, SelectResult::Selected(_)),
-        "the burst's first read holds nothing: {:?}",
-        d.result
-    );
     let shed = line(&d.record, "move:shed");
     assert!(number(fact(shed, "factor")) < 1.0, "{:?}", shed.facts);
-    assert_eq!(fact(shed, "ramp"), &FactValue::Number(0.0));
-    assert_eq!(ramp_since(&st), Some(T + 40 * SECOND));
+    assert_eq!(
+        fact(shed, "ramp"),
+        &FactValue::Number(20.0 / 1_800.0),
+        "the 20 s since the span opened over the 30-minute burn average"
+    );
+
+    // The burst ends again, and comes back once the return has lasted the wait, before any drain closed the span.
+    reading(&mut st, "a", 0.1, 2 * HOUR, T + 50 * SECOND);
+    decide(
+        &mut st,
+        &on,
+        &main_turn(&on, "s1", T + 50 * SECOND),
+        &mut rng(),
+    );
+    let back = T + 50 * SECOND + SLOW_DOWN_WAIT_MS;
+    reading(&mut st, "a", 0.80, 2 * HOUR, back);
+    let d = decide(&mut st, &on, &main_turn(&on, "s1", back), &mut rng());
+    let shed = line(&d.record, "move:shed");
+    assert!(number(fact(shed, "factor")) < 1.0, "{:?}", shed.facts);
+    assert_eq!(
+        fact(shed, "ramp"),
+        &FactValue::Number(0.0),
+        "a return that lasted the wait closed the span, so the burst ramps from nothing"
+    );
 }
 
 #[test]
@@ -24688,14 +24701,12 @@ fn a_selection_on_an_entry_read_before_its_windows_passed_reset_replaces_it_and_
             entry.reset,
             entry.speed,
             entry.over_since,
-            entry.ramp_since,
             entry.slowed_since
         ),
         (
             T + 50 * MINUTE,
             Some(T + 50 * MINUTE + 5 * HOUR),
             1.0,
-            None,
             None,
             None
         ),
@@ -24722,9 +24733,9 @@ fn a_read_under_1_that_replaces_a_stamped_stale_entry_takes_a_fresh_stamp_at_its
     reading(&mut st, "a", 0.93, 30 * MINUTE, T);
     let stale = slowed_at(&mut st, T + 30 * MINUTE, T);
     assert_eq!(
-        (stale.ramp_since, stale.slowed_since),
-        (Some(T), Some(T)),
-        "the old window's entry carries both stamps"
+        stale.slowed_since,
+        Some(T),
+        "the old window's entry carries the span's stamp"
     );
     st.take_slow_down_edges(T);
     // A minute past the reset the new window's first reading lands at half, and five hours of s1's burn, decayed over
@@ -24743,9 +24754,9 @@ fn a_read_under_1_that_replaces_a_stamped_stale_entry_takes_a_fresh_stamp_at_its
         entry.factor
     );
     assert_eq!(
-        (entry.read_at, entry.ramp_since, entry.slowed_since),
-        (at, Some(at), Some(at)),
-        "the replacing read stamps the ramp and the span at its instant, and no stamp of the old window carries over"
+        (entry.read_at, entry.slowed_since),
+        (at, Some(at)),
+        "the replacing read stamps the span at its instant, and no stamp of the old window carries over"
     );
     let edges = st.take_slow_down_edges(at);
     assert_eq!(edges.len(), 2, "{edges:?}");
@@ -24931,15 +24942,9 @@ fn the_selection_that_opens_a_window_after_an_idle_gap_writes_an_entry_the_next_
         .cloned()
         .expect("the turn wrote a's entry");
     assert_eq!(
-        (
-            entry.read_at,
-            entry.reset,
-            entry.factor,
-            entry.ramp_since,
-            entry.slowed_since
-        ),
-        (T + 50 * MINUTE, None, 1.0, None, None),
-        "the write replaced the old window's entry, and a read at a factor of 1 stamps no ramp and no span"
+        (entry.read_at, entry.reset, entry.factor, entry.slowed_since),
+        (T + 50 * MINUTE, None, 1.0, None),
+        "the write replaced the old window's entry, and a read at a factor of 1 stamps no span"
     );
     // The turn's upstream receipt opens the window a moment later, and its head names the reset five hours on.
     reading(&mut st, "a", 0.93, 5 * HOUR, T + 50 * MINUTE + 200);
@@ -24962,7 +24967,7 @@ fn the_selection_that_opens_a_window_after_an_idle_gap_writes_an_entry_the_next_
     );
     assert_eq!(
         st.slow_down_state("p", "a")
-            .and_then(|entry| entry.ramp_since),
+            .and_then(|entry| entry.slowed_since),
         Some(T + 51 * MINUTE),
         "the new window's ramp starts at its first read under 1, not at the old window's"
     );

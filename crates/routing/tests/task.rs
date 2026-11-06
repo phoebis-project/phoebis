@@ -13731,9 +13731,16 @@ async fn the_projections_ask_answers_the_slow_down_read_and_the_demand_beside_th
     assert!(entry.factor > 0.0 && entry.factor < 1.0, "{entry:?}");
     assert!(entry.stretch_ms > 0, "{entry:?}");
     assert_eq!(
-        (entry.speed, entry.since, entry.threshold_ms, entry.hold_ms),
-        (1.0, Some(stamped), 900_000, 90_000),
-        "the entry's own speed, its span's start and the pool's threshold and hold cap"
+        (
+            entry.speed,
+            entry.since,
+            entry.ramp,
+            entry.threshold_ms,
+            entry.hold_ms
+        ),
+        (1.0, Some(stamped), Some(1.0), 900_000, 90_000),
+        "the entry's own speed, its span's start, the whole ramp one burn average after it, and the pool's threshold \
+         and hold cap"
     );
     let five_hour = a.windows[FIVE_HOUR];
     assert!(
@@ -13808,18 +13815,25 @@ async fn pins_standing_answers_the_speed_and_the_cycle_of_a_pin() {
         panic!("the last read states its factor");
     };
     assert!(factor < 1.0, "{factor}");
+    let speed = projection_of_account(&handle.projections("p").await.unwrap(), "a")
+        .slow_down
+        .expect("the pinned reads wrote a's entry")
+        .speed;
     let standing = handle.pins_standing().await.unwrap();
     let of = |session: &str| {
         standing
             .iter()
             .find(|p| p.pin.session_id == session)
-            .map(|p| (p.speed, p.cycle_ms))
+            .map(|p| (p.factor, p.speed, p.cycle_ms))
             .unwrap_or_else(|| panic!("no pin of {session}: {standing:?}"))
     };
     assert_eq!(
         (of("s2"), of("s3")),
-        ((Some(factor), Some(12_000.0)), (Some(factor), None)),
-        "each pin reads its account's factor, and the cycle stands from a pin's third request on"
+        (
+            (Some(factor), Some(speed), Some(12_000.0)),
+            (Some(factor), Some(speed), None)
+        ),
+        "each pin reads its account's factor and realized speed, and the cycle stands from a pin's third request on"
     );
 }
 

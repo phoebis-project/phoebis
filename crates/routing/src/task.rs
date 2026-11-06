@@ -26,8 +26,8 @@ use crate::record::{
 };
 use crate::select::{
     decide, obstacle, pace_of, passes_reset, projection_of, projections_of, release_reasons,
-    routed_agent, BurnRead, Decided, FailedOver, Obstacle, Refusal, SelectRequest, SelectResult,
-    MAIN_AGENT, RATE_LIMIT_REASON,
+    routed_agent, slow_down_ramp, BurnRead, Decided, FailedOver, Obstacle, Refusal, SelectRequest,
+    SelectResult, MAIN_AGENT, RATE_LIMIT_REASON,
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, burn_folded, ceiling, default_burn_average_ms,
@@ -1242,6 +1242,9 @@ pub struct AccountSlowDown {
     pub speed: f64,
     /// When the factor first read under 1 since it last read 1, `None` outside a span.
     pub since: Option<i64>,
+    /// The share of the factor the holds apply at the ask's instant, by the selection's own rule, `None` outside a
+    /// span.
+    pub ramp: Option<f64>,
     pub stretch_ms: i64,
     pub threshold_ms: i64,
     pub hold_ms: i64,
@@ -1277,6 +1280,8 @@ pub struct PinStanding {
     /// The window the runway reads, `None` unless it is bounded.
     pub binding: Option<String>,
     /// The account's factor from the slow-down entry in force, `None` without one.
+    pub factor: Option<f64>,
+    /// The speed the account's holds realized, from the same entry, `None` where `factor` is.
     pub speed: Option<f64>,
     /// The pin's cycle from its pace, `None` until two requests of the pin after its placement have measured a gap
     /// under the pool's burn average.
@@ -2681,6 +2686,19 @@ fn projections(
                         factor: entry.factor,
                         speed: entry.speed,
                         since: entry.slowed_since,
+                        ramp: entry.slowed_since.map(|_| {
+                            let at_ceiling =
+                                state.predicted(account_id, FIVE_HOUR, now).is_some_and(
+                                    |reading| reading.utilization >= ceiling(pool, FIVE_HOUR),
+                                );
+                            slow_down_ramp(
+                                Some(entry),
+                                at_ceiling,
+                                entry.factor,
+                                burn_average_ms(pool),
+                                now,
+                            )
+                        }),
                         stretch_ms: entry.stretch_ms,
                         threshold_ms: entry.threshold_ms,
                         hold_ms: slow_down_hold_ms(pool),
@@ -2704,8 +2722,8 @@ fn projections(
 /// Every pin with its burn decayed to `now` by its pool's burn average (the default preset's for a key whose pool left
 /// the registry) and its runway on its own account under that pool, read by `standing_runway` once per pool, account
 /// and set of windows, since the account's projection already holds every pin's burn and every pin drawing those
-/// windows there reads the same runway. Each pin reads its account's factor from the slow-down entry in force under
-/// that pool, its cycle from its pace, and its agent's and its session's main agent's first placements.
+/// windows there reads the same runway. Each pin reads its account's factor and realized speed from the slow-down entry
+/// in force under that pool, its cycle from its pace, and its agent's and its session's main agent's first placements.
 fn pins_standing(state: &RoutingState, snapshot: &RegistrySnapshot, now: i64) -> Vec<PinStanding> {
     type Runway = Option<(Option<i64>, Option<String>)>;
     let mut runways: HashMap<(String, String, Vec<&'static str>), Runway> = HashMap::new();
@@ -2731,9 +2749,9 @@ fn pins_standing(state: &RoutingState, snapshot: &RegistrySnapshot, now: i64) ->
                 None => (None, None, None),
                 Some((runway_ms, binding)) => (runway_ms, Some(runway_ms.is_some()), binding),
             };
-            let speed = pool
+            let slow_down = pool
                 .and_then(|pool| state.slow_down_in_force(pool, &pin.account_id, now))
-                .map(|entry| entry.factor);
+                .map(|entry| (entry.factor, entry.speed));
             let cycle_ms = state.pin_pace(&pin.key()).and_then(|pace| pace.cycle_ms);
             let auxiliary_only = state.auxiliary_only(&pin.key());
             let effort = effort_of(&pin).map(String::from);
@@ -2744,7 +2762,8 @@ fn pins_standing(state: &RoutingState, snapshot: &RegistrySnapshot, now: i64) ->
                 runway_ms,
                 runway_bounded,
                 binding,
-                speed,
+                factor: slow_down.map(|(factor, _)| factor),
+                speed: slow_down.map(|(_, speed)| speed),
                 cycle_ms,
                 auxiliary_only,
                 effort,

@@ -79,8 +79,10 @@ pub(crate) struct Session {
     /// Null where the account projects none of the windows the pin's model draws, false for an unbounded runway or one
     /// past the window's reset, true where `runway_ms` is set.
     pub runway_bounded: Option<bool>,
-    /// The pin's account's factor from the slow-down entry in force, null on a row with no pin and where no entry is
-    /// in force.
+    /// The pin's account's factor under the slow-down, from the entry in force, null on a row with no pin and where no
+    /// entry is in force.
+    pub factor: Option<f64>,
+    /// The speed the holds realized, from 0 to 1, beside `factor`, null where `factor` is.
     pub speed: Option<f64>,
     /// The pin's cycle in milliseconds, null until two requests of the pin after its placement have measured a gap
     /// under the pool's burn average, and on a row with no pin.
@@ -417,6 +419,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                 burn_at: priced.at,
                 runway_ms: standing.runway_ms,
                 runway_bounded: standing.runway_bounded,
+                factor: standing.factor,
                 speed: standing.speed,
                 cycle_ms: standing.cycle_ms,
                 cache_ttl_ms: Some(p.cache_ttl_ms),

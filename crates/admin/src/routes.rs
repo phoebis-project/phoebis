@@ -2035,6 +2035,7 @@ fn slow_down_view(ctx: &AccountContext, account_id: &str) -> Option<AccountSlowD
         factor: entry.factor,
         speed: entry.speed,
         since: entry.since,
+        ramp: entry.ramp,
         stretch_ms: entry.stretch_ms,
         threshold_ms: entry.threshold_ms,
         hold_ms: entry.hold_ms,
@@ -2324,6 +2325,9 @@ pub(crate) struct AccountSlowDownView {
     pub speed: f64,
     /// Epoch milliseconds: when the factor first read under 1 since it last read 1, null outside a span.
     pub since: Option<i64>,
+    /// The share of the factor the holds apply, from 0 to 1 by the selection's own rule: 1 at the ceiling or once one
+    /// burn average has passed since `since`, 0 at a factor of 1. Null outside a span.
+    pub ramp: Option<f64>,
     /// How long before the reset the sessions' unpaced demand would pass the window's ceiling, 0 when it never does.
     pub stretch_ms: i64,
     /// The pool's `slow_down_stretch_seconds` at the read, in milliseconds.

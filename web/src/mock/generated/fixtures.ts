@@ -11170,6 +11170,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "active_pins": 4,
               "pace_score": 0.005952380952380952,
               "burn": null,
+              "factor": null,
               "speed": null
             },
             {
@@ -11190,6 +11191,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "active_pins": 2,
               "pace_score": 1,
               "burn": null,
+              "factor": null,
               "speed": null
             },
             {
@@ -11204,6 +11206,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "active_pins": 0,
               "pace_score": 1,
               "burn": null,
+              "factor": null,
               "speed": null
             }
           ],
@@ -11558,6 +11561,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "active_pins": 0,
               "pace_score": 60,
               "burn": null,
+              "factor": null,
               "speed": null
             }
           ],
@@ -16876,6 +16880,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "runway_ms": null,
           "runway_bounded": null,
           "cache_ttl_ms": 300000,
+          "factor": null,
           "speed": null,
           "cycle_ms": null,
           "last_input_tokens": 0,
@@ -16931,6 +16936,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "runway_ms": null,
           "runway_bounded": null,
           "cache_ttl_ms": 300000,
+          "factor": null,
           "speed": null,
           "cycle_ms": null,
           "last_input_tokens": 0,
@@ -16986,6 +16992,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "runway_ms": null,
           "runway_bounded": null,
           "cache_ttl_ms": 300000,
+          "factor": null,
           "speed": null,
           "cycle_ms": null,
           "last_input_tokens": 52000,
@@ -17065,6 +17072,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_ttl_ms": null,
           "last_input_tokens": null,
           "effort": null,
+          "factor": null,
           "speed": null,
           "cycle_ms": null,
           "last_refresh_at": null,
@@ -17108,6 +17116,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_ttl_ms": null,
           "last_input_tokens": null,
           "effort": null,
+          "factor": null,
           "speed": null,
           "cycle_ms": null,
           "last_refresh_at": null,
@@ -17151,6 +17160,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_ttl_ms": null,
           "last_input_tokens": null,
           "effort": null,
+          "factor": null,
           "speed": null,
           "cycle_ms": null,
           "last_refresh_at": null,

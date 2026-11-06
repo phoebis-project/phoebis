@@ -752,13 +752,16 @@ every session there gets the same stretch. The factor lives in memory beside the
 selection on the account and read until the next write, so a quiet account reads unslowed again at the purge tick and a
 restart starts from none. An entry read before its 5-hour window's passed reset answers nothing, the entry's own reset
 answering where the latest reading names none, the purge tick drops it, and a span the reset ends is recorded to the
-reset. The holds apply the factor in proportion to the share of one `burn_average_seconds` the stretch has read over
-zero for, so a burst of a few minutes that would project past the ceiling costs holds in proportion to how long it has
-stood, and the full factor applies after one burn average. A window already at or past its ceiling takes its full factor
-at once, since its standing is measured and not projected. The ramp restarts with every window, since the reset clears
-the stamp, and the routing log's shed line shows the share as `ramp`, 0 wherever the factor reads 1, since nothing is
-held then. The holds realize the factor as a speed, which the router averages over `burn_average_seconds` beside the
-burn, and the demand every reader above divides by is that speed.
+reset. The holds apply the factor in proportion to the share of one `burn_average_seconds` that has passed since the
+account's slowed span opened, so a burst of a few minutes that would project past the ceiling costs holds in proportion
+to how long it has stood, and the full factor applies after one burn average. The span opens at the factor's first read
+under 1 and stays open through a return to 1 shorter than two minutes, so a burst that comes back inside that wait
+continues the ramp where it stood, and a return that lasts the wait closes the span and its ramp, the next burst ramping
+from nothing. A window already at or past its ceiling takes its full factor at once, since its standing is measured and
+not projected. The ramp restarts with every window, since the reset ends the span, and the routing log's shed line shows
+the share as `ramp`, 0 wherever the factor reads 1, since nothing is held then. The holds realize the factor as a speed,
+which the router averages over `burn_average_seconds` beside the burn, and the demand every reader above divides by is
+that speed.
 
 The hold is served before the response head, inside the selection, as a `held` decision with the reason `slow_down`: the
 request waits the pin's cycle times `1 / f - 1` for the factor `f` the ramp leaves, so a session at half speed waits one
@@ -809,7 +812,9 @@ request of the account waits the full cap, so an account at the ceiling serves o
 cap until the reset while its probes, counts and compactions pass unheld. The `shedding_off` warning fires for a pool
 with both switches off alone. The account's factor, its stretch against the threshold, each hold and the two events that
 bracket a slowed span, `slow_down_started` and `slow_down_ended`, are on the console's [Pools](console.md#pools),
-[Quota](console.md#quota) and [Routing log](console.md#routing-log) views.
+[Quota](console.md#quota) and [Routing log](console.md#routing-log) views. The account's `slow_down` on
+`GET /admin/accounts/{id}` names the factor, the realized speed, the span's start and the ramp, `GET /admin/sessions`
+names the factor and the realized speed of each pin's account, and `GET /admin/pools` those of each member.
 
 ## Cooldowns and failover
 
@@ -832,7 +837,10 @@ reset is not refused by a clock a hair behind.
 
 A shared window is healthy when its status reads `allowed` or `allowed_warning`, or when the status is absent and the
 window's own utilization reads below 1.0. An absent status with no utilization, or any other status value, is not
-evidence that the window is fine, and the rejection cools the whole account.
+evidence that the window is fine, and the rejection cools the whole account. A reading taken after the rejection lifts
+an account-wide rate-limit row before its deadline: a claim on the 5-hour or the 7-day window recovers once that window
+reads under 1.0, and a claim on another week, or on a shared window the account's window set no longer holds, once every
+shared window the set still holds reads under 1.0.
 
 The two model-scoped rows apply to a model whose family has a week of its own in the family table (Fable, whose week is
 `seven_day_fable`). The row cools that model on the account and recovers once a reading of that week is under 1.0. The
