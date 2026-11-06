@@ -24147,9 +24147,15 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     // The Agents table reads each line's own facts beside the session's: the written session's main line first with
     // its own pin (claude-fable-5-1 at high effort, 16,228 tokens), main's two seed rows summed into its Requests, then
     // the busy subagent 4d1a on its own pin (22,000 tokens), whose one seed row ledgered no request. The table closes
-    // on the agent's menu, labeled with the agent.
+    // on the agent's menu, labeled with the agent. An agent's "+N" counts the accounts other than its line's: on the
+    // story's first session, a primary one, e4b7's line sits on nightly and its seed rows spent $1.31 on primary and
+    // secondary, $0.77 of it billed on an API key, so its Cost cell reads +$ and +2, where the session's account
+    // would leave +1.
     const page = await mount('/sessions', { now: CLOCK_ORIGIN });
     const { heads, rows } = agentsOf(await openRow(page, written));
+    const elsewhere = agentsOf(await openRow(page, story)).rows.find((r) => r.agent === 'e4b7');
+    const elsewhereCost = elsewhere?.tr.children[heads.indexOf('Cost')] ?? null;
+    const elsewhereRead = { badges: [...(elsewhereCost?.querySelectorAll('.badge') ?? [])].map(textOf), figure: textOf(elsewhereCost?.querySelector('.srow__pin')?.firstChild), sub: elsewhere?.costSub ?? null };
     page.unmount();
     const main = rows.find((r) => r.agent === 'main');
     const busy = rows.find((r) => r.agent === '4d1a');
@@ -24192,9 +24198,14 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     };
     const read = { busy: pick(busy), main: pick(main) };
     results.push({
-      name: "/sessions an open row's Agents table reads Agent, Type, Model, Account, Context, Burn, Requests, Cost, Status, Cache and the menu, main first, each line its own pin's facts and its agent's requests",
-      ok: absent.length === 0 && JSON.stringify(heads) === JSON.stringify(['Agent', 'Type', 'Model', 'Account', 'Context', 'Burn', 'Requests', 'Cost', 'Status', 'Cache', '']) && rows[0]?.agent === 'main' && JSON.stringify(read) === JSON.stringify({ busy: want.busy, main: want.main }),
-      missing: [JSON.stringify(heads), JSON.stringify(read), `want ${JSON.stringify(want)}`],
+      name: "/sessions an open row's Agents table reads Agent, Type, Model, Account, Context, Burn, Requests, Cost, Status, Cache and the menu, main first, each line its own pin's facts and its agent's requests, its +N counting the accounts other than the line's",
+      ok:
+        absent.length === 0 &&
+        JSON.stringify(heads) === JSON.stringify(['Agent', 'Type', 'Model', 'Account', 'Context', 'Burn', 'Requests', 'Cost', 'Status', 'Cache', '']) &&
+        rows[0]?.agent === 'main' &&
+        JSON.stringify(read) === JSON.stringify({ busy: want.busy, main: want.main }) &&
+        JSON.stringify(elsewhereRead) === JSON.stringify({ badges: ['+$', '+2'], figure: '$1.31', sub: 'equivalent' }),
+      missing: [JSON.stringify(heads), JSON.stringify(read), `want ${JSON.stringify(want)}`, `e4b7 ${JSON.stringify(elsewhereRead)}`],
     });
   }
   {
