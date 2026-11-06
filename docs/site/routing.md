@@ -733,9 +733,9 @@ ended at an authentication failure that marked nothing, with no cooldown or mark
 session renewing it meanwhile, records the single reason `client_error`: it never served, so the session's next request
 is placed afresh rather than moved. Releasing a session by hand, from the Sessions view
 ([Sessions](console.md#sessions)) or `POST /admin/sessions/{key}/{session}/release`, expires its pin the same way. In
-the routing log, a `placed` decision whose session's pin sat on another account until a pause, a cooldown, a pool
-change, a subscription end or an idle expiry released it names that account as its source (`from_account_id`), and one
-placed after the purge took the row, a release by hand or a client error names none.
+the routing log, a `placed` decision whose session's pin the selection released off another account, for any of the
+reasons above, names that account as its source (`from_account_id`), and one placed after the purge took the row, a
+release by hand or a client error names none.
 
 ### Slow-down
 
