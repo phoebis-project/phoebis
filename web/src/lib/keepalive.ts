@@ -507,8 +507,11 @@ export function hiddenLines(row: MatchRow, filters: SessionFilters): { hidden: n
   return { hidden: drawn.length - shown.length + earlierAgents(row.session, row.lines).length, shown };
 }
 
-/** The agents the bar's count names over the kept rows, each row's matching lines counted as the Agents cell counts. */
-export const matchingAgents = (rows: readonly MatchRow[], filters: SessionFilters): number => rows.reduce((n, row) => n + agentCount(hiddenLines(row, filters).shown), 0);
+/**
+ * The agents the bar's count names over the kept rows' `hiddenLines` answers, each row's matching lines counted as the
+ * Agents cell counts.
+ */
+export const matchingAgents = (drawn: Iterable<Pick<ReturnType<typeof hiddenLines>, 'shown'>>): number => [...drawn].reduce((n, row) => n + agentCount(row.shown), 0);
 
 /** Whether any Agents filter stands. */
 export const agentFiltersStand = (filters: SessionFilters): boolean =>

@@ -383,13 +383,13 @@ export function SessionsPage() {
   const listed = useMemo(() => built?.filter((r) => r.expiresAt === null || r.expiresAt > now) ?? null, [built, now]);
   // The expiry stays the outer bound, and the filters narrow the list inside it.
   const rows = useMemo(() => listed?.filter((r) => matches(r, filters, now)) ?? null, [listed, filters, now]);
-  // The lines each kept row draws under the filters and how many the filters fold away, which its detail and its Next
-  // probe cell read.
+  // The lines each kept row draws under the filters and how many the filters fold away, which its detail, its Next
+  // probe cell and the bar's count read.
   const drawn = useMemo(() => new Map((rows ?? []).map((r) => [rowKey(r.session), hiddenLines(r, filters)])), [rows, filters]);
   const options = useMemo(() => (listed === null ? {} : filterOptions(listed, keys.data, pools.data ?? [], accounts.data ?? [], modelTiers)), [listed, keys.data, pools.data, accounts.data, modelTiers]);
   const hiddenRows = listed !== null && rows !== null ? listed.length - rows.length : 0;
   const hiddenTitle = hiddenRows > 0 ? `${fmtCount(hiddenRows, 'session')} hidden by the filters` : undefined;
-  const agentsKept = rows === null ? 0 : matchingAgents(rows, filters);
+  const agentsKept = matchingAgents(drawn.values());
   const matching = agentFiltersStand(filters);
   const countWords = rows === null ? '' : `${fmtCount(rows.length, 'session')} · ${fmtCount(agentsKept, matching ? 'matching agent' : 'agent')}`;
   const summary = rows === null ? null : daySummary(rows);

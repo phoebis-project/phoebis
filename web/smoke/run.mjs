@@ -24166,18 +24166,17 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     });
   }
   {
-    // The summary line under the card's title, over the rows the filters keep: the 35 agents the Agents cells count,
-    // 10 busy, 6 idle and 4 parked among them, nightly's notebook row (`sessionSpec[19]`) counted in none of the three,
-    // since no mod reports it and its main reads unreported over the idle word the engine holds, the 86 client
-    // requests of the last 24 hours the rows' `day` folds and
-    // their spend, the figure in the chosen week, then the $1.40 the day billed in dollars, $1.4036 over these rows of
-    // the request seed (mock/requests.ts): e4b7's row the seed draws onto the story's first session (`SESSION_IDS[0]`)
-    // on desktop, on overflow's API key on claude-fable-5-1 ($0.7747), the written session's row on overflow's API key
-    // that the Cost case names ($0.4812), the fleet session's three written rows on the fleet key, on contract's
-    // usage-based seat on claude-opus-5-5 and claude-sonnet-5-5 ($0.0554, $0.0174 and $0.0337), 0b7f's written row on
-    // story 4's desktop session in nightly's overage on claude-sonnet-5 ($0.0055) and the failover on story 5's desktop
-    // session that ends on overflow's API key on claude-sonnet-4-6 (`REJECTION_STORY_ID`, $0.0357). The card's title
-    // carries its sentence on hover.
+    // The summary line under the card's title, over the rows the filters keep: the 35 agents the Agents cells count, 10
+    // busy, 6 idle and 4 parked among them, nightly's notebook row (`sessionSpec[19]`) counted in none of the three,
+    // since no mod reports it and its main reads unreported over the idle word the engine holds, the 86 client requests
+    // of the last 24 hours the rows' `day` folds and their spend, the figure in the chosen week, then the $1.40 the day
+    // billed in dollars, $1.4036 over these rows of the request seed (mock/requests.ts): e4b7's row the seed draws onto
+    // the story's first session (`SESSION_IDS[0]`) on desktop, on overflow's API key on claude-fable-5-1 ($0.7747), the
+    // written session's row on overflow's API key that the Cost case names ($0.4812), the fleet session's three written
+    // rows on the fleet key, on contract's usage-based seat on claude-opus-5-5 and claude-sonnet-5-5 ($0.0554, $0.0174
+    // and $0.0337), 0b7f's written row on story 4's desktop session in nightly's overage on claude-sonnet-5 ($0.0055)
+    // and the failover on story 5's desktop session that ends on overflow's API key on claude-sonnet-4-6
+    // (`REJECTION_STORY_ID`, $0.0357). The card's title carries its sentence on hover.
     const card = page.container.querySelector('.card--table');
     const subtitle = card?.querySelector('.card__subtitle')?.textContent ?? '';
     const parts = /^(.*) · (.*) requests and (.*) \+ (\$[\d.]+) in 24 h$/.exec(subtitle);
