@@ -3021,8 +3021,8 @@ impl Engine {
         inner.set_aside(&key, &agent_id, now);
         // A session takes its slots at its first real request, so both caps are read here, the session cap first as a
         // registration reads them, and the session's agents join the agent count only where they all fit. A first
-        // request over either cap is refused the slot as a registration over it is: it keeps nothing and writes no
-        // request time, so the session's next request reads the caps again.
+        // request over either cap is refused the slot as a registration over it is: it keeps nothing and leaves the
+        // session's request time unwritten, so the session's next request reads the caps again.
         if !inner.sessions[&key].requested() {
             let joining = inner.sessions[&key].agents.len();
             let refused = if inner.live_sessions() >= inner.limits.max_sessions {
@@ -3033,6 +3033,11 @@ impl Engine {
                 None
             };
             if let Some(reason) = refused {
+                // The agent saw a real request, so the view lists its line with the cause, while the session's own
+                // request time stays unwritten and the session still holds no slot.
+                let agent = agent_mut(&mut inner.sessions, &key, &agent_id).expect(AGENT_HELD);
+                agent.last_real_at = Some(now);
+                agent.canonical_model = observed.canonical_model.clone();
                 inner.drop_aside(&key, &agent_id);
                 inner.set_reason(&key, &agent_id, reason);
                 return;

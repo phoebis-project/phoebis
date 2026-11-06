@@ -26,8 +26,10 @@ async fn the_session_bound_counts_live_sessions_only() {
         ..RigSpec::default()
     })
     .await;
+    // Each sends a request before its end, so the end alone is what leaves it no slot.
     for i in 0..128 {
         rig.event(session_start(&format!("s-{i}"))).unwrap();
+        first_request(&rig, "desktop", &format!("s-{i}"));
         rig.event(session_end(&format!("s-{i}"))).unwrap();
     }
     let ack = rig.event(session_start("s-128"));

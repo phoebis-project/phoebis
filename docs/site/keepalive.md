@@ -77,7 +77,7 @@ every model request of its process, `X-Keepalive-Owner-Id`, to tell that process
 the same session id, leaving the session's recipes as they were and counting the mismatch when the header names another
 owner, and strips the header before a request leaves. Once the holder's lease has lapsed, a real request naming another
 owner takes the session over for that owner. A registration starts main `busy` under the cause `awaiting_request` until
-the session's first request.
+its first request.
 
 ## Turning it on
 

@@ -741,7 +741,8 @@ fn start_agent(r: &mut Rig, agent: &str) {
 
 /// A session holds a slot of `max_sessions` from its first real request, so under a cap of one a second session
 /// registers beside the rig's, which has sent nothing, and the first of the two to send a request takes the slot. The
-/// other's first request is then refused as a registration over the cap is, and keeps nothing.
+/// other's first request is then refused as a registration over the cap is, keeps nothing, and lists its line on the
+/// view with the cause.
 #[tokio::test]
 async fn a_registered_session_holds_no_slot_until_its_first_request_and_one_over_the_session_cap_keeps_nothing(
 ) {
@@ -774,6 +775,21 @@ async fn a_registered_session_holds_no_slot_until_its_first_request_and_one_over
             held,
             1
         )
+    );
+    let line = r
+        .engine
+        .recipes()
+        .into_iter()
+        .find(|v| v.session_id == "other" && v.agent_id == "main")
+        .map(|v| (v.cause, v.model, v.state));
+    assert_eq!(
+        line,
+        Some((
+            Reason::SessionLimit,
+            "claude-sonnet-4-5".to_string(),
+            RecipeState::NotRetained
+        )),
+        "the refused request's line shows its cause and its model"
     );
 }
 

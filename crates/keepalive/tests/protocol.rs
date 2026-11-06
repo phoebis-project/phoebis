@@ -1672,6 +1672,7 @@ async fn a_revival_that_would_register_main_past_the_agent_cap_answers_agent_lim
         ..RigSpec::default()
     })
     .await;
+    r.observe("main").await;
     r.event(session_end("session")).unwrap();
     r.advance(3_600_000);
     r.step().await;
@@ -1701,4 +1702,33 @@ async fn a_revival_that_would_register_main_past_the_agent_cap_answers_agent_lim
         "instance_ended",
         "and left the session ended"
     );
+}
+
+/// The end of a session that sent a request releases its agents, and each released record keeps its slot of the agent
+/// cap until it leaves one cache TTL after the end, so a registration that needs main's slot is refused until the leave
+/// and admitted at it.
+#[tokio::test]
+async fn an_ended_sessions_released_records_hold_their_agent_slots_until_they_leave() {
+    let mut r = rig(RigSpec {
+        limits: phoebis_keepalive::KeepaliveLimits {
+            max_agents: 1,
+            ..RigSpec::default().limits
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    r.observe("main").await;
+    r.event(session_end("session")).unwrap();
+    r.advance(3_599_999);
+    r.step().await;
+    let refused = r.event(session_start("other")).unwrap_err();
+    assert_eq!(
+        (refused.code, refused.status),
+        ("agent_limit", 429),
+        "main's released record still holds its slot"
+    );
+    r.advance(1);
+    r.step().await;
+    r.event(session_start("other"))
+        .expect("the leave frees main's slot");
 }
