@@ -460,7 +460,7 @@ async fn an_oauth_account_whose_stored_uuid_is_malformed_answers_503_and_files_r
 
 /// Mirrors `MAX_BODY_ELEMENTS`, which no reader outside the relay's crate reaches, so a change to the bound turns the
 /// case below red until this follows it.
-const ELEMENT_BOUND: usize = 2_000_000;
+const ELEMENT_BOUND: usize = 1_000_000;
 
 /// `BODY`'s members with a lone quote for the prompt, so an escaped quote stands ahead of the elements, and a top-level
 /// `filler` array of `empties` empty arrays, then `extra`, then a last string holding brackets and commas. Outside

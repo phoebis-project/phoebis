@@ -44,7 +44,7 @@ and a body that runs past the bound (`request_too_large`). A gzip body is then i
 (`body_budget_exhausted` where the budget cannot hold the inflated bound, `invalid_body` where the bytes are not valid
 gzip, and `request_too_large`), so every later read and edit sees the plain bytes.
 
-A body holding more than 2,000,000 elements, each `[`, `{` and `,` outside a string, is refused before it is parsed
+A body holding more than 1,000,000 elements, each `[`, `{` and `,` outside a string, is refused before it is parsed
 (`body_shape`), since a body of many tiny elements builds a parsed tree far larger than itself ([Compiled-in
 limits](installation.md#compiled-in-limits)). The body's facts are read once, the parsed tree beside them, and the
 ledger's standing is checked before the first fact is published, so no request is accepted that the writer cannot record

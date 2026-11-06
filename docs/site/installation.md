@@ -832,7 +832,7 @@ Rows in alphabetical order of the limit's name. None of these has a bootstrap ke
 | --- | --- |
 | Admin login throttle | Five failed logins per minute, then `too many failed logins, try again in a minute`. |
 | Admin session lifetime | 15 minutes idle, 12 hours absolute. With "Stay logged in", 30 days from the last read, across a restart, until a secret rotation or a kept logout. |
-| Body elements | 2,000,000 elements in a request body, counted before the parse. Above it the body is refused `body_shape`. |
+| Body elements | 1,000,000 elements in a request body, counted before the parse. Above it the body is refused `body_shape`. |
 | Chunk framing | 1 KiB per chunk-size line and 16 KiB of trailers from an upstream. |
 | Connection cap | 4,096 on the proxy listener, 256 on the admin listener, 64 on the metrics listener. |
 | Cooldown booking | Seven days ahead of each announcement, and a later announcement books the next stretch. |

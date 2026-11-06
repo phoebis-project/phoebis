@@ -48,8 +48,9 @@ does not help where the session's main turns pass ([Client drift](relay.md#clien
 account's malformed stored uuid files as rejected, and every answer of the side routes carries
 `Cache-Control: no-store`, a refusal of a malformed path among them ([When nothing can
 serve](routing.md#when-nothing-can-serve), [What the proxy accepts](client.md#what-the-proxy-accepts)). A body holding
-more than 2,000,000 elements is refused `400` `body_shape` before it is parsed, so a body of many tiny elements cannot
-build a parsed tree past about 461 MiB ([Admission](relay.md#admission)).
+more than 1,000,000 elements is refused `400` `body_shape` before it is parsed, so a body of many tiny elements cannot
+build a parsed tree past about 346 MiB, what nested single-entry objects (the dearest shape measured) build at the bound
+([Admission](relay.md#admission)).
 
 A key routes into one pool ([Pools, keys and routing](routing.md)), and every request it presents is placed on one
 account by the session's pin, the pool's strategy and each account's quota. A live pin moves only by one of five rules,

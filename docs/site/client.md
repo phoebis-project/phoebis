@@ -311,7 +311,7 @@ check nor restamp (a key on its path, the billing line's header name or its `cch
 stamped `text` in the first `system` block), and a body without the `metadata.user_id` an account is bound into. Each is
 refused before anything reaches the upstream, whether or not the request needs an edit. A billing line the strict
 decoder refuses for a lone surrogate escape is refused before anything reaches the upstream too, on a request whose line
-the relay restores. A body holding more than 2,000,000 elements, each `[`, `{` and `,` outside a string, is refused
+the relay restores. A body holding more than 1,000,000 elements, each `[`, `{` and `,` outside a string, is refused
 before the relay parses it ([Compiled-in limits](installation.md#compiled-in-limits)). A body that nests deeper than the
 relay reads, or is not a JSON object, is `invalid_body` instead.
 
