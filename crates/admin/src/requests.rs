@@ -831,10 +831,11 @@ pub(crate) fn flag(q: &HashMap<String, String>, name: &str) -> bool {
 
 /// The words a parameter takes as its refusal lists them, `a, b or c`.
 pub(crate) fn one_of(words: &[&str]) -> String {
-    let (last, rest) = words
-        .split_last()
-        .expect("a parameter takes at least two words");
-    format!("{} or {last}", rest.join(", "))
+    match words {
+        [] => panic!("a parameter takes at least one word"),
+        [word] => word.to_string(),
+        [rest @ .., last] => format!("{} or {last}", rest.join(", ")),
+    }
 }
 
 /// `GET /admin/requests`'s query.
