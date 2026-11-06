@@ -3703,6 +3703,13 @@
   margin-left: 6px;
 }
 
+/* The stripe rule paints the Agents table's even rows alone, so its odd rows show what stands behind the table, and the
+   detail cell of a striped session row is itself striped. The card's fill under the table keeps its rows alternating
+   under every session row. */
+.sessions-table .agents-table {
+  background: var(--surface);
+}
+
 /* The Agents table nests in the session table, whose descendant rules would give it their 5 px cells and one-line text:
    its own inset, 8 px before each cell and none after, keeps the head's first and last cells level with its body's and
    leaves the eleven columns room at 1280 px, and its text wraps, so a type breaks at its hyphen where room runs out,
