@@ -627,9 +627,9 @@ hold again at the first read. The four routing conditions, `wall_reached`, `dest
 restart holds them again at the first fold. `meter_drift` lands in the same table by the same fold, from the reconciled
 windows rather than the events, so a restart holds it again at the first fold too. Of the keepalive engine's three
 conditions, `keepalive_bus_gaps` starts over, since the engine keeps its gaps in memory alone, `keepalive_cap` holds
-again once the engine has read its saved sessions, agents and recipes back from the registry at start ([A router
-restart](keepalive.md#a-router-restart)), and `expired_between_turns`, read from the ledger's hourly rollups, holds
-again at the first read.
+again once the engine has read its saved sessions, agents and recipes back from the registry at start, and only where
+those still reach 90 percent of a cap ([A router restart](keepalive.md#a-router-restart)), and `expired_between_turns`,
+read from the ledger's hourly rollups, holds again at the first read.
 
 | Kind | Tone | Subject | Clears when |
 | --- | --- | --- | --- |
@@ -805,8 +805,8 @@ item opens the routing log on the account's slow-down starts and ends since the 
 
 **`keepalive_cap`** holds while one of the keepalive engine's caps, its live sessions, its agent records or its retained
 prompts' bytes, stands at 90 percent of its max or more, each cap a series of its own. At a max the engine refuses what
-would pass it, a new session, agent record or recipe, the retained bytes once its evictions cannot make room ([Holds and
-lapses](keepalive.md#holds-and-lapses)), and the maxes are the bootstrap file's `keepalive` block
+would pass it, a new session, agent record or recipe, a recipe at the retained bytes' max only once its evictions cannot
+make room ([Holds and lapses](keepalive.md#holds-and-lapses)), and the maxes are the bootstrap file's `keepalive` block
 ([keepalive](installation.md#keepalive)). The subject is the cap, `keepalive.sessions`, `keepalive.agents` or
 `keepalive.retained`, and the item dates from the first read of this process that saw it. The detail names the cap with
 its count, its max and the share, which the dashboard's line reads as `Keepalive cap at {pct}: {cap}` in the warning
