@@ -129,6 +129,16 @@ test('isFinished reads a session whose main ended with it or was released, or wh
   assert.equal(d.isFinished(session('idle', 'scheduled'), []), false);
 });
 
+test('withinExpiry keeps a session whose last use lies inside the expiry of now and drops one at the bound, reads the last request where no use stands, and keeps every session while the expiry is unknown', () => {
+  const now = Date.UTC(2026, 8, 16, 14, 30);
+  const at = (msAgo) => new Date(now - msAgo).toISOString();
+  assert.equal(d.withinExpiry({ lastRequestAt: null, lastUsedAt: at(HOUR - 1) }, 3_600, now), true);
+  assert.equal(d.withinExpiry({ lastRequestAt: null, lastUsedAt: at(HOUR) }, 3_600, now), false);
+  assert.equal(d.withinExpiry({ lastRequestAt: at(HOUR), lastUsedAt: null }, 3_600, now), false);
+  assert.equal(d.withinExpiry({ lastRequestAt: at(HOUR - 1), lastUsedAt: null }, 3_600, now), true);
+  assert.equal(d.withinExpiry({ lastRequestAt: null, lastUsedAt: at(HOUR) }, null, now), true);
+});
+
 test('contextCell reads the tokens compact, and a dash with none or before the first turn', () => {
   assert.deepEqual([d.contextCell(184_000), d.contextCell(18_400)], ['184K', '18.4K']);
   assert.deepEqual([d.contextCell(null), d.contextCell(0)], ['-', '-'], 'a session with no pin or no figure, and a pin before its first turn');
