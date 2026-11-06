@@ -344,14 +344,16 @@ wrap at both widths, the wrap's scroll and client widths recorded, and the first
 Last used cells of the first row whose Status reads unreported on its session id's line, its top and its height), the
 Agents tables (on every row Expand all opens at 1280 by 800, each earlier agents line opened: each table inside its
 detail panel's client width with its eleven heads closing on the menu's, its head cells in the type size, weight and ink
-of the session table's, the table whose narrowest layout is widest recorded with that width), the Sessions bar's sort
-control and its order (on loads of its own that end on the bare view: the Sort button in the height, top edge, type size
-and weight of the Columns control beside it, reading "Sort: Created" on the bare address and "Sort: Last activity" under
-`?sort=activity`, the first five rows' session ids recorded under each), the Sessions fold line (on a load of its own
-under `?model=claude-sonnet-5` that ends on the bare view: every row Expand all opens listing the lines on that model
-alone, a row whose other agents the filter hides reading the fold line's count, its toggle in the type size, weight and
-ink of the Cache warming line's, and the model chip's `(any agent)` suffix in the type size and ink of the chip's word),
-the fork badge's face (under the session id, in the face of the Status badges), the fork badges (inside their cell and
+of the session table's, the table whose narrowest layout is widest recorded with that width), the agent menu (mock pass,
+at 1280 by 800 on the open row of a session whose Agents table lists main alone: the open list's last item takes the
+pointer at its center, so the table's wrap clips none of the list), the Sessions bar's sort control and its order (on
+loads of its own that end on the bare view: the Sort button in the height, top edge, type size and weight of the Columns
+control beside it, reading "Sort: Created" on the bare address and "Sort: Last activity" under `?sort=activity`, the
+first five rows' session ids recorded under each), the Sessions fold line (on a load of its own under
+`?model=claude-sonnet-5` that ends on the bare view: every row Expand all opens listing the lines on that model alone, a
+row whose other agents the filter hides reading the fold line's count, its toggle in the type size, weight and ink of
+the Cache warming line's, and the model chip's `(any agent)` suffix in the type size and ink of the chip's word), the
+fork badge's face (under the session id, in the face of the Status badges), the fork badges (inside their cell and
 whole), the row's badges (on the first row whose Status and Cache cells both draw one, the two in one face and height,
 and the Agents, Requests, Cost and Cache cells' sub lines in the type of the Status cell's), the session row's chevron
 (14 px square at the icon's 1.75 stroke), the Sessions read error (mock pass, on loads of its own under the mock's

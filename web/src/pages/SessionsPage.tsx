@@ -1159,8 +1159,9 @@ function SessionRows({
                   ]}
                 />
               </div>
-              {/* At a phone's width the open row is narrower than the table, which then scrolls in its own wrap. */}
-              <div className="agents-table__wrap">
+              {/* At a phone's width the open row is narrower than the table, which then scrolls in its own wrap. That
+                  wrap clips the agent menus' lists, so it is a table wrap, whose edges a menu bounds its list by. */}
+              <div className="table-wrap agents-table__wrap">
                 <table id={tableId} className="table agents-table">
                   <thead>
                     <tr>

@@ -11890,6 +11890,64 @@ async function agentsTableFits(theme) {
 }
 
 /**
+ * The agent menu of a one-line Agents table at 1280 by 800, in the mock pass: the row of nightly's notebook session,
+ * whose table lists main alone, opens, main's menu opens with its trigger in the middle of the viewport, and the list's
+ * last item takes the pointer at its center. The table's wrap scrolls sideways, so it clips on both axes, and a list
+ * drawn in flow past its bottom edge leaves the wrap or the panel under that point. The menu and the row shut again.
+ */
+async function agentRowMenu(theme) {
+  const say = (what) => failures.push(`${theme} /sessions agent menu: ${what}`);
+  const session = '6d2f8b40-1e7a-4c95-a3d8-7b5e0c9f2a61';
+  const row = page.locator('.sessions-table tbody tr.srow', { has: page.locator(`td[title="${session}"]`) });
+  if ((await row.count()) !== 1) return say(`the story lists ${await row.count()} rows of session ${session}, not one`);
+  const gutter = row.locator('td.sessions-table__gutter');
+  await gutter.click();
+  await settle();
+  const lines = row.locator('xpath=following-sibling::tr[1]').locator('table.agents-table > tbody > tr');
+  const count = await lines.count();
+  if (count !== 1) {
+    say(`the open row's Agents table lists ${count} lines, not main's alone`);
+  } else {
+    const trigger = lines.first().locator('.menu__trigger');
+    await trigger.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+    await settle();
+    await trigger.click();
+    await settle();
+    const read = await page.evaluate(() => {
+      const lists = document.querySelectorAll('.menu__list');
+      if (lists.length !== 1) return { lists: lists.length };
+      const list = lists[0];
+      const items = [...list.querySelectorAll('[role="menuitem"]')];
+      const last = items[items.length - 1];
+      if (!last) return { items: 0, lists: 1 };
+      const b = last.getBoundingClientRect();
+      const x = Math.round(b.left + b.width / 2);
+      const y = Math.round(b.top + b.height / 2);
+      const hit = document.elementFromPoint(x, y);
+      return {
+        at: hit ? `${hit.tagName.toLowerCase()}.${hit.className}` : 'nothing',
+        hit: hit !== null && list.contains(hit),
+        items: items.length,
+        label: last.textContent?.trim() ?? '',
+        lists: 1,
+        placement: list.classList.contains('menu__list--float') ? 'float' : list.classList.contains('menu__list--up') ? 'up' : 'down',
+        x,
+        y,
+      };
+    });
+    await trigger.click();
+    await settle();
+    measurements.push(`${theme} /sessions agent menu ${JSON.stringify(read)}`);
+    if (read.lists !== 1) say(`${read.lists} lists are open, not one`);
+    else if (read.items === 0) say('the list draws no item');
+    else if (!read.hit) say(`the last item ${read.label} takes no pointer at its center (${read.x}, ${read.y}): ${read.at} lies there`);
+  }
+  await gutter.click();
+  await atRest();
+  await settle();
+}
+
+/**
  * The Sessions bar's sort control and the order it gives the rows: the Sort button in the height, top edge, type size
  * and weight of the Columns control beside it, its text "Sort: Created" on the bare address and "Sort: Last activity"
  * under `?sort=activity`, and the session ids of the first five rows under each recorded. The bare view loads again
@@ -12469,6 +12527,7 @@ try {
         await sessionRowMenu(theme);
         await agentLines(theme, 1280);
         await agentsTableFits(theme);
+        if (mock) await agentRowMenu(theme);
         try {
           await page.setViewportSize({ height: 900, width: 1440 });
           await settle();

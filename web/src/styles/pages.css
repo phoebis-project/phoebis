@@ -3727,8 +3727,10 @@
   white-space: nowrap;
 }
 
-.agents-table__wrap {
-  overflow-x: auto;
+/* The card's hairline over a table wrap is for a table at the card's level, and this wrap sits inside an open row's
+   panel. */
+.card--table .agents-table__wrap {
+  border-top: 0;
 }
 
 /* A hint with no room beside its label wraps under it, as it does at a phone's width. */
