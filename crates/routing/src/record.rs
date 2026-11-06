@@ -713,10 +713,10 @@ pub struct ShedRoundFacts {
 }
 
 /// One of the pool's pins on the account its round ran on: those in the round in its order, then those it left out (a
-/// fast-lane pin, a pin whose model does not draw the trigger's window, a pin whose agent ended and a pin with no priced
-/// burn on the window). A pin there under a key of a pool the account left is in no round and is not listed here.
-/// `burn` and `per_rewrite` are shares of the trigger's window, the burn per hour, and `rewrite` the Pro-week figure of
-/// the pin's rewrite.
+/// fast-lane pin, a pin whose model does not draw the trigger's window, a pin whose agent ended and a pin with no
+/// priced burn on the window). A pin there under a key of a pool the account left is in no round and is not listed
+/// here. `burn` and `per_rewrite` are shares of the trigger's window, the burn per hour, and `rewrite` the Pro-week
+/// figure of the pin's rewrite.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct ShedPinFacts {
     pub key_id: String,

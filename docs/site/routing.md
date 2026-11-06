@@ -634,19 +634,19 @@ Fable sessions alone and an Opus session on the account is neither counted nor m
 out of the round as well (`ended`): a subagent whose last answer stopped with `end_turn`, or an agent the keepalive mod
 released. Its pin, its account and its cache stay, since the main session can respawn the agent with its whole context,
 and the agent's next request brings the pin back into the walk. The mark is kept in memory, so after a restart the walk
-reads such a pin as live until its next request. A pin with no priced burn on the fired window, such as one only the
-client's classifier calls renew, is out of the round too (`no_burn`), since it has nothing to shed. The round then walks
-the pins in that order while the burn it removed, each pin's burn on the fired window, is under the target. A pin with a
-standing mark counts its burn as removed and is skipped as `standing`, since its move is pending. The pool's last
-unmarked pin on the window is never marked (`last_pin`), counted among the pins the round walks alone, so a pool with
-one session burning there sheds nothing and no round takes all of an account's burn. A pin whose burn the cost model
-cannot price counts nothing and is never marked (`unpriced`), so a session is never shed on a guess. A pin the shed
-rule's gate finds no destination for is skipped as `no_runway` and counts nothing. Every other pin is marked with the
-destination the gate planned for it, and the walk counts that destination's planned rewrite and burn for the pins after
-it, so two marks do not take one sibling's headroom twice. A pin is indivisible, so the order serves a target larger
-than one pin's burn, and once the burn of a pin the walk has not reached covers what the target still asks, the walk
-picks instead: among the pins whose burn covers the rest and for which the gate finds a destination, it marks the one
-whose move costs the least, a warm pin its rewrite as the Pro share of the pin's model week, or of the 7-day window
+reads such a pin as live until its next request. A pin with no priced burn on the fired window, such as a classifier pin
+whose calls took no share of a plan window, is out of the round too (`no_burn`), since it has nothing to shed. The round
+then walks the pins in that order while the burn it removed, each pin's burn on the fired window, is under the target. A
+pin with a standing mark counts its burn as removed and is skipped as `standing`, since its move is pending. The pool's
+last unmarked pin on the window is never marked (`last_pin`), counted among the pins the round walks alone, so a pool
+with one session burning there sheds nothing and no round takes all of an account's burn. A pin whose burn the cost
+model cannot price counts nothing and is never marked (`unpriced`), so a session is never shed on a guess. A pin the
+shed rule's gate finds no destination for is skipped as `no_runway` and counts nothing. Every other pin is marked with
+the destination the gate planned for it, and the walk counts that destination's planned rewrite and burn for the pins
+after it, so two marks do not take one sibling's headroom twice. A pin is indivisible, so the order serves a target
+larger than one pin's burn, and once the burn of a pin the walk has not reached covers what the target still asks, the
+walk picks instead: among the pins whose burn covers the rest and for which the gate finds a destination, it marks the
+one whose move costs the least, a warm pin its rewrite as the Pro share of the pin's model week, or of the 7-day window
 where the model has no week, the window the pick compares on, one figure for the pin on every destination, and a cold
 pin nothing, since its cache is rewritten wherever it runs next (under `warm_sessions` `always` every pin its rewrite,
 as the order ignores warmth there), the first in the order among equals, and the marking ends there with the target met.

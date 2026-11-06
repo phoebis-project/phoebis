@@ -8729,7 +8729,7 @@ async fn a_round_leaves_out_a_pin_whose_agent_ended_until_the_agent_sends_again(
             .unwrap(),
     );
     let ended = selected_pin(handle.select(subagent(AT)).await.unwrap());
-    for (pin, input) in [(requester, 1_000), (sibling, 2_000)] {
+    for (pin, input) in [(requester, 1_000), (sibling.clone(), 2_000)] {
         handle
             .report(renewal(
                 pin,
@@ -8816,25 +8816,78 @@ async fn a_round_leaves_out_a_pin_whose_agent_ended_until_the_agent_sends_again(
         "the mark relieves the sibling's own burn: {round:?}"
     );
 
-    // The subagent sends again inside the dwell, so the next round past it walks its pin.
-    handle.select(subagent(at + 1_000)).await.unwrap();
-    let later = at + shed_dwell_ms(&pool) + 1_000;
-    now.store(later, Ordering::SeqCst);
+    // The next round past the dwell, on the requester's request. A reading over the ceiling keeps it firing whatever
+    // the decayed burns read by then.
+    let dwell = shed_dwell_ms(&pool);
+    let round_after = |since: i64| {
+        let handle = handle.clone();
+        let now = now.clone();
+        async move {
+            let at = since + dwell + 1_000;
+            now.store(at, Ordering::SeqCst);
+            handle
+                .report(observed(
+                    "a",
+                    sample_with(at - 1_000, FIVE_HOUR, 0.96, None),
+                ))
+                .await;
+            handle.samples().await.unwrap();
+            handle
+                .stamp_projection_over("p", "a", FIVE_HOUR, at - waited, None)
+                .await;
+            (at, handle.select(request(&handle, Some("s1"), at)).await)
+        }
+    };
+
+    // Inside the dwell a probe replays the subagent's request and a probe of s2 reports an answer that ended its
+    // turn: neither is an agent's own request or its end, so the next round still leaves the subagent out alone.
     handle
-        .report(observed(
-            "a",
-            sample_with(later - 1_000, FIVE_HOUR, 0.94, None),
-        ))
-        .await;
-    handle.samples().await.unwrap();
-    handle
-        .stamp_projection_over("p", "a", FIVE_HOUR, later - waited, None)
-        .await;
-    drained(&mut events).await;
-    handle
-        .select(request(&handle, Some("s1"), later))
+        .select(SelectRequest {
+            probe: true,
+            ..subagent(at + 500)
+        })
         .await
         .unwrap();
+    handle
+        .report(Report::PinRenewed {
+            pin: sibling,
+            now: at + 500,
+            usage: None,
+            keepalive: true,
+            cache_ttl_ms: 300_000,
+            fast: false,
+            classifier: false,
+            turn: true,
+            ended: true,
+        })
+        .await;
+    drained(&mut events).await;
+    let (middle, answer) = round_after(at).await;
+    answer.unwrap();
+    let round = round_among(&drained(&mut events).await);
+    let skip_of = |round: &phoebis_routing::ShedRoundFacts, session: &str, agent: &str| {
+        round
+            .pins
+            .iter()
+            .find(|p| p.session_id == session && p.agent_id == agent)
+            .unwrap_or_else(|| panic!("{session}'s {agent} pin is on the account: {round:?}"))
+            .skip
+    };
+    assert_eq!(
+        skip_of(&round, "s1", "sub"),
+        Some("ended"),
+        "a probe's selection leaves the mark: {round:?}"
+    );
+    assert_ne!(
+        skip_of(&round, "s2", "main"),
+        Some("ended"),
+        "a probe's renewal ends no agent: {round:?}"
+    );
+
+    // The subagent sends again inside the dwell, so the next round past it walks its pin.
+    handle.select(subagent(middle + 1_000)).await.unwrap();
+    drained(&mut events).await;
+    round_after(middle).await.1.unwrap();
     let round = round_among(&drained(&mut events).await);
     let returned = round
         .pins

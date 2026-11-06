@@ -2635,8 +2635,8 @@ pub const SLOW_DOWN_WAIT_MS: i64 = 120_000;
 /// the hold buys, so the pin renews unslowed and the next request reads again.
 pub const SLOW_DOWN_MIN_HOLD_MS: i64 = 1_000;
 
-/// The least share of the rest a fallback mark's burn covers: a pin under it relieves too little of the rest to be worth
-/// its move, so it stays under `sliver`, warm or cold. A tenth of the rest, the owner's default.
+/// The least share of the rest a fallback mark's burn covers: a pin under it relieves too little of the rest to be
+/// worth its move, so it stays under `sliver`. A tenth of the rest, warm or cold.
 pub const SHED_MARK_SHARE: f64 = 0.1;
 
 /// Milliseconds as the seconds a share-per-second burn multiplies.
@@ -4921,16 +4921,16 @@ fn destination_of(
 /// keys, ordered in a window-share round by the span's average share of the trigger's window the walk prices them by,
 /// and in a `usd` round by the dollar burn at `now` (cold first by burn, then warm by burn over rewrite cost, bounded
 /// by `warm_sessions`, a fast-lane pin out of a window-share round, and a pin whose model does not draw the trigger's
-/// window, a pin whose agent ended and a pin with no priced burn on the window out of any round, since none of them
-/// has a share of it to shed), then walked while the removed burn is under the target, `min(excess, shed_cap x
-/// burn_sum)` on the trigger's window. Once one pin's burn covers what the target still asks, the walk marks the
-/// covering pin whose move costs the least, `cheapest` on the record, rather than the next in the order. Where no
-/// covering pin has a destination, the walk marks the pin at its position only where its burn covers
-/// `SHED_MARK_SHARE` of the rest, `sliver` otherwise. A standing mark is a move pending, so its burn counts as removed
-/// and the pin is skipped. The last unmarked pin and an unpriced one are never marked, and a pin with no fitting
-/// destination counts nothing. Each mark plans a reservation on its destination, which the next pin's fit counts, so a
-/// sibling's headroom is taken once. The current pin's warmth and lane are this request's, every other pin's the stored
-/// ones.
+/// window and a pin with no priced burn on it out of any round, since none of them has a share of it to shed, and a pin
+/// whose agent ended out of any round too, since its agent sends no new turn and marking its decayed burn relieves
+/// nothing), then walked while the removed burn is under the target, `min(excess, shed_cap x burn_sum)` on the
+/// trigger's window. Once one pin's burn covers what the target still asks, the walk marks the covering pin whose move
+/// costs the least, `cheapest` on the record, rather than the next in the order. Where no covering pin has a
+/// destination, the walk marks the pin at its position only where its burn covers `SHED_MARK_SHARE` of the rest,
+/// `sliver` otherwise. A standing mark is a move pending, so its burn counts as removed and the pin is skipped. The
+/// last unmarked pin and an unpriced one are never marked, and a pin with no fitting destination counts nothing. Each
+/// mark plans a reservation on its destination, which the next pin's fit counts, so a sibling's headroom is taken once.
+/// The current pin's warmth and lane are this request's, every other pin's the stored ones.
 #[allow(clippy::too_many_arguments)]
 fn shed_round(
     state: &RoutingState,
