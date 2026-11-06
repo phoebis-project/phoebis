@@ -187,10 +187,13 @@ text_enum! {
 }
 
 /// An account's staged cancellation: off, which carries no end, or on with the end it stages.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Cancellation {
+    #[default]
     Off,
-    On { ends_at: Option<i64> },
+    On {
+        ends_at: Option<i64>,
+    },
 }
 
 impl Cancellation {
@@ -204,7 +207,7 @@ impl Cancellation {
     }
 
     /// The `canceled` flag and the `subscription_ends_at` value the row stores for it.
-    pub(crate) fn stored_pair(self) -> (bool, Option<i64>) {
+    pub fn stored_pair(self) -> (bool, Option<i64>) {
         match self {
             Cancellation::On { ends_at } => (true, ends_at),
             Cancellation::Off => (false, None),
@@ -503,15 +506,14 @@ pub struct RetiredSecret {
     pub expires_at: i64,
 }
 
-/// What the engine knows about an account's paid term: the profile's start and trial end, the operator's flag
-/// and the end the operator saved with it (set only while the flag is on), and the class the stored profile names.
+/// What the engine knows about an account's paid term: the profile's start and trial end, the operator's
+/// cancellation with the end it stages, and the class the stored profile names.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SubscriptionTerm {
     pub account_id: String,
     pub since: Option<i64>,
     pub trial_ends_at: Option<i64>,
-    pub canceled: bool,
-    pub ends_at: Option<i64>,
+    pub cancellation: Cancellation,
     /// The profile's rate-limit tier, which prices the router's own use of the account's windows where `plan` is one
     /// the cost table prices.
     pub tier: Option<String>,
@@ -728,6 +730,20 @@ fn json_column<T: serde::de::DeserializeOwned>(
     serde_json::from_str(&raw).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(idx, rusqlite::types::Type::Text, Box::new(e))
     })
+}
+
+/// A nullable JSON text column decoded as its row is read, its fault naming its own column.
+pub(crate) fn optional_json_column<T: serde::de::DeserializeOwned>(
+    r: &rusqlite::Row<'_>,
+    idx: usize,
+) -> rusqlite::Result<Option<T>> {
+    let raw: Option<String> = r.get(idx)?;
+    raw.map(|raw| {
+        serde_json::from_str(&raw).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(idx, rusqlite::types::Type::Text, Box::new(e))
+        })
+    })
+    .transpose()
 }
 
 /// The 33 pool columns the insert and the update write, in the order `pool_params!` binds them. `POOL_SELECT` reads
@@ -2211,15 +2227,14 @@ fn key_fields(row: &ApiKeyRow) -> serde_json::Value {
 /// The account's pairs over the five editable fields, `secret_replaced` beside them when a secret was staged. The
 /// row holds the label, the state and the switch, and the term row the flag and the end.
 fn account_pairs(before: &AccountRow, u: &AccountUpdate<'_>, term: &SubscriptionTerm) -> String {
-    let (canceled, ends_at) = u
-        .cancellation
-        .map_or((term.canceled, term.ends_at), Cancellation::stored_pair);
+    let (canceled_before, ends_at_before) = term.cancellation.stored_pair();
+    let (canceled, ends_at) = u.cancellation.unwrap_or(term.cancellation).stored_pair();
     let old = serde_json::json!({
         "label": before.label,
         "enabled": before.enabled,
         "state": before.state.as_str(),
-        "canceled": term.canceled,
-        "subscription_ends_at": term.ends_at,
+        "canceled": canceled_before,
+        "subscription_ends_at": ends_at_before,
     });
     let new = serde_json::json!({
         "label": u.label,

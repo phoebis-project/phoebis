@@ -576,7 +576,14 @@ fn the_canceled_flag_and_its_end_are_the_operators_alone_and_survive_a_profile_w
         .unwrap();
     let revision = || store.account("a").unwrap().unwrap().revision;
     let before = revision();
-    store.set_canceled("a", true, Some(9_000)).unwrap();
+    store
+        .set_canceled(
+            "a",
+            Cancellation::On {
+                ends_at: Some(9_000),
+            },
+        )
+        .unwrap();
     assert!(revision() > before, "the write bumps the revision");
     store
         .set_profile(
@@ -592,21 +599,14 @@ fn the_canceled_flag_and_its_end_are_the_operators_alone_and_survive_a_profile_w
         .unwrap();
     let term = store.subscription_term("a").unwrap().unwrap();
     assert_eq!(
-        (term.canceled, term.ends_at, term.since),
-        (true, Some(9_000), Some(1_000)),
-        "the flag and its end are the operator's alone; the start is the profile's"
-    );
-    let after_profile = revision();
-    store.set_canceled("a", false, Some(9_000)).unwrap();
-    assert!(
-        revision() > after_profile,
-        "clearing the flag bumps the revision too"
-    );
-    let term = store.subscription_term("a").unwrap().unwrap();
-    assert_eq!(
-        (term.canceled, term.ends_at),
-        (false, None),
-        "the end is dropped the moment the flag goes off, whatever end was passed"
+        (term.cancellation, term.since),
+        (
+            Cancellation::On {
+                ends_at: Some(9_000)
+            },
+            Some(1_000)
+        ),
+        "the flag and its end are the operator's alone, the start is the profile's"
     );
 }
 
@@ -2332,8 +2332,8 @@ fn a_stale_account_update_carrying_enabled_and_a_cancellation_writes_nothing() {
     let row = store.account("a").unwrap().unwrap();
     let term = store.subscription_term("a").unwrap().unwrap();
     assert_eq!(
-        (row.label.as_str(), row.enabled, term.canceled, term.ends_at),
-        ("Moved", true, false, None),
+        (row.label.as_str(), row.enabled, term.cancellation),
+        ("Moved", true, Cancellation::Off),
         "no staged field of the stale edit landed"
     );
     store
@@ -2349,16 +2349,16 @@ fn a_stale_account_update_carrying_enabled_and_a_cancellation_writes_nothing() {
             landed.label.as_str(),
             landed.enabled,
             landed.state,
-            term.canceled,
-            term.ends_at,
+            term.cancellation,
             landed.revision
         ),
         (
             "Stale",
             false,
             AccountState::Ready,
-            true,
-            Some(9_000),
+            Cancellation::On {
+                ends_at: Some(9_000)
+            },
             row.revision + 1
         ),
         "the same edit built from the moved row lands every staged field in one revision"
@@ -3295,7 +3295,14 @@ fn an_account_edit_of_the_label_and_the_end_records_two_pairs_and_no_secret_flag
     store
         .insert_account(&account("plan", AccountKind::Oauth))
         .unwrap();
-    store.set_canceled("plan", true, Some(1_000)).unwrap();
+    store
+        .set_canceled(
+            "plan",
+            Cancellation::On {
+                ends_at: Some(1_000),
+            },
+        )
+        .unwrap();
     store
         .commit_account_update(&AccountUpdate {
             cancellation: Some(Cancellation::On {
@@ -3323,7 +3330,14 @@ fn an_uncancel_records_the_end_the_update_drops_as_null() {
     store
         .insert_account(&account("plan", AccountKind::Oauth))
         .unwrap();
-    store.set_canceled("plan", true, Some(2_000)).unwrap();
+    store
+        .set_canceled(
+            "plan",
+            Cancellation::On {
+                ends_at: Some(2_000),
+            },
+        )
+        .unwrap();
     // The admin route drops the stored end with the flag when it stages an uncancel.
     store
         .commit_account_update(&AccountUpdate {
@@ -3332,8 +3346,12 @@ fn an_uncancel_records_the_end_the_update_drops_as_null() {
         })
         .unwrap();
     assert_eq!(
-        store.subscription_term("plan").unwrap().unwrap().ends_at,
-        None
+        store
+            .subscription_term("plan")
+            .unwrap()
+            .unwrap()
+            .cancellation,
+        Cancellation::Off
     );
     assert_eq!(
         last_change(&store, "plan").1,

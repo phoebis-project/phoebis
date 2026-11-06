@@ -1,6 +1,6 @@
 use phoebis_store::{
-    crypto, AccountKind, AccountRow, AccountState, AttemptOutcome, Identity, NewBundle, Secret,
-    StateCause, StorageKey, Store, StoreError,
+    crypto, AccountKind, AccountRow, AccountState, AttemptOutcome, Identity, NewBundle,
+    OutcomeWord, Secret, StateCause, StorageKey, Store, StoreError,
 };
 
 fn account(id: &str) -> AccountRow {
@@ -227,7 +227,7 @@ fn a_commit_resolves_its_attempt_in_the_same_transaction() {
     );
     assert_eq!(
         store.last_refresh_attempt("a", 1).unwrap().unwrap().outcome,
-        Some("committed".to_string()),
+        Some(OutcomeWord::Committed),
         "the commit's own attempt is the one that committed"
     );
 }
@@ -255,7 +255,7 @@ fn a_commit_supersedes_an_attempt_left_open_by_the_bundle_it_replaces() {
         .commit_credentials("a", 1, 1, Some(g), None, &bundle("at-2"))
         .unwrap();
     let attempt = store.last_refresh_attempt("a", 1).unwrap().unwrap();
-    assert_eq!(attempt.outcome.as_deref(), Some("failed"));
+    assert_eq!(attempt.outcome, Some(OutcomeWord::Failed));
     assert_eq!(attempt.detail.as_deref(), Some("superseded"));
     assert!(
         store.pending_refresh_attempts().unwrap().is_empty(),
@@ -702,7 +702,7 @@ fn a_holders_newest_settled_attempts_read_newest_first_within_the_bound_and_its_
             .newest_resolved_refresh_attempts("a", incarnation, limit)
             .unwrap()
             .into_iter()
-            .map(|a| (a.id, a.outcome, a.detail))
+            .map(|a| (a.id, a.outcome.as_str().to_string(), a.detail))
             .collect::<Vec<_>>()
     };
     assert_eq!(

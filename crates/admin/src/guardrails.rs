@@ -12,8 +12,7 @@ use axum::Json;
 use phoebis_bus::OTHER_CLIENT;
 use phoebis_guardrails::{
     evaluate, parse_body, CompileError, CompiledGuardrail, Condition, ConditionWords,
-    GuardrailAction, GuardrailMode, HintLookup, Preset, RequestFacts, Subject, Verdict,
-    MAX_CONDITIONS,
+    GuardrailAction, GuardrailMode, HintLookup, Preset, RequestFacts, Verdict, MAX_CONDITIONS,
 };
 use phoebis_ledger::{guardrail_sample_page, request_body, request_body_held, RequestCursor};
 use phoebis_store::{
@@ -842,7 +841,7 @@ pub(crate) async fn test(State(state): State<Arc<AdminState>>, body: Bytes) -> R
     let reads_body = compiled
         .conditions
         .iter()
-        .any(|c| matches!(c.probe.subject(), Subject::Body | Subject::Message));
+        .any(|c| c.probe.subject().reads_body());
     let window_hours = state.body_capture_max_hours;
     let now = (state.clock)();
     let since = now - i64::from(window_hours) * 3_600_000;

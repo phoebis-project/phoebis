@@ -544,7 +544,12 @@ async fn every_route_is_captured_and_holds_its_shape() {
     let free_end = now - 8 * DAY;
     parts
         .store
-        .set_canceled("free-org", true, Some(free_end))
+        .set_canceled(
+            "free-org",
+            phoebis_store::Cancellation::On {
+                ends_at: Some(free_end),
+            },
+        )
         .unwrap();
     // The profile read a quarter hour after the end found the free document stored above and flagged the account, as
     // the poll does. No event is recorded, so the routing log's ids stand.

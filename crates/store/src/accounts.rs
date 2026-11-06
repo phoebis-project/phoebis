@@ -5,7 +5,10 @@ use std::sync::LazyLock;
 
 use rusqlite::{params, OptionalExtension, Row};
 
-use crate::registry::{organization_type_of, plan_of, usage_based_of, SubscriptionTerm};
+use crate::registry::{
+    optional_json_column, organization_type_of, plan_of, usage_based_of, Cancellation,
+    SubscriptionTerm,
+};
 use crate::{AttemptOutcome, Store, StoreError, LOCK_POISONED, PENDING_WHERE};
 
 text_enum! {
@@ -154,24 +157,12 @@ pub fn answers_stamp_token(incarnation: u64, updated_at: i64, token: u64) -> boo
 pub const INFERENCE_HOST: &str = "api.anthropic.com";
 
 fn row_to_account(row: &Row<'_>) -> rusqlite::Result<AccountRow> {
-    let identity_json: Option<String> = row.get("identity_json")?;
-    let identity = identity_json
-        .map(|json| {
-            serde_json::from_str(&json).map_err(|e| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    0,
-                    rusqlite::types::Type::Text,
-                    Box::new(e),
-                )
-            })
-        })
-        .transpose()?;
     Ok(AccountRow {
         id: row.get("id")?,
         kind: row.get("kind")?,
         label: row.get("label")?,
         enabled: row.get("enabled")?,
-        identity,
+        identity: optional_json_column(row, 4)?,
         incarnation: row.get::<_, i64>("incarnation")? as u64,
         lifecycle_generation: row.get::<_, i64>("lifecycle_generation")? as u64,
         revision: row.get::<_, i64>("revision")? as u64,
@@ -572,17 +563,10 @@ impl Store {
         .map_err(StoreError::from)
     }
 
-    /// The operator's answer alone: the flag and the end together, the end dropped when the flag is off;
-    /// bumps `revision` so the next reload publishes it.
+    /// Stages or clears an account's cancellation as the operator's edit does and bumps `revision`.
     #[cfg(any(test, feature = "test-support"))]
-    pub fn set_canceled(
-        &self,
-        id: &str,
-        canceled: bool,
-        ends_at: Option<i64>,
-    ) -> Result<(), StoreError> {
-        let (canceled, ends_at) =
-            crate::registry::Cancellation::from_flag(canceled, ends_at).stored_pair();
+    pub fn set_canceled(&self, id: &str, cancellation: Cancellation) -> Result<(), StoreError> {
+        let (canceled, ends_at) = cancellation.stored_pair();
         let conn = self.conn.lock().expect(LOCK_POISONED);
         if conn.execute(
             "UPDATE accounts SET canceled = ?2, subscription_ends_at = ?3, \
@@ -714,8 +698,7 @@ fn term_of(
         account_id: row.get(0)?,
         since: row.get(1)?,
         trial_ends_at: row.get(2)?,
-        canceled: row.get(3)?,
-        ends_at: row.get(4)?,
+        cancellation: Cancellation::from_flag(row.get(3)?, row.get(4)?),
         tier,
         usage_based,
         plan,

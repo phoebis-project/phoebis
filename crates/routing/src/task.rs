@@ -4949,7 +4949,11 @@ impl Task {
                         pool_id: pool.id.clone(),
                         ends_at,
                         wind_down_minutes: minutes,
-                        end_source: if term.canceled { "canceled" } else { "trial" },
+                        end_source: if term.cancellation.stored_pair().0 {
+                            "canceled"
+                        } else {
+                            "trial"
+                        },
                         restored,
                         at: now,
                     });

@@ -2561,9 +2561,10 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
     };
     let now = (state.clock)();
     let end = phoebis_routing::term::end_of(term, now);
+    let (canceled, ends_at) = term.cancellation.stored_pair();
     // Null until the account has paired and a profile document exists, unless the operator has canceled it:
     // a canceled, unpaired OAuth row still has an end to report, so the flag joins `profile.is_some()` here.
-    let subscription = (row.kind == AccountKind::Oauth && (profile.is_some() || term.canceled))
+    let subscription = (row.kind == AccountKind::Oauth && (profile.is_some() || canceled))
         .then(|| match extras {
             // The extras' term holds the tier, the start and the trial end of the same row.
             Some(_) => SubscriptionRow {
@@ -2589,7 +2590,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
             tier: s.tier,
             since: s.since,
             trial_ends_at: s.trial_ends_at,
-            ends_at: term.ends_at,
+            ends_at,
         });
     // The token manager hands out no token for an `oauth` account in either state, and a flagged account's poll is
     // paused and its routing reads it as past its end, so neither the poll nor a request reads the account until it
@@ -2689,7 +2690,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         kind: row.kind,
         label: row.label.clone(),
         enabled: row.enabled,
-        canceled: term.canceled,
+        canceled,
         plan_ended_at: term.plan_ended_at,
         state: row.state,
         funding_retry_at,

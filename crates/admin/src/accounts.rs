@@ -305,8 +305,9 @@ pub(crate) async fn patch(
             Ok(term) => term.unwrap_or_default(),
             Err(error) => return store_failure(error),
         };
-        let canceled = input.canceled.unwrap_or(term.canceled);
-        let ends_at = input.subscription_ends_at.unwrap_or(term.ends_at);
+        let (stored_canceled, stored_ends_at) = term.cancellation.stored_pair();
+        let canceled = input.canceled.unwrap_or(stored_canceled);
+        let ends_at = input.subscription_ends_at.unwrap_or(stored_ends_at);
         if canceled && row.kind == AccountKind::ApiKey {
             return failure(StatusCode::BAD_REQUEST, "only an oauth account is canceled");
         }

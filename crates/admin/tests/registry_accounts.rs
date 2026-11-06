@@ -1,5 +1,5 @@
 mod common;
-use phoebis_store::{AccountKind, CooldownScope};
+use phoebis_store::{AccountKind, Cancellation, CooldownScope};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -1642,7 +1642,7 @@ async fn a_canceled_account_stores_the_end_it_was_saved_with_and_answers_it_back
         (Some(true), Some(end)),
         "no profile on file, but the flag and the stored end round-trip regardless"
     );
-    // Canceling off drops the stored end, per `set_canceled`'s own rule.
+    // Canceling off drops the stored end, per `Cancellation::from_flag`'s own rule.
     let restored = json(
         patch(
             &parts.app,
@@ -2234,12 +2234,13 @@ async fn a_subscription_end_edit_is_fenced_as_a_rename_is() {
         json(stale).await["error"],
         "the account changed while it was being edited, so reload and try again"
     );
-    assert!(
-        !store
+    assert_eq!(
+        store
             .subscription_term("business")
             .unwrap()
             .unwrap_or_default()
-            .canceled,
+            .cancellation,
+        Cancellation::Off,
         "the end edit read before the rename wrote nothing"
     );
 
@@ -2253,8 +2254,13 @@ async fn a_subscription_end_edit_is_fenced_as_a_rename_is() {
     assert_eq!(fresh.status(), 200);
     let term = store.subscription_term("business").unwrap().unwrap();
     assert_eq!(
-        (term.canceled, term.ends_at, revision("business")),
-        (true, Some(2_000_000), read + 2)
+        (term.cancellation, revision("business")),
+        (
+            Cancellation::On {
+                ends_at: Some(2_000_000)
+            },
+            read + 2
+        )
     );
 }
 

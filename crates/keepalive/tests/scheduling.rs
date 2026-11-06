@@ -13,7 +13,8 @@ use phoebis_routing::{
     SelectResult,
 };
 use phoebis_store::{
-    AccountState, BudgetPeriod, CooldownRow, CooldownScope, MemberWrite, OveragePolicy, StateCause,
+    AccountState, BudgetPeriod, Cancellation, CooldownRow, CooldownScope, MemberWrite,
+    OveragePolicy, StateCause,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -904,7 +905,12 @@ async fn a_probe_whose_interval_passes_the_subscription_end_is_held_and_one_endi
     let mut r = armed(RigSpec::default()).await;
     let due = r.now() + 270_000;
     r.h.store
-        .set_canceled("a", true, Some(due + 270_000))
+        .set_canceled(
+            "a",
+            Cancellation::On {
+                ends_at: Some(due + 270_000),
+            },
+        )
         .unwrap();
     r.h.router.reload().await.unwrap();
     r.advance(270_000);
@@ -920,7 +926,12 @@ async fn a_probe_whose_interval_passes_the_subscription_end_is_held_and_one_endi
     let mut r = armed(RigSpec::default()).await;
     let due = r.now() + 270_000;
     r.h.store
-        .set_canceled("a", true, Some(due + 269_999))
+        .set_canceled(
+            "a",
+            Cancellation::On {
+                ends_at: Some(due + 269_999),
+            },
+        )
         .unwrap();
     r.h.router.reload().await.unwrap();
     r.advance(270_000);
@@ -956,7 +967,12 @@ async fn a_paused_recipe_on_an_account_whose_term_ended_reads_paused_under_ineli
         "the probe's answer paused the recipe"
     );
     r.h.store
-        .set_canceled("a", true, Some(r.now() + 1_000))
+        .set_canceled(
+            "a",
+            Cancellation::On {
+                ends_at: Some(r.now() + 1_000),
+            },
+        )
         .unwrap();
     r.h.router.reload().await.unwrap();
     r.advance(10_000);

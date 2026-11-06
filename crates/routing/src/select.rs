@@ -7111,13 +7111,16 @@ fn candidate_facts(
             observed_at: c.observed_at,
             blocked: state.credits_blocked(snapshot, id, now).map(String::from),
         });
-    let term = snapshot.term(id).map(|t| TermFacts {
-        since: t.since,
-        trial_ends_at: t.trial_ends_at,
-        canceled: t.canceled,
-        ends_at: t.ends_at,
-        winding_down: term::winding_down(t, now, pool.failover.wind_down_minutes),
-        ended: term::ended(t, now),
+    let term = snapshot.term(id).map(|t| {
+        let (canceled, ends_at) = t.cancellation.stored_pair();
+        TermFacts {
+            since: t.since,
+            trial_ends_at: t.trial_ends_at,
+            canceled,
+            ends_at,
+            winding_down: term::winding_down(t, now, pool.failover.wind_down_minutes),
+            ended: term::ended(t, now),
+        }
     });
     let facts = CandidateFacts {
         account_id: id.to_string(),
@@ -7951,7 +7954,8 @@ mod banded_tests {
     use std::sync::Arc;
 
     use phoebis_store::{
-        AccountKind, AccountRow, PoolMember, PoolRow, RegistryLoad, RoutingLoad, SubscriptionTerm,
+        AccountKind, AccountRow, Cancellation, PoolMember, PoolRow, RegistryLoad, RoutingLoad,
+        SubscriptionTerm,
     };
 
     use super::{fit_of, lane_key, slow_down_of, Banded, Figures, Judge, SelectRequest};
@@ -8051,8 +8055,7 @@ mod banded_tests {
                     account_id: "b".into(),
                     since: None,
                     trial_ends_at: None,
-                    canceled: false,
-                    ends_at: None,
+                    cancellation: Cancellation::Off,
                     tier: Some("default_claude_max_20x".into()),
                     usage_based: false,
                     plan: Some("max_20x".into()),
@@ -8210,8 +8213,9 @@ mod banded_tests {
                     account_id: "b".into(),
                     since: None,
                     trial_ends_at: None,
-                    canceled: true,
-                    ends_at: Some(T - HOUR),
+                    cancellation: Cancellation::On {
+                        ends_at: Some(T - HOUR),
+                    },
                     tier: Some(tier.into()),
                     usage_based: false,
                     plan: Some("max_20x".into()),

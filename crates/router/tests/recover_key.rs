@@ -12,8 +12,8 @@ use std::process::{Command, Output, Stdio};
 use phoebis_store::keepalive::BodyWrite;
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AttemptOutcome, CanaryRead, KeepaliveAgentRow,
-    KeepaliveBatch, KeepaliveSessionRow, NewBundle, Secret, StateCause, StorageKey, Store,
-    StoreError,
+    KeepaliveBatch, KeepaliveSessionRow, NewBundle, OutcomeWord, Secret, StateCause, StorageKey,
+    Store, StoreError,
 };
 
 /// The key that sealed the registry, the one an operator lost.
@@ -472,7 +472,7 @@ fn a_missing_key_file_is_generated_at_0600_and_the_recovery_discards_every_seale
         assert!(store.credentials(id).unwrap().is_none(), "{id}");
         let attempt = store.last_refresh_attempt(id, 1).unwrap().unwrap();
         assert!(attempt.resolved_at.is_some(), "{id}");
-        assert_eq!(attempt.outcome.as_deref(), Some("failed"), "{id}");
+        assert_eq!(attempt.outcome, Some(OutcomeWord::Failed), "{id}");
         assert_eq!(attempt.detail.as_deref(), Some("disconnected"), "{id}");
         assert_eq!(
             store.newest_resolved_refresh_attempts(id, 1, 1).unwrap()[0]

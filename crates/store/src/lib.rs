@@ -110,7 +110,7 @@ pub use accounts::{
 pub use backup::{snapshot, BackupError, RETRY_PAUSE};
 pub use credentials::{
     AttemptOutcome, CredentialBundle, CredentialMetadata, CredentialStanding, LastAttempt,
-    NewBundle, PendingAttempt, ResolvedAttempt, Secret, Settled,
+    NewBundle, OutcomeWord, PendingAttempt, ResolvedAttempt, Secret, Settled,
 };
 pub use keepalive::{
     keepalive_aad, IdleReturnsRow, KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow,
@@ -1110,11 +1110,9 @@ impl SealedRow {
 /// stop a start whose key the rows behind it inside the bound prove, and a wrong key, which opens none, costs a
 /// bounded read rather than every row of a large registry at each start and each `check-config`.
 ///
-/// The bound leaves two shapes of a registry without a canary refusing the right key at the start: one whose readable
-/// credential or API-key rows all sit past the 32nd of their kind, and one whose readable rows sit only among the
-/// keepalive bodies, which this proof never reads, beside credential or API-key rows that do not open. `recover-key`
-/// scans every sealed row, so on such a registry it seals the canary under the key it opens and discards nothing, the
-/// way out of both shapes.
+/// The bound leaves one shape of a registry without a canary refusing the right key at the start: one whose readable
+/// credential bundles, API-key secrets and recipe bodies all sit past the 32nd of their kind. `recover-key` scans every
+/// sealed row, so on such a registry it seals the canary under the key it opens and discards nothing, the way out.
 const PROOF_ROWS_PER_KIND: i64 = 32;
 
 /// Whether the key opens any of the sealed rows `leading_sealed_rows` reads, or `None` when the registry holds
@@ -1128,12 +1126,12 @@ fn sealed_rows_open_under(conn: &Connection, key: &StorageKey) -> Result<Option<
     Ok(Some(rows.iter().any(|row| row.opens_under(key))))
 }
 
-/// The first `PROOF_ROWS_PER_KIND` sealed rows of each kind in row order: credential bundles and API-key
-/// secrets. `read_canary` meets the file as it is, without `prepare`, so a table the registry does
-/// not have yet holds nothing sealed rather than failing the read.
+/// The first `PROOF_ROWS_PER_KIND` sealed rows of each kind in row order: credential bundles, API-key secrets and
+/// recipe bodies. `read_canary` meets the file as it is, without `prepare`, so a table the registry does not have yet
+/// holds nothing sealed rather than failing the read.
 fn leading_sealed_rows(conn: &Connection) -> Result<Vec<SealedRow>, StoreError> {
     let mut rows = Vec::new();
-    for kind in SEALED_KINDS.iter().filter(|kind| kind.sampled_at_start) {
+    for kind in &SEALED_KINDS {
         if !has_table(conn, kind.table)? {
             continue;
         }
@@ -1146,36 +1144,32 @@ fn leading_sealed_rows(conn: &Connection) -> Result<Vec<SealedRow>, StoreError> 
 
 type RowOf = fn(&rusqlite::Row<'_>) -> rusqlite::Result<SealedRow>;
 
-/// One kind of sealed row: its table, the statement over it, the mapper to the row with its associated data, and
-/// whether the start's sample reads it.
+/// One kind of sealed row, a credential bundle, an API-key secret or a recipe body: its table, the statement over it
+/// and the mapper to the row with its associated data.
 struct SealedKind {
     table: &'static str,
     sql: &'static str,
     row_of: RowOf,
-    sampled_at_start: bool,
 }
 
-/// Each kind of sealed row. A recovery reads every kind, and `sampled_at_start` picks the kinds the start's sample
-/// reads.
+/// Each kind of sealed row: credential bundles, API-key secrets and recipe bodies. A recovery reads every row of each
+/// kind, and the start's sample the first `PROOF_ROWS_PER_KIND` of each.
 const SEALED_KINDS: [SealedKind; 3] = [
     SealedKind {
         table: "credentials",
         sql: "SELECT account_id, generation, nonce, sealed FROM credentials",
         row_of: credential_row,
-        sampled_at_start: true,
     },
     SealedKind {
         table: "api_key_secrets",
         sql: "SELECT account_id, nonce, sealed FROM api_key_secrets",
         row_of: api_key_row,
-        sampled_at_start: true,
     },
     SealedKind {
         table: "keepalive_agents",
         sql: "SELECT key_id, key_generation, session_id, agent_id, body_nonce, body_sealed FROM keepalive_agents \
               WHERE body_sealed IS NOT NULL AND body_nonce IS NOT NULL",
         row_of: recipe_row,
-        sampled_at_start: false,
     },
 ];
 
@@ -1477,6 +1471,37 @@ mod tests {
             .unwrap();
         store
             .set_api_key_secret("vendor", &Secret::new("sk-ant-test-not-a-key"))
+            .unwrap();
+        store.debug_drop_canary().unwrap();
+        drop(store);
+        assert_the_sealed_rows_prove_the_key(&db, &key);
+    }
+
+    #[test]
+    fn a_registry_whose_only_sealed_rows_are_recipe_bodies_proves_the_key_against_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("router.sqlite");
+        let key = StorageKey::generate();
+        let store = Store::open(&db, &key).unwrap();
+        store
+            .save_keepalive(&KeepaliveBatch {
+                agents: vec![KeepaliveAgentRow {
+                    key_id: "desktop".into(),
+                    key_generation: 1,
+                    session_id: "s-1".into(),
+                    agent_id: "main".into(),
+                    record_version: 1,
+                    payload: "{}".into(),
+                    body: None,
+                    body_write: keepalive::BodyWrite::Seal(b"{\"messages\":[]}".to_vec()),
+                    headers: "[]".into(),
+                    body_size: 15,
+                    dispatched_ms: None,
+                    fast: false,
+                    updated_at: 1_800_000_000_000,
+                }],
+                ..KeepaliveBatch::default()
+            })
             .unwrap();
         store.debug_drop_canary().unwrap();
         drop(store);

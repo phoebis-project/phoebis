@@ -13,7 +13,7 @@ use phoebis_keepalive::{
     MAIN_AGENT, MAX_WORKERS, ONE_HOUR_MS,
 };
 use phoebis_relay::Accounting;
-use phoebis_store::AccountState;
+use phoebis_store::{AccountState, Cancellation};
 
 fn json(status: u16, body: &str) -> Respond {
     Respond::Json {
@@ -1460,7 +1460,12 @@ async fn a_probe_on_a_pin_whose_subscription_ended_holds_the_agent_and_keeps_the
     let due = r.now() + 270_000;
     let sent = r.up.requests().len();
     r.h.store
-        .set_canceled("a", true, Some(r.now() + 1_000))
+        .set_canceled(
+            "a",
+            Cancellation::On {
+                ends_at: Some(r.now() + 1_000),
+            },
+        )
         .unwrap();
     r.h.router.reload().await.unwrap();
     r.advance(270_000);

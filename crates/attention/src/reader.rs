@@ -727,7 +727,7 @@ pub(crate) fn conditions(
                     "account": account.id,
                     "failures": run.len(),
                     "last_error": newest.and_then(|a| a.detail.clone()),
-                    "outcome": newest.map(|a| a.outcome.clone()),
+                    "outcome": newest.map(|a| a.outcome.as_str()),
                 }),
             ));
         }

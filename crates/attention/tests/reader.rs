@@ -821,7 +821,7 @@ async fn a_pairing_that_supersedes_a_pending_retry_leaves_no_refresh_run() {
         .newest_resolved_refresh_attempts("business", 1, 16)
         .unwrap()
         .into_iter()
-        .map(|a| (a.id, a.outcome, a.detail))
+        .map(|a| (a.id, a.outcome.as_str().to_string(), a.detail))
         .collect();
     assert_eq!(
         rows,

@@ -533,8 +533,9 @@ impl Store {
     }
 
     pub fn purge_cooldowns_before(&self, now: i64) -> Result<usize, StoreError> {
-        let conn = self.conn.lock().expect(LOCK_POISONED);
-        Ok(conn.execute("DELETE FROM cooldowns WHERE until < ?1", params![now])?)
+        self.routing_transaction(|tx| {
+            Ok(tx.execute("DELETE FROM cooldowns WHERE until < ?1", params![now])?)
+        })
     }
 
     /// Drops every window, window set and credits row whose incarnation is not its account's. The router's purge

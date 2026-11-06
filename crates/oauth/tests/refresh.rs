@@ -10,7 +10,8 @@ use phoebis_profile::{
     fixtures::{control_head, control_response, ControlFixture},
 };
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, NewBundle, Secret, StateCause, StorageKey, Store,
+    AccountKind, AccountRow, AccountState, NewBundle, OutcomeWord, Secret, StateCause, StorageKey,
+    Store,
 };
 use phoebis_transport::{
     connector_builder,
@@ -591,7 +592,7 @@ async fn a_lost_response_keeps_the_old_token_through_the_floor_and_retries_once_
     );
     assert_eq!(store.pending_refresh_attempts().unwrap().len(), 1);
     let attempt = store.last_refresh_attempt("a", 1).unwrap().unwrap();
-    assert_eq!(attempt.outcome.as_deref(), Some("uncertain"));
+    assert_eq!(attempt.outcome, Some(OutcomeWord::Uncertain));
     assert!(
         attempt.detail.is_some_and(|detail| !detail.is_empty()),
         "an uncertain attempt says what went uncertain, or the operator has nothing to act on"
@@ -668,9 +669,9 @@ async fn an_unreadable_200_quarantines_inside_the_floor_and_retries_once_past_it
     assert_eq!(mgr.acquire("a").await.unwrap().secret.expose(), "old");
     let attempt = store.last_refresh_attempt("a", 1).unwrap().unwrap();
     assert_eq!(
-        (attempt.outcome.as_deref(), attempt.detail.as_deref()),
+        (attempt.outcome, attempt.detail.as_deref()),
         (
-            Some("uncertain"),
+            Some(OutcomeWord::Uncertain),
             Some("refresh response could not be read")
         )
     );
@@ -705,7 +706,7 @@ async fn a_failed_credential_commit_quarantines_inside_the_floor_and_retries_onc
     store.debug_fail_next_credential_commit();
     assert_eq!(mgr.acquire("a").await.unwrap().secret.expose(), "old");
     let attempt = store.last_refresh_attempt("a", 1).unwrap().unwrap();
-    assert_eq!(attempt.outcome.as_deref(), Some("uncertain"));
+    assert_eq!(attempt.outcome, Some(OutcomeWord::Uncertain));
     assert!(attempt
         .detail
         .as_deref()
@@ -1490,8 +1491,8 @@ async fn an_attempt_row_without_its_commit_quarantines_the_account_at_start() {
     );
     let attempt = store.last_refresh_attempt("a", 1).unwrap().unwrap();
     assert_eq!(
-        (attempt.outcome.as_deref(), attempt.detail.as_deref()),
-        (Some("failed"), Some("quarantined at start"))
+        (attempt.outcome, attempt.detail.as_deref()),
+        (Some(OutcomeWord::Failed), Some("quarantined at start"))
     );
     up.shutdown().await;
 }

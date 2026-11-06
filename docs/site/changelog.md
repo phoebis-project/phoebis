@@ -657,7 +657,9 @@ advice, under `reading the registry at {path}` or `reading the ledger at {path}`
 not a directory, a dangling link among them, `proxy.upstream_gzip` refuses a bad word as a YAML error naming the key,
 `phoebis tls reload` names the admin listener in its refusal, `phoebis backup` names the directory it could not create
 or sync, and `phoebis status` probes the proxy beside its admin reads ([Commands](installation.md#commands),
-[proxy](installation.md#proxy), [Is it up?](operations.md#is-it-up)).
+[proxy](installation.md#proxy), [Is it up?](operations.md#is-it-up)). A registry from before the key canary proves the
+storage key against its keepalive recipe bodies too, so a registry whose readable rows are all bodies opens under the
+key that sealed them and refuses any other ([The storage key](operations.md#the-storage-key)).
 
 Guardrails are named objects attached to pools and keys, each an ordered list of conditions over a request's headers,
 derived facts, body members and messages, which in observe mode record the requests they match and in enforce mode

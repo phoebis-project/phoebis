@@ -13,7 +13,8 @@ use phoebis_ledger::{
 };
 use phoebis_routing::RouterEvent;
 use phoebis_store::{
-    AccountState, CooldownScope, MemberWrite, PinKey, PoolRow, StateCause, StorageKey, Store,
+    AccountState, Cancellation, CooldownScope, MemberWrite, PinKey, PoolRow, StateCause,
+    StorageKey, Store,
 };
 use tower::ServiceExt;
 
@@ -3449,7 +3450,14 @@ async fn a_wind_down_a_cancellation_after_the_start_opens_lands_whenever_its_win
     // Ten minutes out under the pool's thirty-minute wind-down: the window opened twenty minutes ago, before the
     // previous run's last row, and no run announced it.
     let ends_at = NOW + 10 * 60_000;
-    h.store.set_canceled("a", true, Some(ends_at)).unwrap();
+    h.store
+        .set_canceled(
+            "a",
+            Cancellation::On {
+                ends_at: Some(ends_at),
+            },
+        )
+        .unwrap();
     h.router.reload().await.unwrap();
     let wind_downs = || async {
         h.db.events(0, i64::MAX, 100)

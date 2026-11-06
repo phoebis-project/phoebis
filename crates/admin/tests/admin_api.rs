@@ -1427,7 +1427,12 @@ async fn the_account_view_answers_the_plan_the_profile_resolves_to() {
         .unwrap();
     // Canceled before it ever paired, so the view answers a subscription with no profile behind it.
     store
-        .set_canceled("unpaired", true, Some(common::NOW + 86_400_000))
+        .set_canceled(
+            "unpaired",
+            phoebis_store::Cancellation::On {
+                ends_at: Some(common::NOW + 86_400_000),
+            },
+        )
         .unwrap();
     let mut plans = Vec::new();
     for id in ["business", "seat", "unpaired"] {

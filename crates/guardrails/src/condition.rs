@@ -81,6 +81,21 @@ impl Subject {
             Subject::Message => 8,
         }
     }
+
+    /// Whether a condition on the subject reads the body itself: the body walk and the message regex do, and every
+    /// other subject reads a fact the request carries beside it.
+    pub fn reads_body(self) -> bool {
+        match self {
+            Subject::Body | Subject::Message => true,
+            Subject::AgentType
+            | Subject::Client
+            | Subject::Header
+            | Subject::Kind
+            | Subject::Model
+            | Subject::RequestClass
+            | Subject::UserAgent => false,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

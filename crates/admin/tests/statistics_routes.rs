@@ -5,7 +5,7 @@ use std::time::Duration;
 use common::{delete, get, json, login, post, wait_json};
 use fake_upstream::{stays_for, wait_for};
 use phoebis_ledger::{AttemptRecord, EventRecord, ParkedRecord, Record, RequestRecord};
-use phoebis_store::{AccountKind, AccountRow, AccountState, ShedStamp, StateCause};
+use phoebis_store::{AccountKind, AccountRow, AccountState, Cancellation, ShedStamp, StateCause};
 
 const HOUR: i64 = 3_600_000;
 
@@ -2418,7 +2418,10 @@ async fn the_unused_allowance_route_groups_each_subscription_accounts_weekly_res
     }
     // `second`'s term ended five days ago, inside the week its last reading names.
     let end = now - 5 * DAY;
-    parts.store.set_canceled("second", true, Some(end)).unwrap();
+    parts
+        .store
+        .set_canceled("second", Cancellation::On { ends_at: Some(end) })
+        .unwrap();
     parts.router.reload().await.unwrap();
     for (account, window, utilization_before, at, observed) in [
         ("business", "seven_day", 0.62, now - 20 * DAY, "sample"),
@@ -2588,7 +2591,7 @@ async fn the_unused_allowance_route_answers_each_resets_plan_and_tier_and_null_o
     let end = now - DAY;
     parts
         .store
-        .set_canceled("business", true, Some(end))
+        .set_canceled("business", Cancellation::On { ends_at: Some(end) })
         .unwrap();
     parts.router.reload().await.unwrap();
     for (utilization_before, at, observed, pair) in [
@@ -2839,7 +2842,7 @@ async fn a_term_end_before_the_range_still_drops_the_resets_after_it() {
     let end = now - 3 * DAY;
     parts
         .store
-        .set_canceled("business", true, Some(end))
+        .set_canceled("business", Cancellation::On { ends_at: Some(end) })
         .unwrap();
     parts.router.reload().await.unwrap();
     let week_reset = end + 2 * DAY;
@@ -2933,7 +2936,7 @@ async fn a_canceled_end_still_ahead_of_now_ends_no_week_in_a_range_that_reaches_
     let end = now + 3 * HOUR;
     parts
         .store
-        .set_canceled("business", true, Some(end))
+        .set_canceled("business", Cancellation::On { ends_at: Some(end) })
         .unwrap();
     parts.router.reload().await.unwrap();
     let reset_at = now - 3 * DAY;

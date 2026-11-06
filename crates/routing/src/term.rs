@@ -1,7 +1,7 @@
 //! The account's paid term: the operator's canceled flag and saved end, the trial end the profile carries, and the
 //! instant a profile read found no plan.
 
-use phoebis_store::SubscriptionTerm;
+use phoebis_store::{Cancellation, SubscriptionTerm};
 
 /// The end an engine rule reads: the stored end while the account is canceled, else a trial end still ahead, and the
 /// plan-ended flag where it comes first, so the rules for an account past its end apply to a flagged one.
@@ -14,10 +14,10 @@ pub fn end_of(term: &SubscriptionTerm, now: i64) -> Option<i64> {
 }
 
 fn term_end(term: &SubscriptionTerm, now: i64) -> Option<i64> {
-    if term.canceled {
-        return term.ends_at;
+    match term.cancellation {
+        Cancellation::On { ends_at } => ends_at,
+        Cancellation::Off => term.trial_ends_at.filter(|&end| end > now),
     }
-    term.trial_ends_at.filter(|&end| end > now)
 }
 
 /// Whether a fresh session should place on the account only as a last resort: inside `wind_down_minutes` of its
@@ -34,7 +34,7 @@ pub fn wind_down_start(end: i64, wind_down_minutes: u32) -> i64 {
 /// Canceled and the stored end passed, or flagged plan ended at or before `now`: the account is the obstacle
 /// `subscription_ended`.
 pub fn ended(term: &SubscriptionTerm, now: i64) -> bool {
-    (term.canceled && term.ends_at.is_some_and(|end| end <= now))
+    matches!(term.cancellation, Cancellation::On { ends_at: Some(end) } if end <= now)
         || term.plan_ended_at.is_some_and(|at| at <= now)
 }
 
@@ -53,8 +53,7 @@ mod tests {
             account_id: "a".into(),
             since,
             trial_ends_at,
-            canceled,
-            ends_at,
+            cancellation: Cancellation::from_flag(canceled, ends_at),
             tier: None,
             usage_based: false,
             plan: None,

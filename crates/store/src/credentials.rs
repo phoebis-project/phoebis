@@ -170,13 +170,43 @@ pub enum Settled {
     Uncertain,
 }
 
-fn settled(outcome: &str, detail: Option<&str>) -> Settled {
+/// An attempt row's outcome word, decoded once at the row read and read into `Settled` with the row's detail. Any
+/// other stored word reads as `Failed` at the row read, and `Superseded` under that detail.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OutcomeWord {
+    Committed,
+    Failed,
+    Uncertain,
+}
+
+impl OutcomeWord {
+    // Total rather than refusing an unknown word: a refused row would fail the mirror's batch read, whose cursor
+    // then never passes it, and the whole attention answer with it.
+    fn from_text(word: &str) -> OutcomeWord {
+        match word {
+            "committed" => OutcomeWord::Committed,
+            "uncertain" => OutcomeWord::Uncertain,
+            _ => OutcomeWord::Failed,
+        }
+    }
+
+    /// The stored word.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            OutcomeWord::Committed => "committed",
+            OutcomeWord::Failed => "failed",
+            OutcomeWord::Uncertain => "uncertain",
+        }
+    }
+}
+
+fn settled(outcome: OutcomeWord, detail: Option<&str>) -> Settled {
     match (outcome, detail) {
-        ("committed", Some(PAIRING_DETAIL)) => Settled::Paired,
-        ("committed", _) => Settled::Committed,
+        (OutcomeWord::Committed, Some(PAIRING_DETAIL)) => Settled::Paired,
+        (OutcomeWord::Committed, _) => Settled::Committed,
         (_, Some(SUPERSEDED_DETAIL)) => Settled::Superseded,
-        ("uncertain", _) => Settled::Uncertain,
-        _ => Settled::Failed,
+        (OutcomeWord::Uncertain, _) => Settled::Uncertain,
+        (OutcomeWord::Failed, _) => Settled::Failed,
     }
 }
 
@@ -197,7 +227,7 @@ pub struct ResolvedAttempt {
     pub account_id: String,
     pub started_at: i64,
     pub resolved_at: i64,
-    pub outcome: String,
+    pub outcome: OutcomeWord,
     pub detail: Option<String>,
     /// The failure's class as its settlement recorded it, `None` for a commit and for a row settled before the
     /// registry carried the column.
@@ -219,14 +249,14 @@ impl ResolvedAttempt {
     }
 
     pub fn settled(&self) -> Settled {
-        settled(&self.outcome, self.detail.as_deref())
+        settled(self.outcome, self.detail.as_deref())
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct LastAttempt {
     pub resolved_at: Option<i64>,
-    pub outcome: Option<String>,
+    pub outcome: Option<OutcomeWord>,
     pub detail: Option<String>,
 }
 
@@ -243,7 +273,6 @@ impl LastAttempt {
     /// `None` for an attempt still in flight.
     pub fn settled(&self) -> Option<Settled> {
         self.outcome
-            .as_deref()
             .map(|outcome| settled(outcome, self.detail.as_deref()))
     }
 }
@@ -295,7 +324,10 @@ fn last_refresh_attempt_in(
         .query_row(params![account_id, incarnation as i64], |row| {
             Ok(LastAttempt {
                 resolved_at: row.get(0)?,
-                outcome: row.get(1)?,
+                outcome: row
+                    .get::<_, Option<String>>(1)?
+                    .as_deref()
+                    .map(OutcomeWord::from_text),
                 detail: row.get(2)?,
             })
         })
@@ -345,7 +377,7 @@ fn row_to_resolved_attempt(r: &rusqlite::Row<'_>) -> rusqlite::Result<ResolvedAt
         account_id: r.get(1)?,
         started_at: r.get(2)?,
         resolved_at: r.get(3)?,
-        outcome: r.get(4)?,
+        outcome: OutcomeWord::from_text(&r.get::<_, String>(4)?),
         detail: r.get(5)?,
         lifecycle_generation: r.get::<_, i64>(6)? as u64,
         credential_generation: r.get::<_, i64>(7)? as u64,
@@ -1070,6 +1102,29 @@ mod tests {
         assert!(
             !plan.iter().any(|detail| detail.contains("TEMP B-TREE")),
             "{plan:?}"
+        );
+    }
+
+    #[test]
+    fn a_resolved_row_whose_outcome_word_is_none_of_the_three_reads_back_failed() {
+        let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO refresh_attempts (account_id, lifecycle_generation, credential_generation, started_at, \
+                 resolved_at, outcome) VALUES ('a', 1, 1, 1, 2, 'abandoned')",
+                [],
+            )
+            .unwrap();
+        let attempts = store.refresh_attempts_resolved_after(0, 0, 16).unwrap();
+        assert_eq!(
+            attempts
+                .iter()
+                .map(ResolvedAttempt::settled)
+                .collect::<Vec<_>>(),
+            [Settled::Failed]
         );
     }
 }

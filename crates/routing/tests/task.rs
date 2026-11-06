@@ -16,10 +16,10 @@ use phoebis_routing::{
     IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WRITER_DEPTH,
 };
 use phoebis_store::{
-    key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, CooldownScope,
-    FirstSeenRow, MemberWrite, ModelRule, OveragePolicy, OverageRow, PinBurn, PinKey, PinMark,
-    PinRow, PoolRow, RoutingLoad, RulesMode, Shedding, StateCause, StorageKey, Store, Strategy,
-    SubscriptionRow, WindowRow, WindowSetRow,
+    key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, Cancellation, CooldownRow,
+    CooldownScope, FirstSeenRow, MemberWrite, ModelRule, OveragePolicy, OverageRow, PinBurn,
+    PinKey, PinMark, PinRow, PoolRow, RoutingLoad, RulesMode, Shedding, StateCause, StorageKey,
+    Store, Strategy, SubscriptionRow, WindowRow, WindowSetRow,
 };
 
 const HOUR: i64 = 3_600_000;
@@ -11089,7 +11089,9 @@ async fn a_member_entering_its_wind_down_emits_once() {
     let store = seeded(&["a"]);
     // Forty minutes out, ten more than the pool's thirty-minute wind-down.
     let end = 1_000 + 40 * 60_000;
-    store.set_canceled("a", true, Some(end)).unwrap();
+    store
+        .set_canceled("a", Cancellation::On { ends_at: Some(end) })
+        .unwrap();
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(
         store.clone(),
@@ -11182,7 +11184,9 @@ async fn a_decision_records_a_canceled_members_term_under_the_canceled_key() {
     let store = seeded(&["a"]);
     // Ten minutes before the pool's thirty-minute wind-down opens, so the member stays the pick.
     let end = 1_000 + 40 * 60_000;
-    store.set_canceled("a", true, Some(end)).unwrap();
+    store
+        .set_canceled("a", Cancellation::On { ends_at: Some(end) })
+        .unwrap();
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
     let mut events = handle.subscribe_events();
@@ -11214,7 +11218,9 @@ async fn the_first_purge_after_the_start_marks_the_wind_downs_it_finds_as_restor
     let store = seeded(&["a"]);
     // Ten minutes out under the pool's thirty-minute wind-down: inside the window before the router starts.
     let end = 1_000 + 10 * 60_000;
-    store.set_canceled("a", true, Some(end)).unwrap();
+    store
+        .set_canceled("a", Cancellation::On { ends_at: Some(end) })
+        .unwrap();
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     let mut events = handle.subscribe_events();
@@ -11236,7 +11242,14 @@ async fn the_first_purge_after_the_start_marks_the_wind_downs_it_finds_as_restor
 async fn a_member_past_its_canceled_end_emits_no_wind_down() {
     let store = seeded(&["a"]);
     // The subscription ended an hour before the router starts: past its end, not entering a wind-down.
-    store.set_canceled("a", true, Some(1_000 - HOUR)).unwrap();
+    store
+        .set_canceled(
+            "a",
+            Cancellation::On {
+                ends_at: Some(1_000 - HOUR),
+            },
+        )
+        .unwrap();
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(
         store.clone(),
