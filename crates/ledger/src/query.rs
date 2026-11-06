@@ -8,7 +8,8 @@ use indexmap::IndexMap;
 use phoebis_bus::{Classifier, Kind};
 use phoebis_relay::EFFORT_LEVELS;
 use phoebis_routing::{
-    model_week, MemberSpend, PinUsage, DAY_MS, FIVE_HOUR, HOUR_MS, REFRESHING_CLASSES, SEVEN_DAY,
+    model_week, plan_windows, MemberSpend, PinUsage, DAY_MS, FIVE_HOUR, HOUR_MS,
+    REFRESHING_CLASSES, SEVEN_DAY,
 };
 use phoebis_store::{canonical_id, AccountKind, AttachmentSubject, BudgetPeriod};
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row};
@@ -24,7 +25,7 @@ use crate::histogram::Histogram;
 use crate::pattern::{literal_like, Patterns, ESCAPE};
 use crate::plan::{
     entrypoint_of_client, free_equivalent, free_shares, funding_of, price_equivalent, price_shares,
-    CostRevisions, Funding, PlanTables,
+    CostRevisions, Funding, PlanTables, WindowShares,
 };
 use crate::price::{price_row, price_usd, Priced, RowKey};
 use crate::pricing::{Band, PriceRevisions, Speed};
@@ -32,7 +33,7 @@ use crate::record::{
     AttemptRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord, RequestRecord,
 };
 use crate::rollup::{
-    add_counts, detail_json, fold_identifier, fold_user_agent, hour_of, migration_reason,
+    add_counts, detail_json, fold_identifier, fold_user_agent, hour_end, hour_of, migration_reason,
     read_account_rollups, read_rollups_paged, visit_rollups, CostSplit, KeySelector, RollupRow,
     RollupSelect, RoutingKind, DIMENSION_MAX_BYTES, EXPIRED_BETWEEN_TURNS, NO_CLASS, NO_EFFORT,
     OTHER_DIMENSION, UNATTRIBUTED,
@@ -87,7 +88,7 @@ pub fn hour_ceil(at_ms: i64) -> i64 {
     if floor * 1_000 == at_ms {
         floor
     } else {
-        floor + 3_600
+        hour_end(floor)
     }
 }
 
@@ -3032,7 +3033,7 @@ pub fn dashboard_on(
     prices: &PriceRevisions,
     costs: &PlanTables,
 ) -> Result<Dashboard, LedgerError> {
-    let to_hour = hour_of(now) + 3_600;
+    let to_hour = hour_end(hour_of(now));
     let from_hour = to_hour - 24 * 3_600;
     let fold = TrafficFold::new(from_hour, to_hour, 3_600, prices, costs, now)?;
     let mut buckets = fold.zero.clone();
@@ -3610,9 +3611,7 @@ pub struct SessionActivity {
     pub key_id: String,
     pub key_generation: i64,
     pub session_id: String,
-    pub first_request_at: i64,
     pub last_request_at: i64,
-    pub requests: u64,
     pub model: String,
     pub account_id: Option<String>,
     /// The newest request of the session presented the retired secret, and under which rotation.
@@ -3623,23 +3622,21 @@ pub struct SessionActivity {
 /// Every (key, key generation, session) with a client request since `since`, with the canonical model and the
 /// serving account of its newest request. Grouped by generation as well as id, so a key id created again never
 /// merges its sessions with an earlier holder's. One pass over the window's client requests: the newest request of
-/// a session is inside the window whenever any of its requests is, so the window alone answers both the counts and
-/// the newest request's facts. The count leaves the refused requests out, while their rows stay in the partition,
-/// so a session whose every request was refused keeps its newest request and is listed.
+/// a session is inside the window whenever any of its requests is, so the window alone answers the newest request's
+/// facts. Refused requests stay in the partition, so a session whose every request was refused keeps its newest
+/// request and is listed.
 pub fn session_activity(
     conn: &Connection,
     since: i64,
 ) -> Result<Vec<SessionActivity>, LedgerError> {
     let mut stmt = conn.prepare(&format!(
         "WITH recent AS (SELECT id, key_id, key_generation, session_id AS grp, received_at, canonical_model, \
-         presented_retired, rotation_at, refused FROM requests \
+         presented_retired, rotation_at FROM requests \
          WHERE key_id IS NOT NULL AND session_id IS NOT NULL AND kind != 'probe' AND received_at >= ?1), \
          ranked AS (SELECT recent.*, \
-         ROW_NUMBER() OVER (PARTITION BY key_id, key_generation, grp ORDER BY received_at DESC, id DESC) AS nth, \
-         MIN(received_at) OVER (PARTITION BY key_id, key_generation, grp) AS first_at, \
-         SUM(CASE WHEN refused = 0 THEN 1 ELSE 0 END) OVER (PARTITION BY key_id, key_generation, grp) AS n \
+         ROW_NUMBER() OVER (PARTITION BY key_id, key_generation, grp ORDER BY received_at DESC, id DESC) AS nth \
          FROM recent) \
-         SELECT key_id, key_generation, grp, first_at, received_at, n, canonical_model, \
+         SELECT key_id, key_generation, grp, received_at, canonical_model, \
          {}, \
          presented_retired, rotation_at \
          FROM ranked WHERE nth = 1 ORDER BY received_at DESC",
@@ -3650,13 +3647,11 @@ pub fn session_activity(
             key_id: r.get(0)?,
             key_generation: r.get(1)?,
             session_id: r.get(2)?,
-            first_request_at: r.get(3)?,
-            last_request_at: r.get(4)?,
-            requests: r.get::<_, i64>(5)? as u64,
-            model: r.get(6)?,
-            account_id: r.get(7)?,
-            on_retired_secret: r.get(8)?,
-            rotation_at: r.get(9)?,
+            last_request_at: r.get(3)?,
+            model: r.get(4)?,
+            account_id: r.get(5)?,
+            on_retired_secret: r.get(6)?,
+            rotation_at: r.get(7)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -3735,14 +3730,9 @@ pub fn session_identities(
     Ok(out)
 }
 
-/// `session_identities_chunk`'s statement and its binds, spelled once so the plan test explains the statement the
-/// read runs. Each named session costs two seeks of the session index, the `EXISTS` and the marking request's lookup,
-/// each stopping early, and the two fork facts are read off the marking row by primary key. The index is named: the
-/// lookup binds a key and a session, two indexes lead with one of them each, and the planner weighs them by
-/// statistics the file may lack or that a key holding most rows can mislead.
-pub(crate) fn session_identities_statement(
-    sessions: &[(String, i64, String)],
-) -> (String, Vec<rusqlite::types::Value>) {
+/// The `named` table the identities read and the first fill seek the session index from, with its binds. Its
+/// placeholders number from `?1`, so a statement's further binds go after these.
+fn named_sessions(sessions: &[(String, i64, String)]) -> (String, Vec<rusqlite::types::Value>) {
     let mut binds = Vec::with_capacity(sessions.len() * 3);
     let values: Vec<String> = sessions
         .iter()
@@ -3760,11 +3750,29 @@ pub(crate) fn session_identities_statement(
             )
         })
         .collect();
+    (
+        format!(
+            "named(key_id, key_generation, session_id) AS (VALUES {})",
+            values.join(", ")
+        ),
+        binds,
+    )
+}
+
+/// `session_identities_chunk`'s statement and its binds, spelled once so the plan test explains the statement the
+/// read runs. Each named session costs two seeks of the session index, the `EXISTS` and the marking request's lookup,
+/// each stopping early, and the two fork facts are read off the marking row by primary key. The index is named: the
+/// lookup binds a key and a session, two indexes lead with one of them each, and the planner weighs them by
+/// statistics the file may lack or that a key holding most rows can mislead.
+pub(crate) fn session_identities_statement(
+    sessions: &[(String, i64, String)],
+) -> (String, Vec<rusqlite::types::Value>) {
+    let (named, binds) = named_sessions(sessions);
     // The client's quota probe is an `inference` row ahead of the session's first main request and names no
     // fork, so the marker is read off the first refreshing or unclassed request, as the router records it.
     let refreshing = sql_list(REFRESHING_CLASSES);
     let sql = format!(
-        "WITH named(key_id, key_generation, session_id) AS (VALUES {}), \
+        "WITH {named}, \
          marked AS ( \
            SELECT n.key_id, n.key_generation, n.session_id, \
                   (SELECT r.id FROM requests r INDEXED BY requests_session \
@@ -3776,8 +3784,7 @@ pub(crate) fn session_identities_statement(
                            WHERE r.session_id = n.session_id AND r.key_id = n.key_id \
                              AND r.key_generation = n.key_generation AND r.kind != 'probe')) \
          SELECT m.key_id, m.key_generation, m.session_id, r.forked_from, r.fork_depth \
-           FROM marked m LEFT JOIN requests r ON r.id = m.marking_id",
-        values.join(", ")
+           FROM marked m LEFT JOIN requests r ON r.id = m.marking_id"
     );
     (sql, binds)
 }
@@ -4322,13 +4329,6 @@ impl Latch {
         };
     }
 
-    /// A zero on a figure no row of the bucket has latched.
-    fn zero(&mut self) {
-        if *self == Latch::Idle {
-            *self = Latch::Sum(0.0);
-        }
-    }
-
     fn figure(self) -> Option<f64> {
         match self {
             Latch::Sum(sum) => Some(sum),
@@ -4405,17 +4405,11 @@ pub(crate) fn price_usage(
     ]
     .into_iter()
     .filter_map(|(window, latch)| Some((*shares.get(window?)?, latch)));
-    match price.funding {
-        Funding::Plan => {
-            windows.for_each(|(share, latch)| latch.add(share));
-            point.equivalent.add(price.equivalent);
-        }
-        _ => {
-            point.usd += price.usd;
-            windows.for_each(|(_, latch)| latch.zero());
-            point.equivalent.zero();
-        }
+    if price.funding != Funding::Plan {
+        point.usd += price.usd;
     }
+    windows.for_each(|(share, latch)| latch.add(share));
+    point.equivalent.add(price.equivalent);
     point.cached_tokens += usage.cache_read;
     point.tokens += tokens_of(usage);
     point.uncached_tokens += usage.input;
@@ -4434,7 +4428,7 @@ pub struct RequestPrice {
     /// A plan row's shares of its tier's windows, keyed `five_hour`, `seven_day`, `seven_day_<family>`, a window the
     /// tables do not size `None`, and a billed row's zero on each window its tier sizes, none for an api_key row.
     /// `None` without a tier.
-    pub shares: Option<BTreeMap<&'static str, Option<f64>>>,
+    pub shares: Option<WindowShares>,
 }
 
 /// `None` for a usage with no token, which prices nothing, as `price_usage` returns early for it.
@@ -4450,9 +4444,7 @@ pub(crate) fn price_request(
         return None;
     }
     let priced = price_row(prices, tables, &key, usage);
-    let windows = [FIVE_HOUR, SEVEN_DAY]
-        .into_iter()
-        .chain(model_week(key.model));
+    let windows = plan_windows(key.model);
     let (equivalent, shares) = match key.funding {
         // A tier the cost revision does not size answers no map, and every window it would share reads unpriced.
         Funding::Plan => (
@@ -4473,16 +4465,9 @@ pub(crate) fn price_request(
         // zero share rests on the tier alone. An api_key account has no window to share.
         funding => (
             Some(0.0),
-            key.tier.filter(|_| funding != Funding::ApiKey).map(|tier| {
-                windows
-                    .filter(|window| {
-                        tables
-                            .tier_factor(tier, window, key.entrypoint, key.at)
-                            .is_some()
-                    })
-                    .map(|window| (window, Some(0.0)))
-                    .collect()
-            }),
+            key.tier
+                .filter(|_| funding != Funding::ApiKey)
+                .map(|tier| free_shares(tables, key.entrypoint, tier, key.model, key.at)),
         ),
     };
     Some(RequestPrice {
@@ -5217,31 +5202,14 @@ pub(crate) fn session_spend_since_statement(
 pub(crate) fn session_spend_of_statement(
     sessions: &[(String, i64, String)],
 ) -> (String, Vec<rusqlite::types::Value>) {
-    let mut binds = Vec::with_capacity(sessions.len() * 3);
-    let values: Vec<String> = sessions
-        .iter()
-        .map(|(key_id, key_generation, session_id)| {
-            format!(
-                "({})",
-                bind_all(
-                    &[
-                        rusqlite::types::Value::Text(key_id.clone()),
-                        rusqlite::types::Value::Integer(*key_generation),
-                        rusqlite::types::Value::Text(session_id.clone()),
-                    ],
-                    &mut binds,
-                )
-            )
-        })
-        .collect();
+    let (named, binds) = named_sessions(sessions);
     let sql = format!(
-        "WITH named(key_id, key_generation, session_id) AS (VALUES {}) \
+        "WITH {named} \
          SELECT {SESSION_SPEND_COLUMNS}, {PRICED_ATTEMPT_COLUMNS} \
          FROM named n CROSS JOIN requests r INDEXED BY requests_session ON r.session_id = n.session_id \
          AND r.key_id = n.key_id AND r.key_generation = n.key_generation \
          LEFT JOIN attempts a ON a.request_id = r.id \
-         ORDER BY r.session_id, r.received_at, r.id, a.attempt",
-        values.join(", ")
+         ORDER BY r.session_id, r.received_at, r.id, a.attempt"
     );
     (sql, binds)
 }

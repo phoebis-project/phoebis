@@ -7154,16 +7154,16 @@ fn session_activity_groups_every_row_under_its_own_session() {
     let db = LedgerDb::open_in_memory().unwrap();
     plant_identity(&db, "r1", "k1", 0, "s1", "inference", 1_000, None, None);
     plant_identity(&db, "r2", "k1", 0, "s2", "inference", 2_000, None, None);
-    let mut grouped: Vec<(String, u64)> = db
+    let mut grouped: Vec<String> = db
         .read_blocking(|c| phoebis_ledger::session_activity(c, 0))
         .unwrap()
         .into_iter()
-        .map(|a| (a.session_id, a.requests))
+        .map(|a| a.session_id)
         .collect();
     grouped.sort();
     assert_eq!(
         grouped,
-        [("s1".to_string(), 1), ("s2".to_string(), 1)],
+        ["s1".to_string(), "s2".to_string()],
         "each row groups under its own session"
     );
 }
@@ -8167,8 +8167,8 @@ fn the_breakdown_answers_refused_and_refusals_per_group() {
     );
 }
 
-/// A session's count leaves its refused requests out, while the refused rows stay in the window that picks a
-/// session's newest request, so a session whose every request was refused is still listed.
+/// The refused rows stay in the window that picks a session's newest request, so a session whose every request was
+/// refused is still listed.
 #[test]
 fn a_sessions_count_leaves_its_refused_requests_out_and_a_session_of_refusals_alone_is_still_listed(
 ) {
@@ -8189,13 +8189,8 @@ fn a_sessions_count_leaves_its_refused_requests_out_and_a_session_of_refusals_al
         "the rejection and the 529 carry no session: {sessions:?}"
     );
     assert_eq!(
-        session("s1").requests,
-        1,
-        "the served request, the two blocks left out"
-    );
-    assert_eq!(
-        (session("s2").requests, session("s2").last_request_at),
-        (0, WEEKDAY_OFF_PEAK - 60_000 + 2),
+        session("s2").last_request_at,
+        WEEKDAY_OFF_PEAK - 60_000 + 2,
         "the contract refusal alone, listed with its newest request"
     );
 }

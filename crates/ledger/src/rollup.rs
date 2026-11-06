@@ -954,7 +954,7 @@ fn reread_utilization(
             "SELECT MAX(ratelimit_5h_utilization), MAX(ratelimit_7d_utilization), MAX(ratelimit_7d_oi_utilization) \
              FROM attempts WHERE account_id = ?1 AND started_at >= ?2 AND started_at < ?3",
         )?
-        .query_row(params![account_id, hour * 1_000, (hour + 3_600) * 1_000], |r| {
+        .query_row(params![account_id, hour * 1_000, hour_end(hour) * 1_000], |r| {
             Ok((
                 r.get::<_, Option<f64>>(0)?,
                 r.get::<_, Option<f64>>(1)?,
@@ -1127,7 +1127,7 @@ pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), Ledge
             let mut cursor = from;
             while cursor < booked {
                 let bucket = hour_of(cursor);
-                let end = booked.min((bucket + 3_600) * 1_000);
+                let end = booked.min(hour_end(bucket) * 1_000);
                 let seconds = ((end - cursor) / 1_000) as u64;
                 if seconds > 0 {
                     fold_account(
@@ -1153,7 +1153,7 @@ pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), Ledge
             for (bucket, counted) in take_segments(tx, account, scope)? {
                 // The part of this hour's segment that lies after the clear never elapsed.
                 let start_ms = bucket * 1_000;
-                let end_ms = (bucket + 3_600) * 1_000;
+                let end_ms = hour_end(bucket) * 1_000;
                 let unelapsed =
                     ((until.min(end_ms) - event.at.max(start_ms)).max(0) / 1_000) as u64;
                 let seconds = unelapsed.min(counted);
