@@ -280,8 +280,7 @@ impl Accumulator {
         }
     }
 
-    /// One request, `row` its run's last row: the statements keep a request's attempts one run in attempt order, so
-    /// the last is the serving attempt the request log takes.
+    /// One request, priced by the serving attempt the request log takes.
     fn fold(
         &mut self,
         row: &SessionSpendRow,
@@ -289,20 +288,8 @@ impl Accumulator {
         tables: &PlanTables,
         now: i64,
     ) {
-        if row.refused {
-            return;
-        }
         let attempt = row.attempt.as_ref();
-        let price = attempt.and_then(|a| {
-            a.price(
-                row.received_at,
-                &row.canonical_model,
-                &row.kind,
-                prices,
-                tables,
-                now,
-            )
-        });
+        let price = attempt.and_then(|a| a.price(prices, tables, now));
         let served = attempt
             .zip(price.as_ref())
             .map(|(a, price)| (a.account_id.as_str(), price));
@@ -392,18 +379,12 @@ impl Accumulator {
     }
 }
 
-/// A row with no key or no session has no row to land on, as the activity read drops it.
-fn key_of(row: &SessionSpendRow) -> Option<(String, i64, String)> {
-    Some((
-        row.key_id.clone()?,
+fn key_of(row: &SessionSpendRow) -> (String, i64, String) {
+    (
+        row.key_id.clone(),
         row.key_generation,
-        row.session_id.clone()?,
-    ))
-}
-
-fn serving_rows(rows: &[SessionSpendRow]) -> impl Iterator<Item = &SessionSpendRow> {
-    rows.chunk_by(|a, b| a.request_id == b.request_id)
-        .filter_map(<[SessionSpendRow]>::last)
+        row.session_id.clone(),
+    )
 }
 
 /// What the fold copies out before the ledger read: the watermark and the sessions it holds, so the read's statements
@@ -414,13 +395,16 @@ pub(crate) struct FoldCursor {
     pub held: BTreeSet<(String, i64, String)>,
 }
 
-/// One poll's rows as the sessions closure read them under its transaction, and the watermark the incremental read
-/// ran with.
+/// One poll's rows as the sessions closure read them under its transaction, the watermark the incremental read ran
+/// with and the snapshot's newest landing.
 pub(crate) struct PollRows {
     pub fill: Vec<(String, i64, String)>,
     pub fill_rows: Vec<SessionSpendRow>,
     pub since_rows: Vec<SessionSpendRow>,
     pub watermark: i64,
+    /// `newest_landed_at` in the snapshot, since the incremental read leaves out the rows the fold passes over and
+    /// their landings still move the watermark.
+    pub newest: i64,
 }
 
 /// The row's four members and its count, as the fold answers them for one session.
@@ -434,8 +418,8 @@ pub(crate) struct SessionFigures {
 
 /// The fold's reads of one poll, on the closure's transaction after the activity read: the start watermark where the
 /// cursor holds none (`newest_landed_at`, before the first fill), the first fill over the `keys` the cursor does not
-/// hold, then the incremental read after the watermark. A function of its own so a test runs the sequence on an
-/// in-memory ledger as the route does.
+/// hold, then the incremental read after the watermark and the newest landing. A function of its own so a test runs
+/// the sequence on an in-memory ledger as the route does.
 pub(crate) fn read_poll(
     conn: &Connection,
     cursor: &FoldCursor,
@@ -455,11 +439,13 @@ pub(crate) fn read_poll(
         .collect();
     let fill_rows = phoebis_ledger::session_spend_rows_of(conn, &fill)?;
     let since_rows = phoebis_ledger::session_spend_rows_since(conn, watermark)?;
+    let newest = phoebis_ledger::newest_landed_at(conn)?;
     Ok(PollRows {
         fill,
         fill_rows,
         since_rows,
         watermark,
+        newest,
     })
 }
 
@@ -496,7 +482,7 @@ impl SessionSpendFold {
 
     /// Folds one poll's rows, guarded by the ledger's landing stamps, which the writer keeps strictly increasing,
     /// since two polls can copy one cursor, read under two snapshots and fold in either order. A poll whose newest
-    /// landing (`rows.watermark`, or the last incremental row's where it is above) is below the fold's watermark is
+    /// landing (`rows.newest`, or `rows.watermark` where it is above) is below the fold's watermark is
     /// stale and applies nothing, its fills waiting for the next poll's snapshot, and so does a poll priced under a
     /// cost revision a newer cursor has reset the fold away from. Otherwise each session `rows.fill` names is reset
     /// and filled from its rows, a held one too, since the fill is its whole history in a snapshot at least as new as
@@ -522,11 +508,7 @@ impl SessionSpendFold {
         {
             return;
         }
-        // The incremental rows arrive in landing order.
-        let newest = rows
-            .since_rows
-            .last()
-            .map_or(rows.watermark, |row| row.landed_at.max(rows.watermark));
+        let newest = rows.newest.max(rows.watermark);
         if inner.watermark.is_some_and(|watermark| newest < watermark) {
             return;
         }
@@ -535,22 +517,24 @@ impl SessionSpendFold {
         for key in &filled {
             inner.sessions.insert(key.clone(), Accumulator::new(now));
         }
-        for row in serving_rows(&rows.fill_rows) {
-            let Some(key) = key_of(row).filter(|key| filled.contains(key)) else {
+        for row in &rows.fill_rows {
+            let key = key_of(row);
+            if !filled.contains(&key) {
                 continue;
-            };
+            }
             if let Some(accumulator) = inner.sessions.get_mut(&key) {
                 accumulator.fold(row, prices, tables, now);
             }
         }
         let folded_to = inner.watermark;
-        for row in serving_rows(&rows.since_rows) {
+        for row in &rows.since_rows {
             if folded_to.is_some_and(|watermark| row.landed_at <= watermark) {
                 continue;
             }
-            let Some(key) = key_of(row).filter(|key| !filled.contains(key)) else {
+            let key = key_of(row);
+            if filled.contains(&key) {
                 continue;
-            };
+            }
             if let Some(accumulator) = inner.sessions.get_mut(&key) {
                 accumulator.fold(row, prices, tables, now);
             }
@@ -637,8 +621,8 @@ mod tests {
     fn row(id: &str, session: &str, received_at: i64, landed_at: i64) -> SessionSpendRow {
         SessionSpendRow {
             request_id: id.into(),
-            session_id: Some(session.into()),
-            key_id: Some("k".into()),
+            session_id: session.into(),
+            key_id: "k".into(),
             key_generation: 0,
             agent_id: None,
             agent_type: None,
@@ -646,7 +630,6 @@ mod tests {
             request_class: None,
             canonical_model: MODEL.into(),
             kind: "inference".into(),
-            refused: false,
             received_at,
             landed_at,
             attempt: None,
@@ -706,6 +689,7 @@ mod tests {
                 fill_rows: rows_of(&db, "s"),
                 since_rows: Vec::new(),
                 watermark: 3,
+                newest: 3,
             },
             &prices,
             &tables,
@@ -717,6 +701,7 @@ mod tests {
                 fill_rows: Vec::new(),
                 since_rows: rows_of(&db, "s"),
                 watermark: 3,
+                newest: 3,
             },
             &prices,
             &tables,
@@ -750,6 +735,7 @@ mod tests {
                 fill_rows: vec![row("t1", "t", at, 2)],
                 since_rows: Vec::new(),
                 watermark: 2,
+                newest: 2,
             },
             &prices,
             &tables,
@@ -774,6 +760,7 @@ mod tests {
                     .collect(),
                 since_rows: Vec::new(),
                 watermark: 1,
+                newest: 1,
             },
             &prices,
             &tables,
@@ -804,6 +791,7 @@ mod tests {
                 fill_rows: vec![row("r1", "s", at, 1), row("r2", "s", at + 1, 2)],
                 since_rows: vec![row("r2", "s", at + 1, 2), row("r3", "t", at + 2, 3)],
                 watermark: 1,
+                newest: 3,
             },
             &prices,
             &tables,
@@ -822,7 +810,7 @@ mod tests {
         assert_eq!(
             (cursor.watermark, cursor.held),
             (Some(3), BTreeSet::from([s])),
-            "the watermark reaches the newest landing either read returned"
+            "the watermark reaches the poll's newest landing"
         );
     }
 
@@ -858,11 +846,13 @@ mod tests {
         // The fill the route's read takes from the cursor: the session where the fold does not hold it.
         let poll = |cursor: &FoldCursor| {
             let held = cursor.held.contains(&s);
+            let watermark = cursor.watermark.unwrap_or(1);
             PollRows {
                 fill: if held { Vec::new() } else { vec![s.clone()] },
                 fill_rows: if held { Vec::new() } else { rows_of(&db, "s") },
                 since_rows: Vec::new(),
-                watermark: cursor.watermark.unwrap_or(1),
+                watermark,
+                newest: watermark,
             }
         };
         let cursor = fold.cursor(&tables, JANUARY_2026);
@@ -958,6 +948,7 @@ mod tests {
                 ],
                 since_rows: Vec::new(),
                 watermark: 2,
+                newest: 2,
             },
             &prices,
             &tables,

@@ -4877,6 +4877,7 @@ pub(crate) const PRICED_ATTEMPT_COLUMNS: &str =
      a.usage_based";
 
 /// One attempt's facts toward the share and the dollars it is priced at, read off its attempt and request rows.
+#[derive(Debug)]
 pub(crate) struct PricedAttempt {
     /// Milliseconds: the attempt's completion, `attempts.finished_at`, else the request's, where the meter charges
     /// it; the band that prices it is read here.
@@ -4904,6 +4905,12 @@ pub(crate) struct PricedAttempt {
 }
 
 impl PricedAttempt {
+    // Offsets past `first` of the request columns `SessionSpendRow::read` takes as well, for a request no attempt
+    // joined, so both readers name one place.
+    const MODEL: usize = 1;
+    const RECEIVED_AT: usize = 7;
+    const KIND: usize = 11;
+
     /// The attempt from `PRICED_ATTEMPT_COLUMNS` read from column `first` on, a missing or negative token count read
     /// as zero.
     pub(crate) fn read(row: &Row, first: usize) -> rusqlite::Result<PricedAttempt> {
@@ -4912,7 +4919,7 @@ impl PricedAttempt {
         };
         Ok(PricedAttempt {
             completed_at: row.get(first)?,
-            canonical_model: row.get(first + 1)?,
+            canonical_model: row.get(first + Self::MODEL)?,
             usage: PinUsage {
                 input: tokens(2)?,
                 cache_read: tokens(3)?,
@@ -4920,11 +4927,11 @@ impl PricedAttempt {
                 write_1h: tokens(5)?,
                 output: tokens(6)?,
             },
-            received_at: row.get(first + 7)?,
+            received_at: row.get(first + Self::RECEIVED_AT)?,
             speed: row.get(first + 8)?,
             account_kind: row.get(first + 9)?,
             overage_in_use: row.get(first + 10)?,
-            kind: row.get(first + 11)?,
+            kind: row.get(first + Self::KIND)?,
             tier: row.get(first + 12)?,
             client: row.get(first + 13)?,
             classifier: row.get(first + 14)?,
@@ -4932,66 +4939,32 @@ impl PricedAttempt {
         })
     }
 
-    /// The key and the usage `price_usage` prices the attempt at, `now` the read's instant.
+    /// The key and the usage `price_usage` prices the attempt at, `now` the read's instant. The attempt's revision is
+    /// its request's, and its band the completion's, where the meter charges it.
     pub(crate) fn usage(&self, prices: &PriceRevisions, now: i64) -> (RowKey<'_>, PinUsage) {
-        let facts = AttemptFacts {
-            canonical_model: &self.canonical_model,
-            kind: &self.kind,
-            received_at: self.received_at,
-            completed_at: self.completed_at,
-            usage: self.usage,
-            speed: self.speed.as_deref(),
-            account_kind: &self.account_kind,
-            usage_based: self.usage_based,
-            overage_in_use: self.overage_in_use,
-            tier: self.tier.as_deref(),
-            client: self.client.as_deref(),
-            classifier: self.classifier.as_deref(),
-        };
-        (row_key(facts, prices, now), self.usage)
-    }
-}
-
-/// An attempt's facts and its request's that a `RowKey` is built from, borrowed from whichever read holds them, so the
-/// burn series and the session fold build one key from one fact.
-struct AttemptFacts<'a> {
-    canonical_model: &'a str,
-    kind: &'a str,
-    received_at: i64,
-    completed_at: i64,
-    usage: PinUsage,
-    speed: Option<&'a str>,
-    account_kind: &'a str,
-    usage_based: bool,
-    overage_in_use: Option<bool>,
-    tier: Option<&'a str>,
-    client: Option<&'a str>,
-    classifier: Option<&'a str>,
-}
-
-/// The attempt's revision is its request's, and its band the completion's, where the meter charges it.
-fn row_key<'a>(facts: AttemptFacts<'a>, prices: &PriceRevisions, now: i64) -> RowKey<'a> {
-    let band = prices
-        .in_force(facts.received_at)
-        .band_of(facts.canonical_model, facts.usage.prompt_tokens());
-    let speed = Speed::of(facts.speed);
-    RowKey {
-        model: facts.canonical_model,
-        speed,
-        band,
-        funding: funding_of(
-            AccountKind::parse(facts.account_kind),
-            facts.usage_based,
-            facts.overage_in_use,
+        let band = prices
+            .in_force(self.received_at)
+            .band_of(&self.canonical_model, self.usage.prompt_tokens());
+        let speed = Speed::of(self.speed.as_deref());
+        let key = RowKey {
+            model: &self.canonical_model,
             speed,
-        ),
-        kind: facts.kind,
-        tier: facts.tier,
-        entrypoint: entrypoint_of_client(facts.client.unwrap_or(UNATTRIBUTED)),
-        classifier: facts.classifier == Some(Classifier::Client.as_str()),
-        at: facts.received_at,
-        band_at: Some(facts.completed_at),
-        now,
+            band,
+            funding: funding_of(
+                AccountKind::parse(&self.account_kind),
+                self.usage_based,
+                self.overage_in_use,
+                speed,
+            ),
+            kind: &self.kind,
+            tier: self.tier.as_deref(),
+            entrypoint: entrypoint_of_client(self.client.as_deref().unwrap_or(UNATTRIBUTED)),
+            classifier: self.classifier.as_deref() == Some(Classifier::Client.as_str()),
+            at: self.received_at,
+            band_at: Some(self.completed_at),
+            now,
+        };
+        (key, self.usage)
     }
 }
 
@@ -5054,15 +5027,15 @@ fn read_session_attempts(
         .map_err(LedgerError::from)
 }
 
-/// The request facts and the attempt the session fold prices, one row per attempt of a request and one row with no
-/// attempt for a request no account served. The first fill answers them by session, `received_at` and request id, the
-/// incremental read by `landed_at`, and both keep a request's attempts one run in attempt order.
+/// A request the session fold prices, with its serving attempt where an account served it. Neither read answers a
+/// refused request, which the spend leaves out, or one with no key or no session, which has no row to land on, as the
+/// activity read drops it. The first fill answers them by session, `received_at` and request id, the incremental read
+/// by `landed_at`.
 #[derive(Debug)]
 pub struct SessionSpendRow {
     pub request_id: String,
-    /// `None` on a request that named no session, which the fold passes over.
-    pub session_id: Option<String>,
-    pub key_id: Option<String>,
+    pub session_id: String,
+    pub key_id: String,
     pub key_generation: i64,
     pub agent_id: Option<String>,
     pub agent_type: Option<String>,
@@ -5070,56 +5043,28 @@ pub struct SessionSpendRow {
     pub request_class: Option<String>,
     pub canonical_model: String,
     pub kind: String,
-    pub refused: bool,
     pub received_at: i64,
     pub landed_at: i64,
     pub attempt: Option<SpendAttempt>,
 }
 
-/// One attempt's facts the fold prices, `PricedAttempt`'s with the account and the start beside them.
+/// One attempt's facts the fold prices, `PricedAttempt`'s with the account beside them.
 #[derive(Debug)]
 pub struct SpendAttempt {
     pub account_id: String,
-    pub(crate) account_kind: String,
-    pub started_at: i64,
-    /// The completion the meter charges at, `attempts.finished_at`, else the request's, else the start.
-    pub(crate) completed_at: i64,
-    pub(crate) speed: Option<String>,
-    pub(crate) overage_in_use: Option<bool>,
-    pub(crate) usage_based: bool,
-    pub(crate) tier: Option<String>,
-    pub(crate) client: Option<String>,
-    pub(crate) classifier: Option<String>,
-    pub(crate) usage: PinUsage,
+    priced: PricedAttempt,
 }
 
 impl SpendAttempt {
-    /// The attempt priced under its request's receipt, model and kind, which the row carries, through the key the burn
-    /// series builds for an attempt, `now` the read's instant.
+    /// The attempt priced through the key the burn series builds for an attempt, `now` the read's instant.
     pub fn price(
         &self,
-        received_at: i64,
-        canonical_model: &str,
-        kind: &str,
         prices: &PriceRevisions,
         tables: &PlanTables,
         now: i64,
     ) -> Option<RequestPrice> {
-        let facts = AttemptFacts {
-            canonical_model,
-            kind,
-            received_at,
-            completed_at: self.completed_at,
-            usage: self.usage,
-            speed: self.speed.as_deref(),
-            account_kind: &self.account_kind,
-            usage_based: self.usage_based,
-            overage_in_use: self.overage_in_use,
-            tier: self.tier.as_deref(),
-            client: self.client.as_deref(),
-            classifier: self.classifier.as_deref(),
-        };
-        price_request(prices, tables, row_key(facts, prices, now), self.usage)
+        let (key, usage) = self.priced.usage(prices, now);
+        price_request(prices, tables, key, usage)
     }
 }
 
@@ -5127,10 +5072,10 @@ impl SpendAttempt {
 /// `SessionSpendRow::read` reads them.
 const SESSION_SPEND_COLUMNS: &str =
     "r.id, r.session_id, r.key_id, r.key_generation, r.agent_id, r.agent_type, \
-     r.user_agent, r.request_class, r.refused, r.landed_at, a.account_id, a.started_at";
+     r.user_agent, r.request_class, r.landed_at, a.account_id";
 
 /// The column `PRICED_ATTEMPT_COLUMNS` starts at in the session spend reads.
-const SESSION_SPEND_PRICED_FROM: usize = 12;
+const SESSION_SPEND_PRICED_FROM: usize = 10;
 
 impl SessionSpendRow {
     /// A request no account served joins no attempt, so its attempt half reads null and must not reach
@@ -5138,23 +5083,11 @@ impl SessionSpendRow {
     /// their place there whether an attempt joined or not.
     fn read(row: &Row) -> rusqlite::Result<SessionSpendRow> {
         let first = SESSION_SPEND_PRICED_FROM;
-        let attempt = match row.get::<_, Option<String>>(10)? {
-            Some(account_id) => {
-                let priced = PricedAttempt::read(row, first)?;
-                Some(SpendAttempt {
-                    account_id,
-                    account_kind: priced.account_kind,
-                    started_at: row.get(11)?,
-                    completed_at: priced.completed_at,
-                    speed: priced.speed,
-                    overage_in_use: priced.overage_in_use,
-                    usage_based: priced.usage_based,
-                    tier: priced.tier,
-                    client: priced.client,
-                    classifier: priced.classifier,
-                    usage: priced.usage,
-                })
-            }
+        let attempt = match row.get::<_, Option<String>>(9)? {
+            Some(account_id) => Some(SpendAttempt {
+                account_id,
+                priced: PricedAttempt::read(row, first)?,
+            }),
             None => None,
         };
         Ok(SessionSpendRow {
@@ -5166,55 +5099,57 @@ impl SessionSpendRow {
             agent_type: row.get(5)?,
             user_agent: row.get(6)?,
             request_class: row.get(7)?,
-            refused: row.get(8)?,
-            landed_at: row.get(9)?,
-            canonical_model: row.get(first + 1)?,
-            received_at: row.get(first + 7)?,
-            kind: row.get(first + 11)?,
+            landed_at: row.get(8)?,
+            canonical_model: row.get(first + PricedAttempt::MODEL)?,
+            received_at: row.get(first + PricedAttempt::RECEIVED_AT)?,
+            kind: row.get(first + PricedAttempt::KIND)?,
             attempt,
         })
     }
 }
 
-/// `session_spend_rows_since`'s statement: every request landed after the watermark with its attempts, oldest landing
-/// first, through the landing index the writer's poll rule names. The index is named so the seek holds whatever
-/// statistics a file carries. The request id keeps the two statements' orders one shape, and a request's attempts run
-/// by attempt index alone, so the run ends on the highest index, the attempt the request log takes as the serving
-/// one, even where a retry's start reads earlier than its predecessor's.
+/// `session_spend_rows_since`'s statement: every request landed after the watermark with a key and a session and not
+/// refused, with its serving attempt, oldest landing first, through the landing index the writer's poll rule names.
+/// The index is named so the seek holds whatever statistics a file carries. The request id keeps the two statements'
+/// orders one shape.
 pub(crate) fn session_spend_since_statement(
     landed_after: i64,
 ) -> (String, Vec<rusqlite::types::Value>) {
+    let serving = serving_attempt("a.attempt", "r.id");
     let sql = format!(
         "SELECT {SESSION_SPEND_COLUMNS}, {PRICED_ATTEMPT_COLUMNS} \
-         FROM requests r INDEXED BY requests_landed_at LEFT JOIN attempts a ON a.request_id = r.id \
-         WHERE r.landed_at > ? ORDER BY r.landed_at, r.id, a.attempt"
+         FROM requests r INDEXED BY requests_landed_at \
+         LEFT JOIN attempts a ON a.request_id = r.id AND a.attempt = {serving} \
+         WHERE r.landed_at > ? AND r.key_id IS NOT NULL AND r.session_id IS NOT NULL AND r.refused = 0 \
+         ORDER BY r.landed_at, r.id"
     );
     (sql, vec![rusqlite::types::Value::Integer(landed_after)])
 }
 
 /// `session_spend_rows_of`'s statement for one chunk of named sessions: every request of each under its key lifetime
-/// with its attempts, seeking the session index per named session as the identities read does, each session's rows
-/// oldest first with each request's attempts one run (the request id before the attempt index, since two requests of
-/// a session can share `received_at`, and the attempts by index alone, as the incremental read orders them). The key
-/// and its generation scope the rows, as `session_identities_statement` scopes its own. The named sessions hold the
-/// outer loop through `CROSS JOIN`: the session index yields the order the statement sorts by, and on statistics that
-/// make a session look large the planner would walk the whole index in that order to spare the sort.
+/// and not refused, with its serving attempt, seeking the session index per named session as the identities read
+/// does, each session's rows oldest first. The key and its generation scope the rows, as
+/// `session_identities_statement` scopes its own. The named sessions hold the outer loop through `CROSS JOIN`: the
+/// session index yields the order the statement sorts by, and on statistics that make a session look large the
+/// planner would walk the whole index in that order to spare the sort.
 pub(crate) fn session_spend_of_statement(
     sessions: &[(String, i64, String)],
 ) -> (String, Vec<rusqlite::types::Value>) {
     let (named, binds) = named_sessions(sessions);
+    let serving = serving_attempt("a.attempt", "r.id");
     let sql = format!(
         "WITH {named} \
          SELECT {SESSION_SPEND_COLUMNS}, {PRICED_ATTEMPT_COLUMNS} \
          FROM named n CROSS JOIN requests r INDEXED BY requests_session ON r.session_id = n.session_id \
          AND r.key_id = n.key_id AND r.key_generation = n.key_generation \
-         LEFT JOIN attempts a ON a.request_id = r.id \
-         ORDER BY r.session_id, r.received_at, r.id, a.attempt"
+         LEFT JOIN attempts a ON a.request_id = r.id AND a.attempt = {serving} \
+         WHERE r.refused = 0 \
+         ORDER BY r.session_id, r.received_at, r.id"
     );
     (sql, binds)
 }
 
-/// Every request landed after `landed_after` with its attempts, of any session or none.
+/// Every request landed after `landed_after` with a key and a session and not refused, with its serving attempt.
 pub fn session_spend_rows_since(
     conn: &Connection,
     landed_after: i64,
@@ -5478,14 +5413,13 @@ mod tests {
         );
     }
 
-    /// The fold takes a request's last attempt as the one that served it, so each request's attempts must reach it as
-    /// one run in attempt order: each request's retry starts before its first attempt, so a start order in either
-    /// statement ends the run on the wrong attempt. Two requests of a session received at one instant tie on every
-    /// first-fill order column before the request id. The writer stamps each landing above the last, so the
-    /// incremental read's boundary is what can slip: a request landed at the watermark was folded by the poll that set
-    /// it.
+    /// Each read answers a request once with its highest-index attempt, the one that served it: each request's retry
+    /// starts, and so completes, before its first attempt, so a pick of the latest start or completion takes the wrong
+    /// one. Two requests of a session received at one instant tie on every first-fill order column before the request
+    /// id. The writer stamps each landing above the last, so the incremental read's boundary is what can slip: a
+    /// request landed at the watermark was folded by the poll that set it.
     #[test]
-    fn the_session_spend_reads_keep_attempts_one_run_and_the_read_since_leaves_the_watermark_out() {
+    fn the_session_spend_reads_take_the_highest_attempt_and_the_read_since_skips_the_watermark() {
         let db = LedgerDb::open_in_memory().unwrap();
         let request = |id: &str| RequestRecord {
             id: id.into(),
@@ -5515,9 +5449,9 @@ mod tests {
             None,
         )
         .unwrap();
-        let runs = |rows: Vec<SessionSpendRow>| -> Vec<(String, Option<i64>)> {
+        let served = |rows: Vec<SessionSpendRow>| -> Vec<(String, Option<i64>)> {
             rows.into_iter()
-                .map(|row| (row.request_id, row.attempt.map(|a| a.started_at)))
+                .map(|row| (row.request_id, row.attempt.map(|a| a.priced.completed_at)))
                 .collect()
         };
         let sessions = [("k".to_string(), 0, "s".to_string())];
@@ -5525,21 +5459,13 @@ mod tests {
             .read_blocking(|c| session_spend_rows_of(c, &sessions))
             .unwrap();
         assert_eq!(
-            runs(filled),
-            [
-                ("r1".to_string(), Some(100)),
-                ("r1".to_string(), Some(50)),
-                ("r2".to_string(), Some(200)),
-                ("r2".to_string(), Some(150)),
-            ]
+            served(filled),
+            [("r1".to_string(), Some(50)), ("r2".to_string(), Some(150))]
         );
         let since = db
             .read_blocking(|c| session_spend_rows_since(c, 1))
             .unwrap();
-        assert_eq!(
-            runs(since),
-            [("r2".to_string(), Some(200)), ("r2".to_string(), Some(150))]
-        );
+        assert_eq!(served(since), [("r2".to_string(), Some(150))]);
     }
 
     #[test]
