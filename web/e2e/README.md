@@ -16,11 +16,11 @@ expert field's wrapper (a half cell beside the plain one, a lone field the grid'
 mark's box 36 px square with the logo drawn 26 px square in it, the name 17 px at weight 600 on one line and inside the
 sidebar's content box), the dashboard's attention line (one 22 px row in every state, each badge and the "+N more" badge
 the pool card's strip badge on the row's one top edge, in the content box and clear of the tiles, with the story's
-nineteen items folded behind the dashed "+N more" badge in the mock pass, the seeded exhaustion or the quiet line in
-the router pass), the list the "+N more" badge opens (every item, one badge per row inside the box, 8 px under the badge
-and 8 px inside the window, the unpriced model's info badge against the first warning badge in height, left edge and
-type, its ink on its fill contrasting less than the warning badge's and at 4.5 to 1 or more, read here since the line
-folds the item at 1280 px and shows none at the phone widths, closed by Escape with the focus back on the badge), the
+nineteen items folded behind the dashed "+N more" badge in the mock pass, the seeded exhaustion or the quiet line in the
+router pass), the list the "+N more" badge opens (every item, one badge per row inside the box, 8 px under the badge and
+8 px inside the window, the unpriced model's info badge against the first warning badge in height, left edge and type,
+its ink on its fill contrasting less than the warning badge's and at 4.5 to 1 or more, read here since the line folds
+the item at 1280 px and shows none at the phone widths, closed by Escape with the focus back on the badge), the
 attention line at the phone widths from 360 to 414 px (the first row one 22 px row of the lead, the badges that fit and
 the fold badge, the Replay button on a second row where they need more than the line, every part inside the line's box,
 the same draw on a second read), the dashboard's stat grid at the pass's viewport, at 1024 by 768 and at 400 by 900 (all
@@ -358,34 +358,34 @@ layout is widest recorded with that width), the agent menu (mock pass, at 1280 b
 Agents table lists main alone: the open list's last item takes the pointer at its center, so the table's wrap clips none
 of the list), the open row's facts (the written session's row in the mock pass and the first row in the router's: the
 Session and Routing grids on one row of tops at 1280 by 800, and one above the other on one left edge at 599 by 800),
-the open row at a phone's 375 by 800 (on a load of its own that ends on the bare view: its panel as wide as the session
-table's wrap and at the wrap's left edge before and after the wrap scrolls 200 px, the Session facts above the Routing
-facts, and the Agents table scrolling in a wrap of its own under a sideways wheel that leaves the session table's wrap
-where it stood), the Sessions bar's sort control and its order (on loads of its own that end on the bare view: the Sort
-button in the height, top edge, type size and weight of the Columns control beside it, reading "Sort: Created" on the
-bare address and "Sort: Last activity" under `?sort=activity`, the first five rows' session ids recorded under each),
-the Sessions fold line (on a load of its own under `?model=claude-sonnet-5` that ends on the bare view: every row Expand
-all opens listing the lines on that model alone, a row whose other agents the filter hides reading the fold line's
-count, its toggle in the type size, weight and ink of the Cache warming line's, and the model chip's `(any agent)`
-suffix in the type size and ink of the chip's word), the fork badge's face (under the session id, in the face of the
-Status badges), the fork badges (inside their cell and whole), the row's badges (on the first row whose Status and Cache
-cells both draw one, the two in one face and height, and the Agents, Requests, Cost and Cache cells' sub lines in the
-type of the Status cell's), the badges' tones (on the bare view `busy` accent, `idle` and `warm` good, `parked`,
-`registered`, `cold`, `+$` and "+N" neutral, the `silent` sub line in `--warning-ink`, the `unreported` and `no pin`
-words in the ink of the bar's muted count, and the fork badge carrying `.srow__fork`), the session row's chevron (14 px
-square at the icon's 1.75 stroke), the Sessions read error (mock pass, on loads of its own under the mock's sessions
-failure switch: the notice 12 px under the bar naming the sessions with the read's message, and the card's error state,
-whose Try again the notice's matches in height, type size and weight), a finished session's line, found by its Status,
-the first line of its open detail, its words against the detail's type (mock pass, on a load of its own under the
-finished filter once the session list's shot is taken), the fork link, which is followed once the session list's shot is
-taken, the copy fallback (Copied on the Settings snippet with the clipboard API removed, on the Settings view's own
-load, and on a Key created dialog's secret in the mock pass, on a load of its own), the login screen's Stay logged in
-row (on both logins, the light theme's and the dark one's after the Log out: the secret field's, the row's, its box's,
-its label's and its hint's edges inside the card recorded, asserting nothing)). A check that opens an editor, a dialog
-or a row closes it again before the view's shot, and one that turns a column on turns it off again. The recent requests'
-table is fitted in the router pass and recorded in the mock pass, whose story's subscription rows read their figure in
-the Ultra week in the Cost cell, wider than the card leaves at 1280 by 800, so the table scrolls inside its wrap there.
-The script exits non-zero with the list of failures when any of that does not hold.
+the open row at a phone's 375 by 800 (ending on a load of the bare view: its panel as wide as the session table's wrap
+and at the wrap's left edge before and after the wrap scrolls 200 px, the Session facts above the Routing facts, and the
+Agents table scrolling in a wrap of its own under a sideways wheel that leaves the session table's wrap where it stood),
+the Sessions bar's sort control and its order (on loads of its own that end on the bare view: the Sort button in the
+height, top edge, type size and weight of the Columns control beside it, reading "Sort: Created" on the bare address and
+"Sort: Last activity" under `?sort=activity`, the first five rows' session ids recorded under each), the Sessions fold
+line (on a load of its own under `?model=claude-sonnet-5` that ends on the bare view: every row Expand all opens listing
+the lines on that model alone, a row whose other agents the filter hides reading the fold line's count, its toggle in
+the type size, weight and ink of the Cache warming line's, and the model chip's `(any agent)` suffix in the type size
+and ink of the chip's word), the fork badge's face (under the session id, in the face of the Status badges), the fork
+badges (inside their cell and whole), the row's badges (on the first row whose Status and Cache cells both draw one, the
+two in one face and height, and the Agents, Requests, Cost and Cache cells' sub lines in the type of the Status cell's),
+the badges' tones (on the bare view `busy` accent, `idle` and `warm` good, `parked`, `registered`, `cold`, `+$` and "+N"
+neutral, the `silent` sub line in `--warning-ink`, the `unreported` and `no pin` words in the ink of the bar's muted
+count, and the fork badge carrying `.srow__fork`), the session row's chevron (14 px square at the icon's 1.75 stroke),
+the Sessions read error (mock pass, on loads of its own under the mock's sessions failure switch: the notice 12 px under
+the bar naming the sessions with the read's message, and the card's error state, whose Try again the notice's matches in
+height, type size and weight), a finished session's line, found by its Status, the first line of its open detail, its
+words against the detail's type (mock pass, on a load of its own under the finished filter once the session list's shot
+is taken), the fork link, which is followed once the session list's shot is taken, the copy fallback (Copied on the
+Settings snippet with the clipboard API removed, on the Settings view's own load, and on a Key created dialog's secret
+in the mock pass, on a load of its own), the login screen's Stay logged in row (on both logins, the light theme's and
+the dark one's after the Log out: the secret field's, the row's, its box's, its label's and its hint's edges inside the
+card recorded, asserting nothing)). A check that opens an editor, a dialog or a row closes it again before the view's
+shot, and one that turns a column on turns it off again. The recent requests' table is fitted in the router pass and
+recorded in the mock pass, whose story's subscription rows read their figure in the Ultra week in the Cost cell, wider
+than the card leaves at 1280 by 800, so the table scrolls inside its wrap there. The script exits non-zero with the list
+of failures when any of that does not hold.
 
 The screenshot directory has to lie outside the repository, which the script enforces against every worktree `git
 worktree list` reports, and against the tree holding the nearest `Cargo.toml` when git cannot answer.

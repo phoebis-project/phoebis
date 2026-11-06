@@ -12685,7 +12685,7 @@ async function sessionsOpenShots(theme) {
       await page.setViewportSize(size);
       await settle();
       await atRest();
-      // As the view shots do: a full-page capture paints the fixed header and sidebar at the window's scroll offset.
+      // A full-page capture paints the fixed header and sidebar at the window's scroll offset, so the window scrolls up.
       await page.evaluate(() => window.scrollTo(0, 0));
       await page.waitForFunction(() => !document.querySelector('.skeleton'), null, { timeout: 3_000 }).catch(() => {});
       await page.screenshot({ fullPage: true, path: join(shots, theme, `${slug}.png`) });
