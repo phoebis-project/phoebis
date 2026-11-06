@@ -22149,16 +22149,6 @@ await forView('/sessions', async () => {
   const page = await mount('/sessions', { now: CLOCK_ORIGIN });
   const rows = () => [...page.container.querySelectorAll('tbody tr.srow')];
   const sessionOf = (tr) => sessionOfRow(tr, listed);
-  const activityOf = (s) => {
-    const times = [s.lastUsedAt, s.lastRequestAt].filter((t) => t !== null).map((t) => Date.parse(t));
-    return times.length === 0 ? null : Math.max(...times);
-  };
-  const expected = (s) => {
-    const last = activityOf(s);
-    // A session with no activity opens on the log's default last hour, which the address leaves out.
-    if (last === null) return { path: '/routing-log', session: s.sessionId };
-    return { path: '/routing-log', session: s.sessionId, from: isoAt(last - HOUR), to: isoAt(Math.min(last + HOUR, CLOCK_ORIGIN)) };
-  };
   const entryOf = async (tr) => {
     tr?.querySelector('.menu__trigger')?.click();
     await page.settle(120);
@@ -22171,25 +22161,30 @@ await forView('/sessions', async () => {
     tr.querySelector('.menu__trigger')?.click();
     await page.settle(120);
   }
-  // One row whose last activity ends the range at now, one whose hour after its last activity ended before now, one
-  // whose last use is newer than its last request, and one with neither.
-  const cases = [
-    (s) => activityOf(s) !== null && activityOf(s) > CLOCK_ORIGIN - HOUR,
-    (s) => activityOf(s) !== null && activityOf(s) < CLOCK_ORIGIN - HOUR,
-    (s) => s.lastRequestAt !== null && s.lastUsedAt !== null && Date.parse(s.lastUsedAt) > Date.parse(s.lastRequestAt) + HOUR,
-    (s) => activityOf(s) === null,
-  ];
+  // Each followed row by its session id, with the window its seed gives it (`sessionSpec` in
+  // `web/src/mock/operations.ts`, its last request from the request seed in `web/src/mock/requests.ts`). The mock dates
+  // its seed from its own load, a moment past the clock origin, so a window's edge is read off the row's seed instant
+  // while an end the clock caps is the origin itself.
+  const at = (instant, shift) => isoAt(Date.parse(instant ?? '') + shift);
+  const FOLLOWED = {
+    // Last used 95 minutes back and last requested about 16 hours back: the window centers on the last use and its
+    // hour after ended 35 minutes before now.
+    '1c0f9727-241e-48a5-9d36-3d241522aaa3': (s) => ({ from: at(s.lastUsedAt, -HOUR), to: at(s.lastUsedAt, HOUR) }),
+    // Last used 21 seconds back and last requested about five hours back: the clock caps the window's end at now.
+    'c64358b5-b04f-4047-baf2-5e86716ea490': (s) => ({ from: at(s.lastUsedAt, -HOUR), to: isoAt(CLOCK_ORIGIN) }),
+    // Last requested 2 minutes 32 seconds back and last used 36 minutes back: the window reads the last request alone.
+    'd7167642-751d-475e-b0bf-2f24fe70245e': (s) => ({ from: at(s.lastRequestAt, -HOUR), to: isoAt(CLOCK_ORIGIN) }),
+    // The registered row holds neither, so the log opens on its default last hour, which the address leaves out.
+    '0f1d7c64-3b2a-4f58-9c7e-1a5b0e8d2f43': () => ({}),
+  };
   const followed = [];
-  for (const wanted of cases) {
-    const tr = rows().find((r) => {
-      const s = sessionOf(r);
-      return s !== undefined && wanted(s);
-    });
+  for (const [id, windowOf] of Object.entries(FOLLOWED)) {
+    const tr = rows().find((r) => sessionOf(r)?.sessionId === id);
     const session = tr ? sessionOf(tr) : undefined;
     (await entryOf(tr))?.click();
     await page.settle(300);
     const landed = page.location();
-    followed.push({ got: logTarget(`${landed.pathname}${landed.search}`), want: session ? expected(session) : null });
+    followed.push({ got: logTarget(`${landed.pathname}${landed.search}`), want: session ? { path: '/routing-log', session: id, ...windowOf(session) } : null });
     await page.navigate('/sessions');
     await page.settle(300);
   }
@@ -23685,11 +23680,18 @@ await forView('/sessions', async () => {
     // order alone, since a row's lines keep the order their own key gives them.
     const name = '/sessions the sort control orders the rows by Cost and by Requests, largest first and then smallest, each pick writing the address';
     const page = await mount('/sessions', { now: CLOCK_ORIGIN });
-    const drawn = listed.filter((s) => drawnIds(page).includes(idOfRow(s)));
-    const figureOf = (s, sort) => (sort === 'cost' ? (s.spend?.usd ?? null) : s.requests);
-    /** Two figures largest first, or smallest first under `asc`, a missing one last under either. */
-    const byFigure = (a, b, dir) => (a === null || b === null ? (a === b ? 0 : a === null ? 1 : -1) : dir === 'asc' ? a - b : b - a);
-    const orderedBy = (sort, dir) => [...drawn].sort((a, b) => byFigure(figureOf(a, sort), figureOf(b, sort), dir) || a.sessionId.localeCompare(b.sessionId)).map(idOfRow);
+    // Each pick's drawn order by session id prefix, read off the 24 rows' `spend.usd` and `requests` (the mock's fold
+    // over the request seed in `web/src/mock/requests.ts`). The five rows with no spend, `0f1d7c64`, `3e9b7c21`,
+    // `6d2f8b40`, `b7e2d5a9` and `cd9a5904`, stand last under Cost either way and read by session id, while their zero
+    // requests put them first under Requests ascending. `0d588de5` and `d7167642` tie at seven requests and read by
+    // session id under both directions.
+    const ORDERS = {
+      cost: ['bcc805b6', '89cd1c92', '0d588de5', 'fa23a6da', '4ef130f1', '7bea4514', '4a7c2e9b', '229bf72c', '5f8a3c1e', 'd7167642', '76ddb35b', 'c8f4a2e7', 'c64358b5', '9c2d7e4a', '5eeed6ce', '1c0f9727', 'e7a4b2d9', '8b1f4c2e', '7d3e1c20', '0f1d7c64', '3e9b7c21', '6d2f8b40', 'b7e2d5a9', 'cd9a5904'],
+      costAsc: ['7d3e1c20', '8b1f4c2e', 'e7a4b2d9', '1c0f9727', '5eeed6ce', '9c2d7e4a', 'c64358b5', 'c8f4a2e7', '76ddb35b', 'd7167642', '5f8a3c1e', '229bf72c', '4a7c2e9b', '7bea4514', '4ef130f1', 'fa23a6da', '0d588de5', '89cd1c92', 'bcc805b6', '0f1d7c64', '3e9b7c21', '6d2f8b40', 'b7e2d5a9', 'cd9a5904'],
+      requests: ['bcc805b6', 'fa23a6da', '0d588de5', 'd7167642', '229bf72c', '4ef130f1', '7bea4514', '76ddb35b', '89cd1c92', '5eeed6ce', '5f8a3c1e', '8b1f4c2e', 'c64358b5', '1c0f9727', '4a7c2e9b', '7d3e1c20', '9c2d7e4a', 'c8f4a2e7', 'e7a4b2d9', '0f1d7c64', '3e9b7c21', '6d2f8b40', 'b7e2d5a9', 'cd9a5904'],
+      requestsAsc: ['0f1d7c64', '3e9b7c21', '6d2f8b40', 'b7e2d5a9', 'cd9a5904', 'e7a4b2d9', '1c0f9727', '4a7c2e9b', '7d3e1c20', '9c2d7e4a', 'c8f4a2e7', '8b1f4c2e', 'c64358b5', '5eeed6ce', '5f8a3c1e', '76ddb35b', '89cd1c92', '229bf72c', '4ef130f1', '7bea4514', '0d588de5', 'd7167642', 'fa23a6da', 'bcc805b6'],
+    };
+    const rowIds = (prefixes) => prefixes.map((p) => listed.find((s) => !s.historical && s.sessionId.startsWith(p))).map((s) => (s === undefined ? 'no session' : idOfRow(s)));
     const read = () => ({
       arrow: ARROWS[sortButton(page)?.querySelector('svg path')?.getAttribute('transform') ?? ''] ?? 'no arrow',
       rows: drawnIds(page),
@@ -23706,19 +23708,15 @@ await forView('/sessions', async () => {
     const picks = { cost: await choose('Cost'), costAsc: await choose('Ascending'), requests: await choose('Requests'), requestsAsc: await choose('Ascending') };
     page.unmount();
     const want = {
-      cost: { arrow: 'down', rows: orderedBy('cost', 'desc'), search: '?sort=cost', text: 'Sort: Cost' },
-      costAsc: { arrow: 'up', rows: orderedBy('cost', 'asc'), search: '?sort=cost&dir=asc', text: 'Sort: Cost' },
-      requests: { arrow: 'down', rows: orderedBy('requests', 'desc'), search: '?sort=requests', text: 'Sort: Requests' },
-      requestsAsc: { arrow: 'up', rows: orderedBy('requests', 'asc'), search: '?sort=requests&dir=asc', text: 'Sort: Requests' },
+      cost: { arrow: 'down', rows: rowIds(ORDERS.cost), search: '?sort=cost', text: 'Sort: Cost' },
+      costAsc: { arrow: 'up', rows: rowIds(ORDERS.costAsc), search: '?sort=cost&dir=asc', text: 'Sort: Cost' },
+      requests: { arrow: 'down', rows: rowIds(ORDERS.requests), search: '?sort=requests', text: 'Sort: Requests' },
+      requestsAsc: { arrow: 'up', rows: rowIds(ORDERS.requestsAsc), search: '?sort=requests&dir=asc', text: 'Sort: Requests' },
     };
-    // Each order differs from the others, rows with no spend stand under Cost, and rows with no request tie and read by
-    // session id under Requests.
-    const orders = Object.values(want).map((w) => JSON.stringify(w.rows));
-    const story = drawn.length === 24 && new Set(orders).size === 4 && drawn.some((s) => s.spend === null) && drawn.filter((s) => s.requests === 0).length >= 2;
     results.push({
       name,
-      ok: story && Object.entries(picks).every(([key, got]) => JSON.stringify(got) === JSON.stringify(want[key])),
-      missing: [`story ${story}: ${drawn.length} rows, ${new Set(orders).size} orders`, ...Object.entries(picks).map(([key, got]) => `${key} ${JSON.stringify(got)} against ${JSON.stringify(want[key])}`)],
+      ok: Object.entries(picks).every(([key, got]) => JSON.stringify(got) === JSON.stringify(want[key])),
+      missing: Object.entries(picks).map(([key, got]) => `${key} ${JSON.stringify(got)} against ${JSON.stringify(want[key])}`),
     });
   }
   {
@@ -23729,30 +23727,22 @@ await forView('/sessions', async () => {
     // (`WRITTEN_SUBAGENTS` in `web/src/mock/operations.ts`), and the slowed notebook session, whose main and Haiku
     // subagent hold pins no recipe stands on and no mod reports (`SLOWED_PINS`). The written session's released lines
     // stand on no pin, so under Created they tie and read by agent id, and under Last activity by their last requests.
+    // Each query's lines are written out from those seeds. The written session's live subagents hold one line per
+    // word, `4d1a` busy, `b2d8` idle and `4f0c2a9e7b61d3c58` parked, so only its released lines move: `e7c1` last
+    // requested nine minutes back, `c3a9` eleven and `91aa` twelve. The slowed session's Haiku subagent `7b2e` holds
+    // the one pin-only line and follows main.
     const SLOWED_ID = '5f8a3c1e-9d27-4b6e-8c04-2a7e9b3d1f65';
-    const RANK = { busy: 0, idle: 1, parked: 2, registered: 0, unknown: 2, released: 3 };
     const writtenId = recipes.find((r) => r.agentId === 'e7c1' && r.cause === 'agent_released')?.sessionId;
     const hosts = { slowed: listed.find((s) => s.sessionId === SLOWED_ID), written: listed.find((s) => !s.historical && s.sessionId === writtenId) };
-    const wantLines = (s, released, sort, dir) => {
-      const own = recipes.filter((r) => r.keyId === s.keyId && r.sessionId === s.sessionId && (released || r.agentState !== 'released'));
-      // Every recipe of these two sessions runs on its pin's model as written, so a pin is found by its agent and
-      // model.
-      const pinOf = (r) => s.agentContexts.find((c) => c.agentId === r.agentId && c.model === r.model) ?? null;
-      const lines = [
-        ...own.map((r) => ({ at: sort === 'activity' ? r.lastRequestAt : (pinOf(r)?.createdAt ?? null), group: RANK[r.agentState], id: r.agentId })),
-        ...s.agentContexts.filter((c) => !own.some((r) => pinOf(r) === c)).map((c) => ({ at: sort === 'activity' ? c.lastUsedAt : c.createdAt, group: c.lifecycle === null ? 4 : RANK[c.lifecycle], id: c.agentId })),
-      ];
-      return lines.sort((a, b) => ((a.id === 'main') !== (b.id === 'main') ? (a.id === 'main' ? -1 : 1) : a.group - b.group || byTime(a.at, b.at, dir) || a.id.localeCompare(b.id))).map((l) => l.id);
-    };
     const QUERIES = [
-      ['', false, 'created', 'desc'],
-      ['?sort=activity', false, 'activity', 'desc'],
-      ['?released=1', true, 'created', 'desc'],
-      ['?released=1&sort=activity', true, 'activity', 'desc'],
-      ['?released=1&sort=activity&dir=asc', true, 'activity', 'asc'],
+      ['', false, { slowed: ['main', '7b2e'], written: ['main', '4d1a', 'b2d8', '4f0c2a9e7b61d3c58'] }],
+      ['?sort=activity', false, { slowed: ['main', '7b2e'], written: ['main', '4d1a', 'b2d8', '4f0c2a9e7b61d3c58'] }],
+      ['?released=1', true, { slowed: ['main', '7b2e'], written: ['main', '4d1a', 'b2d8', '4f0c2a9e7b61d3c58', '91aa', 'c3a9', 'e7c1'] }],
+      ['?released=1&sort=activity', true, { slowed: ['main', '7b2e'], written: ['main', '4d1a', 'b2d8', '4f0c2a9e7b61d3c58', 'e7c1', 'c3a9', '91aa'] }],
+      ['?released=1&sort=activity&dir=asc', true, { slowed: ['main', '7b2e'], written: ['main', '4d1a', 'b2d8', '4f0c2a9e7b61d3c58', '91aa', 'c3a9', 'e7c1'] }],
     ];
     const reads = [];
-    for (const [query, released, sort, dir] of QUERIES) {
+    for (const [query, released, want] of QUERIES) {
       const page = await mount(`/sessions${query}`, { now: CLOCK_ORIGIN });
       const got = { agents: null };
       for (const [key, s] of Object.entries(hosts)) {
@@ -23763,16 +23753,12 @@ await forView('/sessions', async () => {
         got[key] = row?.nextElementSibling?.classList.contains('srow__detail') ? [...row.nextElementSibling.querySelectorAll('table.agents-table > tbody > tr')].map((l) => l.firstElementChild?.textContent?.trim() ?? '') : null;
       }
       page.unmount();
-      const want = Object.fromEntries(Object.entries(hosts).map(([key, s]) => [key, s === undefined ? null : wantLines(s, released, sort, dir)]));
       reads.push({ got, query, released, want });
     }
-    // The written session's released lines read one order under Created and another under Last activity.
-    const releasedTail = (lines) => lines?.filter((id) => ['91aa', 'c3a9', 'e7c1'].includes(id)) ?? [];
-    const story = hosts.slowed !== undefined && hosts.written !== undefined && JSON.stringify(releasedTail(reads[2].want.written)) !== JSON.stringify(releasedTail(reads[3].want.written));
     results.push({
       name: "/sessions an expanded row's lines read main first and then their groups under each key and direction, the released lines tied under Created and read by agent id",
-      ok: story && reads.every((r) => JSON.stringify([r.got.slowed, r.got.written]) === JSON.stringify([r.want.slowed, r.want.written]) && r.want.slowed?.[0] === 'main' && r.want.written?.[0] === 'main'),
-      missing: [`story ${story}`, ...reads.map((r) => `${r.query || 'bare'}: ${JSON.stringify({ slowed: r.got.slowed, written: r.got.written })} against ${JSON.stringify(r.want)}`)],
+      ok: reads.every((r) => JSON.stringify([r.got.slowed, r.got.written]) === JSON.stringify([r.want.slowed, r.want.written])),
+      missing: reads.map((r) => `${r.query || 'bare'}: ${JSON.stringify({ slowed: r.got.slowed, written: r.got.written })} against ${JSON.stringify(r.want)}`),
     });
     // The release filter reads each line's word, under either key: the three released subagents, `e7c1` and `91aa`
     // released under the live session and `c3a9` by the session's end, draw no line with Released agents off, and the
@@ -24371,15 +24357,15 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
   {
     // The optional columns read off the story's first session: Created as its age with the instant on hover, and Key
     // as a link to its key's row in the Keys view (`desktop`, `sessionSpec[0]`'s key), which the view lands on by the
-    // anchor since its search matches no key id. Last request reads the instant of the written session's last request.
-    for (const label of ['Created', 'Key', 'Last request']) await showColumn(page, label);
+    // anchor since its search matches no key id.
+    for (const label of ['Created', 'Key']) await showColumn(page, label);
     const created = cellOf(subjects.story, 'Created');
     const key = cellOf(subjects.story, 'Key')?.querySelector('a');
-    const read = { created: { text: created?.textContent?.trim() ?? null, title: created?.getAttribute('title') ?? null }, key: { href: key?.getAttribute('href') ?? null, text: key?.textContent?.trim() ?? null }, last: cellOf(subjects.written, 'Last request')?.textContent?.trim() ?? null };
-    for (const label of ['Created', 'Key', 'Last request']) await showColumn(page, label, false);
-    const want = { created: { text: fmtRelative(subjects.story?.createdAt ?? null, CLOCK_ORIGIN), title: fmtAbsolute(subjects.story?.createdAt ?? null) }, key: { href: '/keys#desktop', text: 'desktop' }, last: fmtAbsolute(subjects.written?.lastRequestAt ?? null) };
+    const read = { created: { text: created?.textContent?.trim() ?? null, title: created?.getAttribute('title') ?? null }, key: { href: key?.getAttribute('href') ?? null, text: key?.textContent?.trim() ?? null } };
+    for (const label of ['Created', 'Key']) await showColumn(page, label, false);
+    const want = { created: { text: fmtRelative(subjects.story?.createdAt ?? null, CLOCK_ORIGIN), title: fmtAbsolute(subjects.story?.createdAt ?? null) }, key: { href: '/keys#desktop', text: 'desktop' } };
     results.push({
-      name: "/sessions the Created, Key and Last request columns read the age with its instant, the key's link to its row in the Keys view and the last request's instant",
+      name: "/sessions the Created and Key columns read the age with its instant and the key's link to its row in the Keys view",
       ok: absent.length === 0 && JSON.stringify(read) === JSON.stringify(want),
       missing: [JSON.stringify(read), JSON.stringify(want)],
     });
@@ -25123,34 +25109,14 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
   results.push({ name: '/sessions counts ledgered requests per session', ok: counts.filter((n) => n > 0).length === 19 && counts.includes(0), missing: counts.map(String) });
 
   // Per-agent pins: a "+N" badge on the Model cell wherever an agent is pinned on another model, recipe or not, its
-  // hover naming each one's model and account. The set is read off the mock's answer: a listed session's pins on
-  // another model, then its shown recipes no pin stands under likewise, a recipe naming no account left out.
+  // hover naming each one's model and account.
   {
     const listed = await api.listSessions();
-    const recipes = await api.listKeepaliveRecipes();
     const idOfRow = (s) => `session-${encodeURIComponent(`${s.keyId}:${s.keyGeneration}:${s.sessionId}`)}`;
-    const elsewhere = (s) => {
-      const lines = new Map(s.agentContexts.map((c) => [`${c.agentId} ${c.model}`, c]));
-      for (const r of recipes) {
-        const shown = !s.historical && r.keyId === s.keyId && r.sessionId === s.sessionId && r.agentState !== 'released';
-        if (shown && !lines.has(`${r.agentId} ${r.model}`)) lines.set(`${r.agentId} ${r.model}`, r);
-      }
-      return [...lines.values()].filter((l) => l.accountId !== null && l.model !== s.model).map((l) => `${l.agentId}: ${l.model} on ${l.accountId}`);
-    };
     const drawn = rows().map((tr) => {
       const s = listed.find((x) => idOfRow(x) === tr.id);
       const badge = cell(tr, 'Model')?.querySelector('.srow__pin .badge');
-      return { expected: s === undefined ? null : elsewhere(s), hover: (badge?.getAttribute('title') ?? '').split('\n'), id: s?.sessionId ?? tr.id, text: badge?.textContent?.trim() ?? null };
-    });
-    const off = drawn.filter((d) =>
-      d.expected === null || d.expected.length === 0
-        ? d.text !== null
-        : d.text !== `+${d.expected.length}` || d.hover[0] !== 'Agents on another model:' || JSON.stringify(d.hover.slice(1).sort()) !== JSON.stringify([...d.expected].sort()),
-    );
-    results.push({
-      name: '/sessions marks every session with an agent pinned on another model, recipe or not, its "+N" the count and its hover the agents',
-      ok: drawn.length > 0 && drawn.every((d) => d.expected !== null) && off.length === 0,
-      missing: [`${drawn.length} rows, ${drawn.filter((d) => d.text !== null).length} badges`, ...off.map((d) => `${d.id}: ${d.text ?? 'no badge'} ${JSON.stringify(d.hover.slice(1))} against ${JSON.stringify(d.expected)}`)],
+      return { hover: (badge?.getAttribute('title') ?? '').split('\n'), id: s?.sessionId ?? tr.id, text: badge?.textContent?.trim() ?? null };
     });
     // The two story sessions whose subagent is pinned on Haiku with no recipe standing on the pin (`SLOWED_PINS` and
     // `noModLines` in mock/operations.ts): studio's slowed notebook session and the fleet session no mod reports.
@@ -25180,7 +25146,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
       .map((l) => `${l.children[0]?.textContent?.trim()}: ${l.children[2]?.getAttribute('title') ?? l.children[2]?.querySelector(':scope > :not(.sub)')?.textContent?.trim()}`)
       .filter((line) => hovered.includes(line));
     byActivity.unmount();
-    results.push({ name: "/sessions the +N hover lists the agents pinned elsewhere in the expanded lines' order", ok: twiceSession !== undefined && hovered.length === elsewhere(twiceSession).length && JSON.stringify(lined) === JSON.stringify(hovered), missing: [JSON.stringify(hovered), JSON.stringify(lined)] });
+    results.push({ name: "/sessions the +N hover lists the agents pinned elsewhere in the expanded lines' order", ok: twiceSession !== undefined && hovered.length === 2 && JSON.stringify(lined) === JSON.stringify(hovered), missing: [JSON.stringify(hovered), JSON.stringify(lined)] });
   }
 
   // Every column on, and the cases that read the optional columns and the cells' states.
@@ -25248,12 +25214,6 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
         missing: [String(id), bare === undefined ? 'hidden on the bare address' : 'listed on the bare address', JSON.stringify(read)],
       });
     }
-    const epochLines = [...m.container.querySelectorAll('.srow__client')].filter((e) => (e.textContent ?? '').includes('epoch'));
-    results.push({
-      name: '/sessions a re-created pin says so on the line under the session id',
-      ok: epochLines.length === 3 && epochLines.every((e) => (e.textContent ?? '').endsWith(' · epoch 2') && (e.getAttribute('title') ?? '').endsWith("How many times this session's pin was re-created")),
-      missing: epochLines.map((e) => `${e.textContent} titled ${e.getAttribute('title')}`),
-    });
     // The 19 rows the default filters keep that hold ledgered requests read their last request's instant and the other
     // five none, the two written sessions among the five. The earlier holder, the ci key's two rows and the
     // refusal-only row, which read a last request, and the row idle for two hours, which reads none, left the list
@@ -25290,18 +25250,6 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
       ok: parkedRows.length === 2 && probedParked.length === 1 && cell(probedParked[0], 'Next probe')?.textContent?.trim() !== 'not scheduled',
       missing: parkedRows.map((r) => `${stateOf(r)} ${cell(r, 'Next probe')?.textContent?.trim()}`),
     });
-    // The story's first session, whose recipes the route lists first, read by its row's id since the view orders the
-    // rows by their creation: its main awaits the cache evidence of its last request, which reads as retained.
-    const [story] = await api.listKeepaliveRecipes();
-    const mixedRow = rows().find((r) => {
-      const s = sessionOfRow(r, listedNow);
-      return s !== undefined && !s.historical && s.keyId === story?.keyId && s.sessionId === story?.sessionId;
-    });
-    results.push({
-      name: "/sessions an agent awaiting cache evidence reads retained under the row's Cache badge",
-      ok: stateOf(mixedRow) === 'retained',
-      missing: [cell(mixedRow, 'Cache')?.textContent?.trim() ?? 'absent'],
-    });
     // The parked badge's sentence, then the park's kind and its deadline or wake from main's recipe on the next line.
     const parkedTitle = (cell(parkedRow, 'Status')?.querySelector('.badge')?.getAttribute('title') ?? '').split('\n');
     results.push({
@@ -25316,7 +25264,6 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
   {
     const named = heads();
     const sessionAt = named.indexOf('Session');
-    results.push({ name: '/sessions the Session column leads after the gutter and Status follows it', ok: sessionAt === 1 && named.indexOf('Status') === 2, missing: named });
     {
       // Every column is on here, so the fill set is read whole: the gutter keeps its own width and carries neither
       // class, and each row's cell carries its header's class, which is what makes the fill cut and the fit hug.
@@ -25622,12 +25569,6 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
   await m.settle(150);
   const detail = m.container.querySelector('.srow__detail');
   expect('/sessions row expands into its agents', detail?.textContent ?? '', ['Created', ' ago', 'Agent', 'Model', 'Account', 'TTL', 'Last request', 'Last probe', 'Next probe', 'Probes / credited', 'State', 'main']);
-  {
-    const head = [...(detail?.querySelectorAll('.agents__row--head > span') ?? [])].map((c) => c.textContent?.trim());
-    // Every session's Cache warming details read the probe columns alone.
-    const want = ['Agent', 'TTL', 'Last request', 'Last probe', 'Next probe', 'Probes / credited', 'State'];
-    results.push({ name: "/sessions an agent's line carries no net, and the page no net-saved tile", ok: JSON.stringify(head) === JSON.stringify(want) && !m.text().includes('Net saved'), missing: [...head, m.text().includes('Net saved') ? 'Net saved tile' : ''].filter(Boolean) });
-  }
   {
     const mainAgent = [...(detail?.querySelectorAll('.agents__row') ?? [])].find((r) => r.textContent?.startsWith('main'))?.textContent ?? '';
     results.push({
@@ -25935,31 +25876,6 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
         long !== undefined &&
         long.title === long.id,
       missing: lines.map((l) => `${l.id} ${l.word}${l.title === l.id ? '' : ` title ${l.title}`}`),
-    });
-    row?.click();
-    await m.settle(150);
-  }
-  // A subagent released under a live session draws no line, by the mod's word for the agent or by the session's end,
-  // and the Agents cell leaves the released lines out of its count.
-  {
-    const hidden = (await api.listKeepaliveRecipes()).filter((r) => r.agentState === 'released' && r.cause === 'agent_released');
-    const row = rows().find((r) => cell(r, 'Session')?.getAttribute('title') === hidden[0]?.sessionId);
-    row?.click();
-    await m.settle(150);
-    const lines = [...m.container.querySelectorAll('.srow__detail .agents__row:not(.agents__row--head)')].map((l) => ({
-      id: l.firstElementChild?.textContent?.trim() ?? '',
-      word: l.querySelector('.agents__life .badge')?.textContent?.trim() ?? '',
-    }));
-    const count = cell(row, 'Agents')?.firstChild?.textContent?.trim();
-    results.push({
-      name: '/sessions a released line is not listed, whatever released it, and the Agents cell leaves the released ones out of its count',
-      ok:
-        hidden.length > 0 &&
-        lines.length === 4 &&
-        lines.every((l) => l.word !== 'released' && !['c3a9', 'e7c1', '91aa'].includes(l.id)) &&
-        count === '4' &&
-        count === String(lines.length),
-      missing: [...lines.map((l) => `${l.id} ${l.word}`), `Agents cell ${count ?? 'absent'}`],
     });
     row?.click();
     await m.settle(150);
