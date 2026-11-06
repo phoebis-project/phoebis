@@ -495,7 +495,9 @@ const present = (v: string | null): string[] => (v === null ? [] : [v]);
  * flag draws lines and matches none, so it stays out.
  */
 const AGENT_FILTER_WORDS = {
-  account: (_, line) => present(line.recipe?.accountId ?? line.pin?.accountId ?? null),
+  // The account the Agents table's cell shows: the recipe's, none where its request was refused before any account
+  // served it, and the pin's only where no recipe stands.
+  account: (_, line) => present(line.recipe !== null ? line.recipe.accountId : (line.pin?.accountId ?? null)),
   agentType: (_, line) => present(line.agentType),
   cache: (_, line) => cacheWords(line),
   effort: (_, line) => present(line.pin?.effort ?? null),
