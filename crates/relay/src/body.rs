@@ -96,9 +96,9 @@ pub const DANGEROUS_TOOL_USE_BETA: &str = phoebis_profile::DANGEROUS_TOOL_USE_BE
 /// marks the call.
 pub const CLASSIFIER_BETA: &str = "auto-mode-classifier-2026-07-16";
 
-/// A member an edit needs to find. A body toward the measured host that lacks one is refused rather than sent
-/// on: the account it would be billed against, or the model it would be served by, is not the one the router
-/// resolved.
+/// A member an edit needs to find, or the bound on the body's elements. A body toward the measured host that lacks
+/// such a member is refused rather than sent on: the account it would be billed against, or the model it would be
+/// served by, is not the one the router resolved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BodyMember {
     /// A billing line at `system[0].text` the strict decoder cannot read, a lone surrogate escape among its causes:
@@ -110,6 +110,8 @@ pub enum BodyMember {
     /// A `cache_control` marker the decoder reads and the raw walk cannot reach, or one it reaches and cannot
     /// read.
     CacheControl,
+    /// A body that holds more elements than `MAX_BODY_ELEMENTS`, refused before it is parsed.
+    Elements,
     MetadataUserId,
     Model,
     /// A member the caller's body carries more than once, raw or escaped: one of the top-level members admission
@@ -172,6 +174,8 @@ impl BodyMember {
         match self {
             BodyMember::BillingLine | BodyMember::BillingStamp => BILLING_LINE_PATH,
             BodyMember::CacheControl => "cache_control",
+            // The bound is the whole body's, and a path spelled from the root names the root by no member.
+            BodyMember::Elements => "",
             BodyMember::MetadataUserId => "metadata.user_id",
             BodyMember::Model => "model",
             BodyMember::Repeated(member) => member.path(),
@@ -181,8 +185,8 @@ impl BodyMember {
 
     /// `RelayError::BodyShape`'s `Display` text: a billing line the restoration cannot decode, a billing stamp the
     /// restamp cannot reach, a `cache_control` marker the rewrite cannot place, a repeated member, or a `safeguards`
-    /// member the cut cannot place, was found rather than absent, so none reads like the other two variants'
-    /// "has no ... member to edit".
+    /// member the cut cannot place, was found rather than absent, and a body past the element bound names no
+    /// member, so none reads like the other two variants' "has no ... member to edit".
     pub(crate) fn shape_message(self) -> String {
         match self {
             BodyMember::BillingLine => {
@@ -194,6 +198,7 @@ impl BodyMember {
             BodyMember::CacheControl => {
                 "request body carries a cache_control marker the router cannot place".into()
             }
+            BodyMember::Elements => "request body holds more elements than the router reads".into(),
             BodyMember::Repeated(member) => format!("request body {}", member.carried_twice()),
             BodyMember::Safeguards => {
                 "request body carries a safeguards member the router cannot place".into()

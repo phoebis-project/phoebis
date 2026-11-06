@@ -303,6 +303,9 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
                 BodyMember::CacheControl => {
                     "the request body carries a cache_control marker the relay cannot place, so the pool's cache TTL policy cannot be applied to it".into()
                 }
+                BodyMember::Elements => {
+                    "the request body holds more elements than the relay reads".into()
+                }
                 BodyMember::MetadataUserId => {
                     "the request body has no metadata.user_id the account can be bound to".into()
                 }

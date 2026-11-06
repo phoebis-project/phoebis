@@ -44,12 +44,14 @@ and a body that runs past the bound (`request_too_large`). A gzip body is then i
 (`body_budget_exhausted` where the budget cannot hold the inflated bound, `invalid_body` where the bytes are not valid
 gzip, and `request_too_large`), so every later read and edit sees the plain bytes.
 
-The body's facts are read once, the parsed tree beside them, and the ledger's standing is checked before the first fact
-is published, so no request is accepted that the writer cannot record (`ledger_behind`). The repeated-member check
-refuses a body that carries `metadata`, `model`, `stream` or `system`, the first system block's `text` or
-`metadata.user_id` more than once (`body_shape`), and a body that nests deeper than the relay reads or is not a Messages
-request at all (`invalid_body`), since the relay edits the first spelling of a member and a last-wins parser upstream
-would act on the second ([The body edits](#the-body-edits)).
+A body holding more than 2,000,000 elements, each `[`, `{` and `,` outside a string, is refused before it is parsed
+(`body_shape`), since a body of many tiny elements builds a parsed tree far larger than itself ([Compiled-in
+limits](installation.md#compiled-in-limits)). The body's facts are read once, the parsed tree beside them, and the
+ledger's standing is checked before the first fact is published, so no request is accepted that the writer cannot record
+(`ledger_behind`). The repeated-member check refuses a body that carries `metadata`, `model`, `stream` or `system`, the
+first system block's `text` or `metadata.user_id` more than once (`body_shape`), and a body that nests deeper than the
+relay reads or is not a Messages request at all (`invalid_body`), since the relay edits the first spelling of a member
+and a last-wins parser upstream would act on the second ([The body edits](#the-body-edits)).
 
 The model and the identity are read from the body and the headers (`missing_model` for a body without a model,
 `invalid_model` for one that is not a usable model name), the catalog resolves the canonical model the request is routed

@@ -70,7 +70,7 @@ use crate::errors::{
 use crate::exhaustion::{
     exhaustion_class, exhaustion_code, exhaustion_response, pool_moved_response,
 };
-use crate::facts::{AttributionLine, BodyFacts, ClientHints};
+use crate::facts::{element_count, AttributionLine, BodyFacts, ClientHints, MAX_BODY_ELEMENTS};
 use crate::headers::{outbound_headers, starts_with_ignoring_case, CredentialKind};
 use crate::hold::{hold, Commit, Held, Inspect, INSPECT_BUFFER};
 use crate::identity::{
@@ -1443,6 +1443,21 @@ impl Relay {
                     .await;
             }
         };
+        // A body of many tiny elements builds a tree far larger than itself, and the body budget does not count the
+        // tree, so the count is read off the bytes before the first parse.
+        if element_count(&raw, MAX_BODY_ELEMENTS) > MAX_BODY_ELEMENTS {
+            return self
+                .refused_before_body(
+                    &trace,
+                    Some(&key),
+                    &parts.headers,
+                    capture_hours,
+                    retired,
+                    relay_failure(&RelayError::BodyShape(BodyMember::Elements)),
+                    client_version.as_deref(),
+                )
+                .await;
+        }
         // Each lookup below walks the raw body's top-level object itself and holds no table of its members.
         let members = phoebis_cch::TopLevelMembers::read(&raw);
         // The tree lives to the guardrail step and no further: the body budget does not count it, and it is
@@ -3811,9 +3826,9 @@ impl Relay {
         behind
     }
 
-    /// A refusal with no body to observe: decided on the head before the read, or on a read that ended without
-    /// a whole body. The observation carries the client facts the head alone gives. `key` is `None` for a refusal
-    /// decided before a key was known.
+    /// A refusal with no body to observe: decided on the head before the read, on a read that ended without a
+    /// whole body, or on a whole body refused before its parse. The observation carries the client facts the head
+    /// alone gives. `key` is `None` for a refusal decided before a key was known.
     #[allow(clippy::too_many_arguments)]
     async fn refused_before_body(
         &self,

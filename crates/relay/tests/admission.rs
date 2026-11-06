@@ -1,7 +1,8 @@
-//! What the relay refuses on the router's own standing before any dial: the ledger behind its writer at admission,
-//! and a key moved to another pool between its admission and its selection, which answers the exhaustion `503` with
-//! `Retry-After: 1` under the outcome's obstacle `pool_moved` and files the request `rejected` with
-//! `accounts_unavailable`, as an account whose stored uuid the body cannot carry does.
+//! What the relay refuses before any dial: the ledger behind its writer at admission, a body holding more elements
+//! than the relay reads, refused `400` `body_shape` before its parse, and a key moved to another pool between its
+//! admission and its selection, which answers the exhaustion `503` with `Retry-After: 1` under the outcome's obstacle
+//! `pool_moved` and files the request `rejected` with `accounts_unavailable`, as an account whose stored uuid the body
+//! cannot carry does.
 
 mod common;
 
@@ -454,5 +455,64 @@ async fn an_oauth_account_whose_stored_uuid_is_malformed_answers_503_and_files_r
         (complete.outcome, complete.error_code.as_deref()),
         (Outcome::Rejected, Some("accounts_unavailable"))
     );
+    up.shutdown().await;
+}
+
+/// Mirrors `MAX_BODY_ELEMENTS`, which no reader outside the relay's crate reaches, so a change to the bound turns the
+/// case below red until this follows it.
+const ELEMENT_BOUND: usize = 2_000_000;
+
+/// `BODY`'s members with a lone quote for the prompt, so an escaped quote stands ahead of the elements, and a top-level
+/// `filler` array of `empties` empty arrays, then `extra`, then a last string holding brackets and commas. Outside
+/// strings the body counts `BODY`'s eight marks, the comma ahead of `filler`, the array's bracket, two marks per empty
+/// array and `extra`'s own.
+fn crowded(empties: usize, extra: &str) -> String {
+    format!(
+        r#"{{"model":"claude-sonnet-4-5","messages":[{{"role":"user","content":"\""}}],"max_tokens":8,"metadata":{{"user_id":"{{\"account_uuid\":\"\",\"session_id\":\"s-1\"}}"}},"filler":[{}{extra}"[[,,]]"]}}"#,
+        "[],".repeat(empties)
+    )
+}
+
+#[tokio::test]
+async fn a_body_one_element_past_the_bound_is_refused_for_its_shape_and_one_at_the_bound_is_admitted(
+) {
+    let up = FakeUpstream::start(vec![ok_rule()]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    let post = |body: String| {
+        Request::post("/v1/messages")
+            .header("authorization", format!("Bearer {KEY}"))
+            .header("content-type", "application/json")
+            .header("content-length", body.len())
+            .header("user-agent", CLAUDE_CLI_USER_AGENT)
+            .header("x-claude-code-session-id", "s-1")
+            .header("x-claude-code-request-class", "main")
+            .body(Body::from(body))
+            .unwrap()
+    };
+    // The ten marks ahead of the empty arrays and two per array land on the bound, and the extra `1,` adds its comma.
+    let empties = (ELEMENT_BOUND - 10) / 2;
+    let over = h
+        .app
+        .clone()
+        .oneshot(post(crowded(empties, "1,")))
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            over.status().as_u16(),
+            over.headers()
+                .get("x-phoebis-error-code")
+                .map(|code| code.to_str().unwrap())
+        ),
+        (400, Some("body_shape"))
+    );
+    assert!(up.requests().is_empty(), "nothing reached the upstream");
+    let at = h
+        .app
+        .clone()
+        .oneshot(post(crowded(empties, "")))
+        .await
+        .unwrap();
+    assert_eq!(at.status(), 200, "{}", text_of(at).await);
     up.shutdown().await;
 }

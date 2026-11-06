@@ -47,7 +47,9 @@ suffix refusal names the anchors the router tried and the marks a subagent's req
 does not help where the session's main turns pass ([Client drift](relay.md#client-drift)). A request refused for an
 account's malformed stored uuid files as rejected, and every answer of the side routes carries
 `Cache-Control: no-store`, a refusal of a malformed path among them ([When nothing can
-serve](routing.md#when-nothing-can-serve), [What the proxy accepts](client.md#what-the-proxy-accepts)).
+serve](routing.md#when-nothing-can-serve), [What the proxy accepts](client.md#what-the-proxy-accepts)). A body holding
+more than 2,000,000 elements is refused `400` `body_shape` before it is parsed, so a body of many tiny elements cannot
+build a parsed tree past about 461 MiB ([Admission](relay.md#admission)).
 
 A key routes into one pool ([Pools, keys and routing](routing.md)), and every request it presents is placed on one
 account by the session's pin, the pool's strategy and each account's quota. A live pin moves only by one of five rules,

@@ -77,6 +77,40 @@ pub struct ClientHints {
 /// The text the client writes in place of a tool result it dropped at a resume.
 pub const RESUME_PLACEHOLDER: &str = "[Orphaned tool result removed due to conversation resume]";
 
+/// The elements a body may hold, counted before any tree is built. A counting allocator over
+/// `phoebis_guardrails::parse_body` on the release target, with `serde_json`'s `preserve_order`, measured the dearest
+/// of three shapes, an array of 10,000 small objects `{"a":1}`, at 241 bytes per counted element (206 for one-element
+/// arrays, 88 for empty arrays), so a body at the bound builds at most about 461 MiB, under the default
+/// `proxy.body_budget_bytes`. The largest recorded client body holds 390 elements.
+pub const MAX_BODY_ELEMENTS: usize = 2_000_000;
+
+/// The body's elements, each `[`, `{` and `,` outside a string, stopping once the count passes `limit`.
+pub(crate) fn element_count(body: &[u8], limit: usize) -> usize {
+    let mut count = 0;
+    let mut in_string = false;
+    let mut escaped = false;
+    for &byte in body {
+        if in_string {
+            // An escaped quote read as the close would put every byte after it on the wrong side of a string.
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+        } else if byte == b'"' {
+            in_string = true;
+        } else if matches!(byte, b'[' | b'{' | b',') {
+            count += 1;
+            if count > limit {
+                break;
+            }
+        }
+    }
+    count
+}
+
 impl BodyFacts {
     /// The facts and the parsed root they were read from, for a caller that reads the tree once more and drops it.
     pub fn read_with_tree(members: &TopLevelMembers<'_>) -> (BodyFacts, Option<Value>) {
@@ -951,5 +985,11 @@ mod tests {
         let (facts, tree) = BodyFacts::read_with_tree(&TopLevelMembers::read(b"not json"));
         assert_eq!(tree, None);
         assert!(facts.chains.is_none());
+    }
+
+    #[test]
+    fn the_element_count_stops_once_it_passes_the_limit() {
+        // Seven elements, the bracket and six commas, read under a limit of two.
+        assert_eq!(element_count(b"[1,1,1,1,1,1,1]", 2), 3);
     }
 }
