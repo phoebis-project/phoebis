@@ -1969,6 +1969,14 @@ fn run(
     // A slowed pin waits before it renews. A pin whose account left the set takes the placement path below, whatever
     // deadline stands on it.
     if let Some(((current, current_key), warmth)) = pin.as_ref().zip(warmth) {
+        // Step 1 read the pace before step 4's read could drop its deadline at a passed reset, so the record names the
+        // deadline as the decision leaves it, whichever answer follows.
+        if let Some(facts) = rec.pin.as_mut() {
+            facts.slow_down_until = state
+                .pin_pace(current_key)
+                .and_then(|pace| pace.deadline)
+                .filter(|deadline| *deadline > request.now);
+        }
         if let Some(candidate) = candidate_in(&eligible, &current.account_id) {
             if let Some(hold) = rewrite_answer(state, pool, request, current, current_key) {
                 return (SelectResult::Held(hold), writes);
@@ -4354,8 +4362,9 @@ fn rewrite_answer(
 /// standing on the pin is rejoined to the same instant, whatever the pool's switch reads now, since the hold was
 /// answered under the setting then in force: no hold is sized, nothing is folded and the span counts the wait once.
 /// The exception is a 5-hour reset passed since the deadline stood: step 4's read that replaces the old window's
-/// entry drops the deadline first, so the request is read afresh. Otherwise the pin waits its part of the read's plan
-/// while the read slows the account, the deadline standing on the pin for the requests that follow.
+/// entry, or the purge tick that removed it first, has dropped the deadline, so the request is read afresh. Otherwise
+/// the pin waits its part of the read's plan while the read slows the account, the deadline standing on the pin for
+/// the requests that follow.
 fn slow_down_answer(
     state: &mut RoutingState,
     snapshot: &RegistrySnapshot,
@@ -4378,10 +4387,6 @@ fn slow_down_answer(
             cycle_ms: pace.cycle_ms.map(|cycle| cycle.round() as i64),
         },
         None => {
-            // Step 1 read the pace before step 4's read could drop its deadline at a passed reset.
-            if let Some(pin) = rec.pin.as_mut() {
-                pin.slow_down_until = None;
-            }
             let read = rec.slow_down.as_ref().filter(|read| read.factor < 1.0)?;
             let plan = slow_down_hold(request, key, read)?;
             state.stand_slow_down_deadline(key, plan.until);

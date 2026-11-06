@@ -23545,8 +23545,31 @@ fn a_slow_down_hold_whose_part_runs_past_the_five_hour_reset_ends_at_the_reset()
 }
 
 #[test]
-fn the_first_selection_after_a_reset_drops_the_deadlines_the_accounts_pins_stood_before_it() {
-    // At the ceiling under a reset ten minutes out, each pin's part is the pool's cap of a minute.
+fn a_slow_down_hold_the_reset_cuts_under_a_second_is_not_served() {
+    // At the ceiling the pin's part is the pool's cap of a minute, and the read names the reset half a second after
+    // the arrival.
+    let (off, on) = held_pools(60);
+    let mut st = rounding(vec![burning("s1", "a", 15.0, true, T)]);
+    reading(&mut st, "a", 0.96, 20 * SECOND + 500, T);
+    reading(&mut st, "b", 0.1, 2 * HOUR, T);
+    cycled(&mut st, &off, "s1", 10 * SECOND, T + 10 * SECOND);
+    let d = decide(
+        &mut st,
+        &on,
+        &main_turn(&on, "s1", T + 20 * SECOND),
+        &mut rng(),
+    );
+    assert_eq!(
+        landed(d.result.clone()),
+        ("a".into(), None),
+        "a hold the reset cuts to half a second is not served, so the pin renews"
+    );
+}
+
+/// `s1` and a sibling `s2` on `a`, each held to the pool's cap of a minute at the ceiling under a reset ten minutes
+/// out (deadlines at `T + 80 s` and `T + 81 s`, the first arrival at `T + 20 s`), then a reading naming the reset at
+/// `T + 50 s`, so both deadlines outlive it. Answers the slowing pool and the state.
+fn held_past_a_moved_reset() -> (RegistrySnapshot, RoutingState) {
     let (off, on) = held_pools(60);
     let mut st = rounding(vec![
         burning("s1", "a", 15.0, true, T),
@@ -23566,9 +23589,13 @@ fn the_first_selection_after_a_reset_drops_the_deadlines_the_accounts_pins_stood
         held_on(&decide(&mut st, &on, &sibling, &mut rng())).1.until,
         Some(T + 81 * SECOND)
     );
-    // A later reading names the reset thirty seconds after the first arrival, so both deadlines outlive it.
     reading(&mut st, "a", 0.96, 28 * SECOND, T + 22 * SECOND);
+    (on, st)
+}
 
+#[test]
+fn the_first_selection_after_a_reset_drops_the_deadlines_the_accounts_pins_stood_before_it() {
+    let (on, mut st) = held_past_a_moved_reset();
     let second = SelectRequest {
         request_id: "r-2".into(),
         ..main_turn(&on, "s1", T + 60 * SECOND)
@@ -23594,6 +23621,24 @@ fn the_first_selection_after_a_reset_drops_the_deadlines_the_accounts_pins_stood
         landed(d.result.clone()),
         ("a".into(), None),
         "the sibling pin's deadline dropped at the same selection"
+    );
+    assert_eq!(d.record.pin.as_ref().and_then(|p| p.slow_down_until), None);
+}
+
+#[test]
+fn a_purge_tick_after_a_reset_drops_the_deadlines_the_accounts_pins_stood_before_it() {
+    let (on, mut st) = held_past_a_moved_reset();
+    // The tick removes the stale entry before any selection after the reset could replace it.
+    st.purge(&on, T + 55 * SECOND);
+    let second = SelectRequest {
+        request_id: "r-2".into(),
+        ..main_turn(&on, "s1", T + 60 * SECOND)
+    };
+    let d = decide(&mut st, &on, &second, &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("a".into(), None),
+        "the pin's request after the purge is read afresh and renews"
     );
     assert_eq!(d.record.pin.as_ref().and_then(|p| p.slow_down_until), None);
 }

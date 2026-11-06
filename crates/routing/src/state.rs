@@ -2761,16 +2761,7 @@ impl RoutingState {
                     },
                 ));
             }
-            // Every deadline the account's pins stood was sized under the old window, so each pin's next request is
-            // read afresh. A former pool's pins go too, since no selection holds them on this account.
-            let pins: Vec<PinKey> = self
-                .pins_on(account_id, &|_| true)
-                .into_iter()
-                .map(PinRow::key)
-                .collect();
-            for pin in &pins {
-                self.clear_slow_down_deadline(pin);
-            }
+            self.drop_slow_down_deadlines(account_id);
         }
         let mut opened = !self.slow_downs.contains_key(&key) && slowed;
         let mut ended = None;
@@ -3027,6 +3018,21 @@ impl RoutingState {
     pub(crate) fn clear_slow_down_deadline(&mut self, key: &PinKey) {
         if let Some(pace) = self.pin_paces.get_mut(key) {
             pace.deadline = None;
+        }
+    }
+
+    /// Drops the slow-down deadline of each pin on the account where a passed 5-hour reset clears its entry, by the
+    /// selection that replaces the entry or the purge tick that removes it: each was sized under the old window, so
+    /// each pin's next request is read afresh. A former pool's pins go too, since no selection holds them on this
+    /// account.
+    fn drop_slow_down_deadlines(&mut self, account_id: &str) {
+        let pins: Vec<PinKey> = self
+            .pins_on(account_id, &|_| true)
+            .into_iter()
+            .map(PinRow::key)
+            .collect();
+        for pin in &pins {
+            self.clear_slow_down_deadline(pin);
         }
     }
 
@@ -3892,8 +3898,8 @@ impl RoutingState {
     /// The slow-down entries a quiet account, a switched-off pool or a passed reset leaves, removed and answered in key
     /// order: an entry whose account holds no pin of the pool, one no selection wrote for `IN_FLIGHT_RECLAIM_MS`, the
     /// backstop the reservations use, one read before its window's passed reset, which every reader already reads as
-    /// cleared, and every entry of a pool whose slow-down is off or that left the registry, so a quiet account reads
-    /// unslowed again without a selection.
+    /// cleared and whose account's pins lose their deadlines with it, and every entry of a pool whose slow-down is off
+    /// or that left the registry, so a quiet account reads unslowed again without a selection.
     fn purge_slow_downs(
         &mut self,
         snapshot: &RegistrySnapshot,
@@ -3925,6 +3931,11 @@ impl RoutingState {
             .collect();
         for (key, entry) in &dropped {
             self.end_slow_down(key, entry, now);
+            // The passed reset alone makes the pins' deadlines moot: under a switched-off pool, a pool that left the
+            // registry or a quiet account, the window they were sized under still runs.
+            if self.slow_down_stale(&key.1, entry, now) {
+                self.drop_slow_down_deadlines(&key.1);
+            }
         }
         dropped
     }
