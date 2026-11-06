@@ -2719,8 +2719,8 @@ impl RoutingState {
     /// `SLOW_DOWN_WAIT_MS` continues it and its ramp, and `take_slow_down_edges` closes it once the factor has read 1
     /// for the wait. A span that opens records its start from this read, after the end of a span whose wait ran out
     /// before any drain closed it. An entry read before its window's passed reset is replaced: its open span ends by
-    /// that reset, and this read writes the entry afresh as a first write does. Answers the entry as written, the
-    /// read's stretch and threshold beside its factor.
+    /// that reset, the deadline standing on each of the account's pins drops, and this read writes the entry afresh as
+    /// a first write does. Answers the entry as written, the read's stretch and threshold beside its factor.
     pub fn write_slow_down(
         &mut self,
         pool_id: &str,
@@ -2760,6 +2760,16 @@ impl RoutingState {
                         held_ms: stale.held_ms,
                     },
                 ));
+            }
+            // Every deadline the account's pins stood was sized under the old window, so each pin's next request is
+            // read afresh. A former pool's pins go too, since no selection holds them on this account.
+            let pins: Vec<PinKey> = self
+                .pins_on(account_id, &|_| true)
+                .into_iter()
+                .map(PinRow::key)
+                .collect();
+            for pin in &pins {
+                self.clear_slow_down_deadline(pin);
             }
         }
         let mut opened = !self.slow_downs.contains_key(&key) && slowed;
@@ -3001,12 +3011,23 @@ impl RoutingState {
     }
 
     /// The slow-down hold's deadline stands on the pin under `key`, which the pin's next requests rejoin until it
-    /// passes, and the request is dispatched there. Nothing for a key with no pace.
+    /// passes or the account's 5-hour window resets (`clear_slow_down_deadline`), and the request is dispatched there.
+    /// Nothing for a key with no pace.
     pub(crate) fn stand_slow_down_deadline(&mut self, key: &PinKey, until: i64) {
         if let Some(pace) = self.pin_paces.get_mut(key) {
             pace.deadline = Some(until);
         }
         self.pace_held_until(key, until);
+    }
+
+    /// Drops the slow-down deadline standing on the pin under `key` at its account's 5-hour reset and keeps the last
+    /// dispatch: the request the deadline held still dispatches at that instant, since the relay's hold is already
+    /// answered, so the pace's last dispatch stays a fact and the pin's next gap measures from it. Nothing for a key
+    /// with no pace.
+    pub(crate) fn clear_slow_down_deadline(&mut self, key: &PinKey) {
+        if let Some(pace) = self.pin_paces.get_mut(key) {
+            pace.deadline = None;
+        }
     }
 
     /// A landing that finds a mark replaces it, since the earlier request's entry is on an account the pin left.

@@ -23518,6 +23518,87 @@ fn a_decision_past_the_pins_slow_down_deadline_records_no_deadline() {
 }
 
 #[test]
+fn a_slow_down_hold_whose_part_runs_past_the_five_hour_reset_ends_at_the_reset() {
+    // At the ceiling the pin's part is the pool's cap of a minute, and the read names the reset twenty seconds after
+    // the arrival.
+    let (off, on) = held_pools(60);
+    let mut st = rounding(vec![burning("s1", "a", 15.0, true, T)]);
+    reading(&mut st, "a", 0.96, 40 * SECOND, T);
+    reading(&mut st, "b", 0.1, 2 * HOUR, T);
+    cycled(&mut st, &off, "s1", 10 * SECOND, T + 10 * SECOND);
+    let d = decide(
+        &mut st,
+        &on,
+        &main_turn(&on, "s1", T + 20 * SECOND),
+        &mut rng(),
+    );
+    assert_eq!(
+        held_on(&d).1.until,
+        Some(T + 40 * SECOND),
+        "the hold ends at the reset, short of its part's end"
+    );
+    assert_eq!(
+        st.slow_down_state("p", "a").expect("an entry").held_ms,
+        20 * SECOND,
+        "the span counts the wait to the reset"
+    );
+}
+
+#[test]
+fn the_first_selection_after_a_reset_drops_the_deadlines_the_accounts_pins_stood_before_it() {
+    // At the ceiling under a reset ten minutes out, each pin's part is the pool's cap of a minute.
+    let (off, on) = held_pools(60);
+    let mut st = rounding(vec![
+        burning("s1", "a", 15.0, true, T),
+        seeded_pin("s2", "a", T),
+    ]);
+    reading(&mut st, "a", 0.96, 10 * MINUTE, T);
+    reading(&mut st, "b", 0.1, 2 * HOUR, T);
+    cycled(&mut st, &off, "s1", 10 * SECOND, T + 10 * SECOND);
+    cycled(&mut st, &off, "s2", 10 * SECOND, T + 11 * SECOND);
+    let first = main_turn(&on, "s1", T + 20 * SECOND);
+    assert_eq!(
+        held_on(&decide(&mut st, &on, &first, &mut rng())).1.until,
+        Some(T + 80 * SECOND)
+    );
+    let sibling = main_turn(&on, "s2", T + 21 * SECOND);
+    assert_eq!(
+        held_on(&decide(&mut st, &on, &sibling, &mut rng())).1.until,
+        Some(T + 81 * SECOND)
+    );
+    // A later reading names the reset thirty seconds after the first arrival, so both deadlines outlive it.
+    reading(&mut st, "a", 0.96, 28 * SECOND, T + 22 * SECOND);
+
+    let second = SelectRequest {
+        request_id: "r-2".into(),
+        ..main_turn(&on, "s1", T + 60 * SECOND)
+    };
+    let d = decide(&mut st, &on, &second, &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("a".into(), None),
+        "the pin's request after the reset is read afresh and renews"
+    );
+    assert_eq!(
+        d.record.pin.as_ref().and_then(|p| p.slow_down_until),
+        None,
+        "the record names no deadline once the reset dropped it"
+    );
+
+    let next = SelectRequest {
+        request_id: "r-2".into(),
+        ..main_turn(&on, "s2", T + 61 * SECOND)
+    };
+    let d = decide(&mut st, &on, &next, &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("a".into(), None),
+        "the sibling pin's deadline dropped at the same selection"
+    );
+    assert_eq!(d.record.pin.as_ref().and_then(|p| p.slow_down_until), None);
+}
+
+#[test]
 fn a_placement_after_a_slow_down_hold_names_the_hold_it_followed() {
     let (off, on) = held_pools(120);
     let mut st = slowed_s1(0.80);

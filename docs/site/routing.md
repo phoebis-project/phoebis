@@ -766,20 +766,22 @@ that speed.
 The hold is served before the response head, inside the selection, as a `held` decision with the reason `slow_down`: the
 request waits the pin's cycle times `1 / f - 1` for the factor `f` the ramp leaves, so a session at half speed waits one
 cycle before each request and one at a quarter speed three, capped by `slow_down_hold_seconds` (1 to 300, default 120)
-and never past the request's own deadline. The cycle is the pin's mean time from the dispatch of one request to the
-arrival of the next over about its last eight gaps, each arrival moving it by an eighth toward its gap and the first
-arrivals by their plain mean, so a pin's first requests pass unheld until a gap has been measured and a restart starts
-the measure over. A gap of `burn_average_seconds` or longer is a pause that enters no cycle, the next gap measured from
-the arrival that ended it, so a session that resumes after a long think or an idle hour is held for the pace it runs at
-and not for the pause. The deadline belongs to the pin: a retry or a sibling request of the same pin arriving before it
-rejoins it for the remaining time, so two requests of one pin wait to one instant and a hold that crossed the client's
-window costs one visible retry and no doubled wait. A hold under a second is not served, a request is held for the
-slow-down once, and a slot or reset hold after it keeps its own bound of `retry_in_place_seconds`. A pin whose cycle is
-too long for the cap is held at the cap and runs faster than the factor, and the account's other pins share the
-remaining reduction at one speed. The cap stands against the client's first-byte window of 180 seconds plus 1 second per
-32 KiB of body: the default leaves 60 seconds for the upstream's head and the pre-commit hold, and the pool's warning
-`hold_over_window` fires above 150 seconds. [When the client waits](client.md#when-the-client-waits) states the relation
-and the operator's choice.
+and never past the request's own deadline or the 5-hour window's reset. The cycle is the pin's mean time from the
+dispatch of one request to the arrival of the next over about its last eight gaps, each arrival moving it by an eighth
+toward its gap and the first arrivals by their plain mean, so a pin's first requests pass unheld until a gap has been
+measured and a restart starts the measure over. A gap of `burn_average_seconds` or longer is a pause that enters no
+cycle, the next gap measured from the arrival that ended it, so a session that resumes after a long think or an idle
+hour is held for the pace it runs at and not for the pause. The deadline belongs to the pin: a retry or a sibling
+request of the same pin arriving before it and before the 5-hour window's reset rejoins it for the remaining time, so
+two requests of one pin wait to one instant and a hold that crossed the client's window costs one visible retry and no
+doubled wait. The first selection on the account after the reset drops the deadlines its pins stood in the old window,
+so a request after the reset waits no deadline set before it and is read afresh. A hold under a second is not served, a
+request is held for the slow-down once, and a slot or reset hold after it keeps its own bound of
+`retry_in_place_seconds`. A pin whose cycle is too long for the cap is held at the cap and runs faster than the factor,
+and the account's other pins share the remaining reduction at one speed. The cap stands against the client's first-byte
+window of 180 seconds plus 1 second per 32 KiB of body: the default leaves 60 seconds for the upstream's head and the
+pre-commit hold, and the pool's warning `hold_over_window` fires above 150 seconds. [When the client
+waits](client.md#when-the-client-waits) states the relation and the operator's choice.
 
 Probes, token counts, compactions, auxiliary requests (any `x-claude-code-request-class` outside `compaction`, `main`
 and `subagent`), requests sent fast, requests on an API-key account and non-portable requests are never held for the

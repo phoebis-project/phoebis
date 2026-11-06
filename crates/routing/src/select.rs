@@ -4297,15 +4297,18 @@ struct HoldPlan {
 }
 
 /// The requesting pin's hold, read from the plan its selection's read computed, measured from the arrival so a
-/// selection that queued adds nothing to it. Writes no speed. `None` when the pin has no part in the plan, its hold
-/// reads under `SLOW_DOWN_MIN_HOLD_MS`, or its end is already past, as for a selection that queued longer than its
-/// own hold.
+/// selection that queued adds nothing to it. The hold ends at the earlier of its part's end and the reset the read
+/// names, with no slack since the ceiling sits under the limit. Writes no speed. `None` when the pin has no part in
+/// the plan, its hold so bounded reads under `SLOW_DOWN_MIN_HOLD_MS`, or its end is already past, as for a selection
+/// that queued longer than its own hold.
 fn slow_down_hold(request: &SelectRequest, key: &PinKey, read: &SlowDownRead) -> Option<HoldPlan> {
     let part = read.plan.iter().find(|part| part.key == *key)?;
-    let until = request.received_at.saturating_add(part.hold_ms);
-    (part.hold_ms >= SLOW_DOWN_MIN_HOLD_MS && until > request.now).then_some(HoldPlan {
+    let end = request.received_at.saturating_add(part.hold_ms);
+    let until = read.reset.map_or(end, |reset| end.min(reset));
+    let hold_ms = until - request.received_at;
+    (hold_ms >= SLOW_DOWN_MIN_HOLD_MS && until > request.now).then_some(HoldPlan {
         until,
-        hold_ms: part.hold_ms,
+        hold_ms,
         cycle_ms: Some(part.cycle_ms),
     })
 }
@@ -4350,8 +4353,9 @@ fn rewrite_answer(
 /// request of a held class that carries no hold is held: the second selection after any wait goes on. A deadline
 /// standing on the pin is rejoined to the same instant, whatever the pool's switch reads now, since the hold was
 /// answered under the setting then in force: no hold is sized, nothing is folded and the span counts the wait once.
-/// Otherwise the pin waits its part of the read's plan while the read slows the account, the deadline standing on the
-/// pin for the requests that follow.
+/// The exception is a 5-hour reset passed since the deadline stood: step 4's read that replaces the old window's
+/// entry drops the deadline first, so the request is read afresh. Otherwise the pin waits its part of the read's plan
+/// while the read slows the account, the deadline standing on the pin for the requests that follow.
 fn slow_down_answer(
     state: &mut RoutingState,
     snapshot: &RegistrySnapshot,
@@ -4374,6 +4378,10 @@ fn slow_down_answer(
             cycle_ms: pace.cycle_ms.map(|cycle| cycle.round() as i64),
         },
         None => {
+            // Step 1 read the pace before step 4's read could drop its deadline at a passed reset.
+            if let Some(pin) = rec.pin.as_mut() {
+                pin.slow_down_until = None;
+            }
             let read = rec.slow_down.as_ref().filter(|read| read.factor < 1.0)?;
             let plan = slow_down_hold(request, key, read)?;
             state.stand_slow_down_deadline(key, plan.until);

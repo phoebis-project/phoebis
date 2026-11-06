@@ -121,7 +121,8 @@ or unready member's `unavailable` ([API reference](api-reference.md)). The slow-
 start, so a return to full speed shorter than the span's wait continues it, the account view names the ramp,
 `GET /admin/sessions` and `GET /admin/pools` name the factor and the realized speed, and a rate-limit claim on a window
 the account's plan dropped recovers on the windows it has ([Slow-down](routing.md#slow-down), [Cooldowns and
-failover](routing.md#cooldowns-and-failover)).
+failover](routing.md#cooldowns-and-failover)). A slow-down hold never runs past the 5-hour window's reset, and a request
+after the reset is read afresh ([Slow-down](routing.md#slow-down)).
 
 With `keepalive.enabled` on a pool the router keeps a replayable copy of every eligible request a session sends and,
 shortly before the cache entry would expire, sends a probe that reads it ([Keepalive](keepalive.md)). The policy's
