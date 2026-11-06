@@ -1778,17 +1778,27 @@ export const LIFECYCLE_VALUES = [...AGENT_STATE_VALUES, 'registered'] as const;
  *  request yet. */
 export type Lifecycle = (typeof LIFECYCLE_VALUES)[number];
 
-export interface AgentContext {
+/** A pin's burn members: a row's for its display pin, a line's for its own. */
+export interface BurnFigures {
+  /** The pin's typed burn per hour in `burnUnit`, priced when read, on plan quota the share of the account's own window
+   *  `burnWindow` names. It reads 0 for a pin never renewed with usage, and null on a row with no pin at all, for a pin
+   *  whose account left the registry, on a subscription account whose tier is unknown, or on a model it has no weight
+   *  for, or a tier it has no capacity for on that window. */
+  burn: number | null;
+  /** The Pro-week burn per hour, the share of the Pro 7-day window a Pro account would spend on it, null where
+   *  `burnUnit` is not `window_share` or the model has no weight. */
+  burnEquivalent: number | null;
+  /** Null on a row with no pin, or for a pin whose account left the registry: no kind is left to pick a unit from. */
+  burnUnit: BurnUnit | null;
+  /** The window `burn` is read on: `five_hour` where the account's shared window set has it, `seven_day` otherwise,
+   *  null where `burnUnit` is not `window_share`. */
+  burnWindow: string | null;
+}
+
+export interface AgentContext extends BurnFigures {
   /** The pin's account. */
   accountId: string;
   agentId: string;
-  /** The pin's typed burn per hour in `burnUnit`, priced as the row's `burn` is for this pin. */
-  burn: number | null;
-  /** The pin's burn per hour as the Pro-week figure, as the row's `burnEquivalent`. */
-  burnEquivalent: number | null;
-  burnUnit: BurnUnit | null;
-  /** The window `burn` is a share of for this pin, as the row's `burnWindow`. */
-  burnWindow: string | null;
   /** The cache TTL in force at the pin's last refresh. */
   cacheTtlMs: number | null;
   /** The agent's first-seen time, null where none. */
@@ -1842,7 +1852,7 @@ export interface AgentRequests {
   spend: SessionSpend;
 }
 
-export interface Session {
+export interface Session extends BurnFigures {
   accountId: string | null;
   /** One entry per conversation pin that draws a line, main's among them, and empty where none does. */
   agentContexts: AgentContext[];
@@ -1851,21 +1861,8 @@ export interface Session {
   /** The session's requests per agent and model, main's among them, each with its type, its newest request's account
    *  and instant and its spend. */
   agentRequests: AgentRequests[];
-  /** The pin's typed burn per hour in `burnUnit`, priced when read, on plan quota the share of the account's own window
-   *  `burnWindow` names. It reads 0 for a pin never renewed with usage, and null with no pin at all, with one whose
-   *  account left the registry, on a subscription account whose tier is unknown, or on a model it has no weight for, or
-   *  a tier it has no capacity for on that window. */
-  burn: number | null;
   /** The instant the served burn is decayed to, null with no pin or for a pin never folded. */
   burnAt: string | null;
-  /** The Pro-week burn per hour, the share of the Pro 7-day window a Pro account would spend on it, null where
-   *  `burnUnit` is not `window_share` or the model has no weight. */
-  burnEquivalent: number | null;
-  /** Null for a session with no pin, or one whose account left the registry: no kind is left to pick a unit from. */
-  burnUnit: BurnUnit | null;
-  /** The window `burn` is read on: `five_hour` where the account's shared window set has it, `seven_day` otherwise,
-   *  null where `burnUnit` is not `window_share`. */
-  burnWindow: string | null;
   /** The cache TTL in force at the pin's last refresh, and `null` for a session with no pin. */
   cacheTtlMs: number | null;
   companion: CompanionState;

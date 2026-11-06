@@ -121,12 +121,12 @@ test('requestsRange picks the narrowest range that covers the last request, with
 });
 
 test('isFinished reads a session whose main ended with it or was released, or whose every line the mod released', () => {
-  const session = (state, cause) => ({ keepalive: { cause, lastGuard: null, nextProbeAt: null, state } });
-  assert.equal(d.isFinished(session('idle', 'session_ended'), [{ agentId: 'main', lifecycle: 'idle' }, { agentId: '3e', lifecycle: 'released' }]), true);
-  assert.equal(d.isFinished(session('released', 'released'), [{ agentId: 'main', lifecycle: 'released' }]), true);
-  assert.equal(d.isFinished(session('released', 'agent_released'), [{ agentId: 'main', lifecycle: 'released' }, { agentId: '3e', lifecycle: 'released' }]), true);
-  assert.equal(d.isFinished(session('busy', 'probing'), [{ agentId: 'main', lifecycle: 'busy' }, { agentId: '3e', lifecycle: 'released' }]), false);
-  assert.equal(d.isFinished(session('idle', 'scheduled'), []), false);
+  const session = (cause) => ({ keepalive: { cause, nextProbeAt: null } });
+  assert.equal(d.isFinished(session('session_ended'), [{ agentId: 'main', lifecycle: 'idle' }, { agentId: '3e', lifecycle: 'released' }]), true);
+  assert.equal(d.isFinished(session('released'), [{ agentId: 'main', lifecycle: 'released' }]), true);
+  assert.equal(d.isFinished(session('agent_released'), [{ agentId: 'main', lifecycle: 'released' }, { agentId: '3e', lifecycle: 'released' }]), true);
+  assert.equal(d.isFinished(session('probing'), [{ agentId: 'main', lifecycle: 'busy' }, { agentId: '3e', lifecycle: 'released' }]), false);
+  assert.equal(d.isFinished(session('scheduled'), []), false);
 });
 
 test('withinExpiry keeps a session whose last use lies inside the expiry of now and drops one at the bound, reads the last request where no use stands, and keeps every session while the expiry is unknown', () => {
@@ -227,10 +227,10 @@ test("sessionLines reads each line's type from the agent's newest ledger entry, 
 });
 
 test("statusOf reads finished before the lifecycle word, unreported where no word stands, and the engine's unknown as unknown", () => {
-  const session = (lifecycle, cause) => ({ companion: 'reporting', keepalive: { cause, lastGuard: null, nextProbeAt: null, state: null }, lifecycle });
-  assert.deepEqual(d.statusOf(session('busy', 'session_ended'), [{ lifecycle: 'busy' }]), { tone: 'neutral', word: 'finished' }, 'main busy when the session ended');
-  assert.deepEqual(d.statusOf(session(null, null), [{ lifecycle: null }]), { tone: 'muted', word: 'unreported' });
-  assert.deepEqual(d.statusOf(session('unknown', null), [{ lifecycle: 'unknown' }]), { tone: 'neutral', word: 'unknown' });
+  const session = (lifecycle) => ({ companion: 'reporting', lifecycle });
+  assert.deepEqual(d.statusOf(session('busy'), true), { tone: 'neutral', word: 'finished' }, 'main busy when the session ended');
+  assert.deepEqual(d.statusOf(session(null), false), { tone: 'muted', word: 'unreported' });
+  assert.deepEqual(d.statusOf(session('unknown'), false), { tone: 'neutral', word: 'unknown' });
 });
 
 test("presenceOf reads a silent companion's span from when it fell silent and a reporting one's presence age", () => {

@@ -11,7 +11,7 @@ import { StatusBadge } from '@/components/ui/AttemptTrail';
 import { AttentionLine } from '@/components/ui/AttentionLine';
 import { CostReferenceLink } from '@/components/ui/CostReference';
 import { CostTd } from '@/components/ui/CostTd';
-import { Badge, Button, Card, EmptyState, ErrorState, Skeleton, SkeletonRows, StateRow } from '@/components/ui/primitives';
+import { Badge, Card, EmptyState, ErrorState, ReadNotice, Skeleton, SkeletonRows, StateRow } from '@/components/ui/primitives';
 import { ProbeBar } from '@/components/ui/ProbeBar';
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
@@ -20,7 +20,7 @@ import { accountHref, requestHref } from '@/lib/address';
 import { daySumOf, dollarsUnder, equivalentOrDash, nativeSidesOf, type WeekReading } from '@/lib/analytics';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtMiB, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortModel, tokensTotal } from '@/lib/format';
 import { failedFirst, refreshAttention, useAsync, useAttention, useNow, useWeekReading, type Loaded } from '@/lib/hooks';
-import { agentCount, isFinished, lifecycleSplit, sessionLines, withinExpiry } from '@/lib/keepalive';
+import { isFinished, lineTotals, sessionLines, withinExpiry } from '@/lib/keepalive';
 import { STATUS_LABEL, STATUS_TONE, accountCooldown, planExtraUsage, slowedOf } from '@/lib/quota';
 import { REFUSED_TITLE, costHeaderTitle, glanceCellOf, requestCostUnit, revisionsTitle } from '@/lib/requests';
 import { ringFigures, ringLine, ringRowTitle, type RingFigures, type RingLeftOut, type RingRow, type RingWindow } from '@/lib/rings';
@@ -419,10 +419,7 @@ function SessionsSummary({ activePins, expireAfterSeconds, keepalive, now, sessi
     const lines = sessionLines(session, []);
     return isFinished(session, lines) || !withinExpiry(session, expireAfterSeconds, now) ? [] : [{ lines, session }];
   });
-  const sum = (values: number[]) => values.reduce((n, v) => n + v, 0);
-  const splits = live.map((r) => lifecycleSplit(r.session, r.lines));
-  const agents = sum(live.map((r) => agentCount(r.lines)));
-  const byState = { busy: sum(splits.map((s) => s.busy)), idle: sum(splits.map((s) => s.idle)), parked: sum(splits.map((s) => s.parked)) };
+  const totals = lineTotals(live);
   return (
     <div className="sess-summary">
       <div className="sess-summary__hero">
@@ -432,19 +429,19 @@ function SessionsSummary({ activePins, expireAfterSeconds, keepalive, now, sessi
       <dl className="sess-summary__grid">
         <div>
           <dt>Agents</dt>
-          <dd className="num">{agents}</dd>
+          <dd className="num">{totals.agents}</dd>
         </div>
         <div>
           <dt>Busy</dt>
-          <dd className="num">{byState.busy}</dd>
+          <dd className="num">{totals.busy}</dd>
         </div>
         <div>
           <dt>Idle</dt>
-          <dd className="num">{byState.idle}</dd>
+          <dd className="num">{totals.idle}</dd>
         </div>
         <div>
           <dt>Parked</dt>
-          <dd className="num">{byState.parked}</dd>
+          <dd className="num">{totals.parked}</dd>
         </div>
       </dl>
       <KeepaliveEngine now={now} read={keepalive} warming={warming} />
@@ -470,14 +467,7 @@ function KeepaliveEngine({ now, read, warming }: { now: number; read: Loaded<Kee
   return (
     <section className="sess-summary__engine">
       <h3 className="section-title">Keepalive engine</h3>
-      {failed && (
-        <p className="sess-summary__notice" role="status">
-          Could not load the keepalive overview: {read.error}{' '}
-          <Button size="sm" onClick={read.reload}>
-            Try again
-          </Button>
-        </p>
-      )}
+      {failed && <ReadNotice className="sess-summary__notice" error={read.error} name="keepalive overview" retry={read.reload} />}
       <dl className="sess-summary__caps">
         <div>
           <dt>Sessions</dt>

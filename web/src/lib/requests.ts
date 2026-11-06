@@ -1,6 +1,6 @@
 import { effectiveLabel } from '@/api/decode';
 import type { Account, CohortHold, RequestLog, SessionSpend, SessionSpendPart, Settings, SubscriptionCosts } from '@/api/types';
-import { heldSpan, hintPlan, sentences, shareHint } from '@/lib/analytics';
+import { heldSpan, hintPlan, ownShareHint, sentences, shareHint } from '@/lib/analytics';
 import { type Funding, fundingOf, inBand, revisionAt } from '@/lib/costs';
 import { has, lookup } from '@/lib/counts';
 import { servingAttempt } from '@/lib/dimensions';
@@ -105,7 +105,7 @@ export function requestCostUnit(r: RequestLog, unit: UnitPosition, accounts: Acc
   return costUnitOf(r, unit, args === null ? null : shareHint(...args));
 }
 
-/** The Cost cell's reading of a session's spend, null where the session has no ledgered request. */
+/** The Cost cell's reading of a session's spend. */
 export interface SpendReading {
   /** The other accounts whose plan windows the requests spent on, in id order, which the "+N" badge names. An API-key
    *  account bills dollars and writes no window share, so none is among them. */
@@ -140,8 +140,7 @@ function largestFunding(billedUsd: Record<string, number>): Exclude<Funding, 'pl
  * account served their list dollars, as an unserved request reads. Nothing is read off `equivalent === 0`, since a free
  * plan-funded request reads 0 too.
  */
-export function spendUnitOf(spend: SessionSpendPart | null, unit: UnitPosition, accountId: string | null, hint: string | null): SpendReading | null {
-  if (spend === null) return null;
+export function spendUnitOf(spend: SessionSpendPart, unit: UnitPosition, accountId: string | null, hint: string | null): SpendReading {
   const accounts = Object.keys(spend.shares).filter((id) => id !== accountId).sort();
   if (spend.requests === 0) return { accounts, billed: 0, unit: { kind: 'unserved', usd: 0 } };
   const billed = billedSum(spend);
@@ -157,16 +156,13 @@ export function spendUnitOf(spend: SessionSpendPart | null, unit: UnitPosition, 
 }
 
 /**
- * The hint's arguments over the one account the shares name, null where they name none or more than one or the
- * accounts read is out: the plan label through `hintPlan` over the account's tier, its shares, the tier, no band.
+ * The hint over the one account the shares name, its own share hint at its current tier, null where they name none or
+ * more than one or the accounts read is out.
  */
-export function spendHintArgs(spend: Pick<SessionSpendPart, 'shares'>, accounts: Account[] | null): [string, Record<string, number | null>, string | null, null] | null {
+export function spendHint(spend: Pick<SessionSpendPart, 'shares'>, accounts: Account[] | null): string | null {
   const ids = Object.keys(spend.shares);
   if (accounts === null || ids.length !== 1) return null;
-  const account = accounts.find((a) => a.id === ids[0]);
-  const tier = account?.subscription?.rateLimitTier ?? null;
-  const plan = hintPlan(account, tier);
-  return plan === null ? null : [plan, spend.shares[ids[0]], tier, null];
+  return ownShareHint(accounts.find((a) => a.id === ids[0]), spend.shares[ids[0]]);
 }
 
 /**

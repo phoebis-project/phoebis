@@ -2,7 +2,7 @@ import { Fragment, type KeyboardEvent, type MouseEvent, type ReactNode, useId, u
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
 import { iso } from '@/api/decode';
-import type { Account, AgentContext, ApiKey, CompanionState, KeepaliveRecipe, ModelTiers, Pool, RecipeState, Session, SessionSpend } from '@/api/types';
+import type { Account, ApiKey, BurnFigures, CompanionState, KeepaliveRecipe, ModelTiers, Pool, RecipeState, Session, SessionSpend } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { useSession } from '@/app/session';
 import { FilterBar } from '@/components/FilterBar';
@@ -13,23 +13,22 @@ import type { Option } from '@/components/ui/OptionList';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { IconChevron } from '@/components/ui/icons';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
-import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skeleton, toggleRow, useHostedDescription } from '@/components/ui/primitives';
-import { accountHref, ANALYTICS_CODEC, REQUESTS_CODEC, requestsHref as requestsAddressHref, SESSION_SORT_KEYS, SESSIONS_CODEC, type SessionsAddress, sortAddressOf, sortDirOf, type SortDir } from '@/lib/address';
-import { HINT_WINDOW, sentences, shareHint, type WeekReading } from '@/lib/analytics';
+import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, ReadNotice, Skeleton, toggleRow, useHostedDescription } from '@/components/ui/primitives';
+import { accountHref, ACTIVE_WITHIN, ANALYTICS_CODEC, keyHref, REQUESTS_CODEC, requestsHref as requestsAddressHref, SESSION_SORT_KEYS, SESSIONS_CODEC, type SessionsAddress, sortAddressOf, sortDirOf, type SortDir } from '@/lib/address';
+import { HINT_WINDOW, sentences, type WeekReading } from '@/lib/analytics';
 import { AGENT_TYPES, clientVersion } from '@/lib/client';
 import { clock } from '@/lib/clock';
 import { tierOrder, weekReadingOf } from '@/lib/costs';
 import { groupInto, lookup } from '@/lib/counts';
-import { SESSIONS_DIMENSIONS } from '@/lib/filterBar';
-import { SESSION_CHARS, fmtAbsolute, fmtCount, fmtDuration, fmtInt, fmtRelative, fmtShare, fmtUsd, joinPresent, keyGenerationOf, keyLifetime, messageOf, shortId, shortModel, weekShort } from '@/lib/format';
-import { ACTIVE_WITHIN, addSpend, agentCount, type AgentFigures, agentFigures, agentFiltersStand, CAUSE_HINT, CAUSE_LABEL, contextCell, drawnLines, earlierAgents, expiryOf, hiddenLines, isFinished, lastActivity, lifecycleSplit, lineWordOf, MAIN_AGENT, matches, matchingAgents, orderLines, orderRows, pinTtlMs, presenceOf, requestsRange, sessionLines, type SessionLine, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES, withinExpiry } from '@/lib/keepalive';
+import { keyOptions, SESSIONS_DIMENSIONS } from '@/lib/filterBar';
+import { SESSION_CHARS, fmtAbsolute, fmtCount, fmtDuration, fmtInt, fmtRelative, fmtShare, fmtUsd, joinPresent, keyGenerationOf, keyLifetime, messageOf, modelTitle, shortId, shortModel, weekShort } from '@/lib/format';
+import { agentCount, type AgentFigures, agentFigures, agentFiltersStand, CAUSE_HINT, CAUSE_LABEL, contextCell, earlierAgents, expiryOf, figuresOf, hiddenLines, isFinished, lastActivity, lifecycleSplit, lineTotals, lineWordOf, MAIN_AGENT, matches, matchingAgents, orderLines, orderRows, pinTtlMs, presenceOf, requestsRange, sessionLines, type SessionLine, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES, withinExpiry } from '@/lib/keepalive';
 import { failedFirst, toggled, useAsync, useNow, useQueryFilters } from '@/lib/hooks';
 import { minuteSpan, type BadgeTone } from '@/lib/quota';
-import { costCellOf, spendHintArgs, spendHover, spendUnitOf } from '@/lib/requests';
+import { costCellOf, spendHint, spendHover, spendUnitOf } from '@/lib/requests';
 import { ageWord, aroundSubject, logHref } from '@/lib/routingLog';
 import { memberSpeed } from '@/lib/selection';
 import type { UnitPosition, WeekPosition } from '@/lib/unit';
-import { keyOptions } from './RequestsPage';
 
 // The Session column is the row's identity and the table's fill column, so it is always drawn and the control toggles
 // the others.
@@ -61,9 +60,6 @@ const HIDDEN_BY_DEFAULT: readonly SessionColumnId[] = ['companion', 'context', '
  * Null for a row with no pin or no projection, which the cell draws as a dash.
  */
 const runwayWord = (s: Session): string | null => (!s.pinned ? null : s.runwayMs !== null ? (s.runwayMs === 0 ? 'none' : minuteSpan(s.runwayMs)) : s.runwayBounded === false ? 'unbounded' : null);
-
-/** The id as sent on hover where the cell shows less of it. */
-const modelTitle = (model: string, shown: string) => (shown === model ? undefined : model);
 
 /** A row's or a line's Status word with its sentence. */
 const LIFECYCLE_HINT: Record<StatusWord, string> = {
@@ -223,10 +219,11 @@ function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], keys: ApiKey
     // The full list stays beside the lines: the causes of a session without a line read every record, and a session
     // whose lines the mod all released still holds records, so it is no session without a recipe.
     const lines = sessionLines(session, agents);
+    const finished = isFinished(session, lines);
     return {
       agents,
       expiresAt: expiryOf(session, expireAfterSeconds),
-      finished: isFinished(session, lines),
+      finished,
       idleLimit,
       lastUsed,
       lines: orderLines(lines, sort, dir),
@@ -234,7 +231,7 @@ function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], keys: ApiKey
       pool,
       poolId: key?.poolId ?? null,
       session,
-      status: statusOf(session, lines),
+      status: statusOf(session, finished),
     };
   });
   return orderRows(rows, sort, dir);
@@ -268,15 +265,11 @@ function filterOptions(rows: readonly Row[], keys: ApiKey[] | null, pools: Pool[
 /** The kept rows' figures the card's summary line reads, each agent counted as the Agents cell counts it. */
 function daySummary(rows: readonly Row[]): { agents: number; billed: number; busy: number; equivalent: number; idle: number; parked: number; requests: number } {
   const sum = (values: number[]) => values.reduce((n, v) => n + v, 0);
-  const splits = rows.map((r) => lifecycleSplit(r.session, r.lines));
   return {
-    agents: sum(rows.map((r) => agentCount(r.lines))),
+    ...lineTotals(rows),
     billed: sum(rows.flatMap((r) => Object.values(r.session.day.billedUsd))),
-    busy: sum(splits.map((s) => s.busy)),
     // A day the cost model priced nothing for adds nothing to the figure.
     equivalent: sum(rows.flatMap((r) => (r.session.day.equivalent === null ? [] : [r.session.day.equivalent]))),
-    idle: sum(splits.map((s) => s.idle)),
-    parked: sum(splits.map((s) => s.parked)),
     requests: sum(rows.flatMap((r) => Object.values(r.session.day.requests))),
   };
 }
@@ -447,8 +440,8 @@ export function SessionsPage() {
           <ColumnsControl columns={SESSION_COLUMNS} visible={visible} onChange={setVisible} />
           <SortControl keys={SESSION_SORT_KEYS} onChange={(next) => update(sortAddressOf(SESSION_SORT_KEYS, next))} value={{ dir, sort: filters.sort }} />
         </FilterBar>
-        {firstFailed !== null && <ReadNotice error={reads[firstFailed].error} name={firstFailed} retry={reads[firstFailed].reload} />}
-        {failedFirst(accounts) && <ReadNotice error={accounts.error} name="accounts" retry={accounts.reload} />}
+        {firstFailed !== null && <ReadNotice className="sessions__notice" error={reads[firstFailed].error} name={firstFailed} retry={reads[firstFailed].reload} />}
+        {failedFirst(accounts) && <ReadNotice className="sessions__notice" error={accounts.error} name="accounts" retry={accounts.reload} />}
         <div className="page-head">
           <div className="page-head__lead">
             <p className="page-head__meta">
@@ -517,16 +510,15 @@ export function SessionsPage() {
                       columns={columns}
                       cost={cost}
                       current={current === rowDomId(row.session)}
-                      drawn={drawn.get(rowKey(row.session))?.shown ?? []}
                       filtered={{ account: filters.account.length > 0, model: filters.model.length > 0 }}
                       fold={matching ? (drawn.get(rowKey(row.session))?.hidden ?? 0) : null}
                       forkBase={row.session.forkedFrom === null ? null : rowDomId({ ...row.session, sessionId: row.session.forkedFrom })}
+                      lines={drawn.get(rowKey(row.session)) ?? { drawn: [], hidden: 0, shown: [] }}
                       listedRows={listedRows}
                       onFollowFork={followFork}
                       onOpen={(path) => navigate(path)}
                       onRelease={() => setPending(row)}
                       onUnfold={() => unfold(rowKey(row.session))}
-                      released={filters.released}
                       unfolded={unfolded.has(rowKey(row.session))}
                       visible={visible}
                     />
@@ -574,20 +566,6 @@ export function SessionsPage() {
   );
 }
 
-function ReadNotice({ error, name, retry }: { error: string | null; name: string; retry: () => void }) {
-  return (
-    <p className="sessions__notice" role="status">
-      Could not load the {name}: {error}{' '}
-      <Button size="sm" onClick={retry}>
-        Try again
-      </Button>
-    </p>
-  );
-}
-
-/** A pin's burn members: the row's for its display pin, a line's for its own. */
-type BurnFigures = Pick<AgentContext, 'burn' | 'burnEquivalent' | 'burnUnit' | 'burnWindow'>;
-
 /**
  * A pin's burn per hour: the share of the chosen week on a plan pin, the dollars on a pin billed in dollars, and the
  * share of the pin's own window as its title. Null with no pin, no figure, or while the week's scale is out.
@@ -618,16 +596,16 @@ function BurnLine({ cost, session }: { cost: CostContext; session: Session }) {
  * dash before any ledgered request.
  */
 function CostCell({ accountId, burn = null, cost, spend }: { accountId: string | null; burn?: ReactNode; cost: CostContext; spend: SessionSpend | null }) {
-  const args = spend === null ? null : spendHintArgs(spend, cost.accounts);
-  const hint = args === null ? null : shareHint(...args);
-  const reading = spendUnitOf(spend, cost.unit, accountId, hint);
-  if (spend === null || reading === null)
+  // The spend is null where the ledger holds no request of the session or the agent.
+  if (spend === null)
     return (
       <td className="right num col-fit" title={NO_TRAFFIC_HINT}>
         <span className="muted">-</span>
         {burn}
       </td>
     );
+  const hint = spendHint(spend, cost.accounts);
+  const reading = spendUnitOf(spend, cost.unit, accountId, hint);
   const cell = costCellOf(reading.unit, cost.week, cost.scale);
   if (cell === null)
     return cost.failure === null ? (
@@ -782,16 +760,15 @@ function SessionRows({
   columns,
   cost,
   current,
-  drawn,
   filtered,
   fold,
   forkBase,
+  lines: { drawn: rowLines, shown: drawn },
   listedRows,
   onFollowFork,
   onOpen,
   onRelease,
   onUnfold,
-  released,
   unfolded,
   visible,
 }: {
@@ -800,14 +777,14 @@ function SessionRows({
   cost: CostContext;
   /** Whether a fork link last led here. */
   current: boolean;
-  /** The lines the row draws, `hiddenLines`' answer under the filters. */
-  drawn: SessionLine[];
   /** Whether the Account and the Model filters stand, which accent the "+N" of their column. */
   filtered: { account: boolean; model: boolean };
   /** How many agents the Agents filters fold out of the open row, null while none stands. */
   fold: number | null;
   /** The element id the base of a forked session would carry, whether or not it is listed; null off a fork. */
   forkBase: string | null;
+  /** `hiddenLines`' answer under the filters: the lines the row draws and the ones it lists. */
+  lines: ReturnType<typeof hiddenLines>;
   listedRows: ReadonlyMap<string, Row>;
   now: number;
   onFollowFork: (id: string) => void;
@@ -816,8 +793,6 @@ function SessionRows({
   onToggle: () => void;
   onUnfold: () => void;
   open: boolean;
-  /** Whether the Released agents filter stands, which draws a live row's released lines. */
-  released: boolean;
   row: Row;
   /** Whether the fold line is open, which draws the agents it counts under the matching lines. */
   unfolded: boolean;
@@ -833,7 +808,6 @@ function SessionRows({
   // draws on another model or account, recipe or not, whatever the Agents filters match, and its hover reads them in
   // the order the expanded row draws them. It takes the accent where its column's filter stands and one of its lines
   // matches the filters, a line `drawn` holds.
-  const rowLines = drawnLines(row, { released });
   const placed = rowLines.flatMap((l) => {
     const accountId = l.pin?.accountId ?? l.recipe?.accountId ?? null;
     return accountId !== null && l.model !== null ? [{ accountId, agentId: l.agentId, matched: drawn.includes(l), model: l.model }] : [];
@@ -962,7 +936,7 @@ function SessionRows({
           </td>
         )}
         {visible.has('model') && (
-          <td className="mono nowrap col-fit" title={session.model === null ? undefined : modelTitle(session.model, shortModel(session.model))}>
+          <td className="mono nowrap col-fit" title={session.model === null ? undefined : modelTitle(session.model)}>
             <span className="srow__pin srow__pin--wraps">
               {session.model === null ? <span className="muted">-</span> : shortModel(session.model)}
               <OtherPins accent={filtered.model && otherModels.some((l) => l.matched)} agents={otherModels} lead="Agents on another model:" />
@@ -1025,7 +999,7 @@ function SessionRows({
         {/* No route lists one key and the Keys view's search matches no id, so the link lands on the key's row. */}
         {visible.has('key') && (
           <td className="mono col-fit">
-            <Link to={`/keys#${encodeURIComponent(session.keyId)}`} onClick={stopAtLink} onKeyDown={stopAtLink}>
+            <Link to={keyHref(session.keyId)} onClick={stopAtLink} onKeyDown={stopAtLink}>
               {session.keyId}
             </Link>
             {session.historical && (
@@ -1082,7 +1056,7 @@ function SessionRows({
                       ) : (
                         <>
                           {/* The Keys view lands on the key's row by its id and clears a filter that would hide it. */}
-                          <Link className="mono" to={`/keys#${encodeURIComponent(session.keyId)}`}>
+                          <Link className="mono" to={keyHref(session.keyId)}>
                             {session.keyId}
                           </Link>
                           {row.pool !== null && ` in pool ${row.pool.name}`}
@@ -1234,11 +1208,9 @@ function SessionRows({
  * joins the Agents table the line controls.
  */
 function EarlierLine({ agents, controls, cost, onToggle, open, session }: { agents: (AgentFigures & { agentId: string })[]; controls: string; cost: CostContext; onToggle: () => void; open: boolean; session: Session }) {
-  const [first, ...rest] = agents;
-  const spend = rest.reduce((sum, agent) => addSpend(sum, agent.spend), first.spend);
-  const requests = rest.reduce((n, agent) => n + agent.requests, first.requests);
+  const { requests, spend } = figuresOf(agents);
   const reading = spendUnitOf(spend, cost.unit, session.accountId, null);
-  const cell = reading === null ? null : costCellOf(reading.unit, cost.week, cost.scale);
+  const cell = costCellOf(reading.unit, cost.week, cost.scale);
   return (
     <Disclosure
       className="srow__earlier"
@@ -1246,7 +1218,7 @@ function EarlierLine({ agents, controls, cost, onToggle, open, session }: { agen
       hint={
         <>
           {`· ${fmtCount(requests, 'request')} · ${cell?.main ?? '-'}`}
-          {reading !== null && reading.billed > 0 && (
+          {reading.billed > 0 && (
             <>
               {' '}
               <Badge tone="neutral" title={`${fmtUsd(reading.billed)} billed in dollars`}>
@@ -1474,7 +1446,7 @@ function AgentRow({
         {hasTraffic ? <Link to={requestsHref(session.sessionId, session, lastRequestAt, agentId)}>{agentId}</Link> : agentId}
       </td>
       <td>{type ?? <span className="muted">-</span>}</td>
-      <td title={model === null || short === null ? undefined : modelTitle(model, short)}>
+      <td title={model === null ? undefined : modelTitle(model)}>
         {short === null ? <span className="muted">-</span> : <span className="mono nowrap">{short}</span>}
         <span className="sub">{pin?.effort ?? '-'}</span>
       </td>

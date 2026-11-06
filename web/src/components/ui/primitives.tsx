@@ -276,6 +276,21 @@ export function ErrorState({ title = 'Could not load', body, action, retry }: { 
   );
 }
 
+/**
+ * A failed read named above content the other reads still draw, where `ErrorState` would stand in for the content.
+ * `className` places it on its page.
+ */
+export function ReadNotice({ className, error, name, retry }: { className: string; error: string | null; name: string; retry: () => void }) {
+  return (
+    <p className={className} role="status">
+      Could not load the {name}: {error}{' '}
+      <Button size="sm" onClick={retry}>
+        Try again
+      </Button>
+    </p>
+  );
+}
+
 export function StateRow({ colSpan, empty, error, errorTitle, loading, retry }: { colSpan: number; empty: string; error: string | null; errorTitle: string; loading: boolean; retry?: () => void }) {
   return (
     <tr>

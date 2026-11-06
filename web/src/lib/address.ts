@@ -4,7 +4,7 @@ import { REQUEST_KIND_VALUES, REQUEST_OUTCOME_VALUES } from '@/api/types';
 import { clock } from './clock';
 import type { SessionFilters } from './keepalive';
 import { ACCOUNT_STATUSES } from './quota';
-import { DAY, HOUR } from './time';
+import { DAY, HOUR, MINUTE } from './time';
 
 /** One preset of the range control's one table: the name the address carries, the width and the label. */
 export interface RangePreset {
@@ -21,6 +21,14 @@ export const RANGE_PRESETS = [
   { label: 'Last 7 days', ms: 7 * DAY, name: '7d' },
   { label: 'Last 30 days', ms: 30 * DAY, name: '30d' },
 ] as const satisfies readonly RangePreset[];
+
+/** The Active within values, each read against the later of a row's last use and last request. */
+export const ACTIVE_WITHIN = [
+  { id: '15m', label: '15 min', ms: 15 * MINUTE },
+  { id: '1h', label: '1 h', ms: HOUR },
+  { id: '6h', label: '6 h', ms: 6 * HOUR },
+  { id: '24h', label: '24 h', ms: DAY },
+] as const;
 
 /** A view's window as the address carries it: a preset by name with the instants empty, or `custom` with both instants. */
 export interface RangeValue {
@@ -261,6 +269,7 @@ export const REQUESTS_CODEC = codecOf<RequestsAddress>({
 export const requestsHref = (address: RequestsAddress): string => `/requests?${REQUESTS_CODEC.toParams(address)}`;
 
 export const accountHref = (id: string): string => `/accounts/${encodeURIComponent(id)}`;
+export const keyHref = (id: string): string => `/keys#${encodeURIComponent(id)}`;
 /** One request's own page, where `requestsHref` opens the filtered list. */
 export const requestHref = (id: string): string => `/requests/${encodeURIComponent(id)}`;
 
@@ -407,11 +416,10 @@ export const SESSION_SORT_KEYS = [
   { defaultDir: 'desc', id: 'requests', label: 'Requests' },
 ] as const satisfies readonly SortKey[];
 
-// The codec's literal keeps the bar's order: codecOf writes the address's keys in its specification's order. The
-// Active within ids are spelled out, since `keepalive.ts`, which holds them, reads this module at run time.
+// The codec's literal keeps the bar's order: codecOf writes the address's keys in its specification's order.
 export const SESSIONS_CODEC = codecOf<SessionsAddress>({
   search: text('search'),
-  active: { default: '', kind: 'choice', name: 'active', values: ['', '15m', '1h', '6h', '24h'] },
+  active: { default: '', kind: 'choice', name: 'active', values: ['', ...ACTIVE_WITHIN.map((a) => a.id)] },
   client: list('client'),
   companion: list('companion'),
   finished: { kind: 'flag', name: 'finished' },

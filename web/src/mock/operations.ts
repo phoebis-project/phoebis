@@ -1,4 +1,4 @@
-import type { AgentContext, AgentRequests, BurnUnit, CompanionState, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, RecipeCause, RecipeState, RequestLog, Session, SessionDay, SessionSpendPart } from '@/api/types';
+import type { AgentContext, AgentRequests, BurnFigures, BurnUnit, CompanionState, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, RecipeCause, RecipeState, RequestLog, Session, SessionDay, SessionSpendPart } from '@/api/types';
 import { anchorTier, fundingOf, tierCapacity, weightOf, type CostWindow } from '@/lib/costs';
 import { groupInto } from '@/lib/counts';
 import { servedMissReason, servingAttempt } from '@/lib/dimensions';
@@ -346,7 +346,7 @@ const warmAt = (lastUsedAt: string | null, cacheTtlMs: number | null): boolean =
  * served burn priced on the pin's own account, in that account's unit and window, as the row's is for the display pin.
  */
 const pinLine = (
-  line: Omit<AgentContext, 'burn' | 'burnEquivalent' | 'burnUnit' | 'burnWindow' | 'createdAt' | 'warm'>,
+  line: Omit<AgentContext, keyof BurnFigures | 'createdAt' | 'warm'>,
   served: { burn: number | null },
 ): Omit<AgentContext, 'createdAt'> => {
   const unit = burnUnitOf(line.accountId);

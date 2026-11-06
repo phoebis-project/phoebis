@@ -1,8 +1,9 @@
+import type { ApiKey } from '@/api/types';
 // A type-only import, so the API bundle the unit tests load stays free of React.
 import type { Option } from '@/components/ui/OptionList';
 import { NO_CLASS } from './dimensions';
 import { failedFirst } from './follow';
-import { listed, shortId } from './format';
+import { earlierHolderLabel, keyGenerationOf, listed, parseKeyLifetime, shortId } from './format';
 import { kindsChipText } from './routingLog';
 
 export type DimensionKind = 'choice' | 'flag' | 'id' | 'list' | 'pattern';
@@ -198,6 +199,22 @@ const STATUS: Dimension = { anyLabel: 'All statuses', defaultValue: 'all', field
  */
 export function notLoadedReason(field: string, name: string, read: { data: unknown; error: string | null }): Record<string, string> {
   return failedFirst(read) ? { [field]: `The ${name} list did not load: ${read.error}` } : {};
+}
+
+/**
+ * The Keys control's options: the live keys, then each lifetime the address names that no live key holds, under its
+ * earlier holder's label, so a link from an earlier holder's session reads whole. Until the key list lands no lifetime
+ * can be told from a live key's own, so none is listed.
+ */
+export function keyOptions(keys: ApiKey[] | null, selected: string[]): Option[] {
+  if (keys === null) return [];
+  const live = new Map(keys.map((k) => [k.id, keyGenerationOf(k)]));
+  const earlier = selected.flatMap((value) => {
+    const lifetime = parseKeyLifetime(value);
+    if (lifetime === null || live.get(lifetime.id) === lifetime.generation) return [];
+    return [{ label: earlierHolderLabel(lifetime.id, lifetime.generation), value }];
+  });
+  return [...keys.map((k) => ({ label: k.name, value: k.id })), ...earlier];
 }
 
 /** Routing, Outcome, Request, Subject. A status chip prints the codes alone, since an option's label adds the code's name. */

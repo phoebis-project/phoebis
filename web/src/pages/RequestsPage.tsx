@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api } from '@/api';
 import { iso } from '@/api/decode';
-import type { Account, ApiKey, Attempt, AttemptResponse, CapturedBodies, CohortHold, DiagnosticsSource, Guardrail, RequestLog, RequestOutcome, RequestPage, RequestQuery, Settings, SubscriptionCosts, Usage } from '@/api/types';
+import type { Account, Attempt, AttemptResponse, CapturedBodies, CohortHold, DiagnosticsSource, Guardrail, RequestLog, RequestOutcome, RequestPage, RequestQuery, Settings, SubscriptionCosts, Usage } from '@/api/types';
 import { REFUSAL_CATEGORIES, REQUEST_OUTCOME_VALUES, STOP_REASONS } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { useFollow, usePaging } from '@/app/useFollow';
@@ -27,9 +27,9 @@ import { CACHE_MISS_REASONS, isDivergence, missLabel } from '@/lib/cache';
 import { AGENT_TYPES, TURN_ORIGINS } from '@/lib/client';
 import { clock } from '@/lib/clock';
 import { EFFORT_LEVELS, foldRequestClass, NO_CLASS, NO_EFFORT, OTHER_DIMENSION, REQUEST_KIND_LABEL, servedMissReason, servingAttempt, servingResponse } from '@/lib/dimensions';
-import { notLoadedReason, REQUESTS_DIMENSIONS } from '@/lib/filterBar';
+import { keyOptions, notLoadedReason, REQUESTS_DIMENSIONS } from '@/lib/filterBar';
 import { effectiveInterval, ENDED_RANGE, FOLLOW_OVERRUN, pollQuery, readEnd, rowsRefreshTitle, shownCount, spanEnded } from '@/lib/follow';
-import { bytesDropped, earlierHolderLabel, fmtAbsolute, fmtCompact, fmtDatedTime, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, fmtWeek, forkLabel, keyGenerationOf, parseKeyLifetime, shortAgent, shortId, shortModel, tokensTotal } from '@/lib/format';
+import { bytesDropped, fmtAbsolute, fmtCompact, fmtDatedTime, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, fmtWeek, forkLabel, modelTitle, shortAgent, shortId, shortModel, tokensTotal } from '@/lib/format';
 import { guardrailLabel, guardrailOptions } from '@/lib/guardrails';
 import { useAsync, useNow, useQueryFilters, useRangeTakenAt, useWeekReading } from '@/lib/hooks';
 import { compareRequests, costCellOf, costHeaderTitle, type CostUnit, costUnitOf, FREE_SHARE_TITLE, FUNDING_WORD, heldWords, NO_SHARE_TITLE, requestCostUnit, requestHintArgs, revisionsTitle } from '@/lib/requests';
@@ -233,22 +233,6 @@ function CostRows({ context, request: r, settings, unit }: { context: CostContex
   );
 }
 
-/**
- * The Keys control's options: the live keys, then each lifetime the address names that no live key holds, under its
- * earlier holder's label, so a link from an earlier holder's session reads whole. Until the key list lands no lifetime
- * can be told from a live key's own, so none is listed.
- */
-export function keyOptions(keys: ApiKey[] | null, selected: string[]): Option[] {
-  if (keys === null) return [];
-  const live = new Map(keys.map((k) => [k.id, keyGenerationOf(k)]));
-  const earlier = selected.flatMap((value) => {
-    const lifetime = parseKeyLifetime(value);
-    if (lifetime === null || live.get(lifetime.id) === lifetime.generation) return [];
-    return [{ label: earlierHolderLabel(lifetime.id, lifetime.generation), value }];
-  });
-  return [...keys.map((k) => ({ label: k.name, value: k.id })), ...earlier];
-}
-
 /** The route answers its rows as `requests`, and the poll reads a list's as `rows`. */
 const listed = (page: RequestPage) => ({ landedThrough: page.landedThrough, nextCursor: page.nextCursor, rows: page.requests });
 
@@ -437,7 +421,7 @@ export function RequestsPage() {
                           {shown.has('pool') && <td className="mono col-fit">{r.poolId ?? '-'}</td>}
                           {shown.has('account') && <td className="col-fit">{r.accountId ?? '-'}</td>}
                           {shown.has('model') && (
-                            <td className="mono nowrap col-fit" title={shortModel(r.model) === r.model ? undefined : r.model}>
+                            <td className="mono nowrap col-fit" title={modelTitle(r.model)}>
                               {r.model === '' ? <span className="muted">-</span> : shortModel(r.model)}
                             </td>
                           )}

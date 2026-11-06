@@ -1,7 +1,7 @@
 import type { AgentContext, AgentRequests, KeepaliveRecipe, Lifecycle, RecipeCause, Session, SessionSpend, SessionSpendPart } from '@/api/types';
-import { RANGE_PRESETS, type SessionsAddress, type SortDir } from '@/lib/address';
+import { ACTIVE_WITHIN, RANGE_PRESETS, type SessionsAddress, type SortDir } from '@/lib/address';
 import { clientVersion } from '@/lib/client';
-import { countOf, lookup } from '@/lib/counts';
+import { countOf, groupInto, lookup } from '@/lib/counts';
 import { fmtCompact, fmtDuration, keyLifetime } from '@/lib/format';
 import type { BadgeTone } from '@/lib/quota';
 
@@ -257,11 +257,11 @@ export const STATUS_TONE: Record<Lifecycle, BadgeTone> = { busy: 'accent', idle:
 export const reportedWord = (session: Pick<Session, 'companion'>, lifecycle: Lifecycle | null): Lifecycle | null => (session.companion === 'none' && lifecycle !== 'released' ? null : lifecycle);
 
 /**
- * The row's Status word and tone: `finished` first (`isFinished` over the session and its lines), `unreported` where
+ * The row's Status word and tone: `finished` first where the row's `isFinished` holds, `unreported` where
  * `reportedWord` reads none, else the lifecycle word. `muted` is the ink `unreported` takes.
  */
-export function statusOf(session: Pick<Session, 'companion' | 'keepalive' | 'lifecycle'>, lines: readonly Pick<SessionLine, 'lifecycle'>[]): { tone: BadgeTone | 'muted'; word: StatusWord } {
-  if (isFinished(session, lines)) return { tone: 'neutral', word: 'finished' };
+export function statusOf(session: Pick<Session, 'companion' | 'lifecycle'>, finished: boolean): { tone: BadgeTone | 'muted'; word: StatusWord } {
+  if (finished) return { tone: 'neutral', word: 'finished' };
   const word = reportedWord(session, session.lifecycle);
   if (word === null) return { tone: 'muted', word: 'unreported' };
   return { tone: STATUS_TONE[word], word };
@@ -300,6 +300,19 @@ export function lifecycleSplit(session: Pick<Session, 'companion'>, lines: reado
     if (word !== 'released') split[word] += 1;
   }
   return split;
+}
+
+/** The rows' lines counted as the Agents cell counts them, with the busy, idle and parked ones of `lifecycleSplit`. */
+export function lineTotals(rows: readonly { lines: readonly Pick<SessionLine, 'agentId' | 'lifecycle'>[]; session: Pick<Session, 'companion'> }[]): { agents: number; busy: number; idle: number; parked: number } {
+  const totals = { agents: 0, busy: 0, idle: 0, parked: 0 };
+  for (const { lines, session } of rows) {
+    const split = lifecycleSplit(session, lines);
+    totals.agents += agentCount(lines);
+    totals.busy += split.busy;
+    totals.idle += split.idle;
+    totals.parked += split.parked;
+  }
+  return totals;
 }
 
 /** The Context cell's text: the tokens compact, a dash with none or before the first turn. */
@@ -361,10 +374,10 @@ export function sessionLines(s: Pick<Session, 'agentContexts' | 'agentId' | 'age
  *  entry with the latest `lastRequestAt`). */
 export type AgentFigures = Omit<AgentRequests, 'agentId'>;
 
-/** An agent's entries summed, null for an agent with no entry. */
-export function agentFigures(session: Pick<Session, 'agentRequests'>, agentId: string): AgentFigures | null {
-  const [first, ...rest] = session.agentRequests.filter((entry) => entry.agentId === agentId);
-  if (first === undefined) return null;
+/** Entries summed over a list of one entry or more, an agent's or an earlier line's agents', with the newest's account,
+ *  model and type. */
+export function figuresOf(entries: readonly AgentRequests[]): AgentFigures {
+  const [first, ...rest] = entries;
   const newest = rest.reduce((n, entry) => (byInstant(entry.lastRequestAt, n.lastRequestAt, 'desc') < 0 ? entry : n), first);
   return {
     accountId: newest.accountId,
@@ -374,6 +387,12 @@ export function agentFigures(session: Pick<Session, 'agentRequests'>, agentId: s
     requests: rest.reduce((n, entry) => n + entry.requests, first.requests),
     spend: rest.reduce((sum, entry) => addSpend(sum, entry.spend), first.spend),
   };
+}
+
+/** An agent's entries summed, null for an agent with no entry. */
+export function agentFigures(session: Pick<Session, 'agentRequests'>, agentId: string): AgentFigures | null {
+  const entries = session.agentRequests.filter((entry) => entry.agentId === agentId);
+  return entries.length === 0 ? null : figuresOf(entries);
 }
 
 const keysOf = (a: object, b: object): string[] => [...new Set([...Object.keys(a), ...Object.keys(b)])];
@@ -394,21 +413,22 @@ export function addSpend(a: SessionSpend, b: SessionSpend): SessionSpend {
   return { ...addPart(a, b), probes: addPart(a.probes, b.probes) };
 }
 
+/** The entries of every agent with ledgered requests and no line, by agent, main never among them. */
+function earlierGroups(session: Pick<Session, 'agentRequests'>, lines: readonly Pick<SessionLine, 'agentId'>[]): Map<string, AgentRequests[]> {
+  const named = new Set(lines.map((line) => line.agentId));
+  return groupInto(session.agentRequests, (entry) => (entry.agentId === MAIN_AGENT || named.has(entry.agentId) ? null : entry.agentId));
+}
+
 /** Every agent with ledgered requests and no line, main never among them, in id order, each with its figures. */
 export function earlierAgents(session: Pick<Session, 'agentRequests'>, lines: readonly Pick<SessionLine, 'agentId'>[]): AgentRequests[] {
-  const named = new Set(lines.map((line) => line.agentId));
-  const ids = [...new Set(session.agentRequests.map((entry) => entry.agentId))].filter((id) => id !== MAIN_AGENT && !named.has(id)).sort();
-  return ids.flatMap((agentId) => {
-    const figures = agentFigures(session, agentId);
-    return figures === null ? [] : [{ ...figures, agentId }];
-  });
+  return [...earlierGroups(session, lines)].sort(([a], [b]) => (a < b ? -1 : 1)).map(([agentId, entries]) => ({ ...figuresOf(entries), agentId }));
 }
 
 /** The filters the Sessions view matches a row against, the address's values less its sort. */
 export interface SessionFilters {
   account: string[];
   /** `15m`, `1h`, `6h`, `24h` or empty. */
-  active: string;
+  active: '' | (typeof ACTIVE_WITHIN)[number]['id'];
   agentType: string[];
   /** `cold`, `no recipe`, `warm`. */
   cache: string[];
@@ -428,14 +448,6 @@ export interface SessionFilters {
   /** The lifecycle words, `released`, `unknown` and `unreported` among them. */
   status: string[];
 }
-
-/** The Active within values, each read against the later of a row's last use and last request. */
-export const ACTIVE_WITHIN: readonly { id: string; label: string; ms: number }[] = [
-  { id: '15m', label: '15 min', ms: 15 * 60_000 },
-  { id: '1h', label: '1 h', ms: 3_600_000 },
-  { id: '6h', label: '6 h', ms: 6 * 3_600_000 },
-  { id: '24h', label: '24 h', ms: 24 * 3_600_000 },
-];
 
 /** What the matcher reads of a row: the session, its lines (the released ones among them), its key's pool. */
 export interface MatchRow {
@@ -528,14 +540,15 @@ export function matches(row: MatchRow, filters: SessionFilters, now: number): bo
 }
 
 /**
- * The lines the row draws and, under Agents filters, the ones that match with how many the fold line counts: the
- * other drawn lines and the earlier agents, so the count leaves out a released line the row does not draw.
+ * The lines the row draws (`drawn`) and, under Agents filters, the ones that match (`shown`) with how many the fold
+ * line counts: the other drawn lines and the earlier agents, so the count leaves out a released line the row does not
+ * draw.
  */
-export function hiddenLines(row: MatchRow, filters: SessionFilters): { hidden: number; shown: SessionLine[] } {
+export function hiddenLines(row: MatchRow, filters: SessionFilters): { drawn: SessionLine[]; hidden: number; shown: SessionLine[] } {
   const drawn = drawnLines(row, filters);
-  if (!agentFiltersStand(filters)) return { hidden: 0, shown: drawn };
+  if (!agentFiltersStand(filters)) return { drawn, hidden: 0, shown: drawn };
   const shown = drawn.filter((line) => lineMatches(row.session, line, filters));
-  return { hidden: drawn.length - shown.length + earlierAgents(row.session, row.lines).length, shown };
+  return { drawn, hidden: drawn.length - shown.length + earlierGroups(row.session, row.lines).size, shown };
 }
 
 /**

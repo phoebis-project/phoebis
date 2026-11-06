@@ -55,6 +55,8 @@ export const undatedModel = (id: string) => id.replace(/-\d{8}$/, '');
  * the family and version remain (`haiku-4-5`); the cell's title carries the id as sent.
  */
 export const shortModel = (id: string) => undatedModel(id).replace(/^claude-/, '');
+/** The id as sent on hover where the cell shows less of it. */
+export const modelTitle = (model: string): string | undefined => (shortModel(model) === model ? undefined : model);
 export const fmtPct = (ratio: number, digits = 0) => `${(ratio * 100).toFixed(digits)}%`;
 /**
  * A figure already in percent to the whole point, a dash without one, and the sign of a lead where `signed` asks. The
