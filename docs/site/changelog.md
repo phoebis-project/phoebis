@@ -112,7 +112,10 @@ A decision record names a seat its spend cap holds out `spent` and an account th
 overage ends `overage`, in its standing facts, its trace, its candidates' obstacles and its probe line, as its
 exhausted line does ([Overage](routing.md#overage)). A client classifier call that runs off the account its judged turn
 ended on, or in a session with no turn to judge, is charged as any call and recorded `client_off`, and a classifier call
-directed to the account its judged turn ended on moves no pin ([Clients](routing.md#clients)).
+directed to the account its judged turn ended on moves no pin ([Clients](routing.md#clients)). A guardrail create that
+loses the race for its id to another create answers the route's 409 for a taken id, as the key and pool creates do, and
+a key, pool or guardrail edit whose row is deleted while it is being saved answers 404 ahead of a stale stamp's 409
+([API reference](api-reference.md)).
 
 With `keepalive.enabled` on a pool the router keeps a replayable copy of every eligible request a session sends and,
 shortly before the cache entry would expire, sends a probe that reads it ([Keepalive](keepalive.md)). The policy's

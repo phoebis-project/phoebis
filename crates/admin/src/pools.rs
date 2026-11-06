@@ -762,12 +762,9 @@ pub(crate) async fn patch(
             return refusal;
         }
     }
-    if read_at != row.updated_at {
-        return stale_edit(STALE_EDIT);
-    }
     match state.store.update_pool_with_members_and_guardrails(
         &row,
-        row.updated_at,
+        read_at,
         writes.as_deref(),
         input.guardrails.as_deref(),
         ACTOR,
@@ -1595,7 +1592,7 @@ pub(crate) async fn traffic(
             buckets,
         })
         .into_response(),
-        Err(e) => crate::analytics::series_failure(e),
+        Err(e) => crate::analytics::ledger_failure(e),
     }
 }
 

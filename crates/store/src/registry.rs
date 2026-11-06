@@ -1579,7 +1579,8 @@ impl Store {
             "INSERT INTO guardrails (id, name, description, enabled, mode, action, conditions_json, preset_id, preset_version, incarnation, created_at, updated_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
             guardrail_params!(row, incarnation as i64, now),
-        )?;
+        )
+        .map_err(|error| create_failure(&tx, "guardrails", &row.id, error.into(), StoreError::from))?;
         set_guardrail_subjects_in(&tx, &row.id, SubjectKind::Pool, pools, now)?;
         set_guardrail_subjects_in(&tx, &row.id, SubjectKind::Key, keys, now)?;
         check_guardrail_bounds(&tx, &bound_pools(&tx, Some(pools), Some(keys))?)?;

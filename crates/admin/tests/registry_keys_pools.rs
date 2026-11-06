@@ -3754,6 +3754,19 @@ async fn until_parked(parked: impl Fn() -> bool) {
     }
 }
 
+/// Waits, within five seconds, for the edit spawned before it to park on its store hold or to answer before it
+/// reaches the store, so a route that refuses the edit itself shows its own answer rather than a timeout.
+async fn until_parked_or_answered<T>(parked: impl Fn() -> bool, edit: &tokio::task::JoinHandle<T>) {
+    let give_up = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !parked() && !edit.is_finished() {
+        assert!(
+            tokio::time::Instant::now() < give_up,
+            "the edit neither reached its write nor answered"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
+}
+
 // Multi-threaded: the parked edit blocks the worker it runs on until the hold is released.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_pool_edits_from_one_read_answer_409_on_the_second() {
@@ -3942,6 +3955,50 @@ async fn a_pool_edit_with_a_stale_expected_revision_answers_409_and_writes_nothi
     assert_eq!(store.pool("main").unwrap().unwrap().label, "Main");
 }
 
+// Multi-threaded: the parked edit blocks the worker it runs on until the hold is released.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stale_pool_edit_answers_404_when_the_pool_is_deleted_while_it_is_saved() {
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    // No key, so the delete lands under the parked edit.
+    assert_eq!(
+        post(
+            &app,
+            "/admin/pools",
+            r#"{"id":"main","label":"Main","strategy":"priority"}"#,
+            Some(&cookie),
+        )
+        .await
+        .status(),
+        201
+    );
+    let stale = listed_revision(&app, &cookie, "pools", "main").await - 1;
+    let hold = store.debug_hold_next_pool_write();
+    let edit = tokio::spawn({
+        let (app, cookie) = (app.clone(), cookie.clone());
+        async move {
+            patch(
+                &app,
+                "/admin/pools/main",
+                &format!(r#"{{"label":"Moved","expected_revision":{stale}}}"#),
+                Some(&cookie),
+            )
+            .await
+        }
+    });
+    until_parked_or_answered(|| hold.is_parked(), &edit).await;
+    assert_eq!(
+        delete(&app, "/admin/pools/main", Some(&cookie))
+            .await
+            .status(),
+        204
+    );
+    hold.release();
+    let answered = edit.await.unwrap();
+    assert_eq!(answered.status(), 404);
+    assert_eq!(json(answered).await["error"], "pool not found");
+}
+
 #[tokio::test]
 async fn a_pool_edit_with_the_fresh_stamp_lands_and_the_stamp_moves() {
     let (app, _up, store, _router) = common::admin_parts().await;
@@ -4017,6 +4074,39 @@ async fn a_key_edit_with_a_stale_expected_revision_answers_409_and_writes_nothin
         );
     }
     assert_eq!(store.api_key("desktop").unwrap().unwrap().label, "Desktop");
+}
+
+// Multi-threaded: the parked edit blocks the worker it runs on until the hold is released.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stale_key_edit_answers_404_when_the_key_is_deleted_while_it_is_saved() {
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    pool_and_key(&app, &cookie).await;
+    let stale = listed_revision(&app, &cookie, "keys", "desktop").await - 1;
+    let hold = store.debug_hold_next_key_write();
+    let edit = tokio::spawn({
+        let (app, cookie) = (app.clone(), cookie.clone());
+        async move {
+            patch(
+                &app,
+                "/admin/keys/desktop",
+                &format!(r#"{{"label":"Moved","expected_revision":{stale}}}"#),
+                Some(&cookie),
+            )
+            .await
+        }
+    });
+    until_parked_or_answered(|| hold.is_parked(), &edit).await;
+    assert_eq!(
+        delete(&app, "/admin/keys/desktop", Some(&cookie))
+            .await
+            .status(),
+        204
+    );
+    hold.release();
+    let answered = edit.await.unwrap();
+    assert_eq!(answered.status(), 404);
+    assert_eq!(json(answered).await["error"], "key not found");
 }
 
 #[tokio::test]

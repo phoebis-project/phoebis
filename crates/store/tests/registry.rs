@@ -3781,6 +3781,21 @@ fn a_guardrail_created_again_under_a_deleted_id_restarts_at_the_next_incarnation
 }
 
 #[test]
+fn a_guardrail_created_under_a_held_id_answers_id_taken() {
+    let store = guarded_store();
+    store
+        .insert_guardrail(&guardrail("g1", None), &[], &[], "test")
+        .unwrap();
+    let error = store
+        .insert_guardrail(&guardrail("g1", None), &[], &[], "test")
+        .unwrap_err();
+    assert!(
+        matches!(&error, StoreError::IdTaken(id) if id == "g1"),
+        "{error:?}"
+    );
+}
+
+#[test]
 fn deleting_a_guardrail_removes_its_attachments_and_deleting_a_pool_or_a_key_removes_theirs() {
     let store = guarded_store();
     for id in ["g1", "g2"] {

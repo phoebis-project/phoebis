@@ -35,6 +35,7 @@ use crate::AdminState;
 
 pub(crate) const STALE_EDIT: &str =
     "the guardrail changed while it was being edited, so reload and try again";
+const DUPLICATE_ID: &str = "a guardrail with this id exists";
 
 /// The ids the static routes of the same names take, so a guardrail under either could never be read back by id.
 const RESERVED_IDS: [&str; 2] = ["presets", "test"];
@@ -655,7 +656,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         return failure(StatusCode::BAD_REQUEST, "id is reserved");
     }
     if let Ok(Some(_)) = state.store.guardrail(id) {
-        return failure(StatusCode::CONFLICT, "a guardrail with this id exists");
+        return failure(StatusCode::CONFLICT, DUPLICATE_ID);
     }
     let preset = match &input.preset {
         Some(preset_id) => match Preset::current(preset_id) {
@@ -710,8 +711,11 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     let pools = input.pools.as_deref().unwrap_or_default();
     let keys = input.keys.as_deref().unwrap_or_default();
     // The store takes the incarnation and the stamps inside the insert, so the answer reads the row back.
-    if let Err(error) = state.store.insert_guardrail(&row, pools, keys, ACTOR) {
-        return attachment_refusal(error);
+    match state.store.insert_guardrail(&row, pools, keys, ACTOR) {
+        Ok(_) => {}
+        // The check above reads outside the insert, so a create that lost the race for the id arrives here.
+        Err(StoreError::IdTaken(_)) => return failure(StatusCode::CONFLICT, DUPLICATE_ID),
+        Err(error) => return attachment_refusal(error),
     }
     // The row exists from here on, so every answer, a refusal included, names it to the mutation log.
     let mut response = publish(&state, &row.id, StatusCode::CREATED).await;
@@ -1051,12 +1055,9 @@ pub(crate) async fn patch(
     if let Err(refusal) = distinct_subjects(&input) {
         return refusal;
     }
-    if read_at != row.updated_at {
-        return stale_edit(STALE_EDIT);
-    }
     match state.store.update_guardrail(
         &row,
-        row.updated_at,
+        read_at,
         input.pools.as_deref(),
         input.keys.as_deref(),
         ACTOR,

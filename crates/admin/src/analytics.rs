@@ -245,18 +245,14 @@ pub(crate) struct UnusedAllowanceQuery {
     pub accounts: Option<String>,
 }
 
-pub(crate) fn ledger_failure(error: phoebis_ledger::LedgerError) -> Response {
+/// A ledger read's failure: the range's own refusal, raised before any read, answers the caller's 400 with the
+/// ledger's message, and any other error answers the 500 `ledger failure`.
+pub(crate) fn ledger_failure(error: LedgerError) -> Response {
+    if let LedgerError::Range(_) = error {
+        return failure(StatusCode::BAD_REQUEST, &error.to_string());
+    }
     tracing::warn!(%error, "an admin read failed in the ledger");
     failure(StatusCode::INTERNAL_SERVER_ERROR, "ledger failure")
-}
-
-/// A series read's failure: the range's own refusal, raised before any read, answers the caller's 400 with the
-/// ledger's message, and any other error is a ledger failure.
-pub(crate) fn series_failure(error: LedgerError) -> Response {
-    match error {
-        LedgerError::Range(_) => failure(StatusCode::BAD_REQUEST, &error.to_string()),
-        error => ledger_failure(error),
-    }
 }
 
 /// The series bucketed to the range. Under `group_by=key` a point's `groups` entries carry `key` in the same form
@@ -313,7 +309,7 @@ pub(crate) async fn series(
     .await
     {
         Ok(p) => p,
-        Err(e) => return series_failure(e),
+        Err(e) => return ledger_failure(e),
     };
     let reported = reported_samples(&state).await;
     for point in &mut points {
@@ -944,7 +940,7 @@ pub(crate) async fn burn(
     };
     let series = match read {
         Ok(s) => s,
-        Err(e) => return series_failure(e),
+        Err(e) => return ledger_failure(e),
     };
     let reported = reported_samples(&state).await;
     let points = series
@@ -1371,7 +1367,7 @@ pub(crate) struct RewritePoint {
     params(RangeQuery),
     responses(
         (status = 200, description = "The points, the moves and the slow-down's held time over the range.", body = Rewrites),
-        (status = 400, description = "For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`", body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
+        (status = 400, description = "For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`\n\nFor a range the chart cannot carry, the ledger's own message: `the range needs {count} points, and the most a chart carries is 10000`.", body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
         (status = 500, response = LedgerFailure),
     ),
 )]

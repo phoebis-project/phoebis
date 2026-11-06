@@ -570,12 +570,9 @@ pub(crate) async fn patch(
             return refusal;
         }
     }
-    if read_at != row.updated_at {
-        return stale_edit(STALE_EDIT);
-    }
     match state.store.update_api_key_with_guardrails(
         &row,
-        row.updated_at,
+        read_at,
         input.guardrails.as_deref(),
         ACTOR,
     ) {

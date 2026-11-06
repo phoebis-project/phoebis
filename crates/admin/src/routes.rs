@@ -3199,10 +3199,10 @@ pub(crate) fn present<'de, D: serde::Deserializer<'de>>(
     serde_json::Value::deserialize(d).map(Some)
 }
 
-/// The stamp a pool or key edit's body names through the row's `revision`: the row's own when the body sent none,
-/// refused when it is not a non-negative integer, and answered `409 stale_edit` with `stale` when it names another
-/// incarnation than the row's. A token of the row's incarnation answers the stamp it carries, which the route
-/// compares with its own read.
+/// The stamp a guardrail, key or pool edit's body names through the row's `revision`: the row's own when the body sent
+/// none, refused when it is not a non-negative integer, and answered `409 stale_edit` with `stale` when it names
+/// another incarnation than the row's. A token of the row's incarnation answers the stamp it carries, which the route
+/// passes to the store as its fence, so a row deleted since the read answers 404 before a stale token answers 409.
 // The error is a rendered HTTP response, returned once per request and dropped. Boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
