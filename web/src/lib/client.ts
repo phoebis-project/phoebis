@@ -8,7 +8,7 @@ export const TURN_ORIGINS = ['auto_continuation', 'host_synthetic', 'human', 'pe
  * other token reads as sent. Null for a session with no user agent or a blank one.
  */
 export function clientVersion(userAgent: string | null): string | null {
-  const [token] = (userAgent ?? '').trim().split(/\s+/);
-  if (token === '') return null;
+  const token = /\S+/.exec(userAgent ?? '')?.[0];
+  if (token === undefined) return null;
   return token.startsWith('claude-cli/') ? `Claude Code ${token.slice('claude-cli/'.length)}` : token;
 }

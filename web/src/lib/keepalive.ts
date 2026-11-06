@@ -1,8 +1,8 @@
-import type { AgentContext, KeepaliveRecipe, Lifecycle, RecipeCause, Session, SessionSpend, SessionSpendPart } from '@/api/types';
+import type { AgentContext, AgentRequests, KeepaliveRecipe, Lifecycle, RecipeCause, Session, SessionSpend, SessionSpendPart } from '@/api/types';
 import { RANGE_PRESETS, type SessionsAddress, type SortDir } from '@/lib/address';
 import { clientVersion } from '@/lib/client';
-import { lookup } from '@/lib/counts';
-import { fmtCompact, fmtDuration } from '@/lib/format';
+import { countOf, lookup } from '@/lib/counts';
+import { fmtCompact, fmtDuration, keyLifetime } from '@/lib/format';
 import type { BadgeTone } from '@/lib/quota';
 
 export const CAUSE_LABEL: Record<RecipeCause, string> = {
@@ -153,11 +153,7 @@ const STATE_ORDER: Record<Lifecycle, number> = { busy: 0, idle: 1, parked: 2, re
  * Two instants newest first under `desc` and oldest first under `asc`, an instant missing last under either, so the
  * direction flips the dated entries alone.
  */
-const byInstant = (a: string | null, b: string | null, dir: SortDir): number => {
-  if (a === null || b === null) return a === b ? 0 : a === null ? 1 : -1;
-  const order = Date.parse(b) - Date.parse(a);
-  return dir === 'desc' ? order : -order;
-};
+const byInstant = (a: string | null, b: string | null, dir: SortDir): number => byFigure(a === null ? null : Date.parse(a), b === null ? null : Date.parse(b), dir);
 
 /** Two figures largest first under `desc` and smallest first under `asc`, a missing one last under either. */
 const byFigure = (a: number | null, b: number | null, dir: SortDir): number => {
@@ -173,22 +169,34 @@ export const lastActivity = (s: Pick<Session, 'lastRequestAt' | 'lastUsedAt'>): 
 
 type OrderedSession = Pick<Session, 'createdAt' | 'lastRequestAt' | 'lastUsedAt' | 'requests' | 'sessionId' | 'spend'>;
 
+const ROW_ORDER: Record<SessionsAddress['sort'], (a: OrderedSession, b: OrderedSession, dir: SortDir) => number> = {
+  activity: (a, b, dir) => byInstant(lastActivity(a), lastActivity(b), dir),
+  cost: (a, b, dir) => byFigure(a.spend?.usd ?? null, b.spend?.usd ?? null, dir),
+  created: (a, b, dir) => byInstant(a.createdAt, b.createdAt, dir),
+  requests: (a, b, dir) => byFigure(a.requests, b.requests, dir),
+};
+
 /**
  * The rows under `created`, `activity`, `cost` (`spend.usd`, the list dollars, which add across units) or `requests`,
  * ties by session id, a row without the value last either way.
  */
 export function orderRows<T extends { session: OrderedSession }>(rows: readonly T[], sort: SessionsAddress['sort'], dir: SortDir): T[] {
-  const order = (a: OrderedSession, b: OrderedSession): number => {
-    if (sort === 'cost') return byFigure(a.spend?.usd ?? null, b.spend?.usd ?? null, dir);
-    if (sort === 'requests') return byFigure(a.requests, b.requests, dir);
-    return sort === 'activity' ? byInstant(lastActivity(a), lastActivity(b), dir) : byInstant(a.createdAt, b.createdAt, dir);
-  };
-  return [...rows].sort((a, b) => order(a.session, b.session) || a.session.sessionId.localeCompare(b.session.sessionId));
+  const order = ROW_ORDER[sort];
+  return [...rows].sort((a, b) => order(a.session, b.session, dir) || a.session.sessionId.localeCompare(b.session.sessionId));
 }
 
 /** A line's group: main first, then the lines by lifecycle word, then the lines with no word, whose agent the engine
  *  holds no record of. */
 const lineGroup = (line: SessionLine): number => (line.agentId === MAIN_AGENT ? -1 : line.lifecycle === null ? STATE_ORDER.released + 1 : STATE_ORDER[line.lifecycle]);
+
+const pinCreatedAt = (line: SessionLine): string | null => line.pin?.createdAt ?? null;
+
+const LINE_VALUE: Record<SessionsAddress['sort'], (line: SessionLine) => string | null> = {
+  activity: (line) => (line.recipe !== null ? line.recipe.lastRequestAt : (line.pin?.lastUsedAt ?? null)),
+  cost: pinCreatedAt,
+  created: pinCreatedAt,
+  requests: pinCreatedAt,
+};
 
 /**
  * The lines under the rows' key: main first, then the lifecycle groups (`STATE_ORDER`), then the lines with no word,
@@ -197,7 +205,7 @@ const lineGroup = (line: SessionLine): number => (line.agentId === MAIN_AGENT ? 
  * then by model.
  */
 export function orderLines(lines: readonly SessionLine[], sort: SessionsAddress['sort'], dir: SortDir): SessionLine[] {
-  const valueOf = (line: SessionLine) => (sort === 'activity' ? (line.recipe !== null ? line.recipe.lastRequestAt : (line.pin?.lastUsedAt ?? null)) : (line.pin?.createdAt ?? null));
+  const valueOf = LINE_VALUE[sort];
   return [...lines].sort((a, b) => lineGroup(a) - lineGroup(b) || byInstant(valueOf(a), valueOf(b), dir) || a.agentId.localeCompare(b.agentId) || (a.model ?? '').localeCompare(b.model ?? ''));
 }
 
@@ -237,7 +245,7 @@ export function isFinished(session: Pick<Session, 'keepalive'>, lines: readonly 
 
 /** A row's or a line's Status word: a lifecycle word, `finished` for a session the engine is done with, `unreported`
  *  where no mod reports the agent. */
-export type StatusWord = 'busy' | 'finished' | 'idle' | 'parked' | 'registered' | 'released' | 'unknown' | 'unreported';
+export type StatusWord = Lifecycle | 'finished' | 'unreported';
 
 export const STATUS_TONE: Record<Lifecycle, BadgeTone> = { busy: 'accent', idle: 'good', parked: 'neutral', registered: 'neutral', released: 'neutral', unknown: 'neutral' };
 
@@ -270,15 +278,13 @@ export function presenceOf(session: Pick<Session, 'companion' | 'companionSince'
   return null;
 }
 
-/** A line's own word: its lifecycle, `unreported` where null. */
-export const lineWord = (line: Pick<SessionLine, 'lifecycle'>): Exclude<StatusWord, 'finished'> => line.lifecycle ?? 'unreported';
-
 /**
  * A line's word as the Status filter, the Agents cell's split and the Agents table read it: main's through
- * `reportedWord`, so the three agree with the row's Status, and every other line's own.
+ * `reportedWord`, so the three agree with the row's Status, every other line's own lifecycle, and `unreported` where
+ * the word is null.
  */
 export const lineWordOf = (session: Pick<Session, 'companion'>, line: Pick<SessionLine, 'agentId' | 'lifecycle'>): Exclude<StatusWord, 'finished'> =>
-  line.agentId === MAIN_AGENT ? (reportedWord(session, line.lifecycle) ?? 'unreported') : lineWord(line);
+  (line.agentId === MAIN_AGENT ? reportedWord(session, line.lifecycle) : line.lifecycle) ?? 'unreported';
 
 /** The lines less the released ones, the Agents cell's and the Dashboard's count. */
 export const agentCount = (lines: readonly Pick<SessionLine, 'lifecycle'>[]): number => lines.filter((line) => !isReleasedLine(line)).length;
@@ -331,7 +337,13 @@ export interface SessionLine {
  * which `orderLines` sorts into the view's.
  */
 export function sessionLines(s: Pick<Session, 'agentContexts' | 'agentId' | 'agentRequests' | 'lifecycle' | 'model'>, recipes: readonly KeepaliveRecipe[]): SessionLine[] {
-  const typeOf = (agentId: string) => agentFigures(s, agentId)?.agentType ?? null;
+  // Each agent's newest entry as `agentFigures` picks it, a tie kept on the first, without summing its spend per line.
+  const newest = new Map<string, AgentRequests>();
+  for (const entry of s.agentRequests) {
+    const held = newest.get(entry.agentId);
+    if (held === undefined || byInstant(entry.lastRequestAt, held.lastRequestAt, 'desc') < 0) newest.set(entry.agentId, entry);
+  }
+  const typeOf = (agentId: string) => newest.get(agentId)?.agentType ?? null;
   const claimed = new Set<AgentContext>();
   const lines: SessionLine[] = recipes.map((recipe) => {
     const pin = lineFigures(s, recipe.agentId, recipe.model);
@@ -341,20 +353,13 @@ export function sessionLines(s: Pick<Session, 'agentContexts' | 'agentId' | 'age
   for (const pin of s.agentContexts) if (!claimed.has(pin)) lines.push({ agentId: pin.agentId, agentType: typeOf(pin.agentId), lifecycle: pin.lifecycle, model: pin.model, pin, recipe: null });
   if (lines.some((line) => line.agentId === MAIN_AGENT)) return lines;
   // A row whose pin is another agent's carries that agent's model, so main's line reads main's newest ledger entry.
-  const model = s.agentId === null || s.agentId === MAIN_AGENT ? s.model : (agentFigures(s, MAIN_AGENT)?.model ?? null);
+  const model = s.agentId === null || s.agentId === MAIN_AGENT ? s.model : (newest.get(MAIN_AGENT)?.model ?? null);
   return [{ agentId: MAIN_AGENT, agentType: typeOf(MAIN_AGENT), lifecycle: s.lifecycle, model, pin: null, recipe: null }, ...lines];
 }
 
-/** An agent's entries summed, since one agent may run two models. */
-export interface AgentFigures {
-  /** The newest entry's account, model and type (the entry with the latest `lastRequestAt`). */
-  accountId: string | null;
-  agentType: string | null;
-  lastRequestAt: string | null;
-  model: string;
-  requests: number;
-  spend: SessionSpend;
-}
+/** An agent's entries summed, since one agent may run two models, with the newest entry's account, model and type (the
+ *  entry with the latest `lastRequestAt`). */
+export type AgentFigures = Omit<AgentRequests, 'agentId'>;
 
 /** An agent's entries summed, null for an agent with no entry. */
 export function agentFigures(session: Pick<Session, 'agentRequests'>, agentId: string): AgentFigures | null {
@@ -371,15 +376,16 @@ export function agentFigures(session: Pick<Session, 'agentRequests'>, agentId: s
   };
 }
 
+const keysOf = (a: object, b: object): string[] => [...new Set([...Object.keys(a), ...Object.keys(b)])];
+
 /** Two maps keyed by data summed by key, built as fresh entries so no key the wire sends reaches a prototype. */
-const addMap = (a: Record<string, number>, b: Record<string, number>): Record<string, number> =>
-  Object.fromEntries([...new Set([...Object.keys(a), ...Object.keys(b)])].map((k) => [k, (lookup(a, k) ?? 0) + (lookup(b, k) ?? 0)]));
+const addMap = (a: Record<string, number>, b: Record<string, number>): Record<string, number> => Object.fromEntries(keysOf(a, b).map((k) => [k, countOf(a, k) + countOf(b, k)]));
 
 const addPart = (a: SessionSpendPart, b: SessionSpendPart): SessionSpendPart => ({
   billedUsd: addMap(a.billedUsd, b.billedUsd),
   equivalent: a.equivalent === null || b.equivalent === null ? null : a.equivalent + b.equivalent,
   requests: a.requests + b.requests,
-  shares: Object.fromEntries([...new Set([...Object.keys(a.shares), ...Object.keys(b.shares)])].map((id) => [id, addMap(lookup(a.shares, id) ?? {}, lookup(b.shares, id) ?? {})])),
+  shares: Object.fromEntries(keysOf(a.shares, b.shares).map((id) => [id, addMap(lookup(a.shares, id) ?? {}, lookup(b.shares, id) ?? {})])),
   usd: a.usd + b.usd,
 });
 
@@ -389,7 +395,7 @@ export function addSpend(a: SessionSpend, b: SessionSpend): SessionSpend {
 }
 
 /** Every agent with ledgered requests and no line, main never among them, in id order, each with its figures. */
-export function earlierAgents(session: Pick<Session, 'agentRequests'>, lines: readonly Pick<SessionLine, 'agentId'>[]): (AgentFigures & { agentId: string })[] {
+export function earlierAgents(session: Pick<Session, 'agentRequests'>, lines: readonly Pick<SessionLine, 'agentId'>[]): AgentRequests[] {
   const named = new Set(lines.map((line) => line.agentId));
   const ids = [...new Set(session.agentRequests.map((entry) => entry.agentId))].filter((id) => id !== MAIN_AGENT && !named.has(id)).sort();
   return ids.flatMap((agentId) => {
@@ -422,9 +428,6 @@ export interface SessionFilters {
   /** The lifecycle words, `released`, `unknown` and `unreported` among them. */
   status: string[];
 }
-
-/** The filters that read each agent line. The Released agents flag draws lines and matches none, so it stays out. */
-export const AGENT_FILTER_FIELDS: readonly (keyof SessionFilters)[] = ['account', 'agentType', 'cache', 'effort', 'model', 'status'];
 
 /** The Active within values, each read against the later of a row's last use and last request. */
 export const ACTIVE_WITHIN: readonly { id: string; label: string; ms: number }[] = [
@@ -473,16 +476,27 @@ const misses = (values: readonly string[], value: string | null): boolean => val
  *  with no pin matches none. */
 const cacheWords = (line: SessionLine): string[] => (line.pin === null ? [] : [line.pin.warm ? 'warm' : 'cold', ...(line.recipe === null ? ['no recipe'] : [])]);
 
+const present = (v: string | null): string[] => (v === null ? [] : [v]);
+
+/**
+ * The words a line offers each Agents filter, so a line that offers none misses a standing one. The Released agents
+ * flag draws lines and matches none, so it stays out.
+ */
+const AGENT_FILTER_WORDS = {
+  account: (_, line) => present(line.recipe?.accountId ?? line.pin?.accountId ?? null),
+  agentType: (_, line) => present(line.agentType),
+  cache: (_, line) => cacheWords(line),
+  effort: (_, line) => present(line.pin?.effort ?? null),
+  model: (_, line) => present(line.model),
+  status: (session, line) => [lineWordOf(session, line)],
+} satisfies Partial<Record<keyof SessionFilters, (session: Pick<Session, 'companion'>, line: SessionLine) => string[]>>;
+
+/** The filters that read each agent line. */
+export const AGENT_FILTER_FIELDS = Object.keys(AGENT_FILTER_WORDS) as readonly (keyof typeof AGENT_FILTER_WORDS)[];
+
 /** One line passes every Agents filter that stands, its Status read as `lineWordOf` reads it. */
 export function lineMatches(session: Pick<Session, 'companion'>, line: SessionLine, filters: SessionFilters): boolean {
-  return !(
-    misses(filters.account, line.recipe?.accountId ?? line.pin?.accountId ?? null) ||
-    misses(filters.agentType, line.agentType) ||
-    (filters.cache.length > 0 && !cacheWords(line).some((word) => filters.cache.includes(word))) ||
-    misses(filters.effort, line.pin?.effort ?? null) ||
-    misses(filters.model, line.model) ||
-    misses(filters.status, lineWordOf(session, line))
-  );
+  return AGENT_FILTER_FIELDS.every((f) => filters[f].length === 0 || AGENT_FILTER_WORDS[f](session, line).some((w) => filters[f].includes(w)));
 }
 
 /**
@@ -508,7 +522,7 @@ export function matches(row: MatchRow, filters: SessionFilters, now: number): bo
   if (active !== undefined && !activeWithin(session, active.ms, now)) return false;
   if (misses(filters.client, clientVersion(session.userAgent)) || misses(filters.companion, session.companion) || misses(filters.pool, row.poolId)) return false;
   if (filters.forked && session.forkedFrom === null) return false;
-  if (filters.key.length > 0 && !filters.key.some((k) => (k.includes('@') ? k === `${session.keyId}@${session.keyGeneration}` : k === session.keyId && !session.historical))) return false;
+  if (filters.key.length > 0 && !filters.key.some((k) => (k.includes('@') ? k === keyLifetime(session.keyId, session.keyGeneration) : k === session.keyId && !session.historical))) return false;
   if (filters.slowed && !(session.speed !== null && session.speed < 1)) return false;
   return !agentFiltersStand(filters) || drawnLines(row, filters).some((line) => lineMatches(session, line, filters));
 }
@@ -531,11 +545,7 @@ export function hiddenLines(row: MatchRow, filters: SessionFilters): { hidden: n
 export const matchingAgents = (drawn: Iterable<Pick<ReturnType<typeof hiddenLines>, 'shown'>>): number => [...drawn].reduce((n, row) => n + agentCount(row.shown), 0);
 
 /** Whether any Agents filter stands. */
-export const agentFiltersStand = (filters: SessionFilters): boolean =>
-  AGENT_FILTER_FIELDS.some((field) => {
-    const values = filters[field];
-    return Array.isArray(values) && values.length > 0;
-  });
+export const agentFiltersStand = (filters: SessionFilters): boolean => AGENT_FILTER_FIELDS.some((f) => filters[f].length > 0);
 
 /** A pin-only line's TTL: the time left to the pin's last use plus its cache TTL, null once passed or unknown. */
 export const pinTtlMs = (pin: Pick<AgentContext, 'cacheTtlMs' | 'lastUsedAt'>, now: number): number | null => {

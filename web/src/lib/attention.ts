@@ -81,6 +81,8 @@ function conditionLog({ kind, link }: LinkedItem): { log: Pick<LogLink, 'account
 /** The entity each of the route's three link pages opens, in the kind entityHref takes. */
 const PAGE_ENTITY = { accounts: 'account', keys: 'key', pools: 'pool' } as const;
 
+const SESSIONS_KINDS: ReadonlySet<AttentionKind> = new Set(['expired_between_turns', 'keepalive_bus_gaps', 'keepalive_cap']);
+
 /** An item's key in a list. The raw kind keeps two conditions the console does not know apart on one subject. */
 export const attentionKey = (item: Pick<AttentionItem, 'kind' | 'rawKind' | 'subject'>): string => `${item.rawKind ?? item.kind}:${item.subject.type}:${item.subject.id}`;
 
@@ -94,7 +96,7 @@ export const attentionKey = (item: Pick<AttentionItem, 'kind' | 'rawKind' | 'sub
  */
 export function attentionHref(item: LinkedItem, now: number): string | null {
   const { link } = item;
-  if (item.kind === 'keepalive_bus_gaps' || item.kind === 'keepalive_cap' || item.kind === 'expired_between_turns') return '/sessions';
+  if (SESSIONS_KINDS.has(item.kind)) return '/sessions';
   if (link === null || item.kind === 'unknown') return null;
   const since = sinceCondition(Date.parse(item.since), now);
   const pool = exhaustedPool(item);
@@ -289,12 +291,12 @@ const CAP_WORD: Record<string, string> = { agents: 'agent records', retained: 'r
  */
 export function attentionWords(item: AttentionItem, now: number): string | null {
   const d = item.detail;
-  if (item.kind === 'keepalive_bus_gaps') return `Keepalive bus gaps: ${num(d.gaps)} since the start`;
+  if (item.kind === 'keepalive_bus_gaps') return `${ATTENTION_LABEL[item.kind]}: ${num(d.gaps)} since the start`;
   if (item.kind === 'keepalive_cap') {
     const cap = text(d.cap) ?? '';
-    return `Keepalive cap at ${fmtPct(num(d.pct))}: ${lookup(CAP_WORD, cap) ?? cap}`;
+    return `${ATTENTION_LABEL[item.kind]} at ${fmtPct(num(d.pct))}: ${lookup(CAP_WORD, cap) ?? cap}`;
   }
-  if (item.kind === 'expired_between_turns') return `Expired between turns: ${num(d.expired)} in 24h`;
+  if (item.kind === 'expired_between_turns') return `${ATTENTION_LABEL[item.kind]}: ${num(d.expired)} in 24h`;
   if (item.kind === 'slowed_long') return `${item.subject.label}: ${slowedWords(item, now)}`;
   if (item.kind === 'meter_drift') return `${item.subject.label}: ${driftWords(item, now)}`;
   if (item.kind !== 'wall_reached' && item.kind !== 'destination_spent' && item.kind !== 'shed_no_runway') return null;
