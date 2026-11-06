@@ -123,7 +123,7 @@ test('requestsRange picks the narrowest range that covers the last request, with
 test('isFinished reads a session whose main ended with it or was released, or whose every line the mod released', () => {
   const session = (cause) => ({ keepalive: { cause, nextProbeAt: null } });
   assert.equal(d.isFinished(session('session_ended'), [{ agentId: 'main', lifecycle: 'idle' }, { agentId: '3e', lifecycle: 'released' }]), true);
-  assert.equal(d.isFinished(session('released'), [{ agentId: 'main', lifecycle: 'released' }]), true);
+  assert.equal(d.isFinished(session('released'), [{ agentId: 'main', lifecycle: 'idle' }]), true, 'the cause alone, with a line the mod kept');
   assert.equal(d.isFinished(session('agent_released'), [{ agentId: 'main', lifecycle: 'released' }, { agentId: '3e', lifecycle: 'released' }]), true);
   assert.equal(d.isFinished(session('probing'), [{ agentId: 'main', lifecycle: 'busy' }, { agentId: '3e', lifecycle: 'released' }]), false);
   assert.equal(d.isFinished(session('scheduled'), []), false);
@@ -303,10 +303,12 @@ test("matches reads a bare key id as the live key's rows and id@generation as th
   assert.deepEqual(rows.map((r) => d.matches(r, { ...NO_FILTERS, key: ['desktop@1'] }, NOW)), [false, true], 'a lifetime keeps its own row alone');
 });
 
-test('activeWithin reads the later of the last use and the last request', () => {
-  assert.equal(d.activeWithin({ lastRequestAt: iso(NOW - 2 * HOUR), lastUsedAt: iso(NOW - 10 * MINUTE) }, HOUR, NOW), true, 'the last use inside the span');
-  assert.equal(d.activeWithin({ lastRequestAt: iso(NOW - 10 * MINUTE), lastUsedAt: iso(NOW - 2 * HOUR) }, HOUR, NOW), true, 'the last request inside the span');
-  assert.equal(d.activeWithin({ lastRequestAt: iso(NOW - 2 * HOUR), lastUsedAt: iso(NOW - 2 * HOUR) }, HOUR, NOW), false, 'both older than the span');
+test('matches reads Active within against the later of the last use and the last request', () => {
+  const row = (lastRequestAt, lastUsedAt) => ({ finished: false, lines: [], poolId: 'all', session: { ...matchSession, lastRequestAt, lastUsedAt } });
+  const within = { ...NO_FILTERS, active: '1h' };
+  assert.equal(d.matches(row(iso(NOW - 2 * HOUR), iso(NOW - 10 * MINUTE)), within, NOW), true, 'the last use inside the span');
+  assert.equal(d.matches(row(iso(NOW - 10 * MINUTE), iso(NOW - 2 * HOUR)), within, NOW), true, 'the last request inside the span');
+  assert.equal(d.matches(row(iso(NOW - 2 * HOUR), iso(NOW - 2 * HOUR)), within, NOW), false, 'both older than the span');
 });
 
 test('hiddenLines counts the lines the Agents filters hide and the earlier agents', () => {

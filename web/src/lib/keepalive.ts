@@ -254,7 +254,7 @@ export const STATUS_TONE: Record<Lifecycle, BadgeTone> = { busy: 'accent', idle:
  * the engine's word off the view, except `released`, the mod's last word, which the engine keeps after the session's
  * end while the companion reads `none`.
  */
-export const reportedWord = (session: Pick<Session, 'companion'>, lifecycle: Lifecycle | null): Lifecycle | null => (session.companion === 'none' && lifecycle !== 'released' ? null : lifecycle);
+const reportedWord = (session: Pick<Session, 'companion'>, lifecycle: Lifecycle | null): Lifecycle | null => (session.companion === 'none' && lifecycle !== 'released' ? null : lifecycle);
 
 /**
  * The row's Status word and tone: `finished` first where the row's `isFinished` holds, `unreported` where
@@ -409,7 +409,7 @@ const addPart = (a: SessionSpendPart, b: SessionSpendPart): SessionSpendPart => 
 });
 
 /** Two spends summed: the maps merged by key, `equivalent` null where either is null. */
-export function addSpend(a: SessionSpend, b: SessionSpend): SessionSpend {
+function addSpend(a: SessionSpend, b: SessionSpend): SessionSpend {
   return { ...addPart(a, b), probes: addPart(a.probes, b.probes) };
 }
 
@@ -476,7 +476,7 @@ export function withinExpiry(session: Pick<Session, 'lastRequestAt' | 'lastUsedA
 }
 
 /** The later of the row's last use and last request is inside `spanMs` of `now`. */
-export function activeWithin(session: Pick<Session, 'lastRequestAt' | 'lastUsedAt'>, spanMs: number, now: number): boolean {
+function activeWithin(session: Pick<Session, 'lastRequestAt' | 'lastUsedAt'>, spanMs: number, now: number): boolean {
   const last = lastActivity(session);
   return last !== null && now - Date.parse(last) <= spanMs;
 }
@@ -504,10 +504,10 @@ const AGENT_FILTER_WORDS = {
 } satisfies Partial<Record<keyof SessionFilters, (session: Pick<Session, 'companion'>, line: SessionLine) => string[]>>;
 
 /** The filters that read each agent line. */
-export const AGENT_FILTER_FIELDS = Object.keys(AGENT_FILTER_WORDS) as readonly (keyof typeof AGENT_FILTER_WORDS)[];
+const AGENT_FILTER_FIELDS = Object.keys(AGENT_FILTER_WORDS) as readonly (keyof typeof AGENT_FILTER_WORDS)[];
 
 /** One line passes every Agents filter that stands, its Status read as `lineWordOf` reads it. */
-export function lineMatches(session: Pick<Session, 'companion'>, line: SessionLine, filters: SessionFilters): boolean {
+function lineMatches(session: Pick<Session, 'companion'>, line: SessionLine, filters: SessionFilters): boolean {
   return AGENT_FILTER_FIELDS.every((f) => filters[f].length === 0 || AGENT_FILTER_WORDS[f](session, line).some((w) => filters[f].includes(w)));
 }
 
