@@ -7,10 +7,10 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use phoebis_ledger::{
-    hour_of, Connection, Funding, LedgerError, PlanTables, PriceRevisions, RequestPrice,
-    SessionSpendRow, PROBE_KIND,
+    add_figures, hour_of, Connection, Funding, LedgerError, PlanTables, PriceRevisions,
+    RequestPrice, SessionSpendRow, PROBE_KIND,
 };
-use phoebis_routing::HOUR_MS;
+use phoebis_routing::{DAY_MS, HOUR_MS};
 use utoipa::ToSchema;
 
 /// The session's spend over its client requests, and the same figures over its probes, apart.
@@ -129,13 +129,21 @@ struct Sums {
 }
 
 /// The dollars and the Pro-week figure over a set of requests.
-#[derive(Default)]
 struct Money {
     usd: f64,
     billed_usd: BTreeMap<&'static str, f64>,
-    equivalent: f64,
-    /// A plan request the cost model priced nothing for, which leaves the summed figure unknown.
-    unpriced: bool,
+    /// `None` once a plan request the cost model priced nothing for leaves the summed figure unknown.
+    equivalent: Option<f64>,
+}
+
+impl Default for Money {
+    fn default() -> Money {
+        Money {
+            usd: 0.0,
+            billed_usd: BTreeMap::new(),
+            equivalent: Some(0.0),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -163,17 +171,20 @@ const UNCLASSED: &str = "other";
 
 /// The oldest hour a bucket is kept for: one before the day `answer` reads.
 fn kept_from(now: i64) -> i64 {
-    hour_of(now - 25 * HOUR_MS)
+    hour_of(now - DAY_MS - HOUR_MS)
+}
+
+fn owned(map: &BTreeMap<&'static str, f64>) -> BTreeMap<String, f64> {
+    map.iter()
+        .map(|(key, value)| (key.to_string(), *value))
+        .collect()
 }
 
 impl Money {
     fn add(&mut self, price: &RequestPrice) {
         self.usd += price.usd;
         if price.funding == Funding::Plan {
-            match price.equivalent {
-                Some(equivalent) => self.equivalent += equivalent,
-                None => self.unpriced = true,
-            }
+            self.equivalent = add_figures(self.equivalent, price.equivalent);
         } else if price.usd > 0.0 {
             // `as_str`, since the rollup word files an API key account's dollars under `billed`.
             *self.billed_usd.entry(price.funding.as_str()).or_default() += price.usd;
@@ -185,26 +196,18 @@ impl Money {
         for (&funding, usd) in &other.billed_usd {
             *self.billed_usd.entry(funding).or_default() += usd;
         }
-        self.equivalent += other.equivalent;
-        self.unpriced |= other.unpriced;
-    }
-
-    fn billed_usd(&self) -> BTreeMap<String, f64> {
-        self.billed_usd
-            .iter()
-            .map(|(funding, usd)| (funding.to_string(), *usd))
-            .collect()
+        self.equivalent = add_figures(self.equivalent, other.equivalent);
     }
 
     fn equivalent(&self) -> Option<f64> {
-        (!self.unpriced).then_some(self.equivalent)
+        self.equivalent
     }
 
     fn day(&self, requests: BTreeMap<String, u64>) -> SessionDay {
         SessionDay {
             requests,
             usd: self.usd,
-            billed_usd: self.billed_usd(),
+            billed_usd: owned(&self.billed_usd),
             equivalent: self.equivalent(),
         }
     }
@@ -233,18 +236,12 @@ impl Sums {
         SessionSpendPart {
             requests: self.requests,
             usd: self.money.usd,
-            billed_usd: self.money.billed_usd(),
+            billed_usd: owned(&self.money.billed_usd),
             equivalent: self.money.equivalent(),
             shares: self
                 .shares
                 .iter()
-                .map(|(account_id, windows)| {
-                    let windows = windows
-                        .iter()
-                        .map(|(window, share)| (window.to_string(), *share))
-                        .collect();
-                    (account_id.clone(), windows)
-                })
+                .map(|(account_id, windows)| (account_id.clone(), owned(windows)))
                 .collect(),
         }
     }
@@ -283,7 +280,7 @@ impl Accumulator {
     /// One request, priced by the serving attempt the request log takes.
     fn fold(
         &mut self,
-        row: &SessionSpendRow,
+        row: SessionSpendRow,
         prices: &PriceRevisions,
         tables: &PlanTables,
         now: i64,
@@ -293,9 +290,9 @@ impl Accumulator {
         let served = attempt
             .zip(price.as_ref())
             .map(|(a, price)| (a.account_id.as_str(), price));
-        let agent = row.agent_id.as_ref().map(|agent_id| {
+        let agent = row.agent_id.map(|agent_id| {
             self.agents
-                .entry((agent_id.clone(), row.canonical_model.clone()))
+                .entry((agent_id, row.canonical_model))
                 .or_default()
         });
         if row.kind == PROBE_KIND {
@@ -313,7 +310,7 @@ impl Accumulator {
             .as_ref()
             .is_none_or(|(at, _)| *at <= row.received_at)
         {
-            self.user_agent = Some((row.received_at, row.user_agent.clone()));
+            self.user_agent = Some((row.received_at, row.user_agent));
         }
         if let Some(agent) = agent {
             agent.spend.add(served);
@@ -324,7 +321,7 @@ impl Accumulator {
             {
                 agent.newest = Some(NewestRequest {
                     at: row.received_at,
-                    agent_type: row.agent_type.clone(),
+                    agent_type: row.agent_type,
                     account_id: attempt.map(|a| a.account_id.clone()),
                 });
             }
@@ -332,8 +329,8 @@ impl Accumulator {
         let hour = hour_of(row.received_at);
         if hour >= kept_from(now) {
             let hour = self.hours.entry(hour).or_default();
-            let class = row.request_class.as_deref().unwrap_or(UNCLASSED);
-            *hour.classes.entry(class.to_string()).or_default() += 1;
+            let class = row.request_class.unwrap_or_else(|| UNCLASSED.to_string());
+            *hour.classes.entry(class).or_default() += 1;
             if let Some((_, price)) = served {
                 hour.money.add(price);
             }
@@ -345,7 +342,7 @@ impl Accumulator {
         let mut money = Money::default();
         for hour in self
             .hours
-            .range(hour_of(now - 24 * HOUR_MS)..)
+            .range(hour_of(now - DAY_MS)..)
             .map(|(_, hour)| hour)
         {
             for (class, requests) in &hour.classes {
@@ -379,11 +376,12 @@ impl Accumulator {
     }
 }
 
-fn key_of(row: &SessionSpendRow) -> (String, i64, String) {
+/// Moves the key's strings out and leaves them empty in the row, since `Accumulator::fold` reads neither.
+fn key_of(row: &mut SessionSpendRow) -> (String, i64, String) {
     (
-        row.key_id.clone(),
+        std::mem::take(&mut row.key_id),
         row.key_generation,
-        row.session_id.clone(),
+        std::mem::take(&mut row.session_id),
     )
 }
 
@@ -513,32 +511,30 @@ impl SessionSpendFold {
             return;
         }
         inner.priced_under = Some(effective.clone());
-        let filled: BTreeSet<(String, i64, String)> = rows.fill.into_iter().collect();
-        for key in &filled {
-            inner.sessions.insert(key.clone(), Accumulator::new(now));
-        }
-        for row in &rows.fill_rows {
-            let key = key_of(row);
-            if !filled.contains(&key) {
-                continue;
-            }
-            if let Some(accumulator) = inner.sessions.get_mut(&key) {
+        let mut filled: BTreeMap<_, Accumulator> = rows
+            .fill
+            .into_iter()
+            .map(|key| (key, Accumulator::new(now)))
+            .collect();
+        for mut row in rows.fill_rows {
+            if let Some(accumulator) = filled.get_mut(&key_of(&mut row)) {
                 accumulator.fold(row, prices, tables, now);
             }
         }
         let folded_to = inner.watermark;
-        for row in &rows.since_rows {
+        for mut row in rows.since_rows {
             if folded_to.is_some_and(|watermark| row.landed_at <= watermark) {
                 continue;
             }
-            let key = key_of(row);
-            if filled.contains(&key) {
+            let key = key_of(&mut row);
+            if filled.contains_key(&key) {
                 continue;
             }
             if let Some(accumulator) = inner.sessions.get_mut(&key) {
                 accumulator.fold(row, prices, tables, now);
             }
         }
+        inner.sessions.extend(filled);
         inner.watermark = Some(newest);
     }
 

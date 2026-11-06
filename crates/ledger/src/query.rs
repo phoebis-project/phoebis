@@ -1851,7 +1851,7 @@ impl EquivalentSum {
 
 /// Two sums of the Pro-week figure added: a `None` stays `None`, since either sum already met a plan row that priced
 /// nothing.
-fn add_figures(sum: Option<f64>, figure: Option<f64>) -> Option<f64> {
+pub fn add_figures(sum: Option<f64>, figure: Option<f64>) -> Option<f64> {
     sum.zip(figure).map(|(sum, figure)| sum + figure)
 }
 

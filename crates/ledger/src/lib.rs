@@ -62,12 +62,12 @@ pub use query::{apply_filter, breakdown, burn_rows, burn_series, series};
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_tables;
 pub use query::{
-    account_request_counts, breakdown_paged, bucket_seconds, burn_groups_paged, burn_series_over,
-    dashboard_on, decision_record, guardrail_counts, held_series, hour_ceil, hourly_window_samples,
-    key_request_totals, key_request_totals_by_generation, latest_extra_usage,
-    latest_extra_usage_polled, latest_extra_usage_share, latest_quota, list_requests,
-    list_routing_log, member_spends, moves_by_reason, moves_by_reason_and_fit, names_one_account,
-    newest_landed_at, parked_count, parked_summary, parse_range,
+    account_request_counts, add_figures, breakdown_paged, bucket_seconds, burn_groups_paged,
+    burn_series_over, dashboard_on, decision_record, guardrail_counts, held_series, hour_ceil,
+    hourly_window_samples, key_request_totals, key_request_totals_by_generation,
+    latest_extra_usage, latest_extra_usage_polled, latest_extra_usage_share, latest_quota,
+    list_requests, list_routing_log, member_spends, moves_by_reason, moves_by_reason_and_fit,
+    names_one_account, newest_landed_at, parked_count, parked_summary, parse_range,
     pin_migrations_by_account_and_reason, placements, pool_traffic, pools_traffic,
     recent_events_of_kind, recent_gaps, request_by_id, request_events, request_totals,
     revision_spans, rewrite_series, routing_conditions, series_paged, session_activity,
