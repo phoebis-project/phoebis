@@ -242,9 +242,9 @@ export type StatusWord = 'busy' | 'finished' | 'idle' | 'parked' | 'registered' 
 export const STATUS_TONE: Record<Lifecycle, BadgeTone> = { busy: 'accent', idle: 'good', parked: 'neutral', registered: 'neutral', released: 'neutral', unknown: 'neutral' };
 
 /**
- * The word the row and main's line read for main, null where it reads `unreported`: the engine writes main's word for
- * any session it holds, and a session no mod reports keeps that word off the view. `released` is the mod's last word,
- * which the engine keeps after the session's end while the companion reads `none`, so it stands.
+ * The word the row and main's line read for main, null where it reads `unreported`: a session no mod reports keeps
+ * the engine's word off the view, except `released`, the mod's last word, which the engine keeps after the session's
+ * end while the companion reads `none`.
  */
 export const reportedWord = (session: Pick<Session, 'companion'>, lifecycle: Lifecycle | null): Lifecycle | null => (session.companion === 'none' && lifecycle !== 'released' ? null : lifecycle);
 
@@ -275,8 +275,7 @@ export const lineWord = (line: Pick<SessionLine, 'lifecycle'>): Exclude<StatusWo
 
 /**
  * A line's word as the Status filter, the Agents cell's split and the Agents table read it: main's through
- * `reportedWord`, as its row reads it, and every other line's own, since the engine writes its word for main on a
- * session no mod reports and none for that session's other agents.
+ * `reportedWord`, so the three agree with the row's Status, and every other line's own.
  */
 export const lineWordOf = (session: Pick<Session, 'companion'>, line: Pick<SessionLine, 'agentId' | 'lifecycle'>): Exclude<StatusWord, 'finished'> =>
   line.agentId === MAIN_AGENT ? (reportedWord(session, line.lifecycle) ?? 'unreported') : lineWord(line);
