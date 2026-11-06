@@ -2342,6 +2342,13 @@ textarea.input {
   min-width: 0;
 }
 
+/* The suffix holds its line as the word does, so at a phone's width the values give way before it wraps. */
+.chip--filter .chip__suffix {
+  flex: none;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
 /* The pill clips at its round end, so the x stands as far in from it as the body's text stands from the start. */
 .chip--filter .chip__remove {
   margin-right: 8px;

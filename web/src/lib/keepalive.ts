@@ -269,17 +269,28 @@ export function presenceOf(session: Pick<Session, 'companion' | 'companionSince'
   return null;
 }
 
-/** A line's word for the Status filter and the split: its lifecycle, `unreported` where null. */
+/** A line's own word: its lifecycle, `unreported` where null. */
 export const lineWord = (line: Pick<SessionLine, 'lifecycle'>): Exclude<StatusWord, 'finished'> => line.lifecycle ?? 'unreported';
+
+/**
+ * A line's word as the Status filter, the Agents cell's split and the Agents table read it: main's through
+ * `reportedWord`, as its row reads it, and every other line's own, since the engine writes its word for main on a
+ * session no mod reports and none for that session's other agents.
+ */
+export const lineWordOf = (session: Pick<Session, 'companion'>, line: Pick<SessionLine, 'agentId' | 'lifecycle'>): Exclude<StatusWord, 'finished'> =>
+  line.agentId === MAIN_AGENT ? (reportedWord(session, line.lifecycle) ?? 'unreported') : lineWord(line);
 
 /** The lines less the released ones, the Agents cell's and the Dashboard's count. */
 export const agentCount = (lines: readonly Pick<SessionLine, 'lifecycle'>[]): number => lines.filter((line) => !isReleasedLine(line)).length;
 
-/** The shown lines by word, `busy`, `idle`, `parked`, `registered`, `unknown`, `unreported`, the released ones out. */
-export function lifecycleSplit(lines: readonly Pick<SessionLine, 'lifecycle'>[]): Record<Exclude<StatusWord, 'finished' | 'released'>, number> {
+/**
+ * The shown lines by `lineWordOf`'s word, `busy`, `idle`, `parked`, `registered`, `unknown`, `unreported`, the
+ * released ones out.
+ */
+export function lifecycleSplit(session: Pick<Session, 'companion'>, lines: readonly Pick<SessionLine, 'agentId' | 'lifecycle'>[]): Record<Exclude<StatusWord, 'finished' | 'released'>, number> {
   const split = { busy: 0, idle: 0, parked: 0, registered: 0, unknown: 0, unreported: 0 };
   for (const line of lines) {
-    const word = lineWord(line);
+    const word = lineWordOf(session, line);
     if (word !== 'released') split[word] += 1;
   }
   return split;
@@ -444,15 +455,15 @@ const misses = (values: readonly string[], value: string | null): boolean => val
  *  with no pin matches none. */
 const cacheWords = (line: SessionLine): string[] => (line.pin === null ? [] : [line.pin.warm ? 'warm' : 'cold', ...(line.recipe === null ? ['no recipe'] : [])]);
 
-/** One line passes every Agents filter that stands. */
-export function lineMatches(line: SessionLine, filters: SessionFilters): boolean {
+/** One line passes every Agents filter that stands, its Status read as `lineWordOf` reads it. */
+export function lineMatches(session: Pick<Session, 'companion'>, line: SessionLine, filters: SessionFilters): boolean {
   return !(
     misses(filters.account, line.recipe?.accountId ?? line.pin?.accountId ?? null) ||
     misses(filters.agentType, line.agentType) ||
     (filters.cache.length > 0 && !cacheWords(line).some((word) => filters.cache.includes(word))) ||
     misses(filters.effort, line.pin?.effort ?? null) ||
     misses(filters.model, line.model) ||
-    misses(filters.status, lineWord(line))
+    misses(filters.status, lineWordOf(session, line))
   );
 }
 
@@ -481,7 +492,7 @@ export function matches(row: MatchRow, filters: SessionFilters, now: number): bo
   if (filters.forked && session.forkedFrom === null) return false;
   if (filters.key.length > 0 && !filters.key.some((k) => (k.includes('@') ? k === `${session.keyId}@${session.keyGeneration}` : k === session.keyId && !session.historical))) return false;
   if (filters.slowed && !(session.speed !== null && session.speed < 1)) return false;
-  return !agentFiltersStand(filters) || drawnLines(row, filters).some((line) => lineMatches(line, filters));
+  return !agentFiltersStand(filters) || drawnLines(row, filters).some((line) => lineMatches(session, line, filters));
 }
 
 /**
@@ -491,9 +502,12 @@ export function matches(row: MatchRow, filters: SessionFilters, now: number): bo
 export function hiddenLines(row: MatchRow, filters: SessionFilters): { hidden: number; shown: SessionLine[] } {
   const drawn = drawnLines(row, filters);
   if (!agentFiltersStand(filters)) return { hidden: 0, shown: drawn };
-  const shown = drawn.filter((line) => lineMatches(line, filters));
+  const shown = drawn.filter((line) => lineMatches(row.session, line, filters));
   return { hidden: drawn.length - shown.length + earlierAgents(row.session, row.lines).length, shown };
 }
+
+/** The agents the bar's count names over the kept rows, each row's matching lines counted as the Agents cell counts. */
+export const matchingAgents = (rows: readonly MatchRow[], filters: SessionFilters): number => rows.reduce((n, row) => n + agentCount(hiddenLines(row, filters).shown), 0);
 
 /** Whether any Agents filter stands. */
 export const agentFiltersStand = (filters: SessionFilters): boolean =>

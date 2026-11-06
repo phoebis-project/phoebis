@@ -11934,6 +11934,62 @@ async function sessionsSortOrder(theme) {
 }
 
 /**
+ * The Sessions view under an Agents filter, on a load of its own under `?model=claude-sonnet-5` that ends on the bare
+ * view: every row Expand all opens lists the lines on that model alone, a row whose other agents the filter hides reads
+ * the fold line's count with its toggle in the type size, weight and ink of the Cache warming line's, and the model
+ * chip's `(any agent)` suffix reads in the type size and ink of the chip's word. The story holds sessions on that model
+ * beside agents on another, so only the mock's pass fails where no fold line or suffix is drawn.
+ */
+async function sessionsFoldLine(theme) {
+  const say = (what) => failures.push(`${theme} /sessions fold line: ${what}`);
+  const model = 'claude-sonnet-5';
+  try {
+    await loadAtOrigin(`/sessions?model=${model}`, '.sessions-table');
+    const expand = page.getByRole('button', { name: 'Expand all', exact: true });
+    if ((await expand.count()) === 0) {
+      if (mock) say(`the story holds sessions on ${model}, yet there is no Expand all button`);
+      return;
+    }
+    await expand.click();
+    await settle();
+    const read = await page.evaluate(() => {
+      const type = (el) => {
+        if (!el) return null;
+        const s = getComputedStyle(el);
+        return { color: s.color, fontSize: s.fontSize, fontWeight: s.fontWeight };
+      };
+      const chip = [...document.querySelectorAll('.chip--filter')].find((c) => c.querySelector('.chip__word')?.textContent?.trim() === 'model:') ?? null;
+      const panels = [...document.querySelectorAll('.sessions-table .srow__detail .srow__panel')].map((panel) => {
+        const table = panel.querySelector('table.agents-table');
+        const heads = [...(table?.querySelectorAll(':scope > thead > tr > th') ?? [])].map((th) => th.textContent?.trim() ?? '');
+        const at = heads.indexOf('Model');
+        return {
+          fold: panel.querySelector('.srow__fold .disclosure__toggle')?.textContent?.trim() ?? null,
+          foldType: type(panel.querySelector('.srow__fold .disclosure__toggle')),
+          // The cell names the id on hover where it draws the short name.
+          models: [...(table?.querySelectorAll(':scope > tbody > tr') ?? [])].map((tr) => tr.children[at]?.getAttribute('title') ?? tr.children[at]?.querySelector('.mono')?.textContent?.trim() ?? null),
+          warmingType: type(panel.querySelector('.srow__warming .disclosure__toggle')),
+        };
+      });
+      return { panels, suffix: { text: chip?.querySelector('.chip__suffix')?.textContent?.trim() ?? null, type: type(chip?.querySelector('.chip__suffix')) }, word: type(chip?.querySelector('.chip__word')) };
+    });
+    const folded = read.panels.filter((p) => p.fold !== null);
+    measurements.push(`${theme} /sessions fold line ${JSON.stringify({ folds: folded.map((p) => p.fold), models: read.panels.map((p) => p.models), suffix: read.suffix, word: read.word, fold: folded[0]?.foldType ?? null, warming: folded[0]?.warmingType ?? null })}`);
+    if (mock && read.panels.length === 0) say(`Expand all opened no row under ${model}`);
+    if (mock && folded.length === 0) say(`no open row reads a fold line under ${model}, though the story holds agents on another model beside it`);
+    for (const p of read.panels) if (p.models.length === 0 || p.models.some((m) => m !== model)) say(`an open row lists ${JSON.stringify(p.models)}, not the lines on ${model} alone`);
+    for (const p of folded) {
+      if (!/^\d+ agents? hidden by the filters$/.test(p.fold)) say(`the fold line reads ${JSON.stringify(p.fold)}`);
+      for (const what of compare(p.foldType, p.warmingType, ['fontSize', 'fontWeight', 'color'], "the fold line's toggle against the Cache warming line's")) say(what);
+    }
+    if (read.suffix.text !== '(any agent)') say(`the model chip's suffix reads ${JSON.stringify(read.suffix.text)}, not "(any agent)"`);
+    for (const what of compare(read.suffix.type, read.word, ['color', 'fontSize'], "the model chip's suffix against its word")) say(what);
+  } finally {
+    await loadAtOrigin('/sessions', '.sessions-table');
+  }
+}
+
+/**
  * The Sessions table's fork badge against the row's other badges: it reads `fork` alone at the head of the client line
  * under the session id, in the face of the Status badges. Both seeds record a fork, so both passes measure the fork
  * badge, and only the mock's pass fails when none is drawn.
@@ -12423,6 +12479,8 @@ try {
         }
         // Its loads end on the bare view, so the measures after it read the view as it first drew.
         await sessionsSortOrder(theme);
+        // Its loads end on the bare view, so the measures after it read the view as it first drew.
+        await sessionsFoldLine(theme);
         await sessionForkMark(theme);
         await sessionForkBadges(theme);
         await sessionsRowBadges(theme);

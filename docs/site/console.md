@@ -1049,20 +1049,23 @@ main's among them (Account, Agent type, Cache, Effort, Model, Released agents an
 listed when it passes every Session filter and, while Agents filters stand, when one of its lines passes every Agents
 filter together. A finished session, one whose main agent ended with the session or was released or whose every agent
 the mod released, stays out unless Finished sessions stands, and Released agents draws a live session's released agents,
-which stay hidden without it. The router lists a companion session within the session expiry and a session no mod
-reports while the later of its last use and its last request is within the non-companion timeout of the Settings page
-(`sessions.non_companion_idle_seconds`, 1h by default), and the view reads that list as it is. Each filter off its
-default stands as a chip on a line under the bar: a click on the chip opens its values again, its x removes it, and from
-two chips on "Clear all" returns every filter to its default. The filters live in the page's address, so a reload or a
-shared link keeps them, and a bare `/sessions` reads the defaults. Where a read the rows wait on failed before it
-answered, the sessions, the recipes or the keys, a line under the bar names it, `Could not load the {read}: {reason}`,
-with Try again, and a failed accounts read draws a line of its own. The head under the bar reads "Every session the
-router lists: what it runs, where it is pinned, what it has spent and whether its prompt cache is warm." with the
-disclosure "How pins and recipes work", whose paragraph says what a pin and a recipe are, and a "Cost reference" link
-that opens the dialog on Plan rates. Auto reload starts at 5 s and reads the accounts, the recipes and the sessions at
-that one interval, and it waits while the Cost reference dialog, the Release question, a row's menu or a popover of the
-bar is open. The probes and the recipe are explained on [Keepalive](keepalive.md), the mod's words under [The
-mod](keepalive.md#the-mod) and the recipe's states under [The five states](keepalive.md#the-five-states).
+which stay hidden without it. Status reads each line's word as the Agents table draws it, so main's line of a session no
+mod reports matches `unreported` whatever word the engine holds for it. The router lists a companion session within the
+session expiry and a session no mod reports while the later of its last use and its last request is within the
+non-companion timeout of the Settings page (`sessions.non_companion_idle_seconds`, 1h by default), and the view reads
+that list as it is. Each filter off its default stands as a chip on a line under the bar: a click on the chip opens its
+values again, its x removes it, and from two chips on "Clear all" returns every filter to its default. An Agents
+filter's chip reads `(any agent)` after its values in the secondary ink, its hover ending "matched by any one agent".
+The filters live in the page's address, so a reload or a shared link keeps them, and a bare `/sessions` reads the
+defaults. Where a read the rows wait on failed before it answered, the sessions, the recipes or the keys, a line under
+the bar names it, `Could not load the {read}: {reason}`, with Try again, and a failed accounts read draws a line of its
+own. The head under the bar reads "Every session the router lists: what it runs, where it is pinned, what it has spent
+and whether its prompt cache is warm." with the disclosure "How pins and recipes work", whose paragraph says what a pin
+and a recipe are, and a "Cost reference" link that opens the dialog on Plan rates. Auto reload starts at 5 s and reads
+the accounts, the recipes and the sessions at that one interval, and it waits while the Cost reference dialog, the
+Release question, a row's menu or a popover of the bar is open. The probes and the recipe are explained on
+[Keepalive](keepalive.md), the mod's words under [The mod](keepalive.md#the-mod) and the recipe's states under [The five
+states](keepalive.md#the-five-states).
 
 The card "Sessions", its title carrying "One row per session. Open a row for its agents, its routing and its cache
 warming." on hover, offers "Expand all" or "Collapse all", and its summary line reads the rows the filters keep: `{k}
@@ -1093,7 +1096,8 @@ and a "+N" badge where N agents of the session are pinned on another model, its 
 and account in the lines' order. Account links to the pinned account's page with its kind on hover, then the speed chip
 on a slowed session with the Quota view's hover, the warning badge `leaving` where a shedding round or a failover marked
 the session to leave the account, its hover naming the account and the reason, and a "+N" for the agents pinned on
-another account. A row with no account reads a dash.
+another account. While a Model or an Account filter stands, that column's "+N" takes the accent tone where one of the
+agents it names matches every Agents filter. A row with no account reads a dash.
 
 Requests counts the session's client requests over its life under its key, the ones the router refused before any
 account was asked left out, with its last request's age under it and the instant on hover, and "View in requests" lists
@@ -1122,7 +1126,7 @@ projection. On a pinned row whose pin carries a cycle its hover reads `cycle 20 
 requests the slow-down's hold is sized from. Before the first session the card reads "No live sessions" with "A session
 appears here on its first request, or as soon as the keepalive mod registers it, and drops off once it passes the
 session expiry." While the filters hide every row the router lists, the card reads "No sessions kept by the filters"
-with `{k} sessions hidden by the filters.`
+with `{h} sessions hidden by the filters.`
 
 A row's menu offers "View in analytics" and "View in requests" once the session has a ledgered request, each disabled
 with "No ledgered request yet" on hover before it, "View in routing log", which opens the log on that session's
@@ -1158,8 +1162,9 @@ lifecycle word with its sentence and a parked agent's park on hover, or `unrepor
 the session, and Cache reads the pin's `warm` or `cold` with the recipe's state word under it, or `no pin`. Each line's
 menu offers "View in analytics", "View in requests" and "View in routing log", each narrowed to the session and the
 agent, the routing log an hour either side of the agent's last request, and an open one holds auto reload as a row's
-does. While an Agents filter stands, the table lists the matching lines alone and a line under it reads `{k} agents
-hidden by the filters`.
+does. While an Agents filter stands, the table lists the matching lines alone, and the earlier agents line gives way to
+a line under the table, `{k} agents hidden by the filters`, which counts the row's other lines and its earlier agents
+and opens them under the matching lines.
 
 The earlier agents, the ones the ledger holds requests of that draw no line, such as a subagent whose pin and recipe are
 gone, share one line under the table, `{n} earlier agents · {k} requests · {cost}`, with a `+$` badge where they
@@ -1177,6 +1182,11 @@ word for the agent with a parked agent's park kind and its deadline or wake time
 lines in their ended state with the TTL, Last request, Last probe, Next probe and Probes / credited the engine last
 read, and its Status reads `finished`. A session without a recipe reads "no recipe" and `Nothing is scheduled because
 {reason}.` inside the details.
+
+At a phone's width, under 600 px, the session table scrolls sideways inside its card. An open row's detail stays as wide
+as the card's visible part, its content 12 px in from each side, and keeps to the card's left edge while the table
+scrolls under it. The Session facts stand above the Routing facts, the Agents table scrolls on its own at its full
+width, and the lines under it wrap their hint under their label where the two do not fit side by side.
 
 ### The cost reference
 

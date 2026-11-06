@@ -3,10 +3,11 @@ import { IconX } from '@/components/ui/icons';
 import type { Chip } from '@/lib/filterBar';
 
 /**
- * `span.chip.chip--filter.chip--removable[title]` holding `button.chip__body` (the word, a colon, the values, 240 px at
- * most with an ellipsis, `aria-haspopup="dialog"` with `aria-expanded` while the body is `editing`, the element the Add
- * filter box opened from) and a `button[aria-label="Remove {label} filter"]` with IconX at 12. A button holds no other
- * button, so the two stand side by side in the pill. `hidden` keeps a chip the line folds drawn but out of view.
+ * `span.chip.chip--filter.chip--removable[title]` holding `button.chip__body` (the word, a colon, the values and a
+ * suffixed dimension's `span.chip__suffix`, 240 px at most with an ellipsis on the values, `aria-haspopup="dialog"`
+ * with `aria-expanded` while the body is `editing`, the element the Add filter box opened from) and a
+ * `button[aria-label="Remove {label} filter"]` with IconX at 12. A button holds no other button, so the two stand side
+ * by side in the pill. `hidden` keeps a chip the line folds drawn but out of view.
  */
 export function FilterChip({ chip, editing = null, hidden, onOpen, onRemove }: { chip: Chip; editing?: HTMLElement | null; hidden?: boolean; onOpen: (anchor: HTMLElement) => void; onRemove: () => void }): JSX.Element {
   const { values } = chip;
@@ -20,6 +21,12 @@ export function FilterChip({ chip, editing = null, hidden, onOpen, onRemove }: {
           <>
             {/* The gap draws the space, and the text keeps it for a reader and a copy. */}{' '}
             <span className={chip.mono ? 'chip__values ellipsis mono' : 'chip__values ellipsis'}>{values}</span>
+            {chip.suffix !== undefined && (
+              <>
+                {' '}
+                <span className="chip__suffix">{chip.suffix.text}</span>
+              </>
+            )}
           </>
         )}
       </button>

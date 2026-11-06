@@ -3727,14 +3727,14 @@
   white-space: nowrap;
 }
 
-.srow__fold {
-  margin: 0;
-  font-size: 12.5px;
-  color: var(--ink-2);
+.agents-table__wrap {
+  overflow-x: auto;
 }
 
+/* A hint with no room beside its label wraps under it, as it does at a phone's width. */
 .disclosure {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   align-items: baseline;
 }
@@ -3764,6 +3764,33 @@
 
 .srow__warming-body > * {
   margin-top: 8px;
+}
+
+/* At a phone's width the session table scrolls inside its wrap, so an open row's panel holds the wrap's visible width
+   and sticks to its left edge while the table scrolls under it, the cell's gutter indent and inset moving to the panel.
+   The wrap is the container `100cqw` reads, since a table cell cannot be one, and the containment stays on the session
+   table's wrap, since it drops a wrap's content from its intrinsic width. The Agents table scrolls at its own width in
+   its wrap, where its wrapping cells would otherwise break at every space before it scrolled. */
+@media (max-width: 599px) {
+  .card--table .table-wrap:has(> .sessions-table) {
+    container-type: inline-size;
+  }
+
+  .sessions-table .srow__detail > td {
+    padding: 0;
+  }
+
+  .sessions-table .srow__panel {
+    position: sticky;
+    left: 0;
+    box-sizing: border-box;
+    width: 100cqw;
+    padding: 12px;
+  }
+
+  .sessions-table .agents-table__wrap > .agents-table {
+    width: max-content;
+  }
 }
 
 /* `.agents` holds the seven tracks for Agent, TTL, Last request, Last probe, Next probe, Probes / credited and State,

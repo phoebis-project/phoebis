@@ -22,7 +22,7 @@ import { tierOrder, weekReadingOf } from '@/lib/costs';
 import { groupInto, lookup } from '@/lib/counts';
 import { SESSIONS_DIMENSIONS } from '@/lib/filterBar';
 import { SESSION_CHARS, fmtAbsolute, fmtCount, fmtDuration, fmtInt, fmtRelative, fmtShare, fmtUsd, joinPresent, keyGenerationOf, keyLifetime, messageOf, shortId, shortModel, weekShort } from '@/lib/format';
-import { ACTIVE_WITHIN, addSpend, agentCount, type AgentFigures, agentFigures, agentFiltersStand, CAUSE_HINT, CAUSE_LABEL, contextCell, drawnLines, earlierAgents, hiddenLines, isFinished, lastActivity, lifecycleSplit, MAIN_AGENT, matches, orderLines, orderRows, pinTtlMs, presenceOf, reportedWord, requestsRange, sessionLines, type SessionLine, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES } from '@/lib/keepalive';
+import { ACTIVE_WITHIN, addSpend, agentCount, type AgentFigures, agentFigures, agentFiltersStand, CAUSE_HINT, CAUSE_LABEL, contextCell, drawnLines, earlierAgents, hiddenLines, isFinished, lastActivity, lifecycleSplit, lineWordOf, MAIN_AGENT, matches, matchingAgents, orderLines, orderRows, pinTtlMs, presenceOf, requestsRange, sessionLines, type SessionLine, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES } from '@/lib/keepalive';
 import { failedFirst, toggled, useAsync, useNow, useQueryFilters } from '@/lib/hooks';
 import { minuteSpan, type BadgeTone } from '@/lib/quota';
 import { costCellOf, spendHintArgs, spendHover, spendUnitOf } from '@/lib/requests';
@@ -272,7 +272,7 @@ function filterOptions(rows: readonly Row[], keys: ApiKey[] | null, pools: Pool[
 /** The kept rows' figures the card's summary line reads, each agent counted as the Agents cell counts it. */
 function daySummary(rows: readonly Row[]): { agents: number; billed: number; busy: number; equivalent: number; idle: number; parked: number; requests: number } {
   const sum = (values: number[]) => values.reduce((n, v) => n + v, 0);
-  const splits = rows.map((r) => lifecycleSplit(r.lines));
+  const splits = rows.map((r) => lifecycleSplit(r.session, r.lines));
   return {
     agents: sum(rows.map((r) => agentCount(r.lines))),
     billed: sum(rows.flatMap((r) => Object.values(r.session.day.billedUsd))),
@@ -359,6 +359,8 @@ export function SessionsPage() {
   const now = useNow(5_000);
   const navigate = useNavigate();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // The open rows whose fold line was opened, by row, so each row unfolds the agents the filters hide on its own.
+  const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(() => new Set());
   const [visible, setVisible] = useState<Set<SessionColumnId>>(() => new Set(SESSION_COLUMNS.map((c) => c.id).filter((id) => !HIDDEN_BY_DEFAULT.includes(id))));
   const { notify } = useSession();
   // The base row the last fork link led to, marked until another fork link is followed.
@@ -381,13 +383,13 @@ export function SessionsPage() {
   const listed = useMemo(() => built?.filter((r) => r.expiresAt === null || r.expiresAt > now) ?? null, [built, now]);
   // The expiry stays the outer bound, and the filters narrow the list inside it.
   const rows = useMemo(() => listed?.filter((r) => matches(r, filters, now)) ?? null, [listed, filters, now]);
-  // The lines each kept row draws under the filters and how many the filters fold away, which its detail, its Next
-  // probe cell and the count read.
+  // The lines each kept row draws under the filters and how many the filters fold away, which its detail and its Next
+  // probe cell read.
   const drawn = useMemo(() => new Map((rows ?? []).map((r) => [rowKey(r.session), hiddenLines(r, filters)])), [rows, filters]);
   const options = useMemo(() => (listed === null ? {} : filterOptions(listed, keys.data, pools.data ?? [], accounts.data ?? [], modelTiers)), [listed, keys.data, pools.data, accounts.data, modelTiers]);
   const hiddenRows = listed !== null && rows !== null ? listed.length - rows.length : 0;
   const hiddenTitle = hiddenRows > 0 ? `${fmtCount(hiddenRows, 'session')} hidden by the filters` : undefined;
-  const agentsKept = [...drawn.values()].reduce((n, lines) => n + agentCount(lines.shown), 0);
+  const agentsKept = rows === null ? 0 : matchingAgents(rows, filters);
   const matching = agentFiltersStand(filters);
   const countWords = rows === null ? '' : `${fmtCount(rows.length, 'session')} · ${fmtCount(agentsKept, matching ? 'matching agent' : 'agent')}`;
   const summary = rows === null ? null : daySummary(rows);
@@ -419,6 +421,7 @@ export function SessionsPage() {
   };
   const allOpen = rows !== null && rows.length > 0 && rows.every((r) => expanded.has(rowKey(r.session)));
   const toggle = (id: string) => setExpanded((prev) => toggled(prev, id));
+  const unfold = (id: string) => setUnfolded((prev) => toggled(prev, id));
   // The expand gutter, the Session column and the menu are drawn whatever the control hides.
   const columns = visible.size + 3;
 
@@ -519,13 +522,16 @@ export function SessionsPage() {
                       cost={cost}
                       current={current === rowDomId(row.session)}
                       drawn={drawn.get(rowKey(row.session))?.shown ?? []}
+                      filtered={{ account: filters.account.length > 0, model: filters.model.length > 0 }}
                       fold={matching ? (drawn.get(rowKey(row.session))?.hidden ?? 0) : null}
                       forkBase={row.session.forkedFrom === null ? null : rowDomId({ ...row.session, sessionId: row.session.forkedFrom })}
                       listedRows={listedRows}
                       onFollowFork={followFork}
                       onOpen={(path) => navigate(path)}
                       onRelease={() => setPending(row)}
+                      onUnfold={() => unfold(rowKey(row.session))}
                       released={filters.released}
+                      unfolded={unfolded.has(rowKey(row.session))}
                       visible={visible}
                     />
                   ))}
@@ -659,7 +665,7 @@ function CostCell({ accountId, burn = null, cost, spend }: { accountId: string |
  * The row's account: a link to its page with the kind on its title, described to a reader that never hovers, the
  * slow-down chip on a slowed pin, the shed mark, and the agents pinned on another account. A dash with no account.
  */
-function RowAccount({ account, now, others, session }: { account: Account | null; now: number; others: { accountId: string; agentId: string; model: string }[]; session: Session }) {
+function RowAccount({ accent, account, now, others, session }: { accent: boolean; account: Account | null; now: number; others: { accountId: string; agentId: string; model: string }[]; session: Session }) {
   const title = account ? KIND_HINT[account.kind] : undefined;
   const kind = useHostedDescription(title);
   if (session.accountId === null) return <span className="muted">-</span>;
@@ -671,7 +677,7 @@ function RowAccount({ account, now, others, session }: { account: Account | null
       {/* An unpinned row on a slowed account carries no speed, so the row's own speed gates the chip. */}
       {session.speed !== null && <SpeedChip {...memberSpeed(session, account, now)} />}
       <ShedBadge session={session} />
-      <OtherPins agents={others} lead="Agents on another account:" />
+      <OtherPins accent={accent} agents={others} lead="Agents on another account:" />
     </span>
   );
 }
@@ -781,13 +787,16 @@ function SessionRows({
   cost,
   current,
   drawn,
+  filtered,
   fold,
   forkBase,
   listedRows,
   onFollowFork,
   onOpen,
   onRelease,
+  onUnfold,
   released,
+  unfolded,
   visible,
 }: {
   accountById: ReadonlyMap<string, Account>;
@@ -797,6 +806,8 @@ function SessionRows({
   current: boolean;
   /** The lines the row draws, `hiddenLines`' answer under the filters. */
   drawn: SessionLine[];
+  /** Whether the Account and the Model filters stand, which accent the "+N" of their column. */
+  filtered: { account: boolean; model: boolean };
   /** How many agents the Agents filters fold out of the open row, null while none stands. */
   fold: number | null;
   /** The element id the base of a forked session would carry, whether or not it is listed; null off a fork. */
@@ -807,10 +818,13 @@ function SessionRows({
   onOpen: (path: string) => void;
   onRelease: () => void;
   onToggle: () => void;
+  onUnfold: () => void;
   open: boolean;
   /** Whether the Released agents filter stands, which draws a live row's released lines. */
   released: boolean;
   row: Row;
+  /** Whether the fold line is open, which draws the agents it counts under the matching lines. */
+  unfolded: boolean;
   visible: ReadonlySet<SessionColumnId>;
 }) {
   const { expiresAt, lastUsed, session, status } = row;
@@ -821,13 +835,17 @@ function SessionRows({
   // A line takes its account from its pin, or from its recipe where no pin stands, and a recipe whose request was
   // refused before any account served it names none, so that line is left out. A "+N" counts every other line the row
   // draws on another model or account, recipe or not, whatever the Agents filters match, and its hover reads them in
-  // the order the expanded row draws them.
-  const placed = drawnLines(row, { released }).flatMap((l) => {
+  // the order the expanded row draws them. It takes the accent where its column's filter stands and one of its lines
+  // matches the filters, a line `drawn` holds.
+  const rowLines = drawnLines(row, { released });
+  const placed = rowLines.flatMap((l) => {
     const accountId = l.pin?.accountId ?? l.recipe?.accountId ?? null;
-    return accountId !== null && l.model !== null ? [{ accountId, agentId: l.agentId, model: l.model }] : [];
+    return accountId !== null && l.model !== null ? [{ accountId, agentId: l.agentId, matched: drawn.includes(l), model: l.model }] : [];
   });
   const otherModels = placed.filter((l) => l.model !== session.model);
   const otherAccounts = placed.filter((l) => l.accountId !== session.accountId);
+  // Opened, the fold line draws the lines the filters hide and then the earlier agents, the agents it counts.
+  const hiddenHere = fold === null ? [] : rowLines.filter((l) => !drawn.includes(l));
   // A retained agent with no time is waiting on its first stream event, which is
   // a different thing from a session nothing probes.
   const pendingProbe = shown.some((a) => a.state === 'retained' && a.nextProbeAt === null);
@@ -850,7 +868,7 @@ function SessionRows({
   const park = status.word === 'parked' && mainRecipe !== null ? parkDetail(mainRecipe, now).replace(/^ · /, '') : '';
   const statusTitle = park === '' ? LIFECYCLE_HINT[status.word] : `${LIFECYCLE_HINT[status.word]}\n${park}`;
   const presence = presenceOf(session, now);
-  const split = Object.entries(lifecycleSplit(row.lines)).flatMap(([word, n]) => (n > 0 ? [`${fmtInt(n)} ${word}`] : []));
+  const split = Object.entries(lifecycleSplit(session, row.lines)).flatMap(([word, n]) => (n > 0 ? [`${fmtInt(n)} ${word}`] : []));
   // The state the route's summary reads, unless no recipe keeps the session's prompt.
   const recipe = row.noRecipe === null ? rowRecipe(row.agents) : null;
   const relation = forkRelation(baseAccountId, session.pinned ? session.accountId : null);
@@ -951,13 +969,13 @@ function SessionRows({
           <td className="mono nowrap col-fit" title={session.model === null ? undefined : modelTitle(session.model, shortModel(session.model))}>
             <span className="srow__pin srow__pin--wraps">
               {session.model === null ? <span className="muted">-</span> : shortModel(session.model)}
-              <OtherPins agents={otherModels} lead="Agents on another model:" />
+              <OtherPins accent={filtered.model && otherModels.some((l) => l.matched)} agents={otherModels} lead="Agents on another model:" />
             </span>
           </td>
         )}
         {visible.has('account') && (
           <td className="col-fit">
-            <RowAccount account={account} now={now} others={otherAccounts} session={session} />
+            <RowAccount accent={filtered.account && otherAccounts.some((l) => l.matched)} account={account} now={now} others={otherAccounts} session={session} />
           </td>
         )}
         {visible.has('requests') && (
@@ -1141,28 +1159,32 @@ function SessionRows({
                   ]}
                 />
               </div>
-              <table id={tableId} className="table agents-table">
-                <thead>
-                  <tr>
-                    <th>Agent</th>
-                    <th>Type</th>
-                    <th>Model</th>
-                    <th>Account</th>
-                    <th>Context</th>
-                    <th>Burn</th>
-                    <th className="right">Requests</th>
-                    <th className="right">Cost</th>
-                    <th>Status</th>
-                    <th>Cache</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {lines.map((line) => agentRow(line.agentId, line, agentFigures(session, line.agentId)))}
-                  {fold === null && earlierOpen && earlier.map((agent) => agentRow(agent.agentId, null, agent))}
-                </tbody>
-              </table>
-              {fold !== null && fold > 0 && <p className="srow__fold">{fmtCount(fold, 'agent')} hidden by the filters</p>}
+              {/* At a phone's width the open row is narrower than the table, which then scrolls in its own wrap. */}
+              <div className="agents-table__wrap">
+                <table id={tableId} className="table agents-table">
+                  <thead>
+                    <tr>
+                      <th>Agent</th>
+                      <th>Type</th>
+                      <th>Model</th>
+                      <th>Account</th>
+                      <th>Context</th>
+                      <th>Burn</th>
+                      <th className="right">Requests</th>
+                      <th className="right">Cost</th>
+                      <th>Status</th>
+                      <th>Cache</th>
+                      <th />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {lines.map((line) => agentRow(line.agentId, line, agentFigures(session, line.agentId)))}
+                    {unfolded && hiddenHere.map((line) => agentRow(line.agentId, line, agentFigures(session, line.agentId)))}
+                    {(fold === null ? earlierOpen : unfolded) && earlier.map((agent) => agentRow(agent.agentId, null, agent))}
+                  </tbody>
+                </table>
+              </div>
+              {fold !== null && fold > 0 && <Disclosure className="srow__fold" controls={tableId} label={`${fmtCount(fold, 'agent')} hidden by the filters`} onToggle={onUnfold} open={unfolded} />}
               {/* Under Agents filters the earlier agents are among the agents the fold line counts. */}
               {fold === null && earlier.length > 0 && <EarlierLine agents={earlier} controls={tableId} cost={cost} onToggle={() => setEarlierOpen((v) => !v)} open={earlierOpen} session={session} />}
               <div className="srow__warming">
@@ -1441,7 +1463,7 @@ function AgentRow({
   const context = contextCell(tokens);
   const burn = burnReading(pin, cost);
   // Main reads unreported on a session no mod reports, as its row does, whatever word the engine holds for it.
-  const word = line === null ? null : agentId === MAIN_AGENT ? reportedWord(session, line.lifecycle) : line.lifecycle;
+  const word = line === null ? null : lineWordOf(session, line);
   const park = word === 'parked' && recipe !== null ? parkDetail(recipe, now).replace(/^ · /, '') : '';
   const hint = LIFECYCLE_HINT[word ?? 'unreported'];
   const cacheTitle =
@@ -1468,7 +1490,7 @@ function AgentRow({
       <td>
         {line === null ? (
           <span className="muted">no pin</span>
-        ) : word === null ? (
+        ) : word === null || word === 'unreported' ? (
           <span className="muted" title={hint}>
             unreported
           </span>
@@ -1507,11 +1529,14 @@ function AgentRow({
   );
 }
 
-/** "+2" beside a row's figure, hovering into `lead` and one line per agent that sits on another model or account. */
-function OtherPins({ agents, lead }: { agents: { accountId: string; agentId: string; model: string }[]; lead: string }) {
+/**
+ * "+2" beside a row's figure, hovering into `lead` and one line per agent that sits on another model or account, in the
+ * accent tone where one of those agents matches the filter standing on its column.
+ */
+function OtherPins({ accent, agents, lead }: { accent: boolean; agents: { accountId: string; agentId: string; model: string }[]; lead: string }) {
   if (agents.length === 0) return null;
   return (
-    <Badge tone="neutral" title={`${lead}\n${agents.map((a) => `${a.agentId}: ${a.model} on ${a.accountId}`).join('\n')}`}>
+    <Badge tone={accent ? 'accent' : 'neutral'} title={`${lead}\n${agents.map((a) => `${a.agentId}: ${a.model} on ${a.accountId}`).join('\n')}`}>
       +{agents.length}
     </Badge>
   );

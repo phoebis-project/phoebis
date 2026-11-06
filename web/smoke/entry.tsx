@@ -307,7 +307,10 @@ export async function mount(path: string, options: { now?: number } = {}): Promi
     container,
     root,
     async (p) => {
-      await router.navigate(p);
+      // A navigation that moves the search alone calls no mock route, so the settle has no call to wait out, and two of
+      // its reads could agree on the frame a transition still holds. Written at once, as the pages' own address writes
+      // are, the page has drawn the new address by the time the router answers.
+      await router.navigate(p, { flushSync: true });
       await settled(container);
     },
     () => {
