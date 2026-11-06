@@ -257,10 +257,11 @@ pub enum RouterEvent {
         reset: Option<i64>,
         at: i64,
     },
-    /// The factor read 1 for the safety wait, the window's reset cleared the entry, or the purge dropped it: the span
-    /// from `since` to the instant the factor returned to 1, to the passed reset of the window it slowed for where the
-    /// reset cleared the entry, or to the entry's last read where the purge dropped the entry before either, with the
-    /// lowest factor read in it and the time its new holds waited.
+    /// The factor read 1 for the safety wait, the window's reset cleared the entry, the purge dropped it, or a clean
+    /// poll dropped it with the 5-hour window, announced at that poll: the span from `since` to the instant the factor
+    /// returned to 1, to the passed reset of the window it slowed for where the reset cleared the entry, or to the
+    /// entry's last read where the purge or the poll dropped the entry before either, with the lowest factor read in it
+    /// and the time its new holds waited.
     SlowDownEnded {
         account_id: String,
         pool_id: String,
@@ -304,9 +305,11 @@ pub enum RouterEvent {
         source_request_id: Option<String>,
         at: i64,
     },
-    /// A window's reset passed: a sample named a later reset, or none once it was read past the stored one
-    /// (`observed` `sample`), or the purge tick found the clock past a stored reset with no newer sample (`clock`),
-    /// once per account, window and reset.
+    /// A window's reset passed: the sample's own instant has passed it, within `RESET_SLACK_MS` where the sample names
+    /// a later reset and outright where it names none (`observed` `sample`), or the purge tick found the clock past a
+    /// stored reset with no newer sample (`clock`), once per account, window and reset. A sample taken ahead of the
+    /// stored reset that names a later one is a slide, as an idle account's 5-hour reset moves with every poll, and
+    /// emits nothing.
     WindowReset {
         account_id: String,
         window: String,
@@ -4115,6 +4118,11 @@ impl Task {
                     let rows = self.state.window_rows(&account_id, &windows, incarnation);
                     writes.extend(rows.into_iter().map(StateWrite::UpsertWindow));
                 }
+                // The fold ends the account's slow-down spans with the 5-hour window. The selection and the purge
+                // each emit the edges of their own pass, so the drop emits its own rather than leave them to the next.
+                if dropped.iter().any(|window| window == FIVE_HOUR) {
+                    self.slow_down_edges(now);
+                }
                 // A settling poll can move nothing, as one that drains after a newer head does, so the drop and the
                 // set are written whatever moved.
                 for window in dropped {
@@ -4633,12 +4641,12 @@ impl Task {
         self.write(writes);
     }
 
-    /// The edges a plan window's new reading crosses against the stored one: its reset passing, which a later
-    /// reset names, or no reset on a reading taken past it, then the window cleared, which a reading under 1.0 names
-    /// over one at 1.0 or above with no reset passed, or over a wall the prediction announced in the reading's cycle,
-    /// from `predicted`, the stored reading's prediction before this one replaced it, or the window spent, which a
-    /// reading at 1.0 or above names over one under it, or over any one where it names the next reset after a passed
-    /// one.
+    /// The edges a plan window's new reading crosses against the stored one: its reset passing, which a reading
+    /// names with no reset where taken past it, or with a later reset where taken within `RESET_SLACK_MS` of it or
+    /// past it, then the window cleared, which a reading under 1.0 names over one at 1.0 or above with no reset
+    /// passed, or over a wall the prediction announced in the reading's cycle, from `predicted`, the stored reading's
+    /// prediction before this one replaced it, or the window spent, which a reading at 1.0 or above names over one
+    /// under it, or over any one where it names the next reset after a passed one.
     #[allow(clippy::too_many_arguments)]
     fn window_edges(
         &mut self,
@@ -4653,9 +4661,12 @@ impl Task {
         let passed = stored.as_ref().and_then(|stored| {
             let reset_at = stored.reset?;
             let next_reset = match reading.reset {
-                Some(next) => {
-                    (next > reset_at.saturating_add(RESET_SLACK_MS)).then_some(Some(next))
-                }
+                // A reset is passed once the reading's own instant has passed it, within the slack. An idle account's
+                // 5-hour reset slides later with every poll, so a reading taken ahead of the stored reset that names a
+                // later one replaces it with no event.
+                Some(next) => (next > reset_at.saturating_add(RESET_SLACK_MS)
+                    && reset_at <= reading.observed_at.saturating_add(RESET_SLACK_MS))
+                .then_some(Some(next)),
                 // The reading replaces the stored one whole, so the clock walk would never see this reset: it is
                 // announced here or nowhere.
                 None => (reset_at <= reading.observed_at).then_some(None),

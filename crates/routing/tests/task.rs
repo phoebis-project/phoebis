@@ -9614,7 +9614,7 @@ async fn a_sample_with_a_later_reset_emits_window_reset_by_sample() {
     handle
         .report(observed(
             "a",
-            sample_with(2_000, FIVE_HOUR, 0.1, Some(10 * HOUR)),
+            sample_with(5 * HOUR + 1_000, FIVE_HOUR, 0.1, Some(10 * HOUR)),
         ))
         .await;
     match next_event(&mut events).await {
@@ -9643,11 +9643,68 @@ async fn a_sample_with_a_later_reset_emits_window_reset_by_sample() {
     handle
         .report(observed(
             "a",
-            sample_with(3_000, FIVE_HOUR, 0.2, Some(10 * HOUR)),
+            sample_with(5 * HOUR + 2_000, FIVE_HOUR, 0.2, Some(10 * HOUR)),
         ))
         .await;
     handle.samples().await.unwrap();
     no_further_event(&mut events).await;
+}
+
+/// An idle account's 5-hour reset slides later with every poll, so a later reset passes the stored one only where the
+/// reading was taken within `RESET_SLACK_MS` of it or past it.
+#[tokio::test]
+async fn a_later_reset_reads_the_stored_reset_passed_only_within_the_slack_of_the_reading_s_instant(
+) {
+    use phoebis_routing::{RouterEvent, RESET_SLACK_MS};
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(4_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000, FIVE_HOUR, 0.6, Some(2_000 + RESET_SLACK_MS + 1)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    handle
+        .report(observed(
+            "a",
+            sample_with(2_000, FIVE_HOUR, 0.5, Some(5 * HOUR)),
+        ))
+        .await;
+    let slid = handle
+        .reported_samples()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|(id, _)| id == "a")
+        .and_then(|(_, sample)| sample.reading(FIVE_HOUR))
+        .expect("a stored reading");
+    assert_eq!(
+        slid.reset,
+        Some(5 * HOUR),
+        "a stored reset a millisecond past the slack still lies ahead, so the later one replaces it"
+    );
+    no_further_event(&mut events).await;
+    handle
+        .report(observed(
+            "a",
+            sample_with(5 * HOUR - RESET_SLACK_MS, FIVE_HOUR, 0.1, Some(10 * HOUR)),
+        ))
+        .await;
+    match next_event(&mut events).await {
+        RouterEvent::WindowReset {
+            reset_at,
+            next_reset,
+            observed,
+            ..
+        } => assert_eq!(
+            (reset_at, next_reset, observed),
+            (5 * HOUR, Some(10 * HOUR), "sample")
+        ),
+        other => panic!("a stored reset at the slack's edge reads passed, not {other:?}"),
+    }
 }
 
 /// The pair `with_tier` stores, as the snapshot resolves it.
@@ -9765,7 +9822,7 @@ async fn a_profile_read_between_a_reading_and_the_sample_past_its_reset_leaves_t
     handle
         .report(observed(
             "a",
-            sample_with(2_000, FIVE_HOUR, 0.1, Some(10 * HOUR)),
+            sample_with(5 * HOUR + 1_000, FIVE_HOUR, 0.1, Some(10 * HOUR)),
         ))
         .await;
     let event = next_window_edge(&mut events).await;
@@ -10282,7 +10339,7 @@ async fn a_reading_under_the_limit_with_a_reset_past_the_slack_emits_window_rese
     handle
         .report(observed(
             "a",
-            sample_with(2_000, FIVE_HOUR, 0.1, Some(10 * HOUR)),
+            sample_with(5 * HOUR + 1_000, FIVE_HOUR, 0.1, Some(10 * HOUR)),
         ))
         .await;
     handle.samples().await.unwrap();
@@ -12339,13 +12396,22 @@ async fn a_wall_announced_by_a_sample_is_not_announced_again_under_its_reset() {
 }
 
 /// A reset-less head the hold raises to the wall stands under the stored reset and takes it, so the stored reading
-/// after it still names that reset, and a poll naming a later one reads it passed.
+/// after it still names that reset, and a poll taken past it naming a later one reads it passed.
 #[tokio::test]
 async fn a_head_raised_to_the_wall_keeps_the_stored_reset_so_a_later_reset_reads_it_passed() {
     use phoebis_routing::RouterEvent;
     let store = seeded_oauth(&["a"]);
     let now = Arc::new(AtomicI64::new(2_000));
-    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    // Held, so no clock walk announces the passed reset between the move past it and the sample that reads it passed.
+    let handle = spawn(
+        store,
+        clock(&now),
+        RouterConfig {
+            hold_first_purge: true,
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
     let mut events = handle.subscribe_events();
     let reset = 10 * HOUR;
     handle
@@ -12366,11 +12432,11 @@ async fn a_head_raised_to_the_wall_keeps_the_stored_reset_so_a_later_reset_reads
         (1.0, Some(reset)),
         "the raised head stands under the stored reset"
     );
-    now.store(4_000, Ordering::SeqCst);
+    now.store(reset + 1_000, Ordering::SeqCst);
     handle
         .report(observed(
             "a",
-            sample_with(4_000, FIVE_HOUR, 0.1, Some(15 * HOUR)),
+            sample_with(reset + 1_000, FIVE_HOUR, 0.1, Some(15 * HOUR)),
         ))
         .await;
     match next_window_edge(&mut events).await {
@@ -12393,7 +12459,15 @@ async fn a_head_raised_to_the_wall_keeps_the_stored_reset_so_a_later_reset_reads
                 observed,
                 at
             ),
-            ("a", FIVE_HOUR, 1.0, reset, Some(15 * HOUR), "sample", 4_000)
+            (
+                "a",
+                FIVE_HOUR,
+                1.0,
+                reset,
+                Some(15 * HOUR),
+                "sample",
+                reset + 1_000
+            )
         ),
         other => panic!("the stored reset reads passed, not {other:?}"),
     }
@@ -12401,15 +12475,24 @@ async fn a_head_raised_to_the_wall_keeps_the_stored_reset_so_a_later_reset_reads
     no_further_event(&mut events).await;
 }
 
-/// A reset-less clear read before the stored reset stands under it and is stored with it, so a later poll naming a
-/// later reset reads the stored one passed.
+/// A reset-less clear read before the stored reset stands under it and is stored with it, so a poll taken past it
+/// naming a later reset reads the stored one passed.
 #[tokio::test]
 async fn a_clear_that_names_no_reset_is_stored_under_the_stored_reset_so_a_later_reset_reads_it_passed(
 ) {
     use phoebis_routing::RouterEvent;
     let store = seeded_oauth(&["a"]);
     let now = Arc::new(AtomicI64::new(2_000));
-    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    // Held, so no clock walk announces the passed reset between the move past it and the sample that reads it passed.
+    let handle = spawn(
+        store,
+        clock(&now),
+        RouterConfig {
+            hold_first_purge: true,
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
     let mut events = handle.subscribe_events();
     let reset = 10 * HOUR;
     handle
@@ -12444,11 +12527,11 @@ async fn a_clear_that_names_no_reset_is_stored_under_the_stored_reset_so_a_later
         (0.4, Some(reset)),
         "the clear is stored under the stored reset"
     );
-    now.store(4_000, Ordering::SeqCst);
+    now.store(reset + 1_000, Ordering::SeqCst);
     handle
         .report(observed(
             "a",
-            sample_with(4_000, FIVE_HOUR, 0.1, Some(15 * HOUR)),
+            sample_with(reset + 1_000, FIVE_HOUR, 0.1, Some(15 * HOUR)),
         ))
         .await;
     match next_window_edge(&mut events).await {
@@ -12540,7 +12623,8 @@ async fn a_late_reading_under_the_margin_that_the_fold_drops_leaves_the_wall_ann
     let now = Arc::new(AtomicI64::new(2_000));
     let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
     let mut events = handle.subscribe_events();
-    let reset = Some(10 * HOUR);
+    let reset_at = 10 * HOUR;
+    let reset = Some(reset_at);
     handle
         .report(observed("a", sample_with(2_000, FIVE_HOUR, 1.0, reset)))
         .await;
@@ -12556,14 +12640,15 @@ async fn a_late_reading_under_the_margin_that_the_fold_drops_leaves_the_wall_ann
         (kept.utilization, kept.observed_at, kept.source),
         (1.0, 2_000, WindowSource::Poll)
     );
-    // A newer reading of a later cycle reads the reset and clears nothing, so the old cycle's announcement stands, and
-    // a poll naming the old reset at the wall again announces nothing. Had the late reading forgotten the
-    // announcement, that poll would announce the wall a second time.
-    now.store(2_800, Ordering::SeqCst);
+    // A newer reading of a later cycle, taken within the slack of the old reset, reads the reset passed and clears
+    // nothing, so the old cycle's announcement stands, and a poll naming the old reset at the wall again announces
+    // nothing. Had the late reading forgotten the announcement, that poll would announce the wall a second time. The
+    // steps after it stay short of the old reset, which the head that names none stands under.
+    now.store(reset_at - 50_000, Ordering::SeqCst);
     handle
         .report(observed(
             "a",
-            sample_with(2_800, FIVE_HOUR, 0.10, Some(15 * HOUR)),
+            sample_with(reset_at - 50_000, FIVE_HOUR, 0.10, Some(15 * HOUR)),
         ))
         .await;
     match next_window_edge(&mut events).await {
@@ -12586,24 +12671,40 @@ async fn a_late_reading_under_the_margin_that_the_fold_drops_leaves_the_wall_ann
                 observed,
                 at
             ),
-            ("a", FIVE_HOUR, 1.0, reset, Some(15 * HOUR), "sample", 2_800)
+            (
+                "a",
+                FIVE_HOUR,
+                1.0,
+                reset,
+                Some(15 * HOUR),
+                "sample",
+                reset_at - 50_000
+            )
         ),
         other => panic!("{other:?}"),
     }
-    now.store(2_900, Ordering::SeqCst);
+    now.store(reset_at - 40_000, Ordering::SeqCst);
     handle
-        .report(observed("a", sample_with(2_900, FIVE_HOUR, 1.0, reset)))
+        .report(observed(
+            "a",
+            sample_with(reset_at - 40_000, FIVE_HOUR, 1.0, reset),
+        ))
         .await;
     handle.samples().await.unwrap();
     no_further_event(&mut events).await;
     // A head that names no reset, read before the stored reset passed, stands under that reset, so within the margin
     // of the wall it is raised to it: no clear, and the poll at the wall after it announces nothing.
-    now.store(3_000, Ordering::SeqCst);
-    handle.report(head_reading(3_000, 0.99, None, "r-2")).await;
-    assert_eq!(predicted_reading(&handle, FIVE_HOUR).await.utilization, 1.0);
-    now.store(4_000, Ordering::SeqCst);
+    now.store(reset_at - 30_000, Ordering::SeqCst);
     handle
-        .report(observed("a", sample_with(4_000, FIVE_HOUR, 1.0, reset)))
+        .report(head_reading(reset_at - 30_000, 0.99, None, "r-2"))
+        .await;
+    assert_eq!(predicted_reading(&handle, FIVE_HOUR).await.utilization, 1.0);
+    now.store(reset_at - 20_000, Ordering::SeqCst);
+    handle
+        .report(observed(
+            "a",
+            sample_with(reset_at - 20_000, FIVE_HOUR, 1.0, reset),
+        ))
         .await;
     handle.samples().await.unwrap();
     no_further_event(&mut events).await;
@@ -13273,6 +13374,18 @@ async fn a_quiet_accounts_slow_down_entry_and_a_gone_pins_pace_leave_at_the_purg
 /// minutes before the reset, a factor of about 0.75 and a stretch under the pool's half-hour threshold. The pool's burn
 /// average is `SLOWED_AVERAGE_MS`. The purge ticks every 50 ms.
 async fn slowed_router(now: &Arc<AtomicI64>) -> RouterHandle {
+    slowed_router_under(
+        now,
+        RouterConfig {
+            purge_interval: Duration::from_millis(50),
+            ..priced_config()
+        },
+    )
+    .await
+}
+
+/// `slowed_router`'s pool, pin and reading under `config`.
+async fn slowed_router_under(now: &Arc<AtomicI64>, config: RouterConfig) -> RouterHandle {
     let store = shedding_store(&["a"]);
     let mut pool = store.pool("p").unwrap().unwrap();
     pool.slow_down.slow_down = true;
@@ -13283,15 +13396,7 @@ async fn slowed_router(now: &Arc<AtomicI64>) -> RouterHandle {
     store
         .upsert_pin(&stored_pin(&store, "s1", "a", 1, 10.0))
         .unwrap();
-    let handle = spawn(
-        store,
-        clock(now),
-        RouterConfig {
-            purge_interval: Duration::from_millis(50),
-            ..priced_config()
-        },
-    )
-    .unwrap();
+    let handle = spawn(store, clock(now), config).unwrap();
     handle
         .report(observed(
             "a",
@@ -13627,6 +13732,49 @@ async fn a_purge_after_the_reset_drops_the_slowed_entry_and_ends_its_span_at_the
             .any(|event| matches!(event, RouterEvent::SlowDownEnded { .. })),
         "the dropped entry's span ends once"
     );
+}
+
+#[tokio::test]
+async fn a_clean_poll_that_drops_the_five_hour_window_ends_the_account_s_slow_down_at_the_drop() {
+    use phoebis_routing::RouterEvent;
+    let now = Arc::new(AtomicI64::new(AT));
+    // Held, so no purge tick emits the span's end and the drop is the one pass that can.
+    let handle = slowed_router_under(
+        &now,
+        RouterConfig {
+            hold_first_purge: true,
+            ..priced_config()
+        },
+    )
+    .await;
+    let mut events = handle.subscribe_events();
+    handle
+        .select(slowed_turn(&handle, "r-1", AT))
+        .await
+        .unwrap();
+    assert!(
+        drained(&mut events)
+            .await
+            .iter()
+            .any(|event| matches!(event, RouterEvent::SlowDownStarted { .. })),
+        "the read under 1 opened a span"
+    );
+    let dropped_at = AT + 1_000;
+    now.store(dropped_at, Ordering::SeqCst);
+    handle.report(polled(dropped_at, &[SEVEN_DAY])).await;
+    match next_event(&mut events).await {
+        RouterEvent::SlowDownEnded {
+            account_id,
+            pool_id,
+            since,
+            at,
+            ..
+        } => assert_eq!(
+            (account_id.as_str(), pool_id.as_str(), since, at),
+            ("a", "p", AT, dropped_at)
+        ),
+        other => panic!("the drop ends the span before any selection, not {other:?}"),
+    }
 }
 
 /// `account`'s answer among `projections`.

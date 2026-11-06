@@ -6742,6 +6742,19 @@ async fn a_named_accounts_shares_leave_out_the_window_its_set_lacks() {
              {point}"
         );
     }
+    parts
+        .router
+        .report(poll_of(&["five_hour"], now + 60_000))
+        .await;
+    polled_set(&parts.router, &["five_hour"]).await;
+    let (_, points) = named_account_reads(&parts.app, &cookie).await;
+    for (reader, point) in &points {
+        assert!(
+            point["five_hour_share"].is_number() && point["seven_day_share"].is_null(),
+            "the poll dropped the 7-day window, so {reader} answers its 7-day share null beside the 5-hour one: \
+             {point}"
+        );
+    }
 }
 
 #[tokio::test]

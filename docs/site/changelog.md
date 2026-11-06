@@ -122,7 +122,10 @@ start, so a return to full speed shorter than the span's wait continues it, the 
 `GET /admin/sessions` and `GET /admin/pools` name the factor and the realized speed, and a rate-limit claim on a window
 the account's plan dropped recovers on the windows it has ([Slow-down](routing.md#slow-down), [Cooldowns and
 failover](routing.md#cooldowns-and-failover)). A slow-down hold never runs past the 5-hour window's reset, and a request
-after the reset is read afresh ([Slow-down](routing.md#slow-down)).
+after the reset is read afresh ([Slow-down](routing.md#slow-down)). A reading that moves a window's reset later while
+the stored one still lies ahead replaces it with no `window_reset`, and a clean poll that drops the 5-hour window
+records the end of the account's slow-down in the routing log at the drop ([The windows the router works
+from](routing.md#the-windows-the-router-works-from)).
 
 With `keepalive.enabled` on a pool the router keeps a replayable copy of every eligible request a session sends and,
 shortly before the cache entry would expire, sends a probe that reads it ([Keepalive](keepalive.md)). The policy's

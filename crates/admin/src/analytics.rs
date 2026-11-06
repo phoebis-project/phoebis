@@ -187,7 +187,7 @@ pub(crate) struct BurnQuery {
     /// way `breakdown` and `series` do.
     pub group_by: Option<String>,
     /// A comma-separated list. Naming exactly one account answers `unit` and the shares under any grouping, with
-    /// `five_hour_share` null where the account's shared window set lacks the window.
+    /// `five_hour_share` and `seven_day_share` each null where the account's shared window set lacks its window.
     pub accounts: Option<String>,
     /// Newline-separated patterns, each naming a group under `group_by=user_agent` as the Analytics tag describes.
     pub user_agent_groups: Option<String>,
@@ -960,17 +960,19 @@ pub(crate) async fn burn(
                     .account(account)
                     .map(|a| BurnUnit::of(a.kind, snapshot.usage_based(account), false).as_str())
             });
-            // The ledger prices the share by the tier each row recorded, so a 5-hour window the account's set no
+            // The ledger prices the shares by the tier each row recorded, so a shared window the account's set no
             // longer holds is taken out here.
-            let five_hour_lacked = account
-                .is_some_and(|account| windows_lacked(&reported, account).contains(&FIVE_HOUR));
+            let lacked =
+                account.map_or_else(Vec::new, |account| windows_lacked(&reported, account));
+            let five_hour_lacked = lacked.contains(&FIVE_HOUR);
+            let seven_day_lacked = lacked.contains(&SEVEN_DAY);
             points.into_iter().map(move |p| BurnPoint {
                 at: p.at,
                 group: group.clone(),
                 unit: unit.map(String::from),
                 usd: p.usd,
                 five_hour_share: p.five_hour_share.filter(|_| !five_hour_lacked),
-                seven_day_share: p.seven_day_share,
+                seven_day_share: p.seven_day_share.filter(|_| !seven_day_lacked),
                 model_week_share: p.model_week_share,
                 equivalent: p.equivalent,
                 unpriced: p.unpriced,
