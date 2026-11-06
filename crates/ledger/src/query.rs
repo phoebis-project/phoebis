@@ -5033,7 +5033,6 @@ fn read_session_attempts(
 /// by `landed_at`.
 #[derive(Debug)]
 pub struct SessionSpendRow {
-    pub request_id: String,
     pub session_id: String,
     pub key_id: String,
     pub key_generation: i64,
@@ -5071,11 +5070,11 @@ impl SpendAttempt {
 /// The request half of the session spend reads, ahead of `PRICED_ATTEMPT_COLUMNS`, in the order
 /// `SessionSpendRow::read` reads them.
 const SESSION_SPEND_COLUMNS: &str =
-    "r.id, r.session_id, r.key_id, r.key_generation, r.agent_id, r.agent_type, \
+    "r.session_id, r.key_id, r.key_generation, r.agent_id, r.agent_type, \
      r.user_agent, r.request_class, r.landed_at, a.account_id";
 
 /// The column `PRICED_ATTEMPT_COLUMNS` starts at in the session spend reads.
-const SESSION_SPEND_PRICED_FROM: usize = 10;
+const SESSION_SPEND_PRICED_FROM: usize = 9;
 
 impl SessionSpendRow {
     /// A request no account served joins no attempt, so its attempt half reads null and must not reach
@@ -5083,7 +5082,7 @@ impl SessionSpendRow {
     /// their place there whether an attempt joined or not.
     fn read(row: &Row) -> rusqlite::Result<SessionSpendRow> {
         let first = SESSION_SPEND_PRICED_FROM;
-        let attempt = match row.get::<_, Option<String>>(9)? {
+        let attempt = match row.get::<_, Option<String>>(8)? {
             Some(account_id) => Some(SpendAttempt {
                 account_id,
                 priced: PricedAttempt::read(row, first)?,
@@ -5091,15 +5090,14 @@ impl SessionSpendRow {
             None => None,
         };
         Ok(SessionSpendRow {
-            request_id: row.get(0)?,
-            session_id: row.get(1)?,
-            key_id: row.get(2)?,
-            key_generation: row.get(3)?,
-            agent_id: row.get(4)?,
-            agent_type: row.get(5)?,
-            user_agent: row.get(6)?,
-            request_class: row.get(7)?,
-            landed_at: row.get(8)?,
+            session_id: row.get(0)?,
+            key_id: row.get(1)?,
+            key_generation: row.get(2)?,
+            agent_id: row.get(3)?,
+            agent_type: row.get(4)?,
+            user_agent: row.get(5)?,
+            request_class: row.get(6)?,
+            landed_at: row.get(7)?,
             canonical_model: row.get(first + PricedAttempt::MODEL)?,
             received_at: row.get(first + PricedAttempt::RECEIVED_AT)?,
             kind: row.get(first + PricedAttempt::KIND)?,
@@ -5415,9 +5413,10 @@ mod tests {
 
     /// Each read answers a request once with its highest-index attempt, the one that served it: each request's retry
     /// starts, and so completes, before its first attempt, so a pick of the latest start or completion takes the wrong
-    /// one. Two requests of a session received at one instant tie on every first-fill order column before the request
-    /// id. The writer stamps each landing above the last, so the incremental read's boundary is what can slip: a
-    /// request landed at the watermark was folded by the poll that set it.
+    /// one, and each attempt sits on its own account, so an answer names the attempt it took. Two requests of a
+    /// session received at one instant tie on every first-fill order column before the request id. The writer stamps
+    /// each landing above the last, so the incremental read's boundary is what can slip: a request landed at the
+    /// watermark was folded by the poll that set it.
     #[test]
     fn the_session_spend_reads_take_the_highest_attempt_and_the_read_since_skips_the_watermark() {
         let db = LedgerDb::open_in_memory().unwrap();
@@ -5430,28 +5429,28 @@ mod tests {
             kind: "inference".into(),
             ..Default::default()
         };
-        let attempt = |id: &str, attempt: u32, started_at: i64| AttemptRecord {
+        let attempt = |id: &str, attempt: u32, account: &str, started_at: i64| AttemptRecord {
             request_id: id.into(),
             attempt,
-            account_id: "a".into(),
+            account_id: account.into(),
             started_at,
             ..Default::default()
         };
         db.insert_request(
             &request("r1"),
-            &[attempt("r1", 1, 100), attempt("r1", 2, 50)],
+            &[attempt("r1", 1, "a", 100), attempt("r1", 2, "b", 50)],
             None,
         )
         .unwrap();
         db.insert_request(
             &request("r2"),
-            &[attempt("r2", 1, 200), attempt("r2", 2, 150)],
+            &[attempt("r2", 1, "c", 200), attempt("r2", 2, "d", 150)],
             None,
         )
         .unwrap();
-        let served = |rows: Vec<SessionSpendRow>| -> Vec<(String, Option<i64>)> {
+        let served = |rows: Vec<SessionSpendRow>| -> Vec<Option<String>> {
             rows.into_iter()
-                .map(|row| (row.request_id, row.attempt.map(|a| a.priced.completed_at)))
+                .map(|row| row.attempt.map(|a| a.account_id))
                 .collect()
         };
         let sessions = [("k".to_string(), 0, "s".to_string())];
@@ -5460,12 +5459,12 @@ mod tests {
             .unwrap();
         assert_eq!(
             served(filled),
-            [("r1".to_string(), Some(50)), ("r2".to_string(), Some(150))]
+            [Some("b".to_string()), Some("d".to_string())]
         );
         let since = db
             .read_blocking(|c| session_spend_rows_since(c, 1))
             .unwrap();
-        assert_eq!(served(since), [("r2".to_string(), Some(150))]);
+        assert_eq!(served(since), [Some("d".to_string())]);
     }
 
     /// The fold prices the requests an account served under a key and a session, so a refused request, a request with
@@ -5474,15 +5473,16 @@ mod tests {
     #[test]
     fn the_session_spend_reads_leave_refused_keyless_and_sessionless_requests_out() {
         let db = LedgerDb::open_in_memory().unwrap();
-        let request = |id: &str, key: Option<&str>, session: Option<&str>| RequestRecord {
-            id: id.into(),
-            received_at: 1_000,
-            key_id: key.map(String::from),
-            session_id: session.map(String::from),
-            canonical_model: "claude-sonnet-5".into(),
-            kind: "inference".into(),
-            ..Default::default()
-        };
+        let request =
+            |id: &str, received_at: i64, key: Option<&str>, session: Option<&str>| RequestRecord {
+                id: id.into(),
+                received_at,
+                key_id: key.map(String::from),
+                session_id: session.map(String::from),
+                canonical_model: "claude-sonnet-5".into(),
+                kind: "inference".into(),
+                ..Default::default()
+            };
         let attempt = |id: &str| AttemptRecord {
             request_id: id.into(),
             attempt: 1,
@@ -5491,7 +5491,7 @@ mod tests {
             ..Default::default()
         };
         db.insert_request(
-            &request("served", Some("k"), Some("s")),
+            &request("served", 1_000, Some("k"), Some("s")),
             &[attempt("served")],
             None,
         )
@@ -5499,38 +5499,38 @@ mod tests {
         db.insert_request(
             &RequestRecord {
                 refused: true,
-                ..request("refused", Some("k"), Some("s"))
+                ..request("refused", 2_000, Some("k"), Some("s"))
             },
             &[],
             None,
         )
         .unwrap();
         db.insert_request(
-            &request("keyless", None, Some("s")),
+            &request("keyless", 3_000, None, Some("s")),
             &[attempt("keyless")],
             None,
         )
         .unwrap();
         db.insert_request(
-            &request("sessionless", Some("k"), None),
+            &request("sessionless", 4_000, Some("k"), None),
             &[attempt("sessionless")],
             None,
         )
         .unwrap();
-        let ids = |rows: Vec<SessionSpendRow>| {
+        let receipts = |rows: Vec<SessionSpendRow>| {
             rows.into_iter()
-                .map(|row| row.request_id)
+                .map(|row| row.received_at)
                 .collect::<Vec<_>>()
         };
         let sessions = [("k".to_string(), 0, "s".to_string())];
         let filled = db
             .read_blocking(|c| session_spend_rows_of(c, &sessions))
             .unwrap();
-        assert_eq!(ids(filled), ["served"]);
+        assert_eq!(receipts(filled), [1_000]);
         let since = db
             .read_blocking(|c| session_spend_rows_since(c, 0))
             .unwrap();
-        assert_eq!(ids(since), ["served"]);
+        assert_eq!(receipts(since), [1_000]);
     }
 
     #[test]

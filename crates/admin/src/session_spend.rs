@@ -623,9 +623,8 @@ mod tests {
     }
 
     /// A client request no account served, for the tests whose figures are counts.
-    fn row(id: &str, session: &str, received_at: i64, landed_at: i64) -> SessionSpendRow {
+    fn row(session: &str, received_at: i64, landed_at: i64) -> SessionSpendRow {
         SessionSpendRow {
-            request_id: id.into(),
             session_id: session.into(),
             key_id: "k".into(),
             key_generation: 0,
@@ -737,7 +736,7 @@ mod tests {
         fold.fold(
             PollRows {
                 fill: vec![t.clone()],
-                fill_rows: vec![row("t1", "t", at, 2)],
+                fill_rows: vec![row("t", at, 2)],
                 since_rows: Vec::new(),
                 watermark: 2,
                 newest: 2,
@@ -761,7 +760,7 @@ mod tests {
                 fill: vec![s.clone()],
                 fill_rows: rows_of(&db, "s")
                     .into_iter()
-                    .filter(|r| r.request_id == "r1")
+                    .filter(|r| r.received_at == at)
                     .collect(),
                 since_rows: Vec::new(),
                 watermark: 1,
@@ -794,8 +793,8 @@ mod tests {
         fold.fold(
             PollRows {
                 fill: vec![s.clone()],
-                fill_rows: vec![row("r1", "s", at, 1), row("r2", "s", at + 1, 2)],
-                since_rows: vec![row("r2", "s", at + 1, 2), row("r3", "t", at + 2, 3)],
+                fill_rows: vec![row("s", at, 1), row("s", at + 1, 2)],
+                since_rows: vec![row("s", at + 1, 2), row("t", at + 2, 3)],
                 watermark: 1,
                 newest: 3,
             },
@@ -951,8 +950,8 @@ mod tests {
             PollRows {
                 fill: vec![s.clone()],
                 fill_rows: vec![
-                    row("r-out", "s", now - 24 * HOUR_MS - 60_000, 1),
-                    row("r-in", "s", now - 24 * HOUR_MS + 60_000, 2),
+                    row("s", now - 24 * HOUR_MS - 60_000, 1),
+                    row("s", now - 24 * HOUR_MS + 60_000, 2),
                 ],
                 since_rows: Vec::new(),
                 watermark: 2,
