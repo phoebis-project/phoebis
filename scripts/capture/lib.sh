@@ -61,8 +61,14 @@ enter_capture_namespace() { # $1 the script's name for its messages, $2 the scri
       exit 1
     fi
     export PHOEBIS_CAPTURE_RESOLVER
-    if getent hosts api.anthropic.com >/dev/null; then
+    # getent exits 2 for a name it did not find, and any other failure is a check that never ran.
+    lookup=0
+    getent hosts api.anthropic.com >/dev/null || lookup=$?
+    if [[ "$lookup" -eq 0 ]]; then
       echo "$0: name lookups leave the namespace, refusing to capture" >&2
+      exit 1
+    elif [[ "$lookup" -ne 2 ]]; then
+      echo "$0: getent exited $lookup, refusing to capture with name lookups unchecked" >&2
       exit 1
     fi
     echo "capture namespace: name lookups kept to the hosts file through $PHOEBIS_CAPTURE_RESOLVER" >&2

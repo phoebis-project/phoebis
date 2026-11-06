@@ -12,7 +12,8 @@
 # Measured on this host: `unshare -rn` works for an unprivileged user, loopback connects succeed inside it, and an
 # outbound connect fails with `Network is unreachable`. Under `unshare -rnm` the bind holds and
 # `getent hosts api.anthropic.com` exits 2. The script refuses to start where `unshare -rnm` does not work, where
-# neither mount holds, or where that lookup still answers inside, rather than trusting the caller's environment.
+# neither mount holds, where that lookup still answers inside, or where getent exits with any other status (a check
+# that never ran), rather than trusting the caller's environment.
 #
 # Two loopback receivers in scripts/capture/ record the traffic. http_raw.py answers each HTTP/1.1 request with a
 # canned 400 and writes <output-dir>/clean_modes.json plus one clean_body_<i>.json per request, which is the

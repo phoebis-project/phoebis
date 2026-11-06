@@ -306,14 +306,16 @@ re-pinned to the client. To re-pin the profile against a new build:
    `scripts/capture-baseline.sh <path-to-claude-binary> <output-dir>`. It refuses to start with a real
    `ANTHROPIC_API_KEY` or a real `CLAUDE_CODE_OAUTH_TOKEN` in the environment
    (`capture-baseline.sh: refusing to run with a real ANTHROPIC_API_KEY set`), where `unshare -rnm` does not work or
-   neither of its mounts holds, and where a name outside the hosts file still resolves inside the namespace
-   (`capture-baseline.sh: name lookups leave the namespace, refusing to capture`). Otherwise it re-executes itself in
-   the loopback-only namespace, drives the three credential modes, the first-party override a second time, a gzip-forced
-   run and a probe run without the nonessential-traffic switch past the recording receiver, records the ClientHello
-   through the CONNECT receiver, and ends with `python3 -I scripts/build-fixtures.py --check <output-dir>`, exiting with
-   that command's status. The system prompt the client sends embeds the current date, so a re-capture taken on another
-   day differs there, and `--check` prints a bounded diff per body so that shows as a date difference rather than a
-   shape change.
+   neither of its mounts holds, where a name outside the hosts file still resolves inside the namespace
+   (`capture-baseline.sh: name lookups leave the namespace, refusing to capture`), and where `getent` exits with a
+   status other than 0 or 2, so the lookup check did not run
+   (`capture-baseline.sh: getent exited 127, refusing to capture with name lookups unchecked`). Otherwise it re-executes
+   itself in the loopback-only namespace, drives the three credential modes, the first-party override a second time, a
+   gzip-forced run and a probe run without the nonessential-traffic switch past the recording receiver, records the
+   ClientHello through the CONNECT receiver, and ends with `python3 -I scripts/build-fixtures.py --check <output-dir>`,
+   exiting with that command's status. The system prompt the client sends embeds the current date, so a re-capture taken
+   on another day differs there, and `--check` prints a bounded diff per body so that shows as a date difference rather
+   than a shape change.
 2. Read the diff. A header added or renamed, a beta list that changed, or a new body field is the signal that the
    client has moved past the pinned profile.
 3. `scripts/capture-control.sh <path-to-claude-binary> <output-dir>` records the control plane (the code and refresh
