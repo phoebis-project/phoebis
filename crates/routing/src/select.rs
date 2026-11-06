@@ -3214,10 +3214,10 @@ pub(crate) struct FitRead {
 }
 
 /// How `fit_of` reads a window with no reading and an account with no tier. `Move` reads either gap as least bad: a
-/// move pays a cold rewrite on its destination, so it trusts only one it can price on every window the model draws
-/// that the destination's set holds. `Placement` skips a window with no reading and reads an untiered account as
-/// fitting with an unbounded runway and no binding window, since a fresh session counts an unsampled account as
-/// untouched and nothing prices an untiered account's rewrite or burn.
+/// move pays a cold rewrite on its destination, so it trusts only one it can price on every window the model draws that
+/// the destination's set holds. `Placement` skips a window with no reading and reads an untiered account as fitting
+/// with an unbounded runway and no binding window, since a fresh session counts an unsampled account as untouched and
+/// nothing prices an untiered account's rewrite or burn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Judge {
     Move,
