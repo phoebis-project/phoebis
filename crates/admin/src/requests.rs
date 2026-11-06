@@ -8,14 +8,14 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use phoebis_bus::Classifier;
 use phoebis_ledger::{
-    entrypoint_of_client, free_equivalent, free_shares, list_request_page, price_equivalent,
-    price_shares, request_by_id, request_events, AttemptRecord, Direction, Funding, LiveKeys,
-    Patterns, PlanTables, PriceRevisions, RequestCursor, RequestFilter, RequestOrder,
-    RequestRecord, Speed, WindowShares, SHARE_REASON_CLIENT_CLASSIFIER,
+    list_request_page, price_row, request_by_id, request_events, AttemptRecord, CostSplit,
+    Direction, Funding, LiveKeys, Patterns, PlanTables, PriceRevisions, Priced, RequestCursor,
+    RequestFilter, RequestOrder, RequestRecord, RowKey, WindowShares,
 };
-use phoebis_routing::{UtilizationSample, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_OVERAGE_INCLUDED};
+use phoebis_routing::{
+    plan_windows, UtilizationSample, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_OVERAGE_INCLUDED,
+};
 use serde_json::Value;
 use utoipa::ToSchema;
 
@@ -286,7 +286,8 @@ pub(crate) struct Attempt {
     /// The serving account's class at the attempt, false on a row from before the router recorded it.
     pub usage_based: bool,
     /// The attempt's dollars at the cells its own prompt selects on the API price revision in force at its request's
-    /// receipt, priced when it is read, null for a model the revision lacks and for an attempt without usage.
+    /// receipt, priced when it is read. Null for an attempt without usage. A probe on a model the revision lacks
+    /// prices at the dearest listed standard cell of each type, and any other attempt on such a model reads null.
     pub estimated_usd: Option<f64>,
     /// Null, or the trace behind the attempt's placement: `strategy`, `tier` (the three-element array `[group,
     /// priority, overage_bit]` the choice was made in, null for a renewed pin), `renewed`, `moved` (the reason a
@@ -509,11 +510,28 @@ pub(crate) fn request_summary(
     shares: &ShareContext,
 ) -> RequestSummary {
     let last = attempts.last();
-    let plan = plan_figures(r, attempts, &shares.tables, shares.now);
+    let table = shares.prices.in_force(r.received_at);
+    let priced: Vec<Priced> = attempts
+        .iter()
+        .map(|a| {
+            price_row(
+                &shares.prices,
+                &shares.tables,
+                &RowKey::of_attempt(r, a, table, shares.now),
+                a.usage(),
+            )
+        })
+        .collect();
     let trail: Vec<Attempt> = attempts
         .iter()
-        .map(|a| attempt_json(a, r, &shares.prices))
+        .zip(&priced)
+        .map(|(a, priced)| attempt_json(a, estimated_usd(a, priced)))
         .collect();
+    // The serving attempt's figures, `None` for a request no subscription window paid: no attempt, or a serving
+    // attempt whose funding is not plan.
+    let plan = last
+        .zip(priced.last())
+        .filter(|(a, _)| a.funding() == Funding::Plan);
     RequestSummary {
         id: r.id.clone(),
         at: r.received_at,
@@ -563,11 +581,9 @@ pub(crate) fn request_summary(
             .iter()
             .filter_map(|a| a.estimated_usd)
             .fold(0.0, |a, b| a + b),
-        cost_shares: plan.as_ref().map(cost_shares_json),
-        cost_equivalent: plan.as_ref().and_then(|p| p.equivalent),
-        share_reason: plan
-            .as_ref()
-            .and_then(|p| p.share_reason.map(str::to_string)),
+        cost_shares: plan.map(|(a, priced)| cost_shares_json(r, a, priced)),
+        cost_equivalent: plan.and_then(|(_, priced)| priced.equivalent),
+        share_reason: plan.and_then(|(_, priced)| priced.share_reason.map(str::to_string)),
         tier: last.and_then(|a| a.tier.clone()),
         phases: phases_json(r, attempts),
         attempts: trail,
@@ -627,67 +643,6 @@ fn phases_json(r: &RequestRecord, attempts: &[AttemptRecord]) -> RequestPhases {
     }
 }
 
-/// The serving attempt's figures on the plan: its shares under the account tier it recorded, `None` for an attempt
-/// that recorded none, and its Pro-week figure, which reads no account tier.
-struct PlanFigures {
-    shares: Option<WindowShares>,
-    equivalent: Option<f64>,
-    share_reason: Option<&'static str>,
-}
-
-/// `None` for a request no subscription window paid: no attempt, or a serving attempt whose funding is not plan.
-/// The request's receipt selects the cost revision, as it selects the price revision of the dollars, and the
-/// attempt's completion (else the request's, else the attempt's start) reads the peak band, where the meter charges
-/// it, and the revision in force at `now` holds the anchor row the Pro-week figure divides by. The entrypoint the
-/// request's `client` names picks the regime both figures price under.
-fn plan_figures(
-    r: &RequestRecord,
-    attempts: &[AttemptRecord],
-    tables: &PlanTables,
-    now: i64,
-) -> Option<PlanFigures> {
-    let a = attempts.last()?;
-    if a.funding() != Funding::Plan {
-        return None;
-    }
-    let usage = a.usage();
-    let band_at = a.finished_at.or(r.finished_at).unwrap_or(a.started_at);
-    let entrypoint = r.client.as_deref().and_then(entrypoint_of_client);
-    if r.classifier.as_deref() == Some(Classifier::Client.as_str()) {
-        // The admin prices through the share helpers and not price_row, so the free call's rule is taken here.
-        return Some(PlanFigures {
-            shares: a.tier.as_deref().map(|tier| {
-                free_shares(tables, entrypoint, tier, &r.canonical_model, r.received_at)
-            }),
-            equivalent: Some(free_equivalent()),
-            share_reason: Some(SHARE_REASON_CLIENT_CLASSIFIER),
-        });
-    }
-    Some(PlanFigures {
-        shares: a.tier.as_deref().map(|tier| {
-            price_shares(
-                tables,
-                entrypoint,
-                tier,
-                &r.canonical_model,
-                usage,
-                r.received_at,
-                band_at,
-            )
-        }),
-        equivalent: price_equivalent(
-            tables,
-            entrypoint,
-            &r.canonical_model,
-            usage,
-            r.received_at,
-            band_at,
-            now,
-        ),
-        share_reason: None,
-    })
-}
-
 /// `summary` with the shared windows its serving account's set lacks taken out of `cost_shares`, since a share of a
 /// window the account no longer has measures nothing. The stored row keeps pricing by tier, so the bound is the read's.
 fn bounded(
@@ -704,11 +659,23 @@ fn bounded(
     summary
 }
 
-/// `{}` for an attempt that recorded no account tier, since the burn route prices no share without one.
-fn cost_shares_json(plan: &PlanFigures) -> BTreeMap<String, Option<f64>> {
-    plan.shares
-        .as_ref()
-        .map_or_else(BTreeMap::new, windows_json)
+/// `{}` for an attempt that recorded no account tier, since the burn route prices no share without one, and for a free
+/// call on a tier that sizes no window. Any other attempt on a tier the cost revision does not size answers no map from
+/// `price_row`, and each window the model keys reads null, as the fold latches the windows of such a row unpriced.
+fn cost_shares_json(
+    r: &RequestRecord,
+    a: &AttemptRecord,
+    priced: &Priced,
+) -> BTreeMap<String, Option<f64>> {
+    match &priced.shares {
+        Some(shares) => windows_json(shares),
+        None if a.tier.is_some() && priced.share_reason.is_none() => {
+            plan_windows(&r.canonical_model)
+                .map(|window| (window.to_string(), None))
+                .collect()
+        }
+        None => BTreeMap::new(),
+    }
 }
 
 /// A sorted map keeps the order `price_shares` inserts the window ids in: `five_hour`, `seven_day`, then the model week
@@ -735,19 +702,15 @@ fn usage_json(last: Option<&AttemptRecord>) -> RequestUsage {
     }
 }
 
-/// The attempt's dollars at the cells its own prompt and its reported speed select on the revision in force when its
-/// request arrived, `None` for an attempt without usage and for a model the revision lacks.
-fn attempt_usd(a: &AttemptRecord, r: &RequestRecord, prices: &PriceRevisions) -> Option<f64> {
-    if !a.has_usage() {
-        return None;
-    }
-    prices
-        .in_force(r.received_at)
-        .estimate(&r.canonical_model, Speed::of(a.speed.as_deref()), a.usage())
-        .map(|split| split.total())
+/// The total of `price_row`'s dollars for the attempt, `None` for an attempt without usage, whose zero counts on a
+/// listed model would read as a priced zero.
+fn estimated_usd(a: &AttemptRecord, priced: &Priced) -> Option<f64> {
+    a.has_usage()
+        .then(|| priced.usd.as_ref().map(CostSplit::total))
+        .flatten()
 }
 
-fn attempt_json(a: &AttemptRecord, r: &RequestRecord, prices: &PriceRevisions) -> Attempt {
+fn attempt_json(a: &AttemptRecord, estimated_usd: Option<f64>) -> Attempt {
     let window = |id: &str, u: Option<f64>, reset: Option<i64>| {
         (u.is_some() || reset.is_some()).then(|| AttemptWindow {
             id: id.to_string(),
@@ -792,7 +755,7 @@ fn attempt_json(a: &AttemptRecord, r: &RequestRecord, prices: &PriceRevisions) -
         windows,
         overage_in_use: a.overage_in_use,
         usage_based: a.usage_based,
-        estimated_usd: attempt_usd(a, r, prices),
+        estimated_usd,
         selection: a
             .selection
             .as_deref()

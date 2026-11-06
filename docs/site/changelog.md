@@ -550,7 +550,9 @@ bodies ends after the body in progress once a write is waiting, so a write waits
 poll of one bucket write one Fable row and the gauge holds one Fable series ([Quota
 samples](statistics.md#quota-samples)). The request log orders by its arrival, attempts, duration, time to first byte,
 tokens in or tokens out, either way, and the routing log by its time either way, each page continuing at its last row
-([API reference](api-reference.md)).
+([API reference](api-reference.md)). The request log prices each attempt through the one price rule the fold uses, so a
+probe on a model the price list lacks reads dollars at the dearest listed standard cells where it read null
+([Pricing](statistics.md#pricing)).
 
 Every price is computed when it is read, from the token counts the ledger stores, at the price revision in force when
 the request arrived. The price table and the subscription cost model are revision lists keyed by effective date, the

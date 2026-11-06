@@ -229,13 +229,6 @@ impl PriceRevisions {
         PriceRevisions::from_yaml(SHIPPED_API_PRICES, "shipped")
             .expect("the shipped price file parses")
     }
-
-    /// The dearest listed standard cell of each type in the revision in force at `at_ms` (what `rate_table().fallback`
-    /// computes on one table), for a probe row on a model the revision lacks: a zero would read a probe that consumed
-    /// quota as free.
-    pub fn fallback_rates(&self, at_ms: i64) -> phoebis_routing::Rates {
-        self.in_force(at_ms).rate_table().fallback
-    }
 }
 
 /// 00:00:00 UTC of a `YYYY-MM-DD` date in Unix milliseconds, `None` for any other text (through jiff's civil date).
@@ -387,18 +380,26 @@ impl PriceTable {
         counts: phoebis_routing::PinUsage,
     ) -> Option<CostSplit> {
         let (_, row) = self.entry(canonical_model)?;
-        let p = cells(row, speed, band);
-        Some(split_of(
-            counts,
-            [
-                p.input,
-                p.cache_read,
-                p.cache_write_5m,
-                p.cache_write_1h,
-                p.output,
-            ],
-            |tokens, price| tokens as f64 * price / 1_000_000.0,
-        ))
+        Some(split_of(counts, cells(row, speed, band)))
+    }
+
+    /// The dearest listed standard cell of each type, per million tokens: the cells a probe row on a model the
+    /// revision does not list prices at, since a zero would read a probe that consumed quota as free, and through
+    /// `rate_table` the routing's fallback rates.
+    pub fn dearest_cells(&self) -> ModelPrice {
+        let dearest = |of: fn(&ModelPrice) -> f64| {
+            self.models
+                .values()
+                .map(|row| of(&row.standard))
+                .fold(0.0, f64::max)
+        };
+        ModelPrice {
+            input: dearest(|p| p.input),
+            cache_write_5m: dearest(|p| p.cache_write_5m),
+            cache_write_1h: dearest(|p| p.cache_write_1h),
+            cache_read: dearest(|p| p.cache_read),
+            output: dearest(|p| p.output),
+        }
     }
 
     /// The metrics label: a priced model reads as the table key that priced it, everything else is one bucket,
@@ -408,20 +409,13 @@ impl PriceTable {
     }
 
     /// Dollars per token, the routing task's api_key burn unit: the standard cells per row and the long-context
-    /// cells of every row that carries them. A model the table lacks prices at the dearest listed standard rate of
-    /// each type, so a model the table has not learned never looks cheap to the shedding order.
+    /// cells of every row that carries them. A model the table lacks prices at `dearest_cells`, so a model the table
+    /// has not learned never looks cheap to the shedding order.
     pub fn rate_table(&self) -> phoebis_routing::RateTable {
         let rows = self.per_token_rows(|row| &row.standard);
-        let dearest = |of: fn(&phoebis_routing::Rates) -> Option<f64>| {
-            rows.values().filter_map(of).fold(0.0, f64::max)
-        };
-        let fallback = phoebis_routing::Rates {
-            input: Some(dearest(|r| r.input)),
-            cache_read: Some(dearest(|r| r.cache_read)),
-            write_5m: Some(dearest(|r| r.write_5m)),
-            write_1h: Some(dearest(|r| r.write_1h)),
-            output: Some(dearest(|r| r.output)),
-        };
+        // The division by a million rounds correctly and so keeps the order of the cells: the quotient of the
+        // dearest cell is the dearest of the quotients, bit for bit.
+        let fallback = per_token(&self.dearest_cells());
         let long_context = self
             .models
             .iter()
@@ -480,20 +474,16 @@ impl PriceTable {
     }
 }
 
-/// The four figures of five counts, `at` pricing each count at its cell, `cells` in the order input, cache read,
-/// 5-minute write, 1-hour write, output, and the two writes summed. `estimate_banded` and the probe rows' fallback
-/// both build their split here, each with its own arithmetic in `at`.
-pub(crate) fn split_of(
-    counts: phoebis_routing::PinUsage,
-    cells: [f64; 5],
-    at: impl Fn(u64, f64) -> f64,
-) -> CostSplit {
-    let [input, cache_read, write_5m, write_1h, output] = cells;
+/// The four figures of five counts at the per-million cells `p`, the two writes summed. `estimate_banded` and the
+/// probe rows' fallback both split here, so a probe on a model the table lacks prices as a listed model's counts do.
+pub(crate) fn split_of(counts: phoebis_routing::PinUsage, p: &ModelPrice) -> CostSplit {
+    let at = |tokens: u64, price: f64| tokens as f64 * price / 1_000_000.0;
     CostSplit {
-        input_usd: at(counts.input, input),
-        cache_read_usd: at(counts.cache_read, cache_read),
-        cache_write_usd: at(counts.write_5m, write_5m) + at(counts.write_1h, write_1h),
-        output_usd: at(counts.output, output),
+        input_usd: at(counts.input, p.input),
+        cache_read_usd: at(counts.cache_read, p.cache_read),
+        cache_write_usd: at(counts.write_5m, p.cache_write_5m)
+            + at(counts.write_1h, p.cache_write_1h),
+        output_usd: at(counts.output, p.output),
     }
 }
 
@@ -1139,35 +1129,26 @@ mod tests {
     }
 
     #[test]
-    fn the_fallback_rates_are_the_dearest_listed_standard_cell_of_each_type_in_the_revision_in_force(
+    fn the_fallback_cells_are_the_dearest_listed_standard_cell_of_each_type_in_the_revision_in_force(
     ) {
         // The test table's dearest standard row is Opus 5.5 in both entries: input, cache read, the two writes and
         // output at 10, 1, 12.5, 20 and 50 per million in January, each doubled in February. Its January fast
         // cells are dearer still, at 20 input, and the fallback leaves them out.
         let revisions = crate::test_tables::api_prices();
-        let rates = |at: i64| {
-            let r = revisions.fallback_rates(at);
-            [r.input, r.cache_read, r.write_5m, r.write_1h, r.output].map(Option::unwrap)
-        };
-        assert_eq!(
-            rates(JANUARY_2026),
+        let cells = |at: i64| {
+            let p = revisions.in_force(at).dearest_cells();
             [
-                10.0 / 1_000_000.0,
-                1.0 / 1_000_000.0,
-                12.5 / 1_000_000.0,
-                20.0 / 1_000_000.0,
-                50.0 / 1_000_000.0
+                p.input,
+                p.cache_read,
+                p.cache_write_5m,
+                p.cache_write_1h,
+                p.output,
             ]
-        );
+        };
+        assert_eq!(cells(JANUARY_2026), [10.0, 1.0, 12.5, 20.0, 50.0]);
         assert_eq!(
-            rates(FEBRUARY_2026),
-            [
-                20.0 / 1_000_000.0,
-                2.0 / 1_000_000.0,
-                25.0 / 1_000_000.0,
-                40.0 / 1_000_000.0,
-                100.0 / 1_000_000.0
-            ],
+            cells(FEBRUARY_2026),
+            [20.0, 2.0, 25.0, 40.0, 100.0],
             "the second entry doubles every standard cell"
         );
     }

@@ -24,8 +24,7 @@ use crate::db::{
 use crate::histogram::Histogram;
 use crate::pattern::{literal_like, Patterns, ESCAPE};
 use crate::plan::{
-    entrypoint_of_client, free_equivalent, free_shares, funding_of, price_equivalent, price_shares,
-    CostRevisions, Funding, PlanTables, WindowShares,
+    entrypoint_of_client, free_shares, funding_of, CostRevisions, Funding, PlanTables, WindowShares,
 };
 use crate::price::{price_row, price_usd, Priced, RowKey};
 use crate::pricing::{Band, PriceRevisions, Speed};
@@ -2611,14 +2610,14 @@ struct ShareSums {
 }
 
 impl ShareSums {
-    /// Folds one plan-funded row in when `counted`, as the request dollars take the row, each window priced at the
-    /// row's own hour under `tier` and the regime the row's `client` names, so a group that mixes clients prices each
-    /// row under its own.
+    /// Folds one plan-funded row with a recorded tier in when `counted`, as the request dollars take the row, each
+    /// window priced through `price_row` at the row's own key: its hour, its tier and the regime its `client` names, so
+    /// a group that mixes clients prices each row under its own.
     fn add(
         &mut self,
         row: &RollupRow,
         key: &RowKey<'_>,
-        tier: &str,
+        prices: &PriceRevisions,
         tables: &PlanTables,
         counted: bool,
     ) {
@@ -2629,18 +2628,16 @@ impl ShareSums {
         if !counted || tokens_of(usage) == 0 {
             return;
         }
-        let shares = if key.classifier {
-            free_shares(tables, key.entrypoint, tier, key.model, key.at)
-        } else {
-            price_shares(
-                tables,
-                key.entrypoint,
-                tier,
-                key.model,
-                usage,
-                key.at,
-                key.at,
-            )
+        let priced = price_row(prices, tables, key, usage);
+        let shares = match priced.shares {
+            Some(shares) => shares,
+            // A free call spends no window, so on a tier that sizes none it latches nothing.
+            None if priced.share_reason.is_some() => return,
+            // A tier the cost revision does not size answers no map, and every window the row would share reads
+            // unpriced, as `price_usage` latches a bucket's.
+            None => plan_windows(key.model)
+                .map(|window| (window, None))
+                .collect(),
         };
         for (window, share) in shares {
             self.cost
@@ -2828,6 +2825,7 @@ impl PlanSums {
         row: &RollupRow,
         key: &RowKey<'_>,
         priced: Priced,
+        prices: &PriceRevisions,
         costs: &PlanTables,
         counted: bool,
     ) {
@@ -2835,24 +2833,9 @@ impl PlanSums {
             self.requests += row.requests;
             self.output_tokens += row.output_tokens;
         }
-        // A classifier call's every part reads zero with no pricing call, so a model the cost model cannot price marks
-        // nothing unpriced for a charge of nothing. A rollup row keeps no completion, so its hour is its band instant
-        // too, and each part prices under the regime the row's `client` names.
-        let price = |usage: PinUsage| {
-            if key.classifier {
-                Some(free_equivalent())
-            } else {
-                price_equivalent(
-                    costs,
-                    key.entrypoint,
-                    key.model,
-                    usage,
-                    key.at,
-                    key.at,
-                    key.now,
-                )
-            }
-        };
+        // Each part prices through `price_row` at the row's key, whose classifier rule reads a free call's every part
+        // at zero, so a model the cost model cannot price marks nothing unpriced for a charge of nothing.
+        let price = |usage: PinUsage| price_row(prices, costs, key, usage).equivalent;
         let halves = self
             .equivalent
             .add_priced(row, counted, priced.equivalent, price);
@@ -2965,7 +2948,7 @@ impl GroupSums {
         let entry = self.0.entry(key).or_default();
         let own_key = row.price_key(now);
         // Keyed as `priced` keys the row, since the group's shares come from `ShareSums::add` and a tier would price
-        // share windows nothing reads.
+        // share windows nothing reads, here and in each part `PlanSums::add` prices.
         let price_key = RowKey {
             tier: None,
             ..own_key
@@ -3005,19 +2988,18 @@ impl GroupSums {
                 entry.plan.kept_warm_5m_tokens += row.kept_warm_5m_tokens;
                 entry.plan.kept_warm_1h_tokens += row.kept_warm_1h_tokens;
             }
-            entry.plan.add(row, &own_key, row_priced, costs, counted);
+            entry
+                .plan
+                .add(row, &price_key, row_priced, prices, costs, counted);
         }
         // Each row prices under the account tier it recorded. A tier of `UNATTRIBUTED` (a profile not yet read, a row
         // folded before the tier was recorded, an api_key account's row) answers no share.
-        if !shares {
+        if !shares || own_key.tier.is_none() {
             return;
         }
-        let Some(tier) = own_key.tier else {
-            return;
-        };
         let sums = entry.shares.get_or_insert_with(ShareSums::default);
         if plan {
-            sums.add(row, &own_key, tier, costs, counted);
+            sums.add(row, &own_key, prices, costs, counted);
         }
     }
 
@@ -5464,6 +5446,7 @@ pub fn session_burn_series(
 mod tests {
     use super::*;
 
+    use crate::plan::price_equivalent;
     use crate::pricing::effective_instant;
     use crate::test_tables::{plan_of, plan_under};
 
@@ -6032,6 +6015,7 @@ mod tests {
                 equivalent: Some(sentinel),
                 ..Priced::default()
             },
+            &crate::test_tables::api_prices(),
             &costs,
             true,
         );

@@ -2150,6 +2150,42 @@ async fn an_unpriced_row_nulls_the_window_it_could_not_price_and_leaves_the_othe
     assert!(close(cost.get(FIVE_HOUR), want), "{cost:?} vs {want}");
 }
 
+/// One account's rows in one hour under two tiers, its profile read again between them: a Fable row on `test_tier`,
+/// which the share cost model sizes, and a Sonnet row on a tier the model does not list.
+#[tokio::test]
+async fn a_group_holding_a_sized_and_an_unsized_row_of_one_account_answers_the_unsized_rows_windows_unpriced(
+) {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-sized",
+            ..ShareRow::default()
+        },
+    );
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-unsized",
+            model: "claude-sonnet-5-5",
+            tier: Some("unlisted_tier"),
+            ..ShareRow::default()
+        },
+    );
+    let tables = share_tables();
+    let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
+    let groups = account_groups(&db, &RollupFilter::default(), from, to, &tables).await;
+    let cost = group(&groups, "a")
+        .cost_shares
+        .as_ref()
+        .expect("an oauth group with a tier answers its shares");
+    assert_eq!(
+        cost.keys().copied().collect::<Vec<_>>(),
+        [SEVEN_DAY_FABLE],
+        "the Sonnet row's two windows read unpriced, the model week only the Fable row keys stays priced: {cost:?}"
+    );
+}
+
 /// A weighted plan row of an account whose tier the test cost model sizes, an unweighted plan row of a second account
 /// and a billed row of a third: the day, the pool's traffic and the breakdown answer the same dollars and Pro-week
 /// figure whether or not the read answers the shares, each figure the test tables' own to the bit. The breakdown of
@@ -8332,8 +8368,8 @@ fn a_probe_row_on_a_model_the_revision_lacks_prices_at_the_dearest_listed_cells(
         &COSTS,
         NOW,
     );
-    let rates = prices.fallback_rates(hour * 1_000);
-    let (input, output) = (rates.input.unwrap(), rates.output.unwrap());
+    let cells = prices.in_force(hour * 1_000).dearest_cells();
+    let (input, output) = (cells.input / 1_000_000.0, cells.output / 1_000_000.0);
     assert!(input > 0.0 && output > 0.0);
     let probe = groups.iter().find(|g| g.key == "probe").unwrap();
     assert!(

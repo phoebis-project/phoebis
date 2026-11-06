@@ -1092,6 +1092,82 @@ async fn the_request_log_reads_the_classifiers_filter_and_the_show_route_prices_
     );
 }
 
+/// A plan request served on a tier the test cost model does not list, on a model it weighs.
+#[tokio::test]
+async fn the_request_log_answers_each_window_of_a_tier_the_cost_model_does_not_size_as_null() {
+    let parts =
+        common::admin_parts_full_costed(phoebis_ledger::test_tables::subscription_costs()).await;
+    let row = request(
+        "r-unsized",
+        common::NOW - HOUR,
+        Some("desktop"),
+        "claude-sonnet-5-5",
+        "succeeded",
+        200,
+        "inference",
+    );
+    let mut served = attempt("r-unsized", "business", 200);
+    served.tier = Some("default_claude_enterprise".into());
+    parts.db.insert_request(&row, &[served], None).unwrap();
+    let cookie = login(&parts.app, "admin-secret").await;
+    let shown = json(get(&parts.app, "/admin/requests/r-unsized", Some(&cookie)).await).await
+        ["request"]
+        .clone();
+    assert_eq!(
+        shown["cost_shares"],
+        serde_json::json!({ "five_hour": null, "seven_day": null }),
+        "{shown}"
+    );
+}
+
+/// The test's own price list, its dearest standard cells spread over its two rows: the input on Opus 5.5 at 10 and the
+/// output on Sonnet 5.5 at 50 per million.
+const PROBE_PRICES: &str = "\
+revisions:
+  - effective: 2026-01-01
+    models:
+      claude-opus-5-5: {input: 10, cache_write_5m: 12.5, cache_write_1h: 2, cache_read: 1, output: 20}
+      claude-sonnet-5-5: {input: 3, cache_write_5m: 3.75, cache_write_1h: 6, cache_read: 0.3, output: 50}
+";
+
+/// A keepalive probe on a model the price list lacks consumed quota all the same: 1,000 input tokens at 10 and 100
+/// output tokens at 50 per million read $0.015.
+#[tokio::test]
+async fn the_request_log_prices_a_probe_on_a_model_the_price_list_lacks_at_the_dearest_listed_cells(
+) {
+    let parts = common::admin_parts_full_priced(
+        phoebis_ledger::PriceRevisions::from_yaml(PROBE_PRICES, "test")
+            .expect("the price list parses"),
+    )
+    .await;
+    let row = request(
+        "r-probe",
+        common::NOW - HOUR,
+        Some("desktop"),
+        "claude-mystery-9",
+        "succeeded",
+        200,
+        "probe",
+    );
+    let served = AttemptRecord {
+        input_tokens: Some(1_000),
+        output_tokens: Some(100),
+        cache_read_tokens: None,
+        ..attempt("r-probe", "business", 200)
+    };
+    parts.db.insert_request(&row, &[served], None).unwrap();
+    let cookie = login(&parts.app, "admin-secret").await;
+    let shown = json(get(&parts.app, "/admin/requests/r-probe", Some(&cookie)).await).await
+        ["request"]
+        .clone();
+    assert!(
+        shown["attempts"][0]["estimated_usd"]
+            .as_f64()
+            .is_some_and(|usd| (usd - 0.015).abs() < 1e-12),
+        "{shown}"
+    );
+}
+
 /// The breakdown answers the shares only where a filter names one account, so the grouped read without one asserts
 /// the Pro-week figure and the filtered read the shares.
 #[tokio::test]

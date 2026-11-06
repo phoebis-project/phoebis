@@ -5,13 +5,15 @@
 //! listed cells sits inside it too: a probe that consumed quota must never read as free, and a reader filling the
 //! dollars in after the call would be the recomputation this function exists to prevent.
 
-use phoebis_bus::Kind;
+use phoebis_bus::{Classifier, Kind};
 use phoebis_routing::{PinUsage, SEVEN_DAY};
 
 use crate::plan::{
-    free_equivalent, free_shares, price_equivalent, price_shares, Funding, PlanTables, WindowShares,
+    entrypoint_of_client, free_equivalent, free_shares, price_equivalent, price_shares, Funding,
+    PlanTables, WindowShares,
 };
-use crate::pricing::{split_of, Band, PriceRevisions, Speed};
+use crate::pricing::{split_of, Band, PriceRevisions, PriceTable, Speed};
+use crate::record::{AttemptRecord, RequestRecord};
 use crate::rollup::CostSplit;
 
 /// The share reason of a plan row priced at no share by rule: the client's own classifier call.
@@ -28,7 +30,7 @@ pub struct RowKey<'a> {
     pub band: Band,
     pub funding: Funding,
     /// `probe` for a keepalive probe's row, `inference` otherwise: a probe row on a model the revision does not list
-    /// prices at `fallback_rates`, since a probe that consumed quota must never read as free.
+    /// prices at the revision's `dearest_cells`, since a probe that consumed quota must never read as free.
     pub kind: &'a str,
     pub tier: Option<&'a str>,
     /// The request's entrypoint from its `client` label, `None` the base regime.
@@ -43,12 +45,46 @@ pub struct RowKey<'a> {
     pub now: i64,
 }
 
+impl RowKey<'_> {
+    /// The key one attempt of `request` prices under at `now`: the attempt's tier, funding, speed and band, the
+    /// request's `canonical_model`, kind, entrypoint and classifier word. `table` is the price revision in force at
+    /// `request.received_at`, whose `band_of` reads the band off the attempt's own prompt, so a custom or a historical
+    /// long-context threshold prices the attempt as the fold prices it. `at` is the request's receipt, which selects
+    /// both revisions, and `band_at` the attempt's finish, else the request's, else the attempt's start, since the
+    /// meter charges the peak band where the answer completed.
+    pub fn of_attempt<'a>(
+        request: &'a RequestRecord,
+        attempt: &'a AttemptRecord,
+        table: &PriceTable,
+        now: i64,
+    ) -> RowKey<'a> {
+        RowKey {
+            model: &request.canonical_model,
+            speed: Speed::of(attempt.speed.as_deref()),
+            band: table.band_of(&request.canonical_model, attempt.usage().prompt_tokens()),
+            funding: attempt.funding(),
+            kind: &request.kind,
+            tier: attempt.tier.as_deref(),
+            entrypoint: request.client.as_deref().and_then(entrypoint_of_client),
+            classifier: request.classifier.as_deref() == Some(Classifier::Client.as_str()),
+            at: request.received_at,
+            band_at: Some(
+                attempt
+                    .finished_at
+                    .or(request.finished_at)
+                    .unwrap_or(attempt.started_at),
+            ),
+            now,
+        }
+    }
+}
+
 /// Every figure a reader may want, so the native rule (a plan row in the equivalent, a billed row in dollars) is
 /// written once by the caller and never recomputed from the account tier the registry holds now.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Priced {
     /// The price revision in force at `at` over the five counts at the selected cells, `None` for a model it lacks,
-    /// except a probe row, which prices such a model at `fallback_rates(at)`.
+    /// except a probe row, which prices such a model at that revision's `dearest_cells`.
     pub usd: Option<CostSplit>,
     /// The shares of the account tier's windows for `Funding::Plan` with an account tier the cost revision sizes,
     /// else `None`.
@@ -136,27 +172,16 @@ pub(crate) fn price_usd(
     key: &RowKey<'_>,
     counts: PinUsage,
 ) -> Option<CostSplit> {
-    prices
-        .in_force(key.at)
+    let table = prices.in_force(key.at);
+    table
         .estimate_banded(key.model, key.speed, key.band, counts)
-        .or_else(|| (key.kind == Kind::Probe.as_str()).then(|| dearest(prices, key.at, counts)))
+        .or_else(|| (key.kind == Kind::Probe.as_str()).then(|| dearest(table, counts)))
 }
 
-/// The five counts at `fallback_rates(at)`, split through `split_of` as `estimate_banded` splits them.
-fn dearest(prices: &PriceRevisions, at: i64, counts: PinUsage) -> CostSplit {
-    let rates = prices.fallback_rates(at);
-    let rate = |rate: Option<f64>| rate.unwrap_or(0.0);
-    split_of(
-        counts,
-        [
-            rate(rates.input),
-            rate(rates.cache_read),
-            rate(rates.write_5m),
-            rate(rates.write_1h),
-            rate(rates.output),
-        ],
-        |tokens, rate| tokens as f64 * rate,
-    )
+/// The five counts at the table's `dearest_cells`, split through `split_of` as `estimate_banded` splits a listed
+/// model's cells.
+fn dearest(table: &PriceTable, counts: PinUsage) -> CostSplit {
+    split_of(counts, &table.dearest_cells())
 }
 
 #[cfg(test)]
