@@ -251,7 +251,10 @@ compaction nor the first request after one, whose chain holds neither of the las
 admitted request while its answer read at least nine tenths of that request's prompt from the cache contradicts the
 router's chain model. The router logs it at warn once per client version per hour, naming the version, the session and
 the two token counts, counts each one in `phoebis_keepalive_chain_contradictions_total` by client version, and changes
-no return counter and no recipe for it.
+no return counter and no recipe for it. The watch compares against the prompt of main's last completion that it marked
+or the keepalive followed, so a request refused at its arrival on a keepalive-off pool or from an opted-out key leaves
+that prompt in place unless the watch marked it, and a session whose requests were all refused that way has no prompt
+and marks nothing.
 
 The ten buckets run 0 to 5, 5 to 15, 15 to 30 and 30 to 60 minutes, then 1 to 2, 2 to 4, 4 to 8, 8 to 16 and 16 to 32
 hours, and above. Windows are counted whether or not a recipe is retained, so one that outlives the idle window still
@@ -325,9 +328,10 @@ prompt itself leaves when its entry goes cold: at the entry's expiry the engine 
 `expired`, each as its chain's last entry ends, and sends nothing, and the row still reads `paused`. The same hold on an
 armed recipe reads `held`, since the gate reads it again at every tick and probing resumes when it clears. A recipe held
 on a disabled pool reads `retained` again at the first tick after the pool is enabled. A `held` or `retained` cause
-reads `not_retained` when the agent holds no prompt, as a request refused at its account selection does.
-`keepalive_off` and `opted_out` are recorded when the request arrives and no body is kept, while
-`ineligible_credential` is read at the account selection.
+reads `not_retained` when the agent holds no prompt, as a request refused at its account selection does. `keepalive_off`
+and `opted_out` are recorded when the request arrives and no body is kept, while `ineligible_credential` is read at the
+account selection. A request refused at its arrival credits no probe, so a probe outstanding when the pool's keepalive
+is turned off or the key opts out is judged at the agent's next followed turn or settles as wasted.
 
 A session's recipes end together when the session does. A `session_end` report, a registration that replaces the
 instance, the session's own expiry and an operator's release each discard every recipe of the session at once, and the

@@ -2787,7 +2787,7 @@ impl Engine {
         let key: SessionKey = (key_id, session_id);
         // Read ahead of the body's parse, so a request on a pool with the keepalive off or from an opted-out key keeps
         // no body. A key the snapshot lacks reads the default policy, which is off.
-        let refused = {
+        let arrival_refusal = {
             let snapshot = self.parts.router.snapshot();
             let key_row = snapshot.key(&key.0);
             let enabled = key_row
@@ -2818,7 +2818,7 @@ impl Engine {
             )
         };
         let prebuilt = (held
-            && refused.is_none()
+            && arrival_refusal.is_none()
             && observed
                 .client
                 .request_class
@@ -3073,7 +3073,7 @@ impl Engine {
         agent.canonical_model = observed.canonical_model.clone();
         agent.key_generation = observed.key_generation;
         // Past the activity writes and the slot, which such a request takes as any other does, and ahead of the build.
-        if let Some(reason) = refused {
+        if let Some(reason) = arrival_refusal {
             inner.drop_aside(&key, &agent_id);
             inner.set_reason(&key, &agent_id, reason);
             return;
@@ -3199,8 +3199,8 @@ impl Engine {
             agent.ttl_ms = 0;
         }
         agent.account = Some(selected.account_id);
-        // A key deleted since the arrival leaves the agent's pool as it stood, and the next tick drops the recipe as it
-        // drops any whose key the snapshot lacks.
+        // A key deleted since the arrival leaves the agent's pool as it stood, and the next tick's
+        // `drop_sessions_of_dead_keys` ends the whole session under `session_ended`.
         if let Some(pool_id) = pool_id {
             agent.pool_id = pool_id;
         }

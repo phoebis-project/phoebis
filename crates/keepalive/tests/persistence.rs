@@ -1791,8 +1791,8 @@ async fn a_restart_restores_the_class_of_a_seats_records_and_a_payload_from_befo
     );
 }
 
-/// A probe saved with a null speed, as a payload holds one whose answer named no speed, comes back from a restart and
-/// settles at the standard speed.
+/// A probe saved with a null speed, as a payload an earlier build saved holds one whose answer named no speed, comes
+/// back from a restart and settles at the standard speed.
 #[tokio::test]
 async fn a_saved_probe_whose_speed_reads_null_restores_and_settles_at_standard() {
     let mut r = rig(on_disk()).await;
