@@ -9,7 +9,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use phoebis_store::permissions::{create_private_dir, create_private_file};
+use phoebis_store::permissions::create_private_file;
 use phoebis_store::StorageKey;
 
 use crate::config::{ConfigError, ListenerTls};
@@ -652,7 +652,7 @@ fn write(
     }
     parents.push(parent_of(&plan.config_path));
     for dir in parents {
-        create_missing(dir, written)?;
+        walk_to(dir, private_dirs::create_missing, written)?;
     }
 
     let hex = StorageKey::generate().to_hex();
@@ -662,15 +662,11 @@ fn write(
         write_file(env_file, 0o600, &[lines.as_bytes()], written)?;
     }
     if !plan.container {
-        let existed = private_dirs::exists(&plan.data_dir)?;
-        create_private_dir(&plan.data_dir)
-            .map_err(io_error(format!("creating {}", plan.data_dir.display())))?;
-        if !existed {
-            written.push(Landed {
-                dir: true,
-                path: plan.data_dir.clone(),
-            });
-        }
+        walk_to(
+            &plan.data_dir,
+            private_dirs::create_dir_through_walk,
+            written,
+        )?;
     }
     write_file(
         &plan.config_path,
@@ -686,9 +682,15 @@ fn write(
     Ok(())
 }
 
-fn create_missing(dir: &Path, written: &mut Vec<Landed>) -> Result<(), InitError> {
+/// Records what `walk` created before its answer is read, so a walk that fails part way leaves its directories to the
+/// undo.
+fn walk_to(
+    dir: &Path,
+    walk: fn(&Path, &mut Vec<PathBuf>) -> Result<(), private_dirs::WalkError>,
+    written: &mut Vec<Landed>,
+) -> Result<(), InitError> {
     let mut created = Vec::new();
-    let walked = private_dirs::create_missing(dir, &mut created);
+    let walked = walk(dir, &mut created);
     written.extend(created.into_iter().map(|path| Landed { dir: true, path }));
     walked.map_err(InitError::from)
 }

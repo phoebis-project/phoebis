@@ -10,7 +10,7 @@ use anyhow::Context;
 use clap::{Parser, Subcommand};
 use phoebis_router::admin_client::{self, AdminClient, Common};
 use phoebis_router::backup::{self, BackupArgs};
-use phoebis_router::config::Config;
+use phoebis_router::config::{Config, UPSTREAM_GZIP_WORDS};
 use phoebis_router::recover_key::{self, RecoverKeyArgs};
 use phoebis_router::status::{self, Listeners, StatusArgs};
 use phoebis_router::tls::PublicListener;
@@ -96,7 +96,11 @@ fn main() -> anyhow::Result<()> {
                 config.proxy.key_body_reads,
                 config.proxy.max_request_bytes,
                 if config.proxy.sign_cch_placeholder { "on" } else { "off" },
-                config.proxy.upstream_gzip
+                // The deserializer and the default write only the table's settings, so the empty word never prints.
+                UPSTREAM_GZIP_WORDS
+                    .iter()
+                    .find(|(_, setting)| *setting == config.proxy.upstream_gzip)
+                    .map_or("", |(word, _)| word)
             );
             println!("profile {}", app::profile().name);
             println!(

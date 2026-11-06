@@ -23,6 +23,26 @@ pub(crate) fn create_missing(dir: &Path, created: &mut Vec<PathBuf>) -> Result<(
     create(&missing(dir)?, created)
 }
 
+/// Creates `path`'s missing directories as the walk does and refuses anything at `path` that is not a directory,
+/// reading through a link as the recursive create does. A link to a directory passes, and a dangling link refuses,
+/// since the first start would fail on it.
+pub(crate) fn create_dir_through_walk(
+    path: &Path,
+    created: &mut Vec<PathBuf>,
+) -> Result<(), WalkError> {
+    create_missing(path, created)?;
+    let refused = |error| WalkError {
+        step: "checking",
+        path: path.to_path_buf(),
+        error,
+    };
+    match std::fs::metadata(path) {
+        Ok(found) if found.is_dir() => Ok(()),
+        Ok(_) => Err(refused(ErrorKind::NotADirectory.into())),
+        Err(error) => Err(refused(error)),
+    }
+}
+
 /// Whether anything sits at `path`, a dangling link included, since `create_new` refuses that too.
 pub(crate) fn exists(path: &Path) -> Result<bool, WalkError> {
     match std::fs::symlink_metadata(path) {

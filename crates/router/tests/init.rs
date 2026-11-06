@@ -367,6 +367,24 @@ fn an_existing_empty_data_directory_is_used_as_it_is() {
 }
 
 #[test]
+fn a_dangling_link_at_the_data_directory_path_refuses_the_run_and_leaves_nothing_behind() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    std::os::unix::fs::symlink(dir.path().join("nowhere"), &data).unwrap();
+    let config = dir.path().join("config.yaml");
+    let out = init(
+        dir.path(),
+        &["--non-interactive", "--config", path_arg(&config)],
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    assert!(out.stdout.is_empty(), "{}", printed(&out));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(stderr.lines().count(), 1, "{stderr}");
+    assert!(stderr.contains(&data.display().to_string()), "{stderr}");
+    assert_eq!(entries(dir.path()), ["data"]);
+}
+
+#[test]
 fn an_address_off_loopback_is_written_without_a_tls_line_and_passes_check_config() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.yaml");

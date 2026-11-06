@@ -652,7 +652,11 @@ named, while the status screen keeps the host's zone ([Is it up?](operations.md#
 the rows it opened, discarding nothing ([The storage key](operations.md#the-storage-key)).
 `phoebis check-config` refuses a registry or a ledger a newer build wrote with the start's own sentence and its restore
 advice, under `reading the registry at {path}` or `reading the ledger at {path}`
-([Upgrades and renewals](operations.md#upgrades)).
+([Upgrades and renewals](operations.md#upgrades)). `phoebis init` refuses anything at the data directory's path that is
+not a directory, a dangling link among them, `proxy.upstream_gzip` refuses a bad word as a YAML error naming the key,
+`phoebis tls reload` names the admin listener in its refusal, `phoebis backup` names the directory it could not create
+or sync, and `phoebis status` probes the proxy beside its admin reads ([Commands](installation.md#commands),
+[proxy](installation.md#proxy), [Is it up?](operations.md#is-it-up)).
 
 Guardrails are named objects attached to pools and keys, each an ordered list of conditions over a request's headers,
 derived facts, body members and messages, which in observe mode record the requests they match and in enforce mode

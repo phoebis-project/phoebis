@@ -65,7 +65,7 @@ pub enum ClientError {
     Config(#[from] ConfigError),
     #[error("the admin secret was refused")]
     Refused401,
-    #[error("{status} {message}")]
+    #[error("the admin listener answered {status} {message}")]
     Refused { status: u16, message: String },
     /// The listener answered, with a body that is not JSON: something other than the admin API holds the address.
     #[error("{url}: answered {status} with a body that is not JSON")]

@@ -341,8 +341,10 @@ and owner, where the secret went, and the next command, `phoebis check-config --
 already exists, when a `router.sqlite` or `ledger.sqlite` already sits in the data directory
 (`{path} exists and a new key cannot open it, so keep the key that sealed it, or name an empty --data-dir`), when input
 ends before a question is answered, and when `--owner` runs off root or names no user. A directory or a file it cannot
-write exits 1 too, after removing what the run wrote, which the line names. A usage error, such as `--proxy-cert`
-without `--proxy-key` or an address that does not parse, exits 2.
+write exits 1 too, after removing what the run wrote, which the line names, and so does anything at the data
+directory's path that is not a directory, with `checking {path}: {reason}`. The check reads through a link, so a link to
+a directory is used as the data directory and a dangling link refuses. A usage error, such as `--proxy-cert` without
+`--proxy-key` or an address that does not parse, exits 2.
 
 Under `--container` the bootstrap file's directory is the compose directory: `init` writes `storage.key` and
 `phoebis.env` beside the file, the container's paths inside it (`/run/secrets/router-storage-key`,
@@ -572,7 +574,8 @@ Refused with:
 - `tls`: `proxy.tls: must be a mapping with cert_file and key_file` under `the configuration is not valid YAML` for a
   word in the key's place, the key with nothing beneath it, a third key, a repeated key, or a mapping that lacks one
   of the two ([TLS on the listeners](#tls-on-the-listeners))
-- `upstream_gzip`: `proxy.upstream_gzip must be auto, on or off, not {value}`
+- `upstream_gzip`: `proxy.upstream_gzip: must be auto, on or off, not {value}` under
+  `the configuration is not valid YAML`
 
 `max_request_bytes` is the per-body bound, the Messages API's own request limit, so the router never refuses what the
 upstream accepts, and a value above it is refused as pointless. `body_budget_bytes` is the bytes of bodies the whole

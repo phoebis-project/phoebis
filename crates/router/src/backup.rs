@@ -178,8 +178,7 @@ fn take(
     created: &mut Vec<PathBuf>,
     written: &mut Vec<PathBuf>,
 ) -> Result<(Manifest, Vec<String>), String> {
-    create_missing(dir, created)
-        .map_err(|error| format!("cannot create {}: {error}", dir.display()))?;
+    create_missing(dir, created)?;
     let mut lines = Vec::new();
     let registry_copy = dir.join(REGISTRY_COPY);
     let mut registry = copy(
@@ -259,11 +258,12 @@ fn copy(
 }
 
 /// Creates `dir` and its missing parents, then syncs the directory holding each one the run created, so the entries
-/// outlive a power loss once the run answers.
-fn create_missing(dir: &Path, created: &mut Vec<PathBuf>) -> std::io::Result<()> {
-    private_dirs::create_missing(dir, created).map_err(|walk| walk.error)?;
+/// outlive a power loss once the run answers. A failure keeps the walk's own line, since the component that refused
+/// may sit above `dir`.
+fn create_missing(dir: &Path, created: &mut Vec<PathBuf>) -> Result<(), String> {
+    private_dirs::create_missing(dir, created).map_err(|walk| walk.to_string())?;
     for path in created.iter() {
-        File::open(permissions::data_dir_of(path))?.sync_all()?;
+        sync_dir(permissions::data_dir_of(path))?;
     }
     Ok(())
 }

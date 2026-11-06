@@ -67,8 +67,45 @@ pub struct ProxyConfig {
     #[serde(default, deserialize_with = "present_tls")]
     pub tls: Option<ListenerTls>,
     /// How the edited body leaves toward the upstream: `auto` mirrors the client, `on` always gzip, `off` never.
-    #[serde(default = "default_upstream_gzip")]
-    pub upstream_gzip: String,
+    #[serde(
+        default = "default_upstream_gzip",
+        deserialize_with = "upstream_gzip_word"
+    )]
+    pub upstream_gzip: phoebis_relay::UpstreamGzip,
+}
+
+/// The one table of `proxy.upstream_gzip`'s words, read by the deserializer and the check-config print.
+pub const UPSTREAM_GZIP_WORDS: &[(&str, phoebis_relay::UpstreamGzip)] = &[
+    ("auto", phoebis_relay::UpstreamGzip::Auto),
+    ("off", phoebis_relay::UpstreamGzip::Off),
+    ("on", phoebis_relay::UpstreamGzip::On),
+];
+
+/// A word outside the table is refused at the parse. The refusal is raised inside the visitor, since the parser puts
+/// the key's path in front of an error the value's own read raises and only the block's path in front of one raised
+/// after it.
+fn upstream_gzip_word<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<phoebis_relay::UpstreamGzip, D::Error> {
+    struct Word;
+
+    impl serde::de::Visitor<'_> for Word {
+        type Value = phoebis_relay::UpstreamGzip;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("auto, on or off")
+        }
+
+        fn visit_str<E: serde::de::Error>(self, word: &str) -> Result<Self::Value, E> {
+            UPSTREAM_GZIP_WORDS
+                .iter()
+                .find(|(known, _)| *known == word)
+                .map(|(_, setting)| *setting)
+                .ok_or_else(|| E::custom(format_args!("must be auto, on or off, not {word}")))
+        }
+    }
+
+    deserializer.deserialize_str(Word)
 }
 
 /// One public listener's `tls` key: the operator's certificate pair, and the listener terminates TLS. Absent, the
@@ -271,8 +308,6 @@ pub enum ConfigError {
     StoragePath { path: PathBuf },
     #[error("the configuration is not valid YAML")]
     Syntax(#[from] serde_norway::Error),
-    #[error("proxy.upstream_gzip must be auto, on or off, not {value}")]
-    UpstreamGzipInvalid { value: String },
 }
 
 /// Reads, parses and validates the bootstrap file and leaves the admin secret's variable unchecked: the start reads it
@@ -396,11 +431,6 @@ fn check_shape(config: &Config) -> Result<(), ConfigError> {
         1,
         4_096,
     )?;
-    if upstream_gzip(&proxy.upstream_gzip).is_none() {
-        return Err(ConfigError::UpstreamGzipInvalid {
-            value: proxy.upstream_gzip.clone(),
-        });
-    }
     within(
         "routing.model_rejection_seconds",
         config.routing.model_rejection_seconds,
@@ -584,19 +614,8 @@ fn default_max_request_bytes() -> usize {
     32 << 20
 }
 
-/// `proxy.upstream_gzip`'s word as the relay's setting, `None` for a word the load refuses. The one list of the words,
-/// since the relay's enum has no parser of its own.
-pub fn upstream_gzip(word: &str) -> Option<phoebis_relay::UpstreamGzip> {
-    match word {
-        "auto" => Some(phoebis_relay::UpstreamGzip::Auto),
-        "off" => Some(phoebis_relay::UpstreamGzip::Off),
-        "on" => Some(phoebis_relay::UpstreamGzip::On),
-        _ => None,
-    }
-}
-
-fn default_upstream_gzip() -> String {
-    "auto".into()
+fn default_upstream_gzip() -> phoebis_relay::UpstreamGzip {
+    phoebis_relay::UpstreamGzip::Auto
 }
 
 #[cfg(test)]
@@ -683,15 +702,22 @@ mod tests {
                 "  key_body_reads: 4097\n",
                 "proxy.key_body_reads must be between 1 and 4096, not 4097",
             ),
-            (
-                "gzip",
-                "  upstream_gzip: gzip\n",
-                "proxy.upstream_gzip must be auto, on or off, not gzip",
-            ),
         ] {
             let error = load_unresolved(&file_with_proxy(dir.path(), name, keys)).unwrap_err();
             assert_eq!(error.to_string(), expected, "{name}");
         }
+        let error = load_unresolved(&file_with_proxy(
+            dir.path(),
+            "gzip",
+            "  upstream_gzip: gzip\n",
+        ))
+        .unwrap_err();
+        let chain = chain(&error);
+        assert!(
+            matches!(error, ConfigError::Syntax(_))
+                && chain.contains("proxy.upstream_gzip: must be auto, on or off, not gzip"),
+            "gzip: {chain}"
+        );
         let edges = load_unresolved(&file_with_proxy(
             dir.path(),
             "edges",
@@ -707,9 +733,16 @@ mod tests {
                 edges.key_body_reads,
                 edges.max_request_bytes,
                 edges.sign_cch_placeholder,
-                edges.upstream_gzip.as_str()
+                edges.upstream_gzip
             ),
-            (1 << 40, 599, 4_096, 1_024, true, "off")
+            (
+                1 << 40,
+                599,
+                4_096,
+                1_024,
+                true,
+                phoebis_relay::UpstreamGzip::Off
+            )
         );
         let low = load_unresolved(&file_with_proxy(
             dir.path(),
@@ -720,8 +753,8 @@ mod tests {
         .unwrap()
         .proxy;
         assert_eq!(
-            (low.body_budget_bytes, low.upstream_gzip.as_str()),
-            (1_024, "on"),
+            (low.body_budget_bytes, low.upstream_gzip),
+            (1_024, phoebis_relay::UpstreamGzip::On),
             "a budget of one body at the per-body bound is enough"
         );
     }

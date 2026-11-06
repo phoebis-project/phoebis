@@ -1,4 +1,4 @@
-//! `phoebis status`: the proxy listener's readiness probe, then five admin reads through the subcommand client,
+//! `phoebis status`: the proxy listener's readiness probe beside five admin reads through the subcommand client,
 //! printed as one screen of at most 80 columns or as one JSON object.
 
 use std::collections::BTreeMap;
@@ -83,32 +83,33 @@ const SESSION_CHARS: usize = 12;
 /// Where a wrapped line carries on.
 const CARRY: &str = "    ";
 
-/// The probe (blocking, on a worker) and the five GETs, in the spec's order, each under the client's deadline.
+/// The probe, blocking on a worker, runs beside the five GETs, so a wedged proxy listener does not hold the admin reads
+/// back by its budget. The GETs run one after another in the spec's order, each under the client's deadline.
 pub async fn read(client: &AdminClient, proxy: Option<(SocketAddr, bool)>) -> Reads {
-    let health = match proxy {
-        // The probe keeps its own three-second budget, so `health` and `status` read the listener the same way, and
-        // a shorter `--timeout` shortens it too.
-        Some((listen, tls)) => {
-            let budget = health::TIMEOUT.min(client.timeout());
-            Some(
-                tokio::task::spawn_blocking(move || health::probe(listen, tls, budget))
-                    .await
-                    .unwrap_or_else(|error| {
-                        Err(format!("the proxy probe did not finish: {error}"))
-                    }),
-            )
-        }
-        None => None,
+    // The probe keeps its own three-second budget, so `health` and `status` read the listener the same way, and a
+    // shorter `--timeout` shortens it too.
+    let budget = health::TIMEOUT.min(client.timeout());
+    let probe = async move {
+        let (listen, tls) = proxy?;
+        Some(
+            tokio::task::spawn_blocking(move || health::probe(listen, tls, budget))
+                .await
+                .unwrap_or_else(|error| Err(format!("the proxy probe did not finish: {error}"))),
+        )
     };
-    let mut reader = Reader {
-        client,
-        refused: None,
+    let admin = async {
+        let mut reader = Reader {
+            client,
+            refused: None,
+        };
+        let system = reader.get("/admin/system").await;
+        let attention = reader.get("/admin/attention").await;
+        let pools = reader.get("/admin/pools").await;
+        let accounts = reader.get("/admin/accounts").await;
+        let sessions = reader.get("/admin/sessions").await;
+        (system, attention, pools, accounts, sessions)
     };
-    let system = reader.get("/admin/system").await;
-    let attention = reader.get("/admin/attention").await;
-    let pools = reader.get("/admin/pools").await;
-    let accounts = reader.get("/admin/accounts").await;
-    let sessions = reader.get("/admin/sessions").await;
+    let (health, (system, attention, pools, accounts, sessions)) = tokio::join!(probe, admin);
     Reads {
         accounts,
         attention,
@@ -136,19 +137,16 @@ impl Reader<'_> {
         }
         match self.client.expect(Method::GET, path, None).await {
             Ok(answer) => Ok(answer.body),
-            Err(ClientError::Refused { status, message }) => {
-                let line = format!("the admin listener answered {status} {message}");
-                if status == 429 {
+            Err(error) => {
+                let line = error.to_string();
+                if matches!(
+                    error,
+                    ClientError::Refused401 | ClientError::Refused { status: 429, .. }
+                ) {
                     self.refused = Some(line.clone());
                 }
                 Err(line)
             }
-            Err(error @ ClientError::Refused401) => {
-                let line = error.to_string();
-                self.refused = Some(line.clone());
-                Err(line)
-            }
-            Err(error) => Err(error.to_string()),
         }
     }
 }

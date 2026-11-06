@@ -243,9 +243,9 @@ present, and lets the next start create an empty registry, in which every accoun
 ## Is it up?
 
 `phoebis status` is the operator's read and `phoebis health` the orchestrator's: `health` sends one `HEAD /api/ready`
-to the proxy listener and prints one line, while `status` runs that probe first, then reads `GET /admin/system`,
-`/admin/attention`, `/admin/pools`, `/admin/accounts` and `/admin/sessions` with the admin secret from the environment,
-each call under the `--timeout` deadline, and prints one screen:
+to the proxy listener and prints one line, while `status` runs that probe beside its reads of `GET /admin/system`,
+`/admin/attention`, `/admin/pools`, `/admin/accounts` and `/admin/sessions`, which it makes in that order with the admin
+secret from the environment, each call under the `--timeout` deadline, and prints one screen:
 
 ```text title="phoebis status"
 phoebis 0.1.0, up 3d 4h, ready

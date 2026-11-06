@@ -401,7 +401,10 @@ async fn a_mutation_sends_json_and_reads_the_routes_refusal() {
         }
         other => panic!("the route's own refusal was expected: {other}"),
     }
-    assert_eq!(error.to_string(), "400 id and label are required");
+    assert_eq!(
+        error.to_string(),
+        "the admin listener answered 400 id and label are required"
+    );
     running.stop().await;
 }
 
