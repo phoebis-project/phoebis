@@ -520,7 +520,10 @@ export const FIXTURES: Record<string, Fixture> = {
           "slow_down": null,
           "fast_lane": null,
           "extra_usage": null,
-          "pool": null,
+          "pool": {
+            "pool_id": "retired",
+            "priority": 0
+          },
           "requests": {
             "last_24h": 0,
             "last_7d": 0,
@@ -9773,7 +9776,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         "attempted": [],
         "holds": [],
-        "registry_revision": 65,
+        "registry_revision": 66,
         "body_tokens": 0
       },
       "pin": {
@@ -11463,6 +11466,337 @@ export const FIXTURES: Record<string, Fixture> = {
               "text": "A shed cap under 25 percent removes at most a quarter of the burn per round, so a window far over the ceiling needs several rounds and dwells to come under it."
             }
           ]
+        },
+        {
+          "id": "retired",
+          "label": "Retired",
+          "enabled": true,
+          "strategy": "priority",
+          "prefer_subscription": true,
+          "affinity_ttl_seconds": 3600,
+          "overage_policy": "prefer_plan",
+          "affinity_mode": "always",
+          "subagent_placement": "by_strategy",
+          "session_placement": "by_strategy",
+          "min_shared_prefix_tokens": 20000,
+          "window_ceiling": 0.95,
+          "model_rules": [],
+          "load_shedding": true,
+          "shed_cap": 0.5,
+          "burn_average_seconds": 1800,
+          "shed_dwell_seconds": 900,
+          "migrate_when_spent": true,
+          "warm_sessions": "when_needed",
+          "slow_down": false,
+          "slow_down_stretch_seconds": 9000,
+          "slow_down_hold_seconds": 120,
+          "retry_in_place_seconds": 60,
+          "in_flight_cap": 16,
+          "overage_move_grace_minutes": 30,
+          "wind_down_minutes": 30,
+          "return_to_plan": "always",
+          "return_to_plan_dwell_seconds": 900,
+          "moves_per_hour": {},
+          "keepalive": {
+            "enabled": false,
+            "max_idle_seconds": 3600,
+            "max_parked_seconds": null,
+            "scheduled_horizon_seconds": null
+          },
+          "keepalive_resolved": {
+            "break_even_seconds": {
+              "min": 11760,
+              "max": 158760
+            },
+            "horizon_seconds": {
+              "min": 11760,
+              "max": 158760
+            },
+            "idle_seconds": {
+              "min": 3600,
+              "max": 3600
+            },
+            "idle_share": {
+              "min": 0.022222222222222223,
+              "max": 0.3
+            },
+            "parked_seconds": {
+              "min": 11760,
+              "max": 158760
+            }
+          },
+          "cache_ttl": {
+            "enabled": false,
+            "inject_when_absent": false,
+            "metered": {
+              "main": "5m",
+              "models": [],
+              "subagent": "5m"
+            },
+            "plan": {
+              "main": "1h",
+              "models": [],
+              "subagent": "1h"
+            }
+          },
+          "cache_diagnostics": false,
+          "auto_mode_server": true,
+          "body_capture_hours": 0,
+          "created_at": 1791721000000,
+          "updated_at": 1791721000000,
+          "revision": 6189767511104,
+          "members": [
+            {
+              "account_id": "free-org",
+              "priority": 0,
+              "eligible": "subscription_ended",
+              "kind": "oauth",
+              "budget_daily_usd": null,
+              "budget_monthly_usd": null,
+              "budget_until": null,
+              "spends": [],
+              "active_pins": 0,
+              "pace_score": 60,
+              "burn": null,
+              "speed": null
+            }
+          ],
+          "keys": [],
+          "status": "exhausted",
+          "requests_24h": 0,
+          "cost_24h": 0,
+          "billed_24h": 0,
+          "equivalent_24h": 0,
+          "active_pins": 0,
+          "traffic_24h": [
+            {
+              "at": 1791633600000,
+              "requests": 0,
+              "failed": 0,
+              "tokens": 0,
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": 0
+            },
+            {
+              "at": 1791637200000,
+              "requests": 0,
+              "failed": 0,
+              "tokens": 0,
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": 0
+            },
+            {
+              "at": 1791640800000,
+              "requests": 0,
+              "failed": 0,
+              "tokens": 0,
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": 0
+            },
+            {
+              "at": 1791644400000,
+              "requests": 0,
+              "failed": 0,
+              "tokens": 0,
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": 0
+            },
+            {
+              "at": 1791648000000,
+              "requests": 0,
+              "failed": 0,
+              "tokens": 0,
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": 0
+            },
+            {
+              "at": 1791651600000,
+              "requests": 0,
+              "failed": 0,
+              "tokens": 0,
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": 0
+            },
+            {
+              "at": 1791655200000,
+              "requests": 0,
+              "failed": 0,
+              "tokens": 0,
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": 0
+            },
+            {
+              "at": 1791658800000,
+              "requests": 0,
+              "failed": 0,
+              "tokens": 0,
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": 0
+            },
+            {
+              "at": 1791662400000,
+              "requests": 0,
+              "failed": 0,
+              "tokens": 0,
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": 0
+            },
+            {
+              "at": 1791666000000,
+              "requests": 0,
+              "failed": 0,
+              "tokens": 0,
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": 0
+            },
+            {
+              "at": 1791669600000,
+              "requests": 0,
+              "failed": 0,
+              "tokens": 0,
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": 0
+            },
+            {
+              "at": 1791673200000,
+              "requests": 0,
+              "failed": 0,
+              "tokens": 0,
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": 0
+            },
+            {
+              "at": 1791676800000,
+              "requests": 0,
+              "failed": 0,
+              "tokens": 0,
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": 0
+            },
+            {
+              "at": 1791680400000,
+              "requests": 0,
+              "failed": 0,
+              "tokens": 0,
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": 0
+            },
+            {
+              "at": 1791684000000,
+              "requests": 0,
+              "failed": 0,
+              "tokens": 0,
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": 0
+            },
+            {
+              "at": 1791687600000,
+              "requests": 0,
+              "failed": 0,
+              "tokens": 0,
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": 0
+            },
+            {
+              "at": 1791691200000,
+              "requests": 0,
+              "failed": 0,
+              "tokens": 0,
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": 0
+            },
+            {
+              "at": 1791694800000,
+              "requests": 0,
+              "failed": 0,
+              "tokens": 0,
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": 0
+            },
+            {
+              "at": 1791698400000,
+              "requests": 0,
+              "failed": 0,
+              "tokens": 0,
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": 0
+            },
+            {
+              "at": 1791702000000,
+              "requests": 0,
+              "failed": 0,
+              "tokens": 0,
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": 0
+            },
+            {
+              "at": 1791705600000,
+              "requests": 0,
+              "failed": 0,
+              "tokens": 0,
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": 0
+            },
+            {
+              "at": 1791709200000,
+              "requests": 0,
+              "failed": 0,
+              "tokens": 0,
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": 0
+            },
+            {
+              "at": 1791712800000,
+              "requests": 0,
+              "failed": 0,
+              "tokens": 0,
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": 0
+            },
+            {
+              "at": 1791716400000,
+              "requests": 0,
+              "failed": 0,
+              "tokens": 0,
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": 0
+            },
+            {
+              "at": 1791720000000,
+              "requests": 0,
+              "failed": 0,
+              "tokens": 0,
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": 0
+            }
+          ],
+          "guardrails": [],
+          "warnings": []
         }
       ]
     }

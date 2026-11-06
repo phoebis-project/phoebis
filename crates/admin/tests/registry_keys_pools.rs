@@ -1376,9 +1376,10 @@ async fn the_key_lifetime_walks_the_older_rows_once_an_hour_and_a_key_created_ag
 }
 
 /// The selector skips an account whose saved subscription end has passed, so the pool status does too: its only
-/// such member reads unavailable and the pool exhausted, as a paused one leaves it.
+/// such member reads subscription_ended, a word apart from a paused member's unavailable, and the pool exhausted.
 #[tokio::test]
-async fn a_member_past_its_saved_subscription_end_is_unavailable_and_its_pool_exhausted() {
+async fn a_member_past_its_saved_subscription_end_reads_subscription_ended_and_its_pool_exhausted()
+{
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     parts
@@ -1419,7 +1420,7 @@ async fn a_member_past_its_saved_subscription_end_is_unavailable_and_its_pool_ex
             pool["status"].as_str(),
             pool["members"][0]["eligible"].as_str()
         ),
-        (Some("exhausted"), Some("unavailable")),
+        (Some("exhausted"), Some("subscription_ended")),
         "past its saved end the member is the selector's obstacle: {pool}"
     );
 }

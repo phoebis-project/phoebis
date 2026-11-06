@@ -1113,7 +1113,9 @@ fn warnings_of(row: &PoolRow, cache_ttl: &CacheTtlPolicy, cohort: usize) -> Vec<
 pub(crate) struct PoolMemberView {
     pub account_id: String,
     pub priority: u32,
-    /// `budget`, `budget_unknown`, `cooldown`, `eligible`, `overage`, `spent`, or `unavailable`.
+    /// `budget`, `budget_unknown`, `cooldown`, `eligible`, `overage`, `spent`, `subscription_ended` (past the saved
+    /// end of a canceled subscription), `unavailable` (deleted, paused or unready), or `unknown` (no projection: the
+    /// router has not loaded the member, or does not answer).
     #[schema(example = "budget")]
     pub eligible: String,
     /// The account's `oauth` or `api_key`.
@@ -1327,7 +1329,9 @@ enum Eligibility {
     Eligible,
     Overage,
     Spent,
+    SubscriptionEnded,
     Unavailable,
+    Unknown,
 }
 
 impl Eligibility {
@@ -1339,27 +1343,29 @@ impl Eligibility {
             Eligibility::Eligible => "eligible",
             Eligibility::Overage => "overage",
             Eligibility::Spent => "spent",
+            Eligibility::SubscriptionEnded => "subscription_ended",
             Eligibility::Unavailable => "unavailable",
+            Eligibility::Unknown => "unknown",
         }
     }
 }
 
 /// The member word for the selector's obstacle on the member, as the router's projection of it answers.
 fn member_word(projection: Option<&AccountProjection>) -> Eligibility {
-    // A member the router answers no projection for (the router gone, or a registry write it has not reloaded) is
-    // routed nothing at that instant. No account is attempted and the fast lane is off for a projection, so the
-    // attempted and credits obstacles never arise, and neither takes a member out of the pool's standard set.
+    // The router answers no projection for a member it has not loaded (a registry write before its reload) or while
+    // it does not answer, and routes that member nothing at that instant. A member with no usage reading still has a
+    // projection, so it reads its obstacle's word. No account is attempted and the fast lane is off for a projection,
+    // so the attempted and credits obstacles never arise, and neither takes a member out of the pool's standard set.
     let Some(projection) = projection else {
-        return Eligibility::Unavailable;
+        return Eligibility::Unknown;
     };
     match &projection.obstacle {
         None | Some(Obstacle::Attempted | Obstacle::Credits { .. }) => Eligibility::Eligible,
         Some(Obstacle::Budget { .. }) => Eligibility::Budget,
         Some(Obstacle::BudgetUnknown) => Eligibility::BudgetUnknown,
         Some(Obstacle::Cooldown { .. }) => Eligibility::Cooldown,
-        Some(Obstacle::Deleted | Obstacle::Ended | Obstacle::Paused | Obstacle::Unready) => {
-            Eligibility::Unavailable
-        }
+        Some(Obstacle::Ended) => Eligibility::SubscriptionEnded,
+        Some(Obstacle::Deleted | Obstacle::Paused | Obstacle::Unready) => Eligibility::Unavailable,
         Some(Obstacle::Overage { .. }) => Eligibility::Overage,
         Some(Obstacle::Spent { .. }) => Eligibility::Spent,
     }

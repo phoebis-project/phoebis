@@ -6317,6 +6317,51 @@ async fn a_pool_member_answers_the_engines_pace_score_whatever_its_kind() {
     );
 }
 
+#[tokio::test]
+async fn a_pool_member_the_router_has_not_loaded_reads_unknown_while_a_paused_one_reads_unavailable(
+) {
+    use common::{get, json, login, post};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":0}]}"#, Some(&cookie)).await;
+    assert_eq!(
+        post(
+            &parts.app,
+            "/admin/accounts/direct/pause",
+            "",
+            Some(&cookie)
+        )
+        .await
+        .status(),
+        204,
+        "the pause's reload brings the obstacle to the router"
+    );
+    // Through the store alone and after the pause, since any reload before the read gives the member a projection.
+    let member = |account_id: &str, priority| phoebis_store::MemberWrite {
+        account_id: account_id.into(),
+        priority,
+        budget_daily_usd: None,
+        budget_monthly_usd: None,
+    };
+    parts
+        .store
+        .set_pool_members(
+            "main",
+            &[member("direct", 0), member("business", 1)],
+            "test",
+        )
+        .unwrap();
+    let pools = json(get(&parts.app, "/admin/pools", Some(&cookie)).await).await;
+    assert_eq!(
+        (
+            pool_member(&pools, "direct")["eligible"].as_str(),
+            pool_member(&pools, "business")["eligible"].as_str()
+        ),
+        (Some("unavailable"), Some("unknown")),
+        "a member the router passes over keeps its obstacle's word, and one it has not loaded reads unknown: {pools}"
+    );
+}
+
 /// A cost model whose `default_claude_max_20x` tier holds 20 times Pro's 5-hour window and 40 times Pro's week, so a
 /// burn read on one window through the other window's tier factor reads apart from the right figure.
 const UNEQUAL_FACTORS_COSTS: &str = "\

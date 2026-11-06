@@ -115,7 +115,9 @@ ended on, or in a session with no turn to judge, is charged as any call and reco
 directed to the account its judged turn ended on moves no pin ([Clients](routing.md#clients)). A guardrail create that
 loses the race for its id to another create answers the route's 409 for a taken id, as the key and pool creates do, and
 a guardrail, key or pool edit whose row is deleted while it is being saved answers 404 ahead of a stale stamp's 409
-([API reference](api-reference.md)).
+([API reference](api-reference.md)). A pool member's `eligible` word on `GET /admin/pools` reads `unknown` for a member
+the router has not loaded yet and `subscription_ended` for one past its subscription's end, apart from a deleted, paused
+or unready member's `unavailable` ([API reference](api-reference.md)).
 
 With `keepalive.enabled` on a pool the router keeps a replayable copy of every eligible request a session sends and,
 shortly before the cache entry would expire, sends a probe that reads it ([Keepalive](keepalive.md)). The policy's

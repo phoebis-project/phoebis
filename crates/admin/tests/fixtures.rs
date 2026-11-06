@@ -495,8 +495,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
             trial_ends_at: None,
         },
     ).unwrap();
-    // A free organization on the Pro tier, so the accounts fixtures carry the plan its type resolves to. It sits in
-    // no pool, which leaves the pool fixtures as they stand, and shares the seed's two bound tokens as the seat does.
+    // A free organization on the Pro tier, so the accounts fixtures carry the plan its type resolves to. It sits in a
+    // pool of its own, apart from `main`, and shares the seed's two bound tokens as the seat does.
     parts
         .store
         .insert_account(&AccountRow {
@@ -566,6 +566,12 @@ async fn every_route_is_captured_and_holds_its_shape() {
     // No fixture carries a secret shaped like a real one, so the stand-in stays whatever the capture mints.
     key_created["secret"] = j!("phoebis-fixture");
     hold(&planted, "key_created", "POST /admin/keys", key_created);
+    // The free organization past its term end alone in a second pool, so the pool fixtures carry the word of a member
+    // past its subscription's end, with a label after Main's so `main` stays the list's first pool. It follows the
+    // key's create, since the ledger mirrors the change log on a wall-clock tick whose first lands around the main
+    // pool's reload, and a create beside that pool's reaches the routing log in one capture and not the next.
+    let response = post(app, "/admin/pools", r#"{"id":"retired","label":"Retired","strategy":"priority","members":[{"account_id":"free-org","priority":0}]}"#, Some(&cookie)).await;
+    assert_eq!(response.status(), 201, "the second pool is created");
     // One guardrail observing on the pool and one enforcing on the key, so the matches the request rows below carry
     // name registry rows and the pool's and the key's answers carry both lists. The first comes from the preset, so
     // the guardrail fixtures carry the stamp the console reads.

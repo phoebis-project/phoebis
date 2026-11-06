@@ -1979,7 +1979,7 @@ async fn two_account_editors_from_one_read_meet_one_409() {
     );
     assert_eq!(
         json(first).await["error"],
-        "the account changed while the edit was being saved"
+        "the account changed while it was being edited, so reload and try again"
     );
     assert_eq!(
         (
@@ -2096,7 +2096,7 @@ async fn an_account_edit_with_a_stale_expected_revision_answers_409_and_writes_n
     );
     assert_eq!(
         json(stale).await["error"],
-        "the account changed while the edit was being saved"
+        "the account changed while it was being edited, so reload and try again"
     );
     let row = store.account("business").unwrap().unwrap();
     assert_eq!(
@@ -2232,7 +2232,7 @@ async fn a_subscription_end_edit_is_fenced_as_a_rename_is() {
     );
     assert_eq!(
         json(stale).await["error"],
-        "the account changed while the edit was being saved"
+        "the account changed while it was being edited, so reload and try again"
     );
     assert!(
         !store

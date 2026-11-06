@@ -227,7 +227,10 @@
         "slow_down": null,
         "fast_lane": null,
         "extra_usage": null,
-        "pool": null,
+        "pool": {
+          "pool_id": "retired",
+          "priority": 0
+        },
         "requests": {
           "last_24h": 0,
           "last_7d": 0,

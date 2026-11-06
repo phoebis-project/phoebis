@@ -30,7 +30,7 @@ pub(crate) const ACTOR: &str = "admin";
 pub(crate) const DUPLICATE_ID: &str = "an account with this id exists";
 
 /// The message of the 409 a stale account edit answers, in the shape a stale key, pool or guardrail edit answers.
-const STALE_EDIT: &str = "the account changed while the edit was being saved";
+const STALE_EDIT: &str = "the account changed while it was being edited, so reload and try again";
 
 /// The account to create. A member the route does not name is ignored.
 #[derive(serde::Deserialize, ToSchema)]
@@ -264,9 +264,9 @@ async fn verify_staged(
         (status = 404, description = "`account not found`", body = ErrorBody, example = json!({"error": "account not found"})),
         // The header goes ahead of `example`: utoipa-gen 6 takes the comma after an example as its own, so an
         // attribute after it fails to parse.
-        (status = 409, description = "`the account changed while the edit was being saved`",
+        (status = 409, description = "`the account changed while it was being edited, so reload and try again`",
             headers(("x-phoebis-error-code" = String, description = "`stale_edit`: the row changed since it was read")),
-            body = ErrorBody, example = json!({"error": "the account changed while the edit was being saved"})),
+            body = ErrorBody, example = json!({"error": "the account changed while it was being edited, so reload and try again"})),
         (status = 500, response = StorageFailure),
         (status = 502, description = "`the key check failed: {reason}`: the models endpoint answered a status other than `200` or `401`, is unreachable, or answered a malformed body. The reason names which, and the stored key stays.", body = ErrorBody, example = json!({"error": "the key check failed: {reason}"})),
         (status = 503, response = RegistryUnavailable),
