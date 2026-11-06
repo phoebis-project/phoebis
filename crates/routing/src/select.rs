@@ -2639,6 +2639,15 @@ pub const SLOW_DOWN_MIN_HOLD_MS: i64 = 1_000;
 /// worth its move, so it stays under `sliver`. A tenth of the rest, warm or cold.
 pub const SHED_MARK_SHARE: f64 = 0.1;
 
+/// The share of a moved pin's own burn over the time to the horizon that a move's fit holds under the ceiling, so a
+/// destination whose room exceeds that burn by less than half of it reads short for the move. The shed rule's gate
+/// refuses such a destination, the round's destination pick refuses it, and the spent, overage, return-to-plan and
+/// drain gates drop it to the rewrite-only order, which they take only where no sibling fits. A fresh placement keeps
+/// the ceiling. One half, since the burn the recorded projection implies reads a median 1.07 times the decayed average
+/// a pin's burn is priced from, p10 0.62 and p90 2.81, so a pin's burn under-reads by more than half at least one
+/// record in ten.
+pub const SHED_FIT_BAND: f64 = 0.5;
+
 /// Milliseconds as the seconds a share-per-second burn multiplies.
 fn seconds(ms: i64) -> f64 {
     ms as f64 / 1_000.0
@@ -3164,12 +3173,12 @@ pub(crate) enum Judge {
     Placement,
 }
 
-/// The fit of `pin` (or a fresh session) on `candidate`: the runway per window the request's model draws, the
-/// predicate of the three verdicts and the end exclusion, with the unknowns read as `judge` says. `planned` holds the
-/// reservations a shedding round planned before this read, summed into the candidate's prediction and burn as the
-/// live ones are, and is empty for a move rule, the partition and rung 4. `own` is the request's pin key on a
-/// placement's own read, whose row the account's burn leaves out since the placement replaces it, and `None` for a
-/// move.
+/// The fit of `pin` (or a fresh session) on `candidate`: the runway per window the request's model draws (a move's
+/// to `SHED_FIT_BAND`'s line under the ceiling), the predicate of the three verdicts and the end exclusion, with the
+/// unknowns read as `judge` says. `planned` holds the reservations a shedding round planned before this read, summed
+/// into the candidate's prediction and burn as the live ones are, and is empty for a move rule, the partition and
+/// rung 4. `own` is the request's pin key on a placement's own read, whose row the account's burn leaves out since
+/// the placement replaces it, and `None` for a move.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn fit_of(
     state: &RoutingState,
@@ -3277,6 +3286,13 @@ pub(crate) fn fit_of(
         };
         let limit = ceiling(pool, window);
         let span = projection.horizon - now;
+        // A destination whose room rests on the moved pin's own burn estimate fills at its next under-read, and the
+        // next round sheds the pin back, so a move's runway reads to a line the band holds under the ceiling. The
+        // rewrite's test and a fresh placement read the ceiling.
+        let line = match (judge, pin_burn.get(window)) {
+            (Judge::Move, Some(rate)) => limit - SHED_FIT_BAND * rate * seconds(span),
+            _ => limit,
+        };
         read.projection
             .insert(window.to_string(), predicted + account_burn.increase());
         read.horizon.insert(window.to_string(), projection.horizon);
@@ -3293,7 +3309,7 @@ pub(crate) fn fit_of(
         let runway_ms = if !lands {
             Some(0)
         } else {
-            burn.time_to(limit - predicted - rewrite)
+            burn.time_to(line - predicted - rewrite)
         };
         let Some(runway_ms) = runway_ms else {
             continue;

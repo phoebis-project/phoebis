@@ -484,7 +484,8 @@ projection carries forward (see **Burn**, below). A burn the cost model cannot p
 plan the cost model does not price (a free organization, a Team or Enterprise organization whose tier the cost model
 does not hold, or a tier the profile has not named) projects its prediction alone. An API-key account has no plan window
 and no projection, and neither has a usage-based seat, so the plan readings a seat kept from before it converted project
-nothing.
+nothing. A pin whose agent ended (see **Shed**, below) adds no burn until its next request, since its agent sends no new
+turn, while the pin and its cache stay.
 
 **The demand** What the slow-down holds back is still wanted: a session held before each request burns less than it asks
 to, and the moment the hold lifts it burns at its own pace again, so the router keeps two readings of a session's burn.
@@ -505,7 +506,11 @@ A session's runway on an account is the time until that account's projection, wi
 prompt as one cache write) added now and its burn added to the account's, reaches `window_ceiling`: none when the
 rewrite alone takes a window there, unbounded when nothing burns, and unbounded on the Sessions route and in the
 decision record's fit table where it reaches past the window's next reset, while the fit's verdict reads the computed
-figure against the horizon and the strategy's tie-break ranks by it. The session fits the account when the runway
+figure against the horizon and the strategy's tie-break ranks by it. A move reads its runway to the ceiling less half
+the session's own burn over the time to the horizon, so the line that admits a moved session sits under the line that
+sheds one. A session's burn average under-reads the burn its window then takes by more than half often enough that a
+destination whose room covers that burn with less than half of it to spare would fill before the horizon, and the next
+round would shed the session back. A fresh placement reads the ceiling. The session fits the account when the runway
 reaches the horizon on every window its model draws that the account's window set holds, `five_hour` where the set has
 it, `seven_day` and the model's own week where it has one, so an approved Ultra account is judged on its 7-day window
 and the model week alone. An API-key account fits while its worst live rate-limit bucket reads under 1.0. A usage-based
@@ -533,8 +538,9 @@ neither the spent nor the overage rule, since it draws usage credits and no plan
 
 Every rule takes its destination through one gate, the destination gate. It leaves out the source, the siblings the
 rule's own test refuses and every sibling inside `wind_down_minutes` of its subscription end (see **Subscription end**,
-below). It reads the moving session's fit on each sibling left (see **The projection**, above), each sibling's burn read
-as its demand (see **The demand**, above), and sorts them into three orders: the siblings the session fits, else the
+below). It reads the moving session's fit on each sibling left (see **The projection**, above), its runway read to the
+ceiling less half its own burn over the time to the horizon, the margin a move keeps, and each sibling's burn read as
+its demand (see **The demand**, above), and sorts them into three orders: the siblings the session fits, else the
 siblings where its rewrite lands under the ceiling but its burn runs out before a horizon, those with the longest runway
 among them with every tie kept, else the rest, the least bad. The rule answers the first order that holds a sibling.
 Among the siblings the session fits, the pool's strategy ranks them and the one with the longest runway on the binding
@@ -633,8 +639,9 @@ does not draw the window that fired is out of the round too (`off_window`), so a
 Fable sessions alone and an Opus session on the account is neither counted nor moved by it. A pin whose agent ended is
 out of the round as well (`ended`): a subagent whose last answer stopped with `end_turn`, or an agent the keepalive mod
 released. Its pin, its account and its cache stay, since the main session can respawn the agent with its whole context,
-and the agent's next request brings the pin back into the walk. The mark is kept in memory, so after a restart the walk
-reads such a pin as live until its next request. A pin with no priced burn on the fired window, such as a classifier pin
+and the agent's next request brings the pin back into the walk and its burn back into the projection that fires a round
+(see **The projection**, above). The mark is kept in memory, so after a restart the walk and the projection read such a
+pin as live until the agent's next request. A pin with no priced burn on the fired window, such as a classifier pin
 whose calls took no share of a plan window, is out of the round too (`no_burn`), since it has nothing to shed. The round
 then walks the pins in that order while the burn it removed, each pin's burn on the fired window, is under the target. A
 pin with a standing mark counts its burn as removed and is skipped as `standing`, since its move is pending. The pool's

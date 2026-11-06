@@ -1676,8 +1676,8 @@ impl RoutingState {
         self.renewed.contains(&*self.canonical_key(key))
     }
 
-    /// Marks the pin whose agent ended (a subagent's `end_turn`, the companion's release). The shed walk reads the
-    /// mark, the pin and its cache stay, and the pin's next request clears it.
+    /// Marks the pin whose agent ended (a subagent's `end_turn`, the companion's release). The shed walk and the
+    /// projection read the mark, the pin and its cache stay, and the pin's next request clears it.
     pub(crate) fn mark_ended(&mut self, key: &PinKey) {
         let key = self.canonical_key(key);
         if self.pins.contains_key(&*key) && !self.ended.contains(&*key) {
@@ -3199,9 +3199,9 @@ impl RoutingState {
         (pins, sum)
     }
 
-    /// The account's burn per plan window in share per second: the kept pins not named by a live reservation,
-    /// each `share.rate` of its plain average on `tier` at `now` decayed with `average_ms`, plus the live
-    /// reservations' `burn`. A window a pin's model does not draw is absent, an unpriced pin adds nothing.
+    /// The account's burn per plan window in share per second: the kept pins not named by a live reservation and
+    /// not marked ended, each `share.rate` of its plain average on `tier` at `now` decayed with `average_ms`, plus the
+    /// live reservations' `burn`. A window a pin's model does not draw is absent, an unpriced pin adds nothing.
     pub fn burn_shares(
         &self,
         account_id: &str,
@@ -3337,8 +3337,9 @@ impl RoutingState {
     /// Folds `add` over each kept pin's decayed rate at `now` on every plan window its model draws that the account's
     /// set has, with the pin's entrypoint, in the pin map's order, so every fold over it names the set's windows
     /// alone. A priced pin alone reaches `add`. `keep` decides which rows count, beside the skip of a row a live
-    /// booking names, with no idle test: a row idle past the TTL stands until its placement replaces it or the purge
-    /// takes it, and a placement's own reads leave the request's own row out through `keep`.
+    /// booking names and of a pin whose agent ended, with no idle test: a row idle past the TTL stands until its
+    /// placement replaces it or the purge takes it, and a placement's own reads leave the request's own row out
+    /// through `keep`.
     fn pin_rates<'a>(
         &'a self,
         account_id: &str,
@@ -3356,12 +3357,17 @@ impl RoutingState {
             .live_bookings(account_id)
             .filter_map(|reservation| reservation.pin.as_ref().map(PinKey::parts))
             .collect();
-        for pin in self
+        for (key, pin) in self
             .pins
-            .values()
-            .filter(|pin| pin.account_id == account_id && keep(pin))
+            .iter()
+            .filter(|(_, pin)| pin.account_id == account_id && keep(pin))
         {
             if reserved.contains(&pin.key_parts()) {
+                continue;
+            }
+            // An ended agent sends no new turn, so its decayed burn would hold up a projection nothing will fill. The
+            // pin and its cache stay, and its next request clears the mark and counts it again.
+            if self.ended.contains(key) {
                 continue;
             }
             for window in

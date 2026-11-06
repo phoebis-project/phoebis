@@ -8900,6 +8900,104 @@ async fn a_round_leaves_out_a_pin_whose_agent_ended_until_the_agent_sends_again(
     );
 }
 
+#[tokio::test]
+async fn a_projection_leaves_out_the_burn_of_a_pin_whose_agent_ended_until_the_agent_sends_again() {
+    let store = averaged(shedding_store(&["a", "b"]));
+    with_tier(&store, "a");
+    with_tier(&store, "b");
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), priced_config()).unwrap();
+    let subagent = |at: i64| SelectRequest {
+        agent_id: "sub".into(),
+        ..request(&handle, Some("s1"), at)
+    };
+    // Two pins on `a`: s2's main, a live sibling, and s1's subagent, whose answer ended its turn. Over the 600 s
+    // average the sibling's 1 200 input tokens burn 0.02 of the 5-hour window an hour and the subagent's 3 600 burn
+    // 0.06.
+    let sibling = selected_pin(
+        handle
+            .select(request(&handle, Some("s2"), AT))
+            .await
+            .unwrap(),
+    );
+    let ended = selected_pin(handle.select(subagent(AT)).await.unwrap());
+    handle
+        .report(renewal(
+            sibling,
+            AT + 1_000,
+            PinUsage {
+                input: 1_200,
+                ..PinUsage::default()
+            },
+            false,
+            300_000,
+        ))
+        .await;
+    handle
+        .report(Report::PinRenewed {
+            pin: ended,
+            now: AT + 1_000,
+            usage: Some(PinUsage {
+                input: 3_600,
+                ..PinUsage::default()
+            }),
+            keepalive: false,
+            cache_ttl_ms: 300_000,
+            fast: false,
+            classifier: false,
+            turn: true,
+            ended: true,
+        })
+        .await;
+    handle
+        .report(observed("a", sample_with(AT + 1_000, FIVE_HOUR, 0.6, None)))
+        .await;
+    handle.report(windows("b", 0.1, 0.1, AT + 1_000)).await;
+    handle.samples().await.unwrap();
+    now.store(AT + 1_000, Ordering::SeqCst);
+    let on_a = |record: &DecisionRecord| {
+        let a = record
+            .candidates
+            .iter()
+            .find(|c| c.account_id == "a")
+            .expect("a's row");
+        (
+            a.burn.get(FIVE_HOUR).copied(),
+            a.windows.get(FIVE_HOUR).and_then(|w| w.projection),
+        )
+    };
+
+    // The sibling's request: five hours of its burn over 0.6 read under the ceiling, where the subagent's burn would
+    // carry the window to 1.0.
+    let mut events = handle.subscribe_events();
+    handle
+        .select(request(&handle, Some("s2"), AT + 1_000))
+        .await
+        .unwrap();
+    let (burn, projection) = on_a(&next_decision(&mut events).await.1);
+    assert!(
+        close(burn, 0.02),
+        "the burn leaves the ended pin out: {burn:?}"
+    );
+    assert!(
+        close(projection, 0.7),
+        "the projection at the horizon leaves the ended pin out: {projection:?}"
+    );
+
+    // The subagent's own request clears the mark, so its record counts the pin in both sums again.
+    let mut events = handle.subscribe_events();
+    handle.select(subagent(AT + 1_000)).await.unwrap();
+    let (burn, projection) = on_a(&next_decision(&mut events).await.1);
+    assert!(
+        close(burn, 0.08),
+        "the burn counts the returned pin: {burn:?}"
+    );
+    assert!(
+        close(projection, 1.0),
+        "the projection counts the returned pin: {projection:?}"
+    );
+}
+
 /// A clock past the cache TTL, so a pin last refreshed an hour before it reads cold.
 const AT: i64 = 10 * HOUR;
 

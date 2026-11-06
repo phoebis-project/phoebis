@@ -18776,7 +18776,7 @@ fn with_no_fitting_destination_the_rewrite_only_candidate_with_the_longest_runwa
     let s = tiered(gate_pool());
     // 1 000 input tokens a second, a ten-thousandth of the window a second, overrun three hours on either sibling.
     let mut st = priced(vec![gated_pin("s1", "a", 1_000.0)]);
-    gated_siblings(&mut st, 0.5, 0.6);
+    gated_siblings(&mut st, 0.1, 0.2);
     let d = decide(
         &mut st,
         &s,
@@ -18794,10 +18794,10 @@ fn with_no_fitting_destination_the_rewrite_only_candidate_with_the_longest_runwa
         &FactValue::List(vec!["b".into()]),
         "the longer runway alone"
     );
-    // b: 0.4 of the window left over the burn is 4 000 s, c: 0.3 left is 3 000 s, both short of the 10 800 s to
-    // the reset.
-    assert_eq!(fact_of(fit, "runway_ms", "b"), &FactValue::Int(4_000_000));
-    assert_eq!(fact_of(fit, "runway_ms", "c"), &FactValue::Int(3_000_000));
+    // The move's line sits half the pin's 1.08 over the three hours under the ceiling, at 0.41. b: 0.26 of the window
+    // left under it over the burn is 2 600 s, c: 0.16 left is 1 600 s, both short of the 10 800 s to the reset.
+    assert_eq!(fact_of(fit, "runway_ms", "b"), &FactValue::Int(2_600_000));
+    assert_eq!(fact_of(fit, "runway_ms", "c"), &FactValue::Int(1_600_000));
     for id in ["b", "c"] {
         assert_eq!(
             fact_of(fit, "verdict", id),
@@ -18807,9 +18807,59 @@ fn with_no_fitting_destination_the_rewrite_only_candidate_with_the_longest_runwa
     assert_eq!(
         summary_facts(&d),
         vec![
-            ("runway", FactValue::Int(4_000_000), Some("ms")),
+            ("runway", FactValue::Int(2_600_000), Some("ms")),
             ("fit", FactValue::Text("rewrite only".into()), Some("text")),
         ]
+    );
+}
+
+#[test]
+fn a_sibling_with_room_under_the_band_reads_short_for_a_move_and_fits_a_placement() {
+    let s = tiered(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    // s1 burns a ten-thousandth of the 5-hour window a second and holds no context, so neither read prices a
+    // rewrite. As the pool's one warm pin it is a fresh session's prior as well, so the move and the placement read
+    // one burn on b: 0.3 over the 3 000 s to b's reset, against the 0.39 that b's 0.56 leaves under the ceiling.
+    let state = || {
+        let mut st = priced(vec![PinRow {
+            last_input_tokens: 0,
+            ..burning("s1", "a", 1_000.0, true, T)
+        }]);
+        st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500), 0);
+        st.record_sample(
+            "b",
+            refreshing(0.56, T + 50 * MINUTE, T + 72 * HOUR, T - 500),
+            0,
+        );
+        st
+    };
+    let moved = decide(
+        &mut state(),
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    assert_eq!(
+        landed(moved.result.clone()),
+        ("b".into(), Some(MigrateReason::Spent))
+    );
+    assert_eq!(
+        candidate(&moved.record, "b").fit,
+        Some("rewrite_only"),
+        "the room covers 1.3 times the pin's burn, short of the band's 1.5, so the move reads b short"
+    );
+    let placed = decide(
+        &mut state(),
+        &s,
+        &request(&s, None, "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    assert_eq!(
+        candidate(&placed.record, "b").fit,
+        Some("fits"),
+        "a fresh placement reads the same burn against the ceiling itself"
     );
 }
 
@@ -18818,16 +18868,17 @@ fn a_rewrite_only_candidate_with_a_window_past_its_reset_keeps_the_longest_runwa
     let s = tiered(gate_pool());
     let mut st = priced(vec![gated_pin("s1", "a", 1_000.0)]);
     st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500), 0);
-    // b's 5-hour window binds at 4 000 s, short of the 10 800 s to its reset, beside a week whose 50 500 s pass its
-    // reset two hours out. c's 5-hour window binds at 3 000 s beside a week inside its reset.
+    // Under the move's line, half the pin's burn to each horizon under the ceiling, b's 5-hour window binds at
+    // 2 600 s, short of the 10 800 s to its reset, beside a week whose 46 900 s pass its reset two hours out. c's
+    // 5-hour window binds at 1 600 s beside a week inside its reset.
     st.record_sample(
         "b",
-        windows_with_resets((0.5, T + 3 * HOUR), (0.1, T + 2 * HOUR), T - 500),
+        windows_with_resets((0.1, T + 3 * HOUR), (0.1, T + 2 * HOUR), T - 500),
         0,
     );
     st.record_sample(
         "c",
-        refreshing(0.6, T + 3 * HOUR, T + 72 * HOUR, T - 500),
+        refreshing(0.2, T + 3 * HOUR, T + 72 * HOUR, T - 500),
         0,
     );
     let d = decide(
@@ -18851,14 +18902,14 @@ fn a_rewrite_only_candidate_with_a_window_past_its_reset_keeps_the_longest_runwa
         (fact_of(fit, "binding", "b"), fact_of(fit, "runway_ms", "b")),
         (
             &FactValue::Text("five_hour".into()),
-            &FactValue::Int(4_000_000)
+            &FactValue::Int(2_600_000)
         )
     );
     assert_eq!(
         (fact_of(fit, "binding", "c"), fact_of(fit, "runway_ms", "c")),
         (
             &FactValue::Text("five_hour".into()),
-            &FactValue::Int(3_000_000)
+            &FactValue::Int(1_600_000)
         )
     );
 }
@@ -18870,9 +18921,10 @@ fn under_priority_two_fitting_candidates_in_one_tier_take_the_longer_runway_with
         ..gate_pool()
     });
     let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
-    // b: 0.6 of the window left over the pin's burn is 60 000 s, c: 0.4 left is 40 000 s, both past the 10 800 s to
-    // the reset, and each week's runway passes its reset 72 hours out: both runways read unbounded, while the
-    // computed figures still break the tie.
+    // Under the move's line, half the pin's burn to each horizon under the ceiling, b: 0.546 of the window left over
+    // the pin's burn is 54 600 s, c: 0.346 left is 34 600 s, both past the 10 800 s to the reset, and each week's
+    // runway passes its reset 72 hours out: both runways read unbounded, while the computed figures still break the
+    // tie.
     gated_siblings(&mut st, 0.3, 0.5);
     let d = decide(
         &mut st,
@@ -18917,10 +18969,10 @@ fn under_priority_a_runway_shown_unbounded_past_its_reset_still_breaks_the_tie_b
     });
     let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
     st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500), 0);
-    // b, first in the tie, reaches the ceiling past each window's reset: 35 000 s on the 5-hour window against its
-    // reset three hours out, about 140 hours on the week against its reset 72 hours out. c's 60 000 s on the 5-hour
-    // window pass its reset too, while its week's 85 000 s stay inside the 72 hours. b's computed runway is the
-    // shorter.
+    // b, first in the tie, reaches the move's line, half the pin's burn to each horizon under the ceiling, past each
+    // window's reset: 29 600 s on the 5-hour window against its reset three hours out, about 138 hours on the week
+    // against its reset 72 hours out. c's 54 600 s on the 5-hour window pass its reset too, while its week's 76 000 s
+    // stay inside the 72 hours. b's computed runway is the shorter.
     st.record_sample(
         "b",
         refreshing(0.55, T + 3 * HOUR, T + 72 * HOUR, T - 500),
@@ -18968,8 +19020,9 @@ fn under_pace_an_exact_score_tie_is_broken_by_the_runway() {
         ..gate_pool()
     });
     let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
-    // b and c read one week, 0.1 with one reset, and no pin burns on either, so their scores tie exactly. c's 5-hour
-    // window at 0.3 leaves the pin 60 000 s and b's at 0.5 leaves it 40 000 s.
+    // b and c read one week, 0.1 with one reset, and no pin burns on either, so their scores tie exactly. Under the
+    // move's line, half the pin's burn to the reset under the ceiling, c's 5-hour window at 0.3 leaves the pin
+    // 54 600 s and b's at 0.5 leaves it 34 600 s.
     gated_siblings(&mut st, 0.5, 0.3);
     let d = decide(
         &mut st,
@@ -19983,7 +20036,8 @@ fn the_shed_rule_takes_the_fitting_destination_the_strategy_ranks_first_or_none(
     for id in ["b", "c"] {
         assert_eq!(fact_of(fit, "verdict", id), &FactValue::Text("fits".into()));
     }
-    // b's 60 000 s and c's 40 000 s pass the reset three hours out, and each week's runway its reset 72 hours out.
+    // Under the move's line, b's 54 600 s and c's 34 600 s pass the reset three hours out, and each week's runway its
+    // reset 72 hours out.
     assert!(
         no_fact_of(fit, "runway_ms", "b") && no_fact_of(fit, "runway_ms", "c"),
         "a runway past each window's reset reads unbounded: {:?}",
@@ -20034,8 +20088,9 @@ fn under_round_robin_the_cursor_picks_and_the_runway_never_speaks() {
         burning("s0", "a", 10.0, false, T),
     ]);
     st.record_sample("a", sample(0.9, 0.3, T - 500), 0);
-    // b at 0.1 keeps the longer runway even once the first move books its rewrite and burn there, and c at 0.75
-    // still fits the 10 800 s to the reset, so both moves find both siblings fitting.
+    // b at 0.1 keeps the longer runway even once the first move books its rewrite and burn there, and c at 0.7 still
+    // fits the 10 800 s to the reset under the move's line, half the pin's burn over them under the ceiling, so both
+    // moves find both siblings fitting.
     st.record_sample(
         "b",
         refreshing(0.1, T + 3 * HOUR, T + 72 * HOUR, T - 500),
@@ -20043,7 +20098,7 @@ fn under_round_robin_the_cursor_picks_and_the_runway_never_speaks() {
     );
     st.record_sample(
         "c",
-        refreshing(0.75, T + 3 * HOUR, T + 72 * HOUR, T - 500),
+        refreshing(0.7, T + 3 * HOUR, T + 72 * HOUR, T - 500),
         0,
     );
     past_the_wait(&mut st, &s, "p", "a", T);
@@ -20062,14 +20117,14 @@ fn under_round_robin_the_cursor_picks_and_the_runway_never_speaks() {
     );
     let fit = line(&second.record, "fit");
     // b's 5-hour runway passes its reset, so its week, inside its reset 72 hours out, binds. Each of c's windows
-    // resets before the ceiling is reached, its 15 000 s past the 10 800 s to the 5-hour reset among them. b's
-    // computed runway, about 37 500 s on its 5-hour window, is the longer against c's 15 000 s and is the figure a Pace
+    // resets before the move's line is reached, its 14 600 s past the 10 800 s to the 5-hour reset among them. b's
+    // computed runway, about 34 800 s on its 5-hour window, is the longer against c's 14 600 s and is the figure a Pace
     // or Priority tie-break would rank by, while b displays its week since its 5-hour runway passes the reset.
     assert_eq!(
         (fact_of(fit, "binding", "b"), fact_of(fit, "runway_ms", "b")),
         (
             &FactValue::Text("seven_day".into()),
-            &FactValue::Int(250_069_444)
+            &FactValue::Int(245_570_694)
         ),
         "{:?}",
         fit.facts
@@ -20265,21 +20320,21 @@ fn windows_with_resets(
 #[test]
 fn the_binding_window_is_the_one_the_pin_reaches_first_among_those_it_overruns() {
     let s = tiered(gate_pool());
-    // 2 000 input tokens a second burn two ten-thousandths of the 5-hour window a second and a sixth of that on
-    // the week.
-    let mut st = priced(vec![gated_pin("s1", "a", 2_000.0)]);
+    // 500 input tokens a second burn half a ten-thousandth of the 5-hour window a second and a sixth of that on the
+    // week. Each window's room is read under the move's line, half the pin's burn to its horizon under the ceiling.
+    let mut st = priced(vec![gated_pin("s1", "a", 500.0)]);
     st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500), 0);
-    // b overruns both windows: 0.4 of the 5-hour window left is 2 000 s against an hour to its reset, and 0.3417 of
-    // the week left is 10 250 s against the five-hour horizon, so the larger shortfall sits on the longer runway.
+    // b overruns both windows: 0.11 of the 5-hour window left is 2 200 s against an hour to its reset, and 0.0667 of
+    // the week left is 8 000 s against the five-hour horizon, so the larger shortfall sits on the longer runway.
     st.record_sample(
         "b",
-        windows_with_resets((0.5, T + HOUR), (0.6, T + 72 * HOUR), T - 500),
+        windows_with_resets((0.7, T + HOUR), (0.8, T + 72 * HOUR), T - 500),
         0,
     );
-    // c overruns the 5-hour window alone: 0.6 left is 3 000 s against three hours to its reset.
+    // c overruns the 5-hour window alone: 0.13 left is 2 600 s against three hours to its reset.
     st.record_sample(
         "c",
-        refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500),
+        refreshing(0.5, T + 3 * HOUR, T + 72 * HOUR, T - 500),
         0,
     );
     let d = decide(
@@ -20291,7 +20346,7 @@ fn the_binding_window_is_the_one_the_pin_reaches_first_among_those_it_overruns()
     assert_eq!(
         landed(d.result.clone()),
         ("c".into(), Some(MigrateReason::Spent)),
-        "c's 3 000 s outlast b's 2 000 s, whatever b's week leaves"
+        "c's 2 600 s outlast b's 2 200 s, whatever b's week leaves"
     );
     let fit = line(&d.record, "fit");
     assert_eq!(fit.verdict, "rewrite_only");
@@ -20299,7 +20354,7 @@ fn the_binding_window_is_the_one_the_pin_reaches_first_among_those_it_overruns()
         (fact_of(fit, "binding", "b"), fact_of(fit, "runway_ms", "b")),
         (
             &FactValue::Text("five_hour".into()),
-            &FactValue::Int(2_000_000)
+            &FactValue::Int(2_200_000)
         ),
         "the window the pin reaches first binds, not the one with the larger shortfall"
     );
@@ -20307,7 +20362,7 @@ fn the_binding_window_is_the_one_the_pin_reaches_first_among_those_it_overruns()
         (fact_of(fit, "binding", "c"), fact_of(fit, "runway_ms", "c")),
         (
             &FactValue::Text("five_hour".into()),
-            &FactValue::Int(3_000_000)
+            &FactValue::Int(2_600_000)
         )
     );
 }
@@ -20320,8 +20375,9 @@ fn a_window_whose_runway_passes_its_reset_leaves_the_binding_to_the_window_insid
     });
     let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
     st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500), 0);
-    // b's 5-hour window leaves the pin 35 000 s against its reset three hours out, so the window resets before the
-    // ceiling. Its week leaves 85 000 s, past the five-hour horizon and inside its reset 72 hours out, and binds.
+    // Under the move's line, half the pin's burn to each horizon under the ceiling, b's 5-hour window leaves the pin
+    // 29 600 s against its reset three hours out, so the window resets before the line. Its week leaves 76 000 s, past
+    // the five-hour horizon and inside its reset 72 hours out, and binds.
     st.record_sample(
         "b",
         windows_with_resets((0.55, T + 3 * HOUR), (0.8, T + 72 * HOUR), T - 500),
@@ -20355,14 +20411,14 @@ fn a_window_whose_runway_passes_its_reset_leaves_the_binding_to_the_window_insid
         (fact_of(fit, "binding", "b"), fact_of(fit, "runway_ms", "b")),
         (
             &FactValue::Text("seven_day".into()),
-            &FactValue::Int(85_000_000)
+            &FactValue::Int(76_000_000)
         ),
         "the week inside its reset binds, the 5-hour window past its reset shown unbounded"
     );
     let b = candidate(&d.record, "b");
     assert_eq!(
         (b.runway_ms, b.fit, b.binding.as_deref()),
-        (Some(85_000_000), Some("fits"), Some("seven_day"))
+        (Some(76_000_000), Some("fits"), Some("seven_day"))
     );
     assert_eq!(
         (
@@ -20382,8 +20438,9 @@ fn a_candidate_whose_every_runway_passes_its_reset_carries_no_runway_and_no_bind
     });
     let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
     st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500), 0);
-    // b leaves the pin 45 000 s on the 5-hour window against its reset two hours out and 265 000 s on the week against
-    // its reset ten hours out: each window resets before the ceiling is reached.
+    // Under the move's line, half the pin's burn to each horizon under the ceiling, b leaves the pin 41 400 s on the
+    // 5-hour window against its reset two hours out and 256 000 s on the week against its reset ten hours out: each
+    // window resets before the line is reached.
     st.record_sample(
         "b",
         windows_with_resets((0.45, T + 2 * HOUR), (0.5, T + 10 * HOUR), T - 500),
@@ -20444,8 +20501,8 @@ fn a_zero_runway_on_one_window_reads_none_whatever_another_window_allows() {
     });
     let mut st = priced(vec![gated_pin("s1", "a", 2_000.0)]);
     st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500), 0);
-    // The rewrite alone takes b's 5-hour window to the ceiling an hour from its reset, while its week leaves
-    // 10 250 s of burn.
+    // The rewrite alone takes b's 5-hour window to the ceiling an hour from its reset, while its week leaves 1 250 s
+    // of burn under the move's line, half the pin's burn to the horizon under the ceiling.
     st.record_sample(
         "b",
         windows_with_resets((0.95, T + HOUR), (0.6, T + 72 * HOUR), T - 500),
@@ -22609,8 +22666,8 @@ fn a_slowed_pins_figures_read_its_burn_over_its_sources_speed_at_a_destination()
         members: vec![("a", 0), ("b", 1)],
         ..Pool::default()
     }));
-    // s1 burns a ten-thousandth of a's 5-hour window a second and a is spent, so the spent rule moves it to b.
-    let mut st = priced(vec![burning("s1", "a", 1_000.0, true, T)]);
+    // s1 burns half a ten-thousandth of a's 5-hour window a second and a is spent, so the spent rule moves it to b.
+    let mut st = priced(vec![burning("s1", "a", 500.0, true, T)]);
     st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500), 0);
     reading(&mut st, "b", 0.1, 3 * HOUR, T);
     st.write_slow_down("p", "a", &seeded_read(1.0, T), 0.5, T, AVERAGE_MS);
@@ -22636,13 +22693,15 @@ fn a_slowed_pins_figures_read_its_burn_over_its_sources_speed_at_a_destination()
         close(booked, 2.0 * achieved),
         "the move books the pin's burn over a's speed: {booked} against {achieved}"
     );
-    // Nothing else burns on b, so the runway on the window that binds is the room after the rewrite over that burn.
+    // Nothing else burns on b, so the runway on the window that binds is the room after the rewrite over that burn,
+    // under the move's line: half the booked 0.36 an hour over the three hours to b's reset under the ceiling.
     let fit = line(&d.record, "fit");
     assert_eq!(
         fact_of(fit, "binding", "b"),
         &FactValue::Text("five_hour".into())
     );
     let room = 0.95
+        - 0.54
         - number(fact_of(fit, "projection_five_hour", "b"))
         - number(fact_of(fit, "rewrite_five_hour", "b"));
     let runway_ms = number(fact_of(fit, "runway_ms", "b"));
@@ -22658,7 +22717,7 @@ fn a_slowed_pins_figures_read_its_burn_over_its_sources_speed_at_a_destination()
         failed_over: Some(FailedOver {
             from_account_id: "a".into(),
             reason: "cooldown",
-            row: burning("s2", "a", 1_000.0, true, T),
+            row: burning("s2", "a", 500.0, true, T),
             cause: None,
         }),
         ..request(&s, Some("s2"), "claude-sonnet-5", true, &[], T)
@@ -27859,7 +27918,7 @@ fn the_runway_on_a_crossing_span_reaches_the_room_earlier_than_one_rate_would() 
     st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500), 0);
     st.record_sample(
         "b",
-        refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500),
+        refreshing(0.1, T + 3 * HOUR, T + 72 * HOUR, T - 500),
         0,
     );
     let d = decide(
@@ -27871,7 +27930,8 @@ fn the_runway_on_a_crossing_span_reaches_the_room_earlier_than_one_rate_would() 
     let fit = line(&d.record, "fit");
     let runway = number(fact_of(fit, "runway_ms", "b"));
     let rate = 0.36 / 3_600.0;
-    let room = 0.95 - 0.3 - number(fact_of(fit, "rewrite_five_hour", "b"));
+    // The move's line sits half the pin's 1.08 at the rate read at T over the three hours under the ceiling.
+    let room = 0.95 - 0.54 - 0.1 - number(fact_of(fit, "rewrite_five_hour", "b"));
     let walk = 1_800.0 + (room - rate * 1_800.0) / (2.0 * rate);
     assert!(
         runway < room / rate * 1_000.0,
