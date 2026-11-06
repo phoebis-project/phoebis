@@ -1139,12 +1139,12 @@ async fn the_contradiction_line_names_no_hash() {
     assert!(longest_hex_run < 64, "a 64-hex run in the log: {text}");
 }
 
-/// Main's turn on five messages whose first, third and last carry the cache marker, so the deepest marked boundary
-/// before its last two is the third's.
+/// Main's turn on five messages whose first, third, fourth and last carry the cache marker, so the deepest marked
+/// boundary before its last two is the third's.
 fn marked_turns() -> String {
     BODY.replace(
         r#"{"role":"user","content":"hello"}]"#,
-        r#"{"role":"user","content":[{"type":"text","text":"hello","cache_control":{"type":"ephemeral"}}]},{"role":"assistant","content":"hi"},{"role":"user","content":[{"type":"text","text":"and then","cache_control":{"type":"ephemeral"}}]},{"role":"assistant","content":"working"},{"role":"user","content":[{"type":"text","text":"steer","cache_control":{"type":"ephemeral"}}]}]"#,
+        r#"{"role":"user","content":[{"type":"text","text":"hello","cache_control":{"type":"ephemeral"}}]},{"role":"assistant","content":"hi"},{"role":"user","content":[{"type":"text","text":"and then","cache_control":{"type":"ephemeral"}}]},{"role":"assistant","content":[{"type":"text","text":"working","cache_control":{"type":"ephemeral"}}]},{"role":"user","content":[{"type":"text","text":"steer","cache_control":{"type":"ephemeral"}}]}]"#,
     )
 }
 
@@ -1168,8 +1168,8 @@ fn past_the_marked_boundary() -> String {
 
 /// The upstream reads the cache through the deepest marked boundary, so an interrupted turn's next request, which drops
 /// the last two messages, continues the prefix. The anchor's request goes through the relay, so the marked positions
-/// are the ones it publishes. A request that rewinds past that boundary holds none of the anchor's, the shallower
-/// marked one it shares included.
+/// are the ones it publishes. A request that rewinds past that boundary holds none of the anchor's boundaries, since
+/// the anchor keeps the deepest marked one and not the shallower one the two requests share.
 #[tokio::test]
 async fn an_interrupted_turns_next_request_counts_a_return_and_marks_nothing_while_a_rewind_past_the_marked_boundary_marks(
 ) {
