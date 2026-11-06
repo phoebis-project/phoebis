@@ -75,10 +75,11 @@ npm run e2e:reference
 ```
 
 `npm run smoke` builds the smoke bundle and runs `smoke/run.mjs` under jsdom with `TZ=UTC`. A whole run takes 15 to 30
-minutes, so `SMOKE_ONLY`, a comma-separated list of view paths as in `SMOKE_ONLY=/sessions,/keys npm run smoke`, runs
-only the blocks of the script that name those views, and a path that no block names fails the run. The last two lines
-are the browser pass against the mock and the reference smoke, both in the next section. The screenshot directory has to
-lie outside the repository.
+minutes. `SMOKE_ONLY`, a comma-separated list of view paths as in `SMOKE_ONLY=/keys,/sessions npm run smoke`, runs only
+the blocks that name those views, and a path that no block names fails the run and lists the names the blocks give. A
+new top-level block in the script takes its own `forView` call, since a bare block runs under every filter. The last two
+lines are the browser pass against the mock and the reference smoke, both in the next section. The screenshot directory
+has to lie outside the repository.
 
 ## The browser pass
 

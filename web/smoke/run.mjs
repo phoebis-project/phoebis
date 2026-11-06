@@ -121,11 +121,12 @@ function expect(name, text, needles) {
   results.push({ name, ok: missing.length === 0, missing, length: text.length });
 }
 /**
- * A whole run takes 15 to 30 minutes. `SMOKE_ONLY`, a comma-separated list of view paths such as `/sessions,/keys`,
- * runs the blocks of those views and skips the others. A block names the view it mounts or the views it walks, and
- * also any view whose checks expect what it writes. Each view's shared mount `m` runs as one block with the statements
- * and blocks that read it, down to its unmount, and those lines stay unindented so their blame stays with the checks.
- * A path that no block names fails the run, so a typo cannot pass as an empty run.
+ * A whole run takes 15 to 30 minutes. `SMOKE_ONLY`, a comma-separated list of view paths such as `/keys,/sessions`,
+ * runs the blocks of those views and skips the others. A block names every view its checks name or its walk mounts,
+ * and also any view whose checks expect what it writes. Each view's shared mount `m` runs as one block with the
+ * statements and blocks that read it, down to its unmount, and those lines stay unindented so their blame stays with
+ * the checks. A new top-level block takes its own call, since a bare one runs under every filter. A path that no
+ * block names fails the run, so a typo cannot pass as an empty run.
  */
 const SMOKE_ONLY = (process.env.SMOKE_ONLY ?? '').split(',').map((p) => p.trim()).filter(Boolean);
 const viewsNamed = new Set();
@@ -2508,9 +2509,9 @@ const accountsInPlace = (page) => ({
   nav: page.container.querySelector('.nav__link.is-active')?.getAttribute('href') ?? '',
   row: page.container.querySelector('a.account-row.is-active')?.getAttribute('href') ?? '',
 });
-// Also runs for /pools, whose checks expect spare deleted as the last block here leaves it, and so for /keys, which
-// runs the pool checks.
-await forView(['/accounts', '/keys', '/pools'], async () => {
+// The usage-based seat block below checks /, /analytics, /quota and /requests too. The call also runs for /pools,
+// whose checks expect spare deleted as the last block here leaves it, and so for /keys, which runs the pool checks.
+await forView(['/', '/accounts', '/analytics', '/keys', '/pools', '/quota', '/requests'], async () => {
 m = await mount('/accounts');
 {
   // Without an account id the page itself lands on the first account, primary.
@@ -8460,7 +8461,7 @@ await forView('/pools', async () => {
 
 // The address opens a dialog on a named group: a link, a reload or a typed address lands on the group, and the
 // entry is replaced by the bare route.
-await forView('/pools', async () => {
+await forView(['/keys', '/pools'], async () => {
   const dialogOf = (page) => page.container.querySelector('dialog[open]');
   const titleOf = (page) => dialogOf(page)?.querySelector('.dialog__title')?.textContent?.trim() ?? 'no dialog';
   const shown = (page) => [...(dialogOf(page)?.querySelectorAll('section.dialog-group:not([hidden])') ?? [])].map((s) => s.getAttribute('aria-label')).join();
@@ -8556,7 +8557,7 @@ await forView('/pools', async () => {
 
 // On create the rail marks what a first pool needs; the marks are decoration with a hidden description, so an entry's
 // name stays its label, and they stay while the refusal dots come and go.
-await forView('/pools', async () => {
+await forView(['/keys', '/pools'], async () => {
   const c = await mount('/pools');
   [...c.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Create pool')?.click();
   await c.settle(300);
@@ -8709,7 +8710,7 @@ await forView('/pools', async () => {
 // The plain view of the two dialogs: each group draws its plain fields and ends with the line where the expert view
 // adds some, the groups whose every field is expert leave the rail, a hidden field keeps its value through a save, and
 // a refusal on a hidden field shows it whatever the mode.
-await forView('/pools', async () => {
+await forView(['/keys', '/pools'], async () => {
   localStorage.removeItem('phoebis.expertView');
   const sw = (page) => page.container.querySelector('.sidebar__status button[role="switch"][aria-label="Expert view"]');
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
@@ -9091,7 +9092,9 @@ await forView('/pools', async () => {
   localStorage.removeItem('phoebis.expertView');
 });
 
-await forView('/keys', async () => {
+// Also runs for /pools, whose address and titled badge checks expect laptop back in all, where a key check here moves
+// it after the pool checks moved it to jobs.
+await forView(['/keys', '/pools'], async () => {
 // As on the pools, the key dialog checks below read the expert fields too.
 localStorage.setItem('phoebis.expertView', 'on');
 m = await mount('/keys');
@@ -10765,7 +10768,8 @@ const closeCustom = async (page, button) => {
   await page.settle();
 };
 
-await forView('/requests', async () => {
+// One check below reads the Dashboard's recent Cost cells, so the call names / too.
+await forView(['/', '/requests'], async () => {
 m = await mount('/requests');
 expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', 'fable-5-1', 'desktop', 'laptop', 'shown']);
 {
@@ -22341,7 +22345,8 @@ await forView('/sessions', async () => {
 
 // Every filtered view reads its filters from the address under one grammar: a link sets the controls, a preset reads
 // from the load, and a control's change rewrites the address with every other key and the hash kept.
-await forView('/analytics', async () => {
+// The call names each view the checks read.
+await forView(['/analytics', '/keys', '/pools', '/quota', '/routing-log', '/sessions'], async () => {
   const HOUR = 3_600_000;
   const chooseIn = async (page, select, value) => {
     Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(select, value);
@@ -23687,7 +23692,8 @@ await forView('/sessions', async () => {
   }
 });
 
-await forView('/sessions', async () => {
+// The session view checks below land on Analytics, so the call names /analytics too.
+await forView(['/analytics', '/sessions'], async () => {
 m = await mount('/sessions');
 expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 'of 1,024', 'busy', 'idle', 'parked', 'Retained', 'of 256 MiB', 'prompts kept for probes', 'presence ', 's ago', 'Cache probes, 24h', 'ok (', 'migrated', 'skipped', 'failed', 'Expired between turns, 24h', 'misses cache warming exists to prevent', 'Cost reference', 'Key', 'Session', 'Model', 'Context', 'Effort', 'Last used', 'expires in', 'Companion', 'Cache warming', 'Expand all', 'epoch 2', 'reporting', 'silent', 'since ', 'none', 'no recipe', 'fable-5-1']);
 {
@@ -24888,7 +24894,8 @@ m.unmount();
 // against the decoded settings the mock answers, the files the fixtures captured, through lib/costs.ts and the page's
 // own formatting, never against a literal, while the console's own words for the regimes and the band are pinned as
 // literals.
-await forView('/sessions', async () => {
+// The call names the views those entry points sit on.
+await forView(['/', '/analytics', '/pools', '/sessions', '/settings'], async () => {
   const wired = decodeSettings(SETTINGS_WIRE);
   // The dialog draws each file's entry in force at its instant, here the mount's pinned clock.
   const pricesAt = revisionAt(wired.apiPrices.revisions, CLOCK_ORIGIN);
@@ -26049,7 +26056,8 @@ await forView('/settings', async () => {
 // installation has. A view settled with a skeleton still drawn waits for ever, and a needle only an empty store draws
 // proves the switch reached the view's reads: its empty sentence, or the zero it counts where it has none. Settings
 // reads no list and no ledger, so it can only show it still draws whole.
-await forView('/keys', async () => {
+// The call names every view the walk mounts.
+await forView(['/', '/accounts', '/analytics', '/guardrails', '/keys', '/pools', '/quota', '/requests', '/sessions', '/settings'], async () => {
   localStorage.setItem('phoebis.mockEmpty', '1');
   const zeroTiles = (c) => [...c.querySelectorAll('.stat-grid .stat__value')].map((v) => v.textContent);
   const pairLines = (c) => [...c.querySelectorAll('.stat-grid .stat__pair-line')].map((l) => `${l.querySelector('.cost-figure')?.textContent} ${l.querySelector('.stat__pair-word')?.textContent}`);
@@ -26625,7 +26633,7 @@ await forView(['/guardrails', '/keys', '/pools'], async () => {
 });
 
 
-await forView('/requests', async () => {
+await forView(['/keys', '/requests'], async () => {
   // The popups from the keyboard, late in the run like the checks after them, so the real time their mounts take moves
   // none of the story's relative times the earlier checks read. jsdom has no Tab navigation, so a Tab out is a focus
   // moved to a control outside the popup.
@@ -27041,7 +27049,7 @@ await forView(['/analytics', '/requests', '/routing-log'], async () => {
   }
 });
 
-await forView('/', async () => {
+await forView(['/', '/keys'], async () => {
   // The shell's toast queue, each check on the frozen clock with its failures set before the mount unless it says
   // otherwise. Like the login checks after them, these run late, so the real time their mounts take moves none of the
   // story's relative times the earlier checks read.
@@ -27450,7 +27458,8 @@ await forView('/', async () => {
   });
 });
 
-await forView('/requests', async () => {
+// The sweep navigates every view that draws titled badges, so the call names each one.
+await forView(['/', '/accounts', '/analytics', '/keys', '/pools', '/quota', '/requests', '/sessions', '/settings'], async () => {
   // The descriptions beside titles, late in the run like the checks after them, so the real time their mounts take
   // moves none of the story's relative times the earlier checks read.
   // React's ids carry colons, which a selector would have to escape, so a reference is resolved by id.

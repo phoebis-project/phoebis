@@ -29,7 +29,8 @@ The other scripts:
   `PHOEBIS_SCREENSHOT_DIR`, or to `phoebis-screenshots` under the system's temporary directory when that is unset.
 - `npm run lint` runs ESLint over the sources, the tests, the smoke checks, the browser pass and the scripts.
 - `npm run smoke` mounts every view in jsdom against the mock and checks what it draws, or only the views listed in
-  `SMOKE_ONLY`, a comma-separated list of view paths such as `/sessions,/keys`.
+  `SMOKE_ONLY`, a comma-separated list of view paths such as `/keys,/sessions`, and a path that no block names fails the
+  run.
 - `npm run sync-mock` regenerates the mock's fixture module from the admin fixtures (see below).
 - `npm test` builds the test bundle and runs the unit tests under `test/`.
 
