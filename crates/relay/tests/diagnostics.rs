@@ -2232,14 +2232,17 @@ async fn a_resumed_conversations_suffix_that_reproduces_from_no_candidate_is_ref
     assert!(warning.contains(" resume=true"), "{warning}");
 }
 
-/// A conversation that was not resumed keeps the words of a version change, and its warning says so.
+/// A conversation that was not resumed names the anchors the router tried, and its warning says so.
 #[tokio::test]
-async fn a_fresh_conversations_suffix_that_does_not_reproduce_keeps_the_version_change_words() {
+async fn a_fresh_conversations_suffix_that_does_not_reproduce_names_the_anchors_tried() {
     let (message, warning) = drift_refusal(&stamped("abc", false), "version_suffix").await;
     assert_eq!(
         message,
-        "the client's version suffix does not reproduce from the prompt and the user agent. Re-pin the router to \
-         this client version"
+        "the client's version suffix does not reproduce from any text block of the first user message or the \
+         version the user agent names, the anchors this build tries for every request. Where the session's main \
+         turns pass, re-pinning the router does not help: the refused body shows where this client anchored the \
+         suffix, and its billing line's cc_is_subagent and the x-claude-code-agent-id, x-claude-code-request-class \
+         and x-claude-code-agent-type headers, where the client sends them, tell a subagent's request apart"
     );
     assert!(warning.contains(" resume=false"), "{warning}");
 }

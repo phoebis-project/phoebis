@@ -339,9 +339,16 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
                      from the resume placeholder, the empty prompt or the user agent. Re-pin the router to this \
                      client version"
                 }
+                // The words name the anchors the check tried and the marks an operator reads off the refused
+                // request, so a subagent that anchored its suffix elsewhere is told apart from a client that moved.
                 (DriftKind::VersionSuffix, false) => {
-                    "the client's version suffix does not reproduce from the prompt and the user agent. \
-                     Re-pin the router to this client version"
+                    "the client's version suffix does not reproduce from any text block of the first user \
+                     message or the version the user agent names, the anchors this build tries for every \
+                     request. Where the session's main turns pass, re-pinning the router does not help: \
+                     the refused body shows where this client anchored the suffix, and its billing line's \
+                     cc_is_subagent and the x-claude-code-agent-id, x-claude-code-request-class and \
+                     x-claude-code-agent-type headers, where the client sends them, tell a subagent's \
+                     request apart"
                 }
                 (DriftKind::Hash, _) => {
                     "the client's billing hash does not reproduce under the Claude Code release this \

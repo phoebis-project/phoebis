@@ -201,8 +201,17 @@ codes](client.md#refusal-codes)):
 | Drift kind | Message |
 | --- | --- |
 | `hash` | `the client's billing hash does not reproduce under the Claude Code release this build is measured against. Re-pin the router to this client version` |
-| `version_suffix` | `the client's version suffix does not reproduce from the prompt and the user agent. Re-pin the router to this client version` |
+| `version_suffix` | `the client's version suffix does not reproduce from any text block of the first user message or the version the user agent names, the anchors this build tries for every request. Where the session's main turns pass, re-pinning the router does not help: the refused body shows where this client anchored the suffix, and its billing line's cc_is_subagent and the x-claude-code-agent-id, x-claude-code-request-class and x-claude-code-agent-type headers, where the client sends them, tell a subagent's request apart` |
 | `version_suffix`, resumed conversation | `the conversation was resumed, and the client's version suffix does not reproduce from the resume placeholder, the empty prompt or the user agent. Re-pin the router to this client version` |
+
+The suffix check tries the same anchors for every request, each text block of the first user message and the version
+the user agent names, and the `version_suffix` message names them. A custom agent of Claude Code 2.1.318, captured in
+print mode, anchors its suffix on the last text block of the first wire user message, as the main turn does, so its
+suffix reproduces. The custom agents refused on 2026-10-30 (client 2.1.314, the `cli` entrypoint, the model
+`claude-fable-5-1`, with 10 and 40 tools) anchored theirs outside those blocks, and their case is open. The message
+also names the marks that tell a subagent's request apart from a moved client's: `cc_is_subagent` on the billing line,
+the `x-claude-code-agent-id` header, and the hint headers `x-claude-code-agent-type` and `x-claude-code-request-class`
+where the client sends them. The refused body shows where the client anchored the suffix, so the operator captures it.
 
 The refusal logs `a caller stamped a billing line this build cannot reproduce. Re-pin the router to that client` at
 warn level with the drift kind, the user agent and the profile name, and records itself as the request's one decision,
@@ -216,9 +225,10 @@ The router fails closed because a stamp it cannot verify never travels under an 
 wrong hash is indistinguishable from tampering, and the cost would fall on the account rather than on the request, which
 is why neither relaying the body unedited under the client's stamp nor stripping the stamp is an answer. No setting
 clears the refusal. The formula comes from the profile compiled into the build, `claude-code-2.1.310-linux-x64`, and
-every reader takes it from there, so the cure is a build re-pinned to the client's version
-([Re-pinning the client build](operations.md#re-pinning-the-client-build)). The user agent's version itself is recorded
-for the ledger and never judged: every version is relayed the same way.
+every reader takes it from there, so the cure is a build re-pinned to the client's version where the session's main
+turns fail too ([Re-pinning the client build](operations.md#re-pinning-the-client-build)), and the refused body's
+capture where they pass. The user agent's version itself is recorded for the ledger and never judged: every version is
+relayed the same way.
 
 ## The boundary chains
 

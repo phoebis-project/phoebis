@@ -42,7 +42,9 @@ classifier call that lands on another account than the turn it judges
 (`auth_ambiguous`, `auth_malformed`, `auth_missing` and `auth_unknown`, the registry's key refusal among them) carries
 `x-should-retry: false` on every route that answers it, so the client does not resend it
 ([Refusal codes](client.md#refusal-codes)). The router is measured against Claude Code 2.1.310 on Linux x64, the build
-the profile and the fixtures come from ([The pinned client build](development.md#the-pinned-client-build)).
+the profile and the fixtures come from ([The pinned client build](development.md#the-pinned-client-build)). A version
+suffix refusal names the anchors the router tried and the marks a subagent's request carries, and says that a re-pin
+does not help where the session's main turns pass ([Client drift](relay.md#client-drift)).
 
 A key routes into one pool ([Pools, keys and routing](routing.md)), and every request it presents is placed on one
 account by the session's pin, the pool's strategy and each account's quota. A live pin moves only by one of five rules,
