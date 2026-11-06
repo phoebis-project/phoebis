@@ -1390,6 +1390,9 @@ struct Recorder {
     shed_round: Option<ShedRoundRecord>,
     /// The plan windows a round on the renewed pin's account tests, in the trigger's order, for the renewal fact.
     trigger_windows: Vec<&'static str>,
+    /// What set each projected window's horizon, by member and window, beside the projection the member's facts carry,
+    /// so the renewal fact tests that projection against its round's limit.
+    horizon_bounds: BTreeMap<String, BTreeMap<&'static str, HorizonBound>>,
     /// The mark step 1's heal check or step 4's move cleared, for the outcome and the task's event.
     mark_cleared: Option<MarkClearedFacts>,
     pick: Option<Pick>,
@@ -1677,7 +1680,7 @@ fn run(
             request.fallback_ms,
             request.fast,
         );
-        rec.candidates.push(candidate_facts(
+        let (facts, bounds) = candidate_facts(
             state,
             snapshot,
             pool,
@@ -1687,7 +1690,10 @@ fn run(
             blocking,
             found.as_ref(),
             placing_own,
-        ));
+        );
+        rec.candidates.push(facts);
+        rec.horizon_bounds
+            .insert(candidate.account_id.clone(), bounds);
         standing.push(
             Fact::text("standing", found.as_ref().map_or("eligible", obstacle_name))
                 .about(&candidate.account_id),
@@ -2661,6 +2667,8 @@ pub(crate) struct Projection {
     /// `demand_shares` under `BurnRead::Demand`.
     pub burn: f64,
     pub horizon: i64,
+    /// What set `horizon`, read by the round's limit, the heal and the renewal summary.
+    pub bound: HorizonBound,
     pub at_horizon: f64,
     /// The same burn over `[now, horizon)` as the band weighs it, whose increase `at_horizon` adds.
     pub banded: Banded,
@@ -2690,17 +2698,47 @@ fn in_pool_without<'a>(
     }
 }
 
+/// What set a projection's horizon: the account's end and the window's own reset discard the quota left at them, so a
+/// round tests the wall there, and no reset is known at the five-hour bound, so the quota reads on and the round tests
+/// the ceiling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HorizonBound {
+    End,
+    Reset,
+    Span,
+}
+
+impl HorizonBound {
+    /// The line a projection at a horizon this bound set reads over or under: the wall, 1.0, or the window's ceiling.
+    fn limit(self, pool: &PoolRow, window: &str) -> f64 {
+        match self {
+            HorizonBound::End | HorizonBound::Reset => 1.0,
+            HorizonBound::Span => ceiling(pool, window),
+        }
+    }
+}
+
 /// The 5-hour horizon is the earlier of the reading's reset (`now + FIVE_HOUR_MS` for a reading past its reset with
 /// none, since the window opens with the next request and runs five hours) and the account's end, the weekly horizon
-/// the earliest of `now + FIVE_HOUR_MS`, the reset and the end. An end at or before `now` makes the horizon `now`.
-pub(crate) fn horizon_of(window: &str, reading: &WindowReading, end: Option<i64>, now: i64) -> i64 {
+/// the earliest of `now + FIVE_HOUR_MS`, the reset and the end. An end at or before `now` makes the horizon `now`. The
+/// bound names which of them set it: an end tied with the reset or the five-hour bound reads `End`, and a weekly reset
+/// tied with the five-hour bound `Reset`, since the tied instant still discards the quota left at it.
+pub(crate) fn horizon_of(
+    window: &str,
+    reading: &WindowReading,
+    end: Option<i64>,
+    now: i64,
+) -> (i64, HorizonBound) {
     let length = now.saturating_add(FIVE_HOUR_MS);
-    let horizon = match reading.reset {
-        Some(reset) if window == FIVE_HOUR => reset,
-        Some(reset) => reset.min(length),
-        None => length,
+    let (horizon, bound) = match reading.reset {
+        Some(reset) if window == FIVE_HOUR || reset <= length => (reset, HorizonBound::Reset),
+        _ => (length, HorizonBound::Span),
     };
-    end.map_or(horizon, |end| horizon.min(end)).max(now)
+    let (horizon, bound) = match end {
+        Some(end) if end <= horizon => (end, HorizonBound::End),
+        _ => (horizon, bound),
+    };
+    (horizon.max(now), bound)
 }
 
 /// The instant the burn `projection` implies over the time to its horizon, `(at_horizon - predicted) / (horizon -
@@ -2767,12 +2805,14 @@ pub(crate) fn projections_of(
         let Some(reading) = state.predicted(account_id, window, now) else {
             continue;
         };
+        let (horizon, bound) = horizon_of(window, &reading, end, now);
         projections.insert(
             window.to_string(),
             Projection {
                 predicted: reading.utilization,
                 burn: burn.get(window).copied().unwrap_or(0.0),
-                horizon: horizon_of(window, &reading, end, now),
+                horizon,
+                bound,
                 at_horizon: reading.utilization,
                 banded: Banded::default(),
                 reset: reading.reset,
@@ -3009,7 +3049,7 @@ pub(crate) fn slow_down_of(
     }
     let reading = state.predicted(account_id, FIVE_HOUR, now)?;
     let utilization = reading.utilization;
-    let horizon = horizon_of(
+    let (horizon, _) = horizon_of(
         FIVE_HOUR,
         &reading,
         account_end(snapshot, account_id, now),
@@ -4011,12 +4051,12 @@ fn move_of<'a>(
     }
     // The shed rule's trigger, tested on every plan window the pool's pins on the account draw, in the windows' order,
     // one round per selection at most: on a pool that slows its pins the 5-hour window's is the stretch over the
-    // threshold after the safety wait, every other window's the projection at its horizon over the ceiling after the
-    // projection's wait, a window inside its wait yielding to the next, as a 5-hour window inside its hold does. A wait
-    // or the hold holds back the round alone, so a standing mark moves below while a window waits or is held as it does
-    // under a fired one. The line names every projection it read whether or not one fired, with its horizon and the
-    // wall its burn reaches, the stamp and the wait of each window inside its wait and the 5-hour window's age and hold
-    // inside the hold.
+    // threshold after the safety wait, every other window's the projection at its horizon over the limit the horizon's
+    // bound sets after the projection's wait, a window inside its wait yielding to the next, as a 5-hour window inside
+    // its hold does. A wait or the hold holds back the round alone, so a standing mark moves below while a window waits
+    // or is held as it does under a fired one. The line names every projection it read whether or not one fired, with
+    // its horizon and the wall instant its burn reaches, the stamp and the wait of each window inside its wait and the
+    // 5-hour window's age and hold inside the hold.
     let source = current.account_id.as_str();
     let tier = snapshot.priced_tier(source).unwrap_or_default();
     let projections = projections_of(
@@ -4615,6 +4655,8 @@ pub(crate) struct Trigger {
     pub utilization: f64,
     pub projection: f64,
     pub horizon: i64,
+    /// The limit the test read: the wall where the projection's horizon is the account's end or the window's own
+    /// reset, the window's ceiling at the five-hour bound and under the stretch.
     pub ceiling: f64,
     pub excess: f64,
     /// `projection` when the projection at the window's horizon fired the round, `slow_down` when the stretch did.
@@ -4686,7 +4728,7 @@ struct TriggerRead {
     waiting: Vec<Waiting>,
 }
 
-/// A window of the projection test that reads over the ceiling and has not read over for its wait yet.
+/// A window of the projection test that reads over its limit and has not read over for its wait yet.
 struct Waiting {
     window: &'static str,
     /// When the window first read over the ceiling.
@@ -4696,8 +4738,8 @@ struct Waiting {
 
 /// What fires a round, if anything: the first of `windows` whose test reads over past its wait, with the windows of the
 /// projection test that read over inside their wait before it. The excess is share per second on the fired window: the
-/// burn that, removed now, lands the projection on the ceiling at the horizon, and on a span the band crosses, the
-/// average rate to remove over the span.
+/// burn that, removed now, lands the projection at the horizon on the limit the test read, and on a span the band
+/// crosses, the average rate to remove over the span.
 ///
 /// On a pool that slows its pins the 5-hour window's test is the stretch: it fires once `over_since`, the instant the
 /// stretch first read over the threshold, is `SLOW_DOWN_WAIT_MS` past, with the horizon at the reset less the
@@ -4705,16 +4747,19 @@ struct Waiting {
 /// demand's stretch to the threshold, so the round takes what the slow-down cannot cover. A reset nearer than the
 /// threshold puts that horizon at or before `now` and fires nothing, since the slow-down alone holds the window to its
 /// reset, and an account with no read fires nothing on the window. Every other window's test is the projection at its
-/// horizon over the window's ceiling, strictly, on the achieved burn, and it fires once the window has read over since
-/// `stamp` names for `min((wall - over_since) / 4, 2 * burn_average_ms)`, `wall` being the instant the projection's
-/// burn reaches 1.0 as `wall_of` reads it now and the wait the cap alone while no burn reaches it, so a burst toward a
-/// near wall fires early, a slow climb waits, and one large turn's charge, which moves the prediction before the burn
-/// average has absorbed it, fires no round at the selection it lands on. Replayed over the recorded projection at the
-/// default burn average, this wait fires 12 rounds while the window reads under the ceiling (2 on a window still under
-/// it at the horizon) where a quarter of the time to the horizon capped at the dwell fires 56 (33), falsely fires on 1
-/// window of 32 against 11, costs 170,044 tokens of rewrites and missed walls against 6,990,451, and fires 2 minutes
-/// before a wall the horizon's quarter misses and 159 minutes before another. A window inside its wait yields to the
-/// next.
+/// horizon over the limit the horizon's bound sets, strictly, on the achieved burn: the wall, 1.0, where the horizon is
+/// the account's end or the window's own reset, since the quota left there is lost, and the window's ceiling at the
+/// five-hour bound. It fires once the window has read over since `stamp` names for `min((wall - over_since) / 4, 2 *
+/// burn_average_ms)`, `wall` being the wall instant, where the projection's burn reaches 1.0 as `wall_of` reads it now,
+/// and the wait the cap alone while no burn reaches it, so a burst toward a near wall instant fires early, a slow climb
+/// waits, and one large turn's charge, which moves the prediction before the burn average has absorbed it, fires no
+/// round at the selection it lands on. The stamp stays the first reading over the ceiling, so a window that crosses
+/// the wall at an end or a reset horizon has spent the part of its wait it read between the two lines, which confirms
+/// the climb as the wait would. Replayed over the recorded projection at the default burn average, this wait fires 12
+/// rounds while the window reads under the ceiling (2 on a window still under it at the horizon) where a quarter of
+/// the time to the horizon capped at the dwell fires 56 (33), falsely fires on 1 window of 32 against 11, costs 170,044
+/// tokens of rewrites and missed walls against 6,990,451, and fires 2 minutes before a wall the horizon's quarter
+/// misses and 159 minutes before another. A window inside its wait yields to the next.
 ///
 /// A 5-hour window whose age `young` names, under twice the pool's burn average, fires under neither test and yields to
 /// the next window as a waiting one does, since the burn average still carries the previous window's burst over the
@@ -4733,8 +4778,8 @@ fn trigger_of(
 ) -> TriggerRead {
     let mut waiting = Vec::new();
     let mut test = |window: &'static str| -> Option<Trigger> {
-        let limit = ceiling(pool, window);
         if window == FIVE_HOUR && slow_down(pool) {
+            let limit = ceiling(pool, window);
             let read = read?;
             over_since.filter(|since| now - since >= SLOW_DOWN_WAIT_MS)?;
             let horizon = read.horizon - read.threshold_ms;
@@ -4758,9 +4803,10 @@ fn trigger_of(
                 speed: Some(read.speed),
             });
         }
-        let projection = projections
+        let (projection, limit) = projections
             .get(window)
-            .filter(|projection| projection.at_horizon > limit)?;
+            .map(|projection| (projection, projection.bound.limit(pool, window)))
+            .filter(|(projection, limit)| projection.at_horizon > *limit)?;
         // The shed rule stamped every window over the ceiling before the test, so a missing stamp starts the wait now.
         let since = stamp(window).unwrap_or(now);
         let cap = burn_average_ms.saturating_mul(2);
@@ -4810,9 +4856,10 @@ struct Healed {
 /// mark on a pool that slows its pins heals when the stretch reads at or under the threshold, read here since the heal
 /// runs ahead of the selection's own read, and answers the demand's projection at the reset less the threshold, or the
 /// prediction where that instant has passed, since no horizon lies ahead to price. Every other mark heals when the
-/// projection on its window at its horizon, on the achieved burn, reads under the ceiling, strictly, since a reading at
-/// the ceiling leaves the pin's next turn no room. `None` for a mark that stands or whose window the account has no
-/// read of.
+/// projection on its window at its horizon, on the achieved burn, reads under the round's limit for that horizon,
+/// strictly, since a reading at the line leaves the pin's next turn no room: the wall at the account's end or the
+/// window's own reset, where the quota left is lost, and the ceiling at the five-hour bound. `None` for a mark that
+/// stands or whose window the account has no read of.
 fn healed(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -4844,7 +4891,7 @@ fn healed(
         now,
         BurnRead::Achieved,
     )?;
-    (projection.at_horizon < ceiling(pool, window)).then_some(Healed {
+    (projection.at_horizon < projection.bound.limit(pool, window)).then_some(Healed {
         projection: projection.at_horizon,
         stretch_ms: None,
         threshold_ms: None,
@@ -6865,6 +6912,7 @@ fn obstacle_facts(obstacle: &Obstacle) -> ObstacleFacts {
 /// A member's standing as step 2 reads it, eligible or not: the readings the rules and the pick below weigh. The
 /// tier is the one step 2 can know, with no member kept on extra usage yet. The partition corrects it. `own` is the
 /// request's pin key where its Pace figures are the placement's own, as `choose` reads them, and `None` otherwise.
+/// Beside the facts, what set the horizon of each window they carry a projection of.
 #[allow(clippy::too_many_arguments)]
 fn candidate_facts(
     state: &RoutingState,
@@ -6876,12 +6924,13 @@ fn candidate_facts(
     blocking: Option<&CooldownRow>,
     obstacle: Option<&Obstacle>,
     own: Option<&PinKey>,
-) -> CandidateFacts {
+) -> (CandidateFacts, BTreeMap<&'static str, HorizonBound>) {
     let (now, id) = (request.now, candidate.account_id.as_str());
     let account = snapshot.account(id);
     let kind = account.map(|a| a.kind);
     let sample = state.sample(id);
     let mut windows = BTreeMap::new();
+    let mut bounds = BTreeMap::new();
     let mut burn = BTreeMap::new();
     // A usage-based seat draws no plan window, so its facts list none, its spend window drawn below.
     if kind != Some(AccountKind::ApiKey) && !snapshot.usage_based(id) {
@@ -6925,6 +6974,9 @@ fn candidate_facts(
                     facts.demand = Some(five_hour_demand(state, snapshot, pool, id, &burn, now));
                 }
                 windows.insert(name, facts);
+                if let Some(projection) = projections.get(name) {
+                    bounds.insert(name, projection.bound);
+                }
             }
         }
     }
@@ -7009,7 +7061,7 @@ fn candidate_facts(
         winding_down: term::winding_down(t, now, pool.failover.wind_down_minutes),
         ended: term::ended(t, now),
     });
-    CandidateFacts {
+    let facts = CandidateFacts {
         account_id: id.to_string(),
         incarnation: candidate.incarnation,
         kind: kind_name(kind),
@@ -7069,7 +7121,8 @@ fn candidate_facts(
         factor: state
             .slow_down_in_force(pool, id, now)
             .map(|entry| entry.factor),
-    }
+    };
+    (facts, bounds)
 }
 
 /// A subscription member's demand on the 5-hour window, share per hour, from the entry standing at step 2: the achieved
@@ -7130,6 +7183,7 @@ fn finish(
         hold_place,
         shed_round,
         trigger_windows,
+        horizon_bounds,
         mark_cleared,
         pick,
         renewal,
@@ -7264,6 +7318,7 @@ fn finish(
         hold_place,
         pick: pick.as_ref(),
         trigger_windows: &trigger_windows,
+        horizon_bounds: &horizon_bounds,
         exhaustion: match result {
             SelectResult::Exhausted(exhaustion) => Some(exhaustion),
             _ => None,
@@ -7321,6 +7376,7 @@ struct Readings<'r> {
     pick: Option<&'r Pick>,
     exhaustion: Option<&'r Exhaustion>,
     trigger_windows: &'r [&'static str],
+    horizon_bounds: &'r BTreeMap<String, BTreeMap<&'static str, HorizonBound>>,
 }
 
 fn summary_fact(key: &'static str, value: FactValue, unit: &'static str) -> SummaryFact {
@@ -7498,8 +7554,8 @@ impl Readings<'_> {
     }
 
     /// A probe's renewal names the pin's epoch. Any other names the warmth's cause when the pin was cold, else the
-    /// utilization of the first plan window, in the trigger's order, whose projection at the horizon reaches the
-    /// ceiling, else the pin's idle age.
+    /// utilization of the first plan window, in the trigger's order, whose projection at the horizon reads over its
+    /// round's limit, else the pin's idle age.
     fn renewal_fact(&self) -> Vec<SummaryFact> {
         let Some(renewal) = self.renewal else {
             return Vec::new();
@@ -7524,15 +7580,24 @@ impl Readings<'_> {
             .as_deref()
             .and_then(|id| self.member(id));
         if let (Some(pool), Some(member)) = (self.pool, member) {
-            // The windows the round's trigger read, in its order, the first over the ceiling named by its
+            // The windows the round's trigger read, in its order, the first over its round's limit named by its
             // utilization: the trigger's own comparison, strict, so the row never names a window no round would
-            // fire on.
+            // fire on. The limit is the one the horizon's bound sets, and the ceiling where the stretch tests the
+            // window.
+            let bounds = self.horizon_bounds.get(&member.account_id);
             for name in self.trigger_windows.iter().copied() {
-                if let Some(window) = member
-                    .windows
-                    .get(name)
-                    .filter(|w| w.projection.is_some_and(|p| p > ceiling(pool, name)))
-                {
+                let limit = bounds.and_then(|bounds| bounds.get(name)).map(|bound| {
+                    if projection_tested(pool, name) {
+                        bound.limit(pool, name)
+                    } else {
+                        ceiling(pool, name)
+                    }
+                });
+                if let Some(window) = member.windows.get(name).filter(|w| {
+                    w.projection
+                        .zip(limit)
+                        .is_some_and(|(projection, limit)| projection > limit)
+                }) {
                     return vec![summary_fact(
                         name,
                         FactValue::Number(window.utilization),

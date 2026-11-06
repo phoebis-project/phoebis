@@ -479,15 +479,19 @@ window the account's set lacks is not projected, since nothing is read or charge
 the earlier of its reset and the account's subscription end. A weekly window's, the 7-day window's and a model's own
 week's, is the earliest of five hours from now, its reset and the end, so a weekly projection looks five hours ahead at
 most. A 5-hour reading past its reset with no new reset looks five hours ahead too, since the window opens with the next
-request. A projection's wall is the instant the burn it implies over the time to its horizon takes the prediction to
-1.0, past the horizon where the projection reads under 1.0 there, and a projection with no burn names none (see
-**Shed**, below). `burn_average_seconds` (default 1800) is the time constant of each session's burn average, the figure
-the projection carries forward (see **Burn**, below). A burn the cost model cannot price adds nothing, so an account
-whose plan the cost model does not price (a free organization, a Team or Enterprise organization whose tier the cost
-model does not hold, or a tier the profile has not named) projects its prediction alone. An API-key account has no plan
-window and no projection, and neither has a usage-based seat, so the plan readings a seat kept from before it converted
-project nothing. A pin whose agent ended (see **Shed**, below) adds no burn until its next request, since its agent
-sends no new turn, while the pin and its cache stay.
+request. A shedding round and the heal of a standing mark test the projection at the horizon against the line the
+horizon sets: the wall, 1.0, where the horizon is the account's end or the window's own reset, since the quota left at
+either instant is lost, and `window_ceiling` where it is the five-hour bound, since no reset is known at that instant
+and the quota reads on. The runways of moves and placements read the ceiling whatever the horizon. A projection's wall
+instant is the instant the burn it implies over the time to its horizon takes the prediction to the wall, past the
+horizon where the projection reads under the wall there, and a projection with no burn names none (see **Shed**, below).
+`burn_average_seconds` (default 1800) is the time constant of each session's burn average, the figure the projection
+carries forward (see **Burn**, below). A burn the cost model cannot price adds nothing, so an account whose plan the
+cost model does not price (a free organization, a Team or Enterprise organization whose tier the cost model does not
+hold, or a tier the profile has not named) projects its prediction alone. An API-key account has no plan window and no
+projection, and neither has a usage-based seat, so the plan readings a seat kept from before it converted project
+nothing. A pin whose agent ended (see **Shed**, below) adds no burn until its next request, since its agent sends no new
+turn, while the pin and its cache stay.
 
 **The demand** What the slow-down holds back is still wanted: a session held before each request burns less than it asks
 to, and the moment the hold lifts it burns at its own pace again, so the router keeps two readings of a session's burn.
@@ -600,19 +604,24 @@ when one of the account's plan windows crosses its trigger. No round fires on a 
 readings project nothing (see **The projection**, above). The windows are tested in the order `five_hour`, `seven_day`,
 then each model week a pin of the pool on the account draws, and the first that crosses fires and is the round's window.
 A weekly window, and the 5-hour window of a pool whose `slow_down` is off, crosses when the account's projection on it
-reads over `window_ceiling` at the window's horizon (see **The projection**, above) at a pinned selection and still
-reads over at a pinned selection a wait later, a quarter of the time from the first reading over to the window's wall as
-that selection reads it, and at most twice `burn_average_seconds` (an hour at the default), the cap alone while the
-projection's burn reads nothing. A burst toward a near wall fires early and a slow climb waits, and one large turn's
-charge, which moves the prediction before the burn average has absorbed it, fires no round at the selection it lands on,
-since the wait starts there. The routing log's record of the selection names each projected window's wall beside its
-horizon, `wall_seven_day` beside `horizon_seven_day` for the week, and no wall where the window's burn reads nothing.
-The wait's stamp, the first reading over, belongs to the window whose reset it was set under, so a reading whose reset
-lies an hour or more from that one, earlier or later, opens a new window whose wait starts at that reading, while a
-smaller move is the upstream's drift inside one window. The wait holds the round back and nothing else: the request is
-served as before, a mark already standing moves at its pin's next request, and a window inside its wait yields to the
-next in the order. The 5-hour window of a pool whose `slow_down` is on crosses when the stretch the slow-down reads has
-stood over `slow_down_stretch_seconds` for its safety wait, and the round's horizon moves earlier by the threshold (see
+at the window's horizon reads over the line that horizon sets (see **The projection**, above), the wall where the
+horizon is the account's end or the window's own reset and `window_ceiling` at the five-hour bound, at a pinned
+selection and still reads over it at a pinned selection a wait later. The 5-hour window's horizon is its reset wherever
+its reading names one, so on a pool whose `slow_down` is off that window sheds only once its projection at the reset
+passes the wall. The wait is a quarter of the time from the first reading over `window_ceiling` to the window's wall
+instant as that selection reads it, and at most twice `burn_average_seconds` (an hour at the default), the cap alone
+while the projection's burn reads nothing. A burst toward a near wall instant fires early and a slow climb waits, and
+one large turn's charge, which moves the prediction before the burn average has absorbed it, fires no round at the
+selection it lands on, since the wait starts there. Where the line is the wall, the time a window reads between the
+ceiling and the wall counts toward its wait, since the wait runs from the first reading over the ceiling. The routing
+log's record of the selection names each projected window's wall instant beside its horizon, `wall_seven_day` beside
+`horizon_seven_day` for the week, and none where the window's burn reads nothing. The wait's stamp, the first reading
+over the ceiling, belongs to the window whose reset it was set under, so a reading whose reset lies an hour or more from
+that one, earlier or later, opens a new window whose wait starts at that reading, while a smaller move is the upstream's
+drift inside one window. The wait holds the round back and nothing else: the request is served as before, a mark already
+standing moves at its pin's next request, and a window inside its wait yields to the next in the order. The 5-hour
+window of a pool whose `slow_down` is on crosses when the stretch the slow-down reads has stood over
+`slow_down_stretch_seconds` for its safety wait, and the round's horizon moves earlier by the threshold (see
 [Slow-down](#slow-down), below). No 5-hour round fires while the window is younger than twice `burn_average_seconds` (an
 hour at the default), whatever fired the trigger, because each session's burn average still carries the previous
 window's last half hour over the reset and the projection would apply that rate to a horizon of up to five hours. While
@@ -622,9 +631,10 @@ wait fires in the 5-hour window's place, and a standing mark still moves. The we
 same burst after a weekly reset is a small share of a week over a weekly horizon. A weekly window's horizon lies five
 hours ahead at most, so a weekly wall is shed only in its last five hours, when the gate also stops placing new sessions
 there. A round runs on an account at most once per `shed_dwell_seconds`, and a selection runs one round at most. The
-excess is the burn that, removed now, lands the fired window's projection on the ceiling at its horizon, the demand's
-projection at the moved horizon under the slow-down. The round's target is the lesser of the excess and `shed_cap`
-(default 0.5) of the burn of the round's pins on that window, so the excess sets the amount and the cap bounds it.
+excess is the burn that, removed now, lands the fired window's projection at its horizon on the line it crossed, the
+wall or `window_ceiling`, and under the slow-down the demand's projection at the moved horizon on the ceiling. The
+round's target is the lesser of the excess and `shed_cap` (default 0.5) of the burn of the round's pins on that window,
+so the excess sets the amount and the cap bounds it.
 
 With `load_shedding` off no round runs and nothing is marked, and a mark already standing is released at the session's
 next request, which renews the pin in place. The destination gate, the reservations and `window_ceiling` on every move
@@ -684,13 +694,14 @@ it is. A pin on an account cooling for the session's model, marked or not, is re
 `cooldown` among its reasons: the selection's renew step does not renew it, the fresh placement takes its place, and a
 mark goes with it. The round on the account still runs, since a cooldown can hold one model alone. An unmarked pin never
 moves for utilization. A mark holds until the pin moves, is released or expires, or its account heals: when the
-account's projection on the marked window reads under the ceiling at the pin's next request, or, for a mark the stretch
-made, when the stretch reads at or under `slow_down_stretch_seconds`, the mark clears and the pin stays. A later round
-adds its marks beside the standing ones. `shed_dwell_seconds` (default 900) thus has two roles, the pause between two
-rounds on one account and the time a shed session keeps off the account that shed it. The marks live on the pins' rows
-in the registry, beside each account's last round, so a restart neither forgets a mark nor starts a fresh round inside
-the dwell. A held request does not survive one (the relay's open connection closes and the client retries), and the
-routing log's router started row says so.
+account's projection on the marked window reads under the line its horizon sets (the wall at the account's end or the
+window's own reset, `window_ceiling` at the five-hour bound) at the pin's next request, or, for a mark the stretch made,
+when the stretch reads at or under `slow_down_stretch_seconds`, the mark clears and the pin stays. A later round adds
+its marks beside the standing ones. `shed_dwell_seconds` (default 900) thus has two roles, the pause between two rounds
+on one account and the time a shed session keeps off the account that shed it. The marks live on the pins' rows in the
+registry, beside each account's last round, so a restart neither forgets a mark nor starts a fresh round inside the
+dwell. A held request does not survive one (the relay's open connection closes and the client retries), and the routing
+log's router started row says so.
 
 **Warmth** A pin stays warm while its last refresh is younger than the cache TTL in force for it. A `main`, `subagent`
 or `compaction` request ([`x-claude-code-request-class`](client.md#claude_code_gateway_hint_headers)) refreshes it, and
@@ -738,7 +749,7 @@ window's reset, and the window that binds it, and a failover's move adds its `ca
 (`account`, `fast`, `fast_credits` or `model:<id>`), its `reason` (the cooldown row's own word, such as `rate_limit`)
 and its `window`, and for a mark the account's `state` and the state's `cause`. A failover with neither, a 401 whose
 refresh failed with a transient error the request could not wait out, carries none. A mark that clears records
-`mark_cleared` with the reason `healed` (the account's projection on the marked window read under the ceiling again, or
+`mark_cleared` with the reason `healed` (the account's projection on the marked window read under its line again, or
 its stretch under the threshold for a mark the stretch made), `moved` or `released`. A reservation that leaves without
 the usage that would have replaced it records `reservation_expired`, with the relay's word for a request that ended
 without usage (`canceled`, `exhausted`, `refused` or `transport_error`) or `timeout` for a booking an hour old. A pin
@@ -1210,3 +1221,8 @@ account can serve ([Moves](#moves)). A warm session stays (the **Drain** rule of
 `wind_down_minutes` at 0 nothing happens before the end. Past the end, a canceled account is the obstacle
 `subscription_ended`, and the upstream refuses the dead credential, so the session's next request fails over to a
 sibling.
+
+An end that falls before a window's horizon becomes that horizon ([The windows the router works
+from](#the-windows-the-router-works-from)). Such a window sheds only once the account's projection at the end passes the
+wall, 1.0, in place of `window_ceiling`, since the quota left at the end is lost, and a standing mark on it heals once
+the projection there reads under the wall ([Moves](#moves)). A move's fit and a placement keep reading the ceiling.

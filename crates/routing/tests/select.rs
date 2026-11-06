@@ -1449,7 +1449,7 @@ fn a_round_with_no_fitting_destination_marks_nothing_and_records_no_runway() {
         ..Pool::default()
     });
     // Two cold pins burning 0.5 of the window an hour, so a at 0.94 projects to 1.44 and a round runs, and the burn
-    // decayed over the dwell on the pool's 600 second average still takes the second arm's projection over the ceiling.
+    // decayed over the dwell on the pool's 600 second average still takes the second arm's projection over the wall.
     let mut st = rounding(vec![
         burning("s1", "a", 40.0, false, T),
         burning("s0", "a", 10.0, false, T),
@@ -3358,13 +3358,14 @@ fn a_rounds_fitting_destinations_order_by_the_strategy_and_then_by_the_longest_r
         members: vec![("a", 0), ("b", 1), ("c", 2)],
         ..Pool::default()
     });
-    // `a` at 0.94 with its pins burning 0.05 of the window an hour projects to 0.99, so its round runs and marks s1.
+    // `a` at 0.99 with its pins burning 0.05 of the window an hour projects to 1.04 at its reset, over the wall, so its
+    // round runs and marks s1.
     let run = |s: &RegistrySnapshot, b: UtilizationSample, c: UtilizationSample| {
         let mut st = rounding(vec![
             burning("s1", "a", 4.0, false, T),
             burning("s0", "a", 1.0, false, T),
         ]);
-        st.record_sample("a", refreshing(0.94, T + HOUR, T + 72 * HOUR, T - 500), 0);
+        st.record_sample("a", refreshing(0.99, T + HOUR, T + 72 * HOUR, T - 500), 0);
         st.record_sample("b", b, 0);
         st.record_sample("c", c, 0);
         past_the_wait(&mut st, s, "p", "a", T);
@@ -3467,7 +3468,7 @@ fn a_rounds_plan_under_round_robin_names_the_cohorts_turn_the_move_then_takes() 
         burning("s1", "a", 4.0, false, T),
         burning("s0", "a", 1.0, false, T),
     ]);
-    st.record_sample("a", refreshing(0.94, T + HOUR, T + 72 * HOUR, T - 500), 0);
+    st.record_sample("a", refreshing(0.99, T + HOUR, T + 72 * HOUR, T - 500), 0);
     st.record_sample("b", sample(0.3, 0.3, T - 500), 0);
     st.record_sample("c", sample(0.3, 0.3, T - 500), 0);
     // A fresh session placed while a sits at its cap takes the first turn of the cohort b, c and passes the turn on.
@@ -5449,8 +5450,8 @@ fn a_round_on_an_account_marks_among_every_pin_on_it_under_its_pools_cap_and_dwe
         landed(select(&mut st, &s, &req, &mut rng()).0),
         ("a".into(), None)
     );
-    // The pins burn 0.085 of the window an hour, so a at 0.94 projects to 1.025 and the excess of 0.075 is capped at
-    // half the burn, 0.0425, which k1's s1 and k2's s3 carry the removed burn past.
+    // The pins burn 0.085 of the window an hour, so a at 0.99 projects to 1.075 and the excess of 0.075 over the wall
+    // is capped at half the burn, 0.0425, which k1's s1 and k2's s3 carry the removed burn past.
     assert_eq!(
         [
             key("k1", "s1"),
@@ -12796,12 +12797,13 @@ fn a_shedding_rounds_destination_read_fits_a_usage_based_seat_as_it_fits_an_api_
         },
         terms,
     );
-    // `a` at 0.94 with its pins burning 0.05 of the window an hour projects to 0.99, so its round runs and marks s1.
+    // `a` at 0.99 with its pins burning 0.05 of the window an hour projects to 1.04 at its reset, over the wall, so its
+    // round runs and marks s1.
     let mut st = rounding(vec![
         burning("s1", "a", 4.0, false, T),
         burning("s0", "a", 1.0, false, T),
     ]);
-    st.record_sample("a", refreshing(0.94, T + HOUR, T + 72 * HOUR, T - 500), 0);
+    st.record_sample("a", refreshing(0.99, T + HOUR, T + 72 * HOUR, T - 500), 0);
     st.record_sample("c", weekly(0.3, 0.5, 4, T - 500), 0);
     past_the_wait(&mut st, &s, "p", "a", T);
     let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
@@ -13412,11 +13414,11 @@ fn shedding_pool(shedding: Shedding) -> Pool {
     }
 }
 
-/// `a` at 0.94 on its 5-hour window with the reset an hour out, so pins burning a hundredth of the window an hour
-/// between them take its projection over the ceiling, and `b` at 0.1 on both windows, fitting every pin of these cases
-/// to its horizon. Both weeks read 0.1, far under the ceiling at their horizons.
+/// `a` at 0.99 on its 5-hour window with the reset an hour out, so pins burning over a hundredth of the window an hour
+/// between them take its projection at the reset over the wall, and `b` at 0.1 on both windows, fitting every pin of
+/// these cases to its horizon. Both weeks read 0.1, far under the ceiling at their horizons.
 fn over_a_fitting_b(st: &mut RoutingState, at: i64) {
-    st.record_sample("a", refreshing(0.94, at + HOUR, at + 72 * HOUR, at), 0);
+    st.record_sample("a", refreshing(0.99, at + HOUR, at + 72 * HOUR, at), 0);
     st.record_sample("b", refreshing(0.1, at + HOUR, at + 72 * HOUR, at), 0);
 }
 
@@ -14041,9 +14043,10 @@ fn a_pin_that_fails_over_off_its_account_leaves_its_mark_with_the_row() {
         burning("s0", "a", 1.0, false, T),
     ]);
     // s0's request runs a's round, which marks s1 with b as its planned destination and leaves s1 where it is until
-    // its own next request. c reads full, so no mark finds it a destination yet.
+    // its own next request. c reads full, over the ceiling as a does, so no mark finds it a destination yet and a fresh
+    // placement reads both least bad.
     over_a_fitting_b(&mut st, T - 500);
-    st.record_sample("c", sample(0.9, 0.3, T - 500), 0);
+    st.record_sample("c", sample(0.96, 0.3, T - 500), 0);
     past_the_wait(&mut st, &s, "p", "a", T);
     assert_eq!(
         landed(select(&mut st, &s, &auxiliary(&s, "s0", T), &mut rng()).0),
@@ -14095,7 +14098,7 @@ fn a_pin_that_fails_over_off_its_account_leaves_its_mark_with_the_row() {
     assert_eq!(
         landed(select(&mut st, &s, &auxiliary(&s, "s1", T + 7_000), &mut rng()).0),
         ("a".into(), None),
-        "a still projects over the ceiling and its round still stands, but the fail-over took s1's mark with its row"
+        "a still projects over the wall and its round still stands, but the fail-over took s1's mark with its row"
     );
     assert!(!marked(&st, "s1"));
     assert_eq!(st.last_shed("p", "a"), Some(T), "no new round ran on a");
@@ -14187,7 +14190,8 @@ fn a_round_never_marks_the_last_pin_and_skips_an_unpriced_one() {
          round left out lists last with no share"
     );
 
-    // Three unpriced pins on an account over the ceiling: the round can price no burn to remove.
+    // Three unpriced pins on an account over the ceiling at the five-hour bound, its reading naming no reset: the round
+    // can price no burn to remove.
     let mut st = rounding(
         ["guess-a", "guess-b", "guess-c"]
             .into_iter()
@@ -14197,7 +14201,7 @@ fn a_round_never_marks_the_last_pin_and_skips_an_unpriced_one() {
             })
             .collect(),
     );
-    st.record_sample("a", refreshing(0.96, T + HOUR, T + 72 * HOUR, T - 500), 0);
+    st.record_sample("a", sample(0.96, 0.1, T - 500), 0);
     st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500), 0);
     let guess = |session: &str| PinKey {
         model: "claude-guess".into(),
@@ -14225,7 +14229,7 @@ fn a_round_never_marks_the_last_pin_and_skips_an_unpriced_one() {
         .iter()
         .all(|session| !st.shed_marked(&guess(session))));
 
-    // No burn projects nothing over the reading, so an account under the ceiling runs no round.
+    // No burn projects nothing over the reading, so an account under the wall at its reset runs no round.
     let mut st = rounding(
         ["cold-a", "cold-b", "cold-c", "cold-d"]
             .into_iter()
@@ -14240,7 +14244,7 @@ fn a_round_never_marks_the_last_pin_and_skips_an_unpriced_one() {
     assert_eq!(
         st.last_shed("p", "a"),
         None,
-        "0.94 with nothing burning stays under the ceiling"
+        "0.99 with nothing burning stays under the wall"
     );
 
     // A cap at its floor bounds the target at a tenth of the burn, which the heaviest pin alone covers.
@@ -15736,6 +15740,130 @@ fn a_source_ending_inside_the_weeks_horizon_projects_to_its_end_and_runs_no_roun
         "one hour of the pins' burn to the end"
     );
     assert_eq!(last_shed, None, "no round ran on a");
+}
+
+#[test]
+fn a_horizon_at_the_end_or_the_window_s_own_reset_fires_a_round_and_keeps_a_mark_only_past_the_wall(
+) {
+    // a's two warm pins burn 0.05 of the 5-hour window an hour, and the window's horizon lies an hour out: at the
+    // account's end under a reading that names no reset, or at the reading's own reset on an account with no end. A
+    // reading of 0.94 projects 0.99 there, between the ceiling and the wall, and one of 0.99 projects 1.04, past it.
+    let run = |end: Option<i64>, a: UtilizationSample, marked: bool| {
+        let mut terms = tier_terms(&["a", "b"]);
+        terms[0].canceled = end.is_some();
+        terms[0].ends_at = end;
+        let s = snapshot_with_terms(shedding_pool(Shedding::default()), terms);
+        let mark = marked.then(|| PinMark {
+            at: T - 963_000,
+            on: "a".into(),
+            window: FIVE_HOUR.into(),
+        });
+        let mut st = rounding(vec![
+            PinRow {
+                mark,
+                ..burning("s1", "a", 4.0, true, T)
+            },
+            burning("s0", "a", 1.0, true, T),
+        ]);
+        st.record_sample("a", a, 0);
+        st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T), 0);
+        past_the_wait(&mut st, &s, "p", "a", T);
+        decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng())
+    };
+    let at_the_end = |five_hour: f64| (Some(T + HOUR), sample(five_hour, 0.1, T));
+    let at_the_reset = |five_hour: f64| (None, refreshing(five_hour, T + HOUR, T + 72 * HOUR, T));
+    for (horizon, set) in [
+        (
+            "end",
+            &at_the_end as &dyn Fn(f64) -> (Option<i64>, UtilizationSample),
+        ),
+        ("reset", &at_the_reset),
+    ] {
+        let (end, a) = set(0.94);
+        let d = run(end, a, false);
+        let shed = line(&d.record, "move:shed");
+        assert!(
+            (number(fact(shed, "projection_five_hour")) - 0.99).abs() < 1e-9,
+            "{horizon}: {:?}",
+            shed.facts
+        );
+        assert_eq!(fact(shed, "horizon_five_hour"), &FactValue::Int(T + HOUR));
+        assert!(
+            d.shed_round.is_none() && shed.facts.iter().all(|f| f.key != "trigger"),
+            "{horizon}: a projection under the wall fires no round: {:?}",
+            shed.facts
+        );
+        assert_eq!(
+            summary_facts(&d),
+            vec![("idle", FactValue::Int(1_000), Some("ms"))],
+            "{horizon}: the renewal names no window, since no round fires on one"
+        );
+        let (end, a) = set(0.94);
+        let d = run(end, a, true);
+        assert_eq!(
+            (
+                landed(d.result.clone()),
+                d.record.outcome.mark_cleared.as_ref().map(|m| m.reason)
+            ),
+            (("a".into(), None), Some("healed")),
+            "{horizon}: a projection under the wall heals the standing mark"
+        );
+
+        let (end, a) = set(0.99);
+        let d = run(end, a, false);
+        let round = d
+            .shed_round
+            .unwrap_or_else(|| panic!("{horizon}: a projection past the wall fires"))
+            .facts;
+        assert_eq!(
+            (round.window.as_str(), round.horizon),
+            ("five_hour", T + HOUR),
+            "{horizon}"
+        );
+        for (read, expected) in [
+            (round.projection, 1.04),
+            (round.ceiling, 1.0),
+            (round.excess, 0.04),
+        ] {
+            assert!(
+                (read - expected).abs() < 1e-9,
+                "{horizon}: {read} against {expected}, the round's line the wall"
+            );
+        }
+        let (end, a) = set(0.99);
+        let d = run(end, a, true);
+        assert_eq!(
+            (
+                landed(d.result.clone()),
+                d.record.outcome.mark_cleared.as_ref().map(|m| m.reason)
+            ),
+            (("b".into(), Some(MigrateReason::Shed)), Some("moved")),
+            "{horizon}: a projection past the wall keeps the mark, which moves the pin"
+        );
+    }
+
+    // A week's own reset an hour out sets its horizon in the same way: the pins' 0.05 / 6 an hour take 0.995 to 1.0033
+    // there, past the wall, while the 5-hour window at 0.1 with no reset projects 0.35 five hours out.
+    let week = sample(0.1, 0.995, T).with(
+        SEVEN_DAY,
+        WindowReading {
+            utilization: 0.995,
+            reset: Some(T + HOUR),
+            observed_at: T,
+            source: WindowSource::Poll,
+            plan: None,
+            tier: None,
+        },
+    );
+    let round = run(None, week, false)
+        .shed_round
+        .expect("a week past the wall at its reset fires")
+        .facts;
+    assert_eq!(
+        (round.window.as_str(), round.horizon, round.ceiling),
+        ("seven_day", T + HOUR, 1.0),
+        "the week's round reads the wall at its own reset"
+    );
 }
 
 #[test]
@@ -18345,7 +18473,7 @@ fn a_shed_round_reads_no_rewrite_for_a_pin_a_classifier_call_renewed_last() {
             ..burning("small", "a", 0.1, true, T)
         },
     ]);
-    st.record_sample("a", refreshing(0.747, T + HOUR, T + 72 * HOUR, T - 500), 0);
+    st.record_sample("a", refreshing(0.797, T + HOUR, T + 72 * HOUR, T - 500), 0);
     st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500), 0);
     past_the_wait(&mut st, &s, "p", "a", T);
     let d = decide(&mut st, &s, &auxiliary(&s, "small", T), &mut rng());
@@ -18386,7 +18514,7 @@ fn a_shed_round_reads_no_rewrite_for_a_pin_a_classifier_call_renewed_last() {
 
 /// Three warm pins on `a`, two of them last renewed by a classifier call with a prompt of 400 000 tokens: `current`,
 /// whose request the round runs on, burning twenty, `other` a tenth, and `plain`, whose last prompt of 10 000 tokens is
-/// the session's own, burning 0.4. Together they take `a`'s 5-hour projection over the ceiling. The two a classifier
+/// the session's own, burning 0.4. Together they take `a`'s 5-hour projection at the reset over the wall. The two a classifier
 /// call renewed are pins only auxiliary calls use, as a classifier call's own pin is, so neither names a turn and a
 /// classifier request on `current` runs the move rules, the round among them.
 fn classifier_renewed_round() -> RoutingState {
@@ -18408,7 +18536,7 @@ fn classifier_renewed_round() -> RoutingState {
             ..burning("plain", "a", 0.4, true, T)
         },
     ]);
-    st.record_sample("a", refreshing(0.747, T + HOUR, T + 72 * HOUR, T - 500), 0);
+    st.record_sample("a", refreshing(0.797, T + HOUR, T + 72 * HOUR, T - 500), 0);
     st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500), 0);
     st
 }
@@ -20583,9 +20711,10 @@ fn a_renewal_names_the_first_window_whose_projection_at_its_horizon_reaches_the_
 #[test]
 fn a_renewal_names_no_window_whose_projection_reads_the_ceiling_exactly() {
     // A round fires over the ceiling, strictly, so a renewal row names a window only where a round would fire. The
-    // pin's hundred tokens a second carry the 5-hour window from 0.5 to the ceiling exactly at its reset 144 minutes
-    // out, the ceiling being that projection as the engine computes it.
-    let at_horizon = 0.5 + (100.0 / 10_000_000.0) * 8_640.0;
+    // pin's hundred tokens a second carry the 5-hour window from 0.5 to the ceiling exactly at its horizon five hours
+    // out, where a reading that names no reset reads the ceiling, the ceiling being that projection as the engine
+    // computes it.
+    let at_horizon = 0.5 + (100.0 / 10_000_000.0) * 18_000.0;
     let s = tiered(Pool {
         members: vec![("a", 0), ("b", 1)],
         window_ceiling: at_horizon,
@@ -20593,11 +20722,7 @@ fn a_renewal_names_no_window_whose_projection_reads_the_ceiling_exactly() {
     });
     let renew = |input: f64| {
         let mut st = priced(vec![burning("s1", "a", input, true, T)]);
-        st.record_sample(
-            "a",
-            refreshing(0.5, T + 144 * MINUTE, T + 72 * HOUR, T - 500),
-            0,
-        );
+        st.record_sample("a", sample(0.5, 0.1, T - 500), 0);
         decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng())
     };
     let d = renew(100.0);
@@ -20776,11 +20901,12 @@ fn past_the_wait(
 }
 
 #[test]
-fn a_five_hour_round_fires_on_the_projection_over_the_ceiling_and_marks_until_the_removed_burn_covers_the_excess(
+fn a_five_hour_round_fires_on_the_projection_over_the_wall_at_its_reset_and_marks_until_the_removed_burn_covers_the_excess(
 ) {
     let s = projection_pool(vec![("a", 0), ("b", 1)]);
-    let mut st = three_pins_projecting_over();
-    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T), 0);
+    // The round pins' 0.42 of the window an hour take a at 0.85 to 1.27 at its reset an hour out, an excess of 0.27 an
+    // hour over the wall under a cap of half the burn.
+    let mut st = three_pins_with_a(refreshing(0.85, T + HOUR, T + 72 * HOUR, T));
     past_the_wait(&mut st, &s, "p", "a", T);
     let d = decide(&mut st, &s, &auxiliary(&s, "s3", T), &mut rng());
     assert_eq!(
@@ -20791,7 +20917,7 @@ fn a_five_hour_round_fires_on_the_projection_over_the_ceiling_and_marks_until_th
     let shed = line(&d.record, "move:shed");
     assert_eq!(shed.verdict, "no");
     assert_eq!(fact(shed, "trigger"), &FactValue::Text("five_hour".into()));
-    assert!((number(fact(shed, "projection_five_hour")) - 1.22).abs() < 1e-9);
+    assert!((number(fact(shed, "projection_five_hour")) - 1.27).abs() < 1e-9);
     assert_eq!(fact(shed, "horizon_five_hour"), &FactValue::Int(T + HOUR));
     assert!((number(fact(shed, "ceiling")) - 0.95).abs() < 1e-9);
     assert!((number(fact(shed, "excess")) - 0.27).abs() < 1e-9);
@@ -20811,9 +20937,9 @@ fn a_five_hour_round_fires_on_the_projection_over_the_ceiling_and_marks_until_th
         ("five_hour", "marked 2", None)
     );
     for (read, expected) in [
-        (round.utilization, 0.80),
-        (round.projection, 1.22),
-        (round.ceiling, 0.95),
+        (round.utilization, 0.85),
+        (round.projection, 1.27),
+        (round.ceiling, 1.0),
         (round.burn_sum, 0.42),
         (round.excess, 0.27),
         (round.target, 0.21),
@@ -20871,7 +20997,7 @@ fn a_five_hour_round_fires_on_the_projection_over_the_ceiling_and_marks_until_th
 }
 
 /// Two cold pins of `a` burning 20 input tokens a second each, `s0` placed under the cases' regime `desk` and `s1`
-/// under none, so `s0` sorts first in the key order, with `a` at 0.80 on its 5-hour window and the reset an hour out,
+/// under none, so `s0` sorts first in the key order, with `a` at 0.85 on its 5-hour window and the reset an hour out,
 /// and `b` at 0.1 on both windows.
 fn a_desk_pin_and_a_base_pin() -> RoutingState {
     let mut st = rounding(vec![
@@ -20881,7 +21007,7 @@ fn a_desk_pin_and_a_base_pin() -> RoutingState {
         },
         burning("s1", "a", 20.0, false, T),
     ]);
-    st.record_sample("a", refreshing(0.80, T + HOUR, T + 72 * HOUR, T), 0);
+    st.record_sample("a", refreshing(0.85, T + HOUR, T + 72 * HOUR, T), 0);
     st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T), 0);
     st
 }
@@ -20910,7 +21036,7 @@ fn two_pins_of_equal_burn_project_half_the_share_for_the_pin_under_the_test_regi
     let shed = line(&d.record, "move:shed");
     // The base pin burns 0.20 of the window an hour and the desk pin half of it, so the hour to the reset adds 0.30.
     assert!(
-        (number(fact(shed, "projection_five_hour")) - 1.10).abs() < 1e-9,
+        (number(fact(shed, "projection_five_hour")) - 1.15).abs() < 1e-9,
         "the projection sums each pin under its own regime: {:?}",
         fact(shed, "projection_five_hour")
     );
@@ -21167,8 +21293,9 @@ fn a_pool_with_load_shedding_off_runs_no_round_releases_its_marks_and_still_move
     assert!(!marked(&st, "s1") && !marked(&st, "s0"), "no pin is marked");
 
     // A mark written while the switch was on is released at the pin's next selection, ahead of the heal check: with
-    // `a` under the ceiling the heal check would clear it as healed, and the reason is the switch's all the same.
-    for (five_hour, reading) in [(0.94, "over the ceiling"), (0.5, "under the ceiling")] {
+    // `a` under the wall at its reset the heal check would clear it as healed, and the reason is the switch's all the
+    // same.
+    for (five_hour, reading) in [(0.99, "over the wall"), (0.5, "under the wall")] {
         let marked_at = T - 300_000;
         let mut st = rounding(vec![
             PinRow {
@@ -21238,7 +21365,7 @@ fn a_pool_with_load_shedding_off_runs_no_round_releases_its_marks_and_still_move
 }
 
 #[test]
-fn a_mark_holds_past_the_dwell_heals_when_the_projection_reads_under_the_ceiling_and_stays_with_no_fitting_destination(
+fn a_mark_holds_past_the_dwell_heals_when_the_projection_reads_under_the_wall_and_stays_with_no_fitting_destination(
 ) {
     let s = tiered(shedding_pool(Shedding::default()));
     // s1 was marked 963 seconds ago by a round whose 900 second dwell has passed, and has not asked since.
@@ -21299,7 +21426,8 @@ fn a_mark_holds_past_the_dwell_heals_when_the_projection_reads_under_the_ceiling
         Some(("moved", marked_at, "a", None))
     );
 
-    // The account's projection fell under the ceiling: the heal check clears the mark ahead of the move rules.
+    // The account's projection at the reset fell under the wall: the heal check clears the mark ahead of the move
+    // rules.
     let mut st = state();
     st.record_sample("a", refreshing(0.5, T + HOUR, T + 72 * HOUR, T), 0);
     st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T), 0);
@@ -21344,9 +21472,9 @@ fn a_mark_holds_past_the_dwell_heals_when_the_projection_reads_under_the_ceiling
     assert!(!marked(&st, "s1"));
     assert_eq!(d.record.outcome.kind, "renewed");
 
-    // Over the ceiling with no sibling that fits: the pin renews in place and its mark stands.
+    // Over the wall with no sibling that fits: the pin renews in place and its mark stands.
     let mut st = state();
-    st.record_sample("a", refreshing(0.94, T + HOUR, T + 72 * HOUR, T), 0);
+    st.record_sample("a", refreshing(0.99, T + HOUR, T + 72 * HOUR, T), 0);
     st.record_sample("b", sample(0.95, 0.3, T), 0);
     past_the_wait(&mut st, &s, "p", "a", T);
     let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
@@ -21777,10 +21905,10 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
     );
 
     // T + 85 min: 0.56 used. The idle subagent's average has decayed to 0.0437 an hour, still over each Fable pin's
-    // 0.036, and the 215 minutes to the reset add 0.4145: 0.9745 crosses the ceiling. It is cedar's first reading over
-    // the ceiling, so the window waits before a round. The burn the projection implies takes the 0.44 left to the wall
-    // about 228 minutes out, past the reset, and the wait is a quarter of that, under two burn averages. A heavy Fable
-    // pin's turn runs no round and renews in place.
+    // 0.036, and the 215 minutes to the reset add 0.4145: 0.9745 crosses the ceiling and stays under the wall at the
+    // reset, where the quota left is lost, so the window runs no wait and fires no round, and the stamp alone notes its
+    // first reading over the ceiling. The burn the projection implies takes the 0.44 left to the wall about 228 minutes
+    // out, past the reset. A heavy Fable pin's turn renews in place.
     charge(&mut st, 70, 85);
     let at_85 = decide(
         &mut st,
@@ -21794,7 +21922,7 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
     assert_eq!(shed.verdict, "no");
     assert!(
         no_fact(shed, "trigger") && no_fact(shed, "round"),
-        "the wait holds the round back: {:?}",
+        "a projection under the wall at the reset fires no round: {:?}",
         shed.facts
     );
     let projection = number(fact(shed, "projection_five_hour"));
@@ -21806,7 +21934,7 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
         ) + 2.0 * five_hour_rate(FABLE, FABLE_READS))
             * seconds_to_reset(T + 85 * MINUTE);
     assert!(
-        close(projection, expected) && projection > ceiling,
+        close(projection, expected) && projection > ceiling && projection < 1.0,
         "{projection} against {expected}"
     );
     let wall = time_of(fact(shed, "wall_five_hour"));
@@ -21814,23 +21942,23 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
         wall > cedar_reset,
         "a projection under 1.0 at the reset puts the wall past it"
     );
-    assert_eq!(
-        fact(shed, "over_since_five_hour"),
-        &FactValue::Int(T + 85 * MINUTE)
+    assert!(
+        no_fact(shed, "over_since_five_hour") && no_fact(shed, "wait_five_hour"),
+        "a window under its wall runs no wait: {:?}",
+        shed.facts
     );
     assert_eq!(
-        fact(shed, "wait_five_hour"),
-        &FactValue::Int((wall - (T + 85 * MINUTE)) / 4)
+        st.projection_over_since("p", "cedar", FIVE_HOUR),
+        Some(T + 85 * MINUTE),
+        "the stamp notes the first reading over the ceiling"
     );
-    assert_eq!(fact(shed, "marked"), &FactValue::Bool(false));
     assert!(at_85.shed_round.is_none());
     assert_eq!(at_85.record.outcome.shed_marks, None);
     assert!(st.marked_pins("cedar").is_empty());
 
     // T + 85 min + 963 s: 0.66 used, the subagent's average down to 0.0256 an hour, and 199 minutes to the reset add
-    // 0.3235: 0.9835 still reads over the ceiling. The burn it implies takes the 0.34 left to the wall about 209
-    // minutes out, so the window is still inside its wait of a quarter of the time from its first reading over to that
-    // wall, and the subagent's turn runs no round and renews on cedar.
+    // 0.3235: 0.9835 still reads over the ceiling and under the wall at the reset. The burn it implies takes the 0.34
+    // left to the wall about 209 minutes out, past the reset, so the subagent's turn runs no round and renews on cedar.
     charge(&mut st, 85, 101);
     let returned = T + 85 * MINUTE + 963_000;
     let back = decide(
@@ -21845,7 +21973,7 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
     assert_eq!(shed.verdict, "no");
     assert!(
         no_fact(shed, "trigger") && no_fact(shed, "round"),
-        "the wait holds the round back: {:?}",
+        "a projection under the wall at the reset fires no round: {:?}",
         shed.facts
     );
     let projection = number(fact(shed, "projection_five_hour"));
@@ -21857,19 +21985,14 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
         ) + 2.0 * five_hour_rate(FABLE, FABLE_READS))
             * seconds_to_reset(returned);
     assert!(
-        close(projection, expected) && projection > ceiling,
+        close(projection, expected) && projection > ceiling && projection < 1.0,
         "{projection} against {expected}"
     );
-    let wall = time_of(fact(shed, "wall_five_hour"));
-    assert_eq!(
-        fact(shed, "over_since_five_hour"),
-        &FactValue::Int(T + 85 * MINUTE)
+    assert!(
+        no_fact(shed, "over_since_five_hour") && no_fact(shed, "wait_five_hour"),
+        "a window under its wall runs no wait: {:?}",
+        shed.facts
     );
-    assert_eq!(
-        fact(shed, "wait_five_hour"),
-        &FactValue::Int((wall - (T + 85 * MINUTE)) / 4)
-    );
-    assert_eq!(fact(shed, "marked"), &FactValue::Bool(false));
     assert!(back.shed_round.is_none());
     assert_eq!(back.record.outcome.shed_marks, None);
     assert!(st.marked_pins("cedar").is_empty());
@@ -25673,9 +25796,9 @@ fn a_stretch_made_mark_heals_when_the_stretch_reads_under_the_threshold() {
 #[test]
 fn a_mark_made_with_the_slow_down_off_heals_under_the_projection() {
     let s = projection_pool(vec![("a", 0), ("b", 1)]);
-    // The stretch would read 20 minutes here, but with the slow-down off the projection at the reset, 0.98, over the
-    // ceiling, keeps the mark, and the round past its dwell moves the pin.
-    let mut st = marked_s1(6.0, 3.0, 0.80);
+    // The stretch would read 24 minutes here, but with the slow-down off the projection at the reset, 1.01, over the
+    // wall, keeps the mark, and the round past its dwell moves the pin.
+    let mut st = marked_s1(10.0, 5.0, 0.71);
     past_the_wait(&mut st, &s, "p", "a", T);
     let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
     assert_eq!(
@@ -25905,10 +26028,10 @@ fn heavy_light_small() -> RoutingState {
 #[test]
 fn a_target_under_one_pins_burn_marks_the_cheapest_sufficient_pin() {
     let s = projection_pool(vec![("a", 0), ("b", 1)]);
-    // 0.747 plus the pins' 0.205 an hour over the hour to the reset projects 0.952, an excess of 0.002 an hour under
-    // the cap's half of the burn: the target, a hundredth of heavy's burn and half of light's, over small's.
+    // 0.797 plus the pins' 0.205 an hour over the hour to the reset projects 1.002, an excess of 0.002 an hour over the
+    // wall under the cap's half of the burn: the target, a hundredth of heavy's burn and half of light's, over small's.
     let mut st = heavy_light_small();
-    st.record_sample("a", refreshing(0.747, T + HOUR, T + 72 * HOUR, T - 500), 0);
+    st.record_sample("a", refreshing(0.797, T + HOUR, T + 72 * HOUR, T - 500), 0);
     st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500), 0);
     past_the_wait(&mut st, &s, "p", "a", T);
     let d = decide(&mut st, &s, &auxiliary(&s, "small", T), &mut rng());
@@ -25973,7 +26096,9 @@ fn a_target_under_one_pins_burn_marks_the_cheapest_sufficient_pin() {
     assert!(marked(&st, "light") && !marked(&st, "heavy") && !marked(&st, "small"));
 
     // Under a cap of the whole burn with the excess past the three burns' sum, the target is the sum: no one pin covers
-    // what it asks, so the order marks heavy and light and small is the last pin.
+    // what it asks, so the order marks heavy and light and small is the last pin. Only a line the reading already
+    // passes takes the excess past the burn, so a's reading names no reset: its horizon is the five-hour bound, whose
+    // line is the ceiling.
     let whole = tiered(Pool {
         strategy: Strategy::Pace,
         members: vec![("a", 0), ("b", 1)],
@@ -25984,7 +26109,7 @@ fn a_target_under_one_pins_burn_marks_the_cheapest_sufficient_pin() {
         ..Pool::default()
     });
     let mut st = heavy_light_small();
-    st.record_sample("a", refreshing(0.96, T + HOUR, T + 72 * HOUR, T - 500), 0);
+    st.record_sample("a", sample(0.96, 0.1, T - 500), 0);
     st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500), 0);
     past_the_wait(&mut st, &whole, "p", "a", T);
     let d = decide(&mut st, &whole, &auxiliary(&whole, "small", T), &mut rng());
@@ -26011,13 +26136,14 @@ fn a_target_under_one_pins_burn_marks_the_cheapest_sufficient_pin() {
 #[test]
 fn a_covering_pin_without_a_destination_leaves_the_pick_to_the_order() {
     let s = projection_pool(vec![("a", 0), ("b", 1)]);
-    // `wide` burns half the window an hour, which b at 0.9 cannot carry to its reset, and `narrow` 0.01. a at 0.46
-    // projects 0.97 at its reset, a target of 0.02 an hour: wide covers it and has no destination, narrow does not.
+    // `wide` burns half the window an hour, which b at 0.9 cannot carry to its reset, and `narrow` 0.01. a at 0.51
+    // projects 1.02 at its reset, a target of 0.02 an hour over the wall: wide covers it and has no destination, narrow
+    // does not.
     let mut st = rounding(vec![
         burning("wide", "a", 50.0, false, T),
         burning("narrow", "a", 1.0, false, T),
     ]);
-    st.record_sample("a", refreshing(0.46, T + HOUR, T + 72 * HOUR, T - 500), 0);
+    st.record_sample("a", refreshing(0.51, T + HOUR, T + 72 * HOUR, T - 500), 0);
     st.record_sample("b", refreshing(0.9, T + HOUR, T + 72 * HOUR, T - 500), 0);
     past_the_wait(&mut st, &s, "p", "a", T);
     let d = decide(&mut st, &s, &auxiliary(&s, "wide", T), &mut rng());
@@ -26065,7 +26191,7 @@ fn a_covering_pin_without_a_destination_leaves_the_pick_to_the_order() {
 fn a_pin_with_no_burn_on_the_fired_window_leaves_the_walk_and_the_last_pin_count_while_any_burn_stays(
 ) {
     let s = tiered(shedding_pool(Shedding::default()));
-    // `hot` burns a tenth of the window an hour, which takes a at 0.94 over the ceiling at its reset and covers the
+    // `hot` burns a tenth of the window an hour, which takes a at 0.99 over the wall at its reset and covers the
     // target, and b at 0.1 fits it.
     let round_beside = |other: PinRow| {
         let mut st = rounding(vec![burning("hot", "a", 10.0, false, T), other]);
@@ -26125,14 +26251,14 @@ fn a_pin_marked_in_place_of_a_covering_one_needs_a_tenth_of_the_rest_so_a_warm_s
 ) {
     let s = projection_pool(vec![("a", 0), ("b", 1)]);
     // The cold `wide` covers the target and b at 0.9 cannot carry it to its reset, so the walk reaches the warm
-    // `narrow` with the whole target left, the cap's half of the burn: a at 0.94 projects 1.14 at its reset, an excess
-    // of 0.19 an hour over a target of 0.1. No pin from narrow on covers it, and b carries narrow.
+    // `narrow` with the whole target left, the cap's half of the burn: a at 0.99 projects 1.19 at its reset, an excess
+    // of 0.19 an hour over the wall and over a target of 0.1. No pin from narrow on covers it, and b carries narrow.
     let round_of = |wide: f64, narrow: f64| {
         let mut st = rounding(vec![
             burning("wide", "a", wide, false, T),
             burning("narrow", "a", narrow, true, T),
         ]);
-        st.record_sample("a", refreshing(0.94, T + HOUR, T + 72 * HOUR, T - 500), 0);
+        st.record_sample("a", refreshing(0.99, T + HOUR, T + 72 * HOUR, T - 500), 0);
         st.record_sample("b", refreshing(0.9, T + HOUR, T + 72 * HOUR, T - 500), 0);
         past_the_wait(&mut st, &s, "p", "a", T);
         let d = decide(&mut st, &s, &auxiliary(&s, "wide", T), &mut rng());
@@ -26165,9 +26291,9 @@ fn a_pin_marked_in_place_of_a_covering_one_needs_a_tenth_of_the_rest_so_a_warm_s
 }
 
 /// Two warm pins of one prompt size on `a`, a Fable pin burning twice what an Opus pin burns, so the order walks the
-/// Fable pin first, and the light current pin under the target. `a` at 0.7 with the reset an hour out projects 1.004 on
-/// its 5-hour window, a target of 0.054 an hour that each of the two covers. Both Fable weeks read 0.1, so the Fable
-/// pin finds `b` and `a`'s week projects under the ceiling.
+/// Fable pin first, and the light current pin under the target. `a` at 0.75 with the reset an hour out projects 1.054
+/// at the reset on its 5-hour window, a target of 0.054 an hour over the wall that each of the two covers. Both Fable
+/// weeks read 0.1, so the Fable pin finds `b` and `a`'s week projects under the ceiling.
 fn fable_and_opus_of_one_prompt(s: &RegistrySnapshot) -> RoutingState {
     let model_pin = |session: &str, model: &str, burn: f64| PinRow {
         model: model.into(),
@@ -26186,7 +26312,7 @@ fn fable_and_opus_of_one_prompt(s: &RegistrySnapshot) -> RoutingState {
     st.record_sample(
         "a",
         with_fable(
-            refreshing(0.7, T + HOUR, T + 72 * HOUR, T - 500),
+            refreshing(0.75, T + HOUR, T + 72 * HOUR, T - 500),
             0.1,
             Some(T + 96 * HOUR),
         ),
@@ -26295,7 +26421,7 @@ fn a_covering_pins_rewrite_reads_one_figure_whatever_the_destinations_tier() {
         );
         let mut st = heavy_light_small();
         st.set_share(two_tier_pricer());
-        st.record_sample("a", refreshing(0.747, T + HOUR, T + 72 * HOUR, T - 500), 0);
+        st.record_sample("a", refreshing(0.797, T + HOUR, T + 72 * HOUR, T - 500), 0);
         st.record_sample(
             sibling,
             refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500),
@@ -26342,7 +26468,7 @@ fn a_covering_pin_planned_on_an_api_key_sibling_reads_its_figure() {
     // which fits every pin before any pricing.
     let run = |s: &RegistrySnapshot| {
         let mut st = heavy_light_small();
-        st.record_sample("a", refreshing(0.747, T + HOUR, T + 72 * HOUR, T - 500), 0);
+        st.record_sample("a", refreshing(0.797, T + HOUR, T + 72 * HOUR, T - 500), 0);
         st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500), 0);
         past_the_wait(&mut st, s, "p", "a", T);
         decide(&mut st, s, &auxiliary(s, "small", T), &mut rng())
@@ -26411,8 +26537,8 @@ fn an_unsized_and_an_unpriced_covering_pin_cost_nothing_and_the_pick_takes_one_f
     let s = projection_pool(vec![("a", 0), ("b", 1)]);
     // Three warm pins burning 0.2 of the 5-hour window an hour each and the light current pin: `unsized` reports no
     // prompt, so it leads the order, `unpriced` runs a model the equivalent does not weigh, and `sized` rewrites
-    // 400 000 tokens. `a` at 0.4 projects 1.001 at its reset an hour out, a target of 0.051 that each of the three
-    // covers.
+    // 400 000 tokens. `a` at 0.45 projects 1.051 at its reset an hour out, a target of 0.051 over the wall that each of
+    // the three covers.
     let mut st = loaded(vec![
         PinRow {
             last_input_tokens: 0,
@@ -26434,7 +26560,7 @@ fn an_unsized_and_an_unpriced_covering_pin_cost_nothing_and_the_pick_takes_one_f
         },
     ]);
     st.set_share(unpriced_equivalent_pricer());
-    st.record_sample("a", refreshing(0.4, T + HOUR, T + 72 * HOUR, T - 500), 0);
+    st.record_sample("a", refreshing(0.45, T + HOUR, T + 72 * HOUR, T - 500), 0);
     st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500), 0);
     past_the_wait(&mut st, &s, "p", "a", T);
     let d = decide(&mut st, &s, &auxiliary(&s, "small", T), &mut rng());
@@ -26484,8 +26610,8 @@ fn an_unsized_and_an_unpriced_covering_pin_cost_nothing_and_the_pick_takes_one_f
     );
     assert_eq!((round.outcome.as_str(), round.reason), ("marked 1", None));
 
-    // Without `unsized`, `sized` rewrites 5 000 tokens and leads the order over `unpriced`'s 10 000. `a` at 0.6
-    // projects 1.001 at its reset, a target of 0.051 that both cover.
+    // Without `unsized`, `sized` rewrites 5 000 tokens and leads the order over `unpriced`'s 10 000. `a` at 0.65
+    // projects 1.051 at its reset, a target of 0.051 over the wall that both cover.
     let mut st = loaded(vec![
         PinRow {
             model: "claude-unpriced-5".into(),
@@ -26503,7 +26629,7 @@ fn an_unsized_and_an_unpriced_covering_pin_cost_nothing_and_the_pick_takes_one_f
         },
     ]);
     st.set_share(unpriced_equivalent_pricer());
-    st.record_sample("a", refreshing(0.6, T + HOUR, T + 72 * HOUR, T - 500), 0);
+    st.record_sample("a", refreshing(0.65, T + HOUR, T + 72 * HOUR, T - 500), 0);
     st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500), 0);
     past_the_wait(&mut st, &s, "p", "a", T);
     let d = decide(&mut st, &s, &auxiliary(&s, "small", T), &mut rng());
@@ -27008,17 +27134,18 @@ fn the_projection_trigger_waits_a_quarter_of_the_time_to_the_wall_at_most_two_bu
 fn a_window_inside_its_wait_yields_to_the_next_window_past_its_wait() {
     let s = waiting_pool();
     let cap = 2 * burn_average_ms(s.pool("p").expect("the pool"));
-    // Both of a's windows read over the ceiling: the 5-hour window at 0.58 for the first time at this selection, which
-    // the pins' 0.42 an hour take to the wall at its reset an hour out, so it waits a quarter of that hour, and the
-    // week since two burn averages ago, the wait's cap, past its wait whatever its wall.
-    let mut st = three_pins_over_the_week(0.58);
+    // Both of a's windows read over their lines: the 5-hour window at 0.72 for the first time at this selection, which
+    // the pins' 0.42 an hour take to the wall 40 minutes out and to 1.14 at its reset an hour out, so it waits a quarter
+    // of those 40 minutes, and the week over the ceiling since two burn averages ago, the wait's cap, past its wait
+    // whatever its wall instant.
+    let mut st = three_pins_over_the_week(0.72);
     st.stamp_projection_over("p", "a", SEVEN_DAY, T - cap, None);
     let d = decide(&mut st, &s, &auxiliary(&s, "s3", T), &mut rng());
     let shed = line(&d.record, "move:shed");
     assert_eq!(fact(shed, "trigger"), &FactValue::Text("seven_day".into()));
     assert_eq!(fact(shed, "round"), &FactValue::Text("ran".into()));
     assert_eq!(fact(shed, "over_since_five_hour"), &FactValue::Int(T));
-    assert_eq!(fact(shed, "wait_five_hour"), &FactValue::Int(15 * MINUTE));
+    assert_eq!(fact(shed, "wait_five_hour"), &FactValue::Int(10 * MINUTE));
     assert!(
         no_fact(shed, "over_since_seven_day") && no_fact(shed, "wait_seven_day"),
         "{:?}",
@@ -27375,19 +27502,19 @@ fn after_a_round_the_dwell_gates_the_next_and_the_standing_stamp_waits_no_second
     let s = waiting_pool();
     let dwell = shed_dwell_ms(s.pool("p").expect("the pool"));
     let first = T - dwell;
-    // The three round pins on a at 0.94 two hours from its reset at the first reading over the ceiling, a dwell before
-    // T: the projection reads over from there to a dwell after T, about 1.0 then.
+    // The three round pins on a at 0.99 two hours from its reset at the first reading over the wall, a dwell before
+    // T: the projection reads over the wall from there to a dwell after T, about 1.05 then.
     let mut st = rounding(vec![
         burning("s1", "a", 16.0, false, first),
         burning("s2", "a", 14.0, false, first),
         burning("s3", "a", 12.0, false, first),
     ]);
-    reading(&mut st, "a", 0.94, 2 * HOUR, first);
+    reading(&mut st, "a", 0.99, 2 * HOUR, first);
     reading(&mut st, "b", 0.1, 2 * HOUR, first);
     let d = decide(&mut st, &s, &auxiliary(&s, "s3", first), &mut rng());
     assert!(
         d.shed_round.is_none(),
-        "the first reading over the ceiling waits"
+        "the first reading over the wall waits"
     );
     assert_eq!(st.projection_over_since("p", "a", FIVE_HOUR), Some(first));
     let d = decide(&mut st, &s, &auxiliary(&s, "s3", T), &mut rng());
@@ -28127,8 +28254,8 @@ fn a_rounds_pins_read_their_average_over_a_span_leaving_the_band_so_a_pin_coveri
 ) {
     // The band ends a quarter hour into the hour to the reset, so each pin's rate read at T, inside it, runs a quarter
     // hour at that rate and three quarters at half of it, five eighths of it on average. The 0.16 an hour s1 reads at T
-    // would cover the excess alone, while its 0.10 over the span leaves a rest the next pin covers.
-    let d = three_pins_round_under_a_band(0.80, T - HOUR, T + 15 * MINUTE);
+    // would cover the excess over the wall alone, while its 0.10 over the span leaves a rest the next pin covers.
+    let d = three_pins_round_under_a_band(0.85, T - HOUR, T + 15 * MINUTE);
     let shed = line(&d.record, "move:shed");
     assert_eq!(fact(shed, "trigger"), &FactValue::Text("five_hour".into()));
     assert_eq!(
@@ -28140,9 +28267,9 @@ fn a_rounds_pins_read_their_average_over_a_span_leaving_the_band_so_a_pin_coveri
     );
     let round = d.shed_round.expect("the round ran").facts;
     let average = |at_now: f64| at_now * 0.625;
-    let excess = 0.80 + average(0.42) - 0.95;
+    let excess = 0.85 + average(0.42) - 1.0;
     for (read, expected) in [
-        (round.projection, 0.80 + average(0.42)),
+        (round.projection, 0.85 + average(0.42)),
         (round.excess, excess),
         (
             round.burn_sum,
@@ -28162,8 +28289,8 @@ fn a_rounds_pins_read_their_average_over_a_span_entering_the_band_so_one_pin_cov
 ) {
     // The band starts half an hour into the hour to the reset, so each pin's rate read at T, outside it, runs half an
     // hour at that rate and half an hour at twice it, one and a half times it on average. The 0.16 an hour s1 reads at
-    // T falls short of the excess, while its 0.24 over the span covers it.
-    let d = three_pins_round_under_a_band(0.52, T + 30 * MINUTE, T + 10 * HOUR);
+    // T falls short of the excess over the wall, while its 0.24 over the span covers it.
+    let d = three_pins_round_under_a_band(0.57, T + 30 * MINUTE, T + 10 * HOUR);
     let shed = line(&d.record, "move:shed");
     assert_eq!(fact(shed, "trigger"), &FactValue::Text("five_hour".into()));
     assert_eq!(
@@ -28172,9 +28299,9 @@ fn a_rounds_pins_read_their_average_over_a_span_entering_the_band_so_one_pin_cov
     );
     let round = d.shed_round.expect("the round ran").facts;
     let average = |at_now: f64| at_now * 1.5;
-    let excess = 0.52 + average(0.42) - 0.95;
+    let excess = 0.57 + average(0.42) - 1.0;
     for (read, expected) in [
-        (round.projection, 0.52 + average(0.42)),
+        (round.projection, 0.57 + average(0.42)),
         (round.excess, excess),
         (
             round.burn_sum,
@@ -28214,7 +28341,7 @@ fn a_rounds_desk_pin_reads_one_rate_over_the_span_beside_a_base_pin_whose_averag
         (round_burn(&round, "s0"), 0.10),
         (round_burn(&round, "s1"), 0.30),
         (round.burn_sum, 0.10 + 0.30),
-        (round.excess, 0.80 + 0.10 + 0.30 - 0.95),
+        (round.excess, 0.85 + 0.10 + 0.30 - 1.0),
         (round.target, 0.5 * (0.10 + 0.30)),
         (round.removed, 0.30),
     ] {
@@ -28320,7 +28447,7 @@ fn a_pin_under_the_test_regime_projects_at_one_rate_beside_a_base_pin_that_weigh
     let projection = number(fact(line(&d.record, "move:shed"), "projection_five_hour"));
     // The desk pin burns 0.10 of the window an hour across the edge, the base pin 0.20 before it and 0.40 after.
     let (desk, base) = (0.10 / 3_600.0, 0.20 / 3_600.0);
-    let expected = 0.80 + desk * 3_600.0 + base * 1_800.0 + 2.0 * base * 1_800.0;
+    let expected = 0.85 + desk * 3_600.0 + base * 1_800.0 + 2.0 * base * 1_800.0;
     assert!(
         (projection - expected).abs() < 1e-9,
         "{projection} against {expected}"

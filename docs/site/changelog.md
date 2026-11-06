@@ -132,9 +132,11 @@ no burn on the fired window, and marks a pin in place of a covering one only whe
 left to shed, so a round never rewrites a session for a sliver ([Moves](routing.md#moves)). A move fits a destination
 only where its room covers half the moved pin's burn beyond the pin's own, a fresh placement keeping the ceiling, and an
 ended pin's burn leaves the projection until its next request ([Moves](routing.md#moves)). A window's round waits a
-quarter of the time from its first reading over the ceiling to the wall its burn projects, at most two burn averages, so
-a burst toward a near wall fires early and a slow climb waits, and the routing log names the wall
-([Moves](routing.md#moves)).
+quarter of the time from its first reading over the ceiling to the wall instant its burn projects, at most two burn
+averages, so a burst toward a near wall instant fires early and a slow climb waits, and the routing log names the wall
+instant ([Moves](routing.md#moves)). A shedding round and the heal of a standing mark test a window against the wall
+where its horizon is the account's end or the window's own reset, since the quota left there is lost, and against the
+ceiling elsewhere ([Subscription end](routing.md#subscription-end)).
 
 With `keepalive.enabled` on a pool the router keeps a replayable copy of every eligible request a session sends and,
 shortly before the cache entry would expire, sends a probe that reads it ([Keepalive](keepalive.md)). The policy's
