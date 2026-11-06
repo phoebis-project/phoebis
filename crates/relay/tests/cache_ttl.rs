@@ -890,7 +890,7 @@ async fn a_refused_extended_ttl_beta_reverts_the_body_to_five_minutes_and_stays_
         .any(|b| b == EXTENDED_TTL_BETA));
 
     // A fresh account never latched serves another session at the full policy, undisturbed by a's history.
-    h.store.set_enabled("a", false).unwrap();
+    h.store.set_enabled("a", false, "test").unwrap();
     h.router.reload().await.unwrap();
     up.push_credential_rule(B, "/v1/messages", json_200());
     let mut other_session = request_from_fixture(

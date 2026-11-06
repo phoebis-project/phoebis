@@ -555,7 +555,9 @@ samples](statistics.md#quota-samples)). The request log orders by its arrival, a
 tokens in or tokens out, either way, and the routing log by its time either way, each page continuing at its last row
 ([API reference](api-reference.md)). The request log prices each attempt through the one price rule the fold uses, so a
 probe on a model the price list lacks reads dollars at the dearest listed standard cells where it read null
-([Pricing](statistics.md#pricing)).
+([Pricing](statistics.md#pricing)). An account's pause and resume land in the routing log as a registry change carrying
+the `enabled` pair, and a registry change names the account or the key it changed, so the routing log filtered by the
+account or the key lists it ([Routing log](console.md#routing-log)).
 
 Every price is computed when it is read, from the token counts the ledger stores, at the price revision in force when
 the request arrived. The price table and the subscription cost model are revision lists keyed by effective date, the

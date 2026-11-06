@@ -1620,7 +1620,7 @@ async fn a_pool_with_nothing_to_hold_for_still_answers_accounts_unavailable() {
         .unwrap();
     assert_eq!(h.router.in_flight().account("a"), 1, "a is at its cap");
     // Paused, the account is no longer one a request could be held for, cap or not.
-    h.store.set_enabled("a", false).unwrap();
+    h.store.set_enabled("a", false, "test").unwrap();
     h.router.reload().await.unwrap();
     let mut events = h.router.subscribe_events();
     let resp = h

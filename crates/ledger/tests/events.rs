@@ -566,6 +566,49 @@ async fn a_registry_change_lands_with_its_diff_decoded_once() {
 }
 
 #[tokio::test]
+async fn a_mirrored_account_change_names_the_account_and_a_key_change_names_the_key() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), polled_every_50_ms()).await;
+    h.store.set_enabled("a", false, "test").unwrap();
+    h.store.revoke_api_key("desktop", NOW, "test").unwrap();
+    type Subjects = (Option<String>, Option<String>, Option<String>);
+    let named = wait_for_async(Duration::from_secs(5), || async {
+        let named: BTreeMap<String, Subjects> =
+            h.db.events(0, i64::MAX, 100)
+                .await
+                .unwrap()
+                .into_iter()
+                .filter(|e| e.kind == "registry_changed")
+                .map(|e| {
+                    let detail: serde_json::Value =
+                        serde_json::from_str(e.detail.as_deref().unwrap()).unwrap();
+                    (
+                        detail["kind"].as_str().unwrap().to_string(),
+                        (e.account_id, e.key_id, e.pool_id),
+                    )
+                })
+                .collect();
+        (named.len() == 2).then_some(named)
+    })
+    .await;
+    assert_eq!(
+        named,
+        BTreeMap::from([
+            (
+                "account_updated".to_string(),
+                (Some("a".to_string()), None, None)
+            ),
+            (
+                "key_revoked".to_string(),
+                (None, Some("desktop".to_string()), None)
+            ),
+        ]),
+        "each change names its own subject as (account, key, pool) and leaves the other two null"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_pool_save_that_keeps_its_member_list_mirrors_one_event_and_a_save_that_changes_nothing_mirrors_none(
 ) {
     let up = FakeUpstream::start(vec![]).await;

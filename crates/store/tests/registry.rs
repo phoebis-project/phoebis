@@ -1369,7 +1369,7 @@ fn set_enabled_leaves_the_state_cause() {
         .set_state("a", AccountState::Ready, StateCause::Paired)
         .unwrap();
     for enabled in [false, true] {
-        store.set_enabled("a", enabled).unwrap();
+        store.set_enabled("a", enabled, "test").unwrap();
         let row = store.account("a").unwrap().unwrap();
         assert_eq!(
             (row.enabled, row.state, row.state_cause),
@@ -2770,7 +2770,7 @@ fn every_write_that_changes_a_dispatch_input_moves_the_account_revision() {
     );
     rename(&store, "a", 1, "Renamed", "admin").unwrap();
     assert_eq!(revision(), 2, "a label update");
-    store.set_enabled("a", false).unwrap();
+    store.set_enabled("a", false, "test").unwrap();
     assert_eq!(revision(), 3, "an enable flip");
     store.set_api_key_secret("a", &Secret::new("k1")).unwrap();
     assert_eq!(revision(), 4, "a secret rotation");
@@ -3388,6 +3388,45 @@ fn an_account_edit_that_stages_a_secret_records_the_flag_beside_its_pairs_and_ne
 }
 
 #[test]
+fn a_pause_and_a_resume_each_record_the_enabled_pair_and_a_repeated_pause_writes_nothing() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store
+        .insert_account(&account("a", AccountKind::Oauth))
+        .unwrap();
+    let revision = || store.account("a").unwrap().unwrap().revision;
+    store.set_enabled("a", false, "admin").unwrap();
+    let paused = revision();
+    store.set_enabled("a", false, "admin").unwrap();
+    let repeated = revision();
+    store.set_enabled("a", true, "admin").unwrap();
+    let changes: Vec<(String, serde_json::Value)> = store
+        .registry_changes_after(0, 100)
+        .unwrap()
+        .into_iter()
+        .filter(|c| c.target == "a" && c.kind == "account_updated")
+        .map(|c| (c.actor, serde_json::from_str(&c.diff_json).unwrap()))
+        .collect();
+    assert_eq!(
+        changes,
+        [
+            (
+                "admin".to_string(),
+                serde_json::json!({ "enabled": { "from": true, "to": false } })
+            ),
+            (
+                "admin".to_string(),
+                serde_json::json!({ "enabled": { "from": false, "to": true } })
+            ),
+        ],
+        "the pause and the resume, and no row for the pause of a paused account"
+    );
+    assert_eq!(
+        repeated, paused,
+        "a repeated pause leaves the revision, so an edit read before it stays fresh"
+    );
+}
+
+#[test]
 fn an_edit_of_an_absent_pool_key_or_account_answers_not_found_and_writes_nothing() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     store.insert_pool(&pool("main"), "test").unwrap();
@@ -3402,6 +3441,10 @@ fn an_edit_of_an_absent_pool_key_or_account_answers_not_found_and_writes_nothing
     ));
     assert!(matches!(
         rename(&store, "ghost", 1, "x", "admin"),
+        Err(StoreError::AccountNotFound(id)) if id == "ghost"
+    ));
+    assert!(matches!(
+        store.set_enabled("ghost", false, "admin"),
         Err(StoreError::AccountNotFound(id)) if id == "ghost"
     ));
     assert_eq!(

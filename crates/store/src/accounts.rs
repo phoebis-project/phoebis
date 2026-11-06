@@ -321,12 +321,41 @@ impl Store {
         Ok(())
     }
 
-    pub fn set_enabled(&self, id: &str, enabled: bool) -> Result<(), StoreError> {
-        let conn = self.conn.lock().expect(LOCK_POISONED);
-        conn.execute(
+    /// Pauses or resumes an account and records the flip as an `account_updated` change carrying the `enabled` pair,
+    /// in one transaction. Writes nothing where the flag already reads `enabled`.
+    pub fn set_enabled(&self, id: &str, enabled: bool, actor: &str) -> Result<(), StoreError> {
+        let mut conn = self.conn.lock().expect(LOCK_POISONED);
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let before: Option<bool> = tx
+            .query_row(
+                "SELECT enabled FROM accounts WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let before = before.ok_or_else(|| StoreError::AccountNotFound(id.to_string()))?;
+        // A repeat moves no revision, so an account edit opened before it still lands.
+        if before == enabled {
+            return Ok(());
+        }
+        let now = self.now_ms();
+        tx.execute(
             "UPDATE accounts SET enabled = ?2, revision = revision + 1, updated_at = ?3 WHERE id = ?1",
-            params![id, enabled, self.now_ms()],
+            params![id, enabled, now],
         )?;
+        let pairs = crate::registry::changed(
+            &serde_json::json!({ "enabled": before }),
+            &serde_json::json!({ "enabled": enabled }),
+        );
+        crate::registry::record_change(
+            &tx,
+            now,
+            actor,
+            "account_updated",
+            id,
+            &serde_json::Value::Object(pairs).to_string(),
+        )?;
+        tx.commit()?;
         Ok(())
     }
 

@@ -869,7 +869,7 @@ async fn a_paused_or_reauth_marked_account_serves_no_probe() {
         ..RigSpec::default()
     })
     .await;
-    r.h.store.set_enabled("a", false).unwrap();
+    r.h.store.set_enabled("a", false, "test").unwrap();
     r.h.router.reload().await.unwrap();
     r.advance(270_000);
     r.step().await;
@@ -877,7 +877,7 @@ async fn a_paused_or_reauth_marked_account_serves_no_probe() {
         (r.status("main").probes, r.status("main").reason),
         (0, Reason::Paused)
     );
-    r.h.store.set_enabled("a", true).unwrap();
+    r.h.store.set_enabled("a", true, "test").unwrap();
     r.h.store
         .set_state("a", AccountState::ReauthRequired, StateCause::Operator)
         .unwrap();
@@ -1474,7 +1474,7 @@ async fn a_hold_counts_one_skipped_probe_however_many_ticks_it_spans() {
         .clear_cooldown("a", CooldownScope::Account)
         .await
         .unwrap();
-    r.h.store.set_enabled("a", false).unwrap();
+    r.h.store.set_enabled("a", false, "test").unwrap();
     r.h.router.reload().await.unwrap();
     for _ in 0..5 {
         r.step().await;

@@ -973,7 +973,9 @@ pub fn spawn_event_mirror(
                                 at: change.at,
                                 kind: REGISTRY_CHANGED.into(),
                                 actor: Some(change.actor.clone()),
-                                // Every pool change names the pool as its target.
+                                // Every account, key and pool change names its own subject as its target.
+                                account_id: change.kind.starts_with("account_").then(|| change.target.clone()),
+                                key_id: change.kind.starts_with("key_").then(|| change.target.clone()),
                                 pool_id: change.kind.starts_with("pool_").then(|| change.target.clone()),
                                 detail: Some(json!({
                                     "kind": change.kind,

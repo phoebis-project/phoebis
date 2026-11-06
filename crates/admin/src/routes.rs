@@ -689,8 +689,12 @@ async fn set_enabled(state: &AdminState, id: &str, enabled: bool) -> Response {
     if let Err(refusal) = account(state, id) {
         return refusal;
     }
-    if let Err(error) = state.store.set_enabled(id, enabled) {
-        return store_failure(error);
+    match state.store.set_enabled(id, enabled, accounts::ACTOR) {
+        Ok(()) => {}
+        Err(StoreError::AccountNotFound(_)) => {
+            return failure(StatusCode::NOT_FOUND, "account not found")
+        }
+        Err(error) => return store_failure(error),
     }
     reload_or_no_content(state).await
 }

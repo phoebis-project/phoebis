@@ -2024,7 +2024,7 @@ async fn a_probe_held_on_its_pinned_members_pause_completes_rejected_beside_a_si
     assert_eq!(outcome(&real).account_id, "a", "the session pins on a");
     real.into_body().collect().await.unwrap();
     drain_until_complete(&mut sub).await;
-    h.store.set_enabled("a", false).unwrap();
+    h.store.set_enabled("a", false, "test").unwrap();
     h.router.reload().await.unwrap();
 
     let resp = h

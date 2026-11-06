@@ -468,7 +468,7 @@ async fn every_polled_account_is_read_once_per_interval_on_its_own_phase_and_rep
     )
     .await;
     // A pause leaves the account polled; an unpaired one holds no credential worth asking with.
-    h.store.set_enabled("a", false).unwrap();
+    h.store.set_enabled("a", false, "test").unwrap();
     h.store
         .set_state(
             "b",
@@ -1282,7 +1282,7 @@ async fn the_startup_step_records_and_reports_one_sample_per_polled_account() {
     )
     .await;
     // A pause leaves the account polled: its quota is still the operator's to watch.
-    h.store.set_enabled("a", false).unwrap();
+    h.store.set_enabled("a", false, "test").unwrap();
     let sampled = QuotaPoll {
         ledger: h.ledger.clone(),
         router: h.router.clone(),

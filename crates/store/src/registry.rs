@@ -2239,7 +2239,7 @@ fn account_pairs(before: &AccountRow, u: &AccountUpdate<'_>, term: &Subscription
 /// Each member whose value differs between two snapshots of one row, as `{"from": old, "to": new}`: `before`'s
 /// members, then the members of `after` that `before` lacks, so a save that gives a policy member the row did not
 /// hold a value names it. A member one side lacks reads null there, so a null beside a missing member is no change.
-fn changed(
+pub(crate) fn changed(
     before: &serde_json::Value,
     after: &serde_json::Value,
 ) -> serde_json::Map<String, serde_json::Value> {

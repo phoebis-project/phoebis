@@ -1752,7 +1752,7 @@ async fn disconnecting_an_account_cancels_its_in_flight_relays_and_a_pause_does_
         panic!()
     };
     assert!(!first.cancel.is_cancelled());
-    store.set_enabled(&sel.account.id, false).unwrap();
+    store.set_enabled(&sel.account.id, false, "test").unwrap();
     handle.reload().await.unwrap();
     assert!(
         !first.cancel.is_cancelled(),
@@ -1798,7 +1798,7 @@ async fn disconnecting_an_account_cancels_its_in_flight_relays_and_a_pause_does_
         1,
         "the pin stays on the disconnected account until it is released or expires"
     );
-    store.set_enabled(&sel.account.id, true).unwrap();
+    store.set_enabled(&sel.account.id, true, "test").unwrap();
     store.delete_account(&other.account.id, "test").unwrap();
     handle.reload().await.unwrap();
     let fourth = handle
