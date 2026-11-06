@@ -5366,16 +5366,13 @@ mod tests {
             ],
         );
         assert!(
-            plan.iter().any(
-                |s| s.starts_with("SEARCH r USING INDEX requests_landed_at ")
-                    && s.contains("landed_at>?")
+            seeks_without_a_scan(
+                &plan,
+                "requests",
+                &["r"],
+                "requests_landed_at",
+                &["landed_at>?"]
             ),
-            "{plan:?}"
-        );
-        assert!(
-            !plan
-                .iter()
-                .any(|step| step.starts_with("SCAN r") || step.contains("SCAN requests")),
             "{plan:?}"
         );
     }
@@ -5397,16 +5394,13 @@ mod tests {
             ],
         );
         assert!(
-            plan.iter()
-                .filter(|s| s.starts_with("SEARCH r ") && s.contains("INDEX requests_session "))
-                .count()
-                >= 1,
-            "{plan:?}"
-        );
-        assert!(
-            !plan
-                .iter()
-                .any(|step| step.starts_with("SCAN r") || step.contains("SCAN requests")),
+            seeks_without_a_scan(
+                &plan,
+                "requests",
+                &["r"],
+                "requests_session",
+                &["session_id=?"]
+            ),
             "{plan:?}"
         );
     }
