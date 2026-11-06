@@ -1,7 +1,7 @@
 //! The recipe builder's shape checks, the TTL evidence rules, and usage parsing; the Go recipe and usage suites.
 use phoebis_keepalive::{
-    make_recipe, request_ttl_ms, ProbeUsage, Recipe, RecipeRefusal, FIVE_MINUTES_MS,
-    MAX_USAGE_BYTES, ONE_HOUR_MS,
+    make_recipe, request_ttl_ms, ProbeUsage, Reason, Recipe, FIVE_MINUTES_MS, MAX_USAGE_BYTES,
+    ONE_HOUR_MS,
 };
 use serde_json::{json, Value};
 
@@ -214,7 +214,7 @@ fn an_escaped_safeguards_spelling_is_not_retained() {
             1 << 20
         )
         .unwrap_err(),
-        RecipeRefusal::InvalidRequest
+        Reason::InvalidRequest
     );
     let twice = spliced.replacen(r#""stream":"#, r#""safeg\u0075ards":[],"stream":"#, 1);
     assert_eq!(
@@ -225,7 +225,7 @@ fn an_escaped_safeguards_spelling_is_not_retained() {
             1 << 20
         )
         .unwrap_err(),
-        RecipeRefusal::InvalidRequest,
+        Reason::InvalidRequest,
         "a second spelling beside the one the cut finds, which the decoded duplicate-key walk refuses before the cut runs"
     );
 }
@@ -246,7 +246,7 @@ fn a_member_the_replays_edits_cannot_reach_is_not_retained() {
         assert!(serde_json::from_str::<Value>(&body).is_ok(), "{body}");
         assert_eq!(
             make_recipe(&headers(), body.as_bytes(), "routing-alias", 1 << 20),
-            Err(RecipeRefusal::EscapedKey),
+            Err(Reason::InvalidRequest),
             "{escaped}"
         );
     }
@@ -255,47 +255,39 @@ fn a_member_the_replays_edits_cannot_reach_is_not_retained() {
 #[test]
 fn unsupported_shapes_are_named() {
     for (path, value, reason) in [
-        ("messages", json!([]), RecipeRefusal::UnsupportedShape),
-        ("max_tokens", json!(0), RecipeRefusal::UnsupportedShape),
+        ("messages", json!([]), Reason::UnsupportedShape),
+        ("max_tokens", json!(0), Reason::UnsupportedShape),
         (
             "output_config",
             json!({"format": {"type": "json_schema"}}),
-            RecipeRefusal::StructuredOutput,
+            Reason::StructuredOutput,
         ),
         (
             "thinking",
             json!({"type": "enabled", "budget_tokens": 1024}),
-            RecipeRefusal::FixedThinking,
+            Reason::FixedThinking,
         ),
-        (
-            "thinking",
-            json!("adaptive"),
-            RecipeRefusal::UnsupportedShape,
-        ),
-        (
-            "tool_choice",
-            json!({"type": "any"}),
-            RecipeRefusal::ForcedTool,
-        ),
+        ("thinking", json!("adaptive"), Reason::UnsupportedShape),
+        ("tool_choice", json!({"type": "any"}), Reason::ForcedTool),
         (
             "output_format",
             json!({"type": "json"}),
-            RecipeRefusal::StructuredOutput,
+            Reason::StructuredOutput,
         ),
         (
             "tools",
             json!([{"name": "t", "strict": true}]),
-            RecipeRefusal::StructuredOutput,
+            Reason::StructuredOutput,
         ),
         (
             "system",
             json!([{"type": "text", "text": "x", "cache_control": {"type": "persistent"}}]),
-            RecipeRefusal::InvalidCacheControl,
+            Reason::InvalidCacheControl,
         ),
         (
             "system",
             json!([{"type": "text", "text": "x", "cache_control": {"type": "ephemeral", "ttl": "2h"}}]),
-            RecipeRefusal::InvalidCacheControl,
+            Reason::InvalidCacheControl,
         ),
     ] {
         let result = make_recipe(&headers(), &with(path, value), "routing-alias", 1 << 20);
@@ -313,28 +305,28 @@ fn unsupported_shapes_are_named() {
     );
     assert_eq!(
         make_recipe(&headers(), &vec![b'x'; 1_025], "m", 1_024).unwrap_err(),
-        RecipeRefusal::RequestTooLarge
+        Reason::RequestTooLarge
     );
     assert_eq!(
         make_recipe(&headers(), b"{", "m", 1 << 20).unwrap_err(),
-        RecipeRefusal::InvalidRequest
+        Reason::InvalidRequest
     );
     assert_eq!(
         make_recipe(&headers(), b"[]", "m", 1 << 20).unwrap_err(),
-        RecipeRefusal::InvalidRequest
+        Reason::InvalidRequest
     );
     assert_eq!(
         make_recipe(&headers(), BODY.as_bytes(), "", 1 << 20).unwrap_err(),
-        RecipeRefusal::InvalidModel
+        Reason::InvalidModel
     );
     assert_eq!(
         make_recipe(&headers(), BODY.as_bytes(), "bad\u{7}model", 1 << 20).unwrap_err(),
-        RecipeRefusal::InvalidModel
+        Reason::InvalidModel
     );
     let long = vec![("anthropic-beta".to_string(), "x".repeat(8_193))];
     assert_eq!(
         make_recipe(&long, BODY.as_bytes(), "routing-alias", 1 << 20).unwrap_err(),
-        RecipeRefusal::HeadersTooLarge
+        Reason::HeadersTooLarge
     );
     let many: Vec<(String, String)> = (0..3)
         .map(|i| {
@@ -346,7 +338,7 @@ fn unsupported_shapes_are_named() {
         .collect();
     assert_eq!(
         make_recipe(&many, BODY.as_bytes(), "routing-alias", 1 << 20).unwrap_err(),
-        RecipeRefusal::HeadersTooLarge
+        Reason::HeadersTooLarge
     );
     // The model's length is part of the budget: 16,375 header bytes pass under a one-byte model and fail under
     // a fifteen-byte one.
@@ -359,7 +351,7 @@ fn unsupported_shapes_are_named() {
     assert!(make_recipe(&near, BODY.as_bytes(), "m", 1 << 20).is_ok());
     assert_eq!(
         make_recipe(&near, BODY.as_bytes(), "routing-alias-x", 1 << 20).unwrap_err(),
-        RecipeRefusal::HeadersTooLarge
+        Reason::HeadersTooLarge
     );
     // The bus denylist is the one gate: a recipe replays what the bus published, so the credential, the
     // forwarding headers, and the relay's own framing never reach one in the first place.
@@ -379,19 +371,19 @@ fn duplicate_output_controls_are_rejected() {
         br#"{"max_tokens":1,"max_tokens":10000,"messages":[{"role":"user","content":"test"}]}"#;
     assert_eq!(
         make_recipe(&headers(), body, "m", 1 << 20).unwrap_err(),
-        RecipeRefusal::InvalidRequest,
+        Reason::InvalidRequest,
         "an ambiguous output limit"
     );
     let body = br#"{"max_tokens":1,"thinking":{"type":"adaptive","type":"enabled"},"messages":[{"role":"user","content":"test"}]}"#;
     assert_eq!(
         make_recipe(&headers(), body, "m", 1 << 20).unwrap_err(),
-        RecipeRefusal::InvalidRequest,
+        Reason::InvalidRequest,
         "an ambiguous thinking block"
     );
     let body = br#"{"max_tokens":1,"cache_control":{"type":"ephemeral","type":"ephemeral"},"messages":[{"role":"user","content":"test"}]}"#;
     assert_eq!(
         make_recipe(&headers(), body, "m", 1 << 20).unwrap_err(),
-        RecipeRefusal::InvalidRequest,
+        Reason::InvalidRequest,
         "a repeated key inside a nested object"
     );
 }
@@ -543,7 +535,7 @@ fn malformed_usage_is_refused_and_the_bus_shape_is_read() {
             five_minutes: 2_000,
             one_hour: 0,
             input: 0,
-            speed: None
+            speed: phoebis_ledger::Speed::Standard
         }
     );
     let split = ProbeUsage::parse(br#"{"usage":{"cache_read_input_tokens":5,"cache_creation":{"ephemeral_1h_input_tokens":7}}}"#).unwrap();
@@ -574,7 +566,7 @@ fn malformed_usage_is_refused_and_the_bus_shape_is_read() {
             five_minutes: 0,
             one_hour: 0,
             input: 4,
-            speed: None
+            speed: phoebis_ledger::Speed::Standard
         },
         "a five-minute column without a one-hour column is the bare total of the older wire shape or a split with the five-minute member alone, and the bus merge reads both as the bare total too"
     );
@@ -621,7 +613,7 @@ fn a_body_bound_to_its_account_is_refused() {
     ] {
         assert_eq!(
             make_recipe(&headers(), &body, "routing-alias", 1 << 20).unwrap_err(),
-            RecipeRefusal::UnsupportedShape,
+            Reason::UnsupportedShape,
             "{label}"
         );
     }
@@ -668,5 +660,5 @@ fn a_marker_inside_a_tool_results_content_that_is_not_ephemeral_refuses_the_body
         "routing-alias",
         1 << 20,
     );
-    assert_eq!(result.unwrap_err(), RecipeRefusal::InvalidCacheControl);
+    assert_eq!(result.unwrap_err(), Reason::InvalidCacheControl);
 }

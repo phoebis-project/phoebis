@@ -154,6 +154,39 @@ async fn admission_needs_the_pool_toggle_and_no_key_opt_out() {
     );
 }
 
+/// The pool's policy is read when the request arrives, ahead of any account selection: a request on a pool with the
+/// keepalive off keeps no body from its arrival on, while the same request on the pool turned on is kept.
+#[tokio::test]
+async fn a_request_on_a_keepalive_off_pool_keeps_no_body_at_its_arrival_while_one_on_a_probing_pool_is_kept(
+) {
+    let r = rig(RigSpec {
+        policy: KeepalivePolicy {
+            enabled: false,
+            ..RigSpec::default().policy
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    r.engine.observe(r.observed("off", "main", BODY));
+    assert_eq!(
+        (r.engine.stats().retained_bytes, r.status("main").reason),
+        (0, Reason::KeepaliveOff),
+        "the arrival on the keepalive-off pool kept no body and read the refusal"
+    );
+    let mut pool = r.h.store.pool("main").unwrap().unwrap();
+    pool.keepalive_json = serde_json::to_string(&RigSpec::default().policy).unwrap();
+    r.h.store
+        .update_pool(&pool, pool.updated_at, "test")
+        .unwrap();
+    r.h.router.reload().await.unwrap();
+    r.engine.observe(r.observed("on", "main", BODY));
+    assert_eq!(
+        (r.engine.stats().retained_bytes > 0, r.status("main").reason),
+        (true, Reason::AwaitingSelection),
+        "the arrival on the probing pool kept its body for the selection"
+    );
+}
+
 #[tokio::test]
 async fn an_oauth_account_on_an_enabled_pool_retains_its_recipe() {
     let mut r = rig(RigSpec {

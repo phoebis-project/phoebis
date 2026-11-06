@@ -15,8 +15,8 @@ use phoebis_ledger::{funding_of, Band, Ledger, Metrics, PlanTables, Pricing, Spe
 use phoebis_oauth::Clock;
 use phoebis_relay::{CacheTtl, CacheTtlPolicy, Relay};
 use phoebis_routing::{
-    budget_deadline, listing, MemberSpend, PinUsage, RegistrySnapshot, RouterHandle, DAY_MS,
-    SEVEN_DAY,
+    budget_deadline, listing, seconds_ms, MemberSpend, PinUsage, RegistrySnapshot, RouterHandle,
+    DAY_MS, SEVEN_DAY,
 };
 use phoebis_store::{
     AccountKind, AccountState, CooldownScope, OveragePolicy, PoolRow, Store, StoreError,
@@ -33,7 +33,8 @@ use crate::config::{
 };
 use crate::persist::Dirty;
 use crate::probe::{ceiling, run_job, wasted_label, ProbeJob};
-use crate::recipe::{make_recipe, Recipe, RecipeRefusal};
+use crate::recipe::{make_recipe, Recipe};
+use crate::savings::AttemptFunding;
 use crate::usage::ProbeUsage;
 use crate::view::{recipe_state, RecipeState};
 
@@ -982,9 +983,7 @@ pub(crate) struct OpenCompaction {
     pub fast: bool,
     pub attempt: u8,
     pub account: Option<String>,
-    pub kind: Option<AccountKind>,
-    pub usage_based: bool,
-    pub in_overage: bool,
+    pub funding: AttemptFunding,
     /// Whether the current attempt's head was a 2xx, without which its stream's usage is no evidence about the cache.
     pub ok_head: bool,
     /// What the current attempt's stream read from the cache, for a completion that carries no usage of its own.
@@ -1011,9 +1010,9 @@ struct Answer {
 
 /// A kept-warm credit a completion earned, its keys read under the lock and recorded once the lock is released. `at` is
 /// the credited request's receipt, the instant its row files under, so the credit sits in that row's hour and revision
-/// whenever the answer completes, and `ttl_ms` the TTL its own write would have taken. `kind`, `usage_based` and
-/// `in_overage` are its serving attempt's, so the credit files under the funding word its request row took, and
-/// `client` its client label as the relay observed it, so the credit prices under that client's regime.
+/// whenever the answer completes, and `ttl_ms` the TTL its own write would have taken. `funding` is its serving
+/// attempt's, so the credit files under the funding word its request row took, and `client` its client label as the
+/// relay observed it, so the credit prices under that client's regime.
 pub(crate) struct Credit {
     pub(crate) at: i64,
     pub(crate) key: SessionKey,
@@ -1024,9 +1023,7 @@ pub(crate) struct Credit {
     pub(crate) read: u64,
     pub(crate) ttl_ms: i64,
     pub(crate) fast: bool,
-    pub(crate) kind: Option<AccountKind>,
-    pub(crate) usage_based: bool,
-    pub(crate) in_overage: bool,
+    pub(crate) funding: AttemptFunding,
     pub(crate) client: Option<String>,
 }
 
@@ -1154,13 +1151,10 @@ pub(crate) struct Observation {
     /// The TTL the relay actually dispatched this attempt's body with, read off `AccountSelected`; `None` when
     /// the relay left the markers as sent, in which case the cap falls back to the recipe's own received TTL.
     pub dispatched_ms: Option<i64>,
-    /// The kind of the account the current attempt was placed on, read off `AccountSelected`, so a skip and a kept-warm
-    /// credit file under the funding this request ran under whatever the registry holds by then.
-    pub kind: Option<AccountKind>,
-    /// The class of that account, off the same fact beside the kind.
-    pub usage_based: bool,
-    /// Whether the current attempt's head reported overage in use, the fact the request's own row files under.
-    pub in_overage: bool,
+    /// The kind and the class of the account the current attempt was placed on, read off `AccountSelected`, and
+    /// whether that attempt's head reported overage in use, the fact the request's own row files under, so a skip and a
+    /// kept-warm credit file under the funding this request ran under whatever the registry holds by then.
+    pub funding: AttemptFunding,
 }
 
 /// A main request whose chain held neither anchor boundary at its arrival, kept until its completion.
@@ -1199,13 +1193,11 @@ pub(crate) struct ProbeCharge {
     pub band: Band,
     /// The kind and the class the probe was served under and whether its answer reported overage, as the probe's own
     /// cost row took them, so the waste files under the same funding word whatever the registry holds now.
-    pub in_overage: bool,
-    pub kind: Option<AccountKind>,
+    pub funding: AttemptFunding,
     /// The account tier the settlement read, so the credit row keys the tier the probe ran under.
     pub tier: Option<String>,
     /// The probe's own usage, which the rollup carries as the wasted counts and prices when read.
     pub usage: ProbeUsage,
-    pub usage_based: bool,
 }
 
 /// One unanswered probe with the label that settles it as wasted. Queued under the lock and written to the ledger by
@@ -1231,9 +1223,7 @@ pub(crate) struct Skipped {
     pub state: RecipeState,
     /// The kind, the class and the overage of the request the recipe came from, off its observation, so the skip files
     /// under the funding that request ran under.
-    pub kind: Option<AccountKind>,
-    pub usage_based: bool,
-    pub in_overage: bool,
+    pub funding: AttemptFunding,
 }
 
 impl Skipped {
@@ -1246,9 +1236,11 @@ impl Skipped {
             canonical_model: agent.canonical_model.clone(),
             fast: agent.current.as_ref().is_some_and(|o| o.recipe.fast),
             state,
-            kind: agent.current.as_ref().and_then(|o| o.kind),
-            usage_based: agent.current.as_ref().is_some_and(|o| o.usage_based),
-            in_overage: agent.current.as_ref().is_some_and(|o| o.in_overage),
+            funding: agent
+                .current
+                .as_ref()
+                .map(|o| o.funding)
+                .unwrap_or_default(),
         }
     }
 }
@@ -1469,7 +1461,7 @@ impl Engine {
     /// The tier the router prices `account` by, off `read`, the store's term for it: `None` for a free organization,
     /// a usage-based seat or a read that failed. A failure is logged once per account and streak, naming `fallback`,
     /// what the caller does without the tier. The read waits on the store's one connection, which a save holds
-    /// through its write, so a caller makes it without the engine's lock.
+    /// through its write, so the probe's settlement makes it without the engine's lock.
     pub(crate) fn tier_from(
         &self,
         account: &str,
@@ -2793,6 +2785,22 @@ impl Engine {
         };
         let now = self.now();
         let key: SessionKey = (key_id, session_id);
+        // Read ahead of the body's parse, so a request on a pool with the keepalive off or from an opted-out key keeps
+        // no body. A key the snapshot lacks reads the default policy, which is off.
+        let refused = {
+            let snapshot = self.parts.router.snapshot();
+            let key_row = snapshot.key(&key.0);
+            let enabled = key_row
+                .and_then(|row| snapshot.pool(&row.pool_id))
+                .is_some_and(|pool| KeepalivePolicy::from_json(&pool.keepalive_json).enabled);
+            if !enabled {
+                Some(Reason::KeepaliveOff)
+            } else if key_row.is_some_and(|row| row.keepalive_opt_out) {
+                Some(Reason::OptedOut)
+            } else {
+                None
+            }
+        };
         // The body's parse and edits run apart from the lock, which the bus observer, the tick and the companion
         // route all take, for a request on an agent the engine holds and of a class that can arm a recipe: a
         // compaction stores none. Every check below runs again under the lock, which builds the recipe itself where
@@ -2810,6 +2818,7 @@ impl Engine {
             )
         };
         let prebuilt = (held
+            && refused.is_none()
             && observed
                 .client
                 .request_class
@@ -2963,9 +2972,7 @@ impl Engine {
                 fast: observed.shape.speed.as_deref() == Some("fast"),
                 attempt: 0,
                 account: None,
-                kind: None,
-                usage_based: false,
-                in_overage: false,
+                funding: AttemptFunding::default(),
                 ok_head: false,
                 read: 0,
                 ttl_ms: 0,
@@ -3065,6 +3072,12 @@ impl Engine {
         agent.last_real_at = Some(now);
         agent.canonical_model = observed.canonical_model.clone();
         agent.key_generation = observed.key_generation;
+        // Past the activity writes and the slot, which such a request takes as any other does, and ahead of the build.
+        if let Some(reason) = refused {
+            inner.drop_aside(&key, &agent_id);
+            inner.set_reason(&key, &agent_id, reason);
+            return;
+        }
         if inner.pending.len() >= inner.limits.max_agents {
             inner.drop_aside(&key, &agent_id);
             inner.set_reason(&key, &agent_id, Reason::RequestLimit);
@@ -3075,7 +3088,7 @@ impl Engine {
             Ok(recipe) => recipe,
             Err(reason) => {
                 inner.drop_aside(&key, &agent_id);
-                inner.set_reason(&key, &agent_id, Reason::from(reason));
+                inner.set_reason(&key, &agent_id, reason);
                 return;
             }
         };
@@ -3113,9 +3126,7 @@ impl Engine {
             prior,
             poisoned,
             dispatched_ms: None,
-            kind: None,
-            usage_based: false,
-            in_overage: false,
+            funding: AttemptFunding::default(),
         });
         agent.body_dirty = true;
         // The mark is retired only by a save at the row's revision, so the new body takes a revision of its own.
@@ -3137,9 +3148,11 @@ impl Engine {
                 if let Some(compaction) = agent.compaction.as_mut() {
                     compaction.attempt = selected.attempt;
                     compaction.account = Some(selected.account_id);
-                    compaction.kind = AccountKind::parse(&selected.account_kind);
-                    compaction.usage_based = selected.usage_based;
-                    compaction.in_overage = false;
+                    compaction.funding = AttemptFunding {
+                        kind: AccountKind::parse(&selected.account_kind),
+                        usage_based: selected.usage_based,
+                        in_overage: false,
+                    };
                     compaction.ok_head = false;
                     compaction.read = 0;
                     compaction.ttl_ms = ttl_ms;
@@ -3162,36 +3175,20 @@ impl Engine {
         observation.expected = 0;
         observation.ttl_ms = 0;
         observation.dispatched_ms = selected.cache_ttl_ms;
-        observation.kind = AccountKind::parse(&selected.account_kind);
-        observation.usage_based = selected.usage_based;
-        observation.in_overage = false;
+        observation.funding = AttemptFunding {
+            kind: AccountKind::parse(&selected.account_kind),
+            usage_based: selected.usage_based,
+            in_overage: false,
+        };
         agent.cache_started = observation.started;
         agent.expires = None;
         inner.set_reason(&key, &agent_id, Reason::AwaitingSelection);
-        let (policy, opted_out, pool_id) = match snapshot.key(&key.0) {
-            Some(row) => (
-                snapshot
-                    .pool(&row.pool_id)
-                    .map(|p| KeepalivePolicy::from_json(&p.keepalive_json))
-                    .unwrap_or_default(),
-                row.keepalive_opt_out,
-                row.pool_id.clone(),
-            ),
-            None => (KeepalivePolicy::default(), true, String::new()),
-        };
-        let refusal = if !policy.enabled {
-            Some(Reason::KeepaliveOff)
-        } else if opted_out {
-            Some(Reason::OptedOut)
-        } else if snapshot.account(&selected.account_id).is_none() {
-            Some(Reason::IneligibleCredential)
-        } else {
-            None
-        };
-        if let Some(reason) = refusal {
-            inner.set_reason(&key, &agent_id, reason);
+        // The arrival reads the pool's policy and the key's opt-out, so a request refused by either never reaches here.
+        if snapshot.account(&selected.account_id).is_none() {
+            inner.set_reason(&key, &agent_id, Reason::IneligibleCredential);
             return;
         }
+        let pool_id = snapshot.key(&key.0).map(|row| row.pool_id.clone());
         let agent = agent_mut(&mut inner.sessions, &key, &agent_id).expect(AGENT_HELD);
         if let Some(observation) = agent.current.as_mut() {
             // A poisoned observation never becomes ready, so no evidence of this request can arm a schedule.
@@ -3202,7 +3199,11 @@ impl Engine {
             agent.ttl_ms = 0;
         }
         agent.account = Some(selected.account_id);
-        agent.pool_id = pool_id;
+        // A key deleted since the arrival leaves the agent's pool as it stood, and the next tick drops the recipe as it
+        // drops any whose key the snapshot lacks.
+        if let Some(pool_id) = pool_id {
+            agent.pool_id = pool_id;
+        }
         inner.set_reason(&key, &agent_id, Reason::AwaitingCacheEvidence);
     }
 
@@ -3217,9 +3218,10 @@ impl Engine {
                 .and_then(|agent| agent.compaction.as_mut())
                 .filter(|compaction| compaction.attempt == head.attempt)
             {
-                compaction.in_overage = phoebis_relay::UnifiedHeaders::parse_list(&head.headers)
-                    .and_then(|unified| unified.overage_in_use)
-                    == Some(true);
+                compaction.funding.in_overage =
+                    phoebis_relay::UnifiedHeaders::parse_list(&head.headers)
+                        .and_then(|unified| unified.overage_in_use)
+                        == Some(true);
                 compaction.ok_head = (200..300).contains(&head.status);
             }
             return;
@@ -3236,8 +3238,8 @@ impl Engine {
                 let in_overage = phoebis_relay::UnifiedHeaders::parse_list(&head.headers)
                     .and_then(|unified| unified.overage_in_use)
                     == Some(true);
-                let moved = observation.in_overage != in_overage;
-                observation.in_overage = in_overage;
+                let moved = observation.funding.in_overage != in_overage;
+                observation.funding.in_overage = in_overage;
                 // A failed attempt is not evidence about the cache, and the next selection re-arms the attempt.
                 if !(200..300).contains(&head.status) {
                     observation.ready = false;
@@ -3391,9 +3393,7 @@ impl Engine {
                         // Set below, once this request's own evidence has settled the TTL.
                         ttl_ms: 0,
                         fast,
-                        kind: served.and_then(|o| o.kind),
-                        usage_based: served.is_some_and(|o| o.usage_based),
-                        in_overage: served.is_some_and(|o| o.in_overage),
+                        funding: served.map(|o| o.funding).unwrap_or_default(),
                         client: agent.client_label.clone(),
                     }
                 })
@@ -3441,12 +3441,10 @@ impl Engine {
                 // The gap that poisoned it is what this request proved nothing under.
                 inner.discard(&key, &agent_id, Reason::BusGap, None);
             } else {
-                // The three gates are pool, key, or credential properties that do not vary between attempts of
-                // one request, so ending the observation must not recount a reason the request already carries.
+                // The pool's toggle and the credential are properties that do not vary between attempts of one
+                // request, so ending the observation must not recount a reason the request already carries.
                 match current {
-                    Some(
-                        Reason::KeepaliveOff | Reason::OptedOut | Reason::IneligibleCredential,
-                    ) if !ready => {
+                    Some(Reason::KeepaliveOff | Reason::IneligibleCredential) if !ready => {
                         inner.end_observation(&key, &agent_id, None, Unanswered::Settle);
                     }
                     _ => inner.discard(&key, &agent_id, Reason::NoCacheEvidence, None),
@@ -3518,15 +3516,14 @@ impl Engine {
         let Some(credit) = credit else {
             return;
         };
-        // The tier the router prices the serving account by, as a settlement reads it, so the credit files under the
-        // tier its request row does.
-        let tier = credit.account.as_deref().and_then(|account| {
-            self.tier_from(
-                account,
-                self.parts.store.subscription_term(account),
-                "the kept-warm credit files under no tier",
-            )
-        });
+        // The tier the router's snapshot prices the serving account by, the one the request row files under, so a
+        // stored term the router has not loaded yet leaves the credit beside its row.
+        let snapshot = self.parts.router.snapshot();
+        let tier = credit
+            .account
+            .as_deref()
+            .and_then(|account| snapshot.priced_tier(account))
+            .map(String::from);
         // The band the request's own row keys, read off its prompt as the ledger reads the serving attempt's.
         // A completion with no usage reads as a prompt of 0, which every row bands as standard.
         let band = self.parts.pricing.revisions().in_force(credit.at).band_of(
@@ -3622,9 +3619,7 @@ impl Inner {
                 read,
                 ttl_ms,
                 fast: compaction.fast,
-                kind: compaction.kind,
-                usage_based: compaction.usage_based,
-                in_overage: compaction.in_overage,
+                funding: compaction.funding,
                 client: Some(compaction.client_label.clone()),
             });
         if credit.is_some() {
@@ -3670,24 +3665,6 @@ fn reported_prompt(usage: Option<&phoebis_bus::Usage>) -> Option<u64> {
         }
         .prompt_tokens()
     })
-}
-
-impl From<RecipeRefusal> for Reason {
-    /// An escaped key reads as the invalid request it makes of the replay. Every refusal is named, so one added later
-    /// fails to build here until it is given its reason.
-    fn from(refusal: RecipeRefusal) -> Reason {
-        match refusal {
-            RecipeRefusal::EscapedKey | RecipeRefusal::InvalidRequest => Reason::InvalidRequest,
-            RecipeRefusal::FixedThinking => Reason::FixedThinking,
-            RecipeRefusal::ForcedTool => Reason::ForcedTool,
-            RecipeRefusal::HeadersTooLarge => Reason::HeadersTooLarge,
-            RecipeRefusal::InvalidCacheControl => Reason::InvalidCacheControl,
-            RecipeRefusal::InvalidModel => Reason::InvalidModel,
-            RecipeRefusal::RequestTooLarge => Reason::RequestTooLarge,
-            RecipeRefusal::StructuredOutput => Reason::StructuredOutput,
-            RecipeRefusal::UnsupportedShape => Reason::UnsupportedShape,
-        }
-    }
 }
 
 impl Inner {
@@ -4185,7 +4162,13 @@ pub(crate) fn refresh_policy<'v>(
     else {
         return Err(Gate::Drop(Reason::KeyOptedOut, Wasted::Released));
     };
-    let Some(pool) = view.snapshot.pool(&key.pool_id).filter(|p| p.enabled) else {
+    // The view's map is read in the same lookup, so a pool the map lacks holds as a disabled one does.
+    let Some((pool, policy)) = view
+        .snapshot
+        .pool(&key.pool_id)
+        .filter(|p| p.enabled)
+        .zip(view.policies.get(&key.pool_id))
+    else {
         return Err(Gate::Hold(Reason::PoolDisabled));
     };
     // The pool's policy may have changed since admission, and an admin may have moved the key to another pool
@@ -4193,12 +4176,7 @@ pub(crate) fn refresh_policy<'v>(
     // belongs to now.
     let moved = agent.pool_id != key.pool_id;
     agent.pool_id = key.pool_id.clone();
-    let policy = view
-        .policies
-        .get(&pool.id)
-        .cloned()
-        .unwrap_or_else(|| KeepalivePolicy::from_json(&pool.keepalive_json));
-    Ok((pool, policy, moved))
+    Ok((pool, policy.clone(), moved))
 }
 
 /// The ceilings of one agent at a tick: its policy, the factors of its model under its account's funding (dollars
@@ -4267,7 +4245,7 @@ pub(crate) fn gate(
     // the recipe's own TTL less the lead, so a five-minute recipe needs about four minutes of pin and a
     // one-hour one about fifty-four. The save-time floor of 300 s stays the one hard refusal.
     let due_after_ms = floor_ttl_ms(agent.ttl_ms) - agent.timing.lead_ms(agent.ttl_ms);
-    if (pool.affinity_ttl_seconds as i64).saturating_mul(1_000) < due_after_ms {
+    if seconds_ms(pool.affinity_ttl_seconds) < due_after_ms {
         return Err(Gate::Hold(Reason::AffinityTooShort));
     }
     if !policy.enabled {
@@ -4624,9 +4602,7 @@ mod tests {
             prior: None,
             poisoned: false,
             dispatched_ms: None,
-            kind: None,
-            usage_based: false,
-            in_overage: false,
+            funding: AttemptFunding::default(),
         }
     }
 

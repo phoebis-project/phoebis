@@ -1015,6 +1015,23 @@ async fn affinity_off_or_short_stops_probing_until_raised() {
     r.h.router.reload().await.unwrap();
     r.step().await;
     assert_eq!(r.status("main").probes, 1);
+    // The longest TTL a pool can hold outlives every due time, as the router's pin reads it.
+    pool.affinity_ttl_seconds = u64::MAX;
+    r.h.store
+        .update_pool(
+            &pool,
+            r.h.store.pool("main").unwrap().unwrap().updated_at,
+            "test",
+        )
+        .unwrap();
+    r.h.router.reload().await.unwrap();
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (2, Reason::Scheduled),
+        "the longest TTL probes"
+    );
     // Turning the pool's toggle off holds too, and the recipe survives for the toggle coming back.
     pool.keepalive_json = serde_json::to_string(&KeepalivePolicy {
         enabled: false,
@@ -1033,7 +1050,7 @@ async fn affinity_off_or_short_stops_probing_until_raised() {
     r.step().await;
     assert_eq!(
         (r.status("main").probes, r.status("main").reason),
-        (1, Reason::KeepaliveOff)
+        (2, Reason::KeepaliveOff)
     );
 }
 

@@ -4621,6 +4621,44 @@ async fn a_credit_keys_its_requests_tier_and_band() {
     );
 }
 
+/// A credit files under the tier its request row files under, the one the router prices the account by: the stored
+/// term moves to another tier after the probe and the router loads nothing before the kept-warm request, so the
+/// credit stays beside its request's row under the tier the router holds.
+#[tokio::test]
+async fn a_credit_files_under_its_requests_tier_while_the_stored_term_names_a_tier_the_router_has_not_loaded(
+) {
+    let mut r = rig(plan_funded_spec()).await;
+    let body = opus_body();
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1);
+    name_the_tier(&r.h.store, "o", "default_claude_max_20x");
+    r.advance(60_000);
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", warm_answer());
+    let kept = r.observe_with("main", &body).await;
+    let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
+    assert!(row(&r, &kept).await.kept_warm);
+    let credit = rows
+        .iter()
+        .find(|row| row.kept_warm_requests > 0)
+        .expect("the credit's row");
+    let tiers: BTreeSet<&str> = rows
+        .iter()
+        .filter(|row| row.kind == "inference")
+        .map(|row| row.tier.as_str())
+        .collect();
+    assert_eq!(
+        (credit.tier.as_str(), tiers),
+        (
+            "default_claude_max_5x",
+            BTreeSet::from(["default_claude_max_5x"])
+        ),
+        "the credit files under the tier the router still holds, beside its request's row"
+    );
+}
+
 /// A credit keys the hour and the band its request's own row keys, read at the relay's receipt: a Haiku 5.5 request
 /// received a minute and a half before February, whose prompt passes January's long-context threshold and not
 /// February's, and observed by the engine and answered after midnight, files its credit in the January hour under

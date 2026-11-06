@@ -6,6 +6,7 @@ use phoebis_cch::{Cut, Stamp};
 use serde_json::Value;
 
 use crate::config::{FIVE_MINUTES_MS, ONE_HOUR_MS};
+use crate::engine::Reason;
 
 pub const MAX_HEADER_VALUE: usize = 8_192;
 pub const MAX_HEADER_BYTES: usize = 16_384;
@@ -106,51 +107,37 @@ fn parse_unique(raw: &[u8]) -> Option<Value> {
     Some(root)
 }
 
-/// Why a request's body is not kept as a recipe, each answer the reason the agent reads.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RecipeRefusal {
-    /// A member the replay's edits cannot reach, such as a key spelled with a JSON escape.
-    EscapedKey,
-    FixedThinking,
-    ForcedTool,
-    HeadersTooLarge,
-    InvalidCacheControl,
-    InvalidModel,
-    InvalidRequest,
-    RequestTooLarge,
-    StructuredOutput,
-    UnsupportedShape,
-}
-
+/// The recipe a request's body makes, or why the body is not kept: the reason the agent reads.
 pub fn make_recipe(
     headers: &[(String, String)],
     body: &[u8],
     model: &str,
     limit: usize,
-) -> Result<Recipe, RecipeRefusal> {
+) -> Result<Recipe, Reason> {
     if body.len() > limit {
-        return Err(RecipeRefusal::RequestTooLarge);
+        return Err(Reason::RequestTooLarge);
     }
     // The one parse refuses a repeated key at every depth, which covers the top level and the four output-control
     // objects the Go engine checked one by one.
     let root = parse_unique(body)
         .filter(Value::is_object)
-        .ok_or(RecipeRefusal::InvalidRequest)?;
+        .ok_or(Reason::InvalidRequest)?;
     let messages = root.get("messages").and_then(Value::as_array);
     if messages.is_none_or(|m| m.is_empty())
         || root.get("max_tokens").and_then(Value::as_u64).unwrap_or(0) == 0
     {
-        return Err(RecipeRefusal::UnsupportedShape);
+        return Err(Reason::UnsupportedShape);
     }
     // The edits below and the restamp read raw keys and values; a member the decoded walk finds and the raw edits
     // cannot read (an escaped key, a stamp `find_cch` cannot parse, a `stream` that is no boolean) would gain a
-    // second `stream` beside it or keep a stale hash, so such a body is refused rather than retained. Read after the
-    // shape check, so a `max_tokens` that is no positive number stays an unsupported shape.
+    // second `stream` beside it or keep a stale hash, so such a body is refused as the invalid request it makes of the
+    // replay rather than retained. Read after the shape check, so a `max_tokens` that is no positive number stays an
+    // unsupported shape.
     let members = phoebis_cch::TopLevelMembers::read(body);
     let decoded = |name: &str| {
         members
             .top_level_member_count(name)
-            .map_err(|_| RecipeRefusal::InvalidRequest)
+            .map_err(|_| Reason::InvalidRequest)
     };
     let stamp = members.stamp();
     let stamp_hidden = members.decoded_stamp_count()
@@ -161,25 +148,25 @@ pub fn make_recipe(
     let max_tokens = members.number_member_span("max_tokens");
     let max_tokens_hidden = decoded("max_tokens")? > usize::from(max_tokens.is_some());
     if stamp_hidden || stream_hidden || max_tokens_hidden {
-        return Err(RecipeRefusal::EscapedKey);
+        return Err(Reason::InvalidRequest);
     }
     for key in ["cache_control", "output_config", "thinking", "tool_choice"] {
         if root.get(key).is_some_and(|field| !field.is_object()) {
-            return Err(RecipeRefusal::UnsupportedShape);
+            return Err(Reason::UnsupportedShape);
         }
     }
     // A reference to account-scoped state belongs to the account that served the request, while a probe
     // follows a pin a sibling's request may have moved since; the relay checks portability against the pin it
     // finds, so such a body must never be retained in the first place.
     if !phoebis_relay::portable_of(&root) {
-        return Err(RecipeRefusal::UnsupportedShape);
+        return Err(Reason::UnsupportedShape);
     }
     let thinking = root
         .pointer("/thinking/type")
         .and_then(Value::as_str)
         .unwrap_or("");
     if !matches!(thinking, "" | "adaptive" | "disabled") {
-        return Err(RecipeRefusal::FixedThinking);
+        return Err(Reason::FixedThinking);
     }
     let fast = root.get("speed").and_then(Value::as_str) == Some("fast");
     let choice = root
@@ -187,10 +174,10 @@ pub fn make_recipe(
         .and_then(Value::as_str)
         .unwrap_or("");
     if !matches!(choice, "" | "auto" | "none") {
-        return Err(RecipeRefusal::ForcedTool);
+        return Err(Reason::ForcedTool);
     }
     if root.pointer("/output_config/format").is_some() || root.get("output_format").is_some() {
-        return Err(RecipeRefusal::StructuredOutput);
+        return Err(Reason::StructuredOutput);
     }
     let strict = root
         .get("tools")
@@ -201,16 +188,16 @@ pub fn make_recipe(
                 .any(|t| t.get("strict").and_then(Value::as_bool) == Some(true))
         });
     if strict {
-        return Err(RecipeRefusal::StructuredOutput);
+        return Err(Reason::StructuredOutput);
     }
-    let (ttl_ms, longest_ttl_ms) = marker_ttls(&root).ok_or(RecipeRefusal::InvalidCacheControl)?;
+    let (ttl_ms, longest_ttl_ms) = marker_ttls(&root).ok_or(Reason::InvalidCacheControl)?;
     if !valid_opaque(model) {
-        return Err(RecipeRefusal::InvalidModel);
+        return Err(Reason::InvalidModel);
     }
     // The relay's own rule for what counts as a client hash, so a probe is re-signed exactly where its request was.
     let client_hash = matches!(stamp, Stamp::Hash(_));
     let mut edited = body.to_vec();
-    let (start, end) = max_tokens.ok_or(RecipeRefusal::InvalidRequest)?;
+    let (start, end) = max_tokens.ok_or(Reason::InvalidRequest)?;
     edited.splice(start..end, b"0".iter().copied());
     match phoebis_cch::bool_member_span(&edited, &["stream"]) {
         Some((start, end)) => {
@@ -221,7 +208,7 @@ pub fn make_recipe(
             let at = edited
                 .iter()
                 .position(|b| *b == b'{')
-                .ok_or(RecipeRefusal::InvalidRequest)?
+                .ok_or(Reason::InvalidRequest)?
                 + 1;
             edited.splice(at..at, b"\"stream\":false,".iter().copied());
         }
@@ -232,7 +219,7 @@ pub fn make_recipe(
     // and neither is retained.
     match phoebis_cch::cut_sole_top_level_member(&mut edited, "safeguards") {
         Ok(Cut::Absent | Cut::Removed) => {}
-        Ok(Cut::Repeated | Cut::Unreachable) | Err(_) => return Err(RecipeRefusal::InvalidRequest),
+        Ok(Cut::Repeated | Cut::Unreachable) | Err(_) => return Err(Reason::InvalidRequest),
     }
     // `stream` is inside the billing hash view and `max_tokens` outside it: a client-stamped body is re-signed
     // over the edited bytes, since the relay would refuse the client's hash as drift. The body is the one the bus
@@ -242,17 +229,17 @@ pub fn make_recipe(
     // carries no stamp to touch, since the relay restores its fields on the request's way out, after the bus
     // published the body, and never on a probe's; a body without a stamp is left alone.
     if client_hash {
-        phoebis_cch::restamp_if_present(&mut edited).map_err(|_| RecipeRefusal::InvalidRequest)?;
+        phoebis_cch::restamp_if_present(&mut edited).map_err(|_| Reason::InvalidRequest)?;
     }
     // The budget is the retained bytes beyond the body, and the model name is among them.
     let mut header_bytes = model.len();
     for (name, value) in headers {
         if value.len() > MAX_HEADER_VALUE {
-            return Err(RecipeRefusal::HeadersTooLarge);
+            return Err(Reason::HeadersTooLarge);
         }
         header_bytes += name.len() + value.len();
         if header_bytes > MAX_HEADER_BYTES {
-            return Err(RecipeRefusal::HeadersTooLarge);
+            return Err(Reason::HeadersTooLarge);
         }
     }
     let size = edited.len() + header_bytes;

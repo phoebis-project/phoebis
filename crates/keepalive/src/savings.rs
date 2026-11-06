@@ -5,10 +5,23 @@ use std::collections::BTreeMap;
 
 use phoebis_ledger::{Band, KeepaliveDelta, PlanTables, Record, Speed, UNATTRIBUTED};
 use phoebis_routing::{PinUsage, SEVEN_DAY};
+use phoebis_store::AccountKind;
 
 use crate::engine::{Credit, Engine, SavingsUnit, SessionKey, Settlement, Skipped};
 use crate::probe::{ProbeOutcome, ProbeRecord};
 use crate::usage::ProbeUsage;
+
+/// The serving attempt's funding as the credit and the probe price it: one `Copy` value the saved forms convert at
+/// `of` and `restore`, each saved form keeping its own members. The default is an attempt no account served yet.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AttemptFunding {
+    /// The kind of the account the attempt was served on, `None` before any selection, which prices nothing.
+    pub kind: Option<AccountKind>,
+    /// Whether that account is a usage-based seat.
+    pub usage_based: bool,
+    /// Whether the attempt's answer reported overage in use.
+    pub in_overage: bool,
+}
 
 /// A probe's estimated cost as the share of the `tier`'s 7-day window at `at` (the band inside the price) under the
 /// regime of the agent's `entrypoint`, the base one for `None`. `None` for a model the cost model gives no weight on
@@ -47,13 +60,6 @@ pub(crate) fn typed(usage: ProbeUsage) -> PinUsage {
         write_1h,
         output: usage.output,
     }
-}
-
-/// The speed a probe's answer reported, `Standard` when it named none, as the ledger reads the speed of the probe's own
-/// request row: the cells that row prices at and the funding it files under, which a fast recipe's answer can leave at
-/// standard.
-pub(crate) fn answered_speed(usage: ProbeUsage) -> Speed {
-    usage.speed.unwrap_or(Speed::Standard)
 }
 
 /// `row` when the cost model in force at `at` gives the model no weight on the 7-day window, else `tier`: the only
@@ -154,9 +160,9 @@ impl Engine {
             "probe",
             record.fast,
         );
-        d.account_kind = record.kind;
-        d.usage_based = record.usage_based;
-        d.overage_in_use = record.in_overage;
+        d.account_kind = record.funding.kind;
+        d.usage_based = record.funding.usage_based;
+        d.overage_in_use = record.funding.in_overage;
         d.probe_migrated = 1;
         self.parts.ledger.record(Record::Keepalive(d));
     }
@@ -193,9 +199,9 @@ impl Engine {
         }
         d.tier = tier;
         d.band = band;
-        d.account_kind = credit.kind;
-        d.usage_based = credit.usage_based;
-        d.overage_in_use = credit.in_overage;
+        d.account_kind = credit.funding.kind;
+        d.usage_based = credit.funding.usage_based;
+        d.overage_in_use = credit.funding.in_overage;
         self.parts.ledger.record(Record::Keepalive(d));
     }
 
@@ -215,7 +221,7 @@ impl Engine {
             "probe",
             // The speed the probe's answer reported, so the waste prices at the cells and files under the funding its
             // own cost row took even when a fast recipe's answer came back at standard speed.
-            answered_speed(charge.usage) == Speed::Fast,
+            charge.usage.speed == Speed::Fast,
         );
         let counts = typed(charge.usage);
         d.wasted_probes = 1;
@@ -227,9 +233,9 @@ impl Engine {
         d.wasted_probe_reasons = BTreeMap::from([(settlement.label.as_str().to_string(), 1)]);
         d.tier = charge.tier;
         d.band = charge.band;
-        d.account_kind = charge.kind;
-        d.usage_based = charge.usage_based;
-        d.overage_in_use = charge.in_overage;
+        d.account_kind = charge.funding.kind;
+        d.usage_based = charge.funding.usage_based;
+        d.overage_in_use = charge.funding.in_overage;
         self.parts.ledger.record(Record::Keepalive(d));
     }
 
@@ -245,9 +251,9 @@ impl Engine {
             skip.fast,
         );
         d.probes_skipped = 1;
-        d.account_kind = skip.kind;
-        d.usage_based = skip.usage_based;
-        d.overage_in_use = skip.in_overage;
+        d.account_kind = skip.funding.kind;
+        d.usage_based = skip.funding.usage_based;
+        d.overage_in_use = skip.funding.in_overage;
         self.parts.ledger.record(Record::Keepalive(d));
         self.parts
             .metrics

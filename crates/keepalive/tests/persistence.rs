@@ -1791,6 +1791,59 @@ async fn a_restart_restores_the_class_of_a_seats_records_and_a_payload_from_befo
     );
 }
 
+/// A probe saved with a null speed, as a payload holds one whose answer named no speed, comes back from a restart and
+/// settles at the standard speed.
+#[tokio::test]
+async fn a_saved_probe_whose_speed_reads_null_restores_and_settles_at_standard() {
+    let mut r = rig(on_disk()).await;
+    r.observe("main").await;
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").unanswered, 1);
+    let (sessions, mut agents) = r.engine.persist_rows();
+    r.engine.flush_persisted().await;
+    let mut payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
+    payload["unanswered"][0]["usage"]["speed"] = serde_json::Value::Null;
+    agents[0].payload = payload.to_string();
+    r.h.store
+        .save_keepalive(&KeepaliveBatch {
+            sessions,
+            agents,
+            ..KeepaliveBatch::default()
+        })
+        .unwrap();
+    let second = r.restart().await;
+    second.load_persisted().await;
+    assert_eq!(
+        second
+            .agent_status("desktop", "session", "main")
+            .map(|status| status.unanswered),
+        Some(1),
+        "the probe saved with a null speed came back"
+    );
+    second.release("desktop", "session").unwrap();
+    second.flush_persisted().await;
+    let speeds = wait_for(Duration::from_secs(30), || {
+        let rows =
+            r.db.read_blocking(|c| {
+                read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+            })
+            .unwrap();
+        let speeds: Vec<String> = rows
+            .iter()
+            .filter(|row| row.kind == "probe" && row.wasted_probes > 0)
+            .map(|row| row.speed.clone())
+            .collect();
+        (!speeds.is_empty()).then_some(speeds)
+    })
+    .await;
+    assert_eq!(
+        speeds,
+        vec!["standard".to_string()],
+        "the restored probe settled at the standard speed"
+    );
+}
+
 /// A saved session of record version 2 carries a probe's dollars in place of its usage, its account tier, its
 /// instant and its band, so nothing would settle its waste under the cells and the revision the probe ran at: the
 /// load drops it whole.

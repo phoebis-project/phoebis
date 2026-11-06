@@ -23,6 +23,7 @@ use crate::engine::{
     Session, SessionKey, Settlement, UnansweredProbe, Wasted, MAIN_AGENT,
 };
 use crate::recipe::Recipe;
+use crate::savings::AttemptFunding;
 use crate::usage::ProbeUsage;
 
 /// The payloads' shape. A row of an older version is dropped at the load: version 1 carried no funding and version 2
@@ -231,6 +232,8 @@ pub(crate) struct PersistedUsage {
     pub five_minutes: u64,
     pub one_hour: u64,
     pub input: u64,
+    /// `Speed::as_str`'s word. Null in a payload an earlier build saved for an answer that named no speed, which reads
+    /// as standard.
     pub speed: Option<String>,
 }
 
@@ -257,11 +260,11 @@ impl PersistedCharge {
             account: charge.account.clone(),
             at: charge.at,
             band: charge.band.as_str().to_string(),
-            in_overage: charge.in_overage,
-            kind: charge.kind,
+            in_overage: charge.funding.in_overage,
+            kind: charge.funding.kind,
             tier: charge.tier.clone(),
             usage: persisted_usage(&charge.usage),
-            usage_based: charge.usage_based,
+            usage_based: charge.funding.usage_based,
         }
     }
 
@@ -270,11 +273,13 @@ impl PersistedCharge {
             account: self.account,
             at: self.at,
             band: Band::of_rollup(&self.band),
-            in_overage: self.in_overage,
-            kind: self.kind,
+            funding: AttemptFunding {
+                kind: self.kind,
+                usage_based: self.usage_based,
+                in_overage: self.in_overage,
+            },
             tier: self.tier,
             usage: probe_usage(self.usage),
-            usage_based: self.usage_based,
         }
     }
 }
@@ -336,7 +341,7 @@ fn persisted_usage(usage: &ProbeUsage) -> PersistedUsage {
         five_minutes: usage.five_minutes,
         one_hour: usage.one_hour,
         input: usage.input,
-        speed: usage.speed.map(|speed| speed.as_str().to_string()),
+        speed: Some(usage.speed.as_str().to_string()),
     }
 }
 
@@ -348,7 +353,7 @@ fn probe_usage(saved: PersistedUsage) -> ProbeUsage {
         five_minutes: saved.five_minutes,
         one_hour: saved.one_hour,
         input: saved.input,
-        speed: saved.speed.as_deref().map(|word| Speed::of(Some(word))),
+        speed: Speed::of(saved.speed.as_deref()),
     }
 }
 
@@ -471,9 +476,9 @@ impl PersistedAgent {
                     static_hash: o.recipe.static_hash.clone(),
                     tail_hash: o.recipe.tail_hash.clone(),
                 },
-                kind: o.kind.map(|kind| kind.as_str().to_string()),
-                usage_based: o.usage_based,
-                in_overage: o.in_overage,
+                kind: o.funding.kind.map(|kind| kind.as_str().to_string()),
+                usage_based: o.funding.usage_based,
+                in_overage: o.funding.in_overage,
             }),
             expires: agent.expires,
             leaves_at: agent.leaves_at,
@@ -676,9 +681,11 @@ impl PersistedObservation {
             prior,
             poisoned: false,
             dispatched_ms: row.dispatched_ms,
-            kind: optional(self.kind, phoebis_store::AccountKind::parse)?,
-            usage_based: self.usage_based,
-            in_overage: self.in_overage,
+            funding: AttemptFunding {
+                kind: optional(self.kind, phoebis_store::AccountKind::parse)?,
+                usage_based: self.usage_based,
+                in_overage: self.in_overage,
+            },
         })
     }
 }
@@ -1539,11 +1546,9 @@ mod tests {
                 account: Some("o".into()),
                 at: 0,
                 band: Band::Standard,
-                in_overage: false,
-                kind: None,
+                funding: AttemptFunding::default(),
                 tier: Some("default_claude_max_20x".into()),
                 usage: ProbeUsage::default(),
-                usage_based: false,
             },
             unit: Some(SavingsUnit::WindowShare),
             window: SEVEN_DAY,

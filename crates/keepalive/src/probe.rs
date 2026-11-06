@@ -12,7 +12,6 @@ use bytes::Bytes;
 use phoebis_ledger::{Band, PlanTables, PriceTable, Speed};
 use phoebis_relay::{ProbeObstacle, RelayOutcome};
 use phoebis_routing::{seconds_ms, SEVEN_DAY};
-use phoebis_store::AccountKind;
 use serde_json::Value;
 
 use crate::breakeven::Ceilings;
@@ -21,7 +20,7 @@ use crate::engine::{
     SavingsUnit, SessionKey, UnansweredProbe, Verdict, Wasted, AGENT_HELD, MAIN_AGENT,
 };
 use crate::recipe::Recipe;
-use crate::savings::{answered_speed, probe_cost, settlement_unit, typed, unpriced_reason};
+use crate::savings::{probe_cost, settlement_unit, typed, unpriced_reason, AttemptFunding};
 use crate::usage::{ProbeUsage, MAX_USAGE_BYTES};
 
 /// The engine's own bound on one exchange. A probe with `max_tokens = 0` answers in seconds; the relay's idle
@@ -70,17 +69,12 @@ pub(crate) struct ProbeResult {
     /// The TTL the relay dispatched the probe's body with, off `RelayOutcome::cache_ttl_ms`; `None` when the
     /// body went as sent.
     pub cache_ttl_ms: Option<i64>,
-    /// Whether the answer's head said overage was in use, off `RelayOutcome::overage_in_use`: the fact the ledger
-    /// files the probe's request row under, so the credit files beside it.
-    pub in_overage: bool,
-    /// The served account's kind off `RelayOutcome::account_kind`, as the leg that answered stamped it at its
-    /// selection: the fact the request row files its funding under, carried so the credit files beside it even when
-    /// the account leaves the registry while the probe is in flight. `None` for an answer the relay built before any
-    /// selection.
-    pub account_kind: Option<AccountKind>,
-    /// The served account's class off `RelayOutcome::usage_based`, stamped beside the kind, so the settlement reads the
-    /// funding the request row files under. False for an answer the relay built before any selection.
-    pub usage_based: bool,
+    /// The served account's kind and class off `RelayOutcome::account_kind` and `RelayOutcome::usage_based`, as the
+    /// leg that answered stamped them at its selection, and whether the answer's head said overage was in use, off
+    /// `RelayOutcome::overage_in_use`: the facts the ledger files the probe's request row under, carried so the credit
+    /// and the settlement file beside it even when the account leaves the registry while the probe is in flight. The
+    /// default for an answer the relay built before any selection.
+    pub funding: AttemptFunding,
     /// The `Retry-After` header's seconds, on a pool-at-its-cap 429; `None` otherwise.
     pub retry_after_secs: Option<u64>,
     /// The relay's `RelayOutcome::obstacle`, the standing the agent holds on rather than pausing as an exhausted
@@ -142,19 +136,15 @@ pub struct ProbeRecord {
     pub agent_id: String,
     pub canonical_model: String,
     /// The recipe carried `speed: "fast"`, the speed its migration mark files under. The probe's cost and its waste
-    /// file under the speed its answer reported, `answered_speed` of `usage`.
+    /// file under the speed its answer reported, the `speed` of `usage`.
     pub fast: bool,
-    /// Whether the probe's answer reported overage in use, the fact its request row files under: the credit row
-    /// keys the same funding, and the settlement unit follows the same side.
-    pub in_overage: bool,
+    /// The served account's kind and class as the leg that answered stamped them, off the answer rather than the
+    /// registry, and whether the answer reported overage in use: the facts its request row files under, so the credit
+    /// row keys the same funding even when the account leaves while the probe is in flight, and the settlement unit
+    /// follows the same side. No kind where no leg answered, which prices nothing.
+    pub funding: AttemptFunding,
     pub key: SessionKey,
     pub key_generation: i64,
-    /// The served account's kind as the leg that answered stamped it, off the answer rather than the registry, so the
-    /// credit files under the kind the request row carries even when the account leaves while the probe is in flight.
-    /// `None` for an answer the relay built before any selection, which prices nothing.
-    pub kind: Option<AccountKind>,
-    /// The served account's class as the same leg stamped it beside the kind, false where no leg answered.
-    pub usage_based: bool,
     pub outcome: ProbeOutcome,
     pub pool_id: String,
     pub usage: ProbeUsage,
@@ -277,9 +267,11 @@ pub(crate) async fn run_job(engine: Arc<Engine>, mut job: ProbeJob) {
                         error_code: o.error_code,
                         body,
                         cache_ttl_ms: o.cache_ttl_ms,
-                        in_overage: o.overage_in_use == Some(true),
-                        account_kind: o.account_kind,
-                        usage_based: o.usage_based,
+                        funding: AttemptFunding {
+                            kind: o.account_kind,
+                            usage_based: o.usage_based,
+                            in_overage: o.overage_in_use == Some(true),
+                        },
                         retry_after_secs,
                         obstacle: o.obstacle,
                     },
@@ -318,9 +310,9 @@ pub(crate) async fn run_job(engine: Arc<Engine>, mut job: ProbeJob) {
     // A fast answer draws usage credits whatever the account's funding, so it settles in dollars. The answer's speed
     // decides rather than the recipe's: a fast recipe answered at standard speed spent the plan, as its request row
     // files it.
-    let default_unit = match record.kind {
-        Some(kind) if answered_speed(record.usage) != Speed::Fast => {
-            SavingsUnit::of(kind, record.usage_based, record.in_overage)
+    let default_unit = match record.funding.kind {
+        Some(kind) if record.usage.speed != Speed::Fast => {
+            SavingsUnit::of(kind, record.funding.usage_based, record.funding.in_overage)
         }
         _ => SavingsUnit::Usd,
     };
@@ -358,7 +350,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, mut job: ProbeJob) {
         record.usage,
         at,
     );
-    let covered_unit = record.kind.map(|_| unit);
+    let covered_unit = record.funding.kind.map(|_| unit);
     engine
         .lock()
         .apply_probe(&job, exchange, &record, covered_unit, now);
@@ -397,11 +389,9 @@ impl Inner {
             agent_id: job.agent_id.clone(),
             canonical_model: job.canonical_model.clone(),
             fast: job.recipe.fast,
-            in_overage: false,
+            funding: AttemptFunding::default(),
             key: job.key.clone(),
             key_generation: job.key_generation,
-            kind: None,
-            usage_based: false,
             outcome: ProbeOutcome::Failed,
             pool_id: job.pool_id.clone(),
             usage: ProbeUsage::default(),
@@ -420,9 +410,7 @@ impl Inner {
             }
             Exchange::Answered(result) => result,
         };
-        record.in_overage = result.in_overage;
-        record.kind = result.account_kind;
-        record.usage_based = result.usage_based;
+        record.funding = result.funding;
         if let Some(account) = &result.account {
             record.account = account.clone();
         }
@@ -459,11 +447,9 @@ impl Inner {
             account: Some(record.account.clone()),
             at: record.at,
             band: record.band,
-            in_overage: record.in_overage,
-            kind: record.kind,
+            funding: record.funding,
             tier: record.tier.clone(),
             usage: record.usage,
-            usage_based: record.usage_based,
         };
         // The worker slot comes back to the record the probe started on whatever the fence says. A result
         // orphaned on a record that is still alive, by a superseding request or by a discard, would otherwise
