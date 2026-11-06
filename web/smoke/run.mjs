@@ -24149,8 +24149,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     // the busy subagent 4d1a on its own pin (22,000 tokens), whose one seed row ledgered no request. The table closes
     // on the agent's menu, labeled with the agent. An agent's "+N" counts the accounts other than its line's: on the
     // story's first session, a primary one, e4b7's line sits on nightly and its seed rows spent $1.31 on primary and
-    // secondary, $0.77 of it billed on an API key, so its Cost cell reads +$ and +2, where the session's account
-    // would leave +1.
+    // secondary, $0.77 of it billed, so its Cost cell reads +$ and +2, where the session's account would leave +1.
     const page = await mount('/sessions', { now: CLOCK_ORIGIN });
     const { heads, rows } = agentsOf(await openRow(page, written));
     const elsewhere = agentsOf(await openRow(page, story)).rows.find((r) => r.agent === 'e4b7');
