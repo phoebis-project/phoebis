@@ -425,11 +425,10 @@ pub(crate) fn read_poll(
 ) -> Result<PollRows, LedgerError> {
     // A fold that starts takes the snapshot's newest landing, never 0: the first fill answers the listed sessions whole
     // and fills a session that returns to the list whole later, so nothing landed before the start is needed here, and
-    // a read from 0 would walk the ledger's whole history on every restart.
-    let watermark = match cursor.watermark {
-        Some(watermark) => watermark,
-        None => phoebis_ledger::newest_landed_at(conn)?,
-    };
+    // a read from 0 would walk the ledger's whole history on every restart. The reads ride one snapshot, so the one
+    // seek serves the start watermark and the poll's newest landing alike.
+    let newest = phoebis_ledger::newest_landed_at(conn)?;
+    let watermark = cursor.watermark.unwrap_or(newest);
     let fill: Vec<(String, i64, String)> = keys
         .iter()
         .filter(|key| !cursor.held.contains(*key))
@@ -437,7 +436,6 @@ pub(crate) fn read_poll(
         .collect();
     let fill_rows = phoebis_ledger::session_spend_rows_of(conn, &fill)?;
     let since_rows = phoebis_ledger::session_spend_rows_since(conn, watermark)?;
-    let newest = phoebis_ledger::newest_landed_at(conn)?;
     Ok(PollRows {
         fill,
         fill_rows,
