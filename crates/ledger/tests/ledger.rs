@@ -2053,6 +2053,7 @@ async fn a_completion_cut_after_its_head_writes_one_stream_interrupted_row_its_r
         else {
             unreachable!()
         };
+        complete.key_id = Some("k1".into());
         if let Some(interruption) = &interruption {
             complete.outcome = BusOutcome::Incomplete;
             complete.error_code = Some(interruption.code.clone());
