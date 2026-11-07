@@ -1390,6 +1390,10 @@ async fn a_request_answers_its_hold_with_its_wait_and_held_filters_the_list() {
     parts.bus.publish(observed("r-at-cap"));
     parts.bus.publish(Event::RequestComplete(RequestComplete {
         request_id: "r-at-cap".into(),
+        key_id: Some("desktop".into()),
+        pool_id: Some("main".into()),
+        origin: phoebis_bus::Origin::Client,
+        kind: phoebis_bus::Kind::Inference,
         attempt: 0,
         account_id: None,
         outcome: Outcome::Exhausted,
@@ -2121,6 +2125,10 @@ fn publish_capture(bus: &phoebis_bus::Bus, id: &str, delivered: u32, published: 
     }
     bus.publish(Event::RequestComplete(RequestComplete {
         request_id: id.into(),
+        key_id: Some("desktop".into()),
+        pool_id: Some("main".into()),
+        origin: phoebis_bus::Origin::Client,
+        kind: phoebis_bus::Kind::Inference,
         attempt: 0,
         account_id: None,
         outcome: Outcome::Succeeded,

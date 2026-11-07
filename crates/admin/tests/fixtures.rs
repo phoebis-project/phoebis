@@ -1732,6 +1732,10 @@ async fn every_route_is_captured_and_holds_its_shape() {
             .keepalive
             .observe(Event::RequestComplete(RequestComplete {
                 request_id: request_id.clone(),
+                key_id: Some("desktop".into()),
+                pool_id: Some("main".into()),
+                origin: Origin::Client,
+                kind: Kind::Inference,
                 attempt: 1,
                 account_id: Some(account.into()),
                 outcome: phoebis_bus::Outcome::Succeeded,
@@ -1776,6 +1780,10 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .keepalive
         .observe(Event::RequestComplete(RequestComplete {
             request_id: "k1".into(),
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            origin: Origin::Client,
+            kind: Kind::Inference,
             attempt: 1,
             account_id: Some("direct".into()),
             outcome: phoebis_bus::Outcome::Succeeded,
@@ -1886,6 +1894,10 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .attention
         .observe(&Event::RequestComplete(RequestComplete {
             request_id: "x1".into(),
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            origin: Origin::Client,
+            kind: Kind::Inference,
             attempt: 0,
             account_id: None,
             outcome: phoebis_bus::Outcome::Exhausted,

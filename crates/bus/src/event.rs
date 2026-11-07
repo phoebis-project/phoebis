@@ -459,6 +459,13 @@ pub struct Interruption {
 #[derive(Clone, Debug)]
 pub struct RequestComplete {
     pub request_id: String,
+    /// The key and its pool as the observation named them, `None` for a refusal published before the key was read.
+    /// The completion repeats them with the origin and the kind, so a subscriber that missed the observation still
+    /// reads the outcome against them.
+    pub key_id: Option<String>,
+    pub pool_id: Option<String>,
+    pub origin: Origin,
+    pub kind: Kind,
     pub attempt: u8,
     pub account_id: Option<String>,
     pub outcome: Outcome,

@@ -61,9 +61,20 @@ fn observed(id: &str, key: &str, pool: &str) -> Event {
     })
 }
 
-fn complete(id: &str, outcome: Outcome, drift: Option<&str>, at: i64) -> Event {
+fn complete(
+    id: &str,
+    key: &str,
+    pool: &str,
+    outcome: Outcome,
+    drift: Option<&str>,
+    at: i64,
+) -> Event {
     Event::RequestComplete(RequestComplete {
         request_id: id.into(),
+        key_id: Some(key.into()),
+        pool_id: Some(pool.into()),
+        origin: Origin::Client,
+        kind: Kind::Inference,
         attempt: 0,
         account_id: None,
         outcome,
@@ -160,14 +171,19 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
         parts.attention.observe(&observed(id, "laptop", pool));
         parts
             .attention
-            .observe(&complete(id, Outcome::Exhausted, None, at));
+            .observe(&complete(id, "laptop", pool, Outcome::Exhausted, None, at));
     }
     parts
         .attention
         .observe(&observed("r-drift", "laptop", "main"));
-    parts
-        .attention
-        .observe(&complete("r-drift", Outcome::Rejected, Some("hash"), later));
+    parts.attention.observe(&complete(
+        "r-drift",
+        "laptop",
+        "main",
+        Outcome::Rejected,
+        Some("hash"),
+        later,
+    ));
     common::park_unreadable(&parts.db, "main", "business", later - 1_000);
     // The four routing conditions as the ledger's fold writes them, each older than everything above, which they
     // still rank after: none of them stops traffic.

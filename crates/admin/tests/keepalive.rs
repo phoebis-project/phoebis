@@ -437,6 +437,10 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
     parts.keepalive.observe(phoebis_bus::Event::RequestComplete(
         phoebis_bus::RequestComplete {
             request_id: "r1".into(),
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            origin: phoebis_bus::Origin::Client,
+            kind: phoebis_bus::Kind::Inference,
             attempt: 1,
             account_id: Some("direct".into()),
             outcome: phoebis_bus::Outcome::Succeeded,
@@ -737,6 +741,10 @@ async fn the_overview_answers_the_counts_beside_their_caps_and_each_pools_day_an
     parts.keepalive.observe(phoebis_bus::Event::RequestComplete(
         phoebis_bus::RequestComplete {
             request_id: "r1".into(),
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            origin: phoebis_bus::Origin::Client,
+            kind: phoebis_bus::Kind::Inference,
             attempt: 1,
             account_id: Some("direct".into()),
             outcome: phoebis_bus::Outcome::Succeeded,
@@ -1125,6 +1133,10 @@ impl<'a> Companion<'a> {
             .observe(phoebis_bus::Event::RequestComplete(
                 phoebis_bus::RequestComplete {
                     request_id: id.into(),
+                    key_id: Some("desktop".into()),
+                    pool_id: Some("main".into()),
+                    origin: phoebis_bus::Origin::Client,
+                    kind: phoebis_bus::Kind::Inference,
                     attempt: 1,
                     account_id: Some("direct".into()),
                     outcome: phoebis_bus::Outcome::Succeeded,
@@ -1425,6 +1437,10 @@ async fn a_session_row_groups_by_key_generation_and_a_historical_row_is_read_onl
     parts.keepalive.observe(phoebis_bus::Event::RequestComplete(
         phoebis_bus::RequestComplete {
             request_id: "r3".into(),
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            origin: phoebis_bus::Origin::Client,
+            kind: phoebis_bus::Kind::Inference,
             attempt: 1,
             account_id: Some("direct".into()),
             outcome: phoebis_bus::Outcome::Succeeded,

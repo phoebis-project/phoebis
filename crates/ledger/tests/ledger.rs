@@ -1186,6 +1186,10 @@ fn observed_event(id: &str) -> BusEvent {
 fn complete_event(id: &str) -> BusEvent {
     BusEvent::RequestComplete(RequestComplete {
         request_id: id.into(),
+        key_id: None,
+        pool_id: None,
+        origin: Origin::Client,
+        kind: Kind::Inference,
         attempt: 0,
         account_id: None,
         outcome: BusOutcome::Succeeded,
@@ -1249,6 +1253,8 @@ fn refused_probe_events(id: &str, error_code: &str) -> [BusEvent; 2] {
     let BusEvent::RequestComplete(mut complete) = complete_event(id) else {
         unreachable!()
     };
+    complete.origin = Origin::Keepalive;
+    complete.kind = Kind::Probe;
     complete.outcome = BusOutcome::Rejected;
     complete.status = 503;
     complete.error_code = Some(error_code.into());

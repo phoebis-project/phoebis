@@ -15,10 +15,8 @@ use phoebis_attention::{
     Attention, AttentionError, Condition, KeepaliveCap, Kind, Link, PairFacts, Subject,
     SubjectKind, BACKOFF_ATTENTION_AFTER_MS,
 };
-use phoebis_bus::{Event, Kind as RequestKind, Origin, Outcome, ResponseChunk};
-use phoebis_ledger::{
-    AttemptRecord, Metrics, PriceRevisions, Pricing, Record, RequestRecord, IN_FLIGHT_TTL_MS,
-};
+use phoebis_bus::{Kind as RequestKind, Origin, Outcome};
+use phoebis_ledger::{AttemptRecord, Metrics, PriceRevisions, Pricing, Record, RequestRecord};
 use phoebis_oauth::PollOutcome;
 use phoebis_store::{
     AccountKind, AccountState, AttemptOutcome, NewBundle, Secret, StateCause, StorageKey, Store,
@@ -131,13 +129,6 @@ async fn a_pool_exhaustion_holds_from_its_first_exhausted_outcome_until_a_reques
 ) {
     let rig = rig().await;
     let (attention, _arm) = rig.attention(None);
-    // A completion with no observation names no pool, so it decides nothing.
-    attention.observe(&complete("stray", Outcome::Exhausted, None, None, NOW));
-    assert!(
-        !find(&read(&attention, NOW), Kind::PoolExhausted, "main")
-            .unwrap()
-            .holds
-    );
     for (id, at) in [("r1", NOW + 1_000), ("r2", NOW + 2_000)] {
         attention.observe(&observed(id, Some("desktop"), "main"));
         attention.observe(&complete(id, Outcome::Exhausted, None, None, at));
@@ -186,48 +177,20 @@ async fn a_pool_exhaustion_holds_from_its_first_exhausted_outcome_until_a_reques
     );
 }
 
-fn chunk(id: &str) -> Event {
-    Event::ResponseChunk(ResponseChunk {
-        request_id: id.into(),
-        attempt: 1,
-        index: 0,
-        body: bytes::Bytes::new(),
-        phase: None,
-    })
-}
-
-/// Both requests are still live when the TTL of the first request passes, and each later event meets them past that
-/// instant: the silent one's late chunk and completion come past the TTL of silence, and the streaming one's
-/// completion past the TTL of its observation but inside the TTL of its last chunk.
 #[tokio::test]
-async fn a_completion_past_the_ttl_of_silence_files_nothing_and_a_chunk_inside_it_keeps_the_request(
-) {
+async fn an_exhausted_completion_holds_its_pool_with_no_observation_before_it() {
     let rig = rig().await;
     let (attention, _arm) = rig.attention(None);
-    rig.at(NOW);
-    attention.observe(&observed("first", Some("desktop"), "main"));
-    rig.at(NOW + 1);
-    attention.observe(&observed("silent", Some("desktop"), "main"));
-    attention.observe(&observed("streaming", Some("desktop"), "main"));
-    rig.at(NOW + IN_FLIGHT_TTL_MS);
-    attention.observe(&observed("other", Some("desktop"), "main"));
-    attention.observe(&chunk("streaming"));
-    rig.at(NOW + IN_FLIGHT_TTL_MS + 1);
-    let at = NOW + IN_FLIGHT_TTL_MS + 1;
-    attention.observe(&chunk("silent"));
-    attention.observe(&complete("silent", Outcome::Exhausted, None, None, at));
-    assert!(
-        !find(&read(&attention, at), Kind::PoolExhausted, "main")
-            .unwrap()
-            .holds,
-        "a request silent for the TTL is forgotten: a late chunk does not revive it, and its completion names no pool"
-    );
-    attention.observe(&complete("streaming", Outcome::Exhausted, None, None, at));
-    assert!(
-        find(&read(&attention, at), Kind::PoolExhausted, "main")
-            .unwrap()
-            .holds,
-        "a chunk inside the TTL keeps the stream on file"
+    attention.observe(&complete("r1", Outcome::Exhausted, None, None, NOW));
+    let conditions = read(&attention, NOW);
+    let held = find(&conditions, Kind::PoolExhausted, "main").unwrap();
+    assert_eq!(
+        (held.holds, held.since, &held.detail),
+        (
+            true,
+            Some(NOW),
+            &json!({ "key": "desktop", "pool": "main" })
+        )
     );
 }
 
@@ -324,8 +287,12 @@ async fn a_keyless_drift_refusal_names_no_key_and_carries_no_link() {
     let rig = rig().await;
     let (attention, _arm) = rig.attention(None);
     attention.observe(&observed("d1", None, "main"));
-    attention.observe(&complete(
+    attention.observe(&complete_as(
         "d1",
+        None,
+        "main",
+        Origin::Client,
+        RequestKind::Inference,
         Outcome::Rejected,
         Some("hash"),
         Some("2.1.274"),
@@ -396,8 +363,12 @@ async fn a_drift_condition_clears_only_on_a_relayed_client_inference_of_its_vers
         ("k1", Origin::Keepalive, RequestKind::Inference),
     ] {
         attention.observe(&observed_as(id, Some("desktop"), "main", origin, kind));
-        attention.observe(&complete(
+        attention.observe(&complete_as(
             id,
+            Some("desktop"),
+            "main",
+            origin,
+            kind,
             Outcome::Succeeded,
             None,
             Some("2.1.274"),

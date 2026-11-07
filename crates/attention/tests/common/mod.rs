@@ -336,8 +336,7 @@ pub fn usage_over(rig: &Rig, up: &FakeUpstream) -> Arc<UsageService> {
     Arc::new(UsageService::new(manager, control, profile, 2, clock))
 }
 
-/// A client inference's observation, which carries the key and pool its completion does not; `None` for a refusal
-/// published before the key was read.
+/// A client inference's observation. `None` for a refusal published before the key was read.
 pub fn observed(id: &str, key: Option<&str>, pool: &str) -> Event {
     observed_as(id, key, pool, Origin::Client, RequestKind::Inference)
 }
@@ -383,7 +382,8 @@ pub fn observed_as(
     })
 }
 
-/// A completion at `at`, refused for drift with that trigger when `drift` names one.
+/// A completion at `at` of the client inference `observed(id, Some("desktop"), "main")` announces, refused for drift
+/// with that trigger when `drift` names one.
 pub fn complete(
     id: &str,
     outcome: Outcome,
@@ -391,8 +391,38 @@ pub fn complete(
     version: Option<&str>,
     at: i64,
 ) -> Event {
+    complete_as(
+        id,
+        Some("desktop"),
+        "main",
+        Origin::Client,
+        RequestKind::Inference,
+        outcome,
+        drift,
+        version,
+        at,
+    )
+}
+
+/// `complete` for a request of that key, pool, origin and kind.
+#[allow(clippy::too_many_arguments)]
+pub fn complete_as(
+    id: &str,
+    key: Option<&str>,
+    pool: &str,
+    origin: Origin,
+    kind: RequestKind,
+    outcome: Outcome,
+    drift: Option<&str>,
+    version: Option<&str>,
+    at: i64,
+) -> Event {
     Event::RequestComplete(RequestComplete {
         request_id: id.into(),
+        key_id: key.map(String::from),
+        pool_id: Some(pool.into()),
+        origin,
+        kind,
         attempt: 1,
         account_id: Some("business".into()),
         outcome,

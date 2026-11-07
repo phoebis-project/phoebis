@@ -633,11 +633,11 @@ impl Trace {
 
     /// Called by `observed` right after it published the request's first fact. A second call keeps the guard
     /// already armed, whose drop would otherwise publish a completion for a request still running.
-    fn arm_completion(&self) {
+    fn arm_completion(&self, key: Option<&ApiKeyRow>) {
         self.completion
             .lock()
             .expect("completion lock poisoned")
-            .get_or_insert_with(|| CompletionGuard::arm(self));
+            .get_or_insert_with(|| CompletionGuard::arm(self, key));
     }
 
     /// A no-op once the guard left the slot.
@@ -748,7 +748,7 @@ impl Trace {
         }))
         .await;
         // The assembler holds an entry for the request from this fact on, and only a completion closes it.
-        self.arm_completion();
+        self.arm_completion(key);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -829,6 +829,10 @@ impl Trace {
         };
         self.publish_fact(Event::RequestComplete(RequestComplete {
             request_id: self.request_id.clone(),
+            key_id: outcome.key_id.clone(),
+            pool_id: outcome.pool_id.clone(),
+            origin: self.origin(),
+            kind: self.kind,
             attempt: outcome.attempt,
             account_id: (!outcome.account_id.is_empty()).then(|| outcome.account_id.clone()),
             outcome: final_outcome,
@@ -870,6 +874,10 @@ impl Trace {
 struct CompletionGuard {
     /// `Trace::detached`: the guard sits in the trace's slot, so a clone holding that slot would keep itself alive.
     trace: Trace,
+    /// The key and its pool `observed` published, which a cut request's completion repeats, since the drop has no
+    /// outcome to read them from.
+    key_id: Option<String>,
+    pool_id: Option<String>,
     /// The last leg a `Responding` named, `(attempt, account_id, judged)`, and `(0, None, None)` before the first. A
     /// client that leaves between legs or during the `selected` fact's await is completed on it.
     leg: (u8, Option<String>, Option<JudgedCharge>),
@@ -877,9 +885,11 @@ struct CompletionGuard {
 }
 
 impl CompletionGuard {
-    fn arm(trace: &Trace) -> CompletionGuard {
+    fn arm(trace: &Trace, key: Option<&ApiKeyRow>) -> CompletionGuard {
         CompletionGuard {
             trace: trace.detached(),
+            key_id: key.map(|k| k.id.clone()),
+            pool_id: key.map(|k| k.pool_id.clone()),
             leg: (0, None, None),
             armed: true,
         }
@@ -908,6 +918,10 @@ impl Drop for CompletionGuard {
         let (attempt, account_id, judged) = std::mem::take(&mut self.leg);
         let event = Event::RequestComplete(RequestComplete {
             request_id: self.trace.request_id.clone(),
+            key_id: self.key_id.take(),
+            pool_id: self.pool_id.take(),
+            origin: self.trace.origin(),
+            kind: self.trace.kind,
             attempt,
             account_id,
             outcome: Outcome::Canceled,

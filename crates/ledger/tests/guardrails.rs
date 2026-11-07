@@ -399,6 +399,10 @@ async fn a_blocked_request_with_a_body_keeps_its_body_row_under_the_keys_window(
     }));
     h.bus.publish(BusEvent::RequestComplete(RequestComplete {
         request_id: "blocked".into(),
+        key_id: Some("desktop".into()),
+        pool_id: Some("main".into()),
+        origin: Origin::Client,
+        kind: Kind::Inference,
         attempt: 0,
         account_id: None,
         outcome: BusOutcome::Rejected,

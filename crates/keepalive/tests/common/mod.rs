@@ -701,6 +701,10 @@ impl Rig {
     pub fn complete(&self, id: &str, outcome: Outcome, usage: Option<Usage>) -> BusEvent {
         BusEvent::RequestComplete(RequestComplete {
             request_id: id.into(),
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            origin: Origin::Client,
+            kind: Kind::Inference,
             attempt: 1,
             account_id: Some("a".into()),
             outcome,

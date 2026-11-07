@@ -189,8 +189,7 @@ impl Attention {
 
     /// The bus arm's entry, public so a test drives it event by event.
     pub fn observe(&self, event: &Event) {
-        let now = (self.clock)();
-        reader::observe(&mut self.state.lock().expect(STATE_POISONED), event, now);
+        reader::observe(&mut self.state.lock().expect(STATE_POISONED), event);
     }
 
     /// The metrics listener reads the conditions through a closure, since the ledger that renders them is one of this

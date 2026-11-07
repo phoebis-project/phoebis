@@ -897,6 +897,10 @@ mod tests {
     ) -> Event {
         Event::RequestComplete(RequestComplete {
             request_id: id.into(),
+            key_id: Some("k".into()),
+            pool_id: Some("main".into()),
+            origin: Origin::Client,
+            kind: Kind::Inference,
             attempt: n,
             account_id: account.map(String::from),
             outcome,
@@ -938,6 +942,16 @@ mod tests {
         Event::RequestComplete(done)
     }
 
+    /// `complete` under no account for a request `observed` with no key.
+    fn complete_keyless(id: &str, outcome: Outcome, status: u16, code: Option<&str>) -> Event {
+        let Event::RequestComplete(mut done) = complete(id, 0, None, outcome, status, code) else {
+            unreachable!()
+        };
+        done.key_id = None;
+        done.pool_id = None;
+        Event::RequestComplete(done)
+    }
+
     /// A completion carrying only the two fields a capture-completeness test cares about; named apart from
     /// `complete` so the two do not collide.
     fn completion(
@@ -947,6 +961,10 @@ mod tests {
     ) -> RequestComplete {
         RequestComplete {
             request_id: id.into(),
+            key_id: Some("k".into()),
+            pool_id: Some("main".into()),
+            origin: Origin::Client,
+            kind: Kind::Inference,
             attempt: 0,
             account_id: None,
             outcome: Outcome::Succeeded,
@@ -1247,10 +1265,8 @@ mod tests {
         let Some(Record::Request {
             request, attempts, ..
         }) = a
-            .observe(complete(
+            .observe(complete_keyless(
                 "r2",
-                0,
-                None,
                 Outcome::Rejected,
                 401,
                 Some("auth_unknown"),
@@ -1688,7 +1704,7 @@ mod tests {
         request.headers = vec![("user-agent".into(), "a".repeat(300))];
         assert!(a.observe(Event::RequestObserved(request)).is_empty());
         let Some(Record::Request { request, .. }) = a
-            .observe(complete("r14", 0, None, Outcome::Succeeded, 200, None))
+            .observe(complete_keyless("r14", Outcome::Succeeded, 200, None))
             .pop()
         else {
             panic!()
@@ -1710,7 +1726,7 @@ mod tests {
         };
         assert!(a.observe(Event::RequestObserved(request)).is_empty());
         let Some(Record::Request { request, .. }) = a
-            .observe(complete("r16", 0, None, Outcome::Succeeded, 200, None))
+            .observe(complete_keyless("r16", Outcome::Succeeded, 200, None))
             .pop()
         else {
             panic!()

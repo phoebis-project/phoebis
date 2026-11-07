@@ -9,9 +9,8 @@ use std::collections::{HashMap, HashSet};
 
 use phoebis_bus::{Event, Kind as RequestKind, Origin, Outcome};
 use phoebis_ledger::{
-    polled, RoutingCondition, RoutingKind, UnpricedModel, CEILING_SETTING, IN_FLIGHT_TTL_MS,
-    SHED_CAP_SETTING, SLOW_DOWN_STRETCH_SETTING, SLOW_SETTINGS, WALL_SETTINGS,
-    WINDOW_CEILING_SETTING,
+    polled, RoutingCondition, RoutingKind, UnpricedModel, CEILING_SETTING, SHED_CAP_SETTING,
+    SLOW_DOWN_STRETCH_SETTING, SLOW_SETTINGS, WALL_SETTINGS, WINDOW_CEILING_SETTING,
 };
 use phoebis_oauth::UsageService;
 use phoebis_routing::{shed_cap, RegistrySnapshot, RouterHandle, DAY_MS};
@@ -113,10 +112,30 @@ impl Kind {
         }
     }
 
-    /// The ledger's kind for a condition its hourly fold writes, read off the word, so `as_str` alone pairs the two.
-    /// `None` for a kind the reader derives itself.
+    /// The ledger's kind for each of the five conditions its hourly fold writes, which pair by name. `None` for a kind
+    /// the reader derives itself. Every kind is listed, so a kind added later has to say which of the two it is.
     fn routing(self) -> Option<RoutingKind> {
-        RoutingKind::parse(self.as_str())
+        match self {
+            Kind::MeterDrift => Some(RoutingKind::MeterDrift),
+            Kind::WallReached => Some(RoutingKind::WallReached),
+            Kind::DestinationSpent => Some(RoutingKind::DestinationSpent),
+            Kind::ShedNoRunway => Some(RoutingKind::ShedNoRunway),
+            Kind::SlowedLong => Some(RoutingKind::SlowedLong),
+            Kind::PoolExhausted
+            | Kind::ClientDrift
+            | Kind::WriterDegraded
+            | Kind::CertificateReloadFailed
+            | Kind::ReauthRequired
+            | Kind::FundingRequired
+            | Kind::RefreshFailed
+            | Kind::CertificateExpiring
+            | Kind::LedgerRecordParked
+            | Kind::KeepaliveBusGaps
+            | Kind::PollBackoff
+            | Kind::ModelUnpriced
+            | Kind::KeepaliveCap
+            | Kind::ExpiredBetweenTurns => None,
+        }
     }
 }
 
@@ -229,26 +248,7 @@ pub struct Condition {
 pub(crate) struct ReaderState {
     drift: HashMap<String, Drift>,
     exhausted: HashMap<String, Exhausted>,
-    in_flight: HashMap<String, InFlight>,
     state_since: HashMap<(Kind, String), i64>,
-    /// When the in-flight map was last swept, so a sweep runs once per TTL rather than on every chunk a stream
-    /// publishes. Between sweeps each lookup treats an expired entry as absent.
-    swept_at: i64,
-}
-
-/// A request's key, pool, origin and kind, which its completion does not carry, held from its observation until then.
-struct InFlight {
-    key: Option<String>,
-    kind: RequestKind,
-    origin: Origin,
-    pool: Option<String>,
-    seen_at: i64,
-}
-
-impl InFlight {
-    fn fresh(&self, now: i64) -> bool {
-        now - self.seen_at < IN_FLIGHT_TTL_MS
-    }
 }
 
 struct Exhausted {
@@ -268,50 +268,17 @@ struct Drift {
 
 /// The bus arm's reading of one event: an exhausted outcome on a pool enters it and a succeeded one clears it, and a
 /// drift refusal activates its version until a client inference from that version succeeds.
-pub(crate) fn observe(state: &mut ReaderState, event: &Event, now: i64) {
-    if now - state.swept_at >= IN_FLIGHT_TTL_MS {
-        state.in_flight.retain(|_, e| e.fresh(now));
-        state.swept_at = now;
-    }
+pub(crate) fn observe(state: &mut ReaderState, event: &Event) {
     match event {
-        Event::RequestObserved(o) => {
-            state.in_flight.insert(
-                o.request_id.clone(),
-                InFlight {
-                    key: o.key_id.clone(),
-                    kind: o.kind,
-                    origin: o.origin,
-                    pool: o.pool_id.clone(),
-                    seen_at: now,
-                },
-            );
-        }
-        Event::ResponseChunk(c) => {
-            // The TTL asks whether a request went silent, so a stream still sending is not idle.
-            if let Some(e) = state
-                .in_flight
-                .get_mut(&c.request_id)
-                .filter(|e| e.fresh(now))
-            {
-                e.seen_at = now;
-            }
-        }
         Event::RequestComplete(c) => {
-            let Some(e) = state
-                .in_flight
-                .remove(&c.request_id)
-                .filter(|e| e.fresh(now))
-            else {
-                return;
-            };
-            if let Some(pool) = &e.pool {
+            if let Some(pool) = &c.pool_id {
                 match c.outcome {
                     Outcome::Exhausted => {
                         state
                             .exhausted
                             .entry(pool.clone())
                             .or_insert_with(|| Exhausted {
-                                key: e.key.clone(),
+                                key: c.key_id.clone(),
                                 since: c.finished_at,
                             });
                     }
@@ -338,11 +305,11 @@ pub(crate) fn observe(state: &mut ReaderState, event: &Event, now: i64) {
                     drift.active = true;
                     drift.since = c.finished_at;
                 }
-                drift.key.clone_from(&e.key);
+                drift.key.clone_from(&c.key_id);
                 drift.trigger.clone_from(trigger);
             } else if c.outcome == Outcome::Succeeded
-                && e.origin == Origin::Client
-                && e.kind == RequestKind::Inference
+                && c.origin == Origin::Client
+                && c.kind == RequestKind::Inference
             {
                 // Only a relayed client inference says the build passes the stamp check again: a count carries no
                 // stamped line, a keepalive request replays a body the router kept rather than the client's next one,
@@ -352,7 +319,10 @@ pub(crate) fn observe(state: &mut ReaderState, event: &Event, now: i64) {
                 }
             }
         }
-        Event::AccountSelected(_) | Event::ResponseHead(_) => {}
+        Event::AccountSelected(_)
+        | Event::RequestObserved(_)
+        | Event::ResponseChunk(_)
+        | Event::ResponseHead(_) => {}
     }
 }
 
