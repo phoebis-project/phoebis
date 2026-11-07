@@ -7427,6 +7427,8 @@ fn a_lifetime_total_prices_every_row_as_a_read_from_the_earliest_hour_does() {
             ))
         })
         .unwrap();
+    let key = &key_lifetime["desktop"];
+    assert_eq!(key.requests, 2, "{key:?}");
     assert_eq!(key_lifetime, key_since);
 }
 
