@@ -141,6 +141,19 @@ test('the HttpApi encodes ids into paths and lists into comma-separated query va
   assert.equal(slug(`${'a'.repeat(63)} tail`), 'a'.repeat(63), 'a name cut at the limit keeps no trailing separator');
 });
 
+test('listRequests sends the key, the direction and the fallback switch, and none under the defaults, and listRoutingLog sends the direction', async () => {
+  const calls = stub((url) => answer(200, url.startsWith('/admin/requests') ? { next_cursor: null, requests: [] } : { next_cursor: null, rows: [] }));
+  const api = new HttpApi();
+  await api.listRequests({ dir: 'asc', fallback: false, order: 'ttfb_ms' });
+  const sent = new URL(calls[0].url, 'http://x').searchParams;
+  assert.deepEqual([sent.get('dir'), sent.get('fallback'), sent.get('order')], ['asc', 'false', 'ttfb_ms'], 'a switch set to false travels too');
+  await api.listRequests({});
+  const bare = new URL(calls[1].url, 'http://x').searchParams;
+  assert.deepEqual([bare.get('dir'), bare.get('fallback'), bare.get('order')], [null, null, null], "the route's defaults travel as no key");
+  await api.listRoutingLog({ dir: 'asc' });
+  assert.equal(new URL(calls[2].url, 'http://x').searchParams.get('dir'), 'asc');
+});
+
 test('listRoutingLog encodes comma lists, ISO instants and kinds, and getDecision names its path', async () => {
   const record = JSON.parse(readFileSync(new URL('./fixtures/decision.json', import.meta.url), 'utf8')).body;
   const calls = stub((url) => (url.startsWith('/admin/routing-log') ? answer(200, { next_cursor: null, rows: [] }) : url.includes('/gone/') ? answer(404, { error: 'no decision 1 for request gone' }) : answer(200, record)));
@@ -322,7 +335,7 @@ test('the refusal categories read sends the analytics query and answers the rows
   const url = new URL(calls[0].url, 'http://x');
   assert.equal(url.pathname, '/admin/analytics/refusal_categories');
   assert.deepEqual(Object.fromEntries(url.searchParams), { accounts: 'primary', group_by: 'all', include_probes: 'true', keys: 'desktop', kinds: 'inference', models: 'claude-sonnet-5', pools: 'all', range: '0,86400000' });
-  assert.deepEqual(read, { from: '1970-01-01T00:00:00.000Z', rows, to: '1970-01-02T00:00:00.000Z' });
+  assert.deepEqual(read, { fallbacks: 0, from: '1970-01-01T00:00:00.000Z', rows: [{ category: 'cyber', model: '', requests: 3 }, { category: '-', model: '', requests: 1 }], to: '1970-01-02T00:00:00.000Z' });
 });
 
 test('the unused allowance read sends the one range parameter and the Accounts filter alone, and no accounts without one', async () => {

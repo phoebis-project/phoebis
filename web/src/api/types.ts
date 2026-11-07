@@ -123,6 +123,8 @@ export interface AccountSlowDown {
   factor: number;
   /** The pool's `slow_down_hold_seconds`, the longest one request waits, in milliseconds. */
   holdMs: number;
+  /** The share of one burn average passed since the span opened, 1 once the average has passed, null outside a span. */
+  ramp: number | null;
   /** When the factor first read under 1 since it last read 1, null outside a span. */
   since: string | null;
   /** The speed the holds realized, which the demand divides the pins' burn by. */
@@ -399,7 +401,7 @@ export interface TrafficBucket {
   tokens: number;
 }
 
-export const ELIGIBILITY_VALUES = ['budget', 'budget_unknown', 'cooldown', 'eligible', 'overage', 'spent', 'unavailable'] as const;
+export const ELIGIBILITY_VALUES = ['budget', 'budget_unknown', 'cooldown', 'eligible', 'overage', 'spent', 'subscription_ended', 'unavailable', 'unknown'] as const;
 /** Why routing would refuse a pool member, or `eligible` when it would not. */
 export type MemberEligibility = (typeof ELIGIBILITY_VALUES)[number];
 
@@ -430,6 +432,8 @@ export interface PoolMember {
    */
   burn: number | null;
   eligible: MemberEligibility;
+  /** The factor the pool's slow-down computed for the account, null where the account route answers no `slowDown`. */
+  factor: number | null;
   kind: AccountKind;
   /**
    * The router's Pace score for the member whatever its kind: the spare rate for an OAuth member, the remaining
@@ -437,7 +441,7 @@ export interface PoolMember {
    */
   paceScore: number | null;
   priority: number;
-  /** The account's factor under the pool's slow-down, null where the account route answers no `slowDown`. */
+  /** The speed the account's holds realized, from the factor to 1, null where `factor` is. */
   speed: number | null;
   /** One report per budgeted period the ledger has summed; empty until it reports. */
   spends: { period: BudgetPeriod; periodEnd: string | null; spentUsd: number }[];
@@ -714,6 +718,8 @@ export interface Attempt {
   cooldownSet: { reason: string; until: string } | null;
   durationMs: number | null;
   index: number;
+  /** The digest of the credit token a refused attempt issued, null elsewhere. */
+  issuedDigest: string | null;
   outcome: AttemptOutcome;
   /** The head's overage flag as the attempt stored it: null on an API-key attempt and on a head that reported none. */
   overageInUse: boolean | null;
@@ -782,6 +788,8 @@ export interface RequestPhases {
  *  hold without a tier. */
 export type CostShares = Record<string, number | null>;
 
+export const CLASSIFIER_VALUES = ['client', 'client_off'] as const;
+
 export interface RequestLog {
   accountId: string | null;
   agentId: string | null;
@@ -793,9 +801,9 @@ export interface RequestLog {
   /** The model the router resolved the request to, which a pin and its events are keyed by. */
   canonicalModel: string;
   capturedBodies: boolean;
-  /** `client` for the client's own auto-mode classifier call, which takes no share of a plan window, and `null`
-   * otherwise. */
-  classifier: 'client' | null;
+  /** `client` for the client's own classifier call on the account and incarnation its judged turn ended on,
+   * `client_off` where it ran off them or in a session with no turn to judge, and `null` for every other request. */
+  classifier: (typeof CLASSIFIER_VALUES)[number] | null;
   /** The class the router derived at admission: `claude-code/<entrypoint>` or `other`, and `null` on a row from before
    * the router recorded it. */
   client: string | null;
@@ -816,6 +824,8 @@ export interface RequestLog {
   diagnosticsSource: DiagnosticsSource | null;
   durationMs: number | null;
   errorCode: string | null;
+  /** The digest of the fallback credit token the request presented, null where it presented none. */
+  fallbackDigest: string | null;
   /** A request whose session branched from another: the depth where the two part, and the session it branched from. */
   forkDepth: number | null;
   forkedFrom: string | null;
@@ -917,6 +927,10 @@ export interface RequestDetail {
   streamCut: StreamCut | null;
 }
 
+/** The route's own list of the request list's keys, its default first. */
+export const REQUEST_ORDER_VALUES = ['received_at', 'attempts', 'duration_ms', 'ttfb_ms', 'input_tokens', 'output_tokens'] as const;
+export type RequestOrder = (typeof REQUEST_ORDER_VALUES)[number];
+
 export interface RequestQuery {
   accountIds?: string[];
   /** The requests whose agent id equals the value, `main` or a subagent's id. */
@@ -924,13 +938,17 @@ export interface RequestQuery {
   agentTypes?: string[];
   /** The serving attempt's cache miss reason, any name the beta sent. */
   cacheMissReasons?: string[];
-  /** `client`, `-`: the classifier standing. */
+  /** `client`, `client_off`, `-`: the classifier standing. */
   classifiers?: string[];
   /** A pattern over the client class, the grammar of `userAgent`. */
   client?: string;
   cursor?: string;
+  /** The key's direction, `desc` the route's default. */
+  dir?: 'asc' | 'desc';
   /** The effort as the rollups fold it: a level, `none` or `other`. */
   efforts?: string[];
+  /** `true` keeps the rows that presented a fallback digest, `false` the rest. */
+  fallback?: boolean;
   /** The range holds its own end, so `landedThrough` is left uncapped at `to` and a late row is read once. */
   fixedEnd?: boolean;
   from?: string;
@@ -945,6 +963,8 @@ export interface RequestQuery {
   landedAfter?: number;
   limit?: number;
   models?: string[];
+  /** The list's key, `received_at` the route's default. */
+  order?: RequestOrder;
   outcomes?: RequestOutcome[];
   poolIds?: string[];
   /** The serving attempt's refusal category, `-` for none. */
@@ -1102,6 +1122,8 @@ export interface RoutingLogQuery {
    */
   agentId?: string;
   cursor?: string;
+  /** The time's direction, `desc` the route's default. */
+  dir?: 'asc' | 'desc';
   from?: string;
   keyIds?: string[];
   /** Decision kinds, event kinds and the pseudo-kind `probe`. Absent, it is the route's default set. */
@@ -1277,7 +1299,7 @@ export interface RecordCandidate {
   inOverage: boolean;
   incarnation: number;
   kind: AccountKind;
-  obstacle: { name: string; reason: string | null; until: string | null; window: string | null } | null;
+  obstacle: { name: string; reason: string | null; scope: string | null; until: string | null; window: string | null } | null;
   overage: { observedAt: string; reset: string | null; since: string; source: string } | null;
   /**
    * `score` is the spare rate: the remaining share per hour less `burn`, the account's burn on `window`. `burn` is null
@@ -1667,13 +1689,17 @@ export interface HeldPoint {
   requests: number;
 }
 
-/** One category's refused answers in range, as `GET /admin/analytics/refusal_categories` answers them, `-` for none. */
+/** One model and category's refused answers in range, as `GET /admin/analytics/refusal_categories` answers them, `-`
+ *  for no category. */
 export interface RefusalCategoryRow {
   category: string;
+  model: string;
   requests: number;
 }
 
 export interface RefusalCategoriesAnswer {
+  /** The requests in range whose row carries a fallback digest. */
+  fallbacks: number;
   from: string;
   rows: RefusalCategoryRow[];
   to: string;
@@ -1876,6 +1902,9 @@ export interface Session extends BurnFigures {
   /** The effective effort of the pin's last turn, the word as the client sent it, and `null` with none or no pin. */
   effort: string | null;
   epoch: number | null;
+  /** The factor of the slow-down entry in force on the pin's account, null on a row with no pin and where no entry is
+   *  in force. */
+  factor: number | null;
   /** The depth where a forked session parts from its base, and `null` with `forkedFrom`. */
   forkDepth: number | null;
   /** The session this one branched from, null for one that branched from none. */
@@ -1923,7 +1952,7 @@ export interface Session extends BurnFigures {
    *  `fast_lane`, `mark`) for its landing. Null with no stamp and on a pin stamped before it carried one, which reads
    *  as shed. */
   shedReason: string | null;
-  /** The pin's account's factor from the slow-down entry in force, null on a row with no pin and where none is in force. */
+  /** The speed the account's holds realized, from the factor to 1, null where `factor` is. */
   speed: number | null;
   /** The session's spend over its life under its key, null where the ledger holds no request of it the router did not
    *  refuse. */

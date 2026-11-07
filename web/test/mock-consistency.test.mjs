@@ -1622,7 +1622,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
     // No story member is ready with routing off, so an account of the case's own takes that branch.
     const routingOff = { id: 'routing-off', routingEnabled: false, status: 'ready', subscription: null };
-    assert.deepEqual(s.lib.obstacleOf(routingOff, s.lib.poolById.get('all'), s.now, 'claude-sonnet-5', false, []), { name: 'operator', reason: null, until: null, window: null });
+    assert.deepEqual(s.lib.obstacleOf(routingOff, s.lib.poolById.get('all'), s.now, 'claude-sonnet-5', false, []), { name: 'operator', reason: null, scope: null, until: null, window: null });
   });
 
   test(`a member at two reached budgets reads the budget whose period ends last, at ${at}`, async () => {
@@ -1634,7 +1634,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual([day.period, month.period], ['day', 'month']);
     assert.ok(day.spentUsd >= day.budgetUsd && month.spentUsd >= month.budgetUsd, 'both budgets reached');
     assert.ok(Date.parse(day.periodEnd) < Date.parse(month.periodEnd), "the day's period ends before the month's");
-    assert.deepEqual(s.lib.obstacleOf(account, pool, s.now, 'claude-sonnet-5', false, []), { name: 'budget', reason: 'month', until: month.periodEnd, window: null });
+    assert.deepEqual(s.lib.obstacleOf(account, pool, s.now, 'claude-sonnet-5', false, []), { name: 'budget', reason: 'month', scope: null, until: month.periodEnd, window: null });
   });
 
   test(`a spent member stays servable for a Fable request where an allow pool reads its credits unblocked, and drops otherwise, at ${at}`, async () => {
@@ -3596,20 +3596,25 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const [totals] = s.lib.groupsOf(defaultRange(s), { groupBy: 'all', includeProbes: false });
     assert.ok(refused.some((r) => rows.includes(r)), 'the default range holds a refused answer');
     assert.equal(totals.succeeded, rows.filter((r) => r.outcome === 'succeeded').length, 'the OK count holds the refused answers');
-    // The route orders the rows by the count, then by the category in byte order, where the dash sorts first.
-    const byCategory = (list) => {
+    // The route orders the rows by the count, then by the model and the category in byte order, where the dash sorts
+    // first.
+    const byModelAndCategory = (list) => {
       const counts = new Map();
-      for (const r of list) counts.set(word(r), (counts.get(word(r)) ?? 0) + 1);
-      return [...counts].map(([category, requests]) => ({ category, requests })).sort((a, b) => b.requests - a.requests || (a.category < b.category ? -1 : a.category > b.category ? 1 : 0));
+      for (const r of list) {
+        const key = `${r.canonicalModel}|${word(r)}`;
+        counts.set(key, { category: word(r), model: r.canonicalModel, requests: (counts.get(key)?.requests ?? 0) + 1 });
+      }
+      const bytes = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+      return [...counts.values()].sort((a, b) => b.requests - a.requests || bytes(a.model, b.model) || bytes(a.category, b.category));
     };
     const range = { from: iso(Math.min(...s.requests.map((r) => Date.parse(r.at)))), groupBy: 'all', to: iso(s.now) };
     const answer = await s.api.getAnalyticsRefusalCategories(range);
-    assert.deepEqual(answer.rows, byCategory(refused));
+    assert.deepEqual(answer.rows, byModelAndCategory(refused));
     assert.equal(sum(answer.rows, (row) => row.requests), refused.length, 'the rows sum to the refused answers');
     const account = refused[0].accountId;
     const mine = refused.filter((r) => r.accountId === account);
     assert.ok(mine.length < refused.length, `${account} serves some of the refused answers alone`);
-    assert.deepEqual((await s.api.getAnalyticsRefusalCategories({ ...range, accountIds: [account] })).rows, byCategory(mine), `narrowed to ${account}`);
+    assert.deepEqual((await s.api.getAnalyticsRefusalCategories({ ...range, accountIds: [account] })).rows, byModelAndCategory(mine), `narrowed to ${account}`);
   });
 
   test(`the routing log lists the story's late event once the clock reaches it a few seconds after the load, on top, at ${at}`, async () => {

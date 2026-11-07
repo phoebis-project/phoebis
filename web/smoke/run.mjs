@@ -18221,8 +18221,9 @@ await forView('/analytics', async () => {
 });
 
 // The Traffic section's Refusals by category card over the story's refused answers, read off the mock's `REQUESTS`:
-// `cyber` three times, `harmful` twice and one the upstream gave no category, all inside the default day. Each bar
-// links the Requests view on its category's refused answers over the page's range to the millisecond, with no session.
+// `cyber` three times, `harmful` twice on two models and one the upstream gave no category, all inside the default day,
+// a bar per model and category as the route counts them. Each bar links the Requests view on its category's refused
+// answers over the page's range to the millisecond, with no session.
 await forView('/analytics', async () => {
   const DAY = 86_400_000;
   const TITLE = 'Refusals by category';
@@ -18238,18 +18239,24 @@ await forView('/analytics', async () => {
       label: li.querySelector('.mono')?.textContent?.trim() ?? null,
     }));
   const countsOf = (page) => barsOf(page).map((b) => [b.label, b.count]);
-  /** The route's rows over `list`, the largest count first and then the category in byte order, `-` read none. */
+  /** The route's rows over `list`, the largest count first and then the model and the category in byte order, `-` read
+   *  none. */
   const ranked = (list) => {
     const counts = new Map();
-    for (const r of list) counts.set(served(r).refusalCategory ?? '-', (counts.get(served(r).refusalCategory ?? '-') ?? 0) + 1);
-    return [...counts].sort(([a, x], [b, y]) => y - x || (a < b ? -1 : a > b ? 1 : 0)).map(([category, n]) => [category === '-' ? 'none' : category, String(n)]);
+    for (const r of list) {
+      const category = served(r).refusalCategory ?? '-';
+      const key = `${r.canonicalModel}|${category}`;
+      counts.set(key, { category, model: r.canonicalModel, n: (counts.get(key)?.n ?? 0) + 1 });
+    }
+    const bytes = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+    return [...counts.values()].sort((a, b) => b.n - a.n || bytes(a.model, b.model) || bytes(a.category, b.category)).map(({ category, n }) => [category === '-' ? 'none' : category, String(n)]);
   };
   // Each parameter by name, in key order, since the codec writes the categories before the stop reasons.
   const paramsOf = (href) => Object.fromEntries([...new URL(href, 'http://console.test').searchParams].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
   const rowIds = (page) => [...page.container.querySelectorAll('.requests__table tbody tr')].map((tr) => tr.querySelector('.sub.mono')?.getAttribute('title') ?? null).sort();
 
   const cardCheck =
-    '/analytics the Refusals by category card follows Refusals by code with its subtitle, a bar per category with cyber first and none for the refusal with no category, each linking the refused answers over the range to the millisecond with no session';
+    '/analytics the Refusals by category card follows Refusals by code with its subtitle, a bar per model and category with cyber first and none for the refusal with no category, each linking the refused answers over the range to the millisecond with no session';
   const page = await mount('/analytics', { now: CLOCK_ORIGIN });
   const titles = [...(cardOf(page, 'Refusals by code')?.parentElement?.children ?? [])].map((c) => c.querySelector('.card__title')?.textContent?.trim() ?? null);
   const bars = barsOf(page);
@@ -18261,13 +18268,14 @@ await forView('/analytics', async () => {
       titles.indexOf(TITLE) > 0 &&
       titles.indexOf(TITLE) === titles.indexOf('Refusals by code') + 1 &&
       subtitleOf(page) === SUBTITLE &&
-      JSON.stringify(countsOf(page)) === JSON.stringify([['cyber', '3'], ['harmful', '2'], ['none', '1']]) &&
+      JSON.stringify(countsOf(page)) === JSON.stringify([['cyber', '3'], ['none', '1'], ['harmful', '1'], ['harmful', '1']]) &&
       JSON.stringify(countsOf(page)) === JSON.stringify(ranked(refused)) &&
       JSON.stringify(links) ===
         JSON.stringify([
           { from: span.from, refusal_categories: 'cyber', stop_reasons: 'refusal', to: span.to },
-          { from: span.from, refusal_categories: 'harmful', stop_reasons: 'refusal', to: span.to },
           { from: span.from, refusal_categories: '-', stop_reasons: 'refusal', to: span.to },
+          { from: span.from, refusal_categories: 'harmful', stop_reasons: 'refusal', to: span.to },
+          { from: span.from, refusal_categories: 'harmful', stop_reasons: 'refusal', to: span.to },
         ]),
     missing: [JSON.stringify(titles), subtitleOf(page) ?? 'no subtitle', JSON.stringify(countsOf(page)), JSON.stringify(links)],
   });
@@ -18312,7 +18320,7 @@ await forView('/analytics', async () => {
       during.codes > 0 &&
       during.errors > 0 &&
       retried.error === null &&
-      JSON.stringify(retried.counts) === JSON.stringify([['cyber', '3'], ['harmful', '2'], ['none', '1']]),
+      JSON.stringify(retried.counts) === JSON.stringify([['cyber', '3'], ['none', '1'], ['harmful', '1'], ['harmful', '1']]),
     missing: [JSON.stringify(during), JSON.stringify(retried)],
   });
   failed.unmount();
@@ -18363,8 +18371,8 @@ await forView('/analytics', async () => {
       name: sessionCheck,
       ok:
         subtitleOf(scoped) === `${SUBTITLE}. The session filter does not apply here` &&
-        JSON.stringify(countsOf(scoped)) === JSON.stringify([['cyber', '3'], ['harmful', '2'], ['none', '1']]) &&
-        scopedLinks.length === 3 &&
+        JSON.stringify(countsOf(scoped)) === JSON.stringify([['cyber', '3'], ['none', '1'], ['harmful', '1'], ['harmful', '1']]) &&
+        scopedLinks.length === 4 &&
         scopedLinks.every((l) => l !== null && !('session' in l)),
       missing: [subtitleOf(scoped) ?? 'no subtitle', JSON.stringify(countsOf(scoped)), JSON.stringify(scopedLinks)],
     });
@@ -18394,9 +18402,9 @@ await forView('/analytics', async () => {
       missedRead.counts.length === 0 &&
       missedRead.subtitle === SUBTITLE &&
       subtitleOf(matched) === SUBTITLE &&
-      JSON.stringify(countsOf(matched)) === JSON.stringify([['cyber', '3'], ['harmful', '2'], ['none', '1']]) &&
+      JSON.stringify(countsOf(matched)) === JSON.stringify([['cyber', '3'], ['none', '1'], ['harmful', '1'], ['harmful', '1']]) &&
       JSON.stringify(countsOf(matched)) === JSON.stringify(onCli) &&
-      matchedLinks.length === 3 &&
+      matchedLinks.length === 4 &&
       matchedLinks.every((l) => l !== null && l.client === 'claude-code/cli' && !('session' in l)),
     missing: [JSON.stringify(missedRead), subtitleOf(matched) ?? 'no subtitle', JSON.stringify(countsOf(matched)), JSON.stringify(matchedLinks)],
   });

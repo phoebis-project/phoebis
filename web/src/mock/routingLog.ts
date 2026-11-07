@@ -322,21 +322,21 @@ const inOverageAt = (accountId: string, at: number) => accountId === 'nightly' &
  */
 export function obstacleOf(a: Account, pool: PoolSeed, at: number, model: string, fast: boolean, attempted: string[]): RecordCandidate['obstacle'] {
   const state = stateAt(a, at);
-  if (state !== 'ready' || !a.routingEnabled) return { name: 'operator', reason: null, until: null, window: null };
+  if (state !== 'ready' || !a.routingEnabled) return { name: 'operator', reason: null, scope: null, until: null, window: null };
   const endsAt = a.subscription?.endsAt ? Date.parse(a.subscription.endsAt) : null;
-  if (endsAt !== null && endsAt <= at) return { name: 'subscription_ended', reason: null, until: null, window: null };
+  if (endsAt !== null && endsAt <= at) return { name: 'subscription_ended', reason: null, scope: null, until: null, window: null };
   const live = COOLDOWNS.filter((c) => c.accountId === a.id && c.setAt <= at && at < c.until && holds(c, model, fast));
-  const cooldown = (c: CooldownRow) => ({ name: 'cooldown', reason: c.reason, until: iso(c.until), window: c.window });
+  const cooldown = (c: CooldownRow) => ({ name: 'cooldown', reason: c.reason, scope: c.scope, until: iso(c.until), window: c.window });
   const blocking = live.find((c) => c.scope !== 'fast');
   if (blocking) return cooldown(blocking);
   const credits = fast ? creditsAt(a.id, at) : null;
-  if (credits?.blocked) return { name: 'credits', reason: credits.blocked, until: null, window: null };
+  if (credits?.blocked) return { name: 'credits', reason: credits.blocked, scope: null, until: null, window: null };
   // The engine names the reached budget whose period ends last, the one that keeps the member out longest.
   const reached = budgetsAt(pool, a.id, at).filter((b) => b.spentUsd !== null && b.spentUsd >= b.budgetUsd).sort((x, y) => Date.parse(y.periodEnd ?? '') - Date.parse(x.periodEnd ?? ''))[0];
-  if (reached) return { name: 'budget', reason: reached.period, until: reached.periodEnd, window: null };
+  if (reached) return { name: 'budget', reason: reached.period, scope: null, until: reached.periodEnd, window: null };
   const fastLimited = live.find((c) => c.scope === 'fast');
   if (fastLimited) return cooldown(fastLimited);
-  if (attempted.includes(a.id)) return { name: 'attempted', reason: null, until: null, window: null };
+  if (attempted.includes(a.id)) return { name: 'attempted', reason: null, scope: null, until: null, window: null };
   return null;
 }
 

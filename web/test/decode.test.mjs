@@ -89,7 +89,7 @@ test("an account decodes its slow-down and each window's demand, and an api_key 
     windows: [{ ...five, burn: 0.085, demand: 0.17, horizon: five.resets_at, projection: 0.81 }, ...rest],
   };
   const slowed = d.decodeAccount(wire);
-  assert.deepEqual(slowed.slowDown, { factor: 0.5, holdMs: 120_000, since: new Date(since).toISOString(), speed: 0.6, stretchMs: 2_520_000, thresholdMs: 1_800_000 });
+  assert.deepEqual(slowed.slowDown, { factor: 0.5, holdMs: 120_000, ramp: null, since: new Date(since).toISOString(), speed: 0.6, stretchMs: 2_520_000, thresholdMs: 1_800_000 });
   assert.deepEqual(slowed.windows.map((w) => [w.id, w.demand]), [['5h', 0.17], ['7d', null], ['seven_day_opus', null]], 'the demand where the route projects one');
   assert.equal(slowed.fableWindow.demand, null);
   assert.equal(d.decodeAccount({ ...wire, slow_down: { ...wire.slow_down, since: null } }).slowDown.since, null, 'an entry outside a span names no start');
@@ -516,6 +516,8 @@ test('a pool decodes its policy, status, members, and traffic', () => {
   assert.deepEqual(p.members.map((m) => m.eligible), ['eligible', 'eligible', 'eligible'], 'every member is servable in the captured pool');
   assert.equal(d.decodePool({ ...fixture('pools').pools[0], members: [{ account_id: 'business', priority: 0, eligible: 'overage' }] }).members[0].eligible, 'overage');
   assert.equal(d.decodePool({ ...fixture('pools').pools[0], members: [{ account_id: 'business', priority: 0 }] }).members[0].eligible, 'unavailable', 'a member row without the field reads as not servable');
+  const added = [{ account_id: 'business', priority: 0, eligible: 'subscription_ended' }, { account_id: 'direct', priority: 1, eligible: 'unknown' }];
+  assert.deepEqual(d.decodePool({ ...fixture('pools').pools[0], members: added }).members.map((m) => m.eligible), ['subscription_ended', 'unknown'], 'an ended subscription and a member with no projection keep their words');
 });
 
 test('a pool member reads the spent and budget unknown words as the route answers them', () => {
@@ -781,7 +783,7 @@ test("the refusal categories answer keeps the route's rows in order with the das
   const from = 1_791_633_600_000;
   const to = from + 86_400_000;
   const rows = [{ category: 'cyber', requests: 3 }, { category: '-', requests: 1 }];
-  assert.deepEqual(d.decodeRefusalCategories({ from, rows, to }), { from: new Date(from).toISOString(), rows, to: new Date(to).toISOString() });
+  assert.deepEqual(d.decodeRefusalCategories({ from, rows, to }), { fallbacks: 0, from: new Date(from).toISOString(), rows: [{ category: 'cyber', model: '', requests: 3 }, { category: '-', model: '', requests: 1 }], to: new Date(to).toISOString() });
   const wire = fixture('request').request;
   const last = wire.attempts.length - 1;
   const refused = { ...wire, attempts: wire.attempts.map((a, i) => (i === last ? { ...a, response: { ...a.response, refusal_category: null, stop_reason: 'refusal' } } : a)) };
@@ -1346,6 +1348,7 @@ test('a request reads its auto-mode standing, and a spelling the console does no
 test('a_request_decodes_its_classifier_standing_its_contract_item_and_its_share_reason', () => {
   const read = (r) => [r.classifier, r.clientContract, r.shareReason];
   assert.deepEqual(read(d.decodeRequest({ attempts: [], classifier: 'client', client_contract: 'class_header', share_reason: 'client_classifier' })), ['client', 'class_header', 'client_classifier'], 'the members set');
+  assert.equal(d.decodeRequest({ attempts: [], classifier: 'client_off' }).classifier, 'client_off', "a classifier call that ran off the judged turn's account");
   assert.deepEqual(read(d.decodeRequest({ attempts: [], classifier: null, client_contract: null, share_reason: null })), [null, null, null], 'the members null');
   assert.deepEqual(read(d.decodeRequest({ attempts: [] })), [null, null, null], 'a row from before the members');
   assert.deepEqual(read(d.decodeRequest({ attempts: [], classifier: 'server', share_reason: 'free' })), [null, null, null], 'a standing or a reason the console does not know reads as none');

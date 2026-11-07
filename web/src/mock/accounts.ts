@@ -231,7 +231,7 @@ const SEEDS = [
     subscription: { billingType: 'monthly', organizationType: 'claude_max', planDisplayName: null, rateLimitTier: 'default_claude_max_5x', since: ago(16 * DAY), trialEndsAt: null, endsAt: null },
     requests: { last24h: 0, last7d: 0, lifetime: 48 },
     cooldowns: [],
-    slowDown: { factor: 0.5, holdMs: 120_000, since: iso(clock(13, 48)), speed: 0.5, stretchMs: 2_520_000, thresholdMs: 1_800_000 },
+    slowDown: { factor: 0.5, holdMs: 120_000, ramp: 1, since: iso(clock(13, 48)), speed: 0.5, stretchMs: 2_520_000, thresholdMs: 1_800_000 },
   },
   // The work pool's API-key member, which takes the sessions a round moves off studio.
   {

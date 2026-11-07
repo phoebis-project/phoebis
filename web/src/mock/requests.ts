@@ -496,6 +496,7 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
       cooldownSet: rateLimitHit ? rateLimitCooldown(windows, cursor + durationMs, rng.int(20, 75)) : null,
       durationMs,
       index: i,
+      issuedDigest: null,
       outcome,
       overageInUse: kind === 'oauth' ? false : null,
       response: { clearedInputTokens: null, inferenceGeo: 'us', refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: 'standard', stopReason: 'end_turn', stopSequence: null },
@@ -929,6 +930,7 @@ interface StoryAttempt {
    * story reads its own figure rather than the walk back's.
    */
   head5h?: number;
+  issuedDigest?: string;
   ms: number;
   status: number;
 }
@@ -944,8 +946,9 @@ interface StorySeed {
   canonical?: string;
   /** Whether the bodies were captured, where it is not the laptop key's rule. */
   capturedBodies?: boolean;
-  /** The client's own auto-mode classifier call, which the class header and the beta mark. */
-  classifier?: 'client';
+  /** The client's own auto-mode classifier call, which the class header and the beta mark: `client` on the account and
+   * incarnation its judged turn ended on, `client_off` off them. */
+  classifier?: 'client' | 'client_off';
   /** The label the ledger wrote, where it is not the lane's. */
   client?: string | null;
   /** The item a contract refusal named. */
@@ -953,6 +956,7 @@ interface StorySeed {
   clientDrift?: string;
   contextCompacted?: string;
   errorCode?: string;
+  fallbackDigest?: string;
   /** The client's subagent summary fork: its captured body carries the fork's tools and its question last. */
   fork?: boolean;
   /** The answer's inference geography where it is not the story's `us`. */
@@ -1090,6 +1094,7 @@ function storyRow(seed: StorySeed): RequestLog {
       cooldownSet: a.cooldown ? { reason: a.cooldown.reason, until: iso(a.cooldown.until) } : null,
       durationMs: a.ms,
       index,
+      issuedDigest: a.issuedDigest ?? null,
       outcome: cut ? 'canceled' : a.status === 200 ? (index === seed.attempts.length - 1 && seed.errorCode ? 'upstream_error' : 'succeeded') : a.status === 429 ? 'rate_limited' : 'upstream_error',
       // A usage-based seat's head names no overage, so its attempt stores no flag, as an API key's does.
       overageInUse: oauth && !usageBased ? false : null,
@@ -1137,6 +1142,7 @@ function storyRow(seed: StorySeed): RequestLog {
     diagnosticsSource: sourceOf(attempts, seed.keyId),
     durationMs,
     errorCode: seed.errorCode ?? (status === 200 ? null : 'rate_limit_error'),
+    fallbackDigest: seed.fallbackDigest ?? null,
     forkDepth: null,
     forkedFrom: null,
     guardrailId: seed.guardrails?.find((m) => m.blocked)?.id ?? null,

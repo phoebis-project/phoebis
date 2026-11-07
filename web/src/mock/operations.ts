@@ -707,6 +707,7 @@ const writtenRow = (
     cycleMs: null,
     effort: line.effort,
     epoch: 1,
+    factor: null,
     forkDepth: null,
     forkedFrom: null,
     historical: false,
@@ -803,11 +804,12 @@ SLOWED_PINS.forEach((pin, k) => {
   SESSIONS.push({
     ...writtenRow({ accountId: 'studio', agentId: 'main', burn: pin.burn, createdAt, keyId: 'notebook', sessionId: pin.sessionId }, lines),
     cycleMs: pin.cycleMs,
+    factor: accountById.get('studio')?.slowDown?.factor ?? null,
     lastRequestAt: rows[0].at,
     requests: rows.length,
     runwayBounded: studioRunwayMs !== null,
     runwayMs: studioRunwayMs,
-    speed: accountById.get('studio')?.slowDown?.factor ?? null,
+    speed: accountById.get('studio')?.slowDown?.speed ?? null,
   });
 });
 

@@ -7,31 +7,32 @@ import { KEY_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, DELETED_HOLDER_END, MINUTE, NOW, ago, ahead, clock, daysAgo, endOfMonth, iso, startOfDay } from './time';
 
 /**
- * A member as the story seeds it. The mock reads its kind, its eligibility, its burn, its Pace score and its speed off
- * the account, as the route does, and its pins off the recipes once they are drawn.
+ * A member as the story seeds it. The mock reads its kind, its eligibility, its burn, its Pace score, its factor and
+ * its speed off the account, as the route does, and its pins off the recipes once they are drawn.
  */
-type MemberSeed = Omit<PoolMember, 'activePins' | 'budgetUntil' | 'burn' | 'eligible' | 'kind' | 'paceScore' | 'speed'>;
+type MemberSeed = Omit<PoolMember, 'activePins' | 'budgetUntil' | 'burn' | 'eligible' | 'factor' | 'kind' | 'paceScore' | 'speed'>;
 
 /** The worst live bucket of each API-key account, which the router reads as its room. */
 export const WORST_BUCKET: Readonly<Record<string, number>> = { annex: 0.02, overflow: 0.04, research: 0.1 };
 
 /**
- * A member's three figures as the pools route serves them: the 7-day window's burn, the router's Pace score, the spare
+ * A member's four figures as the pools route serves them: the 7-day window's burn, the router's Pace score, the spare
  * rate on the 7-day window for an OAuth member (its remaining share per hour to the earlier of the reset and the end,
- * less the burn) and the remaining worst bucket for an API-key member, which burns no plan window, and the factor of
- * the account's slow-down where the member's pool has the switch on.
+ * less the burn) and the remaining worst bucket for an API-key member, which burns no plan window, and the factor and
+ * the realized speed of the account's slow-down where the member's pool has the switch on.
  */
-export function servedFigures(accountId: string, now: number, slowDown: boolean): Pick<PoolMember, 'burn' | 'paceScore' | 'speed'> {
+export function servedFigures(accountId: string, now: number, slowDown: boolean): Pick<PoolMember, 'burn' | 'factor' | 'paceScore' | 'speed'> {
   const account = accountById.get(accountId);
-  if (account === undefined) return { burn: null, paceScore: null, speed: null };
-  if (account.kind === 'api_key') return { burn: null, paceScore: 1 - (WORST_BUCKET[accountId] ?? 0), speed: null };
-  const speed = slowDown ? (account.slowDown?.factor ?? null) : null;
+  if (account === undefined) return { burn: null, factor: null, paceScore: null, speed: null };
+  if (account.kind === 'api_key') return { burn: null, factor: null, paceScore: 1 - (WORST_BUCKET[accountId] ?? 0), speed: null };
+  const factor = slowDown ? (account.slowDown?.factor ?? null) : null;
+  const speed = slowDown ? (account.slowDown?.speed ?? null) : null;
   const week = account.windows.find((w) => w.id === '7d');
-  if (week === undefined) return { burn: null, paceScore: null, speed };
+  if (week === undefined) return { burn: null, factor, paceScore: null, speed };
   const reset = week.resetsAt === null ? null : Date.parse(week.resetsAt);
   const hours = paceHours(paceDeadline(account, reset, now), now);
   const burn = week.burn ?? 0;
-  return { burn: week.burn, paceScore: round((1 - week.utilization) / hours - burn, 5), speed };
+  return { burn: week.burn, factor, paceScore: round((1 - week.utilization) / hours - burn, 5), speed };
 }
 /**
  * A pool as the story seeds it and the mock stores it, over its kind of member. The route lists a pool's keys from the

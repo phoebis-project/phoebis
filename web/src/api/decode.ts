@@ -7,7 +7,7 @@ import type {
 import type { AgentContext, BurnFigures } from './types';
 import type { StreamCut } from './types';
 import type { Condition, Guardrail, GuardrailAttachment, GuardrailCounts, GuardrailMatch, GuardrailMode, GuardrailPreset, GuardrailPresetState, GuardrailRef, GuardrailTestResult } from './types';
-import { ACCOUNT_KIND_VALUES, AFFINITY_MODE_VALUES, AGENT_STATE_VALUES, ATTEMPT_OUTCOME_VALUES, ATTENTION_KIND_VALUES, ATTENTION_PAGE_VALUES, ATTENTION_SUBJECT_VALUES, AUTO_MODE_VALUES, BUDGET_PERIOD_VALUES, BURN_UNIT_VALUES, BY_KIND_VALUES, CONDITION_OPERATOR_VALUES, CONDITION_SUBJECT_VALUES, DECISION_KIND_VALUES, DIAGNOSTICS_SOURCE_VALUES, ELIGIBILITY_VALUES, FACT_ENTITY_VALUES, FACT_UNIT_VALUES, GUARDRAIL_MODE_VALUES, GUARD_VERDICT_VALUES, LIFECYCLE_VALUES, MESSAGE_SELECTOR_VALUES, MODEL_RULES_MODE_VALUES, OVERAGE_POLICY_VALUES, PARK_KIND_VALUES, PIN_REASON_VALUES, PLACEMENT_RUNG_VALUES, POLL_OUTCOME_VALUES, POOL_STATUS_VALUES, POOL_STRATEGY_VALUES, RECIPE_CAUSE_VALUES, RECIPE_STATE_VALUES, REQUEST_KIND_VALUES, REQUEST_OUTCOME_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, TEST_VERDICT_VALUES, WARM_SESSIONS_VALUES } from './types';
+import { ACCOUNT_KIND_VALUES, AFFINITY_MODE_VALUES, AGENT_STATE_VALUES, ATTEMPT_OUTCOME_VALUES, ATTENTION_KIND_VALUES, ATTENTION_PAGE_VALUES, ATTENTION_SUBJECT_VALUES, AUTO_MODE_VALUES, BUDGET_PERIOD_VALUES, BURN_UNIT_VALUES, BY_KIND_VALUES, CLASSIFIER_VALUES, CONDITION_OPERATOR_VALUES, CONDITION_SUBJECT_VALUES, DECISION_KIND_VALUES, DIAGNOSTICS_SOURCE_VALUES, ELIGIBILITY_VALUES, FACT_ENTITY_VALUES, FACT_UNIT_VALUES, GUARDRAIL_MODE_VALUES, GUARD_VERDICT_VALUES, LIFECYCLE_VALUES, MESSAGE_SELECTOR_VALUES, MODEL_RULES_MODE_VALUES, OVERAGE_POLICY_VALUES, PARK_KIND_VALUES, PIN_REASON_VALUES, PLACEMENT_RUNG_VALUES, POLL_OUTCOME_VALUES, POOL_STATUS_VALUES, POOL_STRATEGY_VALUES, RECIPE_CAUSE_VALUES, RECIPE_STATE_VALUES, REQUEST_KIND_VALUES, REQUEST_OUTCOME_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, TEST_VERDICT_VALUES, WARM_SESSIONS_VALUES } from './types';
 import { CACHE_TTL_DEFAULTS, METERED_TTL_DEFAULTS, PLAN_TTL_DEFAULTS, POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type AccountPatch, type KeyInput, type PoolInput } from './client';
 import type { GuardrailInput, GuardrailTestInput } from './client';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
@@ -145,7 +145,7 @@ export function decodeAccount(v: unknown): Account {
     // than landing over a row it could not vouch for.
     revision: num(a.revision),
     routingEnabled: bool(a.enabled, true),
-    slowDown: orNull(a.slow_down, (s) => ({ factor: num(s.factor, 1), holdMs: num(s.hold_ms), since: isoOrNull(s.since), speed: num(s.speed, 1), stretchMs: num(s.stretch_ms), thresholdMs: num(s.threshold_ms) })),
+    slowDown: orNull(a.slow_down, (s) => ({ factor: num(s.factor, 1), holdMs: num(s.hold_ms), ramp: numOrNull(s.ramp), since: isoOrNull(s.since), speed: num(s.speed, 1), stretchMs: num(s.stretch_ms), thresholdMs: num(s.threshold_ms) })),
     spend: decodeSpend(a.spend),
     status: accountStatus(a, cooldowns),
     subscription,
@@ -367,6 +367,7 @@ export function decodePool(v: unknown): Pool {
       burn: numOrNull(m.burn),
       // A row from before the router reported eligibility reads as not servable rather than as servable.
       eligible: oneOf(ELIGIBILITY_VALUES, m.eligible) ?? 'unavailable',
+      factor: numOrNull(m.factor),
       // The route answers null for an account it cannot find, which is no API-key account either.
       kind: accountKind(m.kind),
       paceScore: numOrNull(m.pace_score),
@@ -446,13 +447,13 @@ export function decodeRequest(v: unknown): RequestLog {
   const r = rec(v);
   return {
     accountId: strOrNull(r.account_id), agentId: strOrNull(r.agent_id), agentType: strOrNull(r.agent_type), at: isoOr(r.at, epoch),
-    attempts: list(r.attempts).map(rec).map((a) => ({ accountId: str(a.account_id), accountKind: accountKind(a.account_kind), cacheMissReason: strOrNull(a.cache_miss_reason), cooldownSet: a.cooldown_set ? { reason: str(rec(a.cooldown_set).reason), until: isoOr(rec(a.cooldown_set).until, epoch) } : null, durationMs: numOrNull(a.duration_ms), index: num(a.index) - 1, outcome: outcomeOf(a.outcome), overageInUse: boolOrNull(a.overage_in_use), response: responseOf(a.response), selection: decodeSelection(a.selection), serviceTier: strOrNull(a.service_tier), startedAt: isoOr(a.started_at, epoch), tier: strOrNull(a.tier), upstreamMessageId: strOrNull(a.upstream_message_id), upstreamRequestId: strOrNull(a.upstream_request_id), upstreamStatus: numOrNull(a.upstream_status), usageBased: bool(a.usage_based), windows: attemptWindows(a.windows) })),
+    attempts: list(r.attempts).map(rec).map((a) => ({ accountId: str(a.account_id), accountKind: accountKind(a.account_kind), cacheMissReason: strOrNull(a.cache_miss_reason), cooldownSet: a.cooldown_set ? { reason: str(rec(a.cooldown_set).reason), until: isoOr(rec(a.cooldown_set).until, epoch) } : null, durationMs: numOrNull(a.duration_ms), index: num(a.index) - 1, issuedDigest: strOrNull(a.issued_digest), outcome: outcomeOf(a.outcome), overageInUse: boolOrNull(a.overage_in_use), response: responseOf(a.response), selection: decodeSelection(a.selection), serviceTier: strOrNull(a.service_tier), startedAt: isoOr(a.started_at, epoch), tier: strOrNull(a.tier), upstreamMessageId: strOrNull(a.upstream_message_id), upstreamRequestId: strOrNull(a.upstream_request_id), upstreamStatus: numOrNull(a.upstream_status), usageBased: bool(a.usage_based), windows: attemptWindows(a.windows) })),
     autoMode: oneOf(AUTO_MODE_VALUES, r.auto_mode),
-    canonicalModel: str(r.canonical_model), capturedBodies: bool(r.captured_bodies), classifier: r.classifier === 'client' ? 'client' : null, client: strOrNull(r.client), clientContract: strOrNull(r.client_contract), clientDrift: strOrNull(r.client_drift), compaction: strOrNull(r.compaction), contextCompacted: strOrNull(r.context_compacted),
+    canonicalModel: str(r.canonical_model), capturedBodies: bool(r.captured_bodies), classifier: oneOf(CLASSIFIER_VALUES, r.classifier), client: strOrNull(r.client), clientContract: strOrNull(r.client_contract), clientDrift: strOrNull(r.client_drift), compaction: strOrNull(r.compaction), contextCompacted: strOrNull(r.context_compacted),
     costEquivalent: numOrNull(r.cost_equivalent),
     costShares: orNull(r.cost_shares, nullableNumberMap), costUsd: num(r.cost_usd),
     diagnosticsSource: oneOf(DIAGNOSTICS_SOURCE_VALUES, r.diagnostics_source),
-    durationMs: numOrNull(r.duration_ms), errorCode: strOrNull(r.error_code),
+    durationMs: numOrNull(r.duration_ms), errorCode: strOrNull(r.error_code), fallbackDigest: strOrNull(r.fallback_digest),
     forkDepth: numOrNull(r.fork_depth), forkedFrom: strOrNull(r.forked_from),
     guardrailId: strOrNull(r.guardrail_id), guardrails: list(r.guardrails).map(decodeGuardrailMatch),
     held: cohortHoldOf(r.held), id: str(r.id),
@@ -553,7 +554,7 @@ function decodeRecordCandidate(v: unknown): RecordCandidate {
     cooldowns: list(c.cooldowns).map(rec).map((x) => ({ blocking: bool(x.blocking), reason: str(x.reason), scope: str(x.scope), until: isoOr(x.until, epoch), window: str(x.window) })),
     credits: orNull(c.credits, (x) => ({ blocked: strOrNull(x.blocked), disabledReason: strOrNull(x.disabled_reason), enabled: bool(x.enabled), observedAt: isoOr(x.observed_at, epoch), utilization: numOrNull(x.utilization) })),
     enabled: bool(c.enabled), factor: numOrNull(c.factor), fit: strOrNull(c.fit), inFlight: num(c.in_flight), inFlightCap: num(c.in_flight_cap), inOverage: bool(c.in_overage), incarnation: num(c.incarnation), kind: accountKind(c.kind),
-    obstacle: orNull(c.obstacle, (o) => ({ name: str(o.name), reason: strOrNull(o.reason), until: isoOrNull(o.until), window: strOrNull(o.window) })),
+    obstacle: orNull(c.obstacle, (o) => ({ name: str(o.name), reason: strOrNull(o.reason), scope: strOrNull(o.scope), until: isoOrNull(o.until), window: strOrNull(o.window) })),
     overage: orNull(c.overage, (o) => ({ observedAt: isoOr(o.observed_at, epoch), reset: isoOrNull(o.reset), since: isoOr(o.since, epoch), source: str(o.source) })),
     pace: orNull(c.pace, (p) => ({ burn: numOrNull(p.burn), deadline: isoOrNull(p.deadline), end: isoOrNull(p.end), hours: numOrNull(p.hours), remaining: num(p.remaining), reset: isoOrNull(p.reset), score: num(p.score), window: strOrNull(p.window) })),
     partition: strOrNull(c.partition), planTier: strOrNull(c.plan_tier),
@@ -728,8 +729,9 @@ export const decodeBurnPoint = (v: unknown): BurnPoint => {
 };
 export const decodeBurn = (v: unknown): { bucketSeconds: number; points: BurnPoint[] } => ({ bucketSeconds: num(rec(v).bucket_seconds, 3_600), points: list(rec(v).points).map(decodeBurnPoint) });
 export const decodeRefusalCategories = (v: unknown): RefusalCategoriesAnswer => ({
+  fallbacks: num(rec(v).fallbacks),
   from: isoOr(rec(v).from, epoch),
-  rows: list(rec(v).rows).map(rec).map((r) => ({ category: str(r.category), requests: num(r.requests) })),
+  rows: list(rec(v).rows).map(rec).map((r) => ({ category: str(r.category), model: str(r.model), requests: num(r.requests) })),
   to: isoOr(rec(v).to, epoch),
 });
 export const decodeRewrites = (v: unknown): RewritesAnswer => ({
@@ -841,7 +843,7 @@ function decodeAgentRequests(v: unknown): AgentRequests {
 export function decodeSession(v: unknown): Session {
   const s = rec(v);
   const k = rec(s.keepalive);
-  return { accountId: strOrNull(s.account_id), agentContexts: list(s.agent_contexts).map(decodeAgentContext), agentId: strOrNull(s.agent_id), agentRequests: list(s.agent_requests).map(decodeAgentRequests), ...burnFigures(s), burnAt: isoOrNull(s.burn_at), cacheTtlMs: numOrNull(s.cache_ttl_ms), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), cycleMs: numOrNull(s.cycle_ms), day: decodeSessionDay(s.day), effort: strOrNull(s.effort), epoch: numOrNull(s.epoch), forkDepth: numOrNull(s.fork_depth), forkedFrom: strOrNull(s.forked_from), historical: bool(s.historical), keepalive: { cause: recipeCause(k.cause), nextProbeAt: isoOrNull(k.next_probe_at) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastInputTokens: numOrNull(s.last_input_tokens), lastRefreshAt: isoOrNull(s.last_refresh_at), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), lifecycle: lifecycle(s.lifecycle), model: strOrNull(s.model), pinned: bool(s.pinned), presenceAgeSeconds: numOrNull(s.presence_age_seconds), requests: num(s.requests), runwayBounded: boolOrNull(s.runway_bounded), runwayMs: numOrNull(s.runway_ms), sessionId: str(s.session_id), shedFrom: strOrNull(s.shed_from), shedReason: strOrNull(s.shed_reason), speed: numOrNull(s.speed), spend: orNull(s.spend, decodeSessionSpend), userAgent: strOrNull(s.user_agent), warm: boolOrNull(s.warm) };
+  return { accountId: strOrNull(s.account_id), agentContexts: list(s.agent_contexts).map(decodeAgentContext), agentId: strOrNull(s.agent_id), agentRequests: list(s.agent_requests).map(decodeAgentRequests), ...burnFigures(s), burnAt: isoOrNull(s.burn_at), cacheTtlMs: numOrNull(s.cache_ttl_ms), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), cycleMs: numOrNull(s.cycle_ms), day: decodeSessionDay(s.day), effort: strOrNull(s.effort), epoch: numOrNull(s.epoch), factor: numOrNull(s.factor), forkDepth: numOrNull(s.fork_depth), forkedFrom: strOrNull(s.forked_from), historical: bool(s.historical), keepalive: { cause: recipeCause(k.cause), nextProbeAt: isoOrNull(k.next_probe_at) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastInputTokens: numOrNull(s.last_input_tokens), lastRefreshAt: isoOrNull(s.last_refresh_at), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), lifecycle: lifecycle(s.lifecycle), model: strOrNull(s.model), pinned: bool(s.pinned), presenceAgeSeconds: numOrNull(s.presence_age_seconds), requests: num(s.requests), runwayBounded: boolOrNull(s.runway_bounded), runwayMs: numOrNull(s.runway_ms), sessionId: str(s.session_id), shedFrom: strOrNull(s.shed_from), shedReason: strOrNull(s.shed_reason), speed: numOrNull(s.speed), spend: orNull(s.spend, decodeSessionSpend), userAgent: strOrNull(s.user_agent), warm: boolOrNull(s.warm) };
 }
 
 const recipeCause = (v: unknown): RecipeCause | null => oneOf(RECIPE_CAUSE_VALUES, v);

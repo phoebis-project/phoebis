@@ -1,7 +1,7 @@
 import { agentTokenOf, plus } from '@/api/fold';
 import type {
   Account, AccountRollup, AllowanceReset, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, HeldPoint, LatencyHistograms, PinMigrationReason, PlacementRow, QuotaHistory, Reconciliation, ReconciliationsAnswer,
-  RefusalCategoriesAnswer, RequestKind, RequestLog, RewritePoint, RewritesAnswer, UnusedAllowanceAnswer, WastedProbeReason,
+  RefusalCategoriesAnswer, RefusalCategoryRow, RequestKind, RequestLog, RewritePoint, RewritesAnswer, UnusedAllowanceAnswer, WastedProbeReason,
 } from '@/api/types';
 import { bucketShare, keptWarmTokens } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
@@ -656,17 +656,19 @@ export function placementsOf(requests: RequestLog[], q: Pick<AnalyticsQuery, 'fr
 }
 
 /**
- * The refused answers by category off the request rows, as the route counts them: each request in range whose serving
- * attempt the upstream answered with the stop reason `refusal`, `-` for a refusal with no category, the largest count
- * first and then the category in byte order, where the dash sorts first. The route narrows by the range, the accounts,
- * the keys, the pools, the models, the kinds, the probes switch and the client and user agent patterns. A pattern
- * matches as the rollups key a row: the client as recorded and the user agent folded to its first product token, each
- * `-` where the request named none. The user agent groups partition the rows and narrow nothing.
+ * The refused answers by model and category off the request rows, as the route counts them: each request in range
+ * whose serving attempt the upstream answered with the stop reason `refusal`, `-` for a refusal with no category, the
+ * largest count first and then the model and the category in byte order, where the dash sorts first, and beside them
+ * the requests in range that presented a fallback digest. The route narrows by the range, the accounts, the keys, the
+ * pools, the models, the kinds, the probes switch and the client and user agent patterns. A pattern matches as the
+ * rollups key a row: the client as recorded and the user agent folded to its first product token, each `-` where the
+ * request named none. The user agent groups partition the rows and narrow nothing.
  */
 export function refusalCategoriesOf(requests: RequestLog[], q: AnalyticsQuery): RefusalCategoriesAnswer {
   const fromMs = Date.parse(q.from);
   const toMs = Date.parse(q.to);
-  const counts = new Map<string, number>();
+  const counts = new Map<string, RefusalCategoryRow>();
+  let fallbacks = 0;
   for (const r of requests) {
     const at = Date.parse(r.at);
     if (at < fromMs || at > toMs) continue;
@@ -680,13 +682,15 @@ export function refusalCategoriesOf(requests: RequestLog[], q: AnalyticsQuery): 
     if (r.kind === 'probe' && !q.includeProbes && !q.kinds?.includes('probe')) continue;
     if (q.userAgents?.length && !q.userAgents.some((p) => matchesPattern(p, agentTokenOf(r.userAgent)))) continue;
     if (q.clients?.length && !q.clients.some((p) => matchesPattern(p, r.client ?? '-'))) continue;
+    if (r.fallbackDigest !== null) fallbacks += 1;
     const answer = servingResponse(r);
     if (answer?.stopReason !== 'refusal') continue;
     const category = answer.refusalCategory ?? '-';
-    counts.set(category, (counts.get(category) ?? 0) + 1);
+    const key = `${r.canonicalModel}|${category}`;
+    counts.set(key, { category, model: r.canonicalModel, requests: (counts.get(key)?.requests ?? 0) + 1 });
   }
-  const rows = [...counts].map(([category, requests]) => ({ category, requests })).sort((a, b) => b.requests - a.requests || byteOrder(a.category, b.category));
-  return { from: iso(fromMs), rows, to: iso(toMs) };
+  const rows = [...counts.values()].sort((a, b) => b.requests - a.requests || byteOrder(a.model, b.model) || byteOrder(a.category, b.category));
+  return { fallbacks, from: iso(fromMs), rows, to: iso(toMs) };
 }
 
 /**
