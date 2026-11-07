@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use common::*;
-use fake_upstream::{install, Captured};
+use fake_upstream::capture_tracing;
 use phoebis_bus::{
     AttemptOutcome, Event as BusEvent, Kind, Outcome, Phase, ResponseChunk, ResponseHead, Usage,
 };
@@ -394,12 +394,11 @@ async fn a_sessions_first_owner_mismatch_logs_one_warning_naming_the_session_and
     let mut r = rig(RigSpec::default()).await;
     r.event(registered_by("session", "owner-1")).unwrap();
     r.event(registered_by("other", "owner-1")).unwrap();
-    let captured = Captured::default();
-    let _guard = install(&captured);
+    let (captured, _sink) = capture_tracing();
     for (id, session) in [("r-1", "session"), ("r-2", "session"), ("r-3", "other")] {
         r.engine.observe(owned(&r, id, session, "owner-2"));
     }
-    let text = captured.text();
+    let text = captured.lock().unwrap().join("\n");
     let lines: Vec<&str> = text
         .lines()
         .filter(|line| line.contains(OWNER_MISMATCH_LINE))
@@ -407,7 +406,7 @@ async fn a_sessions_first_owner_mismatch_logs_one_warning_naming_the_session_and
     assert_eq!(lines.len(), 2, "one line per session: {text}");
     for (line, session) in lines.iter().zip(["session", "other"]) {
         assert!(
-            line.contains("WARN") && line.contains(&format!("session={session}")),
+            line.contains("level=WARN") && line.contains(&format!("session={session} ")),
             "{line}"
         );
     }

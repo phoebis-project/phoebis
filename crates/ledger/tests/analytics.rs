@@ -4516,7 +4516,16 @@ fn a_row_filed_under_the_asked_fast_speed_with_plan_funding_prices_as_a_standard
 #[test]
 fn fast_traffic_alone_on_a_model_without_a_weight_reads_a_zero_share_and_a_zero_equivalent_on_a_sized_tier(
 ) {
-    let tables = PlanTables::shipped();
+    let tables = phoebis_ledger::test_tables::subscription_costs();
+    // Haiku 5.5 carries no weight in the test cost model, and fast cells in this list alone: the standard cells at $1
+    // and $5 a million input and output tokens, the fast ones at $6 and $30.
+    let prices = PriceRevisions::from_yaml(
+        "revisions:\n  - effective: 2026-01-01\n    models:\n      claude-haiku-5-5: {input: 1, cache_write_5m: 1.25, \
+         cache_write_1h: 2, cache_read: 0.1, output: 5, \
+         fast: {input: 6, cache_write_5m: 7.5, cache_write_1h: 12, cache_read: 0.6, output: 30}}\n",
+        "test",
+    )
+    .expect("the case's price list parses");
     let filter = SeriesFilter {
         from: 0,
         to: 7_200_000,
@@ -4533,7 +4542,7 @@ fn fast_traffic_alone_on_a_model_without_a_weight_reads_a_zero_share_and_a_zero_
             0,
             "p",
             "a",
-            "claude-sonnet-4-5",
+            "claude-haiku-5-5",
             "inference",
             UNATTRIBUTED,
             UNATTRIBUTED,
@@ -4551,28 +4560,24 @@ fn fast_traffic_alone_on_a_model_without_a_weight_reads_a_zero_share_and_a_zero_
             FIVE_HOUR,
             None,
             MAX_20X,
-            "claude-sonnet-4-5",
+            "claude-haiku-5-5",
             usage(1_000, 100),
             3_600_000,
         ),
         None,
-        "the model has no weight, so it prices nothing on the plan window whatever its model tier"
+        "the model has no weight, so it prices nothing on the plan window"
     );
-    let point = burn_series_over(&[row], &tables, &PRICES, &filter, NOW)
+    let point = burn_series_over(&[row], &tables, &prices, &filter, NOW)
         .unwrap()
         .into_iter()
         .find(|p| p.at == 3_600_000)
         .unwrap();
-    let fast_usd = shipped_usd(
-        3_600_000,
-        "claude-sonnet-4-5",
-        Speed::Fast,
-        usage(1_000, 100),
-    );
-    assert_eq!(
-        (point.usd, point.five_hour_share, point.seven_day_share),
-        (fast_usd, Some(0.0), Some(0.0)),
-        "the tier alone sizes the account, so its fast dollars sit beside a zero share of either window"
+    // 1,000 input tokens at $6 and 100 output tokens at $30 a million, where the standard cells would read $0.0015.
+    assert!(
+        (point.usd - 0.009).abs() < 1e-12
+            && (point.five_hour_share, point.seven_day_share) == (Some(0.0), Some(0.0)),
+        "the tier alone sizes the account, so its dollars at the fast cells sit beside a zero share of either \
+         window: {point:?}"
     );
     assert_eq!(
         (point.equivalent, point.unpriced),

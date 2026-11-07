@@ -896,6 +896,11 @@ async fn a_stalled_handshake_answers_502_within_two_connect_bounds_and_the_wait(
         },
     )
     .await;
+    // A loopback port probe from another process, an HTTP request on the listener's port, is no dial of the relay's.
+    let mut probe = tokio::net::TcpStream::connect(up.addr()).await.unwrap();
+    tokio::io::AsyncWriteExt::write_all(&mut probe, b"GET / HTTP/1.1\r\n\r\n")
+        .await
+        .unwrap();
     let started = Instant::now();
     let resp = tokio::time::timeout(
         Duration::from_secs(5),

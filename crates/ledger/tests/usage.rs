@@ -73,19 +73,33 @@ fn request(
 fn a_window_sums_one_keys_rollups_and_leaves_probes_and_other_keys_out() {
     let db = LedgerDb::open_in_memory().unwrap();
     db.insert_request(
-        &request("r1", "k1", "claude-sonnet-5", "inference", "succeeded", 200),
+        &request(
+            "r1",
+            "k1",
+            "claude-sonnet-5-5",
+            "inference",
+            "succeeded",
+            200,
+        ),
         &[used("r1")],
         None,
     )
     .unwrap();
     db.insert_request(
-        &request("r2", "k1", "claude-sonnet-5", "inference", "succeeded", 200),
+        &request(
+            "r2",
+            "k1",
+            "claude-sonnet-5-5",
+            "inference",
+            "succeeded",
+            200,
+        ),
         &[used("r2")],
         None,
     )
     .unwrap();
     db.insert_request(
-        &request("r3", "k1", "claude-sonnet-5", "inference", "failed", 500),
+        &request("r3", "k1", "claude-sonnet-5-5", "inference", "failed", 500),
         &[unused("r3")],
         None,
     )
@@ -99,13 +113,20 @@ fn a_window_sums_one_keys_rollups_and_leaves_probes_and_other_keys_out() {
     // A probe under the same key is folded into its own rollup row and must not reach the key's own totals,
     // the way `request_totals` already leaves probes out of the key list.
     db.insert_request(
-        &request("r5", "k1", "claude-sonnet-5", "probe", "succeeded", 200),
+        &request("r5", "k1", "claude-sonnet-5-5", "probe", "succeeded", 200),
         &[used("r5")],
         None,
     )
     .unwrap();
     db.insert_request(
-        &request("r6", "k2", "claude-sonnet-5", "inference", "succeeded", 200),
+        &request(
+            "r6",
+            "k2",
+            "claude-sonnet-5-5",
+            "inference",
+            "succeeded",
+            200,
+        ),
         &[used("r6")],
         None,
     )
@@ -113,8 +134,9 @@ fn a_window_sums_one_keys_rollups_and_leaves_probes_and_other_keys_out() {
 
     // Rows an hour old, planted under the generation the builders stamp, so the day window is every row the
     // reading key filed under the id.
+    let prices = phoebis_ledger::test_tables::api_prices();
     let day = |id: &str| {
-        db.read_blocking(|c| key_usage_windows(c, id, 0, 10_000, &PriceRevisions::shipped()))
+        db.read_blocking(|c| key_usage_windows(c, id, 0, 10_000, &prices))
             .map(|(day, _)| day)
             .unwrap()
     };
@@ -123,17 +145,17 @@ fn a_window_sums_one_keys_rollups_and_leaves_probes_and_other_keys_out() {
     assert_eq!((k1.requests, k1.succeeded, k1.failed), (4, 3, 1));
     assert_eq!(k1.tokens.input, 300);
     assert_eq!(k1.tokens.cache_write, 60);
-    // The window prices each row's counts on the shipped list at the entry in force at its hour, the first entry
-    // before its date. Per million, Sonnet 5 reads 2 input, 0.2 cache read, 2.5 for a 5-minute write and 10 output,
-    // so a used attempt costs $0.00036, and Opus 5 reads 5, 0.5, 6.25 and 25, so $0.0009: two Sonnet requests and
-    // one Opus are $0.00162.
-    assert!((k1.cost_usd - 0.00162).abs() < 1e-9, "{}", k1.cost_usd);
+    // The window prices each row's counts on the test list at the entry in force at its hour, the first entry before
+    // its date. Per million, Sonnet 5.5 reads 3 input, 0.3 cache read, 3.75 for a 5-minute write and 15 output, so a
+    // used attempt costs $0.00054, and Opus 5 reads 5, 0.5, 6.25 and 25, so $0.0009: two Sonnet requests and one Opus
+    // are $0.00198.
+    assert!((k1.cost_usd - 0.00198).abs() < 1e-9, "{}", k1.cost_usd);
     assert_eq!(
         k1.models
             .iter()
             .map(|m| m.model.as_str())
             .collect::<Vec<_>>(),
-        ["claude-opus-5", "claude-sonnet-5"]
+        ["claude-opus-5", "claude-sonnet-5-5"]
     );
 
     assert_eq!(day("k2").requests, 1);

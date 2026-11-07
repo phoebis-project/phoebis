@@ -5184,6 +5184,14 @@ async fn sessions_harness_priced(
     common::admin_parts_full_on_priced(seed.store.clone(), prices).await
 }
 
+/// `sessions_harness_with` pricing dollars and shares through the ledger's test tables rather than the shipped files.
+async fn sessions_harness_on_test_tables(
+    pins: impl Fn(i64) -> Vec<phoebis_store::PinRow>,
+) -> common::Full {
+    let seed = sessions_seed(pins).await;
+    common::admin_parts_full_test_tables(Some(seed.store.clone())).await
+}
+
 /// `sessions_harness_with` with the sessions route bounded by `session_expiry` and `non_companion_idle` rather than
 /// the harness's 24 hours and one hour.
 async fn sessions_harness_bounded(
@@ -5246,7 +5254,7 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
     let now = common::NOW;
     // One hundred input tokens a second plain and 145 banded: the share reads the banded copy, dollars the
     // plain one. The subscription pin burns Opus 5.5, which the cost model weighs; the api_key pin Opus 5.
-    let parts = sessions_harness_with(|generation| {
+    let parts = sessions_harness_on_test_tables(|generation| {
         vec![
             phoebis_store::PinRow {
                 model: "claude-opus-5-5".into(),
@@ -5259,13 +5267,16 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
     let cookie = login(&parts.app, "admin-secret").await;
     let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
     let row = |sessions: &serde_json::Value, session: &str| session_row(sessions, session);
-    // The banded copy priced at the fixed clock, which the peak band never covers: 145 Opus 5.5 input tokens a second
-    // at the shipped weight 2.2 are 319 units, over Ultra's 150,000,000 and times 3,600 seconds 0.007656 an hour. The
-    // plain copy's 100 tokens a second are 220 units, over the Pro tier's 90,000,000 on the week and times 3,600
-    // seconds 0.0088 an hour. The plain copy at the shipped Opus 5 input price of $5 a million tokens is $1.80 an
-    // hour, and at Opus 5.5's own $4 it is $1.44.
-    let (share_per_hour, equivalent_per_hour) = (0.007656, 0.0088);
-    let usd_per_hour = 1.8;
+    // The test tables' second entries, in force at the fixed clock, which the peak band never covers: 145 Opus 5.5
+    // input tokens a second at the weight 4 are 580 units, over Ultra's 100 on the 5-hour window and times 3,600
+    // seconds 20,880 an hour. The plain copy's 100 tokens a second are 400 units, over the Pro tier's 50 on the week
+    // and times 3,600 seconds 28,800 an hour. The plain copy at the Opus 5 input price of $10 a million tokens is $3.60
+    // an hour, and at Opus 5.5's own $20 it is $7.20.
+    let (share_per_hour, equivalent_per_hour) = (20_880.0, 28_800.0);
+    let usd_per_hour = 3.6;
+    // The file's absolute bound of 1e-12 lies under one ulp of a figure in the thousands, so these compare to a
+    // relative one.
+    let close = |a: Option<f64>, b: f64| a.is_some_and(|a| (a - b).abs() <= b.abs() * 1e-12);
     let (burn, unit) = burn_of(&sessions, "s1");
     assert!(
         close(burn, share_per_hour) && unit.as_deref() == Some("window_share"),
@@ -5278,8 +5289,8 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
         "an api_key pin always reads the plain copy in dollars per hour: {:?}",
         (burn, unit)
     );
-    // The shipped table lists Opus 5.5, so its dollar reading is that row's own rate.
-    let s1_usd_per_hour = 1.44;
+    // The test list prices Opus 5.5, so its dollar reading is that row's own rate.
+    let s1_usd_per_hour = 7.2;
     assert_eq!(
         row(&sessions, "s1")["burn_at"].as_i64(),
         Some(now),

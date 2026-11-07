@@ -646,6 +646,47 @@ fn a_dip_whose_climb_the_attempts_between_its_ends_predict_keeps_its_split() {
 }
 
 #[test]
+fn a_dip_inside_one_the_attempts_predict_is_judged_on_its_own_and_leaves_the_run() {
+    let reset = SATURDAY + 2 * HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    seed_request(&db, "seed", SATURDAY - MINUTE);
+    // A grant empties the window at 0.60, and seventy Sonnet units refill it past that level to 0.70. Inside that dip a
+    // failed poll reads 0.10 after 0.30, and the forty units completed after it predict far less than its 0.60 climb.
+    polls(&db, reset, &[0.05, 0.60, 0.0, 0.30, 0.10, 0.70]);
+    served_after_poll(&db, 0, 55);
+    served_after_poll(&db, 2, 30);
+    served_after_poll(&db, 4, 40);
+    let row = the_row(&db, reset);
+    assert!(
+        close(row.observed_rise, 1.25),
+        "0.55 before the grant and 0.70 after it, the failed poll's climb counted no second time: {}",
+        row.observed_rise
+    );
+    assert!(close(row.predicted_share, 1.25), "{}", row.predicted_share);
+}
+
+#[test]
+fn a_dip_whose_attempts_the_tables_cannot_price_keeps_its_split() {
+    let reset = SATURDAY + 2 * HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    seed_request(&db, "seed", SATURDAY - MINUTE);
+    // A grant drops the window from 0.50 to 0.20 and the next poll reads 0.10, so the dip spans two parts. Between them
+    // an attempt completes on a model the tables price to no share, so nothing judges the dip, and the sum of the parts
+    // leaves that attempt out.
+    polls(&db, reset, &[0.10, 0.50, 0.20, 0.10, 0.60]);
+    served_after_poll(&db, 0, 40);
+    served(&db, "unpriced", MYSTERY, SATURDAY + 25 * MINUTE, 20, None);
+    served_after_poll(&db, 3, 50);
+    let row = the_row(&db, reset);
+    assert!(
+        close(row.observed_rise, 0.90),
+        "0.40 before the grant and 0.50 from the poll after it: {}",
+        row.observed_rise
+    );
+    assert!(close(row.predicted_share, 0.90), "{}", row.predicted_share);
+}
+
+#[test]
 fn a_dip_that_never_closes_keeps_its_split() {
     let reset = SATURDAY + 2 * HOUR;
     let db = LedgerDb::open_in_memory().unwrap();

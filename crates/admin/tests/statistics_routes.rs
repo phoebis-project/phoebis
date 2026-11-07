@@ -944,7 +944,7 @@ async fn the_price_routes_answer_the_long_context_set_beside_the_standard_cells(
 
 #[tokio::test]
 async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
-    let parts = common::admin_parts_full().await;
+    let parts = common::admin_parts_full_test_tables(None).await;
     let cookie = login(&parts.app, "admin-secret").await;
     let now = common::NOW;
     let bucket = phoebis_ledger::bucket_of(now - HOUR);
@@ -1040,7 +1040,7 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
         let mut seeded = record(
             &format!("t{i}"),
             now - i * HOUR,
-            "claude-sonnet-5",
+            "claude-sonnet-5-5",
             &format!("s{}", i % 2),
         );
         if i == OVERAGE {
@@ -1055,12 +1055,11 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
         parts.db.request("t4").await.unwrap()
     })
     .await;
-    // Each row's 1,000 input and 100 output tokens of Sonnet 5 at the shipped $2 and $10 a million are $0.003, so the
-    // five rows make $0.015 and the overage row $0.003 billed. At Sonnet 5's own weight 1.5 a row is
-    // 1.5 * (1,000 + 100 * 5) = 2,250 units, 0.000025 of the Pro tier's 90,000,000 on the week, so the four plan rows
-    // make 0.0001.
-    let (dollars, billed) = (0.015, 0.003);
-    let figure = 0.0001;
+    // On the test tables' second entries, each row's 1,000 input and 100 output tokens of Sonnet 5.5 at $6 and $30 a
+    // million are $0.009, so the five rows make $0.045 and the overage row $0.009 billed. At Sonnet 5.5's weight 2 a
+    // row is 2 * (1,000 + 100 * 10) = 4,000 units, 80 of the Pro tier's 50 on the week, so the four plan rows make 320.
+    let (dollars, billed) = (0.045, 0.009);
+    let figure = 320.0;
     let traffic = json(
         get(
             &parts.app,
@@ -3525,7 +3524,7 @@ async fn an_unknown_funding_value_is_refused() {
 
 #[tokio::test]
 async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts_kind() {
-    let parts = common::admin_parts_full().await;
+    let parts = common::admin_parts_full_test_tables(None).await;
     let cookie = login(&parts.app, "admin-secret").await;
     // A tier on file, so the shares the session grouping leaves null are the grouping's and not a missing tier's.
     set_max_20x(&parts).await;
@@ -3540,8 +3539,8 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
                     key_id: Some("desktop".into()),
                     pool_id: Some("main".into()),
                     session_id: Some(session.into()),
-                    model: "claude-sonnet-5".into(),
-                    canonical_model: "claude-sonnet-5".into(),
+                    model: "claude-sonnet-5-5".into(),
+                    canonical_model: "claude-sonnet-5-5".into(),
                     kind: "inference".into(),
                     origin: "client".into(),
                     status: Some(200),
@@ -3648,8 +3647,8 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
         .find(|p| p["group"] == "s-mid" && p["usd"].as_f64().unwrap_or(0.0) > 0.0)
         .unwrap_or_else(|| panic!("s-mid's bucket carries its dollar price: {points:?}"));
     assert_eq!(mid_point["uncached_tokens"].as_u64(), Some(1_000));
-    // The attempt's 1,000 input and 100 output tokens of Sonnet 5 at the shipped $2 and $10 a million.
-    let mid_usd = 0.003;
+    // The attempt's 1,000 input and 100 output tokens of Sonnet 5.5 at the test list's $6 and $30 a million.
+    let mid_usd = 0.009;
     assert!(
         (mid_point["usd"].as_f64().unwrap() - mid_usd).abs() < 1e-12,
         "s-mid's bucket reads its attempt's dollars at read time: {mid_point} vs {mid_usd}"
@@ -3681,11 +3680,10 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
         named.iter().all(|p| p["group"] != "s-mid"),
         "the sessions rank by the named account's attempts alone: {one_account}"
     );
-    // Each s-big attempt's 2,000 input and 200 output tokens of Sonnet 5 at its shipped weight 1.5 are
-    // 1.5 * (2,000 + 200 * 5) = 4,500 units: 0.00003 of Ultra's 150,000,000 on the 5-hour window and 0.000005 of its
-    // 900,000,000 on the week, outside the weekday peak band on the rig's Sunday, and 0.00005 of the Pro tier's
-    // 90,000,000 on the week.
-    let (five_hour, seven_day, figure) = (0.00003, 0.000005, 0.00005);
+    // Each s-big attempt's 2,000 input and 200 output tokens of Sonnet 5.5 at the test weight 2 are
+    // 2 * (2,000 + 200 * 10) = 8,000 units: 80 of Ultra's 100 on the 5-hour window and 8 of its 1,000 on the week,
+    // outside the weekday peak band on the rig's Sunday, and 160 of the Pro tier's 50 on the week.
+    let (five_hour, seven_day, figure) = (80.0, 8.0, 160.0);
     for started in [now - HOUR - 100, now - 100] {
         let bucket_of = |points: &[serde_json::Value]| {
             points
@@ -4039,7 +4037,8 @@ async fn the_burn_route_answers_only_the_twenty_busiest_sessions() {
 
 #[tokio::test]
 async fn the_session_series_sizes_its_buckets_like_the_account_series_on_long_ranges() {
-    let parts = common::admin_parts_full().await;
+    let parts =
+        common::admin_parts_full_costed(phoebis_ledger::test_tables::subscription_costs()).await;
     let cookie = login(&parts.app, "admin-secret").await;
     set_max_20x(&parts).await;
     let now = common::NOW;
@@ -4127,9 +4126,9 @@ async fn the_session_series_sizes_its_buckets_like_the_account_series_on_long_ra
         .iter()
         .rfind(|p| p["group"] == "business")
         .unwrap();
-    // 500 input and 50 output tokens of Sonnet 5.5 at its shipped weight 1.5 are 1.5 * (500 + 50 * 5) = 1,125 units,
-    // 0.00000125 of Ultra's 900,000,000 on the week.
-    let seven_day = 0.00000125;
+    // 500 input and 50 output tokens of Sonnet 5.5 at the test weight 2 are 2 * (500 + 50 * 10) = 2,000 units, 2 of
+    // Ultra's 1,000 on the week.
+    let seven_day = 2.0;
     assert!(
         account_trailing["five_hour_share"].as_f64().unwrap_or(0.0) > 0.0
             && (account_trailing["seven_day_share"].as_f64().unwrap() - seven_day).abs() < 1e-9,

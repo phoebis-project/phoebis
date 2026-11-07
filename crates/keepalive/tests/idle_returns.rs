@@ -1131,6 +1131,11 @@ async fn the_contradiction_line_names_no_hash() {
     arrive(&r, "moved", "main", &conversation(1), |_| {});
     answer(&r, "moved", VERSION, reading(1_800));
     let text = captured.text();
+    assert_eq!(
+        text.matches(WATCH_LINE).count(),
+        1,
+        "the line the claim reads is printed: {text}"
+    );
     let longest_hex_run = text
         .split(|c: char| !c.is_ascii_hexdigit())
         .map(str::len)

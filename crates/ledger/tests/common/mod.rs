@@ -109,6 +109,34 @@ pub async fn harness_on(
     config: LedgerConfig,
     with_usage: bool,
 ) -> Harness {
+    harness_on_tables(
+        store,
+        db,
+        up,
+        accounts,
+        capture,
+        config,
+        with_usage,
+        PriceRevisions::shipped(),
+        PlanTables::shipped(),
+    )
+    .await
+}
+
+/// `harness_on` with its ledger pricing through `prices` and `costs` rather than the shipped files, so a case's
+/// expected figure is worked out by hand from the tables it names.
+#[allow(clippy::too_many_arguments)]
+pub async fn harness_on_tables(
+    store: Arc<Store>,
+    db: Arc<LedgerDb>,
+    up: &FakeUpstream,
+    accounts: &[Account],
+    capture: (u32, Option<u32>),
+    config: LedgerConfig,
+    with_usage: bool,
+    prices: PriceRevisions,
+    costs: PlanTables,
+) -> Harness {
     let p = claude_code_2_1_310_linux_x64();
     if store.accounts().unwrap().is_empty() {
         for (n, account) in accounts.iter().enumerate() {
@@ -271,12 +299,12 @@ pub async fn harness_on(
         Duration::from_secs(5),
     ));
     let bus = Bus::new();
-    let pricing = Arc::new(Pricing::new(PriceRevisions::shipped()));
+    let pricing = Arc::new(Pricing::new(prices));
     let metrics = Arc::new(Metrics::new());
     let ledger = spawn(
         db.clone(),
         pricing.clone(),
-        Arc::new(PlanTables::shipped()),
+        Arc::new(costs),
         store.clone(),
         &bus,
         router_handle.clone(),

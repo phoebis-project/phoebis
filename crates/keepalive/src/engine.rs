@@ -2350,10 +2350,7 @@ impl Inner {
             .request_class
             .as_deref()
             .is_some_and(|class| class_guard(class) == Guard::Rearm);
-        if !refreshing
-            || observed.client.compaction.is_some()
-            || observed.client.context_compacted.is_some()
-        {
+        if !refreshing || observed.client.context_compacted.is_some() {
             return;
         }
         let Some(main) = agent_ref(&self.sessions, key, MAIN_AGENT) else {

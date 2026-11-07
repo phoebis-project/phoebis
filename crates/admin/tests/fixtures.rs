@@ -3090,6 +3090,18 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
             cause: phoebis_oauth::BackoffEndCause::CleanPoll,
         },
     ));
+    // The ledger's hook writes a run's end only after its start, so the run the plan-ended pause closes opens here.
+    parts.ledger.record(phoebis_ledger::poll_backoff(
+        &phoebis_oauth::BackoffEdge::Started {
+            account_id: "business".into(),
+            at: at(1),
+            endpoint: "usage",
+            reason: "429".into(),
+            attempts: 1,
+            next_attempt_at: at(1) + 30_000,
+            last_clean_at: Some(at(0)),
+        },
+    ));
     // The plan-ended pause closes a run at the flag's instant, so this close shares the `plan_ended` row's minute.
     parts.ledger.record(phoebis_ledger::poll_backoff(
         &phoebis_oauth::BackoffEdge::Ended {

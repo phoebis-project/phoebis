@@ -8,8 +8,7 @@ use common::*;
 use fake_upstream::FakeUpstream;
 use phoebis_ledger::{
     breakdown, fold_keepalive, hour_of, read_rollups, AttemptRecord, KeepaliveDelta, LedgerConfig,
-    LedgerDb, LiveKeys, PlanTables, PriceRevisions, Record, RequestRecord, RollupSelect, Speed,
-    UNATTRIBUTED,
+    LedgerDb, LiveKeys, PriceRevisions, Record, RequestRecord, RollupSelect, Speed, UNATTRIBUTED,
 };
 use phoebis_store::AccountKind;
 
@@ -243,7 +242,14 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
     };
     // The rows above carry the generation a record defaults to, so that is what holds the id here.
     let live = LiveKeys(BTreeMap::from([("desktop".to_string(), 0)]));
-    let (prices, costs) = (PriceRevisions::shipped(), PlanTables::shipped());
+    // Sonnet 5 at round figures of the case's own, since the test list prices no Sonnet 5.
+    let prices = PriceRevisions::from_yaml(
+        "revisions:\n  - effective: 2026-01-01\n    models:\n      claude-sonnet-5: {input: 1, cache_write_5m: 1.25, \
+         cache_write_1h: 2, cache_read: 0.1, output: 10}\n",
+        "test",
+    )
+    .expect("the case's price list parses");
+    let costs = phoebis_ledger::test_tables::subscription_costs();
     let groups = phoebis_ledger::breakdown(
         &phoebis_ledger::apply_filter(rows.clone(), &with_probes),
         phoebis_ledger::GroupBy::Key,
@@ -295,13 +301,13 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
         ),
         (1, 1, 1, 2)
     );
-    // The probe's own request row's counts and the settlement's, each priced when read on the shipped list's first
-    // entry, in force before its date: Sonnet 5 reads cache at $0.20 per million, so the probe's 2,000 read tokens
-    // cost $0.0004, and the settlement's 100 input tokens at $2 and 20 output tokens at $10 per million $0.0002 each.
+    // The probe's own request row's counts and the settlement's, each priced when read on the case's list, in force
+    // before its date: Sonnet 5 reads cache at $0.10 per million, so the probe's 2,000 read tokens cost $0.0002, and
+    // the settlement's 100 input tokens at $1 and 20 output tokens at $10 per million $0.0001 and $0.0002.
     assert!(
-        (desktop.probe_cost_usd - 0.0004).abs() < 1e-12
+        (desktop.probe_cost_usd - 0.0002).abs() < 1e-12
             && desktop.wasted_probes == 3
-            && (desktop.wasted_probe_usd - 0.0004).abs() < 1e-12,
+            && (desktop.wasted_probe_usd - 0.0003).abs() < 1e-12,
         "{desktop:?}"
     );
     // A request without a user agent shares the reserved row with the credits of its key. Replacing it under

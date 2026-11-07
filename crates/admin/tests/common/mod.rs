@@ -288,6 +288,24 @@ pub async fn admin_parts_full_on_priced(store: Arc<Store>, prices: PriceRevision
     )
 }
 
+/// The full harness pricing dollars and shares through the ledger's test tables rather than the shipped files, over
+/// `store` where the caller holds one, so a case works both its dollars and its shares out by hand from the fixtures.
+pub async fn admin_parts_full_test_tables(store: Option<Arc<Store>>) -> Full {
+    full_from(
+        build_app(
+            None,
+            ACCOUNT_UUID,
+            false,
+            store,
+            None,
+            Some(phoebis_ledger::test_tables::api_prices()),
+            None,
+            Some(phoebis_ledger::test_tables::subscription_costs()),
+        )
+        .await,
+    )
+}
+
 /// The full harness over a store the caller holds, its sessions route bounded by `session_expiry` and
 /// `non_companion_idle` rather than the defaults' 24 hours and one hour.
 pub async fn admin_parts_full_on_bounded(

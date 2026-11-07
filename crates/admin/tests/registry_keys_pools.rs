@@ -1080,7 +1080,15 @@ async fn a_request_on_the_hours_first_millisecond_counts_in_the_key_pool_and_acc
 #[tokio::test]
 async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
     use phoebis_ledger::{AttemptRecord, Record, RequestRecord};
-    let parts = common::admin_parts_full().await;
+    // Sonnet 5 and Sonnet 4.5 at round figures of the case's own, since the ledger's test list prices neither.
+    let prices = phoebis_ledger::PriceRevisions::from_yaml(
+        "revisions:\n  - effective: 2026-01-01\n    models:\n      \
+         claude-sonnet-5: {input: 1, cache_write_5m: 1.25, cache_write_1h: 2, cache_read: 0.1, output: 10}\n      \
+         claude-sonnet-4-5: {input: 2, cache_write_5m: 2.5, cache_write_1h: 4, cache_read: 0.2, output: 20}\n",
+        "test",
+    )
+    .expect("the case's price list parses");
+    let parts = common::admin_parts_full_priced(prices).await;
     let cookie = login(&parts.app, "admin-secret").await;
     let now = common::NOW;
     post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":0}]}"#, Some(&cookie)).await;
@@ -1133,9 +1141,9 @@ async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
     })
     .await;
     let key = keys["keys"][0].clone();
-    // A reader prices each row's counts at read time on the shipped list: 100 input tokens of Sonnet 5 at $2 a million
-    // and 50 output tokens at $10 are $0.0007 a row.
-    let (r1, r2) = (0.0007, 0.0007);
+    // A reader prices each row's counts at read time on the case's list: 100 input tokens of Sonnet 5 at $1 a million
+    // and 50 output tokens at $10 are $0.0006 a row.
+    let (r1, r2) = (0.0006, 0.0006);
     assert_eq!(
         (
             key["usage_7d"]["requests"].as_u64(),
@@ -1220,8 +1228,8 @@ async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
         }],
         bodies: None,
     });
-    // Sonnet 4.5's $3 and $15 a million tokens make $0.00105.
-    let plan_usd = 0.00105;
+    // Sonnet 4.5's $2 and $20 a million tokens make $0.0012.
+    let plan_usd = 0.0012;
     let close = |got: &serde_json::Value, want: f64| {
         got.as_f64()
             .is_some_and(|got| (got - want).abs() <= 1e-12 + want.abs() * 1e-9)

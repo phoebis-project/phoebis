@@ -113,7 +113,14 @@ fn seed_rollups(parts: &common::Full) {
 
 #[tokio::test]
 async fn analytics_series_breakdown_and_accounts_read_the_rollups_with_percentiles() {
-    let parts = common::admin_parts_full().await;
+    // Sonnet 5 at round figures of the case's own, since the ledger's test list prices no Sonnet 5.
+    let prices = phoebis_ledger::PriceRevisions::from_yaml(
+        "revisions:\n  - effective: 2026-01-01\n    models:\n      claude-sonnet-5: {input: 1, cache_write_5m: 1.25, \
+         cache_write_1h: 2, cache_read: 0.1, output: 10}\n",
+        "test",
+    )
+    .expect("the case's price list parses");
+    let parts = common::admin_parts_full_priced(prices).await;
     let now = common::NOW;
     seed_rollups(&parts);
     parts
@@ -226,10 +233,10 @@ async fn analytics_series_breakdown_and_accounts_read_the_rollups_with_percentil
     );
     assert_eq!(business["tokens"]["cache_read"].as_u64(), Some(120));
     // The three business rows `seed_rollups` lands, each 100 input, 40 cache-read and 10 output tokens of Sonnet 5 at
-    // the shipped $2, $0.20 and $10 a million: $0.000308 a row.
+    // the case's $1, $0.10 and $10 a million: $0.000204 a row.
     assert!(
-        (business["cost_usd"].as_f64().unwrap() - 0.000924).abs() < 1e-9,
-        "{} vs 0.000924",
+        (business["cost_usd"].as_f64().unwrap() - 0.000612).abs() < 1e-9,
+        "{} vs 0.000612",
         business["cost_usd"]
     );
     assert_eq!(

@@ -4621,9 +4621,10 @@ fn a_second_message_stop_chunk_keeps_the_first_chunks_stream_end() {
 
 #[test]
 fn a_fast_attempt_prices_at_the_fast_cells_beside_a_standard_one() {
-    // The shipped Opus 5.5 row in force at `NOW`, per million: input 4 and output 20 at the standard cells, 8 and 40
-    // at the fast ones, so a million input and 100,000 output tokens are $6 standard and $12 fast.
-    let revisions = PriceRevisions::shipped();
+    // The test list's Opus 5.5 row in force at `NOW`, its first entry before its date, per million: input 10 and
+    // output 50 at the standard cells, 20 and 100 at the fast ones, so a million input and 100,000 output tokens are
+    // $15 standard and $30 fast.
+    let revisions = phoebis_ledger::test_tables::api_prices();
     let table = revisions.in_force(NOW);
     let (input, output) = (1_000_000_u64, 100_000_u64);
     let estimate = |speed: Speed| {
@@ -4639,15 +4640,15 @@ fn a_fast_attempt_prices_at_the_fast_cells_beside_a_standard_one() {
                     output,
                 },
             )
-            .expect("the shipped list carries the model")
+            .expect("the test list carries the model")
             .total()
     };
     assert!(
-        (estimate(Speed::Fast) - 12.0).abs() < 1e-9,
+        (estimate(Speed::Fast) - 30.0).abs() < 1e-9,
         "the answer that reported speed fast prices at the fast cells"
     );
     assert!(
-        (estimate(Speed::Standard) - 6.0).abs() < 1e-9,
+        (estimate(Speed::Standard) - 15.0).abs() < 1e-9,
         "the one that reported none at the standard cells"
     );
     let attempt = |attempt: u32, speed: Option<&str>| AttemptRecord {
@@ -4701,7 +4702,7 @@ fn a_fast_attempt_prices_at_the_fast_cells_beside_a_standard_one() {
         &live,
         &[],
         &revisions,
-        &PlanTables::shipped(),
+        &phoebis_ledger::test_tables::subscription_costs(),
         NOW,
     );
     let group = groups
@@ -4709,7 +4710,7 @@ fn a_fast_attempt_prices_at_the_fast_cells_beside_a_standard_one() {
         .find(|g| g.key == "claude-opus-5-5")
         .expect("one model group");
     assert!(
-        (group.cost_usd - 18.0).abs() < 1e-9,
+        (group.cost_usd - 45.0).abs() < 1e-9,
         "the hour's rows price the fast attempt at the fast cells and the other at the standard ones: {}",
         group.cost_usd
     );
@@ -7788,7 +7789,7 @@ async fn a_restart_over_a_ledger_holding_the_period_s_crossing_writes_no_second_
     let db = Arc::new(LedgerDb::open_in_memory().unwrap());
     let accounts = [api_key("a", C, 0)];
     let run = || {
-        harness_on(
+        harness_on_tables(
             store.clone(),
             db.clone(),
             &up,
@@ -7796,6 +7797,8 @@ async fn a_restart_over_a_ledger_holding_the_period_s_crossing_writes_no_second_
             (0, None),
             LedgerConfig::default(),
             false,
+            phoebis_ledger::test_tables::api_prices(),
+            phoebis_ledger::test_tables::subscription_costs(),
         )
     };
     let started = |h: &Harness, at: i64| {
@@ -7895,6 +7898,7 @@ async fn a_restart_over_a_ledger_holding_the_period_s_crossing_writes_no_second_
     })
     .await;
     let detail: serde_json::Value = serde_json::from_str(ended.detail.as_deref().unwrap()).unwrap();
+    // Two million Haiku 4.5 input tokens at the test list's $1 a million, its first entry before its date.
     assert_eq!(detail["previous_spent_usd"], serde_json::json!(2.0));
     up.shutdown().await;
 }

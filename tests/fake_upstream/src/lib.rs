@@ -201,7 +201,9 @@ impl FakeUpstream {
     }
 
     /// A listener the relay dials as a TLS host (its CA trusted as `start`'s is) that accepts and never answers the
-    /// ClientHello, reading nothing, so the handshake is what the connect bound times out.
+    /// ClientHello, so the handshake is what the connect bound times out. It reads a connection's first two bytes and
+    /// counts it in `connections` only when they open a TLS record, as the relay's ClientHello does, so a probe another
+    /// process makes to the loopback port is no dial.
     pub async fn start_silent() -> FakeUpstream {
         let tls = generate_tls(&["api.anthropic.com", "platform.claude.com"]);
         Self::spawn(Vec::new(), Wire::Silent, tls.ca_pem).await
@@ -226,16 +228,23 @@ impl FakeUpstream {
         let accept_shared = shared.clone();
         let task = tokio::spawn(async move {
             // Held by this task, so a silent listener's sockets stay open until `shutdown` aborts it.
-            let mut silent = Vec::new();
+            let mut silent = tokio::task::JoinSet::new();
             loop {
-                let Ok((sock, _)) = listener.accept().await else {
+                let Ok((mut sock, _)) = listener.accept().await else {
                     break;
                 };
-                let conn_id = accept_shared.accept_connection();
                 if matches!(*wire, Wire::Silent) {
-                    silent.push(sock);
+                    let counted = accept_shared.clone();
+                    silent.spawn(async move {
+                        if opens_a_tls_record(&mut sock).await {
+                            counted.connections.fetch_add(1, Ordering::SeqCst);
+                        }
+                        // The socket stays open and unanswered until the set is dropped.
+                        std::future::pending::<()>().await;
+                    });
                     continue;
                 }
+                let conn_id = accept_shared.accept_connection();
                 // Decided before any byte is read: the only information a `CloseImmediately` connection ever
                 // gets to act on is its own ordinal among accepted connections.
                 if accept_shared.should_close_immediately() {
@@ -269,6 +278,7 @@ impl FakeUpstream {
         self.shared.requests.lock().unwrap().clone()
     }
 
+    /// The connections accepted, on a `start_silent` listener the ones that opened a TLS record.
     pub fn connections(&self) -> usize {
         self.shared.connections.load(Ordering::SeqCst) as usize
     }
@@ -685,6 +695,13 @@ fn wants_close(headers: &[(String, String)]) -> bool {
     headers
         .iter()
         .any(|(n, v)| n.eq_ignore_ascii_case("connection") && v.eq_ignore_ascii_case("close"))
+}
+
+/// Whether the peer's first two bytes are a TLS handshake record's type and major version. A peer that closes first
+/// opened none.
+async fn opens_a_tls_record(sock: &mut TcpStream) -> bool {
+    let mut head = [0u8; 2];
+    sock.read_exact(&mut head).await.is_ok() && head == [0x16, 0x03]
 }
 
 async fn handle_connection(shared: Arc<Shared>, sock: TcpStream, conn_id: u64, wire: Arc<Wire>) {
