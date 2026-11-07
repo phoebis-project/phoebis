@@ -11,7 +11,7 @@ use axum::middleware::map_response;
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::Router;
-use phoebis_relay::{authenticated_key, is_json, new_request_id, no_store};
+use phoebis_relay::{authenticated_key, is_json, new_request_id, no_store_answer};
 
 use crate::engine::Engine;
 use crate::events::{decode_json_event, err, EventError};
@@ -22,10 +22,7 @@ pub const MAX_BODY_BYTES: usize = 16 << 10;
 pub fn keepalive_router(engine: Arc<Engine>) -> Router {
     Router::new()
         .route(EVENTS_PATH, post(events))
-        // On the router rather than in the handlers, so an answer no handler builds carries it too.
-        .layer(map_response(|response: Response| async move {
-            no_store(response)
-        }))
+        .layer(map_response(no_store_answer))
         .with_state(engine)
 }
 

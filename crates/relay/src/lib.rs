@@ -46,8 +46,8 @@ pub use chains::Chains;
 pub use classify::{next_month_start, Cooldown, Verdict, SPEND_CAP_REASON};
 pub use drift::DriftKind;
 pub use errors::{
-    anthropic_error, no_store, ACCOUNTS_AT_CAP, ACCOUNTS_EXHAUSTED, ACCOUNTS_UNAVAILABLE,
-    ERROR_CODE_HEADER, LEDGER_BEHIND,
+    anthropic_error, no_store, no_store_answer, ACCOUNTS_AT_CAP, ACCOUNTS_EXHAUSTED,
+    ACCOUNTS_UNAVAILABLE, ERROR_CODE_HEADER, LEDGER_BEHIND,
 };
 pub use hold::INSPECT_BUFFER;
 pub use identity::{identifier_byte, is_valid_id};

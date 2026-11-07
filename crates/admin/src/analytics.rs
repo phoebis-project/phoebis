@@ -13,7 +13,7 @@ use phoebis_ledger::{
     hour_of, hourly_window_samples, lead_over_pace, moves_by_reason_and_fit, names_one_account,
     parse_range, read_account_rollups, read_reconciliations, rewrite_series, series_paged,
     session_burn_series, AccountRollupRow, FundingFilter, GroupBy, GroupRow, HourlyWindowSample,
-    LedgerError, LiveKeys, Patterns, RequestFilter, RollupFilter, SeriesFilter, GROUP_BYS,
+    LedgerError, LiveKeys, Patterns, RequestFilter, RollupFilter, SeriesFilter,
 };
 use phoebis_routing::{term, BurnUnit, UtilizationSample, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
 use phoebis_store::{AccountKind, SubscriptionTerm};
@@ -78,7 +78,9 @@ fn selection(state: &AdminState, q: &HashMap<String, String>) -> Result<Selectio
         .map_err(|m| failure(StatusCode::BAD_REQUEST, &m))?;
     let group_by =
         GroupBy::parse(q.get("group_by").map_or("all", String::as_str)).ok_or_else(|| {
-            let (last, rest) = GROUP_BYS.split_last().expect("GroupBy has a dimension");
+            let (last, rest) = GroupBy::WORDS
+                .split_last()
+                .expect("GroupBy has a dimension");
             failure(
                 StatusCode::BAD_REQUEST,
                 &format!("group_by is {}, or {last}", rest.join(", ")),

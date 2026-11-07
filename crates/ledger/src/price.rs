@@ -6,7 +6,7 @@
 //! dollars in after the call would be the recomputation this function exists to prevent.
 
 use phoebis_bus::{Classifier, Kind};
-use phoebis_routing::{PinUsage, SEVEN_DAY};
+use phoebis_routing::{plan_windows, PinUsage, SEVEN_DAY};
 
 use crate::plan::{
     entrypoint_of_client, free_equivalent, free_shares, price_equivalent, price_shares, Funding,
@@ -18,6 +18,13 @@ use crate::rollup::CostSplit;
 
 /// The share reason of a plan row priced at no share by rule: the client's own classifier call.
 pub const SHARE_REASON_CLIENT_CLASSIFIER: &str = "client_classifier";
+
+/// Whether a stored classifier word marks a free call: `client`, the client's own classifier call on the account its
+/// judged turn ended on, which takes no share of a plan window and the normal dollars elsewhere. A `client_off` call
+/// and a row with no word price as any call.
+pub(crate) fn is_free_classifier(classifier: Option<&str>) -> bool {
+    classifier == Some(Classifier::Client.as_str())
+}
 
 /// What prices a row: its model, the cells its speed and band select, who paid, the rollup's `kind` word, the account
 /// tier the row carries (`None` for an api_key account, a profile not yet read, or the rollup's `-`), the entrypoint
@@ -35,8 +42,7 @@ pub struct RowKey<'a> {
     pub tier: Option<&'a str>,
     /// The request's entrypoint from its `client` label, `None` the base regime.
     pub entrypoint: Option<&'a str>,
-    /// The row is the client's own classifier call on the account its judged turn ended on (the word `client`), which
-    /// takes no share of a plan window and the normal dollars elsewhere. A `client_off` row is priced as any call.
+    /// The row is a free classifier call, as `is_free_classifier` reads its word.
     pub classifier: bool,
     pub at: i64,
     pub band_at: Option<i64>,
@@ -48,32 +54,67 @@ pub struct RowKey<'a> {
 impl RowKey<'_> {
     /// The key one attempt of `request` prices under at `now`: the attempt's tier, funding, speed and band, the
     /// request's `canonical_model`, kind, entrypoint and classifier word. `table` is the price revision in force at
-    /// `request.received_at`, whose `band_of` reads the band off the attempt's own prompt, so a custom or a historical
-    /// long-context threshold prices the attempt as the fold prices it. `at` is the request's receipt, which selects
-    /// both revisions, and `band_at` the attempt's finish, else the request's, else the attempt's start, since the
-    /// meter charges the peak band where the answer completed.
+    /// `request.received_at`.
     pub fn of_attempt<'a>(
         request: &'a RequestRecord,
         attempt: &'a AttemptRecord,
         table: &PriceTable,
         now: i64,
     ) -> RowKey<'a> {
-        RowKey {
+        AttemptFacts {
             model: &request.canonical_model,
-            speed: Speed::of(attempt.speed.as_deref()),
-            band: table.band_of(&request.canonical_model, attempt.usage().prompt_tokens()),
-            funding: attempt.funding(),
             kind: &request.kind,
+            client: request.client.as_deref(),
+            classifier: request.classifier.as_deref(),
+            received_at: request.received_at,
+            completed_at: attempt
+                .finished_at
+                .or(request.finished_at)
+                .unwrap_or(attempt.started_at),
+            speed: attempt.speed.as_deref(),
+            funding: attempt.funding(),
             tier: attempt.tier.as_deref(),
-            entrypoint: request.client.as_deref().and_then(entrypoint_of_client),
-            classifier: request.classifier.as_deref() == Some(Classifier::Client.as_str()),
-            at: request.received_at,
-            band_at: Some(
-                attempt
-                    .finished_at
-                    .or(request.finished_at)
-                    .unwrap_or(attempt.started_at),
-            ),
+            usage: attempt.usage(),
+        }
+        .key(table, now)
+    }
+}
+
+/// One attempt's facts toward its price key, borrowed from the records the request drawer holds or from the columns a
+/// priced attempt was read from, so both readers key an attempt by the one rule in `key`.
+pub(crate) struct AttemptFacts<'a> {
+    pub model: &'a str,
+    pub kind: &'a str,
+    /// The request's `client` label, `None` on a row from before the column.
+    pub client: Option<&'a str>,
+    pub classifier: Option<&'a str>,
+    /// The request's receipt, which selects both revisions.
+    pub received_at: i64,
+    /// The attempt's finish, else the request's, else the attempt's start, since the meter charges the peak band where
+    /// the answer completed.
+    pub completed_at: i64,
+    pub speed: Option<&'a str>,
+    pub funding: Funding,
+    pub tier: Option<&'a str>,
+    pub usage: PinUsage,
+}
+
+impl<'a> AttemptFacts<'a> {
+    /// The key the attempt prices under at `now`. `table` is the price revision in force at `received_at`, whose
+    /// `band_of` reads the band off the attempt's own prompt, so a custom or a historical long-context threshold prices
+    /// the attempt as the fold prices it.
+    pub(crate) fn key(&self, table: &PriceTable, now: i64) -> RowKey<'a> {
+        RowKey {
+            model: self.model,
+            speed: Speed::of(self.speed),
+            band: table.band_of(self.model, self.usage.prompt_tokens()),
+            funding: self.funding,
+            kind: self.kind,
+            tier: self.tier,
+            entrypoint: self.client.and_then(entrypoint_of_client),
+            classifier: is_free_classifier(self.classifier),
+            at: self.received_at,
+            band_at: Some(self.completed_at),
             now,
         }
     }
@@ -95,6 +136,26 @@ pub struct Priced {
     /// Why the shares read zero by rule rather than by usage: `client_classifier` under the plan for a classifier
     /// call, `None` for a row priced from its counts.
     pub share_reason: Option<&'static str>,
+}
+
+impl Priced {
+    /// The window shares of a plan row priced under `key`: `shares` where the cost revision sizes the row's tier, else,
+    /// for a recorded tier the revision does not size, every window the model keys at `None`, as `price_usage` latches
+    /// a bucket's. `None` for another funding, for a row with no tier and for a free call on a tier that sizes no
+    /// window, which spends none.
+    pub fn plan_shares(&self, key: &RowKey<'_>) -> Option<WindowShares> {
+        if self.shares.is_some() {
+            return self.shares.clone();
+        }
+        if key.funding != Funding::Plan || key.tier.is_none() || self.share_reason.is_some() {
+            return None;
+        }
+        Some(
+            plan_windows(key.model)
+                .map(|window| (window, None))
+                .collect(),
+        )
+    }
 }
 
 /// Every figure for one row, the probe rows' dearest-cell fallback inside it.
@@ -119,7 +180,7 @@ pub fn price_row(
         return Priced {
             usd,
             shares,
-            equivalent: Some(free_equivalent()),
+            equivalent: price_equivalent_at(costs, key, counts),
             share_reason: Some(SHARE_REASON_CLIENT_CLASSIFIER),
         };
     }
@@ -146,23 +207,34 @@ pub fn price_row(
                 && std::ptr::eq(in_force, costs.revisions.in_force(key.now))
         })
         .and_then(|shares| shares.get(SEVEN_DAY).copied());
-    let equivalent = unit_week.unwrap_or_else(|| {
-        price_equivalent(
-            costs,
-            key.entrypoint,
-            key.model,
-            counts,
-            key.at,
-            band_at,
-            key.now,
-        )
-    });
+    let equivalent = unit_week.unwrap_or_else(|| price_equivalent_at(costs, key, counts));
     Priced {
         usd,
         shares,
         equivalent,
         share_reason: None,
     }
+}
+
+/// A plan key's Pro-week figure over `counts`, as `price_row` answers it off the unit's tier: zero by rule for a free
+/// classifier call, which reads no weight, else the cost model's figure at the key's instants.
+pub(crate) fn price_equivalent_at(
+    costs: &PlanTables,
+    key: &RowKey<'_>,
+    counts: PinUsage,
+) -> Option<f64> {
+    if key.classifier {
+        return Some(free_equivalent());
+    }
+    price_equivalent(
+        costs,
+        key.entrypoint,
+        key.model,
+        counts,
+        key.at,
+        key.band_at.unwrap_or(key.at),
+        key.now,
+    )
 }
 
 /// `price_row`'s dollars alone: the counts at the price revision in force at the row's instant, a probe row on a model
@@ -175,13 +247,9 @@ pub(crate) fn price_usd(
     let table = prices.in_force(key.at);
     table
         .estimate_banded(key.model, key.speed, key.band, counts)
-        .or_else(|| (key.kind == Kind::Probe.as_str()).then(|| dearest(table, counts)))
-}
-
-/// The five counts at the table's `dearest_cells`, split through `split_of` as `estimate_banded` splits a listed
-/// model's cells.
-fn dearest(table: &PriceTable, counts: PinUsage) -> CostSplit {
-    split_of(counts, &table.dearest_cells())
+        .or_else(|| {
+            (key.kind == Kind::Probe.as_str()).then(|| split_of(counts, &table.dearest_cells()))
+        })
 }
 
 #[cfg(test)]

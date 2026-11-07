@@ -254,9 +254,7 @@ fn drop_faulty_dips(
             if climb <= rounded(share * RATIO_HIGH) {
                 continue;
             }
-            for gone in &mut dropped[dip.first..at] {
-                *gone = true;
-            }
+            dropped[dip.first..at].fill(true);
             let (level_part, close_part) = (readings[dip.level].0, readings[at].0);
             for (label, _) in readings.iter_mut() {
                 if (level_part..=close_part).contains(label) {
@@ -520,8 +518,8 @@ fn predicted(
         // The prediction reads the shares alone, which take no anchor row, so the part's end stands in for the read's
         // instant.
         let (key, usage) = attempt.usage(prices, to);
-        // API-key, usage-based, fast and overage answers draw no plan window, so they are no part of the rise either. A
-        // classifier call under the word `client` draws no plan window either. A `client_off` call draws as any call.
+        // API-key, usage-based, fast and overage answers draw no plan window, so they are no part of the rise either,
+        // and neither is a free classifier call (`is_free_classifier`).
         if key.funding != Funding::Plan
             || (window == SEVEN_DAY_FABLE && window_for(key.model) != SEVEN_DAY_FABLE)
             || key.classifier

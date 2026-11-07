@@ -10,7 +10,7 @@ use phoebis_oauth::{BackoffEdge, Clock, PollFault};
 use phoebis_relay::CatalogChange;
 use phoebis_routing::{term, CreditsState, RouterEvent, RouterHandle};
 use phoebis_store::{
-    AccountRow, AccountState, CooldownScope, ResolvedAttempt, Settled, StateCause, Store,
+    AccountRow, AccountState, CooldownScope, PinKey, ResolvedAttempt, Settled, StateCause, Store,
 };
 use serde_json::json;
 use tokio::sync::broadcast::error::RecvError;
@@ -30,6 +30,17 @@ use crate::task::Ledger;
 
 /// Rows read per mirror tick; a registry busier than this per tick is caught up on the next.
 const MIRROR_BATCH: usize = 500;
+
+/// A pin event's row over the four columns its `PinKey` fills.
+fn pin_row(pin: &PinKey) -> EventRecord {
+    EventRecord {
+        agent_id: Some(pin.agent_id.clone()),
+        key_id: Some(pin.key_id.clone()),
+        model: Some(pin.model.clone()),
+        session_id: Some(pin.session_id.clone()),
+        ..Default::default()
+    }
+}
 
 /// `None` for the three variants that land as no row of their own here: a `Decision` and a `CacheMapWritten`, which
 /// the mirror maps to the ledger's own records, and an `AccountStateChanged`, a transition the mirror's account watch
@@ -96,12 +107,8 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             at: *at,
             kind: PIN_CREATED.into(),
             account_id: Some(account_id.clone()),
-            key_id: Some(pin.key_id.clone()),
-            session_id: Some(pin.session_id.clone()),
-            model: Some(pin.model.clone()),
             detail: Some(json!({ "agent_id": pin.agent_id, "epoch": epoch }).to_string()),
-            agent_id: Some(pin.agent_id.clone()),
-            ..Default::default()
+            ..pin_row(pin)
         },
         RouterEvent::PinExpired {
             pin,
@@ -112,12 +119,8 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             at: *at,
             kind: PIN_EXPIRED.into(),
             account_id: Some(account_id.clone()),
-            key_id: Some(pin.key_id.clone()),
-            session_id: Some(pin.session_id.clone()),
-            model: Some(pin.model.clone()),
             detail: Some(json!({ "agent_id": pin.agent_id, "reasons": reasons }).to_string()),
-            agent_id: Some(pin.agent_id.clone()),
-            ..Default::default()
+            ..pin_row(pin)
         },
         RouterEvent::PinMigrated {
             pin,
@@ -134,9 +137,6 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             at: *at,
             kind: PIN_MIGRATED.into(),
             account_id: Some(to_account.clone()),
-            key_id: Some(pin.key_id.clone()),
-            session_id: Some(pin.session_id.clone()),
-            model: Some(pin.model.clone()),
             detail: Some(
                 json!({
                     "agent_id": pin.agent_id,
@@ -150,8 +150,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
                 })
                 .to_string(),
             ),
-            agent_id: Some(pin.agent_id.clone()),
-            ..Default::default()
+            ..pin_row(pin)
         },
         RouterEvent::MarkCleared {
             account_id,
@@ -168,9 +167,6 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             at: *at,
             kind: MARK_CLEARED.into(),
             account_id: Some(account_id.clone()),
-            key_id: Some(pin.key_id.clone()),
-            session_id: Some(pin.session_id.clone()),
-            model: Some(pin.model.clone()),
             detail: Some(
                 json!({
                     "agent_id": pin.agent_id,
@@ -184,8 +180,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
                 })
                 .to_string(),
             ),
-            agent_id: Some(pin.agent_id.clone()),
-            ..Default::default()
+            ..pin_row(pin)
         },
         RouterEvent::PinReleased {
             pin,
@@ -195,12 +190,8 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             at: *at,
             kind: PIN_RELEASED.into(),
             account_id: Some(account_id.clone()),
-            key_id: Some(pin.key_id.clone()),
-            session_id: Some(pin.session_id.clone()),
-            model: Some(pin.model.clone()),
             detail: Some(json!({ "agent_id": pin.agent_id }).to_string()),
-            agent_id: Some(pin.agent_id.clone()),
-            ..Default::default()
+            ..pin_row(pin)
         },
         RouterEvent::ReservationExpired {
             account_id,
@@ -231,9 +222,6 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             at: *at,
             kind: SHEDDING_ROUND.into(),
             account_id: Some(account_id.clone()),
-            key_id: Some(pin.key_id.clone()),
-            session_id: Some(pin.session_id.clone()),
-            model: Some(pin.model.clone()),
             // The round's facts serialize as the detail's fields, the pins and the marks as arrays of objects. The
             // routing task writes every round to the registry with the decision's writes, so its marks and dwell
             // outlive a restart.
@@ -242,9 +230,8 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
                 detail.to_string()
             }),
             pool_id: Some(pool_id.clone()),
-            agent_id: Some(pin.agent_id.clone()),
             request_id: Some(request_id.clone()),
-            ..Default::default()
+            ..pin_row(pin)
         },
         RouterEvent::SlowDownStarted {
             account_id,

@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use phoebis_bus::{spawn_subscriber, Bus, Classifier, Delivery, Subscriber, SubscriberStats};
+use phoebis_bus::{spawn_subscriber, Bus, Delivery, Subscriber, SubscriberStats};
 use phoebis_oauth::Clock;
 use phoebis_routing::{MemberSpend, RegistrySnapshot, Report, RouterHandle, SEVEN_DAY};
 use phoebis_store::{AccountKind, BudgetPeriod, Store};
@@ -23,6 +23,7 @@ use crate::db::{
 use crate::events::{spawn_event_mirror, MirrorBaseline};
 use crate::metrics::Metrics;
 use crate::plan::{Funding, PlanTables};
+use crate::price::is_free_classifier;
 use crate::pricing::Pricing;
 use crate::query::{
     member_spends, period_bounds, BudgetedMember, BUDGET_PERIOD_ENDED, BUDGET_REACHED, LEDGER_GAP,
@@ -696,9 +697,9 @@ async fn writer(
         }
         let priced = priced_attempts(&records);
         records.extend(spends.take_pending());
+        stamp_tiers(&router.snapshot(), &mut records);
         let batch = Arc::new(records);
-        let snapshot = router.snapshot();
-        match handles.land(&snapshot, &batch, 0..batch.len()).await {
+        match handles.land(&batch, 0..batch.len()).await {
             // A degraded ledger reads the spend after any batch that lands, since that read is what clears it.
             Landed::Written => {
                 if !priced.is_empty() || stats.degraded.load(Ordering::Relaxed) {
@@ -717,7 +718,6 @@ async fn writer(
                     records: batch,
                     from: 0,
                     retried: false,
-                    snapshot,
                 });
                 continue;
             }
@@ -737,7 +737,7 @@ async fn writer(
                     detail: Some(format!(r#"{{"dropped":{}}}"#, dropped - reported)),
                     ..Default::default()
                 })]);
-                if let Landed::Written = handles.land(&router.snapshot(), &gap, 0..1).await {
+                if let Landed::Written = handles.land(&gap, 0..1).await {
                     reported = dropped;
                     stats.gaps.fetch_add(1, Ordering::Relaxed);
                     stats.last_gap_at.store(clock(), Ordering::Relaxed);
@@ -753,26 +753,19 @@ async fn writer(
 /// retried and its records replayed or parked without a copy.
 type Batch = Arc<Vec<Record>>;
 
-/// Each account's priced tier as the registry snapshot held it when the batch was taken, read before the blocking write
-/// so the write holds no registry type: `None` for an api_key account, for an oauth account whose profile has not been
-/// read, and for a plan the router never prices (a free organization, a usage-based seat), so their rows price no share.
-type AccountTiers = HashMap<String, Option<String>>;
-
-/// The tiers of the accounts the batch's attempts name, read once per batch.
-fn batch_tiers(snapshot: &RegistrySnapshot, batch: &[Record]) -> AccountTiers {
-    batch
-        .iter()
-        .flat_map(|record| match record {
-            Record::Request { attempts, .. } => attempts.as_slice(),
-            _ => &[],
-        })
-        .map(|a| {
-            (
-                a.account_id.clone(),
-                snapshot.priced_tier(&a.account_id).map(String::from),
-            )
-        })
-        .collect()
+/// Stamps each attempt of the requests in `records` with its account's priced tier as `snapshot` holds it, before the
+/// blocking write so the write holds no registry type: `None` for an api_key account, for an oauth account whose
+/// profile has not been read, and for a plan the router never prices (a free organization, a usage-based seat), so
+/// their rows price no share. Stamped once while the writer owns the records, so a batch's retries, its replays and
+/// the drain land the tiers its first try read.
+fn stamp_tiers(snapshot: &RegistrySnapshot, records: &mut [Record]) {
+    for record in records {
+        if let Record::Request { attempts, .. } = record {
+            for a in attempts {
+                a.tier = snapshot.priced_tier(&a.account_id).map(String::from);
+            }
+        }
+    }
 }
 
 /// A batch some of whose records have not landed, from `from` on.
@@ -781,8 +774,6 @@ struct Held {
     from: usize,
     /// The in-place retries are behind it, so its next try waits out `BATCH_RETRY_HOLD`.
     retried: bool,
-    /// The registry snapshot the batch's first try read, so its retries, its replays and the drain stamp one tier.
-    snapshot: Arc<RegistrySnapshot>,
 }
 
 /// What one `land` did with its records.
@@ -848,7 +839,7 @@ async fn retry_held(handles: &Handles, stopped: &mut watch::Receiver<bool>, held
             return Retry::Stopped(held);
         }
         let rest = held.from..held.records.len();
-        match handles.land(&held.snapshot, &held.records, rest).await {
+        match handles.land(&held.records, rest).await {
             Landed::Written | Landed::Lost => return Retry::Settled,
             Landed::Refused { .. } => {}
         }
@@ -869,10 +860,9 @@ impl Handles {
     /// One record per transaction. A record the database as a whole refuses is held with everything after it. One
     /// refused on its own row is a poison row, parked when it carries money and dropped with its gap otherwise.
     async fn replay(&self, held: Held) -> Retry {
-        let snapshot = held.snapshot;
         for index in held.from..held.records.len() {
             let one = index..index + 1;
-            let error = match self.land(&snapshot, &held.records, one).await {
+            let error = match self.land(&held.records, one).await {
                 Landed::Written | Landed::Lost => continue,
                 // A full disk, an I/O error or a lock held past the timeout refuses every record after this one as
                 // well, so the rest of the batch waits with it. A constraint or a trigger refused this row alone.
@@ -884,7 +874,6 @@ impl Handles {
                         records: held.records,
                         from: index,
                         retried: true,
-                        snapshot,
                     })
                 }
                 Landed::Refused { error, .. } => error,
@@ -906,7 +895,6 @@ impl Handles {
                             records: held.records.clone(),
                             from: index,
                             retried: true,
-                            snapshot,
                         });
                     }
                 }
@@ -919,7 +907,7 @@ impl Handles {
                         "poison",
                         (self.clock)(),
                     )]);
-                    let _ = self.land(&snapshot, &gap, 0..1).await;
+                    let _ = self.land(&gap, 0..1).await;
                 }
                 other => self.count_drop(table_of(other)),
             }
@@ -1013,16 +1001,17 @@ impl Handles {
                 Ok(parked) => {
                     // The capture was not parked, so the row claims none: the drawer would read a captured request
                     // whose bodies are gone as one whose bodies aged out.
-                    let batch = Arc::new(vec![Record::Request {
+                    let mut records = vec![Record::Request {
                         request: RequestRecord {
                             bodies_captured: false,
                             ..parked.request
                         },
                         attempts: parked.attempts,
                         bodies: None,
-                    }]);
-                    self.land_acknowledging(&snapshot, &batch, 0..1, Some(row.id))
-                        .await
+                    }];
+                    stamp_tiers(&snapshot, &mut records);
+                    let batch = Arc::new(records);
+                    self.land_acknowledging(&batch, 0..1, Some(row.id)).await
                 }
                 Err(error) => Landed::Refused {
                     database_wide: false,
@@ -1352,10 +1341,7 @@ impl Spends {
             return;
         }
         let batch: Batch = Arc::new(self.pending.iter().cloned().map(Record::Event).collect());
-        let landed = self
-            .handles
-            .land(&self.handles.router.snapshot(), &batch, 0..batch.len())
-            .await;
+        let landed = self.handles.land(&batch, 0..batch.len()).await;
         // A refused batch keeps its rows for the next batch or refresh, as a held batch keeps its records.
         if !matches!(landed, Landed::Refused { .. }) {
             self.pending.clear();
@@ -1516,13 +1502,8 @@ impl Handles {
     /// the records to the caller to retry, replay or park, and only a panicking closure drops them, counted, so the gap
     /// that follows names them. Metrics are observed only after the commit succeeds, so a failed write never reaches
     /// the request or sample series.
-    async fn land(
-        &self,
-        snapshot: &RegistrySnapshot,
-        batch: &Batch,
-        range: Range<usize>,
-    ) -> Landed {
-        self.land_acknowledging(snapshot, batch, range, None).await
+    async fn land(&self, batch: &Batch, range: Range<usize>) -> Landed {
+        self.land_acknowledging(batch, range, None).await
     }
 
     /// `land`, deleting the parked row the batch replays in the record's own transaction. A row deleted after the
@@ -1530,7 +1511,6 @@ impl Handles {
     /// next start would charge the record again, while a row deleted ahead of a failed commit would lose the money.
     async fn land_acknowledging(
         &self,
-        snapshot: &RegistrySnapshot,
         batch: &Batch,
         range: Range<usize>,
         parked: Option<i64>,
@@ -1548,7 +1528,6 @@ impl Handles {
         let db = db.clone();
         let clock = clock.clone();
         let revisions = pricing.revisions();
-        let tiers = batch_tiers(snapshot, &batch[range.clone()]);
         let records = batch.clone();
         let size = range.len() as u64;
         let landed = range.clone();
@@ -1575,21 +1554,17 @@ impl Handles {
                             attempts,
                             bodies,
                         } => {
-                            let mut attempts = attempts.to_vec();
-                            for a in &mut attempts {
-                                a.tier = tiers.get(&a.account_id).cloned().flatten();
-                            }
                             let previous = insert_request_in(
                                 &tx,
                                 request,
-                                &attempts,
+                                attempts,
                                 bodies.as_ref(),
                                 clock(),
                             )?;
                             crate::rollup::fold_request(
                                 &tx,
                                 request,
-                                &attempts,
+                                attempts,
                                 previous.as_ref().map(|(r, a)| (r, a.as_slice())),
                                 &revisions,
                             )?;
@@ -1668,8 +1643,6 @@ impl Handles {
                         "a cache map found no decision to land on, so it is counted and dropped"
                     );
                 }
-                // The batch's own attempts serve the observers: the copies the transaction stamped differ in `tier`
-                // alone, which neither reads.
                 for record in &batch[landed] {
                     match record {
                         Record::Request {
@@ -1716,9 +1689,9 @@ impl Handles {
 }
 
 /// Records a plan-funded landing with usage on a model the cost model in force at its arrival gives no weight on the
-/// 7-day window, never a classifier call under the word `client`: the entry enters, or counts the request once however
-/// many of its attempts answered. A `client_off` call is recorded as any call. A landing that finds the model weighted
-/// clears the entry and keeps its key, so its gauge series reads 0.
+/// 7-day window, never a free classifier call (`is_free_classifier`): the entry enters, or counts the request once
+/// however many of its attempts answered. A landing that finds the model weighted clears the entry and keeps its key,
+/// so its gauge series reads 0.
 /// The entry follows landing order, by design: a request received before the revision that weighted its model and
 /// landed after the clear raises the entry again with its own earlier receipt as `since`.
 fn note_unpriced(
@@ -1727,9 +1700,8 @@ fn note_unpriced(
     request: &RequestRecord,
     attempts: &[AttemptRecord],
 ) {
-    // A classifier call under the word `client` prices at no share, so its model's weight is never read.
-    // A `client_off` call prices as any call.
-    if request.classifier.as_deref() == Some(Classifier::Client.as_str()) {
+    // A free classifier call prices at no share, so its model's weight is never read.
+    if is_free_classifier(request.classifier.as_deref()) {
         return;
     }
     let plan_funded = attempts

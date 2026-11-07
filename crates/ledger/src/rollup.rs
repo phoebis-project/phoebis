@@ -8,7 +8,7 @@ use std::sync::{Arc, LazyLock};
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, ToSql, Transaction};
 
-use phoebis_bus::{Classifier, Kind};
+use phoebis_bus::Kind;
 use phoebis_relay::{identifier_byte, EFFORT_LEVELS};
 use phoebis_routing::{window_length_ms, PinUsage, DAY_MS, HOUR_MS, WEEK_MS};
 
@@ -17,12 +17,12 @@ use crate::db::LedgerDb;
 use crate::histogram::bucket_index;
 use crate::histogram::Histogram;
 use crate::plan::{entrypoint_of_client, funding_of, Funding, PlanTables};
-use crate::price::RowKey;
+use crate::price::{is_free_classifier, RowKey};
 use crate::pricing::{Band, PriceRevisions, Speed};
 use crate::query::{
-    in_list, key_clause, pattern_any, pool_term, ProbeView, COOLDOWN_CLEARED, COOLDOWN_SET,
-    OVERAGE_ENDED, PIN_CREATED, PIN_MIGRATED, ROUTER_STARTED, SHEDDING_ROUND, SLOW_DOWN_ENDED,
-    SLOW_DOWN_STARTED, WINDOW_CLEARED, WINDOW_SPENT,
+    hour_ceil, in_list, key_clause, pattern_any, pool_term, ProbeView, COOLDOWN_CLEARED,
+    COOLDOWN_SET, OVERAGE_ENDED, PIN_CREATED, PIN_MIGRATED, ROUTER_STARTED, SHEDDING_ROUND,
+    SLOW_DOWN_ENDED, SLOW_DOWN_STARTED, WINDOW_CLEARED, WINDOW_SPENT,
 };
 use crate::reconcile::{newest_rows, ReconciliationRow};
 use crate::record::{AttemptRecord, EventRecord, KeepaliveDelta, RequestRecord};
@@ -404,7 +404,7 @@ impl RollupRow {
             kind: self.kind.as_str(),
             tier: (self.tier != UNATTRIBUTED).then_some(self.tier.as_str()),
             entrypoint: entrypoint_of_client(&self.client),
-            classifier: self.classifier == Classifier::Client.as_str(),
+            classifier: is_free_classifier(Some(self.classifier.as_str())),
             at: self.hour * 1_000,
             band_at: None,
             now,
@@ -643,8 +643,9 @@ pub fn deltas_of(
         .filter(|pair| pair[0].account_id != pair[1].account_id)
         .count() as u64;
     let read = last.and_then(|a| a.cache_read_tokens).unwrap_or(0);
-    let wrote = last.and_then(|a| a.cache_write_5m_tokens).unwrap_or(0)
-        + last.and_then(|a| a.cache_write_1h_tokens).unwrap_or(0);
+    let wrote = last
+        .and_then(AttemptRecord::cache_write_tokens)
+        .unwrap_or(0);
     if let Some(reason) = last.and_then(|a| a.cache_miss_reason.as_ref()) {
         *d.cache_miss_reasons.entry(reason.clone()).or_default() += 1;
         if reason == "none" && read == 0 {
@@ -947,7 +948,7 @@ fn serving_rewrite(attempts: &[AttemptRecord]) -> Option<(&AttemptRecord, u64)> 
     if !moved(a) {
         return None;
     }
-    let tokens = a.cache_write_5m_tokens.unwrap_or(0) + a.cache_write_1h_tokens.unwrap_or(0);
+    let tokens = a.cache_write_tokens().unwrap_or(0);
     (tokens > 0).then_some((a, tokens))
 }
 
@@ -1308,8 +1309,8 @@ struct Held {
 /// `wall_reached` per account from its spent windows of any source, a predicted wall among them, and `slowed_long` per
 /// account with a slow-down span inside the day, once the time the slow-down held its requests passes the bar:
 /// `slow_down_held_ms` summed over the account's `rollups_hourly` rows across its pools and keys whose hour starts at
-/// or after the cutoff (bound in seconds rounded up, since `hour` holds seconds), beside the same sum of
-/// `slow_down_held`, against `SLOWED_LONG_STRETCHES` times the `threshold_ms` of the newest counted span's start row,
+/// or after the cutoff, beside the same sum of `slow_down_held`, against `SLOWED_LONG_STRETCHES` times the
+/// `threshold_ms` of the newest counted span's start row,
 /// at least `SLOWED_LONG_FLOOR_MS`. The spans name the pool, the threshold and the start, so held time with no span in
 /// the day raises nothing. `since` is the oldest qualifying event's time, and for `slowed_long` the own start of the
 /// oldest span counted, which a span open from before the cutoff dates before the day. A wall reads the newest round on
@@ -1576,16 +1577,18 @@ pub fn fold_routing_conditions(
     for ((account, pool), (since, threshold_ms)) in &standing {
         count(account, pool, *since, now, true, *threshold_ms);
     }
-    // `hour` holds the hour's start in seconds, so the cutoff rounds up to the first second inside the day.
-    let held_time: BTreeMap<String, (i64, i64)> = tx
-        .prepare(
+    let held_time: BTreeMap<String, (i64, i64)> = if counted.is_empty() {
+        BTreeMap::new()
+    } else {
+        tx.prepare(
             "SELECT account_id, SUM(slow_down_held_ms), SUM(slow_down_held) FROM rollups_hourly \
              WHERE hour >= ?1 GROUP BY account_id",
         )?
-        .query_map(params![(cutoff + 999).div_euclid(1_000)], |r| {
+        .query_map(params![hour_ceil(cutoff)], |r| {
             Ok((r.get(0)?, (r.get(1)?, r.get(2)?)))
         })?
-        .collect::<Result<_, _>>()?;
+        .collect::<Result<_, _>>()?
+    };
     for (account, spans) in counted {
         let (Some(oldest), Some(newest)) = (
             spans.iter().map(|span| span.since).min(),

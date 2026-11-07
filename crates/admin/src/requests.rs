@@ -13,9 +13,7 @@ use phoebis_ledger::{
     Direction, Funding, LiveKeys, Patterns, PlanTables, PriceRevisions, Priced, RequestCursor,
     RequestFilter, RequestOrder, RequestRecord, RowKey, WindowShares,
 };
-use phoebis_routing::{
-    plan_windows, UtilizationSample, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_OVERAGE_INCLUDED,
-};
+use phoebis_routing::{UtilizationSample, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_OVERAGE_INCLUDED};
 use serde_json::Value;
 use utoipa::ToSchema;
 
@@ -514,21 +512,18 @@ pub(crate) fn request_summary(
 ) -> RequestSummary {
     let last = attempts.last();
     let table = shares.prices.in_force(r.received_at);
-    let priced: Vec<Priced> = attempts
+    let priced: Vec<(RowKey<'_>, Priced)> = attempts
         .iter()
         .map(|a| {
-            price_row(
-                &shares.prices,
-                &shares.tables,
-                &RowKey::of_attempt(r, a, table, shares.now),
-                a.usage(),
-            )
+            let key = RowKey::of_attempt(r, a, table, shares.now);
+            let priced = price_row(&shares.prices, &shares.tables, &key, a.usage());
+            (key, priced)
         })
         .collect();
     let trail: Vec<Attempt> = attempts
         .iter()
         .zip(&priced)
-        .map(|(a, priced)| attempt_json(a, estimated_usd(a, priced)))
+        .map(|(a, (_, priced))| attempt_json(a, estimated_usd(a, priced)))
         .collect();
     // The serving attempt's figures, `None` for a request no subscription window paid: no attempt, or a serving
     // attempt whose funding is not plan.
@@ -584,9 +579,9 @@ pub(crate) fn request_summary(
             .iter()
             .filter_map(|a| a.estimated_usd)
             .fold(0.0, |a, b| a + b),
-        cost_shares: plan.map(|(a, priced)| cost_shares_json(r, a, priced)),
-        cost_equivalent: plan.and_then(|(_, priced)| priced.equivalent),
-        share_reason: plan.and_then(|(_, priced)| priced.share_reason.map(str::to_string)),
+        cost_shares: plan.map(|(_, (key, priced))| cost_shares_json(key, priced)),
+        cost_equivalent: plan.and_then(|(_, (_, priced))| priced.equivalent),
+        share_reason: plan.and_then(|(_, (_, priced))| priced.share_reason.map(str::to_string)),
         tier: last.and_then(|a| a.tier.clone()),
         phases: phases_json(r, attempts),
         attempts: trail,
@@ -662,23 +657,12 @@ fn bounded(
     summary
 }
 
-/// `{}` for an attempt that recorded no account tier, since the burn route prices no share without one, and for a free
-/// call on a tier that sizes no window. Any other attempt on a tier the cost revision does not size answers no map from
-/// `price_row`, and each window the model keys reads null, as the fold latches the windows of such a row unpriced.
-fn cost_shares_json(
-    r: &RequestRecord,
-    a: &AttemptRecord,
-    priced: &Priced,
-) -> BTreeMap<String, Option<f64>> {
-    match &priced.shares {
-        Some(shares) => windows_json(shares),
-        None if a.tier.is_some() && priced.share_reason.is_none() => {
-            plan_windows(&r.canonical_model)
-                .map(|window| (window.to_string(), None))
-                .collect()
-        }
-        None => BTreeMap::new(),
-    }
+/// `{}` where `Priced::plan_shares` answers no map: for an attempt that recorded no account tier, since the burn route
+/// prices no share without one, and for a free call on a tier that sizes no window.
+fn cost_shares_json(key: &RowKey<'_>, priced: &Priced) -> BTreeMap<String, Option<f64>> {
+    priced
+        .plan_shares(key)
+        .map_or_else(BTreeMap::new, |shares| windows_json(&shares))
 }
 
 /// A sorted map keeps the order `price_shares` inserts the window ids in: `five_hour`, `seven_day`, then the model week

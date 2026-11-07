@@ -48,9 +48,9 @@ pub use metrics::{
 };
 pub use pattern::{Patterns, PATTERNS_TOO_LONG};
 pub use plan::{
-    entrypoint_of_client, free_equivalent, free_shares, funding_of, price_equivalent, price_shares,
-    Capacity, CostRevisions, Funding, ModelWindow, Override, Peak, PerWindow, PlanTables, Regime,
-    RegimePeak, SubscriptionCosts, TypeMultiplier, TypeOverride, Unit, WindowShares,
+    entrypoint_of_client, funding_of, price_equivalent, price_shares, Capacity, CostRevisions,
+    Funding, ModelWindow, Override, Peak, PerWindow, PlanTables, Regime, RegimePeak,
+    SubscriptionCosts, TypeMultiplier, TypeOverride, Unit, WindowShares,
 };
 pub use price::{price_row, Priced, RowKey, SHARE_REASON_CLIENT_CLASSIFIER};
 pub use pricing::{
@@ -78,8 +78,8 @@ pub use query::{
     RequestCursor, RequestFilter, RequestPrice, RollupFilter, RoutingCondition, RoutingLogCursor,
     RoutingLogFilter, RoutingLogPage, RoutingLogRow, SeriesFilter, SeriesPoint, SessionActivity,
     SessionIdentity, SessionSpendRow, Span, SpendAttempt, Totals, TotalsBy, TrafficBucket,
-    DECISION_KINDS, EVENT_KINDS, GROUP_BYS, GUARDRAIL_BLOCKED_BYTES_SQL, GUARDRAIL_COUNTS_SQL,
-    MAX_POINTS, MAX_RANGE_MS, PROBE_KIND,
+    DECISION_KINDS, EVENT_KINDS, GUARDRAIL_BLOCKED_BYTES_SQL, GUARDRAIL_COUNTS_SQL, MAX_POINTS,
+    MAX_RANGE_MS, PROBE_KIND,
 };
 pub use query::{guardrail_sample_page, request_body, request_body_held, SampleRow};
 pub use query::{list_request_page, refusal_categories, RefusalCount, Refusals, RequestPage};

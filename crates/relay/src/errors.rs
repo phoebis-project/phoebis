@@ -490,6 +490,12 @@ pub fn no_store(mut response: Response) -> Response {
     response
 }
 
+/// `no_store` as a router's `map_response` layer. The header goes on the router rather than in the handlers, so an
+/// answer no handler builds, such as an extractor's refusal, carries it too.
+pub async fn no_store_answer(response: Response) -> Response {
+    no_store(response)
+}
+
 /// The error code for a request the bound account's removal cut short.
 pub(crate) const ACCOUNT_CANCELED_CODE: &str = "account_canceled";
 /// The error code for a request the client's leaving cut short.

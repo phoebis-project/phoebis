@@ -147,10 +147,6 @@ impl ServingFacts {
         let Some(last) = attempts.last() else {
             return ServingFacts::default();
         };
-        let cache_write_tokens = match (last.cache_write_5m_tokens, last.cache_write_1h_tokens) {
-            (None, None) => None,
-            (five_minute, hour) => Some(five_minute.unwrap_or(0) + hour.unwrap_or(0)),
-        };
         ServingFacts {
             account_id: Some(last.account_id.clone()),
             reached_upstream: Some(last.upstream_status.is_some()),
@@ -162,7 +158,7 @@ impl ServingFacts {
             input_tokens: last.input_tokens,
             output_tokens: last.output_tokens,
             cache_read_tokens: last.cache_read_tokens,
-            cache_write_tokens,
+            cache_write_tokens: last.cache_write_tokens(),
         }
     }
 }
@@ -258,6 +254,14 @@ impl AttemptRecord {
             write_5m: self.cache_write_5m_tokens.unwrap_or(0),
             write_1h: self.cache_write_1h_tokens.unwrap_or(0),
             output: self.output_tokens.unwrap_or(0),
+        }
+    }
+
+    /// The 5-minute and 1-hour cache writes summed, an absent half read as 0, `None` when both are absent.
+    pub(crate) fn cache_write_tokens(&self) -> Option<u64> {
+        match (self.cache_write_5m_tokens, self.cache_write_1h_tokens) {
+            (None, None) => None,
+            (five_minute, hour) => Some(five_minute.unwrap_or(0) + hour.unwrap_or(0)),
         }
     }
 

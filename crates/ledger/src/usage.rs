@@ -11,7 +11,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use phoebis_oauth::Clock;
-use phoebis_relay::{anthropic_error, authenticated_key, new_request_id, no_store};
+use phoebis_relay::{anthropic_error, authenticated_key, new_request_id, no_store_answer};
 use phoebis_routing::{RouterHandle, DAY_MS, WEEK_MS};
 use rusqlite::Connection;
 use serde::Serialize;
@@ -186,10 +186,7 @@ pub fn usage_router(
 ) -> Router {
     Router::new()
         .route(USAGE_PATH, get(usage))
-        // On the router rather than in the handler, so an answer no handler builds carries it too.
-        .layer(map_response(|response: Response| async move {
-            no_store(response)
-        }))
+        .layer(map_response(no_store_answer))
         .with_state(Arc::new(UsageState {
             clock,
             db,
@@ -199,15 +196,11 @@ pub fn usage_router(
 }
 
 async fn usage(State(state): State<Arc<UsageState>>, headers: HeaderMap) -> Response {
-    usage_answer(&state, &headers).await
-}
-
-async fn usage_answer(state: &UsageState, headers: &HeaderMap) -> Response {
     let request_id = new_request_id();
     let now = (state.clock)();
     let html = wants_html(headers.get(ACCEPT).and_then(|v| v.to_str().ok()));
     let snapshot = state.router.snapshot();
-    let row = match authenticated_key(&snapshot, headers, now, &request_id) {
+    let row = match authenticated_key(&snapshot, &headers, now, &request_id) {
         Ok(row) => row,
         Err(refused) => return refused,
     };

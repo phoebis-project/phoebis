@@ -5,16 +5,18 @@
 //! waiting for the other's transaction under the busy timeout.
 
 use std::collections::HashMap;
+use std::iter::once;
 use std::path::Path;
 #[cfg(any(test, feature = "debug-hooks"))]
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use phoebis_store::migrations::{self, VersionError};
+use rusqlite::types::Value;
 use rusqlite::{
-    params, params_from_iter, Connection, OptionalExtension, Statement, Transaction,
+    params, params_from_iter, Connection, OptionalExtension, Statement, ToSql, Transaction,
     TransactionBehavior,
 };
 
@@ -831,6 +833,49 @@ fn landing_stamp(tx: &Transaction<'_>, now: i64) -> Result<i64, LedgerError> {
 /// The writer's landing stamp read, a `MAX` the landed-at index answers from its last entry.
 pub(crate) const LANDING_STAMP_SQL: &str = "SELECT COALESCE(MAX(landed_at), 0) FROM requests";
 
+/// The serving facts' columns of the request row, in the order `serving_values` binds them, so the landing and the
+/// start's backfill write one list.
+const SERVING_COLUMNS: [&str; 11] = [
+    "serving_account_id",
+    "reached_upstream",
+    "outcome_class",
+    "speed",
+    "cache_miss_reason",
+    "stop_reason",
+    "refusal_category",
+    "input_tokens",
+    "output_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+];
+
+/// `facts` as the binds of `SERVING_COLUMNS`, in its order.
+fn serving_values(facts: &ServingFacts) -> [Value; 11] {
+    let tokens = |n: Option<u64>| Value::from(n.map(|n| n as i64));
+    [
+        facts.account_id.clone().into(),
+        facts.reached_upstream.into(),
+        facts.outcome_class.clone().into(),
+        facts.speed.clone().into(),
+        facts.cache_miss_reason.clone().into(),
+        facts.stop_reason.clone().into(),
+        facts.refusal_category.clone().into(),
+        tokens(facts.input_tokens),
+        tokens(facts.output_tokens),
+        tokens(facts.cache_read_tokens),
+        tokens(facts.cache_write_tokens),
+    ]
+}
+
+/// The landing's insert, the serving facts' columns last at `?61` to `?71`.
+static INSERT_REQUEST: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "INSERT OR REPLACE INTO requests (id, received_at, finished_at, key_id, key_generation, pool_id, session_id, agent_id, parent_agent_id, model, canonical_model, stream, kind, origin, status, outcome, attempts, request_bytes, response_bytes, ttfb_ms, ttfc_ms, duration_ms, error_code, client_drift, kept_warm, bodies_captured, user_agent, effort, thinking_type, thinking_budget, max_tokens, tool_count, system_blocks, message_count, context_edits, temperature, requested_speed, requested_service_tier, presented_retired, rotation_at, response_truncated, client, agent_type, compaction, context_compacted, prev_tool_ms, turn_origin, request_class, identified_by, identity_root, identity_depth, forked_from, fork_depth, auto_mode, held, stream_end_at, diagnostics_source, guardrail_id, classifier, client_contract, landed_at, refused, fallback_digest, {}) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, NULL, NULL, NULL, ?49, ?50, ?51, ?52, ?53, ?54, ?55, ?56, ?57, ?58, ?59, ?60, ?61, ?62, ?63, ?64, ?65, ?66, ?67, ?68, ?69, ?70, ?71)",
+        SERVING_COLUMNS.join(", ")
+    )
+});
+
 /// Writes the request and its attempts, answering the rows the id held before, if any: a replacement has to
 /// take its earlier contribution out of every aggregate that was folded from it. `now` is the writer's clock, which
 /// the row's `landed_at` is stamped from. The row's serving facts are derived here from the attempts it writes, so
@@ -853,29 +898,74 @@ pub(crate) fn insert_request_in(
     let kept_warm = request.kept_warm || marked;
     let landed_at = landing_stamp(tx, now)?;
     let serving = ServingFacts::of(request, attempts);
-    tx.prepare_cached(
-        "INSERT OR REPLACE INTO requests (id, received_at, finished_at, key_id, key_generation, pool_id, session_id, agent_id, parent_agent_id, model, canonical_model, stream, kind, origin, status, outcome, attempts, request_bytes, response_bytes, ttfb_ms, ttfc_ms, duration_ms, error_code, client_drift, kept_warm, bodies_captured, user_agent, effort, thinking_type, thinking_budget, max_tokens, tool_count, system_blocks, message_count, context_edits, temperature, requested_speed, requested_service_tier, presented_retired, rotation_at, response_truncated, client, agent_type, compaction, context_compacted, prev_tool_ms, turn_origin, request_class, identified_by, identity_root, identity_depth, forked_from, fork_depth, auto_mode, held, stream_end_at, diagnostics_source, guardrail_id, classifier, client_contract, landed_at, refused, fallback_digest, serving_account_id, reached_upstream, outcome_class, speed, cache_miss_reason, stop_reason, refusal_category, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, NULL, NULL, NULL, ?49, ?50, ?51, ?52, ?53, ?54, ?55, ?56, ?57, ?58, ?59, ?60, ?61, ?62, ?63, ?64, ?65, ?66, ?67, ?68, ?69, ?70, ?71)",
-    )?
-    .execute(params![
-        request.id, request.received_at, request.finished_at, request.key_id, request.key_generation, request.pool_id, request.session_id, request.agent_id,
-        request.parent_agent_id, request.model, request.canonical_model, request.stream, request.kind, request.origin,
-        request.status.map(i64::from), request.outcome, request.attempts, request.request_bytes.map(|n| n as i64),
-        request.response_bytes.map(|n| n as i64), request.ttfb_ms, request.ttfc_ms, request.duration_ms, request.error_code,
-        request.client_drift, kept_warm, request.bodies_captured, request.user_agent,
-        request.effort, request.thinking_type, request.thinking_budget.map(|n| n as i64), request.max_tokens.map(|n| n as i64),
-        i64::from(request.tool_count), i64::from(request.system_blocks), i64::from(request.message_count),
-        request.context_edits, request.temperature, request.requested_speed, request.requested_service_tier,
-        request.presented_retired, request.rotation_at, request.response_truncated,
-        request.client, request.agent_type, request.compaction, request.context_compacted, request.prev_tool_ms, request.turn_origin,
-        request.request_class, request.forked_from, request.fork_depth.map(|n| n as i64), request.auto_mode, request.held,
-        request.stream_end_at,
-        request.diagnostics_source, request.guardrail_id, request.classifier, request.client_contract, landed_at, request.refused,
-        request.fallback_digest, serving.account_id, serving.reached_upstream, serving.outcome_class, serving.speed,
-        serving.cache_miss_reason, serving.stop_reason, serving.refusal_category, serving.input_tokens.map(|n| n as i64),
-        serving.output_tokens.map(|n| n as i64), serving.cache_read_tokens.map(|n| n as i64),
-        serving.cache_write_tokens.map(|n| n as i64),
-    ])?;
+    tx.prepare_cached(&INSERT_REQUEST)?
+        .execute(params_from_iter(
+            params![
+                request.id,
+                request.received_at,
+                request.finished_at,
+                request.key_id,
+                request.key_generation,
+                request.pool_id,
+                request.session_id,
+                request.agent_id,
+                request.parent_agent_id,
+                request.model,
+                request.canonical_model,
+                request.stream,
+                request.kind,
+                request.origin,
+                request.status.map(i64::from),
+                request.outcome,
+                request.attempts,
+                request.request_bytes.map(|n| n as i64),
+                request.response_bytes.map(|n| n as i64),
+                request.ttfb_ms,
+                request.ttfc_ms,
+                request.duration_ms,
+                request.error_code,
+                request.client_drift,
+                kept_warm,
+                request.bodies_captured,
+                request.user_agent,
+                request.effort,
+                request.thinking_type,
+                request.thinking_budget.map(|n| n as i64),
+                request.max_tokens.map(|n| n as i64),
+                i64::from(request.tool_count),
+                i64::from(request.system_blocks),
+                i64::from(request.message_count),
+                request.context_edits,
+                request.temperature,
+                request.requested_speed,
+                request.requested_service_tier,
+                request.presented_retired,
+                request.rotation_at,
+                request.response_truncated,
+                request.client,
+                request.agent_type,
+                request.compaction,
+                request.context_compacted,
+                request.prev_tool_ms,
+                request.turn_origin,
+                request.request_class,
+                request.forked_from,
+                request.fork_depth.map(|n| n as i64),
+                request.auto_mode,
+                request.held,
+                request.stream_end_at,
+                request.diagnostics_source,
+                request.guardrail_id,
+                request.classifier,
+                request.client_contract,
+                landed_at,
+                request.refused,
+                request.fallback_digest,
+            ]
+            .iter()
+            .copied()
+            .chain(serving_values(&serving).iter().map(|v| v as &dyn ToSql)),
+        ))?;
     tx.prepare_cached("DELETE FROM attempts WHERE request_id = ?1")?
         .execute(params![request.id])?;
     for a in attempts {
@@ -919,9 +1009,7 @@ pub(crate) fn insert_request_in(
 
 /// Request rows the start's backfill writes per start. One slice read through `requests_serving_pending` after a
 /// filled prefix of ten slices holds the writer for about 97 ms on a desktop host, and the next start continues where
-/// this one stopped. The slice's ids bind in one `IN` list through `with_attempts`, so the constant stays under
-/// SQLite's default bind bound of 32,766 (`SQLITE_MAX_VARIABLE_NUMBER`, which the bundled build keeps), and a larger
-/// slice would need a chunked read.
+/// this one stopped.
 pub const BACKFILL_SLICE: usize = 10_000;
 
 /// What one start's backfill did: the rows it wrote and the rows still null with attempts, read after the slice
@@ -946,39 +1034,62 @@ const SERVING_PENDING: &str = " INDEXED BY requests_serving_pending \
 pub fn backfill_serving_facts(db: &LedgerDb) -> Result<Backfilled, LedgerError> {
     let written = db.write(|conn| {
         let tx = begin_write(conn)?;
+        // `ServingFacts::of` reads the request's asked speed and its last attempt alone, so the slice joins each row's
+        // serving attempt and reads those columns, every other field of the two records at its default.
         let pending = tx
-            .prepare(&format!(
-                "{REQUEST_SELECT}{SERVING_PENDING} ORDER BY received_at LIMIT ?1"
-            ))?
-            .query_map(params![BACKFILL_SLICE as i64], row_to_request)?
+            .prepare(
+                "SELECT r.id, r.requested_speed, a.account_id, a.upstream_status, a.outcome, a.speed, \
+                 a.cache_miss_reason, a.stop_reason, a.refusal_category, a.input_tokens, a.output_tokens, \
+                 a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens \
+                 FROM requests r INDEXED BY requests_serving_pending \
+                 JOIN attempts a ON a.request_id = r.id \
+                 AND a.attempt = (SELECT MAX(x.attempt) FROM attempts x WHERE x.request_id = r.id) \
+                 WHERE r.serving_account_id IS NULL AND r.attempts > 0 ORDER BY r.received_at LIMIT ?1",
+            )?
+            .query_map(params![BACKFILL_SLICE as i64], |r| {
+                let tokens = |i: usize| -> rusqlite::Result<Option<u64>> {
+                    Ok(r.get::<_, Option<i64>>(i)?.map(|n| n as u64))
+                };
+                let request = RequestRecord {
+                    id: r.get(0)?,
+                    requested_speed: r.get(1)?,
+                    ..Default::default()
+                };
+                let last = AttemptRecord {
+                    account_id: r.get(2)?,
+                    upstream_status: r.get::<_, Option<i64>>(3)?.map(|n| n as u16),
+                    outcome: r.get(4)?,
+                    speed: r.get(5)?,
+                    cache_miss_reason: r.get(6)?,
+                    stop_reason: r.get(7)?,
+                    refusal_category: r.get(8)?,
+                    input_tokens: tokens(9)?,
+                    output_tokens: tokens(10)?,
+                    cache_read_tokens: tokens(11)?,
+                    cache_write_5m_tokens: tokens(12)?,
+                    cache_write_1h_tokens: tokens(13)?,
+                    ..Default::default()
+                };
+                Ok((request, last))
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        let rows = with_attempts(&tx, pending)?;
         {
-            let mut fill = tx.prepare(
-                "UPDATE requests SET serving_account_id = ?2, reached_upstream = ?3, outcome_class = ?4, speed = ?5, \
-                 cache_miss_reason = ?6, stop_reason = ?7, refusal_category = ?8, input_tokens = ?9, \
-                 output_tokens = ?10, cache_read_tokens = ?11, cache_write_tokens = ?12 WHERE id = ?1",
-            )?;
-            for (request, attempts) in &rows {
-                let facts = ServingFacts::of(request, attempts);
-                fill.execute(params![
-                    request.id,
-                    facts.account_id,
-                    facts.reached_upstream,
-                    facts.outcome_class,
-                    facts.speed,
-                    facts.cache_miss_reason,
-                    facts.stop_reason,
-                    facts.refusal_category,
-                    facts.input_tokens.map(|n| n as i64),
-                    facts.output_tokens.map(|n| n as i64),
-                    facts.cache_read_tokens.map(|n| n as i64),
-                    facts.cache_write_tokens.map(|n| n as i64),
-                ])?;
+            let set = SERVING_COLUMNS
+                .iter()
+                .enumerate()
+                .map(|(i, column)| format!("{column} = ?{}", i + 2))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let mut fill = tx.prepare(&format!("UPDATE requests SET {set} WHERE id = ?1"))?;
+            for (request, last) in &pending {
+                let facts = ServingFacts::of(request, std::slice::from_ref(last));
+                fill.execute(params_from_iter(
+                    once(Value::from(request.id.clone())).chain(serving_values(&facts)),
+                ))?;
             }
         }
         tx.commit()?;
-        Ok(rows.len())
+        Ok(pending.len())
     })?;
     let left = db.read_blocking(|conn| {
         Ok(conn.query_row(
@@ -1045,6 +1156,9 @@ pub(crate) const REQUEST_SELECT: &str = "SELECT id, received_at, finished_at, ke
 pub(crate) const ATTEMPT_SELECT: &str = "SELECT request_id, attempt, account_id, account_kind, pin_epoch, started_at, finished_at, ttfb_ms, ttfc_ms, upstream_status, upstream_request_id, outcome, cooldown_scope, cooldown_until, input_tokens, output_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, service_tier, cache_miss_reason, client_drift, ratelimit_5h_utilization, ratelimit_5h_reset, ratelimit_7d_utilization, ratelimit_7d_reset, ratelimit_7d_oi_utilization, ratelimit_7d_oi_reset, overage_in_use, overage_utilization, thinking_tokens, web_search_requests, web_fetch_requests, stop_reason, stop_sequence, served_model, speed, inference_geo, cleared_input_tokens, refusal_category, refusal_recommended_model, selection, upstream_message_id, written_at, tier, usage_based, issued_digest FROM attempts";
 
 pub(crate) fn row_to_request(r: &rusqlite::Row<'_>) -> rusqlite::Result<RequestRecord> {
+    let opt_u64 = |i: usize| -> rusqlite::Result<Option<u64>> {
+        Ok(r.get::<_, Option<i64>>(i)?.map(|n| n as u64))
+    };
     Ok(RequestRecord {
         id: r.get(0)?,
         received_at: r.get(1)?,
@@ -1063,8 +1177,8 @@ pub(crate) fn row_to_request(r: &rusqlite::Row<'_>) -> rusqlite::Result<RequestR
         status: r.get::<_, Option<i64>>(14)?.map(|n| n as u16),
         outcome: r.get(15)?,
         attempts: r.get(16)?,
-        request_bytes: r.get::<_, Option<i64>>(17)?.map(|n| n as u64),
-        response_bytes: r.get::<_, Option<i64>>(18)?.map(|n| n as u64),
+        request_bytes: opt_u64(17)?,
+        response_bytes: opt_u64(18)?,
         ttfb_ms: r.get(19)?,
         ttfc_ms: r.get(20)?,
         duration_ms: r.get(21)?,
@@ -1076,8 +1190,8 @@ pub(crate) fn row_to_request(r: &rusqlite::Row<'_>) -> rusqlite::Result<RequestR
         user_agent: r.get(26)?,
         effort: r.get(27)?,
         thinking_type: r.get(28)?,
-        thinking_budget: r.get::<_, Option<i64>>(29)?.map(|n| n as u64),
-        max_tokens: r.get::<_, Option<i64>>(30)?.map(|n| n as u64),
+        thinking_budget: opt_u64(29)?,
+        max_tokens: opt_u64(30)?,
         tool_count: r.get::<_, i64>(31)? as u32,
         system_blocks: r.get::<_, i64>(32)? as u32,
         message_count: r.get::<_, i64>(33)? as u32,
@@ -1115,10 +1229,10 @@ pub(crate) fn row_to_request(r: &rusqlite::Row<'_>) -> rusqlite::Result<RequestR
             cache_miss_reason: r.get(63)?,
             stop_reason: r.get(64)?,
             refusal_category: r.get(65)?,
-            input_tokens: r.get::<_, Option<i64>>(66)?.map(|n| n as u64),
-            output_tokens: r.get::<_, Option<i64>>(67)?.map(|n| n as u64),
-            cache_read_tokens: r.get::<_, Option<i64>>(68)?.map(|n| n as u64),
-            cache_write_tokens: r.get::<_, Option<i64>>(69)?.map(|n| n as u64),
+            input_tokens: opt_u64(66)?,
+            output_tokens: opt_u64(67)?,
+            cache_read_tokens: opt_u64(68)?,
+            cache_write_tokens: opt_u64(69)?,
         },
     })
 }

@@ -63,9 +63,10 @@ use crate::classify::{
 use crate::credit::{hex_of, CreditDigest, CreditStore};
 use crate::dispatch::{self, until_canceled, AttemptFailure, Sent};
 use crate::errors::{
-    accounts_at_cap, body_budget_exhausted, key_body_reads, key_refusal, no_store, relay_failure,
-    Failure, ACCOUNT_CANCELED, CLIENT_GONE_CODE, GUARDRAIL_BLOCKED, METHOD_NOT_ALLOWED,
-    MODEL_NOT_ALLOWED, NOT_FOUND, ROUTER_SHUTDOWN_CODE, ROUTER_UNAVAILABLE, UPSTREAM_UNREACHABLE,
+    accounts_at_cap, body_budget_exhausted, key_body_reads, key_refusal, no_store_answer,
+    relay_failure, Failure, ACCOUNT_CANCELED, CLIENT_GONE_CODE, GUARDRAIL_BLOCKED,
+    METHOD_NOT_ALLOWED, MODEL_NOT_ALLOWED, NOT_FOUND, ROUTER_SHUTDOWN_CODE, ROUTER_UNAVAILABLE,
+    UPSTREAM_UNREACHABLE,
 };
 use crate::exhaustion::{
     exhaustion_class, exhaustion_code, exhaustion_response, pool_moved_response,
@@ -1162,15 +1163,12 @@ fn cooldown_set(cooldown: Option<&Cooldown>, canonical_model: &str) -> Option<Co
 /// than the 404 an unknown path gets, so a client can tell a wrong method from a wrong route.
 pub fn router(relay: Arc<Relay>) -> Router {
     // The listing answers the caller's key with what its pool may route to, so a client that sizes its context
-    // window by the id sees the `[1m]` twins. Layered apart, so the mark reaches an extractor's refusal, which no
-    // handler sees, and the wrong method's answer is set inside the layer.
+    // window by the id sees the `[1m]` twins. Layered apart, so the wrong method's answer is set inside the layer.
     let models = Router::new()
         .route("/v1/models", get(crate::models::list))
         .route("/v1/models/{*id}", get(crate::models::show))
         .method_not_allowed_fallback(wrong_method)
-        .layer(map_response(|response: Response| async move {
-            no_store(response)
-        }));
+        .layer(map_response(no_store_answer));
     Router::new()
         .route("/api/hello", head(hello))
         .route("/api/ready", get(ready).head(ready))

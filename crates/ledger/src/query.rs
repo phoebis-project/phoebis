@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, LazyLock};
 
 use indexmap::IndexMap;
-use phoebis_bus::{Classifier, Kind};
+use phoebis_bus::Kind;
 use phoebis_relay::EFFORT_LEVELS;
 use phoebis_routing::{
     model_week, plan_windows, MemberSpend, PinUsage, DAY_MS, FIVE_HOUR, HOUR_MS,
@@ -23,10 +23,8 @@ use crate::db::{
 };
 use crate::histogram::Histogram;
 use crate::pattern::{literal_like, Patterns, ESCAPE};
-use crate::plan::{
-    entrypoint_of_client, free_shares, funding_of, CostRevisions, Funding, PlanTables, WindowShares,
-};
-use crate::price::{price_row, price_usd, Priced, RowKey};
+use crate::plan::{free_shares, funding_of, CostRevisions, Funding, PlanTables, WindowShares};
+use crate::price::{price_equivalent_at, price_row, price_usd, AttemptFacts, Priced, RowKey};
 use crate::pricing::{Band, PriceRevisions, Speed};
 use crate::record::{
     AttemptRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord, RequestRecord,
@@ -510,55 +508,24 @@ fn filter_clauses(
     (args, clauses)
 }
 
-/// The request list's order keys. `ReceivedAt` is the default and the only key with an index, so the others sort the
-/// rows the filters admit. A row without the figure of a nullable key sorts after every row with it, under either
-/// direction.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum RequestOrder {
-    #[default]
-    ReceivedAt,
-    Attempts,
-    DurationMs,
-    TtfbMs,
-    InputTokens,
-    OutputTokens,
+phoebis_store::text_enum! {
+    plain
+    /// The request list's order keys, each word the requests table's column it orders by. `ReceivedAt` is the default
+    /// and the only key with an index, so the others sort the rows the filters admit. A row without the figure of a
+    /// nullable key sorts after every row with it, under either direction.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub enum RequestOrder {
+        #[default]
+        ReceivedAt => "received_at",
+        Attempts => "attempts",
+        DurationMs => "duration_ms",
+        TtfbMs => "ttfb_ms",
+        InputTokens => "input_tokens",
+        OutputTokens => "output_tokens",
+    }
 }
 
 impl RequestOrder {
-    /// The words `parse` reads, the default first.
-    pub const WORDS: &'static [&'static str] = &[
-        "received_at",
-        "attempts",
-        "duration_ms",
-        "ttfb_ms",
-        "input_tokens",
-        "output_tokens",
-    ];
-
-    pub fn parse(word: &str) -> Option<RequestOrder> {
-        Some(match word {
-            "received_at" => RequestOrder::ReceivedAt,
-            "attempts" => RequestOrder::Attempts,
-            "duration_ms" => RequestOrder::DurationMs,
-            "ttfb_ms" => RequestOrder::TtfbMs,
-            "input_tokens" => RequestOrder::InputTokens,
-            "output_tokens" => RequestOrder::OutputTokens,
-            _ => return None,
-        })
-    }
-
-    /// The requests table's column the key orders by.
-    fn column(self) -> &'static str {
-        match self {
-            RequestOrder::ReceivedAt => "received_at",
-            RequestOrder::Attempts => "attempts",
-            RequestOrder::DurationMs => "duration_ms",
-            RequestOrder::TtfbMs => "ttfb_ms",
-            RequestOrder::InputTokens => "input_tokens",
-            RequestOrder::OutputTokens => "output_tokens",
-        }
-    }
-
     /// Whether the key's column can be null. The null prefix joins the order and the cursor on such a key alone, so
     /// `received_at` keeps its walk of `requests_received` (its id tie-break sorted), and `attempts`, which has no
     /// index, keeps the same shape as the other not-null key.
@@ -585,26 +552,18 @@ impl RequestOrder {
     }
 }
 
-/// `desc` (the default) or `asc`, the direction of a paged read's order.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Direction {
-    #[default]
-    Desc,
-    Asc,
+phoebis_store::text_enum! {
+    plain
+    /// `desc` (the default) or `asc`, the direction of a paged read's order.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub enum Direction {
+        #[default]
+        Desc => "desc",
+        Asc => "asc",
+    }
 }
 
 impl Direction {
-    /// The words `parse` reads, the default first.
-    pub const WORDS: &'static [&'static str] = &["desc", "asc"];
-
-    pub fn parse(word: &str) -> Option<Direction> {
-        match word {
-            "desc" => Some(Direction::Desc),
-            "asc" => Some(Direction::Asc),
-            _ => None,
-        }
-    }
-
     fn sql(self) -> &'static str {
         match self {
             Direction::Desc => "DESC",
@@ -617,6 +576,18 @@ impl Direction {
         match self {
             Direction::Desc => "<",
             Direction::Asc => ">",
+        }
+    }
+
+    /// The comparison on `at` alone that a routing log row of `own_rank` past a cursor of the other list's
+    /// `cursor_rank` meets. The log orders by `(at, rank)` in this direction, a decision ranking 1 and an event 0, so
+    /// newest first the decisions come before the events at one `at` and oldest first after them. A row whose rank
+    /// sorts after the cursor's is past it at the cursor's own `at` too.
+    fn past_across(self, own_rank: u8, cursor_rank: u8) -> &'static str {
+        match self {
+            Direction::Desc if own_rank < cursor_rank => "<=",
+            Direction::Asc if own_rank > cursor_rank => ">=",
+            _ => self.past(),
         }
     }
 }
@@ -632,7 +603,7 @@ pub(crate) fn list_requests_statement(
     limit: usize,
 ) -> (String, Vec<rusqlite::types::Value>) {
     let (mut args, mut clauses) = filter_clauses(filter, live);
-    let column = order.column();
+    let column = order.as_str();
     let past = dir.past();
     if let Some(cursor) = cursor {
         let n = args.len() + 1;
@@ -673,10 +644,17 @@ pub(crate) fn list_requests_statement(
     // One row past the page says whether a next page exists, so a page of exactly `limit` rows offers no
     // cursor that would only lead to an empty page.
     args.push(((limit + 1) as i64).into());
-    let sql = format!(
-        "{REQUEST_SELECT}{where} ORDER BY {nulls_last}{column} {dir}, id {dir} LIMIT ?{}",
-        args.len()
-    );
+    let order_by = format!("ORDER BY {nulls_last}{column} {dir}, id {dir}");
+    let limit_at = args.len();
+    let sql = if order == RequestOrder::ReceivedAt {
+        format!("{REQUEST_SELECT}{where} {order_by} LIMIT ?{limit_at}")
+    } else {
+        // A key with no index sorts every admitted row, so the sort ranks the ids alone and the page reads its rows by
+        // primary key, rather than loading each candidate's whole row into the sorter.
+        format!(
+            "{REQUEST_SELECT} WHERE id IN (SELECT id FROM requests{where} {order_by} LIMIT ?{limit_at}) {order_by}"
+        )
+    };
     (sql, args)
 }
 
@@ -793,8 +771,7 @@ pub struct Refusals {
 /// requests in the same range and filter whose row carries a fallback credit's digest. Both read off the request row's
 /// columns, the serving attempt's facts and the digest the request presented, written at the landing, since no rollup
 /// carries the category or the digest. The `clients` and `user_agents` patterns match each row's client and agent
-/// folded as the rollups fold them, so both reads narrow as the series do. Both reads share one transaction, so the
-/// count reads the snapshot the rows read.
+/// folded as the rollups fold them, so both figures narrow as the series do.
 pub fn refusal_categories(
     conn: &Connection,
     filter: &RequestFilter,
@@ -807,34 +784,39 @@ pub fn refusal_categories(
         to: Some(to),
         ..filter.clone()
     };
-    // A read hands a shared connection, which only the unchecked form opens a transaction on.
-    let tx = conn.unchecked_transaction()?;
-    let (args, clauses) = filter_clauses(&filter, live);
-    let mut refused = clauses.clone();
-    refused.push("requests.stop_reason = 'refusal'".into());
+    let (args, mut clauses) = filter_clauses(&filter, live);
+    clauses
+        .push("(requests.stop_reason = 'refusal' OR requests.fallback_digest IS NOT NULL)".into());
     // SQL does not express the fold, so the patterns match each raw pair in memory, grouped first so a pair repeated
     // across many refusals folds once per model and category.
     let sql = format!(
-        "SELECT canonical_model, COALESCE(requests.refusal_category, '-') AS category, \
-         client, user_agent, COUNT(*) FROM requests WHERE {} GROUP BY canonical_model, category, client, user_agent",
-        refused.join(" AND ")
+        "SELECT canonical_model, COALESCE(requests.refusal_category, '-') AS category, client, user_agent, \
+         COUNT(CASE WHEN requests.stop_reason = 'refusal' THEN 1 END), COUNT(requests.fallback_digest) \
+         FROM requests WHERE {} GROUP BY canonical_model, category, client, user_agent",
+        clauses.join(" AND ")
     );
-    let mut stmt = tx.prepare(&sql)?;
-    let rows = stmt.query_map(params_from_iter(args.clone()), |r| {
+    let mut stmt = conn.prepare(&sql)?;
+    let groups = stmt.query_map(params_from_iter(args), |r| {
         Ok((
             r.get::<_, String>(0)?,
             r.get::<_, String>(1)?,
             r.get::<_, Option<String>>(2)?,
             r.get::<_, Option<String>>(3)?,
             r.get::<_, i64>(4)? as u64,
+            r.get::<_, i64>(5)? as u64,
         ))
     })?;
     let mut counts: BTreeMap<(String, String), u64> = BTreeMap::new();
-    for row in rows {
-        let (model, category, client, user_agent, requests) = row?;
-        if passes_request_patterns(&filter, client.as_deref(), user_agent.as_deref()) {
-            *counts.entry((model, category)).or_default() += requests;
+    let mut fallbacks = 0;
+    for group in groups {
+        let (model, category, client, user_agent, refused, presented) = group?;
+        if !passes_request_patterns(&filter, client.as_deref(), user_agent.as_deref()) {
+            continue;
         }
+        if refused > 0 {
+            *counts.entry((model, category)).or_default() += refused;
+        }
+        fallbacks += presented;
     }
     let mut rows: Vec<RefusalCount> = counts
         .into_iter()
@@ -847,27 +829,6 @@ pub fn refusal_categories(
     // The map hands the pairs in byte order, the model first, as SQLite compares text, and the stable sort keeps that
     // order among equal counts.
     rows.sort_by_key(|row| std::cmp::Reverse(row.requests));
-    let mut presented = clauses;
-    presented.push("requests.fallback_digest IS NOT NULL".into());
-    let sql = format!(
-        "SELECT client, user_agent, COUNT(*) FROM requests WHERE {} GROUP BY client, user_agent",
-        presented.join(" AND ")
-    );
-    let mut stmt = tx.prepare(&sql)?;
-    let pairs = stmt.query_map(params_from_iter(args), |r| {
-        Ok((
-            r.get::<_, Option<String>>(0)?,
-            r.get::<_, Option<String>>(1)?,
-            r.get::<_, i64>(2)? as u64,
-        ))
-    })?;
-    let mut fallbacks = 0;
-    for pair in pairs {
-        let (client, user_agent, requests) = pair?;
-        if passes_request_patterns(&filter, client.as_deref(), user_agent.as_deref()) {
-            fallbacks += requests;
-        }
-    }
     Ok(Refusals { rows, fallbacks })
 }
 
@@ -1588,14 +1549,14 @@ pub fn list_routing_log(
     }
     .into_iter()
     .peekable();
-    // Both lists arrive in the page's order, so the merge takes the decision whenever it comes first in that order:
-    // newest first, decisions rank before events at one `at`, and oldest first, the exact reverse, after them.
+    // Both lists arrive in the page's order, so the merge takes the decision whenever its `(at, rank)` comes first in
+    // that order, as `Direction::past_across` ranks them.
     let mut rows = Vec::with_capacity(limit + 1);
     while rows.len() <= limit {
         let take_decision = match (decided.peek(), evented.peek()) {
             (Some(d), Some(e)) => match dir {
-                Direction::Desc => d.at >= e.at,
-                Direction::Asc => d.at < e.at,
+                Direction::Desc => (d.at, 1) > (e.at, 0),
+                Direction::Asc => (d.at, 1) < (e.at, 0),
             },
             (Some(_), None) => true,
             (None, Some(_)) => false,
@@ -1642,14 +1603,9 @@ pub(crate) fn decision_rows_statement(
                 n + 2
             ));
         }
-        // Decisions rank before events at one `at` newest first and after them oldest first, so an event's cursor
-        // has passed every decision at its own `at` under `Desc` and none under `Asc`.
         Some(RoutingLogCursor::Event { at, .. }) => {
             statement.args.push((*at).into());
-            let op = match dir {
-                Direction::Desc => "<",
-                Direction::Asc => ">=",
-            };
+            let op = dir.past_across(1, 0);
             statement.clauses.push(format!("d.at {op} ?{n}"));
         }
     }
@@ -1731,14 +1687,9 @@ fn event_rows(
     let past = dir.past();
     match cursor {
         None => {}
-        // Decisions rank before events at one `at` newest first and after them oldest first, so a decision's cursor
-        // leaves every event at its own `at` to read under `Desc` and none under `Asc`.
         Some(RoutingLogCursor::Decision { at, .. }) => {
             statement.args.push((*at).into());
-            let op = match dir {
-                Direction::Desc => "<=",
-                Direction::Asc => ">",
-            };
+            let op = dir.past_across(0, 1);
             statement.clauses.push(format!("e.at {op} ?{n}"));
         }
         Some(RoutingLogCursor::Event { at, rowid }) => {
@@ -2247,9 +2198,6 @@ phoebis_store::text_enum! {
     }
 }
 
-/// The `group_by` words, one per `GroupBy` in its order.
-pub const GROUP_BYS: &[&str] = GroupBy::WORDS;
-
 /// The group a pattern list files an agent under when no pattern matches.
 pub const OTHER_AGENTS: &str = "other";
 
@@ -2566,35 +2514,9 @@ struct ShareSums {
 }
 
 impl ShareSums {
-    /// Folds one plan-funded row with a recorded tier in when `counted`, as the request dollars take the row, each
-    /// window priced through `price_row` at the row's own key: its hour, its tier and the regime its `client` names, so
-    /// a group that mixes clients prices each row under its own.
-    fn add(
-        &mut self,
-        row: &RollupRow,
-        key: &RowKey<'_>,
-        prices: &PriceRevisions,
-        tables: &PlanTables,
-        counted: bool,
-    ) {
-        let usage = row.usage();
-        // A failed request books a row with no token and an accounting row carries the wasted counts alone, while the
-        // cost model refuses a model it has no weight for before it reads the usage: such a row would null a priced
-        // window for a charge of nothing.
-        if !counted || tokens_of(usage) == 0 {
-            return;
-        }
-        let priced = price_row(prices, tables, key, usage);
-        let shares = match priced.shares {
-            Some(shares) => shares,
-            // A free call spends no window, so on a tier that sizes none it latches nothing.
-            None if priced.share_reason.is_some() => return,
-            // A tier the cost revision does not size answers no map, and every window the row would share reads
-            // unpriced, as `price_usage` latches a bucket's.
-            None => plan_windows(key.model)
-                .map(|window| (window, None))
-                .collect(),
-        };
+    /// Folds one plan-funded row's shares in, as `Priced::plan_shares` answered them at the row's own key: its hour,
+    /// its tier and the regime its `client` names, so a group that mixes clients prices each row under its own.
+    fn add(&mut self, shares: WindowShares) {
         for (window, share) in shares {
             self.cost
                 .entry(window)
@@ -2781,7 +2703,6 @@ impl PlanSums {
         row: &RollupRow,
         key: &RowKey<'_>,
         priced: Priced,
-        prices: &PriceRevisions,
         costs: &PlanTables,
         counted: bool,
     ) {
@@ -2789,9 +2710,9 @@ impl PlanSums {
             self.requests += row.requests;
             self.output_tokens += row.output_tokens;
         }
-        // Each part prices through `price_row` at the row's key, whose classifier rule reads a free call's every part
-        // at zero, so a model the cost model cannot price marks nothing unpriced for a charge of nothing.
-        let price = |usage: PinUsage| price_row(prices, costs, key, usage).equivalent;
+        // Each part prices through `price_equivalent_at` at the row's key, whose classifier rule reads a free call's
+        // every part at zero, so a model the cost model cannot price marks nothing unpriced for a charge of nothing.
+        let price = |usage: PinUsage| price_equivalent_at(costs, key, usage);
         let halves = self
             .equivalent
             .add_priced(row, counted, priced.equivalent, price);
@@ -2903,15 +2824,30 @@ impl GroupSums {
         let key = grouping.group_of(row);
         let entry = self.0.entry(key).or_default();
         let own_key = row.price_key(now);
-        // Keyed as `priced` keys the row, since the group's shares come from `ShareSums::add` and a tier would price
-        // share windows nothing reads, here and in each part `PlanSums::add` prices.
+        // The parts `PlanSums::add` prices take no tier, since a tier would price share windows nothing reads.
         let price_key = RowKey {
             tier: None,
             ..own_key
         };
-        let row_priced = price_row(prices, costs, &price_key, row.usage());
-        let usd = row_priced.usd.clone().unwrap_or_default();
         let plan = own_key.funding == Funding::Plan;
+        let counted = probes_counted || row.kind != Kind::Probe.as_str();
+        // A failed request books a row with no token and an accounting row carries the wasted counts alone, while the
+        // cost model refuses a model it has no weight for before it reads the usage: such a row would null a priced
+        // window for a charge of nothing.
+        let share_row =
+            shares && plan && own_key.tier.is_some() && counted && tokens_of(row.usage()) > 0;
+        // The dollars read no tier and the figure is the same under every tier, so a share row prices once, at its own
+        // key.
+        let row_priced = price_row(
+            prices,
+            costs,
+            if share_row { &own_key } else { &price_key },
+            row.usage(),
+        );
+        let row_shares = share_row
+            .then(|| row_priced.plan_shares(&own_key))
+            .flatten();
+        let usd = row_priced.usd.clone().unwrap_or_default();
         if row.kind == Kind::Probe.as_str() {
             entry.probes.add(row);
             entry.probe_counts.add_row(row.probe_view());
@@ -2919,7 +2855,6 @@ impl GroupSums {
         } else {
             entry.saw_non_probe = true;
         }
-        let counted = probes_counted || row.kind != Kind::Probe.as_str();
         if counted {
             entry.sum.add(row);
             entry.dollars.usd.add(&usd);
@@ -2944,9 +2879,7 @@ impl GroupSums {
                 entry.plan.kept_warm_5m_tokens += row.kept_warm_5m_tokens;
                 entry.plan.kept_warm_1h_tokens += row.kept_warm_1h_tokens;
             }
-            entry
-                .plan
-                .add(row, &price_key, row_priced, prices, costs, counted);
+            entry.plan.add(row, &price_key, row_priced, costs, counted);
         }
         // Each row prices under the account tier it recorded. A tier of `UNATTRIBUTED` (a profile not yet read, a row
         // folded before the tier was recorded, an api_key account's row) answers no share.
@@ -2954,8 +2887,8 @@ impl GroupSums {
             return;
         }
         let sums = entry.shares.get_or_insert_with(ShareSums::default);
-        if plan {
-            sums.add(row, &own_key, prices, costs, counted);
+        if let Some(row_shares) = row_shares {
+            sums.add(row_shares);
         }
     }
 
@@ -5042,29 +4975,28 @@ impl PricedAttempt {
     /// The key and the usage `price_usage` prices the attempt at, `now` the read's instant. The attempt's revision is
     /// its request's, and its band the completion's, where the meter charges it.
     pub(crate) fn usage(&self, prices: &PriceRevisions, now: i64) -> (RowKey<'_>, PinUsage) {
-        let band = prices
-            .in_force(self.received_at)
-            .band_of(&self.canonical_model, self.usage.prompt_tokens());
-        let speed = Speed::of(self.speed.as_deref());
-        let key = RowKey {
+        let speed = self.speed.as_deref();
+        let facts = AttemptFacts {
             model: &self.canonical_model,
+            kind: &self.kind,
+            client: self.client.as_deref(),
+            classifier: self.classifier.as_deref(),
+            received_at: self.received_at,
+            completed_at: self.completed_at,
             speed,
-            band,
             funding: funding_of(
                 AccountKind::parse(&self.account_kind),
                 self.usage_based,
                 self.overage_in_use,
-                speed,
+                Speed::of(speed),
             ),
-            kind: &self.kind,
             tier: self.tier.as_deref(),
-            entrypoint: entrypoint_of_client(self.client.as_deref().unwrap_or(UNATTRIBUTED)),
-            classifier: self.classifier.as_deref() == Some(Classifier::Client.as_str()),
-            at: self.received_at,
-            band_at: Some(self.completed_at),
-            now,
+            usage: self.usage,
         };
-        (key, self.usage)
+        (
+            facts.key(prices.in_force(self.received_at), now),
+            self.usage,
+        )
     }
 }
 
@@ -5360,7 +5292,7 @@ pub fn session_burn_series(
 mod tests {
     use super::*;
 
-    use crate::plan::price_equivalent;
+    use crate::plan::{entrypoint_of_client, price_equivalent};
     use crate::pricing::effective_instant;
     use crate::test_tables::{plan_of, plan_under};
 
@@ -5929,7 +5861,6 @@ mod tests {
                 equivalent: Some(sentinel),
                 ..Priced::default()
             },
-            &crate::test_tables::api_prices(),
             &costs,
             true,
         );
