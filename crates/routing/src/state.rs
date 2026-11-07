@@ -999,8 +999,9 @@ pub enum SlowDownEdge {
         reset: Option<i64>,
     },
     /// The span closed, its length running from `since` to the instant the factor returned to 1, to the passed reset
-    /// of the window it slowed for where the reset cleared the entry, or to the entry's last read where the purge
-    /// dropped the entry before either: the wait that closes a span is not slowed time.
+    /// of the window it slowed for where the reset cleared the entry, or to the entry's last read where the purge or
+    /// a clean poll's drop of the 5-hour window dropped the entry before either: the wait that closes a span is not
+    /// slowed time.
     Ended {
         since: i64,
         duration_ms: i64,

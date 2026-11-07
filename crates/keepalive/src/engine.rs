@@ -1371,7 +1371,7 @@ pub(crate) struct Inner {
     /// The probes a gate withheld this locked section, with the keys their skip rows file under, read while the
     /// recipe still held its speed.
     pub skipped: Vec<Skipped>,
-    /// Bus gaps seen by the observer; each one discarded every observation that was still pending.
+    /// Bus gaps seen by the observer. Each one discarded every observation that was still pending.
     pub bus_gaps: u64,
     /// The last gap's instant, so a reader can tell a recent gap from one long past.
     pub last_bus_gap_at: Option<i64>,

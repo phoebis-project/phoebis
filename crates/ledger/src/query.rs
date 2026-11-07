@@ -5178,7 +5178,8 @@ const SESSION_SPEND_PRICED_FROM: usize = 9;
 
 /// The number of request `r`'s serving attempt, its last by number, the attempt the landing takes the row's serving
 /// facts from. The spend reads join that attempt's own row, since its price reads members the request row does not
-/// carry: the completion, the two cache writes apart, the account kind, the overage flag and the tier.
+/// carry: the completion, the two cache writes apart, the account kind, the overage flag, the tier and the
+/// usage-based class.
 const SERVING_ATTEMPT_NUMBER: &str =
     "(SELECT a.attempt FROM attempts a WHERE a.request_id = r.id ORDER BY a.attempt DESC LIMIT 1)";
 
