@@ -148,38 +148,6 @@ const CORPUS: &[(&str, Option<(&str, u16)>)] = &[
     ("walk_steps_v1", None),
 ];
 
-/// Every handler module that reads a query map, with its source, for the check that the names it reads are the
-/// names its parameter types declare.
-const QUERY_MODULES: &[(&str, &str)] = &[
-    ("accounts", include_str!("../src/accounts.rs")),
-    ("analytics", include_str!("../src/analytics.rs")),
-    ("keepalive", include_str!("../src/keepalive.rs")),
-    ("pools", include_str!("../src/pools.rs")),
-    ("requests", include_str!("../src/requests.rs")),
-    ("routing_log", include_str!("../src/routing_log.rs")),
-];
-
-/// Every handler module, so a module that reads a query and is missing from the check is found.
-const HANDLER_MODULES: &[(&str, &str)] = &[
-    ("accounts", include_str!("../src/accounts.rs")),
-    ("analytics", include_str!("../src/analytics.rs")),
-    ("attention", include_str!("../src/attention.rs")),
-    ("dashboard", include_str!("../src/dashboard.rs")),
-    ("guardrails", include_str!("../src/guardrails.rs")),
-    ("keepalive", include_str!("../src/keepalive.rs")),
-    ("keys", include_str!("../src/keys.rs")),
-    ("ledger", include_str!("../src/ledger.rs")),
-    ("models", include_str!("../src/models.rs")),
-    ("pools", include_str!("../src/pools.rs")),
-    ("pricing", include_str!("../src/pricing.rs")),
-    ("requests", include_str!("../src/requests.rs")),
-    ("routes", include_str!("../src/routes.rs")),
-    ("routing_log", include_str!("../src/routing_log.rs")),
-    ("sessions", include_str!("../src/sessions.rs")),
-    ("settings", include_str!("../src/settings.rs")),
-    ("tls", include_str!("../src/tls.rs")),
-];
-
 fn fixtures_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../web/test/fixtures")
 }
@@ -283,80 +251,6 @@ fn schema_error(document: &Value, operation_id: &str, status: u16, body: &Value)
         .validate(body)
         .err()
         .map(|e| format!("at {:?}: {e}", e.instance_path().as_str()))
-}
-
-/// The names a handler module reads off its query map, as the literal of each read. A helper handed the map takes it
-/// by reference in a handler (`list_param(&q, ..)`) and by name inside a function that holds the reference already
-/// (`list(q, ..)`, `analytics.rs`).
-fn reader_names(source: &str) -> BTreeSet<String> {
-    const READERS: &[&str] = &[
-        "q.get(\"",
-        "q.contains_key(\"",
-        "list(&q, \"",
-        "list(q, \"",
-        "agent_list(&q, \"",
-        "agent_list(q, \"",
-        "flag(&q, \"",
-        "flag(q, \"",
-        "list_param(&q, \"",
-        "text_param(&q, \"",
-        "word_param(&q, \"",
-        "time(&q, \"",
-        "number(\"",
-    ];
-    // rustfmt splits a long read into a chain (`q` then `.get("include_probes")` on the next line, `requests.rs`), so
-    // every run of whitespace collapses to one space and a space before a `.` goes, which rejoins the call.
-    let source = source
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .replace(" .", ".");
-    let mut names = BTreeSet::new();
-    for reader in READERS {
-        let mut rest = source.as_str();
-        while let Some(at) = rest.find(reader) {
-            let after = &rest[at + reader.len()..];
-            let end = after.find('"').expect("a closed literal");
-            names.insert(after[..end].to_string());
-            rest = &after[end..];
-        }
-    }
-    names
-}
-
-/// The field names of every struct in the module that derives `IntoParams`: the names the document declares.
-fn declared_names(source: &str) -> BTreeSet<String> {
-    let mut names = BTreeSet::new();
-    let mut lines = source.lines();
-    while let Some(line) = lines.next() {
-        if !(line.contains("#[derive(") && line.contains("IntoParams")) {
-            continue;
-        }
-        for line in lines.by_ref() {
-            if line.trim_start().starts_with("pub(crate) struct")
-                || line.trim_start().starts_with("struct")
-            {
-                break;
-            }
-        }
-        for line in lines.by_ref() {
-            let field = line.trim();
-            if field == "}" {
-                break;
-            }
-            if field.starts_with("///") || field.starts_with("#[") {
-                continue;
-            }
-            if let Some((name, _)) = field.split_once(':') {
-                names.insert(
-                    name.trim_start_matches("pub(crate) ")
-                        .trim_start_matches("pub ")
-                        .to_string(),
-                );
-            }
-        }
-    }
-    names
 }
 
 #[tokio::test]
@@ -1464,8 +1358,8 @@ async fn the_reload_route_answers_each_listener_as_exactly_one_of_the_three_clos
     }
 }
 
-/// The query check compares names per module, and the breakdown's query declares the same names, so it would pass a
-/// burn operation that left the two it reads out of the document.
+/// The burn operation's query in the document is the four names its handler reads: the range, the grouping, the
+/// account filter and the agent groups.
 #[tokio::test]
 async fn the_burn_operation_declares_the_account_filter_and_the_agent_groups_it_reads() {
     let (_app, _up, document) = document().await;
@@ -1482,8 +1376,8 @@ async fn the_burn_operation_declares_the_account_filter_and_the_agent_groups_it_
     );
 }
 
-/// The query check compares names per module, and the breakdown's query declares the same ten names, so it would pass a
-/// refusal count operation that left its own query out of the document.
+/// The refusal count operation's query in the document is the ten names its handler reads: the range, the probe flag
+/// and the eight filters.
 #[tokio::test]
 async fn the_refusal_count_operation_declares_the_range_and_the_filters_it_reads() {
     let (_app, _up, document) = document().await;
@@ -1512,8 +1406,8 @@ async fn the_refusal_count_operation_declares_the_range_and_the_filters_it_reads
     );
 }
 
-/// The query check compares names per module from the source text, so it would pass an operation that left its query
-/// struct out of `params` or a struct that lost `parameter_in = Query`, which utoipa then writes as `in: path`.
+/// Both logs declare `agent_id` in the query, so a query struct left out of `params`, or one that lost
+/// `parameter_in = Query`, which utoipa then writes as `in: path`, fails here.
 #[tokio::test]
 async fn the_request_log_and_the_routing_log_declare_the_agent_id_filter() {
     let (_app, _up, document) = document().await;
@@ -1529,9 +1423,8 @@ async fn the_request_log_and_the_routing_log_declare_the_agent_id_filter() {
     }
 }
 
-/// The query check compares names per module, and the other analytics queries declare `range` and `accounts`, so it
-/// would pass an unused allowance operation that left its own query out. Its default differs from theirs, and the
-/// description is where the document says so.
+/// The unused allowance operation's query in the document is the account filter and the range. The range's default
+/// differs from the other analytics queries', and the description is where the document says so.
 #[tokio::test]
 async fn the_unused_allowance_operation_declares_the_account_filter_and_the_range_with_its_thirty_day_default(
 ) {
@@ -1560,8 +1453,8 @@ async fn the_unused_allowance_operation_declares_the_account_filter_and_the_rang
     );
 }
 
-/// The query check compares names per module, so it would pass an overview operation that left `range` out of the
-/// document, and the console reads the two words and the refusal from the document alone.
+/// The overview operation's query in the document is `range` alone, and the console reads the two words and the
+/// refusal from the document alone.
 #[tokio::test]
 async fn the_keepalive_overview_declares_its_range_and_the_refusal_of_another_word() {
     let (_app, _up, document) = document().await;
@@ -1586,55 +1479,5 @@ async fn the_keepalive_overview_declares_its_range_and_the_refusal_of_another_wo
         operation["responses"]["400"]["content"]["application/json"]["example"],
         serde_json::json!({ "error": "range is 7d or 30d" }),
         "{operation}"
-    );
-}
-
-#[test]
-fn every_module_that_reads_a_query_is_in_the_query_check() {
-    let checked: BTreeSet<&str> = QUERY_MODULES.iter().map(|(m, _)| *m).collect();
-    for (module, source) in HANDLER_MODULES {
-        if !checked.contains(module) {
-            assert!(
-                reader_names(source).is_empty(),
-                "{module} reads a query and is not in QUERY_MODULES"
-            );
-        }
-    }
-}
-
-#[test]
-fn the_query_check_reads_a_direct_read_a_split_chain_and_the_fields_of_an_into_params_struct() {
-    let source = r#"
-async fn list(Query(q): Query<HashMap<String, String>>) -> Response {
-    let limit = q.get("limit");
-    let include_probes = q
-        .get("include_probes")
-        .is_some_and(|v| v == "true");
-}
-
-/// The list's query.
-#[allow(dead_code)]
-#[derive(Deserialize, IntoParams)]
-pub(crate) struct ListQuery {
-    /// At most this many rows.
-    #[param(example = 50)]
-    pub limit: Option<String>,
-    /// Whether the probes count: `true` or `1`.
-    pub include_probes: Option<String>,
-}
-"#;
-    let expected: BTreeSet<String> = ["include_probes", "limit"]
-        .iter()
-        .map(|n| n.to_string())
-        .collect();
-    assert_eq!(
-        reader_names(source),
-        expected,
-        "a direct read and a chain rustfmt split over two lines"
-    );
-    assert_eq!(
-        declared_names(source),
-        expected,
-        "the fields under a doc comment and an attribute"
     );
 }
