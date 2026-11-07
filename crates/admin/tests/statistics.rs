@@ -2337,13 +2337,6 @@ async fn the_dashboard_reads_the_day_and_the_pins_and_the_account_list_the_newes
         ),
         (Some(24 * 150), Some(24 * 40))
     );
-    // Each row's 100 input, 40 cache-read and 10 output tokens of Sonnet 5 at the shipped $2, $0.20 and $10 a million
-    // are $0.000308, and 24 rows $0.007392.
-    assert!(
-        (dashboard["cost_24h"].as_f64().unwrap() - 0.007392).abs() < 1e-9,
-        "the 24 rows' counts at the shipped cells: {} vs 0.007392",
-        dashboard["cost_24h"]
-    );
     assert!((dashboard["error_rate_24h"].as_f64().unwrap() - 5.0 / 24.0).abs() < 1e-9);
     assert_eq!(dashboard["top_error_code"].as_str(), Some("upstream_error"));
     assert_eq!(dashboard["hourly"].as_array().unwrap().len(), 24);

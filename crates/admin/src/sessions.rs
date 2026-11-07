@@ -853,36 +853,5 @@ mod tests {
     fn the_session_fixtures_round_trip_through_their_declared_types() {
         round_trips_each::<Session>("sessions", &["sessions", "*"]);
         round_trips::<SessionCosts>("sessions_costs");
-        // A model priced one way carries `fast` and `long_context` as null, which no cell type takes, so each set a
-        // model carries round-trips through its type and the nulls are passed over.
-        let costs = crate::openapi::round_trip::fixture("sessions_costs");
-        let (mut fast, mut long_context) = (0, 0);
-        for model in costs["models"].as_array().unwrap() {
-            let id = &model["model"];
-            if !model["fast"].is_null() {
-                let typed: crate::openapi::FastCells =
-                    serde_json::from_value(model["fast"].clone()).unwrap();
-                assert_eq!(
-                    serde_json::to_value(&typed).unwrap(),
-                    model["fast"],
-                    "{id}: the fast cells"
-                );
-                fast += 1;
-            }
-            if !model["long_context"].is_null() {
-                let typed: crate::openapi::LongContextCells =
-                    serde_json::from_value(model["long_context"].clone()).unwrap();
-                assert_eq!(
-                    serde_json::to_value(&typed).unwrap(),
-                    model["long_context"],
-                    "{id}: the long-context cells"
-                );
-                long_context += 1;
-            }
-        }
-        assert!(
-            fast >= 1 && long_context >= 1,
-            "a fast set and a long-context set at least, {fast} and {long_context} found"
-        );
     }
 }

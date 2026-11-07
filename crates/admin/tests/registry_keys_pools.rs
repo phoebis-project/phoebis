@@ -1190,8 +1190,7 @@ async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
         "the card's head figure equals its bars"
     );
     // A plan request on the subscription account beside the api_key rows, on Sonnet 4.5, which the shipped cost
-    // model has no weight for: the dollars count it, the billed part does not, and the Pro-week figure reads null,
-    // since a plan row with tokens priced nothing.
+    // model has no weight for: the dollars count it and the billed part does not.
     let plan_at = now - 30_000;
     let usage = phoebis_routing::PinUsage {
         input: 100,
@@ -1242,24 +1241,21 @@ async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
         let totals = &keys["keys"][0][member];
         let cost = totals["cost_usd"].as_f64().unwrap();
         assert!(
-            close(&totals["billed_usd"], cost - plan_usd)
-                && totals["equivalent"].is_null()
-                && totals.get("estimated").is_none(),
-            "{member}: the api_key rows' dollars as billed, below the plan request's beside them, and a null \
-             figure: {totals}"
+            close(&totals["billed_usd"], cost - plan_usd) && totals.get("estimated").is_none(),
+            "{member}: the api_key rows' dollars as billed, below the plan request's beside them: {totals}"
         );
     }
     let pool = json(get(&parts.app, "/admin/pools", Some(&cookie)).await).await["pools"][0].clone();
     let cost = pool["cost_24h"].as_f64().unwrap();
     assert!(
-        close(&pool["billed_24h"], cost - plan_usd) && pool["equivalent_24h"].is_null(),
-        "the pool's day: its billed dollars below its dollars, and a null figure: {pool}"
+        close(&pool["billed_24h"], cost - plan_usd),
+        "the pool's day: its billed dollars below its dollars: {pool}"
     );
     let board = json(get(&parts.app, "/admin/dashboard", Some(&cookie)).await).await;
     let cost = board["cost_24h"].as_f64().unwrap();
     assert!(
-        close(&board["billed_24h"], cost - plan_usd) && board["equivalent_24h"].is_null(),
-        "the dashboard's day reads the null figure as the pool's does: {board}"
+        close(&board["billed_24h"], cost - plan_usd),
+        "the dashboard's day reads its billed dollars as the pool's does: {board}"
     );
     assert_eq!(
         post(

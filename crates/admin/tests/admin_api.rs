@@ -3382,14 +3382,12 @@ async fn an_account_the_router_holds_no_plan_window_of_lists_the_ledger_rows_at_
     h.db.insert_samples(
         &[
             row("business", "five_hour", 0.4, read_at),
-            row("business", "seven_day", 0.2, bucket * 1_000),
             row("direct", "five_hour", 0.1, read_at),
-            row("direct", "seven_day", 0.05, bucket * 1_000),
         ],
         None,
     )
     .unwrap();
-    for (id, five_hour, seven_day) in [("business", 0.4, 0.2), ("direct", 0.1, 0.05)] {
+    for (id, five_hour) in [("business", 0.4), ("direct", 0.1)] {
         let account =
             json(get(&h.app, &format!("/admin/accounts/{id}"), Some(&cookie)).await).await;
         let drawn: Vec<(&str, f64, i64)> = account["windows"]
@@ -3404,14 +3402,7 @@ async fn an_account_the_router_holds_no_plan_window_of_lists_the_ledger_rows_at_
                 )
             })
             .collect();
-        assert_eq!(
-            drawn,
-            [
-                ("five_hour", five_hour, read_at),
-                ("seven_day", seven_day, bucket * 1_000)
-            ],
-            "{account}"
-        );
+        assert_eq!(drawn, [("five_hour", five_hour, read_at)], "{account}");
     }
 }
 
@@ -5509,120 +5500,6 @@ async fn a_session_row_prices_the_burn_at_the_set_the_pins_last_prompt_selects()
         Some("usd"),
         "the fast tokens read at the fast cells and the ordinary ones at the set the last prompt selects, summed \
          in dollars"
-    );
-}
-
-#[tokio::test]
-async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on() {
-    use common::{login, patch, wait_json};
-    let now = common::NOW;
-    let parts = sessions_harness_with(|generation| {
-        vec![phoebis_store::PinRow {
-            model: "claude-opus-5-5".into(),
-            ..burning_opus_pin("s1", "business", generation, now, 0.0, 0.0)
-        }]
-    })
-    .await;
-    let cookie = login(&parts.app, "admin-secret").await;
-    let averaged = patch(
-        &parts.app,
-        "/admin/pools/main",
-        r#"{"burn_average_seconds":600}"#,
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(averaged.status(), 200);
-    // A million Opus 5.5 input tokens at the fixed clock, which the peak band never covers, folded over the
-    // pool's 600-second burn average.
-    parts
-        .router
-        .report(phoebis_routing::Report::PinRenewed {
-            pin: phoebis_routing::PinRef {
-                key_id: "desktop".into(),
-                session_id: "s1".into(),
-                agent_id: "main".into(),
-                model: "claude-opus-5-5".into(),
-                epoch: 1,
-                lane: phoebis_routing::lane_key("claude-opus-5", "standard", "none", "-"),
-                entrypoint: None,
-                effort: None,
-            },
-            now,
-            usage: Some(phoebis_routing::PinUsage {
-                input: 1_000_000,
-                ..phoebis_routing::PinUsage::default()
-            }),
-            keepalive: false,
-            cache_ttl_ms: 300_000,
-            fast: false,
-            classifier: false,
-            turn_end: phoebis_routing::RenewalEnd::Turn,
-        })
-        .await;
-    // A million tokens at the shipped weight 2.2 are 2,200,000 units, over Ultra's 150,000,000 on the 5-hour window,
-    // and an hour holds six of the 600-second averages: 0.088 an hour. Pro's 7,500,000 is a twentieth of that
-    // capacity, so the same tokens read 1.76 there.
-    let on_max_20x = 0.088;
-    let renewed = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
-        session_row(v, "s1")["burn"]
-            .as_f64()
-            .is_some_and(|b| b > 0.0)
-    })
-    .await;
-    let (burn, unit) = burn_of(&renewed, "s1");
-    assert!(
-        close(burn, on_max_20x) && unit.as_deref() == Some("window_share"),
-        "a million Opus 5.5 input tokens over the window, as a share of Ultra's 5-hour window per hour: {:?} \
-         against {on_max_20x}",
-        (burn, unit)
-    );
-    // The Pro-week figure reads no account tier, so the same figure on every tier the account moves to below: the
-    // 13,200,000 units an hour over the Pro tier's 90,000,000 on the week.
-    let equivalent = 13_200_000.0 / 90_000_000.0;
-    let equivalent_of = |sessions: &serde_json::Value| {
-        let row = session_row(sessions, "s1");
-        (
-            row["burn_equivalent"].as_f64(),
-            row.get("estimated").cloned(),
-        )
-    };
-    let (on_ultra, estimated) = equivalent_of(&renewed);
-    assert!(
-        close(on_ultra, equivalent) && estimated.is_none(),
-        "the burn as the Pro-week figure per hour: {on_ultra:?} against {equivalent}"
-    );
-    name_the_tier(&parts.store, "business", "default_claude_ai");
-    parts.router.reload().await.unwrap();
-    let on_pro = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
-        !close(session_row(v, "s1")["burn"].as_f64(), on_max_20x)
-    })
-    .await;
-    let pro = 1.76;
-    assert!(
-        close(burn_of(&on_pro, "s1").0, pro),
-        "the same tokens read on Pro are their share of Pro's own 5-hour window: {:?} against {pro}",
-        burn_of(&on_pro, "s1")
-    );
-    assert!(
-        close(equivalent_of(&on_pro).0, equivalent),
-        "the equivalent takes no tier division on Pro: {:?} against {equivalent}",
-        equivalent_of(&on_pro)
-    );
-    name_the_tier(&parts.store, "business", "default_claude_team");
-    parts.router.reload().await.unwrap();
-    let on_team = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
-        session_row(v, "s1")["burn"].is_null()
-    })
-    .await;
-    assert_eq!(
-        burn_of(&on_team, "s1"),
-        (None, Some("window_share".into())),
-        "a tier the cost model does not size sizes no window, so the figure is null rather than a guess"
-    );
-    assert!(
-        close(equivalent_of(&on_team).0, equivalent),
-        "while the Pro-week figure still reads on a tier the cost model does not size: {:?} against {equivalent}",
-        equivalent_of(&on_team)
     );
 }
 

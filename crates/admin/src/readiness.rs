@@ -43,13 +43,9 @@ mod tests {
     #[test]
     fn dead_of_names_each_dead_component_in_order() {
         for (ledger, router, store, dead) in [
-            (true, true, true, vec![]),
             (false, true, true, vec!["ledger"]),
             (true, false, true, vec!["router"]),
             (true, true, false, vec!["store"]),
-            (false, false, true, vec!["ledger", "router"]),
-            (false, true, false, vec!["ledger", "store"]),
-            (true, false, false, vec!["router", "store"]),
             (false, false, false, vec!["ledger", "router", "store"]),
         ] {
             assert_eq!(

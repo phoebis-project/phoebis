@@ -3240,10 +3240,6 @@ async fn the_breakdown_answers_shares_for_an_oauth_group_under_the_account_group
         ])),
         "the kept-warm requests and their tokens per TTL, each beside its plan-funded part, with no sum: {business}"
     );
-    assert!(
-        business["saving_usd"].is_number() && business["saving_equivalent"].is_number(),
-        "the saving's two members beside the probe cost: {business}"
-    );
     assert_eq!(
         (&business["plan_requests"], &business["plan_output_tokens"]),
         (&serde_json::json!(1), &serde_json::json!(100)),

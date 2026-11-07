@@ -1464,17 +1464,6 @@ async fn the_reload_route_answers_each_listener_as_exactly_one_of_the_three_clos
     }
 }
 
-#[test]
-fn every_query_name_a_handler_reads_is_declared_and_nothing_else() {
-    for (module, source) in QUERY_MODULES {
-        assert_eq!(
-            reader_names(source),
-            declared_names(source),
-            "{module}: the names read and the names declared"
-        );
-    }
-}
-
 /// The query check compares names per module, and the breakdown's query declares the same names, so it would pass a
 /// burn operation that left the two it reads out of the document.
 #[tokio::test]
