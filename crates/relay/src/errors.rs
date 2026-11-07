@@ -303,9 +303,6 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
                 BodyMember::CacheControl => {
                     "the request body carries a cache_control marker the relay cannot place, so the pool's cache TTL policy cannot be applied to it".into()
                 }
-                BodyMember::Elements => {
-                    "the request body holds more elements than the relay reads".into()
-                }
                 BodyMember::MetadataUserId => {
                     "the request body has no metadata.user_id the account can be bound to".into()
                 }
@@ -335,6 +332,17 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             error_type: "request_too_large",
             code: "request_too_large",
             message: Cow::Borrowed("the request body is too large"),
+            retry_after: None,
+            no_retry: false,
+            class: FailureClass::Refused,
+        },
+        // Under the body-shape code, so the ledger files the refusal under the same standing as a body whose
+        // member the relay cannot place.
+        RelayError::BodyTooManyElements => Failure {
+            status: StatusCode::BAD_REQUEST,
+            error_type: "invalid_request_error",
+            code: phoebis_bus::BODY_SHAPE_ERROR_CODE,
+            message: Cow::Borrowed("the request body holds more elements than the relay reads"),
             retry_after: None,
             no_retry: false,
             class: FailureClass::Refused,
@@ -951,8 +959,9 @@ mod tests {
             ),
             (Exhaustion::Untimed, 503),
         ] {
+            let failure = crate::exhaustion::exhaustion_failure(&exhaustion, 0);
             assert_eq!(
-                crate::exhaustion::exhaustion_response(&exhaustion, 0, "r-1")
+                crate::exhaustion::exhaustion_response(&exhaustion, &failure, "r-1")
                     .status()
                     .as_u16(),
                 status,

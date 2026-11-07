@@ -214,14 +214,12 @@ impl Renewal {
         self.fresh && RELEASING_STATUSES.contains(&status)
     }
 
-    /// `fast` is whether the answer reported `usage.speed` `fast`, `end_turn` whether its stop reason read `end_turn`.
     pub(crate) fn send(
         self,
         now: i64,
         status: u16,
         usage: Option<&Usage>,
-        fast: bool,
-        end_turn: bool,
+        response: &ResponseFacts,
         waiting: &mut Waiting,
     ) {
         if self.releases(status) {
@@ -244,7 +242,7 @@ impl Renewal {
         // agent.
         let turn_end = if self.keepalive {
             RenewalEnd::NoTurn
-        } else if self.subagent && end_turn {
+        } else if self.subagent && response.stop_reason.as_deref() == Some("end_turn") {
             RenewalEnd::AgentEnded
         } else if self.turn {
             RenewalEnd::Turn
@@ -259,7 +257,7 @@ impl Renewal {
                 usage: usage.filter(|u| !u.is_empty()).map(pin_usage),
                 keepalive: self.keepalive,
                 cache_ttl_ms: self.cache_ttl_ms,
-                fast,
+                fast: response.speed.as_deref() == Some("fast"),
                 classifier: self.classifier,
                 turn_end,
             },
@@ -318,7 +316,7 @@ impl AffinityFacts {
         now: i64,
         status: u16,
         usage: Option<&Usage>,
-        fast: bool,
+        response: &ResponseFacts,
         message_id: Option<String>,
         waiting: &mut Waiting,
     ) -> bool {
@@ -336,7 +334,7 @@ impl AffinityFacts {
                     canonical_model: self.canonical_model.clone(),
                     incarnation: self.incarnation,
                     usage: pin_usage(counted),
-                    fast,
+                    fast: response.speed.as_deref() == Some("fast"),
                     classifier: self.classifier,
                     request_id: self.request_id.clone(),
                     attempt: self.attempt,
@@ -681,15 +679,12 @@ impl Publish {
             .first_content_at
             .map(|at| at - self.outcome.received_at);
         let usage = (!self.usage.is_empty()).then(|| self.usage.clone());
-        let fast = self.response.speed.as_deref() == Some("fast");
-        let end_turn = self.response.stop_reason.as_deref() == Some("end_turn");
         if let Some(renewal) = self.renewal.take() {
             renewal.send(
                 (self.clock)(),
                 self.status,
                 usage.as_ref(),
-                fast,
-                end_turn,
+                &self.response,
                 waiting,
             );
         }
@@ -698,7 +693,7 @@ impl Publish {
                 (self.clock)(),
                 self.status,
                 usage.as_ref(),
-                fast,
+                &self.response,
                 self.message_id.clone(),
                 waiting,
             ),

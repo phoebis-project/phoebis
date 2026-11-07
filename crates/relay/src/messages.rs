@@ -64,13 +64,11 @@ use crate::credit::{hex_of, CreditDigest, CreditStore};
 use crate::dispatch::{self, until_canceled, AttemptFailure, Sent};
 use crate::errors::{
     accounts_at_cap, body_budget_exhausted, key_body_reads, key_refusal, no_store_answer,
-    relay_failure, Failure, ACCOUNT_CANCELED, CLIENT_GONE_CODE, GUARDRAIL_BLOCKED,
+    relay_failure, Failure, FailureClass, ACCOUNT_CANCELED, CLIENT_GONE_CODE, GUARDRAIL_BLOCKED,
     METHOD_NOT_ALLOWED, MODEL_NOT_ALLOWED, NOT_FOUND, ROUTER_SHUTDOWN_CODE, ROUTER_UNAVAILABLE,
     UPSTREAM_UNREACHABLE,
 };
-use crate::exhaustion::{
-    exhaustion_class, exhaustion_code, exhaustion_response, pool_moved_response,
-};
+use crate::exhaustion::{exhaustion_failure, exhaustion_response, pool_moved_failure};
 use crate::facts::{element_count, AttributionLine, BodyFacts, ClientHints, MAX_BODY_ELEMENTS};
 use crate::headers::{outbound_headers, starts_with_ignoring_case, CredentialKind};
 use crate::hold::{hold, Commit, Held, Inspect, INSPECT_BUFFER};
@@ -229,6 +227,14 @@ pub struct RelayOutcome {
     /// completion names `client_off` where it reads `Off`. `None` for every other request and for an answer the
     /// relay built before any leg.
     pub judged: Option<JudgedCharge>,
+}
+
+impl RelayOutcome {
+    /// Writes `error_code` and `class` together, so no local answer files a code under the upstream's status.
+    fn answered(&mut self, code: &str, class: Outcome) {
+        self.error_code = Some(code.to_string());
+        self.class = Some(class);
+    }
 }
 
 /// The obstacle `RelayOutcome` names for a probe the keepalive holds on rather than pausing as an exhausted pool.
@@ -688,9 +694,7 @@ impl Trace {
         stream: bool,
         body_capture_hours: u32,
         shape: RequestShape,
-        static_hash: Option<String>,
-        boundaries: Arc<[String]>,
-        marked: Arc<[usize]>,
+        chains: Option<&Chains>,
         client: ClientFacts,
         auto_mode: Option<AutoMode>,
         presented_retired: bool,
@@ -729,9 +733,11 @@ impl Trace {
             body,
             body_capture_hours,
             shape,
-            static_hash,
-            boundaries,
-            marked,
+            static_hash: chains.and_then(Chains::static_hash).map(String::from),
+            boundaries: chains
+                .map(|c| c.message_boundaries.clone())
+                .unwrap_or_default(),
+            marked: chains.map(|c| c.marked.clone()).unwrap_or_default(),
             client,
             auto_mode,
             fork: identity
@@ -1282,8 +1288,7 @@ impl Relay {
                     key_refusal(&refusal)
                 }),
             None => resolve_key(&snapshot, &parts.headers, received_at)
-                .map(|(key, presented)| (key.clone(), presented))
-                .map_err(|refused| refused.failure()),
+                .map(|(key, presented)| (key.clone(), presented)),
         };
         let (key, presented) = match admitted {
             Ok(admitted) => admitted,
@@ -1465,7 +1470,7 @@ impl Relay {
                     &parts.headers,
                     capture_hours,
                     retired,
-                    relay_failure(&RelayError::BodyShape(BodyMember::Elements)),
+                    relay_failure(&RelayError::BodyTooManyElements),
                     client_version.as_deref(),
                 )
                 .await;
@@ -1524,8 +1529,6 @@ impl Relay {
                         capture_hours,
                         facts.shape.clone(),
                         None,
-                        Arc::default(),
-                        Arc::default(),
                         client_facts(&parts.headers, &hints, None, Some(&facts)),
                         auto_mode,
                         retired,
@@ -1620,11 +1623,6 @@ impl Relay {
         let guardrail_id = evaluation.blocked.map(|i| guardrails[i].id.clone());
         let client = client_facts(&parts.headers, &hints, Some(&identity), Some(&facts));
         let classifier = client.classifier.is_some();
-        let static_hash = facts
-            .chains
-            .as_ref()
-            .and_then(|c| c.static_hash())
-            .map(String::from);
         trace
             .observed(
                 Some(&key),
@@ -1635,17 +1633,7 @@ impl Relay {
                 stream,
                 capture_hours,
                 facts.shape.clone(),
-                static_hash,
-                facts
-                    .chains
-                    .as_ref()
-                    .map(|c| c.message_boundaries.clone())
-                    .unwrap_or_default(),
-                facts
-                    .chains
-                    .as_ref()
-                    .map(|c| c.marked.clone())
-                    .unwrap_or_default(),
+                facts.chains.as_ref(),
                 client,
                 auto_mode,
                 retired,
@@ -1825,7 +1813,7 @@ impl Relay {
         let (stamped, client_hash, drifted) = match crate::body::stamp_of(&members) {
             Ok(stamp) => (
                 !matches!(stamp, Stamp::None),
-                matches!(stamp, Stamp::Hash(_)),
+                stamp.is_client_hash(),
                 crate::body::drift_of(&raw, stamp),
             ),
             Err(error) => (false, false, Err(error)),
@@ -2298,22 +2286,11 @@ impl Relay {
     ) -> Response {
         // Each builder takes its status from `exhaustion_status` for its arm, the status the routing log's exhausted
         // row records as its `answer`.
-        let (code, class, response) = match exhaustion {
-            Exhaustion::Untimed if at_cap => {
-                let failure = accounts_at_cap(admitted.retry_in_place.as_secs());
-                (
-                    failure.code,
-                    failure.class,
-                    failure.response(&admitted.trace.request_id),
-                )
-            }
-            _ => (
-                exhaustion_code(exhaustion),
-                exhaustion_class(exhaustion),
-                exhaustion_response(exhaustion, now, &admitted.trace.request_id),
-            ),
+        let mut failure = match exhaustion {
+            Exhaustion::Untimed if at_cap => accounts_at_cap(admitted.retry_in_place.as_secs()),
+            _ => exhaustion_failure(exhaustion, now),
         };
-        let mut outcome = admitted.outcome("", 0, attempt, false, Some(code), None, None);
+        let mut outcome = admitted.outcome("", 0, attempt, false, None, None);
         let reauth = admitted.trace.kind == Kind::Probe && auth_marked;
         outcome.obstacle = match exhaustion {
             Exhaustion::Timed { window, .. } if window == BUDGET_WINDOW => {
@@ -2331,10 +2308,11 @@ impl Relay {
         };
         // A probe held on the mark its leg wrote is refused for the probe alone, as one held on its pinned member's
         // standing is, so the pool's exhaustion gauge and rollups never count it.
-        outcome.class = Some(match outcome.obstacle {
-            Some(ProbeObstacle::ReauthRequired) => Outcome::Rejected,
-            _ => class.outcome(attempt),
-        });
+        if matches!(outcome.obstacle, Some(ProbeObstacle::ReauthRequired)) {
+            failure.class = FailureClass::Rejected;
+        }
+        outcome.answered(failure.code, failure.class.outcome(attempt));
+        let response = exhaustion_response(exhaustion, &failure, &admitted.trace.request_id);
         self.answer(admitted.trace, response, outcome).await
     }
 
@@ -2376,26 +2354,12 @@ impl Relay {
                 obstacle = "pool_moved",
                 "the key moved between pools after admission, so the request is refused"
             );
-            let mut outcome = admitted.outcome(
-                "",
-                0,
-                *attempt,
-                false,
-                Some(exhaustion_code(&Exhaustion::Untimed)),
-                None,
-                None,
-            );
-            // Filed as rejected, so the pool's exhaustion gauge and rollups never count a moved key as the pool's.
+            let mut outcome = admitted.outcome("", 0, *attempt, false, None, None);
             outcome.obstacle = Some(ProbeObstacle::PoolMoved);
-            outcome.class = Some(Outcome::Rejected);
             ending(end_guard, REFUSED);
             return Leg::Respond(
-                self.answer(
-                    admitted.trace,
-                    pool_moved_response(&admitted.trace.request_id),
-                    outcome,
-                )
-                .await,
+                self.answer_failure(admitted.trace, pool_moved_failure(), outcome)
+                    .await,
             );
         }
         // The row the router selected, not one looked up again in the admission snapshot: the endpoint a
@@ -2822,7 +2786,6 @@ impl Relay {
                         0,
                         *attempt,
                         false,
-                        None,
                         pin_epoch,
                         cache_ttl_ms(ttl),
                     );
@@ -2840,7 +2803,6 @@ impl Relay {
                         0,
                         *attempt,
                         written,
-                        None,
                         pin_epoch,
                         cache_ttl_ms(ttl),
                     );
@@ -2882,7 +2844,6 @@ impl Relay {
                             0,
                             *attempt,
                             true,
-                            None,
                             pin_epoch,
                             cache_ttl_ms(ttl),
                         );
@@ -2951,7 +2912,6 @@ impl Relay {
             head.status,
             ctx.attempt,
             true,
-            None,
             ctx.pin_epoch,
             ctx.cache_ttl_ms,
         );
@@ -3538,30 +3498,20 @@ impl Relay {
                 (self.clock)(),
                 head.status,
                 None,
-                false,
-                false,
+                &ResponseFacts::default(),
                 &mut waiting,
             );
         }
         ctx.ending(EXHAUSTED);
-        outcome.error_code = Some(exhaustion_code(&Exhaustion::Untimed).to_string());
-        outcome.class = Some(exhaustion_class(&Exhaustion::Untimed).outcome(outcome.attempt));
+        let mut failure = exhaustion_failure(&Exhaustion::Untimed, (self.clock)());
         // A probe bound to its account never reaches the selector's exhaustion, so its own answer names the mark,
         // which refuses the probe alone.
         if ctx.admitted.trace.kind == Kind::Probe && ctx.auth_marked {
             outcome.obstacle = Some(ProbeObstacle::ReauthRequired);
-            outcome.class = Some(Outcome::Rejected);
+            failure.class = FailureClass::Rejected;
         }
         let response = self
-            .answer(
-                ctx.admitted.trace,
-                exhaustion_response(
-                    &Exhaustion::Untimed,
-                    (self.clock)(),
-                    &ctx.admitted.trace.request_id,
-                ),
-                outcome,
-            )
+            .answer_failure(ctx.admitted.trace, failure, outcome)
             .await;
         self.after_answer(waiting, ctx.guards());
         response
@@ -3864,8 +3814,6 @@ impl Relay {
                 capture_hours,
                 RequestShape::default(),
                 None,
-                Arc::default(),
-                Arc::default(),
                 client_facts(headers, &ClientHints::read(headers), None, None),
                 None,
                 presented_retired,
@@ -3904,7 +3852,6 @@ impl Relay {
             client_version.map(str::to_string),
             None,
             None,
-            None,
         );
         outcome.client_drift = client_drift;
         outcome.client_contract = client_contract;
@@ -3935,8 +3882,7 @@ impl Relay {
         failure: Failure,
         mut outcome: RelayOutcome,
     ) -> Response {
-        outcome.error_code = Some(failure.code.to_string());
-        outcome.class = Some(failure.class.outcome(outcome.attempt));
+        outcome.answered(failure.code, failure.class.outcome(outcome.attempt));
         self.answer(trace, failure.response(&trace.request_id), outcome)
             .await
     }
@@ -4169,7 +4115,6 @@ impl Relay {
             status,
             ctx.attempt,
             true,
-            None,
             ctx.pin_epoch,
             ctx.cache_ttl_ms,
         );
@@ -4439,16 +4384,13 @@ impl Relay {
             Some(answer) => (Some(answer.usage), answer.response),
             None => (None, ResponseFacts::default()),
         };
-        let fast = facts.speed.as_deref() == Some("fast");
-        let end_turn = facts.stop_reason.as_deref() == Some("end_turn");
         let mut waiting = Waiting::default();
         if let Some(renewal) = renewal {
             renewal.send(
                 (self.clock)(),
                 head.status,
                 usage.as_ref(),
-                fast,
-                end_turn,
+                &facts,
                 &mut waiting,
             );
         }
@@ -4458,7 +4400,7 @@ impl Relay {
                 (self.clock)(),
                 head.status,
                 usage.as_ref(),
-                fast,
+                &facts,
                 None,
                 &mut waiting,
             ),
@@ -4494,12 +4436,9 @@ impl Relay {
 
 /// The outcome of a request the relay answered with its own 502 after an upstream head it could not use: `code`
 /// names how the response failed, not the head that never reached the caller.
-fn unreachable_outcome(outcome: RelayOutcome, code: &str) -> RelayOutcome {
-    RelayOutcome {
-        error_code: Some(code.to_string()),
-        class: Some(Outcome::Failed),
-        ..outcome
-    }
+fn unreachable_outcome(mut outcome: RelayOutcome, code: &str) -> RelayOutcome {
+    outcome.answered(code, Outcome::Failed);
+    outcome
 }
 
 /// A response whose head is settled and whose body is still on the wire.
@@ -4600,7 +4539,7 @@ impl Responding<'_> {
     /// the one call the upstream keeps free of a plan window. A call the router answered off reports as any call, so
     /// its usage charges the window and its renewal folds as a standard answer.
     fn free_of_plan(&self) -> bool {
-        self.admitted.classifier && self.judged == Some(JudgedCharge::On)
+        self.judged == Some(JudgedCharge::On)
     }
 
     /// Both counts and the end report for a body that outlives the response half, so they are released when it
@@ -4993,14 +4932,12 @@ struct Admitted<'a> {
 impl Admitted<'_> {
     /// The outcome of this request on `account_id`, naming the trace, key, identity and client version it was
     /// admitted with.
-    #[allow(clippy::too_many_arguments)]
     fn outcome(
         &self,
         account_id: &str,
         upstream_status: u16,
         attempt: u8,
         written: bool,
-        error_code: Option<&str>,
         pin_epoch: Option<u64>,
         cache_ttl_ms: Option<i64>,
     ) -> RelayOutcome {
@@ -5013,7 +4950,6 @@ impl Admitted<'_> {
             attempt,
             written,
             self.client_version.clone(),
-            error_code,
             pin_epoch,
             cache_ttl_ms,
         )
@@ -5030,7 +4966,6 @@ fn relay_outcome(
     attempt: u8,
     written: bool,
     client_version: Option<String>,
-    error_code: Option<&str>,
     pin_epoch: Option<u64>,
     cache_ttl_ms: Option<i64>,
 ) -> RelayOutcome {
@@ -5048,7 +4983,7 @@ fn relay_outcome(
         client_drift: None,
         client_contract: None,
         client_version,
-        error_code: error_code.map(str::to_string),
+        error_code: None,
         class: None,
         pin_epoch,
         received_at: trace.received_at,

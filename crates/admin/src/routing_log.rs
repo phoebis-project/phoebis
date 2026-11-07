@@ -18,7 +18,7 @@ use utoipa::ToSchema;
 
 use crate::analytics::ledger_failure;
 use crate::openapi::{ErrorBody, LedgerFailure};
-use crate::requests::{list_param, one_of, text_param};
+use crate::requests::{list_param, text_param, word_param};
 use crate::routes::failure;
 use crate::AdminState;
 
@@ -548,15 +548,9 @@ pub(crate) async fn list(
         Some(Ok(n)) if (1..=MAX_LIMIT).contains(&n) => n,
         Some(_) => return failure(StatusCode::BAD_REQUEST, "limit is 1 to 200"),
     };
-    let dir = match q.get("dir").map(|word| Direction::parse(word)) {
-        None => Direction::default(),
-        Some(Some(dir)) => dir,
-        Some(None) => {
-            return failure(
-                StatusCode::BAD_REQUEST,
-                &format!("dir is {}", one_of(Direction::WORDS)),
-            )
-        }
+    let dir = match word_param(&q, "dir", Direction::parse, Direction::WORDS) {
+        Ok(dir) => dir,
+        Err(response) => return response,
     };
     let cursor = match q.get("cursor").map(|raw| RoutingLogCursor::parse(raw)) {
         None => None,

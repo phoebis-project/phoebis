@@ -96,9 +96,9 @@ pub const DANGEROUS_TOOL_USE_BETA: &str = phoebis_profile::DANGEROUS_TOOL_USE_BE
 /// marks the call.
 pub const CLASSIFIER_BETA: &str = "auto-mode-classifier-2026-07-16";
 
-/// A member an edit needs to find, or the bound on the body's elements. A body toward the measured host that lacks
-/// such a member is refused rather than sent on: the account it would be billed against, or the model it would be
-/// served by, is not the one the router resolved.
+/// A member an edit needs to find. A body toward the measured host that lacks such a member is refused rather than
+/// sent on: the account it would be billed against, or the model it would be served by, is not the one the router
+/// resolved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BodyMember {
     /// A billing line at `system[0].text` the strict decoder cannot read, a lone surrogate escape among its causes:
@@ -110,8 +110,6 @@ pub enum BodyMember {
     /// A `cache_control` marker the decoder reads and the raw walk cannot reach, or one it reaches and cannot
     /// read.
     CacheControl,
-    /// A body that holds more elements than `MAX_BODY_ELEMENTS`, refused before it is parsed.
-    Elements,
     MetadataUserId,
     Model,
     /// A member the caller's body carries more than once, raw or escaped: one of the top-level members admission
@@ -174,8 +172,6 @@ impl BodyMember {
         match self {
             BodyMember::BillingLine | BodyMember::BillingStamp => BILLING_LINE_PATH,
             BodyMember::CacheControl => "cache_control",
-            // The bound is the whole body's, and a path spelled from the root names the root by no member.
-            BodyMember::Elements => "",
             BodyMember::MetadataUserId => "metadata.user_id",
             BodyMember::Model => "model",
             BodyMember::Repeated(member) => member.path(),
@@ -185,8 +181,8 @@ impl BodyMember {
 
     /// `RelayError::BodyShape`'s `Display` text: a billing line the restoration cannot decode, a billing stamp the
     /// restamp cannot reach, a `cache_control` marker the rewrite cannot place, a repeated member, or a `safeguards`
-    /// member the cut cannot place, was found rather than absent, and a body past the element bound names no
-    /// member, so none reads like the other two variants' "has no ... member to edit".
+    /// member the cut cannot place, was found rather than absent, so none reads like the other two variants' "has no
+    /// ... member to edit".
     pub(crate) fn shape_message(self) -> String {
         match self {
             BodyMember::BillingLine => {
@@ -198,7 +194,6 @@ impl BodyMember {
             BodyMember::CacheControl => {
                 "request body carries a cache_control marker the router cannot place".into()
             }
-            BodyMember::Elements => "request body holds more elements than the router reads".into(),
             BodyMember::Repeated(member) => format!("request body {}", member.carried_twice()),
             BodyMember::Safeguards => {
                 "request body carries a safeguards member the router cannot place".into()
@@ -347,13 +342,6 @@ pub fn set_cache_ttl(
 pub fn schema_cache_controls(
     root: &serde_json::Map<String, serde_json::Value>,
 ) -> Vec<&serde_json::Value> {
-    fn blocks(value: Option<&serde_json::Value>) -> impl Iterator<Item = &serde_json::Value> {
-        value
-            .and_then(serde_json::Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|block| block.get("cache_control"))
-    }
     let mut found: Vec<&serde_json::Value> = root.get("cache_control").into_iter().collect();
     found.extend(blocks(root.get("system")));
     found.extend(blocks(root.get("tools")));
@@ -363,19 +351,33 @@ pub fn schema_cache_controls(
         .into_iter()
         .flatten();
     for message in messages {
-        let content = message.get("content");
-        found.extend(blocks(content));
-        // The walk reads a `tool_result`'s own blocks one level down, so this reading does too, or the facts
-        // would miss a marker the rewrite edits.
-        let nested = content
-            .and_then(serde_json::Value::as_array)
-            .into_iter()
-            .flatten();
-        for block in nested {
-            found.extend(blocks(block.get("content")));
-        }
+        found.extend(message_cache_controls(message));
     }
     found
+}
+
+/// The `cache_control` members of one entry of `messages`: on its content blocks, then on the blocks of each such
+/// block's own `content`.
+pub(crate) fn message_cache_controls(
+    message: &serde_json::Value,
+) -> impl Iterator<Item = &serde_json::Value> {
+    let content = message.get("content");
+    // The walk reads a `tool_result`'s own blocks one level down, so this reading does too, or the facts would miss
+    // a marker the rewrite edits.
+    let nested = content
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .flat_map(|block| blocks(block.get("content")));
+    blocks(content).chain(nested)
+}
+
+fn blocks(value: Option<&serde_json::Value>) -> impl Iterator<Item = &serde_json::Value> {
+    value
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|block| block.get("cache_control"))
 }
 
 /// Rewrites every ephemeral marker to `ttl`: `1h` writes `"ttl":"1h"` right after `"type":"ephemeral"`, `5m`
@@ -640,16 +642,14 @@ pub(crate) fn version_drift(
     (!reproduced).then_some(DriftKind::VersionSuffix)
 }
 
-/// The billing block's stamp as `reachable_stamp` reads `system[0].text`, the one read of it admission makes.
+/// The billing block's stamp as `checked_stamp` reads `system[0].text`, the one read of it admission makes.
 /// `Err(BodyShape(BillingStamp))` when the decoded walk, which sees a key spelled with an escape, finds a stamp
 /// the raw walk cannot reach: edited, such a body would carry the client's hash over bytes it was not computed
 /// for; unedited, a hash nothing verified.
 pub(crate) fn stamp_of(members: &TopLevelMembers<'_>) -> Result<Stamp, RelayError> {
-    let stamp = members.reachable_stamp();
-    if members.decoded_stamp_count() > usize::from(!matches!(stamp, Stamp::None)) {
-        return Err(RelayError::BodyShape(BodyMember::BillingStamp));
-    }
-    Ok(stamp)
+    members
+        .checked_stamp()
+        .map_err(|_| RelayError::BodyShape(BodyMember::BillingStamp))
 }
 
 fn starts_with_object(body: &[u8]) -> bool {

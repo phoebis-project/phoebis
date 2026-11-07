@@ -31,12 +31,11 @@ pub use engine::{
 pub use events::{
     decode_json_event, Ack, AckAgent, Event, EventError, EventReport, Reported, PROTOCOL,
 };
-pub use probe::{ProbeOutcome, ProbeRecord, PROBE_DEADLINE};
+pub use probe::PROBE_DEADLINE;
 pub use recipe::{
     make_recipe, request_ttl_ms, valid_opaque, Recipe, MAX_HEADER_BYTES, MAX_HEADER_VALUE,
 };
 pub use routes::{keepalive_router, EVENTS_PATH, MAX_BODY_BYTES};
-pub use savings::AttemptFunding;
 pub use usage::{ProbeUsage, MAX_USAGE_BYTES};
 pub use view::{
     recipe_state, AgentCounts, CompanionState, KeepaliveSummary, RecipeState, RecipeView,

@@ -16,8 +16,13 @@ use crate::ratelimit::{
     UNIFIED_OVERAGE_DISABLED_REASON, UNIFIED_REPRESENTATIVE_CLAIM, UNIFIED_RESET, UNIFIED_STATUS,
 };
 
-pub fn exhaustion_response(exhaustion: &Exhaustion, now: i64, request_id: &str) -> Response {
-    let mut response = exhaustion_failure(exhaustion, now).response(request_id);
+/// `failure`'s answer with the headers `exhaustion` adds to it.
+pub fn exhaustion_response(
+    exhaustion: &Exhaustion,
+    failure: &Failure,
+    request_id: &str,
+) -> Response {
+    let mut response = failure.response(request_id);
     match exhaustion {
         Exhaustion::Timed { deadline, window } => {
             // The client treats an unknown claim as no claim and then never arms its continue, so the one
@@ -56,7 +61,7 @@ pub fn exhaustion_response(exhaustion: &Exhaustion, now: i64, request_id: &str) 
     response
 }
 
-fn exhaustion_failure(exhaustion: &Exhaustion, now: i64) -> Failure {
+pub(crate) fn exhaustion_failure(exhaustion: &Exhaustion, now: i64) -> Failure {
     let (error_type, message, retry_after) = match exhaustion {
         Exhaustion::ModelRejected => return MODEL_REJECTED,
         Exhaustion::Untimed | Exhaustion::Pinned { .. } => (
@@ -93,7 +98,7 @@ fn exhaustion_failure(exhaustion: &Exhaustion, now: i64) -> Failure {
 }
 
 /// The class an exhaustion files under, read by the answer and the request's outcome alike.
-pub(crate) fn exhaustion_class(exhaustion: &Exhaustion) -> FailureClass {
+fn exhaustion_class(exhaustion: &Exhaustion) -> FailureClass {
     match exhaustion {
         Exhaustion::ModelRejected => MODEL_REJECTED.class,
         // A probe answered on its pinned member's standing is refused for the probe alone, whatever its siblings
@@ -106,7 +111,7 @@ pub(crate) fn exhaustion_class(exhaustion: &Exhaustion) -> FailureClass {
 
 /// The adapter code an exhaustion is answered with, read by the answer's header and the request's outcome alike, so
 /// the two cannot disagree.
-pub(crate) fn exhaustion_code(exhaustion: &Exhaustion) -> &'static str {
+fn exhaustion_code(exhaustion: &Exhaustion) -> &'static str {
     match exhaustion {
         Exhaustion::ModelRejected => MODEL_REJECTED.code,
         Exhaustion::Untimed | Exhaustion::Pinned { .. } => ACCOUNTS_UNAVAILABLE,
@@ -119,14 +124,13 @@ pub(crate) fn exhaustion_code(exhaustion: &Exhaustion) -> &'static str {
 /// The answer for a key moved to another pool between its admission and its selection: the untimed exhaustion's
 /// body, naming no account and no reason, with a one-second `Retry-After`, since the next request admits under the
 /// key's new pool.
-pub(crate) fn pool_moved_response(request_id: &str) -> Response {
+pub(crate) fn pool_moved_failure() -> Failure {
     Failure {
         retry_after: Some(1),
         // The request is refused for the move alone, so the pool's exhaustion gauge and rollups never count it.
         class: FailureClass::Rejected,
         ..exhaustion_failure(&Exhaustion::Untimed, 0)
     }
-    .response(request_id)
 }
 
 /// The wait until `deadline` in whole seconds, rounded up and at least one, as `Retry-After` carries it.

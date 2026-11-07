@@ -92,6 +92,9 @@ pub enum RelayError {
     BodyTooDeep,
     #[error("request body is larger than the configured limit")]
     BodyTooLarge,
+    /// A body that holds more elements than `MAX_BODY_ELEMENTS`, refused before it is parsed.
+    #[error("request body holds more elements than the router reads")]
+    BodyTooManyElements,
     #[error("billing header: {0}")]
     Cch(#[from] phoebis_cch::CchError),
     /// A Claude Code inference request lacks an item the router reads of every one: refused before an account is

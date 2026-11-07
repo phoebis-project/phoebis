@@ -722,7 +722,7 @@ impl SubscriptionTerm {
 
 /// What `Store::account_extras` answers for one account: the document `profile_json` answers, parsed, and what
 /// `subscription_term` answers for it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AccountExtras {
     /// `None` without a stored document and for one that does not parse.
     pub profile: Option<serde_json::Value>,

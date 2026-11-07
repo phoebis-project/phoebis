@@ -89,7 +89,7 @@ pub(crate) enum Exchange {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ProbeOutcome {
+pub(crate) enum ProbeOutcome {
     Canceled,
     Exhausted,
     Failed,
@@ -131,34 +131,34 @@ pub(crate) fn covers(migrated: bool, usage: &ProbeUsage, expected: u64) -> bool 
 /// still exists changes nothing here: the upstream served it, so the pool's spend, the metrics, and the ledger
 /// carry it either way.
 #[derive(Clone, Debug, PartialEq)]
-pub struct ProbeRecord {
-    pub account: String,
-    pub agent_id: String,
-    pub canonical_model: String,
+pub(crate) struct ProbeRecord {
+    pub(crate) account: String,
+    pub(crate) agent_id: String,
+    pub(crate) canonical_model: String,
     /// The recipe carried `speed: "fast"`, the speed its migration mark files under. The probe's cost and its waste
     /// file under the speed its answer reported, the `speed` of `usage`.
-    pub fast: bool,
+    pub(crate) fast: bool,
     /// The served account's kind and class as the leg that answered stamped them, off the answer rather than the
     /// registry, and whether the answer reported overage in use: the facts its request row files under, so the credit
     /// row keys the same funding even when the account leaves while the probe is in flight, and the settlement unit
     /// follows the same side. No kind where no leg answered, which prices nothing.
-    pub funding: AttemptFunding,
-    pub key: SessionKey,
-    pub key_generation: i64,
-    pub outcome: ProbeOutcome,
-    pub pool_id: String,
-    pub usage: ProbeUsage,
+    pub(crate) funding: AttemptFunding,
+    pub(crate) key: SessionKey,
+    pub(crate) key_generation: i64,
+    pub(crate) outcome: ProbeOutcome,
+    pub(crate) pool_id: String,
+    pub(crate) usage: ProbeUsage,
     /// The instant the relay received the probe's request, the one its request row files under, so the settlement
     /// keys the same hour and prices at the same revision whenever the answer lands. The instant the engine sent the
     /// request, on the same clock, where the relay built no answer.
-    pub at: i64,
+    pub(crate) at: i64,
     /// The probe's prompt-length band: `table.band_of` on the prompt `PinUsage::prompt_tokens` reads from the answer's
     /// counts, on the revision in force at `at`.
-    pub band: Band,
+    pub(crate) band: Band,
     /// The account tier the settlement read at the exchange, which a probe settling in the window share reads from
     /// the store: its settlement's credit row keys the tier the probe ran under. `None` for a probe that settles in
     /// dollars and for an account whose tier could not be read.
-    pub tier: Option<String>,
+    pub(crate) tier: Option<String>,
 }
 
 /// How an upstream `Retry-After` bears on a rung's wait.

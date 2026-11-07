@@ -63,7 +63,10 @@ impl Chains {
             for (at, message) in messages.iter().enumerate() {
                 previous = boundary(&previous, message, &mut scratch).0;
                 message_boundaries.push(format!("{previous:x}"));
-                if carries_marker(message) {
+                if crate::body::message_cache_controls(message)
+                    .next()
+                    .is_some()
+                {
                     marked.push(at);
                 }
             }
@@ -206,20 +209,6 @@ fn boundary(previous: &Link, block: &Value, scratch: &mut Vec<u8>) -> (Link, u64
     hasher.update(previous);
     hasher.update(&*scratch);
     (hasher.finalize(), scratch.len() as u64)
-}
-
-/// Whether `message` carries a `cache_control` marker at one of the two levels `Chains::marked` reads, the ones
-/// `schema_cache_controls` reads a message's markers at.
-fn carries_marker(message: &Value) -> bool {
-    blocks(message.get("content")).any(|block| {
-        block.get("cache_control").is_some()
-            || blocks(block.get("content")).any(|inner| inner.get("cache_control").is_some())
-    })
-}
-
-/// The items of a content array, none for a string or an absent member.
-fn blocks(content: Option<&Value>) -> impl Iterator<Item = &Value> {
-    content.and_then(Value::as_array).into_iter().flatten()
 }
 
 /// `system`'s blocks in the order the static chain hashes them: a string is one block, an array's own blocks in

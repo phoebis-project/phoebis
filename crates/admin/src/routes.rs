@@ -691,10 +691,7 @@ async fn set_enabled(state: &AdminState, id: &str, enabled: bool) -> Response {
     }
     match state.store.set_enabled(id, enabled, accounts::ACTOR) {
         Ok(()) => {}
-        Err(StoreError::AccountNotFound(_)) => {
-            return failure(StatusCode::NOT_FOUND, "account not found")
-        }
-        Err(error) => return store_failure(error),
+        Err(error) => return account_write_failure(error),
     }
     reload_or_no_content(state).await
 }
@@ -722,10 +719,7 @@ async fn disconnect(State(state): State<Arc<AdminState>>, Path(id): Path<String>
     };
     match state.store.bump_lifecycle(&id, StateCause::Operator) {
         Ok(_) => {}
-        Err(StoreError::AccountNotFound(_)) => {
-            return failure(StatusCode::NOT_FOUND, "account not found")
-        }
-        Err(error) => return store_failure(error),
+        Err(error) => return account_write_failure(error),
     }
     // The bump deleted both credential kinds, so the old identity's state goes whatever the state write below answers.
     state.forget_account(&id, (state.clock)());
@@ -2539,10 +2533,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
                 .account_extras_of(&row.id)
                 .ok()
                 .flatten()
-                .unwrap_or_else(|| phoebis_store::AccountExtras {
-                    profile: None,
-                    term: Default::default(),
-                });
+                .unwrap_or_default();
             &read_extras
         }
     };
@@ -2589,24 +2580,37 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         .reported
         .get(&row.id)
         .filter(|_| row.kind == AccountKind::Oauth && !windows_withheld);
+    let window = |name: &str,
+                  utilization: Option<f64>,
+                  resets_at: Option<i64>,
+                  observed_at: i64,
+                  lead: Option<f64>| {
+        let id = account_window_id(name);
+        let projected = projected_window(ctx, &row.id, id);
+        AccountWindow {
+            id: id.to_string(),
+            utilization,
+            resets_at,
+            observed_at,
+            projection: projected.map(|w| w.projection),
+            horizon: projected.map(|w| w.horizon),
+            burn: projected.map(|w| w.burn),
+            demand: projected.map(|w| w.demand),
+            lead,
+        }
+    };
     let mut windows: Vec<AccountWindow> = reported
         .map(|sample| held_windows(sample, end, now))
         .unwrap_or_default()
         .into_iter()
         .map(|(name, reading, lead)| {
-            let id = account_window_id(&name);
-            let projected = projected_window(ctx, &row.id, id);
-            AccountWindow {
-                id: id.to_string(),
-                utilization: Some(reading.utilization),
-                resets_at: reading.reset,
-                observed_at: reading.observed_at,
-                projection: projected.map(|w| w.projection),
-                horizon: projected.map(|w| w.horizon),
-                burn: projected.map(|w| w.burn),
-                demand: projected.map(|w| w.demand),
-                lead: Some(lead),
-            }
+            window(
+                &name,
+                Some(reading.utilization),
+                reading.reset,
+                reading.observed_at,
+                Some(lead),
+            )
         })
         .collect();
     windows.extend(
@@ -2620,21 +2624,14 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
             // A row the ledger kept from before the poll that dropped its window is no window of the account.
             .filter(|q| reported.is_none_or(|s| s.has_window(&q.window)))
             .map(|q| {
-                let id = account_window_id(&q.window);
-                let projected = projected_window(ctx, &row.id, id);
-                AccountWindow {
-                    id: id.to_string(),
-                    utilization: q.utilization,
-                    resets_at: q.reset_at,
-                    observed_at: q.observed_at,
-                    projection: projected.map(|w| w.projection),
-                    horizon: projected.map(|w| w.horizon),
-                    burn: projected.map(|w| w.burn),
-                    demand: projected.map(|w| w.demand),
-                    lead: q
-                        .utilization
+                window(
+                    &q.window,
+                    q.utilization,
+                    q.reset_at,
+                    q.observed_at,
+                    q.utilization
                         .map(|u| lead_over_pace(&q.window, u, q.reset_at, end, now)),
-                }
+                )
             }),
     );
     // The Fable week reaches the list under one id from up to three sources, so one row stands per id: the newest
@@ -3134,6 +3131,14 @@ pub(crate) fn router_unavailable() -> Response {
 pub(crate) fn store_failure(error: StoreError) -> Response {
     tracing::warn!(%error, "admin request failed in the store");
     failure(StatusCode::INTERNAL_SERVER_ERROR, "storage failure")
+}
+
+/// An account write's store refusal: the 404 where the store holds no such account, else `store_failure`.
+pub(crate) fn account_write_failure(error: StoreError) -> Response {
+    match error {
+        StoreError::AccountNotFound(_) => failure(StatusCode::NOT_FOUND, "account not found"),
+        error => store_failure(error),
+    }
 }
 
 pub(crate) fn failure(status: StatusCode, message: &str) -> Response {

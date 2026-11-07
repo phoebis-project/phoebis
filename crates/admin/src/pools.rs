@@ -1201,6 +1201,7 @@ fn member_json(
             period_end: s.period_end,
         })
         .collect();
+    let slow_down = projection.and_then(|p| p.slow_down);
     PoolMemberView {
         account_id: m.account_id.clone(),
         priority: m.priority,
@@ -1215,12 +1216,8 @@ fn member_json(
         burn: projection
             .and_then(|p| p.windows.get(phoebis_routing::SEVEN_DAY))
             .map(|w| w.burn),
-        factor: projection
-            .and_then(|p| p.slow_down)
-            .map(|slow_down| slow_down.factor),
-        speed: projection
-            .and_then(|p| p.slow_down)
-            .map(|slow_down| slow_down.speed),
+        factor: slow_down.map(|s| s.factor),
+        speed: slow_down.map(|s| s.speed),
     }
 }
 

@@ -139,18 +139,17 @@ pub fn make_recipe(
             .top_level_member_count(name)
             .map_err(|_| Reason::InvalidRequest)
     };
-    let stamp = members.reachable_stamp();
     // An unreadable stamp is refused by name, since no restamp reaches it: its digits do not parse, or its only `cch=`
-    // sits inside an escape. The count refuses a stamp only the decoded walk reaches.
-    let stamp_hidden = matches!(stamp, Stamp::Unreadable)
-        || members.decoded_stamp_count()
-            > usize::from(matches!(stamp, Stamp::Placeholder(_) | Stamp::Hash(_)));
+    // sits inside an escape. The checked read refuses a stamp only the decoded walk reaches.
+    let stamp = members
+        .checked_stamp()
+        .map_err(|_| Reason::InvalidRequest)?;
     let stream_hidden =
         decoded("stream")? > usize::from(members.bool_member_span("stream").is_some());
     // Read off the client's bytes, which the copy edited below still holds unchanged when the span is used.
     let max_tokens = members.number_member_span("max_tokens");
     let max_tokens_hidden = decoded("max_tokens")? > usize::from(max_tokens.is_some());
-    if stamp_hidden || stream_hidden || max_tokens_hidden {
+    if matches!(stamp, Stamp::Unreadable) || stream_hidden || max_tokens_hidden {
         return Err(Reason::InvalidRequest);
     }
     for key in ["cache_control", "output_config", "thinking", "tool_choice"] {
@@ -198,7 +197,7 @@ pub fn make_recipe(
         return Err(Reason::InvalidModel);
     }
     // The relay's own rule for what counts as a client hash, so a probe is re-signed exactly where its request was.
-    let client_hash = matches!(stamp, Stamp::Hash(_));
+    let client_hash = stamp.is_client_hash();
     let mut edited = body.to_vec();
     let (start, end) = max_tokens.ok_or(Reason::InvalidRequest)?;
     edited.splice(start..end, b"0".iter().copied());

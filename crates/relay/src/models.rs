@@ -109,16 +109,8 @@ pub(crate) async fn list(
     Query(query): Query<HashMap<String, String>>,
     headers: HeaderMap,
 ) -> Response {
-    list_answer(&relay, &query, &headers).await
-}
-
-async fn list_answer(
-    relay: &Relay,
-    query: &HashMap<String, String>,
-    headers: &HeaderMap,
-) -> Response {
     let request_id = new_request_id();
-    let access = match authenticate(relay, headers, &request_id).await {
+    let access = match authenticate(&relay, &headers, &request_id).await {
         Ok(access) => access,
         Err(response) => return response,
     };
@@ -126,7 +118,7 @@ async fn list_answer(
         Ok(limit) => limit,
         Err(()) => return invalid_limit(&request_id),
     };
-    let rows = caller_listing(relay, &access).await;
+    let rows = caller_listing(&relay, &access).await;
     let paged = page(
         &rows,
         limit,
@@ -147,17 +139,13 @@ pub(crate) async fn show(
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    show_answer(&relay, &id, &headers).await
-}
-
-async fn show_answer(relay: &Relay, id: &str, headers: &HeaderMap) -> Response {
     let request_id = new_request_id();
-    let access = match authenticate(relay, headers, &request_id).await {
+    let access = match authenticate(&relay, &headers, &request_id).await {
         Ok(access) => access,
         Err(response) => return response,
     };
-    let rows = caller_listing(relay, &access).await;
-    match find(&rows, id) {
+    let rows = caller_listing(&relay, &access).await;
+    match find(&rows, &id) {
         Some(row) => Json(row_json(row)).into_response(),
         None => anthropic_error(
             StatusCode::NOT_FOUND,

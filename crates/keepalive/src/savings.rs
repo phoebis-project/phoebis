@@ -14,7 +14,7 @@ use crate::usage::ProbeUsage;
 /// The serving attempt's funding as the credit and the probe price it: one `Copy` value the saved forms convert at
 /// `of` and `restore`, each saved form keeping its own members. The default is an attempt no account served yet.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct AttemptFunding {
+pub(crate) struct AttemptFunding {
     /// The kind of the account the attempt was served on, `None` before any selection, which prices nothing.
     pub kind: Option<AccountKind>,
     /// Whether that account is a usage-based seat.
@@ -120,6 +120,7 @@ fn delta(
     canonical_model: &str,
     kind: &str,
     fast: bool,
+    funding: AttemptFunding,
 ) -> KeepaliveDelta {
     KeepaliveDelta {
         at,
@@ -134,6 +135,9 @@ fn delta(
         kind: kind.to_string(),
         client: UNATTRIBUTED.to_string(),
         speed: if fast { Speed::Fast } else { Speed::Standard },
+        account_kind: funding.kind,
+        usage_based: funding.usage_based,
+        overage_in_use: funding.in_overage,
         ..Default::default()
     }
 }
@@ -159,10 +163,8 @@ impl Engine {
             &record.canonical_model,
             "probe",
             record.fast,
+            record.funding,
         );
-        d.account_kind = record.funding.kind;
-        d.usage_based = record.funding.usage_based;
-        d.overage_in_use = record.funding.in_overage;
         d.probe_migrated = 1;
         self.parts.ledger.record(Record::Keepalive(d));
     }
@@ -186,6 +188,7 @@ impl Engine {
             &credit.model,
             "inference",
             credit.fast,
+            credit.funding,
         );
         if let Some(client) = &credit.client {
             d.client = client.clone();
@@ -199,9 +202,6 @@ impl Engine {
         }
         d.tier = tier;
         d.band = band;
-        d.account_kind = credit.funding.kind;
-        d.usage_based = credit.funding.usage_based;
-        d.overage_in_use = credit.funding.in_overage;
         self.parts.ledger.record(Record::Keepalive(d));
     }
 
@@ -222,6 +222,7 @@ impl Engine {
             // The speed the probe's answer reported, so the waste prices at the cells and files under the funding its
             // own cost row took even when a fast recipe's answer came back at standard speed.
             charge.usage.speed == Speed::Fast,
+            charge.funding,
         );
         let counts = typed(charge.usage);
         d.wasted_probes = 1;
@@ -233,9 +234,6 @@ impl Engine {
         d.wasted_probe_reasons = BTreeMap::from([(settlement.label.as_str().to_string(), 1)]);
         d.tier = charge.tier;
         d.band = charge.band;
-        d.account_kind = charge.funding.kind;
-        d.usage_based = charge.funding.usage_based;
-        d.overage_in_use = charge.funding.in_overage;
         self.parts.ledger.record(Record::Keepalive(d));
     }
 
@@ -249,11 +247,9 @@ impl Engine {
             &skip.canonical_model,
             "probe",
             skip.fast,
+            skip.funding,
         );
         d.probes_skipped = 1;
-        d.account_kind = skip.funding.kind;
-        d.usage_based = skip.funding.usage_based;
-        d.overage_in_use = skip.funding.in_overage;
         self.parts.ledger.record(Record::Keepalive(d));
         self.parts
             .metrics
@@ -361,6 +357,7 @@ mod tests {
                 "claude-sonnet-5",
                 "probe",
                 false,
+                AttemptFunding::default(),
             )
             .account_id
         };

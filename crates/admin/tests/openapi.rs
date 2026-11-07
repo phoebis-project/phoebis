@@ -300,6 +300,7 @@ fn reader_names(source: &str) -> BTreeSet<String> {
         "flag(q, \"",
         "list_param(&q, \"",
         "text_param(&q, \"",
+        "word_param(&q, \"",
         "time(&q, \"",
         "number(\"",
     ];

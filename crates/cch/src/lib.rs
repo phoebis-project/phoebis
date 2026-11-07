@@ -47,6 +47,17 @@ pub enum Stamp {
     Hash(CchLocation),
 }
 
+impl Stamp {
+    /// The one rule for what counts as a client hash, so the relay and a keepalive replay re-sign the same bodies.
+    pub fn is_client_hash(&self) -> bool {
+        matches!(self, Stamp::Hash(_))
+    }
+}
+
+/// `TopLevelMembers::checked_stamp`'s refusal: the decoded walk reaches a stamp the raw walk cannot.
+#[derive(Debug)]
+pub struct HiddenStamp;
+
 /// Finds the five digits after `cch=` inside the top-level `system[0].text`, when that text is a billing header.
 ///
 /// The span comes from the scanner, not from a search for the text: a tool-use input can carry its own `"system"`
@@ -348,7 +359,7 @@ impl<'a> TopLevelMembers<'a> {
     /// The stamp the body carries as the relay reads it: the raw walk's stamp, `Unreadable` where the raw bytes hold a
     /// `cch=` (readable or not) while the decoded line holds none, since that `cch=` begins inside an escape and the
     /// server reads no stamp where a restamp would write one. A stamp only the decoded walk reaches answers as the raw
-    /// walk reads the line, so refusing it is the caller's count check (`decoded_stamp_count`).
+    /// walk reads the line, so refusing it is `checked_stamp`'s count.
     pub fn reachable_stamp(&self) -> Stamp {
         let text = self.string_member_span(&LINE_PATH);
         let stamp = stamp_in(self.body, text);
@@ -360,6 +371,16 @@ impl<'a> TopLevelMembers<'a> {
             }
             _ => stamp,
         }
+    }
+
+    /// `reachable_stamp`, refused where `decoded_stamp_count`, which sees a key spelled with an escape, counts more
+    /// stamps than the raw walk reaches.
+    pub fn checked_stamp(&self) -> Result<Stamp, HiddenStamp> {
+        let stamp = self.reachable_stamp();
+        if self.decoded_stamp_count() > usize::from(!matches!(stamp, Stamp::None)) {
+            return Err(HiddenStamp);
+        }
+        Ok(stamp)
     }
 
     /// `decoded_stamp_count` of the body.

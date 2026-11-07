@@ -784,11 +784,31 @@ pub(crate) fn flag(q: &HashMap<String, String>, name: &str) -> bool {
 }
 
 /// The words a parameter takes as its refusal lists them, `a, b or c`.
-pub(crate) fn one_of(words: &[&str]) -> String {
+fn one_of(words: &[&str]) -> String {
     match words {
         [] => panic!("a parameter takes at least one word"),
         [word] => word.to_string(),
         [rest @ .., last] => format!("{} or {last}", rest.join(", ")),
+    }
+}
+
+/// The word parameter `name`: the default where it is absent, the word `parse` reads, or the 400 that lists `words`.
+// The error is a rendered HTTP response, returned once per request and dropped. Boxing it would buy a pointer chase
+// and nothing else.
+#[allow(clippy::result_large_err)]
+pub(crate) fn word_param<T: Default>(
+    q: &HashMap<String, String>,
+    name: &str,
+    parse: impl Fn(&str) -> Option<T>,
+    words: &[&str],
+) -> Result<T, Response> {
+    match q.get(name).map(|word| parse(word)) {
+        None => Ok(T::default()),
+        Some(Some(value)) => Ok(value),
+        Some(None) => Err(failure(
+            StatusCode::BAD_REQUEST,
+            &format!("{name} is {}", one_of(words)),
+        )),
     }
 }
 
@@ -974,25 +994,13 @@ pub(crate) async fn list(
         },
     }
     .clamp(1, MAX_LIMIT);
-    let order = match q.get("order").map(|word| RequestOrder::parse(word)) {
-        None => RequestOrder::default(),
-        Some(Some(order)) => order,
-        Some(None) => {
-            return failure(
-                StatusCode::BAD_REQUEST,
-                &format!("order is {}", one_of(RequestOrder::WORDS)),
-            )
-        }
+    let order = match word_param(&q, "order", RequestOrder::parse, RequestOrder::WORDS) {
+        Ok(order) => order,
+        Err(response) => return response,
     };
-    let dir = match q.get("dir").map(|word| Direction::parse(word)) {
-        None => Direction::default(),
-        Some(Some(dir)) => dir,
-        Some(None) => {
-            return failure(
-                StatusCode::BAD_REQUEST,
-                &format!("dir is {}", one_of(Direction::WORDS)),
-            )
-        }
+    let dir = match word_param(&q, "dir", Direction::parse, Direction::WORDS) {
+        Ok(dir) => dir,
+        Err(response) => return response,
     };
     let cursor = match q.get("cursor").map(|c| RequestCursor::parse(c, order)) {
         None => None,

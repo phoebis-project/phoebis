@@ -26,7 +26,7 @@ pub(crate) fn digest_of(token: &str) -> CreditDigest {
 
 /// The digest as the bus and the ledger carry it, lowercase hex.
 pub(crate) fn hex_of(digest: &CreditDigest) -> String {
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+    format!("{:x}", sha2::digest::Output::<Sha256>::from(*digest))
 }
 
 struct CreditEntry {

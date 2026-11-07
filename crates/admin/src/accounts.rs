@@ -19,9 +19,9 @@ use utoipa::ToSchema;
 
 use crate::openapi::{ErrorBody, RegistryUnavailable, RouterUnavailable, StorageFailure};
 use crate::routes::{
-    account, account_json, double_option, failure, fence_revision, parse_object, present,
-    reload_or_no_content, reload_or_refuse, router_unavailable, stale_edit, store_failure,
-    CreatedId,
+    account, account_json, account_write_failure, double_option, failure, fence_revision,
+    parse_object, present, reload_or_no_content, reload_or_refuse, router_unavailable, stale_edit,
+    store_failure, CreatedId,
 };
 use crate::AdminState;
 
@@ -372,10 +372,7 @@ pub(crate) async fn patch(
         match state.store.commit_account_update(&update) {
             Ok(()) => {}
             Err(StoreError::Stale) => return stale_edit(STALE_EDIT),
-            Err(StoreError::AccountNotFound(_)) => {
-                return failure(StatusCode::NOT_FOUND, "account not found")
-            }
-            Err(error) => return store_failure(error),
+            Err(error) => return account_write_failure(error),
         }
         if secret.is_some() {
             state.catalog.evict(&id);
@@ -410,10 +407,7 @@ pub(crate) async fn remove(
 ) -> Response {
     match state.store.delete_account(&id, ACTOR) {
         Ok(()) => {}
-        Err(StoreError::AccountNotFound(_)) => {
-            return failure(StatusCode::NOT_FOUND, "account not found")
-        }
-        Err(error) => return store_failure(error),
+        Err(error) => return account_write_failure(error),
     }
     state.forget_account(&id, (state.clock)());
     reload_or_no_content(&state).await

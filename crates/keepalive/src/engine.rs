@@ -538,6 +538,15 @@ impl Session {
     pub(crate) fn holds_slot(&self) -> bool {
         !self.ended && self.requested()
     }
+
+    /// The slots of `max_agents` the session's agents hold, none before its first real request.
+    pub(crate) fn agent_slots(&self) -> usize {
+        if self.requested() {
+            self.agents.len()
+        } else {
+            0
+        }
+    }
 }
 
 pub(crate) struct Agent {
@@ -1687,11 +1696,7 @@ impl Inner {
     /// The agents `max_agents` bounds: every record of a session that has carried a real request. A registered
     /// session's agents hold no slot until its first request.
     pub(crate) fn agent_count(&self) -> usize {
-        self.sessions
-            .values()
-            .filter(|s| s.requested())
-            .map(|s| s.agents.len())
-            .sum()
+        self.sessions.values().map(Session::agent_slots).sum()
     }
 
     /// The sessions `max_sessions` bounds, those that hold a slot.
@@ -3145,6 +3150,11 @@ impl Engine {
     }
 
     fn on_selected(&self, selected: AccountSelected) {
+        let funding = AttemptFunding {
+            kind: AccountKind::parse(&selected.account_kind),
+            usage_based: selected.usage_based,
+            in_overage: false,
+        };
         let snapshot = self.parts.router.snapshot();
         let mut inner = self.lock();
         if inner.compactions.contains_key(&selected.request_id) {
@@ -3158,11 +3168,7 @@ impl Engine {
                 if let Some(compaction) = agent.compaction.as_mut() {
                     compaction.attempt = selected.attempt;
                     compaction.account = Some(selected.account_id);
-                    compaction.funding = AttemptFunding {
-                        kind: AccountKind::parse(&selected.account_kind),
-                        usage_based: selected.usage_based,
-                        in_overage: false,
-                    };
+                    compaction.funding = funding;
                     compaction.ok_head = false;
                     compaction.read = 0;
                     compaction.ttl_ms = ttl_ms;
@@ -3185,11 +3191,7 @@ impl Engine {
         observation.expected = 0;
         observation.ttl_ms = 0;
         observation.dispatched_ms = selected.cache_ttl_ms;
-        observation.funding = AttemptFunding {
-            kind: AccountKind::parse(&selected.account_kind),
-            usage_based: selected.usage_based,
-            in_overage: false,
-        };
+        observation.funding = funding;
         agent.cache_started = observation.started;
         agent.expires = None;
         inner.set_reason(&key, &agent_id, Reason::AwaitingSelection);
@@ -3218,6 +3220,9 @@ impl Engine {
     }
 
     fn on_head(&self, head: ResponseHead) {
+        let in_overage = phoebis_relay::UnifiedHeaders::parse_list(&head.headers)
+            .and_then(|unified| unified.overage_in_use)
+            == Some(true);
         let mut inner = self.lock();
         if inner.compactions.contains_key(&head.request_id) {
             if inner.quiesced() {
@@ -3228,10 +3233,7 @@ impl Engine {
                 .and_then(|agent| agent.compaction.as_mut())
                 .filter(|compaction| compaction.attempt == head.attempt)
             {
-                compaction.funding.in_overage =
-                    phoebis_relay::UnifiedHeaders::parse_list(&head.headers)
-                        .and_then(|unified| unified.overage_in_use)
-                        == Some(true);
+                compaction.funding.in_overage = in_overage;
                 compaction.ok_head = (200..300).contains(&head.status);
             }
             return;
@@ -3245,9 +3247,6 @@ impl Engine {
         let agent = agent_mut(&mut inner.sessions, &key, &agent_id).expect(AGENT_HELD);
         if let Some(observation) = agent.current.as_mut() {
             if observation.attempt == head.attempt {
-                let in_overage = phoebis_relay::UnifiedHeaders::parse_list(&head.headers)
-                    .and_then(|unified| unified.overage_in_use)
-                    == Some(true);
                 let moved = observation.funding.in_overage != in_overage;
                 observation.funding.in_overage = in_overage;
                 // A failed attempt is not evidence about the cache, and the next selection re-arms the attempt.
@@ -3863,7 +3862,7 @@ impl Engine {
                 let verdict = {
                     let session = &inner.sessions[&key];
                     let agent = &session.agents[&agent_id];
-                    let ceilings = ceilings_for(agent, &policy, &view, &rows, &self.parts.timing);
+                    let ceilings = ceilings_for(agent, policy, &view, &rows, &self.parts.timing);
                     ceiling(
                         agent,
                         session.attended_at(now),
@@ -3919,7 +3918,7 @@ impl Engine {
                 let (held, moved) = {
                     let agent = agent_mut(&mut inner.sessions, &key, &agent_id).expect(AGENT_HELD);
                     let before = agent.account.clone();
-                    let held = gate(&view, agent, &key.1, pool, &policy, now);
+                    let held = gate(&view, agent, &key.1, pool, policy, now);
                     (held, before != agent.account)
                 };
                 if moved {
@@ -4163,7 +4162,7 @@ impl Engine {
 pub(crate) fn refresh_policy<'v>(
     view: &'v RouterView,
     agent: &mut Agent,
-) -> Result<(&'v PoolRow, KeepalivePolicy, bool), Gate> {
+) -> Result<(&'v PoolRow, &'v KeepalivePolicy, bool), Gate> {
     // The operator's opt-out reaches an idle session here, not only at its next request: the recipe is dropped
     // rather than held, because nothing on that key may be probed again until the flag is cleared.
     let Some(key) = view
@@ -4187,7 +4186,7 @@ pub(crate) fn refresh_policy<'v>(
     // belongs to now.
     let moved = agent.pool_id != key.pool_id;
     agent.pool_id = key.pool_id.clone();
-    Ok((pool, policy.clone(), moved))
+    Ok((pool, policy, moved))
 }
 
 /// The ceilings of one agent at a tick: its policy, the factors of its model under its account's funding (dollars
@@ -4624,7 +4623,7 @@ mod tests {
         agent.canonical_model = "claude-opus-5-5".into();
         agent.current = Some(observation(fast));
         refresh_policy(view, &mut agent)
-            .and_then(|(pool, policy, _)| gate(view, &mut agent, "s", pool, &policy, 0))
+            .and_then(|(pool, policy, _)| gate(view, &mut agent, "s", pool, policy, 0))
             .err()
     }
 

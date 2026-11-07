@@ -2,7 +2,7 @@
 
 use axum::http::{header, HeaderMap};
 use axum::response::Response;
-use phoebis_routing::{KeyRefusal, Presented, RegistrySnapshot};
+use phoebis_routing::{Presented, RegistrySnapshot};
 use phoebis_store::ApiKeyRow;
 
 use crate::errors::{auth_failure, key_refusal, Failure};
@@ -66,21 +66,7 @@ pub fn authenticated_key<'a>(
 ) -> Result<&'a ApiKeyRow, Response> {
     resolve_key(snapshot, headers, now)
         .map(|(key, _)| key)
-        .map_err(|refused| refused.failure().response(request_id))
-}
-
-pub(crate) enum KeyRefused {
-    Header(AuthError),
-    Key(KeyRefusal),
-}
-
-impl KeyRefused {
-    pub(crate) fn failure(&self) -> Failure {
-        match self {
-            KeyRefused::Header(error) => auth_failure(error),
-            KeyRefused::Key(refusal) => key_refusal(refusal),
-        }
-    }
+        .map_err(|failure| failure.response(request_id))
 }
 
 /// The one resolution `/v1/messages` and the side routes share, so a key is admitted and refused alike on both.
@@ -88,13 +74,13 @@ pub(crate) fn resolve_key<'a>(
     snapshot: &'a RegistrySnapshot,
     headers: &HeaderMap,
     now: i64,
-) -> Result<(&'a ApiKeyRow, Presented), KeyRefused> {
-    let presented = presented_key(headers).map_err(KeyRefused::Header)?;
+) -> Result<(&'a ApiKeyRow, Presented), Failure> {
+    let presented = presented_key(headers).map_err(|error| auth_failure(&error))?;
     snapshot.authenticate(presented, now).map_err(|refusal| {
         // Here rather than on each route, so a side route's 401 leaves the same trace on the host as the messages
         // route's. The refusal names its reason alone, never the presented secret.
         tracing::debug!(%refusal, "a presented key was refused");
-        KeyRefused::Key(refusal)
+        key_refusal(&refusal)
     })
 }
 

@@ -1176,10 +1176,10 @@ impl Inner {
                 self.file_removed_session(stored);
                 continue;
             }
-            // A session that has sent no real request holds no slot of either cap, as in the running engine, so it
-            // passes both bounds and counts toward neither. The ended ones left above, so `last_real_at` alone reads
-            // the slot.
-            let holds_slot = payload.last_real_at.is_some();
+            let mut session = payload.restore(now);
+            // A session that has sent no real request holds no slot of either cap, so it passes both bounds and counts
+            // toward neither.
+            let holds_slot = session.holds_slot();
             let over = if !holds_slot {
                 None
             } else if live_sessions >= limits.max_sessions {
@@ -1203,7 +1203,6 @@ impl Inner {
                     .then_with(|| b.updated_at.cmp(&a.updated_at))
                     .then_with(|| a.agent_id.cmp(&b.agent_id))
             });
-            let mut session = payload.restore(now);
             for (mut agent_row, decoded) in agents {
                 let Some((mut agent, observation)) = decoded else {
                     self.file_removed_agent(stored.clone(), agent_row.agent_id);
