@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 pub use phoebis_store::{AffinityChain, AffinityRow};
 
-/// One boundary as the map holds it; `AffinityRow` minus its key. The links are always present;
+/// One boundary as the map holds it: `AffinityRow` minus its key. The links are always present.
 /// `ttl_ms` is 0 for a link the cache never confirmed, and such an entry is never `live`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AffinityEntry {
@@ -95,12 +95,12 @@ pub struct AffinityReport {
     pub static_boundaries: Arc<[String]>,
     pub message_boundaries: Arc<[String]>,
     /// Parallel to `static_boundaries`: the estimated token size of the blocks each boundary covers, as the
-    /// relay computed it at chain time (canonical bytes over four); 0 for the empty-tools boundary of a request
+    /// relay computed it at chain time (canonical bytes over four), or 0 for the empty-tools boundary of a request
     /// without tools.
     pub static_sizes: Vec<u64>,
     /// The lifetime of the marker on each tier as sent upstream after the rewrite: the deepest marker inside
     /// `tools[]` or `system[]` for the static tier, the deepest inside `messages[]` for the message tier, a
-    /// top-level member for both; `None` for a tier without a marker, which gets no warmth.
+    /// top-level member for both, and `None` for a tier without a marker, which gets no warmth.
     pub static_ttl_ms: Option<i64>,
     pub message_ttl_ms: Option<i64>,
     /// The usage reported a cache read or a cache write: the evidence the warmth fields need.
@@ -110,10 +110,10 @@ pub struct AffinityReport {
     pub prefix_tokens: u64,
     pub now: i64,
     /// The response's cache-creation writes as its usage reported them: the split object fills both (the 1-hour
-    /// member present, if zero), the older total-only shape the 5-minute one alone; `None` without usage.
+    /// member present, if zero), the older total-only shape the 5-minute one alone. Both are `None` without usage.
     pub cache_write_5m_tokens: Option<u64>,
     pub cache_write_1h_tokens: Option<u64>,
-    /// The TTL every `cache_control` marker of the dispatched body carries, when they all carry one; `None` for a
+    /// The TTL every `cache_control` marker of the dispatched body carries, when they all carry one, or `None` for a
     /// body without a marker or with markers at both TTLs.
     pub uniform_ttl_ms: Option<i64>,
     /// The request whose answer this is, the decision that selected the account (`seq`) and the wire attempt that
@@ -192,7 +192,7 @@ pub struct AffinityMap {
     dirty: HashMap<String, HashSet<String>>,
     /// A folded spelling to the dated id it resolved to, as `RoutingState::canonical` keeps it, so a report or
     /// a lookup keys on the dated id once it is known, whichever spelling the caller names. An entry already
-    /// written under the old spelling is not rekeyed; it ages out through the purge.
+    /// written under the old spelling is not rekeyed. It ages out through the purge.
     resolutions: HashMap<String, String>,
 }
 
@@ -235,7 +235,7 @@ impl AffinityMap {
     }
 
     /// Learns a folded spelling's dated id, fed at load and when a resolution lands. Never rekeys an entry
-    /// already written under the old spelling; it ages out through the purge instead.
+    /// already written under the old spelling. It ages out through the purge instead.
     pub fn learn_resolution(&mut self, spelling: &str, dated_id: &str) {
         self.resolutions
             .insert(spelling.to_string(), dated_id.to_string());
@@ -296,7 +296,7 @@ impl AffinityMap {
         walk
     }
 
-    /// Upserts the report's boundaries; answers the rows to persist (new or moved).
+    /// Upserts the report's boundaries and answers the rows to persist (new or moved).
     pub fn record(&mut self, report: &AffinityReport) -> Vec<AffinityRow> {
         let canonical_model = self.canonical(&report.canonical_model).to_string();
         let lane = self.canonical_lane(&report.lane);
@@ -367,9 +367,9 @@ impl AffinityMap {
         rows
     }
 
-    /// Entries past `ttl_of(key_id)` (an idle TTL in ms; `None` is unserved), or whose account is gone or under
-    /// another incarnation, leave. Answers each with its cause, the account's before the TTL's, since a replaced
-    /// holder's entry would have left whatever its age.
+    /// Entries past `ttl_of(key_id)` (an idle TTL in ms, or `None` for an unserved key), or whose account is gone
+    /// or under another incarnation, leave. Answers each with its cause, the account's before the TTL's, since a
+    /// replaced holder's entry would have left whatever its age.
     pub fn purge(
         &mut self,
         now: i64,
@@ -787,7 +787,7 @@ mod tests {
     #[test]
     fn the_lookup_steps_over_an_entry_under_another_incarnation() {
         let mut map = AffinityMap::default();
-        // b1 is still owned by a1's recorded incarnation; b2's account moved on to incarnation 2 since.
+        // b1 is still owned by a1's recorded incarnation, while b2's account moved on to incarnation 2 since.
         map.record(&AffinityReport {
             message_boundaries: Arc::from(["b1".to_string()]),
             ..report("k", "a1", 1_000)
@@ -815,8 +815,7 @@ mod tests {
     }
 
     #[test]
-    fn the_purge_drops_an_entry_past_its_keys_ttl_one_whose_key_is_unserved_and_one_whose_account_was_replaced_and_keeps_the_rest(
-    ) {
+    fn the_purge_drops_an_expired_an_unserved_and_a_replaced_entry_and_keeps_the_rest() {
         let mut map = AffinityMap::default();
         // "expired" and "unserved" sit on a live account, so their own clauses carry the purge, not the
         // incarnation mismatch that "replaced" relies on.
@@ -974,7 +973,7 @@ mod tests {
     }
 
     /// (static tier, message tier) as recorded for a request whose tiers carry the given deepest markers and whose
-    /// response read `read` tokens beside its writes; the static prefix is sized at 500 tokens.
+    /// response read `read` tokens beside its writes. The static prefix is sized at 500 tokens.
     fn recorded_ttls(
         uniform: Option<i64>,
         tiers: (Option<i64>, Option<i64>),

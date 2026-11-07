@@ -463,7 +463,8 @@ pub(crate) struct DecisionRecord {
 #[derive(serde::Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub(crate) struct RoutingLogQuery {
-    /// A comma list of ids. Matches a decision's source (`from_account_id`) as well as the account it placed on.
+    /// A comma list of ids. Matches a decision's source (`from_account_id`) as well as the account it placed on, and
+    /// an event's account.
     pub accounts: Option<String>,
     /// The decisions and the events whose agent id equals the value, literally, so an event that names no agent is
     /// left out. Combines with `session` and every other filter.

@@ -227,8 +227,9 @@ pub enum RouterEvent {
         round: Box<ShedRoundFacts>,
         at: i64,
     },
-    /// The account's factor on the pool read under 1 for the first time since it last read 1: the read's factor,
-    /// stretch and threshold, its demand in share of the 5-hour window per hour and the window's reset.
+    /// The account's factor on the pool read under 1 for the first time since the span last closed: the read's
+    /// factor, stretch and threshold, its demand in share of the 5-hour window per hour and the window's reset. A dip
+    /// back under 1 inside the safety wait continues the open span and announces nothing.
     SlowDownStarted {
         account_id: String,
         pool_id: String,

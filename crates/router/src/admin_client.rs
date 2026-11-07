@@ -159,7 +159,7 @@ impl AdminClient {
         self.timeout
     }
 
-    /// One request on one connection, `Connection: close`, under the deadline; a JSON body is sent as
+    /// One request on one connection, `Connection: close`, under the deadline. A JSON body is sent as
     /// `application/json`. The answer's body is parsed as JSON when it has one.
     pub async fn call(
         &self,
@@ -169,7 +169,7 @@ impl AdminClient {
     ) -> Result<Answer, ClientError> {
         let https = self.base.scheme_str() == Some("https");
         let authority = self.authority();
-        // `Uri::host` keeps an IPv6 literal's brackets; the socket and the certificate check want the bare address.
+        // `Uri::host` keeps an IPv6 literal's brackets. The socket and the certificate check want the bare address.
         let host = self
             .base
             .host()
@@ -222,7 +222,7 @@ impl AdminClient {
             Ok::<_, Failure>((parts.status, body.collect().await?.to_bytes()))
         })
         .await;
-        // After a finished call this is a no-op (`Connection: close` ended the task); on the deadline it closes the
+        // After a finished call this is a no-op (`Connection: close` ended the task). On the deadline it closes the
         // socket a stalled peer still holds, so nothing of the call outlives the answer.
         if let Some(driver) = driver.take() {
             driver.abort();
@@ -280,7 +280,7 @@ impl AdminClient {
         }
     }
 
-    /// `host:port` as the base names it; `base_of` admits no credential, so this is also the `Host` header.
+    /// `host:port` as the base names it. `base_of` admits no credential, so this is also the `Host` header.
     fn authority(&self) -> String {
         self.base
             .authority()
@@ -302,7 +302,7 @@ impl AdminClient {
 fn connector(ca: Option<&Path>) -> Result<SslConnector, Failure> {
     let mut builder = SslConnector::builder(SslMethod::tls())?;
     if let Some(ca) = ca {
-        // The builder has loaded the system roots already and `set_ca_file` would add to them; a store holding the
+        // The builder has loaded the system roots already and `set_ca_file` would add to them. A store holding the
         // bundle alone replaces them, so no root the host trusts (a TLS-inspection CA among them) can vouch for the
         // listener the bearer goes to.
         let refused = |reason: String| Failure(format!("--ca {}: {reason}", ca.display()));

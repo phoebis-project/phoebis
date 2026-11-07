@@ -443,13 +443,15 @@ pub(crate) struct Event {
     ///   `no_runway`, `off_window`, `sliver`, `standing` and `unpriced` and its note among `cheapest` and `current`,
     ///   and the outcome with its reason among `ended`, `last_pin`, `no_burn`, `no_runway`, `off_window`, `sliver`,
     ///   `standing` and `unpriced`. The marks and the dwell are the pool's on that account.
-    /// - `slow_down_ended`: the account's slow-down on the pool ended, its factor back at 1 for the safety wait or
-    ///   its entry dropped at the purge, with the span's `since`, `duration_ms` (to the factor's return, or to the
-    ///   entry's last read where it never returned), `factor_min`, the lowest factor of the span, and `held_ms`, the
-    ///   time its new holds waited.
-    /// - `slow_down_started`: the account's factor on the pool read under 1 for the first time since it last read 1,
-    ///   with the read's `factor`, `stretch_ms`, `threshold_ms`, `demand` (share of the 5-hour window per hour) and
-    ///   the window's `reset`.
+    /// - `slow_down_ended`: the account's slow-down on the pool ended, its factor back at 1 for the safety wait, its
+    ///   entry cleared by the window's reset, dropped at the purge, or dropped with the 5-hour window by a clean poll,
+    ///   with the span's `since`, `duration_ms` (to the factor's return, to the passed reset of the window it slowed
+    ///   for where the reset cleared the entry, or to the entry's last read where the purge or the poll dropped it
+    ///   before either), `factor_min`, the lowest factor of the span, and `held_ms`, the time its new holds waited.
+    /// - `slow_down_started`: the account's factor on the pool read under 1 for the first time since the span last
+    ///   closed, with the read's `factor`, `stretch_ms`, `threshold_ms`, `demand` (share of the 5-hour window per
+    ///   hour) and the window's `reset`. A dip back under 1 inside the safety wait continues the open span and adds
+    ///   no event.
     /// - `stream_interrupted`: the request's body ended short after the head, with the `code` its `error_code` carries
     ///   (`account_canceled`, `stream_cut`, `stream_stalled` or `stream_undecodable`), the error's own words as
     ///   `text`, `bytes_relayed`, the bytes the client received before the end, the head's `upstream_request_id`, null

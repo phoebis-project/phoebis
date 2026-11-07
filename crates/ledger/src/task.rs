@@ -1716,8 +1716,9 @@ impl Handles {
 }
 
 /// Records a plan-funded landing with usage on a model the cost model in force at its arrival gives no weight on the
-/// 7-day window, never a classifier call: the entry enters, or counts the request once however many of its attempts
-/// answered. A landing that finds the model weighted clears the entry and keeps its key, so its gauge series reads 0.
+/// 7-day window, never a classifier call under the word `client`: the entry enters, or counts the request once however
+/// many of its attempts answered. A `client_off` call is recorded as any call. A landing that finds the model weighted
+/// clears the entry and keeps its key, so its gauge series reads 0.
 /// The entry follows landing order, by design: a request received before the revision that weighted its model and
 /// landed after the clear raises the entry again with its own earlier receipt as `since`.
 fn note_unpriced(
@@ -1726,7 +1727,8 @@ fn note_unpriced(
     request: &RequestRecord,
     attempts: &[AttemptRecord],
 ) {
-    // A classifier call prices at no share, so its model's weight is never read.
+    // A classifier call under the word `client` prices at no share, so its model's weight is never read.
+    // A `client_off` call prices as any call.
     if request.classifier.as_deref() == Some(Classifier::Client.as_str()) {
         return;
     }

@@ -3,8 +3,9 @@
 //! with no wildcard matches its own text alone. ASCII case folds, since the name a rule is judged against is the
 //! folded canonical id. The ledger's request-log matcher is another grammar, where `*` crosses everything.
 
-/// The longest pattern an entry accepts. A pattern past it answers no match, which bounds the rows of a match's
-/// table.
+/// The longest pattern an entry accepts, counted in characters: [`check`] refuses a longer one as
+/// [`PatternError::TooLong`]. The matcher answers no match for a pattern of more tokens than this, which bounds the
+/// rows of a match's table.
 pub const MAX_PATTERN_CHARS: usize = 256;
 /// The longest name the matcher walks. A name past it answers no match, so the cells a match decides are at most
 /// the product of this bound and [`MAX_PATTERN_CHARS`].

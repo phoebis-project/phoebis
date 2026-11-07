@@ -1630,9 +1630,8 @@ pub(crate) struct RouterStats {
     pub command_depth: usize,
     /// The commands waiting in it now.
     pub queued: usize,
-    /// The reports a closed queue refused at shutdown, per kind (`account_state`, `accounting`, `affinity`,
-    /// `cooldown`, `credits`, `ended`, `member_spend`, `overage`, `pin_invalidated`, `pin_released`,
-    /// `pin_renewed`, `sample`, `usage`).
+    /// The reports a closed queue refused at shutdown, per kind, with a member for every kind of the routing crate's
+    /// `Report::KINDS`.
     #[schema(value_type = BTreeMap<String, u64>)]
     pub dropped_reports: indexmap::IndexMap<String, u64>,
     /// The refusal records a full or closed router queue refused, each a decision row never written.

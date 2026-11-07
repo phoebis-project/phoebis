@@ -1,5 +1,5 @@
 //! The engine: every session the companion registered or a request revealed, every agent's recipe, and the
-//! counters behind the views. One mutex, as the Go engine had, held for microseconds at a time; nothing under
+//! counters behind the views. One mutex, as the Go engine had, held for microseconds at a time. Nothing under
 //! it does I/O.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -272,7 +272,7 @@ fn class_guard(class: &str) -> Guard {
     }
 }
 
-/// The hijack guard: a class names the turn directly; without one, the request's own chain against the armed
+/// The hijack guard: a class names the turn directly. Without one, the request's own chain against the armed
 /// recipe's two hashes decides, the same fallback the routing crate's `warmth_of` applies when a request
 /// carries no chain at all. `recipe` is the armed recipe's `(static_hash, tail_hash)`, `None` for a first
 /// observation with nothing to compare against.
@@ -544,7 +544,7 @@ pub(crate) struct Agent {
     pub id: String,
     /// The session's key, repeated here so a gate over one agent needs no session lookup.
     pub key_id: String,
-    /// The generation of the key the recipe was retained under, off the observed request; a probe's and a
+    /// The generation of the key the recipe was retained under, off the observed request. A probe's and a
     /// settlement's rows file under it.
     pub key_generation: i64,
     /// Which record this is. A replacement registration builds a new record under the same ids, and a probe
@@ -598,7 +598,7 @@ pub(crate) struct Agent {
     /// The share of the timing's jitter this schedule takes, rolled once per schedule so the due time holds
     /// still between ticks.
     pub jitter_frac: f64,
-    /// An outstanding backoff after a failed probe; the due time is the later of it and the expiry's.
+    /// An outstanding backoff after a failed probe. The due time is the later of it and the expiry's.
     pub retry_at: Option<i64>,
     /// The engine's timing, held here so a due time and a retry never need the engine.
     pub timing: KeepaliveTiming,
@@ -1155,7 +1155,7 @@ pub(crate) struct Observation {
     /// Observed inside a gap's backlog, so this request's own terminal event may be one the gap dropped:
     /// nothing it carries may arm a recipe.
     pub poisoned: bool,
-    /// The TTL the relay actually dispatched this attempt's body with, read off `AccountSelected`; `None` when
+    /// The TTL the relay actually dispatched this attempt's body with, read off `AccountSelected`, or `None` when
     /// the relay left the markers as sent, in which case the cap falls back to the recipe's own received TTL.
     pub dispatched_ms: Option<i64>,
     /// The kind and the class of the account the current attempt was placed on, read off `AccountSelected`, and
@@ -1333,7 +1333,7 @@ impl Kept {
 /// What ending an observation does with the probes the recipe leaves unanswered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Unanswered {
-    /// A labeled stop settles them and the kept ones under its label; a stop with no label drops them and leaves
+    /// A labeled stop settles them and the kept ones under its label. A stop with no label drops them and leaves
     /// the kept ones for whatever decides them.
     Settle,
     /// A real request supersedes the recipe and keeps them until its completion decides them, a failed one handing
@@ -1409,7 +1409,7 @@ pub struct Engine {
     pub(crate) idle: Notify,
     pub(crate) workers: TaskTracker,
     /// How many times `step` has actually asked the router, for a test to hold against one ask per due tick.
-    /// Cheap enough to keep in every build; only the reader is gated.
+    /// Cheap enough to keep in every build. Only the reader is gated.
     router_view_calls: AtomicU64,
     /// Orders the flushes: a snapshot, its save and its acknowledgment run under it whole, so two flushes never
     /// overlap and an older batch never reaches the store after a newer one.
@@ -1434,7 +1434,7 @@ pub struct Engine {
 
 impl Engine {
     pub fn new(parts: EngineParts) -> Arc<Engine> {
-        // Every read of a stored policy the bounds now refuse answers keepalive off; the operator learns which pool
+        // Every read of a stored policy the bounds now refuse answers keepalive off. The operator learns which pool
         // and why once, here, rather than from a tick that reads it every second.
         for pool in parts.router.snapshot().pools() {
             if let Err(refusal) = KeepalivePolicy::read(&pool.keepalive_json) {
@@ -2382,7 +2382,7 @@ impl Inner {
     }
 
     /// Whether a result about `agent` may still land: the session is not ended, the agent is registered, and
-    /// its state admits traffic. An unattended session is live; the idle limits decide what happens to it.
+    /// its state admits traffic. An unattended session is live. The idle limits decide what happens to it.
     pub(crate) fn live(&self, key: &SessionKey, agent_id: &str) -> bool {
         !self.closed
             && self.sessions.get(key).is_some_and(|s| {
@@ -2421,7 +2421,7 @@ impl Inner {
     }
 
     /// A resolution that landed after a recipe was retained moved the router's pins and model cooldowns to the
-    /// dated id; the recipe follows, so the gate finds them and the next request's credit compares like names.
+    /// dated id. The recipe follows, so the gate finds them and the next request's credit compares like names.
     pub(crate) fn follow_resolutions(&mut self, canonical: &HashMap<String, String>) {
         let mut followed: Vec<(SessionKey, String)> = Vec::new();
         for (key, session) in self.sessions.iter_mut() {
@@ -2634,9 +2634,9 @@ pub struct AgentStatus {
     pub wake_at: Option<i64>,
 }
 
-/// The engine's bus task. Every event is handed to `observe` under the lock; nothing here awaits while holding
+/// The engine's bus task. Every event is handed to `observe` under the lock. Nothing here awaits while holding
 /// it, so a slow registry read never stalls the queue. The bus drops for a subscriber that falls behind and
-/// counts it; a rise in that counter means events this task never saw, so every observation still open is
+/// counts it. A rise in that counter means events this task never saw, so every observation still open is
 /// discarded before the next event is applied.
 pub fn spawn_observer(engine: Arc<Engine>) -> tokio::task::JoinHandle<()> {
     // Best-effort: a drop reads as a gap below, which discards the observations it could have misled.
@@ -2898,7 +2898,7 @@ impl Engine {
         // The hijack guard: an auxiliary or foreign request must not touch the recipe, the schedule, or the
         // unanswered probes a re-arming request's credit depends on. `reason` stays the recipe's gating
         // state, since a hold's `began` check, the completion's gate-reason match, and the view's armed-or-held
-        // state all read that field as state; the agent's own `last_guard` carries the verdict itself, every
+        // state all read that field as state. The agent's own `last_guard` carries the verdict itself, every
         // request's, for the view to show.
         let recipe_hashes = agent.current.as_ref().map(|observation| {
             (
@@ -3499,7 +3499,8 @@ impl Engine {
                     session = %mark.session.1,
                     cache_read_tokens = read,
                     previous_prompt_tokens = mark.previous_prompt,
-                    "a refreshing request's chain holds none of the anchor's boundaries while its completion read the cache as a continuation would"
+                    "a refreshing request's chain holds none of the anchor's boundaries while its completion read \
+                     the cache as a continuation would"
                 );
             }
         }
@@ -4003,7 +4004,7 @@ impl Engine {
         }
     }
 
-    /// Resolves once no probe is in flight; the tests drive `step` and then wait here.
+    /// Resolves once no probe is in flight. The tests drive `step` and then wait here.
     pub async fn wait_idle(&self) {
         phoebis_routing::wait_until(&self.idle, None, || self.lock().running == 0, || {}).await;
     }

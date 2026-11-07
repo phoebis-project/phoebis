@@ -303,7 +303,7 @@ fn answer(
     Ok(line.trim().to_string())
 }
 
-/// The flags and the defaults as a plan; a listener off loopback with no pair plans plain HTTP until `ask`, on a
+/// The flags and the defaults as a plan. A listener off loopback with no pair plans plain HTTP until `ask`, on a
 /// terminal, offers it a choice.
 pub fn plan(config_path: &Path, args: &InitArgs) -> Result<Plan, InitError> {
     let config_path = absolute(config_path)?;
@@ -367,7 +367,7 @@ fn listener(
             cert_file: absolute(cert_file)?,
             key_file: absolute(key_file)?,
         }),
-        // The container network is plain HTTP by default; the host decides what it publishes.
+        // The container network is plain HTTP by default. The host decides what it publishes.
         _ => None,
     };
     Ok(Listener { listen, tls })
@@ -562,8 +562,8 @@ struct Landed {
     path: PathBuf,
 }
 
-/// Writes the plan; a step that fails removes what this run wrote and names it. `secret_out` is stdout and gets
-/// the one `<NAME>=<secret>` line when no environment file is written; `report` is stderr.
+/// Writes the plan. A step that fails removes what this run wrote and names it. `secret_out` is stdout and gets
+/// the one `<NAME>=<secret>` line when no environment file is written, and `report` is stderr.
 pub fn run(
     plan: &Plan,
     secret_out: &mut dyn Write,
@@ -624,7 +624,7 @@ fn refuse_existing(plan: &Plan) -> Result<(), InitError> {
         }
     }
     // A registry sealed under a key this run would replace is the key-loss case the operations page recovers by
-    // hand; a new key over it would only make every sealed row unreadable for good. The container's data directory
+    // hand. A new key over it would only make every sealed row unreadable for good. The container's data directory
     // is the volume's path inside the image, which the host does not have.
     if !plan.container {
         for name in [REGISTRY_FILE, LEDGER_FILE] {
@@ -722,7 +722,7 @@ fn write_file(
 ///
 /// The key file goes over through the descriptor `create_new` opened and each directory through `lchown`, so a link
 /// swapped in as a path's last component cannot carry the change of owner to another file. A link higher up the path
-/// is followed; the documented paths sit under root-owned directories, where nobody else can swap one in.
+/// is followed. The documented paths sit under root-owned directories, where nobody else can swap one in.
 fn hand_over(
     plan: &Plan,
     key_file: &File,
@@ -860,7 +860,7 @@ struct PasswdEntry {
     uid: u32,
 }
 
-/// One reentrant `getpw*_r` lookup, growing the buffer while the entry does not fit; `None` when no entry matches.
+/// One reentrant `getpw*_r` lookup, growing the buffer while the entry does not fit. `None` when no entry matches.
 fn passwd(
     lookup: impl Fn(
         *mut libc::passwd,
@@ -872,7 +872,7 @@ fn passwd(
     let mut size = 1024;
     loop {
         let mut buffer: Vec<libc::c_char> = vec![0; size];
-        // SAFETY: `passwd` is a plain C struct, for which all zeroes is a valid value; the lookup fills it.
+        // SAFETY: `passwd` is a plain C struct, for which all zeroes is a valid value, and the lookup fills it.
         let mut entry: libc::passwd = unsafe { std::mem::zeroed() };
         let mut found: *mut libc::passwd = std::ptr::null_mut();
         match lookup(&mut entry, buffer.as_mut_ptr(), buffer.len(), &mut found) {
@@ -1223,7 +1223,7 @@ mod tests {
             landed("have/data", true),
             landed("conf/config.yaml", false),
         ];
-        // `have` existed, so it is not on the list; `env` and `env/only` lead to the environment file alone, which
+        // `have` existed, so it is not on the list. `env` and `env/only` lead to the environment file alone, which
         // systemd reads as root, and owning them would let the service replace that file.
         assert_eq!(
             owned_dirs(&plan, &written),

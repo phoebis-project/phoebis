@@ -885,12 +885,13 @@ window recovers once that window reads under 1.0, and a claim on another week, o
 window set no longer holds, once every shared window the set still holds reads under 1.0.
 
 The two model-scoped rows apply to a model whose family has a week of its own in the family table (Fable, whose week is
-`seven_day_fable`). The row cools that model on the account and recovers once a reading of that week is under 1.0. The
-claim is the `representative-claim` header: one naming the model's own week, or `seven_day_overage_included`, or none at
-all leaves the decision to these rows. A claim naming another family's week, or a week no row names (such as
-`seven_day_opus`), cools the whole account whatever the `7d_oi` status reads, and so does any of these rejections for a
-model without a week of its own: under the shared row when the top-level `status` reads rejected, and under the row for
-headers that reject nothing otherwise.
+`seven_day_fable`). The row cools that model on the account. Where the rejection carried a claim, the row recovers once
+a reading of that week is under 1.0, and no reading lifts a row from a rejection with no claim. The claim is the
+`representative-claim` header: one naming the model's own week, or `seven_day_overage_included`, or none at all leaves
+the decision to these rows. A claim naming another family's week, or a week no row names (such as `seven_day_opus`),
+cools the whole account whatever the `7d_oi` status reads, and so does any of these rejections for a model without a
+week of its own: under the shared row when the top-level `status` reads rejected, and under the row for headers that
+reject nothing otherwise.
 
 **API key**
 

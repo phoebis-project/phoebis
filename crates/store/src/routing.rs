@@ -78,7 +78,7 @@ pub struct PinRow {
     /// a pin is only ever the holders' it was made for.
     pub key_generation: i64,
     pub incarnation: u64,
-    /// The pin's usage as typed tokens per second over the pool's burn window, and when it was last folded; a
+    /// The pin's usage as typed tokens per second over the pool's burn window, and when it was last folded. A
     /// reader prices it on the account the pin sits on when it reads, so no average carries a unit. Zero and
     /// `None` for a pin never renewed with usage.
     pub burn: PinBurn,
@@ -95,17 +95,17 @@ pub struct PinRow {
     pub last_input_tokens: u64,
     /// A classifier call renewed the pin last, so its stored context is a classifier body and prices no rewrite.
     pub last_classifier: bool,
-    /// The last main, subagent or compaction turn, or a keepalive probe's renewal; `last_used_at` moves on every
-    /// request, this does not.
+    /// The last main, subagent or compaction turn, or a keepalive probe's renewal. `last_used_at` moves on every
+    /// request, while this does not.
     pub last_refresh_at: i64,
     /// The cache TTL in force at the last refresh, as the relay resolved it (the policy's rewrite, else the
-    /// client's own marker), so warmth is judged here without the relay's policy type; 5 minutes until reported.
+    /// client's own marker), so warmth is judged here without the relay's policy type. It is 5 minutes until reported.
     pub cache_ttl_ms: i64,
     pub shed: Option<ShedStamp>,
     pub static_hash: Option<String>,
     pub tail_hash: Option<String>,
-    /// The lane of the request that created the pin, stamped again by each request that refreshed or colded it;
-    /// `""` on a pin written before pins carried a lane, which adopts the next request's lane.
+    /// The lane of the request that created the pin, stamped again by each request that refreshed or colded it,
+    /// or `""` on a pin written before pins carried a lane, which adopts the next request's lane.
     pub lane: String,
     /// The entrypoint of the request that placed the pin, stamped again by each client renewal. `None` for none and
     /// on a pin written before pins carried one, which adopts the next request's, and the base regime prices `None`.
@@ -289,7 +289,7 @@ pub struct CreditsRow {
     pub observed_at: i64,
 }
 
-/// A folded spelling and the dated id the API listed for it; the routing state keys that spelling's rows on
+/// A folded spelling and the dated id the API listed for it. The routing state keys that spelling's rows on
 /// the dated id from the moment the row exists, and the row is loaded before any request is served.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolutionRow {
@@ -321,7 +321,7 @@ text_enum! {
 
 /// One boundary: which account the conversation it names last ran on, whose conversation it belongs
 /// to, and, when the cache confirmed it, how warm it is. The links (the account, the key, the root) are written
-/// for every completed response; the warmth is written only with cache evidence.
+/// for every completed response. The warmth is written only with cache evidence.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AffinityRow {
     pub model: String,
@@ -333,7 +333,7 @@ pub struct AffinityRow {
     pub incarnation: u64,
     /// `written_at` is the last report's time (the purge reads it). `ttl_ms` is the lifetime remaining as of
     /// `written_at`: a report with cache evidence sets it to the marker's full lifetime as sent upstream, and an
-    /// unconfirmed refresh shortens it to what remained, so the boundary's warm deadline never moves; 0 for a
+    /// unconfirmed refresh shortens it to what remained, so the boundary's warm deadline never moves. It is 0 for a
     /// link the cache never confirmed, which never places. `prefix_tokens` is the promised prefix: for a
     /// `static` row the relay's estimate of the blocks the boundary covers (canonical bytes over four), for a
     /// `message` row the cached tokens the upstream reported for the writing request.
@@ -587,7 +587,7 @@ impl Store {
         self.routing_transaction(|tx| delete_first_seen_on(tx, key_id, session_id))
     }
 
-    /// Every row lands or none does; a row under an existing (model, hash) replaces it.
+    /// Every row lands or none does. A row under an existing (model, hash) replaces it.
     pub fn upsert_affinity(&self, rows: &[AffinityRow]) -> Result<(), StoreError> {
         self.routing_transaction(|tx| upsert_affinity_on(tx, rows))
     }
@@ -677,7 +677,7 @@ fn all_resolutions(conn: &Connection) -> Result<Vec<ResolutionRow>, StoreError> 
     Ok(rows)
 }
 
-/// The routing writes on one open transaction; each is the inner form of the public method of the same name.
+/// The routing writes on one open transaction. Each is the inner form of the public method of the same name.
 pub struct RoutingTx<'a> {
     pub(crate) clock: Clock,
     pub(crate) tx: &'a Transaction<'a>,

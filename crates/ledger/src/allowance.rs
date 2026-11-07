@@ -55,8 +55,8 @@ fn share_left(utilization: f64) -> f64 {
 /// events, plus one `term_ended` row per weekly window with a reading before each account's end in `term_ends` that
 /// lies at or after `from`. The read keeps the listed accounts and answers no row for an empty list, since the
 /// ledger holds no account kind: the caller lists the `oauth` accounts it answers for. A term end's row reads
-/// the last reading before the end of a week still open at it (its reset at or after the end), the head's
-/// overage-included week folded into `seven_day_fable` with the newer reading standing, and a reading with no
+/// the last reading before the end of a week still open at it (its reset at or after the end), a row stored under
+/// `seven_day_overage_included` folded into `seven_day_fable` with the newer reading standing, and a reading with no
 /// utilization skipped. A reading with no reset instant shows no open week. A reset of an account in `term_ends` at or
 /// after its end is left out, so the week the end cut short counts once. Ordered by account, window, then `reset_at`
 /// newest first. No rollup and no stored figure: the history is the events the purge still holds.

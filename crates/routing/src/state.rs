@@ -988,8 +988,9 @@ pub struct SlowDownState {
 /// One edge of an account's slow-down span, which the task announces as an event.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SlowDownEdge {
-    /// The factor read under 1 for the first time since it last read 1, with the figures of that read: the demand in
-    /// share of the 5-hour window per hour.
+    /// The factor read under 1 for the first time since the span last closed, with the figures of that read: the
+    /// demand in share of the 5-hour window per hour. A dip back under 1 inside the `SLOW_DOWN_WAIT_MS` wait continues
+    /// the open span and pushes no edge.
     Started {
         factor: f64,
         stretch_ms: i64,

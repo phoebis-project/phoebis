@@ -521,7 +521,7 @@ fn predicted(
         // instant.
         let (key, usage) = attempt.usage(prices, to);
         // API-key, usage-based, fast and overage answers draw no plan window, so they are no part of the rise either. A
-        // classifier call draws no plan window either.
+        // classifier call under the word `client` draws no plan window either. A `client_off` call draws as any call.
         if key.funding != Funding::Plan
             || (window == SEVEN_DAY_FABLE && window_for(key.model) != SEVEN_DAY_FABLE)
             || key.classifier

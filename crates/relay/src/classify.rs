@@ -280,7 +280,8 @@ fn oauth_cooldown(
             // top-level reset, which only ever lengthens the cooldown when it wins.
             let reset = [u.seven_day_oi.reset, u.reset].into_iter().flatten().max();
             // The row keeps the upstream's claim: it reaches the client as an exhausted pool's claim, and the
-            // client resumes only on a claim it knows. Recovery reads the model's own week, not this text.
+            // client resumes only on a claim it knows. A row with a claim recovers on a reading of the model's own
+            // week, not on this text. A row with no claim stores `retry_after`, which no reading lifts.
             return row(Scope::Model, reset);
         }
     }

@@ -6867,7 +6867,7 @@ fn pin_facts(
             .and_then(|p| p.cycle_ms)
             .map(|cycle| cycle.round() as i64),
         // A deadline at or before the decision stands no longer, as `slow_down_answer` reads it, though it stays on
-        // the pace until the pin ends.
+        // the pace until the pin lands elsewhere (`put_pin`), the account's 5-hour window resets, or the pin ends.
         slow_down_until: pace
             .and_then(|p| p.deadline)
             .filter(|deadline| *deadline > now),

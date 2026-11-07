@@ -17,7 +17,7 @@ pub struct Recipe {
     pub body: Bytes,
     pub headers: Vec<(String, String)>,
     pub model: String,
-    /// What the body's own markers ask for; 0 when it carries none, and the response decides.
+    /// What the body's own markers ask for, or 0 when it carries none and the response decides.
     pub ttl_ms: i64,
     /// The longest TTL a marker in the body asks for, 0 with none: a probe that finds the prefix cold writes each
     /// marked part at its own TTL, so one hour marker anywhere means the probe can write for an hour.
@@ -128,7 +128,7 @@ pub fn make_recipe(
     {
         return Err(Reason::UnsupportedShape);
     }
-    // The edits below and the restamp read raw keys and values; a member the decoded walk finds and the raw edits
+    // The edits below and the restamp read raw keys and values. A member the decoded walk finds and the raw edits
     // cannot read (an escaped key, a stamp `find_cch` cannot parse, a `stream` that is no boolean) would gain a
     // second `stream` beside it or keep a stale hash, so such a body is refused as the invalid request it makes of the
     // replay rather than retained. Read after the shape check, so a `max_tokens` that is no positive number stays an
@@ -159,7 +159,7 @@ pub fn make_recipe(
         }
     }
     // A reference to account-scoped state belongs to the account that served the request, while a probe
-    // follows a pin a sibling's request may have moved since; the relay checks portability against the pin it
+    // follows a pin a sibling's request may have moved since. The relay checks portability against the pin it
     // finds, so such a body must never be retained in the first place.
     if !phoebis_relay::portable_of(&root) {
         return Err(Reason::UnsupportedShape);
@@ -230,7 +230,7 @@ pub fn make_recipe(
     // the relay relays a client-sent placeholder unsigned whatever `proxy.sign_cch_placeholder` says, and a probe
     // signed here would travel signed where the request it replays went out unsigned. A reduced-shape line
     // carries no stamp to touch, since the relay restores its fields on the request's way out, after the bus
-    // published the body, and never on a probe's; a body without a stamp is left alone.
+    // published the body, and never on a probe's. A body without a stamp is left alone.
     if client_hash {
         phoebis_cch::restamp_if_present(&mut edited).map_err(|_| Reason::InvalidRequest)?;
     }

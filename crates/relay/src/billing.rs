@@ -43,7 +43,7 @@ pub(crate) fn field_value<'a>(field: &'a str, name: &str) -> Option<&'a str> {
 pub struct Restore<'a> {
     pub prompt_id: Option<&'a str>,
     pub prev_req: Option<&'a str>,
-    /// Items the account has refused on a previous attempt; each is left out of the line even when the field
+    /// Items the account has refused on a previous attempt. Each is left out of the line even when the field
     /// it names is otherwise absent and restorable.
     pub skip: Vec<Injected>,
 }
@@ -204,7 +204,7 @@ fn patch_line(
     let Ok(decoded) = serde_json::from_slice::<String>(&body[start..end]) else {
         return Err(RelayError::BodyShape(BodyMember::BillingLine));
     };
-    // The dispatch above matched `BILLING_BLOCK`, which stops right after the colon; a line that carries no
+    // The dispatch above matched `BILLING_BLOCK`, which stops right after the colon. A line that carries no
     // space after it, or nothing at all past the prefix, is not a shape this build ever writes, and splicing a
     // field into it under the assumption that it is would double the prefix or leave a stray separator behind.
     let Some(fields) = attribution_fields(&decoded) else {
@@ -283,7 +283,7 @@ mod tests {
     }
 
     /// A supplementary character straddling position 4 leaves only its low surrogate there, unpaired in the
-    /// three-unit sample; `from_utf16_lossy` reads it as U+FFFD, the same replacement the client's own decode
+    /// three-unit sample. `from_utf16_lossy` reads it as U+FFFD, the same replacement the client's own decode
     /// produces for a lone surrogate. Verified against sha256 of `"59cf53e54c78" + "\u{FFFD}gt" + "2.1.278"`.
     #[test]
     fn a_supplementary_character_straddling_position_4_decodes_its_lone_surrogate_as_replacement() {
@@ -300,7 +300,7 @@ mod tests {
     }
 
     /// Positions 4 and 7 land on two different characters' surrogate halves that happen to pair once sampled
-    /// together; `from_utf16_lossy` combines them into one four-byte character, matching what the client's own
+    /// together. `from_utf16_lossy` combines them into one four-byte character, matching what the client's own
     /// string concatenation and UTF-8 encoding produce. Verified against sha256 of
     /// `"59cf53e54c78" + "\u{10037}t" + "2.1.278"`.
     #[test]
