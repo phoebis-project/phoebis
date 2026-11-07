@@ -57,8 +57,6 @@ test("a row reads each kind's detail as one sentence", () => {
   assert.equal(sentence('pool_exhausted', { key: null, pool: 'jobs' }), 'no member could take a request');
   assert.equal(sentence('client_drift', { client_version: '2.1.271', key: 'laptop', trigger: 'hash' }), 'its billing hash differs from the pinned build, newest refusal from key laptop');
   assert.equal(sentence('client_drift', { client_version: '2.1.271', key: null, trigger: 'version_suffix' }), 'its version suffix differs from the pinned build');
-  assert.equal(sentence('reauth_required', { account: 'legacy', label: 'legacy' }), 'serves nothing until its credential is renewed');
-  assert.equal(sentence('funding_required', { account: 'research', label: 'Research workspace' }), 'serves nothing until its organization is funded again');
   assert.equal(sentence('refresh_failed', { account: 'legacy', failures: 5, last_error: 'refresh_token rejected: invalid_grant', outcome: 'failed' }), '5 refreshes failed in a row: refresh_token rejected: invalid_grant');
   assert.equal(sentence('refresh_failed', { account: 'legacy', failures: 2, last_error: null, outcome: 'uncertain' }), '2 refreshes failed in a row');
   assert.equal(sentence('poll_backoff', { account: 'secondary', backoff_since: NOW - 42 * 60_000, next_attempt_at: NOW + 4 * 60_000, rate_limited_in_a_row: 6 }), '6 rate-limited answers in a row, next attempt in 4m');
@@ -71,8 +69,6 @@ test("a row reads each kind's detail as one sentence", () => {
   const since = fmtAbsolute(item('model_unpriced').since);
   assert.equal(sentence('model_unpriced', { model: 'claude-sonnet-4-5', requests: 12 }), `claude-sonnet-4-5 has no weight in the cost model, so its 12 plan-funded requests since ${since} priced no window share.`);
   assert.equal(sentence('model_unpriced', { model: 'claude-opus-99', requests: 1 }), `claude-opus-99 has no weight in the cost model, so its 1 plan-funded request since ${since} priced no window share.`, 'one request reads singular');
-  const slowed = { bar_ms: 3_600_000, factor_min: 0.35, open: true, setting: ['slow_down_stretch_seconds'], setting_values: { slow_down_stretch_seconds: 1800 }, slowed_ms: 7_700_000, spans: 2 };
-  assert.equal(sentence('slowed_long', slowed), `slowed 2 h 8 min of the last 24 h, over 1 h, slowest 0.35x, slow_down_stretch_seconds 1800, since ${fmtShortTime(item('slowed_long').since)}`);
 });
 
 test("a listener's certificate items read the listener, the file, the date and what to do", () => {

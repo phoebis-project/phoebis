@@ -806,7 +806,7 @@ async function statGrid(theme) {
       return { fifth: tiles[4] ? round(tiles[4].width) : null, past: tiles.filter((t) => t.right > right + 0.5).length, row: round(grid.clientWidth), rows: new Set(tiles.map((t) => Math.round(t.top))).size, tiles: tiles.length, wide };
     });
   try {
-    for (const size of [viewport, { height: 768, width: 1024 }, { height: 900, width: 400 }]) {
+    for (const { fifth, ...size } of [{ ...viewport, fifth: false }, { fifth: true, height: 768, width: 1024 }, { fifth: true, height: 900, width: 400 }]) {
       const { width } = size;
       if (width !== viewport.width) {
         await page.setViewportSize(size);
@@ -819,7 +819,7 @@ async function statGrid(theme) {
       else {
         if (grid.tiles < 5) say(`draws ${grid.tiles} tiles, not five`);
         if (grid.past > 0) say(`draws ${grid.past} tiles past its right edge`);
-        if (width !== 1280 && (grid.fifth === null || Math.abs(grid.fifth - grid.row) > 1)) say(`draws the fifth tile ${grid.fifth} px wide, not across its ${grid.row} px row`);
+        if (fifth && (grid.fifth === null || Math.abs(grid.fifth - grid.row) > 1)) say(`draws the fifth tile ${grid.fifth} px wide, not across its ${grid.row} px row`);
         for (const w of grid.wide) say(`draws the ${w.label} tile's figure to ${w.figure} px, past its content's right edge at ${w.inner} px`);
       }
     }
