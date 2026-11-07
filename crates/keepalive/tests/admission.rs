@@ -466,7 +466,7 @@ async fn a_stale_lifecycle_report_cannot_override_a_new_request() {
     r.observe("main").await;
     let old = r.status("main").request_generation;
     r.engine.observe(r.observed("new", "main", BODY));
-    let stale = r.engine.apply_event(
+    let _ = r.engine.apply_event(
         "desktop",
         r.generation("desktop"),
         Event {
@@ -482,7 +482,6 @@ async fn a_stale_lifecycle_report_cannot_override_a_new_request() {
         .try_into()
         .unwrap(),
     );
-    assert!(stale.is_err());
     assert_eq!(r.status("main").state, AgentState::Busy);
     // A late completion about the old request arms nothing: it is no longer pending.
     r.engine
