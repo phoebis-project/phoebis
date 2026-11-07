@@ -5382,9 +5382,10 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
         "a passed reset reads as not in overage, so the reading returns to the share: {}",
         row(&recovered_sessions, "s1")
     );
-    // Evidence that names no reset stands for the cooldown fallback past its observation, the harness's 60 seconds,
-    // so read at the instant it was observed it moves the reading to dollars as a reset ahead does. The clock steps
-    // first, since the evidence lands only over the newer report above.
+    // Evidence that names no reset stands for the cooldown fallback past its observation, so read at the instant it
+    // was observed it moves the reading to dollars as a reset ahead does. The clock steps first: the evidence lands
+    // only over the newer report above, and it is observed at the router's clock rather than ahead of it, since an
+    // observation ahead of the clock stands under any fallback, zero included.
     common::step(&parts, std::time::Duration::from_secs(10));
     parts
         .router
