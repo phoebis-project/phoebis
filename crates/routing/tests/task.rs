@@ -8940,6 +8940,100 @@ async fn a_projection_leaves_out_the_burn_of_a_pin_whose_agent_ended_until_the_a
     );
 }
 
+#[tokio::test]
+async fn the_slow_down_hold_divides_the_factor_among_the_live_pins_and_leaves_out_a_pin_whose_agent_ended(
+) {
+    let now = Arc::new(AtomicI64::new(AT));
+    let store = shedding_store(&["a"]);
+    let mut pool = store.pool("p").unwrap().unwrap();
+    pool.slow_down.slow_down = true;
+    pool.slow_down.slow_down_stretch_seconds = 1800;
+    pool.slow_down.slow_down_hold_seconds = 600;
+    pool.shedding.burn_average_seconds = (SLOWED_AVERAGE_MS / 1_000) as u64;
+    store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    with_tier(&store, "a");
+    // `slowed_router`'s s1, a tenth of the 5-hour window an hour on `a` at 0.9 with 40 minutes left, beside s2, whose
+    // agent burned nine times that and ended.
+    store
+        .upsert_pin(&stored_pin(&store, "s1", "a", 1, 10.0))
+        .unwrap();
+    store
+        .upsert_pin(&stored_pin(&store, "s2", "a", 2, 90.0))
+        .unwrap();
+    let handle = spawn(store, clock(&now), priced_config()).unwrap();
+    handle
+        .report(observed(
+            "a",
+            sample_with(AT, FIVE_HOUR, 0.9, Some(SLOWED_RESET)),
+        ))
+        .await;
+    handle
+        .report(Report::AgentEnded {
+            key_id: "k".into(),
+            session_id: "s2".into(),
+            agent_id: "main".into(),
+        })
+        .await;
+    handle.samples().await.unwrap();
+
+    // The stamp one burn average back puts the ramp at 1, s1's first main turn starts its pace, and its second, 30 s
+    // on, gives it its cycle and waits.
+    handle
+        .select(SelectRequest {
+            request_class: Some("quota".into()),
+            ..slowed_turn(&handle, "r-0", AT - SLOWED_AVERAGE_MS)
+        })
+        .await
+        .unwrap();
+    handle
+        .select(slowed_turn(&handle, "r-1", AT))
+        .await
+        .unwrap();
+    let t2 = AT + 30_000;
+    now.store(t2, Ordering::SeqCst);
+    let mut events = handle.subscribe_events();
+    let hold = match handle
+        .select(slowed_turn(&handle, "r-2", t2))
+        .await
+        .unwrap()
+        .result
+    {
+        SelectResult::Held(hold) => hold,
+        other => panic!("the pin with a cycle waits: {other:?}"),
+    };
+    let outcome = next_decision(&mut events)
+        .await
+        .1
+        .outcome
+        .hold
+        .expect("a held outcome");
+    let factor = outcome.factor.expect("the read's factor");
+
+    // s1 is the one live pin, so it takes the whole reduction: it waits its cycle over the factor, under the cap, and
+    // the account realizes the factor itself.
+    let held = (hold.until.expect("a deadline") - t2) as f64;
+    let wanted = 30_000.0 * (1.0 / factor - 1.0);
+    assert!(
+        (held / wanted - 1.0).abs() < 1e-3,
+        "s1 waits its cycle over the factor, not the cap: {held} against {wanted} at {factor}"
+    );
+    let speed = outcome.speed.expect("the realized speed");
+    assert!(
+        (speed / factor - 1.0).abs() < 1e-9,
+        "the ended pin adds no full-speed burn to the realized speed: {speed} against {factor}"
+    );
+    // The entry folds that speed into the full speed r-1's read stored, 30 s of the 30-minute average before.
+    let w = (-1.0_f64 / 60.0).exp();
+    let stored = projection_of_account(&handle.projections("p").await.unwrap(), "a")
+        .slow_down
+        .expect("the pinned reads wrote a's entry")
+        .speed;
+    assert!(
+        (stored / (w + (1.0 - w) * factor) - 1.0).abs() < 1e-9,
+        "the stored speed folds the live pins' speed alone: {stored}"
+    );
+}
+
 /// A clock past the cache TTL, so a pin last refreshed an hour before it reads cold.
 const AT: i64 = 10 * HOUR;
 

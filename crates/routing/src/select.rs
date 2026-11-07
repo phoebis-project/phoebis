@@ -3030,12 +3030,13 @@ pub struct SlowDownRead {
     /// The factor the plan received, `1 - (1 - factor) x ramp`: the hold's outcome names it.
     pub ramped: f64,
     pub speed: f64,
-    /// The holds of the pool's pins on the account whose pace has a cycle, every kept pin weighted by its priced
-    /// decayed rate on `five_hour`: a pin without a cycle runs unheld and a pin whose cycle is too long for the cap is
-    /// held at the cap, and the rest share the remaining reduction at one speed, so the account's pins realize the
-    /// ramped factor together as far as the cap lets them. Empty while no pin on the account has a cycle.
+    /// The holds of the pool's pins on the account whose pace has a cycle, every kept pin whose agent has not ended
+    /// weighted by its priced decayed rate on `five_hour`: a pin without a cycle runs unheld and a pin whose cycle is
+    /// too long for the cap is held at the cap, and the rest share the remaining reduction at one speed, so the
+    /// account's pins realize the ramped factor together as far as the cap lets them. Empty while no pin on the
+    /// account has a cycle.
     pub plan: Vec<PinHold>,
-    /// The speed the account's pins realize under the plan, `sum(b x s) / sum(b)` over every kept pin with
+    /// The speed the account's pins realize under the plan, `sum(b x s) / sum(b)` over the pins `plan` weighs, with
     /// `s = c / (c + h)` and `s = 1` for a pin without a cycle, so 1 while the plan is empty: the one figure the
     /// selection folds into the entry's speed. The demand divides every kept pin's burn by it, so an unheld pin's burn
     /// reads at the pace it runs. Positive, so the demand never divides by zero.
@@ -3133,10 +3134,12 @@ pub(crate) fn slow_down_of(
     let ramp = slow_down_ramp(state, pool, account_id, factor, now);
     let ramped = 1.0 - (1.0 - factor) * ramp;
     // Every kept pin, each weighted by its own priced burn on the window: a pin without a cycle is never held, but its
-    // burn runs at full speed and weighs in the speed the demand divides by.
+    // burn runs at full speed and weighs in the speed the demand divides by. A pin whose agent ended leaves as it
+    // leaves the demand, since its agent sends no new turn to run at any speed.
     let pins: Vec<(PinKey, Option<f64>, f64)> = state
         .pins_on(account_id, &in_pool(snapshot, pool))
         .into_iter()
+        .filter(|p| !state.ended(&p.key()))
         .map(|p| {
             let cycle = state
                 .pin_pace(&p.key())
