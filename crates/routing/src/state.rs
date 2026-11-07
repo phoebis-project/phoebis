@@ -3618,8 +3618,10 @@ impl RoutingState {
         for pin in moved_pins {
             let spelled = pin.key();
             // The pin keeps its epoch under the dated id, so a renewal it had still fences its release there, and
-            // its flag and its fast and unmetered usage move with it.
+            // its flag and its fast and unmetered usage move with it. Its ended agent stays ended there too, since a
+            // resolution is no new request from that agent.
             let renewed = self.renewed.contains(&spelled);
+            let ended = self.ended.contains(&spelled);
             // Read ahead of `take_pin`, which drops it: the mark lives as long as its row, so a `Head` report still
             // finds it under the dated id.
             let mark = self.head_marks.remove(&spelled);
@@ -3658,6 +3660,11 @@ impl RoutingState {
                     self.renewed.insert(dated_key.clone());
                 } else {
                     self.renewed.remove(&dated_key);
+                }
+                if ended {
+                    self.ended.insert(dated_key.clone());
+                } else {
+                    self.ended.remove(&dated_key);
                 }
                 rekey.upsert_pins.push(moved);
             }
@@ -4453,6 +4460,53 @@ mod tests {
                 .iter()
                 .any(|p| p.burn_unmetered != PinBurn::default()),
             "the unmetered usage leaves with the pin"
+        );
+    }
+
+    #[test]
+    fn a_rekey_carries_an_ended_agents_mark_to_the_dated_id() {
+        let (pin, _) = burning("s", 1.0);
+        let mut state = RoutingState::from_load(RoutingLoad {
+            pins: vec![pin.clone()],
+            ..RoutingLoad::default()
+        });
+        state.mark_ended(&pin.key());
+        state.apply_resolution("m", "m-20260101", 0);
+        let dated = PinKey {
+            model: "m-20260101".into(),
+            ..pin.key()
+        };
+        assert!(
+            state.ended(&dated),
+            "the finished agent's pin stays out of the demand under the dated id"
+        );
+    }
+
+    #[test]
+    fn a_live_row_the_rekey_moves_over_an_ended_dated_row_reads_live() {
+        let (spelled, _) = burning("s", 1.0);
+        let spelled = PinRow {
+            last_used_at: 2,
+            ..spelled
+        };
+        let dated = PinRow {
+            model: "m-20260101".into(),
+            last_used_at: 1,
+            ..spelled.clone()
+        };
+        let mut state = RoutingState::from_load(RoutingLoad {
+            pins: vec![spelled, dated.clone()],
+            ..RoutingLoad::default()
+        });
+        state.mark_ended(&dated.key());
+        state.apply_resolution("m", "m-20260101", 0);
+        assert_eq!(
+            (
+                state.pin(&dated.key()).map(|p| p.last_used_at),
+                state.ended(&dated.key())
+            ),
+            (Some(2), false),
+            "the newer spelled row replaces the dated one, and its live agent keeps its demand"
         );
     }
 
