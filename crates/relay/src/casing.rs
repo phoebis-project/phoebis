@@ -345,16 +345,6 @@ mod tests {
         assert!(drain(preface.to_vec()).await.is_empty());
     }
 
-    #[tokio::test]
-    async fn a_head_split_across_two_reads_is_still_found() {
-        let queue = head_queue();
-        let (head, body) = HEAD.split_at(HEAD.len() - 4);
-        let mut recorder = HeadRecorder::new(std::io::Cursor::new(Vec::<u8>::new()), queue.clone());
-        recorder.observe(head);
-        recorder.observe(body);
-        assert_eq!(queue.lock().unwrap().len(), 1);
-    }
-
     #[test]
     fn three_heads_are_found_whether_they_arrive_in_one_read_or_split_across_two() {
         let head = |target: &str| {

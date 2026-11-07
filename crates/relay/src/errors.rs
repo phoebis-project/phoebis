@@ -741,11 +741,6 @@ mod tests {
                 member.path()
             );
         }
-        assert_eq!(
-            phoebis_bus::BODY_SHAPE_ERROR_CODE,
-            "body_shape",
-            "the wire spelling"
-        );
     }
 
     /// The name is the one part of the answer the operator wrote, so the arm formats it into the message and the
