@@ -413,7 +413,7 @@ pub(crate) fn guardrail_json(row: &GuardrailRow, index: &AttachmentIndex) -> Gua
 fn preset_state(row: &GuardrailRow) -> Option<GuardrailPresetState> {
     let PresetStamp { id, version } = row.preset.as_ref()?;
     let version = *version;
-    let (current_version, customized) = match Preset::current(id) {
+    let (current_version, customized) = match Preset::current(phoebis_guardrails::presets(), id) {
         Some(current) => (
             current.version,
             Preset::at(id, version).is_none_or(|stamped| stamped.conditions != row.conditions),
@@ -658,7 +658,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         return failure(StatusCode::CONFLICT, DUPLICATE_ID);
     }
     let preset = match &input.preset {
-        Some(preset_id) => match Preset::current(preset_id) {
+        Some(preset_id) => match Preset::current(phoebis_guardrails::presets(), preset_id) {
             Some(preset) => Some(preset),
             None => {
                 return failure(
@@ -740,7 +740,7 @@ pub(crate) async fn presets() -> Response {
     Json(PresetList {
         presets: ids
             .into_iter()
-            .filter_map(Preset::current)
+            .filter_map(|id| Preset::current(phoebis_guardrails::presets(), id))
             .map(preset_view)
             .collect(),
     })

@@ -13,6 +13,20 @@ use phoebis_transport::ALPN_HTTP1;
 /// check instead of stalling it.
 pub const TIMEOUT: Duration = Duration::from_secs(3);
 
+/// The instant source the probe's budget reads, the real clock in production.
+pub trait Clock {
+    fn now(&self) -> Instant;
+}
+
+/// The monotonic clock the `health` and `status` subcommands pass.
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+}
+
 /// Where a listener bound on every interface is reached: the loopback of the same family, since an
 /// unspecified address is a bind target and not a destination.
 pub fn target(listen: SocketAddr) -> SocketAddr {
@@ -30,12 +44,21 @@ pub fn target(listen: SocketAddr) -> SocketAddr {
 ///
 /// `tls` says the proxy listener terminates TLS: the probe then wraps the socket in a connector that verifies
 /// nothing, since it dials its own process on loopback and asks whether `/api/ready` answers 200, not who answers.
-pub fn probe(listen: SocketAddr, tls: bool, timeout: Duration) -> Result<SocketAddr, String> {
+pub fn probe(
+    listen: SocketAddr,
+    tls: bool,
+    timeout: Duration,
+    clock: &dyn Clock,
+) -> Result<SocketAddr, String> {
     let addr = target(listen);
-    let deadline = Instant::now() + timeout;
-    let stream = TcpStream::connect_timeout(&addr, remaining(addr, deadline, timeout)?)
+    let deadline = clock.now() + timeout;
+    let stream = TcpStream::connect_timeout(&addr, remaining(addr, deadline, timeout, clock)?)
         .map_err(|error| format!("proxy does not answer on {addr}: {error}"))?;
-    let mut socket = Deadlined { stream, deadline };
+    let mut socket = Deadlined {
+        stream,
+        deadline,
+        clock,
+    };
     if tls {
         let connector_error = |error: ErrorStack| {
             format!("proxy probe on {addr} could not build its TLS connector: {error}")
@@ -56,9 +79,9 @@ pub fn probe(listen: SocketAddr, tls: bool, timeout: Duration) -> Result<SocketA
                 format!("proxy on {addr} refused the TLS handshake: {error}")
             }
         })?;
-        exchange(&mut stream, addr, deadline, timeout)?;
+        exchange(&mut stream, addr, deadline, timeout, clock)?;
     } else {
-        exchange(&mut socket, addr, deadline, timeout)?;
+        exchange(&mut socket, addr, deadline, timeout, clock)?;
     }
     Ok(addr)
 }
@@ -67,14 +90,15 @@ pub fn probe(listen: SocketAddr, tls: bool, timeout: Duration) -> Result<SocketA
 /// left of the budget, since BoringSSL reads a record to its announced length one socket read at a time and a timeout
 /// set once would give each of those reads the whole remainder again. A spent budget answers `TimedOut` without
 /// touching the socket.
-struct Deadlined {
+struct Deadlined<'c> {
     stream: TcpStream,
     deadline: Instant,
+    clock: &'c dyn Clock,
 }
 
-impl Deadlined {
+impl Deadlined<'_> {
     fn left(&self) -> std::io::Result<Duration> {
-        let left = self.deadline.saturating_duration_since(Instant::now());
+        let left = self.deadline.saturating_duration_since(self.clock.now());
         if left.is_zero() {
             return Err(ErrorKind::TimedOut.into());
         }
@@ -82,14 +106,14 @@ impl Deadlined {
     }
 }
 
-impl Read for Deadlined {
+impl Read for Deadlined<'_> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         self.stream.set_read_timeout(Some(self.left()?))?;
         self.stream.read(buf)
     }
 }
 
-impl Write for Deadlined {
+impl Write for Deadlined<'_> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         self.stream.set_write_timeout(Some(self.left()?))?;
         self.stream.write(buf)
@@ -118,8 +142,13 @@ fn out_of_time(addr: SocketAddr, timeout: Duration) -> String {
 }
 
 /// What is left of the budget, or the line saying it ran out.
-fn remaining(addr: SocketAddr, deadline: Instant, timeout: Duration) -> Result<Duration, String> {
-    let left = deadline.saturating_duration_since(Instant::now());
+fn remaining(
+    addr: SocketAddr,
+    deadline: Instant,
+    timeout: Duration,
+    clock: &dyn Clock,
+) -> Result<Duration, String> {
+    let left = deadline.saturating_duration_since(clock.now());
     if left.is_zero() {
         return Err(out_of_time(addr, timeout));
     }
@@ -133,8 +162,9 @@ fn exchange<S: Read + Write>(
     addr: SocketAddr,
     deadline: Instant,
     timeout: Duration,
+    clock: &dyn Clock,
 ) -> Result<(), String> {
-    remaining(addr, deadline, timeout)?;
+    remaining(addr, deadline, timeout, clock)?;
     let request = format!("HEAD /api/ready HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
     stream
         .write_all(request.as_bytes())
@@ -142,7 +172,7 @@ fn exchange<S: Read + Write>(
     let mut head = [0u8; 128];
     let mut read = 0;
     while read < head.len() && !head[..read].contains(&b'\n') {
-        remaining(addr, deadline, timeout)?;
+        remaining(addr, deadline, timeout, clock)?;
         match stream.read(&mut head[read..]) {
             Ok(0) => break,
             Ok(n) => read += n,

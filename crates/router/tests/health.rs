@@ -1,11 +1,14 @@
 //! `phoebis health` and the `PHOEBIS_CONFIG` fallback, against listeners this file owns on loopback ports, plain and
 //! behind TLS.
 
+use std::cell::Cell;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
+
+use phoebis_router::health::{Clock, SystemClock};
 
 fn config_file(dir: &Path, name: &str, proxy: SocketAddr) -> PathBuf {
     let key = dir.join("storage.key");
@@ -97,7 +100,7 @@ fn answering_tls(status: &'static str) -> (SocketAddr, std::thread::JoinHandle<O
 fn a_listener_answering_200_passes_and_is_asked_for_ready_by_head() {
     let (addr, served) = answering("200 OK");
     assert_eq!(
-        phoebis_router::health::probe(addr, false, phoebis_router::health::TIMEOUT),
+        phoebis_router::health::probe(addr, false, phoebis_router::health::TIMEOUT, &SystemClock),
         Ok(addr)
     );
     let request = served.join().unwrap();
@@ -118,7 +121,8 @@ fn a_closed_port_fails_within_the_timeout() {
         .unwrap();
     let started = Instant::now();
     let reason =
-        phoebis_router::health::probe(addr, false, phoebis_router::health::TIMEOUT).unwrap_err();
+        phoebis_router::health::probe(addr, false, phoebis_router::health::TIMEOUT, &SystemClock)
+            .unwrap_err();
     assert!(
         reason.starts_with(&format!(
             "proxy does not answer on {addr}: Connection refused"
@@ -143,7 +147,7 @@ fn a_listener_that_accepts_and_never_writes_fails_within_the_budget() {
         drop(stream);
     });
     let started = Instant::now();
-    let reason = phoebis_router::health::probe(addr, false, SHORT).unwrap_err();
+    let reason = phoebis_router::health::probe(addr, false, SHORT, &SystemClock).unwrap_err();
     assert!(
         started.elapsed() < SHORT + Duration::from_millis(500),
         "{:?}",
@@ -153,33 +157,49 @@ fn a_listener_that_accepts_and_never_writes_fails_within_the_budget() {
     held.join().unwrap();
 }
 
+/// The spent-budget case's clock, keyed on the probe's own reads rather than on the listener's accept, which the
+/// kernel's connect races: the probe reads the clock twice before the connect (the deadline, then the remainder the
+/// connect gets), so those two reads answer the start and every later read answers the budget spent.
+struct SpentAfterConnect {
+    start: Instant,
+    budget: Duration,
+    reads: Cell<u32>,
+}
+
+impl Clock for SpentAfterConnect {
+    fn now(&self) -> Instant {
+        let read = self.reads.get();
+        self.reads.set(read + 1);
+        if read < 2 {
+            self.start
+        } else {
+            self.start + self.budget
+        }
+    }
+}
+
 #[test]
 fn a_listener_that_accepts_and_whose_budget_is_spent_before_the_first_read_fails_naming_the_deadline(
 ) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let addr = listener.local_addr().unwrap();
-    // The smallest budget the probe's check before the connect passes: the connect alone outlasts it, so the
-    // handshake's first socket call finds it spent and answers `TimedOut` without touching the socket. A preemption
-    // between the probe's two clock reads spends it before the connect instead, with the same line, so the probe runs
-    // again until an attempt has connected.
-    let budget = Duration::from_micros(1);
-    let connected = (0..10).any(|_| {
-        let reason = phoebis_router::health::probe(addr, true, budget).unwrap_err();
-        // A preemption inside the connect spends the budget there, and std answers "connection timed out": a miss too.
-        // A handshake the kernel finished behind that timeout is drained, so the next attempt cannot count it.
-        if reason.contains("connection timed out") {
-            while listener.accept().is_ok() {}
-            return false;
-        }
-        assert_eq!(
-            reason,
-            format!("proxy on {addr} sent no status line within {budget:?}")
-        );
-        // The probe has returned, so a connection it made waits in the backlog though the probe has closed it.
-        listener.accept().is_ok()
-    });
-    assert!(connected, "no probe connected in ten attempts");
+    let budget = phoebis_router::health::TIMEOUT;
+    let clock = SpentAfterConnect {
+        start: Instant::now(),
+        budget,
+        reads: Cell::new(0),
+    };
+    let reason = phoebis_router::health::probe(addr, true, budget, &clock).unwrap_err();
+    assert_eq!(
+        reason,
+        format!("proxy on {addr} sent no status line within {budget:?}")
+    );
+    // The probe has returned, so a connection it made waits in the backlog though the probe has closed it.
+    assert!(
+        listener.accept().is_ok(),
+        "the probe connected before its budget ran out"
+    );
 }
 
 #[test]
@@ -198,7 +218,7 @@ fn a_listener_that_trickles_the_status_line_fails_within_the_budget() {
         }
     });
     let started = Instant::now();
-    let reason = phoebis_router::health::probe(addr, false, SHORT).unwrap_err();
+    let reason = phoebis_router::health::probe(addr, false, SHORT, &SystemClock).unwrap_err();
     assert!(
         started.elapsed() < SHORT + Duration::from_millis(500),
         "{:?}",
@@ -219,7 +239,7 @@ fn a_tls_listener_that_accepts_and_never_answers_the_handshake_fails_within_the_
         drop(stream);
     });
     let started = Instant::now();
-    let reason = phoebis_router::health::probe(addr, true, SHORT).unwrap_err();
+    let reason = phoebis_router::health::probe(addr, true, SHORT, &SystemClock).unwrap_err();
     assert!(
         started.elapsed() < SHORT + Duration::from_millis(500),
         "{:?}",
@@ -252,7 +272,7 @@ fn a_tls_listener_that_trickles_its_handshake_fails_within_the_budget() {
         }
     });
     let started = Instant::now();
-    let reason = phoebis_router::health::probe(addr, true, SHORT).unwrap_err();
+    let reason = phoebis_router::health::probe(addr, true, SHORT, &SystemClock).unwrap_err();
     assert!(
         started.elapsed() < SHORT + Duration::from_millis(500),
         "{:?}: {reason}",
@@ -283,7 +303,12 @@ fn an_unspecified_listen_is_probed_on_the_loopback_of_its_family() {
     let (addr, served) = answering("200 OK");
     let unspecified: SocketAddr = format!("0.0.0.0:{}", addr.port()).parse().unwrap();
     assert_eq!(
-        phoebis_router::health::probe(unspecified, false, phoebis_router::health::TIMEOUT),
+        phoebis_router::health::probe(
+            unspecified,
+            false,
+            phoebis_router::health::TIMEOUT,
+            &SystemClock
+        ),
         Ok(addr)
     );
     served.join().unwrap();
@@ -475,7 +500,7 @@ fn a_status_line_an_eof_cut_short_is_no_status_line() {
 fn the_probe_speaks_tls_to_a_tls_listener() {
     let (addr, served) = answering_tls("200 OK");
     assert_eq!(
-        phoebis_router::health::probe(addr, true, phoebis_router::health::TIMEOUT),
+        phoebis_router::health::probe(addr, true, phoebis_router::health::TIMEOUT, &SystemClock),
         Ok(addr)
     );
     let request = served.join().unwrap().expect("the handshake finished");
@@ -489,7 +514,8 @@ fn the_probe_speaks_tls_to_a_tls_listener() {
 fn a_plain_probe_against_a_tls_listener_reads_no_status_line() {
     let (addr, served) = answering_tls("200 OK");
     let reason =
-        phoebis_router::health::probe(addr, false, phoebis_router::health::TIMEOUT).unwrap_err();
+        phoebis_router::health::probe(addr, false, phoebis_router::health::TIMEOUT, &SystemClock)
+            .unwrap_err();
     assert!(
         reason.contains("sent no status line") || reason.contains("took no request"),
         "{reason}"
@@ -511,7 +537,8 @@ fn a_tls_probe_against_a_plain_listener_fails_the_handshake() {
             .unwrap();
     });
     let reason =
-        phoebis_router::health::probe(addr, true, phoebis_router::health::TIMEOUT).unwrap_err();
+        phoebis_router::health::probe(addr, true, phoebis_router::health::TIMEOUT, &SystemClock)
+            .unwrap_err();
     assert!(reason.contains("refused the TLS handshake"), "{reason}");
     served.join().unwrap();
 }

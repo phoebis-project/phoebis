@@ -143,8 +143,9 @@ pub fn presets() -> &'static [Preset] {
 }
 
 impl Preset {
-    pub fn current(id: &str) -> Option<&'static Preset> {
-        presets()
+    /// The newest version of `id` in `table`, the shipped presets in production.
+    pub fn current<'t>(table: &'t [Preset], id: &str) -> Option<&'t Preset> {
+        table
             .iter()
             .filter(|preset| preset.id == id)
             .max_by_key(|preset| preset.version)

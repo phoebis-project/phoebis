@@ -647,36 +647,6 @@ fn the_newest_settled_attempt_is_the_mirrors_starting_watermark() {
 }
 
 #[test]
-fn the_resolved_cursor_query_reads_through_its_index() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("router.sqlite");
-    // Opened and dropped so the schema is prepared and the process lock is free for the plain reader below.
-    drop(Store::open(&path, &StorageKey::generate()).unwrap());
-    let conn = rusqlite::Connection::open(&path).unwrap();
-    let mut stmt = conn
-        .prepare(
-            "EXPLAIN QUERY PLAN SELECT id, account_id, started_at, resolved_at, outcome, detail \
-             FROM refresh_attempts WHERE (resolved_at > ?1 OR (resolved_at = ?1 AND id > ?2)) \
-             AND outcome IS NOT NULL ORDER BY resolved_at, id LIMIT ?3",
-        )
-        .unwrap();
-    let plan: String = stmt
-        .query_map([0i64, 0i64, 500i64], |r| r.get::<_, String>(3))
-        .unwrap()
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .unwrap()
-        .join("\n");
-    assert!(
-        plan.contains("refresh_attempts_resolved"),
-        "the 5 s poll must not scan the table: {plan}"
-    );
-    assert!(
-        !plan.contains("TEMP B-TREE"),
-        "and the index supplies the order rather than a sort: {plan}"
-    );
-}
-
-#[test]
 fn a_holders_newest_settled_attempts_read_newest_first_within_the_bound_and_its_incarnation() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     store.insert_account(&account("a")).unwrap();
@@ -758,38 +728,6 @@ fn a_holders_newest_settled_attempts_read_newest_first_within_the_bound_and_its_
         read(1, 16).len(),
         3,
         "and the previous holder keeps its own"
-    );
-}
-
-#[test]
-fn the_holders_newest_attempts_read_through_their_own_index() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("router.sqlite");
-    // Opened and dropped so the schema is prepared and the process lock is free for the plain reader below.
-    drop(Store::open(&path, &StorageKey::generate()).unwrap());
-    let conn = rusqlite::Connection::open(&path).unwrap();
-    let mut stmt = conn
-        .prepare(
-            "EXPLAIN QUERY PLAN SELECT id, account_id, started_at, resolved_at, outcome, detail \
-             FROM refresh_attempts WHERE account_id = ?1 AND incarnation = ?2 AND outcome IS NOT NULL \
-             ORDER BY resolved_at DESC, id DESC LIMIT ?3",
-        )
-        .unwrap();
-    let plan: String = stmt
-        .query_map(rusqlite::params!["a", 1i64, 16i64], |r| {
-            r.get::<_, String>(3)
-        })
-        .unwrap()
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .unwrap()
-        .join("\n");
-    assert!(
-        plan.contains("refresh_attempts_holder_resolved"),
-        "every scrape reads every account's run, so the read must not scan the table: {plan}"
-    );
-    assert!(
-        !plan.contains("TEMP B-TREE"),
-        "and the index supplies the order rather than a sort: {plan}"
     );
 }
 

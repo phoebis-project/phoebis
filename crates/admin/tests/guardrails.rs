@@ -9,7 +9,7 @@ use axum::http::{Response, StatusCode};
 use axum::Router;
 use common::{admin_parts_full, delete, get, json, login, patch, post, Full};
 use fake_upstream::Captured;
-use phoebis_guardrails::{Condition, GuardrailAction, GuardrailMode, Preset};
+use phoebis_guardrails::{presets, Condition, GuardrailAction, GuardrailMode, Preset};
 use phoebis_ledger::{BodyRecord, RequestRecord};
 use phoebis_store::{GuardrailRow, PresetStamp};
 use serde_json::{json as j, Value};
@@ -30,7 +30,7 @@ fn condition() -> Value {
 
 /// The first preset at the version this build ships as its current one.
 fn summary() -> &'static Preset {
-    Preset::current(SUMMARY).expect("the table ships the first preset")
+    Preset::current(presets(), SUMMARY).expect("the table ships the first preset")
 }
 
 /// The conditions as the API writes them: `Condition::words`, with a member the condition lacks left out rather than
@@ -1624,7 +1624,10 @@ async fn a_stamp_the_table_cannot_answer_reads_customized_with_the_tables_curren
         Preset::at(SUMMARY, UNSHIPPED_VERSION).is_none(),
         "the table lacks version {UNSHIPPED_VERSION}"
     );
-    assert!(Preset::current("ghost").is_none(), "the table lacks the id");
+    assert!(
+        Preset::current(presets(), "ghost").is_none(),
+        "the table lacks the id"
+    );
     for row in [
         stamped_row("newer", SUMMARY, UNSHIPPED_VERSION),
         stamped_row("orphan", "ghost", 1),

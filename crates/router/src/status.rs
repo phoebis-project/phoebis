@@ -92,9 +92,11 @@ pub async fn read(client: &AdminClient, proxy: Option<(SocketAddr, bool)>) -> Re
     let probe = async move {
         let (listen, tls) = proxy?;
         Some(
-            tokio::task::spawn_blocking(move || health::probe(listen, tls, budget))
-                .await
-                .unwrap_or_else(|error| Err(format!("the proxy probe did not finish: {error}"))),
+            tokio::task::spawn_blocking(move || {
+                health::probe(listen, tls, budget, &health::SystemClock)
+            })
+            .await
+            .unwrap_or_else(|error| Err(format!("the proxy probe did not finish: {error}"))),
         )
     };
     let admin = async {

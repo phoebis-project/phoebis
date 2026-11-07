@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use phoebis_guardrails::{
-    evaluate, presets, CompiledGuardrail, GuardrailAction, HeaderLookup, Lookup, Preset,
-    RequestFacts, Verdict,
+    evaluate, presets, CompiledGuardrail, GuardrailAction, GuardrailMode, HeaderLookup, Lookup,
+    Preset, RequestFacts, Verdict,
 };
 use serde_json::Value;
 
@@ -73,14 +73,30 @@ fn versions_of_one_id_are_distinct_and_ascending_and_current_and_at_answer_the_t
     }
     // The table ships each id at version 1 alone.
     for id in ["away-recap", "prompt-suggestion", "subagent-status-summary"] {
-        let current = Preset::current(id).expect("a shipped id has a current version");
+        let current = Preset::current(presets(), id).expect("a shipped id has a current version");
         assert_eq!((current.id, current.version), (id, 1));
         let at = Preset::at(id, 1).expect("a shipped version answers");
         assert_eq!((at.id, at.version), (id, 1));
         assert!(Preset::at(id, 2).is_none());
     }
-    assert!(Preset::current("not-a-preset").is_none());
+    assert!(Preset::current(presets(), "not-a-preset").is_none());
     assert!(Preset::at("not-a-preset", 1).is_none());
+}
+
+#[test]
+fn current_answers_the_newer_of_two_versions_listed_newest_first() {
+    let version = |version: u32| Preset {
+        id: "two-versions",
+        version,
+        name: "Two versions",
+        description: "",
+        measured_on: "",
+        suggested_mode: GuardrailMode::Observe,
+        conditions: Vec::new(),
+    };
+    let table = [version(2), version(1)];
+    let current = Preset::current(&table, "two-versions").expect("the table holds the id");
+    assert_eq!(current.version, 2);
 }
 
 #[test]
@@ -108,7 +124,8 @@ fn each_preset_matches_its_own_fork_fixture_and_none_of_the_other_bodies() {
         ),
         ("away-recap", &recap, [&summary, &suggestion, &classifier]),
     ] {
-        let preset = Preset::current(id).unwrap_or_else(|| panic!("{id} is not in the table"));
+        let preset =
+            Preset::current(presets(), id).unwrap_or_else(|| panic!("{id} is not in the table"));
         let guardrail = compiled(preset);
         assert_eq!(
             evaluate(&guardrail, &auxiliary(&own.1)),

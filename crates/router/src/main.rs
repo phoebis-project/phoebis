@@ -236,6 +236,7 @@ fn main() -> anyhow::Result<()> {
                 config.proxy.listen,
                 config.proxy.tls.is_some(),
                 phoebis_router::health::TIMEOUT,
+                &phoebis_router::health::SystemClock,
             ) {
                 Ok(addr) => {
                     println!("proxy answers on {addr}");

@@ -147,7 +147,12 @@ async fn start(secret_env: &str) -> Running {
         _ = fake_upstream::wait_for_async(SETTLE, || async move {
             TcpStream::connect(("127.0.0.1", ports.admin)).await.ok()?;
             tokio::task::spawn_blocking(move || {
-                phoebis_router::health::probe(proxy, false, Duration::from_secs(1))
+                phoebis_router::health::probe(
+                    proxy,
+                    false,
+                    Duration::from_secs(1),
+                    &phoebis_router::health::SystemClock,
+                )
             })
             .await
             .ok()?

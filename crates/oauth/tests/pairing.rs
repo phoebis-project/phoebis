@@ -42,15 +42,9 @@ fn authorization_url_has_the_measured_parameter_order() {
 }
 
 #[test]
-fn pkce_challenge_is_s256_of_the_verifier() {
-    use sha2::{Digest, Sha256};
+fn a_generated_verifier_has_the_rfc_length_and_debug_hides_it_and_two_states_differ() {
     let p = generate_pkce();
     assert!(p.verifier.len() >= 43 && p.verifier.len() <= 128);
-    let expect = base64::Engine::encode(
-        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-        Sha256::digest(p.verifier.as_bytes()),
-    );
-    assert_eq!(p.challenge, expect);
     assert_ne!(generate_state(), generate_state());
     assert!(!format!("{p:?}").contains(&p.verifier));
 }

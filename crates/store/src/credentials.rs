@@ -371,6 +371,13 @@ static HOLDER_NEWEST_RESOLVED: LazyLock<String> = LazyLock::new(|| {
     )
 });
 
+static RESOLVED_AFTER: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "{RESOLVED_ATTEMPT_SELECT} WHERE (resolved_at > ?1 OR (resolved_at = ?1 AND id > ?2)) \
+         AND outcome IS NOT NULL ORDER BY resolved_at, id LIMIT ?3"
+    )
+});
+
 fn row_to_resolved_attempt(r: &rusqlite::Row<'_>) -> rusqlite::Result<ResolvedAttempt> {
     Ok(ResolvedAttempt {
         id: r.get::<_, i64>(0)? as u64,
@@ -860,10 +867,7 @@ impl Store {
         limit: usize,
     ) -> Result<Vec<ResolvedAttempt>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
-        let mut stmt = conn.prepare(&format!(
-            "{RESOLVED_ATTEMPT_SELECT} WHERE (resolved_at > ?1 OR (resolved_at = ?1 AND id > ?2)) \
-             AND outcome IS NOT NULL ORDER BY resolved_at, id LIMIT ?3"
-        ))?;
+        let mut stmt = conn.prepare(&RESOLVED_AFTER)?;
         let rows = stmt.query_map(
             params![resolved_at, id as i64, limit as i64],
             row_to_resolved_attempt,
@@ -1102,6 +1106,53 @@ mod tests {
         assert!(
             !plan.iter().any(|detail| detail.contains("TEMP B-TREE")),
             "{plan:?}"
+        );
+    }
+
+    #[test]
+    fn the_resolved_cursor_query_reads_through_its_index() {
+        let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+        let conn = store.conn.lock().unwrap();
+        let plan: String = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {}", RESOLVED_AFTER.as_str()))
+            .unwrap()
+            .query_map(params![0, 0, 500], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+            .join("\n");
+        assert!(
+            plan.contains("refresh_attempts_resolved"),
+            "the 5 s poll must not scan the table: {plan}"
+        );
+        assert!(
+            !plan.contains("TEMP B-TREE"),
+            "and the index supplies the order rather than a sort: {plan}"
+        );
+    }
+
+    #[test]
+    fn the_holders_newest_attempts_read_through_their_own_index() {
+        let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+        let conn = store.conn.lock().unwrap();
+        let plan: String = conn
+            .prepare(&format!(
+                "EXPLAIN QUERY PLAN {}",
+                HOLDER_NEWEST_RESOLVED.as_str()
+            ))
+            .unwrap()
+            .query_map(params!["a", 1, 16], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+            .join("\n");
+        assert!(
+            plan.contains("refresh_attempts_holder_resolved"),
+            "every scrape reads every account's run, so the read must not scan the table: {plan}"
+        );
+        assert!(
+            !plan.contains("TEMP B-TREE"),
+            "and the index supplies the order rather than a sort: {plan}"
         );
     }
 
