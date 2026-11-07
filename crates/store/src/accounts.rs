@@ -525,40 +525,6 @@ impl Store {
         Ok(())
     }
 
-    pub fn profile_json(&self, id: &str) -> Result<Option<String>, StoreError> {
-        let conn = self.conn.lock().expect(LOCK_POISONED);
-        // `.optional()` catches a missing row; the column itself is nullable before the first poll, so the
-        // row-level get is an `Option` too and the two collapse into one `None`.
-        conn.query_row(
-            "SELECT profile_json FROM accounts WHERE id = ?1",
-            params![id],
-            |row| row.get(0),
-        )
-        .optional()
-        .map(Option::flatten)
-        .map_err(StoreError::from)
-    }
-
-    /// `None` for an unknown id; a row never written answers every field `None`.
-    pub fn subscription(&self, id: &str) -> Result<Option<SubscriptionRow>, StoreError> {
-        let conn = self.conn.lock().expect(LOCK_POISONED);
-        conn.query_row(
-            "SELECT subscription_plan, subscription_tier, subscription_since, trial_ends_at \
-             FROM accounts WHERE id = ?1",
-            params![id],
-            |row| {
-                Ok(SubscriptionRow {
-                    plan: row.get(0)?,
-                    tier: row.get(1)?,
-                    since: row.get(2)?,
-                    trial_ends_at: row.get(3)?,
-                })
-            },
-        )
-        .optional()
-        .map_err(StoreError::from)
-    }
-
     /// Stages or clears an account's cancellation as the operator's edit does and bumps `revision`.
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_canceled(&self, id: &str, cancellation: Cancellation) -> Result<(), StoreError> {
@@ -581,7 +547,7 @@ impl Store {
     }
 
     /// Every account's profile document and term by account id, in one statement, so a list of accounts reads them
-    /// once where `profile_json` and `subscription_term` read one row each.
+    /// once where `account_extras_of` and `subscription_term` read one row each.
     pub fn account_extras(&self) -> Result<BTreeMap<String, AccountExtras>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         let mut stmt = conn.prepare(&format!("SELECT {TERM_COLUMNS} FROM accounts"))?;
@@ -716,7 +682,7 @@ impl SubscriptionTerm {
     }
 }
 
-/// What `Store::account_extras` answers for one account: the document `profile_json` answers, parsed, and what
+/// What `Store::account_extras` answers for one account: the stored `profile_json` document, parsed, and what
 /// `subscription_term` answers for it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AccountExtras {

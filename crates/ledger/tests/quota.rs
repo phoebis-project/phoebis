@@ -546,7 +546,11 @@ async fn every_polled_account_is_read_once_per_interval_on_its_own_phase_and_rep
     assert_eq!(profiles(&up), 2, "the third poll of each reads the profile");
     assert_eq!(usage_asked(&up, B), 0);
     assert!(
-        h.store.profile_json("b").unwrap().is_none(),
+        h.store
+            .account_extras_of("b")
+            .unwrap()
+            .and_then(|extras| extras.profile)
+            .is_none(),
         "an unpaired account is not polled"
     );
     up.shutdown().await;
@@ -1452,7 +1456,10 @@ async fn a_profile_endpoint_that_hangs_holds_no_reported_sample_back() {
     assert!(samples.iter().any(|(id, _)| id == "a"));
     up.release();
     wait_for(Duration::from_secs(2), || {
-        h.store.profile_json("a").unwrap()
+        h.store
+            .account_extras_of("a")
+            .unwrap()
+            .and_then(|extras| extras.profile)
     })
     .await;
     up.shutdown().await;
@@ -2124,8 +2131,13 @@ async fn a_profile_reporting_no_plan_is_stored_before_the_flag_so_the_reload_rea
     }
     .refresh_profile(&row)
     .await;
-    let stored: serde_json::Value =
-        serde_json::from_str(&h.store.profile_json("a").unwrap().unwrap()).unwrap();
+    let stored = h
+        .store
+        .account_extras_of("a")
+        .unwrap()
+        .unwrap()
+        .profile
+        .unwrap();
     let found: serde_json::Value = serde_json::from_slice(NO_PLAN_PROFILE).unwrap();
     assert_eq!(stored, found, "the read stores the document it found");
     let snapshot = h.router.snapshot();

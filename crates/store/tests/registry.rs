@@ -552,9 +552,10 @@ fn the_subscription_is_stored_with_the_profile_and_reads_back_with_nulls_before_
     store
         .insert_account(&account("a", AccountKind::Oauth))
         .unwrap();
+    let term = store.account_extras_of("a").unwrap().unwrap().term;
     assert_eq!(
-        store.subscription("a").unwrap().unwrap(),
-        SubscriptionRow::default(),
+        (term.tier, term.since, term.trial_ends_at),
+        (None, None, None),
         "a row never written answers every field None"
     );
     let row = SubscriptionRow {
@@ -564,8 +565,16 @@ fn the_subscription_is_stored_with_the_profile_and_reads_back_with_nulls_before_
         trial_ends_at: None,
     };
     store.set_profile("a", "{}", &row).unwrap();
-    assert_eq!(store.subscription("a").unwrap().unwrap(), row);
-    assert_eq!(store.profile_json("a").unwrap().as_deref(), Some("{}"));
+    let extras = store.account_extras_of("a").unwrap().unwrap();
+    assert_eq!(
+        (
+            extras.term.tier.as_deref(),
+            extras.term.since,
+            extras.term.trial_ends_at
+        ),
+        (Some("default_claude_max_5x"), Some(1_773_482_400_000), None)
+    );
+    assert_eq!(extras.profile, Some(serde_json::json!({})));
 }
 
 #[test]
@@ -2600,8 +2609,8 @@ fn a_paired_account_is_born_ready_with_its_credential_attempt_and_change_in_one_
         ("account_created", "fresh", "admin", 5)
     );
     assert_eq!(
-        store.profile_json("fresh").unwrap().as_deref(),
-        Some(profile),
+        store.account_extras_of("fresh").unwrap().unwrap().profile,
+        Some(serde_json::from_str(profile).unwrap()),
         "the profile lands in the same write"
     );
     let term = store.subscription_term("fresh").unwrap().unwrap();
