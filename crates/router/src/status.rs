@@ -84,7 +84,8 @@ const SESSION_CHARS: usize = 12;
 const CARRY: &str = "    ";
 
 /// The probe, blocking on a worker, runs beside the five GETs, so a wedged proxy listener does not hold the admin reads
-/// back by its budget. The GETs run one after another in the spec's order, each under the client's deadline.
+/// back by its budget. The GETs run one after another in the order `operations.md` lists them, each under the client's
+/// deadline.
 pub async fn read(client: &AdminClient, proxy: Option<(SocketAddr, bool)>) -> Reads {
     // The probe keeps its own three-second budget, so `health` and `status` read the listener the same way, and a
     // shorter `--timeout` shortens it too.

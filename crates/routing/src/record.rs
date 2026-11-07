@@ -561,9 +561,9 @@ pub enum MoveCause {
 }
 
 /// A mark the decision cleared: `healed` when the heal check found the window back under its test at the pin's request
-/// (the projection under the ceiling, or the stretch at or under the threshold on a 5-hour mark of a pool that slows
-/// its pins), `moved` when the pin left the account the mark was made on, `released` when the pool's load shedding was
-/// off at the pin's request.
+/// (the projection under its round's limit, or the stretch at or under the threshold on a 5-hour mark of a pool that
+/// slows its pins), `moved` when the pin left the account the mark was made on, `released` when the pool's load
+/// shedding was off at the pin's request.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct MarkClearedFacts {
     pub reason: &'static str,
