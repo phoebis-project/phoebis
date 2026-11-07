@@ -58,7 +58,7 @@ also names a session that branched from another conversation: that conversation'
 session the row names is the client's own, and the Sessions view groups a row by it. The request row records who put the
 cache diagnostics member on the body the upstream compared: the client, the router, or none. The request row carries its
 serving attempt's account, speed, outcome and token counts, written when the request lands. A row an earlier version
-wrote fills on the starts that follow, up to 10,000 rows per start, the oldest first, and the start's log line names the
+wrote fills on the starts that follow, up to 10,000 rows per start, the newest first, and the start's log line names the
 rows it filled and the rows left.
 
 The attempt row names the account and its kind, whether the account is a usage-based seat, the upstream status, request

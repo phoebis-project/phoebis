@@ -1007,9 +1007,9 @@ pub(crate) fn insert_request_in(
     Ok(previous)
 }
 
-/// Request rows the start's backfill writes per start. One slice read through `requests_serving_pending` after a
-/// filled prefix of ten slices holds the writer for about 97 ms on a desktop host, and the next start continues where
-/// this one stopped.
+/// Request rows the start's backfill writes per start, the newest first, so the most recent history reads complete
+/// soonest. One slice read through `requests_serving_pending` beside ten filled slices holds the writer for about 95 ms
+/// on a desktop host, and the next start continues where this one stopped.
 pub const BACKFILL_SLICE: usize = 10_000;
 
 /// What one start's backfill did: the rows it wrote and the rows still null with attempts, read after the slice
@@ -1027,7 +1027,7 @@ const SERVING_PENDING: &str = " INDEXED BY requests_serving_pending \
     AND EXISTS (SELECT 1 FROM attempts a WHERE a.request_id = requests.id)";
 
 /// Fills `ServingFacts` on up to `BACKFILL_SLICE` request rows whose `serving_account_id` is null and whose attempts
-/// exist, oldest first through `requests_serving_pending`, in one transaction, the facts through `ServingFacts::of`,
+/// exist, newest first through `requests_serving_pending`, in one transaction, the facts through `ServingFacts::of`,
 /// the one rule the landing runs, so a row landed after the step and a backfilled row with the same attempts read
 /// alike. `left` counts the same rows through the same index on a pooled reader after the slice's transaction
 /// commits, outside the writer's lock.
@@ -1044,7 +1044,7 @@ pub fn backfill_serving_facts(db: &LedgerDb) -> Result<Backfilled, LedgerError> 
                  FROM requests r INDEXED BY requests_serving_pending \
                  JOIN attempts a ON a.request_id = r.id \
                  AND a.attempt = (SELECT MAX(x.attempt) FROM attempts x WHERE x.request_id = r.id) \
-                 WHERE r.serving_account_id IS NULL AND r.attempts > 0 ORDER BY r.received_at LIMIT ?1",
+                 WHERE r.serving_account_id IS NULL AND r.attempts > 0 ORDER BY r.received_at DESC LIMIT ?1",
             )?
             .query_map(params![BACKFILL_SLICE as i64], |r| {
                 let tokens = |i: usize| -> rusqlite::Result<Option<u64>> {

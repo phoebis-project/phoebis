@@ -1519,9 +1519,10 @@ async fn the_backfill_fills_old_rows_with_the_facts_the_list_derived_from_their_
     assert_eq!(unattempted.serving, phoebis_ledger::ServingFacts::default());
 }
 
-/// A start fills one slice of the rows written before the columns, the oldest first behind a filled prefix ten slices
-/// long, and the next start fills the rest. A refused request no attempt served stays null and out of the pending
-/// index, and a request whose trail lost every attempt stays null in it, read and counted by neither start.
+/// A start fills one slice of the rows written before the columns, the newest first beside ten filled slices, so the
+/// request list's account filter finds the most recent history before the next start fills the rest. A refused request
+/// no attempt served stays null and out of the pending index, and a request whose trail lost every attempt stays null
+/// in it, read and counted by neither start.
 #[tokio::test]
 async fn a_start_fills_one_slice_of_pending_rows_and_skips_refusals_and_lost_trails() {
     use phoebis_ledger::{backfill_serving_facts, Backfilled, BACKFILL_SLICE};
@@ -1554,6 +1555,32 @@ async fn a_start_fills_one_slice_of_pending_rows_and_skips_refusals_and_lost_tra
     ))
     .unwrap();
     let first = backfill_serving_facts(&db).unwrap();
+    let by_account_a = phoebis_ledger::RequestFilter {
+        request: Some(format!("pending-{}", pending - 1)),
+        accounts: vec!["a".into()],
+        ..Default::default()
+    };
+    let newest_listed = db
+        .read_blocking(|c| {
+            phoebis_ledger::list_requests(
+                c,
+                &by_account_a,
+                &LiveKeys::default(),
+                RequestOrder::ReceivedAt,
+                Direction::Desc,
+                None,
+                10,
+            )
+        })
+        .unwrap()
+        .0
+        .len();
+    let (oldest, _) = db.request("pending-0").await.unwrap().unwrap();
+    assert_eq!(
+        (newest_listed, oldest.serving.account_id),
+        (1, None),
+        "the first slice fills the newest pending row, which the account filter finds, and leaves the oldest"
+    );
     let second = backfill_serving_facts(&db).unwrap();
     assert_eq!(
         (first, second),
