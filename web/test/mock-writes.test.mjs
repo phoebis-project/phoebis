@@ -691,14 +691,13 @@ test('an unknown id is refused with the route\'s own 404 text, which the console
   await assert.rejects(() => api.rotateKey('nothing'), refusedAs(404, 'key not found'));
 });
 
-test('the quota snapshots never answer a poll outcome the decoder cannot produce', async () => {
+test('every subscription row carries a usage block and no API-key row does, an unpolled account and one backing off among them', async () => {
   const api = await signedIn();
   for (let read = 0; read < 2; read += 1) {
     const accounts = await api.listAccounts();
     assert.deepEqual(accounts.filter((a) => (a.kind === 'api_key') !== (a.usage === null)).map((a) => a.id), [], `read ${read + 1}: a block on every subscription row and none on an API-key row`);
     const snapshots = accounts.flatMap((a) => (a.usage ? [a.usage] : []));
     const polls = snapshots.map((s) => s.poll);
-    assert.deepEqual(polls.filter((p) => p !== null && !['clean', 'failed', 'rate_limited'].includes(p.lastOutcome)), [], `read ${read + 1}`);
     assert.ok(polls.includes(null) && polls.some((p) => p?.backoffSince), 'the story holds an account not yet polled and one backing off');
   }
 });

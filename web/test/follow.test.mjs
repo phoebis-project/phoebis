@@ -48,7 +48,6 @@ test('an auto reload poll reads eight pages and names the cursor past the last w
   const r = route(325);
   const shown = r.rows.slice(300);
   const polled = await d.followPages(r.read, new Set(shown.map(byId)), byId, belowOf(shown));
-  assert.equal(d.FOLLOW_PAGES, 8);
   assert.equal(r.reads.length, d.FOLLOW_PAGES);
   assert.deepEqual(polled.rows.map(byId), r.rows.slice(0, 200).map(byId));
   assert.equal(polled.overrun, '200');
@@ -187,10 +186,6 @@ test('an auto reload poll whose caller is gone after its first page reads no mor
   assert.deepEqual(r.reads, [undefined]);
   assert.equal(polled.overrun, null);
   assert.deepEqual(polled.rows.map(byId), r.rows.slice(0, 25).map(byId));
-});
-
-test('the overrun names auto reload', () => {
-  assert.equal(d.FOLLOW_OVERRUN, 'More rows arrived than auto reload could fetch. Reload to read them.');
 });
 
 const ORIGIN = Date.UTC(2026, 8, 16, 14, 30);

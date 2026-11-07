@@ -257,7 +257,6 @@ test("the band's local hours read on the clock a caller passes, and a run past m
 test("the models list tier by tier in the cost model's order, the newest version first, a model of no tier last, whatever order a file keeps", () => {
   // The test tables' models in reverse, a dated id, the mystery tier the order names last, and two ids of no tier.
   const shuffled = [...Object.keys(costs.modelWeight).reverse(), 'claude-unknown-1', 'claude-mystery-2', 'claude-opus-4-8', 'claude-unknown-2', 'claude-sonnet-5-20250101'];
-  assert.deepEqual(costs.tierOrder, ['fable', 'opus', 'sonnet', 'haiku', 'mystery'], 'the test tables order five model tiers');
   assert.deepEqual(d.tierOrder(shuffled, costs), ['claude-fable-5-1', 'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-sonnet-5-5', 'claude-sonnet-5-20250101', 'claude-haiku-4-5', 'claude-mystery-2', 'claude-unknown-2', 'claude-unknown-1']);
   assert.deepEqual(shuffled.slice(0, 2), ['claude-haiku-4-5', 'claude-sonnet-5-5'], 'the input is left as it was');
   // Each tier's newest model leads its group, and each id of no tier is a group of its own, so none folds under

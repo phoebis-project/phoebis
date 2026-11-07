@@ -16,7 +16,6 @@ export { ChipLine } from '@/components/ChipLine';
 export { ConditionsEditor } from '@/components/ConditionsEditor';
 export { DecisionCard } from '@/components/DecisionCard';
 export { FilterBar } from '@/components/FilterBar';
-export { FilterChip } from '@/components/FilterChip';
 export { GroupBy, GroupsButton } from '@/components/GroupBy';
 export { KeyDialog } from '@/components/KeyDialog';
 export { RangeControl } from '@/components/RangeControl';

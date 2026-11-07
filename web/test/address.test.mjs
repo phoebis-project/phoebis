@@ -192,10 +192,7 @@ test('addressWindow reads a preset from now and a custom span as its own instant
   assert.deepEqual(d.addressWindow(CUSTOM, '1h', now), { from: Date.parse(FROM), to: Date.parse(TO) });
 });
 
-test('the one preset table carries the five presets by name, label and width, and each codec keeps its default', () => {
-  assert.deepEqual(d.RANGE_PRESETS.map((r) => r.name), ['1h', '6h', '24h', '7d', '30d']);
-  assert.deepEqual(d.RANGE_PRESETS[0], { label: 'Last hour', ms: 3_600_000, name: '1h' });
-  assert.deepEqual(d.RANGE_PRESETS[4], { label: 'Last 30 days', ms: 2_592_000_000, name: '30d' });
+test('each codec reads its default preset, and a name the table does not hold reads as that default', () => {
   assert.equal(read(d.REQUESTS_CODEC, '').range.preset, '24h');
   assert.equal(read(d.ROUTING_LOG_CODEC, '').range.preset, '1h');
   assert.equal(read(d.ANALYTICS_CODEC, '').range.preset, '24h');

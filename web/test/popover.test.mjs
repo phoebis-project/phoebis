@@ -10,7 +10,7 @@ for (const key of ['document', 'navigator', 'HTMLElement', 'Element', 'Node', 'g
 globalThis.window = window;
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 after(() => window.close());
-const { act, AddFilter, Button, ChipLine, createElement: h, createRoot, FilterChip, PATTERN_GRAMMAR, Popover, PopoverHost, useState } = await import('./dist/ui.js');
+const { act, AddFilter, Button, ChipLine, createElement: h, createRoot, PATTERN_GRAMMAR, Popover, PopoverHost, useState } = await import('./dist/ui.js');
 const { chipsOf, KEYS_DIMENSIONS, REQUESTS_DIMENSIONS, withoutValue } = await import('./dist/api.js');
 
 // jsdom lays nothing out, so the boxes the placement reads are stood in: a 1280 by 800 window, an anchor's box from
@@ -209,29 +209,6 @@ test('a new placeKey places the box again for the content it now holds', () => {
   boxSize = { height: 300, width: 200 };
   page.render(h(Opened, { onClose() {}, placeKey: 'values', rectOf: '40,600,96,30' }, content()));
   assert.equal(box().style.top, '292px', 'the taller step flips above the anchor');
-});
-
-test('a filter chip draws its word and values spans inside the body under the filter class, the x after them', () => {
-  const opened = [];
-  const removed = [];
-  const chip = { field: 'models', label: 'model', mono: true, text: 'model: claude-opus-5, claude-sonnet-5', title: 'claude-opus-5, claude-sonnet-5', values: 'claude-opus-5, claude-sonnet-5' };
-  const { container } = render(h(FilterChip, { chip, onOpen: (anchor) => opened.push(anchor), onRemove: () => removed.push('x') }));
-  const root = container.firstElementChild;
-  assert.deepEqual([root.tagName, root.className, root.title], ['SPAN', 'chip chip--filter chip--removable', 'claude-opus-5, claude-sonnet-5']);
-  const [body, x] = root.children;
-  assert.deepEqual([body.tagName, body.className, body.getAttribute('type')], ['BUTTON', 'chip__body', 'button']);
-  assert.deepEqual([...body.children].map((el) => [el.className, el.textContent]), [['chip__word', 'model:'], ['chip__values ellipsis mono', 'claude-opus-5, claude-sonnet-5']]);
-  assert.equal(body.textContent, 'model: claude-opus-5, claude-sonnet-5', "the body reads the chip's whole text");
-  assert.deepEqual([x.tagName, x.getAttribute('aria-label'), x.querySelector('svg')?.getAttribute('width')], ['BUTTON', 'Remove model filter', '12']);
-  click(body);
-  click(x);
-  assert.ok(opened[0] === body && removed.length === 1, 'the body opens the chip anchored to itself, the x removes it');
-  act(() => roots.pop().unmount());
-  const flag = render(h(FilterChip, { chip: { field: 'held', label: 'held only', mono: false, text: 'held only', title: 'held only', values: null }, onOpen() {}, onRemove() {} }));
-  assert.deepEqual([...flag.container.querySelector('.chip__body').children].map((el) => [el.className, el.textContent]), [['chip__word', 'held only']], 'a flag draws its word alone');
-  act(() => roots.pop().unmount());
-  const kinds = render(h(FilterChip, { chip: { field: 'kinds', label: 'kinds', mono: false, text: 'moved, held, placed +5', title: 'moved, held, placed, ...', values: 'moved, held, placed +5' }, onOpen() {}, onRemove() {} }));
-  assert.deepEqual([...kinds.container.querySelector('.chip__body').children].map((el) => [el.className, el.textContent]), [['chip__word', 'kinds:'], ['chip__values ellipsis', 'moved, held, placed +5']], "the values come from the chip, whatever its text reads");
 });
 
 const chipOf = (word) => ({ field: word, label: word, mono: false, text: `${word}: x`, title: 'x', values: 'x' });

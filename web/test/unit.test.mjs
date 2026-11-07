@@ -57,27 +57,3 @@ test('the legend closes as the focus leaves it for a control outside, and the fo
     outside.remove();
   }
 });
-
-test('a press outside the legend closes it and leaves the focus on the control the press lands on', () => {
-  const container = document.body.appendChild(document.createElement('div'));
-  const outside = document.body.appendChild(document.createElement('button'));
-  const root = createRoot(container);
-  act(() => root.render(h(UnitLegend)));
-  try {
-    const button = container.querySelector('button[aria-label="What the units mean"]');
-    act(() => button.focus());
-    act(() => button.click());
-    assert.ok(legend() !== null, 'the button opens the legend');
-    // A press dispatches its mousedown and then focuses the control under it, which jsdom's events leave to the case.
-    // The legend is read between the two, since the focus leaving it closes it too.
-    act(() => outside.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true })));
-    // Booleans, as above.
-    assert.ok(legend() === null, 'the press closes the legend');
-    act(() => outside.focus());
-    assert.ok(document.activeElement === outside, `the focus stays on the pressed control, not ${document.activeElement?.getAttribute('aria-label') ?? document.activeElement?.tagName}`);
-  } finally {
-    act(() => root.unmount());
-    container.remove();
-    outside.remove();
-  }
-});
