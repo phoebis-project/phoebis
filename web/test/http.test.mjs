@@ -740,6 +740,7 @@ test('the attention read is one GET, and its failures reach no toast, since the 
       ['wall_reached', 'business', { id: 'business', page: 'accounts' }],
       ['destination_spent', 'business', { id: 'business', page: 'accounts' }],
       ['shed_no_runway', 'main', { id: 'main', page: 'pools' }],
+      ['slowed_long', 'business', { id: 'business', page: 'accounts' }],
     ],
     'every captured kind decodes as itself with its subject and its link',
   );
