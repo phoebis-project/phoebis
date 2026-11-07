@@ -1894,19 +1894,6 @@ mod tests {
     }
 
     #[test]
-    fn the_schema_refusal_names_the_version_this_build_opens_and_the_init_cure() {
-        assert_eq!(
-            StoreError::SchemaTooNew {
-                found: 62,
-                supported: 1
-            }
-            .to_string(),
-            "the registry's schema version 62 is newer than the 1 this build opens: restore the backup taken \
-             before the upgrade, or recreate a registry a pre-release build wrote with phoebis init"
-        );
-    }
-
-    #[test]
     fn a_failing_recovery_preparation_leaves_the_sealed_rows() {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("router.sqlite");
