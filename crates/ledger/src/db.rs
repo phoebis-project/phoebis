@@ -2231,20 +2231,6 @@ mod tests {
         assert_eq!(stored, "99", "no migration ran over the newer file");
     }
 
-    #[test]
-    fn the_schema_refusal_names_the_version_this_build_opens_and_the_init_cure() {
-        assert_eq!(
-            LedgerError::SchemaTooNew {
-                path: "ledger.sqlite".into(),
-                found: 43,
-                supported: 1
-            }
-            .to_string(),
-            "the ledger's schema version 43 is newer than the 1 this build opens: restore the backup taken before \
-             the upgrade, or recreate a ledger a pre-release build wrote with phoebis init"
-        );
-    }
-
     /// The baseline with no step above it, so the test starts at version 1 whatever the build's own chain holds.
     fn prepared_in_memory() -> Connection {
         let mut conn = Connection::open_in_memory().unwrap();

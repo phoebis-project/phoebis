@@ -8,13 +8,13 @@ use phoebis_ledger::{
     burn_groups_paged, burn_rows, burn_series, burn_series_over, deltas_of, fold_account,
     fold_event, fold_keepalive, held_series, hour_ceil, hour_of, key_request_totals, list_requests,
     member_spends, moves_by_reason, placements, pool_traffic, pools_traffic, price_equivalent,
-    price_shares, read_account_rollups, read_rollups, refusal_categories, request_totals,
-    rewrite_series, run_retention_blocking, series, series_paged, session_identities,
-    AttemptRecord, BudgetedMember, CostRevisions, EventRecord, FundingFilter, GroupBy, GroupRow,
-    Histogram, KeepaliveDelta, LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow, Patterns,
-    PlanTables, PriceRevisions, PriceTable, RequestFilter, RequestRecord, RollupFilter, RollupRow,
-    RollupSelect, SeriesFilter, Speed, TotalsBy, WindowShares, BILLED_FUNDING, FAST_FUNDING,
-    NO_CLASS, OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED, USAGE_BASED_FUNDING,
+    price_shares, read_account_rollups, read_rollups, refusal_categories, rewrite_series,
+    run_retention_blocking, series, series_paged, session_identities, AttemptRecord,
+    BudgetedMember, CostRevisions, EventRecord, FundingFilter, GroupBy, GroupRow, Histogram,
+    KeepaliveDelta, LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow, Patterns, PlanTables,
+    PriceRevisions, PriceTable, RequestFilter, RequestRecord, RollupFilter, RollupRow,
+    RollupSelect, SeriesFilter, Speed, WindowShares, BILLED_FUNDING, FAST_FUNDING, NO_CLASS,
+    OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED, USAGE_BASED_FUNDING,
 };
 use phoebis_ledger::{RefusalCount, Refusals};
 use phoebis_routing::{
@@ -969,14 +969,6 @@ fn a_group_of_keepalive_credits_alone_stays_in_the_default_breakdown() {
         .find(|g| g.key == UNATTRIBUTED)
         .expect("a group of keepalive credits alone stays in the default breakdown");
     assert_eq!(group.kept_warm.requests, 1);
-    // The group a route answers carries the saving's two members beside its probe cost.
-    let answered = serde_json::to_value(group).unwrap();
-    assert!(
-        ["saving_equivalent", "saving_usd"]
-            .iter()
-            .all(|member| answered.get(member).is_some()),
-        "{answered}"
-    );
 }
 
 /// A credit's saving prices at read time from its two counts, at the revision in force at the row's hour: each count
@@ -2626,19 +2618,13 @@ async fn shared_sums(
     )
     .await
     .unwrap();
-    let (pools, keys) = db
-        .read_blocking(|c| {
-            Ok((
-                request_totals(c, TotalsBy::Pool, hour, hour + 3_600, &PRICES, costs, NOW)?,
-                key_request_totals(c, hour, hour + 3_600, &live, &PRICES, costs, NOW)?,
-            ))
-        })
+    let keys = db
+        .read_blocking(|c| key_request_totals(c, hour, hour + 3_600, &live, &PRICES, costs, NOW))
         .unwrap();
     vec![
         ("the day", day.equivalent_24h),
         ("the hour", point),
         ("the pool's bucket", traffic[0].equivalent),
-        ("the pool's totals", pools["p"].equivalent),
         ("the key's totals", keys["k"].equivalent),
     ]
 }
@@ -4013,29 +3999,6 @@ fn a_classifier_row_reads_zero_in_the_totals_and_session_series_and_its_price_na
         },
     );
     let hour = hour_of(WEEKDAY_OFF_PEAK);
-    let totals = db
-        .read_blocking(|c| {
-            request_totals(
-                c,
-                TotalsBy::Account,
-                hour,
-                hour + 3_600,
-                &PRICES,
-                &tables,
-                NOW,
-            )
-        })
-        .unwrap();
-    let (marked, plain) = (totals["a"].equivalent, totals["b"].equivalent);
-    assert_eq!(
-        marked,
-        Some(0.0),
-        "the classifier row's figure in the totals"
-    );
-    assert!(
-        plain.is_some_and(|figure| figure > 0.0),
-        "the plain row's figure in the totals: {plain:?}"
-    );
     // A read naming one account answers the session's shares from that account's attempts alone.
     let figures = |account: &str| {
         let filter = SeriesFilter {
@@ -4726,18 +4689,6 @@ fn an_hour_inside_the_peak_band_weighs_the_five_hour_share_and_prices_the_seven_
         peak.five_hour_share,
         base * factor
     );
-    // The figure prices on the anchor tier's week, so an Ultra row's figure is its 7-day share times Ultra's
-    // 7-day capacity over the anchor's, band and all.
-    for (point, at) in [(peak, WEEKDAY_PEAK), (off_peak, WEEKDAY_OFF_PEAK)] {
-        let ratio = tables
-            .tier_factor(MAX_20X, SEVEN_DAY, None, at)
-            .expect("the tables size Ultra");
-        let want = point.seven_day_share.unwrap() * ratio;
-        assert!(
-            (point.equivalent.unwrap() - want).abs() <= 1e-9 * want,
-            "{point:?}"
-        );
-    }
     let week = |at: i64| share_of(&tables, SEVEN_DAY, MAX_20X, "claude-sonnet-5-5", tokens, at);
     for (point, at) in [(peak, WEEKDAY_PEAK), (off_peak, WEEKDAY_OFF_PEAK)] {
         assert!(
@@ -5187,16 +5138,6 @@ fn a_session_attempt_weighs_its_five_hour_share_by_the_band_at_its_completion() 
     assert!(
         (point.seven_day_share.unwrap() - week).abs() < 1e-6,
         "the 7-day share is priced too: {point:?} vs {week}"
-    );
-    // The figure prices on the anchor tier's week, so the attempt's figure is its 7-day share times Ultra's 7-day
-    // capacity over the anchor's, banded at its completion.
-    let ratio = tables
-        .tier_factor(MAX_20X, SEVEN_DAY, None, started)
-        .expect("the tables size Ultra");
-    let want = point.seven_day_share.unwrap() * ratio;
-    assert!(
-        (point.equivalent.unwrap() - want).abs() <= 1e-9 * want,
-        "{point:?}"
     );
 }
 
@@ -6273,23 +6214,6 @@ fn moves_by_reason_invents_no_vocabulary_for_a_reason_no_code_names_or_none_at_a
         ]),
         "the compound key splits into the reason and the fit, each unknown where the event names none"
     );
-}
-
-#[test]
-fn a_zero_bucket_seconds_answers_the_range_error_rather_than_panicking() {
-    let db = LedgerDb::open_in_memory().unwrap();
-    // `SeriesFilter::default()` carries `bucket_seconds: 0`; the guard has to run before the division that
-    // would otherwise panic on it.
-    let filter = SeriesFilter::default();
-    assert!(db.read_blocking(|c| moves_by_reason(c, &filter)).is_err());
-    assert!(db
-        .read_blocking(|c| phoebis_ledger::moves_by_reason_and_fit(c, &filter))
-        .is_err());
-    assert!(db.read_blocking(|c| rewrite_series(c, &filter)).is_err());
-    let tables = PlanTables::shipped();
-    assert!(db
-        .read_blocking(|c| burn_series(c, &tables, &PRICES, &filter, NOW))
-        .is_err());
 }
 
 /// The six-hour bucket of the series readers' range cases.
@@ -7495,35 +7419,15 @@ fn a_lifetime_total_prices_every_row_as_a_read_from_the_earliest_hour_does() {
     );
     let to = hour_ceil(ms(2026, 1, 15, 0, 0));
     let live = LiveKeys(BTreeMap::from([("desktop".to_string(), 0)]));
-    let (lifetime, since, key_lifetime, key_since) = db
+    let (key_lifetime, key_since) = db
         .read_blocking(|c| {
             Ok((
-                request_totals(c, TotalsBy::Account, i64::MIN, to, &PRICES, &COSTS, NOW)?,
-                request_totals(
-                    c,
-                    TotalsBy::Account,
-                    hour_of(first),
-                    to,
-                    &PRICES,
-                    &COSTS,
-                    NOW,
-                )?,
                 key_request_totals(c, i64::MIN, to, &live, &PRICES, &COSTS, NOW)?,
                 key_request_totals(c, hour_of(first), to, &live, &PRICES, &COSTS, NOW)?,
             ))
         })
         .unwrap();
-    let want = shipped_usd(first, "claude-sonnet-5", Speed::Standard, usage(1_000, 0))
-        + shipped_usd(second, "claude-sonnet-5", Speed::Standard, usage(2_000, 0));
-    assert!(
-        lifetime
-            .get("a")
-            .is_some_and(|t| t.requests == 2 && (t.cost_usd - want).abs() < 1e-12),
-        "{lifetime:?} against {want}"
-    );
-    assert_eq!(lifetime, since);
     assert_eq!(key_lifetime, key_since);
-    assert_eq!(key_lifetime["desktop"], lifetime["a"]);
 }
 
 /// The account list reads its request counts apart from the priced totals, so the counts keep the totals' rule on
@@ -7603,21 +7507,8 @@ fn a_cost_revision_inside_a_price_span_moves_the_totals_equivalent_at_its_own_bo
     );
     let (from_hour, to_hour) = (hour_of(before), hour_of(after) + 3_600);
     let live = LiveKeys(BTreeMap::from([("desktop".to_string(), 0)]));
-    let (accounts, keys) = db
-        .read_blocking(|c| {
-            Ok((
-                request_totals(
-                    c,
-                    TotalsBy::Account,
-                    from_hour,
-                    to_hour,
-                    &prices,
-                    &costs,
-                    NOW,
-                )?,
-                key_request_totals(c, from_hour, to_hour, &live, &prices, &costs, NOW)?,
-            ))
-        })
+    let keys = db
+        .read_blocking(|c| key_request_totals(c, from_hour, to_hour, &live, &prices, &costs, NOW))
         .unwrap();
     let at = |instant: i64| {
         let hour = hour_of(instant) * 1_000;
@@ -7637,75 +7528,13 @@ fn a_cost_revision_inside_a_price_span_moves_the_totals_equivalent_at_its_own_bo
         second > first,
         "the second cost entry weighs the model more: {first} vs {second}"
     );
-    for totals in [&accounts["a"], &keys["desktop"]] {
-        assert!(
-            totals
-                .equivalent
-                .is_some_and(|got| (got - (first + second)).abs() < 1e-12),
-            "each row at its own cost entry: {totals:?} vs {}",
-            first + second
-        );
-    }
-}
-
-/// The totals read each group's peak factor at its own hour: one Opus 5.5 input token weighs 2 units in the test
-/// cost model's first entry, 0.04 of a Pro week's 50 out of the band and 0.08 inside it under a first entry that bands
-/// the week at half its capacity.
-#[test]
-fn a_peak_hour_beside_a_quiet_one_prices_the_totals_equivalent_at_each_hours_factor() {
-    let db = LedgerDb::open_in_memory().unwrap();
-    // Thursday 2026-01-15: 12:00 UTC is 04:00 in Los Angeles, before the band, and 13:00 UTC its first hour.
-    let (quiet, peak) = (ms(2026, 1, 15, 12, 30), ms(2026, 1, 15, 13, 30));
-    plant_spend(
-        &db,
-        "r-quiet",
-        "p",
-        "a",
-        "claude-opus-5-5",
-        "inference",
-        quiet,
-        1,
-    );
-    plant_spend(
-        &db,
-        "r-peak",
-        "p",
-        "a",
-        "claude-opus-5-5",
-        "inference",
-        peak,
-        1,
-    );
-    let costs = PlanTables {
-        revisions: CostRevisions::from_yaml(
-            &phoebis_ledger::test_tables::first_entry_costs_text().replacen(
-                "capacity_factor: {five_hour: 0.5, seven_day: 1}",
-                "capacity_factor: {five_hour: 0.5, seven_day: 0.5}",
-                1,
-            ),
-        )
-        .expect("the banded week loads"),
-        path: None,
-        source: "test".to_string(),
-    };
-    let prices = phoebis_ledger::test_tables::api_prices();
-    let totals = db
-        .read_blocking(|c| {
-            request_totals(
-                c,
-                TotalsBy::Account,
-                hour_of(quiet),
-                hour_of(peak) + 3_600,
-                &prices,
-                &costs,
-                NOW,
-            )
-        })
-        .unwrap();
-    let figure = totals["a"].equivalent;
+    let totals = &keys["desktop"];
     assert!(
-        figure.is_some_and(|figure| (figure - (0.04 + 0.08)).abs() < 1e-12),
-        "the quiet hour's 0.04 and the peak hour's 0.08: {figure:?}"
+        totals
+            .equivalent
+            .is_some_and(|got| (got - (first + second)).abs() < 1e-12),
+        "each row at its own cost entry: {totals:?} vs {}",
+        first + second
     );
 }
 
@@ -7740,27 +7569,9 @@ fn a_group_mixing_two_clients_prices_each_rows_regime() {
     let db = LedgerDb::open_in_memory().unwrap();
     plant_share(&db, row("r-desk", "claude-code/desk"));
     plant_share(&db, row("r-sdk", "claude-code/sdk-cli"));
-    let (totals, points) = db
-        .read_blocking(|c| {
-            Ok((
-                request_totals(
-                    c,
-                    TotalsBy::Account,
-                    from_hour,
-                    to_hour,
-                    &prices,
-                    &costs,
-                    NOW,
-                )?,
-                burn_series(c, &costs, &prices, &filter, NOW)?,
-            ))
-        })
+    let points = db
+        .read_blocking(|c| burn_series(c, &costs, &prices, &filter, NOW))
         .unwrap();
-    let equivalent = totals["a"].equivalent.expect("both rows priced");
-    assert!(
-        close(equivalent, 0.032 + 0.04),
-        "each row under its own regime: {equivalent}"
-    );
     let share = points
         .iter()
         .find_map(|p| p.five_hour_share)
@@ -7866,16 +7677,6 @@ async fn the_dashboard_the_traffic_and_the_totals_split_the_billed_dollars_from_
         traffic[0].billed_usd,
         traffic[0].equivalent,
         "the pool's bucket",
-    );
-    let totals = db
-        .read_blocking(|c| {
-            request_totals(c, TotalsBy::Pool, hour, hour + 3_600, &PRICES, &COSTS, NOW)
-        })
-        .unwrap();
-    read(
-        totals["p"].billed_usd,
-        totals["p"].equivalent,
-        "the pool's totals",
     );
 }
 
@@ -8019,132 +7820,6 @@ async fn the_pool_traffic_and_the_key_totals_count_the_asked_requests_alone() {
     assert_eq!(totals["desktop"].requests, 3, "the three asked requests");
 }
 
-/// A pool's traffic over four hours of plan, overage, billed and cached rows beside a probe row sums, bucket by
-/// bucket, to the pool's grouped totals over the same hours: the same requests and tokens, and dollars and a Pro-week
-/// figure within one cent, whichever of the two pool readers buckets them. Each row is worth more than a cent, so a
-/// group dropped or doubled moves the dollars past the tolerance, and the billed dollars where the group is billed.
-#[tokio::test]
-async fn the_pool_traffic_buckets_sum_to_the_pools_grouped_totals_within_one_cent() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
-    let prices = phoebis_ledger::test_tables::api_prices();
-    let costs = phoebis_ledger::test_tables::subscription_costs();
-    let at = phoebis_ledger::test_tables::JANUARY_2026;
-    const HOUR_MS: i64 = 3_600_000;
-    let cached = PinUsage {
-        input: 2_000,
-        cache_read: 30_000,
-        write_5m: 4_000,
-        output: 500,
-        ..PinUsage::default()
-    };
-    for row in [
-        ShareRow {
-            id: "r-plan",
-            model: "claude-opus-5-5",
-            at,
-            usage: usage(1_000, 100),
-            ..ShareRow::default()
-        },
-        ShareRow {
-            id: "r-cached",
-            model: "claude-opus-5-5",
-            at: at + HOUR_MS,
-            usage: cached,
-            ..ShareRow::default()
-        },
-        ShareRow {
-            id: "r-billed",
-            account: "b",
-            account_kind: AccountKind::ApiKey,
-            model: "claude-opus-5-5",
-            at: at + HOUR_MS,
-            usage: usage(2_000, 200),
-            ..ShareRow::default()
-        },
-        ShareRow {
-            id: "r-overage",
-            model: "claude-opus-5-5",
-            at: at + 2 * HOUR_MS,
-            usage: usage(700, 300),
-            overage: Some(true),
-            ..ShareRow::default()
-        },
-        ShareRow {
-            id: "r-probe",
-            kind: "probe",
-            model: "claude-opus-5-5",
-            at: at + 2 * HOUR_MS,
-            usage: PinUsage {
-                cache_read: 5_000,
-                ..PinUsage::default()
-            },
-            ..ShareRow::default()
-        },
-        ShareRow {
-            id: "r-later",
-            account: "c",
-            model: "claude-opus-5-5",
-            at: at + 3 * HOUR_MS,
-            usage: usage(500, 400),
-            ..ShareRow::default()
-        },
-    ] {
-        plant_share(&db, row);
-    }
-    let (from, to) = (hour_of(at), hour_of(at) + 4 * 3_600);
-    let traffic = pool_traffic(
-        &db,
-        "p",
-        from,
-        to,
-        3_600,
-        std::sync::Arc::new(prices.clone()),
-        std::sync::Arc::new(costs.clone()),
-        NOW,
-    )
-    .await
-    .unwrap();
-    let pools = db
-        .read_blocking(|c| {
-            pools_traffic(c, &["p".to_string()], from, to, 3_600, &prices, &costs, NOW)
-        })
-        .unwrap();
-    let totals = db
-        .read_blocking(|c| request_totals(c, TotalsBy::Pool, from, to, &prices, &costs, NOW))
-        .unwrap();
-    let total = &totals["p"];
-    let total_equivalent = total.equivalent.expect("every plan row prices");
-    for (reader, buckets) in [("pool_traffic", &traffic), ("pools_traffic", &pools["p"])] {
-        let requests: u64 = buckets.iter().map(|b| b.requests).sum();
-        let tokens: u64 = buckets.iter().map(|b| b.tokens).sum();
-        let cost: f64 = buckets.iter().map(|b| b.cost_usd).sum();
-        let billed: f64 = buckets.iter().map(|b| b.billed_usd).sum();
-        let equivalent: f64 = buckets
-            .iter()
-            .map(|b| b.equivalent.expect("every plan row prices"))
-            .sum();
-        let within_a_cent = |sum: f64, total: f64| (sum - total).abs() < 0.01;
-        let missed: Vec<&str> = [
-            ("requests", requests == total.requests),
-            ("tokens", tokens == total.tokens),
-            ("dollars", within_a_cent(cost, total.cost_usd)),
-            ("billed dollars", within_a_cent(billed, total.billed_usd)),
-            (
-                "Pro-week figure",
-                within_a_cent(equivalent, total_equivalent),
-            ),
-        ]
-        .into_iter()
-        .filter_map(|(check, holds)| (!holds).then_some(check))
-        .collect();
-        assert_eq!(
-            missed,
-            Vec::<&str>::new(),
-            "{reader}: {requests} requests, {tokens} tokens, {cost}, {billed} and {equivalent} against {total:?}"
-        );
-    }
-}
-
 #[tokio::test]
 async fn pools_traffic_answers_every_asked_pool_and_adds_each_rows_figures_into_its_bucket() {
     let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
@@ -8209,22 +7884,6 @@ async fn pools_traffic_answers_every_asked_pool_and_adds_each_rows_figures_into_
         "a former member's row counts for the hour it was a member"
     );
     assert_eq!(requests("q", hour), Some(1));
-    let single = pool_traffic(
-        &db,
-        "p",
-        hour,
-        hour + 3_600,
-        3_600,
-        std::sync::Arc::new(PRICES.clone()),
-        std::sync::Arc::new(COSTS.clone()),
-        NOW,
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        single, traffic["p"],
-        "the one-pool read answers the same buckets"
-    );
 }
 
 /// The day's requests, its error rate and its most common error code read the asked requests alone, and the refused

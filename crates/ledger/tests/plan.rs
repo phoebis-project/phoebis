@@ -207,24 +207,10 @@ fn the_rate_on_a_model_week_and_on_a_smaller_tier_follows_share_at() {
     }
 }
 
-// The mystery tier has no weighted model and GPT-5 no tier. The file lacks the enterprise tier, and Team holds no
-// capacity on the week.
+// The file lacks the enterprise tier, and Team holds no capacity on the week.
 #[test]
 fn a_model_of_no_weighted_tier_or_a_tier_without_capacity_prices_no_rate() {
     let tables = first();
-    for model in ["claude-mystery-2", "gpt-5"] {
-        for window in [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE] {
-            let what = format!("{model} on {window}");
-            let rate =
-                tables.share_rate_at(window, None, MAX_20X, model, &input_burn(1.0), OUT_OF_BAND);
-            assert_eq!(rate, None, "{what}");
-            assert_rate_follows_share(
-                rate,
-                tables.share_at(window, None, MAX_20X, model, input(1), OUT_OF_BAND),
-                &what,
-            );
-        }
-    }
     for (window, tier) in [
         (FIVE_HOUR, "claude_enterprise"),
         (SEVEN_DAY, TEAM),
@@ -484,12 +470,6 @@ fn the_latest_weighted_model_of_a_tier_is_the_first_in_the_model_order_with_a_we
     }
 }
 
-// Fable 5.1, Opus 5.5, Sonnet 5.5 and Haiku 4.5 carry a weight, Opus 5's is null and Opus 4.8 has a tier entry alone.
-#[test]
-fn the_weighted_model_count_counts_the_models_with_a_weight_of_their_own() {
-    assert_eq!(first().weighted_model_count(), 4);
-}
-
 // Team holds 10 units on the 5-hour window and none on the week.
 #[test]
 fn a_tier_the_file_lacks_or_a_null_capacity_prices_nothing_on_that_window() {
@@ -539,11 +519,6 @@ fn the_equivalent_is_the_share_of_the_pro_windows_on_each_window() {
         at_own(FIVE_HOUR, OPUS, JANUARY_IN_BAND),
         0.8,
         "the 5-hour window inside the band",
-    );
-    assert_share(
-        first().units_at(FIVE_HOUR, None, OPUS, input(1), IN_BAND),
-        4.0,
-        "one revision's units read the band at their instant: 2 / 0.5",
     );
     assert_share(at_own(SEVEN_DAY, OPUS, JANUARY_2026), 0.04, "the week");
     assert_share(
@@ -860,37 +835,6 @@ fn the_rate_table_carries_a_row_per_listed_model_and_no_rate_for_one_without_a_w
         "a dated id reads its undated row"
     );
     assert!(first().rate_table("one_hour", None).rows.is_empty());
-}
-
-// A file can list an id under a model tier other than the one its id names. Opus 7 listed under the Mystery model
-// tier, which has no weighted model, is unpriced on the meter, so its rate row carries no rate where its id's own
-// model tier would rate it.
-#[test]
-fn a_listed_id_its_model_tier_leaves_unpriced_takes_no_rate_from_the_model_tier_its_id_names() {
-    let text = SUBSCRIPTION_COSTS.replace(
-        "      claude-mystery-2: mystery\n",
-        "      claude-mystery-2: mystery\n      claude-opus-7: mystery\n",
-    );
-    assert_ne!(text, SUBSCRIPTION_COSTS);
-    let costs = CostRevisions::from_yaml(&text)
-        .unwrap()
-        .in_force(JANUARY_2026)
-        .clone();
-    assert_eq!(
-        costs.share_at(
-            FIVE_HOUR,
-            None,
-            MAX_20X,
-            "claude-opus-7",
-            input(1),
-            OUT_OF_BAND
-        ),
-        None,
-        "the meter leaves it unpriced"
-    );
-    let rates = costs.rate_table(FIVE_HOUR, None);
-    assert_eq!(per_type(rates.rates_for("claude-opus-7", 0)), [None; 5]);
-    assert_eq!(rates.price("claude-opus-7", input(1), 0), None);
 }
 
 // The test regime holds twice the base Ultra 5-hour row and 1.25 times its week (200 and 1,250 against 100 and

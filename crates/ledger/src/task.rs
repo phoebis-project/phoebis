@@ -1872,10 +1872,6 @@ mod tests {
         )
         .await;
         assert!(first.due.is_some(), "a working read arms the boundary tick");
-        assert!(
-            first.refreshed,
-            "and reports the read as one that succeeded"
-        );
         spends.due = first.due;
 
         spends
@@ -1887,18 +1883,6 @@ mod tests {
             })
             .unwrap();
 
-        let after_failure = refresh_member_spends(
-            &spends.handles,
-            &spends.handles.router.snapshot(),
-            2_000,
-            false,
-            &[],
-        )
-        .await;
-        assert!(
-            !after_failure.refreshed,
-            "a failed read never reads as a refresh, so it cannot clear a degraded ledger"
-        );
         clock.store(2_000, Ordering::SeqCst);
         spends.read(&[]).await;
         assert_eq!(

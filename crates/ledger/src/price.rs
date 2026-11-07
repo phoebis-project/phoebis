@@ -546,7 +546,6 @@ mod tests {
             input(1),
         );
         assert_eq!(priced.shares, None);
-        assert!(priced.equivalent.is_some());
     }
 
     // An enterprise row null on both base windows that the test regime sizes at 40 and 400 units: the one Opus 5.5

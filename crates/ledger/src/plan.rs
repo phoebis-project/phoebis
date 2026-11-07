@@ -793,22 +793,6 @@ impl SubscriptionCosts {
         Some(units / capacity / factor / divisor)
     }
 
-    /// The units `usage` costs on `window` in this revision: the model's weight on the window times each type's
-    /// multiplier, over the band's factor at `at` and the model week's divisor, before any capacity. `None` where the
-    /// model has no weight on the window or the window prices nothing.
-    pub fn units_at(
-        &self,
-        window: &str,
-        entrypoint: Option<&str>,
-        canonical_model: &str,
-        usage: PinUsage,
-        at: i64,
-    ) -> Option<f64> {
-        let (priced, divisor) = self.priced_window(window)?;
-        let units = self.weighted_units(window, canonical_model, usage)?;
-        Some(units / self.factor_at(priced, entrypoint, at) / divisor)
-    }
-
     /// The share of the tier's own `window` a pin burning `burn` typed tokens a second consumes per second at `at`:
     /// `share_at` over a rate rather than a count, the same weight, multipliers, capacity, capacity factor and
     /// model-week divisor. `None` where `share_at` answers none.

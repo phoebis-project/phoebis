@@ -110,8 +110,7 @@ fn a_window_sums_one_keys_rollups_and_leaves_probes_and_other_keys_out() {
         None,
     )
     .unwrap();
-    // A probe under the same key is folded into its own rollup row and must not reach the key's own totals,
-    // the way `request_totals` already leaves probes out of the key list.
+    // A probe under the same key is folded into its own rollup row and must not reach the key's own totals.
     db.insert_request(
         &request("r5", "k1", "claude-sonnet-5-5", "probe", "succeeded", 200),
         &[used("r5")],

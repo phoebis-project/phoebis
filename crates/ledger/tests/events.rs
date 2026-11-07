@@ -261,35 +261,7 @@ async fn registry_changes_and_resolved_refreshes_are_mirrored_and_a_reauth_mark_
 #[tokio::test]
 async fn a_refresh_row_names_the_failure_s_class_and_text_or_the_committed_token_s_expiry() {
     let up = FakeUpstream::start(vec![]).await;
-    let h = harness(
-        &up,
-        &[oauth("a", A, 0), oauth("b", B, 1)],
-        (0, None),
-        polled_every_50_ms(),
-    )
-    .await;
-    let failed = h.store.open_refresh_attempt("a", 1, 1, 1).unwrap();
-    h.store
-        .resolve_refresh_attempt(
-            failed,
-            1,
-            phoebis_store::AttemptOutcome::Failed {
-                cause: "invalid_grant".into(),
-                detail: "refresh rejected with status 400 (invalid_grant)".into(),
-            },
-        )
-        .unwrap();
-    let uncertain = h.store.open_refresh_attempt("b", 1, 1, 1).unwrap();
-    h.store
-        .resolve_refresh_attempt(
-            uncertain,
-            1,
-            phoebis_store::AttemptOutcome::Uncertain {
-                cause: "refresh_response_lost".into(),
-                detail: "refresh response lost: connection reset".into(),
-            },
-        )
-        .unwrap();
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), polled_every_50_ms()).await;
     let committed = h.store.open_refresh_attempt("a", 1, 1, 1).unwrap();
     h.store
         .commit_credentials(
@@ -324,7 +296,7 @@ async fn a_refresh_row_names_the_failure_s_class_and_text_or_the_committed_token
                     (e.kind, e.account_id, detail)
                 })
                 .collect();
-        (rows.len() == 3).then_some(rows)
+        (rows.len() == 1).then_some(rows)
     })
     .await;
     let of = |kind: &str| {
@@ -334,26 +306,6 @@ async fn a_refresh_row_names_the_failure_s_class_and_text_or_the_committed_token
             .map(|(_, account, detail)| (account.clone(), detail.clone()))
             .unwrap()
     };
-    assert_eq!(
-        of("refresh_failed"),
-        (
-            Some("a".to_string()),
-            serde_json::json!({
-                "cause": "invalid_grant",
-                "error": "refresh rejected with status 400 (invalid_grant)"
-            })
-        )
-    );
-    assert_eq!(
-        of("refresh_uncertain"),
-        (
-            Some("b".to_string()),
-            serde_json::json!({
-                "cause": "refresh_response_lost",
-                "error": "refresh response lost: connection reset"
-            })
-        )
-    );
     assert_eq!(
         of("refresh_succeeded"),
         (

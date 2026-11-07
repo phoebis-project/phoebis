@@ -3536,46 +3536,6 @@ impl std::ops::AddAssign<&Totals> for Totals {
     }
 }
 
-/// The column `request_totals` groups by.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TotalsBy {
-    Account,
-    Pool,
-}
-
-impl TotalsBy {
-    pub fn column(self) -> &'static str {
-        match self {
-            TotalsBy::Account => "account_id",
-            TotalsBy::Pool => "pool_id",
-        }
-    }
-}
-
-/// Request, token, and cost totals per pool or account over `[since_hour, to_hour)`, probe rows left out. One
-/// aggregate query per span of `revision_spans` rather than a rollup read. Grouped by the column, the price columns
-/// and the hour, each group priced in Rust at its own hour. A lifetime caller passes `i64::MIN` as `since_hour`,
-/// which the first span's `at` clamps. `now` is the read's instant, whose anchor row divides the Pro-week figure.
-pub fn request_totals(
-    conn: &Connection,
-    by: TotalsBy,
-    since_hour: i64,
-    to_hour: i64,
-    prices: &PriceRevisions,
-    costs: &PlanTables,
-    now: i64,
-) -> Result<BTreeMap<String, Totals>, LedgerError> {
-    grouped_totals(
-        conn,
-        &[by.column()],
-        (since_hour, to_hour),
-        prices,
-        costs,
-        now,
-        |r| r.get(0).map(Some),
-    )
-}
-
 /// Request, token, and cost totals per live key over `[since_hour, to_hour)`, probe rows left out: the answer of
 /// `key_request_totals_by_generation` with only the live generation of each id kept, so a key's row never carries an
 /// earlier holder's. `now` is the read's instant, whose anchor row divides the Pro-week figure.
@@ -3665,9 +3625,8 @@ fn grouped_totals<K: Ord>(
     Ok(out)
 }
 
-/// The requests per account over `[since_hour, to_hour)`, probe rows left out: the `requests` that `request_totals`
-/// answers per account, summed in one statement with no pricing for a caller that reads the counts alone. A lifetime
-/// caller passes `i64::MIN` as `since_hour`.
+/// The requests per account over `[since_hour, to_hour)`, probe rows left out, summed in one statement with no
+/// pricing for a caller that reads the counts alone. A lifetime caller passes `i64::MIN` as `since_hour`.
 pub fn account_request_counts(
     conn: &Connection,
     since_hour: i64,
