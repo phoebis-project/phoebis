@@ -84,19 +84,21 @@ fn versions_of_one_id_are_distinct_and_ascending_and_current_and_at_answer_the_t
 }
 
 #[test]
-fn current_answers_the_newer_of_two_versions_listed_newest_first() {
+fn current_answers_the_highest_version_wherever_the_table_lists_it() {
     let version = |version: u32| Preset {
-        id: "two-versions",
+        id: "three-versions",
         version,
-        name: "Two versions",
+        name: "Three versions",
         description: "",
         measured_on: "",
         suggested_mode: GuardrailMode::Observe,
         conditions: Vec::new(),
     };
-    let table = [version(2), version(1)];
-    let current = Preset::current(&table, "two-versions").expect("the table holds the id");
-    assert_eq!(current.version, 2);
+    // Neither the first nor the last listing holds the newest, so a first match, a last match and a lowest pick
+    // each answer another version.
+    let table = [version(1), version(3), version(2)];
+    let current = Preset::current(&table, "three-versions").expect("the table holds the id");
+    assert_eq!(current.version, 3);
 }
 
 #[test]
