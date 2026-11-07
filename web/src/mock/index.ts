@@ -11,7 +11,7 @@ import type {
 import type { Guardrail, GuardrailAttachment, GuardrailCounts, GuardrailRef, GuardrailTestResult } from '@/api/types';
 import { AFFINITY_MODE_VALUES, GUARDRAIL_MODE_VALUES, REQUEST_ORDER_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/types';
 import { type Clock, wallClock } from '@/lib/clock';
-import { foldClassifier, foldEffort, foldRequestClass, foldSpeed, servedMissReason, servingResponse } from '@/lib/dimensions';
+import { foldClassifier, foldEffort, foldRequestClass, foldSpeed, servedMissReason, servingAttempt, servingResponse } from '@/lib/dimensions';
 import { byteOrder, tokensTotal } from '@/lib/format';
 import { modelRulesRefusal, poolWarnings, type NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
@@ -486,16 +486,21 @@ function matchesQuery(r: RequestLog, q: RequestQuery, live: Map<string, number>)
   return true;
 }
 
-/** The route's order keys, each read off the row, null where the row carries no figure. */
-const figureOf = (r: RequestLog, order: RequestOrder): number | null =>
-  ({
+/**
+ * The route's order keys, each read off the row, null where the row carries no figure. The token keys are the serving
+ * attempt's counts, the last attempt's, so a request whose last attempt answered no 200 carries none.
+ */
+const figureOf = (r: RequestLog, order: RequestOrder): number | null => {
+  const answered = servingAttempt(r)?.upstreamStatus === 200;
+  return {
     attempts: r.attempts.length,
     duration_ms: r.durationMs,
-    input_tokens: r.usage.input,
-    output_tokens: r.usage.output,
+    input_tokens: answered ? r.usage.input : null,
+    output_tokens: answered ? r.usage.output : null,
     received_at: Date.parse(r.at),
     ttfb_ms: r.ttfbMs,
-  })[order];
+  }[order];
+};
 /** The route's cursor under a key: `<figure>:<id>`, the figure empty where the row carries none. */
 const cursorOf = (r: RequestLog, order: RequestOrder): string => `${figureOf(r, order) ?? ''}:${r.id}`;
 

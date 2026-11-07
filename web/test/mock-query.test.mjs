@@ -169,6 +169,12 @@ test("listRequests orders by a nullable key with the rows without a figure last 
   assert.deepEqual(await page('desc'), [['req_1c7e4a9d-f52', 'req_31f0b7c2-6e1'], '3300:req_31f0b7c2-6e1']);
   assert.deepEqual(await page('desc', '3300:req_31f0b7c2-6e1'), [['req_9b4f1c62-a07', 'req_51d0e2b8-7a0'], ':req_51d0e2b8-7a0']);
   assert.deepEqual(await page('desc', ':req_51d0e2b8-7a0'), [['req_2d8e5b13-f40'], null]);
+  // A token key reads the serving attempt's count, so the three rows no attempt served carry none and close the page.
+  const tokens = await api.listRequests({ dir: 'asc', from: '2026-09-16T14:15:00.000Z', limit: 5, order: 'input_tokens', to: '2026-09-16T14:18:00.000Z' });
+  assert.deepEqual(
+    tokens.requests.map((r) => r.id),
+    ['req_31f0b7c2-6e1', 'req_1c7e4a9d-f52', 'req_2d8e5b13-f40', 'req_51d0e2b8-7a0', 'req_9b4f1c62-a07'],
+  );
 });
 
 test('listRequests keeps the row that presented a fallback digest under fallback true and every other row under false', async () => {
