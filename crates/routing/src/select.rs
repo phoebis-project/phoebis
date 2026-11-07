@@ -3033,7 +3033,7 @@ pub struct SlowDownRead {
     /// The holds of the pool's pins on the account whose pace has a cycle, every kept pin whose agent has not ended
     /// weighted by its priced decayed rate on `five_hour`: a pin without a cycle runs unheld and a pin whose cycle is
     /// too long for the cap is held at the cap, and the rest share the remaining reduction at one speed, so the
-    /// account's pins realize the ramped factor together as far as the cap lets them. Empty while no pin on the
+    /// account's pins realize the ramped factor together as far as the cap lets them. Empty while no live pin on the
     /// account has a cycle.
     pub plan: Vec<PinHold>,
     /// The speed the account's pins realize under the plan, `sum(b x s) / sum(b)` over the pins `plan` weighs, with

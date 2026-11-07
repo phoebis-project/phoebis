@@ -407,7 +407,7 @@ CREATE TABLE IF NOT EXISTS window_reconciliations (
 /// Step 3 carries the fallback credit's digests and the serving attempt's facts onto the rows, so the request list
 /// reads a column where it ran a subquery per row. A row written before the step reads null until the start's
 /// backfill reaches it. The partial index holds the rows with attempts whose serving account is null, so a slice
-/// seeks the oldest of them without reading the filled rows before them, and a request no attempt served, whose
+/// seeks the newest of them without reading the filled rows, and a request no attempt served, whose
 /// account stays null, never enters it. The rare row whose trail lost every attempt stays in it, and the backfill's
 /// reads skip it.
 const STEP_3: &str = "ALTER TABLE attempts ADD COLUMN issued_digest TEXT; \
