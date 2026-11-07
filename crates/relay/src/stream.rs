@@ -10,7 +10,7 @@ use bytes::{Bytes, BytesMut};
 use futures::future::BoxFuture;
 use phoebis_bus::{Interruption, Outcome, Phase, ResponseChunk, ResponseFacts, Usage};
 use phoebis_oauth::Clock;
-use phoebis_routing::{AffinityReport, PinRef, PinUsage, Report, RouterHandle};
+use phoebis_routing::{AffinityReport, PinRef, PinUsage, RenewalEnd, Report, RouterHandle};
 use phoebis_transport::decode::Decoder;
 use phoebis_transport::pool::{Conn, Pool, PoolKey};
 use phoebis_transport::response::BodyReader;
@@ -240,6 +240,17 @@ impl Renewal {
         if !self.renews {
             return;
         }
+        // A probe replays another request's class and its answer the turn's stop reason, so it ends no turn and no
+        // agent.
+        let turn_end = if self.keepalive {
+            RenewalEnd::NoTurn
+        } else if self.subagent && end_turn {
+            RenewalEnd::AgentEnded
+        } else if self.turn {
+            RenewalEnd::Turn
+        } else {
+            RenewalEnd::NoTurn
+        };
         waiting.send(
             &self.router,
             Report::PinRenewed {
@@ -250,8 +261,7 @@ impl Renewal {
                 cache_ttl_ms: self.cache_ttl_ms,
                 fast,
                 classifier: self.classifier,
-                turn: self.turn,
-                ended: self.subagent && end_turn,
+                turn_end,
             },
         );
     }

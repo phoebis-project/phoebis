@@ -729,7 +729,10 @@ fn slow_down_held_ms(held: Option<&str>) -> Option<u64> {
         .get("waits")?
         .as_array()?
         .iter()
-        .filter(|wait| wait.get("reason").and_then(serde_json::Value::as_str) == Some("slow_down"))
+        .filter(|wait| {
+            wait.get("reason").and_then(serde_json::Value::as_str)
+                == Some(phoebis_routing::HoldReason::SlowDown.as_str())
+        })
         .map(|wait| {
             wait.get("held_ms")
                 .and_then(serde_json::Value::as_u64)

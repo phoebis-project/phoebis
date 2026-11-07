@@ -406,6 +406,8 @@ pub enum StateWrite {
         session_id: String,
         agent_id: String,
     },
+    /// A replaced pin's removal, which a pin that leaves for good (a release, a client error, the purge's expiry)
+    /// takes as well.
     DeletePin(PinKey),
     /// A shared window a clean poll dropped: its stored reading leaves, fenced by the incarnation.
     DeleteWindow {
@@ -413,9 +415,6 @@ pub enum StateWrite {
         window: String,
         incarnation: u64,
     },
-    /// A pin that leaves for good (a release, a client error, the purge's expiry). A replacement's removal writes
-    /// `DeletePin`.
-    EndPin(PinKey),
     InsertFirstSeen(FirstSeenRow),
     /// `before` is `now` less the longest `shed_dwell_seconds` of the snapshot's pools, computed at the purge tick.
     PurgeShedRounds {
@@ -985,6 +984,15 @@ pub struct SlowDownState {
     pub reset: Option<i64>,
 }
 
+impl SlowDownState {
+    /// The instant the factor returned to 1, where it has read 1 for the `SLOW_DOWN_WAIT_MS` wait by `now` and so
+    /// closed the span.
+    pub(crate) fn closed_at(&self, now: i64) -> Option<i64> {
+        self.clear_since
+            .filter(|clear| now - clear >= SLOW_DOWN_WAIT_MS)
+    }
+}
+
 /// One edge of an account's slow-down span, which the task announces as an event.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SlowDownEdge {
@@ -1025,6 +1033,14 @@ pub struct PinPace {
     pub gaps: u32,
     /// The end of the slow-down hold standing on the pin.
     pub deadline: Option<i64>,
+}
+
+impl PinPace {
+    /// The deadline that still stands at `now`. One at or before `now` stands no longer, though it stays on the pace
+    /// until the pin lands elsewhere (`put_pin`), the account's 5-hour window resets, or the pin ends.
+    pub fn standing_deadline(&self, now: i64) -> Option<i64> {
+        self.deadline.filter(|deadline| *deadline > now)
+    }
 }
 
 /// The request a moved pin's next requests wait for the head of, the wire attempt whose leg carries it, and the
@@ -1451,6 +1467,13 @@ pub(crate) struct TurnEnd {
     pub incarnation: u64,
 }
 
+/// Flags the pin under the canonical `key` in `set`, and only while the pin stands.
+fn flag_held(pins: &HashMap<PinKey, PinRow>, set: &mut HashSet<PinKey>, key: Cow<'_, PinKey>) {
+    if pins.contains_key(&*key) && !set.contains(&*key) {
+        set.insert(key.into_owned());
+    }
+}
+
 impl RoutingState {
     pub fn from_load(load: RoutingLoad) -> RoutingState {
         let next_epoch = load.pins.iter().map(|p| p.epoch).max().unwrap_or(0) + 1;
@@ -1658,9 +1681,7 @@ impl RoutingState {
     /// Records that a selection or a completion renewed the pin under the key since its placement.
     pub(crate) fn mark_renewed(&mut self, key: &PinKey) {
         let key = self.canonical_key(key);
-        if self.pins.contains_key(&*key) && !self.renewed.contains(&*key) {
-            self.renewed.insert(key.into_owned());
-        }
+        flag_held(&self.pins, &mut self.renewed, key);
     }
 
     /// Whether the pin under the key was renewed since its placement.
@@ -1672,9 +1693,20 @@ impl RoutingState {
     /// projection read the mark, the pin and its cache stay, and the pin's next request clears it.
     pub(crate) fn mark_ended(&mut self, key: &PinKey) {
         let key = self.canonical_key(key);
-        if self.pins.contains_key(&*key) && !self.ended.contains(&*key) {
-            self.ended.insert(key.into_owned());
-        }
+        flag_held(&self.pins, &mut self.ended, key);
+    }
+
+    /// Marks every pin the agent holds under the key and session as `mark_ended` marks one. The pin map's keys are
+    /// the canonical ones, so the set takes them as they stand.
+    pub(crate) fn mark_agent_ended(&mut self, key_id: &str, session_id: &str, agent_id: &str) {
+        self.ended.extend(
+            self.pins
+                .keys()
+                .filter(|key| {
+                    key.key_id == key_id && key.session_id == session_id && key.agent_id == agent_id
+                })
+                .cloned(),
+        );
     }
 
     pub(crate) fn clear_ended(&mut self, key: &PinKey) {
@@ -1853,8 +1885,8 @@ impl RoutingState {
             }
             // A claim on a window the set has since dropped waits for a reading that never comes, so it falls through.
             match row.window.as_str() {
-                "five_hour" if self.has_window(account_id, FIVE_HOUR) => below(FIVE_HOUR),
-                "seven_day" if self.has_window(account_id, SEVEN_DAY) => below(SEVEN_DAY),
+                FIVE_HOUR if self.has_window(account_id, FIVE_HOUR) => below(FIVE_HOUR),
+                SEVEN_DAY if self.has_window(account_id, SEVEN_DAY) => below(SEVEN_DAY),
                 // Any other representative claim: it does not say which shared window was exhausted, so the
                 // account is only back once every shared window of its set has allowance.
                 _ => [FIVE_HOUR, SEVEN_DAY]
@@ -2599,6 +2631,16 @@ impl RoutingState {
             .is_none_or(|sample| sample.has_window(window))
     }
 
+    /// The plan windows `model` draws that the account's set holds, the ones every pricing reader walks: a shared
+    /// window the account's newest clean poll lacked has no reading to wait for.
+    pub(crate) fn plan_windows_held<'a>(
+        &'a self,
+        account_id: &'a str,
+        model: &str,
+    ) -> impl Iterator<Item = &'static str> + 'a {
+        plan_windows(model).filter(move |window| self.has_window(account_id, window))
+    }
+
     /// The row of the account's set for the writer, `None` while the set is unset.
     pub fn window_set_row(&self, account_id: &str, incarnation: u64) -> Option<WindowSetRow> {
         let sample = self.samples.get(account_id)?;
@@ -2756,27 +2798,17 @@ impl RoutingState {
         let key = (pool_id.to_string(), account_id.to_string());
         // An entry read before its window's passed reset is the old window's: its span ends by that reset, and no speed
         // or stamp of it carries into the window this read opens.
-        if let Some(reset) = self
+        if self
             .slow_downs
             .get(&key)
             .and_then(|entry| self.stale_reset(account_id, entry, now))
+            .is_some()
         {
             let stale = self
                 .slow_downs
                 .remove(&key)
                 .expect("the entry was just read");
-            if let Some(since) = stale.slowed_since {
-                self.slow_down_edges.push((
-                    pool_id.to_string(),
-                    account_id.to_string(),
-                    SlowDownEdge::Ended {
-                        since,
-                        duration_ms: span_end(&stale, Some(reset)) - since,
-                        factor_min: stale.factor_min,
-                        held_ms: stale.held_ms,
-                    },
-                ));
-            }
+            self.end_slow_down(&key, &stale, now);
             self.drop_slow_down_deadlines(account_id);
         }
         let mut opened = !self.slow_downs.contains_key(&key) && slowed;
@@ -2795,17 +2827,15 @@ impl RoutingState {
                 // A span whose factor has read 1 for the wait ended at the return, though no drain has closed it yet: a
                 // selection can land before the purge tick that would, and the dip it reads opens a span of its own.
                 if let (true, Some(since), Some(clear)) =
-                    (slowed, entry.slowed_since, entry.clear_since)
+                    (slowed, entry.slowed_since, entry.closed_at(now))
                 {
-                    if now - clear >= SLOW_DOWN_WAIT_MS {
-                        ended = Some(SlowDownEdge::Ended {
-                            since,
-                            duration_ms: clear - since,
-                            factor_min: entry.factor_min,
-                            held_ms: entry.held_ms,
-                        });
-                        entry.slowed_since = None;
-                    }
+                    ended = Some(SlowDownEdge::Ended {
+                        since,
+                        duration_ms: clear - since,
+                        factor_min: entry.factor_min,
+                        held_ms: entry.held_ms,
+                    });
+                    entry.slowed_since = None;
                 }
                 match (slowed, entry.slowed_since) {
                     (true, Some(_)) => {
@@ -2872,9 +2902,7 @@ impl RoutingState {
             .iter_mut()
             .filter_map(|((pool_id, account_id), entry)| {
                 let since = entry.slowed_since?;
-                let clear = entry
-                    .clear_since
-                    .filter(|clear| now - clear >= SLOW_DOWN_WAIT_MS)?;
+                let clear = entry.closed_at(now)?;
                 let edge = SlowDownEdge::Ended {
                     since,
                     duration_ms: clear - since,
@@ -3018,7 +3046,7 @@ impl RoutingState {
     }
 
     /// The slow-down hold's deadline stands on the pin under `key`, which the pin's next requests rejoin until it
-    /// passes or the account's 5-hour window resets (`clear_slow_down_deadline`), and the request is dispatched there.
+    /// passes or the account's 5-hour window resets (`drop_slow_down_deadlines`), and the request is dispatched there.
     /// Nothing for a key with no pace.
     pub(crate) fn stand_slow_down_deadline(&mut self, key: &PinKey, until: i64) {
         if let Some(pace) = self.pin_paces.get_mut(key) {
@@ -3027,28 +3055,18 @@ impl RoutingState {
         self.pace_held_until(key, until);
     }
 
-    /// Drops the slow-down deadline standing on the pin under `key` at its account's 5-hour reset and keeps the last
-    /// dispatch: the request the deadline held still dispatches at that instant, since the relay's hold is already
-    /// answered, so the pace's last dispatch stays a fact and the pin's next gap measures from it. Nothing for a key
-    /// with no pace.
-    pub(crate) fn clear_slow_down_deadline(&mut self, key: &PinKey) {
-        if let Some(pace) = self.pin_paces.get_mut(key) {
-            pace.deadline = None;
-        }
-    }
-
     /// Drops the slow-down deadline of each pin on the account where a passed 5-hour reset clears its entry, by the
     /// selection that replaces the entry or the purge tick that removes it: each was sized under the old window, so
     /// each pin's next request is read afresh. A former pool's pins go too, since no selection holds them on this
-    /// account.
+    /// account. Each pace keeps its last dispatch: the request a deadline held still dispatches at that instant, since
+    /// the relay's hold is already answered, so the pin's next gap measures from it.
     fn drop_slow_down_deadlines(&mut self, account_id: &str) {
-        let pins: Vec<PinKey> = self
-            .pins_on(account_id, &|_| true)
-            .into_iter()
-            .map(PinRow::key)
-            .collect();
-        for pin in &pins {
-            self.clear_slow_down_deadline(pin);
+        for (key, pin) in &self.pins {
+            if pin.account_id == account_id {
+                if let Some(pace) = self.pin_paces.get_mut(key) {
+                    pace.deadline = None;
+                }
+            }
         }
     }
 
@@ -3362,9 +3380,7 @@ impl RoutingState {
             if self.ended.contains(key) {
                 continue;
             }
-            for window in
-                plan_windows(&pin.model).filter(|window| self.has_window(account_id, window))
-            {
+            for window in self.plan_windows_held(account_id, &pin.model) {
                 // The plain average, since the banded copy weighs past renewals' bands and the rate reads the band
                 // of now. Every type decays by one factor, so decaying the share equals pricing the decayed rates.
                 if let Some(rate) = self.share.rate(

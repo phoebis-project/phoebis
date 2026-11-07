@@ -9,8 +9,8 @@ use phoebis_routing::{
     AffinityReport, BandWeight, BurnRates, BurnUnit, ClientClass, ConversationLookup, CreditsState,
     DecisionRecord, DecisionSummary, Exhaustion, HoldFacts, HoldReason, KeyRefusal,
     LongContextRates, MemberSpend, MoveCause, PinRef, PinUsage, PredecessorQuery, Presented,
-    RateTable, Rates, Refusal, RefusalFacts, RefusedRequest, RegimeRates, ReloadError, Report,
-    ResolveError, RouterConfig, RouterHandle, RoutingState, SelectAnswer, SelectRequest,
+    RateTable, Rates, Refusal, RefusalFacts, RefusedRequest, RegimeRates, ReloadError, RenewalEnd,
+    Report, ResolveError, RouterConfig, RouterHandle, RoutingState, SelectAnswer, SelectRequest,
     SelectResult, SharePricer, SpendResetSource, SpendWindow, UtilizationSample, WindowReading,
     WindowSource, WriterStatus, COMMANDS, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR,
     IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WRITER_DEPTH,
@@ -6933,8 +6933,7 @@ async fn a_probe_after_a_compacted_request_refreshes_warmth() {
             cache_ttl_ms: 300_000,
             fast: false,
             classifier: false,
-            turn: false,
-            ended: false,
+            turn_end: RenewalEnd::NoTurn,
         })
         .await;
     let pin = handle.pins().await.unwrap().remove(0);
@@ -6975,8 +6974,11 @@ fn renewal(pin: PinRef, now: i64, usage: PinUsage, keepalive: bool, cache_ttl_ms
         cache_ttl_ms,
         fast: false,
         classifier: false,
-        turn: true,
-        ended: false,
+        turn_end: if keepalive {
+            RenewalEnd::NoTurn
+        } else {
+            RenewalEnd::Turn
+        },
     }
 }
 
@@ -7127,8 +7129,7 @@ async fn a_renewal_with_usage_folds_the_typed_rates_and_the_banded_copy_and_a_pr
             cache_ttl_ms: 3_600_000,
             fast: false,
             classifier: false,
-            turn: true,
-            ended: false,
+            turn_end: RenewalEnd::Turn,
         })
         .await;
     let pins = handle.pins().await.unwrap();
@@ -7234,8 +7235,7 @@ async fn a_fast_renewal_lands_in_the_pins_fast_usage_and_lets_both_copies_of_its
             cache_ttl_ms: 300_000,
             fast: true,
             classifier: false,
-            turn: true,
-            ended: false,
+            turn_end: RenewalEnd::Turn,
         })
         .await;
     handle
@@ -7532,8 +7532,7 @@ fn classifier_renewal(pin: PinRef, now: i64, input: u64) -> Report {
         cache_ttl_ms: 300_000,
         fast: false,
         classifier: true,
-        turn: false,
-        ended: false,
+        turn_end: RenewalEnd::NoTurn,
     }
 }
 
@@ -7644,8 +7643,7 @@ fn speed_renewal(pin: PinRef, now: i64, fast: bool, input: u64) -> Report {
         cache_ttl_ms: 300_000,
         fast,
         classifier: false,
-        turn: true,
-        ended: false,
+        turn_end: RenewalEnd::Turn,
     }
 }
 
@@ -8758,8 +8756,7 @@ async fn a_round_leaves_out_a_pin_whose_agent_ended_until_the_agent_sends_again(
             cache_ttl_ms: 300_000,
             fast: false,
             classifier: false,
-            turn: true,
-            ended: true,
+            turn_end: RenewalEnd::AgentEnded,
         })
         .await;
     handle
@@ -8860,8 +8857,7 @@ async fn a_round_leaves_out_a_pin_whose_agent_ended_until_the_agent_sends_again(
             cache_ttl_ms: 300_000,
             fast: false,
             classifier: false,
-            turn: true,
-            ended: true,
+            turn_end: RenewalEnd::NoTurn,
         })
         .await;
     drained(&mut events).await;
@@ -8948,8 +8944,7 @@ async fn a_projection_leaves_out_the_burn_of_a_pin_whose_agent_ended_until_the_a
             cache_ttl_ms: 300_000,
             fast: false,
             classifier: false,
-            turn: true,
-            ended: true,
+            turn_end: RenewalEnd::AgentEnded,
         })
         .await;
     handle
@@ -14298,8 +14293,8 @@ async fn the_projections_ask_answers_the_slow_down_read_and_the_demand_beside_th
     assert_eq!(
         (
             entry.speed,
-            entry.since,
-            entry.ramp,
+            entry.span.map(|s| s.since),
+            entry.span.map(|s| s.ramp),
             entry.threshold_ms,
             entry.hold_ms
         ),
@@ -14389,7 +14384,13 @@ async fn pins_standing_answers_the_speed_and_the_cycle_of_a_pin() {
         standing
             .iter()
             .find(|p| p.pin.session_id == session)
-            .map(|p| (p.factor, p.speed, p.cycle_ms))
+            .map(|p| {
+                (
+                    p.slow_down.map(|s| s.factor),
+                    p.slow_down.map(|s| s.speed),
+                    p.cycle_ms,
+                )
+            })
             .unwrap_or_else(|| panic!("no pin of {session}: {standing:?}"))
     };
     assert_eq!(
@@ -14431,7 +14432,7 @@ async fn a_restarted_router_reads_each_pins_flag_and_effort_from_its_row_and_a_r
             .map(|p| {
                 (
                     p.auxiliary_only,
-                    p.effort.clone(),
+                    p.pin.effort.clone(),
                     p.first_seen_at,
                     p.session_first_seen_at,
                 )
@@ -15611,8 +15612,11 @@ async fn a_client_renewal_writes_the_effort_its_pin_names_to_the_row_and_a_probe
         cache_ttl_ms: 300_000,
         fast: false,
         classifier: false,
-        turn: true,
-        ended: false,
+        turn_end: if keepalive {
+            RenewalEnd::NoTurn
+        } else {
+            RenewalEnd::Turn
+        },
     };
     let stored = || async { handle.pins().await.unwrap().remove(0).effort };
     assert_eq!(
@@ -16173,8 +16177,7 @@ async fn an_auxiliary_calls_end_on_another_agents_turn_pin_does_not_redirect_the
             cache_ttl_ms: 300_000,
             fast: false,
             classifier: false,
-            turn: false,
-            ended: false,
+            turn_end: RenewalEnd::NoTurn,
         })
         .await;
     let call = SelectRequest {
@@ -16254,8 +16257,7 @@ async fn a_probes_renewal_of_another_agents_turn_pin_does_not_redirect_the_class
             cache_ttl_ms: 300_000,
             fast: false,
             classifier: false,
-            turn: true,
-            ended: false,
+            turn_end: RenewalEnd::NoTurn,
         })
         .await;
     let call = SelectRequest {

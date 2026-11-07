@@ -28,7 +28,7 @@ use crate::state::{
     load_shedding, mark_holds, plan_windows, return_to_plan_dwell_ms, round_in_dwell, shed_cap,
     shed_dwell_ms, slow_down, slow_down_hold_ms, slow_down_stretch_ms, standing_mark, warm,
     BandSegment, BurnUnit, MemberSpend, PinPace, PinRef, PinUsage, Reservation, RoutingState,
-    SlowDownState, StateWrite, Tier, WindowReading, FAST_INPUT, FAST_OUTPUT, FIVE_HOUR, HOUR_MS,
+    StateWrite, Tier, WindowReading, FAST_INPUT, FAST_OUTPUT, FIVE_HOUR, HOUR_MS,
     IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
 use crate::windows::{window_for, window_length_ms, MODEL_WINDOWS};
@@ -230,26 +230,17 @@ pub struct Placement {
     pub prefix_tokens: u64,
 }
 
-/// Why a request waits before its next selection. The record and the trace write its snake-case word, the word the
-/// routing log and the ledger read.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum HoldReason {
-    Cap,
-    Reset,
-    Rewrite,
-    SlowDown,
-}
-
-impl HoldReason {
-    /// The word the record and the trace write, for the summary's text facts.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            HoldReason::Cap => "cap",
-            HoldReason::Reset => "reset",
-            HoldReason::Rewrite => "rewrite",
-            HoldReason::SlowDown => "slow_down",
-        }
+phoebis_store::text_enum! {
+    plain
+    /// Why a request waits before its next selection. The record and the trace write its snake-case word, the word the
+    /// routing log and the ledger read.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum HoldReason {
+        Cap => "cap",
+        Reset => "reset",
+        Rewrite => "rewrite",
+        SlowDown => "slow_down",
     }
 }
 
@@ -924,7 +915,7 @@ pub(crate) fn pin_figures<'a>(
     };
     let mut rewrite = BTreeMap::new();
     let mut burn = BTreeMap::new();
-    for window in plan_windows(model).filter(|window| state.has_window(account_id, window)) {
+    for window in state.plan_windows_held(account_id, model) {
         // Nothing priced, or a share of nothing, is nothing to book.
         if let Some(share) = share
             .price(
@@ -1414,9 +1405,9 @@ struct Recorder {
     shed_round: Option<ShedRoundRecord>,
     /// The plan windows a round on the renewed pin's account tests, in the trigger's order, for the renewal fact.
     trigger_windows: Vec<&'static str>,
-    /// What set each projected window's horizon, by member and window, beside the projection the member's facts carry,
-    /// so the renewal fact tests that projection against its round's limit.
-    horizon_bounds: BTreeMap<String, BTreeMap<&'static str, HorizonBound>>,
+    /// Each projected window's round limit by window, index `i` for `candidates[i]`, beside the projection the
+    /// member's facts carry, so the renewal fact tests that projection against its round's limit.
+    horizon_bounds: Vec<BTreeMap<&'static str, f64>>,
     /// The mark step 1's heal check or step 4's move cleared, for the outcome and the task's event.
     mark_cleared: Option<MarkClearedFacts>,
     pick: Option<Pick>,
@@ -1704,7 +1695,7 @@ fn run(
             request.fallback_ms,
             request.fast,
         );
-        let (facts, bounds) = candidate_facts(
+        let (facts, limits) = candidate_facts(
             state,
             snapshot,
             pool,
@@ -1716,8 +1707,7 @@ fn run(
             placing_own,
         );
         rec.candidates.push(facts);
-        rec.horizon_bounds
-            .insert(candidate.account_id.clone(), bounds);
+        rec.horizon_bounds.push(limits);
         standing.push(
             Fact::text("standing", found.as_ref().map_or("eligible", obstacle_name))
                 .about(&candidate.account_id),
@@ -2012,8 +2002,7 @@ fn run(
         if let Some(facts) = rec.pin.as_mut() {
             facts.slow_down_until = state
                 .pin_pace(current_key)
-                .and_then(|pace| pace.deadline)
-                .filter(|deadline| *deadline > request.now);
+                .and_then(|pace| pace.standing_deadline(request.now));
         }
         if let Some(candidate) = candidate_in(&eligible, &current.account_id) {
             if let Some(hold) = rewrite_answer(state, pool, request, current, current_key) {
@@ -2699,8 +2688,8 @@ pub(crate) struct Projection {
     /// `demand_shares` under `BurnRead::Demand`.
     pub burn: f64,
     pub horizon: i64,
-    /// What set `horizon`, read by the round's limit, the heal and the renewal summary.
-    pub bound: HorizonBound,
+    /// The line the round, the heal and the renewal summary test `at_horizon` against.
+    pub limit: f64,
     pub at_horizon: f64,
     /// The same burn over `[now, horizon)` as the band weighs it, whose increase `at_horizon` adds.
     pub banded: Banded,
@@ -2735,8 +2724,7 @@ fn in_pool_without<'a>(
 /// the ceiling.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HorizonBound {
-    End,
-    Reset,
+    Wall,
     Span,
 }
 
@@ -2744,7 +2732,7 @@ impl HorizonBound {
     /// The line a projection at a horizon this bound set reads over or under: the wall, 1.0, or the window's ceiling.
     fn limit(self, pool: &PoolRow, window: &str) -> f64 {
         match self {
-            HorizonBound::End | HorizonBound::Reset => 1.0,
+            HorizonBound::Wall => 1.0,
             HorizonBound::Span => ceiling(pool, window),
         }
     }
@@ -2753,8 +2741,8 @@ impl HorizonBound {
 /// The 5-hour horizon is the earlier of the reading's reset (`now + FIVE_HOUR_MS` for a reading past its reset with
 /// none, since the window opens with the next request and runs five hours) and the account's end, the weekly horizon
 /// the earliest of `now + FIVE_HOUR_MS`, the reset and the end. An end at or before `now` makes the horizon `now`. The
-/// bound names which of them set it: an end tied with the reset or the five-hour bound reads `End`, and a weekly reset
-/// tied with the five-hour bound `Reset`, since the tied instant still discards the quota left at it.
+/// bound names which of them set it: an end or a weekly reset tied with the five-hour bound reads `Wall`, since the
+/// tied instant still discards the quota left at it.
 pub(crate) fn horizon_of(
     window: &str,
     reading: &WindowReading,
@@ -2763,11 +2751,11 @@ pub(crate) fn horizon_of(
 ) -> (i64, HorizonBound) {
     let length = now.saturating_add(FIVE_HOUR_MS);
     let (horizon, bound) = match reading.reset {
-        Some(reset) if window == FIVE_HOUR || reset <= length => (reset, HorizonBound::Reset),
+        Some(reset) if window == FIVE_HOUR || reset <= length => (reset, HorizonBound::Wall),
         _ => (length, HorizonBound::Span),
     };
     let (horizon, bound) = match end {
-        Some(end) if end <= horizon => (end, HorizonBound::End),
+        Some(end) if end <= horizon => (end, HorizonBound::Wall),
         _ => (horizon, bound),
     };
     (horizon.max(now), bound)
@@ -2838,13 +2826,19 @@ pub(crate) fn projections_of(
             continue;
         };
         let (horizon, bound) = horizon_of(window, &reading, end, now);
+        // The limit is the one the horizon's bound sets, and the ceiling where the stretch tests the window.
+        let limit = if projection_tested(pool, window) {
+            bound.limit(pool, window)
+        } else {
+            ceiling(pool, window)
+        };
         projections.insert(
             window.to_string(),
             Projection {
                 predicted: reading.utilization,
                 burn: burn.get(window).copied().unwrap_or(0.0),
                 horizon,
-                bound,
+                limit,
                 at_horizon: reading.utilization,
                 banded: Banded::default(),
                 reset: reading.reset,
@@ -3136,13 +3130,7 @@ pub(crate) fn slow_down_of(
         )
     };
     let average_ms = burn_average_ms(pool);
-    let ramp = slow_down_ramp(
-        state.slow_down_in_force(pool, account_id, now),
-        at_ceiling,
-        factor,
-        average_ms,
-        now,
-    );
+    let ramp = slow_down_ramp(state, pool, account_id, factor, now);
     let ramped = 1.0 - (1.0 - factor) * ramp;
     // Every kept pin, each weighted by its own priced burn on the window: a pin without a cycle is never held, but its
     // burn runs at full speed and weighs in the speed the demand divides by.
@@ -3187,20 +3175,23 @@ pub(crate) fn slow_down_of(
 }
 
 /// The share of the slow-down's factor the holds apply at `now`, the ramp's one rule for the selection and the
-/// account's projection: 1 on a window at or past the ceiling, a measured fact and not a projection a burst could
-/// retract, 0 at a factor of 1, which holds nothing, and between them the share of one burn average `average_ms` that
-/// has passed since the span of `entry`, the entry in force, opened, clamped to [0, 1]. A burst of a few minutes whose
-/// demand projects past the ceiling so costs holds in proportion to how long it has stood, and a demand that lasts gets
-/// the full factor once the average has absorbed it. The ramp lives and ends with the span: a return to 1 shorter than
-/// `SLOW_DOWN_WAIT_MS` keeps the span's start and so continues the ramp, a return that lasts the wait closes both, and
-/// the entry of a passed window is not in force, so the ramp restarts with every window.
+/// account's projection: 1 while the account's 5-hour prediction is at or past the pool's ceiling, a measured fact and
+/// not a projection a burst could retract, 0 at a factor of 1, which holds nothing, and between them the share of one
+/// pool burn average that has passed since the span of the account's entry in force opened, clamped to [0, 1]. A burst
+/// of a few minutes whose demand projects past the ceiling so costs holds in proportion to how long it has stood, and a
+/// demand that lasts gets the full factor once the average has absorbed it. The ramp lives and ends with the span: a
+/// return to 1 shorter than `SLOW_DOWN_WAIT_MS` keeps the span's start and so continues the ramp, a return that lasts
+/// the wait closes both, and the entry of a passed window is not in force, so the ramp restarts with every window.
 pub(crate) fn slow_down_ramp(
-    entry: Option<&SlowDownState>,
-    at_ceiling: bool,
+    state: &RoutingState,
+    pool: &PoolRow,
+    account_id: &str,
     factor: f64,
-    average_ms: i64,
     now: i64,
 ) -> f64 {
+    let at_ceiling = state
+        .predicted(account_id, FIVE_HOUR, now)
+        .is_some_and(|reading| reading.utilization >= ceiling(pool, FIVE_HOUR));
     if at_ceiling {
         return 1.0;
     }
@@ -3208,15 +3199,12 @@ pub(crate) fn slow_down_ramp(
         return 0.0;
     }
     // A span whose factor has read 1 for the wait has closed, though the drain that closes it may not have run yet.
-    let stood = entry
-        .filter(|entry| {
-            entry
-                .clear_since
-                .is_none_or(|clear| now - clear < SLOW_DOWN_WAIT_MS)
-        })
+    let stood = state
+        .slow_down_in_force(pool, account_id, now)
+        .filter(|entry| entry.closed_at(now).is_none())
         .and_then(|entry| entry.slowed_since)
         .map_or(0, |since| (now - since).max(0));
-    (stood as f64 / average_ms.max(1) as f64).clamp(0.0, 1.0)
+    (stood as f64 / burn_average_ms(pool).max(1) as f64).clamp(0.0, 1.0)
 }
 
 /// Whether the slow-down may hold this request on a pin whose account is of `kind`: a main or subagent turn, or one
@@ -3344,11 +3332,7 @@ pub(crate) fn fit_of(
     // reads a runway no burn bounds, while the verdict and the rank read every bounded window.
     let mut bounded: Vec<(&str, i64, bool)> = Vec::new();
     let mut shown: Vec<(&str, i64, bool)> = Vec::new();
-    // A shared window the account's newest clean poll lacked has no reading to wait for, so the fit walks the windows
-    // the set holds, as `pin_figures` prices them.
-    for window in
-        plan_windows(&request.canonical_model).filter(|window| state.has_window(candidate, window))
-    {
+    for window in state.plan_windows_held(candidate, &request.canonical_model) {
         let Some(projection) = projections.get(window) else {
             if judge == Judge::Move {
                 unread = true;
@@ -4154,7 +4138,6 @@ fn move_of<'a>(
         young,
         &windows,
         &|window| state.projection_over_since(&pool.id, source, window),
-        burn_average_ms(pool),
         now,
     );
     let mut facts = Vec::new();
@@ -4497,7 +4480,7 @@ fn slow_down_answer(
         return None;
     }
     let pace = state.pin_pace(key)?;
-    let standing = pace.deadline.filter(|deadline| *deadline > request.now);
+    let standing = pace.standing_deadline(request.now);
     let plan = match standing {
         Some(deadline) => HoldPlan {
             until: deadline,
@@ -4815,7 +4798,6 @@ fn trigger_of(
     young: Option<i64>,
     windows: &[&'static str],
     stamp: &dyn Fn(&str) -> Option<i64>,
-    burn_average_ms: i64,
     now: i64,
 ) -> TriggerRead {
     let mut waiting = Vec::new();
@@ -4845,13 +4827,13 @@ fn trigger_of(
                 speed: Some(read.speed),
             });
         }
-        let (projection, limit) = projections
+        let projection = projections
             .get(window)
-            .map(|projection| (projection, projection.bound.limit(pool, window)))
-            .filter(|(projection, limit)| projection.at_horizon > *limit)?;
+            .filter(|projection| projection.at_horizon > projection.limit)?;
+        let limit = projection.limit;
         // The shed rule stamped every window over the ceiling before the test, so a missing stamp starts the wait now.
         let since = stamp(window).unwrap_or(now);
-        let cap = burn_average_ms.saturating_mul(2);
+        let cap = burn_average_ms(pool).saturating_mul(2);
         let wait_ms =
             wall_of(projection, now).map_or(cap, |wall| (wall.saturating_sub(since) / 4).min(cap));
         if now - since < wait_ms {
@@ -4933,7 +4915,7 @@ fn healed(
         now,
         BurnRead::Achieved,
     )?;
-    (projection.at_horizon < projection.bound.limit(pool, window)).then_some(Healed {
+    (projection.at_horizon < projection.limit).then_some(Healed {
         projection: projection.at_horizon,
         stretch_ms: None,
         threshold_ms: None,
@@ -5104,6 +5086,12 @@ fn shed_round(
     };
     // The only place a left-out pin's skip word is written, so the record and the strip read one spelling.
     let mut left_out: Vec<(PinRow, &'static str)> = Vec::new();
+    let mut leave_out =
+        |pins: Vec<(PinRow, Option<f64>)>, word: &'static str, out: &dyn Fn(&PinRow) -> bool| {
+            let (left, kept): (Vec<_>, Vec<_>) = pins.into_iter().partition(|(p, _)| out(p));
+            left_out.extend(left.into_iter().map(|(p, _)| (p, word)));
+            kept
+        };
     if unit == BurnUnit::WindowShare {
         let on_fast_lane = |p: &PinRow| {
             if is_current(p) {
@@ -5112,25 +5100,18 @@ fn shed_round(
                 lane_is_fast(&p.lane)
             }
         };
-        let (fast, kept): (Vec<_>, Vec<_>) = pins.into_iter().partition(|(p, _)| on_fast_lane(p));
-        left_out.extend(fast.into_iter().map(|(p, _)| (p, "fast_lane")));
-        pins = kept;
+        pins = leave_out(pins, "fast_lane", &on_fast_lane);
     }
     // A pin whose model does not draw the trigger's window burns nothing there whatever the pricer answers, since
     // the projection that fired summed the burn of the drawing models alone: it has no share to shed and no place in
     // the last-pin count, so it leaves before the order under both units. A fast-lane pin leaves first, since it has
     // no plan share at all.
     let off_window = |p: &PinRow| !plan_windows(&p.model).any(|window| window == trigger.window);
-    let (off, kept): (Vec<_>, Vec<_>) = pins.into_iter().partition(|(p, _)| off_window(p));
-    left_out.extend(off.into_iter().map(|(p, _)| (p, "off_window")));
-    pins = kept;
+    pins = leave_out(pins, "off_window", &off_window);
     // A pin whose agent ended burns its decayed average and no new turn, so marking it relieves nothing: it leaves
     // before the order and the last-pin count, its pin and cache kept for a respawn. A pin off the window keeps that
     // word whatever its agent did.
-    let (ended, kept): (Vec<_>, Vec<_>) =
-        pins.into_iter().partition(|(p, _)| state.ended(&p.key()));
-    left_out.extend(ended.into_iter().map(|(p, _)| (p, "ended")));
-    pins = kept;
+    pins = leave_out(pins, "ended", &|p: &PinRow| state.ended(&p.key()));
 
     // The walk's figures: each pin's burn on the trigger's window in share per second, `None` for a pin the pricer
     // does not weight, the one case left once the partition above took the pins whose model does not draw the window,
@@ -5365,21 +5346,20 @@ fn shed_round(
                 planned.push(booking);
                 cheapest = Some(position);
                 met = true;
+            } else if burn < SHED_MARK_SHARE * rest {
+                // A pin under the floor relieves too little of the rest to be worth its move, warm or cold, so it
+                // stays.
+                read.skip = Some("sliver");
             } else if burn < rest {
                 // No covering pin has a destination, so the order marks this pin where its own gate finds one. A
-                // covering pin here already reads the `no_runway` its gate found. A pin under the floor relieves too
-                // little of the rest to be worth its move, warm or cold, so it stays.
-                if burn >= SHED_MARK_SHARE * rest {
-                    let (own, booking) = plan_of(p, &planned);
-                    read = own;
-                    if let Some(booking) = booking {
-                        marks.push(Mark { key: p.key() });
-                        destinations[index] = Some(booking.account_id.clone());
-                        removed += burn;
-                        planned.push(booking);
-                    }
-                } else {
-                    read.skip = Some("sliver");
+                // covering pin here already reads the `no_runway` its gate found.
+                let (own, booking) = plan_of(p, &planned);
+                read = own;
+                if let Some(booking) = booking {
+                    marks.push(Mark { key: p.key() });
+                    destinations[index] = Some(booking.account_id.clone());
+                    removed += burn;
+                    planned.push(booking);
                 }
             }
         } else {
@@ -6866,11 +6846,7 @@ fn pin_facts(
         cycle_ms: pace
             .and_then(|p| p.cycle_ms)
             .map(|cycle| cycle.round() as i64),
-        // A deadline at or before the decision stands no longer, as `slow_down_answer` reads it, though it stays on
-        // the pace until the pin lands elsewhere (`put_pin`), the account's 5-hour window resets, or the pin ends.
-        slow_down_until: pace
-            .and_then(|p| p.deadline)
-            .filter(|deadline| *deadline > now),
+        slow_down_until: pace.and_then(|p| p.standing_deadline(now)),
     }
 }
 
@@ -6923,54 +6899,60 @@ fn window_facts(
 }
 
 fn obstacle_facts(obstacle: &Obstacle) -> ObstacleFacts {
-    let (reason, scope, window, until) = match obstacle {
+    let none = ObstacleFacts {
+        name: obstacle_name(obstacle),
+        reason: None,
+        scope: None,
+        window: None,
+        until: None,
+    };
+    match obstacle {
         Obstacle::Cooldown {
             reason,
             until,
             window,
             scope,
-        } => (
-            Some(reason.clone()),
-            Some(scope.to_string()),
-            Some(window.clone()),
-            Some(*until),
-        ),
-        Obstacle::Budget { until, period } => {
-            (Some(period.as_str().to_string()), None, None, Some(*until))
-        }
-        Obstacle::Credits { reason } => (Some(reason.clone()), None, None, None),
-        Obstacle::Overage { until } => (
-            Some("overage".to_string()),
-            None,
-            Some("overage".to_string()),
-            Some(*until),
-        ),
-        Obstacle::Spent { until, window } => (
-            Some("spent".to_string()),
-            None,
-            Some(window.clone()),
-            Some(*until),
-        ),
+        } => ObstacleFacts {
+            reason: Some(reason.clone()),
+            scope: Some(scope.to_string()),
+            window: Some(window.clone()),
+            until: Some(*until),
+            ..none
+        },
+        Obstacle::Budget { until, period } => ObstacleFacts {
+            reason: Some(period.as_str().to_string()),
+            until: Some(*until),
+            ..none
+        },
+        Obstacle::Credits { reason } => ObstacleFacts {
+            reason: Some(reason.clone()),
+            ..none
+        },
+        Obstacle::Overage { until } => ObstacleFacts {
+            reason: Some("overage".to_string()),
+            window: Some("overage".to_string()),
+            until: Some(*until),
+            ..none
+        },
+        Obstacle::Spent { until, window } => ObstacleFacts {
+            reason: Some("spent".to_string()),
+            window: Some(window.clone()),
+            until: Some(*until),
+            ..none
+        },
         Obstacle::Attempted
         | Obstacle::BudgetUnknown
         | Obstacle::Deleted
         | Obstacle::Ended
         | Obstacle::Paused
-        | Obstacle::Unready => (None, None, None, None),
-    };
-    ObstacleFacts {
-        name: obstacle_name(obstacle),
-        reason,
-        scope,
-        window,
-        until,
+        | Obstacle::Unready => none,
     }
 }
 
 /// A member's standing as step 2 reads it, eligible or not: the readings the rules and the pick below weigh. The
 /// tier is the one step 2 can know, with no member kept on extra usage yet. The partition corrects it. `own` is the
 /// request's pin key where its Pace figures are the placement's own, as `choose` reads them, and `None` otherwise.
-/// Beside the facts, what set the horizon of each window they carry a projection of.
+/// Beside the facts, the round's limit on each window they carry a projection of.
 #[allow(clippy::too_many_arguments)]
 fn candidate_facts(
     state: &RoutingState,
@@ -6982,13 +6964,13 @@ fn candidate_facts(
     blocking: Option<&CooldownRow>,
     obstacle: Option<&Obstacle>,
     own: Option<&PinKey>,
-) -> (CandidateFacts, BTreeMap<&'static str, HorizonBound>) {
+) -> (CandidateFacts, BTreeMap<&'static str, f64>) {
     let (now, id) = (request.now, candidate.account_id.as_str());
     let account = snapshot.account(id);
     let kind = account.map(|a| a.kind);
     let sample = state.sample(id);
     let mut windows = BTreeMap::new();
-    let mut bounds = BTreeMap::new();
+    let mut limits = BTreeMap::new();
     let mut burn = BTreeMap::new();
     // A usage-based seat draws no plan window, so its facts list none, its spend window drawn below.
     if kind != Some(AccountKind::ApiKey) && !snapshot.usage_based(id) {
@@ -7033,7 +7015,7 @@ fn candidate_facts(
                 }
                 windows.insert(name, facts);
                 if let Some(projection) = projections.get(name) {
-                    bounds.insert(name, projection.bound);
+                    limits.insert(name, projection.limit);
                 }
             }
         }
@@ -7183,7 +7165,7 @@ fn candidate_facts(
             .slow_down_in_force(pool, id, now)
             .map(|entry| entry.factor),
     };
-    (facts, bounds)
+    (facts, limits)
 }
 
 /// A subscription member's demand on the 5-hour window, share per hour, from the entry standing at step 2: the achieved
@@ -7370,7 +7352,6 @@ fn finish(
     let read = Readings {
         outcome: &outcome,
         request,
-        pool,
         candidates: &candidates,
         walk: &walk,
         pin: pin.as_ref(),
@@ -7427,7 +7408,6 @@ fn finish(
 struct Readings<'r> {
     outcome: &'r Outcome,
     request: &'r SelectRequest,
-    pool: Option<&'r PoolRow>,
     candidates: &'r [CandidateFacts],
     walk: &'r [WalkStep],
     pin: Option<&'r PinFacts>,
@@ -7436,7 +7416,7 @@ struct Readings<'r> {
     pick: Option<&'r Pick>,
     exhaustion: Option<&'r Exhaustion>,
     trigger_windows: &'r [&'static str],
-    horizon_bounds: &'r BTreeMap<String, BTreeMap<&'static str, HorizonBound>>,
+    horizon_bounds: &'r [BTreeMap<&'static str, f64>],
 }
 
 fn summary_fact(key: &'static str, value: FactValue, unit: &'static str) -> SummaryFact {
@@ -7534,53 +7514,24 @@ impl Readings<'_> {
                     (by, self.placement_fact())
                 }
             },
-            // A moved pin's wait for the head of the request that carried the move names its bound, as a reset's
-            // wait names its end.
-            "held"
-                if outcome
-                    .hold
-                    .as_ref()
-                    .is_some_and(|hold| hold.reason == HoldReason::Rewrite) =>
-            {
-                (
-                    by("hold", HoldReason::Rewrite.as_str()),
-                    outcome
-                        .hold
-                        .as_ref()
-                        .and_then(|hold| hold.until)
-                        .map(|until| summary_fact("until", FactValue::Int(until), "time"))
-                        .into_iter()
-                        .collect(),
-                )
-            }
-            // A slowed pin's wait names its end and the factor it was sized under: no slot, pick or reset explains it.
-            "held"
-                if outcome
-                    .hold
-                    .as_ref()
-                    .is_some_and(|hold| hold.reason == HoldReason::SlowDown) =>
-            {
-                (
-                    by("hold", HoldReason::SlowDown.as_str()),
-                    self.slow_down_fact(),
-                )
-            }
-            // A wait for a reset names the wait's end, since no slot and no pick explain it. The end is the later of
-            // the reset and a blocking cooldown's end, so the fact is named for the wait: the walk's `move:spent`
-            // line keeps the reset itself.
-            "held" => match outcome
-                .hold
-                .as_ref()
-                .filter(|hold| hold.reason == HoldReason::Reset)
-            {
-                Some(hold) => (
-                    by("hold", HoldReason::Reset.as_str()),
+            "held" => match outcome.hold.as_ref() {
+                // A wait for a reset names the wait's end, since no slot and no pick explain it. The end is the later
+                // of the reset and a blocking cooldown's end, so the fact is named for the wait: the walk's
+                // `move:spent` line keeps the reset itself. A moved pin's wait for the head of the request that
+                // carried the move names its bound the same way.
+                Some(hold) if matches!(hold.reason, HoldReason::Reset | HoldReason::Rewrite) => (
+                    by("hold", hold.reason.as_str()),
                     hold.until
                         .map(|until| summary_fact("until", FactValue::Int(until), "time"))
                         .into_iter()
                         .collect(),
                 ),
-                None => (
+                // A slowed pin's wait names its end and the factor it was sized under: no slot, pick or reset explains
+                // it.
+                Some(hold) if hold.reason == HoldReason::SlowDown => {
+                    (by("hold", hold.reason.as_str()), self.slow_down_fact())
+                }
+                _ => (
                     by("hold", self.hold_place.unwrap_or("strategy_pick")),
                     self.in_flight_fact(),
                 ),
@@ -7648,20 +7599,17 @@ impl Readings<'_> {
             .account_id
             .as_deref()
             .and_then(|id| self.member(id));
-        if let (Some(pool), Some(member)) = (self.pool, member) {
+        if let Some(member) = member {
             // The windows the round's trigger read, in its order, the first over its round's limit named by its
             // utilization: the trigger's own comparison, strict, so the row never names a window no round would
-            // fire on. The limit is the one the horizon's bound sets, and the ceiling where the stretch tests the
-            // window.
-            let bounds = self.horizon_bounds.get(&member.account_id);
+            // fire on.
+            let limits = self
+                .candidates
+                .iter()
+                .position(|c| c.account_id == member.account_id)
+                .and_then(|i| self.horizon_bounds.get(i));
             for name in self.trigger_windows.iter().copied() {
-                let limit = bounds.and_then(|bounds| bounds.get(name)).map(|bound| {
-                    if projection_tested(pool, name) {
-                        bound.limit(pool, name)
-                    } else {
-                        ceiling(pool, name)
-                    }
-                });
+                let limit = limits.and_then(|limits| limits.get(name)).copied();
                 if let Some(window) = member.windows.get(name).filter(|w| {
                     w.projection
                         .zip(limit)

@@ -5494,8 +5494,7 @@ async fn a_session_row_prices_the_burn_at_the_set_the_pins_last_prompt_selects()
         cache_ttl_ms: 300_000,
         fast,
         classifier: false,
-        turn: true,
-        ended: false,
+        turn_end: phoebis_routing::RenewalEnd::Turn,
     };
     parts.router.report(renewal(true, 60_000)).await;
     parts.router.report(renewal(false, 600)).await;
@@ -5557,8 +5556,7 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
             cache_ttl_ms: 300_000,
             fast: false,
             classifier: false,
-            turn: true,
-            ended: false,
+            turn_end: phoebis_routing::RenewalEnd::Turn,
         })
         .await;
     // A million tokens at the shipped weight 2.2 are 2,200,000 units, over Ultra's 150,000,000 on the 5-hour window,

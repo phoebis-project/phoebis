@@ -2029,8 +2029,8 @@ fn slow_down_view(ctx: &AccountContext, account_id: &str) -> Option<AccountSlowD
     Some(AccountSlowDownView {
         factor: entry.factor,
         speed: entry.speed,
-        since: entry.since,
-        ramp: entry.ramp,
+        since: entry.span.map(|s| s.since),
+        ramp: entry.span.map(|s| s.ramp),
         stretch_ms: entry.stretch_ms,
         threshold_ms: entry.threshold_ms,
         hold_ms: entry.hold_ms,

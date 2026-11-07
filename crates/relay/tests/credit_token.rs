@@ -625,3 +625,122 @@ async fn a_subagents_answer_that_ends_its_turn_leaves_its_pin_out_of_a_round_and
     );
     up.shutdown().await;
 }
+
+/// An answer whose stop reason asks for a tool, which ends no turn's agent.
+fn tool_use_answer() -> Respond {
+    Respond::Json {
+        status: 200,
+        headers: vec![("content-type".into(), "application/json".into())],
+        body: br#"{"id":"msg_tool","type":"message","role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"read","input":{}}],"stop_reason":"tool_use","usage":{"input_tokens":10,"output_tokens":1}}"#.to_vec(),
+    }
+}
+
+#[tokio::test]
+async fn a_probe_that_replays_a_subagents_turn_ends_no_agent_though_its_answer_ends_the_turn() {
+    use phoebis_routing::{
+        burn_average_ms, Report, RouterConfig, SharePricer, UtilizationSample, WindowReading,
+        WindowSource, FIVE_HOUR,
+    };
+    let up = FakeUpstream::start(Vec::new()).await;
+    up.add_credential_rule(A, MESSAGES, end_turn_answer());
+    // Every pin on the tier burns a tenth of the 5-hour window an hour, so each one the round walks is priced.
+    let h = harness_with_router_config(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec::default(),
+        RouterConfig {
+            share: SharePricer::new(|_, _, _, _, _, _| None).with_rate(
+                |window, _, tier, _, _, _| {
+                    (window == FIVE_HOUR && tier == ROUND_TIER).then_some(0.1 / 3_600.0)
+                },
+            ),
+            ..RouterConfig::default()
+        },
+    )
+    .await;
+    h.store
+        .set_profile(
+            "a",
+            "{}",
+            &phoebis_store::SubscriptionRow {
+                tier: Some(ROUND_TIER.into()),
+                ..phoebis_store::SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+    h.router.reload().await.unwrap();
+    let pool = h.store.pool("main").unwrap().expect("the harness pool");
+    // Two burn averages on, so the window's stamp below stands past the trigger's wait at the round.
+    let at = NOW + 2 * burn_average_ms(&pool);
+    h.clock.store(at, Ordering::SeqCst);
+    // s2's main places the pin whose next request runs the round. s1's subagent turn stops for a tool, so its agent
+    // stands, and a keepalive probe then replays that turn and is answered with `end_turn`.
+    let s1 = fresh_session();
+    let s2 = fresh_session();
+    served(&h, classed_turn(&s2, "main", None)).await;
+    served(&h, classed_turn(&s1, "main", None)).await;
+    up.push_credential_rule(A, MESSAGES, tool_use_answer());
+    served(&h, classed_turn(&s1, "subagent", Some("sub"))).await;
+    let mut probe = classed_turn(&s1, "subagent", Some("sub"));
+    probe.headers_mut().remove("authorization");
+    probe
+        .extensions_mut()
+        .remove::<phoebis_relay::OriginalHead>();
+    let resp = h
+        .relay
+        .probe(
+            phoebis_relay::Probe {
+                key_id: "desktop".into(),
+                key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
+            },
+            probe,
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    tokio::time::timeout(Duration::from_secs(5), resp.into_body().collect())
+        .await
+        .expect("the probe's body ends")
+        .unwrap();
+    h.router
+        .report(Report::Sample {
+            account_id: "a".into(),
+            sample: UtilizationSample::default().with(
+                FIVE_HOUR,
+                WindowReading {
+                    utilization: 0.9,
+                    reset: None,
+                    observed_at: at,
+                    source: WindowSource::Poll,
+                    plan: None,
+                    tier: None,
+                },
+            ),
+            incarnation: 1,
+            source_request_id: None,
+        })
+        .await;
+    h.router.samples().await.unwrap();
+    h.router
+        .stamp_projection_over("main", "a", FIVE_HOUR, NOW, None)
+        .await;
+    let mut events = h.router.subscribe_events();
+    served(&h, classed_turn(&s2, "main", None)).await;
+    let seen = router_events_until(&mut events, |event| {
+        matches!(event, RouterEvent::SheddingRound { .. })
+    })
+    .await;
+    let Some(RouterEvent::SheddingRound { round, .. }) = seen.last() else {
+        unreachable!("the wait ends on the round");
+    };
+    let sub = round
+        .pins
+        .iter()
+        .find(|p| p.session_id == s1 && p.agent_id == "sub")
+        .unwrap_or_else(|| panic!("s1's subagent pin is on the account: {round:?}"));
+    assert_ne!(
+        sub.skip,
+        Some("ended"),
+        "a probe replays the turn's class and stop reason, so it ends no agent: {round:?}"
+    );
+    up.shutdown().await;
+}

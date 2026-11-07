@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use phoebis_oauth::{Clock, LandedMark, UsageSnapshot};
 use phoebis_store::{
-    AccountState, CooldownRow, CooldownScope, PinBurn, PinKey, PinRow, PoolRow, RegistryLoad,
-    RekeyWrite, RoutingLoad, RoutingTx, ShedRoundRow, StateCause, Store, StoreError,
+    AccountState, Cancellation, CooldownRow, CooldownScope, PinBurn, PinKey, PinRow, PoolRow,
+    RegistryLoad, RekeyWrite, RoutingLoad, RoutingTx, ShedRoundRow, StateCause, Store, StoreError,
 };
 use tokio::sync::{broadcast, mpsc, oneshot, Notify};
 use tokio::time::Instant;
@@ -80,6 +80,13 @@ struct Invalidated {
     at: i64,
     row: PinRow,
     cause: Option<MoveCause>,
+}
+
+impl Invalidated {
+    /// Whether the entry still stands at `now`, inside `MIGRATION_WINDOW_MS` of its invalidation.
+    fn within(&self, now: i64) -> bool {
+        now - self.at <= MIGRATION_WINDOW_MS
+    }
 }
 
 /// How far apart two readings' resets may lie and still name one reset: a head names its resets in whole seconds and
@@ -575,6 +582,17 @@ pub struct SelectAnswer {
     pub funding_ordinal: Option<u64>,
 }
 
+/// What a renewal's stream end ended, which `Report::PinRenewed` carries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RenewalEnd {
+    /// No turn: a compaction, an auxiliary call (the classifier's among them) or a keepalive probe.
+    NoTurn,
+    /// A `main` or `subagent` turn, whose stream's end is the end of the agent's turn that `latest_turn_pin` answers.
+    Turn,
+    /// A subagent's turn whose answer stopped with `end_turn`: the turn ended and its agent with it.
+    AgentEnded,
+}
+
 /// Every report that names an account names its holder too: an id is reusable, and a report whose
 /// incarnation is not the snapshot account's changes neither memory nor the store.
 #[derive(Clone, Debug)]
@@ -680,13 +698,9 @@ pub enum Report {
         /// False for a classifier call the router answered off, which folds as a standard answer and leaves its body
         /// as the pin's last prompt, the rewrite the pin's next move prices.
         classifier: bool,
-        /// The request's class is a turn's, `main` or `subagent`: its stream's end is the end of the agent's turn,
-        /// which `latest_turn_pin` answers. False for a compaction and every auxiliary call, the classifier's among
-        /// them. A probe that replays such a request carries it too, so the task reads it beside `keepalive`.
-        turn: bool,
-        /// The answer stopped with `end_turn` on a subagent's turn: its agent ended. A probe replays the turn's class,
-        /// so the task reads it beside `keepalive` as it reads `turn`.
-        ended: bool,
+        /// What the stream's end ended, as the relay read it from the request's class, the answer's stop reason and
+        /// whether a keepalive probe sent the request.
+        turn_end: RenewalEnd,
     },
     Sample {
         account_id: String,
@@ -1227,15 +1241,21 @@ pub struct AccountSlowDown {
     pub factor: f64,
     /// The realized speed the demand divides the pins' burn by.
     pub speed: f64,
-    /// When the factor first read under 1 since the span last closed, the instant the ramp grows from, kept through a
-    /// return to 1 shorter than `SLOW_DOWN_WAIT_MS`. `None` outside a span.
-    pub since: Option<i64>,
-    /// The share of the factor the holds apply at the ask's instant, by the selection's own rule, `None` outside a
-    /// span.
-    pub ramp: Option<f64>,
+    /// The span the factor reads under 1 for, `None` outside a span.
+    pub span: Option<SlowDownSpan>,
     pub stretch_ms: i64,
     pub threshold_ms: i64,
     pub hold_ms: i64,
+}
+
+/// An account's open slow-down span as its projection reads it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SlowDownSpan {
+    /// When the factor first read under 1 since the span last closed, the instant the ramp grows from, kept through a
+    /// return to 1 shorter than `SLOW_DOWN_WAIT_MS`.
+    pub since: i64,
+    /// The share of the factor the holds apply at the ask's instant, by the selection's own rule.
+    pub ramp: f64,
 }
 
 /// One plan window of an account's projection: a window the account holds no reading of has none.
@@ -1270,21 +1290,25 @@ pub struct PinStanding {
     pub runway_bounded: Option<bool>,
     /// The window the runway reads, `None` unless it is bounded.
     pub binding: Option<String>,
-    /// The account's factor from the slow-down entry in force, `None` without one.
-    pub factor: Option<f64>,
-    /// The speed the account's holds realized, from the same entry, `None` where `factor` is.
-    pub speed: Option<f64>,
+    /// The account's figures from the slow-down entry in force, `None` without one.
+    pub slow_down: Option<PinSlowDown>,
     /// The pin's cycle from its pace, `None` until two requests of the pin after its placement have measured a gap
     /// under the pool's burn average.
     pub cycle_ms: Option<f64>,
     /// Only auxiliary requests have used the pin since its placement, read from the row.
     pub auxiliary_only: bool,
-    /// The pin's stored effort, `None` for `""`.
-    pub effort: Option<String>,
     /// The first placement of the pin's agent under the key and session, `None` where no record stands.
     pub first_seen_at: Option<i64>,
     /// The first placement of the session's main agent, `None` where main never placed a pin.
     pub session_first_seen_at: Option<i64>,
+}
+
+/// A standing pin's account as the slow-down entry in force reads it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PinSlowDown {
+    pub factor: f64,
+    /// The speed the account's holds realized.
+    pub speed: f64,
 }
 
 #[derive(Clone)]
@@ -2438,9 +2462,6 @@ fn apply_in(tx: &mut RoutingTx<'_>, batch: &[StateWrite]) -> Result<Marks, Store
             } => {
                 tx.delete_window(account_id, window, *incarnation)?;
             }
-            StateWrite::EndPin(key) => {
-                tx.end_pin(key)?;
-            }
             StateWrite::InsertFirstSeen(row) => tx.insert_first_seen(row)?,
             StateWrite::PurgeShedRounds { before } => {
                 tx.purge_shed_rounds_before(*before)?;
@@ -2673,19 +2694,9 @@ fn projections(
                     .map(|entry| AccountSlowDown {
                         factor: entry.factor,
                         speed: entry.speed,
-                        since: entry.slowed_since,
-                        ramp: entry.slowed_since.map(|_| {
-                            let at_ceiling =
-                                state.predicted(account_id, FIVE_HOUR, now).is_some_and(
-                                    |reading| reading.utilization >= ceiling(pool, FIVE_HOUR),
-                                );
-                            slow_down_ramp(
-                                Some(entry),
-                                at_ceiling,
-                                entry.factor,
-                                burn_average_ms(pool),
-                                now,
-                            )
+                        span: entry.slowed_since.map(|since| SlowDownSpan {
+                            since,
+                            ramp: slow_down_ramp(state, pool, account_id, entry.factor, now),
                         }),
                         stretch_ms: entry.stretch_ms,
                         threshold_ms: entry.threshold_ms,
@@ -2713,7 +2724,8 @@ fn projections(
 /// windows there reads the same runway. Each pin reads its account's factor and realized speed from the slow-down entry
 /// in force under that pool, its cycle from its pace, and its agent's and its session's main agent's first placements.
 /// Its burn unit is the selector's read of its account, an overage whose evidence names no reset standing for
-/// `fallback_ms` past its observation.
+/// `fallback_ms` past its observation. The unit and the slow-down entry depend on the account and the pool alone, so
+/// each is read once beside the runway.
 fn pins_standing(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -2721,54 +2733,74 @@ fn pins_standing(
     fallback_ms: i64,
 ) -> Vec<PinStanding> {
     type Runway = Option<(Option<i64>, Option<String>)>;
-    let mut runways: HashMap<(String, String, Vec<&'static str>), Runway> = HashMap::new();
+    type AccountRead = (Runway, BurnUnit, Option<PinSlowDown>);
+    let mut runways: HashMap<(String, String, Vec<&'static str>), AccountRead> = HashMap::new();
     state
         .pins()
         .into_iter()
         .map(|pin| {
             let pool = snapshot.key_pool(&pin.key_id);
             let average_ms = pool.map_or_else(default_burn_average_ms, burn_average_ms);
-            let runway = pool.and_then(|pool| {
-                runways
+            let (runway, burn_unit, slow_down) = match pool {
+                Some(pool) => runways
                     .entry((
                         pool.id.clone(),
                         pin.account_id.clone(),
                         plan_windows(&pin.model).collect(),
                     ))
                     .or_insert_with(|| {
-                        standing_runway(state, snapshot, pool, &pin.account_id, &pin.model, now)
+                        (
+                            standing_runway(
+                                state,
+                                snapshot,
+                                pool,
+                                &pin.account_id,
+                                &pin.model,
+                                now,
+                            ),
+                            burn_unit(state, snapshot, &pin.account_id, now, fallback_ms),
+                            state
+                                .slow_down_in_force(pool, &pin.account_id, now)
+                                .map(|entry| PinSlowDown {
+                                    factor: entry.factor,
+                                    speed: entry.speed,
+                                }),
+                        )
                     })
-                    .clone()
-            });
+                    .clone(),
+                None => (
+                    None,
+                    burn_unit(state, snapshot, &pin.account_id, now, fallback_ms),
+                    None,
+                ),
+            };
             let (runway_ms, runway_bounded, binding) = match runway {
                 None => (None, None, None),
                 Some((runway_ms, binding)) => (runway_ms, Some(runway_ms.is_some()), binding),
             };
-            let slow_down = pool
-                .and_then(|pool| state.slow_down_in_force(pool, &pin.account_id, now))
-                .map(|entry| (entry.factor, entry.speed));
             let cycle_ms = state.pin_pace(&pin.key()).and_then(|pace| pace.cycle_ms);
             let auxiliary_only = state.auxiliary_only(&pin.key());
-            let effort = pin.effort.clone();
             let first_seen_at = state.first_seen(&pin.key_id, &pin.session_id, &pin.agent_id);
             let session_first_seen_at = state.first_seen(&pin.key_id, &pin.session_id, MAIN_AGENT);
-            let burn_unit = burn_unit(state, snapshot, &pin.account_id, now, fallback_ms);
             PinStanding {
                 pin: decayed(pin, now, average_ms),
                 burn_unit,
                 runway_ms,
                 runway_bounded,
                 binding,
-                factor: slow_down.map(|(factor, _)| factor),
-                speed: slow_down.map(|(_, speed)| speed),
+                slow_down,
                 cycle_ms,
                 auxiliary_only,
-                effort,
                 first_seen_at,
                 session_first_seen_at,
             }
         })
         .collect()
+}
+
+/// A duration setting in the milliseconds the state reads, held at `i64::MAX` past it.
+fn saturating_ms(duration: Duration) -> i64 {
+    i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
 }
 
 /// The pin's four burn copies decayed from their last fold to `now`. Every type decays by one factor, as
@@ -3020,7 +3052,7 @@ impl Task {
                     .invalidated
                     .get(&pin_key)
                     .filter(|_| before.is_none())
-                    .filter(|entry| request.now - entry.at <= MIGRATION_WINDOW_MS)
+                    .filter(|entry| entry.within(request.now))
                     .map(|entry| FailedOver {
                         from_account_id: entry.account_id.clone(),
                         reason: entry.reason,
@@ -3067,7 +3099,7 @@ impl Task {
                         match self
                             .invalidated
                             .remove(&pin_key)
-                            .filter(|entry| now - entry.at <= MIGRATION_WINDOW_MS)
+                            .filter(|entry| entry.within(now))
                         {
                             Some(Invalidated {
                                 account_id: from,
@@ -3349,7 +3381,7 @@ impl Task {
                 let gone = self.state.release_session(&key_id, &session_id);
                 // The deletes follow the records memory dropped, not the pins the release took, so a subagent whose
                 // pin sits in a failover gap loses its row too.
-                let deletes = self.first_seen_deletes(&key_id, &session_id, false);
+                let deletes = self.first_seen_deletes(&key_id, &session_id, None);
                 let count = gone.len();
                 let now = (self.clock)();
                 for row in &gone {
@@ -3364,7 +3396,7 @@ impl Task {
                 }
                 self.write(
                     gone.iter()
-                        .map(|row| StateWrite::EndPin(row.key()))
+                        .map(|row| StateWrite::DeletePin(row.key()))
                         .chain(deletes)
                         .collect(),
                 );
@@ -3383,8 +3415,7 @@ impl Task {
             }
             Command::PinsStanding { reply } => {
                 let snapshot = self.snapshot();
-                let fallback_ms =
-                    i64::try_from(self.config.cooldown_fallback.as_millis()).unwrap_or(i64::MAX);
+                let fallback_ms = saturating_ms(self.config.cooldown_fallback);
                 let _ = reply.send(pins_standing(
                     &self.state,
                     &snapshot,
@@ -3394,8 +3425,7 @@ impl Task {
             }
             Command::Projections { pool_id, reply } => {
                 let snapshot = self.snapshot();
-                let fallback_ms =
-                    i64::try_from(self.config.cooldown_fallback.as_millis()).unwrap_or(i64::MAX);
+                let fallback_ms = saturating_ms(self.config.cooldown_fallback);
                 let _ = reply.send(projections(
                     &self.state,
                     &snapshot,
@@ -3579,17 +3609,7 @@ impl Task {
                 agent_id,
             } => {
                 // The companion names no model, so every pin the agent holds under the key and session ends with it.
-                let keys: Vec<PinKey> = self
-                    .state
-                    .pin_rows()
-                    .filter(|p| {
-                        p.key_id == key_id && p.session_id == session_id && p.agent_id == agent_id
-                    })
-                    .map(PinRow::key)
-                    .collect();
-                for key in &keys {
-                    self.state.mark_ended(key);
-                }
+                self.state.mark_agent_ended(&key_id, &session_id, &agent_id);
             }
             Report::MemberSpend(rows) => {
                 let snapshot = self.snapshot();
@@ -3929,8 +3949,7 @@ impl Task {
                 // placement rather than a move away from it.
                 self.state.remove_pin(&key);
                 let now = (self.clock)();
-                let held = self.gapped(&key.key_id, &key.session_id, now);
-                let deletes = self.first_seen_deletes(&key.key_id, &key.session_id, held);
+                let deletes = self.first_seen_deletes(&key.key_id, &key.session_id, Some(now));
                 self.emit(RouterEvent::pin_expired(
                     &key,
                     &current.account_id,
@@ -3941,7 +3960,7 @@ impl Task {
                     self.emit(event);
                 }
                 self.write(
-                    std::iter::once(StateWrite::EndPin(key))
+                    std::iter::once(StateWrite::DeletePin(key))
                         .chain(deletes)
                         .collect(),
                 );
@@ -3954,8 +3973,7 @@ impl Task {
                 cache_ttl_ms,
                 fast,
                 classifier,
-                turn,
-                ended,
+                turn_end,
             } => {
                 let key = self.canonical_pin(&mut pin);
                 if let Some(current) = self.state.pin(&key) {
@@ -3983,8 +4001,8 @@ impl Task {
                         self.state.clear_head_mark_of(&key);
                     }
                     // The agent's end does not hang on the placement that served its last turn, so a pin moved
-                    // since is marked as well. A probe replays a turn and ends no agent.
-                    if ended && !keepalive {
+                    // since is marked as well.
+                    if turn_end == RenewalEnd::AgentEnded {
                         self.state.mark_ended(&key);
                     }
                     let renewed = (same_epoch && !left_lane)
@@ -3994,10 +4012,12 @@ impl Task {
                         renewed.last_used_at = now;
                         renewed.cache_ttl_ms = cache_ttl_ms;
                         // A turn's stream end with its usage is the turn's end a classifier call that follows judges:
-                        // `latest_turn_pin` reads it ahead of the pins' stamps. A probe (which replays a turn's class),
-                        // an auxiliary call on the agent's turn pin (the subagent summary fork among them), a
-                        // compaction and an answer without usage end no turn.
-                        let turn_ended = !keepalive && turn && usage.is_some();
+                        // `latest_turn_pin` reads it ahead of the pins' stamps. An auxiliary call on the agent's turn
+                        // pin (the subagent summary fork among them), a compaction and an answer without usage end no
+                        // turn.
+                        let turn_ended =
+                            matches!(turn_end, RenewalEnd::Turn | RenewalEnd::AgentEnded)
+                                && usage.is_some();
                         if keepalive {
                             // A probe's selection judged nothing, since it replays another request's facts; the
                             // renewal is the refresh it wrote. Its usage is the keepalive's cost, never the
@@ -4323,8 +4343,7 @@ impl Task {
                     credential_generation,
                 ) {
                     if state == AccountState::FundingRequired {
-                        let interval = i64::try_from(self.config.funding_retry.as_millis())
-                            .unwrap_or(i64::MAX);
+                        let interval = saturating_ms(self.config.funding_retry);
                         marked_ordinal = Some(self.state.funding_marked(
                             &account_id,
                             incarnation,
@@ -4542,19 +4561,20 @@ impl Task {
     /// expiry asks before the retain drops the lapsed entries.
     fn gapped(&self, key_id: &str, session_id: &str, now: i64) -> bool {
         self.invalidated.iter().any(|(key, entry)| {
-            key.key_id == key_id
-                && key.session_id == session_id
-                && now - entry.at <= MIGRATION_WINDOW_MS
+            key.key_id == key_id && key.session_id == session_id && entry.within(now)
         })
     }
 
-    /// One delete per first-seen record the session's end dropped from memory, `held` as `end_first_seen` reads it.
+    /// One delete per first-seen record the session's end dropped from memory. The records are held, as
+    /// `end_first_seen` reads it, where a pin of the session sits in a failover gap at `gap_at` (`gapped`), and `None`
+    /// reads no gap.
     fn first_seen_deletes(
         &mut self,
         key_id: &str,
         session_id: &str,
-        held: bool,
+        gap_at: Option<i64>,
     ) -> Vec<StateWrite> {
+        let held = gap_at.is_some_and(|now| self.gapped(key_id, session_id, now));
         self.state
             .end_first_seen(key_id, session_id, held)
             .into_iter()
@@ -4588,8 +4608,7 @@ impl Task {
         // After the takes, so a session whose last pin the purge took ends with it.
         let mut deletes = Vec::new();
         for (row, _) in &purged.pins {
-            let held = self.gapped(&row.key_id, &row.session_id, now);
-            deletes.extend(self.first_seen_deletes(&row.key_id, &row.session_id, held));
+            deletes.extend(self.first_seen_deletes(&row.key_id, &row.session_id, Some(now)));
         }
         self.slow_down_edges(now);
         tracing::debug!(
@@ -4600,7 +4619,7 @@ impl Task {
         );
         let mut lapsed = Vec::new();
         self.invalidated.retain(|key, entry| {
-            let within = now - entry.at <= MIGRATION_WINDOW_MS;
+            let within = entry.within(now);
             if !within {
                 lapsed.push(key.clone());
             }
@@ -4609,8 +4628,7 @@ impl Task {
         // A failover whose landing never came ends its session as an expiry does, unless another of its pins still
         // sits in a gap. The invalidation already took the pin's row, so only the records leave.
         for key in &lapsed {
-            let held = self.gapped(&key.key_id, &key.session_id, now);
-            deletes.extend(self.first_seen_deletes(&key.key_id, &key.session_id, held));
+            deletes.extend(self.first_seen_deletes(&key.key_id, &key.session_id, Some(now)));
         }
         for (account_id, scope) in &purged.cooldowns {
             self.emit(RouterEvent::CooldownCleared {
@@ -4632,7 +4650,7 @@ impl Task {
             if let Some(event) = released_mark(row, now) {
                 self.emit(event);
             }
-            pin_ends.push(StateWrite::EndPin(key));
+            pin_ends.push(StateWrite::DeletePin(key));
         }
         let restored = !std::mem::replace(&mut self.purged, true);
         self.clock_resets(now, restored);
@@ -4969,7 +4987,7 @@ impl Task {
                         pool_id: pool.id.clone(),
                         ends_at,
                         wind_down_minutes: minutes,
-                        end_source: if term.cancellation.stored_pair().0 {
+                        end_source: if matches!(term.cancellation, Cancellation::On { .. }) {
                             "canceled"
                         } else {
                             "trial"
@@ -5271,7 +5289,6 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
             },
             write,
         ),
-        StateWrite::EndPin(ref key) => one(DeferredKey::Pin(key.clone()), write),
         StateWrite::InsertFirstSeen(ref row) => one(
             DeferredKey::FirstSeen(
                 row.key_id.clone(),

@@ -1592,8 +1592,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 cache_ttl_ms: 300_000,
                 fast: false,
                 classifier: false,
-                turn: true,
-                ended: false,
+                turn_end: phoebis_routing::RenewalEnd::Turn,
             })
             .await;
         parts
@@ -1681,8 +1680,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             cache_ttl_ms: 300_000,
             fast: false,
             classifier: false,
-            turn: true,
-            ended: false,
+            turn_end: phoebis_routing::RenewalEnd::Turn,
         })
         .await;
     // The two agents register and each sends one turn, so the keepalive's view carries their recipes and the row lists
