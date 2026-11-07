@@ -928,7 +928,7 @@ async fn the_overview_answers_the_counts_beside_their_caps_and_each_pools_day_an
         "the router-wide count reads the same window"
     );
     // An ended session keeps its entry until the expiry and holds no slot, so the count beside the cap leaves it out.
-    for (event, sequence) in [("session_start", 1), ("session_end", 2)] {
+    let s2 = |event: &str, sequence: u64| {
         parts
             .keepalive
             .apply_event(
@@ -945,7 +945,10 @@ async fn the_overview_answers_the_counts_beside_their_caps_and_each_pools_day_an
                 .unwrap(),
             )
             .unwrap();
-    }
+    };
+    s2("session_start", 1);
+    parts.keepalive.observe(phoebis_bus::Event::RequestObserved(phoebis_bus::RequestObserved { request_id: "r2".into(), origin: phoebis_bus::Origin::Client, kind: phoebis_bus::Kind::Inference, key_id: Some("desktop".into()), key_generation: generation, pool_id: Some("main".into()), session_id: Some("s2".into()), agent_id: Some("main".into()), parent_agent_id: None, owner_id: None, model: "claude-sonnet-5".into(), canonical_model: "claude-sonnet-5".into(), wire_model: "claude-sonnet-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: phoebis_bus::RequestShape::default(), static_hash: None, boundaries: Vec::new().into(), marked: Vec::new().into(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, guardrail_id: None, guardrails: Vec::new(), received_at: now, fallback_digest: None }));
+    s2("session_end", 2);
     assert_eq!(parts.keepalive.stats().sessions, 2, "the ended entry stays");
     let overview = json(get(&parts.app, "/admin/keepalive/overview", Some(&cookie)).await).await;
     assert_eq!(
