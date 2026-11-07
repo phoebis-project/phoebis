@@ -791,7 +791,6 @@ fn settings_view(config: &Config) -> SettingsView {
             .api_prices_path
             .as_ref()
             .map(|p| p.display().to_string()),
-        cooldown_fallback_seconds: config.routing.cooldown_fallback_seconds,
         ledger_path: config.stats.ledger_path.display().to_string(),
         metrics_listen: config.stats.metrics_listen.to_string(),
         proxy_listen: config.proxy.listen.to_string(),

@@ -32,7 +32,7 @@ use phoebis_routing::{
 use phoebis_store::{
     answers_stamp_token, stamp_token, AccountKind, AccountRow, AccountState, ApiKeyRow,
     CooldownRow, CredentialStanding, Identity, NewBundle, PoolMember, PoolRow, Settled, StateCause,
-    StoreError, SubscriptionRow,
+    StoreError,
 };
 use phoebis_transport::response::ResponseHead;
 use serde::Deserialize;
@@ -1480,9 +1480,8 @@ async fn pairing_confirm(
             (row, false)
         }
     };
-    // Committed outside the manager, which still keeps the replaced bundle: the usage service and the catalog
-    // expect no generation, so they would be served it until it neared its expiry.
-    state.manager.invalidate(&row.id);
+    // Dropped at the commit, so a refusal past it leaves no cache serving the replaced bundle.
+    state.drop_credential_caches(&row.id);
     // A row born paired took its profile and state in the create's transaction.
     if !created {
         // Stored now rather than left to the poll, so a freshly paired account shows its plan and start at once
@@ -1516,10 +1515,6 @@ async fn pairing_confirm(
             Err(error) => return unstored(&state, error),
         }
     }
-    state.usage.invalidate(&row.id);
-    // The credential just committed replaces whatever a slot under this id answered before, so the cached
-    // list (if any) is stale from this instant; the next read fetches fresh with the new one.
-    state.catalog.evict(&row.id);
     // The pairing is over, so the account's one-at-a-time slot is handed back. The credential is already
     // committed at this point, so a session that refuses to close costs the account nothing beyond the
     // wait for its own deadline.
@@ -1949,7 +1944,8 @@ pub(crate) struct AccountContext {
     pub extra_polled: Vec<phoebis_ledger::ExtraUsageSampleRecord>,
     /// The newest extra-usage row per account that carries a share, which a later head naming the reset alone lacks.
     pub extra_share: Vec<phoebis_ledger::ExtraUsageSampleRecord>,
-    /// Each account's profile, subscription and term, read once. A row created since reads its own.
+    /// Each account's profile, subscription and term, read once. A row the read lacks, one created since or every row
+    /// after a failed read, reads its own.
     pub extras: BTreeMap<String, phoebis_store::AccountExtras>,
     /// The router's retry instant per `funding_required` account.
     pub funding_retries: BTreeMap<String, i64>,
@@ -2050,15 +2046,28 @@ pub(crate) async fn account_context(state: &AdminState, rows: &[AccountRow]) -> 
     // The projections ask each member's pool, so the registry is read before the join.
     let members = state.store.all_pool_members().unwrap_or_default();
     let extras = match rows {
-        [row] => state
-            .store
-            .account_extras_of(&row.id)
-            .unwrap_or_default()
-            .map(|extras| (row.id.clone(), extras))
-            .into_iter()
-            .collect(),
-        _ => state.store.account_extras().unwrap_or_default(),
+        [row] => state.store.account_extras_of(&row.id).map(|extras| {
+            extras
+                .map(|extras| (row.id.clone(), extras))
+                .into_iter()
+                .collect()
+        }),
+        _ => state.store.account_extras(),
     };
+    // The whole read fails on one row that does not decode, so each account then reads its own and that row alone
+    // answers no profile and no term.
+    let extras = extras.unwrap_or_else(|error| {
+        tracing::warn!(
+            // An `Option` records nothing at `None`, so a list's line names no account.
+            account = match rows {
+                [row] => Some(tracing::field::display(&row.id)),
+                _ => None,
+            },
+            %error,
+            "the account view could not read the stored profiles and terms, so each account reads its own"
+        );
+        BTreeMap::new()
+    });
     let holders: Vec<(&str, u64)> = rows
         .iter()
         .map(|row| (row.id.as_str(), row.incarnation))
@@ -2520,21 +2529,24 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
             )
         })
         .and_then(|attempt| attempt.resolved_at.map(|at| (at, attempt.detail.clone())));
-    let extras = ctx.extras.get(&row.id);
-    let read_profile;
-    let profile = match extras {
-        Some(extras) => extras.profile.as_ref(),
+    // A row the context lacks reads its own and warns nothing, since a failed whole read already warned.
+    let read_extras;
+    let extras = match ctx.extras.get(&row.id) {
+        Some(extras) => extras,
         None => {
-            read_profile = state
+            read_extras = state
                 .store
-                .profile_json(&row.id)
+                .account_extras_of(&row.id)
                 .ok()
                 .flatten()
-                .and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
-            read_profile.as_ref()
+                .unwrap_or_else(|| phoebis_store::AccountExtras {
+                    profile: None,
+                    term: Default::default(),
+                });
+            &read_extras
         }
-    }
-    .map(|p| AccountProfile {
+    };
+    let profile = extras.profile.as_ref().map(|p| AccountProfile {
         billing_type: p["organization"]["billing_type"].clone(),
         display_name: p["account"]["display_name"].clone(),
         has_extra_usage_enabled: p["organization"]["has_extra_usage_enabled"].clone(),
@@ -2543,53 +2555,23 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         plan_display_name: p["organization"]["plan_display_name"].clone(),
         rate_limit_tier: p["organization"]["rate_limit_tier"].clone(),
     });
-    // The stored flag and end read through this alone, with no profile join, so a canceled account answers
-    // them even before it ever pairs.
-    let read_term;
-    let term = match extras {
-        Some(extras) => &extras.term,
-        None => {
-            read_term = state
-                .store
-                .subscription_term(&row.id)
-                .ok()
-                .flatten()
-                .unwrap_or_default();
-            &read_term
-        }
-    };
+    // The stored flag and end read off the term, which needs no profile, so a canceled account answers them even
+    // before it ever pairs.
+    let term = &extras.term;
     let now = (state.clock)();
     let end = phoebis_routing::term::end_of(term, now);
     let (canceled, ends_at) = term.cancellation.stored_pair();
     // Null until the account has paired and a profile document exists, unless the operator has canceled it:
     // a canceled, unpaired OAuth row still has an end to report, so the flag joins `profile.is_some()` here.
-    let subscription = (row.kind == AccountKind::Oauth && (profile.is_some() || canceled))
-        .then(|| match extras {
-            // The extras' term holds the tier, the start and the trial end of the same row.
-            Some(_) => SubscriptionRow {
-                plan: None,
+    let subscription =
+        (row.kind == AccountKind::Oauth && (profile.is_some() || canceled)).then(|| {
+            AccountSubscription {
+                plan: term.plan.clone(),
                 tier: term.tier.clone(),
                 since: term.since,
                 trial_ends_at: term.trial_ends_at,
-            },
-            None => match state.store.subscription(&row.id) {
-                Ok(subscription) => subscription.unwrap_or_default(),
-                Err(error) => {
-                    tracing::warn!(
-                        account = %row.id,
-                        %error,
-                        "the account's tier could not be read, so the view answers as if no subscription were stored"
-                    );
-                    Default::default()
-                }
-            },
-        })
-        .map(|s| AccountSubscription {
-            plan: term.plan.clone(),
-            tier: s.tier,
-            since: s.since,
-            trial_ends_at: s.trial_ends_at,
-            ends_at,
+                ends_at,
+            }
         });
     // The token manager hands out no token for an `oauth` account in either state, and a flagged account's poll is
     // paused and its routing reads it as past its end, so neither the poll nor a request reads the account until it
@@ -2612,9 +2594,10 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         .unwrap_or_default()
         .into_iter()
         .map(|(name, reading, lead)| {
-            let projected = projected_window(ctx, &row.id, &name);
+            let id = account_window_id(&name);
+            let projected = projected_window(ctx, &row.id, id);
             AccountWindow {
-                id: account_window_id(&name).to_string(),
+                id: id.to_string(),
                 utilization: Some(reading.utilization),
                 resets_at: reading.reset,
                 observed_at: reading.observed_at,

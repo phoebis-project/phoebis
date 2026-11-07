@@ -25,9 +25,9 @@ use crate::record::{
     RefusedRequest, ShedRoundFacts,
 };
 use crate::select::{
-    decide, obstacle, pace_of, passes_reset, projection_of, projections_of, release_reasons,
-    routed_agent, slow_down_ramp, BurnRead, Decided, FailedOver, Obstacle, Refusal, SelectRequest,
-    SelectResult, MAIN_AGENT, RATE_LIMIT_REASON,
+    burn_unit, decide, obstacle, pace_of, passes_reset, projection_of, projections_of,
+    release_reasons, routed_agent, slow_down_ramp, BurnRead, Decided, FailedOver, Obstacle,
+    Refusal, SelectRequest, SelectResult, MAIN_AGENT, RATE_LIMIT_REASON,
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, burn_folded, ceiling, default_burn_average_ms,
@@ -404,8 +404,8 @@ pub struct RouterConfig {
     /// The meter's peak band at a renewal's instant: a pin's banded copy folds its tokens times it, the plain
     /// copy does not.
     pub band: BandWeight,
-    /// Dates an overage whose evidence names no reset in a projections answer, as a selection's request carries its
-    /// own copy: the configuration's `routing.cooldown_fallback_seconds`.
+    /// Dates an overage whose evidence names no reset in a projections answer and in the pins' standing, as a
+    /// selection's request carries its own copy: the configuration's `routing.cooldown_fallback_seconds`.
     pub cooldown_fallback: Duration,
     /// The wait before a `funding_required` account is tried again: the shorter of five minutes and the model
     /// rejection interval, which the router computes from its configuration.
@@ -1260,6 +1260,9 @@ pub struct PinStanding {
     /// The pin with its four burn copies decayed with its pool's burn average and `burn_at` the instant they are
     /// decayed to. A pin never folded keeps its burn and its `burn_at` as stored.
     pub pin: PinRow,
+    /// The unit the pin's burn is priced in on its account at the standing's instant, read by the selector's own
+    /// predicate, so a reader of the pin never disagrees with a selection about it.
+    pub burn_unit: BurnUnit,
     pub runway_ms: Option<i64>,
     /// `None` where the pin's account has no projection on any window the model draws (`runway_ms` null too),
     /// `Some(false)` for an unbounded runway, one no burn bounds or one past its window's reset on every window
@@ -2709,7 +2712,14 @@ fn projections(
 /// and set of windows, since the account's projection already holds every pin's burn and every pin drawing those
 /// windows there reads the same runway. Each pin reads its account's factor and realized speed from the slow-down entry
 /// in force under that pool, its cycle from its pace, and its agent's and its session's main agent's first placements.
-fn pins_standing(state: &RoutingState, snapshot: &RegistrySnapshot, now: i64) -> Vec<PinStanding> {
+/// Its burn unit is the selector's read of its account, an overage whose evidence names no reset standing for
+/// `fallback_ms` past its observation.
+fn pins_standing(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    now: i64,
+    fallback_ms: i64,
+) -> Vec<PinStanding> {
     type Runway = Option<(Option<i64>, Option<String>)>;
     let mut runways: HashMap<(String, String, Vec<&'static str>), Runway> = HashMap::new();
     state
@@ -2742,8 +2752,10 @@ fn pins_standing(state: &RoutingState, snapshot: &RegistrySnapshot, now: i64) ->
             let effort = pin.effort.clone();
             let first_seen_at = state.first_seen(&pin.key_id, &pin.session_id, &pin.agent_id);
             let session_first_seen_at = state.first_seen(&pin.key_id, &pin.session_id, MAIN_AGENT);
+            let burn_unit = burn_unit(state, snapshot, &pin.account_id, now, fallback_ms);
             PinStanding {
                 pin: decayed(pin, now, average_ms),
+                burn_unit,
                 runway_ms,
                 runway_bounded,
                 binding,
@@ -3371,7 +3383,14 @@ impl Task {
             }
             Command::PinsStanding { reply } => {
                 let snapshot = self.snapshot();
-                let _ = reply.send(pins_standing(&self.state, &snapshot, (self.clock)()));
+                let fallback_ms =
+                    i64::try_from(self.config.cooldown_fallback.as_millis()).unwrap_or(i64::MAX);
+                let _ = reply.send(pins_standing(
+                    &self.state,
+                    &snapshot,
+                    (self.clock)(),
+                    fallback_ms,
+                ));
             }
             Command::Projections { pool_id, reply } => {
                 let snapshot = self.snapshot();

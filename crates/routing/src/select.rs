@@ -4671,7 +4671,7 @@ fn no_destination(
 
 /// The unit the account's burn is shed in: the plan window's share on a subscription account on plan quota,
 /// dollars on an api_key account, a usage-based seat or one in overage.
-fn burn_unit(
+pub(crate) fn burn_unit(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
     account_id: &str,

@@ -117,13 +117,20 @@ impl AdminState {
     /// lifecycle: the manager's bundle, the catalog's listing, the usage entry and the vault's pairings, each pairing
     /// session canceled with it.
     pub(crate) fn forget_account(&self, id: &str, now: i64) {
-        // The store's write took the bundle outside the manager, so the copy it keeps goes with it.
-        self.manager.invalidate(id);
-        self.catalog.evict(id);
-        self.usage.invalidate(id);
+        self.drop_credential_caches(id);
         for (session_id, owner) in self.vault.discard_for_account(id, now) {
             let _ = self.pairing.cancel(&session_id, &owner, now);
         }
+    }
+
+    /// Drops the caches a committed credential makes stale: the manager's bundle, the catalog's listing and the usage
+    /// entry.
+    pub(crate) fn drop_credential_caches(&self, id: &str) {
+        // The store's write took the bundle outside the manager, whose copy the usage service and the catalog, asking
+        // for no generation, would be served until it neared its expiry.
+        self.manager.invalidate(id);
+        self.catalog.evict(id);
+        self.usage.invalidate(id);
     }
 
     /// The quota poll over the handles this state holds, the ones the scheduler polls through.
@@ -143,9 +150,6 @@ impl AdminState {
 /// at where a credential lives.
 pub struct SettingsView {
     pub api_prices_path: Option<String>,
-    /// Not answered by the settings route: the session route reads it to tell whether a cooldown the upstream gave
-    /// no length for still stands.
-    pub cooldown_fallback_seconds: u64,
     pub ledger_path: String,
     pub metrics_listen: String,
     pub proxy_listen: String,

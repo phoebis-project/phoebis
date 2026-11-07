@@ -52,10 +52,9 @@ pub(crate) struct Session {
     /// The pin's typed burn per hour, decayed to the read with its pool's `burn_average_seconds` as a shedding round
     /// decays it, priced in `burn_unit`: the share of the account's own window `burn_window` names on plan quota,
     /// dollars otherwise, null when the account's tier is unknown, when the model has no weight on the window, or when
-    /// the account tier has no capacity on it. Null as well on a pinned row whose account has left the registry.
+    /// the account tier has no capacity on it.
     pub burn: Option<f64>,
-    /// `window_share` or `usd`, also null when the pin's account has left the registry, with no kind left to pick
-    /// a unit from.
+    /// `window_share` or `usd`, null on an unpinned row.
     #[schema(value_type = Option<String>, example = "window_share")]
     pub burn_unit: Option<BurnUnit>,
     /// `five_hour` where the account's shared window set has it, `seven_day` otherwise, null where `burn_unit` is not
@@ -264,7 +263,6 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         ))
     };
     let now = (state.clock)();
-    let fallback_ms = phoebis_routing::seconds_ms(state.settings.cooldown_fallback_seconds);
     let cutoff = now - state.session_expiry.as_millis() as i64;
     let idle_bound = now
         - state
@@ -320,12 +318,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         ))
     });
     // Each read is a snapshot of its own, so they wait together and their order carries no meaning.
-    let (overages, reported, read) = tokio::join!(
-        state.router.overages(),
-        crate::routes::reported_samples(state),
-        read,
-    );
-    let overages = overages.unwrap_or_default();
+    let (reported, read) = tokio::join!(crate::routes::reported_samples(state), read);
     let (activity, identities, poll) = match read {
         Ok(read) => read,
         Err(e) => return Err(crate::analytics::ledger_failure(e)),
@@ -360,12 +353,10 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
     };
     let pricing = BurnPricing {
         snapshot: &snapshot,
-        overages: &overages,
         reported: &reported,
         rates: &rates,
         tables: &state.tables,
         now,
-        fallback_ms,
     };
     // Every standing carries its session's creation time, an auxiliary-only one and one past the expiry among them,
     // so a row reads it whichever pin, if any, the row shows.
@@ -401,7 +392,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
             continue;
         };
         let p = &standing.pin;
-        let priced = price_pin_burn(p, &pricing);
+        let priced = price_pin_burn(p, standing.burn_unit, &pricing);
         rows.insert(
             key.clone(),
             Session {
@@ -411,7 +402,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                 last_used_at: standings.iter().map(|s| s.pin.last_used_at).max(),
                 pinned: true,
                 burn: priced.burn,
-                burn_unit: priced.unit,
+                burn_unit: Some(standing.burn_unit),
                 burn_window: priced.window.map(String::from),
                 burn_equivalent: priced.equivalent,
                 burn_at: priced.at,
@@ -551,7 +542,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
             .into_iter()
             .map(|standing| {
                 let pin = &standing.pin;
-                let priced = price_pin_burn(pin, &pricing);
+                let priced = price_pin_burn(pin, standing.burn_unit, &pricing);
                 AgentContext {
                     agent_id: pin.agent_id.clone(),
                     model: pin.model.clone(),
@@ -562,7 +553,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                     last_used_at: pin.last_used_at,
                     warm: now - pin.last_used_at < pin.cache_ttl_ms,
                     burn: priced.burn,
-                    burn_unit: priced.unit,
+                    burn_unit: Some(standing.burn_unit),
                     burn_window: priced.window.map(String::from),
                     burn_equivalent: priced.equivalent,
                     burn_at: priced.at,
@@ -644,55 +635,41 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
 /// What every pin's burn is priced through, read once per request.
 struct BurnPricing<'a> {
     snapshot: &'a phoebis_routing::RegistrySnapshot,
-    overages: &'a [(String, phoebis_routing::OverageEvidence)],
     reported: &'a std::collections::BTreeMap<String, phoebis_routing::UtilizationSample>,
     rates: &'a BurnRates,
     tables: &'a phoebis_ledger::PlanTables,
     now: i64,
-    fallback_ms: i64,
 }
 
 /// The pin's burn per hour in its unit, its window, its Pro-week figure and the instant it is decayed to, priced on the
 /// account the pin sits on: the figures the row carries for its display pin and a line for its own.
 struct PricedBurn {
     burn: Option<f64>,
-    unit: Option<BurnUnit>,
     window: Option<&'static str>,
     equivalent: Option<f64>,
     at: Option<i64>,
 }
 
 /// Prices the row's display pin and each line's pin alike, so a row and its display pin's line answer the same figures.
-fn price_pin_burn(p: &phoebis_store::PinRow, pricing: &BurnPricing) -> PricedBurn {
+/// The unit is the pin's standing's, which the router reads through the selector's own predicate, so a row or a line
+/// never disagrees with the selector.
+fn price_pin_burn(p: &phoebis_store::PinRow, unit: BurnUnit, pricing: &BurnPricing) -> PricedBurn {
     let BurnPricing {
         snapshot,
-        overages,
         reported,
         rates,
         tables,
         now,
-        fallback_ms,
     } = *pricing;
-    // The unit a reader takes for `burn`, the account's kind, its class and whether its overage evidence stands now:
-    // the same predicate every reader of it applies, so a row or a line never disagrees with the selector. A pin whose
-    // account left the registry has no kind to pick a unit from, so the unit, the burn, the window and the Pro-week
-    // figure read null rather than guessing one.
-    let unit = snapshot.account(&p.account_id).map(|a| a.kind).map(|kind| {
-        let in_overage = overages
-            .iter()
-            .any(|(id, e)| *id == p.account_id && e.stands(now, fallback_ms));
-        BurnUnit::of(kind, snapshot.usage_based(&p.account_id), in_overage)
-    });
     let (burn, window, equivalent) = match unit {
-        None => (None, None, None),
-        Some(BurnUnit::Usd) => (
+        BurnUnit::Usd => (
             rates
                 .price_pin(BurnUnit::Usd, p, FIVE_HOUR)
                 .map(|b| b * 3_600.0),
             None,
             None,
         ),
-        Some(BurnUnit::WindowShare) => {
+        BurnUnit::WindowShare => {
             let window = if reported
                 .get(&p.account_id)
                 .is_none_or(|sample| sample.has_window(FIVE_HOUR))
@@ -721,7 +698,6 @@ fn price_pin_burn(p: &phoebis_store::PinRow, pricing: &BurnPricing) -> PricedBur
     };
     PricedBurn {
         burn,
-        unit,
         window,
         equivalent,
         at: p.burn_at,

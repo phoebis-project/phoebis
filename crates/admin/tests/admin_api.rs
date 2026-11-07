@@ -5382,6 +5382,33 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
         "a passed reset reads as not in overage, so the reading returns to the share: {}",
         row(&recovered_sessions, "s1")
     );
+    // Evidence that names no reset stands for the cooldown fallback past its observation, the harness's 60 seconds,
+    // so read at the instant it was observed it moves the reading to dollars as a reset ahead does. The clock steps
+    // first, since the evidence lands only over the newer report above.
+    common::step(&parts, std::time::Duration::from_secs(10));
+    parts
+        .router
+        .report(phoebis_routing::Report::Overage {
+            account_id: "business".into(),
+            evidence: phoebis_routing::OverageEvidence {
+                in_use: true,
+                since: Some(now - 3_600_000),
+                reset: None,
+                observed_at: now + 10_000,
+                source: phoebis_routing::EvidenceSource::Head,
+                incarnation: 1,
+            },
+            incarnation: 1,
+        })
+        .await;
+    wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
+        v["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["session_id"] == "s1" && r["burn_unit"] == "usd")
+    })
+    .await;
 }
 
 #[tokio::test]

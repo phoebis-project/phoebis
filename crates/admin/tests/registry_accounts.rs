@@ -2400,8 +2400,9 @@ async fn an_edit_whose_account_is_replaced_while_its_key_is_verified_is_refused_
     );
 }
 
-/// A tier the store cannot read leaves the account view answering as it does for an account with none stored, and the
-/// log says why, naming the account and the error, on every read.
+/// A tier column the store cannot read fails the account's one extras read whole, so the account view answers as for an
+/// account with no profile and no subscription stored, and the log says why, naming the account and the error, on every
+/// read.
 #[tokio::test]
 async fn the_account_view_warns_on_a_tier_it_cannot_read_and_answers_as_if_no_subscription_were_stored(
 ) {
@@ -2425,7 +2426,7 @@ async fn the_account_view_warns_on_a_tier_it_cannot_read_and_answers_as_if_no_su
             },
         )
         .unwrap();
-    // The tier read names the column, as the stored term's read does.
+    // The account's extras read names the column, so the rename fails it.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(
         "ALTER TABLE accounts RENAME COLUMN subscription_tier TO subscription_tier_held;",
@@ -2442,10 +2443,17 @@ async fn the_account_view_warns_on_a_tier_it_cannot_read_and_answers_as_if_no_su
     let _guard = tracing::subscriber::set_default(subscriber);
     let viewed = get(&parts.app, "/admin/accounts/business", Some(&cookie)).await;
     assert_eq!(viewed.status(), 200);
+    let viewed = json(viewed).await;
     assert_eq!(
-        json(viewed).await["subscription"],
-        serde_json::json!({"plan": null, "tier": null, "since": null, "trial_ends_at": null, "ends_at": null}),
-        "the view answers as for an account with no subscription stored"
+        viewed["subscription"],
+        serde_json::Value::Null,
+        "the one extras read fails whole on the column, so the view answers as for an account with no subscription \
+         stored"
+    );
+    assert_eq!(
+        viewed["profile"],
+        serde_json::Value::Null,
+        "the one extras read fails whole on the column, so the view answers as for an account with no profile stored"
     );
     let text = captured.text();
     let warned: Vec<&str> = text

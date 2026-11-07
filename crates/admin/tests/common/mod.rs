@@ -1247,7 +1247,6 @@ async fn build_app_bounded(
     });
     let settings = Arc::new(SettingsView {
         api_prices_path: None,
-        cooldown_fallback_seconds: 60,
         ledger_path: "test".into(),
         metrics_listen: "127.0.0.1:9464".into(),
         proxy_listen: "test".into(),
