@@ -1191,7 +1191,7 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   // The Keepalive engine block reads the mock's keepalive overview (`KEEPALIVE_OVERVIEW` in mock/operations.ts): the 18
   // sessions the engine holds and its 32 agent records, one per recipe the story writes, against the bootstrap file's
   // caps of 128 and 1,024, the retained prompts hand-set at 92 percent of 256 MiB, the day's probes `PROBES_24H` (225
-  // ok of 295), the 51 expiries between turns the ledger rows of the day hold and the three bus gaps, the last two
+  // ok of 295), the 52 expiries between turns the ledger rows of the day hold and the three bus gaps, the last two
   // hours back. Two of the seeded pools keep caches warm (`all` and `work` in mock/pools.ts), so the expired part takes
   // the warning ink, and with every pool's policy off it takes none. The last gap is inside the day, so the bus gaps
   // part takes the warning ink with that gap's instant on its hover. The card is read at the story's own instant, which
@@ -1226,9 +1226,9 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
       ['Retained', '235.5 MiB of 256 MiB', null],
     ],
     heads: ['Keepalive engine', 'Cache probes, 24h'],
-    line: 'expired between turns 51 · bus gaps 3',
+    line: 'expired between turns 52 · bus gaps 3',
     parts: [
-      { text: 'expired between turns 51', title: null, warning: true },
+      { text: 'expired between turns 52', title: null, warning: true },
       { text: 'bus gaps 3', title: `The last gap was 2h ago, at ${fmtAbsolute(overview.lastBusGapAt)}.`, warning: true },
     ],
     probes: '225 ok (76%) of 295',
@@ -18439,8 +18439,9 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
   // key's Failed leaves them out, as the Traffic line does. Laptop's Failed and the line's errors count the two rows
   // the router's own stop cut, `req_7a2c4e91-d03` and `req_c58d1f3a-e67`, and the line's requests the tie's failover
   // `req_8c41f2d7-a93`, which answered on its second attempt, the contract seat's three rows on fleet, the approved
-  // Ultra's two rows on bench, the four turns of the desktop session the mod ended, story 4's Explore turn and the
-  // classifier call that ran on nightly, `req_7c2e9f41-d03`, each answered.
+  // Ultra's two rows on bench, the four turns of the desktop session the mod ended, story 4's Explore turn, the
+  // classifier call that ran on nightly, `req_7c2e9f41-d03`, and the held conversation's turn that replaced its expired
+  // row, `req_6f3e1b84-d29`, each answered.
   const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Refusals by code');
   const codes = [...(card?.querySelectorAll('.hbars li') ?? [])].map((li) => [li.querySelector('.mono')?.textContent?.trim(), li.querySelector('.num')?.firstChild?.textContent?.trim()]);
   const table = [...m.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Traffic by key');
@@ -18453,7 +18454,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
     ok:
       JSON.stringify(keys) === JSON.stringify([['desktop', '15', '3'], ['ci', '1', '3'], ['laptop', '6', '2']]) &&
       JSON.stringify(codes) === JSON.stringify([['guardrail_blocked', '3'], ['client_not_allowed', '2'], ['auth_unknown', '1'], ['client_contract', '1'], ['client_drift', '1']]) &&
-      line === '225 requests, 16.4% errors',
+      line === '226 requests, 16.4% errors',
     missing: [JSON.stringify(keys), JSON.stringify(codes), line ?? 'no line'],
   });
 }
@@ -20680,7 +20681,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
 
     await groupBy('Classifier');
     const classifiers = trafficRows('classifier').map((row) => row[0]);
-    // The story's classifier calls (`mock/requests.ts`): two on the judged turn's account and one off it.
+    // The story's classifier calls (`mock/requests.ts`): two on the judged turn's account, one with no turn to judge.
     results.push({ name: "/analytics the page groups by classifier, the client's classifier calls as client or client_off and every other request as none", ok: JSON.stringify([...classifiers].sort()) === JSON.stringify(['client', 'client_off', 'none']), missing: classifiers });
 
     await groupBy('User agent');

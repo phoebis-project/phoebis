@@ -1154,6 +1154,20 @@ function pinStepOf(spec: Spec, pool: PoolSeed, pinKey: string): { pin: RecordPin
   const held = pins.get(pinKey);
   if (typeof spec.pin === 'string' && spec.pin !== 'none') return { pin: null, pinReason: spec.pin, steps: spec.kind === 'refused' ? [] : [step('pin', 'none', [fact('reason', spec.pin)])] };
   if (spec.pin === 'none') {
+    // A first placement that replaced the session's row reads the row the purge had not yet taken, idle past the
+    // pool's window, with the reasons its release names. The engine writes no warmth and no mark for a row it releases.
+    const expired = spec.kind === 'placed' && spec.attempt === 1 && spec.from !== undefined && held?.accountId === spec.from ? held : undefined;
+    if (expired) {
+      const idleMs = spec.at - expired.lastUsedAt;
+      const reasons = REQUEST_EVENTS.get(r.id)?.find((e) => e.kind === 'pin_expired')?.detail?.reasons;
+      const pin: RecordPin = {
+        accountId: expired.accountId, createdAt: iso(expired.createdAt), cycleMs: null, epoch: expired.epoch, found: 'expired_idle', idleMs, incarnation: 1, lane: laneOf(r), lastRefreshAt: iso(expired.lastRefreshAt), lastUsedAt: iso(expired.lastUsedAt),
+        marked: false, markedAt: null, markedOn: null, markedWindow: null, refreshAgeMs: spec.at - expired.lastRefreshAt, released: Array.isArray(reasons) ? reasons.map(String) : [],
+        shed: expired.shed === null ? null : { at: iso(expired.shed.at), from: expired.shed.from, reason: expired.shed.reason }, slowDownUntil: null, warmth: null, warmthCause: null,
+      };
+      const facts = [fact('found', 'expired_idle'), fact('account_id', expired.accountId, null, expired.accountId), fact('epoch', expired.epoch, 'count'), fact('idle_ms', idleMs, 'ms'), fact('refresh_age_ms', spec.at - expired.lastRefreshAt, 'ms')];
+      return { pin, pinReason: null, steps: [step('pin', 'none', facts)] };
+    }
     const pin: RecordPin = { accountId: null, createdAt: null, cycleMs: null, epoch: null, found: 'none', idleMs: null, incarnation: null, lane: null, lastRefreshAt: null, lastUsedAt: null, marked: false, markedAt: null, markedOn: null, markedWindow: null, refreshAgeMs: null, released: [], shed: null, slowDownUntil: null, warmth: null, warmthCause: null };
     return { pin, pinReason: null, steps: [step('pin', 'none', [fact('found', 'none')])] };
   }

@@ -996,8 +996,8 @@ interface StorySeed {
    * A story row the routing log derives its records for, as it does a drawn row's, that takes no draw from the streams
    * the drawn rows read and none of the events the story seats on a drawn row, so it keeps its written class and
    * instants and every drawn figure stays where it was: the contract seat's rows on fleet, the approved Ultra's rows on
-   * bench, the last turns of the desktop session the mod ended, the one turn of story 4's Explore subagent and the
-   * classifier call that ran off its judged turn's account.
+   * bench, the last turns of the desktop session the mod ended, the one turn of story 4's Explore subagent, the
+   * classifier call that found no turn to judge and the turn whose placement replaced an expired row.
    */
   unseeded?: true;
   usage?: Partial<Usage>;
@@ -1056,6 +1056,13 @@ const IDLE_NOTEBOOK_SESSION_ID = '2d8b5f1a-7c4e-4e92-b6a3-8f0d1c9e5a47';
 const IDLE_NOTEBOOK_REQUEST_ID = 'req_3c8e1f7a-b29';
 /** The desktop session the 5-hour 429 on secondary fails over to primary. */
 const FAILED_OVER_SESSION_ID = 'd6f1a3c8-2e94-4b07-8a5d-3c9e7f2b1a64';
+/** The conversation the 429 held on nightly for its reset at 13:11. */
+const RESET_HELD_SESSION_ID = 'f19a6c2e-8b4d-4e73-a5c0-3d2b7e1f9a08';
+/**
+ * That conversation's next turn, whose placement finds its row on nightly idle past all's window and not yet purged.
+ * The story writes it by hand, since no drawn turn's idle gap falls inside the purge's minute past its pool's window.
+ */
+const REPLACED_PIN_ID = 'req_6f3e1b84-d29';
 /** The laptop session of the relay's 502 and the client's retry of that turn. */
 export const CLIENT_SESSION_ID = '7d3e1c20-5b4a-4e8f-9c61-0a2b3c4d5e6f';
 /** The desktop session the mod released whole after its one turn, written out as its row lists past the drawn ids. */
@@ -1397,7 +1404,7 @@ function storySeeds(): StorySeed[] {
       keyId: 'desktop',
       model: 'claude-sonnet-5-5',
       requestClass: 'main',
-      session: 'f19a6c2e-8b4d-4e73-a5c0-3d2b7e1f9a08',
+      session: RESET_HELD_SESSION_ID,
       usage: { cacheWrite1h: 41_200, input: 1_800, output: 1_350 },
     },
     // Two turns of nightly's Fable session in the morning, before its overage: the first places the session, and the
@@ -1544,11 +1551,17 @@ function storySeeds(): StorySeed[] {
     // as an earlier agent. It reads a cached prefix, so it counts as no miss between turns. Last, so every seed above
     // keeps the upstream ids it draws.
     { agentId: '0b7f', at: NOW - 40 * MINUTE, attempts: [{ accountId: 'nightly', at: NOW - 40 * MINUTE, ms: 3_600, status: 200 }], id: 'req_0b7f2c58-e43', keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'subagent', session: '89cd1c92', unseeded: true, usage: { cacheRead: 11_800, input: 600, output: 190 } },
-    // A classifier call judging a tool call of the laptop turn primary served at 07:48:10, whose attempt ran on nightly,
-    // off the account the judged turn's stream ended on, so it prices from its usage on nightly's plan, before nightly's
-    // overage, as any request does. It sits below the laptop rows a first page of 25 lists, whose last holds the newest
-    // cut answer. Last, so every seed above keeps the upstream ids it draws.
-    { agentId: 'main', at: t(7, 48, 14), attempts: [{ accountId: 'nightly', at: t(7, 48, 14), ms: 1_400, status: 200 }], classifier: 'client_off', id: 'req_7c2e9f41-d03', keyId: 'laptop', model: 'claude-sonnet-5', requestClass: 'auxiliary', session: 'c52dbc8e', unseeded: true, usage: { input: 3_600, output: 22 } },
+    // A classifier call of the laptop session the router's stop cut at 06:11:58, sent 12 s after the restart at
+    // 06:12:40: the restart took the session's turns out of the router's memory, so the call finds no turn to judge
+    // and lands where the strategy picks, nightly, pricing from its usage on nightly's plan before nightly's overage.
+    // It sits below the laptop rows a first page of 25 lists, whose last holds the newest cut answer. Last, so every
+    // seed above keeps the upstream ids it draws.
+    { agentId: 'main', at: t(6, 12, 52), attempts: [{ accountId: 'nightly', at: t(6, 12, 52), ms: 1_400, status: 200 }], classifier: 'client_off', id: 'req_7c2e9f41-d03', keyId: 'laptop', model: 'claude-sonnet-5', requestClass: 'auxiliary', session: '4ef130f1', unseeded: true, usage: { input: 3_600, output: 22 } },
+    // The held conversation's next turn, 630 s after its turn on nightly ended at 13:11:09 and 639 s after that turn
+    // last used the row, inside the purge's minute past all's 600 s: the placement finds the row expired, releases it
+    // and lands on primary, which holds its plan tier while nightly runs in overage, writing the conversation's prefix
+    // there afresh. Last, so every seed above keeps the upstream ids it draws.
+    { agentId: 'main', at: t(13, 21, 39), attempts: [{ accountId: 'primary', at: t(13, 21, 39), ms: 6_800, status: 200 }], id: REPLACED_PIN_ID, keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: RESET_HELD_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 42_600, input: 1_500, output: 900 } },
   ];
 }
 const storyRequests = () => storySeeds().map(storyRow);
@@ -1837,6 +1850,9 @@ function storyEvents(): Map<string, RequestEvent[]> {
   moved(TIE_STORY_ID, clock(8, 16, 21), 'overflow', 'primary', 'cooldown');
   moved('req_868264bc-611', clock(11, 8, 30), 'secondary', 'primary', 'shed');
   moved(FORCED_MOVE_ID, clock(11, 1, 50), 'overflow', 'nightly', 'return_to_plan');
+  // The placement's release of the expired row on nightly, which it writes before the pin it creates.
+  const replaced = requestById.get(REPLACED_PIN_ID);
+  if (replaced) out.set(replaced.id, [{ accountId: 'nightly', at: replaced.at, detail: { agent_id: replaced.agentId, reasons: ['expired'] }, keyId: replaced.keyId, kind: 'pin_expired', model: replaced.canonicalModel, sessionId: replaced.sessionId }]);
   const rejected = requestById.get('req_2e7c90a1-6d4');
   if (rejected) {
     const pin = { keyId: rejected.keyId, model: rejected.canonicalModel, sessionId: rejected.sessionId };
@@ -1920,25 +1936,6 @@ function addStoryEvents() {
     REQUEST_EVENTS.set(r.id, [next(r, from)]);
     busy.add(pinOf(r));
     owed.shift();
-  }
-}
-
-/**
- * The day's one placement that replaced a pin its selection found expired: the oldest drawn turn whose pin's last turn
- * ran on another account, with no event of its own, writes the expiry on that account at its instant, before the pin
- * its placement creates, as the router writes the pair, so its decision names the account the pin left. No draw, so
- * every row keeps its draws.
- */
-function addReplacedPin() {
-  const lastOn = new Map<string, string>();
-  for (const r of [...REQUESTS].reverse()) {
-    if (r.accountId === null || r.sessionId === null || r.kind !== 'inference') continue;
-    const key = `${r.keyId}|${r.sessionId}|${r.agentId}|${r.canonicalModel}`;
-    const before = lastOn.get(key);
-    lastOn.set(key, r.accountId);
-    if (before === undefined || before === r.accountId || r.attempts.length !== 1 || r.status !== 200 || REQUEST_EVENTS.has(r.id) || STORY_IDS.has(r.id) || UNSEEDED_IDS.has(r.id)) continue;
-    REQUEST_EVENTS.set(r.id, [{ accountId: before, at: r.at, detail: { agent_id: r.agentId, reasons: ['expired'] }, keyId: r.keyId, kind: 'pin_expired', model: r.canonicalModel, sessionId: r.sessionId }]);
-    return;
   }
 }
 
@@ -2205,7 +2202,6 @@ function phaseRequests() {
 }
 
 addStoryEvents();
-addReplacedPin();
 traceRequests();
 seedDrawerBranches();
 seedHolds();
