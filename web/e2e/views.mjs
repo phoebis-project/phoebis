@@ -1001,9 +1001,11 @@ const REQUESTS_TITLE = 'Requests the router asked an account for. The refused re
 /**
  * The Dashboard's tile words beside their neighbors: the Estimated cost, 24h tile's figure and note under native and
  * the Ultra week, the pass's defaults, its subscription line reading that week (`{share} of an Ultra week`, or `0%` on
- * a day without subscription cost) over its word, or the dash under the unpriced title on a day a request priced
- * nothing on, as the story's day holds a Sonnet 4.5 request, and its note a figure per hour, and the Refused, 24h
- * tile's hover naming the router's own refusals beside the Requests, 24h tile's hover, the two labels in one type.
+ * a day with plan rows and no subscription cost) over its word, or the dash under the unpriced title on a day a
+ * request priced nothing on, as the mock story's day holds a Sonnet 4.5 request, or the billed line alone on a day
+ * an API-key account served every request of, as the router story's day is, since a zero plan side reads as no
+ * plan rows, and its note a figure per hour, and the Refused, 24h tile's hover naming the router's own refusals
+ * beside the Requests, 24h tile's hover, the two labels in one type.
  */
 async function dashboardTileWords(theme) {
   const say = (what) => failures.push(`${theme} /: ${what}`);
@@ -1027,9 +1029,12 @@ async function dashboardTileWords(theme) {
   });
   measurements.push(`${theme} / Dashboard tile words ${JSON.stringify(read)}`);
   const subscription = read.cost.lines.find(([, word]) => word === 'subscription');
-  if (subscription?.[0] === '-') {
+  const billed = read.cost.lines.find(([, word]) => word === 'billed');
+  if (subscription === undefined) {
+    if (billed === undefined) say(`the Estimated cost, 24h tile reads ${JSON.stringify(read.cost.lines)}, neither a subscription line nor the billed line alone`);
+  } else if (subscription[0] === '-') {
     if (read.cost.title !== UNPRICED_TITLE) say(`the Estimated cost, 24h tile's subscription dash is titled ${JSON.stringify(read.cost.title)}, not the unpriced title`);
-  } else if (!/^(\d[\d.]*% of an Ultra week|0%)$/.test(subscription?.[0] ?? '')) say(`the Estimated cost, 24h tile's subscription line reads ${JSON.stringify(subscription ?? null)}, not a share of an Ultra week, 0% or the unpriced dash`);
+  } else if (!/^(\d[\d.]*% of an Ultra week|0%)$/.test(subscription[0])) say(`the Estimated cost, 24h tile's subscription line reads ${JSON.stringify(subscription)}, not a share of an Ultra week, 0% or the unpriced dash`);
   if (!/^(\d[\d.]*% of an Ultra week|0%|-|\$[\d,.]+ billed) per hour$/.test(read.cost.note ?? '')) say(`the Estimated cost, 24h tile's note reads ${JSON.stringify(read.cost.note)}`);
   if (read.refused.title !== REFUSED_TITLE) say(`the Refused, 24h tile's hover reads ${JSON.stringify(read.refused.title)}`);
   if (read.requests.title !== REQUESTS_TITLE) say(`the Requests, 24h tile's hover reads ${JSON.stringify(read.requests.title)}`);
