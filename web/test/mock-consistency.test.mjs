@@ -3578,7 +3578,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
 
   // The route's own fixture, `analytics_refusal_categories`, comes with the admin capture, and from then on the sync
   // test reads this answer against it.
-  test(`the story's refused answers fall under two categories and one with none across two sessions, each a request that succeeded, and the refusal route counts them by category, at ${at}`, async () => {
+  test(`the story's refused answers fall under two categories and one with none across two sessions, each a request that succeeded, and the refusal route counts them by model and category, at ${at}`, async () => {
     const s = await story;
     const served = (r) => r.attempts.at(-1)?.response ?? null;
     const word = (r) => served(r).refusalCategory ?? '-';

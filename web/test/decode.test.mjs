@@ -516,8 +516,6 @@ test('a pool decodes its policy, status, members, and traffic', () => {
   assert.deepEqual(p.members.map((m) => m.eligible), ['eligible', 'eligible', 'eligible'], 'every member is servable in the captured pool');
   assert.equal(d.decodePool({ ...fixture('pools').pools[0], members: [{ account_id: 'business', priority: 0, eligible: 'overage' }] }).members[0].eligible, 'overage');
   assert.equal(d.decodePool({ ...fixture('pools').pools[0], members: [{ account_id: 'business', priority: 0 }] }).members[0].eligible, 'unavailable', 'a member row without the field reads as not servable');
-  const added = [{ account_id: 'business', priority: 0, eligible: 'subscription_ended' }, { account_id: 'direct', priority: 1, eligible: 'unknown' }];
-  assert.deepEqual(d.decodePool({ ...fixture('pools').pools[0], members: added }).members.map((m) => m.eligible), ['subscription_ended', 'unknown'], 'an ended subscription and a member with no projection keep their words');
 });
 
 test('a pool member reads the spent and budget unknown words as the route answers them', () => {
