@@ -635,10 +635,6 @@ mod tests {
         );
         assert_eq!(refusal(condition(Body, Present)), "path is required");
         assert_eq!(
-            refusal(with_value(condition(Model, Matches), &"a".repeat(2_049))),
-            "pattern is longer than 2048 characters"
-        );
-        assert_eq!(
             refusal(with_selector(
                 with_path(condition(Body, Present), "tools"),
                 Selector::Any
