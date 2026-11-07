@@ -50,17 +50,17 @@
           }
         ],
         "usage_7d": {
-          "billed_usd": 0.014250000000000002,
-          "cost_usd": 0.0498,
+          "billed_usd": 0.0178,
+          "cost_usd": 0.06055,
           "equivalent": null,
-          "requests": 14,
-          "tokens": 27000
+          "requests": 17,
+          "tokens": 32400
         },
         "lifetime": {
-          "billed_usd": 0.014250000000000002,
-          "cost_usd": 0.0498,
+          "billed_usd": 0.0178,
+          "cost_usd": 0.06055,
           "equivalent": null,
-          "requests": 14
+          "requests": 17
         }
       }
     ]
