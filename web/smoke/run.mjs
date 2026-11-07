@@ -763,12 +763,12 @@ await forView('/', async () => {
       ['accounts: ["primary"]', 'rounds: 1', 'setting: ["window_ceiling"]', 'setting_values: {"window_ceiling":0.75}'],
     ],
     // Studio's two slow-down spans in work: the closed one from 09:12 until its factor read 1 at 10:38:20, and the open
-    // one from 13:48.
+    // one from 13:48, with the day's held time and held requests of `HELD_TODAY` (`mock/attention.ts`).
     [
       'studio: slowed 2 h 8 min of the last 24 h, over 1 h, slowest 0.35x, slow_down_stretch_seconds 1800, since 09:12',
       'badge--warning',
       '/routing-log',
-      ['bar_ms: 3600000', 'factor_min: 0.35', 'open: true', 'setting: ["slow_down_stretch_seconds"]', 'setting_values: {"slow_down_stretch_seconds":1800}', 'slowed_ms: 7700000', 'spans: 2'],
+      ['bar_ms: 3600000', 'factor_min: 0.35', 'held: 72', 'held_ms: 7700000', 'open: true', 'setting: ["slow_down_stretch_seconds"]', 'setting_values: {"slow_down_stretch_seconds":1800}', 'slowed_ms: 7700000', 'spans: 2'],
     ],
     // The engine's retained prompts at 92 percent of their cap, the mock overview's retained bytes, rank last.
     ['Keepalive cap at 92%: retained prompts', 'badge--warning', '/sessions', ['The engine is near its cap and will refuse new records at it. Opens the Sessions view.', 'cap: retained', 'count: 246960620', 'max: 268435456', 'pct: 0.92']],
@@ -1191,11 +1191,11 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   // The Keepalive engine block reads the mock's keepalive overview (`KEEPALIVE_OVERVIEW` in mock/operations.ts): the 18
   // sessions the engine holds and its 32 agent records, one per recipe the story writes, against the bootstrap file's
   // caps of 128 and 1,024, the retained prompts hand-set at 92 percent of 256 MiB, the day's probes `PROBES_24H` (225
-  // ok of 295), the 50 expiries between turns the ledger rows of the day hold and the three bus gaps, the last two hours
-  // back. Two of the seeded pools keep caches warm (`all` and `work` in mock/pools.ts), so the expired part takes the
-  // warning ink, and with every pool's policy off it takes none. The last gap is inside the day, so the bus gaps part
-  // takes the warning ink with that gap's instant on its hover. The card is read at the story's own instant, which the
-  // mock anchors as it loads, a moment past the clock's origin, so the gap lies two hours back.
+  // ok of 295), the 51 expiries between turns the ledger rows of the day hold and the three bus gaps, the last two
+  // hours back. Two of the seeded pools keep caches warm (`all` and `work` in mock/pools.ts), so the expired part takes
+  // the warning ink, and with every pool's policy off it takes none. The last gap is inside the day, so the bus gaps
+  // part takes the warning ink with that gap's instant on its hover. The card is read at the story's own instant, which
+  // the mock anchors as it loads, a moment past the clock's origin, so the gap lies two hours back.
   const overview = await api.getKeepaliveOverview();
   const storyNow = Date.parse(overview.lastBusGapAt) + 2 * 3_600_000;
   const readCard = async () => {
@@ -1226,9 +1226,9 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
       ['Retained', '235.5 MiB of 256 MiB', null],
     ],
     heads: ['Keepalive engine', 'Cache probes, 24h'],
-    line: 'expired between turns 50 · bus gaps 3',
+    line: 'expired between turns 51 · bus gaps 3',
     parts: [
-      { text: 'expired between turns 50', title: null, warning: true },
+      { text: 'expired between turns 51', title: null, warning: true },
       { text: 'bus gaps 3', title: `The last gap was 2h ago, at ${fmtAbsolute(overview.lastBusGapAt)}.`, warning: true },
     ],
     probes: '225 ok (76%) of 295',
@@ -16570,11 +16570,19 @@ await forView('/routing-log', async () => {
         terminus: ['chosen', 'Chosen', 'renewed'],
         // The round marked nothing, so its Round group names each pin it passed over and why, in the round's order: the
         // cold Sonnet 4.5 pin unpriced, since its model has no weight of its own, the Sonnet 5.5 pin with no runway on
-        // any sibling, and the parked Opus pin on the fast lane last, left out before the walk.
+        // any sibling, then the three left out before the walk (`NO_RUNWAY_PINS` in mock/routingLog.ts): the parked
+        // Opus pin on the fast lane, the released session's pin whose agent ended and the classifier pin with no burn.
         own: async (card, record, page) => {
           const round = groupOfPopover(await popoverOf(page, stationButton(card, 'move:shed')), 'Round');
           const skipped = popoverRowOf(round, 'skipped') ?? [];
-          return skipped.length === 3 && /^skipped [0-9a-f]{8}: unpriced$/.test(skipped[0]) && /^skipped [0-9a-f]{8}: no runway$/.test(skipped[1]) && /^skipped [0-9a-f]{8}: fast lane$/.test(skipped[2]);
+          return (
+            skipped.length === 5 &&
+            /^skipped [0-9a-f]{8}: unpriced$/.test(skipped[0]) &&
+            /^skipped [0-9a-f]{8}: no runway$/.test(skipped[1]) &&
+            /^skipped [0-9a-f]{8}: fast lane$/.test(skipped[2]) &&
+            /^skipped [0-9a-f]{8}: ended$/.test(skipped[3]) &&
+            /^skipped [0-9a-f]{8}: no burn$/.test(skipped[4])
+          );
         },
         what: 'round that marked nothing',
       },
@@ -18431,8 +18439,8 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
   // key's Failed leaves them out, as the Traffic line does. Laptop's Failed and the line's errors count the two rows
   // the router's own stop cut, `req_7a2c4e91-d03` and `req_c58d1f3a-e67`, and the line's requests the tie's failover
   // `req_8c41f2d7-a93`, which answered on its second attempt, the contract seat's three rows on fleet, the approved
-  // Ultra's two rows on bench, the four turns of the desktop session the mod ended and story 4's Explore turn, each
-  // answered.
+  // Ultra's two rows on bench, the four turns of the desktop session the mod ended, story 4's Explore turn and the
+  // classifier call that ran on nightly, `req_7c2e9f41-d03`, each answered.
   const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Refusals by code');
   const codes = [...(card?.querySelectorAll('.hbars li') ?? [])].map((li) => [li.querySelector('.mono')?.textContent?.trim(), li.querySelector('.num')?.firstChild?.textContent?.trim()]);
   const table = [...m.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Traffic by key');
@@ -18445,7 +18453,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
     ok:
       JSON.stringify(keys) === JSON.stringify([['desktop', '15', '3'], ['ci', '1', '3'], ['laptop', '6', '2']]) &&
       JSON.stringify(codes) === JSON.stringify([['guardrail_blocked', '3'], ['client_not_allowed', '2'], ['auth_unknown', '1'], ['client_contract', '1'], ['client_drift', '1']]) &&
-      line === '224 requests, 16.5% errors',
+      line === '225 requests, 16.4% errors',
     missing: [JSON.stringify(keys), JSON.stringify(codes), line ?? 'no line'],
   });
 }
@@ -20672,7 +20680,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
 
     await groupBy('Classifier');
     const classifiers = trafficRows('classifier').map((row) => row[0]);
-    results.push({ name: "/analytics the page groups by classifier, the client's classifier calls as client and every other request as none", ok: JSON.stringify([...classifiers].sort()) === JSON.stringify(['client', 'none']), missing: classifiers });
+    // The story's classifier calls (`mock/requests.ts`): two on the judged turn's account and one off it.
+    results.push({ name: "/analytics the page groups by classifier, the client's classifier calls as client or client_off and every other request as none", ok: JSON.stringify([...classifiers].sort()) === JSON.stringify(['client', 'client_off', 'none']), missing: classifiers });
 
     await groupBy('User agent');
     const tokens = trafficRows('user agent').map((row) => row[0]);

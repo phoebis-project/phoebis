@@ -109,12 +109,19 @@ const SLOWED_LONG_STRETCHES = 2;
 const SLOWED_LONG_FLOOR_MS = HOUR;
 
 /**
+ * The day's slow-down holds per account, the hourly rollups' held time and held requests the ledger sums, which the
+ * story's rows cannot carry: they hold only the turns the drawer reads, studio's two held rows of 36 s and 42 s among
+ * its 72. Each hold stays under work's 120 s bound.
+ */
+const HELD_TODAY: Readonly<Record<string, { held: number; heldMs: number }>> = { studio: { held: 72, heldMs: 7_700_000 } };
+
+/**
  * An account's slow-down spans over the day as the reader pairs them: the spans standing at the day's cutoff, then each
  * start with the next end of its account and pool or the next restart, whichever comes first, a start with neither open
- * to now, each span clamped to the day and one with no part inside it not counted. It holds once the spans sum past the
- * bar, twice the stretch threshold the newest span's start row read and at least an hour, from the own start of the
- * oldest, with the lowest factor any span read and the stretch threshold of the newest span's pool. Null where it does
- * not hold.
+ * to now, each span clamped to the day and one with no part inside it not counted. It holds once the account's held
+ * time of the day passes the bar, twice the stretch threshold the newest span's start row read and at least an hour,
+ * from the own start of the oldest span, with the day's held time and held requests, the lowest factor any span read
+ * and the stretch threshold of the newest span's pool. Null where no span falls inside the day or it does not hold.
  */
 export function slowedLongOf(rows: readonly SpanRow[], accountId: string, now: number): Pick<AttentionItem, 'detail' | 'since'> | null {
   const from = now - DAY;
@@ -157,12 +164,15 @@ export function slowedLongOf(rows: readonly SpanRow[], accountId: string, now: n
   const slowedMs = spans.reduce((n, x) => n + x.slowedMs, 0);
   const newest = spans.reduce((a, b) => (b.since > a.since ? b : a));
   const barMs = Math.max(SLOWED_LONG_STRETCHES * (newest.thresholdMs ?? 0), SLOWED_LONG_FLOOR_MS);
-  if (slowedMs <= barMs) return null;
+  const held = HELD_TODAY[accountId] ?? { held: 0, heldMs: 0 };
+  if (held.heldMs <= barMs) return null;
   const stretch = poolById.get(newest.pool)?.slowDownStretchSeconds;
   return {
     detail: {
       bar_ms: barMs,
       factor_min: spans.reduce<number | null>((n, x) => lowest(n, x.factor), null),
+      held: held.held,
+      held_ms: held.heldMs,
       open: spans.some((x) => x.open),
       setting: ['slow_down_stretch_seconds'],
       ...(stretch === undefined ? {} : { setting_values: { slow_down_stretch_seconds: stretch } }),

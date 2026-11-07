@@ -34,7 +34,10 @@ export interface HourlyRollup {
   cacheMisses: number;
   /** Attempts that carried diagnostics, counted by what they reported. */
   cacheMissReasons: Record<CacheMissReason, number>;
-  /** `client` for the client's own auto-mode classifier calls, which take no share of a plan window, else `-`. */
+  /**
+   * `client` for the client's own classifier call on the account and incarnation its judged turn ended on, `client_off`
+   * where it ran off them or in a session with no turn to judge, else `-`.
+   */
   classifier: string;
   /** The class the router derived from the requests' own agent, `-` for a row whose requests carry none. */
   client: string;

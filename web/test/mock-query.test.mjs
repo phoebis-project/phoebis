@@ -156,6 +156,28 @@ test('the mock lists the rows inside a from and to window', async () => {
   assert.deepEqual(await listed({ from, to }), ids(expected));
 });
 
+test("listRequests orders by a nullable key with the rows without a figure last under either direction and names the last row's figure and id in its cursor", async () => {
+  // The story's rows from 14:15 to 14:18: the compacted laptop turn of 3,300 ms, bench's Fable turn of 9,800 ms, and
+  // three requests the router answered before any attempt, which carry no duration.
+  const page = async (dir, cursor) => {
+    const p = await api.listRequests({ cursor, dir, from: '2026-09-16T14:15:00.000Z', limit: 2, order: 'duration_ms', to: '2026-09-16T14:18:00.000Z' });
+    return [p.requests.map((r) => r.id), p.nextCursor];
+  };
+  assert.deepEqual(await page('asc'), [['req_31f0b7c2-6e1', 'req_1c7e4a9d-f52'], '9800:req_1c7e4a9d-f52']);
+  assert.deepEqual(await page('asc', '9800:req_1c7e4a9d-f52'), [['req_2d8e5b13-f40', 'req_51d0e2b8-7a0'], ':req_51d0e2b8-7a0']);
+  assert.deepEqual(await page('asc', ':req_51d0e2b8-7a0'), [['req_9b4f1c62-a07'], null]);
+  assert.deepEqual(await page('desc'), [['req_1c7e4a9d-f52', 'req_31f0b7c2-6e1'], '3300:req_31f0b7c2-6e1']);
+  assert.deepEqual(await page('desc', '3300:req_31f0b7c2-6e1'), [['req_9b4f1c62-a07', 'req_51d0e2b8-7a0'], ':req_51d0e2b8-7a0']);
+  assert.deepEqual(await page('desc', ':req_51d0e2b8-7a0'), [['req_2d8e5b13-f40'], null]);
+});
+
+test('listRequests keeps the row that presented a fallback digest under fallback true and every other row under false', async () => {
+  // The laptop's turn that presented the token the session's oldest refused turn issued, `mock/requests.ts`.
+  const presented = 'req_0f92cbbe-ddb';
+  assert.deepEqual(await listed({ fallback: true }), [presented]);
+  assert.deepEqual(await listed({ fallback: false }), ids(unprobed).filter((id) => id !== presented));
+});
+
 test('the mock answers a request id with the one row, whole and never by prefix', async () => {
   const [row] = unprobed;
   assert.deepEqual(await listed({ request: row.id }), [row.id]);

@@ -562,6 +562,9 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
   return { attempts, chainFrom: attempts.length - added, drawnHead: drawnTrail[drawnTrail.length - 1], whole: !ended && !committed && added === 0 };
 }
 
+/** The digest of the story's one fallback credit token, in the capture's shape: 64 hex characters. */
+const FALLBACK_DIGEST = '3b7e1f9a5c2d8e4b6a0f7c3d9e1b5a8f2c6d0e4a7b9f1c3e5d8a2b6f0c4e7a9d';
+
 /** A request's attempts with the serving one, the last, put through `edit`. */
 const onServing = (attempts: Attempt[], edit: (a: Attempt) => Attempt): Attempt[] => attempts.map((a, i, all) => (i === all.length - 1 ? edit(a) : a));
 
@@ -785,6 +788,15 @@ function buildRequests(): RequestLog[] {
     canceled.errorCode = 'client_gone';
     canceled.attempts = canceled.attempts.map((a) => ({ ...a, outcome: 'canceled' as const }));
   }
+  // The day's one fallback: the oldest refused laptop turn issued a credit token, and the session's next inference
+  // turn on the key presented it. Neither pass draws, so every row keeps its draws.
+  const oldestFirst = [...rows].reverse();
+  const issuer = oldestFirst.find((r) => r.keyId === 'laptop' && r.attempts[r.attempts.length - 1]?.response.stopReason === 'refusal');
+  const presenter = issuer && oldestFirst.find((r) => r.keyId === issuer.keyId && r.sessionId === issuer.sessionId && r.kind === 'inference' && Date.parse(r.at) > Date.parse(issuer.at));
+  if (issuer && presenter) {
+    issuer.attempts = onServing(issuer.attempts, (a) => ({ ...a, issuedDigest: FALLBACK_DIGEST }));
+    presenter.fallbackDigest = FALLBACK_DIGEST;
+  }
   rows.push(...storyRequests());
   return rows.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
 }
@@ -930,7 +942,6 @@ interface StoryAttempt {
    * story reads its own figure rather than the walk back's.
    */
   head5h?: number;
-  issuedDigest?: string;
   ms: number;
   status: number;
 }
@@ -956,7 +967,6 @@ interface StorySeed {
   clientDrift?: string;
   contextCompacted?: string;
   errorCode?: string;
-  fallbackDigest?: string;
   /** The client's subagent summary fork: its captured body carries the fork's tools and its question last. */
   fork?: boolean;
   /** The answer's inference geography where it is not the story's `us`. */
@@ -986,7 +996,8 @@ interface StorySeed {
    * A story row the routing log derives its records for, as it does a drawn row's, that takes no draw from the streams
    * the drawn rows read and none of the events the story seats on a drawn row, so it keeps its written class and
    * instants and every drawn figure stays where it was: the contract seat's rows on fleet, the approved Ultra's rows on
-   * bench, the last turns of the desktop session the mod ended and the one turn of story 4's Explore subagent.
+   * bench, the last turns of the desktop session the mod ended, the one turn of story 4's Explore subagent and the
+   * classifier call that ran off its judged turn's account.
    */
   unseeded?: true;
   usage?: Partial<Usage>;
@@ -1094,7 +1105,7 @@ function storyRow(seed: StorySeed): RequestLog {
       cooldownSet: a.cooldown ? { reason: a.cooldown.reason, until: iso(a.cooldown.until) } : null,
       durationMs: a.ms,
       index,
-      issuedDigest: a.issuedDigest ?? null,
+      issuedDigest: null,
       outcome: cut ? 'canceled' : a.status === 200 ? (index === seed.attempts.length - 1 && seed.errorCode ? 'upstream_error' : 'succeeded') : a.status === 429 ? 'rate_limited' : 'upstream_error',
       // A usage-based seat's head names no overage, so its attempt stores no flag, as an API key's does.
       overageInUse: oauth && !usageBased ? false : null,
@@ -1142,7 +1153,7 @@ function storyRow(seed: StorySeed): RequestLog {
     diagnosticsSource: sourceOf(attempts, seed.keyId),
     durationMs,
     errorCode: seed.errorCode ?? (status === 200 ? null : 'rate_limit_error'),
-    fallbackDigest: seed.fallbackDigest ?? null,
+    fallbackDigest: null,
     forkDepth: null,
     forkedFrom: null,
     guardrailId: seed.guardrails?.find((m) => m.blocked)?.id ?? null,
@@ -1533,6 +1544,11 @@ function storySeeds(): StorySeed[] {
     // as an earlier agent. It reads a cached prefix, so it counts as no miss between turns. Last, so every seed above
     // keeps the upstream ids it draws.
     { agentId: '0b7f', at: NOW - 40 * MINUTE, attempts: [{ accountId: 'nightly', at: NOW - 40 * MINUTE, ms: 3_600, status: 200 }], id: 'req_0b7f2c58-e43', keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'subagent', session: '89cd1c92', unseeded: true, usage: { cacheRead: 11_800, input: 600, output: 190 } },
+    // A classifier call judging a tool call of the laptop turn primary served at 07:48:10, whose attempt ran on nightly,
+    // off the account the judged turn's stream ended on, so it prices from its usage on nightly's plan, before nightly's
+    // overage, as any request does. It sits below the laptop rows a first page of 25 lists, whose last holds the newest
+    // cut answer. Last, so every seed above keeps the upstream ids it draws.
+    { agentId: 'main', at: t(7, 48, 14), attempts: [{ accountId: 'nightly', at: t(7, 48, 14), ms: 1_400, status: 200 }], classifier: 'client_off', id: 'req_7c2e9f41-d03', keyId: 'laptop', model: 'claude-sonnet-5', requestClass: 'auxiliary', session: 'c52dbc8e', unseeded: true, usage: { input: 3_600, output: 22 } },
   ];
 }
 const storyRequests = () => storySeeds().map(storyRow);
@@ -1908,6 +1924,25 @@ function addStoryEvents() {
 }
 
 /**
+ * The day's one placement that replaced a pin its selection found expired: the oldest drawn turn whose pin's last turn
+ * ran on another account, with no event of its own, writes the expiry on that account at its instant, before the pin
+ * its placement creates, as the router writes the pair, so its decision names the account the pin left. No draw, so
+ * every row keeps its draws.
+ */
+function addReplacedPin() {
+  const lastOn = new Map<string, string>();
+  for (const r of [...REQUESTS].reverse()) {
+    if (r.accountId === null || r.sessionId === null || r.kind !== 'inference') continue;
+    const key = `${r.keyId}|${r.sessionId}|${r.agentId}|${r.canonicalModel}`;
+    const before = lastOn.get(key);
+    lastOn.set(key, r.accountId);
+    if (before === undefined || before === r.accountId || r.attempts.length !== 1 || r.status !== 200 || REQUEST_EVENTS.has(r.id) || STORY_IDS.has(r.id) || UNSEEDED_IDS.has(r.id)) continue;
+    REQUEST_EVENTS.set(r.id, [{ accountId: before, at: r.at, detail: { agent_id: r.agentId, reasons: ['expired'] }, keyId: r.keyId, kind: 'pin_expired', model: r.canonicalModel, sessionId: r.sessionId }]);
+    return;
+  }
+}
+
+/**
  * The trace of a row outside the seeded streams: the strategy's pick in its account's tier, with nobody passed over.
  */
 function undrawnTrace(r: RequestLog, a: Attempt, last: boolean): SelectionTrace {
@@ -2108,8 +2143,9 @@ export const bandAt = (model: string, at: number): boolean | null => (weightOf(T
  * request no subscription window paid, else the figure at the request's completion, null for a model without a weight
  * of its own, and a share on each window of the account's set and each week the model applies to, under the account's
  * tier, a window the cost model cannot price carried as null and an account without a tier an empty share map. A
- * client classifier call reads zero, on each such window the tier sizes, with the share reason, and a classifier call
- * billed in dollars carries no reason, as the route answers both.
+ * `client` classifier call reads zero, on each such window the tier sizes, with the share reason, while a `client_off`
+ * call and a classifier call billed in dollars carry no reason, as the route answers them: the router frees only the
+ * call that landed on the judged turn's account.
  */
 function costFiguresOf(r: RequestLog): Pick<RequestLog, 'costEquivalent' | 'costShares' | 'shareReason'> {
   if (!planPaid(r)) return { costEquivalent: null, costShares: null, shareReason: null };
@@ -2117,7 +2153,7 @@ function costFiguresOf(r: RequestLog): Pick<RequestLog, 'costEquivalent' | 'cost
   const tier = accountById.get(serving.accountId)?.subscription?.rateLimitTier;
   const finishedMs = Date.parse(r.at) + (r.durationMs ?? 0);
   const windows = shareWindowsOf(serving.accountId, r.canonicalModel);
-  if (r.classifier !== null) {
+  if (r.classifier === 'client') {
     const zeros = (sizing: string) =>
       Object.fromEntries(
         windows.filter((w) => {
@@ -2169,6 +2205,7 @@ function phaseRequests() {
 }
 
 addStoryEvents();
+addReplacedPin();
 traceRequests();
 seedDrawerBranches();
 seedHolds();
@@ -2397,9 +2434,10 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
         uncached: ok.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h === 0).length,
         costUsd: sumOf(partRows, (r) => r.costUsd),
         cost: sumSplit(partRows.map((r) => costSplitOf(r.model, r.usage, servingResponse(r)?.speed === 'fast', r.at))),
-        // At each answer's completion, the instant its own shares price it at. A client classifier call takes no share
-        // of a plan window, so its part prices nothing and reads zero.
-        ...hourShares(accountId, partRows[0].canonicalModel, classifier === NO_CLASS ? partRows.map((r) => ({ at: Date.parse(r.at) + (r.durationMs ?? 0), usage: r.usage })) : []),
+        // At each answer's completion, the instant its own shares price it at. A `client` classifier call takes no
+        // share of a plan window, so its part prices nothing and reads zero, while a `client_off` part prices as any
+        // other.
+        ...hourShares(accountId, partRows[0].canonicalModel, classifier !== 'client' ? partRows.map((r) => ({ at: Date.parse(r.at) + (r.durationMs ?? 0), usage: r.usage })) : []),
         tier: accountTier(accountId),
         histograms: histogramsOf(served),
         keptWarm: { requests: keptHere.length, tokens1h: sumOf(keptHere, (r) => keptOf(r).tokens1h), tokens5m: sumOf(keptHere, (r) => keptOf(r).tokens5m) },

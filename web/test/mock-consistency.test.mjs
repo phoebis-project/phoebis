@@ -180,8 +180,11 @@ const sameTier = (x, y) => x.tier.join('/') === y.tier.join('/');
 
 /** Whether a record's partitions narrow a move's destinations, which the no-fit partition keeps as its gate left them. */
 const moving = (r) => r.walk.some((w) => w.step === 'cap_filter');
-/** Whether a record lands a failed-over request: a placement that names the account the request came from. */
-const failedOver = (r) => r.outcome.kind === 'placed' && r.outcome.fromAccountId !== null;
+/**
+ * Whether a record lands a failed-over request: a placement after an attempt that names the account the request came
+ * from. A first placement names the pin it replaced the same way and walks no ladder.
+ */
+const failedOver = (r) => r.outcome.kind === 'placed' && r.outcome.fromAccountId !== null && r.request.attempted.length > 0;
 
 /**
  * The set a record's partitions narrow: a move's destinations (the cap filter's facts name them), else the eligible
@@ -233,7 +236,7 @@ function freshFitOf(d, c, r, pool) {
   return every ? 'fits' : lands ? 'rewrite_only' : 'least_bad';
 }
 
-test("the mock's slowed-account fold reads its bar from the start rows and the spans standing at the day's cutoff", () => {
+test("the mock's slowed-account fold reads its bar from the start rows, its spans from the rows standing at the day's cutoff, and holds on the account's held time", () => {
   const now = Date.parse('2026-09-16T14:30:00Z');
   const cutoff = now - DAY;
   const MINUTE = 60_000;
@@ -248,11 +251,15 @@ test("the mock's slowed-account fold reads its bar from the start rows and the s
     ended(now - HOUR + 2 * MINUTE, now - 2 * HOUR, HOUR, 0.4),
   ];
   assert.deepEqual(slowedLongOf(rows, 'studio', now), {
-    detail: { bar_ms: 80 * MINUTE, factor_min: 0.4, open: false, setting: ['slow_down_stretch_seconds'], slowed_ms: 110 * MINUTE, spans: 2 },
+    detail: { bar_ms: 80 * MINUTE, factor_min: 0.4, held: 72, held_ms: 7_700_000, open: false, setting: ['slow_down_stretch_seconds'], slowed_ms: 110 * MINUTE, spans: 2 },
     since: iso(cutoff - 30 * MINUTE),
   });
-  // Without the span from before the cutoff the hour stays under the bar of twice 40 minutes.
-  assert.equal(slowedLongOf(rows.slice(2), 'studio', now), null);
+  // The hour's span alone runs 60 minutes, under the bar of twice 40, and studio's seeded held time of the day, past
+  // the bar, holds the item.
+  assert.deepEqual(slowedLongOf(rows.slice(2), 'studio', now), {
+    detail: { bar_ms: 80 * MINUTE, factor_min: 0.4, held: 72, held_ms: 7_700_000, open: false, setting: ['slow_down_stretch_seconds'], slowed_ms: HOUR, spans: 1 },
+    since: iso(now - 2 * HOUR),
+  });
 });
 
 test("the fresh fit's demand prices the 5-hour window as the mock's fit does, where the achieved burn alone would fit", async () => {

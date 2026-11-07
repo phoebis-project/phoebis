@@ -5,14 +5,14 @@ import { decodeStreamCut } from '@/api/decode';
 import { ApiError, catalogUnion, noteBuild, slug } from '@/api/http';
 import type {
   Account, AccountCatalog, AccountInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, DecisionRecord, KeepaliveOverview, KeyModels, MemberEligibility,
-  ModelRule, Overview, PairingConfirmed, PairingInput, PairingPreview, PairingSession, PairingStart, Pool, PoolMember, RequestDetail, RequestEvent, RequestLog, RequestPage, RequestQuery, RoutingEvent, RoutingLogPage, RoutingLogQuery, RuleCooldown, Session, SessionInfo, Settings,
+  ModelRule, Overview, PairingConfirmed, PairingInput, PairingPreview, PairingSession, PairingStart, Pool, PoolMember, RequestDetail, RequestEvent, RequestLog, RequestOrder, RequestPage, RequestQuery, RoutingEvent, RoutingLogPage, RoutingLogQuery, RuleCooldown, Session, SessionInfo, Settings,
   Subscription,
 } from '@/api/types';
 import type { Guardrail, GuardrailAttachment, GuardrailCounts, GuardrailRef, GuardrailTestResult } from '@/api/types';
-import { AFFINITY_MODE_VALUES, GUARDRAIL_MODE_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/types';
+import { AFFINITY_MODE_VALUES, GUARDRAIL_MODE_VALUES, REQUEST_ORDER_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/types';
 import { type Clock, wallClock } from '@/lib/clock';
 import { foldClassifier, foldEffort, foldRequestClass, foldSpeed, servedMissReason, servingResponse } from '@/lib/dimensions';
-import { tokensTotal } from '@/lib/format';
+import { byteOrder, tokensTotal } from '@/lib/format';
 import { modelRulesRefusal, poolWarnings, type NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
 import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
@@ -461,6 +461,7 @@ function matchesQuery(r: RequestLog, q: RequestQuery, live: Map<string, number>)
   if (q.turnOrigins?.length && !q.turnOrigins.includes(r.turnOrigin ?? '')) return false;
   if (q.speeds?.length && !q.speeds.includes(foldSpeed(r))) return false;
   if (q.held && r.held === null) return false;
+  if (q.fallback !== undefined && (r.fallbackDigest !== null) !== q.fallback) return false;
   // The serving attempt is the last, the one the rollups count a request's reason on. A request with no attempt or a
   // null serving reason matches nothing.
   if (q.cacheMissReasons?.length) {
@@ -485,17 +486,48 @@ function matchesQuery(r: RequestLog, q: RequestQuery, live: Map<string, number>)
   return true;
 }
 
+/** The route's order keys, each read off the row, null where the row carries no figure. */
+const figureOf = (r: RequestLog, order: RequestOrder): number | null =>
+  ({
+    attempts: r.attempts.length,
+    duration_ms: r.durationMs,
+    input_tokens: r.usage.input,
+    output_tokens: r.usage.output,
+    received_at: Date.parse(r.at),
+    ttfb_ms: r.ttfbMs,
+  })[order];
+/** The route's cursor under a key: `<figure>:<id>`, the figure empty where the row carries none. */
+const cursorOf = (r: RequestLog, order: RequestOrder): string => `${figureOf(r, order) ?? ''}:${r.id}`;
+
 /**
- * The route encodes a cursor as `<received_at>:<id>` and resumes strictly past that row in
- * `received_at DESC, id DESC` order; the id breaks the tie so rows sharing a millisecond are neither
- * repeated nor skipped.
+ * The route's order under a key and a direction: a row without the figure after every row with one, under either
+ * direction, then the figure and the id, both in the direction asked, so rows that share a figure keep one order.
  */
-function isAfterCursor(r: RequestLog, cursor: string): boolean {
+const requestOrderOf =
+  (order: RequestOrder, dir: 'asc' | 'desc') =>
+  (a: RequestLog, b: RequestLog): number => {
+    const x = figureOf(a, order);
+    const y = figureOf(b, order);
+    if ((x === null) !== (y === null)) return x === null ? 1 : -1;
+    return (dir === 'asc' ? 1 : -1) * ((x ?? 0) - (y ?? 0) || byteOrder(a.id, b.id));
+  };
+
+/**
+ * The route resumes strictly past the cursor's row in the list's order, so rows sharing a figure are neither repeated
+ * nor skipped: past a row with the figure lie the rows past it by the figure and the id, then every row without one,
+ * and past a row without the figure only the rows without it, past its id.
+ */
+function isAfterCursor(r: RequestLog, cursor: string, order: RequestOrder, dir: 'asc' | 'desc'): boolean {
   const sep = cursor.indexOf(':');
-  const at = Number(cursor.slice(0, sep));
+  const value = cursor.slice(0, sep);
   const id = cursor.slice(sep + 1);
-  const rowAt = Date.parse(r.at);
-  return rowAt < at || (rowAt === at && r.id < id);
+  const figure = figureOf(r, order);
+  const sign = dir === 'asc' ? 1 : -1;
+  const pastId = sign * byteOrder(r.id, id) > 0;
+  if (value === '') return figure === null && pastId;
+  if (figure === null) return true;
+  const at = Number(value);
+  return sign * (figure - at) > 0 || (figure === at && pastId);
 }
 
 type StoredPool = PoolRow<Omit<PoolMember, 'activePins'>>;
@@ -1271,6 +1303,10 @@ export class MockApi implements Api {
   }
 
   listRequests(query: RequestQuery = {}): Promise<RequestPage> {
+    // The route reads its order before the store, so a key outside its list is refused whatever the store holds.
+    const order = query.order ?? 'received_at';
+    if (!REQUEST_ORDER_VALUES.includes(order)) return Promise.reject(new ApiError(400, 'order is received_at, attempts, duration_ms, ttfb_ms, input_tokens or output_tokens', null));
+    const dir = query.dir ?? 'desc';
     if (emptyStore()) return latency({ landedThrough: 0, nextCursor: null, requests: [] });
     const live = new Map(this.keys.map((k) => [k.id, Date.parse(k.createdAt)]));
     // The newest stamp is over the rows the query's filters admit, its `to` included, with its `landedAfter` as the
@@ -1278,15 +1314,15 @@ export class MockApi implements Api {
     const now = mockClock.now();
     const written = writtenBy(now);
     const since = query.landedAfter;
-    const matched = written.filter((r) => matchesQuery(r, query, live) && (since === undefined || landedAt(r) > since)).sort(compareRequests);
+    const matched = written.filter((r) => matchesQuery(r, query, live) && (since === undefined || landedAt(r) > since)).sort(requestOrderOf(order, dir));
     const newest = matched.reduce((stamp, r) => Math.max(stamp, landedAt(r)), since ?? 0);
     const landedThrough = query.to && !query.fixedEnd ? Math.min(newest, Date.parse(query.to)) : newest;
-    const after = query.cursor ? matched.filter((r) => isAfterCursor(r, query.cursor!)) : matched;
+    const after = query.cursor ? matched.filter((r) => isAfterCursor(r, query.cursor!, order, dir)) : matched;
     const limit = query.limit ?? 50;
     const page = after.slice(0, limit);
     const last = page[page.length - 1];
     // A cursor only rides along while rows are left, which is how the route signals the end of the list.
-    return latency({ landedThrough, nextCursor: after.length > limit && last ? `${Date.parse(last.at)}:${last.id}` : null, requests: page });
+    return latency({ landedThrough, nextCursor: after.length > limit && last ? cursorOf(last, order) : null, requests: page });
   }
 
   listRoutingLog(query: RoutingLogQuery = {}): Promise<RoutingLogPage> {
