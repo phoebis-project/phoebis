@@ -1316,9 +1316,10 @@ function BreakdownTable({
 
 /**
  * Horizontal bars of counts in the order given, each with its share of the total and, where its row carries a target,
- * its count linking the requests it counts, and `empty` when every count is zero.
+ * its count linking the requests it counts, and `empty` when every count is zero. A row whose label another row shares
+ * carries a `key` of its own.
  */
-function CountBars({ color, empty, rows }: { color: string; empty: string; rows: { count: number; label: string; target?: RequestsLinkTarget }[] }) {
+function CountBars({ color, empty, rows }: { color: string; empty: string; rows: { count: number; key?: string; label: string; target?: RequestsLinkTarget }[] }) {
   const max = Math.max(1, ...rows.map((r) => r.count));
   const total = rows.reduce((s, r) => s + r.count, 0);
   if (total === 0) return <p className="muted">{empty}</p>;
@@ -1326,7 +1327,7 @@ function CountBars({ color, empty, rows }: { color: string; empty: string; rows:
     <ul className="plain-list hbars hbars--errors">
       {rows.map((r) => (
         <HBarRow
-          key={r.label}
+          key={r.key ?? r.label}
           color={color}
           count={r.target ? <CountLink target={r.target}>{fmtInt(r.count)}</CountLink> : fmtInt(r.count)}
           fill={r.count / max}
@@ -1364,9 +1365,10 @@ function ErrorBars({ errors, color, empty = 'No errors in range.' }: { color: st
 /** A count under several client patterns stays plain, since a link could carry one of them alone. */
 const SEVERAL_CLIENTS: RequestsLinkTarget = { href: null, title: CLIENT_PATTERNS_PLAIN };
 
-/** One bar per category in the route's order, `-` read `none`, each count linking its category's refused answers. */
+/** One bar per model and category in the route's order, `-` read `none`, each count linking its category's refused
+ *  answers. */
 const refusalRows = (answer: RefusalCategoriesAnswer, input: ReasonLink, plainLinks: boolean) =>
-  answer.rows.map((r) => ({ count: r.requests, label: r.category === '-' ? 'none' : r.category, target: plainLinks ? SEVERAL_CLIENTS : refusalLink(input, r.category, r.requests) }));
+  answer.rows.map((r) => ({ count: r.requests, key: `${r.model}:${r.category}`, label: r.category === '-' ? 'none' : r.category, target: plainLinks ? SEVERAL_CLIENTS : refusalLink(input, r.category, r.requests) }));
 
 /** Requests per effort level, each named as the rollups file it; `none`, the requests that asked for no level, last. */
 function EffortBars({ groups, color }: { color: string; groups: AnalyticsGroup[] }) {
