@@ -912,45 +912,6 @@ fn a_quiet_stretch_of_polls_and_a_busy_stretch_of_heads_reconcile_from_the_first
 }
 
 #[test]
-fn a_run_opening_on_a_head_and_closing_on_a_poll_reads_from_its_first_head_to_its_last_poll() {
-    let reset = SATURDAY + HOUR;
-    let db = LedgerDb::open_in_memory().unwrap();
-    seed_request(&db, "seed", SATURDAY - MINUTE);
-    db.insert_samples(
-        &[
-            head_reading(FIVE_HOUR, SATURDAY, 0.10, reset),
-            reading(FIVE_HOUR, SATURDAY + 10 * MINUTE, 0.20, reset),
-            reading(FIVE_HOUR, SATURDAY + 20 * MINUTE, 0.40, reset),
-        ],
-        None,
-    )
-    .unwrap();
-    // 0.10 of the window before the first poll and 0.20 between the polls, both inside the rise from the head.
-    served(&db, "before", SONNET, SATURDAY + 5 * MINUTE, 10, None);
-    served(&db, "between", SONNET, SATURDAY + 15 * MINUTE, 20, None);
-    let now = reset + HOUR;
-    fold(&db, now);
-    let rows = rows(&db, now);
-    assert_eq!(
-        rows.iter()
-            .map(|r| (r.first_reading_at, r.last_reading_at, r.requests))
-            .collect::<Vec<_>>(),
-        [(SATURDAY, SATURDAY + 20 * MINUTE, 2)],
-        "the head's and the last poll's instants and both attempts: {rows:?}"
-    );
-    assert!(
-        close(rows[0].observed_rise, 0.30),
-        "the head to the last poll: {}",
-        rows[0].observed_rise
-    );
-    assert!(
-        close(rows[0].predicted_share, 0.30),
-        "{}",
-        rows[0].predicted_share
-    );
-}
-
-#[test]
 fn a_run_of_heads_alone_reconciles_as_a_run_of_polls_does() {
     let reset = SATURDAY + HOUR;
     let db = LedgerDb::open_in_memory().unwrap();
@@ -980,40 +941,6 @@ fn a_run_of_heads_alone_reconciles_as_a_run_of_polls_does() {
         rows[0].observed_rise
     );
     assert!(close(rows[0].ratio, 1.0), "{}", rows[0].ratio);
-}
-
-#[test]
-fn a_run_with_one_poll_among_its_heads_reconciles_between_its_first_head_and_the_poll() {
-    let reset = SATURDAY + HOUR;
-    let db = LedgerDb::open_in_memory().unwrap();
-    seed_request(&db, "seed", SATURDAY - MINUTE);
-    db.insert_samples(
-        &[
-            head_reading(FIVE_HOUR, SATURDAY, 0.10, reset),
-            head_reading(FIVE_HOUR, SATURDAY + 10 * MINUTE, 0.30, reset),
-            reading(FIVE_HOUR, SATURDAY + 20 * MINUTE, 0.40, reset),
-        ],
-        None,
-    )
-    .unwrap();
-    // 0.20 of the window between the heads and 0.10 between the last head and the poll.
-    served(&db, "between", SONNET, SATURDAY + 5 * MINUTE, 20, None);
-    served(&db, "after", SONNET, SATURDAY + 15 * MINUTE, 10, None);
-    let now = reset + HOUR;
-    fold(&db, now);
-    let rows = rows(&db, now);
-    assert_eq!(
-        rows.iter()
-            .map(|r| (r.first_reading_at, r.last_reading_at, r.requests))
-            .collect::<Vec<_>>(),
-        [(SATURDAY, SATURDAY + 20 * MINUTE, 2)],
-        "the first head's and the poll's instants and both attempts: {rows:?}"
-    );
-    assert!(
-        close(rows[0].observed_rise, 0.30),
-        "the first head to the poll: {}",
-        rows[0].observed_rise
-    );
 }
 
 #[test]

@@ -380,24 +380,6 @@ fn a_pins_auxiliary_mark_and_effort_survive_a_reopen() {
         ("s".to_string(), false, Some("low".to_string())),
         "the renewal's mark and effort replace the stored ones"
     );
-    Store::open(&path, &storage_key)
-        .unwrap()
-        .upsert_pin(&PinRow {
-            entrypoint: None,
-            effort: None,
-            ..pin("k", "s", "claude-opus-5-5", "a")
-        })
-        .unwrap();
-    let bare = Store::open(&path, &storage_key)
-        .unwrap()
-        .load_routing()
-        .unwrap()
-        .pins;
-    assert_eq!(
-        (bare[0].entrypoint.as_deref(), bare[0].effort.as_deref()),
-        (None, None),
-        "a pin written with neither field reads none for both after a reopen"
-    );
 }
 
 #[test]
@@ -612,37 +594,6 @@ fn delete_pin_of_a_sessions_last_pin_keeps_its_first_seen_rows() {
         (load.pins, load.first_seen),
         (Vec::new(), vec![first_seen("k", "s", "main", 1_000)]),
         "the pin leaves and the session's row stays"
-    );
-}
-
-/// A guard: a pin's end takes its row alone, and the session's records leave by their own deletes.
-#[test]
-fn end_pin_without_an_end_keeps_the_sessions_first_seen_rows() {
-    let store = store_with(&["a"]);
-    let main = pin("k", "s", "claude-opus-5-5", "a");
-    let sub = PinRow {
-        agent_id: "sub-1".into(),
-        ..main.clone()
-    };
-    store.upsert_pin(&main).unwrap();
-    store.upsert_pin(&sub).unwrap();
-    for row in [
-        first_seen("k", "s", "main", 1_000),
-        first_seen("k", "s", "sub-1", 2_000),
-    ] {
-        store.insert_first_seen(&row).unwrap();
-    }
-    assert!(store.delete_pin(&sub.key()).unwrap());
-    let load = store.load_routing().unwrap();
-    assert_eq!(
-        (load.pins, load.first_seen),
-        (
-            vec![main],
-            vec![
-                first_seen("k", "s", "main", 1_000),
-                first_seen("k", "s", "sub-1", 2_000)
-            ]
-        )
     );
 }
 

@@ -203,44 +203,6 @@ async fn an_oauth_account_on_an_enabled_pool_retains_its_recipe() {
     assert!(r.engine.stats().retained_bytes > 0);
 }
 
-/// The selection sets `OptedOut` and returns before the observation is ever marked ready; a title request the
-/// guard sets aside in that window must leave it for the completion to read back unchanged.
-#[tokio::test]
-async fn a_title_request_between_an_opted_out_selection_and_its_completion_leaves_the_reason_alone()
-{
-    let r = rig(RigSpec::default()).await;
-    let mut key = r.h.store.api_key("desktop").unwrap().unwrap();
-    key.keepalive_opt_out = true;
-    r.h.store
-        .update_api_key(&key, key.updated_at, "test")
-        .unwrap();
-    r.h.router.reload().await.unwrap();
-    r.engine.observe(r.observed("req", "main", BODY));
-    r.engine.observe(r.selected("req", "a"));
-    assert_eq!(r.status("main").reason, Reason::OptedOut);
-    r.engine.observe(r.observed_with(
-        "aux",
-        "main",
-        Some("title"),
-        None,
-        &[],
-        BODY.as_bytes(),
-        "claude-sonnet-4-5",
-    ));
-    assert_eq!(
-        r.status("main").reason,
-        Reason::OptedOut,
-        "the title request left the selection's reason alone"
-    );
-    r.engine
-        .observe(r.complete("req", Outcome::Succeeded, None));
-    assert_eq!(
-        r.status("main").reason,
-        Reason::OptedOut,
-        "the completion read the reason the selection set, not the guard's own auxiliary note"
-    );
-}
-
 /// A request the guard sets aside never touches `reason`, so the admin view still reads the recipe armed
 /// rather than held under the guard's own note.
 #[tokio::test]

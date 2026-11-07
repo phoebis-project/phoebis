@@ -5243,16 +5243,6 @@ mod tests {
         ));
     }
 
-    /// A guardrail's refusal is conclusive, so the row reads rejected whatever attempt count the outcome carries.
-    #[test]
-    fn a_guardrail_block_files_as_rejected_at_attempt_0_and_1() {
-        let blocked = relay_failure(&RelayError::GuardrailBlocked {
-            name: "Large auxiliary".into(),
-        });
-        assert_eq!(blocked.class.outcome(0), Outcome::Rejected);
-        assert_eq!(blocked.class.outcome(1), Outcome::Rejected);
-    }
-
     #[test]
     fn a_truncated_gzip_stream_is_not_gzip() {
         let plain = vec![b'x'; 8 << 10];

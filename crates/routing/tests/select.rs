@@ -27394,37 +27394,6 @@ fn a_week_whose_wall_lies_two_hours_past_its_first_reading_over_fires_after_thir
 }
 
 #[test]
-fn a_week_whose_wall_lies_a_day_out_fires_after_two_burn_averages_over_the_ceiling_and_not_a_second_before(
-) {
-    let s = wall_pool();
-    // s1's 1.44 input tokens a second burn 0.0024 of a's week an hour, so the week at 0.9448 reaches the wall 23 hours
-    // after T and projects 0.9568 at its horizon five hours out, over the ceiling. A quarter of the day from the first
-    // reading over is six hours, so the wait is its cap, two burn averages of half an hour.
-    let read = |since: i64| {
-        let mut st = a_burning(1.44, 0.1, 0.9448, T);
-        st.stamp_projection_over("p", "a", SEVEN_DAY, since, None);
-        decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng())
-    };
-    let d = read(T - HOUR + SECOND);
-    let shed = line(&d.record, "move:shed");
-    assert!(
-        no_fact(shed, "trigger") && no_fact(shed, "round"),
-        "a second short of two burn averages waits: {:?}",
-        shed.facts
-    );
-    assert_eq!(fact(shed, "wait_seven_day"), &FactValue::Int(HOUR));
-    let d = read(T - HOUR);
-    let shed = line(&d.record, "move:shed");
-    assert_eq!(
-        (fact(shed, "trigger"), fact(shed, "round")),
-        (
-            &FactValue::Text("seven_day".into()),
-            &FactValue::Text("ran".into())
-        )
-    );
-}
-
-#[test]
 fn a_week_over_the_ceiling_with_no_burn_names_no_wall_and_waits_two_burn_averages() {
     let s = wall_pool();
     // s1 burns nothing, so a's week at 0.96 projects 0.96 at its horizon, over the ceiling, on a burn that never

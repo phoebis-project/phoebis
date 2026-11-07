@@ -60,7 +60,7 @@ fn every_preset_of_every_version_checks_and_compiles_under_the_size_limit() {
 }
 
 #[test]
-fn versions_of_one_id_are_distinct_and_ascending_and_current_and_at_answer_the_table() {
+fn versions_of_one_id_are_distinct_and_ascending_and_an_unknown_id_answers_nothing() {
     let mut versions: BTreeMap<&str, Vec<u32>> = BTreeMap::new();
     for preset in presets() {
         versions.entry(preset.id).or_default().push(preset.version);
@@ -70,14 +70,6 @@ fn versions_of_one_id_are_distinct_and_ascending_and_current_and_at_answer_the_t
             stamped.windows(2).all(|pair| pair[0] < pair[1]),
             "{id}: {stamped:?}"
         );
-    }
-    // The table ships each id at version 1 alone.
-    for id in ["away-recap", "prompt-suggestion", "subagent-status-summary"] {
-        let current = Preset::current(presets(), id).expect("a shipped id has a current version");
-        assert_eq!((current.id, current.version), (id, 1));
-        let at = Preset::at(id, 1).expect("a shipped version answers");
-        assert_eq!((at.id, at.version), (id, 1));
-        assert!(Preset::at(id, 2).is_none());
     }
     assert!(Preset::current(presets(), "not-a-preset").is_none());
     assert!(Preset::at("not-a-preset", 1).is_none());

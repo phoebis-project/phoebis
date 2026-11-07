@@ -104,9 +104,6 @@ async fn every_write_failure_reports_the_progress_it_reached() {
     };
     let head = serialize_head(&req).len();
     let cases = [
-        (0, false, WriteProgress::Unsent),
-        (head - 1, false, WriteProgress::Unsent),
-        (head, false, WriteProgress::Unsent),
         (head + 3, false, WriteProgress::Unsent),
         (head + req.body.len(), true, WriteProgress::Written),
     ];

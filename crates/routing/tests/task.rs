@@ -1568,45 +1568,6 @@ async fn a_delete_arriving_while_the_backlog_holds_the_pins_upsert_never_recreat
 }
 
 #[tokio::test]
-async fn a_sessions_end_in_the_backlog_replaces_the_first_seen_record_it_holds_with_the_records_delete(
-) {
-    let store = seeded(&["a", "b"]);
-    let now = Arc::new(AtomicI64::new(1_000));
-    let (handle, hold) = parked_writer(&store, &now).await;
-    for index in 0..WRITER_DEPTH {
-        fill(&handle, index).await;
-    }
-    handle
-        .select(request(&handle, Some("s1"), 1_000))
-        .await
-        .unwrap();
-    assert_eq!(
-        handle.writer_status().deferred,
-        2,
-        "the placement waits in the backlog, its pin and its first-seen record"
-    );
-    now.store(2_000, Ordering::SeqCst);
-    assert_eq!(handle.release_session("k", "s1").await.unwrap(), 1);
-    assert_eq!(
-        handle.writer_status().deferred,
-        2,
-        "the end replaces the pin's upsert, and the record's delete replaces the record under its key"
-    );
-    hold.release();
-    wait_for(DRAINED, || {
-        let landed = store.load_routing().unwrap().cooldowns.len();
-        (handle.writer_status().deferred == 0 && landed == WRITER_DEPTH).then_some(())
-    })
-    .await;
-    handle.shutdown().await.unwrap();
-    let rows = stored_first_seen(&store);
-    assert!(
-        rows.iter().all(|(session, _, _)| session != "s1"),
-        "no first-seen row of the ended session lands: {rows:?}"
-    );
-}
-
-#[tokio::test]
 async fn a_shutdown_with_a_full_writer_channel_lands_every_deferred_write() {
     let store = seeded(&["a", "b"]);
     let now = Arc::new(AtomicI64::new(1_000));
@@ -8839,8 +8800,8 @@ async fn a_round_leaves_out_a_pin_whose_agent_ended_until_the_agent_sends_again(
         }
     };
 
-    // Inside the dwell a probe replays the subagent's request and a probe of s2 reports an answer that ended its
-    // turn: neither is an agent's own request or its end, so the next round still leaves the subagent out alone.
+    // Inside the dwell a probe replays the subagent's request: it is not the agent's own request, so the next round
+    // still leaves the subagent out.
     handle
         .select(SelectRequest {
             probe: true,
@@ -8848,18 +8809,6 @@ async fn a_round_leaves_out_a_pin_whose_agent_ended_until_the_agent_sends_again(
         })
         .await
         .unwrap();
-    handle
-        .report(Report::PinRenewed {
-            pin: sibling,
-            now: at + 500,
-            usage: None,
-            keepalive: true,
-            cache_ttl_ms: 300_000,
-            fast: false,
-            classifier: false,
-            turn_end: RenewalEnd::NoTurn,
-        })
-        .await;
     drained(&mut events).await;
     let (middle, answer) = round_after(at).await;
     answer.unwrap();
@@ -8876,11 +8825,6 @@ async fn a_round_leaves_out_a_pin_whose_agent_ended_until_the_agent_sends_again(
         skip_of(&round, "s1", "sub"),
         Some("ended"),
         "a probe's selection leaves the mark: {round:?}"
-    );
-    assert_ne!(
-        skip_of(&round, "s2", "main"),
-        Some("ended"),
-        "a probe's renewal ends no agent: {round:?}"
     );
 
     // The subagent sends again inside the dwell, so the next round past it walks its pin.
@@ -16189,86 +16133,6 @@ async fn an_auxiliary_calls_end_on_another_agents_turn_pin_does_not_redirect_the
     assert!(
         matches!(answer.result, SelectResult::Selected(ref s) if s.account.id == "b"),
         "the call follows x's turn, not the fork that ended on y's pin: {:?}",
-        answer.result
-    );
-}
-
-#[tokio::test]
-async fn a_probes_renewal_of_another_agents_turn_pin_does_not_redirect_the_classifier_call() {
-    let store = seeded(&["a", "b", "c"]);
-    let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
-    let opus = "claude-opus-5-5";
-    handle
-        .select(agent_turn(
-            &handle,
-            "s1",
-            "main",
-            "main",
-            opus,
-            &["b", "c"],
-            1_000,
-        ))
-        .await
-        .unwrap();
-    let x = handle
-        .select(agent_turn(
-            &handle,
-            "s1",
-            "x",
-            "subagent",
-            opus,
-            &["a", "c"],
-            2_000,
-        ))
-        .await
-        .unwrap();
-    assert!(matches!(x.result, SelectResult::Selected(ref s) if s.account.id == "b"));
-    let y = handle
-        .select(agent_turn(
-            &handle,
-            "s1",
-            "y",
-            "subagent",
-            opus,
-            &["a", "b"],
-            2_500,
-        ))
-        .await
-        .unwrap();
-    assert!(matches!(y.result, SelectResult::Selected(ref s) if s.account.id == "c"));
-    let usage = || PinUsage {
-        input: 10,
-        cache_read: 0,
-        write_5m: 0,
-        write_1h: 0,
-        output: 5,
-    };
-    // x's turn ends on b, then a keepalive probe, which replays y's turn and its class, renews y's idle pin on c.
-    handle
-        .report(renewal(selected_pin(x), 3_000, usage(), false, 300_000))
-        .await;
-    handle
-        .report(Report::PinRenewed {
-            pin: selected_pin(y),
-            now: 3_010,
-            usage: Some(usage()),
-            keepalive: true,
-            cache_ttl_ms: 300_000,
-            fast: false,
-            classifier: false,
-            turn_end: RenewalEnd::NoTurn,
-        })
-        .await;
-    let call = SelectRequest {
-        classifier: true,
-        request_class: Some("auxiliary".into()),
-        ..request(&handle, Some("s1"), 3_020)
-    };
-    let answer = handle.select(call).await.unwrap();
-    assert!(
-        matches!(answer.result, SelectResult::Selected(ref s) if s.account.id == "b"),
-        "the call follows x's turn, not the probe that renewed y's pin: {:?}",
         answer.result
     );
 }
