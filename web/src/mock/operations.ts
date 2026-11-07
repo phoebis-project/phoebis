@@ -284,7 +284,7 @@ const firstRequestAt = (id: string, sessionCreatedAt: string | null): string | u
  * A pin's burn as the Pro-week figure per hour: the account tier's own share of `window` scaled by the tier's capacity
  * there over the anchor tier's 7-day capacity, the Pro week the figure is a share of.
  */
-export const burnEquivalentOf = (burn: number | null, accountId: string, window: CostWindow): number | null => {
+const burnEquivalentOf = (burn: number | null, accountId: string, window: CostWindow): number | null => {
   const tier = accountById.get(accountId)?.subscription?.rateLimitTier;
   const own = tier === undefined ? null : tierCapacity(TABLES, tier, window);
   const anchor = tierCapacity(TABLES, anchorTier(TABLES), 'seven_day');

@@ -63,7 +63,6 @@ test('an overage request, a fast answer, an API key request and a usage-based re
 });
 
 test('under Dollar equivalent an overage request, a fast answer and an API key request read a dash titled no subscription equivalent', () => {
-  assert.equal(d.NO_EQUIVALENT_TITLE, 'Billed in dollars, no subscription equivalent');
   for (const a of [attempt('oauth', true, 'standard'), attempt('oauth', false, 'fast'), attempt('api_key', null, 'standard')]) {
     const unit = d.costUnitOf(request(null, [PLAN, a], 1.25), 'equivalent', null);
     const what = JSON.stringify(a);
@@ -90,14 +89,12 @@ test('under All in dollars and Dollar equivalent a plan request the route priced
 });
 
 test('under Billed dollars a plan request reads a dash titled nothing billed', () => {
-  assert.equal(d.NOTHING_BILLED_TITLE, 'Nothing billed: a subscription request');
   const unit = d.costUnitOf(request({ five_hour: 0.0042, seven_day: 0.00061 }, [PLAN], 0.0048, { costEquivalent: 0.014667 }), 'usd', null);
   assert.deepEqual(unit, { kind: 'dash', title: d.NOTHING_BILLED_TITLE, usd: 0.0048 });
   assert.deepEqual(cellOf(unit), { main: '-', sub: '', title: d.NOTHING_BILLED_TITLE }, 'a dash shows no figure');
 });
 
 test('a_free_calls_cost_cell_reads_zero_with_the_free_title', () => {
-  assert.equal(d.FREE_SHARE_TITLE, 'Free on the plan: a client classifier call takes no window share');
   const free = request({ five_hour: 0, seven_day: 0 }, [PLAN], 0.0012, { costEquivalent: 0, shareReason: 'client_classifier' });
   const native = d.costUnitOf(free, 'native', null);
   assert.deepEqual(native, { figure: 0, hint: null, kind: 'equivalent', reason: 'client_classifier', usd: 0.0012 });

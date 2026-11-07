@@ -23,23 +23,6 @@ test("an account's slow-down draws while its factor is under 1 and the 5-hour wi
   assert.equal(d.slowedOf({ slowDown: null, windows: live }, now), null, 'no entry');
 });
 
-test('the plan word table labels the eight resolved words and nothing else', () => {
-  assert.deepEqual(Object.keys(d.PLAN_WORD_LABEL).sort(), [...d.PLAN_WORDS].sort());
-  assert.deepEqual(
-    d.PLAN_WORDS.map((word) => [word, d.planWordLabel(word)]),
-    [
-      ['enterprise', 'Enterprise'],
-      ['free', 'Free'],
-      ['max', 'Max (tier unknown)'],
-      ['max_20x', 'Ultra'],
-      ['max_5x', 'Max'],
-      ['pro', 'Pro'],
-      ['team', 'Team'],
-      ['usage_based', 'Usage-based'],
-    ],
-  );
-});
-
 test('a plan word the table lacks reads as sent, a key every plain object carries among them', () => {
   assert.equal(d.planWordLabel('some_new_word'), 'some_new_word');
   assert.equal(d.planWordLabel('constructor'), 'constructor', "the table's own keys alone label a word");

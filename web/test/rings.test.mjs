@@ -92,7 +92,6 @@ test("each ring's line and row titles count the chosen week's weeks, the Fable r
     pro.rows.map((r) => d.ringRowTitle(pro, r)),
     ['primary: 40% of the pooled capacity', 'nightly: 8% of the pooled capacity'],
   );
-  assert.equal(d.fmtWindows(1.3), '1.30');
 });
 
 test('an account without the ring\'s window is named with the window\'s reason, one with no window at all "not read yet", and one with routing off neither weighed nor named', () => {

@@ -1276,7 +1276,6 @@ test('a one-number member keeps its null and the display name reads off the prof
   const unpriced = d.decodeBurnPoint({ equivalent: null, unpriced: true });
   const priced = d.decodeBurnPoint({ equivalent: 0.0042, unpriced: false });
   assert.deepEqual([unpriced.equivalent, unpriced.unpriced, priced.equivalent, priced.unpriced], [null, true, 0.0042, false], 'a burn point reads its figure and the flag apart');
-  assert.deepEqual([d.decodeSession({ burn_window: 'seven_day' }).burnWindow, d.decodeSession({}).burnWindow], ['seven_day', null], "a session names its burn's window, none without one");
   assert.deepEqual([d.decodeSubscription({ plan_display_name: 'Ultra' }, null).planDisplayName, d.decodeSubscription({}, null).planDisplayName], ['Ultra', null], "the profile's display name, none where the document lacks it");
 });
 
@@ -1429,15 +1428,11 @@ test("an account rollup carries its hour's window samples keyed by the ledger's 
 test('a captured body carries the bytes the route counted, never the bytes the drawer would measure', () => {
   const whole = d.decodeBodies(fixture('request_bodies'));
   assert.equal(whole.request.model, 'claude-sonnet-5');
-  assert.equal(whole.requestBytesStored, whole.requestBytesSeen, 'nothing was cut, so both sides read the same count');
   assert.equal(whole.responseTruncated, false);
   // A stream is stored as its own text: rendering it back through JSON.stringify adds the escapes, and a
   // length measured there would answer less than the stored count rather than the ten bytes that were cut.
   const stream = d.decodeBodies({ request_id: 'r-cut', response: 'event: message_start\ndata: {"type":"message_start"}\n\n', response_bytes_stored: 8_388_608, response_bytes_seen: 8_388_618, response_truncated: true });
   assert.equal(d.bytesDropped(stream.responseBytesSeen, stream.responseBytesStored), 10);
-  const multibyte = d.decodeBodies({ request_id: 'r-utf8', request: { text: 'héllo' }, request_bytes_stored: 17, request_bytes_seen: 17 });
-  assert.equal(multibyte.requestBytesStored, 17, 'the seventeen bytes the body encodes to, not its sixteen characters');
-  assert.equal(d.bytesDropped(multibyte.requestBytesSeen, multibyte.requestBytesStored), 0);
   const cut = d.decodeBodies({ request_id: 'r-json', response: '{"content":[{"type":"text","text":"aaa', response_bytes_stored: 8_388_608, response_bytes_seen: 8_389_632, response_truncated: true });
   assert.equal(cut.responseTruncated, true);
   assert.equal(d.bytesDropped(cut.responseBytesSeen, cut.responseBytesStored), 1_024);

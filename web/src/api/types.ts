@@ -867,7 +867,6 @@ export interface RequestLog {
 export interface CapturedBodies {
   request: unknown;
   requestBytesSeen: number;
-  requestBytesStored: number;
   requestId: string;
   response: unknown;
   responseBytesSeen: number;

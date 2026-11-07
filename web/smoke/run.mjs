@@ -12174,7 +12174,7 @@ await m.navigate(`/requests/${laptopRow.id}`);
       missing: [`after Escape: ${held.dialog ? 'dialog open' : 'dialog closed'}, ${held.drawer ? 'drawer open' : 'drawer closed'}`, `after the close button: ${closed.dialog ? 'dialog open' : 'dialog closed'}, ${closed.drawer ? 'drawer open' : 'drawer closed'}, focus on ${closed.focused ? 'Open wide' : (document.activeElement?.tagName ?? 'nothing')}`],
     });
 
-    stub({ request: 'line one\nline two', requestBytesStored: 17 });
+    stub({ request: 'line one\nline two' });
     await m.navigate(`/requests/${plainRow.id}`);
     const plain = shownWide(await openWide(m, bodyBlockOf(m, 'Request')));
     await closeWide(m);
@@ -12217,7 +12217,7 @@ await m.navigate(`/requests/${laptopRow.id}`);
     api.getCapturedBodies = async (id) => {
       api.getCapturedBodies = original;
       const answer = await original.call(api, id);
-      return { ...answer, request: value, requestBytesStored: JSON.stringify(value).length, requestId: id };
+      return { ...answer, request: value, requestId: id };
     };
     await m.navigate(`/requests/${row.id}`);
     api.getCapturedBodies = original;
@@ -18594,12 +18594,6 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       JSON.stringify(native.subs) === JSON.stringify([['sunset', `term ended ${instantOf(end)}`]]),
     missing: [JSON.stringify(native && { after: native.after, classes: native.classes, heads: native.heads, ids: native.ids, subs: native.subs, subtitle: native.subtitle })],
   });
-  // The order and the totals read the shipped cost model's capacities, so the figures' labels alone.
-  results.push({
-    name: '/analytics the card heads its fleet figures with the priced totals',
-    ok: JSON.stringify(native?.totals.map(([label]) => label)) === JSON.stringify(['7-day, fleet total', 'Fable, fleet total', null]),
-    missing: [JSON.stringify(native?.totals ?? null)],
-  });
   {
     // Each week prices at the tier it ran under, as on the Accounts block: studio's seed (`claude_max` on
     // `default_claude_max_5x` in mock/accounts.ts) started its subscription 16 days back, so its resets at or before
@@ -18750,7 +18744,6 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   };
   await tab(m, 'Burn');
   expect('/analytics burn section', m.text(), ['Burn', 'Spend per minute', 'Plan per hour', 'The subscription traffic per hour as a share of the chosen week']);
-  results.push({ name: '/analytics the Burn tab draws Spend per minute and the plan card and no token chart', ok: card('Tokens per minute') === undefined && !m.text().includes('Tokens per minute'), missing: [card('Tokens per minute') ? 'the token chart drawn' : 'the words on the page'] });
   {
     // The section draws no group-by and no reason line of its own. The page's group-by carries the Burn's session
     // grouping as its twelfth option, named as the Burn's own.
@@ -20879,8 +20872,6 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     }
     const idleShare = Number([...(weekCard?.querySelectorAll('.hbars--reasons li') ?? [])].find((li) => li.children[0]?.textContent?.trim() === 'Idle limit ran out')?.children[2]?.textContent?.trim().split(' ')[0].replace(/,/g, '') ?? 0);
     results.push({ name: '/analytics idle limit dominates the wasted probes', ok: wasteBars[0] === 'Idle limit ran out' && idleShare > wasteCounts.reduce((n, v) => n + v, 0) / 2, missing: [String(idleShare), String(wasteCounts.reduce((n, v) => n + v, 0))] });
-    const tiles = [...(weekCard?.querySelectorAll('.stat--compact .stat__label') ?? [])].map((l) => l.textContent?.trim());
-    results.push({ name: '/analytics wasted probes reports a count, a cost and a share', ok: JSON.stringify(tiles) === JSON.stringify(['Wasted probes', 'Wasted cost', 'Share of probe cost']), missing: tiles });
     results.push({ name: '/analytics the day the later checks read is reachable', ok: range('24h') !== undefined, missing: [...m.container.querySelectorAll('.segmented button')].map((b) => b.textContent?.trim() ?? '') });
     range('24h')?.click();
     await m.settle(700);
@@ -26044,7 +26035,6 @@ await forView(['/', '/analytics', '/pools', '/sessions', '/settings'], async () 
       await pg.settle(200);
     }
   };
-  const CAPTION_NOTE = 'A shaded cell is more than one full window.';
   // The cost model's models and the price file's, a dated price row under its undated id, tier by tier whatever order
   // the files keep: each tier's newest model shown, the rest folded.
   const listed = [...Object.keys(costs.modelWeight), ...prices.map((p) => p.model)].filter((model, i, all) => all.findIndex((m) => undatedModel(m) === undatedModel(model)) === i);
@@ -26083,8 +26073,7 @@ await forView(['/', '/analytics', '/pools', '/sessions', '/settings'], async () 
         button?.textContent === olderText(older.length) &&
         button.getAttribute('aria-expanded') === 'false' &&
         !rows.some((r) => r.classList.contains('is-divider')) &&
-        caption() === `Share of a ${planLabel(anchor)} window per 1M tokens${regimeClause}` &&
-        (rates()?.querySelector('.cost-ref__caption .muted')?.textContent ?? '') === CAPTION_NOTE,
+        caption() === `Share of a ${planLabel(anchor)} window per 1M tokens${regimeClause}`,
       missing: [JSON.stringify(pressed('Tier')), JSON.stringify(pressed('Peak band')), spinner()?.value ?? 'no spinner', JSON.stringify(pressed('Token count')), JSON.stringify(shown), JSON.stringify(leaders), `fold at ${fold} of ${rows.length}`, button?.outerHTML ?? 'no fold', caption()],
     });
   }

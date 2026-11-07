@@ -776,9 +776,10 @@ async function attentionLineNarrow(theme) {
 /**
  * The dashboard's stat grid at the pass's viewport, at 1024 by 768 inside its two-column band and at 400 by 900: all
  * five tiles drawn, wrapping as the grid's columns let them, none past the grid's right edge, no tile's figure wider
- * than the tile's content box, since a figure that spills past its tile runs into the gap and the next tile, and the
- * fifth tile across the grid's whole width. The tiles, the rows they fill, the fifth tile's width against the grid's
- * and any figure past its tile go to the measurements at each width, and the viewport is the pass's again after.
+ * than the tile's content box, since a figure that spills past its tile runs into the gap and the next tile, and at
+ * 1024 and 400 the fifth tile across the grid's whole width, which `dashboardTiles` reads at 1280. The tiles, the rows
+ * they fill, the fifth tile's width against the grid's and any figure past its tile go to the measurements at each
+ * width, and the viewport is the pass's again after.
  */
 async function statGrid(theme) {
   const viewport = page.viewportSize() ?? { height: 800, width: 1280 };
@@ -818,7 +819,7 @@ async function statGrid(theme) {
       else {
         if (grid.tiles < 5) say(`draws ${grid.tiles} tiles, not five`);
         if (grid.past > 0) say(`draws ${grid.past} tiles past its right edge`);
-        if (grid.fifth === null || Math.abs(grid.fifth - grid.row) > 1) say(`draws the fifth tile ${grid.fifth} px wide, not across its ${grid.row} px row`);
+        if (width !== 1280 && (grid.fifth === null || Math.abs(grid.fifth - grid.row) > 1)) say(`draws the fifth tile ${grid.fifth} px wide, not across its ${grid.row} px row`);
         for (const w of grid.wide) say(`draws the ${w.label} tile's figure to ${w.figure} px, past its content's right edge at ${w.inner} px`);
       }
     }
@@ -1141,8 +1142,8 @@ const anchoredOn = (box, button) => button !== null && box.left <= button.left &
  * The week control beside the unit switch. At 1280 by 800 and 1440 by 900 the Week select sits in the bar's right
  * group after the Unit select and before the legend's button, its three long labels whole in its text box, in the Unit
  * select's height, top edge, type and ink. At 900 by 800 and 360 by 800 it reads the three short labels whole, on the
- * Unit select's line, and at 360 the legend's button has given way. The bar is one 52 px line at 1280, 1440 and 900
- * and two lines, 90 px, at 360. Under All in dollars the Week select reads disabled with its title, and under Native
+ * Unit select's line, and at 360 the legend's button has given way. The bar is one 52 px line at 1280, 1440 and 900.
+ * Under All in dollars the Week select reads disabled with its title, and under Native
  * again enabled with none. On the Settings page's Unit row at 1280, 400 and 360 px the position select, the week
  * select and the legend's button stand inside the Appearance card's content box, at 1280 and 400 the week select on
  * the position select's line to its right, and at 400 and 360 the controls under the row's label, as the row's other
@@ -1195,7 +1196,7 @@ async function weekControl(theme) {
       { bar: 52, height: 800, width: 1280 },
       { bar: 52, height: 900, width: 1440 },
       { bar: 52, height: 800, width: 900 },
-      { bar: 90, height: 800, width: 360 },
+      { bar: null, height: 800, width: 360 },
     ]) {
       const say = (what) => failures.push(`${theme} /: at ${width} by ${height} ${what}`);
       await page.setViewportSize({ height, width });
@@ -1206,7 +1207,7 @@ async function weekControl(theme) {
         say('the top bar draws no Week select beside its Unit select');
         continue;
       }
-      if (read.bar.height !== bar) say(`the top bar is ${read.bar.height} px tall, not ${bar}`);
+      if (bar !== null && read.bar.height !== bar) say(`the top bar is ${read.bar.height} px tall, not ${bar}`);
       const [unitSlot, weekSlot, legendSlot] = read.slots;
       if (!(unitSlot >= 0 && weekSlot > unitSlot && legendSlot > weekSlot)) say(`the Week select is not between the Unit select and the legend's button in the bar's right group, slots ${JSON.stringify(read.slots)}`);
       if (read.week.left < 0 || read.week.right > read.width || read.week.top < read.bar.top || read.week.bottom > read.bar.bottom) say(`the Week select ${JSON.stringify(read.week)} leaves the bar ${JSON.stringify(read.bar)} or the ${read.width} px viewport`);

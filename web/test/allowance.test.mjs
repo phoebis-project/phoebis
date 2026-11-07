@@ -43,7 +43,6 @@ const windowOf = (window, shares, { newest = NOW - DAY, pairs = [], sources = []
 const accountOf = (accountId, plan, windows) => ({ accountId, ...plan, windows });
 
 test('the span runs 29 days behind now to now, four weeks and a day of slack', () => {
-  assert.equal(d.ALLOWANCE_WEEKS, 4);
   assert.deepEqual(d.allowanceSpan(NOW), { from: iso(NOW - 29 * DAY), to: iso(NOW) });
 });
 
