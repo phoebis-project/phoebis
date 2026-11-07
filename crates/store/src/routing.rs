@@ -570,11 +570,6 @@ impl Store {
         self.routing_transaction(|tx| delete_pin_on(tx, key))
     }
 
-    /// `delete_pin` for a pin that leaves for good, one transaction.
-    pub fn end_pin(&self, key: &PinKey) -> Result<bool, StoreError> {
-        self.routing_transaction(|tx| delete_pin_on(tx, key))
-    }
-
     /// `INSERT OR REPLACE`: the router writes a record's row only when it creates the record, so a second write under
     /// a key, session and agent follows the session's end, whose delete of the record a deferred write's fold may
     /// have replaced with this write, and the new instant wins.
@@ -715,10 +710,6 @@ impl RoutingTx<'_> {
     }
 
     pub fn delete_pin(&mut self, key: &PinKey) -> Result<bool, StoreError> {
-        delete_pin_on(self.tx, key)
-    }
-
-    pub fn end_pin(&mut self, key: &PinKey) -> Result<bool, StoreError> {
         delete_pin_on(self.tx, key)
     }
 

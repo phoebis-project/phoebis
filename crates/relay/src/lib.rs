@@ -126,11 +126,14 @@ pub enum RelayError {
     UnsupportedEncoding,
 }
 
-/// How the edited body leaves toward the upstream, `proxy.upstream_gzip`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UpstreamGzip {
-    /// Gzip when the client sent gzip, identity otherwise.
-    Auto,
-    Off,
-    On,
+phoebis_store::text_enum! {
+    plain
+    /// How the edited body leaves toward the upstream, `proxy.upstream_gzip`.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum UpstreamGzip {
+        /// Gzip when the client sent gzip, identity otherwise.
+        Auto => "auto",
+        Off => "off",
+        On => "on",
+    }
 }

@@ -23,14 +23,9 @@ pub(crate) fn create_missing(dir: &Path, created: &mut Vec<PathBuf>) -> Result<(
     create(&missing(dir)?, created)
 }
 
-/// Creates `path`'s missing directories as the walk does and refuses anything at `path` that is not a directory,
-/// reading through a link as the recursive create does. A link to a directory passes, and a dangling link refuses,
-/// since the first start would fail on it.
-pub(crate) fn create_dir_through_walk(
-    path: &Path,
-    created: &mut Vec<PathBuf>,
-) -> Result<(), WalkError> {
-    create_missing(path, created)?;
+/// Refuses anything at `path` that is not a directory, reading through a link as the recursive create does. A link
+/// to a directory passes, and a dangling link refuses, since the first start would fail on it.
+pub(crate) fn require_dir(path: &Path) -> Result<(), WalkError> {
     let refused = |error| WalkError {
         step: "checking",
         path: path.to_path_buf(),

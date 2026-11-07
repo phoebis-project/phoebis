@@ -74,14 +74,7 @@ pub struct ProxyConfig {
     pub upstream_gzip: phoebis_relay::UpstreamGzip,
 }
 
-/// The one table of `proxy.upstream_gzip`'s words, read by the deserializer and the check-config print.
-pub const UPSTREAM_GZIP_WORDS: &[(&str, phoebis_relay::UpstreamGzip)] = &[
-    ("auto", phoebis_relay::UpstreamGzip::Auto),
-    ("off", phoebis_relay::UpstreamGzip::Off),
-    ("on", phoebis_relay::UpstreamGzip::On),
-];
-
-/// A word outside the table is refused at the parse. The refusal is raised inside the visitor, since the parser puts
+/// A word outside the set is refused at the parse. The refusal is raised inside the visitor, since the parser puts
 /// the key's path in front of an error the value's own read raises and only the block's path in front of one raised
 /// after it.
 fn upstream_gzip_word<'de, D: serde::Deserializer<'de>>(
@@ -97,10 +90,7 @@ fn upstream_gzip_word<'de, D: serde::Deserializer<'de>>(
         }
 
         fn visit_str<E: serde::de::Error>(self, word: &str) -> Result<Self::Value, E> {
-            UPSTREAM_GZIP_WORDS
-                .iter()
-                .find(|(known, _)| *known == word)
-                .map(|(_, setting)| *setting)
+            phoebis_relay::UpstreamGzip::parse(word)
                 .ok_or_else(|| E::custom(format_args!("must be auto, on or off, not {word}")))
         }
     }

@@ -334,17 +334,13 @@ impl Store {
             "UPDATE accounts SET enabled = ?2, revision = revision + 1, updated_at = ?3 WHERE id = ?1",
             params![id, enabled, now],
         )?;
-        let pairs = crate::registry::changed(
-            &serde_json::json!({ "enabled": before }),
-            &serde_json::json!({ "enabled": enabled }),
-        );
         crate::registry::record_change(
             &tx,
             now,
             actor,
             "account_updated",
             id,
-            &serde_json::Value::Object(pairs).to_string(),
+            &serde_json::json!({ "enabled": { "from": before, "to": enabled } }).to_string(),
         )?;
         tx.commit()?;
         Ok(())

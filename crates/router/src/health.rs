@@ -98,11 +98,7 @@ struct Deadlined<'c> {
 
 impl Deadlined<'_> {
     fn left(&self) -> std::io::Result<Duration> {
-        let left = self.deadline.saturating_duration_since(self.clock.now());
-        if left.is_zero() {
-            return Err(ErrorKind::TimedOut.into());
-        }
-        Ok(left)
+        time_left(self.deadline, self.clock).ok_or_else(|| ErrorKind::TimedOut.into())
     }
 }
 
@@ -148,11 +144,11 @@ fn remaining(
     timeout: Duration,
     clock: &dyn Clock,
 ) -> Result<Duration, String> {
-    let left = deadline.saturating_duration_since(clock.now());
-    if left.is_zero() {
-        return Err(out_of_time(addr, timeout));
-    }
-    Ok(left)
+    time_left(deadline, clock).ok_or_else(|| out_of_time(addr, timeout))
+}
+
+fn time_left(deadline: Instant, clock: &dyn Clock) -> Option<Duration> {
+    Some(deadline.saturating_duration_since(clock.now())).filter(|left| !left.is_zero())
 }
 
 /// `HEAD /api/ready` through `stream` and the status line it answers. `stream` sets each read's and write's timeout

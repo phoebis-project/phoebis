@@ -632,7 +632,7 @@ fn end_pin_without_an_end_keeps_the_sessions_first_seen_rows() {
     ] {
         store.insert_first_seen(&row).unwrap();
     }
-    assert!(store.end_pin(&sub.key()).unwrap());
+    assert!(store.delete_pin(&sub.key()).unwrap());
     let load = store.load_routing().unwrap();
     assert_eq!(
         (load.pins, load.first_seen),

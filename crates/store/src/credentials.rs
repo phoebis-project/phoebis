@@ -2,6 +2,7 @@
 
 use std::sync::LazyLock;
 
+use rusqlite::types::{FromSql, FromSqlResult, ValueRef};
 use rusqlite::{params, Connection, OptionalExtension};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
@@ -122,12 +123,13 @@ impl AttemptOutcome {
     /// The stored outcome word.
     pub fn word(&self) -> &'static str {
         match self {
-            AttemptOutcome::Committed => "committed",
+            AttemptOutcome::Committed => OutcomeWord::Committed,
             AttemptOutcome::Disconnected
             | AttemptOutcome::Failed { .. }
-            | AttemptOutcome::Superseded => "failed",
-            AttemptOutcome::Uncertain { .. } => "uncertain",
+            | AttemptOutcome::Superseded => OutcomeWord::Failed,
+            AttemptOutcome::Uncertain { .. } => OutcomeWord::Uncertain,
         }
+        .as_str()
     }
 
     pub fn detail(&self) -> Option<&str> {
@@ -170,33 +172,23 @@ pub enum Settled {
     Uncertain,
 }
 
-/// An attempt row's outcome word, decoded once at the row read and read into `Settled` with the row's detail. Any
-/// other stored word reads as `Failed` at the row read, and `Superseded` under the `superseded` detail.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OutcomeWord {
-    Committed,
-    Failed,
-    Uncertain,
+text_enum! {
+    plain
+    /// An attempt row's outcome word, decoded once at the row read and read into `Settled` with the row's detail. Any
+    /// other stored word reads as `Failed` at the row read, and `Superseded` under the `superseded` detail.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum OutcomeWord {
+        Committed => "committed",
+        Failed => "failed",
+        Uncertain => "uncertain",
+    }
 }
 
-impl OutcomeWord {
+impl FromSql for OutcomeWord {
     // Total rather than refusing an unknown word: a refused row would fail the mirror's batch read, whose cursor
     // then never passes it, and the whole attention answer with it.
-    fn from_text(word: &str) -> OutcomeWord {
-        match word {
-            "committed" => OutcomeWord::Committed,
-            "uncertain" => OutcomeWord::Uncertain,
-            _ => OutcomeWord::Failed,
-        }
-    }
-
-    /// The stored word.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            OutcomeWord::Committed => "committed",
-            OutcomeWord::Failed => "failed",
-            OutcomeWord::Uncertain => "uncertain",
-        }
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        Ok(OutcomeWord::parse(value.as_str()?).unwrap_or(OutcomeWord::Failed))
     }
 }
 
@@ -324,10 +316,7 @@ fn last_refresh_attempt_in(
         .query_row(params![account_id, incarnation as i64], |row| {
             Ok(LastAttempt {
                 resolved_at: row.get(0)?,
-                outcome: row
-                    .get::<_, Option<String>>(1)?
-                    .as_deref()
-                    .map(OutcomeWord::from_text),
+                outcome: row.get(1)?,
                 detail: row.get(2)?,
             })
         })
@@ -384,7 +373,7 @@ fn row_to_resolved_attempt(r: &rusqlite::Row<'_>) -> rusqlite::Result<ResolvedAt
         account_id: r.get(1)?,
         started_at: r.get(2)?,
         resolved_at: r.get(3)?,
-        outcome: OutcomeWord::from_text(&r.get::<_, String>(4)?),
+        outcome: r.get(4)?,
         detail: r.get(5)?,
         lifecycle_generation: r.get::<_, i64>(6)? as u64,
         credential_generation: r.get::<_, i64>(7)? as u64,
@@ -867,7 +856,7 @@ impl Store {
         limit: usize,
     ) -> Result<Vec<ResolvedAttempt>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
-        let mut stmt = conn.prepare(&RESOLVED_AFTER)?;
+        let mut stmt = conn.prepare_cached(&RESOLVED_AFTER)?;
         let rows = stmt.query_map(
             params![resolved_at, id as i64, limit as i64],
             row_to_resolved_attempt,

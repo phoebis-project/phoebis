@@ -652,7 +652,7 @@ fn write(
     }
     parents.push(parent_of(&plan.config_path));
     for dir in parents {
-        walk_to(dir, private_dirs::create_missing, written)?;
+        walk_to(dir, written)?;
     }
 
     let hex = StorageKey::generate().to_hex();
@@ -662,11 +662,8 @@ fn write(
         write_file(env_file, 0o600, &[lines.as_bytes()], written)?;
     }
     if !plan.container {
-        walk_to(
-            &plan.data_dir,
-            private_dirs::create_dir_through_walk,
-            written,
-        )?;
+        walk_to(&plan.data_dir, written)?;
+        private_dirs::require_dir(&plan.data_dir)?;
     }
     write_file(
         &plan.config_path,
@@ -682,15 +679,11 @@ fn write(
     Ok(())
 }
 
-/// Records what `walk` created before its answer is read, so a walk that fails part way leaves its directories to the
-/// undo.
-fn walk_to(
-    dir: &Path,
-    walk: fn(&Path, &mut Vec<PathBuf>) -> Result<(), private_dirs::WalkError>,
-    written: &mut Vec<Landed>,
-) -> Result<(), InitError> {
+/// Records what the walk created before its answer is read, so a walk that fails part way leaves its directories to
+/// the undo.
+fn walk_to(dir: &Path, written: &mut Vec<Landed>) -> Result<(), InitError> {
     let mut created = Vec::new();
-    let walked = walk(dir, &mut created);
+    let walked = private_dirs::create_missing(dir, &mut created);
     written.extend(created.into_iter().map(|path| Landed { dir: true, path }));
     walked.map_err(InitError::from)
 }

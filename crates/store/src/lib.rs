@@ -1116,31 +1116,27 @@ impl SealedRow {
 /// sealed row, so on such a registry it seals the canary under the key it opens and discards nothing, the way out.
 const PROOF_ROWS_PER_KIND: i64 = 32;
 
-/// Whether the key opens any of the sealed rows `leading_sealed_rows` reads, or `None` when the registry holds
-/// nothing sealed. A row that does not open is no proof of a wrong key, since the runtime survives a corrupt row
-/// too; a wrong key opens none of them.
+/// Whether the key opens any of the first `PROOF_ROWS_PER_KIND` sealed rows of each kind in row order (credential
+/// bundles, API-key secrets and recipe bodies), or `None` when the registry holds nothing sealed. A row that does not
+/// open is no proof of a wrong key, since the runtime survives a corrupt row too, and a wrong key opens none of them.
+/// `read_canary` meets the file as it is, without `prepare`, so a table the registry does not have yet holds nothing
+/// sealed rather than failing the read.
 fn sealed_rows_open_under(conn: &Connection, key: &StorageKey) -> Result<Option<bool>, StoreError> {
-    let rows = leading_sealed_rows(conn)?;
-    if rows.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(rows.iter().any(|row| row.opens_under(key))))
-}
-
-/// The first `PROOF_ROWS_PER_KIND` sealed rows of each kind in row order: credential bundles, API-key secrets and
-/// recipe bodies. `read_canary` meets the file as it is, without `prepare`, so a table the registry does not have yet
-/// holds nothing sealed rather than failing the read.
-fn leading_sealed_rows(conn: &Connection) -> Result<Vec<SealedRow>, StoreError> {
-    let mut rows = Vec::new();
+    let mut seen = false;
+    let mut opened = false;
     for kind in &SEALED_KINDS {
         if !has_table(conn, kind.table)? {
             continue;
         }
         let mut statement = conn.prepare(&format!("{} ORDER BY rowid LIMIT ?1", kind.sql))?;
-        let found = statement.query_map(params![PROOF_ROWS_PER_KIND], kind.row_of)?;
-        rows.extend(found.collect::<rusqlite::Result<Vec<_>>>()?);
+        let mut rows = statement.query(params![PROOF_ROWS_PER_KIND])?;
+        while let Some(row) = rows.next()? {
+            let sealed = (kind.row_of)(row)?;
+            seen = true;
+            opened = opened || sealed.opens_under(key);
+        }
     }
-    Ok(rows)
+    Ok(seen.then_some(opened))
 }
 
 type RowOf = fn(&rusqlite::Row<'_>) -> rusqlite::Result<SealedRow>;

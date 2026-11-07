@@ -726,10 +726,7 @@ fn json_column<T: serde::de::DeserializeOwned>(
     r: &rusqlite::Row<'_>,
     idx: usize,
 ) -> rusqlite::Result<T> {
-    let raw: String = r.get(idx)?;
-    serde_json::from_str(&raw).map_err(|e| {
-        rusqlite::Error::FromSqlConversionFailure(idx, rusqlite::types::Type::Text, Box::new(e))
-    })
+    json_text(&r.get::<_, String>(idx)?, idx)
 }
 
 /// A nullable JSON text column decoded as its row is read, its fault naming its own column.
@@ -737,13 +734,15 @@ pub(crate) fn optional_json_column<T: serde::de::DeserializeOwned>(
     r: &rusqlite::Row<'_>,
     idx: usize,
 ) -> rusqlite::Result<Option<T>> {
-    let raw: Option<String> = r.get(idx)?;
-    raw.map(|raw| {
-        serde_json::from_str(&raw).map_err(|e| {
-            rusqlite::Error::FromSqlConversionFailure(idx, rusqlite::types::Type::Text, Box::new(e))
-        })
+    r.get::<_, Option<String>>(idx)?
+        .map(|raw| json_text(&raw, idx))
+        .transpose()
+}
+
+fn json_text<T: serde::de::DeserializeOwned>(raw: &str, idx: usize) -> rusqlite::Result<T> {
+    serde_json::from_str(raw).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(idx, rusqlite::types::Type::Text, Box::new(e))
     })
-    .transpose()
 }
 
 /// The 33 pool columns the insert and the update write, in the order `pool_params!` binds them. `POOL_SELECT` reads
@@ -2254,7 +2253,7 @@ fn account_pairs(before: &AccountRow, u: &AccountUpdate<'_>, term: &Subscription
 /// Each member whose value differs between two snapshots of one row, as `{"from": old, "to": new}`: `before`'s
 /// members, then the members of `after` that `before` lacks, so a save that gives a policy member the row did not
 /// hold a value names it. A member one side lacks reads null there, so a null beside a missing member is no change.
-pub(crate) fn changed(
+fn changed(
     before: &serde_json::Value,
     after: &serde_json::Value,
 ) -> serde_json::Map<String, serde_json::Value> {
