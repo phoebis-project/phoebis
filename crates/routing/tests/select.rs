@@ -7026,10 +7026,6 @@ fn a_held_subagent_is_held_on_its_cohorts_account() {
         panic!("held on the cohort's account")
     };
     assert_eq!(
-        hold.account_id, "b",
-        "the override moves the hold to the cohort's account rather than the strategy's a"
-    );
-    assert_eq!(
         hold,
         HoldFacts {
             account_id: "b".into(),
@@ -7396,10 +7392,6 @@ fn a_cohort_hold_that_times_out_lands_the_next_member_elsewhere() {
     let SelectResult::Held(hold) = select(&mut st, &s, &sub_req, &mut rng()).0 else {
         panic!("b holds once the cohort's account is attempted and its own entry no longer admits")
     };
-    assert_eq!(
-        hold.account_id, "b",
-        "a is attempted, so the override skips its entry and the strategy's choice takes the hold"
-    );
     assert_eq!(
         hold,
         HoldFacts {

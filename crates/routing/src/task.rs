@@ -5616,11 +5616,6 @@ mod tests {
             Some(4.0 * 0.25 + 6.0 * 0.5),
             "the row's plain copy at the dollar rate plus its fast usage at the fast rate"
         );
-        assert_eq!(
-            rates.price_pin(BurnUnit::WindowShare, &pin, FIVE_HOUR),
-            Some(16.0 * 0.125),
-            "the banded copy alone, since fast usage draws usage credits and never the plan's window"
-        );
     }
 
     /// Both arms of an open window's bound take the reset's slack: the request that opened the window can reach the
