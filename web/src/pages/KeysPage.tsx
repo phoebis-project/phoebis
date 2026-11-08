@@ -10,18 +10,20 @@ import { useHashLanding } from '@/app/useHashLanding';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { FilterBar } from '@/components/FilterBar';
 import { KEY_STATUS_TONE, KeyDialog, SecretDialog } from '@/components/KeyDialog';
+import { SortControl } from '@/components/SortControl';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { sumTileOf, Tile } from '@/components/ui/Tile';
 import { IconPlus } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skeleton, SkeletonRows } from '@/components/ui/primitives';
-import { EDIT_PARAM, EDIT_PARAMS, KEYS_CODEC } from '@/lib/address';
-import { dollarsUnder, nativeSidesOf, sidesLine, sumFunded, UNPRICED_TITLE, type WeekReading } from '@/lib/analytics';
+import { EDIT_PARAM, EDIT_PARAMS, KEY_SORT_KEYS, KEYS_CODEC, sortAddressOf, sortDirOf, type KeysAddress } from '@/lib/address';
+import { dollarsUnder, fundedRankOf, nativeSidesOf, sidesLine, sumFunded, UNPRICED_TITLE, type WeekReading } from '@/lib/analytics';
 import { effectiveCaptureHours } from '@/lib/capture';
 import { KEYS_DIMENSIONS, notLoadedReason } from '@/lib/filterBar';
 import type { PauseCause } from '@/lib/follow';
 import { fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd, noun, plural } from '@/lib/format';
 import { KEY_GROUPS, type KeyGroup } from '@/lib/forms';
 import { useAsync, useNow, useQueryFilters, useWeekReading } from '@/lib/hooks';
+import { orderRows, type SortFigure } from '@/lib/sort';
 import type { UnitPosition } from '@/lib/unit';
 
 const captureLabel = (hours: number) => (hours > 0 ? `bodies captured, ${hours}h` : 'bodies not captured');
@@ -54,15 +56,6 @@ function keyFigureOf(unit: UnitPosition, s: FundedSum, empty: string, reading: W
   if (reading.scale === null) return null;
   return { text: sidesLine(sides, reading.week, reading.scale), title: sides.equivalent === null ? UNPRICED_TITLE : undefined };
 }
-/**
- * A key's bar length on the lifetime cost card: under native the Pro-week figure, which the chosen week scales alike for
- * every bar, where a billed key's dollars read in its label alone, and null where a plan row priced nothing, since the
- * priced rows alone would draw a length the key's traffic does not have. A dollar position ranks by its dollars.
- */
-export const keyRankOf = (unit: UnitPosition, lifetime: FundedSum): number | null => {
-  return unit === 'native' ? lifetime.equivalent : dollarsUnder(unit, lifetime);
-};
-
 /** A key's figure while the scale is out: the skeleton, or the reading's failure as a dash titled with it. */
 function PendingFigure({ failure }: { failure: WeekReading['failure'] }) {
   return failure === null ? <Skeleton width={72} height={12} /> : <span title={failure.text}>-</span>;
@@ -90,6 +83,7 @@ export function KeysPage() {
   // then carries them through.
   const { address, filters, replaceLater, update } = useQueryFilters(KEYS_CODEC, { keep: EDIT_PARAMS });
   const status = filters.status;
+  const dir = sortDirOf(KEY_SORT_KEYS, filters);
   const [dialog, setDialog] = useState<{ initialGroup: KeyGroup | null; key: ApiKey | null } | null>(null);
   // Held only while the dialog that shows it is open, because the router keeps no copy of a secret.
   const [created, setCreated] = useState<{ key: CreatedApiKey; title: string } | null>(null);
@@ -132,6 +126,20 @@ export function KeysPage() {
       }),
     [keys.data, poolIds, filters.search, status],
   );
+  // The table alone takes the order: the lifetime card ranks its bars by cost whatever the key.
+  const ordered = useMemo(() => {
+    const figures: Record<KeysAddress['sort'], (k: ApiKey) => SortFigure> = {
+      cost: (k) => fundedRankOf(unit, k.usage7d),
+      created: (k) => Date.parse(k.createdAt),
+      expiry: (k) => (k.expiresAt === null ? null : Date.parse(k.expiresAt)),
+      lastUsed: (k) => (k.lastUsedAt === null ? null : Date.parse(k.lastUsedAt)),
+      name: (k) => k.name,
+      requests: (k) => k.usage7d.requests,
+      status: (k) => k.status,
+      tokens: (k) => k.usage7d.tokens,
+    };
+    return orderRows(rows, figures[filters.sort], dir, (k) => k.name);
+  }, [dir, filters.sort, rows, unit]);
 
   // `/keys#<key id>` lands on the row once the keys have drawn it. A filter that would hide the row is cleared first,
   // and the next run finds the row drawn.
@@ -151,7 +159,8 @@ export function KeysPage() {
   // the unit alone.
   const { byRank, maxRank, totals } = useMemo(() => {
     const data = keys.data;
-    const rank = (k: ApiKey) => keyRankOf(unit, k.lifetime);
+    // A key a plan row priced nothing on ranks null, since its priced rows alone would draw a length its traffic lacks.
+    const rank = (k: ApiKey) => fundedRankOf(unit, k.lifetime);
     return {
       // An unknown rank sorts below a zero, so a flagged key comes last.
       byRank: data === null ? null : [...data].sort((a, b) => (rank(b) ?? -1) - (rank(a) ?? -1)),
@@ -197,6 +206,7 @@ export function KeysPage() {
           }}
           update={update}
         >
+          <SortControl keys={KEY_SORT_KEYS} onChange={(next) => update(sortAddressOf(KEY_SORT_KEYS, next))} value={{ dir, sort: filters.sort }} />
           <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setDialog({ initialGroup: null, key: null })}>
             Create key
           </Button>
@@ -214,7 +224,7 @@ export function KeysPage() {
               <ul className="plain-list hbars">
                 {byRank.map((k) => {
                   const figure = keyFigureOf(unit, k.lifetime, 'No request yet', reading);
-                  const rank = keyRankOf(unit, k.lifetime);
+                  const rank = fundedRankOf(unit, k.lifetime);
                   return (
                     <li key={k.id}>
                       <div className="hbars__head">
@@ -263,7 +273,7 @@ export function KeysPage() {
                           </tr>
                         )
                       : <SkeletonRows count={3} colSpan={8} />
-                    : rows.map((k) => (
+                    : ordered.map((k) => (
                         <tr key={k.id} id={k.id} tabIndex={-1} className="key-row">
                           <td className="col-fill" title={k.name}>
                             <b>{k.name}</b>
@@ -278,6 +288,8 @@ export function KeysPage() {
                               )}
                             </span>
                             {k.keepaliveOptOut && <span className="sub" title="keepalive off">keepalive off</span>}
+                            {/* No column draws the week's requests, so the order's figure sits under the name while picked. */}
+                            {filters.sort === 'requests' && <span className="sub">{plural(k.usage7d.requests, 'request')}, 7d</span>}
                           </td>
                           <td className="mono col-fit">{k.prefix}…</td>
                           <td className="mono col-fit">{k.poolId}</td>

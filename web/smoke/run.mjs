@@ -10484,6 +10484,63 @@ await forView('/guardrails', async () => {
   });
   page.unmount();
 });
+await forView('/guardrails', async () => {
+  // The bar's Sort control on a bare /guardrails, which orders the rows by name. Matches, 24h reads the story's day
+  // (`web/src/mock/guardrails.ts` and the rows that matched them): the summary observed 7 requests and the large
+  // auxiliary guardrail blocked 3. No column draws a guardrail's dates, so Created draws each row's under its name
+  // while picked: the seeds date the large auxiliary guardrail 2 days and the summary 3 days before the harness clock,
+  // Sep 14 and Sep 13, 2026 in UTC, where the smoke runs.
+  const name = "/guardrails the sort control orders the rows by name at rest, Matches, 24h puts the most matched first and flips with the direction, Created draws each row's date under its name while picked, the address carries the pick and a reload reads it back";
+  const listed = await api.listGuardrails();
+  const large = listed.find((g) => g.id === 'large-auxiliary');
+  const page = await mount('/guardrails', { now: CLOCK_ORIGIN });
+  const button = (p) => p.container.querySelector('.filter-bar button[aria-label="Sort"]');
+  const box = () => document.querySelector('.popover .sort-popover')?.closest('.popover') ?? null;
+  const ARROWS = { 'rotate(-90 12 12)': 'up', 'rotate(90 12 12)': 'down' };
+  const read = (p) => {
+    const stamps = guardrailRows(p).flatMap((tr) => [...tr.children[0].querySelectorAll('.sub')].filter((s) => /^(created|updated) /.test(s.textContent?.trim() ?? '')));
+    return {
+      arrow: ARROWS[button(p)?.querySelector('svg path')?.getAttribute('transform') ?? ''] ?? 'no arrow',
+      rows: guardrailRows(p).map((tr) => tr.querySelector('td b')?.textContent?.trim() ?? ''),
+      search: p.location().search,
+      stamps: stamps.map((s) => s.textContent?.trim() ?? ''),
+      stampTitle: stamps[0]?.getAttribute('title') ?? null,
+      text: button(p)?.textContent ?? null,
+      title: button(p)?.getAttribute('title') ?? null,
+    };
+  };
+  const pick = async (p, label) => {
+    button(p)?.click();
+    await p.settle(100);
+    [...(box()?.querySelectorAll('[role="radio"]') ?? [])].find((r) => r.textContent?.trim() === label)?.click();
+    await p.settle(300);
+    return { ...read(p), open: box() !== null };
+  };
+  const bare = read(page);
+  const matches = await pick(page, 'Matches, 24h');
+  const ascending = await pick(page, 'Ascending');
+  const at = page.location();
+  page.unmount();
+  const again = await mount(`${at.pathname}${at.search}`, { now: CLOCK_ORIGIN });
+  const reloaded = read(again);
+  const created = await pick(again, 'Created');
+  again.unmount();
+  const shown = (arrow, rows, search, label, word, stamps = [], stampTitle = null) => ({ arrow, rows, search, stamps, stampTitle, text: `Sort: ${label}`, title: `Sorted by ${label}, ${word}` });
+  const flipped = shown('up', ['Large auxiliary requests', 'Subagent status summary'], '?sort=matches&dir=asc', 'Matches, 24h', 'ascending');
+  const want = {
+    bare: shown('up', ['Large auxiliary requests', 'Subagent status summary'], '', 'Name', 'ascending'),
+    matches: { ...shown('down', ['Subagent status summary', 'Large auxiliary requests'], '?sort=matches', 'Matches, 24h', 'descending'), open: false },
+    ascending: { ...flipped, open: false },
+    reloaded: flipped,
+    created: { ...shown('down', ['Large auxiliary requests', 'Subagent status summary'], '?sort=created', 'Created', 'descending', ['created Sep 14, 2026', 'created Sep 13, 2026'], fmtAbsolute(large?.createdAt ?? null)), open: false },
+  };
+  const got = { bare, matches, ascending, reloaded, created };
+  results.push({
+    name,
+    ok: large !== undefined && JSON.stringify(got) === JSON.stringify(want),
+    missing: Object.entries(got).map(([key, read]) => `${key} ${JSON.stringify(read)} against ${JSON.stringify(want[key])}`),
+  });
+});
 await readsAgain('/guardrails', 'listGuardrails', 5_000);
 await forView('/guardrails', async () => {
   // The dialog's pickers alone draw the pools and the keys, so the page reads them once per visit and again after a
@@ -23055,6 +23112,120 @@ await forView('/keys', async () => {
     missing: [JSON.stringify(chips), `${cells.length} rows of ${both.length} in jobs or all, ${stored.length} listed`, `count ${count}`, ...new Set(cells)],
   });
 });
+await forView('/keys', async () => {
+  // The bar's Sort control on a bare /keys, which orders the table by name at rest. The orders are the story's keys
+  // (`KEYS` in `web/src/mock/pools.ts`, each key's last use and week folded from its requests in
+  // `web/src/mock/requests.ts`) beside from-pool, the key the pool dialog's create case added with no request, under
+  // native, the stored default. from-pool was never used, so it files last under Last used. desktop's and laptop's weeks
+  // hold requests the cost model has no weight for, so they price nothing and file last under Cost, 7d in either
+  // direction. No column draws the week's requests, so Requests, 7d draws them under each name while picked, and no
+  // other key does.
+  const name = "/keys the sort control orders the table by name at rest, each pick orders the rows by the key's figure with an unpriced key last under either direction, the address carries the pick and a reload reads it back";
+  const page = await mount('/keys', { now: CLOCK_ORIGIN });
+  const button = (p) => p.container.querySelector('.filter-bar button[aria-label="Sort"]');
+  const box = () => document.querySelector('.popover .sort-popover')?.closest('.popover') ?? null;
+  const ARROWS = { 'rotate(-90 12 12)': 'up', 'rotate(90 12 12)': 'down' };
+  const read = (p) => {
+    const rows = [...p.container.querySelectorAll('.card--table tbody tr.key-row')];
+    return {
+      arrow: ARROWS[button(p)?.querySelector('svg path')?.getAttribute('transform') ?? ''] ?? 'no arrow',
+      rows: rows.map((tr) => tr.querySelector('td b')?.textContent?.trim() ?? ''),
+      search: p.location().search,
+      text: button(p)?.textContent ?? null,
+      title: button(p)?.getAttribute('title') ?? null,
+      unit: shellUnit(p)?.value ?? null,
+      requests: rows.flatMap((tr) => [...tr.children[0].querySelectorAll('.sub')].map((s) => s.textContent?.trim() ?? '').filter((t) => / requests?, 7d$/.test(t))),
+    };
+  };
+  const bare = read(page);
+  const picks = {};
+  for (const [key, label] of [
+    ['lastUsed', 'Last used'],
+    ['requests', 'Requests, 7d'],
+    ['cost', 'Cost, 7d'],
+    ['costAsc', 'Ascending'],
+  ]) {
+    button(page)?.click();
+    await page.settle(100);
+    [...(box()?.querySelectorAll('[role="radio"]') ?? [])].find((r) => r.textContent?.trim() === label)?.click();
+    await page.settle(300);
+    const { requests, ...rest } = read(page);
+    picks[key] = { ...rest, first: requests[0] ?? 'no week line', open: box() !== null };
+  }
+  const at = page.location();
+  page.unmount();
+  const again = await mount(`${at.pathname}${at.search}`, { now: CLOCK_ORIGIN });
+  const reloaded = read(again);
+  again.unmount();
+  const shown = (arrow, rows, search, label, word) => ({ arrow, rows, search, text: `Sort: ${label}`, title: `Sorted by ${label}, ${word}`, unit: 'native' });
+  const ascending = shown('up', ['batch', 'ci', 'fleet', 'from-pool', 'bench', 'notebook', 'desktop', 'laptop'], '?sort=cost&dir=asc', 'Cost, 7d', 'ascending');
+  const wantPicks = {
+    lastUsed: { ...shown('down', ['desktop', 'fleet', 'bench', 'ci', 'laptop', 'notebook', 'batch', 'from-pool'], '?sort=lastUsed', 'Last used', 'descending'), first: 'no week line', open: false },
+    requests: { ...shown('down', ['laptop', 'desktop', 'ci', 'notebook', 'fleet', 'bench', 'batch', 'from-pool'], '?sort=requests', 'Requests, 7d', 'descending'), first: '224 requests, 7d', open: false },
+    cost: { ...shown('down', ['notebook', 'bench', 'batch', 'ci', 'fleet', 'from-pool', 'desktop', 'laptop'], '?sort=cost', 'Cost, 7d', 'descending'), first: 'no week line', open: false },
+    costAsc: { ...ascending, first: 'no week line', open: false },
+  };
+  results.push({
+    name,
+    ok:
+      JSON.stringify(bare) === JSON.stringify({ ...shown('up', ['batch', 'bench', 'ci', 'desktop', 'fleet', 'from-pool', 'laptop', 'notebook'], '', 'Name', 'ascending'), requests: [] }) &&
+      JSON.stringify(picks) === JSON.stringify(wantPicks) &&
+      JSON.stringify(reloaded) === JSON.stringify({ ...ascending, requests: [] }),
+    missing: [`bare ${JSON.stringify(bare)}`, ...Object.entries(picks).map(([key, got]) => `${key} ${JSON.stringify(got)} against ${JSON.stringify(wantPicks[key])}`), `reloaded ${JSON.stringify(reloaded)}`],
+  });
+});
+await forView('/pools', async () => {
+  // The bar's Sort control on a bare /pools, which orders the cards by name at rest. Cost, 24h reads the story's pools
+  // (`web/src/mock/pools.ts`, each day folded from its requests in `web/src/mock/requests.ts`) under native, the stored
+  // default: the all pool's day holds requests the cost model has no weight for, so it prices nothing and files last
+  // in either direction, and contract's and jobs' days hold billed rows alone, a tie at zero read by name. A card's
+  // strip links open the dialog on the view's own address, so its close lands on the same order.
+  const name = "/pools the sort control orders the cards by name at rest, a pick orders them by the pool's figure with a pool whose day priced nothing last under either direction, the strip links carry the order, the address carries the pick and a reload reads it back";
+  const page = await mount('/pools', { now: CLOCK_ORIGIN });
+  const button = (p) => p.container.querySelector('.filter-bar button[aria-label="Sort"]');
+  const box = () => document.querySelector('.popover .sort-popover')?.closest('.popover') ?? null;
+  const ARROWS = { 'rotate(-90 12 12)': 'up', 'rotate(90 12 12)': 'down' };
+  const read = (p) => ({
+    arrow: ARROWS[button(p)?.querySelector('svg path')?.getAttribute('transform') ?? ''] ?? 'no arrow',
+    cards: [...p.container.querySelectorAll('.pool .pool__title h2')].map((h) => h.textContent?.trim() ?? ''),
+    link: p.container.querySelector('.pool .pool__features a')?.getAttribute('href') ?? null,
+    search: p.location().search,
+    text: button(p)?.textContent ?? null,
+    title: button(p)?.getAttribute('title') ?? null,
+    unit: shellUnit(p)?.value ?? null,
+  });
+  const bare = read(page);
+  const picks = {};
+  for (const [key, label] of [
+    ['cost', 'Cost, 24h'],
+    ['costAsc', 'Ascending'],
+  ]) {
+    button(page)?.click();
+    await page.settle(100);
+    [...(box()?.querySelectorAll('[role="radio"]') ?? [])].find((r) => r.textContent?.trim() === label)?.click();
+    await page.settle(300);
+    picks[key] = { ...read(page), open: box() !== null };
+  }
+  const at = page.location();
+  page.unmount();
+  const again = await mount(`${at.pathname}${at.search}`, { now: CLOCK_ORIGIN });
+  const reloaded = read(again);
+  again.unmount();
+  const shown = (arrow, cards, link, search, label, word) => ({ arrow, cards, link, search, text: `Sort: ${label}`, title: `Sorted by ${label}, ${word}`, unit: 'native' });
+  const ascending = shown('up', ['contract', 'jobs', 'workshop', 'work', 'all'], '/pools?sort=cost&dir=asc&edit=contract&group=shedding', '?sort=cost&dir=asc', 'Cost, 24h', 'ascending');
+  const wantPicks = {
+    cost: { ...shown('down', ['work', 'workshop', 'contract', 'jobs', 'all'], '/pools?sort=cost&edit=work&group=autoMode', '?sort=cost', 'Cost, 24h', 'descending'), open: false },
+    costAsc: { ...ascending, open: false },
+  };
+  results.push({
+    name,
+    ok:
+      JSON.stringify(bare) === JSON.stringify(shown('up', ['all', 'contract', 'jobs', 'work', 'workshop'], '/pools?edit=all&group=guardrails', '', 'Name', 'ascending')) &&
+      JSON.stringify(picks) === JSON.stringify(wantPicks) &&
+      JSON.stringify(reloaded) === JSON.stringify(ascending),
+    missing: [`bare ${JSON.stringify(bare)}`, ...Object.entries(picks).map(([key, got]) => `${key} ${JSON.stringify(got)} against ${JSON.stringify(wantPicks[key])}`), `reloaded ${JSON.stringify(reloaded)}`],
+  });
+});
 await forView(CARD_VIEWS.map(([path]) => path), async () => {
   const name = 'the five card views mount the bar first with their slots in order and no empty slot';
   // A slot by what it shows: the search by its placeholder, a control by its name, and the right edge by the split
@@ -23066,8 +23237,8 @@ await forView(CARD_VIEWS.map(([path]) => path), async () => {
   };
   const SLOTS = {
     '/accounts': ['search: Search accounts', 'Add filter', 'Sort', 'Add account', 'edge: Refresh, count'],
-    '/keys': ['search: Search keys', 'Add filter', 'Create key', 'edge: Refresh, count'],
-    '/pools': ['Create pool', 'edge: Refresh, count'],
+    '/keys': ['search: Search keys', 'Add filter', 'Sort', 'Create key', 'edge: Refresh, count'],
+    '/pools': ['Sort', 'Create pool', 'edge: Refresh, count'],
     '/quota': ['Sort', 'Refresh all', 'edge: Refresh, count'],
     '/sessions': ['search: Session id', 'Add filter', 'Columns', 'Sort', 'edge: Refresh, count'],
   };

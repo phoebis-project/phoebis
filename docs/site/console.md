@@ -431,10 +431,14 @@ account](pairing.md).
 ![The Pools view: the jobs pool exhausted at its budget](assets/pools-light.png#only-light)
 ![The Pools view: the jobs pool exhausted at its budget](assets/pools-dark.png#only-dark)
 
-The view opens on its bar, "Create pool" with the split Refresh button and the count `{n} pools` at the right edge, then
-"A pool groups accounts behind a set of keys. Requests pick a member by priority, stick to it per session, and fail over
-when a member hits a rate limit." on a line of its own, then the tiles Pools, Accounts in pools, Keys, "Requests, 24h"
-and "Cost, 24h". Auto reload starts at 5 s and waits while the pool dialog or the Delete pool confirm is open. The
+The view opens on its bar, the Sort control with Name (ascending by default), Status (ascending), Members, "Requests,
+24h", "Cost, 24h" (each descending, a pool whose day priced nothing last under Cost while the top bar's unit is Native)
+and Active pins (descending), then "Create pool" with the split Refresh button and the count `{n} pools` at the right
+edge, then "A pool groups accounts behind a set of keys. Requests pick a member by priority, stick to it per session,
+and fail over when a member hits a rate limit." on a line of its own, then the tiles Pools, Accounts in pools, Keys,
+"Requests, 24h" and "Cost, 24h". The sort and its direction live in the page's address, and a card's links into the
+pool dialog keep them, so the dialog closes onto the same order. A card's member rows keep the selection order whatever
+the sort. Auto reload starts at 5 s and waits while the pool dialog or the Delete pool confirm is open. The
 sessions and the keepalive overview the pool dialog draws are read when it opens on a saved pool and again after a key
 write from it, the overview also when the return rate's range is picked, never at the interval. "Cost, 24h" and each
 card's Cost 24h read in the top bar's unit: under Native the day's subscription traffic as its figure in the chosen week
@@ -628,28 +632,34 @@ by idle age](keepalive.md#the-return-rate-by-idle-age).
 ![The Keys view](assets/keys-light.png#only-light)
 ![The Keys view](assets/keys-dark.png#only-dark)
 
-The view opens on its bar: "Search keys", Add filter with the Pool and Status filters, "Create key", and at the right
-edge the split Refresh button and the count of the keys the table lists, `{n} keys`. Status offers All statuses, Active,
-Disabled, Expired or Revoked. Pool takes any number of pools, each as a chip of its own, such as "pool: jobs" and "pool:
-all", and a pool the address names that the router does not list keeps its chip until the pools load. The search and the
-filters live in the page's address, so the pool card's key count link lands on its pool's keys. Auto reload starts at 5
-s and waits while a dialog or a row's menu is open. The tiles Keys, Active, Lifetime requests and Lifetime cost follow,
-and the card "Lifetime cost by key" ("Relative spend across all keys"), a bar per key. The lifetime tiles and the card's
-bars count their rows older than the week from a read made once an hour, so a request older than a week that lands late
-joins them within the hour. Lifetime cost, each bar's figure and the cost line under a key's "Usage, 7d" read in the top
-bar's unit: under Native the tile stacks the subscription traffic's figure in the chosen week over the billed traffic's
-dollars, and a bar's figure and a cost line read a key's figure beside its billed dollars, a side with no traffic left
-out, the tile, the bar's figure and the cost line each reading the subscription side as a dash with the Dashboard's
-hover where a request priced nothing, and its bar draws no fill and sorts last. A key spans its pool's accounts, so its
-figures carry no hint. The columns are Name, Prefix, Pool, Models, "Usage, 7d", Expiry and Status, and each row ends in
-its menu. Under the name a row notes the capture setting, `bodies captured, {h}h` or `bodies not captured`, with
-"inherited" where the key follows its pool and "keepalive off" for a key opted out of cache warming. Models reads `{n}
-rules`, with "(replace)" where they replace the pool's, or "Pool rules" or "No rules". Expiry reads the date or "Never".
-Status carries the key's state with `used {ago}` and, after a rotation, `{n} sessions still on the previous secret`. The
-menu offers Edit, Rotate (`Rotate {name}`), Revoke (`Revoke {name}`: "Requests with this key are rejected immediately.
-Its history stays in the ledger.") and Delete (`Delete {name}`: "Removes the key and detaches its request history from
-the key name. This cannot be undone."). Before the first key the table reads "No keys yet" with "Create key". What a
-key's settings mean is on [Keys](routing.md#keys).
+The view opens on its bar: "Search keys", Add filter with the Pool and Status filters, the Sort control with Name
+(ascending by default), Created, Last used, "Requests, 7d", "Tokens, 7d" and "Cost, 7d" (each descending), Expiry and
+Status (each ascending), "Create key", and at the right edge the split Refresh button and the count of the keys the
+table lists, `{n} keys`. Status offers All statuses, Active, Disabled, Expired or Revoked. Pool takes any number of
+pools, each as a chip of its own, such as "pool: jobs" and "pool: all", and a pool the address names that the router
+does not list keeps its chip until the pools load. The search, the filters and the sort with its direction live in the
+page's address, so a reload keeps them and the pool card's key count link lands on its pool's keys. Under either
+direction a key never used files last under Last used, one that never expires last under Expiry and one whose week
+priced nothing last under "Cost, 7d" while the top bar's unit is Native. No column shows a key's requests of the week,
+so while "Requests, 7d" is picked each row reads `{n} requests, 7d` under its name. The sort orders the table alone, and
+the card's bars keep their order by cost. Auto reload starts at 5 s and waits while a dialog or a row's menu is open.
+The tiles Keys, Active, Lifetime requests and Lifetime cost follow, and the card "Lifetime cost by key" ("Relative spend
+across all keys"), a bar per key. The lifetime tiles and the card's bars count their rows older than the week from a
+read made once an hour, so a request older than a week that lands late joins them within the hour. Lifetime cost, each
+bar's figure and the cost line under a key's "Usage, 7d" read in the top bar's unit: under Native the tile stacks the
+subscription traffic's figure in the chosen week over the billed traffic's dollars, and a bar's figure and a cost line
+read a key's figure beside its billed dollars, a side with no traffic left out, the tile, the bar's figure and the cost
+line each reading the subscription side as a dash with the Dashboard's hover where a request priced nothing, and its bar
+draws no fill and sorts last. A key spans its pool's accounts, so its figures carry no hint. The columns are Name,
+Prefix, Pool, Models, "Usage, 7d", Expiry and Status, and each row ends in its menu. Under the name a row notes the
+capture setting, `bodies captured, {h}h` or `bodies not captured`, with "inherited" where the key follows its pool and
+"keepalive off" for a key opted out of cache warming. Models reads `{n} rules`, with "(replace)" where they replace the
+pool's, or "Pool rules" or "No rules". Expiry reads the date or "Never". Status carries the key's state with `used
+{ago}` and, after a rotation, `{n} sessions still on the previous secret`. The menu offers Edit, Rotate (`Rotate
+{name}`), Revoke (`Revoke {name}`: "Requests with this key are rejected immediately. Its history stays in the ledger.")
+and Delete (`Delete {name}`: "Removes the key and detaches its request history from the key name. This cannot be
+undone."). Before the first key the table reads "No keys yet" with "Create key". What a key's settings mean is on
+[Keys](routing.md#keys).
 
 "Create key" and Rotate end on the dialog "Key created" or "Key rotated", which shows the secret once with a copy
 button under "Copy the secret now. The router stores only a hash, so it cannot be shown again." and "Set it as
@@ -679,23 +689,27 @@ them.
 ![The Guardrails view: a preset's guardrail observing beside an enforcing one](assets/guardrails-light.png#only-light)
 ![The Guardrails view: a preset's guardrail observing beside an enforcing one](assets/guardrails-dark.png#only-dark)
 
-The view opens on its bar: "Create guardrail", whose menu offers "Blank guardrail" and, under the heading "From a
-preset", one row per preset the build ships, three rows in the order of their ids (Away recap, Prompt suggestion,
-Subagent status summary), then at the right edge the split Refresh button and the count `{n} guardrails` (`1 guardrail`
-for one). Under it one sentence: "A guardrail checks each request against its conditions before any account is selected.
-Observe records the matches, enforce refuses them with a 403." Auto reload starts at 5 s and waits while a dialog or a
-row's menu is open. The pools and keys the dialog's pickers list are read once per visit and again after a write, a
-dialog close and Refresh, never at the interval. The columns are Name (the description muted beneath), Mode (a badge
-`observe` or `enforce`), Enabled (`on`, or `off` muted), "Applies to" (`{n} pools, {m} keys`, `1 pool, 0 keys` in the
-singular, the names on hover, `nowhere` muted when none), "Matches, 24h" (`{observed} observed` over `{blocked} blocked`
-from the last day's counts, a dash while unread) and Preset (the preset's name with `v{n}`, a `customized` badge where
-the conditions left the stamped version, an `update available` badge where the build ships a newer one, a dash without a
-stamp), and each row ends in its menu: Edit, Duplicate, Enable or Disable, "Switch to enforce" or "Switch to observe",
-and Delete. Duplicate opens the dialog in create mode with the source's fields, the name `{name} copy`, no attachment
-and the preset stamp kept, so the copy does not run twice on the source's keys and still says where it came from. Delete
-asks `Delete guardrail {name}`: "Removes the guardrail from every pool and key it is attached to. Requests it matched
-keep its id in the log." Before the first guardrail the table reads "No guardrails yet" with "Create guardrail". What a
-guardrail is, the presets and the conditions are on [Guardrails](guardrails.md).
+The view opens on its bar: the Sort control with Name (ascending by default), Mode (ascending), "Matches, 24h", Created
+and Last updated (each descending), then "Create guardrail", whose menu offers "Blank guardrail" and, under the heading
+"From a preset", one row per preset the build ships, three rows in the order of their ids (Away recap, Prompt
+suggestion, Subagent status summary), then at the right edge the split Refresh button and the count `{n} guardrails` (`1
+guardrail` for one). Under it one sentence: "A guardrail checks each request against its conditions before any account
+is selected. Observe records the matches, enforce refuses them with a 403." "Matches, 24h" orders by the observed and
+blocked counts together, a row whose Matches cell reads its dash last. No column shows a guardrail's dates, so while
+Created or Last updated is picked each row reads `created {date}` or `updated {date}` under its name, the time on hover.
+The sort and its direction live in the page's address, so a link or a reload keeps them. Auto reload starts at 5 s and
+waits while a dialog or a row's menu is open. The pools and keys the dialog's pickers list are read once per visit and
+again after a write, a dialog close and Refresh, never at the interval. The columns are Name (the description muted
+beneath), Mode (a badge `observe` or `enforce`), Enabled (`on`, or `off` muted), "Applies to" (`{n} pools, {m} keys`, `1
+pool, 0 keys` in the singular, the names on hover, `nowhere` muted when none), "Matches, 24h" (`{observed} observed`
+over `{blocked} blocked` from the last day's counts, a dash while unread) and Preset (the preset's name with `v{n}`, a
+`customized` badge where the conditions left the stamped version, an `update available` badge where the build ships a
+newer one, a dash without a stamp), and each row ends in its menu: Edit, Duplicate, Enable or Disable, "Switch to
+enforce" or "Switch to observe", and Delete. Duplicate opens the dialog in create mode with the source's fields, the
+name `{name} copy`, no attachment and the preset stamp kept, so the copy does not run twice on the source's keys and
+still says where it came from. Delete asks `Delete guardrail {name}`: "Removes the guardrail from every pool and key it
+is attached to. Requests it matched keep its id in the log." Before the first guardrail the table reads "No guardrails
+yet" with "Create guardrail". What a guardrail is, the presets and the conditions are on [Guardrails](guardrails.md).
 
 The guardrail dialog, "Create guardrail" or `Edit guardrail {name}`, is grouped like the pool dialog, with the rail
 "Guardrail settings", the groups Identity, Conditions, "Applies to" and Test, the status line "Every group saves

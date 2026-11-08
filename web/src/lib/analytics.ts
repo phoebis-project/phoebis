@@ -398,6 +398,11 @@ export const sidesLine = (sides: { billed: number | undefined; equivalent: numbe
 /** A dollar position's dollars of a sum: every row's, the billed rows', or the plan rows' at the API price list. */
 export const dollarsUnder = (unit: DollarPosition, s: FundedSum): number => (unit === 'all' ? s.cost : unit === 'usd' ? s.billedUsd : s.cost - s.billedUsd);
 /**
+ * The figure a funded sum draws in the chosen unit: under native its Pro-week figure, null where a plan row priced
+ * nothing, under a dollar position its dollars.
+ */
+export const fundedRankOf = (unit: UnitPosition, sum: FundedSum): number | null => (unit === 'native' ? sum.equivalent : dollarsUnder(unit, sum));
+/**
  * A sum's two sides, each undefined where it has no rows, so a sum of one funding shows one figure and no "0%" side.
  * A null figure is a plan row priced nothing, a side with rows whatever the other rows priced, and a zero reads as no
  * plan rows.

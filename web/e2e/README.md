@@ -131,13 +131,23 @@ popover inside the window under the button, its eight radio rows one height, a m
 alone, and Escape closing it with the focus back on the button), the Quota bar's sort control at rest on Default order
 (its button on the top edge and in the height of the Refresh all pill beside it, reading "Sort: Default order" titled
 "Sorted by Default order" with no arrow, and once opened its two direction rows disabled and unchecked, both in the Add
-filter list's disabled row ink, and Escape closing the popover), the Accounts detail's allowance grid at 1280 by 800,
-1440 by 900 and 375 by 800 (mock pass: "Allowance left at reset" and "Meter drift" stacked across the pane's content box
-at 1280 and 375 px, each as wide as the Usage and Requests cards and in their title's type, and at 1440 px side by side
-on one top, as wide as each other and as the Usage card and each under half the pane, the grid inside the pane with
-nothing in it scrolling sideways and every card's right edge inside it), the plan-ended account's Identity list (mock
-pass: its Plan value `Free since {date}`, the plan resolved from the document its profile read found, against its Plan
-ended value in type, left edge and row height, both texts recorded), the plan-ended sentence (mock pass: on the
+filter list's disabled row ink, and Escape closing the popover), the Pools bar's sort control after the view's shot (its
+button reading "Sort: Name" titled "Sorted by Name, ascending" in the height, top edge and weight of the Create pool
+button beside it, a primary button whose larger type and ink differ by design, and once opened its popover inside the
+window under the button, and Escape closing it), the Keys bar's sort control after the view's shot (its button reading
+"Sort: Name" titled "Sorted by Name, ascending" in the height, top edge, type size, weight and ink of the Add filter
+button beside it, once opened its popover inside the window under the button and Escape closing it, and under Requests,
+7d the first row's week line under its name in the type size and ink of the row's last-use line), the Guardrails bar's
+sort control after the view's shot (its button reading "Sort: Name" titled "Sorted by Name, ascending" in the height,
+top edge and weight of the Create guardrail button beside it, a primary button whose type size and ink differ by design,
+once opened its popover inside the window under the button and Escape closing it, and under Created the first row's date
+under its name in the type size and ink of the row's blocked count), the Accounts detail's allowance grid at 1280 by
+800, 1440 by 900 and 375 by 800 (mock pass: "Allowance left at reset" and "Meter drift" stacked across the pane's
+content box at 1280 and 375 px, each as wide as the Usage and Requests cards and in their title's type, and at 1440 px
+side by side on one top, as wide as each other and as the Usage card and each under half the pane, the grid inside the
+pane with nothing in it scrolling sideways and every card's right edge inside it), the plan-ended account's Identity
+list (mock pass: its Plan value `Free since {date}`, the plan resolved from the document its profile read found, against
+its Plan ended value in type, left edge and row height, both texts recorded), the plan-ended sentence (mock pass: on the
 plan-ended account's Dashboard card and Accounts list row the compact `No window since the plan ended {ago}`, muted,
 from the left edge inside its card of the nearest neighbor's window bars and in the type size and ink of their first
 label, both quota rings naming the usage-based seat with its reason and the Fable ring the Pro seeds without a Fable

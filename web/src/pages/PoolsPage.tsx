@@ -19,6 +19,7 @@ import { Legend, timeTip } from '@/components/charts/Tooltip';
 import { FilterBar } from '@/components/FilterBar';
 import { GuardrailList, KEY_STATUS_TONE, KeyDialog, SecretDialog } from '@/components/KeyDialog';
 import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor';
+import { SortControl } from '@/components/SortControl';
 import { AttentionLine } from '@/components/ui/AttentionLine';
 import { CostReferenceLink } from '@/components/ui/CostReference';
 import { SpeedChip } from '@/components/ui/SpeedChip';
@@ -27,16 +28,17 @@ import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Badge, BadgeLink, Button, Card, ConfirmDialog, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, PageLink, Refusal, Select, Skeleton, StaleRefusal, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
-import { accountHref, editHref, poolKeysHref } from '@/lib/address';
-import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, moveLabel, nativeSidesOf, sidesLine, sumFunded, type WeekReading } from '@/lib/analytics';
+import { accountHref, EDIT_PARAMS, editHref, POOL_SORT_KEYS, poolKeysHref, POOLS_CODEC, sortAddressOf, sortDirOf, type PoolsAddress } from '@/lib/address';
+import { FAILOVER_MOVE_REASONS, fundedRankOf, RULE_MOVE_REASONS, moveLabel, nativeSidesOf, sidesLine, sumFunded, type WeekReading } from '@/lib/analytics';
 import { groupInto } from '@/lib/counts';
 import { fmtCompact, fmtDuration, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtShortTime, fmtUsd, messageOf, noun, plural, shortModel } from '@/lib/format';
 import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, guardrailIdsOf, guardrailsChange, keyFormOf, keyInputOf, memberField, poolRefusals, refusalsView, sameValues, saveStatus, typedNumber, type PoolGroup } from '@/lib/forms';
-import { failedFirst, refreshAttention, useAsync, useAttention, useLatest, useNow, useWeekReading, type Loaded } from '@/lib/hooks';
+import { failedFirst, refreshAttention, useAsync, useAttention, useLatest, useNow, useQueryFilters, useWeekReading, type Loaded } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, slowDownPreview, slowDownPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
 import { minuteSpan, windowOf } from '@/lib/quota';
 import { aroundSubject, logHref, words } from '@/lib/routingLog';
+import { orderRows, type SortFigure } from '@/lib/sort';
 import { GROUP_LABEL, INELIGIBLE_LABEL, LAST_RESORT_LABEL, RULE_NOTE, STRATEGY_LABEL, cooldownBadge, kindOrdered, memberSpeed, overageBadge, poolStatusSentence, selectionOrder, spentBadge, type Placement, type StandingBadge, windingDownBadge } from '@/lib/selection';
 
 const POOL_STATUS_TONE = { active: 'good', degraded: 'warning', disabled: 'neutral', exhausted: 'critical' } as const;
@@ -233,6 +235,10 @@ export function PoolsPage() {
   const { unit, week } = useAppSettings();
   // The cost model whose capacities scale the day's figures to the chosen week. The Pro week reads without it.
   const { reading, settings } = useWeekReading(week);
+  // The dialog's one-shot `edit` and `group` wait in the address until the lists load, so a pick written before then
+  // carries them through.
+  const { address, filters, update } = useQueryFilters(POOLS_CODEC, { keep: EDIT_PARAMS });
+  const dir = sortDirOf(POOL_SORT_KEYS, filters);
   const [dialog, setDialog] = useState<{ initialGroup: PoolGroup | null; pool: Pool | null } | null>(null);
   const [deleting, setDeleting] = useState<Pool | null>(null);
   const [intervalMs, setIntervalMs] = useState(5_000);
@@ -259,6 +265,19 @@ export function PoolsPage() {
   useHashLanding(pageRef, '.pool', () => pools.data !== null, [pools.data]);
 
   const accountById = useMemo(() => new Map((accounts.data ?? []).map((a) => [a.id, a])), [accounts.data]);
+  // The cards alone take the order: a card's member rows keep the selection order.
+  const ordered = useMemo(() => {
+    if (pools.data === null) return null;
+    const figures: Record<PoolsAddress['sort'], (p: Pool) => SortFigure> = {
+      cost: (p) => fundedRankOf(unit, p.day24h),
+      members: (p) => p.members.length,
+      name: (p) => p.name,
+      pins: (p) => p.activePins,
+      requests: (p) => p.requests24h,
+      status: (p) => p.status,
+    };
+    return orderRows(pools.data, figures[filters.sort], dir, (p) => p.name);
+  }, [dir, filters.sort, pools.data, unit]);
   const keysByPool = useMemo(() => groupInto(keys.data ?? [], (k) => k.poolId), [keys.data]);
 
   const removePool = async (p: Pool) => {
@@ -295,9 +314,9 @@ export function PoolsPage() {
     <PopoverHost.Provider value={host}>
       <div className="stack" ref={pageRef}>
         <FilterBar
-          address="/pools"
+          address={address}
           count={pools.data === null ? '' : plural(pools.data.length, 'pool')}
-          filters={{}}
+          filters={filters}
           refresh={{
             intervalMs,
             onIntervalChange: setIntervalMs,
@@ -311,8 +330,9 @@ export function PoolsPage() {
             paused: pauseCause,
             refreshTitle: 'Reads the list again now',
           }}
-          update={() => undefined}
+          update={update}
         >
+          <SortControl keys={POOL_SORT_KEYS} onChange={(next) => update(sortAddressOf(POOL_SORT_KEYS, next))} value={{ dir, sort: filters.sort }} />
           <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setDialog({ initialGroup: null, pool: null })}>
             Create pool
           </Button>
@@ -328,10 +348,11 @@ export function PoolsPage() {
         {/* A failed read leaves the cards on the last answer's items, or none before the first. This line says so. */}
         {attention.error !== null && <AttentionLine items={attention.items} error={attention.error} loadedAt={attention.loadedAt} now={now} refresh={refreshAttention} />}
         <div className="pool-grid">
-          {pools.data
-            ? pools.data.map((p) => (
+          {ordered
+            ? ordered.map((p) => (
                 <PoolCard
                   key={p.id}
+                  address={address}
                   pool={p}
                   keys={keysByPool.get(p.id) ?? []}
                   keysRead={keysRead}
@@ -555,6 +576,7 @@ function PoolCost({ pool, reading }: { pool: Pool; reading: WeekReading }) {
 }
 
 function PoolCard({
+  address,
   pool,
   keys,
   keysRead,
@@ -569,6 +591,8 @@ function PoolCard({
   accountById: Map<string, Account>;
   /** Null until the account list is read. The status sentence then says only what the pool's verdicts carry. */
   accounts: Account[] | null;
+  /** The view's query string, which the dialog links carry so the dialog's close returns to the same order. */
+  address: string;
   attention: AttentionItem[];
   keys: ApiKey[];
   /** Until the key list has loaded, `keys` says nothing about the pool's keys, so the count line and the tile wait. */
@@ -638,7 +662,7 @@ function PoolCard({
           <div className="pool__features chips">
             {features.map((f) => (
               <Fragment key={f.group}>
-                <BadgeLink to={editHref('/pools', pool.id, f.group)} title={`Opens the pool dialog on ${POOL_RAIL[f.group].label}`}>
+                <BadgeLink to={editHref('/pools', pool.id, f.group, address)} title={`Opens the pool dialog on ${POOL_RAIL[f.group].label}`}>
                   {f.word(pool)}
                 </BadgeLink>
                 {f.group === 'keepalive' && pool.keepaliveResolved && <span className="muted pool__ceilings">{ceilingsLine(pool.keepaliveResolved)}</span>}
@@ -768,7 +792,7 @@ function PoolCard({
         <div>
           <dt>Warnings</dt>
           <dd className="num" title={pool.warnings.length === 0 ? undefined : pool.warnings.map((w) => w.text).join(' ')}>
-            {warnedAt === null ? fmtInt(pool.warnings.length) : <Link to={editHref('/pools', pool.id, warnedAt)}>{fmtInt(pool.warnings.length)}</Link>}
+            {warnedAt === null ? fmtInt(pool.warnings.length) : <Link to={editHref('/pools', pool.id, warnedAt, address)}>{fmtInt(pool.warnings.length)}</Link>}
           </dd>
         </div>
         <div>

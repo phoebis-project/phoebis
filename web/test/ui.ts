@@ -35,7 +35,6 @@ export { getTimeFormat, setTimeFormat, spanText } from '@/lib/format';
 export { useAsync, useCommittedText, useNow, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';
 export { AccountsPage } from '@/pages/AccountsPage';
 export { GuardrailDialog, GuardrailsPage } from '@/pages/GuardrailsPage';
-export { keyRankOf } from '@/pages/KeysPage';
 export { MeterPage } from '@/pages/MeterPage';
 export { PoolDialog } from '@/pages/PoolsPage';
 export { fakeClock } from '../smoke/clock';

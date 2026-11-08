@@ -8450,6 +8450,106 @@ async function quotaSortControl(theme) {
 }
 
 /**
+ * The Sort control's neighbors on the Pools, Keys and Guardrails bars. Keys measures the button against Add filter,
+ * type and ink included. The Pools and Guardrails bars hold no other secondary button, so the button is measured
+ * against the primary one, whose larger type and ink differ by design. On Keys and Guardrails a picked key whose figure
+ * no column draws puts it under each row's name, read against a plain sub-line the row already draws.
+ */
+const SORT_BARS = {
+  '/guardrails': {
+    keys: ['fontWeight', 'height', 'top'],
+    neighbor: 'Create guardrail',
+    sub: { picked: '^created ', plain: ' blocked$', plainWhat: "the Matches cell's blocked count", rows: '.guardrails__table tbody tr.guardrail-row', search: '?sort=created' },
+  },
+  '/keys': {
+    keys: ['fontSize', 'fontWeight', 'height', 'ink', 'top'],
+    neighbor: 'Add filter',
+    sub: { picked: ' requests?, 7d$', plain: '^used ', plainWhat: "the Status cell's last use", rows: '.card--table tbody tr.key-row', search: '?sort=requests' },
+  },
+  '/pools': { keys: ['fontWeight', 'height', 'top'], neighbor: 'Create pool', sub: null },
+};
+
+/**
+ * The Pools, Keys and Guardrails bars' sort control on a bare address, called after the view's shot: its button reading
+ * "Sort: Name" titled "Sorted by Name, ascending" in the weight, height and top edge of its SORT_BARS neighbor (and
+ * its type size and ink against Add filter), then opened: the popover inside the window under the button, and Escape
+ * closing it. On Keys under Requests, 7d and on Guardrails under Created, the first row's sub-line under its name reads
+ * in the type size and ink of the row's plain sub-line, which the router's seed may not draw and the story's rows do.
+ * The measure loads its addresses itself and leaves the bare view.
+ */
+async function barSortControl(theme, view) {
+  const say = (what) => failures.push(`${theme} ${view} sort control: ${what}`);
+  const { keys, neighbor, sub } = SORT_BARS[view];
+  try {
+    await loadAtOrigin(view, '.filter-bar button[aria-label="Sort"]');
+    const rest = await page.evaluate((name) => {
+      const row = document.querySelector('.filter-bar__row');
+      const box = (el) => {
+        if (!el) return null;
+        const style = getComputedStyle(el);
+        const b = el.getBoundingClientRect();
+        return { fontSize: style.fontSize, fontWeight: style.fontWeight, height: Math.round(b.height), ink: style.color, top: Math.round(b.top) };
+      };
+      const button = row?.querySelector('button[aria-label="Sort"]') ?? null;
+      return {
+        neighbor: box([...(row?.querySelectorAll(':scope > button') ?? [])].find((b) => b.textContent?.trim() === name)),
+        sort: button === null ? null : { ...box(button), text: button.textContent?.trim() ?? '', title: button.getAttribute('title') },
+      };
+    }, neighbor);
+    measurements.push(`${theme} ${view} sort button ${JSON.stringify(rest)}`);
+    if (rest.sort === null) {
+      say('the bar draws no Sort button');
+      return;
+    }
+    for (const what of compare(rest.sort, rest.neighbor, keys, `the Sort button against the ${neighbor} button`)) say(what);
+    if (rest.sort.text !== 'Sort: Name' || rest.sort.title !== 'Sorted by Name, ascending') say(`the button reads ${JSON.stringify(rest.sort.text)} titled ${JSON.stringify(rest.sort.title)} on a bare address, not "Sort: Name" titled "Sorted by Name, ascending"`);
+    await page.locator('.filter-bar button[aria-label="Sort"]').click();
+    await advance(CLOCK_STEP_MS);
+    const open = await page.evaluate(() => {
+      const button = document.querySelector('.filter-bar button[aria-label="Sort"]');
+      const popover = document.querySelector('.popover .sort-popover')?.closest('.popover') ?? null;
+      if (!button || !popover) return null;
+      const b = popover.getBoundingClientRect();
+      return {
+        box: { bottom: Math.round(b.bottom), left: Math.round(b.left), right: Math.round(b.right), top: Math.round(b.top) },
+        button: Math.round(button.getBoundingClientRect().bottom),
+        window: { height: document.documentElement.clientHeight, width: document.documentElement.clientWidth },
+      };
+    });
+    measurements.push(`${theme} ${view} sort popover ${JSON.stringify(open)}`);
+    if (open === null) say('a click on the button opened no popover');
+    else {
+      if (open.box.left < 0 || open.box.top < 0 || open.box.right > open.window.width || open.box.bottom > open.window.height) say(`the popover stands at ${JSON.stringify(open.box)}, past the ${open.window.width} by ${open.window.height} window`);
+      if (open.box.top <= open.button) say(`the popover's top ${open.box.top}px is not under the button's bottom ${open.button}px`);
+      await page.keyboard.press('Escape');
+      await advance(CLOCK_STEP_MS);
+      if (await page.evaluate(() => document.querySelector('.popover .sort-popover') !== null)) say('Escape left the popover open');
+    }
+    if (sub === null) return;
+    await loadAtOrigin(`${view}${sub.search}`, sub.rows);
+    const lines = await page.evaluate(({ picked, plain, rows }) => {
+      const tr = document.querySelector(rows);
+      const line = (el) => (el ? { fontSize: getComputedStyle(el).fontSize, ink: getComputedStyle(el).color, text: el.textContent?.trim() ?? '' } : null);
+      const find = (root, pattern) => [...(root?.querySelectorAll('.sub') ?? [])].find((s) => new RegExp(pattern).test(s.textContent?.trim() ?? '')) ?? null;
+      return { picked: line(find(tr?.querySelector('td'), picked)), plain: line(find(tr, plain)), row: tr !== null };
+    }, sub);
+    measurements.push(`${theme} ${view}${sub.search} first row's sub-lines ${JSON.stringify(lines)}`);
+    if (!lines.row) {
+      // The router's seed may hold no row to draw one, and the story holds several.
+      if (mock) say(`${sub.search} draws no row`);
+      return;
+    }
+    if (lines.picked === null) say(`${sub.search} draws no sub-line of the picked key under the first row's name`);
+    else if (lines.plain === null) {
+      if (mock) say(`${sub.search}: the first row draws no ${sub.plainWhat} to read the sub-line against`);
+    } else for (const what of compare(lines.picked, lines.plain, ['fontSize', 'ink'], `the picked key's sub-line against ${sub.plainWhat}`)) say(what);
+  } finally {
+    await atRest();
+    await loadAtOrigin(view, '.filter-bar');
+  }
+}
+
+/**
  * An account's fast lane against the card it sits in: on the account page the lane is a section of the Usage card as
  * extra usage is, with the same rule and spacing. Only an account with extra usage draws its section, so the check
  * compares where both are drawn and stands down where the neighbor is missing, as it does against the router's seed,
@@ -13235,13 +13335,16 @@ try {
       await phoneFit(theme, view.path);
       if (['/', '/accounts'].includes(view.path)) await absentSlotsPhone(theme, view.path);
       if (view.path === '/guardrails') await barRow(theme, view.path);
+      if (view.path === '/guardrails') await barSortControl(theme, view.path);
       if (view.path === '/pools') await utilizationCeiling(theme);
       if (view.path === '/pools' && mock) await anchoredRowUnderBanner(theme, view.path);
+      if (view.path === '/pools') await barSortControl(theme, view.path);
       if (view.path === '/') await topbarHeights(theme);
       if (view.path === '/') await weekControl(theme);
       if (view.path === '/keys') await keysLayout(theme);
       if (view.path === '/keys' && mock) await anchoredRowUnderBanner(theme, view.path);
       if (view.path === '/keys') await dialogControls(theme);
+      if (view.path === '/keys') await barSortControl(theme, view.path);
       if (view.path === '/analytics') await burnLoneCard(theme);
       if (view.path === '/analytics' && mock) await burnGridPair(theme);
       if (view.path === '/analytics' && mock) await burnGridNamed(theme);

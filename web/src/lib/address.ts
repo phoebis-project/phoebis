@@ -368,16 +368,31 @@ export const METER_CODEC = codecOf<MeterAddress>({ accounts: list('accounts') })
 export const accountMeterHref = (accountId: string): string => `/meter?${METER_CODEC.toParams({ accounts: [accountId] })}`;
 
 export interface KeysAddress {
+  /** `asc`, `desc` or empty for the sort key's own default direction, which the address omits. */
+  dir: '' | SortDir;
   pools: string[];
   search: string;
+  sort: (typeof KEY_SORT_KEYS)[number]['id'];
   status: 'all' | KeyStatus;
 }
 
 const KEY_STATUSES: readonly ('all' | KeyStatus)[] = ['all', 'active', 'disabled', 'expired', 'revoked'];
 
+export const KEY_SORT_KEYS = [
+  { defaultDir: 'asc', id: 'name', label: 'Name' },
+  { defaultDir: 'desc', id: 'created', label: 'Created' },
+  { defaultDir: 'desc', id: 'lastUsed', label: 'Last used' },
+  { defaultDir: 'desc', id: 'requests', label: 'Requests, 7d' },
+  { defaultDir: 'desc', id: 'tokens', label: 'Tokens, 7d' },
+  { defaultDir: 'desc', id: 'cost', label: 'Cost, 7d' },
+  { defaultDir: 'asc', id: 'expiry', label: 'Expiry' },
+  { defaultDir: 'asc', id: 'status', label: 'Status' },
+] as const satisfies readonly SortKey[];
+
 export const KEYS_CODEC = codecOf<KeysAddress>({
   pools: list('pools'),
   search: text('search'),
+  ...sortSpecs(KEY_SORT_KEYS, 'name'),
   status: { default: 'all', kind: 'choice', name: 'status', values: KEY_STATUSES },
 });
 /** The Keys view on one pool's keys, every other filter at its default. */
@@ -402,11 +417,50 @@ export const QUOTA_SORT_KEYS = [
 
 export const QUOTA_CODEC = codecOf<QuotaAddress>(sortSpecs(QUOTA_SORT_KEYS, 'default'));
 
+export const POOL_SORT_KEYS = [
+  { defaultDir: 'asc', id: 'name', label: 'Name' },
+  { defaultDir: 'asc', id: 'status', label: 'Status' },
+  { defaultDir: 'desc', id: 'members', label: 'Members' },
+  { defaultDir: 'desc', id: 'requests', label: 'Requests, 24h' },
+  { defaultDir: 'desc', id: 'cost', label: 'Cost, 24h' },
+  { defaultDir: 'desc', id: 'pins', label: 'Active pins' },
+] as const satisfies readonly SortKey[];
+
+export interface PoolsAddress {
+  dir: '' | SortDir;
+  sort: (typeof POOL_SORT_KEYS)[number]['id'];
+}
+
+export const POOLS_CODEC = codecOf<PoolsAddress>(sortSpecs(POOL_SORT_KEYS, 'name'));
+
+export const GUARDRAIL_SORT_KEYS = [
+  { defaultDir: 'asc', id: 'name', label: 'Name' },
+  { defaultDir: 'asc', id: 'mode', label: 'Mode' },
+  { defaultDir: 'desc', id: 'matches', label: 'Matches, 24h' },
+  { defaultDir: 'desc', id: 'created', label: 'Created' },
+  { defaultDir: 'desc', id: 'updated', label: 'Last updated' },
+] as const satisfies readonly SortKey[];
+
+export interface GuardrailsAddress {
+  dir: '' | SortDir;
+  sort: (typeof GUARDRAIL_SORT_KEYS)[number]['id'];
+}
+
+export const GUARDRAILS_CODEC = codecOf<GuardrailsAddress>(sortSpecs(GUARDRAIL_SORT_KEYS, 'name'));
+
 export const EDIT_PARAM = 'edit';
 export const GROUP_PARAM = 'group';
 export const EDIT_PARAMS = [EDIT_PARAM, GROUP_PARAM] as const;
-/** The view at `path` with the dialog of item `id` opened once on `group`, which `useAddressEdit` reads. */
-export const editHref = (path: string, id: string, group: string): string => `${path}?${new URLSearchParams({ [EDIT_PARAM]: id, [GROUP_PARAM]: group })}`;
+/**
+ * The view at `path` with the dialog of item `id` opened once on `group`, which `useAddressEdit` reads. `search` is the
+ * view's current query string, so its order and filters ride along and the dialog's close returns to the same list.
+ */
+export const editHref = (path: string, id: string, group: string, search = ''): string => {
+  const params = new URLSearchParams(search);
+  params.set(EDIT_PARAM, id);
+  params.set(GROUP_PARAM, group);
+  return `${path}?${params}`;
+};
 
 export interface AccountsAddress {
   /** `asc`, `desc` or empty for the sort key's own default direction, which the address omits. */

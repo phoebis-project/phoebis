@@ -6,17 +6,19 @@ import type { ApiKey, Condition, Guardrail, GuardrailAttachment, GuardrailMode, 
 import { useRun, useSession } from '@/app/session';
 import { blankCondition, ConditionsEditor } from '@/components/ConditionsEditor';
 import { FilterBar } from '@/components/FilterBar';
+import { SortControl } from '@/components/SortControl';
 import { OptionList, type Option, walkFocus } from '@/components/ui/OptionList';
 import { Popover, PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { IconChevron, IconInfo, IconPlus } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, Field, GroupedDialog, Input, Menu, PageLink, Refusal, Segmented, Select, Skeleton, StaleRefusal, StateRow, Toggle, type DialogGroup } from '@/components/ui/primitives';
-import { poolKeysHref, requestHref } from '@/lib/address';
+import { GUARDRAIL_SORT_KEYS, GUARDRAILS_CODEC, poolKeysHref, requestHref, sortAddressOf, sortDirOf, type GuardrailsAddress } from '@/lib/address';
 import { effectiveCaptureHours } from '@/lib/capture';
 import type { PauseCause } from '@/lib/follow';
-import { fmtAbsolute, fmtInt, messageOf, plural } from '@/lib/format';
+import { fmtAbsolute, fmtDate, fmtInt, messageOf, plural } from '@/lib/format';
 import { derivedId, refusalsView, sameMembers, sameValues, saveStatus } from '@/lib/forms';
 import { guardrailRefusals, MODE_TONE, presetBadges, verdictWords } from '@/lib/guardrails';
-import { useAsync } from '@/lib/hooks';
+import { useAsync, useQueryFilters } from '@/lib/hooks';
+import { orderRows, type SortFigure } from '@/lib/sort';
 
 const LEAD = 'A guardrail checks each request against its conditions before any account is selected. Observe records the matches, enforce refuses them with a 403.';
 const NAME_HINT = "The guardrail's id is made from this name when the guardrail is created.";
@@ -117,7 +119,27 @@ export function GuardrailsPage(): JSX.Element {
   const keys = useAsync(() => api.listKeys(), []);
   const presets = useAsync(() => api.listGuardrailPresets(), []);
   const presetList = useMemo(() => presets.data ?? [], [presets.data]);
-  const list = guardrails.data;
+  const { address, filters, update } = useQueryFilters(GUARDRAILS_CODEC);
+  const dir = sortDirOf(GUARDRAIL_SORT_KEYS, filters);
+  const list = useMemo(() => {
+    if (guardrails.data === null) return null;
+    const counted = counts.data;
+    const figures: Record<GuardrailsAddress['sort'], (g: Guardrail) => SortFigure> = {
+      created: (g) => Date.parse(g.createdAt),
+      // Null until the count read answers, so the rows whose cell draws its dash file last.
+      matches: (g) => {
+        if (counted === null) return null;
+        const count = counted.guardrails.find((c) => c.id === g.id);
+        return count === undefined ? 0 : count.observed + count.blocked;
+      },
+      mode: (g) => g.mode,
+      name: (g) => g.name,
+      updated: (g) => Date.parse(g.updatedAt),
+    };
+    return orderRows(guardrails.data, figures[filters.sort], dir, (g) => g.name);
+  }, [counts.data, dir, filters.sort, guardrails.data]);
+  // The order's own date where no column draws it, so the rows read in the order they sit.
+  const stampOf = (g: Guardrail): { at: string; word: string } | null => (filters.sort === 'created' ? { at: g.createdAt, word: 'created' } : filters.sort === 'updated' ? { at: g.updatedAt, word: 'updated' } : null);
 
   const reload = () => {
     guardrails.reload();
@@ -155,6 +177,7 @@ export function GuardrailsPage(): JSX.Element {
           const names = [...attachedPools.map((p) => `pool ${p.label}`), ...attachedKeys.map((k) => `key ${k.label}`)].join(', ');
           const count = counts.data?.guardrails.find((c) => c.id === g.id);
           const presetName = g.preset === null ? null : `${presetList.find((p) => p.id === g.preset?.id)?.name ?? g.preset.id} v${g.preset.version}`;
+          const stamp = stampOf(g);
           return (
             <tr key={g.id} id={g.id} className={g.enabled ? 'guardrail-row' : 'guardrail-row guardrail-row--off'}>
               <td className="col-fill" title={g.name}>
@@ -162,6 +185,11 @@ export function GuardrailsPage(): JSX.Element {
                 {g.description && (
                   <span className="sub muted" title={g.description}>
                     {g.description}
+                  </span>
+                )}
+                {stamp !== null && (
+                  <span className="sub" title={fmtAbsolute(stamp.at)}>
+                    {stamp.word} {fmtDate(stamp.at)}
                   </span>
                 )}
               </td>
@@ -215,12 +243,13 @@ export function GuardrailsPage(): JSX.Element {
     <PopoverHost.Provider value={host}>
       <div className="stack">
         <FilterBar
-          address="/guardrails"
+          address={address}
           count={list === null ? '' : plural(list.length, 'guardrail')}
-          filters={{}}
+          filters={filters}
           refresh={{ intervalMs, onIntervalChange: setIntervalMs, onRefresh: reload, paused: pauseCause, refreshTitle: 'Reads the list again now' }}
-          update={() => undefined}
+          update={update}
         >
+          <SortControl keys={GUARDRAIL_SORT_KEYS} onChange={(next) => update(sortAddressOf(GUARDRAIL_SORT_KEYS, next))} value={{ dir, sort: filters.sort }} />
           <CreateMenu presets={presetList} onBlank={() => setDialog({ existing: null })} onPreset={(p) => setDialog({ existing: null, source: fromPreset(p) })} />
         </FilterBar>
         <p className="page-head__meta guardrails__lead">{LEAD}</p>
