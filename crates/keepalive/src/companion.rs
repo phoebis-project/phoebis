@@ -19,7 +19,7 @@ use phoebis_routing::{
     ceiling, warm, warm_until, AccountProjection, MemberSpend, Obstacle, PinStanding,
     RegistrySnapshot, RouterGone,
 };
-use phoebis_store::{AccountKind, AccountRow, AccountState, ApiKeyRow, PoolRow};
+use phoebis_store::{AccountKind, AccountRow, AccountState, ApiKeyRow, CompanionKey, PoolRow};
 use serde::Serialize;
 
 use crate::engine::Engine;
@@ -33,25 +33,13 @@ const MINUTE_MS: i64 = 60_000;
 
 struct CompanionState {
     engine: Arc<Engine>,
-    /// Read once: the store derives it from the storage key, which a running process never changes.
-    key: [u8; 32],
 }
 
 pub fn companion_router(engine: Arc<Engine>) -> Router {
-    let key = engine.parts.store.companion_digest_key();
     Router::new()
         .route(ALLOWANCE_PATH, get(allowance))
         .layer(map_response(no_store_answer))
-        .with_state(Arc::new(CompanionState { engine, key }))
-}
-
-/// Eight lowercase hex characters: the first four bytes of the HMAC of the account id under `key`.
-pub fn pseudonym(key: &[u8; 32], account_id: &str) -> String {
-    let digest = phoebis_store::digest_with(key, account_id.as_bytes());
-    format!(
-        "{:08x}",
-        u32::from_be_bytes([digest[0], digest[1], digest[2], digest[3]])
-    )
+        .with_state(Arc::new(CompanionState { engine }))
 }
 
 #[derive(Serialize)]
@@ -160,6 +148,7 @@ async fn allowance(
     let Ok((projections, pins, spends)) = read.await else {
         return refusal(StatusCode::SERVICE_UNAVAILABLE, "router_unavailable");
     };
+    let companion_key = engine.parts.store.companion_key();
     let body = Allowance {
         protocol: PROTOCOL,
         now: stamp(now),
@@ -173,8 +162,8 @@ async fn allowance(
             },
             strategy: pool.strategy.as_str(),
         },
-        accounts: accounts(&state.key, &snapshot, pool, projections, &spends, now),
-        pins: session_pins(&state.key, key, session_id, pins, now),
+        accounts: accounts(&companion_key, &snapshot, pool, projections, &spends, now),
+        pins: session_pins(&companion_key, key, session_id, pins, now),
     };
     (
         StatusCode::OK,
@@ -204,7 +193,7 @@ fn refusal(status: StatusCode, code: &'static str) -> Response {
 
 /// The pool's active members, each under its pseudonym and ordered by it.
 fn accounts(
-    digest_key: &[u8; 32],
+    companion_key: &CompanionKey,
     snapshot: &RegistrySnapshot,
     pool: &PoolRow,
     projections: Vec<AccountProjection>,
@@ -216,7 +205,7 @@ fn accounts(
         .filter_map(|projection| {
             let row = snapshot.account(&projection.account_id)?;
             active(row, projection.obstacle.as_ref())
-                .then(|| account_view(digest_key, snapshot, pool, row, projection, spends, now))
+                .then(|| account_view(companion_key, snapshot, pool, row, projection, spends, now))
         })
         .collect();
     accounts.sort_by(|a, b| a.id.cmp(&b.id));
@@ -230,7 +219,7 @@ fn active(row: &AccountRow, obstacle: Option<&Obstacle>) -> bool {
 }
 
 fn account_view(
-    digest_key: &[u8; 32],
+    companion_key: &CompanionKey,
     snapshot: &RegistrySnapshot,
     pool: &PoolRow,
     row: &AccountRow,
@@ -283,7 +272,7 @@ fn account_view(
         })
         .unwrap_or_default();
     AccountView {
-        id: pseudonym(digest_key, &row.id),
+        id: companion_key.pseudonym(&row.id),
         funding,
         tier: snapshot.priced_tier(&row.id).map(String::from),
         obstacle: projection.obstacle.as_ref().map(Obstacle::name),
@@ -300,7 +289,7 @@ fn account_view(
 
 /// The pins of the asking session under this key and its generation, ordered by agent, then model.
 fn session_pins(
-    digest_key: &[u8; 32],
+    companion_key: &CompanionKey,
     key: &ApiKeyRow,
     session_id: &str,
     pins: Vec<PinStanding>,
@@ -318,7 +307,7 @@ fn session_pins(
             PinView {
                 agent: pin.agent_id.clone(),
                 model: pin.model.clone(),
-                account: pseudonym(digest_key, &pin.account_id),
+                account: companion_key.pseudonym(&pin.account_id),
                 placed_at: stamp(pin.created_at),
                 last_used_at: stamp(pin.last_used_at),
                 warm: warm(pin, standing.auxiliary_only, now),

@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use axum::body::Body;
 use axum::http::Request;
 use common::*;
-use phoebis_keepalive::{companion_router, pseudonym};
+use phoebis_keepalive::companion_router;
 use phoebis_routing::{
     Report, RouterConfig, SharePricer, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR,
     HOUR_MS, SEVEN_DAY,
@@ -287,7 +287,7 @@ async fn a_disabled_or_unready_account_is_absent_and_a_cooled_one_present_with_i
             )
         })
         .collect();
-    let a = pseudonym(&r.h.store.companion_digest_key(), "a");
+    let a = r.h.store.companion_key().pseudonym("a");
     assert_eq!(listed, [(a.as_str(), "cooldown")], "{}", answer.text);
 }
 
@@ -297,8 +297,8 @@ async fn the_pseudonym_is_stable_across_calls_and_distinct_between_accounts() {
     let app = companion_router(r.engine.clone());
     let first = get(&app, Some(SESSION), Some(KEY)).await.account_ids();
     let second = get(&app, Some(SESSION), Some(KEY)).await.account_ids();
-    let key = r.h.store.companion_digest_key();
-    let (a, b) = (pseudonym(&key, "a"), pseudonym(&key, "b"));
+    let key = r.h.store.companion_key();
+    let (a, b) = (key.pseudonym("a"), key.pseudonym("b"));
     assert_ne!(a, b);
     for id in [&a, &b] {
         assert!(
@@ -326,7 +326,7 @@ async fn a_pin_names_its_holder_and_warm_follows_the_refresh_and_the_ttl() {
     r.observe("main").await;
     r.advance(MINUTE);
     r.observe("main").await;
-    let a = pseudonym(&r.h.store.companion_digest_key(), "a");
+    let a = r.h.store.companion_key().pseudonym("a");
     // Placed at NOW (00:16:40), refreshed a minute later, and the body's five-minute marker sets the TTL.
     let pin = |answer: &Answer| {
         let pin = &answer.body["pins"][0];
@@ -518,11 +518,11 @@ async fn the_fixture_is_the_route_answer_on_the_seeded_rig() {
     assert_eq!(answer.status, 200, "{}", answer.text);
     // The store's key is drawn per rig, so each pseudonym is written as a placeholder of its account and the list
     // ordered by those, as the route orders it by the pseudonyms.
-    let key = r.h.store.companion_digest_key();
+    let key = r.h.store.companion_key();
     let text = answer
         .text
-        .replace(&format!("\"{}\"", pseudonym(&key, "a")), "\"aaaaaaaa\"")
-        .replace(&format!("\"{}\"", pseudonym(&key, "b")), "\"bbbbbbbb\"");
+        .replace(&format!("\"{}\"", key.pseudonym("a")), "\"aaaaaaaa\"")
+        .replace(&format!("\"{}\"", key.pseudonym("b")), "\"bbbbbbbb\"");
     let mut live: Value = serde_json::from_str(&text).unwrap();
     live["accounts"]
         .as_array_mut()

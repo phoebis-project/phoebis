@@ -386,6 +386,22 @@ impl Clone for StorageKey {
     }
 }
 
+/// The key `Store::companion_key` answers. A type of its own, so the API-key digest key, the same 32 bytes in shape,
+/// cannot stand in for it.
+#[derive(Clone, Copy)]
+pub struct CompanionKey([u8; 32]);
+
+impl CompanionKey {
+    /// Eight lowercase hex characters: the first four bytes of the HMAC of the account id under this key.
+    pub fn pseudonym(&self, account_id: &str) -> String {
+        let digest = digest_with(&self.0, account_id.as_bytes());
+        format!(
+            "{:08x}",
+            u32::from_be_bytes([digest[0], digest[1], digest[2], digest[3]])
+        )
+    }
+}
+
 /// The instant the store stamps a row with, in Unix milliseconds: the wall clock in production, and a test rig's own
 /// cell under `set_clock`, so a capture of the registry's answers reads the same twice.
 pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
@@ -532,8 +548,8 @@ impl Store {
 
     /// The key the companion's account pseudonyms are digested under. A label of its own keeps a pseudonym apart
     /// from every secret digest, and the storage key keeps it stable across restarts and distinct per installation.
-    pub fn companion_digest_key(&self) -> [u8; 32] {
-        digest_with(&self.key.0, b"companion-pseudonym")
+    pub fn companion_key(&self) -> CompanionKey {
+        CompanionKey(digest_with(&self.key.0, b"companion-pseudonym"))
     }
 
     /// A database copy without the key file cannot use this to test guessed secrets: the digest is keyed,
