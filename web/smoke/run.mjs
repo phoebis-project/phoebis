@@ -3213,6 +3213,11 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     // statuses" the labels are the docs' six in their order, written out so a dropped status or an unknown label fails
     // the read.
     const STATUS_STEP = ['All statuses', 'Cooling down', 'Needs funding', 'Paused', 'Needs re-auth', 'Ready', 'Not paired'];
+    // The shared mount reads the list on its 5 s period, and the two cases above clear primary's model cooldown and
+    // put the story back only after their own mounts, so a poll inside that window leaves the rows behind the list read
+    // from the API below. The refresh makes the mount's read fresh whatever the run's phase.
+    m.container.querySelector('.refresh-control__body[aria-label="Refresh"]')?.click();
+    await m.settle();
     const box = await addFilter(m, 'Status');
     const statuses = boxOptions().map((o) => o.textContent?.trim() ?? '');
     const cooling = (await api.listAccounts()).filter((a) => a.status === 'cooldown').map((a) => a.id);
