@@ -128,9 +128,9 @@ export function merged<R>(shown: R[], polled: R[], identity: (row: R) => string,
  * `landedThrough` is the first page's, since a row written between two pages stamps above it and the next poll reads
  * it, where a later page's would skip it.
  *
- * `landsBelow` says every row of the range is the list's (a fixed-end range whose list answered no next cursor), so a
- * polled row below its last row lands in the table rather than staying Next's. Under a watermark no row of such a poll
- * is Next's, so it reads on until the route has no more.
+ * `landsBelow` says every row of the range is the list's (the list answered no next cursor), so a polled row below its
+ * last row lands in the table rather than staying Next's. Under a watermark no row of such a poll is Next's, so it
+ * reads on until the route has no more.
  *
  * `alive` is read between pages: a poll whose caller is gone stops reading and answers what it read, with no overrun.
  */

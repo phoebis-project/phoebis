@@ -23,8 +23,8 @@ export function useFollow<R>(input: {
   cursor: string | undefined;
   error: string | null;
   /**
-   * Whether the range holds its own end (a custom range), so with no next cursor a late row below the list's last row
-   * is the list's.
+   * Whether the range holds its own end (a custom range), so a poll under a stale or a failed list notes a row it
+   * withholds below the rows shown and keeps its stamp for the poll that lands it.
    */
   fixedEnd: boolean;
   identity: (row: R) => string;
@@ -95,7 +95,8 @@ export function useFollow<R>(input: {
       // A stand-in is the list while it stands, so its page's cursor says whether the range holds rows past those
       // shown. A stale list hands none, since its cursor is another query's.
       const tail = standing === null ? list?.nextCursor : standing.cursor;
-      const lands = fixedEnd && tail === null;
+      // The list answered no next cursor, so every polled row is the list's whatever the range's end.
+      const lands = tail === null;
       // On a custom range each page the poll reads notes a row it withholds below the rows shown while the ref holds no
       // list (a stale or a failed read) and no stand-in, since such a poll lands nothing below and the stamp must not
       // pass the row.

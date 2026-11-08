@@ -1,5 +1,6 @@
 import { effectiveLabel } from '@/api/decode';
 import type { Account, CohortHold, RequestLog, SessionSpend, SessionSpendPart, Settings } from '@/api/types';
+import type { RequestOrderWord, SortDir } from '@/lib/address';
 import { heldSpan, hintPlan, ownShareHint, sentences, shareHint } from '@/lib/analytics';
 import { type Funding, fundingOf, inBand, revisionAt } from '@/lib/costs';
 import { has, lookup } from '@/lib/counts';
@@ -10,6 +11,32 @@ import type { UnitPosition, WeekPosition } from '@/lib/unit';
 
 /** The route's order, newest first and the higher id first at one instant, which a poll's merge and the mock keep. */
 export const compareRequests = (a: RequestLog, b: RequestLog) => Date.parse(b.at) - Date.parse(a.at) || byteOrder(b.id, a.id);
+
+/** The route's order key read off the row, null where the row carries no figure. */
+function figureOf(r: RequestLog, order: Exclude<RequestOrderWord, 'received_at'>): number | null {
+  switch (order) {
+    case 'attempts':
+      return r.attempts.length;
+    case 'duration_ms':
+      return r.durationMs;
+    case 'ttfb_ms':
+      return r.ttfbMs;
+  }
+}
+
+/**
+ * The read's cursor pair as a comparator, so a poll's rows merge where the route would page them: the figure in `dir`,
+ * a row without one last under either direction, and on a tie the id in `dir`, as the route orders `id {dir}`.
+ */
+export function requestOrder(order: RequestOrderWord, dir: SortDir): (a: RequestLog, b: RequestLog) => number {
+  if (order === 'received_at') return dir === 'desc' ? compareRequests : (a, b) => compareRequests(b, a);
+  const flip = dir === 'desc' ? -1 : 1;
+  return (a, b) => {
+    const [x, y] = [figureOf(a, order), figureOf(b, order)];
+    if (x === null || y === null) return x === y ? flip * byteOrder(a.id, b.id) : x === null ? 1 : -1;
+    return flip * (x - y || byteOrder(a.id, b.id));
+  };
+}
 
 /** The words under a dollar figure for who paid: the funding of a request billed in dollars. */
 export const FUNDING_WORD: Record<Exclude<Funding, 'plan'>, string> = { api_key: 'API key', fast: 'fast mode', overage: 'overage', usage_based: 'usage-based' };

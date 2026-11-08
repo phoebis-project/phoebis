@@ -11086,7 +11086,7 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
   const button = columnsButton(m);
   results.push({
     name: '/requests the Columns control is an icon button reading the count of shown columns, every column counted in its title',
-    ok: button?.textContent?.trim() === '10' && button.getAttribute('title') === 'Columns: 10 of 13 shown' && button.querySelector('svg') !== null && button.getAttribute('aria-haspopup') === 'dialog',
+    ok: button?.textContent?.trim() === '10' && button.getAttribute('title') === 'Columns: 10 of 14 shown' && button.querySelector('svg') !== null && button.getAttribute('aria-haspopup') === 'dialog',
     missing: [button ? `${JSON.stringify(button.textContent?.trim())} titled ${JSON.stringify(button.getAttribute('title'))}` : 'no Columns button'],
   });
 }
@@ -11111,9 +11111,10 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
   });
 }
 {
-  // Kind, Pool and Transport start hidden, since the drawer names all three, and the control still offers every column.
-  const ALL = ['Time', 'Key', 'Pool', 'Account', 'Model', 'Client', 'Kind', 'Transport', 'Status', 'Attempts', 'TTFB', 'Tokens', 'Cost'];
-  const HIDDEN = ['Kind', 'Pool', 'Transport'];
+  // Duration, Kind, Pool and Transport start hidden, since the drawer names all four, and the control still offers
+  // every column.
+  const ALL = ['Time', 'Key', 'Pool', 'Account', 'Model', 'Client', 'Kind', 'Transport', 'Status', 'Attempts', 'TTFB', 'Duration', 'Tokens', 'Cost'];
+  const HIDDEN = ['Duration', 'Kind', 'Pool', 'Transport'];
   const colsButton = () => columnsButton(m);
   const heads = () => [...m.container.querySelectorAll('.requests__table thead th')].map((th) => th.textContent?.trim() ?? '');
   const offered = () => [...(columnsGrid()?.querySelectorAll('label') ?? [])].map((l) => ({ checked: l.querySelector('input[type="checkbox"]')?.checked ?? null, label: l.textContent?.trim() ?? '' }));
@@ -11131,7 +11132,7 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
   const poolCells = [...m.container.querySelectorAll('.requests__table tbody tr')].map((tr) => tr.children[poolAt]?.textContent?.trim() ?? '');
   const poolCount = `${colsButton()?.textContent?.trim()}, ${colsButton()?.getAttribute('title')}`;
   results.push({
-    name: '/requests the Columns control lists all thirteen columns and turning Pool on draws it',
+    name: '/requests the Columns control lists all fourteen columns and turning Pool on draws it',
     ok:
       JSON.stringify(listed.map((c) => c.label)) === JSON.stringify(ALL) &&
       listed.every((c) => c.checked === !HIDDEN.includes(c.label)) &&
@@ -11139,17 +11140,21 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
       poolAt === withPool.indexOf('Key') + 1 &&
       poolCells.length > 0 &&
       poolCells.every((c) => c.length > 0) &&
-      poolCount === '11, Columns: 11 of 13 shown',
+      poolCount === '11, Columns: 11 of 14 shown',
     missing: [JSON.stringify(listed), JSON.stringify(shownBefore), JSON.stringify(withPool), String(poolCount)],
   });
   // Transport stays a column the control offers, so its badges draw once it is turned on.
   await turn('Transport');
   expect('/requests turning Transport on through the Columns control draws its SSE badges', m.text(), ['SSE', 'Transport']);
-  // With Kind on as well, every one of the thirteen columns is drawn, so the hidden ones carry their class too.
+  // With Duration and Kind on as well, every one of the fourteen columns is drawn, so the hidden ones carry their class
+  // too.
+  await turn('Duration');
   await turn('Kind');
-  // A turn that finds no label does nothing, so the head is counted before the classes are read.
-  results.push({ name: '/requests with Kind, Pool and Transport on the head draws fourteen cells, the three among them', ok: heads().length === 14 && ['Kind', 'Pool', 'Transport'].every((h) => heads().includes(h)), missing: heads() });
-  columnsMarked('/requests every one of the thirteen columns is fit or fill, with Time the fill', m.container.querySelector('.requests__table'), ['Time']);
+  // A turn that finds no label does nothing, so the head is counted before the classes are read. The links column's
+  // empty head is the fifteenth cell.
+  results.push({ name: '/requests with Duration, Kind, Pool and Transport on the head draws fifteen cells, the four among them', ok: heads().length === 15 && ['Duration', 'Kind', 'Pool', 'Transport'].every((h) => heads().includes(h)), missing: heads() });
+  columnsMarked('/requests every one of the fourteen columns is fit or fill, with Time the fill', m.container.querySelector('.requests__table'), ['Time']);
+  await turn('Duration');
   await turn('Kind');
   await turn('Pool');
   await turn('Transport');
@@ -12988,8 +12993,9 @@ await forView('/requests', async () => {
   page.unmount();
 });
 
-// The story's requests span the day before its clock, so the 7-day range read at that clock dates no row, and read a
-// day and an hour later dates every one. A row is paired with the story's by the id under its time.
+// Every row prints its date before the time whatever its age: the story's requests span the day before its clock, so
+// the 7-day range read at that clock holds its newest row within the day, and read a day and an hour later every row
+// is older than a day. A row is paired with the story's by the id under its time.
 await forView('/requests', async () => {
   const HOUR = 3_600_000;
   const clockText = (at) => new Date(at).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h23', minute: '2-digit', second: '2-digit' });
@@ -13008,10 +13014,181 @@ await forView('/requests', async () => {
   const story = await timesAt(CLOCK_ORIGIN);
   const later = await timesAt(CLOCK_ORIGIN + 25 * HOUR);
   const wrong = (read, expected) => read.filter((c) => c.row === null || c.text !== expected(c.row.at) || c.title !== fmtAbsolute(c.row.at)).map((c) => `${c.row?.id ?? 'unpaired'}: ${c.text}`);
+  const newest = story[0]?.row ?? null;
   results.push({
-    name: '/requests under the 7-day range a row older than a day prints its date before the time, and the newest row within the day the time alone',
-    ok: story.length > 0 && later.length > 0 && wrong(story, clockText).length === 0 && wrong(later, datedText).length === 0 && later.every((c) => /^[A-Z][a-z]{2} \d{1,2} \d{2}:\d{2}:\d{2}$/.test(c.text)),
-    missing: [`${story.length} rows at the story's clock, ${later.length} a day and an hour later`, ...wrong(story, clockText).slice(0, 3), ...wrong(later, datedText).slice(0, 3)],
+    name: '/requests under the 7-day range every row prints its date before the time, the newest row within the day too',
+    ok:
+      story.length > 0 && later.length > 0 && newest !== null && CLOCK_ORIGIN - Date.parse(newest.at) < 24 * HOUR &&
+      wrong(story, datedText).length === 0 && wrong(later, datedText).length === 0 && [...story, ...later].every((c) => /^[A-Z][a-z]{2} \d{1,2} \d{2}:\d{2}:\d{2}$/.test(c.text)),
+    missing: [`${story.length} rows at the story's clock, ${later.length} a day and an hour later, the newest at ${newest?.at ?? 'none'}`, ...wrong(story, datedText).slice(0, 3), ...wrong(later, datedText).slice(0, 3)],
+  });
+});
+
+// The Requests view's Sort control. The ci key's day fits one page: its 24 rows in `web/src/mock/requests.ts`, the
+// drawn ones and the request that crossed research's budget (BUDGET_CROSSING_ID), eight of them with no TTFB. Time
+// stands descending at rest, TTFB orders the rows by the figure from its pick with the eight last, and Ascending flips
+// the rows with a figure and keeps the eight last, each run by id in the direction. The read sends the key's order word
+// and the direction, the address carries the pick and a reload reads it back, the Duration column turns on through the
+// Columns control and reads the crossing's 9-second attempt, and a Time cell within the day reads its date.
+await forView('/requests', async () => {
+  const name = '/requests the sort control reads Time at rest, a pick of TTFB pages by the figure with the rows without one last, Ascending flips the rows with a figure, the read sends the order and the direction, and a reload reads the pick back';
+  const button = (p) => p.container.querySelector('.filter-bar button[aria-label="Sort"]');
+  const box = () => document.querySelector('.popover .sort-popover')?.closest('.popover') ?? null;
+  const ARROWS = { 'rotate(-90 12 12)': 'up', 'rotate(90 12 12)': 'down' };
+  const idOf = (tr) => tr?.querySelector('.sub.mono')?.getAttribute('title') ?? null;
+  const column = (p, head) => {
+    const at = [...p.container.querySelectorAll('.requests__table thead th')].findIndex((th) => th.textContent?.trim() === head);
+    return [...p.container.querySelectorAll('.requests__table tbody tr')].map((tr) => ({ id: idOf(tr), text: at < 0 ? null : (tr.children[at]?.firstChild?.textContent?.trim() ?? null) }));
+  };
+  const control = (p) => ({ arrow: ARROWS[button(p)?.querySelector('svg path')?.getAttribute('transform') ?? ''] ?? 'no arrow', search: p.location().search, text: button(p)?.textContent ?? null, title: button(p)?.getAttribute('title') ?? null });
+  // The first and last rows with a TTFB, then the first and last of the rows after them and their count, each with
+  // none.
+  const order = (p) => {
+    const ttfb = column(p, 'TTFB');
+    const timed = ttfb.filter((c) => c.text !== '-');
+    const rest = ttfb.slice(timed.length);
+    return { ...control(p), timed: [timed[0]?.id ?? null, timed.at(-1)?.id ?? null], untimed: [rest[0]?.id ?? null, rest.at(-1)?.id ?? null, rest.every((c) => c.text === '-') ? rest.length : 'interleaved'] };
+  };
+  const pick = async (p, label) => {
+    button(p)?.click();
+    await p.settle(100);
+    [...(box()?.querySelectorAll('[role="radio"]') ?? [])].find((r) => r.textContent?.trim() === label)?.click();
+    await p.settle(300);
+  };
+  const recorded = recordedCalls('listRequests');
+  const sentOf = () => {
+    const q = recorded.calls.at(-1)?.args[0] ?? {};
+    return { dir: q.dir ?? null, order: q.order ?? null };
+  };
+  let bare;
+  let ttfb;
+  let ascending;
+  let reloaded;
+  let duration;
+  let dated;
+  try {
+    const page = await mount('/requests?keys=ci', { now: CLOCK_ORIGIN });
+    bare = { ...control(page), rows: column(page, 'TTFB').length };
+    await pick(page, 'TTFB');
+    ttfb = { ...order(page), sent: sentOf() };
+    await pick(page, 'Ascending');
+    ascending = { ...order(page), sent: sentOf() };
+    const at = page.location();
+    page.unmount();
+    const again = await mount(`${at.pathname}${at.search}`, { now: CLOCK_ORIGIN });
+    reloaded = order(again);
+    // The crossing ran one 9-second attempt, the cell reading `fmtMs` of the duration.
+    const crossing = requests.find((r) => r.id === 'req_7c19e4a0-2f3');
+    columnsButton(again)?.click();
+    await again.settle(100);
+    [...(columnsGrid()?.querySelectorAll('label') ?? [])].find((l) => l.textContent?.trim() === 'Duration')?.querySelector('input[type="checkbox"]')?.click();
+    await again.settle(100);
+    const heads = [...again.container.querySelectorAll('.requests__table thead th')].map((th) => th.textContent?.trim() ?? '');
+    duration = { after: heads[heads.indexOf('TTFB') + 1] ?? null, cell: column(again, 'Duration').find((c) => c.id === crossing?.id)?.text ?? null };
+    columnsButton(again)?.click();
+    await again.settle(100);
+    // Read in UTC, the zone the smoke runs in: a viewer elsewhere reads the day and the clock of their own zone.
+    const clock = (iso) => new Date(iso).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h23', minute: '2-digit', second: '2-digit' });
+    const day = (iso) => new Date(iso).toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
+    dated = { cell: column(again, 'Time').find((c) => c.id === crossing?.id)?.text ?? null, want: crossing ? `${day(crossing.at)} ${clock(crossing.at)}` : null, withinDay: crossing ? CLOCK_ORIGIN - Date.parse(crossing.at) < 24 * 3_600_000 : false };
+    again.unmount();
+  } finally {
+    recorded.restore();
+  }
+  const shown = (arrow, search, word, timed, untimed) => ({ arrow, search, text: 'Sort: TTFB', title: `Sorted by TTFB, ${word}`, timed, untimed });
+  const wantAscending = shown('up', '?keys=ci&sort=ttfb&dir=asc', 'ascending', ['req_d6629ea6-025', 'req_3546fede-0e5'], ['req_0739aa56-cac', 'req_bacc2d06-4d8', 8]);
+  results.push({
+    name,
+    ok:
+      JSON.stringify(bare) === JSON.stringify({ arrow: 'down', search: '?keys=ci', text: 'Sort: Time', title: 'Sorted by Time, descending', rows: 24 }) &&
+      JSON.stringify(ttfb) === JSON.stringify({ ...shown('down', '?keys=ci&sort=ttfb', 'descending', ['req_3546fede-0e5', 'req_d6629ea6-025'], ['req_bacc2d06-4d8', 'req_0739aa56-cac', 8]), sent: { dir: 'desc', order: 'ttfb_ms' } }) &&
+      JSON.stringify(ascending) === JSON.stringify({ ...wantAscending, sent: { dir: 'asc', order: 'ttfb_ms' } }) &&
+      JSON.stringify(reloaded) === JSON.stringify(wantAscending),
+    missing: [`bare ${JSON.stringify(bare)}`, `ttfb ${JSON.stringify(ttfb)}`, `ascending ${JSON.stringify(ascending)}`, `reloaded ${JSON.stringify(reloaded)}`],
+  });
+  results.push({
+    name: "/requests the Columns control turns the Duration column on after TTFB, its cell the request's duration",
+    ok: JSON.stringify(duration) === JSON.stringify({ after: 'Duration', cell: '9.0 s' }),
+    missing: [JSON.stringify(duration)],
+  });
+  results.push({ name: '/requests a Time cell within the day reads its date before the time', ok: dated?.withinDay === true && dated.cell !== null && dated.cell === dated.want, missing: [JSON.stringify(dated)] });
+});
+
+// A key pick on an older page starts the list at its first page, and the poll's watermark goes with the list it was
+// read for: no poll reads while the picked key's list is out, and the first after it reads from that list's stamp.
+await forView('/requests', async () => {
+  const recorded = recordedCalls('listRequests');
+  const button = (p) => p.container.querySelector('.filter-bar button[aria-label="Sort"]');
+  let held;
+  let read;
+  try {
+    const page = await mount('/requests?rows=10', { now: CLOCK_ORIGIN });
+    await chooseInterval(page, '5 s');
+    // One poll first, so the bare list's rows are followed under their own stamp when the pick leaves them.
+    tick(5_000);
+    await page.settle();
+    page.container.querySelector('button[aria-label="Next page"]')?.click();
+    await page.settle();
+    const paged = recorded.calls.at(-1)?.args[0]?.cursor ?? null;
+    const before = recorded.calls.length;
+    held = deferNextCall('listRequests');
+    button(page)?.click();
+    await page.settle(100);
+    [...(document.querySelector('.popover .sort-popover')?.querySelectorAll('[role="radio"]') ?? [])].find((r) => r.textContent?.trim() === 'TTFB')?.click();
+    await page.settle(100);
+    tick(5_000);
+    await page.settle();
+    const whileOut = recorded.calls.slice(before).map((c) => c.args[0]);
+    held.release();
+    await page.settle();
+    const listed = recorded.calls.find((c, i) => i >= before && c.args[0]?.order === 'ttfb_ms' && c.args[0]?.landedAfter === undefined);
+    const afterList = recorded.calls.length;
+    tick(5_000);
+    await page.settle();
+    const poll = recorded.calls[afterList]?.args[0] ?? null;
+    read = {
+      list: { cursor: held.calls[0]?.[0]?.cursor ?? null, order: held.calls[0]?.[0]?.order ?? null },
+      paged: paged !== null,
+      poll: poll === null ? null : { cursor: poll.cursor ?? null, landedAfter: poll.landedAfter === listed?.answer?.landedThrough && poll.landedAfter !== undefined, order: poll.order },
+      search: page.location().search,
+      whileOut: whileOut.filter((q) => q?.landedAfter !== undefined).length,
+    };
+    page.unmount();
+  } finally {
+    held?.restore();
+    recorded.restore();
+  }
+  results.push({
+    name: "/requests a key pick on an older page reads the key's first page, and the poll reads from that list's stamp once it answers, none before",
+    ok: JSON.stringify(read) === JSON.stringify({ list: { cursor: null, order: 'ttfb_ms' }, paged: true, poll: { cursor: null, landedAfter: true, order: 'ttfb_ms' }, search: '?sort=ttfb&rows=10', whileOut: 0 }),
+    missing: [JSON.stringify(read)],
+  });
+});
+
+// The poll's merge files a landed row where the picked key pages it. The story's late request (`LATE_REQUEST_ID` in
+// `web/src/mock/requests.ts`, 640 ms to its first token) lands a few seconds after the load, and under TTFB ascending
+// it stands among the 640 ms rows of a page of 50 by its id, between req_7a2d4c18-e95 and req_7b2e5d93-a16.
+await forView('/requests', async () => {
+  const LATE = 'req_7a3f0c26-d81';
+  const idOf = (tr) => tr?.querySelector('.sub.mono')?.getAttribute('title') ?? null;
+  const ids = (p) => [...p.container.querySelectorAll('.requests__table tbody tr')].map(idOf).filter((id) => id !== null);
+  const page = await mount('/requests?rows=50&sort=ttfb&dir=asc', { now: CLOCK_ORIGIN });
+  const listed = ids(page);
+  await chooseInterval(page, '5 s');
+  let drawn = listed;
+  let ticks = 0;
+  for (; ticks < 8 && !drawn.includes(LATE); ticks += 1) {
+    tick(5_000);
+    await page.settle();
+    drawn = ids(page);
+  }
+  page.unmount();
+  const route = (await api.listRequests({ dir: 'asc', from: isoAt(CLOCK_ORIGIN - 24 * 3_600_000), limit: drawn.length, order: 'ttfb_ms', to: isoAt(CLOCK_ORIGIN + ticks * 5_000) })).requests.map((r) => r.id);
+  const at = drawn.indexOf(LATE);
+  results.push({
+    name: '/requests under TTFB ascending an auto reload poll lands the late request where the key pages it, among the rows shown',
+    ok: listed.length === 50 && !listed.includes(LATE) && ticks > 1 && at > 0 && drawn[at - 1] === 'req_7a2d4c18-e95' && drawn[at + 1] === 'req_7b2e5d93-a16' && JSON.stringify(drawn) === JSON.stringify(route),
+    missing: [`listed ${listed.length}, ${ticks} ticks, late at ${at} between ${drawn[at - 1]} and ${drawn[at + 1]}`, `drawn ${drawn.slice(Math.max(0, at - 2), at + 3).join(' | ')}`, `route ${route.slice(Math.max(0, at - 2), at + 3).join(' | ')}`],
   });
 });
 
@@ -14522,9 +14699,11 @@ await forView('/requests', async () => {
             ? 'add filter'
             : el.matches('button[aria-label="Columns"]')
               ? 'columns'
-              : el.matches('.filter-bar__edge')
-                ? 'edge'
-                : `${el.tagName.toLowerCase()}.${el.className}`;
+              : el.matches('button[aria-label="Sort"]')
+                ? 'sort'
+                : el.matches('.filter-bar__edge')
+                  ? 'edge'
+                  : `${el.tagName.toLowerCase()}.${el.className}`;
     const row = page.container.querySelector('.requests > .filter-bar:first-child > .filter-bar__row');
     const slots = [...(row?.children ?? [])];
     const read = {
@@ -14540,7 +14719,7 @@ await forView('/requests', async () => {
     results.push({
       name: '/requests mounts the bar first with its slots in order and no empty slot',
       ok:
-        JSON.stringify(read.slots) === JSON.stringify(['range', 'search', 'add filter', 'columns', 'edge']) &&
+        JSON.stringify(read.slots) === JSON.stringify(['range', 'search', 'add filter', 'columns', 'sort', 'edge']) &&
         read.empty.length === 0 &&
         JSON.stringify(read.edge) === JSON.stringify(['refresh', 'count']) &&
         read.placeholder === 'Search id, session, key, account, model, error, message id' &&
@@ -14924,6 +15103,60 @@ await forView('/routing-log', async () => {
   });
 });
 
+// The Routing log's Sort control, Time alone: newest first at rest, and Ascending reads the hour from its oldest row,
+// the stream reversed whole, so the story's event 337 and the decision of req_d41e5b80-c26 at the hour's first instant
+// (`web/src/mock/routingLog.ts`) lead in the reverse of their newest-first order, each Time cell dated. The read sends
+// the direction, the address carries it and a reload reads it back.
+await forView('/routing-log', async () => {
+  const button = (p) => p.container.querySelector('.filter-bar button[aria-label="Sort"]');
+  const ARROWS = { 'rotate(-90 12 12)': 'up', 'rotate(90 12 12)': 'down' };
+  // Read in UTC, the zone the smoke runs in: a viewer elsewhere reads the day and the clock of their own zone.
+  const datedText = (at) => `${new Date(at).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })} ${new Date(at).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h23', minute: '2-digit', second: '2-digit' })}`;
+  const read = (p, answer) => {
+    const rows = [...p.container.querySelectorAll('.routing-log__table tbody tr.routing-log__row')];
+    return {
+      arrow: ARROWS[button(p)?.querySelector('svg path')?.getAttribute('transform') ?? ''] ?? 'no arrow',
+      first: rows.slice(0, 2).map((tr) => tr.getAttribute('data-row')),
+      search: p.location().search,
+      text: button(p)?.textContent ?? null,
+      time: rows[0]?.querySelector('td.routing-log__time')?.firstChild?.textContent ?? null,
+      timeWanted: answer?.rows[0] ? datedText(answer.rows[0].at) : null,
+      title: button(p)?.getAttribute('title') ?? null,
+    };
+  };
+  const recorded = recordedCalls('listRoutingLog');
+  let bare;
+  let ascending;
+  let reloaded;
+  try {
+    const page = await mount('/routing-log', { now: CLOCK_ORIGIN });
+    bare = read(page, recorded.calls.at(-1)?.answer);
+    button(page)?.click();
+    await page.settle(100);
+    [...(document.querySelector('.popover .sort-popover')?.querySelectorAll('[role="radio"]') ?? [])].find((r) => r.textContent?.trim() === 'Ascending')?.click();
+    await page.settle(300);
+    const sent = recorded.calls.at(-1);
+    ascending = { ...read(page, sent?.answer), dir: sent?.args[0]?.dir ?? null };
+    const at = page.location();
+    page.unmount();
+    const again = await mount(`${at.pathname}${at.search}`, { now: CLOCK_ORIGIN });
+    reloaded = read(again, recorded.calls.at(-1)?.answer);
+    again.unmount();
+  } finally {
+    recorded.restore();
+  }
+  const up = { arrow: 'up', first: ['event/337', 'req_d41e5b80-c26/1'], search: '?dir=asc', text: 'Sort: Time' };
+  const dated = (r) => r !== undefined && r.time !== null && r.time === r.timeWanted;
+  results.push({
+    name: '/routing-log the sort control reads Time newest first at rest, Ascending reads the hour from its oldest row with the stream reversed whole, the read sends the direction, and a reload reads it back',
+    ok:
+      bare?.arrow === 'down' && bare.text === 'Sort: Time' && bare.title === 'Sorted by Time, descending' && bare.search === '' && dated(bare) &&
+      JSON.stringify({ arrow: ascending?.arrow, first: ascending?.first, search: ascending?.search, text: ascending?.text }) === JSON.stringify(up) && ascending.title === 'Sorted by Time, ascending' && ascending.dir === 'asc' && dated(ascending) &&
+      JSON.stringify({ arrow: reloaded?.arrow, first: reloaded?.first, search: reloaded?.search, text: reloaded?.text }) === JSON.stringify(up) && dated(reloaded),
+    missing: [`bare ${JSON.stringify(bare)}`, `ascending ${JSON.stringify(ascending)}`, `reloaded ${JSON.stringify(reloaded)}`],
+  });
+});
+
 // The routing log on the pinned clock. Every figure a check names is read from the mock's own answer to the query the
 // page sent, so the story's counts are the route's rules over the story rather than a number kept here.
 await forView('/routing-log', async () => {
@@ -14931,6 +15164,8 @@ await forView('/routing-log', async () => {
   const MINUTE = 60_000;
   const iso = (ms) => new Date(ms).toISOString();
   const clockText = (at) => new Date(at).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h23', minute: '2-digit', second: '2-digit' });
+  // Every Time cell prints its date before the clock, whatever the row's age.
+  const datedText = (at) => `${new Date(at).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })} ${clockText(at)}`;
   const LABELS = ['5h', '7d', 'Fable', 'answer', 'attempt', 'capture', 'cause', 'client', 'depth', 'epoch', 'field', 'fields', 'fit', 'gap', 'held', 'idle', 'in flight', 'key', 'lasted', 'models', 'next', 'over', 'pick', 'pins', 'prefix', 'rank', 'resets', 'retry', 'runway', 'spent', 'state', 'to', 'turn', 'until', 'was'];
   const trs = (page) => [...page.container.querySelectorAll('.routing-log__table tbody tr')].filter((tr) => !tr.querySelector('.skeleton, .empty'));
   const cell = (tr, name) => tr?.querySelector(`td.routing-log__${name}`) ?? null;
@@ -14962,7 +15197,7 @@ await forView('/routing-log', async () => {
       ok:
         sent.from === iso(CLOCK_ORIGIN - HOUR) && sent.to === iso(CLOCK_ORIGIN) && sent.kinds === undefined && sent.limit === 25 && sent.cursor === undefined &&
         hour.rows.length > 25 && hour.nextCursor === null && drawn.length === 25 &&
-        JSON.stringify(times) === JSON.stringify(expected.map((r) => clockText(r.at))) &&
+        JSON.stringify(times) === JSON.stringify(expected.map((r) => datedText(r.at))) &&
         JSON.stringify(ids) === JSON.stringify(expected.map((r) => (r.type === 'decision' ? r.requestId : null))) &&
         named.rows.some((r) => r.type === 'decision' && r.probe) && named.rows.some((r) => r.type === 'event' && r.kind === 'warm_prefix_expired') && named.rows.every((r) => listed.has(rowKeyOf(r))),
       missing: [JSON.stringify(sent), `${hour.rows.length} rows in the hour, ${drawn.length} drawn`, `named ${named.rows.map((r) => `${r.kind}${r.probe ? ' probe' : ''}`).join(',')}`, times.join(' ')],
@@ -15026,9 +15261,9 @@ await forView('/routing-log', async () => {
     });
   }
   {
-    // The week's state changes put the story's changes of two and three days back on the first page beside today's.
+    // The week's state changes put the story's changes of two and three days back on the first page beside today's,
+    // and every row prints its date, today's too.
     const DAY = 24 * HOUR;
-    const dateText = (at) => new Date(at).toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
     const spied = countCalls('listRoutingLog');
     const week = await mount('/routing-log?range=7d&kinds=account_state_changed', { now: CLOCK_ORIGIN });
     spied.restore();
@@ -15037,9 +15272,9 @@ await forView('/routing-log', async () => {
     const read = trs(week).map((tr) => ({ text: cell(tr, 'time')?.firstChild?.textContent ?? '', title: cell(tr, 'time')?.getAttribute('title') ?? null }));
     week.unmount();
     const older = answered.filter((r) => CLOCK_ORIGIN - Date.parse(r.at) >= DAY);
-    const expected = answered.map((r) => (CLOCK_ORIGIN - Date.parse(r.at) >= DAY ? `${dateText(r.at)} ${clockText(r.at)}` : clockText(r.at)));
+    const expected = answered.map((r) => datedText(r.at));
     results.push({
-      name: '/routing-log under the 7-day range a row older than a day prints its date before the time, and the newest row within the day the time alone',
+      name: '/routing-log under the 7-day range every row prints its date before the time, the newest row within the day too',
       ok:
         asked.from === iso(CLOCK_ORIGIN - 7 * DAY) && older.length > 0 && answered.length > older.length && CLOCK_ORIGIN - Date.parse(answered[0].at) < DAY &&
         read.length === answered.length && JSON.stringify(read.map((r) => r.text)) === JSON.stringify(expected) && read.every((r, i) => r.title === fmtAbsolute(answered[i].at)),
@@ -15164,16 +15399,18 @@ await forView('/routing-log', async () => {
     });
   }
   {
-    // The range, Add filter and the edge, with no search slot drawn empty and no extras.
+    // The range, Add filter, the Sort control and the edge, with no search slot drawn empty and no extras.
     const row = m.container.querySelector('.routing-log > .filter-bar:first-child > .filter-bar__row');
     const slotOf = (el) =>
       el.matches('.segmented[aria-label="Range"]')
         ? 'range'
         : el.matches('button') && el.textContent?.trim() === 'Add filter'
           ? 'add filter'
-          : el.matches('.filter-bar__edge')
-            ? 'edge'
-            : `${el.tagName.toLowerCase()}.${el.className}`;
+          : el.matches('button[aria-label="Sort"]')
+            ? 'sort'
+            : el.matches('.filter-bar__edge')
+              ? 'edge'
+              : `${el.tagName.toLowerCase()}.${el.className}`;
     const slots = [...(row?.children ?? [])];
     const read = {
       edge: [...(row?.querySelector('.filter-bar__edge')?.children ?? [])].map((el) => (el.classList.contains('refresh-control') ? 'refresh' : el.classList.contains('filter-bar__count') ? 'count' : el.className)),
@@ -15182,8 +15419,8 @@ await forView('/routing-log', async () => {
       slots: slots.map(slotOf),
     };
     results.push({
-      name: '/routing-log mounts the bar first with the range, Add filter and the edge, no search and no empty slot',
-      ok: JSON.stringify(read.slots) === JSON.stringify(['range', 'add filter', 'edge']) && read.empty.length === 0 && JSON.stringify(read.edge) === JSON.stringify(['refresh', 'count']) && !read.search,
+      name: '/routing-log mounts the bar first with the range, Add filter, the Sort control and the edge, no search and no empty slot',
+      ok: JSON.stringify(read.slots) === JSON.stringify(['range', 'add filter', 'sort', 'edge']) && read.empty.length === 0 && JSON.stringify(read.edge) === JSON.stringify(['refresh', 'count']) && !read.search,
       missing: [JSON.stringify(read)],
     });
   }
@@ -15195,7 +15432,8 @@ await forView('/routing-log', async () => {
     for (const page of [m, day]) {
       for (const tr of trs(page)) {
         const fact = cell(tr, 'fact');
-        const time = (cell(tr, 'time')?.firstChild?.textContent ?? '').slice(0, 5);
+        // The cell leads with the date, so the clock's hour and minute sit before its seconds at the end.
+        const time = (cell(tr, 'time')?.firstChild?.textContent ?? '').slice(-8, -3);
         const drawn = [...(fact?.querySelectorAll('.fact__pair') ?? [])];
         if (drawn.length === 0) {
           if (fact?.textContent?.trim() !== '-' || fact.querySelector('.muted') === null) wrong.push(`${time}: ${fact?.textContent}`);
@@ -15350,8 +15588,8 @@ await forView('/routing-log', async () => {
       name: "/routing-log auto reload at 5 s polls with the range's end at now and lands a new row in the accent tint",
       ok:
         start.word === 'Off' && start.title === 'Auto reload off' && chosen.word === '5 s' && chosen.title === 'Auto reload every 5 s' &&
-        firstBefore !== clockText(top.at) &&
-        landed.calls === 2 && landed.cursor === undefined && landed.to === iso(t + 3_000) && landed.isNew && landed.time === clockText(top.at) &&
+        firstBefore !== datedText(top.at) &&
+        landed.calls === 2 && landed.cursor === undefined && landed.to === iso(t + 3_000) && landed.isNew && landed.time === datedText(top.at) &&
         after.calls === 3 && after.isNew === 0,
       missing: [firstBefore, JSON.stringify(start), JSON.stringify(chosen), JSON.stringify(landed), JSON.stringify(after)],
     });
@@ -15397,7 +15635,7 @@ await forView('/routing-log', async () => {
     const back = { first: cell(trs(page)[0], 'time')?.firstChild?.textContent ?? '', tinted: tinted(page) };
     results.push({
       name: '/routing-log paging back from an older page draws no row in the accent tint',
-      ok: landed === 1 && back.first === clockText(hour.rows[0].at) && back.tinted === 0,
+      ok: landed === 1 && back.first === datedText(hour.rows[0].at) && back.tinted === 0,
       missing: [`${landed} tinted after the poll`, JSON.stringify(back)],
     });
     page.unmount();
@@ -15419,7 +15657,7 @@ await forView('/routing-log', async () => {
     held.restore();
     results.push({
       name: '/routing-log a poll that answers after auto reload is turned off lands nothing and reads no further page',
-      ok: after.calls === 1 && JSON.stringify(after.pages) === JSON.stringify([true]) && after.first !== clockText(hour.rows[0].at) && after.tinted === 0 && after.word === 'Off',
+      ok: after.calls === 1 && JSON.stringify(after.pages) === JSON.stringify([true]) && after.first !== datedText(hour.rows[0].at) && after.tinted === 0 && after.word === 'Off',
       missing: [JSON.stringify(after)],
     });
     page.unmount();
@@ -15439,7 +15677,7 @@ await forView('/routing-log', async () => {
     await page.settle();
     const [list, poll] = held.calls.map((c) => c[0]);
     held.restore();
-    const key = (at, requestId) => `${clockText(at)} ${requestId ?? '-'}`;
+    const key = (at, requestId) => `${datedText(at)} ${requestId ?? '-'}`;
     const answered = new Set([...(await api.listRoutingLog(list)).rows, ...(poll ? (await api.listRoutingLog(poll)).rows : [])].map((r) => key(r.at, r.type === 'decision' ? r.requestId : null)));
     const drawn = trs(page).map((tr) => `${cell(tr, 'time')?.firstChild?.textContent ?? ''} ${cell(tr, 'time')?.querySelector('a')?.textContent ?? '-'}`);
     const strays = drawn.filter((k) => !answered.has(k));
@@ -15493,7 +15731,7 @@ await forView('/routing-log', async () => {
     });
     page.unmount();
   }
-  const rowKey = (r) => `${clockText(r.at)} ${r.type === 'decision' ? r.requestId : '-'}`;
+  const rowKey = (r) => `${datedText(r.at)} ${r.type === 'decision' ? r.requestId : '-'}`;
   const drawnKeys = (page) => trs(page).map((tr) => `${cell(tr, 'time')?.firstChild?.textContent ?? ''} ${cell(tr, 'time')?.querySelector('a')?.textContent ?? '-'}`);
   /**
    * Mounts the default hour `back` before the pinned clock, chooses 5 s, and holds the poll with the interval menu open

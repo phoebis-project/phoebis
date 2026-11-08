@@ -9,20 +9,20 @@ import { ChipView } from '@/components/ChipView';
 import { DecisionCard } from '@/components/DecisionCard';
 import { EventDetail } from '@/components/EventDetail';
 import { FilterBar } from '@/components/FilterBar';
+import { SortControl } from '@/components/SortControl';
 import type { Option } from '@/components/ui/OptionList';
 import { IconChevronRight } from '@/components/ui/icons';
 import { PagerNav } from '@/components/ui/PagerNav';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Badge, Button, Card, EmptyState, ErrorState, SkeletonRows, toggleRow, useHostedDescription } from '@/components/ui/primitives';
-import { addressWindow, type LogFilters, ROUTING_LOG_CODEC } from '@/lib/address';
+import { addressWindow, ROUTING_LOG_CODEC, ROUTING_LOG_SORT_KEYS, sortAddressOf, sortDirOf } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { tierOrder } from '@/lib/costs';
 import { chipText, notLoadedReason, ROUTING_LOG_DIMENSIONS } from '@/lib/filterBar';
 import { effectiveInterval, ENDED_RANGE, FOLLOW_OVERRUN, readEnd, rowsRefreshTitle, shownCount, spanEnded } from '@/lib/follow';
 import { fmtAbsolute, fmtDatedTime, plural, upperFirst } from '@/lib/format';
-import { sameMembers } from '@/lib/forms';
 import { toggled, useAsync, useQueryFilters, useRangeTakenAt, useWeekReading } from '@/lib/hooks';
-import { ALL_KINDS, byOf, catalogModel, compareRows, DECISION_KIND_LABEL, DECISION_KIND_TONE, entityHref, EVENT_KIND_LABEL, eventTone, factsOf, identityOf, KIND_PRESETS, type LogLink, logHref, movedFrom, registryTarget, words } from '@/lib/routingLog';
+import { byOf, catalogModel, compareRows, DECISION_KIND_LABEL, DECISION_KIND_TONE, entityHref, EVENT_KIND_LABEL, eventTone, factsOf, identityOf, KIND_PRESETS, type LogLink, logHref, movedFrom, registryTarget, words } from '@/lib/routingLog';
 
 const PAGE_SIZE = 25;
 
@@ -36,11 +36,6 @@ const KIND_OPTIONS: Option[] = [
     .sort((a, b) => a.label.localeCompare(b.label)),
 ];
 const KIND_PRESET_ROWS = { kinds: KIND_PRESETS };
-/**
- * A set equal to every kind is every kind: an update writes no key for it, since an absent `kinds` reads every
- * kind, and the bar draws no chip for it and every row of the Kinds list checked.
- */
-const everyKindAsNone = <T extends { kinds?: readonly string[] }>(f: T): T => (f.kinds !== undefined && sameMembers(f.kinds, ALL_KINDS) ? { ...f, kinds: [] } : f);
 
 const Dash = () => <span className="muted">-</span>;
 
@@ -52,8 +47,7 @@ const EntityLink = ({ children, id, kind, mono = false }: { children?: ReactNode
 );
 
 export function RoutingLogPage() {
-  const { address, filters, update: rawUpdate } = useQueryFilters(ROUTING_LOG_CODEC);
-  const update = (patch: Partial<LogFilters>) => rawUpdate(everyKindAsNone(patch));
+  const { address, filters, update } = useQueryFilters(ROUTING_LOG_CODEC);
   const navigate = useNavigate();
   const keys = useAsync(() => api.listKeys(), []);
   const pools = useAsync(() => api.listPools(), []);
@@ -87,16 +81,18 @@ export function RoutingLogPage() {
   const range = useMemo(() => addressWindow(filters.range, '1h', loadedAt), [filters.range, loadedAt]);
   const ended = spanEnded(custom, range.to, rangeTakenAt);
   const polledMs = effectiveInterval(intervalMs, ended);
+  const dir = sortDirOf(ROUTING_LOG_SORT_KEYS, filters);
   const query = useMemo<RoutingLogQuery>(
-    () => ({ accountIds: filters.accounts, agentId: filters.agentId || undefined, cursor, from: iso(range.from), keyIds: filters.keys, kinds: filters.kinds.length ? filters.kinds : undefined, limit: PAGE_SIZE, models: filters.models, poolIds: filters.pools, request: filters.request || undefined, session: filters.session || undefined, to: iso(readEnd(custom, range.to, pagedTo ?? range.to)) }),
-    [filters, custom, range, cursor, pagedTo],
+    () => ({ accountIds: filters.accounts, agentId: filters.agentId || undefined, cursor, dir, from: iso(range.from), keyIds: filters.keys, kinds: filters.kinds.length ? filters.kinds : undefined, limit: PAGE_SIZE, models: filters.models, poolIds: filters.pools, request: filters.request || undefined, session: filters.session || undefined, to: iso(readEnd(custom, range.to, pagedTo ?? range.to)) }),
+    [filters, custom, range, cursor, dir, pagedTo],
   );
   const log = useAsync(() => api.listRoutingLog(query), [query]);
 
   // An open menu or popover under the bar stands over the list, so the poll waits for it to close.
   const { error, fresh, goNext, goPrevious, nextCursor, overrun, rows, setFollowed } = useFollow<RoutingLogRow>({
     address,
-    compare: compareRows,
+    // Ascending is the stream reversed whole, as the read pages it, so a tie at one instant flips with the time.
+    compare: dir === 'asc' ? (a, b) => compareRows(b, a) : compareRows,
     cursor,
     error: log.error,
     fixedEnd: false,
@@ -121,7 +117,6 @@ export function RoutingLogPage() {
   };
 
   const now = clock.now();
-  const barFilters = useMemo(() => everyKindAsNone(filters), [filters]);
   const counts = log.data?.counts ?? null;
   // The request chip keeps its id form and carries the route's counts for the request in its title.
   const dimensions = useMemo(
@@ -156,7 +151,7 @@ export function RoutingLogPage() {
           count={shownCount(rows, nextCursor, log.data !== null)}
           dimensions={dimensions}
           disabled={disabled}
-          filters={barFilters}
+          filters={filters}
           options={options}
           presets={KIND_PRESET_ROWS}
           range={{ now: clock.now, window: range }}
@@ -169,7 +164,9 @@ export function RoutingLogPage() {
             refreshTitle: rowsRefreshTitle(custom, range.from, range.to),
           }}
           update={update}
-        />
+        >
+          <SortControl keys={ROUTING_LOG_SORT_KEYS} onChange={(next) => update(sortAddressOf(ROUTING_LOG_SORT_KEYS, next))} value={{ dir, sort: filters.sort }} />
+        </FilterBar>
 
         {overrun !== null && (
           <div className="callout callout--warning routing-log__overrun" role="status">
@@ -277,7 +274,7 @@ function LogRow({ isNew, now, onToggle, open, row, rows }: { isNew: boolean; now
         <IconChevronRight size={14} />
       </td>
       <td className="num routing-log__time" title={fmtAbsolute(row.at)}>
-        {fmtDatedTime(row.at, now)}
+        {fmtDatedTime(row.at)}
         {row.type === 'decision' && (
           <span className="sub mono routing-log__cut ellipsis">
             <EntityLink kind="request" id={row.requestId} />

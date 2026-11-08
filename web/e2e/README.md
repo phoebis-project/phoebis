@@ -145,7 +145,12 @@ under its name in the type size and ink of the row's blocked count), the Analyti
 measure (on the Traffic tab its button reading "Sort: Name" with the up arrow, titled "Sorted by Name, ascending", in
 the height, top edge, type size, weight and ink of the Add filter button beside it, once opened its popover inside the
 window under the button and Escape closing it, and on the Burn tab, which has no group table to order, the button
-disabled in its slot, titled "This tab's tables keep their own order"), the Accounts detail's allowance grid at 1280 by
+disabled in its slot, titled "This tab's tables keep their own order"), the Requests and Routing log bars' sort controls
+beside the bar's measure (on the bare log the button reading "Sort: Time" with the down arrow, titled "Sorted by Time,
+descending", in the height, top edge, type size, weight and ink of the Add filter button beside it, once opened its
+popover inside the window under the button, its radios the view's keys and the two directions in one height, a mark on
+Time and Descending alone, and Escape closing it with the focus back on the button), the Accounts detail's allowance
+grid at 1280 by
 800, 1440 by 900 and 375 by 800 (mock pass: "Allowance left at reset" and "Meter drift" stacked across the pane's
 content box at 1280 and 375 px, each as wide as the Usage and Requests cards and in their title's type, and at 1440 px
 side by side on one top, as wide as each other and as the Usage card and each under half the pane, the grid inside the
@@ -217,8 +222,9 @@ column at least 132 px at 375 by 800 with the table scrolling inside its wrap an
 the request table's fit (in both passes the default columns inside the card at 1280 by 800 with the Cost column whole,
 Time the one fill taking the card less the other columns, its floor the widest dated time the clock setting draws with
 the cell's padding, every id line the whole id cut by the room alone with at least twelve characters in view, and no
-Client text cut, again under the 7-day range read a day and an hour on, where every Time cell prints its date on one
-line inside its cell, and there under the 12-hour setting, the table carrying its 12-hour class and, where the set runs
+Client text cut, every Time cell printing its date whatever the row's age, again under the 7-day range read a day and
+an hour on, with every Time cell on one line inside its cell, and there under the 12-hour setting, the table carrying
+its 12-hour class and, where the set runs
 past the card, scrolling inside its wrap with Time at its floor), its sizes (at 1440 by 900 inside the card with every
 id whole in the mock pass, and at 375 by 800 at its narrowest with Time at its floor, scrolling inside its wrap with the
 page as wide as the window), its columns (Time the fill, the Status, Attempts and links cells wrapping), its text at
@@ -240,13 +246,18 @@ required in the mock pass alone since the router's seed holds no request without
 walked on a load of their own once every view's shot is taken, the pagers of both logs (three buttons 32 px square on
 each, the request log's page-size select 32 px, each footer one control tall with its padding and its border), the
 request log's range control (the group 32 px with its six pills 28 px at one top, the group against the split Refresh
-button and the search field on height and top, the Custom pill's width recorded), the speed chip, and the cache miss
-reason, effort and request class chips (each against the turn origin chip at 26 px, on an address that holds them), the
-Cost split's rings under native (each center figure inside its ring, the billed ring alone in the mock pass, whose range
+button on height and the search field on height and top, the Custom pill's width recorded), the speed chip, and the
+cache miss reason, effort and request class chips (each against the turn origin chip at 26 px, on an address that
+holds them), the Cost split's rings under native (each center figure inside its ring, the billed ring alone in the mock
+pass, whose range
 prices its plan rows nothing), the native Cost by table (its width recorded, every column inside its wrap at 1280 by
 800), the filter bar of every list view at 1280 by 800 and 1440 by 900, at rest, with the view's chips and, on a ranged
 view, with a span across midnight (the row 32 px on one line with every control 32 px at one top and a segmented's pills
-28 px, the bar 32 px at rest and 66 px with a chip line, 49 and 83 px as the Analytics sticky bar, each chip 26 px with
+28 px, the bar 32 px at rest and 66 px with a chip line, 49 and 83 px as the Analytics sticky bar, the Requests row at
+1280 by 800 on two lines at rest (72 px, the count "25 shown, more available" taking the slots to 1275 px, so the edge
+wraps alone onto the second line) and across midnight (72 px, the slots 1175 px), and on one line with its chips (the
+bar 66 px, since that address lists no row and the "No rows" count fits its edge in 164.7 px), and on one line at 1440
+by 900 in every case, each chip 26 px with
 its word in `--ink-2` and its values in `--ink`, the chip line on one line, the first card's head below the bar, on a
 card view the next element and the tiles below it, on Analytics the Group by select against Add filter, and on the
 routing log and Analytics the width of the row's slots and gaps at rest under the view's bound, and at 950 by 800 on

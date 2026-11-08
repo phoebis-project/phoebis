@@ -10,6 +10,7 @@ import { BodyViewer } from '@/components/BodyViewer';
 import { Chips } from '@/components/ChipView';
 import { FilterBar } from '@/components/FilterBar';
 import { PhaseWaterfall } from '@/components/PhaseWaterfall';
+import { SortControl } from '@/components/SortControl';
 import { TokenBar } from '@/components/TokenBar';
 import { AttemptCount, StatusBadge } from '@/components/ui/AttemptTrail';
 import { ColumnsControl } from '@/components/ui/ColumnsControl';
@@ -19,7 +20,7 @@ import { IconChevronLeft, IconChevronRight, IconX } from '@/components/ui/icons'
 import { PagerNav } from '@/components/ui/PagerNav';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Badge, Button, Card, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Input, KeyValue, Select, Skeleton, SkeletonRows } from '@/components/ui/primitives';
-import { accountHref, addressWindow, REQUEST_PAGE_SIZES, requestHref, REQUESTS_CODEC } from '@/lib/address';
+import { accountHref, addressWindow, REQUEST_ORDER_OF, REQUEST_PAGE_SIZES, REQUEST_SORT_KEYS, requestHref, REQUESTS_CODEC, sortAddressOf, sortDirOf } from '@/lib/address';
 import { sentences, shareHint, shareHintLines, type WeekReading } from '@/lib/analytics';
 import { autoModeLabel } from '@/lib/autoMode';
 import { bodyLines, bodyText, findHits } from '@/lib/bodies';
@@ -32,7 +33,7 @@ import { effectiveInterval, ENDED_RANGE, FOLLOW_OVERRUN, pollQuery, readEnd, row
 import { bytesDropped, fmtAbsolute, fmtCompact, fmtDatedTime, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, fmtWeek, forkLabel, modelTitle, shortAgent, shortId, shortModel, tokensTotal } from '@/lib/format';
 import { guardrailLabel, guardrailOptions } from '@/lib/guardrails';
 import { useAsync, useNow, useQueryFilters, useRangeTakenAt, useWeekReading } from '@/lib/hooks';
-import { compareRequests, costCellOf, costHeaderTitle, type CostTable, type CostUnit, costUnitOf, FREE_SHARE_TITLE, FUNDING_WORD, heldWords, NO_SHARE_TITLE, requestCostUnit, requestHintArgs, revisionsTitle } from '@/lib/requests';
+import { costCellOf, costHeaderTitle, type CostTable, type CostUnit, costUnitOf, FREE_SHARE_TITLE, FUNDING_WORD, heldWords, NO_SHARE_TITLE, requestCostUnit, requestHintArgs, requestOrder, revisionsTitle } from '@/lib/requests';
 import { requestsWiden } from '@/lib/requestsLink';
 import { type Chip, logHref, requestLink, words } from '@/lib/routingLog';
 import { plainOutputOf } from '@/lib/tokenBar';
@@ -51,12 +52,13 @@ const COLUMNS = [
   { id: 'status', label: 'Status' },
   { id: 'attempts', label: 'Attempts' },
   { id: 'ttfb', label: 'TTFB' },
+  { id: 'duration', label: 'Duration' },
   { id: 'tokens', label: 'Tokens' },
   { id: 'cost', label: 'Cost' },
 ] as const;
 type ColumnId = (typeof COLUMNS)[number]['id'];
-// The drawer names all three, and leaving them out lets the default set fit the card at 1280 by 800.
-const HIDDEN_BY_DEFAULT: readonly ColumnId[] = ['kind', 'pool', 'transport'];
+// The drawer names all four, and leaving them out lets the default set fit the card at 1280 by 800.
+const HIDDEN_BY_DEFAULT: readonly ColumnId[] = ['duration', 'kind', 'pool', 'transport'];
 /** The columns the table shows while the drawer is open: derived at render, so the chosen set returns on close. */
 const COMPACT: readonly ColumnId[] = ['time', 'model', 'status', 'attempts'];
 
@@ -271,17 +273,20 @@ export function RequestsPage() {
   const span = useMemo(() => addressWindow(filters.range, '24h', loadedAt), [filters.range, loadedAt]);
   const ended = spanEnded(custom, span.to, rangeTakenAt);
   const polledMs = effectiveInterval(intervalMs, ended);
+  // The read pages by the key, since a page of a paged list cannot be sorted on its own.
+  const dir = sortDirOf(REQUEST_SORT_KEYS, filters);
+  const order = REQUEST_ORDER_OF[filters.sort];
   const query = useMemo<RequestQuery>(
     // Probes are off the log unless they are what the filter asks for.
-    () => ({ accountIds: filters.accounts, agentId: filters.agentId || undefined, agentTypes: filters.agentTypes, cacheMissReasons: filters.cacheMissReasons, classifiers: filters.classifiers, client: filters.client, cursor, efforts: filters.efforts, from: iso(span.from), guardrails: filters.guardrails, held: filters.held, includeProbes: filters.kind === 'probe', keyIds: filters.keys, kind: filters.kind || null, limit: filters.rows, models: filters.models, outcomes: filters.outcomes, poolIds: filters.pools, refusalCategories: filters.refusalCategories, request: filters.request || undefined, requestClasses: filters.requestClasses, search: filters.search, session: filters.session || undefined, speeds: filters.speeds, statuses: filters.statuses.map(Number), stopReasons: filters.stopReasons, to: cursor !== undefined && !custom ? undefined : iso(readEnd(custom, span.to, pagedTo ?? span.to)), turnOrigins: filters.turnOrigins, userAgent: filters.agent }),
-    [filters, cursor, custom, span, pagedTo],
+    () => ({ accountIds: filters.accounts, agentId: filters.agentId || undefined, agentTypes: filters.agentTypes, cacheMissReasons: filters.cacheMissReasons, classifiers: filters.classifiers, client: filters.client, cursor, dir, efforts: filters.efforts, from: iso(span.from), guardrails: filters.guardrails, held: filters.held, includeProbes: filters.kind === 'probe', keyIds: filters.keys, kind: filters.kind || null, limit: filters.rows, models: filters.models, order, outcomes: filters.outcomes, poolIds: filters.pools, refusalCategories: filters.refusalCategories, request: filters.request || undefined, requestClasses: filters.requestClasses, search: filters.search, session: filters.session || undefined, speeds: filters.speeds, statuses: filters.statuses.map(Number), stopReasons: filters.stopReasons, to: cursor !== undefined && !custom ? undefined : iso(readEnd(custom, span.to, pagedTo ?? span.to)), turnOrigins: filters.turnOrigins, userAgent: filters.agent }),
+    [filters, cursor, custom, dir, order, span, pagedTo],
   );
   const requests = useAsync(() => api.listRequests(query), [query]);
   // The open drawer reads one of the rows, and an open menu or popover under the bar stands over the list, so the poll
   // waits for either to close.
   const { error, fresh, goNext, goPrevious, nextCursor, overrun, rows, setFollowed } = useFollow<RequestLog>({
     address,
-    compare: compareRequests,
+    compare: requestOrder(order, dir),
     cursor,
     error: requests.error,
     fixedEnd: custom,
@@ -302,8 +307,9 @@ export function RequestsPage() {
     setLoadedAt(clock.now());
     settings.reload();
   };
-  // The page size is how the operator reads the log rather than what it narrows to, so Reset filters keeps it.
-  const reset = () => replace({ ...REQUESTS_CODEC.defaults, rows: filters.rows });
+  // The page size and the order are how the operator reads the log rather than what it narrows to, so Reset filters
+  // keeps them.
+  const reset = () => replace({ ...REQUESTS_CODEC.defaults, dir: filters.dir, rows: filters.rows, sort: filters.sort });
   // Six of the lists scan the drawn rows, which grow while the log follows, and the page re-renders on every poll and
   // clock tick, so the lists follow their reads, the filters and the rows alone.
   const options = useMemo<Record<string, Option[]>>(
@@ -363,6 +369,7 @@ export function RequestsPage() {
           update={update}
         >
           <ColumnsControl columns={COLUMNS} visible={visible} onChange={setVisible} />
+          <SortControl keys={REQUEST_SORT_KEYS} onChange={(next) => update(sortAddressOf(REQUEST_SORT_KEYS, next))} value={{ dir, sort: filters.sort }} />
         </FilterBar>
         <div className="stack">
           {overrun !== null && (
@@ -387,6 +394,7 @@ export function RequestsPage() {
                     {shown.has('status') && <th className="col-fit">Status</th>}
                     {shown.has('attempts') && <th className="col-fit" title="How many attempts the request took, the trail on hover">Attempts</th>}
                     {shown.has('ttfb') && <th className="right col-fit">TTFB</th>}
+                    {shown.has('duration') && <th className="right col-fit">Duration</th>}
                     {shown.has('tokens') && <th className="right col-fit">Tokens</th>}
                     {shown.has('cost') && (
                       <th className="right col-fit" title={costHeaderTitle(unit)}>
@@ -413,7 +421,7 @@ export function RequestsPage() {
                         >
                           {shown.has('time') && (
                             <td className="num requests__time col-fill" title={fmtAbsolute(r.at)}>
-                              {fmtDatedTime(r.at, now)}
+                              {fmtDatedTime(r.at)}
                               <span className="sub mono" title={r.id}>{r.id}</span>
                             </td>
                           )}
@@ -463,6 +471,7 @@ export function RequestsPage() {
                             </td>
                           )}
                           {shown.has('ttfb') && <td className="right num col-fit">{fmtMs(r.ttfbMs)}</td>}
+                          {shown.has('duration') && <td className="right num col-fit">{fmtMs(r.durationMs)}</td>}
                           {shown.has('tokens') && (
                             <td className="right num col-fit">
                               {fmtCompact(tokensTotal(r.usage))}

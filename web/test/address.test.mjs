@@ -18,8 +18,8 @@ const FILLED = {
   METER_CODEC: { accounts: ['primary', 'secondary'] },
   POOLS_CODEC: { dir: 'asc', sort: 'cost' },
   QUOTA_CODEC: { dir: 'asc', sort: 'pace7d' },
-  REQUESTS_CODEC: { accounts: ['primary', 'secondary'], agent: 'claude-cli/*', agentId: 'main', agentTypes: ['main', 'subagent'], cacheMissReasons: ['messages_changed', 'ttl_expired'], classifiers: ['client', '-'], client: 'claude-code/*', efforts: ['high', 'low'], guardrails: ['large-auxiliary', '-'], held: true, keys: ['desktop', 'laptop'], kind: 'probe', models: ['claude-opus-5', 'claude-sonnet-5'], outcomes: ['failed', 'succeeded'], pools: ['all', 'jobs'], range: preset('6h'), refusalCategories: ['cyber', '-'], request: 'req_f8085653', requestClasses: ['conversation', 'title'], rows: 50, search: 'req_1d9c3e55', session: '407dd39b-dd60', speeds: ['fast', 'standard'], statuses: ['200', '429'], stopReasons: ['refusal', '-'], turnOrigins: ['agent', 'user'] },
-  ROUTING_LOG_CODEC: { accounts: ['primary', 'secondary'], agentId: 'main', keys: ['desktop', 'laptop'], kinds: ['exhausted', 'moved'], models: ['claude-opus-5', 'claude-sonnet-5'], pools: ['all', 'jobs'], range: preset('6h'), request: 'req_1d9c3e55', session: '407dd39b-dd60' },
+  REQUESTS_CODEC: { accounts: ['primary', 'secondary'], agent: 'claude-cli/*', agentId: 'main', agentTypes: ['main', 'subagent'], cacheMissReasons: ['messages_changed', 'ttl_expired'], classifiers: ['client', '-'], client: 'claude-code/*', dir: 'asc', efforts: ['high', 'low'], guardrails: ['large-auxiliary', '-'], held: true, keys: ['desktop', 'laptop'], kind: 'probe', models: ['claude-opus-5', 'claude-sonnet-5'], outcomes: ['failed', 'succeeded'], pools: ['all', 'jobs'], range: preset('6h'), refusalCategories: ['cyber', '-'], request: 'req_f8085653', requestClasses: ['conversation', 'title'], rows: 50, search: 'req_1d9c3e55', session: '407dd39b-dd60', sort: 'ttfb', speeds: ['fast', 'standard'], statuses: ['200', '429'], stopReasons: ['refusal', '-'], turnOrigins: ['agent', 'user'] },
+  ROUTING_LOG_CODEC: { accounts: ['primary', 'secondary'], agentId: 'main', dir: 'asc', keys: ['desktop', 'laptop'], kinds: ['exhausted', 'moved'], models: ['claude-opus-5', 'claude-sonnet-5'], pools: ['all', 'jobs'], range: preset('6h'), request: 'req_1d9c3e55', session: '407dd39b-dd60', sort: 'time' },
   SESSIONS_CODEC: { account: ['primary', 'studio'], active: '1h', agentType: ['Explore', 'main'], cache: ['cold', 'no recipe'], client: ['Claude Code 2.1.310', 'claude-desktop/1.4'], companion: ['reporting', 'silent'], dir: 'asc', effort: ['high', 'low'], finished: true, forked: true, key: ['desktop', 'laptop@3'], model: ['claude-opus-5', 'claude-sonnet-5'], pool: ['all', 'jobs'], released: true, search: '407dd39b', slowed: true, sort: 'cost', status: ['busy', 'unreported'] },
 };
 
@@ -91,6 +91,12 @@ test('every filter at its default leaves a bare address', () => {
   for (const name of Object.keys(FILLED)) assert.equal(write(d[name], read(d[name], '')), '', name);
 });
 
+test('the Routing log codec reads a Kinds list naming every kind as no Kinds filter and writes none for it', () => {
+  // An absent `kinds` reads every kind, so the full set and the empty list are one filter with one address.
+  assert.deepEqual(read(d.ROUTING_LOG_CODEC, `kinds=${d.ALL_KINDS.join(',')}`).kinds, []);
+  assert.equal(write(d.ROUTING_LOG_CODEC, { ...read(d.ROUTING_LOG_CODEC, ''), kinds: [...d.ALL_KINDS] }), '');
+});
+
 test('a list splits on commas and joins back, empty entries dropped', () => {
   assert.deepEqual(read(d.ROUTING_LOG_CODEC, 'accounts=primary,,secondary').accounts, ['primary', 'secondary']);
   assert.equal(d.ROUTING_LOG_CODEC.toParams({ ...read(d.ROUTING_LOG_CODEC, ''), pools: ['all', 'jobs'] }).get('pools'), 'all,jobs');
@@ -121,7 +127,7 @@ test('a preset travels by its name, nothing for the default, and a custom span a
   assert.equal(write(d.ROUTING_LOG_CODEC, { ...read(d.ROUTING_LOG_CODEC, ''), range: preset('1h') }), '');
   assert.equal(write(d.REQUESTS_CODEC, { ...read(d.REQUESTS_CODEC, ''), range: preset('24h') }), '');
   const params = d.ROUTING_LOG_CODEC.toParams({ ...FILLED.ROUTING_LOG_CODEC, range: CUSTOM });
-  assert.deepEqual([...params.keys()], ['accounts', 'agent_id', 'keys', 'kinds', 'models', 'pools', 'request', 'session', 'from', 'to']);
+  assert.deepEqual([...params.keys()], ['accounts', 'agent_id', 'keys', 'kinds', 'models', 'pools', 'request', 'session', 'dir', 'from', 'to']);
   assert.deepEqual([params.get('from'), params.get('to'), params.get('range')], [FROM, TO, null]);
 });
 

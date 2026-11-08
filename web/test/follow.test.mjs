@@ -167,8 +167,9 @@ test("on a fixed-end range whose list holds a next cursor a row below the last r
   assert.deepEqual(polled.rows.map(byId), shown.map(byId), 'no row past row 24 lands');
 });
 
-test('a preset range keeps the rule', async () => {
-  // The first case's route and list read with the flag at its default, as a preset hands it: row 25 stays for Next.
+test('a list with a next cursor keeps the rule', async () => {
+  // The first case's route and list read with the flag at its default, as a list with a next cursor hands it: row 25
+  // stays for Next.
   const r = watermarked(26);
   const shown = r.rows.slice(0, 25);
   const polled = await d.followPages(r.read, new Set(shown.map(byId)), byId, belowOf(shown), false);
@@ -355,12 +356,12 @@ test("a custom range's poll whose list holds a next cursor leaves a late row bel
   assert.deepEqual([f.last().rows.map(byId), [...f.last().fresh]], [rows.slice(0, 26).map(byId), []], 'row 26 stays for Next');
 });
 
-test("a preset range's poll with no next cursor leaves a late row below the last row shown to Next", async () => {
+test("on a live range whose list holds no next cursor a poll lands a row below the list's last row", async () => {
   const clock = frozen();
   const { read, rows } = lateBelow();
   const f = follow({ fixedEnd: false, list: { nextCursor: null, rows: rows.slice(1, 26) }, read });
   await twoPolls(clock);
-  assert.deepEqual([f.last().rows.map(byId), [...f.last().fresh]], [rows.slice(0, 26).map(byId), []], 'row 26 stays for Next');
+  assert.deepEqual([f.last().rows.map(byId), [...f.last().fresh]], [rows.map(byId), ['row_026']], 'the second poll lands row 26 below row 25, tinted');
 });
 
 test("a custom range's poll over a stale list with no next cursor leaves a late row below the last row shown to Next", async () => {

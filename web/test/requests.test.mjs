@@ -259,6 +259,18 @@ test('the request order puts the newer request first and the higher id first at 
   assert.deepEqual([...rows].sort(d.compareRequests).map((r) => r.id), ['req_0', 'req_b', 'req_a']);
 });
 
+test("the poll's comparator ties by id in the chosen direction and files a row without the figure last", () => {
+  // The route pages a key by its figure, then by the id in the same direction, and files a row with no figure last.
+  const row = (id, ttfbMs) => ({ at: '2026-09-16T10:00:00.000Z', attempts: [{}], durationMs: 1_500, id, ttfbMs });
+  const tiedA = row('req_a', 300);
+  const tiedB = row('req_b', 300);
+  const noTtfb = row('req_c', null);
+  assert.deepEqual([tiedA, tiedB].sort(d.requestOrder('attempts', 'desc')).map((r) => r.id), ['req_b', 'req_a'], 'a tie under desc puts the higher id first');
+  assert.deepEqual([tiedB, tiedA].sort(d.requestOrder('attempts', 'asc')).map((r) => r.id), ['req_a', 'req_b'], 'a tie under asc puts the lower id first');
+  assert.deepEqual([noTtfb, tiedA].sort(d.requestOrder('ttfb_ms', 'desc')).map((r) => r.id), ['req_a', 'req_c'], 'no TTFB files last under desc');
+  assert.deepEqual([noTtfb, tiedA].sort(d.requestOrder('ttfb_ms', 'asc')).map((r) => r.id), ['req_a', 'req_c'], 'no TTFB files last under asc');
+});
+
 test("a session spend with plan and billed requests reads the plan requests' list dollars as its equivalent and the billed ones on the badge", () => {
   const spend = { billedUsd: { api_key: 3 }, equivalent: 0.01, requests: 2, shares: { a: {} }, usd: 5 };
   const reading = d.spendUnitOf(spend, 'equivalent', null, null);

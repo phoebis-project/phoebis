@@ -225,8 +225,8 @@ hold beside its controls onto a second line at a phone's width, so the Routing l
 shell](console.md#the-shell)). The unit legend hangs from its button as the console's other popovers do, takes the focus
 when it opens, closes on Escape, a click outside it or the focus leaving it, and hands the focus back to its button when
 it closes on Escape, and the Settings view's Appearance rows wrap their controls under their labels at a phone's width
-([The shell](console.md#the-shell), [Settings](console.md#settings)). A key's processed rules are read on
-`GET /admin/keys/{id}/models` and in the key dialog, and the Model unpriced attention item opens no page ([API
+([The shell](console.md#the-shell), [Settings](console.md#settings)). A key's processed rules are read on `GET
+/admin/keys/{id}/models` and in the key dialog, and the Model unpriced attention item opens no page ([API
 reference](api-reference.md)). Each `GET /admin/sessions` row reads from the main agent's conversation pin, or the
 newest conversation pin of another agent where main holds none, and lists the row's conversation pins as agent lines
 with their effort and their warmth, a session no companion reports leaving the list after the non-companion timeout of
@@ -289,42 +289,42 @@ re-authentication, which keeps its row and its state on the Accounts view ([Quot
 leaves out an account whose plan ended while its flag stands, as it leaves out a disconnected one, and the Accounts
 detail's Usage card names the ended plan ([Quota](console.md#quota), [Accounts](console.md#accounts)). The speed chip
 reads the speed the holds realized, and its hover names the factor the pool computed and how far the span has ramped
-([Quota](console.md#quota)). Under the 12-hour
-time setting the Quota timeline's short cells read "6 AM" in a cell wide enough for it, with fewer cells at a given
-width ([Quota](console.md#quota)). A pairing confirm on a slot sealed under another storage key answers 409 and names
-the account, so the dialog can offer Disconnect ([Pairing](pairing.md#with-curl)). A pairing whose confirm meets a
-credential sealed under another storage key reads the router's sentence and offers Disconnect, which clears the
-credential and starts the pairing again from its first step ([Accounts](console.md#accounts)). A usage poll's 401 moves
-the account to `reauth_required`, and any other failed poll, except a 429 or the usage 403 an ended plan explains, logs
-one warning and writes a `poll_failed` event ([Pairing](pairing.md#account-states)). A usage-based seat, the rate-limit
-tier `default_claude_zero` or the seat tier `enterprise_usage_based`, reads no overage word on the Accounts view, and
-its Identity list reads "usage-based" beside its rate-limit tier ([Accounts](console.md#accounts)). An account whose
-plan ended reads Free beside its Plan ended row, the plan the router resolved after the end
-([Accounts](console.md#accounts)). An account whose plan ended reads the instant in its Identity list until a profile
-read or a pairing finds a plan again ([Accounts](console.md#accounts)). An account whose profile reports no plan is
-flagged plan ended, which pauses its usage poll and places nothing on it until a profile read or a re-pair finds a plan
-again ([Pairing](pairing.md#account-states)). While an account's plan-ended flag stands, `GET /admin/accounts` and
-`/{id}` answer its `windows` empty, as they do for a disconnected account ([Pairing](pairing.md#account-states)).
-Flagging the plan ended closes an open usage-poll backoff run, so `poll_backoff` clears with the pause
-([Statistics](statistics.md#conditions-and-gauges)). An account's plan reads as one word resolved from its profile's
-organization type first and its rate-limit tier second (`free`, `pro`, `max_5x`, `max_20x`, `max`, `team`, `enterprise`
-or `usage_based`), and a free organization or a usage-based seat prices no capacity, so the router reads it as an
-untiered account ([Pairing](pairing.md#two-kinds-of-account), [API reference](api-reference.md)). An account's badge,
-its Plan row and the Accounts search read the display name claude.ai sends where the account carries one and the plan
-the router resolved from the organization type and the tier otherwise, Ultra, Max or Pro for the tiers the cost model
-prices, "Free" for a free organization and "Usage-based" for a seat, as do the Quota card's chip and the capacity rings,
-while the routing log's candidates read the label of the plan word a record carries ([Accounts](console.md#accounts),
-[Dashboard](console.md#dashboard), [Quota](console.md#quota), [Routing log](console.md#routing-log)). An account's
-detail draws "Allowance left at reset", each weekly window's share left unused at its last four resets in the chosen
-week under every position, a term's end counting as a reset marked "term ended" ([Accounts](console.md#accounts)). An
-account's detail draws "Meter drift", the newest completed window of each kind against the table with the windows off
-the band in 30 days, opening the Meter view on the account ([Accounts](console.md#accounts)). An account's end editor
-names the browser's zone beside its field ([Accounts](console.md#accounts)). An account's end editor opens empty for a
-running plan, and its hint names the date the plan's billing settings show as the end ([Accounts](console.md#accounts)).
-An extra usage reading with no amounts draws its state alone, with no amounts and no meter, on the Accounts view's Usage
-card and the Quota cards ([Accounts](console.md#accounts), [Quota](console.md#quota)). The account's cancellation flag
-is spelled `canceled` on the account view, the account edit, the routing log's term facts and the `wind_down_started`
-event, with the error code `account_canceled`, the probe outcome `canceled` and the pairing session's status `canceled`
+([Quota](console.md#quota)). Under the 12-hour time setting the Quota timeline's short cells read "6 AM" in a cell wide
+enough for it, with fewer cells at a given width ([Quota](console.md#quota)). A pairing confirm on a slot sealed under
+another storage key answers 409 and names the account, so the dialog can offer Disconnect
+([Pairing](pairing.md#with-curl)). A pairing whose confirm meets a credential sealed under another storage key reads the
+router's sentence and offers Disconnect, which clears the credential and starts the pairing again from its first step
+([Accounts](console.md#accounts)). A usage poll's 401 moves the account to `reauth_required`, and any other failed poll,
+except a 429 or the usage 403 an ended plan explains, logs one warning and writes a `poll_failed` event
+([Pairing](pairing.md#account-states)). A usage-based seat, the rate-limit tier `default_claude_zero` or the seat tier
+`enterprise_usage_based`, reads no overage word on the Accounts view, and its Identity list reads "usage-based" beside
+its rate-limit tier ([Accounts](console.md#accounts)). An account whose plan ended reads Free beside its Plan ended row,
+the plan the router resolved after the end ([Accounts](console.md#accounts)). An account whose plan ended reads the
+instant in its Identity list until a profile read or a pairing finds a plan again ([Accounts](console.md#accounts)). An
+account whose profile reports no plan is flagged plan ended, which pauses its usage poll and places nothing on it until
+a profile read or a re-pair finds a plan again ([Pairing](pairing.md#account-states)). While an account's plan-ended
+flag stands, `GET /admin/accounts` and `/{id}` answer its `windows` empty, as they do for a disconnected account
+([Pairing](pairing.md#account-states)). Flagging the plan ended closes an open usage-poll backoff run, so `poll_backoff`
+clears with the pause ([Statistics](statistics.md#conditions-and-gauges)). An account's plan reads as one word resolved
+from its profile's organization type first and its rate-limit tier second (`free`, `pro`, `max_5x`, `max_20x`, `max`,
+`team`, `enterprise` or `usage_based`), and a free organization or a usage-based seat prices no capacity, so the router
+reads it as an untiered account ([Pairing](pairing.md#two-kinds-of-account), [API reference](api-reference.md)). An
+account's badge, its Plan row and the Accounts search read the display name claude.ai sends where the account carries
+one and the plan the router resolved from the organization type and the tier otherwise, Ultra, Max or Pro for the tiers
+the cost model prices, "Free" for a free organization and "Usage-based" for a seat, as do the Quota card's chip and the
+capacity rings, while the routing log's candidates read the label of the plan word a record carries
+([Accounts](console.md#accounts), [Dashboard](console.md#dashboard), [Quota](console.md#quota), [Routing
+log](console.md#routing-log)). An account's detail draws "Allowance left at reset", each weekly window's share left
+unused at its last four resets in the chosen week under every position, a term's end counting as a reset marked "term
+ended" ([Accounts](console.md#accounts)). An account's detail draws "Meter drift", the newest completed window of each
+kind against the table with the windows off the band in 30 days, opening the Meter view on the account
+([Accounts](console.md#accounts)). An account's end editor names the browser's zone beside its field
+([Accounts](console.md#accounts)). An account's end editor opens empty for a running plan, and its hint names the date
+the plan's billing settings show as the end ([Accounts](console.md#accounts)). An extra usage reading with no amounts
+draws its state alone, with no amounts and no meter, on the Accounts view's Usage card and the Quota cards
+([Accounts](console.md#accounts), [Quota](console.md#quota)). The account's cancellation flag is spelled `canceled` on
+the account view, the account edit, the routing log's term facts and the `wind_down_started` event, with the error code
+`account_canceled`, the probe outcome `canceled` and the pairing session's status `canceled`
 ([Accounts](console.md#accounts), [API reference](api-reference.md)). The Accounts view orders its list through the
 filter bar's sort control, a key and a direction carried in the address, with Name ascending by default, one key per
 window's reset and Most used filing an account with no plan window last ([Accounts](console.md#accounts)). The Accounts
@@ -367,60 +367,63 @@ status sentence names when a spent member's spend cap resets ([Pools](console.md
 exhaustion that waits on a spend cap reads `spend cap` in its By chip, and a candidate at its spend cap reads `spend cap
 reached until {time}` in its Verdict chip ([Routing log](console.md#routing-log)). `GET /admin/analytics/burn` and `GET
 /admin/sessions` read each account's kind from the routing snapshot and answer no `storage failure` ([API
-reference](api-reference.md)). On the Requests view a custom range's late row that lands below the rows shown draws on
-the next auto reload read ([Requests](console.md#requests)). On the Requests view and the Routing log the list's late
-answer replaces the page an auto reload poll stood in for it, and Next past an overrun under a preset reads to the
-router's clock ([Requests](console.md#requests), [Routing log](console.md#routing-log)). The pressed range pill names
-its range and its end on hover, and when the tab comes back to a read at once the rows it brought keep their tint
-through the read after it ([Requests](console.md#requests), [Routing log](console.md#routing-log)). The Requests and
-Routing log Time cells print the date before the time on a row older than a day, and the Routing log's columns fit their
-content ([Requests](console.md#requests), [Routing log](console.md#routing-log)). The Requests and Routing log views
-filter on an agent id through the Agent filter of the Subject group, carried in the address as `agent_id`
-([Requests](console.md#requests), [Routing log](console.md#routing-log)). The Requests, Sessions and Routing log tables
-lay their columns out by one rule, with a minimum per column kind, one fill column and a set wider than the card
-scrolling inside it, so the Requests table fits 1280 px with its default columns ([Requests](console.md#requests),
-[Sessions](console.md#sessions), [Routing log](console.md#routing-log)). The Requests view's empty state reads "Widen
-the range or clear a filter.", as the Routing log's does, and a request the router refused before it resolved a model
-reads a dash for its model ([Requests](console.md#requests)). Unchecking Select all in a filter's list clears every
-check, the inverse of checking it, and an empty list keeps its meaning ([Requests](console.md#requests), [Routing
-log](console.md#routing-log)). A deleted key's group reads `<id> (deleted, created <time>)`, its creation instant in the
-viewer's zone ([Analytics](console.md#analytics)). The Accounts cards offer the three windows the router reads, and the
-Accounts in range table reads the Fable week's peak as Peak Fable ([Analytics](console.md#analytics)). The Accounts
-section's card "Unused allowance by account" ranks the subscription accounts by the figure of their weekly windows left
-unused over the last four weeks, in the chosen week, with the fleet's figures ([Analytics](console.md#analytics)). The
-Analytics session view narrows to one agent under the Agent filter of the Subject group, carried in the address as
-`agent_id` and written by the Sessions view's agent menu, its links to the request log carrying the agent, the filter
-disabled until a session is picked and leaving with the session ([Analytics](console.md#analytics)). The Analytics
-session view reads the session's rows through the route's session filter, and each auto reload re-reads the first page
-alone ([Analytics](console.md#analytics)). The Analytics view's Burn tab draws one Plan per hour card, the subscription
-traffic per hour in the chosen week, a bucket the cost model could not price staying a gap under a "model unlisted"
-entry ([Analytics](console.md#analytics)). The Analytics view's Cache warming tab spans its last card across the row
-where that card would sit alone, as the Burn tab does ([Analytics](console.md#analytics)). The Analytics view's group
-tables order through the bar's Sort control by Name or the open tab's columns ([Analytics](console.md#analytics)). The
-Analytics view's model grouping lists a request refused before it resolved a model under "no model"
-([Analytics](console.md#analytics)). The Burn section closes on Member budgets, its reconciliation rows listed on the
-Meter view ([Analytics](console.md#analytics), [Meter](console.md#meter)). The Cache warming tab shows what the probes
-saved and the net saving after their cost, as tiles, a chart and a Saved column per pool
-([Analytics](console.md#analytics)). The Client and User agent filters list the range's values and take a typed pattern,
-each value a chip ([Analytics](console.md#analytics)). The Cost by chart's note names the unpriced groups it draws as
-gaps ([Analytics](console.md#analytics)). The Cost split's subscription ring and the Plan per hour legend read their
-figures in the chosen week ([Analytics](console.md#analytics)). The ledger records a null diagnostics member on a
-request that named a message as `none` and a comparison the upstream was still running as `pending`, which Misses by
-reason and its per-group table read as No divergence and Pending ([Analytics](console.md#analytics)). The Refusals by
-category card narrows under the Client and User agent filters and its links carry the client pattern
-([Analytics](console.md#analytics)). The Traffic section's Refusals by category card counts the answers the upstream
-refused by category, each bar opening the Requests view on them ([Analytics](console.md#analytics)). The Traffic table's
-Error rate reads a dash for a group with no requests ([Analytics](console.md#analytics)). The unused allowance card and
-the Accounts detail's allowance block read their figures in the chosen week under every position and wait on the cost
-model, so a failed settings read draws their error ([Analytics](console.md#analytics), [Accounts](console.md#accounts)).
-Under the Analytics classifier grouping the requests with no classifier call are labeled `none`, as the Requests facet
-names them ([Analytics](console.md#analytics)). The Burn tab's Plan per hour and Spend per minute cards share one row
-where the grid fits two columns ([Analytics](console.md#analytics)). A session that branched from another conversation
-at depth 2 or deeper reads a `fork` badge in its Sessions row, its hover naming the base, the depth and, where the list
-holds the base with both pins live, the base's account, and a click on the badge scrolls to the base's row where the
-list holds it ([Sessions](console.md#sessions)). An open Sessions row ends on its Cache warming details, shut by default
-with the recipes' states on their line, which read each agent's TTL, last request, last and next probe, the probes sent
-and the requests they kept warm, and its recipe state, or `warm` or `cold` by the cache TTL on a pin no recipe stands on
+reference](api-reference.md)). On the Requests view and the Routing log a late row that lands below the rows shown draws
+on the next auto reload read on any range whose rows fit on the page ([Requests](console.md#requests), [Routing
+log](console.md#routing-log)). On the Requests view and the Routing log the list's late answer replaces the page an auto
+reload poll stood in for it, and Next past an overrun under a preset reads to the router's clock
+([Requests](console.md#requests), [Routing log](console.md#routing-log)). The pressed range pill names its range and its
+end on hover, and when the tab comes back to a read at once the rows it brought keep their tint through the read after
+it ([Requests](console.md#requests), [Routing log](console.md#routing-log)). The Requests and Routing log Time cells
+print the date before the time on every row, and the Routing log's columns fit their content
+([Requests](console.md#requests), [Routing log](console.md#routing-log)). The Requests and Routing log views filter on
+an agent id through the Agent filter of the Subject group, carried in the address as `agent_id`
+([Requests](console.md#requests), [Routing log](console.md#routing-log)). The Requests table orders by Time, Attempts,
+Duration or TTFB through the Sort control and offers a Duration column ([Requests](console.md#requests)). The Requests,
+Sessions and Routing log tables lay their columns out by one rule, with a minimum per column kind, one fill column and a
+set wider than the card scrolling inside it, so the Requests table fits 1280 px with its default columns
+([Requests](console.md#requests), [Sessions](console.md#sessions), [Routing log](console.md#routing-log)). The Requests
+view's empty state reads "Widen the range or clear a filter.", as the Routing log's does, and a request the router
+refused before it resolved a model reads a dash for its model ([Requests](console.md#requests)). Unchecking Select all
+in a filter's list clears every check, the inverse of checking it, and an empty list keeps its meaning
+([Requests](console.md#requests), [Routing log](console.md#routing-log)). A deleted key's group reads `<id> (deleted,
+created <time>)`, its creation instant in the viewer's zone ([Analytics](console.md#analytics)). The Accounts cards
+offer the three windows the router reads, and the Accounts in range table reads the Fable week's peak as Peak Fable
+([Analytics](console.md#analytics)). The Accounts section's card "Unused allowance by account" ranks the subscription
+accounts by the figure of their weekly windows left unused over the last four weeks, in the chosen week, with the
+fleet's figures ([Analytics](console.md#analytics)). The Analytics session view narrows to one agent under the Agent
+filter of the Subject group, carried in the address as `agent_id` and written by the Sessions view's agent menu, its
+links to the request log carrying the agent, the filter disabled until a session is picked and leaving with the session
+([Analytics](console.md#analytics)). The Analytics session view reads the session's rows through the route's session
+filter, and each auto reload re-reads the first page alone ([Analytics](console.md#analytics)). The Analytics view's
+Burn tab draws one Plan per hour card, the subscription traffic per hour in the chosen week, a bucket the cost model
+could not price staying a gap under a "model unlisted" entry ([Analytics](console.md#analytics)). The Analytics view's
+Cache warming tab spans its last card across the row where that card would sit alone, as the Burn tab does
+([Analytics](console.md#analytics)). The Analytics view's group tables order through the bar's Sort control by Name or
+the open tab's columns ([Analytics](console.md#analytics)). The Analytics view's model grouping lists a request refused
+before it resolved a model under "no model" ([Analytics](console.md#analytics)). The Burn section closes on Member
+budgets, its reconciliation rows listed on the Meter view ([Analytics](console.md#analytics),
+[Meter](console.md#meter)). The Cache warming tab shows what the probes saved and the net saving after their cost, as
+tiles, a chart and a Saved column per pool ([Analytics](console.md#analytics)). The Client and User agent filters list
+the range's values and take a typed pattern, each value a chip ([Analytics](console.md#analytics)). The Cost by chart's
+note names the unpriced groups it draws as gaps ([Analytics](console.md#analytics)). The Cost split's subscription ring
+and the Plan per hour legend read their figures in the chosen week ([Analytics](console.md#analytics)). The ledger
+records a null diagnostics member on a request that named a message as `none` and a comparison the upstream was still
+running as `pending`, which Misses by reason and its per-group table read as No divergence and Pending
+([Analytics](console.md#analytics)). The Refusals by category card narrows under the Client and User agent filters and
+its links carry the client pattern ([Analytics](console.md#analytics)). The Traffic section's Refusals by category card
+counts the answers the upstream refused by category, each bar opening the Requests view on them
+([Analytics](console.md#analytics)). The Traffic table's Error rate reads a dash for a group with no requests
+([Analytics](console.md#analytics)). The unused allowance card and the Accounts detail's allowance block read their
+figures in the chosen week under every position and wait on the cost model, so a failed settings read draws their error
+([Analytics](console.md#analytics), [Accounts](console.md#accounts)). Under the Analytics classifier grouping the
+requests with no classifier call are labeled `none`, as the Requests facet names them
+([Analytics](console.md#analytics)). The Burn tab's Plan per hour and Spend per minute cards share one row where the
+grid fits two columns ([Analytics](console.md#analytics)). A session that branched from another conversation at depth 2
+or deeper reads a `fork` badge in its Sessions row, its hover naming the base, the depth and, where the list holds the
+base with both pins live, the base's account, and a click on the badge scrolls to the base's row where the list holds it
+([Sessions](console.md#sessions)). An open Sessions row ends on its Cache warming details, shut by default with the
+recipes' states on their line, which read each agent's TTL, last request, last and next probe, the probes sent and the
+requests they kept warm, and its recipe state, or `warm` or `cold` by the cache TTL on a pin no recipe stands on
 ([Sessions](console.md#sessions)). An open Sessions row lists the agents the ledger holds requests of that draw no line,
 such as a subagent whose pin and recipe are gone, on one earlier agents line under its Agents table with their requests
 and their cost, and the line opens to one row per agent ([Sessions](console.md#sessions)). At a phone's width the
@@ -486,58 +489,58 @@ log lists a failed usage poll as `poll failed` and a stream cut after its head a
 round that walks no pin and leaves one out off the window that fired reads `off window` ([Routing
 log](console.md#routing-log)). The routing log lists an account whose plan ended as `plan ended` and the plan's return
 as `plan restored`, each with the read's source and the profile's organization type, rate-limit tier and subscription
-status ([Routing log](console.md#routing-log)). The Routing log reads a backoff's close by its cause, Resumed under a
-clean poll and Ended by the plan's end under the plan's end ([Routing log](console.md#routing-log)). The Routing log's
-Pace cell and hover read a lapsed usage-based seat's remaining share as a percent ([Routing
-log](console.md#routing-log)). The Routing log's window reset panel reads Read from, the usage sample or the clock walk
-([Routing log](console.md#routing-log)). The Meter view badges a ratio only where the priced share reaches the rise's
-floor ([Meter](console.md#meter)). The Meter view in the Diagnostics group lists every subscription account's completed
-windows of the last 30 days grouped by account and window kind, the weekly windows apart, each group collapsed to its
-latest ratio, its off count and a 30-day ratio spark, and the Meter drift condition opens it on the account
-([Dashboard](console.md#dashboard), [Meter](console.md#meter)). A confirmation toast shows ahead of the failures queued
-behind the one on screen. A whole-day or whole-hour duration drops its zero part, so three whole days read `3d` and an
-hour `1h`. Every data table alternates its row tone, with a hovered or selected row reading over it ([The
-console](console.md)). The page behind an open dialog holds still and keeps its scroll position. The embedded console
-builds on Node 26 or later, which the build script checks before npm runs ([Installation](installation.md#build)). A
-pool's change rows name each keepalive policy member they moved as `keepalive.<member>`, and a new pool's row lists the
-policy ([Console](console.md#routing-log)). A Team or Enterprise seat prices under its tier word where the cost table
-holds it, and the log says when it does not ([Pairing](pairing.md#account-states)). A plan-ended account answers the
-plan and the tier its last profile named, its earlier readings keeping the plan they were priced under
-([Pairing](pairing.md#account-states)). `POST /admin/keys` and the key edit refuse an unknown member with `400` as the
-pool routes do ([API reference](api-reference.md)). A pool or key edit, or a guardrail create or edit, that would also
-take a list past 64 guardrails answers its stale stamp, its missing id or its refused member before the bound
-([Pools](routing.md#pools), [Keys](routing.md#keys)). The Dashboard's account cards and the Accounts list keep a slot
-for a window the account's poll does not carry, "none" muted in the share's place with the window's words on hover, "no
-5-hour window" on an approved Ultra account, the Quota cards keep the window's row with the same words muted, and an
-account whose poll has read no window reads "not read" on the Dashboard's cards and the Accounts list
-([Dashboard](console.md#dashboard), [Accounts](console.md#accounts), [Quota](console.md#quota)). The top bar's Week
-control reads a subscription figure as a share of the Pro, Max or Ultra week, Ultra week until you pick one, stored in
-the browser beside the unit position, mirrored on the Settings view's Unit row and disabled under the dollar positions
-([The shell](console.md#the-shell), [Settings](console.md#settings)). A cost model that sizes no 7-day capacity for the
-chosen week's plan draws the unpriced dash on every cost figure in that week, titled "Unpriced: the cost model holds no
-7-day capacity for the {plan} week", the tiles' note reading "unpriced" ([The shell](console.md#the-shell)). The
-Accounts view's lifetime figures and the Keys view's lifetime tiles and card re-read their rows older than the week once
-an hour ([Accounts](console.md#accounts), [Keys](console.md#keys)). Auto reload skips a tick while the view's previous
-read is still in flight, and a read with no answer after a minute fails and frees the next tick ([The
-console](console.md)). The Dashboard's attention line skips a tick or a focus that finds its previous read still out, so
-a slow read lands and the next tick reads again ([Dashboard](console.md#dashboard)). On Requests and the Routing log
-auto reload also waits while the list for the view's filters is still loading, unless its last read failed ([The
-console](console.md)). Auto reload's read at once, when a wait ends or the interval changes a full interval after the
-last answer, also waits for a read still in flight and leaves the read to the next tick ([The console](console.md)). An
-account's Cooling down table draws a model scope's id and a scope the console does not know in the mono face and Whole
-account, Fast mode and Fast mode credits in the text face ([Accounts](console.md#accounts)). The Routing log draws an id
-that links to its account, key, model or pool in the mono face where the chip asks for it, as it draws a session's or a
-request's link, so a decision's Request facts read the Key row's id in the face of the Session row's ([Routing
-log](console.md#routing-log)). A dialog draws its fields afresh at each opening, so a picker's search text starts empty
-([The shell](console.md#the-shell)). The login screen's session read fails after a minute with no answer, as a view's
-read does, so a router that never answers it brings the card that says the router did not answer ([The
-shell](console.md#the-shell)). The Accounts view reads the settings once per visit, whichever account opens, and the
-allowance card's Try again reads them again ([Accounts](console.md#accounts)). The Analytics view reads the account list
-with the window: when a new bucket moves a preset's end, on Refresh and Try again, and at each interval under a custom
-range whose end has not passed ([Analytics](console.md#analytics)). The Pools view reads the sessions and the keepalive
-overview its pool dialog draws when the dialog opens on a saved pool and again after a key write from it, the overview
-also when the return rate's range is picked, and the Guardrails view reads the pools and keys its dialog lists once per
-visit and again after a write, a dialog close and Refresh, neither at the interval ([Pools](console.md#pools),
+status ([Routing log](console.md#routing-log)). The Routing log orders by Time in either direction ([Routing
+log](console.md#routing-log)). The Routing log reads a backoff's close by its cause, Resumed under a clean poll and
+Ended by the plan's end under the plan's end ([Routing log](console.md#routing-log)). The Routing log's Pace cell and
+hover read a lapsed usage-based seat's remaining share as a percent ([Routing log](console.md#routing-log)). The Routing
+log's window reset panel reads Read from, the usage sample or the clock walk ([Routing log](console.md#routing-log)).
+The Meter view badges a ratio only where the priced share reaches the rise's floor ([Meter](console.md#meter)). The
+Meter view in the Diagnostics group lists every subscription account's completed windows of the last 30 days grouped by
+account and window kind, the weekly windows apart, each group collapsed to its latest ratio, its off count and a 30-day
+ratio spark, and the Meter drift condition opens it on the account ([Dashboard](console.md#dashboard),
+[Meter](console.md#meter)). A confirmation toast shows ahead of the failures queued behind the one on screen. A
+whole-day or whole-hour duration drops its zero part, so three whole days read `3d` and an hour `1h`. Every data table
+alternates its row tone, with a hovered or selected row reading over it ([The console](console.md)). The page behind an
+open dialog holds still and keeps its scroll position. The embedded console builds on Node 26 or later, which the build
+script checks before npm runs ([Installation](installation.md#build)). A pool's change rows name each keepalive policy
+member they moved as `keepalive.<member>`, and a new pool's row lists the policy ([Console](console.md#routing-log)). A
+Team or Enterprise seat prices under its tier word where the cost table holds it, and the log says when it does not
+([Pairing](pairing.md#account-states)). A plan-ended account answers the plan and the tier its last profile named, its
+earlier readings keeping the plan they were priced under ([Pairing](pairing.md#account-states)). `POST /admin/keys` and
+the key edit refuse an unknown member with `400` as the pool routes do ([API reference](api-reference.md)). A pool or
+key edit, or a guardrail create or edit, that would also take a list past 64 guardrails answers its stale stamp, its
+missing id or its refused member before the bound ([Pools](routing.md#pools), [Keys](routing.md#keys)). The Dashboard's
+account cards and the Accounts list keep a slot for a window the account's poll does not carry, "none" muted in the
+share's place with the window's words on hover, "no 5-hour window" on an approved Ultra account, the Quota cards keep
+the window's row with the same words muted, and an account whose poll has read no window reads "not read" on the
+Dashboard's cards and the Accounts list ([Dashboard](console.md#dashboard), [Accounts](console.md#accounts),
+[Quota](console.md#quota)). The top bar's Week control reads a subscription figure as a share of the Pro, Max or Ultra
+week, Ultra week until you pick one, stored in the browser beside the unit position, mirrored on the Settings view's
+Unit row and disabled under the dollar positions ([The shell](console.md#the-shell), [Settings](console.md#settings)). A
+cost model that sizes no 7-day capacity for the chosen week's plan draws the unpriced dash on every cost figure in that
+week, titled "Unpriced: the cost model holds no 7-day capacity for the {plan} week", the tiles' note reading "unpriced"
+([The shell](console.md#the-shell)). The Accounts view's lifetime figures and the Keys view's lifetime tiles and card
+re-read their rows older than the week once an hour ([Accounts](console.md#accounts), [Keys](console.md#keys)). Auto
+reload skips a tick while the view's previous read is still in flight, and a read with no answer after a minute fails
+and frees the next tick ([The console](console.md)). The Dashboard's attention line skips a tick or a focus that finds
+its previous read still out, so a slow read lands and the next tick reads again ([Dashboard](console.md#dashboard)). On
+Requests and the Routing log auto reload also waits while the list for the view's filters is still loading, unless its
+last read failed ([The console](console.md)). Auto reload's read at once, when a wait ends or the interval changes a
+full interval after the last answer, also waits for a read still in flight and leaves the read to the next tick ([The
+console](console.md)). An account's Cooling down table draws a model scope's id and a scope the console does not know in
+the mono face and Whole account, Fast mode and Fast mode credits in the text face ([Accounts](console.md#accounts)). The
+Routing log draws an id that links to its account, key, model or pool in the mono face where the chip asks for it, as it
+draws a session's or a request's link, so a decision's Request facts read the Key row's id in the face of the Session
+row's ([Routing log](console.md#routing-log)). A dialog draws its fields afresh at each opening, so a picker's search
+text starts empty ([The shell](console.md#the-shell)). The login screen's session read fails after a minute with no
+answer, as a view's read does, so a router that never answers it brings the card that says the router did not answer
+([The shell](console.md#the-shell)). The Accounts view reads the settings once per visit, whichever account opens, and
+the allowance card's Try again reads them again ([Accounts](console.md#accounts)). The Analytics view reads the account
+list with the window: when a new bucket moves a preset's end, on Refresh and Try again, and at each interval under a
+custom range whose end has not passed ([Analytics](console.md#analytics)). The Pools view reads the sessions and the
+keepalive overview its pool dialog draws when the dialog opens on a saved pool and again after a key write from it, the
+overview also when the return rate's range is picked, and the Guardrails view reads the pools and keys its dialog lists
+once per visit and again after a write, a dialog close and Refresh, neither at the interval ([Pools](console.md#pools),
 [Guardrails](console.md#guardrails)). An account's catalog dialog draws a failed Refresh's failure over the list it
 kept, until a read answers ([Accounts](console.md#accounts)).
 

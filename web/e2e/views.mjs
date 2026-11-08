@@ -1514,10 +1514,10 @@ function phoneTopBar() {
  * padding. A line cut on purpose (the request link under the time, the agent line under the session, an Account line
  * past the column) that does not end behind an ellipsis fails. From 1420 px the model stands in its own column alone,
  * so an Account cell that draws it beneath the account fails, and under 1420 px a row with a model that does not draw
- * it there fails. The bare log is read, then the log under the 7-day range on the state changes, where the mock story
- * dates its Time cells on the first page and a Time cell that breaks over two lines fails. The mock pass fails a 7-day
- * page with no dated cell, and the router's seed, which draws no row older than a day, records that the read stands
- * down. The bare log loads again at the pass's viewport after.
+ * it there fails. The bare log is read, then the log under the 7-day range on the state changes, where the mock story's
+ * changes of two and three days back stand beside today's, and a Time cell that breaks over two lines fails. Every Time
+ * cell prints its date whatever the row's age, so a 7-day page with no dated cell fails. The bare log loads again at
+ * the pass's viewport after.
  */
 async function routingLogColumns(theme) {
   const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
@@ -1548,10 +1548,6 @@ async function routingLogColumns(theme) {
           continue;
         }
         const time = timeFit(await page.evaluate(timeCellsOf, '.routing-log__table'));
-        if (under !== '' && time.dated.length === 0 && !mock) {
-          measurements.push(`${theme} /routing-log columns ${under}skipped: the seed draws no row older than a day (${got.rows} rows under 7d)`);
-          break;
-        }
         const bar = width < 900 ? await page.evaluate(phoneTopBar) : undefined;
         measurements.push(`${theme} /routing-log columns ${where} ${JSON.stringify({ ...got, bar, dated: time.dated.length, split: time.split })}`);
         if (mock && got.rows === 0) say(`${where} no rows to measure`);
@@ -1669,17 +1665,15 @@ async function datedRead() {
 
 /**
  * The routing log's Time cells under the 7-day range on the state changes alone, where the mock story's changes of two
- * and three days back stand on the first page beside today's, so a cell prints its date before the time: each cell's
- * text width against its content box, its lines and its height against the row's other cells are recorded. The mock
- * pass fails a page that draws no dated cell. The router's seed draws no row older than a day, so its pass records
- * that the read stands down. The bare log loads again after.
+ * and three days back stand on the first page beside today's, each cell printing its date before the time whatever the
+ * row's age: each cell's text width against its content box, its lines and its height against the row's other cells
+ * are recorded. The mock pass fails a page that draws no dated cell. The bare log loads again after.
  */
 async function routingLogDatedTime(theme) {
   try {
     await loadAtOrigin('/routing-log?range=7d&kinds=account_state_changed', '.routing-log__table');
     const read = timeFit(await page.evaluate(timeCellsOf, '.routing-log__table'));
-    if (!mock && read.dated.length === 0) measurements.push(`${theme} /routing-log dated Time cells skipped: the seed draws no row older than a day (${read.cells} rows under 7d)`);
-    else measurements.push(`${theme} /routing-log dated Time cells under 7d ${JSON.stringify(read)}`);
+    measurements.push(`${theme} /routing-log dated Time cells under 7d ${JSON.stringify(read)}`);
     if (mock && read.dated.length === 0) failures.push(`${theme} /routing-log: no Time cell under 7d on the state changes prints its date, so the dated form is not measured`);
   } finally {
     await loadAtOrigin('/routing-log', '.routing-log__table');
@@ -6362,10 +6356,9 @@ function timeFill(read, say) {
  * the table needs no more than its wrap's width, with the Cost column whole, and holds the column rule (`timeFill`).
  * The table's need, its narrowest layout and the columns' widths are recorded. The Client text's box keeps its
  * ellipsis, and a TTFB figure never parts from its unit. A held row's marker reads its wait as waited on one line. The
- * share measure below reads the same draw with the Cost column's widest text. Under a `range` the page was loaded on,
- * the dated form is held as well: the mock's story and the router's seed both lie within the day before the pass's
- * clock, so the range is read with the page's clock moved past a day on (`datedRead`), where every row prints its date,
- * and a read with no dated cell fails, as does a cell that stands taller than the row's other cells.
+ * share measure below reads the same draw with the Cost column's widest text. Every Time cell prints its date whatever
+ * the row's age. Under a `range` the page was loaded on, read with the page's clock moved past a day on (`datedRead`),
+ * a read with no dated cell fails, as does a cell that stands taller than the row's other cells.
  */
 async function requestsTableFits(theme, range = null) {
   const read = await readRequestsTable();
@@ -6392,10 +6385,11 @@ async function requestsTableFits(theme, range = null) {
 
 /**
  * The default set under the 12-hour setting, read on the 7-day range a day and an hour on (`datedRead`), where every
- * Time cell prints its date: the table carries its 12-hour class and holds the column rule (`timeFill`), its Time
- * cells' floor taking the widest dated time of that setting with the cell's padding, so no time cuts. Whether the set
- * runs past the card at 1280 by 800 is recorded, since the router's seed fits it. Where it does, the wrap scrolls and
- * Time sits at its floor within 1 px. The setting leaves after, and the view loop loads the bare list again.
+ * Time cell prints its date as it does whatever the row's age: the table carries its 12-hour class and holds the column
+ * rule (`timeFill`), its Time cells' floor taking the widest dated time of that setting with the cell's padding, so no
+ * time cuts. Whether the set runs past the card at 1280 by 800 is recorded, since the router's seed fits it. Where it
+ * does, the wrap scrolls and Time sits at its floor within 1 px. The setting leaves after, and the view loop loads the
+ * bare list again.
  */
 async function requestsTableTwelveHour(theme) {
   const say = (what) => failures.push(`${theme} /requests under the 12-hour setting: ${what}`);
@@ -6924,8 +6918,8 @@ async function pagerControls(theme, path) {
 
 /**
  * The range control at rest on the request log's bar: the group 32 px with its six pills 28 px on one top, the group
- * against the split Refresh button and against the search field on height and top, since the bar holds all three on
- * its one row, and the Custom pill's width at rest recorded, the base its span grows from.
+ * against the split Refresh button on height and against the search field on height and top, since at 1280 px the
+ * bar's edge stands on its second line, and the Custom pill's width at rest recorded, the base its span grows from.
  */
 async function rangePills(theme) {
   const read = await page.evaluate(() => {
@@ -6945,7 +6939,7 @@ async function rangePills(theme) {
   if (read.group?.height !== 32) say(`group is ${read.group?.height} px, not 32`);
   if (read.pills.length !== 6 || read.pills.some((p) => p.height !== 28)) say(`pills measure ${JSON.stringify(read.pills)}, not six of 28 px`);
   if (new Set(read.pills.map((p) => p.top)).size > 1) say(`pills stand at ${JSON.stringify(read.pills.map((p) => p.top))}, not one top`);
-  failures.push(...compare(read.group, read.refresh, ['height', 'top'], `${theme} /requests: the range group against the split Refresh button`));
+  failures.push(...compare(read.group, read.refresh, ['height'], `${theme} /requests: the range group against the split Refresh button`));
   failures.push(...compare(read.group, read.search, ['height', 'top'], `${theme} /requests: the range group against the search field`));
 }
 
@@ -7019,7 +7013,8 @@ const ROW_BOUND = {
   // The row measured 850 px with its range, Group by select and Sort control, past the Routing log's 700, so the bound
   // is that measure plus margin.
   '/analytics': 880,
-  '/routing-log': 700,
+  // The row measured 770 px with its range, Add filter and Sort control, so the bound is that measure plus margin.
+  '/routing-log': 800,
 };
 /** The views whose bar draws no range: the bar is first on the page and the view's head or tiles follow it. */
 const CARD_VIEWS = ['/accounts', '/keys', '/pools', '/quota', '/sessions'];
@@ -7037,13 +7032,18 @@ const MIDNIGHT = (origin) => {
  * on the Analytics sticky bar, whose 8 px of padding above and below and hairline add 17), every row child 32 px at one
  * top (a segmented's pills 28 inside their group), the chips 26 with the word in --ink-2 and the values in --ink, one
  * line (scrollWidth equal to clientWidth) at 1280 by 800 and 1440 by 900 at rest, with the view's chips and, on a
- * ranged view, with a span across midnight, and the row against the first card's head. On a card view the element
- * after the bar and the tiles stand under the bar's bottom. The row's `width`, its slots' widths and the gaps between
- * them, holds under the view's ROW_BOUND at rest. On Analytics the Group by select reads the Add filter button's height
- * and top. On the NARROW_VIEWS at 950 by 800 the bar and its row run no wider than their boxes and the right edge, and
- * the count where the view draws one, end inside the window. At 400 by 800, at rest on every view, the bar and its row
- * run no wider than their boxes and the Refresh button, and the count where the view draws one, end inside the window.
- * There with the view's chips, a chip the line folds draws no box. Records to `measurements`.
+ * ranged view, with a span across midnight, and the row against the first card's head. The Requests row at 1280 by 800
+ * holds two lines at rest, where the count "25 shown, more available" takes the slots to 1275 px in the 992 px row and
+ * wraps the edge alone onto the second line (the row and the bar 72 px), and across midnight, whose Custom pill takes
+ * them to 1175 px (72 px). With its chips the address lists no row, so the "No rows" count's 164.7 px edge fits beside
+ * the slots at 992 px: one line under the chip line, the bar 66 px. At 1440 by 900 every case holds one line. On a card
+ * view the element after the bar and the tiles stand under the bar's bottom. The row's `width`, its slots' widths and
+ * the gaps between them, holds under the view's ROW_BOUND at rest. On Analytics the Group by select reads the Add
+ * filter button's height and top. On the NARROW_VIEWS at 950 by 800 the bar and its row run no wider than their boxes
+ * and the right edge, and the count where the view draws one, end inside the window. At 400 by 800, at rest on every
+ * view, the bar and its row run no wider than their boxes and the Refresh button, and the count where the view draws
+ * one, end inside the window. There with the view's chips, a chip the line folds draws no box. Records to
+ * `measurements`.
  */
 async function barRow(theme, view) {
   const say = (what) => failures.push(`${theme} ${view} bar: ${what}`);
@@ -7087,13 +7087,20 @@ async function barRow(theme, view) {
         width: Math.round(slots.reduce((sum, el) => sum + box(el).width, 0) + (parseFloat(getComputedStyle(row).columnGap) || 0) * Math.max(0, slots.length - 1)),
       };
     });
-  const check = (at, got, chipped) => {
+  const check = (at, got, chipped, lines) => {
     if (got === null) return say(`${at}: no bar to measure`);
-    if (got.row.height !== 32) say(`${at}: the row is ${got.row.height} px, not 32`);
-    if (got.row.scroll > got.row.client) say(`${at}: the row runs ${got.row.scroll} px in ${got.row.client}, past one line`);
+    // A second line stands 8 px under the first, the row's gap.
+    const rowHeight = lines === 2 ? 72 : 32;
+    if (got.row.height !== rowHeight) say(`${at}: the row is ${got.row.height} px, not ${rowHeight}`);
+    if (got.row.scroll > got.row.client) say(`${at}: the row runs ${got.row.scroll} px in ${got.row.client}, past its box`);
     const off = got.children.filter((c) => c.height !== 32);
     if (off.length > 0) say(`${at}: row children not 32 px ${JSON.stringify(off)}`);
-    if (new Set(got.children.map((c) => c.top)).size > 1) say(`${at}: the row's children stand at ${JSON.stringify(got.children.map((c) => c.top))}, not one top`);
+    const tops = [...new Set(got.children.map((c) => c.top))];
+    if (tops.length !== lines) say(`${at}: the row's children stand at ${JSON.stringify(got.children.map((c) => c.top))}, not ${lines === 2 ? 'two tops' : 'one top'}`);
+    else if (lines === 2) {
+      const second = got.children.filter((c) => c.top === Math.max(...tops)).map((c) => c.name);
+      if (JSON.stringify(second) !== JSON.stringify(['filter-bar__edge'])) say(`${at}: the second line holds ${JSON.stringify(second)}, not the edge alone`);
+    }
     if (got.pills.some((h) => h !== 28)) say(`${at}: the pills measure ${JSON.stringify(got.pills)}, not 28`);
     if (got.head !== null && got.head < got.bottom) say(`${at}: the first card's head stands at ${got.head}, above the bar's bottom ${got.bottom}`);
     if (CARD_VIEWS.includes(view)) {
@@ -7101,7 +7108,7 @@ async function barRow(theme, view) {
       if (got.tiles !== null && got.tiles < got.bottom) say(`${at}: the tiles stand at ${got.tiles}, above the bar's bottom ${got.bottom}`);
     }
     if (sticky) failures.push(...compare(got.groupBy, got.addFilter, ['height', 'top'], `${theme} ${view} bar: ${at}: the Group by select against the Add filter button`));
-    const rest = sticky ? 49 : 32;
+    const rest = sticky ? 49 : rowHeight;
     if (!chipped) {
       if (got.bar !== rest) say(`${at}: the bar is ${got.bar} px at rest, not ${rest}`);
       return;
@@ -7119,13 +7126,16 @@ async function barRow(theme, view) {
       await page.setViewportSize({ height, width });
       const cases = [['at rest', '', false], ...(BAR_CHIPS[view] ? [['with its chips', BAR_CHIPS[view], true]] : []), ...(ranged ? [['with a span across midnight', MIDNIGHT(clockOrigin), false]] : [])];
       for (const [label, search, chipped] of cases) {
+        // The Requests bar's slots outrun the 1280 px content column, so its edge wraps under them, as the owner kept
+        // it. The chips' address lists no row, and its shorter count leaves the edge room beside the slots.
+        const lines = view === '/requests' && width === 1280 && label !== 'with its chips' ? 2 : 1;
         await page.goto(`${base}${view}${search}`);
         await booted();
         await advance(LOAD_MS);
         await page.waitForSelector('.filter-bar', { timeout: 15_000 }).catch(() => {});
         const got = await read();
         measurements.push(`${theme} ${view} bar row at ${width} by ${height} ${label} ${JSON.stringify(got)}`);
-        check(`${width} by ${height} ${label}`, got, chipped);
+        check(`${width} by ${height} ${label}`, got, chipped, lines);
         if (chipped) {
           await cutReaders(theme, `${view} at ${width} by ${height} ${label}`);
           await hiddenNodes(theme, `${view} at ${width} by ${height} ${label}`);
@@ -8448,6 +8458,91 @@ async function quotaSortControl(theme) {
     await atRest();
   }
 }
+
+/** The radios each log's Sort popover lists, its keys then the two directions. */
+const LOG_SORT_RADIOS = {
+  '/requests': ['Time', 'Attempts', 'Duration', 'TTFB', 'Ascending', 'Descending'],
+  '/routing-log': ['Time', 'Ascending', 'Descending'],
+};
+
+/**
+ * A log's sort control on the bare view, called beside the bar's measure: its button reading "Sort: Time" with the down
+ * arrow, titled "Sorted by Time, descending", in the type size, weight, height, top edge and ink of the Add filter
+ * button beside it, then opened: the popover inside the window under the button, its radios the view's keys and the two
+ * directions in one height, a mark on Time and Descending alone, and Escape closing it with the focus back on the
+ * button.
+ */
+async function logSortControl(theme, view) {
+  const say = (what) => failures.push(`${theme} ${view} sort control: ${what}`);
+  const sort = page.locator('.filter-bar button[aria-label="Sort"]');
+  if ((await sort.count()) === 0) {
+    say('the bar draws no Sort button');
+    return;
+  }
+  try {
+    const rest = await page.evaluate(() => {
+      const row = document.querySelector('.filter-bar__row');
+      const box = (el) => {
+        if (!el) return null;
+        const style = getComputedStyle(el);
+        const b = el.getBoundingClientRect();
+        return { color: style.color, fontSize: style.fontSize, fontWeight: style.fontWeight, height: Math.round(b.height), top: Math.round(b.top) };
+      };
+      const button = row?.querySelector('button[aria-label="Sort"]') ?? null;
+      return {
+        addFilter: box([...(row?.querySelectorAll(':scope > button') ?? [])].find((b) => b.textContent?.trim() === 'Add filter')),
+        sort: button === null ? null : { ...box(button), arrow: button.querySelector('svg path')?.getAttribute('transform') ?? null, text: button.textContent?.trim() ?? '', title: button.getAttribute('title') },
+      };
+    });
+    measurements.push(`${theme} ${view} sort button ${JSON.stringify(rest)}`);
+    for (const what of compare(rest.sort, rest.addFilter, ['color', 'fontSize', 'fontWeight', 'height', 'top'], 'the Sort button against the Add filter button')) say(what);
+    // The arrow is IconArrowRight's stroke turned a quarter clockwise, down, for descending.
+    if (rest.sort?.text !== 'Sort: Time' || rest.sort?.title !== 'Sorted by Time, descending' || rest.sort?.arrow !== 'rotate(90 12 12)') say(`the button reads ${JSON.stringify(rest.sort?.text ?? null)} titled ${JSON.stringify(rest.sort?.title ?? null)} with the arrow at ${JSON.stringify(rest.sort?.arrow ?? null)} on a bare address, not "Sort: Time" titled "Sorted by Time, descending" with the down arrow`);
+    await sort.click();
+    await advance(CLOCK_STEP_MS);
+    const open = await page.evaluate(() => {
+      const button = document.querySelector('.filter-bar button[aria-label="Sort"]');
+      const popover = document.querySelector('.popover .sort-popover')?.closest('.popover') ?? null;
+      if (!button || !popover) return null;
+      const b = popover.getBoundingClientRect();
+      return {
+        box: { bottom: Math.round(b.bottom), left: Math.round(b.left), right: Math.round(b.right), top: Math.round(b.top) },
+        button: Math.round(button.getBoundingClientRect().bottom),
+        radios: [...popover.querySelectorAll('[role="radio"]')].map((r) => ({
+          checked: r.getAttribute('aria-checked'),
+          height: Math.round(r.getBoundingClientRect().height * 10) / 10,
+          mark: (r.querySelector('.mselect__check svg')?.getBoundingClientRect().width ?? 0) > 0,
+          text: r.textContent?.trim() ?? '',
+        })),
+        window: { height: document.documentElement.clientHeight, width: document.documentElement.clientWidth },
+      };
+    });
+    measurements.push(`${theme} ${view} sort popover ${JSON.stringify(open)}`);
+    if (open === null) {
+      say('a click on the button opened no popover');
+      return;
+    }
+    if (open.box.left < 0 || open.box.top < 0 || open.box.right > open.window.width || open.box.bottom > open.window.height) say(`the popover stands at ${JSON.stringify(open.box)}, past the ${open.window.width} by ${open.window.height} window`);
+    if (open.box.top <= open.button) say(`the popover's top ${open.box.top}px is not under the button's bottom ${open.button}px`);
+    const texts = open.radios.map((r) => r.text);
+    if (JSON.stringify(texts) !== JSON.stringify(LOG_SORT_RADIOS[view])) say(`the radios read ${JSON.stringify(texts)}, not ${JSON.stringify(LOG_SORT_RADIOS[view])}`);
+    if (new Set(open.radios.map((r) => r.height)).size !== 1) say(`the radio rows measure ${JSON.stringify(open.radios.map((r) => r.height))}, not one height`);
+    const marked = open.radios.filter((r) => r.mark).map((r) => r.text);
+    const checked = open.radios.filter((r) => r.checked === 'true').map((r) => r.text);
+    if (JSON.stringify(marked) !== JSON.stringify(['Time', 'Descending']) || JSON.stringify(checked) !== JSON.stringify(marked)) say(`the marks stand on ${JSON.stringify(marked)} and the checked radios are ${JSON.stringify(checked)}, not Time and Descending`);
+    await page.keyboard.press('Escape');
+    await advance(CLOCK_STEP_MS);
+    const closed = await page.evaluate(() => ({ focus: document.activeElement?.getAttribute('aria-label') ?? null, open: document.querySelector('.popover .sort-popover') !== null }));
+    if (closed.open || closed.focus !== 'Sort') say(`Escape left the popover ${closed.open ? 'open' : 'closed'} with the focus on ${JSON.stringify(closed.focus)}, not closed onto the button`);
+  } finally {
+    await atRest();
+  }
+}
+
+/** The Requests bar's sort control (`logSortControl`), its four keys. */
+const requestsSortControl = (theme) => logSortControl(theme, '/requests');
+/** The Routing log bar's sort control (`logSortControl`), its one key. */
+const routingLogSortControl = (theme) => logSortControl(theme, '/routing-log');
 
 /**
  * The Analytics bar's sort control, called beside the bar's measure: on the bare Traffic tab its button reading "Sort:
@@ -13431,6 +13526,7 @@ try {
       if (view.path === '/requests') await speedFilter(theme);
       if (view.path === '/requests') await diagnosticsFilters(theme);
       if (view.path === '/requests') await barRow(theme, view.path);
+      if (view.path === '/requests') await requestsSortControl(theme);
       if (view.path === '/requests') await refreshControlWidth(theme);
       if (view.path === '/requests') await requestsTableNoFill(theme);
       if (view.path === '/requests') await requestDrawerCompact(theme);
@@ -13442,6 +13538,7 @@ try {
       if (view.path === '/routing-log') await decisionCard(theme);
       // The bar's measure loads each address itself and leaves the bare log, where the Kinds list opens.
       if (view.path === '/routing-log') await barRow(theme, view.path);
+      if (view.path === '/routing-log') await routingLogSortControl(theme);
       if (view.path === '/routing-log') await kindsPopoverInside(theme);
       if (view.path === '/routing-log') await freshRowTint(theme, view.path);
       if (view.path === '/routing-log' && mock) await routingLogPickLine(theme);

@@ -758,98 +758,102 @@ created", "Guardrail saved" and "Guardrail deleted". What the test evaluates and
 ![The Requests view: the table with its client column](assets/requests-light.png#only-light)
 ![The Requests view: the table with its client column](assets/requests-dark.png#only-dark)
 
-The filter bar holds one row: the range, the search, Add filter, the Columns button, and at the right edge the split
-Refresh button and the count of rows shown ("25 shown, more available"). The range offers Last hour, Last 6 hours, Last
-24 hours (the default), Last 7 days, Last 30 days or Custom range with From and To, drawn as the pills 1h, 6h, 24h, 7d,
-30d and Custom, the pressed pill naming its range and its end on hover. Custom opens From and To in a popover on the
-window the table shows, where Apply stays disabled under "End must be after start." while the pair is wrong, an end past
-now reads as now, and the pill prints an applied span ("13:00 to 14:30", the date before each time across days). The
-search, "Search id, session, key, account, model, error, message id", matches the request id, the session, the key, the
-model, the error code, and an attempt's account, upstream request id or upstream message id, literally (`_` and `%` are
-characters), and applies 400 milliseconds after the last keystroke, on Enter, or when the field loses focus. Add filter
-opens a "Filter by" field over the filters in four groups: Routing (Account, Key, Model, Pool), Outcome (Cache miss
-reason, Guardrail, Held only, Outcome, Refusal category, Status, Stop reason), Request (Agent type, Classifier, Client,
-Effort, Kind, Request class, Speed, Turn origin, User agent) and Subject (Agent, Request, Session). Choosing one opens
-its values: a list with a Select all row that applies on each click (checking it checks every option and unchecking it
-clears every check), a pattern field for Client and User agent (`claude-cli/2.1.*`, `*sdk-cli*`: `*` for any run of
-characters, `?` for one, a backslash quoting either, and a value with no wildcard matching in full), an id field for
-Agent, Request and Session, which match the id exactly (an agent id is `main` or a subagent's id, carried in the address
-as `agent_id`), or the Kind choices (Any kind, Inference, Count tokens, Probe), while Held only applies at once.
-Guardrail lists the registry's guardrails by name, then the ids of deleted guardrails the loaded rows still carry as
-`{id} (deleted)`, then `none` for a request no guardrail matched ([Guardrails](guardrails.md)). Stop reason lists the
-stop reasons the console names (`end_turn`, `max_tokens`, `model_context_window_exceeded`, `pause_turn`, `refusal`,
-`stop_sequence`, `tool_use`) and any other the loaded rows carry, Refusal category the categories it names (`cyber`) and
-any other the loaded rows carry, each list ending on `none` for a request whose serving attempt carries no value or that
-no attempt served. A pattern or an id applies on Enter or Apply. Each filter in force stands as a chip on a line under
-the bar, such as "account: primary, nightly" or "held only": a click on the chip opens its values again, its x removes
-it, the chips past five fold behind "+N more", and from two chips on "Clear all" removes them and keeps the range, the
-search and the page size. The account filter keeps the requests whose serving attempt ran on the account, so a request
-that failed over lists under the account that answered it. Every filter, the range and the page size live in the page's
-address, so a reload or a shared link keeps them.
+The filter bar holds the range, the search, Add filter, the Columns button, the Sort control, and at the right edge the
+split Refresh button and the count of rows shown ("25 shown, more available"), the right edge on a second line at 1280
+px. The range offers Last hour, Last 6 hours, Last 24 hours (the default), Last 7 days, Last 30 days or Custom range
+with From and To, drawn as the pills 1h, 6h, 24h, 7d, 30d and Custom, the pressed pill naming its range and its end on
+hover. Custom opens From and To in a popover on the window the table shows, where Apply stays disabled under "End must
+be after start." while the pair is wrong, an end past now reads as now, and the pill prints an applied span ("13:00 to
+14:30", the date before each time across days). The search, "Search id, session, key, account, model, error, message
+id", matches the request id, the session, the key, the model, the error code, and an attempt's account, upstream request
+id or upstream message id, literally (`_` and `%` are characters), and applies 400 milliseconds after the last
+keystroke, on Enter, or when the field loses focus. Add filter opens a "Filter by" field over the filters in four
+groups: Routing (Account, Key, Model, Pool), Outcome (Cache miss reason, Guardrail, Held only, Outcome, Refusal
+category, Status, Stop reason), Request (Agent type, Classifier, Client, Effort, Kind, Request class, Speed, Turn
+origin, User agent) and Subject (Agent, Request, Session). Choosing one opens its values: a list with a Select all row
+that applies on each click (checking it checks every option and unchecking it clears every check), a pattern field for
+Client and User agent (`claude-cli/2.1.*`, `*sdk-cli*`: `*` for any run of characters, `?` for one, a backslash quoting
+either, and a value with no wildcard matching in full), an id field for Agent, Request and Session, which match the id
+exactly (an agent id is `main` or a subagent's id, carried in the address as `agent_id`), or the Kind choices (Any kind,
+Inference, Count tokens, Probe), while Held only applies at once. Guardrail lists the registry's guardrails by name,
+then the ids of deleted guardrails the loaded rows still carry as `{id} (deleted)`, then `none` for a request no
+guardrail matched ([Guardrails](guardrails.md)). Stop reason lists the stop reasons the console names (`end_turn`,
+`max_tokens`, `model_context_window_exceeded`, `pause_turn`, `refusal`, `stop_sequence`, `tool_use`) and any other the
+loaded rows carry, Refusal category the categories it names (`cyber`) and any other the loaded rows carry, each list
+ending on `none` for a request whose serving attempt carries no value or that no attempt served. A pattern or an id
+applies on Enter or Apply. Each filter in force stands as a chip on a line under the bar, such as "account: primary,
+nightly" or "held only": a click on the chip opens its values again, its x removes it, the chips past five fold behind
+"+N more", and from two chips on "Clear all" removes them and keeps the range, the search and the page size. The account
+filter keeps the requests whose serving attempt ran on the account, so a request that failed over lists under the
+account that answered it. Every filter, the range, the page size and the order live in the page's address, so a reload
+or a shared link keeps them.
 
-The table offers thirteen columns, Time, Key, Pool, Account, Model, Client, Kind, Transport, Status, Attempts, TTFB,
-Tokens and Cost, with Kind, Pool and Transport hidden until the Columns control turns them on, and shows Time, Model,
-Status and Attempts alone while the drawer is open. Every column but Time is as wide as its widest value, and Time takes
-the card's free width: the request id under the time is cut by the room with an ellipsis, whole on hover, and reads
-whole where the card holds it, on a wide screen or beside the drawer. Time keeps room for the widest time the clock
-draws, so a time never cuts, and under the 12-hour clock, whose times run wider, the default columns can run past the
-card at 1280 px and scroll inside it, as any set of columns wider than the card does. A row older than a day prints its
-date before the time, so a 7-day or 30-day range reads without the hover. The model column reads the family and version
-with the whole id on hover, and a dash for a request the router refused before it resolved a model. The client column
-reads the class the router derived from the user agent (`claude-code/<entrypoint>` or `other`), whole on hover, with the
-agent type beneath it on a subagent's turn. The drawer's Client row names a session that branched from another
-conversation, `fork of {base} at 3`, with the base's whole id on hover. Status reads the code, a warning badge with the
-refusal's category where the upstream refused the answer (`none` where it gave no category, its hover "The upstream
-refused this answer. Open the request for the stop reason and the recommended model.", the request having succeeded),
-and the outcome word beside it where the request did not succeed (`canceled`, `exhausted`, `failed`, `incomplete` or
-`rejected`). One row is one client request however many attempts it took: Attempts reads `2 attempts` with the trail of
-account and status on hover, nothing for a request of one attempt, and a `waited 42 s` badge for a request that waited
-through a hold, for a slot while every account was at its cap, for a reset, for the slow-down or for the rewrite in
-flight, whose hover names each wait with its reason in the row's order and the account it waited on, `waited for the
-slow-down 42 s, for a slot 3 s on {account}` or `waited for the rewrite in flight 2 s on {account}`, or each with its
-own account where the waits span two, `waited for the slow-down 42 s on {account}, for a slot 3 s on {other}` (a row
-from before the reasons reads `waited 1 s on {account}`, and a wait under a second reads `1 s`). Cost reads in the top
-bar's unit, its header's hover naming what each kind of request reads under the position. Under Native a request a
-subscription window paid reads one figure in the chosen week, such as `0.0244% Ultra week`, with its hint and the dollar
-equivalent on hover. The hint names the account's plan, its display name where the account carries one, and its share
-of each window the account has, in the order 5-hour, 7-day and the model week, with "(in the band)" after a 5-hour share
-that completed inside the band of the cost revision in force at its completion: "Ultra: 0.11% of the 7-day window, 0.22%
-of the Fable week". It names no window the account lacks, so an approved Ultra account reads no 5-hour share, and no
-Fable week on a Pro account. Under the Max and Ultra weeks the figure waits on the settings, so the cell draws its
-placeholder until they answer. Where that read
-fails, the cell draws a dash titled with the read's message, the drawer's Estimated cost row draws the same dash with
-the message leading its hover, and the split Refresh button's body reads the settings again. A request whose model
-has no weight in the cost model reads its dollar equivalent over `equivalent` with the hover "The cost model prices no
-share for this request". Under All in dollars and Dollar equivalent a subscription request reads its dollar equivalent
-over `equivalent` with the hint and the figure in the chosen week on hover, and under Billed dollars a dash with the
-hover "Nothing billed: a subscription request". An API-key, fast mode, overage or usage-based request reads dollars
-under every position but Dollar equivalent, where it reads a dash with the hover "Billed in dollars, no subscription
-equivalent". A client classifier call on a subscription account reads `0%` in the chosen week under Native, with the
-hover "Free on the plan: a client classifier call takes no window share" ahead of the hint, its dollar equivalent over
-`equivalent` under All in dollars and Dollar equivalent with the same hover ahead of its zero figure, and a dash under
-Billed dollars, while on an overage or API-key account it reads its dollars as any billed request does. The
-table pages by "Rows" (10, 25, 50 or 100, 25 by default) with First, Previous and Next, holds the requests up to the
-moment you opened it so paging does not shift, and the split Refresh button's body brings it up to now. An empty table
-reads "No requests match" with "Widen the range or clear a filter." and "Reset filters", which clears the filters, the
-search and the range. What each figure means is on [Statistics](statistics.md).
+The table offers fourteen columns, Time, Key, Pool, Account, Model, Client, Kind, Transport, Status, Attempts, TTFB,
+Duration, Tokens and Cost, with Duration, Kind, Pool and Transport hidden until the Columns control turns them on, and
+shows Time, Model, Status and Attempts alone while the drawer is open. The Sort control orders the table by Time
+(descending at rest), Attempts, Duration or TTFB (each descending when picked), a request without the figure last under
+either direction, the read paging by the key, so each page holds the next rows in the order, and a change of the key or
+the direction returns to the first page. Every column but Time is as wide as its widest value, and Time takes the card's
+free width: the request id under the time is cut by the room with an ellipsis, whole on hover, and reads whole where the
+card holds it, on a wide screen or beside the drawer. Time keeps room for the widest time the clock draws, so a time
+never cuts, and under the 12-hour clock, whose times run wider, the default columns can run past the card at 1280 px and
+scroll inside it, as any set of columns wider than the card does. Time reads the date and the clock time with seconds,
+`Nov 5 13:11:05`, whatever the row's age, so a row of any range reads its date without the hover. The model column reads
+the family and version with the whole id on hover, and a dash for a request the router refused before it resolved a
+model. The client column reads the class the router derived from the user agent (`claude-code/<entrypoint>` or `other`),
+whole on hover, with the agent type beneath it on a subagent's turn. The drawer's Client row names a session that
+branched from another conversation, `fork of {base} at 3`, with the base's whole id on hover. Status reads the code, a
+warning badge with the refusal's category where the upstream refused the answer (`none` where it gave no category, its
+hover "The upstream refused this answer. Open the request for the stop reason and the recommended model.", the request
+having succeeded), and the outcome word beside it where the request did not succeed (`canceled`, `exhausted`, `failed`,
+`incomplete` or `rejected`). One row is one client request however many attempts it took: Attempts reads `2 attempts`
+with the trail of account and status on hover, nothing for a request of one attempt, and a `waited 42 s` badge for a
+request that waited through a hold, for a slot while every account was at its cap, for a reset, for the slow-down or for
+the rewrite in flight, whose hover names each wait with its reason in the row's order and the account it waited on,
+`waited for the slow-down 42 s, for a slot 3 s on {account}` or `waited for the rewrite in flight 2 s on {account}`, or
+each with its own account where the waits span two, `waited for the slow-down 42 s on {account}, for a slot 3 s on
+{other}` (a row from before the reasons reads `waited 1 s on {account}`, and a wait under a second reads `1 s`). Cost
+reads in the top bar's unit, its header's hover naming what each kind of request reads under the position. Under Native
+a request a subscription window paid reads one figure in the chosen week, such as `0.0244% Ultra week`, with its hint
+and the dollar equivalent on hover. The hint names the account's plan, its display name where the account carries one,
+and its share of each window the account has, in the order 5-hour, 7-day and the model week, with "(in the band)" after
+a 5-hour share that completed inside the band of the cost revision in force at its completion: "Ultra: 0.11% of the
+7-day window, 0.22% of the Fable week". It names no window the account lacks, so an approved Ultra account reads no
+5-hour share, and no Fable week on a Pro account. Under the Max and Ultra weeks the figure waits on the settings, so the
+cell draws its placeholder until they answer. Where that read fails, the cell draws a dash titled with the read's
+message, the drawer's Estimated cost row draws the same dash with the message leading its hover, and the split Refresh
+button's body reads the settings again. A request whose model has no weight in the cost model reads its dollar
+equivalent over `equivalent` with the hover "The cost model prices no share for this request". Under All in dollars and
+Dollar equivalent a subscription request reads its dollar equivalent over `equivalent` with the hint and the figure in
+the chosen week on hover, and under Billed dollars a dash with the hover "Nothing billed: a subscription request". An
+API-key, fast mode, overage or usage-based request reads dollars under every position but Dollar equivalent, where it
+reads a dash with the hover "Billed in dollars, no subscription equivalent". A client classifier call on a subscription
+account reads `0%` in the chosen week under Native, with the hover "Free on the plan: a client classifier call takes no
+window share" ahead of the hint, its dollar equivalent over `equivalent` under All in dollars and Dollar equivalent with
+the same hover ahead of its zero figure, and a dash under Billed dollars, while on an overage or API-key account it
+reads its dollars as any billed request does. The table pages by "Rows" (10, 25, 50 or 100, 25 by default) with First,
+Previous and Next, holds the requests up to the moment you opened it so paging does not shift, and the split Refresh
+button's body brings it up to now. An empty table reads "No requests match" with "Widen the range or clear a filter."
+and "Reset filters", which clears the filters, the search and the range. What each figure means is on
+[Statistics](statistics.md).
 
 Auto reload is off when the view opens. The split Refresh button's dropdown sets it to Off, 5 s, 10 s, 30 s or 1 min,
 and the choice stays with the open page, out of its address. At each interval it reads the list again, a preset's range
 ending at the router's clock and a custom range keeping its own end, where a request received inside it and written
 after a read draws on the next read, takes every row that arrived since the read before, up to eight pages, and lands a
-new row at the top in the accent tint until the next read. A long request can finish below rows already shown: it lands
-between rows already shown, in the same tint, on the next auto reload. On a custom range whose rows fit on the page
-shown, a request that lands below them after a read draws on the next read in the accent tint, and where the range runs
-on past the page a late row below it stays for Next. Past eight pages a line reads "More rows arrived than auto reload
-could fetch. Reload to read them.", and Next reads on from the last row the poll fetched, under a preset to the router's
-clock. A poll whose newest page stood in for a list read that failed gives way to the list once it answers. A filter
-change keeps the interval. The poll waits while the tab is hidden, while the drawer is open, on an older page until you
-go back to the first, and while a menu or popover under the bar is open, with the interval kept and the cause named in
-the dropdown's title. When the wait ends a full interval or more after its last answer, it reads at once. When the tab
-comes back to a read at once, the rows that read brought keep the tint through the read after it. A custom range whose
-end lay more than a minute in the past when the page took it has nothing new to read, so the dropdown reads Off and
-stays disabled, while a link whose range ends at the moment it was made reads on, each read refreshing the rows inside
-it.
+new row at the top in the accent tint until the next read. Under a key or a direction other than the default, a new row
+lands where the order files it. A long request can finish below rows already shown: it lands between rows already shown,
+in the same tint, on the next auto reload. On any range whose rows fit on the page shown, a request that lands below
+them after a read draws on the next read in the accent tint, and where the range runs on past the page a late row below
+it stays for Next. Past eight pages a line reads "More rows arrived than auto reload could fetch. Reload to read them.",
+and Next reads on from the last row the poll fetched, under a preset to the router's clock. A poll whose newest page
+stood in for a list read that failed gives way to the list once it answers. A filter change keeps the interval. The poll
+waits while the tab is hidden, while the drawer is open, on an older page until you go back to the first, and while a
+menu or popover under the bar is open, with the interval kept and the cause named in the dropdown's title. When the wait
+ends a full interval or more after its last answer, it reads at once. When the tab comes back to a read at once, the
+rows that read brought keep the tint through the read after it. A custom range whose end lay more than a minute in the
+past when the page took it has nothing new to read, so the dropdown reads Off and stays disabled, while a link whose
+range ends at the moment it was made reads on, each read refreshing the rows inside it.
 
 Selecting a row opens the "Request details" drawer, with the request's id and time, a "Routing log" link that opens the
 [routing log](#routing-log) on the request a quarter hour either side, and these sections:
@@ -1332,56 +1336,60 @@ Diagnostics view is open, and every link into the log opens it whatever the mode
 and the events that explain them, newest first, 25 rows a page with First, Previous and Next. The rules a decision
 follows are on [Pools, keys and routing](routing.md).
 
-The filter bar holds one row: the range, Add filter, and at the right edge the split Refresh button and the count of
-rows shown ("25 shown, more available"). The range offers the pills 1h (the default), 6h, 24h, 7d, 30d and Custom, with
-From and To in a popover as on the Requests view. Add filter opens a "Filter by" field over the filters in three groups:
-Kinds, Routing (Account, Key, Model, Pool) and Subject (Agent, which the id matches exactly: a decision by its request's
-agent, an event by its own, so an event that names no agent is left out, Request, and Session, which a prefix matches).
-Every decision and event kind lists by default. The Kinds filter opens with eight presets above the kinds: placements
-and pins, moves and holds, exhaustion and refusals, account state and windows, cooldowns and backoff, keepalive,
-registry changes, router life cycle. While every kind is shown, a preset's click lists its kinds alone, so keepalive
-reads the cache-warming traffic in one click. From there a preset checks or unchecks its members, two presets combine, a
-hand edit after a preset is one click apart, and unchecking the last kind returns to every kind. Checking Select all
-checks every kind and unchecking it clears every check while every kind still lists, so a kind's click from there lists
-that kind alone and a preset's click its members alone. Each filter in force stands as a chip on a line under the bar,
-as on the Requests view: a set of whole presets reads their names ("kinds: moves and holds"), any other set of kinds
-reads their words ("kinds: moved, held, placed +5"), and the request chip's hover counts the request's decisions and
-events ("1 decision, 0 events"). The widenings stand on each decision's card, after "Widen to": "this minute", "this
-session" (an hour either side) and "this account" (a quarter hour either side). Every filter lives in the page's address
-(a preset range by its name as in `range=6h`, a custom range as `from` and `to`, two UTC instants, the lists as comma
+The filter bar holds one row: the range, Add filter, the Sort control, and at the right edge the split Refresh button
+and the count of rows shown ("25 shown, more available"). The Sort control orders the log by Time, newest first at rest,
+and Ascending reads the stream reversed whole, the read paging in that direction and a change of it returning to the
+first page. The range offers the pills 1h (the default), 6h, 24h, 7d, 30d and Custom, with From and To in a popover as
+on the Requests view. Add filter opens a "Filter by" field over the filters in three groups: Kinds, Routing (Account,
+Key, Model, Pool) and Subject (Agent, which the id matches exactly: a decision by its request's agent, an event by its
+own, so an event that names no agent is left out, Request, and Session, which a prefix matches). Every decision and
+event kind lists by default. The Kinds filter opens with eight presets above the kinds: placements and pins, moves and
+holds, exhaustion and refusals, account state and windows, cooldowns and backoff, keepalive, registry changes, router
+life cycle. While every kind is shown, a preset's click lists its kinds alone, so keepalive reads the cache-warming
+traffic in one click. From there a preset checks or unchecks its members, two presets combine, a hand edit after a
+preset is one click apart, and unchecking the last kind returns to every kind. Checking Select all checks every kind and
+unchecking it clears every check while every kind still lists, so a kind's click from there lists that kind alone and a
+preset's click its members alone. Each filter in force stands as a chip on a line under the bar, as on the Requests
+view: a set of whole presets reads their names ("kinds: moves and holds"), any other set of kinds reads their words
+("kinds: moved, held, placed +5"), and the request chip's hover counts the request's decisions and events ("1 decision,
+0 events"). The widenings stand on each decision's card, after "Widen to": "this minute", "this session" (an hour either
+side) and "this account" (a quarter hour either side). Every filter and the direction live in the page's address (a
+preset range by its name as in `range=6h`, a custom range as `from` and `to`, two UTC instants, the lists as comma
 lists), so a filtered view is a link and Back returns to the view before it. A `kinds` value names exactly the kinds
 listed, so `kinds=probe` lists probe decisions alone. An empty range reads "No decisions or events in this range." with
 "Widen the range or clear a filter."
 
 Auto reload is off when the view opens, and its poll is the log's own: the split Refresh button's dropdown sets it to
 Off, 5 s, 10 s, 30 s or 1 min, out of the page's address, and each read takes every row that arrived since the read
-before, up to eight pages, a new row landing at the top in the accent tint. Past eight pages a line reads "More rows
-arrived than auto reload could fetch. Reload to read them.", and Next reads on from the last row the poll fetched. The
-poll waits while the tab is hidden, on an older page until you go back to the first, and while a menu or popover under
-the bar is open, with the interval kept and the cause named in the dropdown's title. A custom range whose end lay more
-than a minute in the past when the page took it has nothing new to read, so the dropdown reads Off and stays disabled,
-while a link whose range ends at the moment it was made reads on, each read refreshing the rows inside it.
+before, up to eight pages, a new row landing at the top in the accent tint. On any range whose rows fit on the page
+shown, a row that lands below them draws on the next read, and where the range runs on past the page it stays for Next.
+Under Ascending a new row lands where the order files it. Past eight pages a line reads "More rows arrived than auto
+reload could fetch. Reload to read them.", and Next reads on from the last row the poll fetched. The poll waits while
+the tab is hidden, on an older page until you go back to the first, and while a menu or popover under the bar is open,
+with the interval kept and the cause named in the dropdown's title. A custom range whose end lay more than a minute in
+the past when the page took it has nothing new to read, so the dropdown reads Off and stays disabled, while a link whose
+range ends at the moment it was made reads on, each read refreshing the rows inside it.
 
-A row reads Time (dated past a day as on the Requests view, a decision's request beneath it as a link to the request's
-drawer), Kind (a decision in a filled badge with `attempt 2/3` beneath a failover attempt, an event in an outlined one),
-Session (the first eight characters with the agent beneath), Account (a move names the account it left and the one it
-landed on, and a registry change the pool, the key or the account it edited), Model, By, Fact, and Details, which opens
-the request's drawer. By names what decided the row in one chip: the rule that fired (`spent rule`), the rung that
-placed it (`static rung`), the strategy and the tier's priority (`Pace P0`, whose hover is the Pace hint), where a hold
-waited (`cohort`, `session pin`), `slow-down` for a request the slow-down held and for the renewal after its hold,
-`rewrite in flight` for a request that waited for a moved pin's first head and for the renewal after it, what exhausted
-the pool (`budget`, `cooldown`, `fast lane`, `spend cap`), the refusal (`client contract`, `client drift`, `guardrail
-blocked`, `key revoked`), `no rule fired` for a renewal, or an event's reason (`window spent`, `429 on 5h`, `slow-down`
-for a slow-down's start and end, `5h cleared` for a window read under its limit again, with the whole `5h cleared to 40%
-under its reset` on hover). Fact gives the value that made it so as a muted label with its value, `gap`, `idle`,
-`prefix`, `until`, a held request's `until 18:20` and `speed 0.5x`, the renewal's `held 42 s`, a slow-down start's
-`speed 0.5x` and an end's `slowest 0.35x`, a move's `runway` on its destination (a span such as `2 h 10 min`, `none` or
-`unbounded`) followed by `least bad` or `rewrite only` where the destination did not fit, or a renewal's window
-utilization, such as `5h 96%`, where that window's projection reached the ceiling. A verdict reads in one color across
-the rows, the card and the strip: good when it served the request, warning when it changed its course, critical for a
-refusal or an exhaustion, and neutral for none and no. Every account, key, pool, model, session and request a row names
-is a link. Each column but Time keeps a set width and Time takes the rest of the card, so on a wide screen the request
-id under the time reads whole, and a window narrower than the columns' total scrolls the table inside its card.
+A row reads Time (dated as on the Requests view, a decision's request beneath it as a link to the request's drawer),
+Kind (a decision in a filled badge with `attempt 2/3` beneath a failover attempt, an event in an outlined one), Session
+(the first eight characters with the agent beneath), Account (a move names the account it left and the one it landed on,
+and a registry change the pool, the key or the account it edited), Model, By, Fact, and Details, which opens the
+request's drawer. By names what decided the row in one chip: the rule that fired (`spent rule`), the rung that placed it
+(`static rung`), the strategy and the tier's priority (`Pace P0`, whose hover is the Pace hint), where a hold waited
+(`cohort`, `session pin`), `slow-down` for a request the slow-down held and for the renewal after its hold, `rewrite in
+flight` for a request that waited for a moved pin's first head and for the renewal after it, what exhausted the pool
+(`budget`, `cooldown`, `fast lane`, `spend cap`), the refusal (`client contract`, `client drift`, `guardrail blocked`,
+`key revoked`), `no rule fired` for a renewal, or an event's reason (`window spent`, `429 on 5h`, `slow-down` for a
+slow-down's start and end, `5h cleared` for a window read under its limit again, with the whole `5h cleared to 40% under
+its reset` on hover). Fact gives the value that made it so as a muted label with its value, `gap`, `idle`, `prefix`,
+`until`, a held request's `until 18:20` and `speed 0.5x`, the renewal's `held 42 s`, a slow-down start's `speed 0.5x`
+and an end's `slowest 0.35x`, a move's `runway` on its destination (a span such as `2 h 10 min`, `none` or `unbounded`)
+followed by `least bad` or `rewrite only` where the destination did not fit, or a renewal's window utilization, such as
+`5h 96%`, where that window's projection reached the ceiling. A verdict reads in one color across the rows, the card and
+the strip: good when it served the request, warning when it changed its course, critical for a refusal or an exhaustion,
+and neutral for none and no. Every account, key, pool, model, session and request a row names is a link. Each column but
+Time keeps a set width and Time takes the rest of the card, so on a wide screen the request id under the time reads
+whole, and a window narrower than the columns' total scrolls the table inside its card.
 
 Every row opens beneath itself. A decision row loads its record and draws the decision card. Its verdict line names the
 decision with its accounts and its pool as links ("Moved secondary to primary", "Attempt 2 of 2: placed on primary",

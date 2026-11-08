@@ -1,11 +1,13 @@
 import { iso } from '@/api/decode';
-import type { Account, BurnGroup, KeyStatus, RequestKind, RequestOutcome } from '@/api/types';
+import type { Account, BurnGroup, KeyStatus, RequestKind, RequestOrder, RequestOutcome } from '@/api/types';
 import { REQUEST_KIND_VALUES, REQUEST_OUTCOME_VALUES } from '@/api/types';
 import { CACHE_MISS_REASONS, missShort } from './cache';
 import { clock } from './clock';
 import { lookup } from './counts';
+import { sameMembers } from './forms';
 import type { SessionFilters } from './keepalive';
 import { ACCOUNT_STATUSES } from './quota';
+import { ALL_KINDS } from './routingLog';
 import { DAY, HOUR, MINUTE } from './time';
 import type { UnitPosition } from './unit';
 
@@ -47,8 +49,11 @@ export type KeySpec =
   | { kind: 'count'; default: number; name: string; values: readonly number[] }
   /** Written as `1`, read as true on `1`. */
   | { kind: 'flag'; name: string }
-  /** Comma-joined ids. An entry `accepts` refuses leaves the list, so it leaves the address on the next write. */
-  | { accepts?: (value: string) => boolean; kind: 'list'; name: string }
+  /**
+   * Comma-joined ids. An entry `accepts` refuses leaves the list, and `normalize` rewrites the list on read and
+   * write.
+   */
+  | { accepts?: (value: string) => boolean; kind: 'list'; name: string; normalize?: (values: string[]) => string[] }
   /** Patterns joined by a newline, as the wire joins them, so a comma inside one rides. */
   | { kind: 'patterns'; name: string }
   /** The keys `range`, `from` and `to`. */
@@ -123,8 +128,10 @@ function readKey(key: KeySpec, params: URLSearchParams, now: number): unknown {
     }
     case 'flag':
       return params.get(key.name) === '1';
-    case 'list':
-      return (params.get(key.name) ?? '').split(',').filter((v) => v !== '' && (key.accepts?.(v) ?? true));
+    case 'list': {
+      const values = (params.get(key.name) ?? '').split(',').filter((v) => v !== '' && (key.accepts?.(v) ?? true));
+      return key.normalize?.(values) ?? values;
+    }
     case 'patterns':
       return (params.get(key.name) ?? '').split('\n').filter(Boolean);
     case 'range': {
@@ -154,9 +161,13 @@ function writeKey(key: KeySpec, value: unknown, params: URLSearchParams): void {
     case 'flag':
       if (value === true) params.set(key.name, '1');
       return;
-    case 'list':
+    case 'list': {
+      const values = key.normalize?.(value as string[]) ?? (value as string[]);
+      if (values.length > 0) params.set(key.name, values.join(','));
+      return;
+    }
     case 'patterns':
-      if ((value as string[]).length > 0) params.set(key.name, (value as string[]).join(key.kind === 'list' ? ',' : '\n'));
+      if ((value as string[]).length > 0) params.set(key.name, (value as string[]).join('\n'));
       return;
     case 'range': {
       const range = value as RangeValue;
@@ -217,6 +228,8 @@ export interface RequestsAddress {
   /** `client`, `-` for a request the marker does not hold. */
   classifiers: string[];
   client: string;
+  /** `asc`, `desc` or empty for the sort key's own default direction, which the address omits. */
+  dir: '' | SortDir;
   efforts: string[];
   /** Guardrail ids, `-` for a request no guardrail matched. */
   guardrails: string[];
@@ -235,6 +248,8 @@ export interface RequestsAddress {
   rows: number;
   search: string;
   session: string;
+  /** The list's order, which the read pages by: `received` the default. */
+  sort: (typeof REQUEST_SORT_KEYS)[number]['id'];
   speeds: string[];
   statuses: string[];
   /** The serving attempt's stop reason, `-` for none. */
@@ -250,6 +265,17 @@ const isStatus = (value: string): boolean => /^\d+$/.test(value);
 const REQUEST_KINDS: readonly ('' | RequestKind)[] = ['', ...REQUEST_KIND_VALUES];
 /** The Rows select's sizes and the codec's, one list, so every size the select offers reads back from the address. */
 export const REQUEST_PAGE_SIZES = [10, 25, 50, 100] as const;
+
+export const REQUEST_SORT_KEYS = [
+  { defaultDir: 'desc', id: 'received', label: 'Time' },
+  { defaultDir: 'desc', id: 'attempts', label: 'Attempts' },
+  { defaultDir: 'desc', id: 'duration', label: 'Duration' },
+  { defaultDir: 'desc', id: 'ttfb', label: 'TTFB' },
+] as const satisfies readonly SortKey[];
+/** The route's order word per key. */
+export const REQUEST_ORDER_OF = { attempts: 'attempts', duration: 'duration_ms', received: 'received_at', ttfb: 'ttfb_ms' } as const satisfies Record<(typeof REQUEST_SORT_KEYS)[number]['id'], RequestOrder>;
+/** The route's order words the console sends, which the poll's comparator reads. */
+export type RequestOrderWord = (typeof REQUEST_ORDER_OF)[keyof typeof REQUEST_ORDER_OF];
 
 export const REQUESTS_CODEC = codecOf<RequestsAddress>({
   search: text('search'),
@@ -276,6 +302,7 @@ export const REQUESTS_CODEC = codecOf<RequestsAddress>({
   refusalCategories: list('refusal_categories'),
   stopReasons: list('stop_reasons'),
   kind: { default: '', kind: 'choice', name: 'kind', values: REQUEST_KINDS },
+  ...sortSpecs(REQUEST_SORT_KEYS, 'received'),
   rows: { default: 25, kind: 'count', name: 'rows', values: REQUEST_PAGE_SIZES },
   range: { default: '24h', kind: 'range' },
 });
@@ -400,6 +427,8 @@ export const ANALYTICS_CODEC = codecOf<AnalyticsAddress>({
 export interface LogFilters {
   accounts: string[];
   agentId: string;
+  /** `asc`, `desc` or empty for the time's own newest first, which the address omits. */
+  dir: '' | SortDir;
   keys: string[];
   kinds: string[];
   models: string[];
@@ -407,7 +436,10 @@ export interface LogFilters {
   range: RangeValue;
   request: string;
   session: string;
+  sort: (typeof ROUTING_LOG_SORT_KEYS)[number]['id'];
 }
+
+export const ROUTING_LOG_SORT_KEYS = [{ defaultDir: 'desc', id: 'time', label: 'Time' }] as const satisfies readonly SortKey[];
 
 /**
  * The routing log's filters to and from its address. A kind this build does not know stays, so the route's refusal
@@ -417,11 +449,15 @@ export const ROUTING_LOG_CODEC = codecOf<LogFilters>({
   accounts: list('accounts'),
   agentId: text('agent_id'),
   keys: list('keys'),
-  kinds: list('kinds'),
+  // An absent `kinds` reads every kind, so a list naming every kind is the empty one. The guard on an empty list keeps
+  // `ALL_KINDS` unread while the modules evaluate: routingLog.ts imports this module, so the list is initialized only
+  // after both have, and the empty list the defaults read at evaluation never reaches it.
+  kinds: { kind: 'list', name: 'kinds', normalize: (v) => (v.length > 0 && sameMembers(v, ALL_KINDS) ? [] : v) },
   models: list('models'),
   pools: list('pools'),
   request: text('request'),
   session: text('session'),
+  ...sortSpecs(ROUTING_LOG_SORT_KEYS, 'time'),
   range: { default: '1h', kind: 'range' },
 });
 

@@ -272,15 +272,8 @@ export function fmtDated(ms: number): string {
   return `${fmtDayMonth(ms)} ${fmtShortTime(ms)}`;
 }
 
-/**
- * The clock time within a day of `now`, else the date before it ("Sep 14 09:12:05"), the seconds kept and the threshold
- * `instant`'s, so the two agree on which rows carry a date.
- */
-export function fmtDatedTime(isoTime: string, now: number): string {
-  const ms = Date.parse(isoTime);
-  if (Math.abs(ms - now) < DAY) return fmtTime(ms);
-  return `${fmtDayMonth(ms)} ${fmtTime(ms)}`;
-}
+/** A log row's time with its date, the seconds kept ("Nov 5 13:11:05"), whatever the row's age. */
+export const fmtDatedTime = (isoTime: string): string => `${fmtDayMonth(isoTime)} ${fmtTime(Date.parse(isoTime))}`;
 
 /** Whether two instants fall on one calendar day in the browser's zone, false where either is no instant. */
 export function sameLocalDay(a: number | string, b: number | string): boolean {

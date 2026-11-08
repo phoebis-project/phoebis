@@ -190,7 +190,7 @@ test('every kind belongs to exactly one preset and a preset is exactly its membe
   assert.deepEqual(['reservation_expired', 'mark_cleared'].map((k) => d.KIND_PRESETS.find((p) => p.members.includes(k))?.label), ['placements and pins', 'moves and holds']);
 });
 
-test('the Kinds chip names a whole preset, a union of whole presets in the table\'s order, else the kinds\' words three then +N, and nothing for every kind', () => {
+test('the Kinds chip names a whole preset, a union of whole presets in the table\'s order, else the kinds\' words three then +N, and nothing for no kind', () => {
   assert.deepEqual(d.kindsChipText(['shedding_round', 'mark_cleared', 'slow_down_ended', 'moved', 'wind_down_started', 'slow_down_started', 'held']), {
     text: 'kinds: moves and holds',
     title: 'shedding round, mark cleared, slow-down ended, moved, wind-down started, slow-down started, held',
@@ -209,8 +209,7 @@ test('the Kinds chip names a whole preset, a union of whole presets in the table
     title: 'moved, held, placed, probe decisions, cooldown set',
     values: 'moved, held, placed +2',
   });
-  const nothing = { text: '', title: '', values: '' };
-  assert.deepEqual([d.kindsChipText(d.ALL_KINDS), d.kindsChipText([...d.ALL_KINDS].reverse()), d.kindsChipText([])], [nothing, nothing, nothing]);
+  assert.deepEqual(d.kindsChipText([]), { text: '', title: '', values: '' });
 });
 
 test('the Kinds dimension reads its chip through the presets', () => {
