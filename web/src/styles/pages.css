@@ -4504,6 +4504,15 @@
   }
 }
 
+/* The Burn grid's four cards sit two to a row. `.grid-2` fits three columns from a 1344 px viewport, where each plan
+   card would draw narrower than it does at 1280 px, so the grid holds two from there, and below it auto-fit draws two
+   or one. */
+@media (min-width: 1344px) {
+  .burn-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 /* Two rings share one card, so the card takes its grid's whole row, which the Billed by card would otherwise leave half
    empty beside it. Each ring sets its list under it, since half a narrow card leaves the list no room beside the ring,
    and below 700 px the rings stack and each list returns beside its ring. */

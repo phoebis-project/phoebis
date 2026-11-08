@@ -206,8 +206,9 @@ the Probe cost tile's box and value type, and the Saved by probes chart in the b
 it), the Cost tab under the mock's unpriced switch (mock pass, on loads of its own: the Cost tile's dash under the
 unpriced title in the type, ink and top of the Cost per request tile's first figure, and the Cost by card's note on a
 line of its own under the subtitle's text, at its left edge, in its type and ink, its text recorded), the burn cards
-(Plan per hour and Spend per minute against Failovers, and in the mock pass the two side by side on one top edge at 1440
-by 900, each half the row less half its gap, under the key grouping and under the Accounts filter naming the account
+(Plan per hour, 5-hour per hour, Fable week per hour and Spend per minute against Failovers, and in the mock pass the
+four cards two to a row on two top edges at 1440 by 900, each half the row less half its gap, under the key grouping
+and under the Accounts filter naming the account
 whose traffic prices nothing), the Errors by code card's subtitle (its text, in the type and ink of the Refusals by code
 card's subtitle), the plan legend's model unlisted entry (and no estimated entry), the placement and budget tables (the
 Burn section's cards closing on Member budgets after the charts), the Unused allowance by account card (mock pass: below

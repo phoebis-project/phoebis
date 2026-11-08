@@ -20715,6 +20715,31 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const gaps = [...carried.filter((p) => p.equivalent !== null || !p.unpriced).map((p) => `${p.group} ${p.at} reads ${p.equivalent}`), ...keyed.filter((p) => p.equivalent !== 0).map((p) => `${p.group} ${p.at} reads ${p.equivalent}`)];
     results.push({ name: '/analytics every bucket with tokens a Sonnet 4.5 request ran in reads no figure and the flag, and an API-key bucket a zero figure', ok: carried.length > 0 && keyed.length > 0 && gaps.length === 0, missing: gaps });
   }
+  {
+    // Under the Ultra week, the stored default, the 5-hour card's note says the Ultra tier's 5-hour row is assumed, and
+    // the Fable week card carries no note. Under the Max week the 5-hour card reads none. The page reads the week at its
+    // load, so the Max read mounts a page of its own.
+    const [FIVE_HOUR, FABLE] = ['5-hour per hour', 'Fable week per hour'];
+    const NOTE = "The Ultra tier's 5-hour capacity row is assumed, and an approved account carries no 5-hour window.";
+    const ultra = { fable: subtitleOf(FABLE), fiveHour: subtitleOf(FIVE_HOUR) };
+    localStorage.setItem('phoebis.week', 'max');
+    const max = await mount('/analytics#burn');
+    const maxFiveHour = [...max.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === FIVE_HOUR)?.querySelector('.card__subtitle')?.textContent ?? '';
+    max.unmount();
+    localStorage.removeItem('phoebis.week');
+    const FIVE_HOUR_SUBTITLE = "The subscription traffic per hour as a share of the chosen tier's 5-hour window, the peak band's factor applied by the hour.";
+    results.push({
+      name: "/analytics under the Ultra week the 5-hour card's note says the Ultra tier's 5-hour row is assumed, and neither the Fable week card nor the 5-hour card under the Max week carries it",
+      ok:
+        ultra.fiveHour.startsWith(FIVE_HOUR_SUBTITLE) &&
+        ultra.fiveHour.includes(NOTE) &&
+        ultra.fable.startsWith("The subscription traffic per hour as a share of the chosen tier's Fable week.") &&
+        !ultra.fable.includes(NOTE) &&
+        maxFiveHour.startsWith(FIVE_HOUR_SUBTITLE) &&
+        !maxFiveHour.includes(NOTE),
+      missing: [`Ultra 5-hour: ${ultra.fiveHour}`, `Ultra Fable week: ${ultra.fable}`, `Max 5-hour: ${maxFiveHour}`],
+    });
+  }
   const spend = legendOf('Spend per minute');
   const spendDashed = [...(card('Spend per minute')?.querySelectorAll('.legend li') ?? [])].filter((li) => li.querySelector('.legend__swatch')?.getAttribute('style')?.includes('repeating-linear-gradient'));
   // A subscription account spends dollars only on its fast-mode answers, which the story's desktop key sends on Opus.
@@ -20911,6 +20936,35 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     await burnGroup('key');
     await burnGroup('account');
   }
+  {
+    // The two cards beside the plan card scale each bucket's figure to their own window. The 5-hour card reads the
+    // anchor's 7-day capacity over the Ultra tier's 5-hour one, divided by the band's 5-hour capacity factor inside the
+    // band, and the Fable week card the anchor's 7-day capacity over the Ultra tier's times the Fable week's capacity
+    // factor, each read off the served cost model's capacity rows, its peak row and its seven_day_fable row. `primary`
+    // burns at 04:00 in Los Angeles, outside the band, and at 06:00, inside it, two hours the clock's origin has closed.
+    const hours = [Date.UTC(2026, 8, 16, 11), Date.UTC(2026, 8, 16, 13)];
+    api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: hours.map((at) => burnPoint({ at: new Date(at).toISOString(), equivalent: 0.002, fiveHourShare: 0.01, group: 'primary', modelWeekShare: 0.004, sevenDayShare: 0.002, tokens: 1_000, uncachedTokens: 1_000, unit: 'window_share' })) });
+    await burnGroup('key');
+    await burnGroup('account');
+    const primaryIn = (t) => {
+      const li = legendItems(t).find((item) => labelOf(item) === 'primary');
+      return li === undefined ? null : valueOf(li);
+    };
+    const read = { fable: primaryIn('Fable week per hour'), fiveHour: primaryIn('5-hour per hour') };
+    delete api.getAnalyticsBurn;
+    await burnGroup('key');
+    await burnGroup('account');
+    const anchor = tierCapacity(SERVED_COSTS, anchorTier(SERVED_COSTS), 'seven_day');
+    const outside = anchor / tierCapacity(SERVED_COSTS, WEEK_TIERS.ultra, 'five_hour');
+    const inside = outside / SERVED_COSTS.peak.capacityFactor.fiveHour;
+    const fable = anchor / (tierCapacity(SERVED_COSTS, WEEK_TIERS.ultra, 'seven_day') * SERVED_COSTS.modelWindows.seven_day_fable.capacityFactor);
+    const want = { fable: `${fmtShare(0.002 * fable)} Ultra Fable week`, fiveHour: `${fmtShare((0.002 * outside + 0.002 * inside) / 2)} Ultra 5-hour` };
+    results.push({
+      name: "/analytics the 5-hour card scales each hour's figure by the band's factor at that hour and the Fable week card by the Fable week's share, each legend figure in its card's short form",
+      ok: JSON.stringify(read) === JSON.stringify(want),
+      missing: [`read ${JSON.stringify(read)}`, `want ${JSON.stringify(want)}`],
+    });
+  }
 
   {
     // A subscription account charts as a plan line where the router sizes its tier or its points carry a figure: a
@@ -20964,7 +21018,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   {
     // The plan card's figure waits on the chosen week's scale, so a failed settings read draws its error under the
     // Ultra week, while Spend per minute under the key grouping, which sizes nothing, still draws. Under the Pro week
-    // the figure reads without the cost model. The page reads the settings once per load, so each read mounts a page.
+    // the figure reads without the cost model, and the 5-hour and Fable week cards, which scale through it, draw the
+    // error. The page reads the settings once per load, so each read mounts a page.
     const { getSettings } = api;
     api.getSettings = () => Promise.reject(new Error('the settings read failed'));
     const cardIn = (page, title) => [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title)?.textContent ?? '';
@@ -20976,13 +21031,20 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const proPlan = cardIn(pro, PLAN);
     const proCard = [...pro.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === PLAN);
     const proEntries = proCard?.querySelectorAll('.legend li').length ?? 0;
+    const proSiblings = { fable: cardIn(pro, 'Fable week per hour'), fiveHour: cardIn(pro, '5-hour per hour') };
     pro.unmount();
     localStorage.removeItem('phoebis.week');
     api.getSettings = getSettings;
     results.push({
-      name: "/analytics a failed settings read draws the plan card's error under the Ultra week and leaves Spend per minute under the key grouping, and the Pro week reads the plan card without the cost model",
-      ok: failed.plan.includes('Could not load plan per hour') && !failed.spend.includes('Could not load') && !proPlan.includes('Could not load') && proEntries > 0,
-      missing: [`plan: ${failed.plan.slice(0, 120)}`, `spend: ${failed.spend.slice(0, 120)}`, `pro: ${proPlan.slice(0, 120)}`, `${proEntries} legend entries on the Pro card`],
+      name: "/analytics a failed settings read draws the plan card's error under the Ultra week and leaves Spend per minute under the key grouping, and the Pro week reads the plan card without the cost model and the 5-hour and Fable week cards' error",
+      ok:
+        failed.plan.includes('Could not load plan per hour') &&
+        !failed.spend.includes('Could not load') &&
+        !proPlan.includes('Could not load') &&
+        proEntries > 0 &&
+        proSiblings.fiveHour.includes('Could not load 5-hour per hour') &&
+        proSiblings.fable.includes('Could not load fable week per hour'),
+      missing: [`plan: ${failed.plan.slice(0, 120)}`, `spend: ${failed.spend.slice(0, 120)}`, `pro: ${proPlan.slice(0, 120)}`, `${proEntries} legend entries on the Pro card`, `Pro 5-hour: ${proSiblings.fiveHour.slice(0, 120)}`, `Pro Fable week: ${proSiblings.fable.slice(0, 120)}`],
     });
   }
   await burnGroup('key');
@@ -21048,7 +21110,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   const burnCards = [...(m.container.querySelector('.analytics-section#burn')?.querySelectorAll('.card__title') ?? [])].map((t) => t.textContent?.trim());
   results.push({
     name: '/analytics the Burn section closes on Member budgets after the charts, with no reconciliation card',
-    ok: JSON.stringify(burnCards) === JSON.stringify(['Plan per hour', 'Spend per minute', 'Member budgets']),
+    ok: JSON.stringify(burnCards) === JSON.stringify(['Plan per hour', '5-hour per hour', 'Fable week per hour', 'Spend per minute', 'Member budgets']),
     missing: burnCards,
   });
 }

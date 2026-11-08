@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { flushSync } from 'react-dom';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Dot, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Link } from 'react-router-dom';
@@ -23,11 +23,11 @@ import { SectionBar } from '@/components/SectionBar';
 import { SortControl } from '@/components/SortControl';
 import { accountHref, addressWindow, ANALYTICS_CODEC, analyticsColumnOf, analyticsKeysOf, sortAddressOf, sortDirOf, type AnalyticsAddress, type SortDir } from '@/lib/address';
 import { ALLOWANCE_WEEKS, allowanceRows, allowanceSpan, fleetFigures, resetInstant, weeklyKeys, weeklyResetsKey, type AllowanceFigure } from '@/lib/allowance';
-import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, analyticsPatch, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, failureHead, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, moveLabel, nativeCellOf, nativeFiguresOf, netSaving, niceAxisTop, oneAccountGroupOf, ownShareHint, peakLines, placementCells, placementRungLabel, readBurn, sentences, sidesLine, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, analyticsPatch, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, failureHead, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, moveLabel, nativeCellOf, nativeFiguresOf, netSaving, niceAxisTop, oneAccountGroupOf, ownShareHint, peakLines, placementCells, placementRungLabel, readBurn, scalePoints, sentences, sidesLine, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { CACHE_MISS_REASONS, WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
-import { failed, weekScale } from '@/lib/costs';
+import { fableWeekReadingOf, fableWeekScale, failed, fiveHourReadingOf, fiveHourScale, weekScale } from '@/lib/costs';
 import { countOf, groupInto } from '@/lib/counts';
 import { ANALYTICS_DIMENSIONS, chipText, escapePattern } from '@/lib/filterBar';
 import { effectiveInterval, ENDED_RANGE, readEnd, spanEnded } from '@/lib/follow';
@@ -40,7 +40,7 @@ import { words } from '@/lib/routingLog';
 import { orderRows, type SortFigure } from '@/lib/sort';
 import { HOUR } from '@/lib/time';
 import { plainOutputOf } from '@/lib/tokenBar';
-import { UNIT_FUNDING, UNIT_POSITIONS, type UnitPosition, type WeekPosition } from '@/lib/unit';
+import { UNIT_FUNDING, UNIT_POSITIONS, WEEK_SHORT, type UnitPosition, type WeekPosition } from '@/lib/unit';
 import { WINDOW_KEYS, windowLabelOf, windowWord } from '@/lib/windows';
 
 /** The dimensions the breakdown route groups on; `all` is the ungrouped total every section reads. */
@@ -557,6 +557,12 @@ export function AnalyticsPage() {
   // The plan chart sizes its lines by tier where each group holds one account's rows.
   const burnSizes = pageBy === 'account' || burnAccount !== null;
   const burnReading: WeekReading = burnSizes && sized === null ? { failure: failed(costSettings.error), scale: null, week } : reading;
+  // The 5-hour and Fable week cards wait on the same tiers, which pick their lines' category too.
+  const burnReadings = {
+    fable: burnSizes && sized === null ? burnReading : fableWeekReadingOf(costs, costSettings.error, week),
+    fiveHour: burnSizes && sized === null ? burnReading : fiveHourReadingOf(costs, costSettings.error, week),
+    week: burnReading,
+  };
 
   const groupSlot = useMemo(() => {
     // Slots follow the range's whole key list so a filter never repaints the survivors, and an account's slot is the
@@ -760,9 +766,9 @@ export function AnalyticsPage() {
 
         {tab === 'burn' && (
           <Section id="burn" shown={shown} title="Burn" meta={`Tokens, spend and plan share over the range${otherFilters ? BURN_UNFILTERED_NOTE : ''}`}>
-            {/* The plan card's figure waits on the chosen week's scale and, where its lines are one account's, on the
-                tiers that pick their category, both carried by `burnReading` with their failure. Spend per minute
-                sizes nothing, so it draws while the settings read is out. */}
+            {/* Each plan card's figure waits on its scale and, where its lines are one account's, on the tiers that
+                pick their category, both carried by `burnReadings` with their failure. Spend per minute sizes nothing,
+                so it draws while the settings read is out. */}
             <BurnCharts
               account={burnAccount}
               answer={burn.current?.answer ?? null}
@@ -770,7 +776,7 @@ export function AnalyticsPage() {
               costs={costs}
               error={burn.error}
               groupBy={pageBy}
-              reading={burnReading}
+              readings={burnReadings}
               rangeEndMs={burn.data?.endMs}
               readAt={burn.data?.readAt}
               sized={sized}
@@ -2221,6 +2227,20 @@ const NO_REQUESTS: RequestLog[] = [];
 const PARTIAL_NOTE = 'The last bucket is partial, rated over the part of its width it covers';
 const PLAN_TITLE = 'Plan per hour';
 const PLAN_SUBTITLE = 'The subscription traffic per hour as a share of the chosen week';
+const FIVE_HOUR_TITLE = '5-hour per hour';
+const FIVE_HOUR_SUBTITLE = "The subscription traffic per hour as a share of the chosen tier's 5-hour window, the peak band's factor applied by the hour";
+const FIVE_HOUR_ULTRA_NOTE = "The Ultra tier's 5-hour capacity row is assumed, and an approved account carries no 5-hour window.";
+const FABLE_WEEK_TITLE = 'Fable week per hour';
+const FABLE_WEEK_SUBTITLE = "The subscription traffic per hour as a share of the chosen tier's Fable week";
+
+/** A plan card's figure under the chosen week, in full for a hover and short for the legend. */
+type FigureWords = (v: number, week: WeekPosition, form: 'full' | 'short') => string;
+const weekWords: FigureWords = (v, week, form) => (form === 'full' ? fmtWeek(v, week) : weekShort(v, week));
+/** "0.11% of the Ultra 5-hour window" in full and "0.11% Ultra 5-hour" short, a zero "0%" in both as `fmtWeek` reads
+ *  it. */
+const fiveHourWords: FigureWords = (v, week, form) => (v === 0 ? '0%' : form === 'full' ? `${fmtShare(v)} of the ${WEEK_SHORT[week]} 5-hour window` : `${fmtShare(v)} ${WEEK_SHORT[week]} 5-hour`);
+/** "0.11% of the Ultra Fable week" in full and "0.11% Ultra Fable week" short, a zero "0%" in both. */
+const fableWeekWords: FigureWords = (v, week, form) => (v === 0 ? '0%' : form === 'full' ? `${fmtShare(v)} of the ${WEEK_SHORT[week]} Fable week` : `${fmtShare(v)} ${WEEK_SHORT[week]} Fable week`);
 
 /**
  * A line's dot, drawn on the slots `isolatedSlots` names alone: the line leaves its null slots unconnected, so a
@@ -2233,10 +2253,11 @@ const isolatedDot = (values: (number | null)[], color: string) => {
 };
 
 /**
- * The burn route's views of one grouping: the dollars per minute, and the plan card in the chosen week. A line's color
- * follows its group within the answer rather than its rank, so a range that reorders the groups does not repaint
- * them, and the account grouping keeps each account's page-wide color. `account` is the one account the Accounts
- * filter names, and `accounts` the accounts read beside the answer, which give a tooltip's hint its plan and tier.
+ * The burn route's views of one grouping: the dollars per minute, and the plan cards in the chosen week, its tier's
+ * 5-hour window and its Fable week. A line's color follows its group within the answer rather than its rank, so a range
+ * that reorders the groups does not repaint them, and the account grouping keeps each account's page-wide color.
+ * `account` is the one account the Accounts filter names, and `accounts` the accounts read beside the answer, which give
+ * a tooltip's hint its plan and tier.
  */
 function BurnCharts({
   account,
@@ -2247,7 +2268,7 @@ function BurnCharts({
   groupBy,
   rangeEndMs,
   readAt,
-  reading,
+  readings,
   sized,
   slotOf,
 }: {
@@ -2259,16 +2280,26 @@ function BurnCharts({
   groupBy: BurnGroup;
   rangeEndMs: number | undefined;
   readAt: number | undefined;
-  reading: WeekReading;
+  readings: { fable: WeekReading; fiveHour: WeekReading; week: WeekReading };
   sized: ReadonlySet<string> | null;
   slotOf: (id: string) => number | null;
 }) {
   const ink = useChartInk();
   const loading = answer === null;
-  const { lines, rows } = useMemo(
-    () => (answer === null ? { lines: [] as BurnLine[], rows: [] as BurnRow[] } : foldBurn(answer.points, groupBy, answer.bucketSeconds, sized ?? NO_ACCOUNT, rangeEndMs, readAt, { account })),
+  const { scale: weekFactor, week } = readings.week;
+  // One fold per plan card over the points scaled into its window, so the legend's peak and per-hour mean come out in
+  // that window with the rows.
+  const fold = useCallback(
+    (scaleAt: ((at: number) => number | null) | null) =>
+      answer === null ? { lines: [] as BurnLine[], rows: [] as BurnRow[] } : foldBurn(scaleAt === null ? answer.points : scalePoints(answer.points, scaleAt), groupBy, answer.bucketSeconds, sized ?? NO_ACCOUNT, rangeEndMs, readAt, { account }),
     [account, answer, groupBy, rangeEndMs, readAt, sized],
   );
+  // Spend per minute and the colors read this fold's lines, and a line's unit follows the route's own figures, so while
+  // the week's scale is out the points fold as answered. The plan card draws its skeleton then and reads none of it.
+  const weekFold = useMemo(() => fold(weekFactor === null ? null : () => weekFactor), [fold, weekFactor]);
+  const fiveHourFold = useMemo(() => fold((at) => (costs === null ? null : fiveHourScale(costs, week, at))), [costs, fold, week]);
+  const fableWeekFold = useMemo(() => fold(() => (costs === null ? null : fableWeekScale(costs, week))), [costs, fold, week]);
+  const { lines, rows } = weekFold;
   // The points by bucket and group, for the tooltip's hint, which reads a bucket's one point of one account.
   const pointsAt = useMemo(() => groupInto(answer?.points ?? [], (p) => `${Date.parse(p.at)}|${p.group}`), [answer]);
   const named = useMemo(() => lines.filter((l) => !l.other).map((l) => l.key).sort(), [lines]);
@@ -2289,20 +2320,16 @@ function BurnCharts({
   const spent = lines.map((l, i) => ({ i, l })).filter(({ l }) => !byAccount || l.unit === 'usd' || l.usdPerMinute > 0);
   // Until the settings land no account reads as sized, so the rest names no tier it cannot know yet.
   const spendNameOf = (l: BurnLine) => (l.other && l.unit !== 'usd' ? (sized === null ? SPEND_REST : SPEND_REST_LABEL[l.unit]) : nameOf(l));
-  // A line draws while a plan paid for its traffic, a group of billed rows alone reading zero, and where each group
-  // holds one account's rows only a line in the plan's unit draws: one the router sizes or whose points carry a figure.
-  const planned = lines.map((l, i) => ({ i, l })).filter(({ l }) => !l.other && (!shared || l.unit === 'window_share') && (l.unpriced || (l.perHour !== null && l.perHour > 0)));
-  const unknown = shared ? lines.filter((l) => !l.other && l.unit === 'unknown') : [];
   const partial = rows[rows.length - 1]?.partial === true;
   // A bucket too short to set the scale would stretch the axis over a few seconds' rate, so the axis stops at the
   // buckets that set it and the short one runs past the top.
-  const scaled = rows.filter((r) => r.setsScale);
-  const scaleTo = (values: number[]) => {
+  const scaleTo = (of: BurnRow[], values: number[]) => {
     const top = Math.max(0, ...values);
-    return scaled.length > 0 && scaled.length < rows.length && top > 0 ? { allowDataOverflow: true, domain: [0, niceAxisTop(top)] as [number, number] } : {};
+    const setting = of.filter((r) => r.setsScale).length;
+    return setting > 0 && setting < of.length && top > 0 ? { allowDataOverflow: true, domain: [0, niceAxisTop(top)] as [number, number] } : {};
   };
-  const spentValues = scaled.flatMap((r) => spent.map(({ i }) => r.usd[i]));
-  const spentScale = scaleTo(spentValues);
+  const spentValues = rows.filter((r) => r.setsScale).flatMap((r) => spent.map(({ i }) => r.usd[i]));
+  const spentScale = scaleTo(rows, spentValues);
   // Without a capped domain recharts spans every row, so the labels' precision reads every row too.
   const spentAxis = usdAxis('domain' in spentScale ? spentValues : rows.flatMap((r) => spent.map(({ i }) => r.usd[i])));
   // The route answers a bucket's shares without the model week's key, so the hint names the model week the cost model
@@ -2317,15 +2344,46 @@ function BurnCharts({
     const [p] = here;
     return ownShareHint(owner, { five_hour: p.fiveHourShare, seven_day: p.sevenDayShare, ...(weekKey === undefined ? {} : { [weekKey]: p.modelWeekShare }) });
   };
-  const subtitle = (
-    <>
-      {PLAN_SUBTITLE}.{partial ? ` ${PARTIAL_NOTE}.` : ''} <CostReferenceLink tab="tiers" />
-    </>
-  );
-  const { scale: weekFactor, week } = reading;
-  const planCard = (factor: number) => {
-    // The figure in the chosen week, the full form on a hover and the short one in the legend.
-    const figureOf = (v: number | null, form: 'full' | 'short') => (v === null ? '-' : form === 'full' ? fmtWeek(v * factor, week) : weekShort(v * factor, week));
+  const planCard = ({
+    fold: { lines: cardLines, rows: cardRows },
+    hint,
+    note,
+    reading,
+    subtitle,
+    title,
+    words,
+  }: {
+    fold: { lines: BurnLine[]; rows: BurnRow[] };
+    /** The tooltip's hint under a line, null on a card that draws no account's own shares. */
+    hint: ((l: BurnLine, at: number) => string | null) | null;
+    note: string | null;
+    reading: WeekReading;
+    subtitle: string;
+    title: string;
+    words: FigureWords;
+  }) => {
+    const head = (
+      <>
+        {subtitle}.{partial ? ` ${PARTIAL_NOTE}.` : ''}
+        {note === null ? '' : ` ${note}`} <CostReferenceLink tab="tiers" />
+      </>
+    );
+    // The figure waits on the card's scale, so the card draws its skeleton while the cost model is out and its failure
+    // in its place.
+    if (reading.scale === null) {
+      return (
+        <ChartCard key={title} title={title} subtitle={head} failure={failed(error) ?? reading.failure} loading>
+          {null}
+        </ChartCard>
+      );
+    }
+    // A line draws while a plan paid for its traffic, a group of billed rows alone reading zero, and where each group
+    // holds one account's rows only a line in the plan's unit draws: one the router sizes or whose points carry a figure.
+    const planned = cardLines.map((l, i) => ({ i, l })).filter(({ l }) => !l.other && (!shared || l.unit === 'window_share') && (l.unpriced || (l.perHour !== null && l.perHour > 0)));
+    const unknown = shared ? cardLines.filter((l) => !l.other && l.unit === 'unknown') : [];
+    const scaled = cardRows.filter((r) => r.setsScale);
+    // The figure in the card's window, the full form on a hover and the short one in the legend.
+    const figureOf = (v: number | null, form: 'full' | 'short') => (v === null ? '-' : words(v, week, form));
     const legend = [
       ...planned.map(({ l }) => ({
         color: colorOf(l),
@@ -2343,9 +2401,9 @@ function BurnCharts({
     ];
     return (
       <ChartCard
-        key={PLAN_TITLE}
-        title={PLAN_TITLE}
-        subtitle={subtitle}
+        key={title}
+        title={title}
+        subtitle={head}
         failure={failed(error)}
         loading={loading}
         empty={
@@ -2360,10 +2418,10 @@ function BurnCharts({
         }
         legend={legend}
       >
-        <LineChart data={rows} margin={CHART_MARGIN}>
+        <LineChart data={cardRows} margin={CHART_MARGIN}>
           <CartesianGrid vertical={false} stroke={ink.grid} />
-          <XAxis type="number" scale="time" domain={['dataMin', 'dataMax']} ticks={rows.map((r) => r.at)} {...axis} />
-          <YAxis tickFormatter={(v: number) => fmtShare(v * factor)} tickLine={false} axisLine={false} width={52} {...scaleTo(scaled.flatMap((r) => planned.map(({ i }) => r.equivalent[i] ?? 0)))} />
+          <XAxis type="number" scale="time" domain={['dataMin', 'dataMax']} ticks={cardRows.map((r) => r.at)} {...axis} />
+          <YAxis tickFormatter={(v: number) => fmtShare(v)} tickLine={false} axisLine={false} width={52} {...scaleTo(cardRows, scaled.flatMap((r) => planned.map(({ i }) => r.equivalent[i] ?? 0)))} />
           {/* Recharts drops null entries by default, and a bucket whose every figure is null would lose its date, its
               dashes and the unpriced hint. */}
           <Tooltip
@@ -2372,14 +2430,14 @@ function BurnCharts({
             content={timeTip<BurnRow>((r) =>
               planned.flatMap(({ i, l }) => {
                 const v = r.equivalent[i];
-                const hint = hintOf(l, r.at);
-                return [{ color: colorOf(l), label: nameOf(l), title: l.unpriced && slotUnpriced(v, r.tokens[i]) ? MODEL_UNLISTED_HINT : undefined, value: figureOf(v, 'full') }, ...(hint === null ? [] : [{ label: hint, value: null }])];
+                const said = hint === null ? null : hint(l, r.at);
+                return [{ color: colorOf(l), label: nameOf(l), title: l.unpriced && slotUnpriced(v, r.tokens[i]) ? MODEL_UNLISTED_HINT : undefined, value: figureOf(v, 'full') }, ...(said === null ? [] : [{ label: said, value: null }])];
               }),
             )}
           />
           {planned.map(({ i, l }) => (
             // A null slot draws no point, and the gap stays since the lines do not connect across it.
-            <Line key={i} type="monotone" dataKey={(r: BurnRow) => r.equivalent[i]} stroke={colorOf(l)} strokeWidth={2} dot={isolatedDot(rows.map((r) => r.equivalent[i]), colorOf(l))} isAnimationActive={false} />
+            <Line key={i} type="monotone" dataKey={(r: BurnRow) => r.equivalent[i]} stroke={colorOf(l)} strokeWidth={2} dot={isolatedDot(cardRows.map((r) => r.equivalent[i]), colorOf(l))} isAnimationActive={false} />
           ))}
         </LineChart>
       </ChartCard>
@@ -2387,15 +2445,9 @@ function BurnCharts({
   };
   return (
     <div className="grid-2 burn-grid">
-      {/* The figure waits on the chosen week's scale, so the card draws its skeleton while the cost model is out and its
-          failure in its place. */}
-      {weekFactor === null ? (
-        <ChartCard title={PLAN_TITLE} subtitle={subtitle} failure={failed(error) ?? reading.failure} loading>
-          {null}
-        </ChartCard>
-      ) : (
-        planCard(weekFactor)
-      )}
+      {planCard({ fold: weekFold, hint: hintOf, note: null, reading: readings.week, subtitle: PLAN_SUBTITLE, title: PLAN_TITLE, words: weekWords })}
+      {planCard({ fold: fiveHourFold, hint: null, note: week === 'ultra' ? FIVE_HOUR_ULTRA_NOTE : null, reading: readings.fiveHour, subtitle: FIVE_HOUR_SUBTITLE, title: FIVE_HOUR_TITLE, words: fiveHourWords })}
+      {planCard({ fold: fableWeekFold, hint: null, note: null, reading: readings.fable, subtitle: FABLE_WEEK_SUBTITLE, title: FABLE_WEEK_TITLE, words: fableWeekWords })}
       <ChartCard
         title="Spend per minute"
         subtitle={`${byAccount ? SPEND_NOTE : `${SPEND_NOTE} when grouped by account`}${groupBy === 'request_class' ? `. ${upperFirst(CLASS_NOTE)}` : ''}${partial ? `. ${PARTIAL_NOTE}` : ''}`}

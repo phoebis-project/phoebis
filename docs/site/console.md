@@ -1006,20 +1006,27 @@ grouping, since no rollup carries a session. Of the filters, the Accounts filter
 to it, which its head says while another filter is set. The card "Plan per hour" ("The subscription traffic per hour as
 a share of the chosen week") draws one line per group, named as the breakdown names it, the requests with no classifier
 call listed as `none` under the classifier grouping, each the group's subscription traffic per hour in the chosen week,
-the legend's figure in full on hover and its highest hour on the entry's hover. A bucket the cost model could not price
-stays a gap, under a "model unlisted" entry with the hover "A bucket whose traffic ran on a model without a weight in
-the cost model prices no share and draws no point", and an idle bucket reads zero. Where one account is named, under the
-account grouping or with one account in the Accounts filter, a bucket's tooltip adds the hint the Requests view's Cost
-column describes under the account's line, with no band word, since a bucket holds no one request's completion. Under
-that grouping or filter a subscription account charts as a plan line where the router sizes its tier or the range holds
-a priced bucket of it, so an account whose range ran on unpriced models alone keeps its line with its gaps, and an
-account the router prices no tier for (a free plan, no tier on file or one the cost model does not hold) whose range
-holds no priced bucket reads "tier unknown", while a usage-based seat draws no line on the card. The note carries a
-"Cost reference" link that opens the dialog on Tiers and peak band. Spend per minute charts the dollars alone, among
-them a usage-based seat's whole spend and a subscription account's fast-mode and overage answers, and the two cards
-share a row where the grid fits two columns. The section closes on Member budgets, Pool, Account, Spent, Budget and
-Period ends, one row per budget a member carries, a member at its budget marked and one the ledger has not reported on
-reading "not reported".
+the legend's figure in full on hover and its highest hour on the entry's hover. Beside it the cards "5-hour per hour"
+("The subscription traffic per hour as a share of the chosen tier's 5-hour window, the peak band's factor applied by the
+hour") and "Fable week per hour" ("The subscription traffic per hour as a share of the chosen tier's Fable week") draw
+the same lines with each bucket's figure scaled to the chosen tier's 5-hour window, by the bucket's hour under the band,
+and to its Fable week, their tooltips carrying no account's hint, and each reads unpriced where the cost model holds no
+5-hour capacity or no Fable week for the chosen tier, or, on the 5-hour card, where the browser does not know the peak
+band's zone. Under the Ultra week the 5-hour card's note reads "The Ultra tier's 5-hour capacity row is assumed, and an
+approved account carries no 5-hour window." A bucket the cost model could not price stays a gap, under a "model
+unlisted" entry with the hover "A bucket whose traffic ran on a model without a weight in the cost model prices no share
+and draws no point", and an idle bucket reads zero. Where one account is named, under the account grouping or with one
+account in the Accounts filter, a bucket's tooltip adds the hint the Requests view's Cost column describes under the
+account's line, with no band word, since a bucket holds no one request's completion. Under that grouping or filter a
+subscription account charts as a plan line where the router sizes its tier or the range holds a priced bucket of it, so
+an account whose range ran on unpriced models alone keeps its line with its gaps, and an account the router prices no
+tier for (a free plan, no tier on file or one the cost model does not hold) whose range holds no priced bucket reads
+"tier unknown", while a usage-based seat draws no line on the card. The three plan cards' notes carry a "Cost reference"
+link that opens the dialog on Tiers and peak band. Spend per minute charts the dollars alone, among them a usage-based
+seat's whole spend and a subscription account's fast-mode and overage answers, and the four cards sit two to a row where
+the grid fits two columns or more. The section closes on Member budgets, Pool, Account, Spent, Budget and Period ends,
+one row per budget a member carries, a member at its budget marked and one the ledger has not reported on reading "not
+reported".
 
 ![The Analytics view: the Burn tab's plan chart](assets/analytics-burn-light.png#only-light)
 ![The Analytics view: the Burn tab's plan chart](assets/analytics-burn-dark.png#only-dark)
@@ -1263,8 +1270,8 @@ width, and the lines under it wrap their hint under their label where the two do
 The "Cost reference" link opens the dialog "Cost reference" under "What a million tokens costs: in dollars at list
 price, and as a share of a subscription window." on three tabs, Tiers and peak band, Plan rates and API prices. The
 Sessions view's head and the pool dialog's Warm sessions hint open it on Plan rates, the pool dialog's Write cost hint
-on API prices, and the subtitle of the Dashboard's 7-day ring and the note of the Burn section's Plan per hour card
-on Tiers and peak band. It opens on the entries in force now. Its footer carries a "Revision" select over both files'
+on API prices, and the subtitle of the Dashboard's 7-day ring and the notes of the Burn section's three plan cards on
+Tiers and peak band. It opens on the entries in force now. Its footer carries a "Revision" select over both files'
 revision dates, newest first, a date not yet in force marked `(next)`, and choosing a date redraws every tab at the
 entry each file had in force on that date, or at a file's first entry when the date comes before it. A single date
 across the two files shows no select. The footer names each table's entry as a chip, `API prices, effective {date},

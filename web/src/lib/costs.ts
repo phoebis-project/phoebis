@@ -208,6 +208,33 @@ export const weekScale = (costs: SubscriptionCosts | null, week: WeekPosition): 
   return anchor === null || chosen === null ? null : anchor / chosen;
 };
 
+/** The anchor tier's 7-day capacity over the chosen tier's 5-hour capacity, null where either side is null. */
+const fiveHourBase = (costs: SubscriptionCosts, week: WeekPosition): number | null => {
+  const anchor = tierCapacity(costs, anchorTier(costs), 'seven_day');
+  const chosen = tierCapacity(costs, WEEK_TIER[week], 'five_hour');
+  return anchor === null || chosen === null ? null : anchor / chosen;
+};
+
+/** The chosen tier's 5-hour share per Pro-week figure at `at`: the anchor tier's 7-day capacity over the chosen
+ *  tier's 5-hour capacity, weighed by the band's factor at that hour. Null where either capacity or the band's state
+ *  is null. */
+export const fiveHourScale = (costs: SubscriptionCosts, week: WeekPosition, at: number): number | null => {
+  const base = fiveHourBase(costs, week);
+  const band = bandFactor(costs, 'five_hour', at);
+  return base === null || band === null ? null : base * band;
+};
+
+/** The chosen tier's Fable-week share per Pro-week figure: the anchor tier's 7-day capacity over the chosen tier's,
+ *  scaled by the Fable week's capacity factor (half the window in the shipped model). Null where either capacity is
+ *  null or the model holds no Fable week. */
+export const fableWeekScale = (costs: SubscriptionCosts, week: WeekPosition): number | null => {
+  // Read off the model's own row rather than `pricedWindow`, which prices an absent model week as the whole 7-day one.
+  const fable = lookup(costs.modelWindows, 'seven_day_fable');
+  const anchor = tierCapacity(costs, anchorTier(costs), 'seven_day');
+  const chosen = tierCapacity(costs, WEEK_TIER[week], 'seven_day');
+  return fable === undefined || fable.of !== 'seven_day' || anchor === null || chosen === null ? null : anchor / (chosen * fable.capacityFactor);
+};
+
 /** The dash's hover and the fleet's note where the chosen week's tier has no 7-day capacity to read a figure in. */
 export const weekUnpricedTitle = (week: WeekPosition): string => `Unpriced: the cost model holds no 7-day capacity for the ${planLabel(WEEK_TIER[week])} week`;
 
@@ -222,6 +249,26 @@ export const weekReadingOf = (costs: SubscriptionCosts | null, error: string | n
   if (scale !== null) return { failure: null, scale, week };
   if (costs === null) return { failure: failed(error), scale, week };
   return { failure: { text: weekUnpricedTitle(week), unpriced: true }, scale, week };
+};
+
+/** The 5-hour card's reading, as `weekReadingOf` reads the week's. Its `scale` is the anchor tier's 7-day capacity over
+ *  the chosen tier's 5-hour capacity without the band, since `fiveHourScale` weighs each bucket by the band at its
+ *  hour. A table that sizes no 5-hour window for the chosen tier, or whose band zone this browser cannot read, reads
+ *  unpriced, since a later read changes neither. */
+export const fiveHourReadingOf = (costs: SubscriptionCosts | null, error: string | null, week: WeekPosition): WeekReading => {
+  if (costs === null) return { failure: failed(error), scale: null, week };
+  const scale = fiveHourBase(costs, week);
+  if (scale === null) return { failure: { text: `Unpriced: the cost model holds no 5-hour capacity for the ${planLabel(WEEK_TIER[week])} week`, unpriced: true }, scale, week };
+  if (!readable(costs.peak.zone)) return { failure: { text: `Unpriced: this browser does not know the peak band's zone ${costs.peak.zone}`, unpriced: true }, scale: null, week };
+  return { failure: null, scale, week };
+};
+
+/** The Fable week card's reading, as `weekReadingOf` reads the week's, its `scale` `fableWeekScale`'s. */
+export const fableWeekReadingOf = (costs: SubscriptionCosts | null, error: string | null, week: WeekPosition): WeekReading => {
+  if (costs === null) return { failure: failed(error), scale: null, week };
+  const scale = fableWeekScale(costs, week);
+  if (scale === null) return { failure: { text: `Unpriced: the cost model holds no Fable week for the ${planLabel(WEEK_TIER[week])} week`, unpriced: true }, scale, week };
+  return { failure: null, scale, week };
 };
 
 /** The account tiers a model week applies to: the cost model sizes the Fable week for every tier, and Pro has no

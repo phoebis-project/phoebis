@@ -547,6 +547,13 @@ const SCALE_FLOOR = 0.1;
 
 const LEGEND_ORDER: ClassLegend[] = ['conversation', 'overhead'];
 
+/** The points with each bucket's plan figure scaled by `scaleAt` at the bucket's instant, null where the scale is. */
+export const scalePoints = (points: BurnPoint[], scaleAt: (at: number) => number | null): BurnPoint[] =>
+  points.map((p) => {
+    const scale = scaleAt(Date.parse(p.at));
+    return { ...p, equivalent: p.equivalent === null || scale === null ? null : p.equivalent * scale };
+  });
+
 /**
  * The burn route's points as chart lines and rows. The request-class grouping folds into its two legend entries, and
  * every other grouping keeps the groups with the most tokens and sums the rest as other, which draws no plan line, so

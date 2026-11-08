@@ -5678,6 +5678,9 @@ async function costUnpricedNote(theme) {
   }
 }
 
+/** The Burn tab's cards in their order: the three plan cards, then Spend per minute. */
+const BURN_CARDS = ['Plan per hour', '5-hour per hour', 'Fable week per hour', 'Spend per minute'];
+
 /**
  * The burn section and the rewrites card against the Failovers card they sit beside: the same title type, the same
  * width in the grid, and, where a card drew a chart, the same chart height. The rewrites card follows Failovers. The
@@ -5704,7 +5707,7 @@ async function burnCards(theme) {
     if (!(await tabTo(theme, 'Traffic'))) return;
     const failovers = await read(['Failovers']);
     if (!(await tabTo(theme, 'Burn'))) return;
-    const burn = await read(['Plan per hour', 'Spend per minute']);
+    const burn = await read(BURN_CARDS);
     if (!(await tabTo(theme, 'Traffic'))) return;
     const rewrites = await read(['Migration rewrites']);
     const cards = { beside: rewrites.beside, boxes: [...failovers.boxes, ...rewrites.boxes, ...burn.boxes] };
@@ -5748,10 +5751,10 @@ async function errorsSubtitle(theme) {
 }
 
 /**
- * The Burn tab's two cards at 1440 by 900, read under `search`: Plan per hour and Spend per minute share one top edge,
- * each as wide as half the grid's row less half its gap within 1 px, and neither spans the row, where `.grid-2` alone
- * would fit three columns. Each card's top edge, left edge and width go to the measurements, and the viewport, the
- * address and the Traffic tab are the pass's again after.
+ * The Burn tab's four cards at 1440 by 900, read under `search`: they sit two to a row on two top edges, each as wide as
+ * half the grid's row less half its gap within 1 px, and none spans the row, where `.grid-2` alone would fit three
+ * columns. Each card's top edge, left edge and width go to the measurements, and the viewport, the address and the
+ * Traffic tab are the pass's again after.
  */
 async function burnGridOf(theme, what, search) {
   const say = (line) => failures.push(`${theme} /analytics burn grid ${what} at 1440 by 900: ${line}`);
@@ -5771,12 +5774,12 @@ async function burnGridOf(theme, what, search) {
       say('no grid to measure');
       return;
     }
-    if (JSON.stringify(read.cards.map((c) => c.title)) !== JSON.stringify(['Plan per hour', 'Spend per minute'])) {
-      say(`the grid draws ${JSON.stringify(read.cards.map((c) => c.title))}, not Plan per hour and Spend per minute`);
+    if (JSON.stringify(read.cards.map((c) => c.title)) !== JSON.stringify(BURN_CARDS)) {
+      say(`the grid draws ${JSON.stringify(read.cards.map((c) => c.title))}, not ${BURN_CARDS.join(', ')}`);
       return;
     }
-    const tops = Object.keys(Object.groupBy(read.cards, (c) => c.top));
-    if (tops.length !== 1) say(`the two cards sit on ${tops.length} top edges (${tops.join(', ')}), not one`);
+    const rows = Object.values(Object.groupBy(read.cards, (c) => c.top));
+    if (rows.length !== 2 || rows.some((r) => r.length !== 2)) say(`the four cards sit ${JSON.stringify(rows.map((r) => r.map((c) => c.title)))} on ${rows.length} top edges, not two to a row on two`);
     const half = (read.row - read.gap) / 2;
     for (const c of read.cards) {
       if (Math.abs(c.width - half) > 1) say(`${c.title} is ${c.width}px wide, not half the ${read.row}px row less half the gap (${half}px) within 1 px`);
@@ -5794,12 +5797,12 @@ async function burnGridOf(theme, what, search) {
 /** The story account serving Sonnet 4.5 alone (the mock's `UNPRICED_ACCOUNT`), whose plan card draws its gaps alone. */
 const BURN_UNPRICED_ACCOUNT = 'secondary';
 
-/** The two cards under the key grouping, the page's default. */
+/** The four cards under the key grouping, the page's default. */
 const burnGridPair = (theme) => burnGridOf(theme, 'under the key grouping', '');
 /**
- * The two cards under the Accounts filter naming the story account whose traffic prices nothing
- * (BURN_UNPRICED_ACCOUNT, the seed named in its comment), so the plan card keeps its place beside Spend per minute with
- * its gaps alone. The mock pass's alone.
+ * The four cards under the Accounts filter naming the story account whose traffic prices nothing
+ * (BURN_UNPRICED_ACCOUNT, the seed named in its comment), so the plan cards keep their places beside Spend per minute
+ * with their gaps alone. The mock pass's alone.
  */
 const burnGridNamed = (theme) => burnGridOf(theme, `under ${BURN_UNPRICED_ACCOUNT}`, `?accounts=${BURN_UNPRICED_ACCOUNT}`);
 

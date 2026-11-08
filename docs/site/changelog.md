@@ -398,12 +398,13 @@ Analytics session view narrows to one agent under the Agent filter of the Subjec
 `agent_id` and written by the Sessions view's agent menu, its links to the request log carrying the agent, the filter
 disabled until a session is picked and leaving with the session ([Analytics](console.md#analytics)). The Analytics
 session view reads the session's rows through the route's session filter, and each auto reload re-reads the first page
-alone ([Analytics](console.md#analytics)). The Analytics view's Burn tab draws one Plan per hour card, the subscription
-traffic per hour in the chosen week, a bucket the cost model could not price staying a gap under a "model unlisted"
-entry ([Analytics](console.md#analytics)). The Analytics view's Cache warming tab spans its last card across the row
-where that card would sit alone, as the Burn tab does ([Analytics](console.md#analytics)). The Analytics view's group
-tables order through the bar's Sort control by Name or the open tab's columns ([Analytics](console.md#analytics)). The
-Analytics view's model grouping lists a request refused before it resolved a model under "no model"
+alone ([Analytics](console.md#analytics)). The Analytics view's Burn tab draws three plan cards, Plan per hour, 5-hour
+per hour and Fable week per hour, the subscription traffic per hour in the chosen week and the same figure scaled to the
+chosen tier's 5-hour window and to its Fable week, a bucket the cost model could not price staying a gap under a "model
+unlisted" entry ([Analytics](console.md#analytics)). The Analytics view's Cache warming tab spans its last card across
+the row where that card would sit alone, as the Burn tab does ([Analytics](console.md#analytics)). The Analytics view's
+group tables order through the bar's Sort control by Name or the open tab's columns ([Analytics](console.md#analytics)).
+The Analytics view's model grouping lists a request refused before it resolved a model under "no model"
 ([Analytics](console.md#analytics)). The Burn section closes on Member budgets, its reconciliation rows listed on the
 Meter view ([Analytics](console.md#analytics), [Meter](console.md#meter)). The Cache warming tab shows what the probes
 saved and the net saving after their cost, as tiles, a chart and a Saved column per pool
@@ -422,13 +423,13 @@ the answers the upstream refused by category, each bar opening the Requests view
 figures in the chosen week under every position and wait on the cost model, so a failed settings read draws their error
 ([Analytics](console.md#analytics), [Accounts](console.md#accounts)). Under the Analytics classifier grouping the
 requests with no classifier call are labeled `none`, as the Requests facet names them
-([Analytics](console.md#analytics)). The Burn tab's Plan per hour and Spend per minute cards share one row where the
-grid fits two columns ([Analytics](console.md#analytics)). A session that branched from another conversation at depth 2
-or deeper reads a `fork` badge in its Sessions row, its hover naming the base, the depth and, where the list holds the
-base with both pins live, the base's account, and a click on the badge scrolls to the base's row where the list holds it
-([Sessions](console.md#sessions)). An open Sessions row ends on its Cache warming details, shut by default with the
-recipes' states on their line, which read each agent's TTL, last request, last and next probe, the probes sent and the
-requests they kept warm, and its recipe state, or `warm` or `cold` by the cache TTL on a pin no recipe stands on
+([Analytics](console.md#analytics)). The Burn tab's three plan cards and Spend per minute sit two to a row where the
+grid fits two columns or more ([Analytics](console.md#analytics)). A session that branched from another conversation at
+depth 2 or deeper reads a `fork` badge in its Sessions row, its hover naming the base, the depth and, where the list
+holds the base with both pins live, the base's account, and a click on the badge scrolls to the base's row where the
+list holds it ([Sessions](console.md#sessions)). An open Sessions row ends on its Cache warming details, shut by default
+with the recipes' states on their line, which read each agent's TTL, last request, last and next probe, the probes sent
+and the requests they kept warm, and its recipe state, or `warm` or `cold` by the cache TTL on a pin no recipe stands on
 ([Sessions](console.md#sessions)). An open Sessions row lists the agents the ledger holds requests of that draw no line,
 such as a subagent whose pin and recipe are gone, on one earlier agents line under its Agents table with their requests
 and their cost, and the line opens to one row per agent ([Sessions](console.md#sessions)). At a phone's width the
