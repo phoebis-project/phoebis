@@ -287,6 +287,90 @@ async fn the_auto_mode_setting_round_trips_on_the_pool_and_the_key_and_a_wrong_t
 }
 
 #[tokio::test]
+async fn a_new_key_has_both_companion_permissions_and_an_unknown_word_is_refused() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority"}"#,
+        Some(&cookie),
+    )
+    .await;
+    let created = post(
+        &app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    assert_eq!(
+        json(created).await["companion_permissions"],
+        serde_json::json!(["allowance", "keepalive"])
+    );
+    let refused = patch(
+        &app,
+        "/admin/keys/desktop",
+        r#"{"companion_permissions":["allowance","events"]}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refused.status(), 400);
+    assert_eq!(
+        json(refused).await["error"].as_str(),
+        Some("companion_permissions holds allowance and keepalive, not events")
+    );
+}
+
+#[tokio::test]
+async fn a_patch_without_the_permission_set_leaves_it_as_stored() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority"}"#,
+        Some(&cookie),
+    )
+    .await;
+    post(
+        &app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    let narrowed = patch(
+        &app,
+        "/admin/keys/desktop",
+        r#"{"companion_permissions":["allowance"]}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(narrowed.status(), 200);
+    assert_eq!(
+        json(narrowed).await["companion_permissions"],
+        serde_json::json!(["allowance"])
+    );
+    let renamed = json(
+        patch(
+            &app,
+            "/admin/keys/desktop",
+            r#"{"label":"Laptop"}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        renamed["companion_permissions"],
+        serde_json::json!(["allowance"]),
+        "an edit that leaves the field out keeps the stored set"
+    );
+}
+
+#[tokio::test]
 async fn keys_are_issued_once_rotated_revoked_and_never_shown_again() {
     let (app, _up, _store, router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
@@ -879,7 +963,7 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
                 model_rules: Vec::new(),
                 model_rules_mode: phoebis_store::RulesMode::Extend,
                 long_context_twins: true,
-                keepalive_opt_out: false,
+                companion_permissions: phoebis_store::CompanionPermissions::default(),
                 body_capture_hours: None,
                 secret_digest: store.api_key_digest(secret).to_vec(),
                 prefix: phoebis_store::key_prefix(secret),

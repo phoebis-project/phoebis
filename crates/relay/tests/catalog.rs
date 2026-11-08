@@ -11,8 +11,8 @@ use http_body_util::BodyExt;
 use phoebis_bus::{Bus, Delivery, Event};
 use phoebis_relay::{DiscoveryError, Warmth, ERROR_HOLD, MAX_BODY};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownScope, NewBundle, RekeyWrite,
-    ResolutionRow, RulesMode, Secret, StorageKey, Store,
+    AccountKind, AccountRow, AccountState, ApiKeyRow, CompanionPermissions, CooldownScope,
+    NewBundle, RekeyWrite, ResolutionRow, RulesMode, Secret, StorageKey, Store,
 };
 use tower::ServiceExt;
 
@@ -788,7 +788,7 @@ async fn a_listing_that_drops_the_dated_entry_keeps_the_dated_id_and_its_denial_
                 model_rules: Vec::new(),
                 model_rules_mode: RulesMode::Replace,
                 long_context_twins: true,
-                keepalive_opt_out: false,
+                companion_permissions: CompanionPermissions::default(),
                 body_capture_hours: None,
                 secret_digest: h.store.api_key_digest("phoebis-open").to_vec(),
                 prefix: phoebis_store::key_prefix("phoebis-open"),

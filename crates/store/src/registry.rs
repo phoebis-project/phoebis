@@ -352,6 +352,51 @@ pub struct MemberWrite {
     pub budget_monthly_usd: Option<f64>,
 }
 
+/// The companion routes a key may use. A new key holds every permission, so a companion works with no setup.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CompanionPermissions {
+    pub allowance: bool,
+    pub keepalive: bool,
+}
+
+impl Default for CompanionPermissions {
+    fn default() -> Self {
+        CompanionPermissions {
+            allowance: true,
+            keepalive: true,
+        }
+    }
+}
+
+impl CompanionPermissions {
+    pub const WORDS: [&'static str; 2] = ["allowance", "keepalive"];
+
+    /// The set the words name; `Err` carries the first word outside `WORDS`. A repeated word is read once.
+    pub fn from_words(words: &[String]) -> Result<CompanionPermissions, String> {
+        let mut set = CompanionPermissions {
+            allowance: false,
+            keepalive: false,
+        };
+        for word in words {
+            match word.as_str() {
+                "allowance" => set.allowance = true,
+                "keepalive" => set.keepalive = true,
+                other => return Err(other.to_string()),
+            }
+        }
+        Ok(set)
+    }
+
+    /// The words of the permissions that are on, in `WORDS` order.
+    pub fn words(self) -> Vec<&'static str> {
+        Self::WORDS
+            .into_iter()
+            .zip([self.allowance, self.keepalive])
+            .filter_map(|(word, on)| on.then_some(word))
+            .collect()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ApiKeyRow {
     pub id: String,
@@ -365,7 +410,7 @@ pub struct ApiKeyRow {
     pub model_rules_mode: RulesMode,
     /// Whether `GET /v1/models` under this key lists an `id[1m]` twin beside every long-context model.
     pub long_context_twins: bool,
-    pub keepalive_opt_out: bool,
+    pub companion_permissions: CompanionPermissions,
     pub body_capture_hours: Option<u32>,
     pub secret_digest: Vec<u8>,
     pub prefix: String,
@@ -1159,7 +1204,7 @@ impl Store {
         let now = previous.map_or(now, |p| stamp_past(now, p));
         let incarnation = crate::accounts::next_incarnation_in(&tx, Tombstones::ApiKey, &row.id)?;
         tx.execute(
-            "INSERT INTO api_keys (id, label, notes, pool_id, enabled, revoked_at, expires_at, model_rules_json, model_rules_mode, long_context_twins, keepalive_opt_out, body_capture_hours, secret_digest, prefix, auto_mode_server, created_at, updated_at, rotated_at, last_used_at, retired_secret_last_used_at, incarnation) \
+            "INSERT INTO api_keys (id, label, notes, pool_id, enabled, revoked_at, expires_at, model_rules_json, model_rules_mode, long_context_twins, companion_permissions_json, body_capture_hours, secret_digest, prefix, auto_mode_server, created_at, updated_at, rotated_at, last_used_at, retired_secret_last_used_at, incarnation) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16, NULL, NULL, NULL, ?17)",
             params![
                 row.id,
@@ -1172,7 +1217,7 @@ impl Store {
                 serde_json::to_string(&row.model_rules)?,
                 row.model_rules_mode,
                 row.long_context_twins,
-                row.keepalive_opt_out,
+                serde_json::to_string(&row.companion_permissions.words())?,
                 row.body_capture_hours,
                 row.secret_digest,
                 row.prefix,
@@ -1236,7 +1281,7 @@ impl Store {
             .ok_or_else(|| StoreError::KeyNotFound(row.id.clone()))?;
         let at = stamp_past(self.now_ms(), expected_updated_at);
         let updated = tx.execute(
-            "UPDATE api_keys SET label = ?2, notes = ?3, pool_id = ?4, enabled = ?5, expires_at = ?6, model_rules_json = ?7, model_rules_mode = ?8, long_context_twins = ?9, keepalive_opt_out = ?10, body_capture_hours = ?11, auto_mode_server = ?12, updated_at = ?13 WHERE id = ?1 AND updated_at = ?14 AND incarnation = ?15",
+            "UPDATE api_keys SET label = ?2, notes = ?3, pool_id = ?4, enabled = ?5, expires_at = ?6, model_rules_json = ?7, model_rules_mode = ?8, long_context_twins = ?9, companion_permissions_json = ?10, body_capture_hours = ?11, auto_mode_server = ?12, updated_at = ?13 WHERE id = ?1 AND updated_at = ?14 AND incarnation = ?15",
             params![
                 row.id,
                 row.label,
@@ -1247,7 +1292,7 @@ impl Store {
                 serde_json::to_string(&row.model_rules)?,
                 row.model_rules_mode,
                 row.long_context_twins,
-                row.keepalive_opt_out,
+                serde_json::to_string(&row.companion_permissions.words())?,
                 row.body_capture_hours,
                 row.auto_mode_server,
                 at,
@@ -1983,7 +2028,7 @@ static POOL_UPDATE: LazyLock<String> = LazyLock::new(|| {
 const MEMBER_SELECT: &str =
     "SELECT pool_id, account_id, priority, budget_daily_usd, budget_monthly_usd FROM pool_members";
 const GUARDRAIL_SELECT: &str = "SELECT id, name, description, enabled, mode, action, conditions_json, preset_id, preset_version, incarnation, created_at, updated_at FROM guardrails";
-const KEY_SELECT: &str = "SELECT id, label, notes, pool_id, enabled, revoked_at, expires_at, keepalive_opt_out, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at, retired_secret_last_used_at, model_rules_json, model_rules_mode, long_context_twins, auto_mode_server, updated_at, incarnation FROM api_keys";
+const KEY_SELECT: &str = "SELECT id, label, notes, pool_id, enabled, revoked_at, expires_at, companion_permissions_json, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at, retired_secret_last_used_at, model_rules_json, model_rules_mode, long_context_twins, auto_mode_server, updated_at, incarnation FROM api_keys";
 
 fn all_pools(conn: &rusqlite::Connection) -> Result<Vec<PoolRow>, StoreError> {
     let mut stmt = conn.prepare(&format!("{POOL_SELECT} ORDER BY label, id"))?;
@@ -2092,6 +2137,7 @@ fn row_to_member(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolMember> {
 }
 
 fn row_to_key(r: &rusqlite::Row<'_>) -> rusqlite::Result<ApiKeyRow> {
+    let permissions: Vec<String> = json_column(r, 7)?;
     Ok(ApiKeyRow {
         id: r.get(0)?,
         label: r.get(1)?,
@@ -2103,7 +2149,8 @@ fn row_to_key(r: &rusqlite::Row<'_>) -> rusqlite::Result<ApiKeyRow> {
         model_rules: json_column(r, 15)?,
         model_rules_mode: r.get(16)?,
         long_context_twins: r.get(17)?,
-        keepalive_opt_out: r.get(7)?,
+        companion_permissions: CompanionPermissions::from_words(&permissions)
+            .map_err(|word| unknown_word(7, &word))?,
         body_capture_hours: r.get::<_, Option<u32>>(8)?,
         secret_digest: r.get(9)?,
         prefix: r.get(10)?,
@@ -2216,7 +2263,7 @@ fn key_fields(row: &ApiKeyRow) -> serde_json::Value {
         "model_rules": row.model_rules,
         "model_rules_mode": row.model_rules_mode.as_str(),
         "long_context_twins": row.long_context_twins,
-        "keepalive_opt_out": row.keepalive_opt_out,
+        "companion_permissions": row.companion_permissions.words(),
         "body_capture_hours": row.body_capture_hours,
         "prefix": row.prefix,
         "auto_mode_server": row.auto_mode_server,

@@ -8,8 +8,8 @@ use phoebis_routing::{
     SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
-    AccountKind, AccountRow, ApiKeyRow, PoolMember, PoolRow, RegistryLoad, RoutingLoad, RulesMode,
-    Strategy,
+    AccountKind, AccountRow, ApiKeyRow, CompanionPermissions, PoolMember, PoolRow, RegistryLoad,
+    RoutingLoad, RulesMode, Strategy,
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -39,7 +39,7 @@ fn snapshot() -> RegistrySnapshot {
             model_rules: Vec::new(),
             model_rules_mode: RulesMode::Extend,
             long_context_twins: true,
-            keepalive_opt_out: false,
+            companion_permissions: CompanionPermissions::default(),
             body_capture_hours: None,
             secret_digest: vec![0; 32],
             prefix: "00000000".into(),

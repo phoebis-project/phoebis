@@ -762,7 +762,7 @@ async fn a_raised_horizon_releases_a_held_recipe_and_a_key_opt_out_discards_it()
     let (mut r, _) = held_under_a_one_hour_horizon().await;
     let held = r.status("main").probes;
     let mut key = r.h.store.api_key("desktop").unwrap().unwrap();
-    key.keepalive_opt_out = true;
+    key.companion_permissions.keepalive = false;
     r.h.store
         .update_api_key(&key, key.updated_at, "test")
         .unwrap();

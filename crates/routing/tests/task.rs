@@ -16,10 +16,10 @@ use phoebis_routing::{
     IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WRITER_DEPTH,
 };
 use phoebis_store::{
-    key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, Cancellation, CooldownRow,
-    CooldownScope, FirstSeenRow, MemberWrite, ModelRule, OveragePolicy, OverageRow, PinBurn,
-    PinKey, PinMark, PinRow, PoolRow, RoutingLoad, RulesMode, Shedding, StateCause, StorageKey,
-    Store, Strategy, SubscriptionRow, WindowRow, WindowSetRow,
+    key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, Cancellation,
+    CompanionPermissions, CooldownRow, CooldownScope, FirstSeenRow, MemberWrite, ModelRule,
+    OveragePolicy, OverageRow, PinBurn, PinKey, PinMark, PinRow, PoolRow, RoutingLoad, RulesMode,
+    Shedding, StateCause, StorageKey, Store, Strategy, SubscriptionRow, WindowRow, WindowSetRow,
 };
 
 const HOUR: i64 = 3_600_000;
@@ -94,7 +94,7 @@ fn seed(store: Arc<Store>, kind: AccountKind, ids: &[&str]) -> Arc<Store> {
                 model_rules: Vec::new(),
                 model_rules_mode: RulesMode::Extend,
                 long_context_twins: true,
-                keepalive_opt_out: false,
+                companion_permissions: CompanionPermissions::default(),
                 body_capture_hours: None,
                 secret_digest: store.api_key_digest("phoebis-secret").to_vec(),
                 prefix: "secret00".into(),
@@ -2184,7 +2184,7 @@ fn insert_key_k(store: &Store) {
                 model_rules: Vec::new(),
                 model_rules_mode: RulesMode::Extend,
                 long_context_twins: true,
-                keepalive_opt_out: false,
+                companion_permissions: CompanionPermissions::default(),
                 body_capture_hours: None,
                 secret_digest: store.api_key_digest("phoebis-reissued").to_vec(),
                 prefix: key_prefix("phoebis-reissued"),

@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
-use phoebis_store::{ApiKeyRow, CooldownRow, CooldownScope, RulesMode};
+use phoebis_store::{ApiKeyRow, CompanionPermissions, CooldownRow, CooldownScope, RulesMode};
 use tower::ServiceExt;
 
 const A: &str = "sk-ant-oat01-AAAAAAAAAAAAAAAA";
@@ -125,7 +125,7 @@ async fn the_listing_answers_the_callers_key_with_each_list_level_applied() {
                 model_rules: Vec::new(),
                 model_rules_mode: RulesMode::Replace,
                 long_context_twins: true,
-                keepalive_opt_out: false,
+                companion_permissions: CompanionPermissions::default(),
                 body_capture_hours: None,
                 secret_digest: h.store.api_key_digest("phoebis-wide").to_vec(),
                 prefix: phoebis_store::key_prefix("phoebis-wide"),

@@ -15,10 +15,10 @@ use phoebis_routing::{
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
-    Cancellation, CooldownRow, CooldownScope, Failover, FirstSeenRow, OveragePolicy, PinBurn,
-    PinKey, PinMark, PinRow, PoolMember, PoolRow, RegistryLoad, ReturnToPlan, RoutingLoad,
-    RulesMode, SessionPlacement, ShedRoundRow, Shedding, SlowDown, Strategy, SubagentPlacement,
-    SubscriptionTerm, WarmSessions,
+    Cancellation, CompanionPermissions, CooldownRow, CooldownScope, Failover, FirstSeenRow,
+    OveragePolicy, PinBurn, PinKey, PinMark, PinRow, PoolMember, PoolRow, RegistryLoad,
+    ReturnToPlan, RoutingLoad, RulesMode, SessionPlacement, ShedRoundRow, Shedding, SlowDown,
+    Strategy, SubagentPlacement, SubscriptionTerm, WarmSessions,
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -175,7 +175,7 @@ fn load_of(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> RegistryLo
             model_rules: Vec::new(),
             model_rules_mode: RulesMode::Extend,
             long_context_twins: true,
-            keepalive_opt_out: false,
+            companion_permissions: CompanionPermissions::default(),
             body_capture_hours: None,
             secret_digest: vec![0; 32],
             prefix: "00000000".into(),
@@ -5328,7 +5328,7 @@ fn shedding_pools(keys: &[(&str, &str)], members: &[(&str, &str, u32)]) -> Regis
         model_rules: Vec::new(),
         model_rules_mode: RulesMode::Extend,
         long_context_twins: true,
-        keepalive_opt_out: false,
+        companion_permissions: CompanionPermissions::default(),
         body_capture_hours: None,
         secret_digest: vec![0; 32],
         prefix: "00000000".into(),

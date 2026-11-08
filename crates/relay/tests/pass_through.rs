@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use fake_upstream::{FakeUpstream, RecordedRequest, Respond, Rule};
 use phoebis_relay::{LiveAcceptor, Relay};
-use phoebis_store::{AccountKind, ApiKeyRow, RulesMode};
+use phoebis_store::{AccountKind, ApiKeyRow, CompanionPermissions, RulesMode};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tower::ServiceExt;
@@ -517,7 +517,7 @@ async fn an_lf_terminated_head_ends_where_hyper_ends_it() {
                 model_rules: Vec::new(),
                 model_rules_mode: RulesMode::Extend,
                 long_context_twins: true,
-                keepalive_opt_out: false,
+                companion_permissions: CompanionPermissions::default(),
                 body_capture_hours: None,
                 secret_digest: h.store.api_key_digest(SECOND).to_vec(),
                 prefix: phoebis_store::key_prefix(SECOND),

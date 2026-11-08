@@ -1,7 +1,7 @@
 use phoebis_routing::{resolve, Candidate, KeyRefusal, RegistrySnapshot, ResolveError};
 use phoebis_store::{
-    AccountKind, AccountRow, ApiKeyRow, ModelRule, PoolMember, PoolRow, RegistryLoad, RulesMode,
-    Strategy,
+    AccountKind, AccountRow, ApiKeyRow, CompanionPermissions, ModelRule, PoolMember, PoolRow,
+    RegistryLoad, RulesMode, Strategy,
 };
 
 const DIGEST_KEY: [u8; 32] = [7; 32];
@@ -37,7 +37,7 @@ fn key(id: &str, pool_id: &str, secret: &str, rules: Vec<ModelRule>, mode: Rules
         model_rules: rules,
         model_rules_mode: mode,
         long_context_twins: true,
-        keepalive_opt_out: false,
+        companion_permissions: CompanionPermissions::default(),
         body_capture_hours: None,
         secret_digest: phoebis_store::digest_with(&DIGEST_KEY, secret.as_bytes()).to_vec(),
         prefix: phoebis_store::key_prefix(secret),

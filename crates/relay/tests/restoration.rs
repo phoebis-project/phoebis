@@ -11,7 +11,9 @@ use phoebis_bus::{Bus, Delivery};
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
 use phoebis_relay::{MemoryKey, CLASSIFIER_BETA};
 use phoebis_routing::RefusalFacts;
-use phoebis_store::{AccountKind, ApiKeyRow, MemoryStore, RulesMode, StorageKey, Store};
+use phoebis_store::{
+    AccountKind, ApiKeyRow, CompanionPermissions, MemoryStore, RulesMode, StorageKey, Store,
+};
 use tower::ServiceExt;
 
 const UUID_RE_LEN: usize = 36;
@@ -949,7 +951,7 @@ async fn a_key_created_again_under_a_used_id_reads_none_of_the_previous_holders_
                 model_rules: Vec::new(),
                 model_rules_mode: RulesMode::Extend,
                 long_context_twins: true,
-                keepalive_opt_out: false,
+                companion_permissions: CompanionPermissions::default(),
                 body_capture_hours: None,
                 secret_digest: h.store.api_key_digest(KEY).to_vec(),
                 prefix: phoebis_store::key_prefix(KEY),

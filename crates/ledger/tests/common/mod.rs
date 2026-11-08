@@ -20,8 +20,8 @@ use phoebis_profile::{
 use phoebis_relay::{router, Accounting, CatalogService, Limits, Relay, UpstreamGzip};
 use phoebis_routing::{spawn as spawn_router, RouterConfig, RouterHandle};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountUpdate, ApiKeyRow, Identity, MemberWrite, NewBundle, PoolRow,
-    RulesMode, Secret, StorageKey, Store, StoreError, Strategy,
+    AccountKind, AccountRow, AccountUpdate, ApiKeyRow, CompanionPermissions, Identity, MemberWrite,
+    NewBundle, PoolRow, RulesMode, Secret, StorageKey, Store, StoreError, Strategy,
 };
 use phoebis_transport::request::parse_head;
 // The polls live with the fake so every integration suite has them; only some of them are used here.
@@ -219,7 +219,7 @@ pub async fn harness_on_tables(
                     model_rules: Vec::new(),
                     model_rules_mode: RulesMode::Extend,
                     long_context_twins: true,
-                    keepalive_opt_out: false,
+                    companion_permissions: CompanionPermissions::default(),
                     body_capture_hours: capture.1,
                     secret_digest: store.api_key_digest(KEY).to_vec(),
                     prefix: phoebis_store::key_prefix(KEY),

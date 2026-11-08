@@ -118,11 +118,12 @@ pub use keepalive::{
 pub use memory::{MemoryKey, MemoryRecord, MemoryStore};
 pub use registry::{
     canonical_id, key_prefix, AccountUpdate, Affinity, AffinityMode, ApiKeyRow, AttachmentSubject,
-    BudgetPeriod, Cancellation, Failover, GuardrailAttachment, GuardrailIndex, GuardrailRow,
-    MemberWrite, ModelRule, OveragePolicy, PoolMember, PoolRow, PresetStamp, RegistryChange,
-    RegistryLoad, RetiredSecret, ReturnToPlan, RulesMode, SessionPlacement, Shedding, SlowDown,
-    Strategy, SubagentPlacement, SubjectKind, SubscriptionTerm, WarmSessions, GUARDRAIL_BOUND,
-    KEY_SECRET_PREFIX, LONG_CONTEXT_SUFFIX, ROTATION_GRACE_MS,
+    BudgetPeriod, Cancellation, CompanionPermissions, Failover, GuardrailAttachment,
+    GuardrailIndex, GuardrailRow, MemberWrite, ModelRule, OveragePolicy, PoolMember, PoolRow,
+    PresetStamp, RegistryChange, RegistryLoad, RetiredSecret, ReturnToPlan, RulesMode,
+    SessionPlacement, Shedding, SlowDown, Strategy, SubagentPlacement, SubjectKind,
+    SubscriptionTerm, WarmSessions, GUARDRAIL_BOUND, KEY_SECRET_PREFIX, LONG_CONTEXT_SUFFIX,
+    ROTATION_GRACE_MS,
 };
 pub use routing::{
     AffinityChain, AffinityRow, CooldownRow, CooldownScope, CreditsRow, EvidenceSource,
@@ -527,6 +528,12 @@ impl Store {
     /// storage key outside the store.
     pub fn digest_key(&self) -> [u8; 32] {
         digest_with(&self.key.0, b"api-key-digest")
+    }
+
+    /// The key the companion's account pseudonyms are digested under. A label of its own keeps a pseudonym apart
+    /// from every secret digest, and the storage key keeps it stable across restarts and distinct per installation.
+    pub fn companion_digest_key(&self) -> [u8; 32] {
+        digest_with(&self.key.0, b"companion-pseudonym")
     }
 
     /// A database copy without the key file cannot use this to test guessed secrets: the digest is keyed,

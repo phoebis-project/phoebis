@@ -137,7 +137,7 @@ async fn admission_needs_the_pool_toggle_and_no_key_opt_out() {
         "enabling the pool retains the next request"
     );
     let mut key = r.h.store.api_key("desktop").unwrap().unwrap();
-    key.keepalive_opt_out = true;
+    key.companion_permissions.keepalive = false;
     r.h.store
         .update_api_key(&key, key.updated_at, "test")
         .unwrap();

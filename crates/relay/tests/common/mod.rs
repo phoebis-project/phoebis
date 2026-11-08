@@ -26,8 +26,9 @@ use phoebis_routing::{
     spawn, DecisionRecord, DecisionSummary, RefusalFacts, RouterConfig, RouterEvent, RouterHandle,
 };
 use phoebis_store::{
-    AccountKind, AccountRow, AccountUpdate, ApiKeyRow, Failover, Identity, MemberWrite, ModelRule,
-    NewBundle, OveragePolicy, PoolRow, RulesMode, Secret, StorageKey, Store, StoreError, Strategy,
+    AccountKind, AccountRow, AccountUpdate, ApiKeyRow, CompanionPermissions, Failover, Identity,
+    MemberWrite, ModelRule, NewBundle, OveragePolicy, PoolRow, RulesMode, Secret, StorageKey,
+    Store, StoreError, Strategy,
 };
 use phoebis_transport::request::parse_head;
 use tokio::sync::broadcast;
@@ -866,7 +867,7 @@ async fn build(
                     model_rules: Vec::new(),
                     model_rules_mode: RulesMode::Extend,
                     long_context_twins: true,
-                    keepalive_opt_out: false,
+                    companion_permissions: CompanionPermissions::default(),
                     body_capture_hours: None,
                     secret_digest: store.api_key_digest(KEY).to_vec(),
                     prefix: phoebis_store::key_prefix(KEY),

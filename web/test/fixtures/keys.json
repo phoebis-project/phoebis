@@ -18,7 +18,10 @@
         ],
         "model_rules_mode": "extend",
         "long_context_twins": true,
-        "keepalive_opt_out": false,
+        "companion_permissions": [
+          "allowance",
+          "keepalive"
+        ],
         "body_capture_hours": null,
         "effective_body_capture_hours": 24,
         "auto_mode_server": null,

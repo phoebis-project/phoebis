@@ -15,7 +15,7 @@ use phoebis_ledger::{
     key_usage_windows, AttemptRecord, LedgerConfig, LedgerDb, PriceRevisions, RequestRecord,
     KEY_RANGE_PREDICATE,
 };
-use phoebis_store::{AccountKind, ApiKeyRow, RulesMode, Store};
+use phoebis_store::{AccountKind, ApiKeyRow, CompanionPermissions, RulesMode, Store};
 use tower::ServiceExt;
 
 fn used(id: &str) -> AttemptRecord {
@@ -478,7 +478,7 @@ async fn a_second_key_sees_its_own_usage_and_not_the_firsts() {
                 model_rules: Vec::new(),
                 model_rules_mode: RulesMode::Extend,
                 long_context_twins: true,
-                keepalive_opt_out: false,
+                companion_permissions: CompanionPermissions::default(),
                 body_capture_hours: None,
                 secret_digest: h.store.api_key_digest(LAPTOP).to_vec(),
                 prefix: phoebis_store::key_prefix(LAPTOP),
@@ -533,7 +533,7 @@ fn desktop_row(store: &Store) -> ApiKeyRow {
         model_rules: Vec::new(),
         model_rules_mode: RulesMode::Extend,
         long_context_twins: true,
-        keepalive_opt_out: false,
+        companion_permissions: CompanionPermissions::default(),
         body_capture_hours: None,
         secret_digest: store.api_key_digest(KEY).to_vec(),
         prefix: phoebis_store::key_prefix(KEY),
@@ -657,7 +657,7 @@ async fn a_deleted_keys_usage_stays_with_it() {
                 model_rules: Vec::new(),
                 model_rules_mode: RulesMode::Extend,
                 long_context_twins: true,
-                keepalive_opt_out: false,
+                companion_permissions: CompanionPermissions::default(),
                 body_capture_hours: None,
                 secret_digest: h.store.api_key_digest("phoebis-desktop-reissued").to_vec(),
                 prefix: phoebis_store::key_prefix("phoebis-desktop-reissued"),

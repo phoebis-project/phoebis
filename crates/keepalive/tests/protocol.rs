@@ -13,7 +13,7 @@ use phoebis_keepalive::{
     keepalive_router, AgentState, CompanionState, Event, EventError, ParkKind, Reason, EVENTS_PATH,
 };
 use phoebis_ledger::{hour_of, read_rollups, RollupSelect};
-use phoebis_store::{ApiKeyRow, RulesMode};
+use phoebis_store::{ApiKeyRow, CompanionPermissions, RulesMode};
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
@@ -108,7 +108,7 @@ fn other_key_row(r: &Rig, id: &str) -> ApiKeyRow {
         model_rules: Vec::new(),
         model_rules_mode: RulesMode::Extend,
         long_context_twins: true,
-        keepalive_opt_out: false,
+        companion_permissions: CompanionPermissions::default(),
         body_capture_hours: None,
         secret_digest: r.h.store.api_key_digest(OTHER_KEY).to_vec(),
         prefix: phoebis_store::key_prefix(OTHER_KEY),

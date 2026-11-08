@@ -296,9 +296,16 @@ const V4: &str = r#"
 ALTER TABLE refresh_attempts ADD COLUMN cause TEXT;
 "#;
 
+/// The companion's per-key permissions replace the keepalive opt-out: a migrated opt-out is a set without `keepalive`.
+const V5: &str = r#"
+ALTER TABLE api_keys ADD COLUMN companion_permissions_json TEXT NOT NULL DEFAULT '["allowance","keepalive"]';
+UPDATE api_keys SET companion_permissions_json = '["allowance"]' WHERE keepalive_opt_out = 1;
+ALTER TABLE api_keys DROP COLUMN keepalive_opt_out;
+"#;
+
 /// Applied in order above the stored `schema_version`, each inside one transaction. A migration may drop or
 /// rebuild a table, so an older build refuses a newer registry rather than misreading it.
-pub const MIGRATIONS: &[(u32, &str)] = &[(2, V2), (3, V3), (4, V4)];
+pub const MIGRATIONS: &[(u32, &str)] = &[(2, V2), (3, V3), (4, V4), (5, V5)];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.

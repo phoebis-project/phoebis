@@ -794,7 +794,7 @@ mod tests {
     use std::collections::HashMap;
 
     use phoebis_routing::{ConversationMatch, PredecessorQuery};
-    use phoebis_store::RulesMode;
+    use phoebis_store::{CompanionPermissions, RulesMode};
 
     fn key() -> ApiKeyRow {
         ApiKeyRow {
@@ -808,7 +808,7 @@ mod tests {
             model_rules: Vec::new(),
             model_rules_mode: RulesMode::Extend,
             long_context_twins: false,
-            keepalive_opt_out: false,
+            companion_permissions: CompanionPermissions::default(),
             body_capture_hours: None,
             secret_digest: Vec::new(),
             prefix: "k".into(),

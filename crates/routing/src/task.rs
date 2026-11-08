@@ -5882,7 +5882,7 @@ mod tests {
 
     #[test]
     fn the_projections_answer_each_windows_projection_and_demand_as_two_projection_of_reads_do() {
-        use phoebis_store::{ApiKeyRow, PoolMember, SubscriptionTerm};
+        use phoebis_store::{ApiKeyRow, CompanionPermissions, PoolMember, SubscriptionTerm};
 
         use crate::select::{Banded, SlowDownRead};
         use crate::state::BandSegment;
@@ -5906,7 +5906,7 @@ mod tests {
                     model_rules: Vec::new(),
                     model_rules_mode: Default::default(),
                     long_context_twins: false,
-                    keepalive_opt_out: false,
+                    companion_permissions: CompanionPermissions::default(),
                     body_capture_hours: None,
                     secret_digest: Vec::new(),
                     prefix: "k".into(),

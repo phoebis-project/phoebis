@@ -1,5 +1,6 @@
 use phoebis_store::{
-    ApiKeyRow, PoolRow, RetiredSecret, RulesMode, StorageKey, Store, Strategy, ROTATION_GRACE_MS,
+    ApiKeyRow, CompanionPermissions, PoolRow, RetiredSecret, RulesMode, StorageKey, Store,
+    Strategy, ROTATION_GRACE_MS,
 };
 
 fn pool(id: &str) -> PoolRow {
@@ -24,7 +25,7 @@ fn key(store: &Store, id: &str, pool_id: &str, secret: &str) -> ApiKeyRow {
         model_rules: Vec::new(),
         model_rules_mode: RulesMode::Extend,
         long_context_twins: true,
-        keepalive_opt_out: false,
+        companion_permissions: CompanionPermissions::default(),
         body_capture_hours: None,
         secret_digest: store.api_key_digest(secret).to_vec(),
         prefix: phoebis_store::key_prefix(secret),

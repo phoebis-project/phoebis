@@ -1,9 +1,9 @@
 use phoebis_routing::lane_key;
 use phoebis_store::{
-    AccountKind, AccountRow, AffinityChain, AffinityRow, ApiKeyRow, CooldownRow, CooldownScope,
-    CreditsRow, EvidenceSource, FirstSeenRow, OverageRow, PinBurn, PinKey, PinMark, PinRow,
-    PoolRow, RekeyWrite, ResolutionRow, RulesMode, ShedRoundRow, ShedStamp, StorageKey, Store,
-    WindowRow, WindowSetRow,
+    AccountKind, AccountRow, AffinityChain, AffinityRow, ApiKeyRow, CompanionPermissions,
+    CooldownRow, CooldownScope, CreditsRow, EvidenceSource, FirstSeenRow, OverageRow, PinBurn,
+    PinKey, PinMark, PinRow, PoolRow, RekeyWrite, ResolutionRow, RulesMode, ShedRoundRow,
+    ShedStamp, StorageKey, Store, WindowRow, WindowSetRow,
 };
 
 const SPELLING: &str = "claude-sonnet-4-5";
@@ -452,7 +452,7 @@ fn seed_key(store: &Store, id: &str) {
                 model_rules: Vec::new(),
                 model_rules_mode: RulesMode::Extend,
                 long_context_twins: true,
-                keepalive_opt_out: false,
+                companion_permissions: CompanionPermissions::default(),
                 body_capture_hours: None,
                 secret_digest: store.api_key_digest(&secret).to_vec(),
                 prefix: phoebis_store::key_prefix(&secret),
@@ -969,12 +969,14 @@ fn a_registry_at_version_two_gains_the_window_set_table_on_open() {
     conn.execute_batch(
         "DROP TABLE usage_window_sets;
          ALTER TABLE refresh_attempts DROP COLUMN cause;
+         ALTER TABLE api_keys ADD COLUMN keepalive_opt_out INTEGER NOT NULL DEFAULT 0;
+         ALTER TABLE api_keys DROP COLUMN companion_permissions_json;
          UPDATE meta SET value = '2' WHERE key = 'schema_version';",
     )
     .unwrap();
     drop(conn);
     let store = Store::open(&path, &key).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 4);
+    assert_eq!(store.schema_version().unwrap(), 5);
     assert!(
         store
             .upsert_window_set(&window_set_row("seven_day", 1_000, 1))

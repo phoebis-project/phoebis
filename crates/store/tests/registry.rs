@@ -2,11 +2,11 @@ use phoebis_guardrails::{Condition, GuardrailAction, GuardrailMode, Operator, Se
 use phoebis_store::{
     answers_stamp_token, stamp_token, AccountKind, AccountRow, AccountState, AccountUpdate,
     Affinity, AffinityChain, AffinityMode, ApiKeyRow, AttachmentSubject, BudgetPeriod, CanaryRead,
-    Cancellation, Failover, GuardrailAttachment, GuardrailRow, Identity, MemberWrite, MemoryKey,
-    MemoryRecord, MemoryStore, ModelRule, NewBundle, OveragePolicy, PinBurn, PinMark, PinRow,
-    PoolRow, PresetStamp, ReturnToPlan, RulesMode, Secret, SessionPlacement, SlowDown, StateCause,
-    StorageKey, Store, StoreError, Strategy, SubagentPlacement, SubscriptionRow, WarmSessions,
-    WindowRow,
+    Cancellation, CompanionPermissions, Failover, GuardrailAttachment, GuardrailRow, Identity,
+    MemberWrite, MemoryKey, MemoryRecord, MemoryStore, ModelRule, NewBundle, OveragePolicy,
+    PinBurn, PinMark, PinRow, PoolRow, PresetStamp, ReturnToPlan, RulesMode, Secret,
+    SessionPlacement, SlowDown, StateCause, StorageKey, Store, StoreError, Strategy,
+    SubagentPlacement, SubscriptionRow, WarmSessions, WindowRow,
 };
 
 fn account(id: &str, kind: AccountKind) -> AccountRow {
@@ -35,7 +35,7 @@ fn key(store: &Store, id: &str, pool_id: &str, secret: &str) -> ApiKeyRow {
         model_rules: Vec::new(),
         model_rules_mode: RulesMode::Extend,
         long_context_twins: true,
-        keepalive_opt_out: false,
+        companion_permissions: CompanionPermissions::default(),
         body_capture_hours: None,
         secret_digest: store.api_key_digest(secret).to_vec(),
         prefix: phoebis_store::key_prefix(secret),
@@ -86,7 +86,7 @@ fn rename(
 }
 
 #[test]
-fn a_version_one_registry_opens_at_four_with_the_new_columns_at_their_defaults_and_no_all_time_counters(
+fn a_version_one_registry_opens_at_five_with_the_new_columns_at_their_defaults_and_no_all_time_counters(
 ) {
     let dir = tempfile::tempdir().unwrap();
     let key = StorageKey::generate();
@@ -152,6 +152,8 @@ fn a_version_one_registry_opens_at_four_with_the_new_columns_at_their_defaults_a
          DROP TABLE session_first_seen;
          DROP TABLE usage_window_sets;
          ALTER TABLE refresh_attempts DROP COLUMN cause;
+         ALTER TABLE api_keys ADD COLUMN keepalive_opt_out INTEGER NOT NULL DEFAULT 0;
+         ALTER TABLE api_keys DROP COLUMN companion_permissions_json;
          DROP TABLE keepalive_idle_returns;
          CREATE TABLE IF NOT EXISTS keepalive_idle_returns (
            pool_id TEXT NOT NULL, bucket INTEGER NOT NULL, reached INTEGER NOT NULL, returned INTEGER NOT NULL,
@@ -163,7 +165,7 @@ fn a_version_one_registry_opens_at_four_with_the_new_columns_at_their_defaults_a
     .unwrap();
     drop(conn);
     let store = Store::open(&path, &key).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 4);
+    assert_eq!(store.schema_version().unwrap(), 5);
     assert!(
         store.load_keepalive().unwrap().2.is_empty(),
         "the all-time counters leave with their table"
@@ -184,6 +186,60 @@ fn a_version_one_registry_opens_at_four_with_the_new_columns_at_their_defaults_a
             .collect::<Vec<_>>(),
         [("five_hour", None, None)],
         "a reading from before the step reads no plan and no tier"
+    );
+}
+
+#[test]
+fn a_key_with_the_old_opt_out_migrates_to_a_set_without_keepalive_and_every_key_gains_allowance() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("registry.sqlite");
+    let key_store = StorageKey::generate();
+    {
+        let store = Store::open(&path, &key_store).unwrap();
+        store.insert_pool(&pool("main"), "test").unwrap();
+        store
+            .insert_api_key(&key(&store, "plain", "main", "phoebis-plain"), "test")
+            .unwrap();
+        store
+            .insert_api_key(&key(&store, "quiet", "main", "phoebis-quiet"), "test")
+            .unwrap();
+    }
+    // The file as a version-4 build left it: the opt-out column back, `quiet` opted out, the set's column gone and
+    // the marker at 4, as the file's other migration test takes a file back to version 1.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "ALTER TABLE api_keys ADD COLUMN keepalive_opt_out INTEGER NOT NULL DEFAULT 0;
+         UPDATE api_keys SET keepalive_opt_out = 1 WHERE id = 'quiet';
+         ALTER TABLE api_keys DROP COLUMN companion_permissions_json;
+         UPDATE meta SET value = '4' WHERE key = 'schema_version';",
+    )
+    .unwrap();
+    drop(conn);
+    let store = Store::open(&path, &key_store).unwrap();
+    assert_eq!(store.schema_version().unwrap(), 5);
+    let plain = store
+        .api_key("plain")
+        .unwrap()
+        .unwrap()
+        .companion_permissions;
+    let quiet = store
+        .api_key("quiet")
+        .unwrap()
+        .unwrap()
+        .companion_permissions;
+    assert_eq!(
+        plain,
+        CompanionPermissions {
+            allowance: true,
+            keepalive: true
+        }
+    );
+    assert_eq!(
+        quiet,
+        CompanionPermissions {
+            allowance: true,
+            keepalive: false
+        }
     );
 }
 

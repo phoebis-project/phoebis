@@ -10,7 +10,9 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_routing::RegistrySnapshot;
-use phoebis_store::{stamp_token, ApiKeyRow, AttachmentSubject, StoreError, ROTATION_GRACE_MS};
+use phoebis_store::{
+    stamp_token, ApiKeyRow, AttachmentSubject, CompanionPermissions, StoreError, ROTATION_GRACE_MS,
+};
 use serde_json::{json, Value};
 use utoipa::ToSchema;
 
@@ -61,8 +63,9 @@ pub(crate) struct KeyInput {
     /// Default `true`.
     #[serde(default)]
     long_context_twins: Option<bool>,
+    /// The companion routes this key may use: allowance and keepalive, both for a new key.
     #[serde(default)]
-    keepalive_opt_out: Option<bool>,
+    companion_permissions: Option<Vec<String>>,
     /// At most `stats.body_capture_max_hours`, or null to inherit.
     #[serde(default, deserialize_with = "double_option")]
     #[schema(value_type = Option<u32>, nullable)]
@@ -113,7 +116,8 @@ pub(crate) struct Key {
     pub model_rules_mode: String,
     /// Default `true`.
     pub long_context_twins: bool,
-    pub keepalive_opt_out: bool,
+    /// The companion routes this key may use: allowance and keepalive, both for a new key.
+    pub companion_permissions: Vec<String>,
     pub body_capture_hours: Option<u32>,
     /// Falls back to the pool's value when the key's own is unset.
     pub effective_body_capture_hours: u32,
@@ -186,7 +190,7 @@ pub(crate) struct KeyCreated {
     #[schema(example = "extend")]
     pub model_rules_mode: String,
     pub long_context_twins: bool,
-    pub keepalive_opt_out: bool,
+    pub companion_permissions: Vec<String>,
     pub body_capture_hours: Option<u32>,
     pub effective_body_capture_hours: u32,
     pub auto_mode_server: Option<bool>,
@@ -252,8 +256,13 @@ fn apply(state: &AdminState, row: &mut ApiKeyRow, input: &KeyInput) -> Result<()
     if let Some(twins) = input.long_context_twins {
         row.long_context_twins = twins;
     }
-    if let Some(opt_out) = input.keepalive_opt_out {
-        row.keepalive_opt_out = opt_out;
+    if let Some(words) = &input.companion_permissions {
+        row.companion_permissions = CompanionPermissions::from_words(words).map_err(|word| {
+            failure(
+                StatusCode::BAD_REQUEST,
+                &format!("companion_permissions holds allowance and keepalive, not {word}"),
+            )
+        })?;
     }
     if let Some(hours) = input.body_capture_hours {
         if hours.is_some_and(|h| h > state.body_capture_max_hours) {
@@ -439,7 +448,7 @@ pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
     request_body(content = KeyInput, content_type = "application/json"),
     responses(
         (status = 201, description = "The created key.", body = KeyCreated),
-        (status = 400, description = "- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `id, label, and pool_id are required`\n- `id must match [a-z0-9][a-z0-9-]{0,63}`\n- `label is at most 256 bytes`\n- `notes is at most 256 bytes`\n- `body_capture_hours exceeds stats.body_capture_max_hours`\n- `auto_mode_server must be true, false, or null`\n- `model_rules holds at most 256 entries`\n- `model_rules[{i}]: {reason}`: the entry's index and the grammar's own text\n- `model_rules_mode is extend or replace`\n- `guardrails applies on edit`: a new key starts with none of its own", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
+        (status = 400, description = "- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `id, label, and pool_id are required`\n- `id must match [a-z0-9][a-z0-9-]{0,63}`\n- `label is at most 256 bytes`\n- `notes is at most 256 bytes`\n- `body_capture_hours exceeds stats.body_capture_max_hours`\n- `auto_mode_server must be true, false, or null`\n- `companion_permissions holds allowance and keepalive, not {word}`: the first unknown word of the list\n- `model_rules holds at most 256 entries`\n- `model_rules[{i}]: {reason}`: the entry's index and the grammar's own text\n- `model_rules_mode is extend or replace`\n- `guardrails applies on edit`: a new key starts with none of its own", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
         (status = 404, description = "`pool not found`", body = ErrorBody, example = json!({"error": "pool not found"})),
         (status = 409, description = "`a key with this id exists`", body = ErrorBody, example = json!({"error": "a key with this id exists"})),
         (status = 500, response = StorageFailure),
@@ -480,7 +489,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         model_rules: Vec::new(),
         model_rules_mode: phoebis_store::RulesMode::Extend,
         long_context_twins: true,
-        keepalive_opt_out: false,
+        companion_permissions: CompanionPermissions::default(),
         body_capture_hours: None,
         secret_digest: state.store.api_key_digest(&secret).to_vec(),
         prefix: phoebis_store::key_prefix(&secret),
@@ -529,7 +538,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     request_body(content = KeyInput, content_type = "application/json"),
     responses(
         (status = 200, description = "The key's fields, the same shape as `POST /admin/keys` without `secret`.", body = Key),
-        (status = 400, description = "- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `expected_revision is the revision the row was read at`: a `null`, or a value that is not a non-negative integer\n- `label is at most 256 bytes`\n- `notes is at most 256 bytes`\n- `body_capture_hours exceeds stats.body_capture_max_hours`\n- `auto_mode_server must be true, false, or null`\n- `model_rules holds at most 256 entries`\n- `model_rules[{i}]: {reason}`: the entry's index and the grammar's own text\n- `model_rules_mode is extend or replace`\n- `guardrails lists {id} twice`\n- `key {id} would hold more than 64 guardrails`, with nothing written, also where a `pool_id` change alone moves the key under a pool whose guardrails take it over the bound", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
+        (status = 400, description = "- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `expected_revision is the revision the row was read at`: a `null`, or a value that is not a non-negative integer\n- `label is at most 256 bytes`\n- `notes is at most 256 bytes`\n- `body_capture_hours exceeds stats.body_capture_max_hours`\n- `auto_mode_server must be true, false, or null`\n- `companion_permissions holds allowance and keepalive, not {word}`: the first unknown word of the list\n- `model_rules holds at most 256 entries`\n- `model_rules[{i}]: {reason}`: the entry's index and the grammar's own text\n- `model_rules_mode is extend or replace`\n- `guardrails lists {id} twice`\n- `key {id} would hold more than 64 guardrails`, with nothing written, also where a `pool_id` change alone moves the key under a pool whose guardrails take it over the bound", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
         (status = 404, description = "- `key not found`\n- `pool not found`\n- `guardrail {id} not found`, with nothing written", body = ErrorBody, example = json!({"error": "key not found"})),
         // The header goes ahead of `example`: utoipa-gen 6 takes the comma after an example as its own, so an
         // attribute after it fails to parse.
@@ -750,7 +759,12 @@ fn key_json(
         model_rules: row.model_rules.clone(),
         model_rules_mode: row.model_rules_mode.as_str().to_string(),
         long_context_twins: row.long_context_twins,
-        keepalive_opt_out: row.keepalive_opt_out,
+        companion_permissions: row
+            .companion_permissions
+            .words()
+            .into_iter()
+            .map(String::from)
+            .collect(),
         body_capture_hours: row.body_capture_hours,
         effective_body_capture_hours: snapshot.body_capture_hours(row),
         auto_mode_server: row.auto_mode_server,

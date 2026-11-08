@@ -1,8 +1,8 @@
 use phoebis_guardrails::{Condition, GuardrailAction, GuardrailMode, Operator, Selector, Subject};
 use phoebis_routing::{CompiledGuardrails, KeyRefusal, Presented, RegistrySnapshot};
 use phoebis_store::{
-    digest_with, ApiKeyRow, AttachmentSubject, GuardrailAttachment, GuardrailRow, PoolRow,
-    RegistryLoad, RetiredSecret, RulesMode, Strategy, SubscriptionTerm,
+    digest_with, ApiKeyRow, AttachmentSubject, CompanionPermissions, GuardrailAttachment,
+    GuardrailRow, PoolRow, RegistryLoad, RetiredSecret, RulesMode, Strategy, SubscriptionTerm,
 };
 
 const DIGEST_KEY: [u8; 32] = [0; 32];
@@ -22,7 +22,7 @@ fn load(revoked_at: Option<i64>) -> RegistryLoad {
             model_rules: Vec::new(),
             model_rules_mode: RulesMode::Extend,
             long_context_twins: true,
-            keepalive_opt_out: false,
+            companion_permissions: CompanionPermissions::default(),
             body_capture_hours: None,
             secret_digest: digest_with(&DIGEST_KEY, b"two").to_vec(),
             prefix: "00000000".into(),

@@ -2804,7 +2804,7 @@ impl Engine {
                 .is_some_and(|pool| KeepalivePolicy::from_json(&pool.keepalive_json).enabled);
             if !enabled {
                 Some(Reason::KeepaliveOff)
-            } else if key_row.is_some_and(|row| row.keepalive_opt_out) {
+            } else if key_row.is_some_and(|row| !row.companion_permissions.keepalive) {
                 Some(Reason::OptedOut)
             } else {
                 None
@@ -4164,11 +4164,11 @@ pub(crate) fn refresh_policy<'v>(
     agent: &mut Agent,
 ) -> Result<(&'v PoolRow, &'v KeepalivePolicy, bool), Gate> {
     // The operator's opt-out reaches an idle session here, not only at its next request: the recipe is dropped
-    // rather than held, because nothing on that key may be probed again until the flag is cleared.
+    // rather than held, because nothing on that key may be probed again until its keepalive permission is back.
     let Some(key) = view
         .snapshot
         .key(&agent.key_id)
-        .filter(|k| !k.keepalive_opt_out)
+        .filter(|k| k.companion_permissions.keepalive)
     else {
         return Err(Gate::Drop(Reason::KeyOptedOut, Wasted::Released));
     };
@@ -4555,7 +4555,7 @@ mod tests {
                 model_rules: Vec::new(),
                 model_rules_mode: phoebis_store::RulesMode::default(),
                 long_context_twins: false,
-                keepalive_opt_out: false,
+                companion_permissions: phoebis_store::CompanionPermissions::default(),
                 body_capture_hours: None,
                 secret_digest: vec![0; 32],
                 prefix: "00000000".into(),
