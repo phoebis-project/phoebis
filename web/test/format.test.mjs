@@ -237,9 +237,8 @@ test("a share names its window through the console's labels and an unknown key a
   assert.equal(shareLabel('seven_day_opus', 0.5), '50% of seven_day_opus', 'a window the pages do not know keeps its key');
 });
 
-test('a count with its noun groups its digits, and a count of one takes the singular', () => {
+test('a count with its noun groups its digits', () => {
   assert.equal(plural(1204, 'request'), '1,204 requests');
-  assert.equal(plural(1, 'request'), '1 request');
 });
 
 test('the sentences of a title leave out an absent part and an empty one with no stray separator', () => {

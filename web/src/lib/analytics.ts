@@ -332,7 +332,7 @@ export const failureHead = (failure: { unpriced: boolean }, what: string): strin
  * still out draws its skeleton and calls this with none.
  */
 export const equivalentOrDash = (v: number | null | undefined, week: WeekPosition, scale: number): string => (v === null || v === undefined ? '-' : fmtWeek(v * scale, week));
-/** Parts of a title as sentences, an absent part left out. */
+/** Parts of a title as sentences, an absent or empty part left out. */
 export const sentences = (parts: (string | null)[]): string => joinPresent(parts, '. ');
 /**
  * A native table cell, short enough that the table's columns fit its card: the figure in the chosen week's short form
