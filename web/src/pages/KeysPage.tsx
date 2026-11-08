@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { api } from '@/api';
 import { oneOf } from '@/api/decode';
-import type { ApiKey, CreatedApiKey, FundedSum, ModelRulesMode, Pool } from '@/api/types';
+import type { ApiKey, CompanionPermission, CreatedApiKey, FundedSum, ModelRulesMode, Pool } from '@/api/types';
+import { COMPANION_PERMISSION_VALUES } from '@/api/types';
 import { useRun, useSession } from '@/app/session';
 import { useAppSettings } from '@/app/settings';
 import { useAddressEdit } from '@/app/useAddressEdit';
@@ -31,6 +32,7 @@ const captureLine = (key: Pick<ApiKey, 'bodyCaptureHours'>, pool: Pick<Pool, 'bo
 const CAPTURE_INHERIT_HINT = 'This key sets no capture of its own, so it follows its pool.';
 /** The Models summary of a key without rules of its own. */
 const NO_RULES: Record<ModelRulesMode, string> = { extend: 'Pool rules', replace: 'No rules' };
+const PERMISSION_OFF: Record<CompanionPermission, string> = { allowance: 'allowance off', keepalive: 'cache warming off' };
 const RETIRED_SECRET_HINT = 'Sessions whose newest request presented the previous secret. A session that registered a companion and sent no request since counts as switched.';
 /** The note under the Status badge. The fill column cuts it, so its title opens with the whole of it. */
 const retiredNote = (sessions: number) => `${plural(sessions, 'session')} still on the previous secret`;
@@ -287,8 +289,11 @@ export function KeysPage() {
                                 </span>
                               )}
                             </span>
-                            {!k.companionPermissions.includes('allowance') && <span className="sub" title="allowance off">allowance off</span>}
-                            {!k.companionPermissions.includes('keepalive') && <span className="sub" title="cache warming off">cache warming off</span>}
+                            {COMPANION_PERMISSION_VALUES.filter((p) => !k.companionPermissions.includes(p)).map((p) => (
+                              <span key={p} className="sub" title={PERMISSION_OFF[p]}>
+                                {PERMISSION_OFF[p]}
+                              </span>
+                            ))}
                             {/* No column draws the creation date or the week's requests, so the order's figure sits
                                 under the name while picked. */}
                             {filters.sort === 'created' && <StampSub at={k.createdAt} word="created" />}

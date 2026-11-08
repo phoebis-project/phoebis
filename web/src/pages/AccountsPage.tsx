@@ -610,7 +610,7 @@ function AccountDetail({ account, awaitingReading, generation, now, onToast, onP
                     { label: 'Type', value: 'API key' },
                     { label: 'Windows', value: 'None reported, billed per token' },
                   ]),
-              { label: 'Companion id', value: <code>{account.companionId}</code> },
+              { label: 'Companion id', value: account.companionId, mono: true },
             ]}
           />
           {endForm && (

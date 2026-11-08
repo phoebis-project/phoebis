@@ -11048,12 +11048,12 @@ async function keyCompanionPermissions(theme) {
   await atRest();
 }
 
-/** The Identity card's Companion id row on the mock's first account, primary, its pseudonym drawn as code. */
+/** The Identity card's Companion id row on the mock's first account, primary, its pseudonym drawn mono. */
 async function companionIdRow(theme) {
   const read = await page.evaluate(() => {
     const identity = [...document.querySelectorAll('.detail .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
     const row = [...(identity?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent?.trim() === 'Companion id');
-    return row ? (row.querySelector('dd > code')?.textContent ?? null) : undefined;
+    return row ? (row.querySelector('dd.mono')?.textContent ?? null) : undefined;
   });
   measurements.push(`${theme} /accounts Identity Companion id ${JSON.stringify(read ?? 'no row')}`);
   if (read !== '3c9e41a7') failures.push(`${theme} /accounts: the Identity card's Companion id reads ${read === undefined ? 'no row' : JSON.stringify(read)}, not the code 3c9e41a7`);
