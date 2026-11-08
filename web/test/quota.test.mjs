@@ -313,6 +313,22 @@ test("the soonest reset of a usage-based seat is its spend window's, while that 
   assert.equal(d.soonestReset(planAccount('plan', [planWindow('5h', 3_600_000), planWindow('7d', 86_400_000)]), SPEND_NOW), '5h', 'a plan account reads its windows as before');
 });
 
+test('the soonest reset reads the Fable window beside the others and names every window that resets at that instant', () => {
+  const fableFirst = { ...planAccount('fable', [planWindow('5h', 2 * HOUR), planWindow('7d', DAY)]), fableWindow: planWindow('7d_fable', HOUR) };
+  assert.deepEqual(d.soonestResetAt(fableFirst, SPEND_NOW), { at: SPEND_NOW + HOUR, ids: ['7d_fable'] });
+  const tied = planAccount('tied', [planWindow('5h', HOUR), planWindow('7d', HOUR)]);
+  assert.deepEqual(d.soonestResetAt(tied, SPEND_NOW), { at: SPEND_NOW + HOUR, ids: ['5h', '7d'] }, 'two windows at one instant');
+});
+
+test("a recovery order reads its own window's reset, the soonest first, and files an account without it after every dated one by label, the usage-based seat among them", () => {
+  // The 5-hour account resets first of all, so an order over every window's soonest reset dates it under the Fable key.
+  const session = planAccount('session', [planWindow('5h', 30 * MINUTE)]);
+  const week = { ...planAccount('week', []), fableWindow: planWindow('7d_fable', HOUR) };
+  const accounts = [seatAccount(), session, week];
+  assert.deepEqual(d.sortByReset(accounts, '7d_fable', SPEND_NOW).map((a) => a.id), ['week', 'seat', 'session'], "the Fable order reads the account's Fable window");
+  assert.deepEqual(d.sortByReset(accounts, '5h', SPEND_NOW).map((a) => a.id), ['session', 'seat', 'week'], 'the 5-hour order reads the 5-hour window');
+});
+
 test('the pace orders put a usage-based seat last, with the accounts that carry no such window', () => {
   const accounts = [seatAccount(), planAccount('behind', [planWindow('5h', 3_600_000, -0.3), planWindow('7d', 86_400_000, -0.2)])];
   for (const id of ['5h', '7d', '7d_fable']) assert.deepEqual(d.sortByPace(accounts, id, SPEND_NOW).map((a) => a.id).slice(-1), ['seat'], id);

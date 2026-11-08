@@ -100,9 +100,9 @@ function TriStateRow({ children, mixed, modifier, on, onClick }: { children: Rea
 }
 
 /** A one-choice row with the lists' check mark: a radio row `ROWS` walks, or a menu's `menuitemradio` row. */
-export function RadioRow({ checked, children, className = 'add-filter__row', onClick, onKeyDown, role = 'radio' }: { checked: boolean; children: ReactNode; className?: string; onClick: () => void; onKeyDown?: (e: KeyboardEvent<HTMLButtonElement>) => void; role?: 'menuitemradio' | 'radio' }) {
+export function RadioRow({ checked, children, className = 'add-filter__row', disabled = false, onClick, onKeyDown, role = 'radio' }: { checked: boolean; children: ReactNode; className?: string; disabled?: boolean; onClick: () => void; onKeyDown?: (e: KeyboardEvent<HTMLButtonElement>) => void; role?: 'menuitemradio' | 'radio' }) {
   return (
-    <button type="button" role={role} aria-checked={checked} className={className} onClick={onClick} onKeyDown={onKeyDown}>
+    <button type="button" role={role} aria-checked={checked} aria-disabled={disabled || undefined} className={className} onClick={disabled ? undefined : onClick} onKeyDown={onKeyDown}>
       <span className="mselect__check">{checked && <IconCheck size={14} />}</span>
       {children}
     </button>

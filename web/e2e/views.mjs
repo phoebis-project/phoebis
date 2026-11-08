@@ -8314,10 +8314,10 @@ async function planEndedLines(theme, path) {
 }
 
 /**
- * The Accounts bar's sort control: its button in the height, top edge, type size and weight of the Add filter button
- * beside it, recorded with its text and title, then opened: the popover inside the window under the button, its six
- * radio rows (the four keys, then Ascending and Descending) one height, the checked key's and direction's marks drawn
- * and no other, and Escape closing it with the focus back on the button.
+ * The Accounts bar's sort control: its button in the height, top edge, type size, weight and ink of the Add filter
+ * button beside it, recorded with its text and title, then opened: the popover inside the window under the button, its
+ * eight radio rows (the six keys, then Ascending and Descending) one height, the checked key's and direction's marks
+ * drawn and no other, and Escape closing it with the focus back on the button.
  */
 async function accountsSortControl(theme) {
   const say = (what) => failures.push(`${theme} /accounts sort control: ${what}`);
@@ -8333,7 +8333,7 @@ async function accountsSortControl(theme) {
         if (!el) return null;
         const style = getComputedStyle(el);
         const b = el.getBoundingClientRect();
-        return { fontSize: style.fontSize, fontWeight: style.fontWeight, height: Math.round(b.height), top: Math.round(b.top) };
+        return { fontSize: style.fontSize, fontWeight: style.fontWeight, height: Math.round(b.height), ink: style.color, top: Math.round(b.top) };
       };
       const button = row?.querySelector('button[aria-label="Sort"]') ?? null;
       return {
@@ -8342,7 +8342,7 @@ async function accountsSortControl(theme) {
       };
     });
     measurements.push(`${theme} /accounts sort button ${JSON.stringify(rest)}`);
-    for (const what of compare(rest.sort, rest.addFilter, ['fontSize', 'fontWeight', 'height', 'top'], 'the Sort button against the Add filter button')) say(what);
+    for (const what of compare(rest.sort, rest.addFilter, ['fontSize', 'fontWeight', 'height', 'ink', 'top'], 'the Sort button against the Add filter button')) say(what);
     if (rest.sort?.text !== 'Sort: Name' || rest.sort?.title !== 'Sorted by Name, ascending') say(`the button reads ${JSON.stringify(rest.sort?.text ?? null)} titled ${JSON.stringify(rest.sort?.title ?? null)} on a bare address, not "Sort: Name" titled "Sorted by Name, ascending"`);
     await sort.click();
     await advance(CLOCK_STEP_MS);
@@ -8371,7 +8371,7 @@ async function accountsSortControl(theme) {
     if (open.box.left < 0 || open.box.top < 0 || open.box.right > open.window.width || open.box.bottom > open.window.height) say(`the popover stands at ${JSON.stringify(open.box)}, past the ${open.window.width} by ${open.window.height} window`);
     if (open.box.top <= open.button) say(`the popover's top ${open.box.top}px is not under the button's bottom ${open.button}px`);
     const texts = open.radios.map((r) => r.text);
-    if (JSON.stringify(texts) !== JSON.stringify(['Name', 'Soonest reset', 'Most used', 'Status', 'Ascending', 'Descending'])) say(`the radios read ${JSON.stringify(texts)}`);
+    if (JSON.stringify(texts) !== JSON.stringify(['Name', '5-hour reset', '7-day reset', '7-day Fable reset', 'Most used', 'Status', 'Ascending', 'Descending'])) say(`the radios read ${JSON.stringify(texts)}`);
     if (new Set(open.radios.map((r) => r.height)).size !== 1) say(`the radio rows measure ${JSON.stringify(open.radios.map((r) => r.height))}, not one height`);
     const marked = open.radios.filter((r) => r.mark).map((r) => r.text);
     const checked = open.radios.filter((r) => r.checked === 'true').map((r) => r.text);

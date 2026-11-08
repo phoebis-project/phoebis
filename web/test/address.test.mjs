@@ -129,7 +129,7 @@ test('the Accounts codec round-trips its search, sort and status and writes noth
   assert.equal(write(d.ACCOUNTS_CODEC, filters), 'search=git&sort=usage&status=paused');
   assert.deepEqual(read(d.ACCOUNTS_CODEC, ''), { dir: '', search: '', sort: 'name', status: 'all' });
   assert.equal(write(d.ACCOUNTS_CODEC, read(d.ACCOUNTS_CODEC, '')), '');
-  for (const sort of ['name', 'reset', 'usage', 'status']) assert.equal(read(d.ACCOUNTS_CODEC, `sort=${sort}`).sort, sort, sort);
+  for (const sort of ['name', 'reset5h', 'reset7d', 'resetFable', 'usage', 'status']) assert.equal(read(d.ACCOUNTS_CODEC, `sort=${sort}`).sort, sort, sort);
   assert.deepEqual(read(d.ACCOUNTS_CODEC, 'sort=newest&status=disabled'), { dir: '', search: '', sort: 'name', status: 'all' });
 });
 

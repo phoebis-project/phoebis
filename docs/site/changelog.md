@@ -208,19 +208,20 @@ Diagnostics group holding Routing log and Meter ([The console](console.md)). Eve
 holding the slots it has in one order: the range pills, the search, Add filter with its filters as chips under the bar,
 the view's own controls, and at the right edge a split Refresh button, whose dropdown sets auto reload, and the count of
 what the view lists. A count of a thousand or more groups its digits on every view, such as 1,204 requests ([The
-console](console.md)). `/models` opens the Keys view, where a saved key's dialog shows its Effective list, the accounts
-cooling for a model show on the Accounts view and the model rejected and model permitted rows in the Routing log, and a
-model a decision card, an event's detail or a log row names opens the Routing log on its rows over the last day ([The
-shell](console.md#the-shell), [Keys](console.md#keys), [Routing log](console.md#routing-log)). The Accounts, Analytics
-and Pools views tell a bundle that changed under the tab from an error while drawing, each with its own words and a
-Reload button ([The shell](console.md#the-shell)). The console shows a reload banner when the router answers from a
-newer build than the open tab's bundle, and an attention condition the console does not know reads as Unknown condition
-with its kind on hover ([The shell](console.md#the-shell), [Dashboard](console.md#dashboard)). The expert view, a switch
-in the sidebar's foot, shows every field of the pool and key dialogs, the advanced ones included, and the sidebar's
-Diagnostics group ([The shell](console.md#the-shell)). The login screen offers "Stay logged in", which keeps the browser
-logged in for 30 days from the last visit, across a router restart, until a secret rotation or a logout of a kept login,
-which ends every kept login ([The shell](console.md#the-shell)). The top bar wraps a view title it cannot hold beside
-its controls onto a second line at a phone's width, so the Routing log page fits the window's width ([The
+console](console.md)). Every list view's filter bar holds a Sort control whose key and direction travel in the address
+([The console](console.md)). `/models` opens the Keys view, where a saved key's dialog shows its Effective list, the
+accounts cooling for a model show on the Accounts view and the model rejected and model permitted rows in the Routing
+log, and a model a decision card, an event's detail or a log row names opens the Routing log on its rows over the last
+day ([The shell](console.md#the-shell), [Keys](console.md#keys), [Routing log](console.md#routing-log)). The Accounts,
+Analytics and Pools views tell a bundle that changed under the tab from an error while drawing, each with its own words
+and a Reload button ([The shell](console.md#the-shell)). The console shows a reload banner when the router answers from
+a newer build than the open tab's bundle, and an attention condition the console does not know reads as Unknown
+condition with its kind on hover ([The shell](console.md#the-shell), [Dashboard](console.md#dashboard)). The expert
+view, a switch in the sidebar's foot, shows every field of the pool and key dialogs, the advanced ones included, and the
+sidebar's Diagnostics group ([The shell](console.md#the-shell)). The login screen offers "Stay logged in", which keeps
+the browser logged in for 30 days from the last visit, across a router restart, until a secret rotation or a logout of a
+kept login, which ends every kept login ([The shell](console.md#the-shell)). The top bar wraps a view title it cannot
+hold beside its controls onto a second line at a phone's width, so the Routing log page fits the window's width ([The
 shell](console.md#the-shell)). The unit legend hangs from its button as the console's other popovers do, takes the focus
 when it opens, closes on Escape, a click outside it or the focus leaving it, and hands the focus back to its button when
 it closes on Escape, and the Settings view's Appearance rows wrap their controls under their labels at a phone's width
@@ -322,62 +323,62 @@ card and the Quota cards ([Accounts](console.md#accounts), [Quota](console.md#qu
 is spelled `canceled` on the account view, the account edit, the routing log's term facts and the `wind_down_started`
 event, with the error code `account_canceled`, the probe outcome `canceled` and the pairing session's status `canceled`
 ([Accounts](console.md#accounts), [API reference](api-reference.md)). The Accounts view orders its list through the
-filter bar's sort control, a key and a direction carried in the address, Name ascending by default
-([Accounts](console.md#accounts)). The Accounts view shows a paired account's first reading once the confirm's poll
-lands, a few seconds after the confirm, with "The first quota reading is in flight." in its Usage card until then and a
-read of the list every 2 s for up to 30 s while auto reload is off ([Accounts](console.md#accounts)). The allowance
-block and the Analytics card read each weekly reset in the chosen week and price it at the tier the account ran under at
-that reset ([Accounts](console.md#accounts), [Analytics](console.md#analytics)). A new pool's dialog starts with cache
-warming off ([Pools](console.md#pools)). A pool card's Active pins fact counts every pin under the pool's keys, as the
-Dashboard's Sessions card does, and reads how many sit on a former member under the figure
-([Dashboard](console.md#dashboard), [Pools](console.md#pools)). The pool dialog holds the save on a member budget field
-the browser cannot read as a number ([Pools](console.md#pools)). The pool dialog's idle window set above the break-even
-reads a note that the ceiling lies above it and prices its cost from the set value, while the parked and horizon
-ceilings stay capped at the break-even ([Pools](console.md#pools)). The Pools dialog's return rate reads the last 7 or
-30 days ([Pools](console.md#pools)). The Pools view names the third selection tier `metered` in its serving table and
-its Selection hint, the tier holding the API-key accounts and the usage-based seats ([Pools](console.md#pools)). The
-Keys view's Pool filter draws one chip per pool, and a pool the address names that the router does not list shows its
-chip until the pools load ([Keys](console.md#keys)). A request whose answer the upstream refused draws the refusal's
-category as a warning badge beside its status, and the Outcome group of Add filter offers Stop reason and Refusal
-category ([Requests](console.md#requests)). A request whose stream was cut after its head reads what cut it in its
-drawer's Error row ([Requests](console.md#requests)). A request's "(in the band)" reads the band of the cost revision in
-force when it completed ([Requests](console.md#requests)). An auto reload on a custom range reads once a request
-received inside the range and written after an earlier read, as a preset range does ([Requests](console.md#requests)).
-Each captured body block in the request drawer has a find field that counts the lines holding a term, opens the wide
-window on a hit, marks every occurrence on the drawn rows and walks the hits with Enter and Shift+Enter
-([Requests](console.md#requests)). A request row of `GET /admin/requests` and a request's captured bodies carry no
-request truncation flag, since the router stores a captured request whole, and the bodies' byte counts say what a cut
-dropped ([API reference](api-reference.md), [Requests](console.md#requests)). A pool member's `eligible` word on
-`GET /admin/pools` reads `spent` for a usage-based seat at its spend cap and `budget_unknown` for a budgeted member
-while the ledger is degraded, each a reason the router skips the member ([API reference](api-reference.md)). The Pools
-view's Standing reads `spend cap until {time}` for a seat at its spend cap and `budget unknown` for a budgeted member
-while the ledger is degraded, and an exhausted pool's status sentence names when a spent member's spend cap resets
-([Pools](console.md#pools)). On the Routing log an exhaustion that waits on a spend cap reads `spend cap` in its By
-chip, and a candidate at its spend cap reads `spend cap reached until {time}` in its Verdict chip ([Routing
-log](console.md#routing-log)). `GET /admin/analytics/burn` and `GET /admin/sessions` read each account's kind from the
-routing snapshot and answer no `storage failure` ([API reference](api-reference.md)). On the Requests view a custom
-range's late row that lands below the rows shown draws on the next auto reload read ([Requests](console.md#requests)).
-On the Requests view and the Routing log the list's late answer replaces the page an auto reload poll stood in for it,
-and Next past an overrun under a preset reads to the router's clock ([Requests](console.md#requests), [Routing
-log](console.md#routing-log)). The pressed range pill names its range and its end on hover, and when the tab comes back
-to a read at once the rows it brought keep their tint through the read after it ([Requests](console.md#requests),
-[Routing log](console.md#routing-log)). The Requests and Routing log Time cells print the date before the time on a row
-older than a day, and the Routing log's columns fit their content ([Requests](console.md#requests), [Routing
-log](console.md#routing-log)). The Requests and Routing log views filter on an agent id through the Agent filter of the
-Subject group, carried in the address as `agent_id` ([Requests](console.md#requests), [Routing
-log](console.md#routing-log)). The Requests, Sessions and Routing log tables lay their columns out by one rule, with a
-minimum per column kind, one fill column and a set wider than the card scrolling inside it, so the Requests table fits
-1280 px with its default columns ([Requests](console.md#requests), [Sessions](console.md#sessions), [Routing
-log](console.md#routing-log)). The Requests view's empty state reads "Widen the range or clear a filter.", as the
-Routing log's does, and a request the router refused before it resolved a model reads a dash for its model
-([Requests](console.md#requests)). Unchecking Select all in a filter's list clears every check, the inverse of checking
-it, and an empty list keeps its meaning ([Requests](console.md#requests), [Routing log](console.md#routing-log)). A
-deleted key's group reads `<id> (deleted, created <time>)`, its creation instant in the viewer's zone
-([Analytics](console.md#analytics)). The Accounts cards offer the three windows the router reads, and the Accounts in
-range table reads the Fable week's peak as Peak Fable ([Analytics](console.md#analytics)). The Accounts section's card
-"Unused allowance by account" ranks the subscription accounts by the figure of their weekly windows left unused over the
-last four weeks, in the chosen week, with the fleet's figures ([Analytics](console.md#analytics)). The Analytics session
-view narrows to one agent under the Agent
+filter bar's sort control, a key and a direction carried in the address, with Name ascending by default, one key per
+window's reset and Most used filing an account with no plan window last ([Accounts](console.md#accounts)). The Accounts
+view shows a paired account's first reading once the confirm's poll lands, a few seconds after the confirm, with "The
+first quota reading is in flight." in its Usage card until then and a read of the list every 2 s for up to 30 s while
+auto reload is off ([Accounts](console.md#accounts)). The allowance block and the Analytics card read each weekly reset
+in the chosen week and price it at the tier the account ran under at that reset ([Accounts](console.md#accounts),
+[Analytics](console.md#analytics)). A new pool's dialog starts with cache warming off ([Pools](console.md#pools)). A
+pool card's Active pins fact counts every pin under the pool's keys, as the Dashboard's Sessions card does, and reads
+how many sit on a former member under the figure ([Dashboard](console.md#dashboard), [Pools](console.md#pools)). The
+pool dialog holds the save on a member budget field the browser cannot read as a number ([Pools](console.md#pools)). The
+pool dialog's idle window set above the break-even reads a note that the ceiling lies above it and prices its cost from
+the set value, while the parked and horizon ceilings stay capped at the break-even ([Pools](console.md#pools)). The
+Pools dialog's return rate reads the last 7 or 30 days ([Pools](console.md#pools)). The Pools view names the third
+selection tier `metered` in its serving table and its Selection hint, the tier holding the API-key accounts and the
+usage-based seats ([Pools](console.md#pools)). The Keys view's Pool filter draws one chip per pool, and a pool the
+address names that the router does not list shows its chip until the pools load ([Keys](console.md#keys)). A request
+whose answer the upstream refused draws the refusal's category as a warning badge beside its status, and the Outcome
+group of Add filter offers Stop reason and Refusal category ([Requests](console.md#requests)). A request whose stream
+was cut after its head reads what cut it in its drawer's Error row ([Requests](console.md#requests)). A request's "(in
+the band)" reads the band of the cost revision in force when it completed ([Requests](console.md#requests)). An auto
+reload on a custom range reads once a request received inside the range and written after an earlier read, as a preset
+range does ([Requests](console.md#requests)). Each captured body block in the request drawer has a find field that
+counts the lines holding a term, opens the wide window on a hit, marks every occurrence on the drawn rows and walks the
+hits with Enter and Shift+Enter ([Requests](console.md#requests)). A request row of `GET /admin/requests` and a
+request's captured bodies carry no request truncation flag, since the router stores a captured request whole, and the
+bodies' byte counts say what a cut dropped ([API reference](api-reference.md), [Requests](console.md#requests)). A pool
+member's `eligible` word on `GET /admin/pools` reads `spent` for a usage-based seat at its spend cap and
+`budget_unknown` for a budgeted member while the ledger is degraded, each a reason the router skips the member ([API
+reference](api-reference.md)). The Pools view's Standing reads `spend cap until {time}` for a seat at its spend cap and
+`budget unknown` for a budgeted member while the ledger is degraded, and an exhausted pool's status sentence names when
+a spent member's spend cap resets ([Pools](console.md#pools)). On the Routing log an exhaustion that waits on a spend
+cap reads `spend cap` in its By chip, and a candidate at its spend cap reads `spend cap reached until {time}` in its
+Verdict chip ([Routing log](console.md#routing-log)). `GET /admin/analytics/burn` and `GET /admin/sessions` read each
+account's kind from the routing snapshot and answer no `storage failure` ([API reference](api-reference.md)). On the
+Requests view a custom range's late row that lands below the rows shown draws on the next auto reload read
+([Requests](console.md#requests)). On the Requests view and the Routing log the list's late answer replaces the page an
+auto reload poll stood in for it, and Next past an overrun under a preset reads to the router's clock
+([Requests](console.md#requests), [Routing log](console.md#routing-log)). The pressed range pill names its range and its
+end on hover, and when the tab comes back to a read at once the rows it brought keep their tint through the read after
+it ([Requests](console.md#requests), [Routing log](console.md#routing-log)). The Requests and Routing log Time cells
+print the date before the time on a row older than a day, and the Routing log's columns fit their content
+([Requests](console.md#requests), [Routing log](console.md#routing-log)). The Requests and Routing log views filter on
+an agent id through the Agent filter of the Subject group, carried in the address as `agent_id`
+([Requests](console.md#requests), [Routing log](console.md#routing-log)). The Requests, Sessions and Routing log tables
+lay their columns out by one rule, with a minimum per column kind, one fill column and a set wider than the card
+scrolling inside it, so the Requests table fits 1280 px with its default columns ([Requests](console.md#requests),
+[Sessions](console.md#sessions), [Routing log](console.md#routing-log)). The Requests view's empty state reads "Widen
+the range or clear a filter.", as the Routing log's does, and a request the router refused before it resolved a model
+reads a dash for its model ([Requests](console.md#requests)). Unchecking Select all in a filter's list clears every
+check, the inverse of checking it, and an empty list keeps its meaning ([Requests](console.md#requests), [Routing
+log](console.md#routing-log)). A deleted key's group reads `<id> (deleted, created <time>)`, its creation instant in the
+viewer's zone ([Analytics](console.md#analytics)). The Accounts cards offer the three windows the router reads, and the
+Accounts in range table reads the Fable week's peak as Peak Fable ([Analytics](console.md#analytics)). The Accounts
+section's card "Unused allowance by account" ranks the subscription accounts by the figure of their weekly windows left
+unused over the last four weeks, in the chosen week, with the fleet's figures ([Analytics](console.md#analytics)). The
+Analytics session view narrows to one agent under the Agent
 filter of the Subject group, carried in the address as `agent_id` and written by the Sessions view's agent menu, its
 links to the request log carrying the agent, the filter disabled until a session is picked and leaving with the session
 ([Analytics](console.md#analytics)). The Analytics session view reads the session's rows through the route's session

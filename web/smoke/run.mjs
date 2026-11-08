@@ -22839,30 +22839,30 @@ await forView('/accounts', async () => {
   });
 });
 await forView('/accounts', async () => {
-  // The bar's sort control on a bare /accounts. Each order is read off the story's accounts (`ACCOUNTS` in
-  // `web/src/mock/accounts.ts`) through `api.listAccounts`, the next reset at the mount's frozen clock as the page
-  // reads it. A key's own direction leaves the address, so a pick of Most used writes `sort=usage` alone.
+  // The bar's sort control on a bare /accounts. The usage and reset orders are written from the story's accounts
+  // (`SEEDS` in `web/src/mock/accounts.ts`) at the mount's frozen clock: their windows' utilizations and the resets
+  // still ahead, the plan-ended sunset holding no window and spare gone with the Delete account case above. An account
+  // without a key's figure reads after every one with it under either direction, by label. A key's own direction leaves
+  // the address, so a pick of Most used writes `sort=usage` alone.
   const name = "/accounts the sort control reads its key and its direction's arrow, lists the keys over the directions, and each pick writes the address and orders the rows";
   const accounts = await api.listAccounts();
-  const usage = (a) => Math.max(0, ...a.windows.map((w) => w.utilization));
-  const nextReset = (a) => Math.min(...a.windows.flatMap((w) => (w.resetsAt === null ? [] : [Date.parse(w.resetsAt)])).filter((t) => t > CLOCK_ORIGIN), Number.POSITIVE_INFINITY);
+  const usage = (a) => (a.windows.length === 0 ? null : Math.max(...a.windows.map((w) => w.utilization)));
   const byLabel = (a, b) => a.label.localeCompare(b.label);
   const ordered = (rows, compare) => [...rows].sort((a, b) => compare(a, b) || byLabel(a, b)).map((a) => a.id);
-  const dated = accounts.filter((a) => nextReset(a) !== Number.POSITIVE_INFINITY);
-  const undated = ordered(accounts.filter((a) => nextReset(a) === Number.POSITIVE_INFINITY), () => 0);
   const want = {
     name: ordered(accounts, () => 0),
-    usage: ordered(accounts, (a, b) => usage(b) - usage(a)),
-    usageAsc: ordered(accounts, (a, b) => usage(a) - usage(b)),
+    usage: ['secondary', 'nightly', 'studio', 'reserve', 'primary', 'legacy', 'workshop', 'contract', 'overflow', 'research', 'annex', 'sunset'],
+    usageAsc: ['workshop', 'legacy', 'primary', 'reserve', 'studio', 'nightly', 'secondary', 'contract', 'overflow', 'research', 'annex', 'sunset'],
     status: ordered(accounts, (a, b) => a.status.localeCompare(b.status)),
-    // An account with no reset ahead sorts last under either direction.
-    reset: [...ordered(dated, (a, b) => nextReset(a) - nextReset(b)), ...undated],
-    resetDesc: [...ordered(dated, (a, b) => nextReset(b) - nextReset(a)), ...undated],
+    reset5h: ['secondary', 'studio', 'primary', 'nightly', 'contract', 'legacy', 'overflow', 'research', 'reserve', 'annex', 'sunset', 'workshop'],
+    reset7d: ['nightly', 'legacy', 'reserve', 'primary', 'workshop', 'studio', 'secondary', 'contract', 'overflow', 'research', 'annex', 'sunset'],
+    resetFable: ['nightly', 'primary', 'workshop', 'studio', 'contract', 'legacy', 'overflow', 'research', 'reserve', 'secondary', 'annex', 'sunset'],
+    resetFableDesc: ['studio', 'workshop', 'primary', 'nightly', 'contract', 'legacy', 'overflow', 'research', 'reserve', 'secondary', 'annex', 'sunset'],
   };
   // Each order moves rows past the label order, and ties stand on usage and on status, so a sort left out or a tie
   // broken any other way than by label fails.
   const shared = (of) => new Set(accounts.map(of)).size < accounts.length;
-  const story = [want.usage, want.status, want.reset].every((rows) => JSON.stringify(rows) !== JSON.stringify(want.name)) && shared(usage) && shared((a) => a.status) && dated.length > 1 && undated.length > 0;
+  const story = [want.usage, want.status].every((rows) => JSON.stringify(rows) !== JSON.stringify(want.name)) && shared(usage) && shared((a) => a.status);
   const page = await mount('/accounts', { now: CLOCK_ORIGIN });
   const button = () => page.container.querySelector('.filter-bar button[aria-label="Sort"]');
   const box = () => document.querySelector('.popover .sort-popover')?.closest('.popover') ?? null;
@@ -22886,8 +22886,10 @@ await forView('/accounts', async () => {
     ['usage', 'Most used'],
     ['usageAsc', 'Ascending'],
     ['status', 'Status'],
-    ['reset', 'Soonest reset'],
-    ['resetDesc', 'Descending'],
+    ['reset5h', '5-hour reset'],
+    ['reset7d', '7-day reset'],
+    ['resetFable', '7-day Fable reset'],
+    ['resetFableDesc', 'Descending'],
   ]) {
     button()?.click();
     await page.settle(100);
@@ -22900,11 +22902,13 @@ await forView('/accounts', async () => {
     usage: { ...shown('down', want.usage, '?sort=usage', 'Most used', 'descending'), open: false },
     usageAsc: { ...shown('up', want.usageAsc, '?sort=usage&dir=asc', 'Most used', 'ascending'), open: false },
     status: { ...shown('up', want.status, '?sort=status', 'Status', 'ascending'), open: false },
-    reset: { ...shown('up', want.reset, '?sort=reset', 'Soonest reset', 'ascending'), open: false },
-    resetDesc: { ...shown('down', want.resetDesc, '?sort=reset&dir=desc', 'Soonest reset', 'descending'), open: false },
+    reset5h: { ...shown('up', want.reset5h, '?sort=reset5h', '5-hour reset', 'ascending'), open: false },
+    reset7d: { ...shown('up', want.reset7d, '?sort=reset7d', '7-day reset', 'ascending'), open: false },
+    resetFable: { ...shown('up', want.resetFable, '?sort=resetFable', '7-day Fable reset', 'ascending'), open: false },
+    resetFableDesc: { ...shown('down', want.resetFableDesc, '?sort=resetFable&dir=desc', '7-day Fable reset', 'descending'), open: false },
   };
   const wantRadios = [
-    ['Name true', 'Soonest reset false', 'Most used false', 'Status false'],
+    ['Name true', '5-hour reset false', '7-day reset false', '7-day Fable reset false', 'Most used false', 'Status false'],
     ['Ascending true', 'Descending false'],
   ];
   results.push({
@@ -22916,7 +22920,7 @@ await forView('/accounts', async () => {
 await forView('/accounts', async () => {
   // The sort control from the keyboard. jsdom moves no focus on Tab and fires no click for Enter on a button, so a Tab
   // here is the focus moved to the next stop in the bar's or the popover's order, and an Enter on a button its click.
-  const name = '/accounts the sort control walks from the keyboard: its stop follows Add filter, Enter opens onto the first key, Tab moves through the six radios, Enter on one picks and closes onto the button, and Escape closes onto the button';
+  const name = '/accounts the sort control walks from the keyboard: its stop follows Add filter, Enter opens onto the first key, Tab moves through the eight radios, Enter on one picks and closes onto the button, and Escape closes onto the button';
   const TABBABLE = 'a[href], button:not(:disabled), input:not(:disabled):not([type="hidden"]), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])';
   const page = await mount('/accounts', { now: CLOCK_ORIGIN });
   const button = page.container.querySelector('.filter-bar button[aria-label="Sort"]');
@@ -22948,7 +22952,7 @@ await forView('/accounts', async () => {
   await page.settle(100);
   const escaped = state();
   page.unmount();
-  const wantWalk = ['Name', 'Soonest reset', 'Most used', 'Status', 'Ascending', 'Descending'].map((label) => `${label} open`);
+  const wantWalk = ['Name', '5-hour reset', '7-day reset', '7-day Fable reset', 'Most used', 'Status', 'Ascending', 'Descending'].map((label) => `${label} open`);
   results.push({
     name,
     ok:

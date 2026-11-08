@@ -52,6 +52,8 @@ export * from '@/lib/keepalive';
 // keepalive and quota both export a STATUS_TONE, which the two star exports would drop: quota's keeps the name through
 // the explicit export below, and keepalive's reads under this alias.
 export { STATUS_TONE as LIFECYCLE_STATUS_TONE } from '@/lib/keepalive';
+// keepalive and sort both export an orderRows, which two star exports would drop, so sort's reads under this alias.
+export { orderRows as orderRowsBy } from '@/lib/sort';
 export * from '@/lib/menu';
 export * from '@/lib/meter';
 export * from '@/lib/pattern';

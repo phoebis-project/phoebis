@@ -14,7 +14,9 @@ const { act, createElement: h, createRoot, SortControl } = await import('./dist/
 
 const KEYS = [
   { defaultDir: 'asc', id: 'name', label: 'Name' },
-  { defaultDir: 'asc', id: 'reset', label: 'Soonest reset' },
+  { defaultDir: 'asc', id: 'reset5h', label: '5-hour reset' },
+  { defaultDir: 'asc', id: 'reset7d', label: '7-day reset' },
+  { defaultDir: 'asc', id: 'resetFable', label: '7-day Fable reset' },
   { defaultDir: 'desc', id: 'usage', label: 'Most used' },
   { defaultDir: 'asc', id: 'status', label: 'Status' },
 ];
@@ -61,7 +63,9 @@ test('at rest the button reads the key, names itself Sort and holds the directio
   assert.equal(groups.length, 2);
   assert.deepEqual(radios(groups[0]), [
     ['Name', 'true'],
-    ['Soonest reset', 'false'],
+    ['5-hour reset', 'false'],
+    ['7-day reset', 'false'],
+    ['7-day Fable reset', 'false'],
     ['Most used', 'false'],
     ['Status', 'false'],
   ]);
@@ -112,4 +116,33 @@ test('Escape on the open popover closes it with the focus on the button and send
   assert.equal(button.getAttribute('aria-expanded'), 'false');
   assert.ok(document.activeElement === button, 'the focus is back on the button');
   assert.deepEqual(calls, []);
+});
+
+test('a key with no direction draws no arrow, names the key alone in its title and offers both directions disabled and unchecked, and a click on one sends nothing', () => {
+  const calls = [];
+  const keys = [{ defaultDir: 'none', id: 'default', label: 'Default order' }, ...KEYS];
+  const { container } = render(h(SortControl, { keys, onChange: (next) => calls.push(next), value: { dir: 'asc', sort: 'default' } }));
+  const button = container.querySelector('button');
+  assert.ok(button.querySelector('svg') === null, 'the button draws no arrow');
+  assert.equal(button.getAttribute('title'), 'Sorted by Default order');
+  click(button);
+  const directions = [...(box()?.querySelectorAll('[role="radiogroup"]')[1]?.querySelectorAll('[role="radio"]') ?? [])];
+  assert.deepEqual(
+    directions.map((r) => [r.textContent?.trim(), r.getAttribute('aria-checked'), r.getAttribute('aria-disabled')]),
+    [
+      ['Ascending', 'false', 'true'],
+      ['Descending', 'false', 'true'],
+    ],
+  );
+  click(radio('Descending'));
+  assert.deepEqual(calls, []);
+});
+
+test('a disabled control carries its title and a click opens nothing', () => {
+  const title = "This tab's tables keep their own order";
+  const { container } = render(h(SortControl, { disabled: true, keys: KEYS, onChange: () => {}, title, value: { dir: 'asc', sort: 'name' } }));
+  const button = container.querySelector('button');
+  assert.deepEqual([button.disabled, button.getAttribute('title')], [true, title]);
+  click(button);
+  assert.ok(box() === null, 'nothing opens');
 });

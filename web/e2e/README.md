@@ -126,8 +126,8 @@ reset on one line inside the bar with the estimate's word muted and its sentence
 own Accounts page (mock pass, at 1280 by 800 after the view's shot: its Usage card's whole slot reading "no 5-hour
 window" muted in the share's place, the words on its title, read as the triples' absent slots are), the plan badges'
 words on the seat's row and the plan-ended account's row against the first other row's, the Accounts bar's sort control
-(its button in the height, top edge, type size and weight of the Add filter button beside it, and once opened its
-popover inside the window under the button, its six radio rows one height, a mark on the checked key and direction
+(its button in the height, top edge, type size, weight and ink of the Add filter button beside it, and once opened its
+popover inside the window under the button, its eight radio rows one height, a mark on the checked key and direction
 alone, and Escape closing it with the focus back on the button), the Accounts detail's allowance grid at 1280 by 800,
 1440 by 900 and 375 by 800 (mock pass: "Allowance left at reset" and "Meter drift" stacked across the pane's content box
 at 1280 and 375 px, each as wide as the Usage and Requests cards and in their title's type, and at 1440 px side by side

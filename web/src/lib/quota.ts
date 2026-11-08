@@ -1,7 +1,9 @@
-import type { Account, AccountSlowDown, Cooldown, ExtraUsage, PLAN_WORDS, PlanWord, PollOutcome, QuotaPoll, RateLimitWindow, Spend, SubscriptionCosts, WindowId } from '@/api/types';
+import type { Account, AccountSlowDown, Cooldown, ExtraUsage, KnownWindowId, PLAN_WORDS, PlanWord, PollOutcome, QuotaPoll, RateLimitWindow, Spend, SubscriptionCosts, WindowId } from '@/api/types';
+import type { SortDir } from '@/lib/address';
 import { tierRow } from '@/lib/costs';
 import { lookup } from '@/lib/counts';
 import { fmtAbsolute, fmtPct, fmtRelative, instant, plural } from '@/lib/format';
+import { orderRows } from '@/lib/sort';
 import { HOUR, MINUTE, span } from '@/lib/time';
 
 export type MeterTone = 'good' | 'low' | 'warn';
@@ -241,38 +243,48 @@ export const flagOf = (status: Account['status']): AccountFlag | null => {
 export const accountStatusOf = (flag: AccountFlag | null, enabled: boolean, cooldowns: Cooldown[]): Account['status'] =>
   flag ?? (!enabled ? 'paused' : accountCooldown(cooldowns) !== null ? 'cooldown' : 'ready');
 
-/** The soonest future reset with its window: the card's highlight reads the window, the soonest sort the instant. */
-export function soonestResetAt(account: Account, now: number): { at: number; id: WindowId } | null {
-  let best: RateLimitWindow | null = null;
-  let bestAt = Number.POSITIVE_INFINITY;
-  for (const w of account.windows) {
+/** The soonest future reset over every window the poll read and a seat's spend window, with every window at that
+ *  instant, so the card marks each. Null where no reset lies ahead. */
+export function soonestResetAt(account: Account, now: number): { at: number; ids: WindowId[] } | null {
+  let at = Number.POSITIVE_INFINITY;
+  let ids: WindowId[] = [];
+  const take = (id: WindowId, resetsAt: string | null | undefined) => {
     // A window the sampler reported without a reset time can never be the soonest to recover.
-    const at = w.resetsAt === null ? Number.NaN : Date.parse(w.resetsAt);
-    if (!(at > now) || at >= bestAt) continue;
-    best = w;
-    bestAt = at;
-  }
-  // A usage-based seat recovers at its spend window's reset, the one reset it carries.
-  const spendAt = account.spend?.resetsAt ? Date.parse(account.spend.resetsAt) : Number.NaN;
-  if (spendAt > now && spendAt < bestAt) return { at: spendAt, id: 'spend' };
-  return best ? { at: bestAt, id: best.id } : null;
-}
-
-export const soonestReset = (account: Account, now: number): WindowId | null => soonestResetAt(account, now)?.id ?? null;
-
-/** The accounts by one window's lead, the largest first, an account whose window is absent, expired or without a lead
- *  after every one with a lead, ties by label. `'7d_fable'` reads `fableWindow`. */
-export function sortByPace(accounts: Account[], windowId: '5h' | '7d' | '7d_fable', now: number): Account[] {
-  const leadOf = (a: Account): number | null => {
-    const w = windowOf(a, windowId);
-    return w === null || isExpired(w, now) ? null : w.lead;
+    const t = resetsAt ? Date.parse(resetsAt) : Number.NaN;
+    if (!(t > now) || t > at) return;
+    ids = t === at ? [...ids, id] : [id];
+    at = t;
   };
-  return [...accounts].sort((a, b) => {
-    const [la, lb] = [leadOf(a), leadOf(b)];
-    if (la === null || lb === null) return la === lb ? a.label.localeCompare(b.label) : la === null ? 1 : -1;
-    return lb - la || a.label.localeCompare(b.label);
-  });
+  for (const w of readWindows(account)) take(w.id, w.resetsAt);
+  // A usage-based seat recovers at its spend window's reset, the one reset it carries.
+  take('spend', account.spend?.resetsAt);
+  return ids.length === 0 ? null : { at, ids };
 }
+
+export const soonestReset = (account: Account, now: number): WindowId | null => soonestResetAt(account, now)?.ids[0] ?? null;
+
+/** One window's future reset, or null where the window is absent, expired or carries none. `'7d_fable'` reads
+ *  `fableWindow`. */
+const resetOf = (account: Account, windowId: KnownWindowId, now: number): number | null => {
+  const resetsAt = windowOf(account, windowId)?.resetsAt;
+  const at = resetsAt ? Date.parse(resetsAt) : Number.NaN;
+  return at > now ? at : null;
+};
+
+/** One window's lead, or null where the window is absent, expired or carries none. `'7d_fable'` reads
+ *  `fableWindow`. */
+const leadOf = (account: Account, windowId: KnownWindowId, now: number): number | null => {
+  const w = windowOf(account, windowId);
+  return w === null || isExpired(w, now) ? null : w.lead;
+};
+
+/** The accounts by one window's reset, the soonest first under `asc`, an account without one and a usage-based seat
+ *  after every dated one under either direction, ties by label. */
+export const sortByReset = (accounts: Account[], windowId: KnownWindowId, now: number, dir: SortDir = 'asc'): Account[] => orderRows(accounts, (a) => resetOf(a, windowId, now), dir, (a) => a.label);
+
+/** The accounts by one window's lead, the largest first under `desc`, an account whose window is absent, expired or
+ *  without a lead after every one with a lead under either direction, ties by label. */
+export const sortByPace = (accounts: Account[], windowId: KnownWindowId, now: number, dir: SortDir = 'desc'): Account[] => orderRows(accounts, (a) => leadOf(a, windowId, now), dir, (a) => a.label);
 
 /**
  * A spend window's reset on hover: the instant, and where the router estimated it, why the line marks it, since no

@@ -10,20 +10,21 @@ Every list view (Accounts, Analytics, Guardrails, Keys, Pools, Quota, Requests, 
 one filter bar, which draws the slots the view has in one order: the range pills, the search, Add filter, the view's own
 controls with its primary action last, among them on a view with an order the Sort control, a button reading the key and
 its direction whose popover offers the view's keys and Ascending or Descending, the choice carried in the address, and
-at the right edge the split Refresh button and the count of what the view lists. When the window is too narrow for the
-bar's controls on one line, the trailing ones wrap onto a second row. Add filter opens a popover over the view's
-filters, and each filter in force stands as a chip on a line under the bar. The Refresh button's body reads the view
-again now, and its dropdown sets auto reload to Off, 5 s, 10 s, 30 s or 1 min, 5 s when a view opens and off on Requests
-and the Routing log. Auto reload waits while the tab is hidden, while a drawer, a dialog or a menu is open and on an
-older page, with a muted mark and the cause in the dropdown's hover. A tick that arrives while the view's previous read
-is still in flight is skipped, and the first tick after it lands reads again. On Requests and the Routing log a tick
-also waits while the list for the view's filters is still loading, unless its last read failed. When a wait ends or the
-interval changes a full interval after the last answer, the view reads at once, unless a read is still in flight, which
-leaves the read to the next tick. A read with no answer after a minute fails as if the router never answered, and the
-next tick reads again. The filters, the search and the range live in the view's address, so a reload or a shared link
-keeps them, and the interval stays with the open page. An Accounts address that names no account, or names one the
-router no longer holds, opens the first account the router lists among the rows the list shows, or the router's first
-account where the filters hide every row.
+at the right edge the split Refresh button and the count of what the view lists. The control starts on Name on Accounts,
+Analytics, Guardrails, Keys and Pools, on Default order on Quota, on Time newest first on Requests and the Routing log,
+and on Created on Sessions. When the window is too narrow for the bar's controls on one line, the trailing ones wrap
+onto a second row. Add filter opens a popover over the view's filters, and each filter in force stands as a chip on a
+line under the bar. The Refresh button's body reads the view again now, and its dropdown sets auto reload to Off, 5 s,
+10 s, 30 s or 1 min, 5 s when a view opens and off on Requests and the Routing log. Auto reload waits while the tab is
+hidden, while a drawer, a dialog or a menu is open and on an older page, with a muted mark and the cause in the
+dropdown's hover. A tick that arrives while the view's previous read is still in flight is skipped, and the first tick
+after it lands reads again. On Requests and the Routing log a tick also waits while the list for the view's filters is
+still loading, unless its last read failed. When a wait ends or the interval changes a full interval after the last
+answer, the view reads at once, unless a read is still in flight, which leaves the read to the next tick. A read with no
+answer after a minute fails as if the router never answered, and the next tick reads again. The filters, the search and
+the range live in the view's address, so a reload or a shared link keeps them, and the interval stays with the open
+page. An Accounts address that names no account, or names one the router no longer holds, opens the first account the
+router lists among the rows the list shows, or the router's first account where the filters hide every row.
 
 ## The shell
 
@@ -310,7 +311,8 @@ it opened to when it resets, and labeled with the instant it resets. Lanes endin
 
 The bar above the list and the detail offers "Search accounts", Add filter with the Status filter ("All statuses" and
 the six status labels, its chip reading such as "status: Paused"), the Sort control with Name (ascending by default),
-Soonest reset (ascending, an account with no reset ahead last under either direction), Most used (descending) or Status
+5-hour reset, 7-day reset and 7-day Fable reset (each ascending, an account without that window's reset ahead last under
+either direction), Most used (descending, an account with no plan window last under either direction) or Status
 (ascending), and "Add account", and at the right edge the split Refresh button and the count of the rows the list shows,
 `{n} accounts`. The search, the sort with its direction and the status live in the page's address, so a link or a reload
 keeps them, and they stay while an account opens. Auto reload starts at 5 s and waits while a dialog or an editor of the

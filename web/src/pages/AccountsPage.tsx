@@ -29,9 +29,10 @@ import { fmtAbsolute, fmtCredits, fmtDate, fmtDated, fmtDayMonth, fmtDayShort, f
 import { accountPatchOf, advancesOwnToken, derivedId, endZoneLabel, subscriptionEndFormOf, subscriptionEndRefusal, tickCanceled, type SubscriptionEndForm } from '@/lib/forms';
 import { useAsync, useLatest, useNow, useQueryFilters, type Loaded } from '@/lib/hooks';
 import { byWindow, meterGroups } from '@/lib/meter';
-import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, accountCooldown, canceledEndOf, planEndedSentence, planExtraUsage, planOverage, planWordLabel, readWindows, slowedOf } from '@/lib/quota';
+import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, accountCooldown, canceledEndOf, planEndedSentence, planExtraUsage, planOverage, planWordLabel, readWindows, slowedOf, sortByReset } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
 import { speedHover } from '@/lib/selection';
+import { orderRows, type SortFigure } from '@/lib/sort';
 import { MINUTE } from '@/lib/time';
 import { joinTrend } from '@/lib/trend';
 import type { WeekPosition } from '@/lib/unit';
@@ -83,15 +84,12 @@ export function AccountsPage() {
       const q = search.trim().toLowerCase();
       return !q || a.label.toLowerCase().includes(q) || (a.email ?? '').toLowerCase().includes(q) || (a.plan ?? '').toLowerCase().includes(q);
     });
-    const nextReset = (a: Account) => Math.min(...a.windows.flatMap((w) => (w.resetsAt === null ? [] : [Date.parse(w.resetsAt)])).filter((t) => t > now), Number.POSITIVE_INFINITY);
-    const usage = (a: Account) => Math.max(0, ...a.windows.map((w) => w.utilization));
-    const byKey = (a: Account, b: Account) => (sort === 'reset' ? nextReset(a) - nextReset(b) : sort === 'usage' ? usage(a) - usage(b) : sort === 'status' ? a.status.localeCompare(b.status) : a.label.localeCompare(b.label));
-    return rows.sort((a, b) => {
-      // No reset ahead sorts last under either direction, so the direction flips the dated rows alone.
-      if (sort === 'reset' && (nextReset(a) === Number.POSITIVE_INFINITY) !== (nextReset(b) === Number.POSITIVE_INFINITY)) return nextReset(a) === Number.POSITIVE_INFINITY ? 1 : -1;
-      const order = byKey(a, b);
-      return (dir === 'desc' ? -order : order) || a.label.localeCompare(b.label);
-    });
+    if (sort === 'reset5h') return sortByReset(rows, '5h', now, dir);
+    if (sort === 'reset7d') return sortByReset(rows, '7d', now, dir);
+    if (sort === 'resetFable') return sortByReset(rows, '7d_fable', now, dir);
+    // Most used reads the plan windows alone, so the Fable week's share stays out of it.
+    const keyOf = (a: Account): SortFigure => (sort === 'usage' ? (a.windows.length === 0 ? null : Math.max(...a.windows.map((w) => w.utilization))) : sort === 'status' ? a.status : a.label);
+    return orderRows(rows, keyOf, dir, (a) => a.label);
   }, [accounts.data, dir, filters, now]);
 
   const selected = accounts.data?.find((a) => a.id === accountId) ?? null;

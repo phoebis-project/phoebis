@@ -54,10 +54,13 @@ export type KeySpec =
 
 export type SortDir = 'asc' | 'desc';
 export const SORT_DIRS = ['asc', 'desc'] as const;
+export type SortDefault = SortDir | 'none';
 
 /** One key of a view's sort control: its address value, its label and the direction a pick of it starts in. */
 export interface SortKey<K extends string = string> {
-  defaultDir: SortDir;
+  /** The direction a pick starts in, or `none` for a key with no direction, which draws no arrow and writes no
+   *  `dir`. */
+  defaultDir: SortDefault;
   id: K;
   label: string;
 }
@@ -73,15 +76,22 @@ export const sortSpecs = <K extends string>(keys: readonly SortKey<K>[], default
   dir: { default: '', kind: 'choice', name: 'dir', values: SORT_DIRS },
 });
 
-/** The direction an address means: its `dir` where it names one, else the sort key's own default. */
-export const sortDirOf = <K extends string>(keys: readonly SortKey<K>[], address: { dir: '' | SortDir; sort: K }): SortDir =>
-  address.dir !== '' ? address.dir : (keys.find((k) => k.id === address.sort)?.defaultDir ?? 'asc');
+/**
+ * The direction an address means: its `dir` where it names one, else the sort key's own default. A key with no
+ * direction reads `asc` whatever the address says, since nothing orders by the figure and a typed `dir` on it is inert.
+ */
+export const sortDirOf = <K extends string>(keys: readonly SortKey<K>[], address: { dir: '' | SortDir; sort: K }): SortDir => {
+  const own = keys.find((k) => k.id === address.sort)?.defaultDir;
+  if (own === 'none') return 'asc';
+  return address.dir !== '' ? address.dir : (own ?? 'asc');
+};
 
-/** The address fields of a pick: `dir` empty where it is the key's own default, so the address omits it. */
-export const sortAddressOf = <K extends string>(keys: readonly SortKey<K>[], next: { dir: SortDir; sort: K }): { dir: '' | SortDir; sort: K } => ({
-  dir: next.dir === keys.find((k) => k.id === next.sort)?.defaultDir ? '' : next.dir,
-  sort: next.sort,
-});
+/** The address fields of a pick: `dir` empty where it is the key's own default, so the address omits it, and always
+ *  empty for a key with no direction. */
+export const sortAddressOf = <K extends string>(keys: readonly SortKey<K>[], next: { dir: SortDir; sort: K }): { dir: '' | SortDir; sort: K } => {
+  const own = keys.find((k) => k.id === next.sort)?.defaultDir;
+  return { dir: own === 'none' || next.dir === own ? '' : next.dir, sort: next.sort };
+};
 
 export type Codec<F> = {
   /** The address with every field at its default, for a link that names one field and leaves the rest as the view's. */
@@ -383,7 +393,8 @@ export interface AccountsAddress {
   /** `asc`, `desc` or empty for the sort key's own default direction, which the address omits. */
   dir: '' | SortDir;
   search: string;
-  /** The list's order: `name` the default, `reset` the soonest reset, `usage` the most used, `status`. */
+  /** The list's order: `name` the default, `reset5h`, `reset7d` and `resetFable` a window's reset, `usage` the most
+   *  used, `status`. */
   sort: (typeof ACCOUNT_SORT_KEYS)[number]['id'];
   /** `all` the default, else an account status. */
   status: 'all' | Account['status'];
@@ -391,7 +402,9 @@ export interface AccountsAddress {
 
 export const ACCOUNT_SORT_KEYS = [
   { defaultDir: 'asc', id: 'name', label: 'Name' },
-  { defaultDir: 'asc', id: 'reset', label: 'Soonest reset' },
+  { defaultDir: 'asc', id: 'reset5h', label: '5-hour reset' },
+  { defaultDir: 'asc', id: 'reset7d', label: '7-day reset' },
+  { defaultDir: 'asc', id: 'resetFable', label: '7-day Fable reset' },
   { defaultDir: 'desc', id: 'usage', label: 'Most used' },
   { defaultDir: 'asc', id: 'status', label: 'Status' },
 ] as const satisfies readonly SortKey[];
