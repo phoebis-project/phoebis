@@ -80,10 +80,10 @@ test("a refusal bar's link carries the client pattern its count was read under a
   // Three of the laptop's owed turns refused under cyber, every one on the pattern's client.
   const cyber = count.rows.find((r) => r.category === 'cyber');
   assert.equal(cyber?.requests, 3, JSON.stringify(count.rows));
-  const counted = unprobed.filter((r) => Date.parse(r.at) >= from && Date.parse(r.at) <= now && d.matchesPattern(pattern, r.client ?? '-') && r.attempts.at(-1)?.response?.stopReason === 'refusal' && r.attempts.at(-1).response.refusalCategory === 'cyber');
+  const counted = unprobed.filter((r) => Date.parse(r.at) >= from && Date.parse(r.at) <= now && d.matchesPattern(pattern, r.client ?? '-') && r.canonicalModel === cyber.model && r.attempts.at(-1)?.response?.stopReason === 'refusal' && r.attempts.at(-1).response.refusalCategory === 'cyber');
   const input = { filters: { accountIds: [], clientPattern: pattern, includeProbes: false, keyIds: [], models: [], poolIds: [], sessionId: null, userAgentPattern: '' }, window: { exact: false, fromMs: from, nowMs: now, toMs: now } };
   // The address read back as the Requests page reads it into its list query.
-  const read = d.REQUESTS_CODEC.fromParams(new URL(d.refusalLink(input, 'cyber', cyber.requests).href, 'http://console.test').searchParams, now);
+  const read = d.REQUESTS_CODEC.fromParams(new URL(d.refusalLink(input, 'cyber', cyber.requests, cyber.model).href, 'http://console.test').searchParams, now);
   assert.equal(read.client, pattern);
   const linked = await listed({ accountIds: read.accounts, client: read.client, from: read.range.from, includeProbes: read.kind === 'probe', keyIds: read.keys, models: read.models, poolIds: read.pools, refusalCategories: read.refusalCategories, session: read.session || undefined, stopReasons: read.stopReasons, to: read.range.to });
   assert.deepEqual(linked, ids(counted));
