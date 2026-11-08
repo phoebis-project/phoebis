@@ -2818,6 +2818,80 @@ async function poolCardLayout(theme) {
 }
 
 /**
+ * Every pool card's head at 400 and 360 px, where the name, the status, the key count and the two buttons can run out
+ * of room. Edit and Delete stand as one group, read as the box around the two buttons: on the title's line, where the
+ * title centers its items so the group's vertical center lies within a pixel of the name's, or on a line of their own
+ * below the name with the group's right edge at the title's. Delete stands after Edit on one line, and both stay
+ * inside the title's box, the head's content box, since the card draws no padding of its own. In the mock pass the
+ * story's pools whose head fits at 400 px keep the group on the title's line, which a fixed width bound that sends
+ * every group to a line of its own fails.
+ */
+async function poolCardHead(theme) {
+  const say = (what) => failures.push(`${theme} /pools card head: ${what}`);
+  const FITS = ['all', 'work'];
+  const read = () =>
+    page.evaluate(() =>
+      [...document.querySelectorAll('.pool')].map((card) => {
+        const title = card.querySelector('.pool__title');
+        const box = (el) => {
+          if (!el) return null;
+          const at = el.getBoundingClientRect();
+          const tenth = (v) => Math.round(v * 10) / 10;
+          return { bottom: tenth(at.bottom), left: tenth(at.left), right: tenth(at.right), top: tenth(at.top) };
+        };
+        return {
+          del: box(title?.querySelector('button[aria-label^="Delete pool "]')),
+          edit: box(title?.querySelector('button[aria-label^="Edit pool "]')),
+          name: box(title?.querySelector('h2')),
+          pool: title?.querySelector('h2')?.textContent ?? '',
+          title: box(title),
+        };
+      }),
+    );
+  try {
+    for (const width of [400, 360]) {
+      await page.setViewportSize({ height: 800, width });
+      await settle();
+      const cards = await read();
+      const heads = cards.map(({ del, edit, name, pool, title }) => {
+        if (!del || !edit || !name || !title) return { line: 'unread', pool };
+        const group = { bottom: Math.max(edit.bottom, del.bottom), right: Math.max(edit.right, del.right), top: Math.min(edit.top, del.top) };
+        const groupCenter = (group.top + group.bottom) / 2;
+        const nameCenter = (name.top + name.bottom) / 2;
+        const onTitleLine = Math.abs(groupCenter - nameCenter) <= 1;
+        const ownLine = group.top >= name.bottom && Math.abs(group.right - title.right) <= 1;
+        return { del, edit, groupCenter, groupRight: group.right, groupTop: group.top, line: onTitleLine ? 'title' : ownLine ? 'own' : 'neither', nameBottom: name.bottom, nameCenter, pool, title };
+      });
+      measurements.push(`${theme} /pools card head at ${width} px ${JSON.stringify(heads.map(({ del, edit, title, ...head }) => ({ ...head, titleRight: title?.right })))}`);
+      if (heads.length === 0) say(`at ${width} px no pool card to measure`);
+      for (const head of heads) {
+        const { del, edit, pool, title } = head;
+        if (head.line === 'unread') {
+          say(`at ${width} px the ${pool} card's title draws no name, Edit or Delete to measure`);
+          continue;
+        }
+        if (head.line === 'neither') say(`at ${width} px the ${pool} card's Edit and Delete stand neither on the title's line (the group's center at ${head.groupCenter}, the name's at ${head.nameCenter}) nor on a line of their own at the title's right (the group's top at ${head.groupTop} under the name's bottom at ${head.nameBottom}, its right at ${head.groupRight} against the title's ${title.right})`);
+        if (del.left < edit.right || Math.abs(del.top - edit.top) > 1) say(`at ${width} px the ${pool} card's Delete does not follow Edit on one line (Edit ${JSON.stringify(edit)}, Delete ${JSON.stringify(del)})`);
+        for (const [word, button] of [['Edit', edit], ['Delete', del]]) {
+          if (button.left < title.left - 0.5 || button.right > title.right + 0.5 || button.top < title.top - 0.5 || button.bottom > title.bottom + 0.5) say(`at ${width} px the ${pool} card's ${word} ${JSON.stringify(button)} leaves the title's box ${JSON.stringify(title)}`);
+        }
+      }
+      if (mock && width === 400) {
+        for (const pool of FITS) {
+          const head = heads.find((h) => h.pool === pool);
+          if (head === undefined) say(`at 400 px no ${pool} card`);
+          else if (head.line !== 'title') say(`at 400 px the ${pool} card's head fits on one line, yet its Edit and Delete stand off the title's line`);
+        }
+      }
+    }
+  } finally {
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await settle();
+    await atRest();
+  }
+}
+
+/**
  * Every pool card's attention rows end with the age: the row's last cell is `.attention__age`, at the row's end after
  * the detail and on its line, in the detail's ink and size, uncut, and every cell inside the card's box. A row on one
  * line holds the badge and the subject on the age's line too. A row a narrow card stacks holds the badge and the
@@ -13368,6 +13442,7 @@ try {
         await poolEngineHints(theme);
         await poolRoutingCards(theme);
         await poolCardLayout(theme);
+        await poolCardHead(theme);
         await poolMemberPins(theme);
         await poolFormerPins(theme);
         await servingTierWord(theme);

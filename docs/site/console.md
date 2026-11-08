@@ -449,21 +449,22 @@ where a request of the day priced nothing. A pool sums its members' accounts, so
 field's meaning is on [Pools, keys and routing](routing.md#pools).
 
 Each card carries the pool's name, its status badge (active, degraded, disabled or exhausted), its keys as a link ("No
-keys yet", "1 key", `{n} keys`, or "Keys unavailable" when the keys read failed), an edit button and "Delete". A strip
-of badges names the features the pool has on and the state of its load shedding, in the rail's order: `1 guardrail` or
-`{n} guardrails` with any attached, "server-side auto mode off", `sheds above 95 %` (the pool's window ceiling) with the
-pool's load shedding on or `shedding off` with it off, `slows above 2 h 30 min` (the pool's stretch threshold as a span,
-`slows above 30 min` on a pool set to 1800) with its slow-down on, "cache TTL" and "keepalive", each opening the dialog
-on the group that edits it, the last followed by the pool's resolved ceilings in whole hours, `idle {h} · parked {h} ·
-horizon {h}` (a range such as `44h to 71h` where the pool's combinations differ). One sentence says what the status
-means, and attention rows under it list the dashboard's conditions filtered to this pool, one row per condition with its
-badge, its subject linked where it is fixed and its detail, ending with its age, the whole on hover. On a narrow card
-the detail and the age take a line of their own under the badge. The pool's own exhausted row and its Rounds without a
-destination row open the [routing log](#routing-log) on its exhausted decisions or its shedding rounds since the
-condition began, and an account's Destination spent within the hour row opens it on the account's moves and spent
-windows, its Wall reached under the ceiling row on its spent windows, and its Slowed past twice the stretch row on its
-slow-down starts and ends. An account's Meter drift against the table row opens the [Meter](#meter) view on the
-account.
+keys yet", "1 key", `{n} keys`, or "Keys unavailable" when the keys read failed), an edit button and "Delete". The edit
+button and "Delete" stay together at the row's right, and on a phone's width where the name, the badge and the keys link
+leave them no room, both move to a line of their own at the right. A strip of badges names the features the pool has on
+and the state of its load shedding, in the rail's order: `1 guardrail` or `{n} guardrails` with any attached,
+"server-side auto mode off", `sheds above 95 %` (the pool's window ceiling) with the pool's load shedding on or
+`shedding off` with it off, `slows above 2 h 30 min` (the pool's stretch threshold as a span, `slows above 30 min` on a
+pool set to 1800) with its slow-down on, "cache TTL" and "keepalive", each opening the dialog on the group that edits
+it, the last followed by the pool's resolved ceilings in whole hours, `idle {h} · parked {h} · horizon {h}` (a range
+such as `44h to 71h` where the pool's combinations differ). One sentence says what the status means, and attention rows
+under it list the dashboard's conditions filtered to this pool, one row per condition with its badge, its subject linked
+where it is fixed and its detail, ending with its age, the whole on hover. On a narrow card the detail and the age take
+a line of their own under the badge. The pool's own exhausted row and its Rounds without a destination row open the
+[routing log](#routing-log) on its exhausted decisions or its shedding rounds since the condition began, and an
+account's Destination spent within the hour row opens it on the account's moves and spent windows, its Wall reached
+under the ceiling row on its spent windows, and its Slowed past twice the stretch row on its slow-down starts and ends.
+An account's Meter drift against the table row opens the [Meter](#meter) view on the account.
 
 The serving table lists who serves next: Tier (`P{n}`, or `plan P{n}`, `overage P{n}` and `metered P{n}` where the pool
 prefers subscription accounts, the metered tier holding the API-key accounts and the usage-based seats), Account,

@@ -336,15 +336,16 @@ in the chosen week and price it at the tier the account ran under at that reset 
 [Analytics](console.md#analytics)). A new pool's dialog starts with cache warming off ([Pools](console.md#pools)). A
 pool card's Active pins fact counts every pin under the pool's keys, as the Dashboard's Sessions card does, and reads
 how many sit on a former member under the figure ([Dashboard](console.md#dashboard), [Pools](console.md#pools)). The
-pool dialog holds the save on a member budget field the browser cannot read as a number ([Pools](console.md#pools)). The
-pool dialog's idle window set above the break-even reads a note that the ceiling lies above it and prices its cost from
-the set value, while the parked and horizon ceilings stay capped at the break-even ([Pools](console.md#pools)). The
-Pools dialog's return rate reads the last 7 or 30 days ([Pools](console.md#pools)). The Pools view names the third
-selection tier `metered` in its serving table and its Selection hint, the tier holding the API-key accounts and the
-usage-based seats ([Pools](console.md#pools)). The Pools view orders its cards through the filter bar's sort control by
-Name, Status, Members, "Requests, 24h", "Cost, 24h" or Active pins, starting on Name, and a card's links into the pool
-dialog carry the order, so the dialog closes onto it ([Pools](console.md#pools)). The Keys view orders its table through
-the filter bar's sort control by Name, Created, Last used, "Requests, 7d", "Tokens, 7d", "Cost, 7d", Expiry or Status,
+pool card's Edit and Delete buttons stay together at the right at every width ([Pools](console.md#pools)). The pool
+dialog holds the save on a member budget field the browser cannot read as a number ([Pools](console.md#pools)). The pool
+dialog's idle window set above the break-even reads a note that the ceiling lies above it and prices its cost from the
+set value, while the parked and horizon ceilings stay capped at the break-even ([Pools](console.md#pools)). The Pools
+dialog's return rate reads the last 7 or 30 days ([Pools](console.md#pools)). The Pools view names the third selection
+tier `metered` in its serving table and its Selection hint, the tier holding the API-key accounts and the usage-based
+seats ([Pools](console.md#pools)). The Pools view orders its cards through the filter bar's sort control by Name,
+Status, Members, "Requests, 24h", "Cost, 24h" or Active pins, starting on Name, and a card's links into the pool dialog
+carry the order, so the dialog closes onto it ([Pools](console.md#pools)). The Keys view orders its table through the
+filter bar's sort control by Name, Created, Last used, "Requests, 7d", "Tokens, 7d", "Cost, 7d", Expiry or Status,
 starting on Name, and while Created or "Requests, 7d" is picked each row reads its creation date or its week's requests
 under its name ([Keys](console.md#keys)). The Keys view's Pool filter draws one chip per pool, and a pool the address
 names that the router does not list shows its chip until the pools load ([Keys](console.md#keys)). The Guardrails view

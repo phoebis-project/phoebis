@@ -576,7 +576,7 @@ export interface KeyFigures { billedUsd: number; cost: number; equivalent: numbe
 export interface ApiKey {
   /** Null inherits the pool's `autoModeServer`; true or false overrides it for this key. */
   autoModeServer: boolean | null;
-  /** Hours of captured bodies for this key, and `null` inherits the pool, 0 turns capture off here. */
+  /** Hours of captured bodies for this key. `null` inherits the pool's hours, and 0 turns capture off here. */
   bodyCaptureHours: number | null;
   createdAt: string;
   /** The stored switch, which `status` folds expiry and revocation over; an edit sends it back as it stands. */
@@ -1496,7 +1496,7 @@ export interface MemberBudget {
   budgetUsd: number;
   /** The member's account kind: a subscription member's spend is its metered spend alone. */
   kind: AccountKind;
-  /** The next UTC day or month boundary, and `null`, with `spentUsd`, until the ledger reports. */
+  /** The next UTC day or month boundary. Like `spentUsd`, it reads `null` until the ledger reports. */
   periodEnd: string | null;
   poolId: string;
   spentUsd: number | null;

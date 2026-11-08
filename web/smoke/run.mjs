@@ -22872,8 +22872,9 @@ await forView('/sessions', async () => {
     if (tr === undefined) continue;
     const s = sessionOf(page, tr);
     (await entryOf(page, tr))?.click();
-    await page.settle(300);
-    followed.push({ band, got: landing(page), key: lifetime(s), keyChip: keyWords(s), session: s.sessionId, want: rangeAt(s.lastRequestAt, CLOCK_ORIGIN) });
+    // The Requests page draws its chips on its own turns, which a busy host can leave past a fixed delay.
+    const drawn = await until(page, () => chipRead(page, 'session') === `session: ${cut(s.sessionId)}`);
+    followed.push({ band, drawn, got: landing(page), key: lifetime(s), keyChip: keyWords(s), session: s.sessionId, want: rangeAt(s.lastRequestAt, CLOCK_ORIGIN) });
     await page.navigate('/sessions');
     await page.settle(300);
   }
@@ -22958,7 +22959,7 @@ await forView('/sessions', async () => {
   const entry = await entryOf(later, movedRow);
   tick(2_000);
   entry?.click();
-  await later.settle(300);
+  const atClickDrawn = await until(later, () => moved !== undefined && chipRead(later, 'session') === `session: ${cut(moved.sessionId)}`);
   const atClick = landing(later);
   api.listSessions = listSessions;
   await later.navigate('/sessions');
@@ -22972,8 +22973,9 @@ await forView('/sessions', async () => {
       off.disabled &&
       off.getAttribute('title') === 'No ledgered request yet' &&
       followed.length > 0 &&
-      followed.every((f) => f.got.path === '/requests' && f.got.session === f.session && f.got.agentId === null && f.got.sessionChip === `session: ${cut(f.session)}` && f.got.search === null && f.got.typed === '' && f.got.keys === f.key && f.got.keyChip === f.keyChip && f.got.keyChipClears && f.got.range === (f.want === '24h' ? null : f.want) && f.got.pill === (f.want ?? '24h')) &&
+      followed.every((f) => f.drawn && f.got.path === '/requests' && f.got.session === f.session && f.got.agentId === null && f.got.sessionChip === `session: ${cut(f.session)}` && f.got.search === null && f.got.typed === '' && f.got.keys === f.key && f.got.keyChip === f.keyChip && f.got.keyChipClears && f.got.range === (f.want === '24h' ? null : f.want) && f.got.pill === (f.want ?? '24h')) &&
       movedRow !== undefined &&
+      atClickDrawn &&
       atClick.path === '/requests' &&
       atClick.agentId === null &&
       atClick.keys === lifetime(moved) &&
@@ -29325,22 +29327,28 @@ await forView(['/', '/accounts', '/analytics', '/keys', '/pools', '/quota', '/re
 
   // A node inside a cell would change the cell's text, which the Status, Companion and trail reads take whole.
   const cellOf = (node) => node?.closest('td, .agents__row > span') ?? null;
+  // The rows draw once their reads land, which can outlast the navigation's settle, and the page draws Expand all only
+  // beside rows. The open read waits for a row too, since every row of an empty list reads open.
+  const expandButton = () => [...page.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Expand all');
+  const sessionRows = () => [...page.container.querySelectorAll('.srow[aria-expanded]')];
   const expandAll = async () => {
-    [...page.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Expand all')?.click();
-    await page.settle(300);
+    const shown = await until(page, () => expandButton() !== undefined);
+    expandButton()?.click();
+    const allOpen = await until(page, () => sessionRows().length > 0 && sessionRows().every((row) => row.getAttribute('aria-expanded') === 'true'));
+    return shown && allOpen;
   };
   const cells = [];
   for (const [path, open] of [['/requests'], ['/sessions', expandAll]]) {
     await page.navigate(path);
-    await open?.();
+    const opened = (await open?.()) ?? true;
     const described = [...page.container.querySelectorAll('[aria-describedby]')].filter((el) => cellOf(el) !== null);
     const stray = described.filter((el) => describedBy(el) === null || cellOf(describedBy(el)) !== null);
-    cells.push({ path, count: described.length, stray: stray.map(why) });
+    cells.push({ path, count: described.length, opened, stray: stray.map(why) });
   }
   results.push({
     name: 'a described badge or trail in a cell points outside every cell',
-    ok: cells.every((c) => c.count > 0 && c.stray.length === 0),
-    missing: cells.map((c) => `${c.path}: ${c.count} described in cells, stray ${JSON.stringify(c.stray)}`),
+    ok: cells.every((c) => c.opened && c.count > 0 && c.stray.length === 0),
+    missing: cells.map((c) => `${c.path}: ${c.opened ? '' : 'the rows did not all open, '}${c.count} described in cells, stray ${JSON.stringify(c.stray)}`),
   });
 
   // A badge outside every host keeps its title alone, so the sweep reads every page for one that lost its description;
@@ -29359,10 +29367,11 @@ await forView(['/', '/accounts', '/analytics', '/keys', '/pools', '/quota', '/re
   // The keys list draws once its read lands, which can outlast the navigation's settle, so each read of the page waits
   // for the list's laptop row first.
   const laptopKey = () => [...page.container.querySelectorAll('.card--table tbody tr')].find((r) => r.children[0]?.querySelector('b')?.textContent?.trim() === 'laptop');
+  let sessionsOpened = false;
   for (const path of ['/', '/accounts', '/analytics', '/keys', '/pools', '/quota', '/requests', `/requests/${laptopRow.id}`, '/sessions', '/settings']) {
     await page.navigate(path);
     if (path === '/keys') await until(page, () => laptopKey() !== undefined);
-    if (path === '/sessions') await expandAll();
+    if (path === '/sessions') sessionsOpened = await expandAll();
     sweep(path);
   }
   // A navigation that drew nothing would pass the sweep empty, so every page that draws titled badges of its own in the
@@ -29381,8 +29390,8 @@ await forView(['/', '/accounts', '/analytics', '/keys', '/pools', '/quota', '/re
   sweep('/keys laptop dialog');
   results.push({
     name: 'every titled badge in the console sits under a host and describes through it',
-    ok: loose.length === 0 && thin.length === 0 && inDialog > 0,
-    missing: [`${inDialog} in the open key dialog's effective list`, ...counts.map((c) => `${c.where}: ${c.seen} titled, ${c.onPage} on the page`), ...loose],
+    ok: loose.length === 0 && thin.length === 0 && inDialog > 0 && sessionsOpened,
+    missing: [`${inDialog} in the open key dialog's effective list`, ...(sessionsOpened ? [] : ['/sessions: the rows did not all open']), ...counts.map((c) => `${c.where}: ${c.seen} titled, ${c.onPage} on the page`), ...loose],
   });
   page.unmount();
 

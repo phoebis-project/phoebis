@@ -1375,6 +1375,7 @@
 
 .pool__title {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   align-items: center;
 }
@@ -1383,24 +1384,11 @@
   font-size: 16px;
 }
 
-/* A phone's card holds the name, the status and the key count on one line but not the two buttons beside them, so the
-   buttons take a line of their own, still at the row's right. The empty break is a line too, so each row gap is half
-   the space between the two lines. */
-@media (max-width: 599px) {
-  .pool__title {
-    flex-wrap: wrap;
-    row-gap: 5px;
-  }
-
-  .pool__title::after {
-    flex-basis: 100%;
-    order: 1;
-    content: '';
-  }
-
-  .pool__title > .btn {
-    order: 2;
-  }
+/* The two buttons stay one group, so a head too narrow for them moves both to a line of their own at the right. */
+.pool__actions {
+  display: inline-flex;
+  gap: 10px;
+  margin-left: auto;
 }
 
 /*
@@ -3482,10 +3470,6 @@
 }
 
 /* Pool card additions */
-.pool__edit {
-  margin-left: auto;
-}
-
 .pool__ceilings {
   font-size: 12.5px;
 }

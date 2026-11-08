@@ -651,12 +651,14 @@ function PoolCard({
           ) : (
             keysRead === 'failed' && <span className="pool__keys pool__keys--unread">Keys unavailable</span>
           )}
-          <Button size="sm" variant="ghost" icon={<IconPencil size={13} />} onClick={onEdit} className="pool__edit" aria-label={`Edit pool ${pool.name}`}>
-            Edit
-          </Button>
-          <Button size="sm" variant="ghost" onClick={onDelete} aria-label={`Delete pool ${pool.name}`}>
-            Delete
-          </Button>
+          <span className="pool__actions">
+            <Button size="sm" variant="ghost" icon={<IconPencil size={13} />} onClick={onEdit} aria-label={`Edit pool ${pool.name}`}>
+              Edit
+            </Button>
+            <Button size="sm" variant="ghost" onClick={onDelete} aria-label={`Delete pool ${pool.name}`}>
+              Delete
+            </Button>
+          </span>
         </div>
         {features.length > 0 && (
           <div className="pool__features chips">
