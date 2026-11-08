@@ -31,6 +31,8 @@ const PROTOCOL: u32 = 1;
 
 const MINUTE_MS: i64 = 60_000;
 
+const READ_ATTEMPTS: u32 = 3;
+
 struct CompanionState {
     engine: Arc<Engine>,
 }
@@ -122,49 +124,58 @@ async fn allowance(
 ) -> Response {
     let engine = &state.engine;
     let now = engine.now();
-    let snapshot = engine.parts.router.snapshot();
-    // The relay's own resolution, so a revoked or expired key gets the same refusal here as on the messages route.
-    let key = match authenticated_key(&snapshot, &headers, now, &new_request_id()) {
-        Ok(key) => key,
-        Err(refused) => return refused,
-    };
-    let Some(session_id) = query.as_deref().and_then(session_id) else {
-        return refusal(StatusCode::BAD_REQUEST, "invalid_identity");
-    };
-    if !key.companion_permissions.allowance {
-        return refusal(StatusCode::FORBIDDEN, "companion_not_permitted");
-    }
-    let Some(pool) = snapshot.key_pool(&key.id) else {
-        return refusal(StatusCode::SERVICE_UNAVAILABLE, "router_unavailable");
-    };
     let router = &engine.parts.router;
-    let Ok((projections, pins)) = tokio::try_join!(
-        router.projections(&pool.id),
-        router.session_pins_standing(&key.id, key.created_at, session_id),
-    ) else {
-        return refusal(StatusCode::SERVICE_UNAVAILABLE, "router_unavailable");
-    };
-    let companion_key = engine.parts.store.companion_key();
-    let body = Allowance {
-        protocol: PROTOCOL,
-        now: stamp(now),
-        pool: PoolView {
-            ceiling: pool.window_ceiling,
-            // A zero TTL keeps no pin past its request, whatever the mode reads.
-            pinning: if pool.affinity_ttl_seconds == 0 {
-                "off"
-            } else {
-                pool.affinity.mode.as_str()
+    for _ in 0..READ_ATTEMPTS {
+        let snapshot = router.snapshot();
+        // The relay's own resolution, so a revoked or expired key gets the same refusal here as on the messages route.
+        let key = match authenticated_key(&snapshot, &headers, now, &new_request_id()) {
+            Ok(key) => key,
+            Err(refused) => return refused,
+        };
+        let Some(session_id) = query.as_deref().and_then(session_id) else {
+            return refusal(StatusCode::BAD_REQUEST, "invalid_identity");
+        };
+        if !key.companion_permissions.allowance {
+            return refusal(StatusCode::FORBIDDEN, "companion_not_permitted");
+        }
+        let Some(pool) = snapshot.key_pool(&key.id) else {
+            return refusal(StatusCode::SERVICE_UNAVAILABLE, "router_unavailable");
+        };
+        let Ok((projections, pins)) = tokio::try_join!(
+            router.projections(&pool.id),
+            router.session_pins_standing(&key.id, key.created_at, session_id),
+        ) else {
+            return refusal(StatusCode::SERVICE_UNAVAILABLE, "router_unavailable");
+        };
+        // The asks answer from the task's current snapshot, which a reload may have moved past this one. Revisions only
+        // grow in the one cell both read, so an equal revision makes the authorization, the membership and the
+        // projections one registry, as the selection path makes them.
+        if router.snapshot().revision != snapshot.revision {
+            continue;
+        }
+        let companion_key = engine.parts.store.companion_key();
+        let body = Allowance {
+            protocol: PROTOCOL,
+            now: stamp(now),
+            pool: PoolView {
+                ceiling: pool.window_ceiling,
+                // A zero TTL keeps no pin past its request, whatever the mode reads.
+                pinning: if pool.affinity_ttl_seconds == 0 {
+                    "off"
+                } else {
+                    pool.affinity.mode.as_str()
+                },
+                strategy: pool.strategy.as_str(),
             },
-            strategy: pool.strategy.as_str(),
-        },
-        accounts: accounts(&companion_key, &snapshot, pool, projections, now),
-        pins: session_pins(&companion_key, pins, now),
-    };
-    json(
-        StatusCode::OK,
-        serde_json::to_string(&body).unwrap_or_default(),
-    )
+            accounts: accounts(&companion_key, &snapshot, pool, projections, now),
+            pins: session_pins(&companion_key, pins, now),
+        };
+        return json(
+            StatusCode::OK,
+            serde_json::to_string(&body).unwrap_or_default(),
+        );
+    }
+    refusal(StatusCode::SERVICE_UNAVAILABLE, "router_unavailable")
 }
 
 /// The query is the one `session_id=<value>` pair. The value is taken as sent, never percent-decoded, and passes the

@@ -563,7 +563,7 @@ the key was accepted and a `403` that the session id was too:
 | --- | --- | --- |
 | `invalid_identity` | 400 | `session_id` is missing or is not a valid id |
 | `companion_not_permitted` | 403 | The key's permission set lacks `allowance` ([Keys](routing.md#keys)) |
-| `router_unavailable` | 503 | The router is not ready: it holds no pool for the key yet, or its loop has stopped answering |
+| `router_unavailable` | 503 | The router is not ready: it holds no pool for the key yet, its loop has stopped answering, or the registry changed under the read three times in a row |
 
 The body carries `protocol`, the integer `1`, which the mod checks before it reads any other field, `now`, the instant
 of the read, and the three objects below. Every instant in the body is RFC 3339 at UTC, every share runs from 0 to 1 of
