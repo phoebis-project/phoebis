@@ -323,8 +323,8 @@ fn runway_minutes(
         return None;
     }
     let hours = (ceiling - predicted) / burn_per_hour;
-    // Compared with the wall before the floor: a ceiling under a minute away floors to zero minutes, which lands
-    // before any wall ahead.
+    // Compared with the wall before the floor: the floor drops the runway's last partial minute, so a wall inside
+    // that minute would read as after the ceiling.
     if wall
         .is_some_and(|wall| wall > now && hours * HOUR_MS as f64 >= wall.saturating_sub(now) as f64)
     {
