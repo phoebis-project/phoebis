@@ -24,7 +24,7 @@ use serde::Serialize;
 
 use crate::engine::Engine;
 
-pub const ALLOWANCE_PATH: &str = "/v0/companion/allowance";
+const ALLOWANCE_PATH: &str = "/v0/companion/allowance";
 
 /// The body's version, which the companion checks before it reads any other field.
 const PROTOCOL: u32 = 1;
@@ -135,7 +135,7 @@ async fn allowance(
     let engine = &state.engine;
     let now = engine.now();
     let snapshot = engine.parts.router.snapshot();
-    // The relay's own resolution and 401 body, so a companion pointed at the wrong port sees what the client would.
+    // The relay's own resolution, so a revoked or expired key gets the same refusal here as on the messages route.
     let key = match authenticated_key(&snapshot, &headers, now, &new_request_id()) {
         Ok(key) => key,
         Err(refused) => return refused,
@@ -355,9 +355,10 @@ fn runway_minutes(
     if burn_per_hour <= 0.0 {
         return None;
     }
-    // Rounded rather than truncated: the difference of two shares lands a hair under a whole minute (0.95 - 0.4 is
-    // 0.5499999999999999), which truncation would read a minute short.
-    let minutes = ((ceiling - predicted) / burn_per_hour * 60.0).round() as u64;
+    // Floored with a tolerance: the difference of two shares can land a hair under a whole minute (0.95 - 0.4 is
+    // 0.5499999999999999), which a bare floor reads a minute short. Rounding up instead could move a runway that ends
+    // just before the wall onto it, which reads as unbounded.
+    let minutes = ((ceiling - predicted) / burn_per_hour * 60.0 + 1e-9).floor() as u64;
     let reached = now.saturating_add(
         i64::try_from(minutes)
             .unwrap_or(i64::MAX)
@@ -400,6 +401,11 @@ mod tests {
         );
         // A wall at `now` is a reading already past its reset.
         assert_eq!(runway_minutes(0.4, 0.1, 0.95, NOW, Some(NOW)), Some(330));
+        // 59.52 minutes to the ceiling end inside a wall an hour out, so the runway reads its whole 59.
+        assert_eq!(
+            runway_minutes(0.45, 0.504, 0.95, NOW, Some(NOW + 60 * MINUTE_MS)),
+            Some(59)
+        );
     }
 
     #[test]

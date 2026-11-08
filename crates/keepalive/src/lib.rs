@@ -19,7 +19,7 @@ pub use breakeven::{
     break_even_ms, factors_for, resolve, BreakEvenFactors, CeilingInputs, Ceilings, Range,
     ResolvedCeilings,
 };
-pub use companion::{companion_router, pseudonym, ALLOWANCE_PATH};
+pub use companion::{companion_router, pseudonym};
 pub use config::{
     KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, LimitsError, PolicyError, FIVE_MINUTES_MS,
     LEASE_MS, LEASE_SECONDS, MAX_WORKERS, MIN_AFFINITY_SECONDS, ONE_HOUR_MS, PERSIST_INTERVAL,

@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use axum::body::Body;
 use axum::http::Request;
 use common::*;
-use phoebis_keepalive::{companion_router, pseudonym, ALLOWANCE_PATH};
+use phoebis_keepalive::{companion_router, pseudonym};
 use phoebis_routing::{
     Report, RouterConfig, SharePricer, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR,
     HOUR_MS, SEVEN_DAY,
@@ -17,6 +17,7 @@ use phoebis_store::{
 };
 use serde_json::{json, Value};
 
+const ALLOWANCE_PATH: &str = "/v0/companion/allowance";
 const C: &str = "sk-ant-api03-CCCC";
 const D: &str = "sk-ant-api03-DDDD";
 const OTHER_KEY: &str = "phoebis-otherkey";
@@ -104,6 +105,24 @@ fn laptop_key(r: &Rig, permissions: CompanionPermissions) -> ApiKeyRow {
         retired_secret_last_used_at: None,
         auto_mode_server: None,
     }
+}
+
+/// One real request of the main agent on `session` under the key `secret`, the rig's own request otherwise, pumped
+/// into the engine.
+async fn observe_as(r: &mut Rig, secret: &str, session: &str) {
+    let mut req = relay_common::request_from_fixture(
+        phoebis_profile::fixtures::inference_head(phoebis_profile::fixtures::FixtureKind::ApiKey),
+        BODY.as_bytes(),
+        secret,
+    );
+    relay_common::set_header(&mut req, "x-claude-code-session-id", session);
+    relay_common::set_header(&mut req, "x-claude-code-agent-id", "main");
+    relay_common::set_header(&mut req, "anthropic-beta", "test-beta");
+    let resp = r.h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let id = relay_common::outcome(&resp).request_id;
+    let _ = resp.into_body().collect().await.unwrap();
+    r.pump(Some(&id)).await;
 }
 
 /// A usage-poll reading of `window` on `account`, held by the router task once this returns.
@@ -352,6 +371,36 @@ async fn a_pin_names_its_holder_and_warm_follows_the_refresh_and_the_ttl() {
 }
 
 #[tokio::test]
+async fn a_pin_of_another_session_or_another_key_is_absent() {
+    let mut r = rig(RigSpec::default()).await;
+    let app = companion_router(r.engine.clone());
+    // The store stamps a key's creation from its own clock, so the laptop key is created at the desktop key's
+    // generation and the key id alone tells the laptop's pin on the same session id apart.
+    let generation = r.generation("desktop");
+    r.h.store.set_clock(std::sync::Arc::new(move || generation));
+    r.h.store
+        .insert_api_key(&laptop_key(&r, CompanionPermissions::default()), "test")
+        .unwrap();
+    assert_eq!(r.generation("laptop"), generation);
+    r.h.router.reload().await.unwrap();
+    r.observe("main").await;
+    observe_as(&mut r, KEY, "other").await;
+    observe_as(&mut r, OTHER_KEY, SESSION).await;
+    assert_eq!(
+        r.h.router.pins().await.unwrap().len(),
+        3,
+        "the asking session's pin, another session's under its key and the same session id's under another key"
+    );
+    let answer = get(&app, Some(SESSION), Some(KEY)).await;
+    assert_eq!(
+        answer.body["pins"].as_array().map(Vec::len),
+        Some(1),
+        "{}",
+        answer.text
+    );
+}
+
+#[tokio::test]
 async fn a_missing_or_invalid_session_id_answers_400_invalid_identity() {
     let r = rig(RigSpec::default()).await;
     let app = companion_router(r.engine.clone());
@@ -493,7 +542,7 @@ async fn the_fixture_is_the_route_answer_on_the_seeded_rig() {
     assert_eq!(
         live, committed,
         "the route's answer differs from the committed fixture. A renamed or dropped field is a defect of the route \
-         or a contract change the companion's decoder and documentation follow; re-capture with \
+         or a contract change the companion's decoder and documentation follow. Re-capture with \
          PHOEBIS_WRITE_FIXTURES=1 only for the latter"
     );
 }
