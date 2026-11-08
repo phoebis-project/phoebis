@@ -979,6 +979,11 @@ interface StorySeed {
   id: string;
   keyId: string;
   kind?: RequestKind;
+  /**
+   * A first placement after the session's row expired, on an account that never saw the conversation, which the cache
+   * diagnostics read as a failover's landing reads.
+   */
+  landsAfresh?: true;
   model: string;
   outcome?: RequestOutcome;
   /** The upstream's comparison was still running when its one attempt's answer went out. */
@@ -997,7 +1002,7 @@ interface StorySeed {
    * the drawn rows read and none of the events the story seats on a drawn row, so it keeps its written class and
    * instants and every drawn figure stays where it was: the contract seat's rows on fleet, the approved Ultra's rows on
    * bench, the last turns of the desktop session the mod ended, the one turn of story 4's Explore subagent, the
-   * classifier call that found no turn to judge and the turn whose placement replaced an expired row.
+   * classifier call its judged account could not take and the turn whose placement replaced an expired row.
    */
   unseeded?: true;
   usage?: Partial<Usage>;
@@ -1107,8 +1112,8 @@ function storyRow(seed: StorySeed): RequestLog {
     return {
       accountId: a.accountId,
       accountKind: kindOf(a.accountId),
-      // A failover lands on an account that never saw the turn before this one.
-      cacheMissReason: !answer || kind === 'count_tokens' ? null : !oauth ? 'not_requested' : index > 0 ? 'previous_message_not_found' : seed.pending ? 'pending' : 'none',
+      // A failover, and a placement after the session's row expired, land on an account that never saw the turn before.
+      cacheMissReason: !answer || kind === 'count_tokens' ? null : !oauth ? 'not_requested' : index > 0 || seed.landsAfresh ? 'previous_message_not_found' : seed.pending ? 'pending' : 'none',
       cooldownSet: a.cooldown ? { reason: a.cooldown.reason, until: iso(a.cooldown.until) } : null,
       durationMs: a.ms,
       index,
@@ -1551,17 +1556,16 @@ function storySeeds(): StorySeed[] {
     // as an earlier agent. It reads a cached prefix, so it counts as no miss between turns. Last, so every seed above
     // keeps the upstream ids it draws.
     { agentId: '0b7f', at: NOW - 40 * MINUTE, attempts: [{ accountId: 'nightly', at: NOW - 40 * MINUTE, ms: 3_600, status: 200 }], id: 'req_0b7f2c58-e43', keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'subagent', session: '89cd1c92', unseeded: true, usage: { cacheRead: 11_800, input: 600, output: 190 } },
-    // A classifier call of the laptop session the router's stop cut at 06:11:58, sent 12 s after the restart at
-    // 06:12:40: the restart took the session's turns out of the router's memory, so the call finds no turn to judge
-    // and lands where the strategy picks, nightly, pricing from its usage on nightly's plan before nightly's overage.
-    // It sits below the laptop rows a first page of 25 lists, whose last holds the newest cut answer. Last, so every
-    // seed above keeps the upstream ids it draws.
-    { agentId: 'main', at: t(6, 12, 52), attempts: [{ accountId: 'nightly', at: t(6, 12, 52), ms: 1_400, status: 200 }], classifier: 'client_off', id: 'req_7c2e9f41-d03', keyId: 'laptop', model: 'claude-sonnet-5', requestClass: 'auxiliary', session: '4ef130f1', unseeded: true, usage: { input: 3_600, output: 22 } },
-    // The held conversation's next turn, 630 s after its turn on nightly ended at 13:11:09 and 639 s after that turn
-    // last used the row, inside the purge's minute past all's 600 s: the placement finds the row expired, releases it
-    // and lands on primary, which holds its plan tier while nightly runs in overage, writing the conversation's prefix
-    // there afresh. Last, so every seed above keeps the upstream ids it draws.
-    { agentId: 'main', at: t(13, 21, 39), attempts: [{ accountId: 'primary', at: t(13, 21, 39), ms: 6_800, status: 200 }], id: REPLACED_PIN_ID, keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: RESET_HELD_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 42_600, input: 1_500, output: 900 } },
+    // A classifier call judging a tool call of the desktop turn that ended on secondary at 14:01:47, sent 53 s later,
+    // after secondary's head at 14:02:11 read its 5-hour window spent: the judged account holds no allowance, so the
+    // router does not direct the call there and places it as any request, on primary's plan tier, off the judged
+    // account. It prices from its usage on primary's plan. Last, so every seed above keeps the upstream ids it draws.
+    { agentId: 'main', at: t(14, 2, 40), attempts: [{ accountId: 'primary', at: t(14, 2, 40), ms: 1_400, status: 200 }], classifier: 'client_off', id: 'req_7c2e9f41-d03', keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'auxiliary', session: '0d588de5', unseeded: true, usage: { input: 3_600, output: 22 } },
+    // The held conversation's next turn, 630 s after its turn on nightly ended at 13:11:09 and so the row's last use,
+    // inside the purge's minute past all's 600 s: the placement finds the row expired, releases it for that and for
+    // nightly's overage under all's preference for a plan, and lands on primary, which holds its plan tier, writing the
+    // conversation's prefix there afresh. Last, so every seed above keeps the upstream ids it draws.
+    { agentId: 'main', at: t(13, 21, 39), attempts: [{ accountId: 'primary', at: t(13, 21, 39), ms: 6_800, status: 200 }], id: REPLACED_PIN_ID, keyId: 'desktop', landsAfresh: true, model: 'claude-sonnet-5-5', requestClass: 'main', session: RESET_HELD_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 42_600, input: 1_500, output: 900 } },
   ];
 }
 const storyRequests = () => storySeeds().map(storyRow);
@@ -1801,9 +1805,10 @@ function buildRequestEvents(): Map<string, RequestEvent[]> {
       spentOwed = false;
     }
     // One release for the drawer and the smoke checks: a pin that expired on a cooled account whose window was
-    // spent, with no sibling holding allowance to move to.
+    // spent, with no sibling holding allowance to move to. The row it lands on is nightly's, in overage under all's
+    // preference for a plan, which the release names in the router's order.
     if (events.length === 0 && releaseOwed && r.status === 200 && lane && lane.accountIds.length > 1) {
-      events.push({ ...pin, accountId: r.accountId, at: r.at, detail: { agent_id: r.agentId, reasons: ['cooldown', 'spent'] }, kind: 'pin_expired' });
+      events.push({ ...pin, accountId: r.accountId, at: r.at, detail: { agent_id: r.agentId, reasons: ['cooldown', 'overage', 'spent'] }, kind: 'pin_expired' });
       releaseOwed = false;
     }
     if (events.length) out.set(r.id, events);
@@ -1850,9 +1855,10 @@ function storyEvents(): Map<string, RequestEvent[]> {
   moved(TIE_STORY_ID, clock(8, 16, 21), 'overflow', 'primary', 'cooldown');
   moved('req_868264bc-611', clock(11, 8, 30), 'secondary', 'primary', 'shed');
   moved(FORCED_MOVE_ID, clock(11, 1, 50), 'overflow', 'nightly', 'return_to_plan');
-  // The placement's release of the expired row on nightly, which it writes before the pin it creates.
+  // The placement's release of the expired row on nightly, which it writes before the pin it creates, its reasons in
+  // the router's order: the idle row, and nightly's overage under all's preference for a plan.
   const replaced = requestById.get(REPLACED_PIN_ID);
-  if (replaced) out.set(replaced.id, [{ accountId: 'nightly', at: replaced.at, detail: { agent_id: replaced.agentId, reasons: ['expired'] }, keyId: replaced.keyId, kind: 'pin_expired', model: replaced.canonicalModel, sessionId: replaced.sessionId }]);
+  if (replaced) out.set(replaced.id, [{ accountId: 'nightly', at: replaced.at, detail: { agent_id: replaced.agentId, reasons: ['expired', 'overage'] }, keyId: replaced.keyId, kind: 'pin_expired', model: replaced.canonicalModel, sessionId: replaced.sessionId }]);
   const rejected = requestById.get('req_2e7c90a1-6d4');
   if (rejected) {
     const pin = { keyId: rejected.keyId, model: rejected.canonicalModel, sessionId: rejected.sessionId };

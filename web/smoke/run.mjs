@@ -1191,7 +1191,7 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   // The Keepalive engine block reads the mock's keepalive overview (`KEEPALIVE_OVERVIEW` in mock/operations.ts): the 18
   // sessions the engine holds and its 32 agent records, one per recipe the story writes, against the bootstrap file's
   // caps of 128 and 1,024, the retained prompts hand-set at 92 percent of 256 MiB, the day's probes `PROBES_24H` (225
-  // ok of 295), the 52 expiries between turns the ledger rows of the day hold and the three bus gaps, the last two
+  // ok of 295), the 51 expiries between turns the ledger rows of the day hold and the three bus gaps, the last two
   // hours back. Two of the seeded pools keep caches warm (`all` and `work` in mock/pools.ts), so the expired part takes
   // the warning ink, and with every pool's policy off it takes none. The last gap is inside the day, so the bus gaps
   // part takes the warning ink with that gap's instant on its hover. The card is read at the story's own instant, which
@@ -1226,9 +1226,9 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
       ['Retained', '235.5 MiB of 256 MiB', null],
     ],
     heads: ['Keepalive engine', 'Cache probes, 24h'],
-    line: 'expired between turns 52 · bus gaps 3',
+    line: 'expired between turns 51 · bus gaps 3',
     parts: [
-      { text: 'expired between turns 52', title: null, warning: true },
+      { text: 'expired between turns 51', title: null, warning: true },
       { text: 'bus gaps 3', title: `The last gap was 2h ago, at ${fmtAbsolute(overview.lastBusGapAt)}.`, warning: true },
     ],
     probes: '225 ok (76%) of 295',
@@ -18440,7 +18440,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
   // the router's own stop cut, `req_7a2c4e91-d03` and `req_c58d1f3a-e67`, and the line's requests the tie's failover
   // `req_8c41f2d7-a93`, which answered on its second attempt, the contract seat's three rows on fleet, the approved
   // Ultra's two rows on bench, the four turns of the desktop session the mod ended, story 4's Explore turn, the
-  // classifier call that ran on nightly, `req_7c2e9f41-d03`, and the held conversation's turn that replaced its expired
+  // classifier call that ran on primary, `req_7c2e9f41-d03`, and the held conversation's turn that replaced its expired
   // row, `req_6f3e1b84-d29`, each answered.
   const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Refusals by code');
   const codes = [...(card?.querySelectorAll('.hbars li') ?? [])].map((li) => [li.querySelector('.mono')?.textContent?.trim(), li.querySelector('.num')?.firstChild?.textContent?.trim()]);
@@ -20681,7 +20681,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
 
     await groupBy('Classifier');
     const classifiers = trafficRows('classifier').map((row) => row[0]);
-    // The story's classifier calls (`mock/requests.ts`): two on the judged turn's account, one with no turn to judge.
+    // The story's classifier calls (`mock/requests.ts`): two on the judged turn's account, one off its spent account.
     results.push({ name: "/analytics the page groups by classifier, the client's classifier calls as client or client_off and every other request as none", ok: JSON.stringify([...classifiers].sort()) === JSON.stringify(['client', 'client_off', 'none']), missing: classifiers });
 
     await groupBy('User agent');
@@ -23692,13 +23692,13 @@ await forView('/sessions', async () => {
     // Each pick's drawn order by session id prefix, read off the 24 rows' `spend.usd` and `requests` (the mock's fold
     // over the request seed in `web/src/mock/requests.ts`). The five rows with no spend, `0f1d7c64`, `3e9b7c21`,
     // `6d2f8b40`, `b7e2d5a9` and `cd9a5904`, stand last under Cost either way and read by session id, while their zero
-    // requests put them first under Requests ascending. `0d588de5` and `d7167642` tie at seven requests and read by
-    // session id under both directions.
+    // requests put them first under Requests ascending. `0d588de5`, with its classifier call of 14:02:40, and
+    // `fa23a6da` tie at eight requests and read by session id under both directions.
     const ORDERS = {
       cost: ['bcc805b6', '89cd1c92', '0d588de5', 'fa23a6da', '4ef130f1', '7bea4514', '4a7c2e9b', '229bf72c', '5f8a3c1e', 'd7167642', '76ddb35b', 'c8f4a2e7', 'c64358b5', '9c2d7e4a', '5eeed6ce', '1c0f9727', 'e7a4b2d9', '8b1f4c2e', '7d3e1c20', '0f1d7c64', '3e9b7c21', '6d2f8b40', 'b7e2d5a9', 'cd9a5904'],
       costAsc: ['7d3e1c20', '8b1f4c2e', 'e7a4b2d9', '1c0f9727', '5eeed6ce', '9c2d7e4a', 'c64358b5', 'c8f4a2e7', '76ddb35b', 'd7167642', '5f8a3c1e', '229bf72c', '4a7c2e9b', '7bea4514', '4ef130f1', 'fa23a6da', '0d588de5', '89cd1c92', 'bcc805b6', '0f1d7c64', '3e9b7c21', '6d2f8b40', 'b7e2d5a9', 'cd9a5904'],
-      requests: ['bcc805b6', 'fa23a6da', '0d588de5', 'd7167642', '229bf72c', '4ef130f1', '7bea4514', '76ddb35b', '89cd1c92', '5eeed6ce', '5f8a3c1e', '8b1f4c2e', 'c64358b5', '1c0f9727', '4a7c2e9b', '7d3e1c20', '9c2d7e4a', 'c8f4a2e7', 'e7a4b2d9', '0f1d7c64', '3e9b7c21', '6d2f8b40', 'b7e2d5a9', 'cd9a5904'],
-      requestsAsc: ['0f1d7c64', '3e9b7c21', '6d2f8b40', 'b7e2d5a9', 'cd9a5904', 'e7a4b2d9', '1c0f9727', '4a7c2e9b', '7d3e1c20', '9c2d7e4a', 'c8f4a2e7', '8b1f4c2e', 'c64358b5', '5eeed6ce', '5f8a3c1e', '76ddb35b', '89cd1c92', '229bf72c', '4ef130f1', '7bea4514', '0d588de5', 'd7167642', 'fa23a6da', 'bcc805b6'],
+      requests: ['bcc805b6', '0d588de5', 'fa23a6da', 'd7167642', '229bf72c', '4ef130f1', '7bea4514', '76ddb35b', '89cd1c92', '5eeed6ce', '5f8a3c1e', '8b1f4c2e', 'c64358b5', '1c0f9727', '4a7c2e9b', '7d3e1c20', '9c2d7e4a', 'c8f4a2e7', 'e7a4b2d9', '0f1d7c64', '3e9b7c21', '6d2f8b40', 'b7e2d5a9', 'cd9a5904'],
+      requestsAsc: ['0f1d7c64', '3e9b7c21', '6d2f8b40', 'b7e2d5a9', 'cd9a5904', 'e7a4b2d9', '1c0f9727', '4a7c2e9b', '7d3e1c20', '9c2d7e4a', 'c8f4a2e7', '8b1f4c2e', 'c64358b5', '5eeed6ce', '5f8a3c1e', '76ddb35b', '89cd1c92', '229bf72c', '4ef130f1', '7bea4514', 'd7167642', '0d588de5', 'fa23a6da', 'bcc805b6'],
     };
     const rowIds = (prefixes) => prefixes.map((p) => listed.find((s) => !s.historical && s.sessionId.startsWith(p))).map((s) => (s === undefined ? 'no session' : idOfRow(s)));
     const read = () => ({
@@ -24346,7 +24346,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
   {
     // The summary line under the card's title, over the rows the filters keep: the 35 agents the Agents cells count, 10
     // busy, 6 idle and 4 parked among them, nightly's notebook row (`sessionSpec[19]`) counted in none of the three,
-    // since no mod reports it and its main reads unreported over the idle word the engine holds, the 86 client requests
+    // since no mod reports it and its main reads unreported over the idle word the engine holds, the 87 client requests
     // of the last 24 hours the rows' `day` folds and a dash for their spend, since thirteen of the rows' days hold a
     // plan request the cost model priced nothing for and a partial sum would read as the whole, then the $1.40 the day
     // billed in dollars, $1.4036 over these rows of the request seed (mock/requests.ts): e4b7's row the seed draws onto
@@ -24361,7 +24361,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     const parts = /^(.*) · (.*) requests and (.*) \+ (\$[\d.]+) in 24 h$/.exec(subtitle);
     results.push({
       name: "/sessions the card's summary line reads the agents by word, the day's requests and spend, and the dollars billed beside it, and the title its sentence on hover",
-      ok: card?.querySelector('.card__title [title]')?.getAttribute('title') === 'One row per session. Open a row for its agents, its routing and its cache warming.' && parts !== null && parts[1] === '35 agents: 10 busy, 6 idle, 4 parked' && parts[2] === '86' && parts[3] === '-' && parts[4] === '$1.40',
+      ok: card?.querySelector('.card__title [title]')?.getAttribute('title') === 'One row per session. Open a row for its agents, its routing and its cache warming.' && parts !== null && parts[1] === '35 agents: 10 busy, 6 idle, 4 parked' && parts[2] === '87' && parts[3] === '-' && parts[4] === '$1.40',
       missing: [subtitle, card?.querySelector('.card__title')?.outerHTML ?? 'no title'],
     });
   }

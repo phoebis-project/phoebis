@@ -1092,6 +1092,11 @@ interface PinState {
   createdAt: number;
   /** The cycle the pin's pace holds, which the slow-down's holds are sized from. */
   cycleMs: number | null;
+  /**
+   * Where the turn that last wrote the row ended its stream, the engine's stamp of the row's last use. The story's
+   * live reads stamp the selection instead, and only the read of a row the purge has not yet taken reads this.
+   */
+  endedAt?: number;
   epoch: number;
   lastRefreshAt: number;
   lastUsedAt: number;
@@ -1158,10 +1163,11 @@ function pinStepOf(spec: Spec, pool: PoolSeed, pinKey: string): { pin: RecordPin
     // pool's window, with the reasons its release names. The engine writes no warmth and no mark for a row it releases.
     const expired = spec.kind === 'placed' && spec.attempt === 1 && spec.from !== undefined && held?.accountId === spec.from ? held : undefined;
     if (expired) {
-      const idleMs = spec.at - expired.lastUsedAt;
+      const lastUsedAt = expired.endedAt ?? expired.lastUsedAt;
+      const idleMs = spec.at - lastUsedAt;
       const reasons = REQUEST_EVENTS.get(r.id)?.find((e) => e.kind === 'pin_expired')?.detail?.reasons;
       const pin: RecordPin = {
-        accountId: expired.accountId, createdAt: iso(expired.createdAt), cycleMs: null, epoch: expired.epoch, found: 'expired_idle', idleMs, incarnation: 1, lane: laneOf(r), lastRefreshAt: iso(expired.lastRefreshAt), lastUsedAt: iso(expired.lastUsedAt),
+        accountId: expired.accountId, createdAt: iso(expired.createdAt), cycleMs: null, epoch: expired.epoch, found: 'expired_idle', idleMs, incarnation: 1, lane: laneOf(r), lastRefreshAt: iso(expired.lastRefreshAt), lastUsedAt: iso(lastUsedAt),
         marked: false, markedAt: null, markedOn: null, markedWindow: null, refreshAgeMs: spec.at - expired.lastRefreshAt, released: Array.isArray(reasons) ? reasons.map(String) : [],
         shed: expired.shed === null ? null : { at: iso(expired.shed.at), from: expired.shed.from, reason: expired.shed.reason }, slowDownUntil: null, warmth: null, warmthCause: null,
       };
@@ -1169,6 +1175,10 @@ function pinStepOf(spec: Spec, pool: PoolSeed, pinKey: string): { pin: RecordPin
       return { pin, pinReason: null, steps: [step('pin', 'none', facts)] };
     }
     const pin: RecordPin = { accountId: null, createdAt: null, cycleMs: null, epoch: null, found: 'none', idleMs: null, incarnation: null, lane: null, lastRefreshAt: null, lastUsedAt: null, marked: false, markedAt: null, markedOn: null, markedWindow: null, refreshAgeMs: null, released: [], shed: null, slowDownUntil: null, warmth: null, warmthCause: null };
+    // The story's `client` calls are the ones the router directed to their judged turn's account, which the engine
+    // names under the pin step with a matching verdict.
+    const judged = r.classifier === 'client' ? spec.accountId : null;
+    if (judged !== null) return { pin, pinReason: null, steps: [step('pin', 'match', [fact('found', 'none'), fact('judged', judged, null, judged)])] };
     return { pin, pinReason: null, steps: [step('pin', 'none', [fact('found', 'none')])] };
   }
   const on = spec.from ?? spec.accountId ?? '';
@@ -1306,7 +1316,8 @@ function pinWriteOf(spec: Spec, pinning: boolean, pin: RecordPin | null, pinKey:
   // stamp, and every other write clears it.
   const source = spec.from ?? '';
   const shed = action === 'renewed' ? (prior?.shed ?? null) : spec.failover ? { at: spec.at, from: source, reason: spec.failover } : spec.kind === 'moved' && spec.rule === 'shed' ? { at: spec.at, from: source, reason: 'round' } : null;
-  pins.set(pinKey, { accountId: spec.accountId ?? '', createdAt: action === 'renewed' && prior ? prior.createdAt : spec.at, cycleMs: spec.pinPace?.cycleMs ?? null, epoch, lastRefreshAt: spec.at, lastUsedAt: spec.at, shed });
+  const dispatched = dispatchedAttempt(spec);
+  pins.set(pinKey, { accountId: spec.accountId ?? '', createdAt: action === 'renewed' && prior ? prior.createdAt : spec.at, cycleMs: spec.pinPace?.cycleMs ?? null, endedAt: dispatched ? attemptEnd(dispatched) : spec.at, epoch, lastRefreshAt: spec.at, lastUsedAt: spec.at, shed });
   return action === 'renewed' ? { action, epoch, hashesStamped: stamps.hashes, lane: laneOf(r), refreshStamped: stamps.refresh } : { action, epoch, hashesStamped: r.kind === 'inference', lane: laneOf(r), refreshStamped: true };
 }
 
@@ -1766,15 +1777,15 @@ const parkedOpus = SESSIONS.find((x) => x.sessionId === SESSION_IDS[3] && x.keyI
  * runway for the other walked pin, since nightly projects past the ceiling, secondary is spent and cooling, and the
  * Overflow workspace needs funding. Three pins leave the round before the order: the parked Opus pin rides the fast
  * lane, so it holds no share of a plan window, the pin of the session the mod released whole after its one turn at
- * 14:03 belongs to an agent that ended, and the laptop session's classifier pin burns nothing, since a classifier call
- * takes no share of a plan window.
+ * 14:03 belongs to an agent that ended, and the pin of the classifier call placed here at 14:02:40 burns nothing,
+ * since the router folds a classifier call into its unmetered copy alone.
  */
 const NO_RUNWAY_PINS: RoundPin[] = [
   { agentId: 'main', burn: null, cold: true, keyId: 'desktop', lastInputTokens: 43_000, marked: false, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('bcc805b6'), skip: 'unpriced' },
   { agentId: 'main', burn: 0.033, cold: false, keyId: 'desktop', lastInputTokens: 52_300, marked: false, model: 'claude-sonnet-5-5', note: 'current', sessionId: sessionId('d7167642'), skip: 'no_runway' },
   { agentId: 'main', burn: null, cold: false, keyId: 'desktop', lastInputTokens: parkedOpus?.lastInputTokens ?? 0, marked: false, model: parkedOpus?.model ?? 'claude-opus-5', note: null, sessionId: SESSION_IDS[3], skip: 'fast_lane' },
   { agentId: 'main', burn: null, cold: false, keyId: 'desktop', lastInputTokens: 18_100, marked: false, model: 'claude-sonnet-5', note: null, sessionId: RELEASED_SESSION_ID, skip: 'ended' },
-  { agentId: 'main', burn: null, cold: false, keyId: 'laptop', lastInputTokens: 3_200, marked: false, model: 'claude-sonnet-5', note: null, sessionId: sessionId('4ef130f1'), skip: 'no_burn' },
+  { agentId: 'main', burn: null, cold: false, keyId: 'desktop', lastInputTokens: 3_600, marked: false, model: 'claude-sonnet-5', note: null, sessionId: sessionId('0d588de5'), skip: 'no_burn' },
 ];
 
 /**
@@ -2777,8 +2788,11 @@ function buildEvents(): RoutingEvent[] {
   // The story's access tokens run eight hours from their refresh.
   const studioRefresh = accountById.get('studio')?.credential.refreshTokenExpiresAt ?? null;
   seeds.push({ accountId: 'studio', at: iso(LATE_EVENT_AT), detail: { access_expires_at: LATE_EVENT_AT + 8 * HOUR, refresh_expires_at: studioRefresh === null ? null : Date.parse(studioRefresh), until: LATE_EVENT_AT + 8 * HOUR }, kind: 'refresh_succeeded' });
+  // At one instant the kinds read alphabetically, save that a placement writes the release of the row it replaces
+  // before the pin it creates, so the ledger numbers the release first.
+  const instantKey = (kind: string) => (kind === 'pin_created' ? 'pin_zcreated' : kind);
   return seeds
-    .sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || a.kind.localeCompare(b.kind))
+    .sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || instantKey(a.kind).localeCompare(instantKey(b.kind)))
     .map((e, i) => ({ type: 'event', accountId: e.accountId, actor: e.actor ?? null, agentId: e.agentId ?? null, at: e.at, detail: e.detail, id: i + 1, keyId: e.keyId ?? null, kind: e.kind, model: e.model ?? null, poolId: e.poolId ?? null, requestId: e.requestId ?? null, sessionId: e.sessionId ?? null }));
 }
 
