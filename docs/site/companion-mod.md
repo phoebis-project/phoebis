@@ -122,8 +122,8 @@ The answer is the key's pool as the router reads it at that instant. The protoco
 (`plan`, `usage_based` or `api_key`), its rate-limit `tier`, the `obstacle` the selector holds against it at that
 instant (`cooldown`, `budget`, `spent` and the other words the routing log uses, or `null` where the selector would
 place on it), its `pace_score`, the spare rate Pace scores it by, the `slow_down` in force on it or `null`, its
-`windows`, and its `spend`, one row per spend budget the account carries in the pool, with the period, the dollars
-spent, the budget and the period's end.
+`windows`, and its `spend`, one row per spend budget the ledger has reported for the account, with the period, the
+dollars spent, the budget and the period's end.
 
 `windows` holds one entry per plan window the account has a reading of, keyed by the window id (`five_hour`,
 `seven_day`, or a model's own week, as [The windows the router works from](routing.md#the-windows-the-router-works-from)

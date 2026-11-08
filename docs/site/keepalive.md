@@ -100,8 +100,8 @@ warm", with the policy's three numbers under it (see [Pools](console.md#pools)).
 The bootstrap file's `keepalive` block holds the process-wide bounds alone, `max_agents`, `max_retained_bytes` and
 `max_sessions`, read once at start, so changing one takes a restart (see [keepalive](installation.md#keepalive)). The
 lease and the four probe workers are fixed. A session holds a slot of `max_sessions` from its first real request until
-its end, and its agents hold slots of `max_agents` from that request until their records leave. A first request over
-the session cap is not kept and reads `session_limit`, and one over the agent cap reads `agent_limit`, the words a
+its end, and its agents hold slots of `max_agents` from that request until their records leave. A first request over the
+session cap is not kept and reads `session_limit`, and one over the agent cap reads `agent_limit`, the words a
 registration over either cap answers.
 
 ## Which requests re-arm a recipe

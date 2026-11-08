@@ -49,8 +49,8 @@ const WRITTEN_SUBAGENTS: Partial<KeepaliveRecipe>[] = [
   { agentState: 'released', cause: 'session_ended', deadline: null, lastProbeAt: ago(6 * MINUTE), lastRequestAt: ago(11 * MINUTE), nextProbeAt: null, parkKind: null, state: 'ended', wakeAt: null },
 ];
 
-// `state: null` marks a session with no cache-warming recipe: the `ci` key opts
-// out and `jobs` keeps no caches warm.
+// `state: null` marks a session with no cache-warming recipe: the `ci` key permits
+// no cache warming and `jobs` keeps no caches warm.
 // `companion` is independent of that: it says whether the companion mod ever
 // registered for the session and is still reporting, and a session the mod
 // ended reads none. A silent companion changes neither, because the retained prompts stay and are probed
