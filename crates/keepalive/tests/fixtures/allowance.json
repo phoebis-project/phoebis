@@ -1,0 +1,69 @@
+{
+  "protocol": 1,
+  "now": "1970-01-01T00:16:40Z",
+  "pool": {
+    "ceiling": 0.95,
+    "pinning": "always",
+    "strategy": "priority"
+  },
+  "accounts": [
+    {
+      "id": "aaaaaaaa",
+      "funding": "api_key",
+      "tier": null,
+      "obstacle": null,
+      "pace_score": 1.0,
+      "slow_down": null,
+      "windows": {},
+      "spend": [
+        {
+          "period": "day",
+          "spent_usd": 2.5,
+          "budget_usd": 10.0,
+          "period_end": "1970-01-02T00:00:00Z"
+        }
+      ]
+    },
+    {
+      "id": "bbbbbbbb",
+      "funding": "plan",
+      "tier": "default_claude_max_20x",
+      "obstacle": null,
+      "pace_score": 0.008333333333333333,
+      "slow_down": null,
+      "windows": {
+        "five_hour": {
+          "utilization": 0.25,
+          "horizon_at": "1970-01-01T02:16:40Z",
+          "burn_per_hour": 0.0,
+          "demand_per_hour": 0.0,
+          "projected_at_horizon": 0.25,
+          "runway_minutes": null
+        },
+        "seven_day": {
+          "utilization": 0.4,
+          "horizon_at": "1970-01-04T00:16:40Z",
+          "burn_per_hour": 0.0,
+          "demand_per_hour": 0.0,
+          "projected_at_horizon": 0.4,
+          "runway_minutes": null
+        }
+      },
+      "spend": []
+    }
+  ],
+  "pins": [
+    {
+      "agent": "main",
+      "model": "claude-sonnet-4-5",
+      "account": "bbbbbbbb",
+      "placed_at": "1970-01-01T00:16:40Z",
+      "last_used_at": "1970-01-01T00:16:40Z",
+      "warm": true,
+      "warm_until": "1970-01-01T00:21:40Z",
+      "runway_minutes": null,
+      "binding_window": null,
+      "slow_down": null
+    }
+  ]
+}

@@ -702,7 +702,9 @@ pub async fn harness_with_catalog_and_head_timeout(
 
 /// `harness_on_with_bus`, with the caller's own catalog fake in place of `catalog_rules()`'s: for a suite (like
 /// keepalive's) built around a session's pin and account continuity, where a spelling resolving to a dated id
-/// mid-test is not what the suite is about. `accounting`, when named, is the ledger's standing admission reads.
+/// mid-test is not what the suite is about. `accounting`, when named, is the ledger's standing admission reads, and
+/// the router task runs on `router_config`.
+#[allow(clippy::too_many_arguments)]
 pub async fn harness_on_with_bus_and_catalog(
     store: Arc<Store>,
     up: &FakeUpstream,
@@ -711,6 +713,7 @@ pub async fn harness_on_with_bus_and_catalog(
     bus: Bus,
     catalog_up: FakeUpstream,
     accounting: Option<AccountingSource>,
+    router_config: RouterConfig,
 ) -> Harness {
     build(
         store,
@@ -722,7 +725,7 @@ pub async fn harness_on_with_bus_and_catalog(
         false,
         None,
         Some(catalog_up),
-        RouterConfig::default(),
+        router_config,
         accounting,
         None,
     )

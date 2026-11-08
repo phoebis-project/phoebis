@@ -4249,6 +4249,19 @@ async fn the_binary_retains_a_session_probes_it_and_serves_the_keepalive_views()
         401,
         "no key, no event"
     );
+    let allowance = client
+        .get(format!(
+            "http://127.0.0.1:{proxy_port}/v0/companion/allowance?session_id=e2e-warm"
+        ))
+        .header("authorization", format!("Bearer {secret}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        allowance.status(),
+        200,
+        "the proxy listener serves the companion's allowance under the key"
+    );
     let resp = fixture_request(&client, proxy_port, &secret, "e2e-warm")
         .body(adaptive.clone())
         .send()

@@ -14,7 +14,8 @@ use phoebis_admin::{
 };
 use phoebis_bus::Bus;
 use phoebis_keepalive::{
-    keepalive_router, spawn_observer, Engine, EngineParts, KeepaliveTiming, PERSIST_INTERVAL,
+    companion_router, keepalive_router, spawn_observer, Engine, EngineParts, KeepaliveTiming,
+    PERSIST_INTERVAL,
 };
 use phoebis_ledger::{
     metrics_router, usage_router, LedgerConfig, LedgerDb, Metrics, Pricing, QuotaPoll,
@@ -534,12 +535,14 @@ pub async fn run_until(
         .spawn(phoebis_relay::serve(
             proxy_listener,
             relay.clone(),
-            keepalive_router(keepalive.clone()).merge(usage_router(
-                ledger_db.clone(),
-                router_task.clone(),
-                clock.clone(),
-                pricing.clone(),
-            )),
+            keepalive_router(keepalive.clone())
+                .merge(companion_router(keepalive.clone()))
+                .merge(usage_router(
+                    ledger_db.clone(),
+                    router_task.clone(),
+                    clock.clone(),
+                    pricing.clone(),
+                )),
             proxy_stop,
             limits(PROXY_MAX_CONNECTIONS),
             proxy_acceptor,

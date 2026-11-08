@@ -29,6 +29,7 @@ use phoebis_ledger::{
 };
 use phoebis_oauth::Clock;
 use phoebis_relay::AccountingSource;
+use phoebis_routing::RouterConfig;
 use phoebis_store::{AccountKind, StorageKey, Store};
 // Re-exported for every test binary that shares this rig; only some of them, this one included, reach for all
 // of `oauth`, `wait_for`, and `NOW` themselves.
@@ -130,6 +131,9 @@ pub struct RigSpec {
     /// The shipped table by default. A ceiling test writes its own rows so a break-even follows from the text, and a
     /// case on a row priced by prompt length hands in the test table.
     pub pricing: PriceRevisions,
+    /// The router task's settings. The default's share pricer prices nothing, so a case that reads an account's burn
+    /// hands in a pricer of its own.
+    pub router: RouterConfig,
     pub session_expiry: Duration,
     /// The shipped tables by default; a test naming a model the cost model has no weight for (though the price
     /// table prices it) overrides this so the gap is deliberate rather than a coincidence of the shipped tables.
@@ -154,6 +158,7 @@ impl Default for RigSpec {
             },
             pool: PoolSpec::default(),
             pricing: PriceRevisions::shipped(),
+            router: RouterConfig::default(),
             session_expiry: Duration::from_secs(86_400),
             tables: PlanTables::shipped(),
             tier: None,
@@ -204,6 +209,7 @@ pub async fn rig(spec: RigSpec) -> Rig {
         bus.clone(),
         catalog_up,
         spec.accounting,
+        spec.router,
     )
     .await;
     let mut pool = h.store.pool("main").unwrap().unwrap();

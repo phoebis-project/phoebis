@@ -14,6 +14,7 @@ debug-hooks = []
 [dependencies]
 axum = { workspace = true }
 bytes = { workspace = true }
+jiff = { workspace = true }
 phoebis-bus = { path = "../bus" }
 phoebis-cch = { path = "../cch" }
 phoebis-ledger = { path = "../ledger" }
