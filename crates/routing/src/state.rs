@@ -244,7 +244,7 @@ pub fn plan_windows(canonical_model: &str) -> impl Iterator<Item = &'static str>
 /// Every plan window an account can hold a reading of, in the trigger's order: both shared windows, then each model
 /// week `MODEL_WINDOWS` names. The projections, the member facts and the route iterate this one list, so a week added
 /// to the table is projected wherever the others are.
-pub(crate) fn all_plan_windows() -> impl Iterator<Item = &'static str> {
+pub fn all_plan_windows() -> impl Iterator<Item = &'static str> {
     [FIVE_HOUR, SEVEN_DAY]
         .into_iter()
         .chain(MODEL_WINDOWS.iter().map(|(_, window)| *window))
@@ -908,12 +908,18 @@ pub(crate) fn burn_folded(
 /// (`auxiliary_only`) is kept warm by those requests, so its last use is the measure, and any other pin reads its last
 /// refresh, the last turn that rewrote its prefix.
 pub fn warm(pin: &PinRow, auxiliary_only: bool, now: i64) -> bool {
+    now < warm_until(pin, auxiliary_only)
+}
+
+/// The first instant `warm` answers false for the pin. `warm` reads it, so a reader that shows when the cache goes
+/// cold cannot disagree with the selector's warmth.
+pub fn warm_until(pin: &PinRow, auxiliary_only: bool) -> i64 {
     let since = if auxiliary_only {
         pin.last_used_at
     } else {
         pin.last_refresh_at
     };
-    now - since < pin.cache_ttl_ms
+    since + pin.cache_ttl_ms
 }
 
 /// Past this age a permit or a ticket is a guard whose drop never reached the table: the relay bounds a

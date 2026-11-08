@@ -25,7 +25,7 @@ use crate::record::{
     RefusedRequest, ShedRoundFacts,
 };
 use crate::select::{
-    burn_unit, decide, obstacle, pace_of, passes_reset, projection_of, projections_of,
+    account_end, burn_unit, decide, obstacle, pace_of, passes_reset, projection_of, projections_of,
     release_reasons, routed_agent, slow_down_ramp, BurnRead, Decided, FailedOver, Obstacle,
     Refusal, SelectRequest, SelectResult, MAIN_AGENT, RATE_LIMIT_REASON,
 };
@@ -1265,6 +1265,9 @@ pub struct WindowProjection {
     /// At the horizon.
     pub projection: f64,
     pub horizon: i64,
+    /// The earlier of the reading's reset and the account's end, the instant the quota left is discarded, `None` with
+    /// neither. `horizon` caps a weekly window five hours out, so the two differ where the wall lies further.
+    pub wall: Option<i64>,
     /// Share per hour, the account's `burn_shares` on the window.
     pub burn: f64,
     /// The pins' burn over the speed with the live bookings' burn undivided, in share per hour.
@@ -2665,6 +2668,7 @@ fn projections(
                 BurnRead::Demand,
                 None,
             );
+            let end = account_end(snapshot, account_id, now);
             let windows = all_plan_windows()
                 .filter_map(|window| {
                     let projection = achieved.get(window)?;
@@ -2675,6 +2679,7 @@ fn projections(
                             predicted: projection.predicted,
                             projection: projection.at_horizon,
                             horizon: projection.horizon,
+                            wall: projection.reset.into_iter().chain(end).min(),
                             burn: projection.burn * 3_600.0,
                             demand: demand.burn * 3_600.0,
                             spare_rate: pace_of(

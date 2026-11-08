@@ -659,7 +659,7 @@ pub enum PinnedObstacle {
 }
 
 impl PinnedObstacle {
-    /// The word the exhausted decision's `obstacle` fact records, the one `obstacle_name` gives the selector's own
+    /// The word the exhausted decision's `obstacle` fact records, the one `Obstacle::name` gives the selector's own
     /// obstacle.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -774,19 +774,21 @@ pub enum Obstacle {
     Unready,
 }
 
-/// The step-2 name `release_reasons` and the trace report for an obstacle: `attempted`, `budget`,
-/// `budget_unknown`, `cooldown`, `credits`, `operator`, `overage`, `spent`, or `subscription_ended`.
-fn obstacle_name(obstacle: &Obstacle) -> &'static str {
-    match obstacle {
-        Obstacle::Attempted => "attempted",
-        Obstacle::Budget { .. } => "budget",
-        Obstacle::BudgetUnknown => "budget_unknown",
-        Obstacle::Cooldown { .. } => "cooldown",
-        Obstacle::Credits { .. } => "credits",
-        Obstacle::Deleted | Obstacle::Paused | Obstacle::Unready => "operator",
-        Obstacle::Ended => "subscription_ended",
-        Obstacle::Overage { .. } => "overage",
-        Obstacle::Spent { .. } => "spent",
+impl Obstacle {
+    /// The step-2 name `release_reasons` and the trace report for an obstacle: `attempted`, `budget`,
+    /// `budget_unknown`, `cooldown`, `credits`, `operator`, `overage`, `spent`, or `subscription_ended`.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Obstacle::Attempted => "attempted",
+            Obstacle::Budget { .. } => "budget",
+            Obstacle::BudgetUnknown => "budget_unknown",
+            Obstacle::Cooldown { .. } => "cooldown",
+            Obstacle::Credits { .. } => "credits",
+            Obstacle::Deleted | Obstacle::Paused | Obstacle::Unready => "operator",
+            Obstacle::Ended => "subscription_ended",
+            Obstacle::Overage { .. } => "overage",
+            Obstacle::Spent { .. } => "spent",
+        }
     }
 }
 
@@ -1709,8 +1711,11 @@ fn run(
         rec.candidates.push(facts);
         rec.horizon_bounds.push(limits);
         standing.push(
-            Fact::text("standing", found.as_ref().map_or("eligible", obstacle_name))
-                .about(&candidate.account_id),
+            Fact::text(
+                "standing",
+                found.as_ref().map_or("eligible", Obstacle::name),
+            )
+            .about(&candidate.account_id),
         );
         match found {
             None => eligible.push(candidate),
@@ -1751,7 +1756,7 @@ fn run(
             let pinned = obstacles.iter().find(|(id, _)| id == &current.account_id);
             let tried = request.attempted.contains(&current.account_id);
             if let Some((_, o)) = pinned {
-                facts.push(Fact::text("obstacle", obstacle_name(o)));
+                facts.push(Fact::text("obstacle", o.name()));
             }
             facts.push(Fact::bool("tried", tried));
             let answered = |rec: &mut Recorder, facts: Vec<Fact>, exhaustion: Exhaustion| {
@@ -2478,7 +2483,7 @@ fn run(
         .iter()
         .map(|(account_id, o)| Skipped {
             account_id: account_id.clone(),
-            obstacle: obstacle_name(o),
+            obstacle: o.name(),
         })
         .collect();
     trace_skipped.extend(skipped);
@@ -3554,7 +3559,7 @@ fn reserve_step(reservation: &Reservation) -> (WalkStep, ReservationFacts) {
     )
 }
 
-fn account_end(snapshot: &RegistrySnapshot, account_id: &str, now: i64) -> Option<i64> {
+pub(crate) fn account_end(snapshot: &RegistrySnapshot, account_id: &str, now: i64) -> Option<i64> {
     snapshot
         .term(account_id)
         .and_then(|term| term::end_of(term, now))
@@ -6758,7 +6763,7 @@ fn pin_key_text(key: &PinKey) -> String {
 
 /// An obstacle as the exhausted line names it beside its account.
 fn weighed_name(account_id: &str, obstacle: &Obstacle) -> String {
-    format!("{account_id}:{}", obstacle_name(obstacle))
+    format!("{account_id}:{}", obstacle.name())
 }
 
 fn exhaustion_facts(exhaustion: &Exhaustion) -> ExhaustionFacts {
@@ -6903,7 +6908,7 @@ fn window_facts(
 
 fn obstacle_facts(obstacle: &Obstacle) -> ObstacleFacts {
     let none = ObstacleFacts {
-        name: obstacle_name(obstacle),
+        name: obstacle.name(),
         reason: None,
         scope: None,
         window: None,
