@@ -49,8 +49,6 @@ type GroupBy = Exclude<AnalyticsGroupBy, 'all'>;
 type QueryDim = 'accountId' | 'keyId' | 'model' | 'poolId';
 /** The two pattern lists, which the analytics query reads whole and the request log as one client pattern at most. */
 type PatternDim = 'clients' | 'userAgents';
-/** No route groups on a session, so it filters the page from the side rather than joining the group-by. */
-type Dim = QueryDim | 'sessionId';
 
 const GROUP_LABEL: Record<GroupBy, string> = { account: 'Account', classifier: 'Classifier', client: 'Client', key: 'Key', effort: 'Effort', kind: 'Kind', model: 'Model', pool: 'Pool', request_class: 'Request class', speed: 'Speed', user_agent: 'User agent' };
 /** The two speeds the rollups file an answer under, standard at the foot of each stacked bar. */
@@ -269,7 +267,10 @@ export function AnalyticsPage() {
     replaceLater({ ...a, unit: '' });
   }, [a, replaceLater, setUnit]);
   // The hook keeps a list's identity while its value stands, so a unit change re-issues none of the reads they key.
-  const filters = useMemo<Record<Dim, string[]>>(() => ({ accountId: a.accounts, keyId: a.keys, model: a.models, poolId: a.pools, sessionId: a.session ? [a.session] : [] }), [a.accounts, a.keys, a.models, a.pools, a.session]);
+  const filters = useMemo<Record<QueryDim, string[]>>(() => ({ accountId: a.accounts, keyId: a.keys, model: a.models, poolId: a.pools }), [a.accounts, a.keys, a.models, a.pools]);
+  // No route groups on a session, so it filters the page from the side rather than joining `filters`. The address
+  // reads an absent session as the empty string.
+  const sessionId = a.session === '' ? null : a.session;
   // The request log reads one client pattern, so a session view's log read carries the one where exactly one stands.
   const logClient = a.clients.length === 1 ? a.clients[0] : undefined;
   const ink = useChartInk();
@@ -303,7 +304,6 @@ export function AnalyticsPage() {
   const toIso = iso(span.toMs);
   const ended = spanEnded(custom, span.toMs, rangeTakenAt);
   const polledMs = effectiveInterval(intervalMs, ended);
-  const sessionId = filters.sessionId[0] ?? null;
   // A session view draws no Cost table, so its Cost tab has no group table to order. A key the open tab's table lacks
   // draws Name while the address keeps it, so the tab that has the column orders by it again.
   const tabKeys = analyticsKeysOf(sessionId !== null && tab === 'cost' ? null : tab, unit);
@@ -556,11 +556,13 @@ export function AnalyticsPage() {
   const burnAccount = filters.accountId.length === 1 ? filters.accountId[0] : null;
   // The plan chart sizes its lines by tier where each group holds one account's rows.
   const burnSizes = pageBy === 'account' || burnAccount !== null;
-  const burnReading: WeekReading = burnSizes && sized === null ? { failure: failed(costSettings.error), scale: null, week } : reading;
-  // The 5-hour and Fable week cards wait on the same tiers, which pick their lines' category too.
+  // Where the cards size their lines by tier, which the cost model holds, the week card alone waits on the model: its
+  // Pro reading sizes without it, and the 5-hour and Fable week readings already read its absence as the settings
+  // read's failure.
+  const burnReading: WeekReading = burnSizes && costs === null ? { failure: failed(costSettings.error), scale: null, week } : reading;
   const burnReadings = {
-    fable: burnSizes && sized === null ? burnReading : fableWeekReadingOf(costs, costSettings.error, week),
-    fiveHour: burnSizes && sized === null ? burnReading : fiveHourReadingOf(costs, costSettings.error, week),
+    fable: fableWeekReadingOf(costs, costSettings.error, week),
+    fiveHour: fiveHourReadingOf(costs, costSettings.error, week),
     week: burnReading,
   };
 
@@ -1341,7 +1343,9 @@ function BreakdownTable({
                 colSpan={columns.length + 1}
                 empty="No rows."
                 error={failure?.text ?? null}
-                errorTitle={failure?.unpriced ? failureHead(failure, title.toLowerCase()) : 'Could not load this breakdown'}
+                // The row draws the title with `error` alone, which is null while `failure` is, so the empty title
+                // draws nowhere.
+                errorTitle={failure === null ? '' : failureHead(failure, title.toLowerCase())}
                 loading={loading}
               />
             )}
@@ -2304,8 +2308,8 @@ function BurnCharts({
   const pointsAt = useMemo(() => groupInto(answer?.points ?? [], (p) => `${Date.parse(p.at)}|${p.group}`), [answer]);
   const named = useMemo(() => lines.filter((l) => !l.other).map((l) => l.key).sort(), [lines]);
   const colorOf = (l: BurnLine) => (l.other ? ink.muted : groupBy === 'account' ? accountColor(ink, slotOf(l.key)) : ink.series[Math.min(7, named.indexOf(l.key))]);
-  // A session id runs past any legend, so it shows cut as the Sessions view cuts it. The spend chart's legend and
-  // tooltip show the whole id on hover, and the plan chart shows the cut id alone.
+  // A session id runs past any legend, so it shows cut as the Sessions view cuts it. Both charts' legend entries
+  // and the spend chart's tooltip show the whole id on hover.
   const nameOf = (l: BurnLine) => (groupBy === 'session' && !l.other ? shortId(l.label, SESSION_CHARS) : l.label);
   const titleOf = (l: BurnLine) => (groupBy === 'request_class' ? (l.key === 'conversation' ? CONVERSATION_HINT : OVERHEAD_HINT) : groupBy === 'session' && !l.other ? l.label : undefined);
   const axis = timeAxis((answer?.bucketSeconds ?? 3_600) * 1_000, ink);
@@ -2389,7 +2393,7 @@ function BurnCharts({
         color: colorOf(l),
         label: nameOf(l),
         shape: 'line' as const,
-        title: l.peak === null ? undefined : `Highest hour ${figureOf(l.peak, 'full')}`,
+        title: sentences([titleOf(l) ?? null, l.peak === null ? null : `Highest hour ${figureOf(l.peak, 'full')}`]) || undefined,
         // The figure's own hover names it in full and masks the entry's title over the figure. A dash has none.
         value: l.perHour === null ? '-' : <span title={figureOf(l.perHour, 'full')}>{figureOf(l.perHour, 'short')}</span>,
       })),
@@ -2397,7 +2401,7 @@ function BurnCharts({
       // line of its own.
       ...(planned.some(({ l }) => l.unpriced) ? [{ color: ink.muted, label: 'model unlisted', shape: 'line' as const, title: MODEL_UNLISTED_HINT }] : []),
       // Muted, since no line of its own is drawn.
-      ...unknown.map((l) => ({ color: ink.muted, label: nameOf(l), shape: 'line' as const, title: TIER_UNKNOWN_HINT, value: 'tier unknown' })),
+      ...unknown.map((l) => ({ color: ink.muted, label: nameOf(l), shape: 'line' as const, title: sentences([titleOf(l) ?? null, TIER_UNKNOWN_HINT]), value: 'tier unknown' })),
     ];
     return (
       <ChartCard

@@ -398,7 +398,8 @@ Analytics session view narrows to one agent under the Agent filter of the Subjec
 `agent_id` and written by the Sessions view's agent menu, its links to the request log carrying the agent, the filter
 disabled until a session is picked and leaving with the session ([Analytics](console.md#analytics)). The Analytics
 session view reads the session's rows through the route's session filter, and each auto reload re-reads the first page
-alone ([Analytics](console.md#analytics)). The Analytics view's Burn tab draws three plan cards, Plan per hour, 5-hour
+alone ([Analytics](console.md#analytics)). The Analytics view's breakdown tables head a failed read with the table's
+name ([Analytics](console.md#analytics)). The Analytics view's Burn tab draws three plan cards, Plan per hour, 5-hour
 per hour and Fable week per hour, the subscription traffic per hour in the chosen week and the same figure scaled to the
 chosen tier's 5-hour window and to its Fable week, a bucket the cost model could not price staying a gap under a "model
 unlisted" entry ([Analytics](console.md#analytics)). The Analytics view's Cache warming tab spans its last card across

@@ -18340,6 +18340,8 @@ await forView('/analytics', async () => {
   [...page.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Try again')?.click();
   await page.settle(900);
   const t = page.text();
+  // A breakdown table heads a failed read with its own name.
+  const failedTables = [...page.container.querySelectorAll('.card--table .card__title')].map((h) => h.textContent?.trim() ?? '').filter((title) => t.includes(`Could not load ${title.toLowerCase()}`));
   const upChoices = await choices();
   const traffic = page.container.querySelector('section#traffic') !== null;
   const others = ['burn', 'latency', 'cache', 'cost', 'cache-warming', 'accounts'].filter((id) => page.container.querySelector(`section#${id}`) !== null);
@@ -18357,7 +18359,7 @@ await forView('/analytics', async () => {
       downChoices.length === 6 &&
       downChoices.every((c) => c.endsWith(' 0')) &&
       !t.includes('Could not load the analytics for these filters') &&
-      !t.includes('Could not load this breakdown') &&
+      failedTables.length === 0 &&
       traffic &&
       others.length === 0 &&
       trafficRows > 0 &&
@@ -18368,7 +18370,7 @@ await forView('/analytics', async () => {
       reads.series === 2 &&
       rollupsOnAccounts === 1 &&
       accountRows > 0,
-    missing: [`down ${downChoices.join(',')}`, `up ${upChoices.join(',')}`, `traffic ${traffic}`, `also mounted ${others.join(',')}`, `Traffic by key ${trafficRows}`, JSON.stringify(reads), `rollups on Accounts ${rollupsOnAccounts}`, `Accounts in range ${accountRows}`, t.includes('Could not load this breakdown') ? 'a breakdown still failed' : ''],
+    missing: [`down ${downChoices.join(',')}`, `up ${upChoices.join(',')}`, `traffic ${traffic}`, `also mounted ${others.join(',')}`, `Traffic by key ${trafficRows}`, JSON.stringify(reads), `rollups on Accounts ${rollupsOnAccounts}`, `Accounts in range ${accountRows}`, failedTables.length === 0 ? '' : `still failed: ${failedTables.join(', ')}`],
   });
   page.unmount();
 });
@@ -19541,17 +19543,17 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       localStorage.removeItem('phoebis.unit');
       let restore = failing((q) => q?.funding === 'billed' && q.groupBy !== 'pool');
       const nativeWarming = await mount('/analytics#cache-warming');
-      const billedRead = { probe: probeTitle(nativeWarming), wasted: cardText(nativeWarming, 'Wasted probes').includes('Could not load wasted probes'), pools: cardText(nativeWarming, 'Cache warming by pool').includes('Could not load this breakdown') };
+      const billedRead = { probe: probeTitle(nativeWarming), wasted: cardText(nativeWarming, 'Wasted probes').includes('Could not load wasted probes'), pools: cardText(nativeWarming, 'Cache warming by pool').includes('Could not load cache warming by pool') };
       nativeWarming.unmount();
       restore();
       restore = failing((q) => q?.funding !== undefined && q.groupBy === 'model');
       const usdCache = await mount('/analytics#cache');
       await chooseUnit(usdCache, 'usd');
-      const modelRead = cardText(usdCache, 'Cache by model').includes('Could not load this breakdown');
+      const modelRead = cardText(usdCache, 'Cache by model').includes('Could not load cache by model');
       restore();
       restore = failing((q) => q?.funding !== undefined && q.groupBy === 'pool');
       await tab(usdCache, 'Cache warming');
-      const poolRead = { pools: cardText(usdCache, 'Cache warming by pool').includes('Could not load this breakdown'), wasted: cardText(usdCache, 'Wasted probes').includes('Could not load wasted probes') };
+      const poolRead = { pools: cardText(usdCache, 'Cache warming by pool').includes('Could not load cache warming by pool'), wasted: cardText(usdCache, 'Wasted probes').includes('Could not load wasted probes') };
       restore();
       usdCache.unmount();
       localStorage.removeItem('phoebis.unit');
@@ -20716,6 +20718,23 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     results.push({ name: '/analytics every bucket with tokens a Sonnet 4.5 request ran in reads no figure and the flag, and an API-key bucket a zero figure', ok: carried.length > 0 && keyed.length > 0 && gaps.length === 0, missing: gaps });
   }
   {
+    // Under the session grouping the legend cuts a session id, so a plan line's entry leads its hover with the whole id
+    // and then its highest hour. The page's own burn read names the whole ids.
+    const asked = countCalls('getAnalyticsBurn');
+    const page = await mount('/analytics?by=session#burn');
+    asked.restore();
+    const sessions = new Set((await api.getAnalyticsBurn(...asked.calls.at(-1))).points.map((p) => p.group));
+    const planCard = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === PLAN);
+    const entries = [...(planCard?.querySelectorAll('.legend li') ?? [])].filter((li) => !MUTED.includes(labelOf(li)) && valueOf(li) !== 'tier unknown').map((li) => ({ label: labelOf(li), title: li.getAttribute('title') ?? '' }));
+    page.unmount();
+    const wrong = entries.filter((e) => !sessions.has(e.title.split('. Highest hour ')[0]));
+    results.push({
+      name: "/analytics under the session grouping a plan line's entry leads its hover with the whole session id, then its highest hour",
+      ok: entries.some((e) => e.title.includes('. Highest hour ')) && wrong.length === 0,
+      missing: [`${sessions.size} sessions in the answer`, ...entries.map((e) => `${e.label} (${e.title})`)],
+    });
+  }
+  {
     // Under the Ultra week, the stored default, the 5-hour card's note says the Ultra tier's 5-hour row is assumed, and
     // the Fable week card carries no note. Under the Max week the 5-hour card reads none. The page reads the week at its
     // load, so the Max read mounts a page of its own.
@@ -21019,7 +21038,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     // The plan card's figure waits on the chosen week's scale, so a failed settings read draws its error under the
     // Ultra week, while Spend per minute under the key grouping, which sizes nothing, still draws. Under the Pro week
     // the figure reads without the cost model, and the 5-hour and Fable week cards, which scale through it, draw the
-    // error. The page reads the settings once per load, so each read mounts a page.
+    // error. Under the account grouping the plan card sizes its lines by the tiers the cost model holds, so the Pro
+    // week's plan card draws the error too. The page reads the settings once per load, so each read mounts a page.
     const { getSettings } = api;
     api.getSettings = () => Promise.reject(new Error('the settings read failed'));
     const cardIn = (page, title) => [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title)?.textContent ?? '';
@@ -21033,18 +21053,22 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const proEntries = proCard?.querySelectorAll('.legend li').length ?? 0;
     const proSiblings = { fable: cardIn(pro, 'Fable week per hour'), fiveHour: cardIn(pro, '5-hour per hour') };
     pro.unmount();
+    const proByAccount = await mount('/analytics?by=account#burn');
+    const proAccountPlan = cardIn(proByAccount, PLAN);
+    proByAccount.unmount();
     localStorage.removeItem('phoebis.week');
     api.getSettings = getSettings;
     results.push({
-      name: "/analytics a failed settings read draws the plan card's error under the Ultra week and leaves Spend per minute under the key grouping, and the Pro week reads the plan card without the cost model and the 5-hour and Fable week cards' error",
+      name: "/analytics a failed settings read draws the plan card's error under the Ultra week and leaves Spend per minute under the key grouping, and the Pro week reads the plan card without the cost model, the 5-hour and Fable week cards' error and under the account grouping the plan card's error",
       ok:
         failed.plan.includes('Could not load plan per hour') &&
         !failed.spend.includes('Could not load') &&
         !proPlan.includes('Could not load') &&
         proEntries > 0 &&
         proSiblings.fiveHour.includes('Could not load 5-hour per hour') &&
-        proSiblings.fable.includes('Could not load fable week per hour'),
-      missing: [`plan: ${failed.plan.slice(0, 120)}`, `spend: ${failed.spend.slice(0, 120)}`, `pro: ${proPlan.slice(0, 120)}`, `${proEntries} legend entries on the Pro card`, `Pro 5-hour: ${proSiblings.fiveHour.slice(0, 120)}`, `Pro Fable week: ${proSiblings.fable.slice(0, 120)}`],
+        proSiblings.fable.includes('Could not load fable week per hour') &&
+        proAccountPlan.includes('Could not load plan per hour'),
+      missing: [`plan: ${failed.plan.slice(0, 120)}`, `spend: ${failed.spend.slice(0, 120)}`, `pro: ${proPlan.slice(0, 120)}`, `${proEntries} legend entries on the Pro card`, `Pro 5-hour: ${proSiblings.fiveHour.slice(0, 120)}`, `Pro Fable week: ${proSiblings.fable.slice(0, 120)}`, `Pro by account: ${proAccountPlan.slice(0, 120)}`],
     });
   }
   await burnGroup('key');
