@@ -16,7 +16,7 @@ import { byteOrder, tokensTotal } from '@/lib/format';
 import { modelRulesRefusal, poolWarnings, type NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
 import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
-import { MODEL_SCOPE_PREFIX, accountCooldown, accountStatusOf, flagOf } from '@/lib/quota';
+import { MODEL_SCOPE_PREFIX, accountStatusOf, flagOf } from '@/lib/quota';
 import { compareRequests } from '@/lib/requests';
 import { ACCOUNTS, QUOTA_HISTORY, accountById, usageOf } from './accounts';
 import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, reconciliationsOf, refusalCategoriesOf, rewritesOf, seriesOf, termEndOf, unusedAllowanceOf } from './analytics';
@@ -29,7 +29,7 @@ import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, UNPRI
 import { GUARDRAIL_STORY_IDS } from './requests';
 import { createRng } from './rng';
 import { ROUTING_LOG_KINDS, WEEKLY_RESETS, getDecision, listRoutingLog } from './routingLog';
-import { ROUTING_EVENTS } from './routingLog';
+import { ROUTING_EVENTS, SUMMARIES } from './routingLog';
 import { ACCOUNT_SAMPLE, KEY_SAMPLE, PAIRING_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, HOUR, MINUTE, NOW, ago, ahead, hourCeil, iso, startOfHour } from './time';
 
@@ -323,6 +323,8 @@ const ledger = () => {
     requestById: empty ? new Map<string, RequestLog>() : requestById,
     requests: empty ? [] : REQUESTS,
     rollups: empty ? [] : unpriced ? [...ALL_ROLLUPS, ...UNPRICED_ROLLUPS] : ALL_ROLLUPS,
+    routingEvents: empty ? [] : ROUTING_EVENTS,
+    summaries: empty ? [] : SUMMARIES,
     weeklyResets: empty ? [] : WEEKLY_RESETS,
   };
 };
@@ -330,7 +332,7 @@ const ledger = () => {
  * The rows the ledger has written by `now`: it lists a request once it has written it, so a row whose landing the
  * clock has not reached stays out of the request log and of the sessions' folds alike.
  */
-const writtenBy = (now: number): RequestLog[] => REQUESTS.filter((r) => landedAt(r) <= now);
+const writtenBy = (now: number, rows: readonly RequestLog[]): RequestLog[] => rows.filter((r) => landedAt(r) <= now);
 /**
  * The key the unpriced request lands on, its lifetime and its week read null under the switch, since the request
  * prices nothing and falls inside the week. The keys' fold runs once at load, so the null lands at the read, and the
@@ -778,7 +780,7 @@ export class MockApi implements Api {
       routingEnabled: true,
       status,
       subscription: null,
-      usage: usageOf({ id: input.id, kind: input.kind, status }),
+      usage: usageOf({ id: input.id, kind: input.kind, status, windows: [] }),
       windows: [],
     };
   }
@@ -823,13 +825,16 @@ export class MockApi implements Api {
   async clearCooldown(accountId: string, scope: string) {
     const a = this.account(accountId);
     const cooldowns = a.cooldowns.filter((c) => c.scope !== scope);
-    this.putAccount({ ...a, cooldowns, status: accountCooldown(cooldowns) !== null ? a.status : 'ready' });
+    this.putAccount({ ...a, cooldowns, status: statusOf({ ...a, cooldowns }, a.routingEnabled) });
     return latency(undefined, 200);
   }
 
   async clearFunding(accountId: string) {
     const a = this.account(accountId);
-    this.putAccount(revised({ ...a, extraUsage: a.extraUsage ? { ...a.extraUsage, disabledReason: null } : null, status: a.status === 'funding_required' ? 'ready' : a.status }));
+    // `statusOf` keeps the flag the status carries, so the clear drops the funding flag before the fold reads the
+    // enabled bit and the cooldowns.
+    const flag = flagOf(a.status);
+    this.putAccount(revised({ ...a, extraUsage: a.extraUsage ? { ...a.extraUsage, disabledReason: null } : null, status: accountStatusOf(flag === 'funding_required' ? null : flag, a.routingEnabled, a.cooldowns) }));
     return latency(undefined, 200);
   }
 
@@ -1122,7 +1127,7 @@ export class MockApi implements Api {
   }
 
   async getCapturedBodies(requestId: string) {
-    const r = requestById.get(requestId);
+    const r = ledger().requestById.get(requestId);
     return latency(r ? capturedBodiesFor(r) : null);
   }
 
@@ -1148,11 +1153,10 @@ export class MockApi implements Api {
   }
 
   async getKeyModels(keyId: string): Promise<KeyModels> {
-    // A store without a key processes no rule for any key, so the answer carries none and no pool.
-    if (emptyStore()) return latency({ keyId, longContextTwins: false, modelRulesMode: 'extend', poolId: '', rules: [] });
-    const key = this.keys.find((k) => k.id === keyId);
+    const { keys, pools } = this.registry();
+    const key = keys.find((k) => k.id === keyId);
     if (!key) throw new ApiError(404, 'key not found', null);
-    const pool = this.pools.find((p) => p.id === key.poolId);
+    const pool = pools.find((p) => p.id === key.poolId);
     const poolRules = pool?.modelRules ?? [];
     const memberIds = new Set((pool?.members ?? []).map((m) => m.accountId));
     const cooldowns = this.modelCooldowns().filter((c) => memberIds.has(c.accountId));
@@ -1270,9 +1274,9 @@ export class MockApi implements Api {
   }
 
   async listCatalogOf(accountIds: string[]): Promise<CatalogModel[]> {
-    if (emptyStore()) return latency([]);
+    const listed = new Set(this.registry().accounts.map((a) => a.id));
     const fetched = await Promise.all(
-      accountIds.map(async (id) => {
+      accountIds.filter((id) => listed.has(id)).map(async (id) => {
         try {
           return await this.getAccountCatalog(id);
         } catch {
@@ -1309,12 +1313,11 @@ export class MockApi implements Api {
     const order = query.order ?? 'received_at';
     if (!REQUEST_ORDER_VALUES.includes(order)) return Promise.reject(new ApiError(400, 'order is received_at, attempts, duration_ms, ttfb_ms, input_tokens or output_tokens', null));
     const dir = query.dir ?? 'desc';
-    if (emptyStore()) return latency({ landedThrough: 0, nextCursor: null, requests: [] });
-    const live = new Map(this.keys.map((k) => [k.id, Date.parse(k.createdAt)]));
+    const live = new Map(this.registry().keys.map((k) => [k.id, Date.parse(k.createdAt)]));
     // The newest stamp is over the rows the query's filters admit, its `to` included, with its `landedAfter` as the
     // floor and capped at its `to` unless the query marks a fixed end, as the route reads it.
     const now = mockClock.now();
-    const written = writtenBy(now);
+    const written = writtenBy(now, ledger().requests);
     const since = query.landedAfter;
     const matched = written.filter((r) => matchesQuery(r, query, live) && (since === undefined || landedAt(r) > since)).sort(requestOrderOf(order, dir));
     const newest = matched.reduce((stamp, r) => Math.max(stamp, landedAt(r)), since ?? 0);
@@ -1328,17 +1331,18 @@ export class MockApi implements Api {
   }
 
   listRoutingLog(query: RoutingLogQuery = {}): Promise<RoutingLogPage> {
-    if (emptyStore()) return latency({ counts: query.request ? { decisions: 0, events: 0 } : null, nextCursor: null, rows: [] });
     // The route's refusals, in its order and words.
     const unknown = query.kinds?.find((k) => !ROUTING_LOG_KINDS.includes(k));
     if (unknown !== undefined) return Promise.reject(new ApiError(400, `unknown kind ${unknown}`, null));
     if (query.limit !== undefined && !(Number.isInteger(query.limit) && query.limit >= 1 && query.limit <= 200)) return Promise.reject(new ApiError(400, 'limit is 1 to 200', null));
-    return latency(listRoutingLog(query, Date.now(), this.written));
+    const { routingEvents, summaries } = ledger();
+    // The writes' rows are the ledger's too, so a fresh installation lists none of them.
+    return latency(listRoutingLog(query, Date.now(), { events: routingEvents, summaries, written: emptyStore() ? [] : this.written }));
   }
 
   listSessions() {
     if (sessionsFail()) return Promise.reject(new ApiError(503, 'store busy', null));
-    return latency(sessionsListedAt(NOW, this.registry().sessions, this.settings.sessions.nonCompanionIdleSeconds, writtenBy(mockClock.now())));
+    return latency(sessionsListedAt(NOW, this.registry().sessions, this.settings.sessions.nonCompanionIdleSeconds, writtenBy(mockClock.now(), ledger().requests)));
   }
 
   login(secret: string, stayLoggedIn = false): Promise<SessionInfo> {
@@ -1439,20 +1443,20 @@ export class MockApi implements Api {
     if (!(Number.isInteger(limit) && limit >= 1 && limit <= 500)) throw new ApiError(400, 'limit is 1 to 500', null);
     const windowHours = this.settings.retention.bodyCaptureMaxHours;
     const sample = { keyId: input.keyId ?? null, limit, poolId: input.poolId ?? null, windowHours };
-    if (emptyStore()) return latency({ requests: [], sample, totals: { indeterminate: 0, matched: 0, sampled: 0, unmatched: 0 } });
+    const { guardrails, keys, pools } = this.registry();
     let conditions = input.conditions ?? [];
     if (input.guardrail !== undefined) {
-      const saved = this.guardrails.find((g) => g.id === input.guardrail);
+      const saved = guardrails.find((g) => g.id === input.guardrail);
       if (!saved) throw new ApiError(404, 'no such guardrail', null);
       conditions = saved.conditions;
     } else {
       const refusal = conditionsRefusal(input.conditions);
       if (refusal !== null) throw new ApiError(400, refusal, null);
     }
-    if (input.poolId !== undefined && !this.pools.some((p) => p.id === input.poolId)) throw new ApiError(404, 'no such pool', null);
-    if (input.keyId !== undefined && !this.keys.some((k) => k.id === input.keyId)) throw new ApiError(404, 'no such key', null);
+    if (input.poolId !== undefined && !pools.some((p) => p.id === input.poolId)) throw new ApiError(404, 'no such pool', null);
+    if (input.keyId !== undefined && !keys.some((k) => k.id === input.keyId)) throw new ApiError(404, 'no such key', null);
     const since = NOW - windowHours * HOUR;
-    const rows = REQUESTS.filter((r) => r.kind !== 'probe' && r.capturedBodies && Date.parse(r.at) >= since && (input.poolId !== undefined ? r.poolId === input.poolId : r.keyId === input.keyId))
+    const rows = ledger().requests.filter((r) => r.kind !== 'probe' && r.capturedBodies && Date.parse(r.at) >= since && (input.poolId !== undefined ? r.poolId === input.poolId : r.keyId === input.keyId))
       .sort(compareRequests)
       .slice(0, limit);
     const requests = rows.map((r) => ({ ...dryRunVerdict(conditions, r, GUARDRAIL_STORY_IDS.has(r.id)), id: r.id, receivedAt: r.at }));

@@ -656,6 +656,31 @@ test('a rename, an end edit, a pause, a resume, a funding clear or a disconnect 
   assert.equal((await storyAccount(api, 'legacy')).label, connected.label);
 });
 
+test("a disconnect keeps the row's last reading in its usage block, with no error and no poll", async () => {
+  const api = await signedIn();
+  const connected = await storyAccount(api, 'legacy');
+  // Legacy's two windows hold one instant, its last clean poll's.
+  const newest = connected.windows.find((w) => w.id === '7d').observedAt;
+  await api.disconnectAccount('legacy');
+  const { usage } = await storyAccount(api, 'legacy');
+  assert.deepEqual([usage.error, usage.fetchedAt, usage.poll], [null, newest, null]);
+});
+
+test('a funding clear on a paused account leaves it paused', async () => {
+  const api = await signedIn();
+  await api.pauseAccount('overflow');
+  await api.clearFunding('overflow');
+  assert.equal((await storyAccount(api, 'overflow')).status, 'paused');
+});
+
+test('a paused account whose last cooldown clears stays paused', async () => {
+  const api = await signedIn();
+  // Primary's other row holds the fast lane alone, which cools none of its standard traffic.
+  await api.pauseAccount('primary');
+  await api.clearCooldown('primary', 'model:claude-haiku-4-5-20251001');
+  assert.equal((await storyAccount(api, 'primary')).status, 'paused');
+});
+
 test('a model-scoped cooldown reads its window from its reason, not a fixed model_rejection value', async () => {
   const api = await signedIn();
   const primary = api.accounts.find((a) => a.id === 'primary');

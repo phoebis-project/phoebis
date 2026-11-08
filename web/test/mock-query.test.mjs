@@ -267,3 +267,17 @@ test('the mock answers the keepalive overview over 7 days by default and over 30
   assert.ok(total(month, 'reached') > total(week, 'reached') && total(month, 'returned') > total(week, 'returned'), 'the 30-day totals are larger');
   await assert.rejects(api.getKeepaliveOverview({ range: '14d' }), (e) => e instanceof d.ApiError && e.status === 400 && e.message === 'range is 7d or 30d');
 });
+
+test('under the empty-store switch a captured-bodies read answers null, as a fresh router holds no request', async () => {
+  // A desktop request of the story whose bodies were captured, `mock/requests.ts`.
+  const id = 'req_a6c19e73-5d2';
+  // The switch lives in the browser's storage, so the case lends the mock a stand-in.
+  const stored = new Map([['phoebis.mockEmpty', '1']]);
+  globalThis.localStorage = { getItem: (key) => stored.get(key) ?? null };
+  try {
+    assert.equal(await api.getCapturedBodies(id), null);
+  } finally {
+    delete globalThis.localStorage;
+  }
+  assert.notEqual(await api.getCapturedBodies(id), null, 'without the switch the story answers the bodies');
+});

@@ -75,6 +75,39 @@ export const SUNSET_FLAGGED_AGO = 4 * HOUR;
  *  started three days before the end. */
 export const SUNSET_WEEK_RESETS_IN = 4 * DAY - SUNSET_END_AGO;
 
+/**
+ * The poll snapshots the story writes by hand for its paired rows, by account id, each a function of the row. Above the
+ * account list, which reads them while the module loads.
+ */
+const SNAPSHOT_OF: Readonly<Record<string, (a: Pick<Account, 'id'>) => QuotaSnapshot>> = {
+  // The polls after the last clean read failed on the endpoint's 503 until the slot whose acquisition ran the refresh
+  // the provider refused, and the poll asks a lapsed account nothing, so that attempt stands as the last, under the
+  // words the usage service records for a failed acquisition, while the windows of the last clean read still answer.
+  legacy: (a) => failedSinceClean(a.id, LEGACY_CLEAN_AGO, iso(LEGACY_LAPSED_AT), 'acquire: account has to be paired again'),
+  // A 503 is a passing fault, neither a 429 nor a 401, so the poll holds nothing back and asks again at its next slot,
+  // while the windows of the last clean read still answer.
+  reserve: (a) => failedSinceClean(a.id, RESERVE_CLEAN_AGO, ago(RESERVE_POLLED_AGO), 'usage request rejected with status 503'),
+  // Past thirty minutes of 429s, so the poll_backoff condition holds for this one.
+  secondary: (a) => {
+    const nextAttemptAt = ahead(4 * MINUTE);
+    // The router's hold sentence names the endpoint alone, and the deadline rides the snapshot as the poll's next
+    // attempt.
+    const lastError = 'the usage endpoint rate-limited the account';
+    return {
+      ...QUOTA_SNAPSHOT_SAMPLE,
+      accountId: a.id,
+      error: null,
+      fetchedAt: ago(47 * MINUTE),
+      heldUntil: nextAttemptAt,
+      poll: { backoffSince: ago(42 * MINUTE), lastAttemptAt: ago(11 * MINUTE), lastCleanAt: ago(47 * MINUTE), lastError, lastOutcome: 'rate_limited', nextAttemptAt, rateLimitedInARow: 6 },
+    };
+  },
+  // The poll sends an account whose plan ended no usage request, so it has asked sunset nothing since the flag: the
+  // read that set it stands as the last attempt, under the words the usage service records for the pause, while the
+  // snapshot keeps the reading of the last clean poll before the end.
+  sunset: (a) => failedSinceClean(a.id, SUNSET_LAST_POLL_AGO, ago(SUNSET_FLAGGED_AGO), 'plan ended'),
+};
+
 /** The reset the router estimates while no head has named the spend window's: 00:00 UTC on the first of next month. */
 const SPEND_RESET_ESTIMATE = endOfMonth(NOW);
 
@@ -537,37 +570,19 @@ function failedSinceClean(accountId: string, cleanAgo: number, lastAttemptAt: st
   };
 }
 
-/** The poll block the route answers on a row: none for an API-key account, which the poll never reads. */
-export function usageOf(a: Pick<Account, 'id' | 'kind' | 'status'>): QuotaSnapshot | null {
+/** The poll block the route answers on a row: none for an API-key account, the general arm for a row without a
+ *  credential (its newest reading's instant, no error and no poll where it holds windows, the no-credential error
+ *  where it holds none), the story's own snapshot where the table names the row, else the default poll. */
+export function usageOf(a: Pick<Account, 'id' | 'kind' | 'status' | 'windows'>): QuotaSnapshot | null {
   if (a.kind === 'api_key') return null;
-  // The polls stop with the credential, so the snapshot keeps the reading from before the disconnect and no poll.
-  if (a.id === 'spare') return { ...QUOTA_SNAPSHOT_SAMPLE, accountId: a.id, error: null, fetchedAt: ago(SPARE_READ_AGO), heldUntil: null, poll: null };
-  if (a.status === 'unpaired') return { ...QUOTA_SNAPSHOT_SAMPLE, accountId: a.id, error: 'no credential is stored for this account, so pair it to load quota', fetchedAt: null, heldUntil: null, poll: null };
-  // The polls after the last clean read failed on the endpoint's 503 until the slot whose acquisition ran the refresh
-  // the provider refused, and the poll asks a lapsed account nothing, so that attempt stands as the last, under the
-  // words the usage service records for a failed acquisition, while the windows of the last clean read still answer.
-  if (a.id === 'legacy') return failedSinceClean(a.id, LEGACY_CLEAN_AGO, iso(LEGACY_LAPSED_AT), 'acquire: account has to be paired again');
-  // The poll sends an account whose plan ended no usage request, so it has asked sunset nothing since the flag: the
-  // read that set it stands as the last attempt, under the words the usage service records for the pause, while the
-  // snapshot keeps the reading of the last clean poll before the end.
-  if (a.id === 'sunset') return failedSinceClean(a.id, SUNSET_LAST_POLL_AGO, ago(SUNSET_FLAGGED_AGO), 'plan ended');
-  // A 503 is a passing fault, neither a 429 nor a 401, so the poll holds nothing back and asks again at its next slot,
-  // while the windows of the last clean read still answer.
-  if (a.id === 'reserve') return failedSinceClean(a.id, RESERVE_CLEAN_AGO, ago(RESERVE_POLLED_AGO), 'usage request rejected with status 503');
-  // Past thirty minutes of 429s, so the poll_backoff condition holds for this one.
-  if (a.id === 'secondary') {
-    const nextAttemptAt = ahead(4 * MINUTE);
-    // The router's hold sentence names the endpoint alone, and the deadline rides the snapshot as the poll's next attempt.
-    const lastError = 'the usage endpoint rate-limited the account';
-    return {
-      ...QUOTA_SNAPSHOT_SAMPLE,
-      accountId: a.id,
-      error: null,
-      fetchedAt: ago(47 * MINUTE),
-      heldUntil: nextAttemptAt,
-      poll: { backoffSince: ago(42 * MINUTE), lastAttemptAt: ago(11 * MINUTE), lastCleanAt: ago(47 * MINUTE), lastError, lastOutcome: 'rate_limited', nextAttemptAt, rateLimitedInARow: 6 },
-    };
+  if (a.status === 'unpaired') {
+    // The polls stop with the credential, while the router keeps the last reading past a disconnect.
+    const read = a.windows.map((w) => Date.parse(w.observedAt));
+    const fetchedAt = read.length === 0 ? null : iso(Math.max(...read));
+    return { ...QUOTA_SNAPSHOT_SAMPLE, accountId: a.id, error: fetchedAt === null ? 'no credential is stored for this account, so pair it to load quota' : null, fetchedAt, heldUntil: null, poll: null };
   }
+  const own = lookup(SNAPSHOT_OF, a.id);
+  if (own !== undefined) return own(a);
   const poll = QUOTA_SNAPSHOT_SAMPLE.poll && { ...QUOTA_SNAPSHOT_SAMPLE.poll, lastAttemptAt: ago(40_000), lastCleanAt: ago(40_000) };
   return { ...QUOTA_SNAPSHOT_SAMPLE, accountId: a.id, error: null, fetchedAt: ago(40_000), heldUntil: null, poll };
 }

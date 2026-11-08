@@ -2839,9 +2839,10 @@ function after(row: RoutingLogPage['rows'][number], cursor: string, dir: 'asc' |
  * back by default. An absent `kinds` is every decision and event, the probe decisions among them, and `kinds` names
  * exactly what it lists, `probe` for a probe's decision of any kind. `accounts` matches a decision's source too.
  * `limit + 1` rows are read so a cursor is offered only when a next page exists, and the counts come under a request
- * filter. The events are the story's and the rows a mock's writes recorded since, which `written` holds.
+ * filter. The rows are the ledger's as the caller reads them: its decision summaries, its events, and the rows a mock's
+ * writes recorded since, which `written` holds.
  */
-export function listRoutingLog(query: RoutingLogQuery, now: number, written: readonly RoutingEvent[] = []): RoutingLogPage {
+export function listRoutingLog(query: RoutingLogQuery, now: number, rows: { events: readonly RoutingEvent[]; summaries: readonly DecisionSummary[]; written: readonly RoutingEvent[] }): RoutingLogPage {
   const from = query.from ? Date.parse(query.from) : now - HOUR;
   const to = query.to ? Date.parse(query.to) : now;
   // An empty list is no filter, as the client omits it from the query.
@@ -2851,7 +2852,7 @@ export function listRoutingLog(query: RoutingLogQuery, now: number, written: rea
   const session = (value: string | null) => !query.session || (value !== null && value.startsWith(query.session));
   // An event that names no agent matches none, as the route leaves a session-level event out.
   const agent = (value: string | null) => !query.agentId || value === query.agentId;
-  const decisions = SUMMARIES.filter(
+  const decisions = rows.summaries.filter(
     (s) =>
       within(s.at) &&
       (!query.request || s.requestId === query.request) &&
@@ -2863,7 +2864,7 @@ export function listRoutingLog(query: RoutingLogQuery, now: number, written: rea
       (!query.accountIds?.length || query.accountIds.some((id) => id === s.accountId || id === s.fromAccountId)) &&
       (kinds === undefined || (kinds.includes(s.kind) && !s.probe) || (kinds.includes('probe') && s.probe)),
   );
-  const events = [...ROUTING_EVENTS, ...written].filter(
+  const events = [...rows.events, ...rows.written].filter(
     (e) =>
       within(e.at) &&
       (e.id !== LATE_EVENT_ID || now >= LATE_EVENT_AT) &&
@@ -2881,12 +2882,12 @@ export function listRoutingLog(query: RoutingLogQuery, now: number, written: rea
   if (dir === 'asc') merged.reverse();
   const rest = query.cursor ? merged.filter((row) => after(row, query.cursor!, dir)) : merged;
   const limit = query.limit ?? 25;
-  const rows = rest.slice(0, limit);
-  const last = rows[rows.length - 1];
+  const page = rest.slice(0, limit);
+  const last = page[page.length - 1];
   return {
     counts: query.request ? { decisions: decisions.length, events: events.length } : null,
     nextCursor: rest.length > limit && last ? cursorOf(last) : null,
-    rows,
+    rows: page,
   };
 }
 
