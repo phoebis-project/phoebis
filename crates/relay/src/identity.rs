@@ -10,7 +10,6 @@ use phoebis_cch::TopLevelMembers;
 use phoebis_routing::{
     ClientClass, ConversationLookup, ConversationQuery, MAIN_AGENT, REFRESHING_CLASSES,
 };
-use phoebis_store::ApiKeyRow;
 
 use crate::billing::{entrypoint_of, restorable_version};
 use crate::facts::{AttributionLine, BodyFacts, ClientHints};
@@ -115,7 +114,8 @@ pub fn identify(
 /// detection's input, which `RequestIdentity` does not retain.
 pub fn climb(
     identity: &mut RequestIdentity,
-    key: &ApiKeyRow,
+    key_id: &str,
+    key_generation: i64,
     message_boundaries: &[String],
     request_class: Option<&str>,
     lookup: &dyn ConversationLookup,
@@ -134,8 +134,8 @@ pub fn climb(
     }
     let Some(m) = lookup.conversation(&ConversationQuery {
         canonical_model: &identity.canonical_model,
-        key_id: &key.id,
-        key_generation: key.created_at,
+        key_id,
+        key_generation,
         message_boundaries,
     }) else {
         return;
@@ -794,33 +794,6 @@ mod tests {
     use std::collections::HashMap;
 
     use phoebis_routing::{ConversationMatch, PredecessorQuery};
-    use phoebis_store::{CompanionPermissions, RulesMode};
-
-    fn key() -> ApiKeyRow {
-        ApiKeyRow {
-            id: "k".into(),
-            label: "k".into(),
-            notes: None,
-            pool_id: "main".into(),
-            enabled: true,
-            revoked_at: None,
-            expires_at: None,
-            model_rules: Vec::new(),
-            model_rules_mode: RulesMode::Extend,
-            long_context_twins: false,
-            companion_permissions: CompanionPermissions::default(),
-            body_capture_hours: None,
-            secret_digest: Vec::new(),
-            prefix: "k".into(),
-            incarnation: 1,
-            created_at: 0,
-            updated_at: 0,
-            rotated_at: None,
-            last_used_at: None,
-            retired_secret_last_used_at: None,
-            auto_mode_server: None,
-        }
-    }
 
     fn identity_of(session_id: Option<&str>) -> RequestIdentity {
         RequestIdentity {
@@ -882,8 +855,7 @@ mod tests {
     #[test]
     fn an_empty_boundary_slice_never_reaches_the_lookup() {
         let mut identity = identity_of(Some("s1"));
-        let k = key();
-        climb(&mut identity, &k, &[], None, &Panicking);
+        climb(&mut identity, "k", 0, &[], None, &Panicking);
         assert_eq!(identity.forked_from, None);
         assert_eq!(identity.fork_depth, None);
     }
@@ -891,12 +863,12 @@ mod tests {
     #[test]
     fn a_session_requests_own_continuation_is_no_fork() {
         let mut identity = identity_of(Some("s1"));
-        let k = key();
         let mut map = HashMap::new();
         map.insert("b3", ("k", matched("s1", 3)));
         climb(
             &mut identity,
-            &k,
+            "k",
+            0,
             &["b1".into(), "b2".into(), "b3".into()],
             None,
             &Stub(map),
@@ -908,10 +880,9 @@ mod tests {
     #[test]
     fn a_session_request_matching_another_conversation_at_depth_1_is_no_fork() {
         let mut identity = identity_of(Some("s1"));
-        let k = key();
         let mut map = HashMap::new();
         map.insert("b1", ("k", matched("s0", 1)));
-        climb(&mut identity, &k, &["b1".into()], None, &Stub(map));
+        climb(&mut identity, "k", 0, &["b1".into()], None, &Stub(map));
         assert_eq!(identity.session_id.as_deref(), Some("s1"));
         assert_eq!(identity.forked_from, None);
         assert_eq!(identity.fork_depth, None);
@@ -920,12 +891,12 @@ mod tests {
     #[test]
     fn a_session_request_matching_another_conversation_at_depth_2_is_a_fork() {
         let mut identity = identity_of(Some("s1"));
-        let k = key();
         let mut map = HashMap::new();
         map.insert("b2", ("k", matched("s0", 2)));
         climb(
             &mut identity,
-            &k,
+            "k",
+            0,
             &["b1".into(), "b2".into()],
             None,
             &Stub(map),
@@ -937,11 +908,11 @@ mod tests {
     #[test]
     fn an_auxiliary_request_matching_another_conversation_at_depth_3_is_no_fork() {
         let boundaries = ["b1".to_string(), "b2".to_string(), "b3".to_string()];
-        let k = key();
         let mut identity = identity_of(Some("s1"));
         climb(
             &mut identity,
-            &k,
+            "k",
+            0,
             &boundaries,
             Some("auxiliary"),
             &Panicking,
@@ -953,7 +924,7 @@ mod tests {
         let mut map = HashMap::new();
         map.insert("b3", ("k", matched("s0", 3)));
         let mut identity = identity_of(Some("s1"));
-        climb(&mut identity, &k, &boundaries, Some("main"), &Stub(map));
+        climb(&mut identity, "k", 0, &boundaries, Some("main"), &Stub(map));
         assert_eq!(identity.forked_from.as_deref(), Some("s0"));
         assert_eq!(identity.fork_depth, Some(3));
     }

@@ -1575,7 +1575,8 @@ impl Relay {
         }
         climb(
             &mut identity,
-            &key,
+            &key.id,
+            key.created_at,
             boundaries,
             hints.request_class.as_deref(),
             &self.router,
