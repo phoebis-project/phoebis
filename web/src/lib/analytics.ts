@@ -3,11 +3,11 @@ import type { Account, AccountRollup, AnalyticsGroup, AnalyticsQuery, BurnGroup,
 import type { AnalyticsAddress } from '@/lib/address';
 import { MODEL_WEEK_TIERS, tierCapacity, type CostWindow } from '@/lib/costs';
 import { has, lookup } from '@/lib/counts';
-import { earlierHolderLabel, fmtCompact, fmtCount, fmtInt, fmtPct, fmtShare, fmtUsd, fmtWeek, joinPresent, parseKeyLifetime, weekShort } from '@/lib/format';
+import { earlierHolderLabel, fmtCompact, fmtInt, fmtPct, fmtShare, fmtUsd, fmtWeek, joinPresent, parseKeyLifetime, plural, weekShort } from '@/lib/format';
 import { planLabel, pricedTier } from '@/lib/quota';
 import { ageWord, HOUR, hourCeil } from '@/lib/time';
 import type { UnitPosition, WeekPosition } from '@/lib/unit';
-import { WINDOW_KEYS } from '@/lib/windows';
+import { windowHint } from '@/lib/windows';
 
 /** Why a session's pin moved, as the pool card's moves tile, the rewrites legend and the routing log word it. */
 export const PIN_MIGRATION_LABEL: Record<PinMigrationReason, string> = {
@@ -41,7 +41,7 @@ export const heldSpan = (ms: number): string => ageWord(Math.max(1_000, ms));
 
 /** A held bar's hover, `12 requests held 14 min in all`, and `no request held` for a bucket that held none. */
 export const heldHover = (bar: Pick<HeldPoint, 'heldMs' | 'requests'>): string =>
-  bar.requests === 0 ? 'no request held' : `${fmtCount(bar.requests, 'request')} held ${heldSpan(bar.heldMs)} in all`;
+  bar.requests === 0 ? 'no request held' : `${plural(bar.requests, 'request')} held ${heldSpan(bar.heldMs)} in all`;
 
 /** The classes that refresh a pin's warmth, the routing crate's `REFRESHING_CLASSES`: the conversation itself. */
 export const CONVERSATION_CLASSES = ['compaction', 'main', 'subagent'] as const;
@@ -201,9 +201,6 @@ export function sizedAccounts(accounts: Account[], costs: SubscriptionCosts, win
 }
 
 const SHARED_WINDOWS = ['five_hour', 'seven_day'];
-/** The hint's words for a window, a sentence's words apart from `shareLabel`'s ("of 5-hour") on the quota views, which
- *  the allowance's week hover reads too. */
-export const HINT_WINDOW: Readonly<Record<string, string>> = { five_hour: 'the 5-hour window', seven_day: 'the 7-day window', seven_day_fable: 'the Fable week' };
 
 /**
  * The hint's parts: the plan's label, then one line per window the route answered a share of, 5-hour, 7-day, then the
@@ -218,7 +215,7 @@ export function shareHintLines(plan: string, shares: Record<string, number | nul
   const lines = [...SHARED_WINDOWS, ...weeks].flatMap((key) => {
     const share = lookup(shares, key) ?? null;
     if (share === null) return [];
-    const words = `${fmtShare(share)} of ${lookup(HINT_WINDOW, key) ?? key}`;
+    const words = `${fmtShare(share)} of ${windowHint(key)}`;
     return [key === 'five_hour' && inBand === true ? `${words} (in the band)` : words];
   });
   return lines.length === 0 ? [] : [plan, ...lines];
@@ -425,7 +422,7 @@ export function unpricedNote(labels: readonly string[], buckets: number): string
   // The middle dot joins the labels, since a deleted holder's label carries a comma of its own ("desktop (deleted,
   // created Oct 11, 2026, 12:15)") and the console already sets a bar's share and its reset apart with it.
   const named = labels.length > 3 ? `${fmtInt(labels.length)} groups` : labels.join(' · ');
-  return `${named} unpriced in ${fmtCount(buckets, 'bucket, drawn as a gap', 'buckets, drawn as gaps')}`;
+  return `${named} unpriced in ${plural(buckets, 'bucket, drawn as a gap', 'buckets, drawn as gaps')}`;
 }
 /** The Cost section's head under a position, as `costHeadOf` reads it. */
 export interface CostHead {
@@ -462,13 +459,6 @@ export function costHeadOf(unit: UnitPosition, totals: AnalyticsGroup, week: Wee
 export function slotIndex(keys: readonly string[], key: string): number {
   const i = key === '' ? -1 : keys.filter((k) => k !== '').indexOf(key);
   return Math.min(7, i < 0 ? 7 : i);
-}
-
-/** The extra-usage week, offered only while a row holds a sample of it, since the heads alone write it. */
-const EXTRA_USAGE_WINDOW = 'seven_day_overage_included';
-/** The window ids the Accounts cards offer, in order, the extra-usage week only while a row holds it. */
-export function sampledWindows(rollups: AccountRollup[]): string[] {
-  return rollups.some((r) => r.windows[EXTRA_USAGE_WINDOW] !== undefined) ? [...WINDOW_KEYS, EXTRA_USAGE_WINDOW] : [...WINDOW_KEYS];
 }
 
 /**

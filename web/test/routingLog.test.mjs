@@ -375,6 +375,11 @@ test('a fact value is drawn by its unit', () => {
   assert.equal(d.formatFact('primary', null, now), 'primary');
 });
 
+test("a window fact reads the Fable tag under the stored key's spelling, and a window the console does not know reads its key's words", () => {
+  assert.equal(d.valueText('window', '7d_oi', null, NOW), 'Fable');
+  assert.equal(d.valueText('window', 'seven_day_opus', null, NOW), 'seven day opus');
+});
+
 test('PIN_RELEASE_LABEL words every release reason and releaseLabel keeps an unknown one as sent', () => {
   assert.equal(d.releaseLabel('cooldown'), 'account cooled');
   assert.equal(d.releaseLabel('expired'), 'pin idle past the affinity window');

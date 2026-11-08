@@ -152,7 +152,7 @@ const readable = (zone: string): boolean => {
 
 /** Whether `at` falls inside the peak band's hours in its zone, on a weekday when the band covers weekdays alone; null
  *  when this browser cannot read the zone, which leaves the band's state unknown. */
-export const inBand = (costs: SubscriptionCosts, at: number): boolean | null => {
+export const inBand = (costs: Pick<SubscriptionCosts, 'peak'>, at: number): boolean | null => {
   const { fromHour, toHour, weekdays, zone } = costs.peak;
   if (!readable(zone)) return null;
   const parts = partsIn(at, zone);

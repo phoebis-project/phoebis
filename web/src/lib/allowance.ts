@@ -1,13 +1,11 @@
 import { iso } from '@/api/decode';
 import type { Account, AllowanceAccount, AllowanceReset, AllowanceWindow, SubscriptionCosts, UnusedAllowanceAnswer } from '@/api/types';
-import { HINT_WINDOW } from '@/lib/analytics';
 import { anchorTier, pricedWindow, tierCapacity, weekScale, weekUnpricedTitle } from '@/lib/costs';
-import { lookup } from '@/lib/counts';
 import { byteOrder, fmtAbsolute, fmtDated, fmtShare, plural, weekShort } from '@/lib/format';
 import { pricedTier, readWindows } from '@/lib/quota';
 import { DAY } from '@/lib/time';
 import type { WeekPosition } from '@/lib/unit';
-import { WINDOW_HOURS, inWindowOrder } from '@/lib/windows';
+import { WINDOW_HOURS, inWindowOrder, windowHint } from '@/lib/windows';
 
 /** The weeks the Accounts block and the Analytics card read: the latest reset and the three before it. */
 export const ALLOWANCE_WEEKS = 4;
@@ -129,7 +127,7 @@ export const resetHover = (reset: AllowanceReset): string => `${fmtAbsolute(rese
 
 /** A reset's own share for the week's hover, in the hint's words: "Ultra: 39% of the 7-day window left", "Max: 12% of
  *  the Fable week left", a week the console does not know under its key. */
-export const ownShareHover = (plan: string, window: string, shareLeft: number): string => `${plan}: ${fmtShare(shareLeft)} of ${lookup(HINT_WINDOW, window) ?? window} left`;
+export const ownShareHover = (plan: string, window: string, shareLeft: number): string => `${plan}: ${fmtShare(shareLeft)} of ${windowHint(window)} left`;
 
 /** A reset's day and time, "Sep 12 20:10", the day written even within a day of now. */
 export const resetInstant = (isoTime: string): string => fmtDated(Date.parse(isoTime));

@@ -4,7 +4,7 @@ This page is for the operator reading or using a view of the web console the adm
 shell first (the login screen, the sidebar, the theme switch and the expert view), then one section per view in the
 sidebar's order, each with its screenshot, what the view shows, what each control does and the dialogs it opens. The
 mechanism behind a view lives on its own page, which each section links. Every data table alternates its row tone, and
-a row's hover or selection reads over it.
+a row's hover or selection reads over it. A count of a thousand or more groups its digits, such as 1,204 requests.
 
 Every list view (Accounts, Analytics, Guardrails, Keys, Pools, Quota, Requests, the Routing log and Sessions) opens on
 one filter bar, which draws the slots the view has in one order: the range pills, the search, Add filter, the view's own
@@ -794,9 +794,10 @@ bar's unit, its header's hover naming what each kind of request reads under the 
 subscription window paid reads one figure in the chosen week, such as `0.0244% Ultra week`, with its hint and the dollar
 equivalent on hover. The hint names the account's plan, its display name where the account carries one, and its share
 of each window the account has, in the order 5-hour, 7-day and the model week, with "(in the band)" after a 5-hour share
-that completed inside the band: "Ultra: 0.11% of the 7-day window, 0.22% of the Fable week". It names no window the
-account lacks, so an approved Ultra account reads no 5-hour share, and no Fable week on a Pro account. Under the Max and
-Ultra weeks the figure waits on the settings, so the cell draws its placeholder until they answer. Where that read
+that completed inside the band of the cost revision in force at its completion: "Ultra: 0.11% of the 7-day window, 0.22%
+of the Fable week". It names no window the account lacks, so an approved Ultra account reads no 5-hour share, and no
+Fable week on a Pro account. Under the Max and Ultra weeks the figure waits on the settings, so the cell draws its
+placeholder until they answer. Where that read
 fails, the cell draws a dash titled with the read's message, the drawer's Estimated cost row draws the same dash with
 the message leading its hover, and the split Refresh button's body reads the settings again. A request whose model
 has no weight in the cost model reads its dollar equivalent over `equivalent` with the hover "The cost model prices no
@@ -1038,11 +1039,11 @@ chart draws dollars under the three dollar positions and the figure in the chose
 dollars on hover, and the billed dollars alone under Native where the range holds no plan side. What a probe is and when
 it counts as wasted is on [Keepalive](keepalive.md).
 
-Accounts draws Peak 5-hour utilization, then Window usage and Pace under a "Window" switch whose positions are the
-windows the range sampled, 5-hour, 7-day, 7-day Fable and "7-day, extra usage". Pace reads "The lead over pace per
-bucket: above zero ahead, below behind, from the quota samples, before the router's burn projection", each account's
-hover adding its Pace score, the remaining share over the hours from the sample's instant to the window's reset. The
-table Accounts in range lists Peak 5h, Peak 7d, "Peak 7d, extra usage", Time in overage, Time in cooldown, Pins created,
+Accounts draws Peak 5-hour utilization, then Window usage and Pace under a "Window" switch whose positions are the three
+windows the router reads, 5-hour, 7-day and 7-day Fable. Pace reads "The lead over pace per bucket: above zero ahead,
+below behind, from the quota samples, before the router's burn projection", each account's hover adding its Pace score,
+the remaining share over the hours from the sample's instant to the window's reset. The table Accounts in range lists
+Peak 5h, Peak 7d, Peak Fable, Time in overage, Time in cooldown, Pins created,
 Migrated in and Migrated out. The section keeps reading the rollups under a session filter, since they carry no session,
 and its subtitle says so. The card "Unused allowance by account" follows Accounts in range, one row per subscription
 account with a weekly reset in the last four weeks under the Accounts filter whatever the range, with Resets, each

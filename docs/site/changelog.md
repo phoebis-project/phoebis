@@ -207,7 +207,8 @@ Dashboard, Quota, Accounts, Pools, Keys, Guardrails, Requests, Analytics, Sessio
 Diagnostics group holding Routing log and Meter ([The console](console.md)). Every list view opens on one filter bar
 holding the slots it has in one order: the range pills, the search, Add filter with its filters as chips under the bar,
 the view's own controls, and at the right edge a split Refresh button, whose dropdown sets auto reload, and the count of
-what the view lists. `/models` opens the Keys view, where a saved key's dialog shows its Effective list, the accounts
+what the view lists. A count of a thousand or more groups its digits on every view, such as 1,204 requests ([The
+console](console.md)). `/models` opens the Keys view, where a saved key's dialog shows its Effective list, the accounts
 cooling for a model show on the Accounts view and the model rejected and model permitted rows in the Routing log, and a
 model a decision card, an event's detail or a log row names opens the Routing log on its rows over the last day ([The
 shell](console.md#the-shell), [Keys](console.md#keys), [Routing log](console.md#routing-log)). The Accounts, Analytics
@@ -339,10 +340,11 @@ Keys view's Pool filter draws one chip per pool, and a pool the address names th
 chip until the pools load ([Keys](console.md#keys)). A request whose answer the upstream refused draws the refusal's
 category as a warning badge beside its status, and the Outcome group of Add filter offers Stop reason and Refusal
 category ([Requests](console.md#requests)). A request whose stream was cut after its head reads what cut it in its
-drawer's Error row ([Requests](console.md#requests)). An auto reload on a custom range reads once a request received
-inside the range and written after an earlier read, as a preset range does ([Requests](console.md#requests)). Each
-captured body block in the request drawer has a find field that counts the lines holding a term, opens the wide window
-on a hit, marks every occurrence on the drawn rows and walks the hits with Enter and Shift+Enter
+drawer's Error row ([Requests](console.md#requests)). A request's "(in the band)" reads the band of the cost revision in
+force when it completed ([Requests](console.md#requests)). An auto reload on a custom range reads once a request
+received inside the range and written after an earlier read, as a preset range does ([Requests](console.md#requests)).
+Each captured body block in the request drawer has a find field that counts the lines holding a term, opens the wide
+window on a hit, marks every occurrence on the drawn rows and walks the hits with Enter and Shift+Enter
 ([Requests](console.md#requests)). A request row of `GET /admin/requests` and a request's captured bodies carry no
 request truncation flag, since the router stores a captured request whole, and the bodies' byte counts say what a cut
 dropped ([API reference](api-reference.md), [Requests](console.md#requests)). A pool member's `eligible` word on
@@ -371,9 +373,11 @@ Routing log's does, and a request the router refused before it resolved a model 
 ([Requests](console.md#requests)). Unchecking Select all in a filter's list clears every check, the inverse of checking
 it, and an empty list keeps its meaning ([Requests](console.md#requests), [Routing log](console.md#routing-log)). A
 deleted key's group reads `<id> (deleted, created <time>)`, its creation instant in the viewer's zone
-([Analytics](console.md#analytics)). The Accounts section's card "Unused allowance by account" ranks the subscription
-accounts by the figure of their weekly windows left unused over the last four weeks, in the chosen week, with the
-fleet's figures ([Analytics](console.md#analytics)). The Analytics session view narrows to one agent under the Agent
+([Analytics](console.md#analytics)). The Accounts cards offer the three windows the router reads, and the Accounts in
+range table reads the Fable week's peak as Peak Fable ([Analytics](console.md#analytics)). The Accounts section's card
+"Unused allowance by account" ranks the subscription accounts by the figure of their weekly windows left unused over the
+last four weeks, in the chosen week, with the fleet's figures ([Analytics](console.md#analytics)). The Analytics session
+view narrows to one agent under the Agent
 filter of the Subject group, carried in the address as `agent_id` and written by the Sessions view's agent menu, its
 links to the request log carrying the agent, the filter disabled until a session is picked and leaving with the session
 ([Analytics](console.md#analytics)). The Analytics session view reads the session's rows through the route's session

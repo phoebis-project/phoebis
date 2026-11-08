@@ -726,13 +726,6 @@ test("a plan-funded row with no token joins the session fold's plan count and no
 const rollup = (accountId, hourMs, windows) => ({ accountId, cooldownSeconds: 0, hour: new Date(hourMs).toISOString(), overageSeconds: 0, peak: { '5h': null, '7d': null, '7d_fable': null }, pins: { created: 0, migratedIn: 0, migratedOut: 0 }, windows });
 const windowSample = (over = {}) => ({ lead: 0.1, resetsAt: '2026-09-16T12:55:00.000Z', sampledAt: '2026-09-16T10:55:00.000Z', utilization: 0.5, ...over });
 
-test('the sampled windows list the three windows and the extra-usage week only while a row holds it', () => {
-  const t = Date.UTC(2026, 8, 16, 10);
-  assert.deepEqual(d.sampledWindows([]), ['five_hour', 'seven_day', 'seven_day_fable'], 'the three the router reads are offered without a row');
-  assert.deepEqual(d.sampledWindows([rollup('a', t, { seven_day_opus: windowSample() })]), ['five_hour', 'seven_day', 'seven_day_fable'], 'another model week the samples carry is not offered');
-  assert.deepEqual(d.sampledWindows([rollup('a', t, {}), rollup('b', t + HOUR, { seven_day_overage_included: windowSample() })]), ['five_hour', 'seven_day', 'seven_day_fable', 'seven_day_overage_included'], 'the extra-usage week joins fourth while any row holds it');
-});
-
 test("the window lines fold each account's utilization and lead per bucket and leave a gap where no sample is or the lead is null", () => {
   const t = Date.UTC(2026, 8, 16, 10);
   const span = { fromMs: t, toMs: t + 3 * HOUR };

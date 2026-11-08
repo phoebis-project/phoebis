@@ -1,10 +1,10 @@
 import { effectiveLabel } from '@/api/decode';
-import type { Account, CohortHold, RequestLog, SessionSpend, SessionSpendPart, Settings, SubscriptionCosts } from '@/api/types';
+import type { Account, CohortHold, RequestLog, SessionSpend, SessionSpendPart, Settings } from '@/api/types';
 import { heldSpan, hintPlan, ownShareHint, sentences, shareHint } from '@/lib/analytics';
 import { type Funding, fundingOf, inBand, revisionAt } from '@/lib/costs';
 import { has, lookup } from '@/lib/counts';
 import { servingAttempt } from '@/lib/dimensions';
-import { byteOrder, fmtCount, fmtUsd, fmtWeek, weekShort } from '@/lib/format';
+import { byteOrder, fmtUsd, fmtWeek, plural, weekShort } from '@/lib/format';
 import { heldAccount, WAIT_REASON_WORD } from '@/lib/routingLog';
 import type { UnitPosition, WeekPosition } from '@/lib/unit';
 
@@ -67,15 +67,21 @@ export function costHeaderTitle(unit: UnitPosition): string {
   return COST_HEADER_TITLE[unit];
 }
 
+/** The cost model with its revisions, as the settings carry it. */
+export type CostTable = Pick<Settings['subscriptionCosts'], 'peak' | 'revisions'>;
 /**
  * The hint's arguments for a request: the serving account's plan, its display name where the accounts read holds it,
  * the shares the route answered, the tier the attempt stored and the band at the request's completion where the cost
  * model is at hand. Null while the accounts read is out, and where the row names no plan to label.
  */
-export function requestHintArgs(r: Pick<RequestLog, 'accountId' | 'at' | 'costShares' | 'durationMs' | 'tier'>, accounts: Account[] | null, costs: SubscriptionCosts | null): [string, Record<string, number | null> | null, string | null, boolean | null] | null {
+export function requestHintArgs(r: Pick<RequestLog, 'accountId' | 'at' | 'costShares' | 'durationMs' | 'tier'>, accounts: Account[] | null, costs: CostTable | null): [string, Record<string, number | null> | null, string | null, boolean | null] | null {
   if (accounts === null) return null;
   const plan = hintPlan(accounts.find((a) => a.id === r.accountId), r.tier);
-  return plan === null ? null : [plan, r.costShares, r.tier, costs === null ? null : inBand(costs, Date.parse(r.at) + (r.durationMs ?? 0))];
+  if (plan === null) return null;
+  const completion = Date.parse(r.at) + (r.durationMs ?? 0);
+  // The band in force when the request completed, which the loaded table's band can differ from after a revision.
+  const table = costs === null ? null : (revisionAt(costs.revisions, completion)?.content ?? costs);
+  return [plan, r.costShares, r.tier, table === null ? null : inBand(table, completion)];
 }
 
 /**
@@ -100,7 +106,7 @@ export function costUnitOf(r: Pick<RequestLog, 'attempts' | 'costEquivalent' | '
 }
 
 /** A request's cost unit with its hint composed from the accounts read and the cost model. */
-export function requestCostUnit(r: RequestLog, unit: UnitPosition, accounts: Account[] | null, costs: SubscriptionCosts | null): CostUnit {
+export function requestCostUnit(r: RequestLog, unit: UnitPosition, accounts: Account[] | null, costs: CostTable | null): CostUnit {
   const args = requestHintArgs(r, accounts, costs);
   return costUnitOf(r, unit, args === null ? null : shareHint(...args));
 }
@@ -215,8 +221,8 @@ export function spendHover(spend: SessionSpend, week: WeekPosition, scale: numbe
   const billed = Object.entries(spend.billedUsd)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([funding, dollars]) => `${fmtUsd(dollars)} ${lookup(FUNDING_WORD, funding) ?? funding}`);
-  const probes = spend.probes.requests > 0 ? `+${spendFigure(spend.probes, week, scale)} in ${fmtCount(spend.probes.requests, 'probe')}` : null;
-  return sentences([fmtCount(spend.requests, 'request'), spendFigure(spend, week, scale), hint, billed.length === 0 ? null : `Billed in dollars: ${billed.join(', ')}`, probes]);
+  const probes = spend.probes.requests > 0 ? `+${spendFigure(spend.probes, week, scale)} in ${plural(spend.probes.requests, 'probe')}` : null;
+  return sentences([plural(spend.requests, 'request'), spendFigure(spend, week, scale), hint, billed.length === 0 ? null : `Billed in dollars: ${billed.join(', ')}`, probes]);
 }
 
 /**

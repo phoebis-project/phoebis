@@ -5,7 +5,7 @@ import { test } from 'node:test';
 // zone, and `node --test` gives each file a process of its own.
 process.env.TZ = 'UTC';
 
-const { earlierHolderLabel, fmtAbsolute, fmtBytes, fmtCredits, fmtDated, fmtDatedTime, fmtDayTick, fmtDuration, fmtEndsIn, fmtHours, fmtMiB, fmtMinor, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, fmtWeek, forkLabel, formatIn, instant, parseKeyLifetime, pct, placementHit, setTimeFormat, shareLabel, shortModel, undatedModel, usdTickDigits, weekShort } = await import('./dist/api.js');
+const { earlierHolderLabel, fmtAbsolute, fmtBytes, fmtCredits, fmtDated, fmtDatedTime, fmtDayTick, fmtDuration, fmtEndsIn, fmtHours, fmtMiB, fmtMinor, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, fmtWeek, forkLabel, formatIn, instant, parseKeyLifetime, pct, placementHit, plural, sentences, setTimeFormat, shareLabel, shortModel, undatedModel, usdTickDigits, weekShort } = await import('./dist/api.js');
 
 test("a fork reads its base cut at the session's width and the depth where one is known", () => {
   const base = '1a2b3c4d-5e6f-4a7b-9c8d-7e6f5a4b3c2d';
@@ -235,6 +235,16 @@ test("a share names its window through the console's labels and an unknown key a
   assert.equal(shareLabel('seven_day', 0.00061), '0.061% of 7-day');
   assert.equal(shareLabel('seven_day_fable', 0.0012), '0.12% of 7-day Fable', 'the model week reads the label the pages draw');
   assert.equal(shareLabel('seven_day_opus', 0.5), '50% of seven_day_opus', 'a window the pages do not know keeps its key');
+});
+
+test('a count with its noun groups its digits, and a count of one takes the singular', () => {
+  assert.equal(plural(1204, 'request'), '1,204 requests');
+  assert.equal(plural(1, 'request'), '1 request');
+});
+
+test('the sentences of a title leave out an absent part and an empty one with no stray separator', () => {
+  assert.equal(sentences([null, '', 'text']), 'text');
+  assert.equal(sentences(['a', '', 'b']), 'a. b');
 });
 
 test('an amount in minor units reads in dollars at its exponent, two digits where the reading names none', () => {

@@ -18560,14 +18560,13 @@ expect('/analytics cache warming tab', m.text(), ['Cache warming', 'Probes by ou
   });
 }
 await tab(m, 'Accounts');
-expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilization', 'Accounts in range', 'Peak 7d, extra usage', 'Time in overage', 'Time in cooldown', 'Pins created', 'Migrated in', 'Migrated out']);
+expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilization', 'Accounts in range', 'Peak Fable', 'Time in overage', 'Time in cooldown', 'Pins created', 'Migrated in', 'Migrated out']);
 {
   const card = (t) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
   const toggleOf = (t) => [...(card(t)?.querySelectorAll('.segmented[aria-label="Window"] button') ?? [])];
   const labels = (t) => toggleOf(t).map((b) => b.textContent?.trim() ?? '');
   const pressed = (t) => toggleOf(t).find((b) => b.getAttribute('aria-pressed') === 'true')?.textContent?.trim() ?? '';
-  // No row of the story samples the extra-usage week, so the toggle offers the three windows the router reads and no
-  // fourth.
+  // The toggle offers the three windows the router reads.
   const three = '["5-hour","7-day","7-day Fable"]';
   results.push({
     name: '/analytics the Accounts section draws the Window usage and Pace cards with a window toggle',

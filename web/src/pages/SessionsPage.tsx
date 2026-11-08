@@ -16,13 +16,13 @@ import { IconChevron } from '@/components/ui/icons';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, KeyValue, Menu, ReadNotice, Skeleton, toggleRow, useHostedDescription } from '@/components/ui/primitives';
 import { accountHref, ACTIVE_WITHIN, ANALYTICS_CODEC, keyHref, REQUESTS_CODEC, requestsHref as requestsAddressHref, SESSION_SORT_KEYS, SESSIONS_CODEC, type SessionsAddress, sortAddressOf, sortDirOf, type SortDir } from '@/lib/address';
-import { HINT_WINDOW, UNPRICED_TITLE, sentences, type WeekReading } from '@/lib/analytics';
+import { UNPRICED_TITLE, sentences, type WeekReading } from '@/lib/analytics';
 import { AGENT_TYPES, clientVersion } from '@/lib/client';
 import { clock } from '@/lib/clock';
 import { tierOrder, weekReadingOf } from '@/lib/costs';
-import { groupInto, lookup } from '@/lib/counts';
+import { groupInto } from '@/lib/counts';
 import { keyOptions, SESSIONS_DIMENSIONS } from '@/lib/filterBar';
-import { SESSION_CHARS, fmtAbsolute, fmtCount, fmtDuration, fmtInt, fmtRelative, fmtShare, fmtUsd, joinPresent, keyGenerationOf, keyLifetime, messageOf, modelTitle, shortId, shortModel, weekShort } from '@/lib/format';
+import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtRelative, fmtShare, fmtUsd, joinPresent, keyGenerationOf, keyLifetime, messageOf, modelTitle, plural, shortId, shortModel, weekShort } from '@/lib/format';
 import { agentCount, type AgentFigures, agentFigures, agentFiltersStand, CAUSE_HINT, CAUSE_LABEL, contextCell, earlierAgents, expiryOf, figuresOf, hiddenLines, isFinished, lastActivity, lifecycleSplit, lineTotals, lineWordOf, MAIN_AGENT, matches, matchingAgents, orderLines, orderRows, pinTtlMs, presenceOf, requestsRange, sessionLines, type SessionLine, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES, withinExpiry } from '@/lib/keepalive';
 import { failedFirst, toggled, useAsync, useNow, useQueryFilters } from '@/lib/hooks';
 import { minuteSpan, type BadgeTone } from '@/lib/quota';
@@ -30,6 +30,7 @@ import { costCellOf, spendHint, spendHover, spendUnitOf } from '@/lib/requests';
 import { ageWord, aroundSubject, logHref } from '@/lib/routingLog';
 import { memberSpeed } from '@/lib/selection';
 import type { UnitPosition } from '@/lib/unit';
+import { windowHint } from '@/lib/windows';
 
 // The Session column is the row's identity and the table's fill column, so it is always drawn and the control toggles
 // the others.
@@ -394,10 +395,10 @@ export function SessionsPage() {
   const drawn = useMemo(() => new Map((rows ?? []).map((r) => [rowKey(r.session), hiddenLines(r, filters)])), [rows, filters]);
   const options = useMemo(() => (listed === null ? {} : filterOptions(listed, keys.data, pools.data ?? [], accounts.data ?? [], modelTiers)), [listed, keys.data, pools.data, accounts.data, modelTiers]);
   const hiddenRows = listed !== null && rows !== null ? listed.length - rows.length : 0;
-  const hiddenTitle = hiddenRows > 0 ? `${fmtCount(hiddenRows, 'session')} hidden by the filters` : undefined;
+  const hiddenTitle = hiddenRows > 0 ? `${plural(hiddenRows, 'session')} hidden by the filters` : undefined;
   const agentsKept = useMemo(() => matchingAgents(drawn.values()), [drawn]);
   const matching = agentFiltersStand(filters);
-  const countWords = rows === null ? '' : `${fmtCount(rows.length, 'session')} · ${fmtCount(agentsKept, matching ? 'matching agent' : 'agent')}`;
+  const countWords = rows === null ? '' : `${plural(rows.length, 'session')} · ${plural(agentsKept, matching ? 'matching agent' : 'agent')}`;
   const summary = useMemo(() => (rows === null ? null : daySummary(rows)), [rows]);
   // The rows wait on these three reads, so the first that failed before it ever answered names the notice, and the card
   // draws its error state where that read is the sessions. A refresh that fails after a first answer keeps the rows.
@@ -483,7 +484,7 @@ export function SessionsPage() {
           subtitle={
             summary === null ? undefined : (
               <>
-                {`${fmtCount(summary.agents, 'agent')}: ${fmtInt(summary.busy)} busy, ${fmtInt(summary.idle)} idle, ${fmtInt(summary.parked)} parked · ${fmtCount(summary.requests, 'request')} and `}
+                {`${plural(summary.agents, 'agent')}: ${fmtInt(summary.busy)} busy, ${fmtInt(summary.idle)} idle, ${fmtInt(summary.parked)} parked · ${plural(summary.requests, 'request')} and `}
                 {/* The figure is a Pro-week figure read in the chosen week, so it waits on the cost model's scale. */}
                 {summary.equivalent === null ? <span title={UNPRICED_TITLE}>-</span> : weekReading.scale !== null ? weekShort(summary.equivalent * weekReading.scale, week) : weekReading.failure === null ? <Skeleton width={64} /> : <span title={weekReading.failure.text}>-</span>}
                 {summary.billed > 0 && ` + ${fmtUsd(summary.billed)}`}
@@ -592,7 +593,7 @@ function burnReading(pin: BurnFigures | null, cost: CostContext): { text: string
   if (pin === null || pin.burn === null) return null;
   if (pin.burnUnit === 'usd') return { text: `${fmtUsd(pin.burn)}/h`, title: undefined };
   if (pin.burnUnit !== 'window_share' || pin.burnEquivalent === null || cost.scale === null) return null;
-  const window = pin.burnWindow === null ? null : (lookup(HINT_WINDOW, pin.burnWindow) ?? pin.burnWindow);
+  const window = pin.burnWindow === null ? null : windowHint(pin.burnWindow);
   return { text: `${weekShort(pin.burnEquivalent * cost.scale, cost.week)}/h`, title: window === null ? undefined : `${fmtShare(pin.burn)} of ${window}` };
 }
 
@@ -1162,7 +1163,7 @@ function SessionRows({
                   </tbody>
                 </table>
               </div>
-              {fold !== null && fold > 0 && <Disclosure className="srow__fold" controls={tableId} label={`${fmtCount(fold, 'agent')} hidden by the filters`} onToggle={onUnfold} open={unfolded} />}
+              {fold !== null && fold > 0 && <Disclosure className="srow__fold" controls={tableId} label={`${plural(fold, 'agent')} hidden by the filters`} onToggle={onUnfold} open={unfolded} />}
               {/* Under Agents filters the earlier agents are among the agents the fold line counts. */}
               {fold === null && earlier.length > 0 && <EarlierLine agents={earlier} controls={tableId} cost={cost} onToggle={() => setEarlierOpen((v) => !v)} open={earlierOpen} session={session} />}
               <div className="srow__warming">
@@ -1224,7 +1225,7 @@ function EarlierLine({ agents, controls, cost, onToggle, open, session }: { agen
       controls={controls}
       hint={
         <>
-          {`· ${fmtCount(requests, 'request')} · ${cell?.main ?? '-'}`}
+          {`· ${plural(requests, 'request')} · ${cell?.main ?? '-'}`}
           {reading.billed > 0 && (
             <>
               {' '}
@@ -1233,7 +1234,7 @@ function EarlierLine({ agents, controls, cost, onToggle, open, session }: { agen
           )}
         </>
       }
-      label={fmtCount(agents.length, 'earlier agent')}
+      label={plural(agents.length, 'earlier agent')}
       onToggle={onToggle}
       open={open}
       title={agents.map((a) => a.agentId).join(', ')}

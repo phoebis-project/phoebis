@@ -33,10 +33,25 @@ test('a Max row that completed inside the band reads the band after its 5-hour s
 
 test('a request that starts before the band and completes inside it reads the band at its completion', () => {
   // A band of 13:00 to 19:00 UTC on weekdays, and a Wednesday request from 12:59 to 13:01.
-  const costs = { peak: { fromHour: 13, toHour: 19, weekdays: true, zone: 'UTC' } };
+  const costs = { peak: { fromHour: 13, toHour: 19, weekdays: true, zone: 'UTC' }, revisions: [] };
   const shares = { five_hour: 0.0267, seven_day: 0.0022 };
   const row = { accountId: 'nightly', at: '2026-09-16T12:59:00Z', costShares: shares, durationMs: 120_000, tier: 'default_claude_max_5x' };
   assert.deepEqual(d.requestHintArgs(row, [{ id: 'nightly', subscription: null }], costs), ['Max', shares, 'default_claude_max_5x', true]);
+});
+
+test('a request reads the band of the cost revision in force when it completed, which the loaded table can differ from', () => {
+  // The band ran 13:00 to 19:00 UTC in September and 05:00 to 11:00 UTC from October 1, the loaded table October's.
+  const september = { fromHour: 13, toHour: 19, weekdays: true, zone: 'UTC' };
+  const october = { fromHour: 5, toHour: 11, weekdays: true, zone: 'UTC' };
+  const revisions = [
+    { content: { peak: september }, effective: '2026-09-01', effectiveDate: '2026-09-01T00:00:00Z' },
+    { content: { peak: october }, effective: '2026-10-01', effectiveDate: '2026-10-01T00:00:00Z' },
+  ];
+  const shares = { five_hour: 0.0267, seven_day: 0.0022 };
+  const accounts = [{ id: 'nightly', subscription: null }];
+  const row = (at) => ({ accountId: 'nightly', at, costShares: shares, durationMs: null, tier: 'default_claude_max_5x' });
+  assert.equal(d.requestHintArgs(row('2026-09-16T15:00:00Z'), accounts, { peak: october, revisions })?.[3], true, 'a Wednesday at 15:00 inside the September band');
+  assert.equal(d.requestHintArgs(row('2026-10-16T15:00:00Z'), accounts, { peak: october, revisions })?.[3], false, 'a Friday at 15:00 outside the October band');
 });
 
 test('a row whose shares are null, or name no window the route priced, reads no hint', () => {

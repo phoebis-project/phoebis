@@ -10,6 +10,13 @@ export const WINDOW_KEY: ByWindow<string> = { '5h': 'five_hour', '7d': 'seven_da
 export const WINDOW_LABEL: ByWindow<string> = { '5h': '5-hour', '7d': '7-day', '7d_fable': '7-day Fable' };
 /** A window's short word, for a cell too narrow for its label. */
 export const WINDOW_SHORT: ByWindow<string> = { '5h': '5h', '7d': '7d', '7d_fable': '7-day Fable' };
+/**
+ * A window's tag in a cell or a chip: `5h`, `7d`, `Fable`. The preset preview's sentence reads `WINDOW_SHORT`, whose
+ * Fable word is longer.
+ */
+export const WINDOW_TAG: ByWindow<string> = { '5h': '5h', '7d': '7d', '7d_fable': 'Fable' };
+/** A window as a hint's sentence names it. */
+export const WINDOW_HINT: ByWindow<string> = { '5h': 'the 5-hour window', '7d': 'the 7-day window', '7d_fable': 'the Fable week' };
 /** The order the pages draw the windows in: the two shared windows, then the model-scoped one. */
 export const WINDOW_ORDER: KnownWindowId[] = ['5h', '7d', '7d_fable'];
 /** The wire keys of the three windows the router reads, in the order the pages draw them. */
@@ -49,6 +56,12 @@ export const windowKeyId = (id: string): WindowId | null => WINDOW_IDS.get(id) ?
 export const windowLabelOf = (key: string): string => lookup(WINDOW_LABEL, windowKeyId(key) ?? '') ?? key;
 /** A window's word in a column head: "7-day", "Fable", "5-hour", a window the console does not know under its key. */
 export const windowWord = (key: string): string => (windowKeyId(key) === '7d_fable' ? 'Fable' : windowLabelOf(key));
+/** A known window's tag under any of its spellings, nothing for a window the console does not know. */
+export const windowTagOf = (key: string): string | undefined => lookup(WINDOW_TAG, windowKeyId(key) ?? '');
+/** A window's tag, a window the console does not know under its key. */
+export const windowTag = (key: string): string => windowTagOf(key) ?? key;
+/** A window's hint sentence, a window the console does not know under its key. */
+export const windowHint = (key: string): string => lookup(WINDOW_HINT, windowKeyId(key) ?? '') ?? key;
 /** A window key's place in the order the pages draw them, a window the pages do not know after every known one. */
 export const windowRank = (key: string): number => {
   const at = (WINDOW_ORDER as readonly string[]).indexOf(windowKeyId(key) ?? '');

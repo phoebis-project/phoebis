@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api } from '@/api';
 import { iso } from '@/api/decode';
-import type { Account, Attempt, AttemptResponse, CapturedBodies, CohortHold, DiagnosticsSource, Guardrail, RequestLog, RequestOutcome, RequestPage, RequestQuery, Settings, SubscriptionCosts, Usage } from '@/api/types';
+import type { Account, Attempt, AttemptResponse, CapturedBodies, CohortHold, DiagnosticsSource, Guardrail, RequestLog, RequestOutcome, RequestPage, RequestQuery, Settings, Usage } from '@/api/types';
 import { REFUSAL_CATEGORIES, REQUEST_OUTCOME_VALUES, STOP_REASONS } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { useFollow, usePaging } from '@/app/useFollow';
@@ -20,7 +20,7 @@ import { PagerNav } from '@/components/ui/PagerNav';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Badge, Button, Card, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Input, KeyValue, Select, Skeleton, SkeletonRows } from '@/components/ui/primitives';
 import { accountHref, addressWindow, REQUEST_PAGE_SIZES, requestHref, REQUESTS_CODEC } from '@/lib/address';
-import { shareHint, shareHintLines, type WeekReading } from '@/lib/analytics';
+import { sentences, shareHint, shareHintLines, type WeekReading } from '@/lib/analytics';
 import { autoModeLabel } from '@/lib/autoMode';
 import { bodyLines, bodyText, findHits } from '@/lib/bodies';
 import { CACHE_MISS_REASONS, isDivergence, missLabel } from '@/lib/cache';
@@ -32,7 +32,7 @@ import { effectiveInterval, ENDED_RANGE, FOLLOW_OVERRUN, pollQuery, readEnd, row
 import { bytesDropped, fmtAbsolute, fmtCompact, fmtDatedTime, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, fmtWeek, forkLabel, modelTitle, shortAgent, shortId, shortModel, tokensTotal } from '@/lib/format';
 import { guardrailLabel, guardrailOptions } from '@/lib/guardrails';
 import { useAsync, useNow, useQueryFilters, useRangeTakenAt, useWeekReading } from '@/lib/hooks';
-import { compareRequests, costCellOf, costHeaderTitle, type CostUnit, costUnitOf, FREE_SHARE_TITLE, FUNDING_WORD, heldWords, NO_SHARE_TITLE, requestCostUnit, requestHintArgs, revisionsTitle } from '@/lib/requests';
+import { compareRequests, costCellOf, costHeaderTitle, type CostTable, type CostUnit, costUnitOf, FREE_SHARE_TITLE, FUNDING_WORD, heldWords, NO_SHARE_TITLE, requestCostUnit, requestHintArgs, revisionsTitle } from '@/lib/requests';
 import { requestsWiden } from '@/lib/requestsLink';
 import { type Chip, logHref, requestLink, words } from '@/lib/routingLog';
 import { plainOutputOf } from '@/lib/tokenBar';
@@ -135,7 +135,7 @@ const routingLogHref = (r: RequestLog, now: number) => {
  *  as a dash titled with the failure. */
 interface CostContext extends WeekReading {
   accounts: Account[] | null;
-  costs: SubscriptionCosts | null;
+  costs: CostTable | null;
 }
 
 /** A request's unit under a position, with the hint composed where the accounts read holds its account. */
@@ -209,7 +209,7 @@ function CostRows({ context, request: r, settings, unit }: { context: CostContex
   const failed = cost.kind === 'equivalent' && context.scale === null ? (context.failure?.text ?? null) : null;
   const why = (cost.kind === 'equivalent' || cost.kind === 'equivalent_dollars') && cost.reason !== null ? FREE_SHARE_TITLE : cost.kind === 'dollars' ? `Billed in dollars: ${FUNDING_WORD[cost.funding]}` : cost.kind === 'unpriced' ? NO_SHARE_TITLE : cost.kind === 'dash' ? cost.title : null;
   const shown = cost.kind === 'equivalent' || cost.kind === 'equivalent_dollars' ? cost.hint : null;
-  const title = [failed, why, shown, r.tier === null ? null : `Account tier ${r.tier}`, revisionsTitle(settings, r.at)].filter((part) => part !== null).join('. ');
+  const title = sentences([failed, why, shown, r.tier === null ? null : `Account tier ${r.tier}`, revisionsTitle(settings, r.at)]);
   return (
     <>
       <tr>

@@ -78,10 +78,11 @@ export const shareLabel = (windowKey: string, share: number): string => `${fmtSh
 export const percentText = (share: number) => `${Math.round(share * 100)} %`;
 /** The word a count takes, for a site that prints the count in a form of its own or leaves it out. */
 export const noun = (n: number, one: string, many = `${one}s`): string => (n === 1 ? one : many);
-/** A count with its noun, `1 day`, `3 days`, `2 cache-map entries` where the plural is not the noun with an s. */
-export const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${noun(n, one, many)}`;
-/** `plural` with the count grouped as `fmtInt` groups it: `1,204 requests`. */
-export const fmtCount = (n: number, one: string, many = `${one}s`): string => `${fmtInt(n)} ${noun(n, one, many)}`;
+/**
+ * A count with its noun, the count grouped as `fmtInt` groups it: `1 day`, `3 days`, `1,204 requests`,
+ * `2 cache-map entries`.
+ */
+export const plural = (n: number, one: string, many = `${one}s`): string => `${fmtInt(n)} ${noun(n, one, many)}`;
 /** The parts that hold text, joined by `separator`: an absent or empty part leaves no stray separator. */
 export const joinPresent = (parts: readonly (string | null | undefined)[], separator: string): string => parts.filter((p): p is string => typeof p === 'string' && p !== '').join(separator);
 /** "a", "a and b", "a, b and c". */

@@ -3,8 +3,8 @@ import { lookup } from '@/lib/counts';
 import { LEGACY_PARTITION_FACTS, PARTITION_FACTS, type Leaf, type Renderer, type Station, type StripAnchor, type StripModel, type Terminus } from '@/lib/decisionStrip';
 import { fmtCompact, fmtInt, fmtPct } from '@/lib/format';
 import type { BadgeTone } from '@/lib/quota';
-import { accountChip, ageWord, candidateCells, type Chip, factChips, formatFact, hashTitle, keyWord, outcomeRows, paceHeader, PLACE_WORD, plain, rungEntry, shortHash, STEP_NAME, valueText, verdictTone, type VerdictTone, verdictWord, walkLines, warmUntil, WINDOW_WORD, wordOf, words } from '@/lib/routingLog';
-import { knownWindowsFirst } from '@/lib/windows';
+import { accountChip, ageWord, candidateCells, type Chip, factChips, formatFact, hashTitle, keyWord, outcomeRows, paceHeader, PLACE_WORD, plain, rungEntry, shortHash, STEP_NAME, valueText, verdictTone, type VerdictTone, verdictWord, walkLines, warmUntil, wordOf, words } from '@/lib/routingLog';
+import { knownWindowsFirst, WINDOW_KEYS, windowTag, windowTagOf } from '@/lib/windows';
 
 // A popover's plan: the facts of one station, leaf or terminus as plain data in the console's words, which
 // `StripPopover` draws and the unit tests read.
@@ -90,7 +90,7 @@ const LEGACY_GROUPS_OF: Record<string, GroupKeys[]> = { ...GROUPS_OF, 'move:shed
 const FIT_COLUMN_ORDER = ['projection', 'rewrite', 'reserved', 'runway_ms', 'binding', 'end', 'verdict'];
 const fitRank = (key: string) => {
   const at = FIT_COLUMN_ORDER.findIndex((lead) => key === lead || key.startsWith(`${lead}_`));
-  const window = Object.keys(WINDOW_WORD).findIndex((w) => key.endsWith(`_${w}`));
+  const window = WINDOW_KEYS.findIndex((w) => key.endsWith(`_${w}`));
   return (at < 0 ? FIT_COLUMN_ORDER.length : at) * 10 + (window < 0 ? 9 : window);
 };
 /** A fact that names the account a step acted on reads as "on" that account, as its chip does. */
@@ -306,7 +306,7 @@ function stationPlan(s: Station, record: DecisionRecord, row: DecisionSummary | 
 /** The card's candidate columns after Account, for the "and N more" leaf's table of the members it stands for. */
 function remainingOf(model: StripModel, record: DecisionRecord, now: number): PlanTable {
   const shown = new Set(model.leaves.map((l) => l.accountId));
-  const windows = Object.entries(WINDOW_WORD).map(([key, label]) => ({ key, label, numeric: true }));
+  const windows = WINDOW_KEYS.map((key) => ({ key, label: windowTag(key), numeric: true }));
   const columns: PlanColumn[] = [
     { key: 'tier', label: 'Tier', numeric: true },
     ...windows,
@@ -366,7 +366,7 @@ function leafPlan(leaf: Leaf, model: StripModel, record: DecisionRecord, now: nu
   // The console's three windows in their order, then any other the account reports, a key's worst bucket among them.
   const windows: WindowRow[] = knownWindowsFirst(Object.keys(member.windows)).map((k) => {
     const w = member.windows[k];
-    return { age: ageWord(w.ageMs), left: fmtPct(1 - w.utilization), reset: w.reset === null ? 'no reset' : formatFact(w.reset, 'time', now), source: w.source, used: fmtPct(w.utilization), window: lookup(WINDOW_WORD, k) ?? keyWord(k) };
+    return { age: ageWord(w.ageMs), left: fmtPct(1 - w.utilization), reset: w.reset === null ? 'no reset' : formatFact(w.reset, 'time', now), source: w.source, used: fmtPct(w.utilization), window: windowTagOf(k) ?? keyWord(k) };
   });
   const title = out && cells.verdict.chip !== null ? cells.verdict.chip : plain(cells.verdict.badge);
   return { block: { chips, kind: 'candidate', windows }, head: { account: cells.account, badge: null, chip: title, second: [], tone: leaf.tone, word: member.accountId }, renderer: 'candidate', unplaced: [] };

@@ -13,7 +13,7 @@ import { Badge, Button, Card, ConfirmDialog, EmptyState, Field, GroupedDialog, I
 import { poolKeysHref, requestHref } from '@/lib/address';
 import { effectiveCaptureHours } from '@/lib/capture';
 import type { PauseCause } from '@/lib/follow';
-import { fmtAbsolute, fmtCount, fmtInt, messageOf } from '@/lib/format';
+import { fmtAbsolute, fmtInt, messageOf, plural } from '@/lib/format';
 import { derivedId, refusalsView, sameMembers, sameValues, saveStatus } from '@/lib/forms';
 import { guardrailRefusals, MODE_TONE, presetBadges, verdictWords } from '@/lib/guardrails';
 import { useAsync } from '@/lib/hooks';
@@ -151,7 +151,7 @@ export function GuardrailsPage(): JSX.Element {
           const attachedPools = byPosition(g.pools);
           const attachedKeys = byPosition(g.keys);
           const nowhere = attachedPools.length === 0 && attachedKeys.length === 0;
-          const where = `${fmtCount(attachedPools.length, 'pool')}, ${fmtCount(attachedKeys.length, 'key')}`;
+          const where = `${plural(attachedPools.length, 'pool')}, ${plural(attachedKeys.length, 'key')}`;
           const names = [...attachedPools.map((p) => `pool ${p.label}`), ...attachedKeys.map((k) => `key ${k.label}`)].join(', ');
           const count = counts.data?.guardrails.find((c) => c.id === g.id);
           const presetName = g.preset === null ? null : `${presetList.find((p) => p.id === g.preset?.id)?.name ?? g.preset.id} v${g.preset.version}`;
@@ -216,7 +216,7 @@ export function GuardrailsPage(): JSX.Element {
       <div className="stack">
         <FilterBar
           address="/guardrails"
-          count={list === null ? '' : fmtCount(list.length, 'guardrail')}
+          count={list === null ? '' : plural(list.length, 'guardrail')}
           filters={{}}
           refresh={{ intervalMs, onIntervalChange: setIntervalMs, onRefresh: reload, paused: pauseCause, refreshTitle: 'Reads the list again now' }}
           update={() => undefined}
@@ -309,8 +309,8 @@ function Picker({ empty, label, one, onChange, options, value }: { empty: string
   const [open, setOpen] = useState(false);
   return (
     <>
-      <Button ref={setAnchor} aria-haspopup="dialog" aria-expanded={open} aria-label={`${label}: ${value.length === 0 ? empty : fmtCount(value.length, one)}`} onClick={() => setOpen((o) => !o)}>
-        {value.length === 0 ? empty : fmtCount(value.length, one)}
+      <Button ref={setAnchor} aria-haspopup="dialog" aria-expanded={open} aria-label={`${label}: ${value.length === 0 ? empty : plural(value.length, one)}`} onClick={() => setOpen((o) => !o)}>
+        {value.length === 0 ? empty : plural(value.length, one)}
         <IconChevron size={12} strokeWidth={1.5} />
       </Button>
       <Popover anchor={anchor} id={boxId} label={label} onClose={() => setOpen(false)} open={open}>

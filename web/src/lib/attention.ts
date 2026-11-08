@@ -3,7 +3,8 @@ import type { AttentionItem, AttentionKind } from '@/api/types';
 import { accountMeterHref } from './address';
 import { lookup } from './counts';
 import { fmtAbsolute, fmtPct, fmtRelative, instant as clockInstant, listWords, messageOf, noun, percentText, plural } from './format';
-import { WINDOW_WORD, entityHref, formatFact, logHref, sinceCondition, type LogLink } from './routingLog';
+import { entityHref, formatFact, logHref, sinceCondition, type LogLink } from './routingLog';
+import { windowTag } from './windows';
 
 export const ATTENTION_LABEL: Record<AttentionKind, string> = {
   certificate_expiring: 'Certificate expiring',
@@ -201,7 +202,7 @@ export function attentionDetail(item: AttentionItem, now: number): string {
 
 /** The spent windows as the record names them, `5h`, `7d` or `Fable`, a key the console does not know as sent. */
 const windowsOf = (windows: string[]): string =>
-  windows.length === 0 ? '' : ` the ${listWords(windows.map((w) => lookup(WINDOW_WORD, w) ?? w))} ${noun(windows.length, 'window')}`;
+  windows.length === 0 ? '' : ` the ${listWords(windows.map((w) => windowTag(w)))} ${noun(windows.length, 'window')}`;
 
 /** The settings a condition names, each with the pool's value where the route sends one, printed by `value`. */
 const settingWords = (d: AttentionItem['detail'], value: (n: number) => string): string => {
@@ -272,7 +273,7 @@ function driftWords(item: AttentionItem, now: number): string {
   const windows = list(item.detail.windows).map(rec);
   const ratios = windows.map((w, i) => {
     const word = text(w.window) ?? '';
-    const name = lookup(WINDOW_WORD, word) ?? word;
+    const name = windowTag(word);
     const ratio = `${ratioWord(num(w.ratio))}x`;
     return i === 0 ? `${name} charged ${ratio} the table` : `${name} ${ratio}`;
   });

@@ -1,8 +1,8 @@
-import type { Account, AccountSlowDown, KnownWindowId, RateLimitWindow, Spend } from '@/api/types';
+import type { Account, AccountSlowDown, RateLimitWindow, Spend } from '@/api/types';
 import { fmtAbsolute, fmtMinor, fmtPct, fmtRelative } from '@/lib/format';
 import { hasSpendReading, isExpired, isSubscription, meterTone, planEndedSentence, projectionParts, remainingOf, slowedOf, spendResetTitle, windowOf } from '@/lib/quota';
 import { speedHover } from '@/lib/selection';
-import { WINDOW_ORDER, windowWord } from '@/lib/windows';
+import { WINDOW_ORDER, windowTag, windowWord } from '@/lib/windows';
 import { Meter, MeterAbsent } from './primitives';
 import { SpeedChip } from './SpeedChip';
 
@@ -126,14 +126,13 @@ export function WindowTriple({ account, now, compact = false, others = false }: 
       </div>
     );
   }
-  // One word each: "Fable 7d" wraps in the narrow compact columns, which drops
-  // that meter a line below its two neighbors. Those columns have no room for a
-  // speed chip beside the 5-hour label either, so a compact card draws it in its head.
-  const SHORT: Record<KnownWindowId, string> = { '5h': '5h', '7d': '7d', '7d_fable': 'Fable' };
   return (
     <div className={`wbars wbars--3 ${compact ? 'wbars--compact' : ''}`}>
       {slots.map(({ id, w }) => {
-        const label = compact ? SHORT[id] : windowWord(id);
+        // One word each: "Fable 7d" wraps in the narrow compact columns, which drops that meter a line below its two
+        // neighbors. Those columns have no room for a speed chip beside the 5-hour label either, so a compact card
+        // draws it in its head.
+        const label = compact ? windowTag(id) : windowWord(id);
         return w ? <WindowBar key={id} window={{ ...w, label }} now={now} compact={compact} slowDown={id === '5h' && !compact ? slowedOf(account, now) : null} /> : <WindowBarAbsent key={id} compact={compact} label={label} words={`no ${windowWord(id)} window`} />;
       })}
       {rest.map((w) => (

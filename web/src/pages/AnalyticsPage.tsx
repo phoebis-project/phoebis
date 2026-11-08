@@ -22,7 +22,7 @@ import { GroupBy as GroupByControl, GroupsButton } from '@/components/GroupBy';
 import { SectionBar } from '@/components/SectionBar';
 import { accountHref, addressWindow, ANALYTICS_CODEC, type AnalyticsAddress } from '@/lib/address';
 import { ALLOWANCE_WEEKS, allowanceRows, allowanceSpan, fleetFigures, resetInstant, weeklyKeys, weeklyResetsKey, type AllowanceFigure } from '@/lib/allowance';
-import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, analyticsPatch, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, failureHead, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, moveLabel, nativeCellOf, nativeFiguresOf, netSaving, niceAxisTop, oneAccountGroupOf, ownShareHint, peakLines, placementCells, placementRungLabel, readBurn, sampledWindows, sidesLine, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, analyticsPatch, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, failureHead, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, moveLabel, nativeCellOf, nativeFiguresOf, netSaving, niceAxisTop, oneAccountGroupOf, ownShareHint, peakLines, placementCells, placementRungLabel, readBurn, sidesLine, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
@@ -39,7 +39,7 @@ import { words } from '@/lib/routingLog';
 import { HOUR } from '@/lib/time';
 import { plainOutputOf } from '@/lib/tokenBar';
 import { UNIT_FUNDING, UNIT_POSITIONS, type UnitPosition, type WeekPosition } from '@/lib/unit';
-import { windowLabelOf, windowWord } from '@/lib/windows';
+import { WINDOW_KEYS, windowLabelOf, windowWord } from '@/lib/windows';
 
 /** The dimensions the breakdown route groups on; `all` is the ungrouped total every section reads. */
 type GroupBy = Exclude<AnalyticsGroupBy, 'all'>;
@@ -2495,13 +2495,6 @@ function BudgetTable({ budgets, error, now }: { budgets: MemberBudget[] | null; 
 
 const NO_SAMPLE_HINT = 'no utilization sampled in range';
 
-/**
- * The toggle's word for a sampled window: the console's label for the three the router reads, and the extra-usage
- * week by its own name, since the decoder folds that key onto the model week elsewhere and the cards never draw two
- * windows as one.
- */
-const toggleLabel = (id: string): string => (id === 'seven_day_overage_included' ? '7-day, extra usage' : windowLabelOf(id));
-
 /** An hour with no sample carries no peak, so the maximum is over the sampled hours alone and null without one. */
 function peakOf(values: (number | null)[]): number | null {
   const sampled = values.filter((v): v is number => v !== null);
@@ -2559,18 +2552,16 @@ function AccountsSection({
     [accounts, rollups],
   );
   const data = useMemo(() => peakLines(rollups ?? [], accounts, span, bucketMs), [rollups, accounts, span, bucketMs]);
-  const windows = useMemo(() => sampledWindows(rollups ?? []), [rollups]);
+  const windows = WINDOW_KEYS;
   const [window, setWindow] = useState('five_hour');
-  // A chosen window no longer offered (the extra-usage week once no row of the range holds it) falls to the 5-hour one.
-  const chosen = windows.includes(window) ? window : 'five_hour';
-  const usage = useMemo(() => windowLines(rollups ?? [], chosen, 'usage', span, bucketMs), [rollups, chosen, span, bucketMs]);
-  const pace = useMemo(() => windowLines(rollups ?? [], chosen, 'pace', span, bucketMs), [rollups, chosen, span, bucketMs]);
+  const usage = useMemo(() => windowLines(rollups ?? [], window, 'usage', span, bucketMs), [rollups, window, span, bucketMs]);
+  const pace = useMemo(() => windowLines(rollups ?? [], window, 'pace', span, bucketMs), [rollups, window, span, bucketMs]);
   // The axis takes the widest lead either side of zero, raised to a round tick, so ahead and behind read alike.
   const paceTop = useMemo(() => {
     const widest = Math.max(0, ...pace.data.flatMap((r) => accounts.map((a) => Math.abs(r[a] ?? 0))));
     return widest > 0 ? niceAxisTop(widest) : 50;
   }, [pace, accounts]);
-  const toggle = <Segmented value={chosen} options={windows.map((id) => ({ label: toggleLabel(id), value: id }))} onChange={setWindow} ariaLabel="Window" />;
+  const toggle = <Segmented value={window} options={windows.map((id) => ({ label: windowLabelOf(id), value: id }))} onChange={setWindow} ariaLabel="Window" />;
   const colorOf = (a: string) => accountColor(ink, slotOf(a));
   const legend = accounts.map((a) => ({ color: colorOf(a), label: a, shape: 'line' as const }));
   const shareTip = timeTip<Record<string, number | null> & { at: number }>((p) => accounts.map((a) => ({ color: colorOf(a), label: a, value: pct(p[a]) })));
@@ -2631,14 +2622,14 @@ function AccountsSection({
         failure={failed(error)}
         loading={loading}
         groupLabel="Account"
-        columns={['Peak 5h', 'Peak 7d', 'Peak 7d, extra usage', 'Time in overage', 'Time in cooldown', 'Pins created', 'Migrated in', 'Migrated out']}
+        columns={['Peak 5h', 'Peak 7d', 'Peak Fable', 'Time in overage', 'Time in cooldown', 'Pins created', 'Migrated in', 'Migrated out']}
         rows={table.map((r) => ({
           key: r.id,
           label: r.id,
           cells: [
             r.peak5 === null ? <span className="muted" title={NO_SAMPLE_HINT}>-</span> : fmtPct(r.peak5),
             r.peak7 === null ? <span className="muted" title={NO_SAMPLE_HINT}>-</span> : fmtPct(r.peak7),
-            r.peakF === null ? <span className="muted" title="no extra-usage window">n/a</span> : fmtPct(r.peakF),
+            r.peakF === null ? <span className="muted" title="no Fable window">n/a</span> : fmtPct(r.peakF),
             r.overage ? fmtDuration(r.overage * 1000) : <span className="muted">none</span>,
             r.cooldown ? fmtDuration(r.cooldown * 1000) : <span className="muted">none</span>,
             fmtInt(r.created),
