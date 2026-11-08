@@ -555,8 +555,10 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
     const byAt = sums.get(group);
     const account = shareAccountOf(group, groupBy, filters.accountIds);
     const share = (list: (number | null)[]) => (account === null ? null : bucketShare(list));
-    // The route answers no 5-hour share where the account's window set lacks the window, a billed row's zero included.
+    // The route answers no 5-hour or 7-day share where the account's window set lacks that window, a billed row's zero
+    // included, and keeps the model week's share.
     const noFiveHour = account !== null && !sharedWindowsOf(account).includes('five_hour');
+    const noSevenDay = account !== null && !sharedWindowsOf(account).includes('seven_day');
     // A usage-based seat is a paid source, so its burn reads in dollars as an API key's does.
     const unit = account === null ? null : burnUnitOf(account);
     return starts.map((at): BurnPoint => {
@@ -568,7 +570,7 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
         fiveHourShare: noFiveHour ? null : share(s.fiveHour),
         group,
         modelWeekShare: share(s.week),
-        sevenDayShare: share(s.sevenDay),
+        sevenDayShare: noSevenDay ? null : share(s.sevenDay),
         tokens: Math.round(s.tokens),
         uncachedTokens: Math.round(s.uncached),
         unit,

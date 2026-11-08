@@ -116,13 +116,12 @@ export function WindowTriple({ account, now, compact = false, others = false }: 
   const slots = WINDOW_ORDER.map((id) => ({ id, w: windowOf(account, id) }));
   const known: readonly string[] = WINDOW_ORDER;
   const rest = others ? account.windows.filter((w) => !known.includes(w.id)) : [];
-  // An API-key account carries no quota window by nature, so only a subscription account's empty triple waits on a
-  // read, which a compact card writes short with the sentence on its title.
+  // An API-key account has no quota window by nature, so only a subscription account's empty triple waits on a read.
   if (slots.every((s) => s.w === null) && rest.length === 0) {
     const unread = account.planEndedAt === null && isSubscription(account);
     return (
-      <div className={`wbar__none muted ${compact ? 'wbar__none--compact' : ''}`} title={unread && compact ? 'Not read yet' : undefined}>
-        {account.planEndedAt !== null ? planEndedSentence(account.planEndedAt, now, compact) : unread ? (compact ? 'not read' : 'Not read yet') : 'No quota windows'}
+      <div className={`wbar__none muted ${compact ? 'wbar__none--compact' : ''}`}>
+        {account.planEndedAt !== null ? planEndedSentence(account.planEndedAt, now, compact) : unread ? 'Not read yet' : 'No quota windows'}
       </div>
     );
   }

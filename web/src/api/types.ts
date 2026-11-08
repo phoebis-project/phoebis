@@ -1662,11 +1662,11 @@ export interface BurnPoint {
    *  exactly one account). */
   fiveHourShare: number | null;
   group: string;
-  /** The same spend as a fraction of the account's model week, null where `sevenDayShare` is and where no row of the
-   *  bucket is on a model with a week of its own. */
+  /** The same spend as a fraction of the account's model week, null where `fiveHourShare` is for any reason but the
+   *  window set and where no row of the bucket is on a model with a week of its own. */
   modelWeekShare: number | null;
   /** The same spend as a fraction of the account's 7-day window, unbanded, null where `fiveHourShare` is for any
-   *  reason but the window set. */
+   *  reason but the window set and where the account's window set lacks the 7-day window. */
   sevenDayShare: number | null;
   /** Every token of the bucket, all five types: zero for a bucket with no traffic the ledger can attribute. */
   tokens: number;

@@ -18,6 +18,7 @@ import { SpeedChip } from '@/components/ui/SpeedChip';
 import { sumTileOf } from '@/components/ui/Tile';
 import { accountHref, requestHref } from '@/lib/address';
 import { dollarsUnder, equivalentOrDash, nativeSidesOf, type WeekReading } from '@/lib/analytics';
+import { weekScale, weekUnpricedTitle } from '@/lib/costs';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtMiB, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortModel, tokensTotal } from '@/lib/format';
 import { failedFirst, refreshAttention, useAsync, useAttention, useNow, useWeekReading, type Loaded } from '@/lib/hooks';
 import { isFinished, lineTotals, sessionLines, withinExpiry } from '@/lib/keepalive';
@@ -236,6 +237,7 @@ const RING_WINDOW: Record<RingWindow, string> = { '7d': '7-day window', '7d_fabl
 function RemainingCard({ title, subtitle, windowId, accounts, costs, now, week, failure }: { accounts: Account[] | null; costs: SubscriptionCosts | null; failure: ReactNode; now: number; subtitle: ReactNode; title: string; week: WeekPosition; windowId: RingWindow }) {
   const figures = useMemo(() => (accounts && costs ? ringFigures(accounts, windowId, costs, week, now) : null), [accounts, costs, windowId, week, now]);
   const slotOf = useMemo(() => accountSlots((accounts ?? []).map((a) => a.id)), [accounts]);
+  const unsized = costs !== null && weekScale(costs, week) === null;
   return (
     <Card title={title} subtitle={subtitle}>
       {failure ? (
@@ -246,9 +248,12 @@ function RemainingCard({ title, subtitle, windowId, accounts, costs, now, week, 
         // A registry of API-key accounts alone has no window to draw, and an empty ring reads as exhausted.
         <EmptyState title="No subscription accounts" body="A subscription account reports the window this card draws." />
       ) : figures.rows.length === 0 ? (
-        // Where no listed account carries the window, a sentence about unsized tiers would say nothing true.
+        // Where no listed account carries the window, a sentence about unsized tiers would say nothing true. Under a
+        // week whose tier holds no 7-day capacity the week is what lacks a size, so the card names the week.
         <>
-          <p className="muted remaining__none">{figures.carried ? `No listed account's tier is sized for the ${RING_WINDOW[windowId]}.` : `No account with a ${RING_WINDOW[windowId]}.`}</p>
+          <p className="muted remaining__none">
+            {figures.carried ? (unsized ? weekUnpricedTitle(week) : `No listed account's tier is sized for the ${RING_WINDOW[windowId]}.`) : `No account with a ${RING_WINDOW[windowId]}.`}
+          </p>
           <LeftOut accounts={figures.leftOut} />
         </>
       ) : (

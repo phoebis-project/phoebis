@@ -268,63 +268,64 @@ the Plan per hour card price a Team or Enterprise seat at its tier where the cos
 an account whose poll lacks the window, a free plan, a usage-based seat or an unheld tier under the ring with the
 reason, and the card reading an account the router prices no tier for whose range holds no priced bucket as tier unknown
 ([Dashboard](console.md#dashboard), [Analytics](console.md#analytics)). The Dashboard's rings list each account with the
-most of its own window left first ([Dashboard](console.md#dashboard)). A Quota card marks every window whose reset is
-its soonest in the accent ink, the Fable row and a seat's Spend row among them ([Quota](console.md#quota)). A Quota
-card's Refresh draws its reading the moment it answers, at the reading's instant ([Quota](console.md#quota)). A
-usage-based seat draws one spend bar wherever the window bars are drawn, with its amounts, its reset marked estimated
-until a header names it, and a lane on the Quota windows timeline ([Quota](console.md#quota)). An account in the
-`disconnected` or `reauth_required` state reports no quota window, so neither a console view nor the status screen draws
-its last reading ([Quota](console.md#quota)). Each window the accounts route serves carries its lead over pace, which
-the console's pace words, pace mark and pace orders read ([Quota](console.md#quota)). On a screen under 900 px wide the
-Quota cards' reset label takes a line of its own under the meter ([Quota](console.md#quota)). The Quota cards sort by
-the bar's Sort control, on Default order in the route's order, on a pace key per window with the account furthest ahead
-first, or on a recovery key per window with the soonest reset first and a usage-based seat among the accounts without
-that window by name, and the Quota windows timeline draws each bar in its account's color, each lane stacking its
-account and its chips above its bars on a narrow screen ([Quota](console.md#quota)). The Quota cards' reset line and the
-window bars of the Dashboard and the Accounts list read the share the projection leaves, such as `19% left at the reset`
-([Quota](console.md#quota)). The Quota windows timeline draws its now marker and its day grid over the bars, so the
-marker stands at the instant's place on them and no grid line crosses a lane's stacked account and chips on a narrow
-screen ([Quota](console.md#quota)). The Quota view leaves out an account that is disconnected or needs
-re-authentication, which keeps its row and its state on the Accounts view ([Quota](console.md#quota)). The Quota view
-leaves out an account whose plan ended while its flag stands, as it leaves out a disconnected one, and the Accounts
-detail's Usage card names the ended plan ([Quota](console.md#quota), [Accounts](console.md#accounts)). The speed chip
-reads the speed the holds realized, and its hover names the factor the pool computed and how far the span has ramped
-([Quota](console.md#quota)). Under the 12-hour time setting the Quota timeline's short cells read "6 AM" in a cell wide
-enough for it, with fewer cells at a given width ([Quota](console.md#quota)). A pairing confirm on a slot sealed under
-another storage key answers 409 and names the account, so the dialog can offer Disconnect
-([Pairing](pairing.md#with-curl)). A pairing whose confirm meets a credential sealed under another storage key reads the
-router's sentence and offers Disconnect, which clears the credential and starts the pairing again from its first step
-([Accounts](console.md#accounts)). A usage poll's 401 moves the account to `reauth_required`, and any other failed poll,
-except a 429 or the usage 403 an ended plan explains, logs one warning and writes a `poll_failed` event
-([Pairing](pairing.md#account-states)). A usage-based seat, the rate-limit tier `default_claude_zero` or the seat tier
-`enterprise_usage_based`, reads no overage word on the Accounts view, and its Identity list reads "usage-based" beside
-its rate-limit tier ([Accounts](console.md#accounts)). An account whose plan ended reads Free beside its Plan ended row,
-the plan the router resolved after the end ([Accounts](console.md#accounts)). An account whose plan ended reads the
-instant in its Identity list until a profile read or a pairing finds a plan again ([Accounts](console.md#accounts)). An
-account whose profile reports no plan is flagged plan ended, which pauses its usage poll and places nothing on it until
-a profile read or a re-pair finds a plan again ([Pairing](pairing.md#account-states)). While an account's plan-ended
-flag stands, `GET /admin/accounts` and `/{id}` answer its `windows` empty, as they do for a disconnected account
-([Pairing](pairing.md#account-states)). Flagging the plan ended closes an open usage-poll backoff run, so `poll_backoff`
-clears with the pause ([Statistics](statistics.md#conditions-and-gauges)). An account's plan reads as one word resolved
-from its profile's organization type first and its rate-limit tier second (`free`, `pro`, `max_5x`, `max_20x`, `max`,
-`team`, `enterprise` or `usage_based`), and a free organization or a usage-based seat prices no capacity, so the router
-reads it as an untiered account ([Pairing](pairing.md#two-kinds-of-account), [API reference](api-reference.md)). An
-account's badge, its Plan row and the Accounts search read the display name claude.ai sends where the account carries
-one and the plan the router resolved from the organization type and the tier otherwise, Ultra, Max or Pro for the tiers
-the cost model prices, "Free" for a free organization and "Usage-based" for a seat, as do the Quota card's chip and the
-capacity rings, while the routing log's candidates read the label of the plan word a record carries
-([Accounts](console.md#accounts), [Dashboard](console.md#dashboard), [Quota](console.md#quota), [Routing
-log](console.md#routing-log)). An account's detail draws "Allowance left at reset", each weekly window's share left
-unused at its last four resets in the chosen week under every position, a term's end counting as a reset marked "term
-ended" ([Accounts](console.md#accounts)). An account's detail draws "Meter drift", the newest completed window of each
-kind against the table with the windows off the band in 30 days, opening the Meter view on the account
-([Accounts](console.md#accounts)). An account's end editor names the browser's zone beside its field
-([Accounts](console.md#accounts)). An account's end editor opens empty for a running plan, and its hint names the date
-the plan's billing settings show as the end ([Accounts](console.md#accounts)). An extra usage reading with no amounts
-draws its state alone, with no amounts and no meter, on the Accounts view's Usage card and the Quota cards
-([Accounts](console.md#accounts), [Quota](console.md#quota)). The account's cancellation flag is spelled `canceled` on
-the account view, the account edit, the routing log's term facts and the `wind_down_started` event, with the error code
-`account_canceled`, the probe outcome `canceled` and the pairing session's status `canceled`
+most of its own window left first ([Dashboard](console.md#dashboard)). The Dashboard's rings read the week's unpriced
+sentence where the chosen week's tier has no 7-day capacity ([Dashboard](console.md#dashboard)). A Quota card marks
+every window whose reset is its soonest in the accent ink, the Fable row and a seat's Spend row among them
+([Quota](console.md#quota)). A Quota card's Refresh draws its reading the moment it answers, at the reading's instant
+([Quota](console.md#quota)). A usage-based seat draws one spend bar wherever the window bars are drawn, with its
+amounts, its reset marked estimated until a header names it, and a lane on the Quota windows timeline
+([Quota](console.md#quota)). An account in the `disconnected` or `reauth_required` state reports no quota window, so
+neither a console view nor the status screen draws its last reading ([Quota](console.md#quota)). Each window the
+accounts route serves carries its lead over pace, which the console's pace words, pace mark and pace orders read
+([Quota](console.md#quota)). On a screen under 900 px wide the Quota cards' reset label takes a line of its own under
+the meter ([Quota](console.md#quota)). The Quota cards sort by the bar's Sort control, on Default order in the route's
+order, on a pace key per window with the account furthest ahead first, or on a recovery key per window with the soonest
+reset first and a usage-based seat among the accounts without that window by name, and the Quota windows timeline draws
+each bar in its account's color, each lane stacking its account and its chips above its bars on a narrow screen
+([Quota](console.md#quota)). The Quota cards' reset line and the window bars of the Dashboard and the Accounts list read
+the share the projection leaves, such as `19% left at the reset` ([Quota](console.md#quota)). The Quota windows timeline
+draws its now marker and its day grid over the bars, so the marker stands at the instant's place on them and no grid
+line crosses a lane's stacked account and chips on a narrow screen ([Quota](console.md#quota)). The Quota view leaves
+out an account that is disconnected or needs re-authentication, which keeps its row and its state on the Accounts view
+([Quota](console.md#quota)). The Quota view leaves out an account whose plan ended while its flag stands, as it leaves
+out a disconnected one, and the Accounts detail's Usage card names the ended plan ([Quota](console.md#quota),
+[Accounts](console.md#accounts)). The speed chip reads the speed the holds realized, and its hover names the factor the
+pool computed and how far the span has ramped ([Quota](console.md#quota)). Under the 12-hour time setting the Quota
+timeline's short cells read "6 AM" in a cell wide enough for it, with fewer cells at a given width
+([Quota](console.md#quota)). A pairing confirm on a slot sealed under another storage key answers 409 and names the
+account, so the dialog can offer Disconnect ([Pairing](pairing.md#with-curl)). A pairing whose confirm meets a
+credential sealed under another storage key reads the router's sentence and offers Disconnect, which clears the
+credential and starts the pairing again from its first step ([Accounts](console.md#accounts)). A usage poll's 401 moves
+the account to `reauth_required`, and any other failed poll, except a 429 or the usage 403 an ended plan explains, logs
+one warning and writes a `poll_failed` event ([Pairing](pairing.md#account-states)). A usage-based seat, the rate-limit
+tier `default_claude_zero` or the seat tier `enterprise_usage_based`, reads no overage word on the Accounts view, and
+its Identity list reads "usage-based" beside its rate-limit tier ([Accounts](console.md#accounts)). An account whose
+plan ended reads Free alone beside its Plan ended row, the plan the router resolved after the end
+([Accounts](console.md#accounts)). An account whose plan ended reads the instant in its Identity list until a profile
+read or a pairing finds a plan again ([Accounts](console.md#accounts)). An account whose profile reports no plan is
+flagged plan ended, which pauses its usage poll and places nothing on it until a profile read or a re-pair finds a plan
+again ([Pairing](pairing.md#account-states)). While an account's plan-ended flag stands, `GET /admin/accounts` and
+`/{id}` answer its `windows` empty, as they do for a disconnected account ([Pairing](pairing.md#account-states)).
+Flagging the plan ended closes an open usage-poll backoff run, so `poll_backoff` clears with the pause
+([Statistics](statistics.md#conditions-and-gauges)). An account's plan reads as one word resolved from its profile's
+organization type first and its rate-limit tier second (`free`, `pro`, `max_5x`, `max_20x`, `max`, `team`, `enterprise`
+or `usage_based`), and a free organization or a usage-based seat prices no capacity, so the router reads it as an
+untiered account ([Pairing](pairing.md#two-kinds-of-account), [API reference](api-reference.md)). An account's badge,
+its Plan row and the Accounts search read the display name claude.ai sends where the account carries one and the plan
+the router resolved from the organization type and the tier otherwise, Ultra, Max or Pro for the tiers the cost model
+prices, "Free" for a free organization and "Usage-based" for a seat, as do the Quota card's chip and the capacity rings,
+while the routing log's candidates read the label of the plan word a record carries ([Accounts](console.md#accounts),
+[Dashboard](console.md#dashboard), [Quota](console.md#quota), [Routing log](console.md#routing-log)). An account's
+detail draws "Allowance left at reset", each weekly window's share left unused at its last four resets in the chosen
+week under every position, a term's end counting as a reset marked "term ended" ([Accounts](console.md#accounts)). An
+account's detail draws "Meter drift", the newest completed window of each kind against the table with the windows off
+the band in 30 days, opening the Meter view on the account ([Accounts](console.md#accounts)). An account's end editor
+names the browser's zone beside its field ([Accounts](console.md#accounts)). An account's end editor opens empty for a
+running plan, and its hint names the date the plan's billing settings show as the end ([Accounts](console.md#accounts)).
+An extra usage reading with no amounts draws its state alone, with no amounts and no meter, on the Accounts view's Usage
+card and the Quota cards ([Accounts](console.md#accounts), [Quota](console.md#quota)). The account's cancellation flag
+is spelled `canceled` on the account view, the account edit, the routing log's term facts and the `wind_down_started`
+event, with the error code `account_canceled`, the probe outcome `canceled` and the pairing session's status `canceled`
 ([Accounts](console.md#accounts), [API reference](api-reference.md)). The Accounts view orders its list through the
 filter bar's sort control, a key and a direction carried in the address, with Name ascending by default, one key per
 window's reset and Most used filing an account with no plan window last ([Accounts](console.md#accounts)). The Accounts
@@ -515,7 +516,7 @@ key edit, or a guardrail create or edit, that would also take a list past 64 gua
 missing id or its refused member before the bound ([Pools](routing.md#pools), [Keys](routing.md#keys)). The Dashboard's
 account cards and the Accounts list keep a slot for a window the account's poll does not carry, "none" muted in the
 share's place with the window's words on hover, "no 5-hour window" on an approved Ultra account, the Quota cards keep
-the window's row with the same words muted, and an account whose poll has read no window reads "not read" on the
+the window's row with the same words muted, and an account whose poll has read no window reads "Not read yet" on the
 Dashboard's cards and the Accounts list ([Dashboard](console.md#dashboard), [Accounts](console.md#accounts),
 [Quota](console.md#quota)). The top bar's Week control reads a subscription figure as a share of the Pro, Max or Ultra
 week, Ultra week until you pick one, stored in the browser beside the unit position, mirrored on the Settings view's

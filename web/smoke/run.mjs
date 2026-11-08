@@ -4173,12 +4173,10 @@ expect('/accounts/secondary', m.text(), [
     // The sunset seed's profile read found no plan four hours before the mock's load, after its saved end three days
     // back, so the route answers no window for it: its Usage card names the ended plan, its row's badge and its Plan
     // row read Free, the plan the router resolves from the document that read found, and the list counts it with every
-    // other account. The smoke runs under TZ=UTC, so the Plan ended hover reads 10:30 and the Plan row's start its UTC
-    // day, where a viewer's zone would move them.
+    // other account. The smoke runs under TZ=UTC, so the Plan ended hover reads 10:30, where a viewer's zone moves it.
     const sunset = story.find((a) => a.id === 'sunset');
     const page = await mount('/accounts/sunset', { now: CLOCK_ORIGIN });
     const ago = sunset ? fmtRelative(sunset.planEndedAt, CLOCK_ORIGIN) : 'no sunset';
-    const since = sunset ? new Date(sunset.subscription.since).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' }) : 'no sunset';
     const usage = [...page.container.querySelectorAll('.detail .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Usage');
     const sentence = usage?.querySelector('p.muted')?.textContent?.trim() ?? 'no sentence';
     const row = identityRows(page).find((r) => r.label === 'Plan ended');
@@ -4187,14 +4185,14 @@ expect('/accounts/secondary', m.text(), [
     const badge = page.container.querySelector('a.account-row[href="/accounts/sunset"] .account-row__head .badge')?.textContent?.trim() ?? 'no badge';
     const count = page.container.querySelector('.filter-bar__count')?.textContent?.trim() ?? 'no count';
     results.push({
-      name: '/accounts/sunset an account whose plan ended names it on its Usage card beside its Plan ended row, its row badged Free and its Identity list reading Free with its start and the found tier',
+      name: '/accounts/sunset an account whose plan ended names it on its Usage card beside its Plan ended row, its row badged Free and its Identity list reading Free and the found tier',
       ok:
         sentence.startsWith('No quota window is read since the plan ended') &&
         sentence === `No quota window is read since the plan ended ${ago}.` &&
         row?.value === ago &&
         row?.title === 'Sep 16, 2026, 10:30:00' &&
         badge === 'Free' &&
-        plan?.value === `Free since ${since}` &&
+        plan?.value === 'Free' &&
         tier?.value === 'default_claude_ai' &&
         count === `${story.length} accounts`,
       missing: [sentence, JSON.stringify(row ?? null), badge, JSON.stringify(plan ?? null), JSON.stringify(tier ?? null), `${count} of ${story.length} accounts`],
@@ -4203,8 +4201,8 @@ expect('/accounts/secondary', m.text(), [
     // free, and a free organization's billing type reads none.
     const billing = identityRows(page).find((r) => r.label === 'Billing type');
     results.push({
-      name: '/accounts/sunset the Plan row reads Free with its start and the tier on hover, the Rate-limit tier row the found tier as sent and the Billing type row none',
-      ok: /^Free since \S/.test(plan?.value ?? '') && plan?.title === 'default_claude_ai' && tier?.value === 'default_claude_ai' && billing?.value === 'none',
+      name: '/accounts/sunset the Plan row reads Free and the tier on hover, the Rate-limit tier row the found tier as sent and the Billing type row none',
+      ok: plan?.value === 'Free' && plan?.title === 'default_claude_ai' && tier?.value === 'default_claude_ai' && billing?.value === 'none',
       missing: [JSON.stringify(plan ?? null), JSON.stringify(tier ?? null), JSON.stringify(billing ?? null)],
     });
     // The list's row draws the compact bars, so it reads the compact form of the Usage card's sentence, muted.
@@ -29168,9 +29166,10 @@ await forView('/', async () => {
 
 await forView('/', async () => {
   // With no tier's 7-day capacity in the cost model no account of the story is sized for that window, nor for the
-  // Fable week, a factor of it, so both rings weigh nobody. Their accounts carry the window, so each ring says no tier
-  // is sized and names every account with its own tier, the Pro seeds without a Fable week by that reason, and the
-  // contract seed, a usage-based seat the router prices no tier for, with the gate's word.
+  // Fable week, a factor of it, so both rings weigh nobody, and the chosen week, Ultra until one is picked, has no
+  // capacity to weigh a tier against. Each ring reads the week's unpriced sentence in place of one about unsized tiers
+  // and names every account with its own tier, the Pro seeds without a Fable week by that reason, and the contract
+  // seed, a usage-based seat the router prices no tier for, with the gate's word.
   const { getSettings } = api;
   api.getSettings = async () => {
     const settings = await getSettings.call(api);
@@ -29188,31 +29187,72 @@ await forView('/', async () => {
   const drawn = { fable: drawnOf(ringCard('Fable week remaining')), week: drawnOf(ringCard('7d remaining')) };
   page.unmount();
   results.push({
-    name: '/ a ring that weighs no account says so and names every account it left out',
+    name: "/ under a week the cost model holds no 7-day capacity for, each ring reads the week's unpriced sentence and names every account it left out",
     ok:
       JSON.stringify(drawn.week) ===
         JSON.stringify({
           listAfter: true,
           names: ['primary: Ultra 7-day capacity not measured', 'secondary: Pro 7-day capacity not measured', 'nightly: Max 7-day capacity not measured', 'studio: Max 7-day capacity not measured', 'reserve: Pro 7-day capacity not measured', 'contract: a usage-based seat', 'workshop: Ultra 7-day capacity not measured'],
           ring: false,
-          sentence: "No listed account's tier is sized for the 7-day window.",
+          sentence: 'Unpriced: the cost model holds no 7-day capacity for the Ultra week',
         }) &&
       JSON.stringify(drawn.fable) ===
         JSON.stringify({
           listAfter: true,
           names: ['primary: Ultra Fable week capacity not measured', 'secondary: no Fable week', 'nightly: Max Fable week capacity not measured', 'studio: Max Fable week capacity not measured', 'reserve: no Fable week', 'contract: a usage-based seat', 'workshop: Ultra Fable week capacity not measured'],
           ring: false,
-          sentence: "No listed account's tier is sized for the Fable week.",
+          sentence: 'Unpriced: the cost model holds no 7-day capacity for the Ultra week',
         }),
     missing: [JSON.stringify(drawn)],
   });
 });
 
 await forView('/', async () => {
+  // A cost model that sizes no Fable week leaves every account off the Fable ring while the chosen week keeps its
+  // 7-day capacity, so the Fable ring reads the sentence about unsized tiers over its list and the 7-day ring draws.
+  const { getSettings } = api;
+  api.getSettings = async () => {
+    const settings = await getSettings.call(api);
+    const modelWindows = Object.fromEntries(Object.entries(settings.subscriptionCosts.modelWindows).filter(([id]) => id !== 'seven_day_fable'));
+    return { ...settings, subscriptionCosts: { ...settings.subscriptionCosts, modelWindows } };
+  };
+  const page = await mount('/', { now: CLOCK_ORIGIN });
+  api.getSettings = getSettings;
+  const ringCard = (title) => [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === title);
+  const fable = ringCard('Fable week remaining');
+  const sentence = fable?.querySelector('p.muted');
+  const drawn = {
+    fable: {
+      listAfter: sentence?.nextElementSibling?.matches('.remaining__left-out') ?? false,
+      names: [...(fable?.querySelectorAll('.remaining__left-out li') ?? [])].map((li) => li.textContent ?? ''),
+      ring: !!fable?.querySelector('svg.donut'),
+      sentence: sentence?.textContent ?? 'none',
+    },
+    week: { ring: !!ringCard('7d remaining')?.querySelector('svg.donut') },
+  };
+  page.unmount();
+  results.push({
+    name: '/ under a sized week with no Fable week in the cost model the Fable ring says no tier is sized over every account it left out, the 7-day ring drawing',
+    ok:
+      JSON.stringify(drawn) ===
+      JSON.stringify({
+        fable: {
+          listAfter: true,
+          names: ['primary: Ultra Fable week capacity not measured', 'secondary: no Fable week', 'nightly: Max Fable week capacity not measured', 'studio: Max Fable week capacity not measured', 'reserve: no Fable week', 'contract: a usage-based seat', 'workshop: Ultra Fable week capacity not measured'],
+          ring: false,
+          sentence: "No listed account's tier is sized for the Fable week.",
+        },
+        week: { ring: true },
+      }),
+    missing: [JSON.stringify(drawn)],
+  });
+});
+
+await forView('/', async () => {
   // An account whose poll has read no window yet is named "not read yet" under both rings, where its compact card
-  // reads "not read" with "Not read yet" on its title while an API-key account's card, which no poll reads, keeps "No
-  // quota windows", and a fleet whose polls carry no Fable week reads that sentence over the Fable ring's list in
-  // place of one about unsized tiers. The answer drops every Fable week and reserve's windows, a Pro seed listed and
+  // reads "Not read yet" whole with no title while an API-key account's card, which no poll reads, keeps "No quota
+  // windows", and a fleet whose polls carry no Fable week reads that sentence over the Fable ring's list in place of
+  // one about unsized tiers. The answer drops every Fable week and reserve's windows, a Pro seed listed and
   // routable with no plan end.
   const { listAccounts } = api;
   api.listAccounts = async () => (await listAccounts.call(api)).map((a) => ({ ...a, fableWindow: null, ...(a.id === 'reserve' ? { windows: [] } : {}) }));
@@ -29232,11 +29272,11 @@ await forView('/', async () => {
   };
   page.unmount();
   results.push({
-    name: '/ an account with no window read yet is named "not read yet" under both rings and on its card, an API-key card keeping "No quota windows", and a fleet with no Fable week says so over the Fable ring\'s list',
+    name: '/ an account with no window read yet is named "not read yet" under both rings and reads "Not read yet" whole with no title on its card, an API-key card keeping "No quota windows", and a fleet with no Fable week says so over the Fable ring\'s list',
     ok:
       JSON.stringify(drawn) ===
       JSON.stringify({
-        card: ['not read', true, 'Not read yet'],
+        card: ['Not read yet', true, null],
         key: 'No quota windows',
         fable: {
           listAfter: true,

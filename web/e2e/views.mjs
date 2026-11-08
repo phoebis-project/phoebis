@@ -8242,8 +8242,8 @@ async function accountBadges(theme) {
 }
 
 /**
- * The plan-ended account's Identity list: its Plan value reads "Free since {date}", the plan the router resolves from
- * the document its profile read found, in the type, from the left edge and on a row of the height of its Plan ended
+ * The plan-ended account's Identity list: its Plan value reads "Free" alone, the plan the router resolves from the
+ * document its profile read found, in the type, from the left edge and on a row of the height of its Plan ended
  * value, both texts recorded. The router's seed holds no such account, so only the story's pass reads it.
  */
 async function accountFreeBadge(theme) {
@@ -8264,7 +8264,7 @@ async function accountFreeBadge(theme) {
     return { ended: valueOf('Plan ended'), plan: valueOf('Plan') };
   });
   measurements.push(`${theme} /accounts/sunset Identity Plan and Plan ended ${JSON.stringify(read)}`);
-  if (!/^Free since \S/.test(read.plan?.text ?? '')) say(`the Plan row reads ${JSON.stringify(read.plan?.text ?? null)}, not Free with its start`);
+  if (read.plan?.text !== 'Free') say(`the Plan row reads ${JSON.stringify(read.plan?.text ?? null)}, not Free alone`);
   if (!read.ended?.text) say('the Identity list draws no Plan ended value');
   for (const what of compare(read.plan, read.ended, ['font', 'height', 'left'], 'the Plan value against the Plan ended value')) say(what);
 }

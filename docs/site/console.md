@@ -175,25 +175,27 @@ capacity not measured`), or where it has no subscription profile. Without a subs
 subscription accounts" and "A subscription account reports the window this card draws.". Where no listed account carries
 the window the card reads "No account with a 7-day window." (or "No account with a Fable week.") over the named
 accounts, and where they carry it with none sized "No listed account's tier is sized for the 7-day window." (or "for the
-Fable week."). Each account keeps one color across the Dashboard, the Quota view and the Analytics, in the order of its
-id, the eight colors cycling past eight accounts, and an account the registry does not list draws muted.
+Fable week."). Under a chosen week whose tier has no 7-day capacity the card reads the week's unpriced sentence
+(`Unpriced: the cost model holds no 7-day capacity for the {plan} week`) in place of the tier sentence. Each account
+keeps one color across the Dashboard, the Quota view and the Analytics, in the order of its id, the eight colors cycling
+past eight accounts, and an account the registry does not list draws muted.
 
 "Accounts" draws one small card per account, linking to its detail, with the status badge, the speed chip beside it on a
 slowed account (`0.5x`, as [Quota](#quota) describes it), the email, the window bars (`No window since the plan ended
-{ago}` in their place on an account whose plan ended, "not read" on one whose poll has read no window yet, and "none"
-muted in the slot of a window the account does not carry, such as an approved Ultra account's 5-hour slot, each with its
-full words on hover) or the spend bar of a usage-based seat, "Overage active" while requests bill as extra usage, the
-cooldown line, and "API key" for an API-key account. "Recent requests" ("Last 10 across every pool", with "All requests"
-opening the Requests view) lists Time, Key, Account, Model, Status, TTFB, Tokens and Cost, the status badge reading
-`×{n}` for a request of several attempts. Time is the column that gives way: the time reads whole, and the request id
-under it is cut by the room past its first twelve characters, whole on hover, while Key and the other columns read
-whole. Cost reads as the Requests view's column does: under All in dollars and Dollar equivalent a subscription
-request's dollar equivalent over `equivalent`, under Billed dollars a dash, and a billed request's dollars under each of
-the three but Dollar equivalent, where it reads a dash. Under Native a subscription request reads its figure in the
-chosen week alone, with the hint the Requests view's column describes, the dollar equivalent and the price list and cost
-model in force on hover, a client classifier call's hover leading with "Free on the plan: a client classifier call takes
-no window share", and a billed request its dollars. The column header's hover names what each kind of request reads
-under the position. Where the table runs wider than its card it scrolls inside it.
+{ago}` in their place on an account whose plan ended, "Not read yet" on one whose poll has read no window yet, and
+"none" muted in the slot of a window the account does not carry, such as an approved Ultra account's 5-hour slot, with
+the window's words on hover) or the spend bar of a usage-based seat, "Overage active" while requests bill as extra
+usage, the cooldown line, and "API key" for an API-key account. "Recent requests" ("Last 10 across every pool", with
+"All requests" opening the Requests view) lists Time, Key, Account, Model, Status, TTFB, Tokens and Cost, the status
+badge reading `×{n}` for a request of several attempts. Time is the column that gives way: the time reads whole, and
+the request id under it is cut by the room past its first twelve characters, whole on hover, while Key and the other
+columns read whole. Cost reads as the Requests view's column does: under All in dollars and Dollar equivalent a
+subscription request's dollar equivalent over `equivalent`, under Billed dollars a dash, and a billed request's dollars
+under each of the three but Dollar equivalent, where it reads a dash. Under Native a subscription request reads its
+figure in the chosen week alone, with the hint the Requests view's column describes, the dollar equivalent and the price
+list and cost model in force on hover, a client classifier call's hover leading with "Free on the plan: a client
+classifier call takes no window share", and a billed request its dollars. The column header's hover names what each kind
+of request reads under the position. Where the table runs wider than its card it scrolls inside it.
 
 "Sessions" ("Sessions, their agents and the engine that keeps their caches warm", with "Open") reads the active pins as
 `active pins across {n} accounts`. Its grid counts the live sessions as the [Sessions](#sessions) view's summary line
@@ -234,58 +236,58 @@ account without that window's reset ahead and a usage-based seat among them by n
 holds the same slots in the same order: the header with the label (the email on hover) and the status badge, one row per
 window ("5h", "7d" and "Fable"), the Extra usage line, the chips and the poll reading. A usage-based seat's card draws
 one Spend row in the windows' place and no Extra usage line. The pace orders read the lead the router answers for each
-window, how far its used share runs past the share of the window elapsed, the account furthest ahead of pace first, and
-an account whose window expired or carries no lead files with the accounts without that window. Each live window's meter
-reads the share left and its pace, `{window}: {pct} left, {n}% ahead of pace`, `{n}% behind pace` or `on pace`, with `
-to its end at {time}` where the pace runs to the subscription's end rather than the reset, and a mark at the share of
-the window still to come. On a screen under 900 px wide the reset label takes a line of its own under the meter. Under
-the meter the window reads `resets {ago}`, followed on a window the router projects by the share the projection leaves
-at the window's horizon: `resets in 2h 13m, 19% left at the reset` where the horizon is the reset (within a minute),
-`resets in 3d 5h, 56% left in 5 h` where it comes earlier (five hours out on a weekly window, or the account's end), and
-`{pct} left now` once it has come. A window the sessions spend before its horizon reads the time until it runs out,
-`spent in 2 h 10 min`, counted back from the projection at the horizon along the burn, so the span follows the router's
-forecast with the charges and the reservations the last reading does not hold yet, and `0% left now` once that time has
-passed. The reset and the projection split over two lines where the column does not hold them on one, and the hover adds
-the burn behind the projection, `the sessions on this account burn 8.5% an hour`. On a slowed account the 5-hour
-window's line ends in the speed chip, `0.5x` in the warning tone (the speed the holds realized, to two decimals with a
-trailing zero dropped, `0.35x`), whose hover reads `slowed since 17:40: the sessions on this account would pass the
-ceiling 42 min before the reset, over the 30 min threshold` (`under` while no round can fire) followed by the factor the
-pool computed, how far the span has ramped toward it where the entry is inside a span, and the speed the holds realized,
-one sentence each, such as `The pool computed 0.5x. Ramped to 0.5x. The holds realized 0.5x`. The chip draws while the
-realized speed is under 1 and the 5-hour window the read came from has not reset since, and the Dashboard's account
-cards, the Accounts view, the Pools cards and the Sessions view draw the same chip with the same hover
-([Slow-down](routing.md#slow-down)). The window bars of the Dashboard's account cards and of the Accounts list draw the
-projection alone in the reset's place, in a compact form (`19% left at reset`, `56% left in 5 h`) that splits between
-the share and the horizon where the bar is narrow, with the reset's instant on hover, and keep the reset where the
-window has no projection. An account whose plan ended reads `No window since the plan ended {ago}` in the bars' place on
-both views, where any other subscription account without a window reads "not read" ("Not read yet" on hover) and an
-API-key account "No quota windows". A window the account's poll does not carry keeps its slot, so the bars line up
-across the cards, with "none" muted in the share's place, since the slot is too narrow for the words beside its label,
-and the words on hover: "no 5-hour window" on an approved Ultra account, "no 7-day window", and "no Fable window" on a
-Pro account. The Accounts detail's bars read the whole label and a missing window's words, split between its two parts
-where the bar is narrow, and the 5-hour bar's label carries the chip on a slowed account. The Pools dialog's Preview,
-the Sessions Runway column and the routing log keep the used share, the figure that the window ceiling of a pool is
-measured against. A window whose reset has passed with no reading since reads `expired {ago}` instead, with "no reading
-since the reset, {time}" on hover, and draws no share and an empty meter until the next reading, and a window the
-account does not report keeps its row with its words muted in the reset label's place and on the chip's hover ("no
-5-hour window", "no 7-day window", "no Fable window"). A card with no window yet reads "No quota windows reported yet.",
-and one whose read failed shows the error with `, next attempt {time}` and a "Retry" button in the windows' place. A
-usage-based seat's Spend row reads the share of its monthly spend limit left, `59% left`, over the meter, with the
-amount spent of the limit in the reading's currency on hover and `resets {ago}` under it, and no pace, since the router
-projects no burn on the seat. With no limit set its chip reads the amount spent, `$1,025.00 spent`, and no meter draws,
-and a seat with no reading yet reads "No spend reading yet." in the windows' place. Until a reset header names the spend
-window's reset, the router estimates it as 00:00 UTC on the first of the next month, and the line reads `resets {ago},
-estimated`, the word in the muted ink, with `resets {time} (estimated: no reset header has been seen for this window
-yet)` on hover. The reset label of every row whose reset is the card's soonest, a seat's Spend row among them, reads in
-the accent ink, its hover adding "the first of this account to recover". The "Extra usage" chip reads `off`, `not in
-use`, `in use` or `not reported`, with the month's spend against its limit while extra usage is enabled and the reading
-carries the amounts, in the serious tone while requests bill as extra usage, and the provider's reason inside the line
-with the whole message on hover. The chips name the plan the router resolved from the organization type and the tier
-("Plan", reading "Free", "Pro", "Max", "Ultra" or "Usage-based", the display name claude.ai sends where the account
-carries one, the tier on hover), when the plan of an account marked canceled ends (in the serious tone inside a week),
-and when a trial ends ("Trial"). The poll reading says when the poll last asked the endpoint and how it answered, with
-the whole message and the backoff on hover, and "Refresh" reads this account's endpoint now. A card that shows an error,
-whose last poll failed, or that is backing off counts as needing attention.
+window, how far its used share runs past the share of the window elapsed, and file an account whose window expired or
+carries no lead with the accounts without that window. Each live window's meter reads the share left and its pace,
+`{window}: {pct} left, {n}% ahead of pace`, `{n}% behind pace` or `on pace`, with ` to its end at {time}` where the pace
+runs to the subscription's end rather than the reset, and a mark at the share of the window still to come. On a screen
+under 900 px wide the reset label takes a line of its own under the meter. Under the meter the window reads `resets
+{ago}`, followed on a window the router projects by the share the projection leaves at the window's horizon: `resets in
+2h 13m, 19% left at the reset` where the horizon is the reset (within a minute), `resets in 3d 5h, 56% left in 5 h`
+where it comes earlier (five hours out on a weekly window, or the account's end), and `{pct} left now` once it has come.
+A window the sessions spend before its horizon reads the time until it runs out, `spent in 2 h 10 min`, counted back
+from the projection at the horizon along the burn, so the span follows the router's forecast with the charges and the
+reservations the last reading does not hold yet, and `0% left now` once that time has passed. The reset and the
+projection split over two lines where the column does not hold them on one, and the hover adds the burn behind the
+projection, `the sessions on this account burn 8.5% an hour`. On a slowed account the 5-hour window's line ends in the
+speed chip, `0.5x` in the warning tone (the speed the holds realized, to two decimals with a trailing zero dropped,
+`0.35x`), whose hover reads `slowed since 17:40: the sessions on this account would pass the ceiling 42 min before the
+reset, over the 30 min threshold` (`under` while no round can fire) followed by the factor the pool computed, how far
+the span has ramped toward it where the entry is inside a span, and the speed the holds realized, one sentence each,
+such as `The pool computed 0.5x. Ramped to 0.5x. The holds realized 0.5x`. The chip draws while the realized speed is
+under 1 and the 5-hour window the read came from has not reset since, and the Dashboard's account cards, the Accounts
+view, the Pools cards and the Sessions view draw the same chip with the same hover ([Slow-down](routing.md#slow-down)).
+The window bars of the Dashboard's account cards and of the Accounts list draw the projection alone in the reset's
+place, in a compact form (`19% left at reset`, `56% left in 5 h`) that splits between the share and the horizon where
+the bar is narrow, with the reset's instant on hover, and keep the reset where the window has no projection. An account
+whose plan ended reads `No window since the plan ended {ago}` in the bars' place on both views, where any other
+subscription account without a window reads "Not read yet" and an API-key account "No quota windows". A window the
+account's poll does not carry keeps its slot, so the bars line up across the cards, with "none" muted in the share's
+place, since the slot is too narrow for the words beside its label, and the words on hover: "no 5-hour window" on an
+approved Ultra account, "no 7-day window", and "no Fable window" on a Pro account. The Accounts detail's bars read the
+whole label and a missing window's words, split between its two parts where the bar is narrow, and the 5-hour bar's
+label carries the chip on a slowed account. The Pools dialog's Preview, the Sessions Runway column and the routing log
+keep the used share, the figure that the window ceiling of a pool is measured against. A window whose reset has passed
+with no reading since reads `expired {ago}` instead, with "no reading since the reset, {time}" on hover, and draws no
+share and an empty meter until the next reading, and a window the account does not report keeps its row with its words
+muted in the reset label's place and on the chip's hover ("no 5-hour window", "no 7-day window", "no Fable window"). A
+card with no window yet reads "No quota windows reported yet.", and one whose read failed shows the error with `, next
+attempt {time}` and a "Retry" button in the windows' place. A usage-based seat's Spend row reads the share of its
+monthly spend limit left, `59% left`, over the meter, with the amount spent of the limit in the reading's currency on
+hover and `resets {ago}` under it, and no pace, since the router projects no burn on the seat. With no limit set its
+chip reads the amount spent, `$1,025.00 spent`, and no meter draws, and a seat with no reading yet reads "No spend
+reading yet." in the windows' place. Until a reset header names the spend window's reset, the router estimates it as
+00:00 UTC on the first of the next month, and the line reads `resets {ago}, estimated`, the word in the muted ink, with
+`resets {time} (estimated: no reset header has been seen for this window yet)` on hover. The reset label of every row
+whose reset is the card's soonest, a seat's Spend row among them, reads in the accent ink, its hover adding "the first
+of this account to recover". The "Extra usage" chip reads `off`, `not in use`, `in use` or `not reported`, with the
+month's spend against its limit while extra usage is enabled and the reading carries the amounts, in the serious tone
+while requests bill as extra usage, and the provider's reason inside the line with the whole message on hover. The chips
+name the plan the router resolved from the organization type and the tier ("Plan", reading "Free", "Pro", "Max", "Ultra"
+or "Usage-based", the display name claude.ai sends where the account carries one, the tier on hover), when the plan of
+an account marked canceled ends (in the serious tone inside a week), and when a trial ends ("Trial"). The poll reading
+says when the poll last asked the endpoint and how it answered, with the whole message and the backoff on hover, and
+"Refresh" reads this account's endpoint now. A card that shows an error, whose last poll failed, or that is backing off
+counts as needing attention.
 
 Quota windows lays the same windows across a calendar titled "Quota windows", with its span and length (`two weeks` in
 the Weekly mode, `three days` in the 5-hour mode), "Previous period", "Today" and "Next period" buttons, the mode switch
@@ -348,7 +350,7 @@ it." The actions, with the dialog each opens:
 | "Delete account" | "Delete account" | `Removes {label} from its pool and deletes it. Request history stays in the ledger.` |
 
 "Identity" lists, for a subscription account, Type ("OAuth login"), Plan, the plan the router resolved, with its start
-(`Ultra since {date}`, and `Free since {date}` on an account whose plan ended, the plan the router resolved once the
+(`Ultra since {date}`, and `Free` with no date on an account whose plan ended, the plan the router resolved once the
 organization held none), Rate-limit tier (`{tier}, usage-based` on a usage-based seat, and on an account whose plan
 ended the tier the profile read found), Ends where known, Plan ended where set, with its instant, Trial ends where
 known, Organization and Billing type, and "Edit end" opens the end editor: the checkbox "Canceled", the field `Ends
@@ -380,12 +382,12 @@ figure. Each week prices at the tier the account ran under at that reset, so a w
 at the earlier tier's capacity, and a reset the router recorded no tier for at the account's current one, a dash where
 the cost model holds no capacity for the tier a week prices at (a Free plan among them, the card then noting it), and
 the total a dash where one of its weeks reads one. Each week's hover adds the reset's own share of the account's window
-under the account's plan, such as `Ultra: 39% of the 7-day window left`. The block waits on the cost model, which the
-page reads from the settings once per visit whichever account opens, so it draws its placeholder until the settings
-answer and the read's error where they fail. A week the account's term ended inside counts as a reset with the badge
-"term ended", a clock-walk reset reads the last reading before it as the event carries it, and the card reads "No weekly
-reset recorded yet. The first shows once this account's week ends." before the first. The card reads its weeks once per
-account, again on the bar's Refresh, once a weekly window resets and once the account's term end moves (its
+under the plan that week prices at, such as `Ultra: 39% of the 7-day window left`. The block waits on the cost model,
+which the page reads from the settings once per visit whichever account opens, so it draws its placeholder until the
+settings answer and the read's error where they fail. A week the account's term ended inside counts as a reset with the
+badge "term ended", a clock-walk reset reads the last reading before it as the event carries it, and the card reads "No
+weekly reset recorded yet. The first shows once this account's week ends." before the first. The card reads its weeks
+once per account, again on the bar's Refresh, once a weekly window resets and once the account's term end moves (its
 cancellation flag, saved end or plan-ended flag), and a failed read draws its error with Try again, which reads the
 weeks and the settings again.
 

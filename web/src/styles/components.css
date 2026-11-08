@@ -2233,6 +2233,8 @@ textarea.input {
   background: var(--warning-soft);
 }
 
+/* A note with an action takes the accent tint. The info badge's muted tokens (`.badge--info`) mark a condition that
+   costs nothing. */
 .callout--info {
   color: var(--accent-ink);
   background: var(--accent-soft);

@@ -155,8 +155,8 @@ grid at 1280 by
 content box at 1280 and 375 px, each as wide as the Usage and Requests cards and in their title's type, and at 1440 px
 side by side on one top, as wide as each other and as the Usage card and each under half the pane, the grid inside the
 pane with nothing in it scrolling sideways and every card's right edge inside it), the plan-ended account's Identity
-list (mock pass: its Plan value `Free since {date}`, the plan resolved from the document its profile read found, against
-its Plan ended value in type, left edge and row height, both texts recorded), the plan-ended sentence (mock pass: on the
+list (mock pass: its Plan value `Free` alone, the plan resolved from the document its profile read found, against its
+Plan ended value in type, left edge and row height, both texts recorded), the plan-ended sentence (mock pass: on the
 plan-ended account's Dashboard card and Accounts list row the compact `No window since the plan ended {ago}`, muted,
 from the left edge inside its card of the nearest neighbor's window bars and in the type size and ink of their first
 label, both quota rings naming the usage-based seat with its reason and the Fable ring the Pro seeds without a Fable
