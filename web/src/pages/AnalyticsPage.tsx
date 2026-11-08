@@ -20,11 +20,12 @@ import { Badge, Card, ErrorState, Meter, Segmented, Skeleton, StateRow } from '@
 import { FilterBar } from '@/components/FilterBar';
 import { GroupBy as GroupByControl, GroupsButton } from '@/components/GroupBy';
 import { SectionBar } from '@/components/SectionBar';
-import { accountHref, addressWindow, ANALYTICS_CODEC, type AnalyticsAddress } from '@/lib/address';
+import { SortControl } from '@/components/SortControl';
+import { accountHref, addressWindow, ANALYTICS_CODEC, analyticsColumnOf, analyticsKeysOf, sortAddressOf, sortDirOf, type AnalyticsAddress, type SortDir } from '@/lib/address';
 import { ALLOWANCE_WEEKS, allowanceRows, allowanceSpan, fleetFigures, resetInstant, weeklyKeys, weeklyResetsKey, type AllowanceFigure } from '@/lib/allowance';
 import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, analyticsPatch, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, failureHead, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, moveLabel, nativeCellOf, nativeFiguresOf, netSaving, niceAxisTop, oneAccountGroupOf, ownShareHint, peakLines, placementCells, placementRungLabel, readBurn, sidesLine, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
-import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missLabel, missReasonOrder, missShort } from '@/lib/cache';
+import { CACHE_MISS_REASONS, WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
 import { failed, weekScale } from '@/lib/costs';
 import { countOf, groupInto } from '@/lib/counts';
@@ -36,6 +37,7 @@ import { useAsync, useHashSection, useQueryFilters, useRangeTakenAt, useResizeOb
 import { REFUSED_TITLE } from '@/lib/requests';
 import { CLIENT_PATTERNS_PLAIN, linkedKeyIds, refusalLink, requestsLink, type RequestsLinkInput, type RequestsLinkTarget } from '@/lib/requestsLink';
 import { words } from '@/lib/routingLog';
+import { orderRows, type SortFigure } from '@/lib/sort';
 import { HOUR } from '@/lib/time';
 import { plainOutputOf } from '@/lib/tokenBar';
 import { UNIT_FUNDING, UNIT_POSITIONS, type UnitPosition, type WeekPosition } from '@/lib/unit';
@@ -164,7 +166,7 @@ const nativeCell = (cell: { main: string; sub: string; title: string }): ReactNo
  * tokens with the billed dollars per billed request and per 1k billed output tokens under it, a side with no rows left
  * out and a figure with no count a dash.
  */
-function nativeRowOf(g: AnalyticsGroup, week: WeekPosition, weekFactor: number, hint: string | null): { cells: ReactNode[]; key: string; label: string } {
+function nativeRowOf(g: AnalyticsGroup, week: WeekPosition, weekFactor: number, hint: string | null): { cells: ReactNode[]; figures: SortFigure[]; key: string; label: string } {
   const sides = sidesOf(g);
   const figure = sides.equivalent === undefined ? null : g.costEquivalent;
   // Undefined leaves a side with no rows out of the cell, as the tiles leave it out.
@@ -173,6 +175,9 @@ function nativeRowOf(g: AnalyticsGroup, week: WeekPosition, weekFactor: number, 
   // The route labels every group, the model grouping's empty key included, since the ledger labels that key itself.
   return {
     cells: [fmtInt(g.requests), both(figure, sides.billed ?? null, hint), ratio(g.planRequests, g.requests, 1), ratio(g.planOutputTokens, g.tokens.output, 1000)],
+    // The Cost key reads the plan rows' figure, 0 for a group of billed rows alone and null where a plan row priced
+    // nothing, so an unpriced group files last under either direction.
+    figures: [g.requests, g.costEquivalent, per(figure, g.planRequests, 1), per(figure, g.planOutputTokens, 1000)],
     key: g.key,
     label: g.label,
   };
@@ -299,6 +304,12 @@ export function AnalyticsPage() {
   const ended = spanEnded(custom, span.toMs, rangeTakenAt);
   const polledMs = effectiveInterval(intervalMs, ended);
   const sessionId = filters.sessionId[0] ?? null;
+  // A session view draws no Cost table, so its Cost tab has no group table to order. A key the open tab's table lacks
+  // draws Name while the address keeps it, so the tab that has the column orders by it again.
+  const tabKeys = analyticsKeysOf(sessionId !== null && tab === 'cost' ? null : tab, unit);
+  const sort = tabKeys.some((k) => k.id === a.sort) ? a.sort : 'name';
+  const dir = sortDirOf(tabKeys, { dir: sort === a.sort ? a.dir : '', sort });
+  const tableOrder = { column: analyticsColumnOf(tabKeys, sort), dir };
 
   const agentGroups = useMemo(() => (groupBy === 'user_agent' && clientGroups.trim() ? clientGroups.split('\n').map((s) => s.trim()).filter(Boolean) : undefined), [clientGroups, groupBy]);
   const query = useMemo<AnalyticsQuery>(
@@ -646,6 +657,8 @@ export function AnalyticsPage() {
           update={update}
         >
           <GroupByControl onChange={changeGroupBy} options={GROUP_OPTIONS} value={pageBy} />
+          {/* A pick reorders the rows the page holds, so it writes the address alone and moves no window's end. */}
+          <SortControl disabled={tabKeys.length === 1} keys={tabKeys} onChange={(next) => rawUpdate(sortAddressOf(tabKeys, next))} title="This tab's tables keep their own order" value={{ dir, sort }} />
           {groupBy === 'user_agent' && <GroupsButton onCommit={commitGroups} value={clientGroups} />}
         </FilterBar>
         {log.current?.partial && (
@@ -730,11 +743,13 @@ export function AnalyticsPage() {
               loading={loading}
               groupLabel={groupLabel}
               columns={[<span key="requests" title="The refused requests are left out, see the Refused column">Requests</span>, 'OK', 'Rate limited', 'Failed', 'Incomplete', 'Exhausted', 'Rejected', <span key="refused" title={REFUSED_TITLE}>Refused</span>, <span key="rate" title="The refused requests are left out, see the Refused column">Error rate</span>, 'Failovers', 'Search', 'Fetch']}
+              order={tableOrder}
               rows={groups.map((g) => ({
                 key: g.key,
                 label: g.label,
                 // Search and Fetch count the server-tool calls the group's answers made, not tokens.
                 cells: [fmtInt(g.requests), fmtInt(g.succeeded), fmtInt(g.rateLimited), fmtInt(g.failed), fmtInt(g.incomplete), fmtInt(g.exhausted), fmtInt(g.rejected), fmtInt(g.refused), rateCell(errorRateOf(g)), fmtInt(g.failovers), fmtInt(g.tokens.webSearch), fmtInt(g.tokens.webFetch)],
+                figures: [g.requests, g.succeeded, g.rateLimited, g.failed, g.incomplete, g.exhausted, g.rejected, g.refused, errorRateOf(g), g.failovers, g.tokens.webSearch, g.tokens.webFetch],
               }))}
             />
           </Section>
@@ -781,6 +796,7 @@ export function AnalyticsPage() {
                 <PctLabel key="d" text="Duration p99" />,
                 <PctLabel key="e" text="tok/s p50" />,
               ]}
+              order={tableOrder}
               rows={groups.map((g) => ({
                 key: g.key,
                 label: g.label,
@@ -792,6 +808,7 @@ export function AnalyticsPage() {
                   fmtMs(g.percentiles.durationMs.p99),
                   g.percentiles.outputTps.p50 === null ? '-' : g.percentiles.outputTps.p50.toFixed(0),
                 ],
+                figures: [g.requests, g.percentiles.ttfbMs.p50, g.percentiles.ttfbMs.p99, g.percentiles.ttftMs.p99, g.percentiles.durationMs.p99, g.percentiles.outputTps.p50],
               }))}
             />
           </Section>
@@ -896,7 +913,7 @@ export function AnalyticsPage() {
                 {loading ? <Skeleton height={190} /> : <ReasonBars link={linkInput} plainLinks={plainLinks} totals={totals} />}
               </Card>
             </div>
-            <MissReasonsByGroup groupBy={groupBy} groups={groups} groupLabel={groupLabel} link={linkInput} loading={loading} plainLinks={plainLinks} />
+            <MissReasonsByGroup groupBy={groupBy} groups={groups} groupLabel={groupLabel} link={linkInput} loading={loading} order={tableOrder} plainLinks={plainLinks} />
             {sessionId === null && (
               <CacheByModel
                 groups={byModel.current ?? []}
@@ -964,6 +981,7 @@ export function AnalyticsPage() {
                 loading={figureLoading}
                 groupLabel={groupLabel}
                 columns={NATIVE_COLUMNS}
+                order={tableOrder}
                 rows={scale === null ? [] : costGroups.map((g) => nativeRowOf(g, week, scale, rowHint(g)))}
               />
             )}
@@ -975,6 +993,7 @@ export function AnalyticsPage() {
                 loading={costLoading}
                 groupLabel={groupLabel}
                 columns={['Requests', 'Cost', 'Input', 'Cache read', 'Cache write', 'Output', 'Per request', 'Per 1k output']}
+                order={tableOrder}
                 rows={costGroups.map((g) => ({
                   key: g.key,
                   label: g.label,
@@ -988,6 +1007,7 @@ export function AnalyticsPage() {
                     fmtUsd(per(g.costUsd, g.requests, 1) ?? 0),
                     fmtUsd(per(g.costUsd, g.tokens.output, 1000) ?? 0),
                   ],
+                  figures: [g.requests, g.costUsd, g.cost.input, g.cost.cacheRead, g.cost.cacheWrite, g.cost.output, per(g.costUsd, g.requests, 1) ?? 0, per(g.costUsd, g.tokens.output, 1000) ?? 0],
                 }))}
               />
             )}
@@ -1247,6 +1267,9 @@ function PctLabel({ text }: { text: string }) {
   );
 }
 
+/** A group table's order: by the label with `column` null, else by that column's figure. */
+type TableOrder = { column: number | null; dir: SortDir };
+
 function BreakdownTable({
   title,
   groupLabel,
@@ -1255,6 +1278,7 @@ function BreakdownTable({
   className = '',
   failure = null,
   loading = false,
+  order,
   subtitle = 'Totals for the selected range and filters',
 }: {
   className?: string;
@@ -1263,11 +1287,16 @@ function BreakdownTable({
   failure?: WeekReading['failure'];
   groupLabel: string;
   loading?: boolean;
-  /** A row's `title` is its label cell's hover text, the label itself where none is given. */
-  rows: { cells: ReactNode[]; key: string; label: string; title?: string }[];
+  /** The rows' order through `orderRows`, a row with no figure in the column last. A table over a fixed dimension
+   *  passes none and keeps its rows' order. */
+  order?: TableOrder;
+  /** A row's `title` is its label cell's hover text, the label itself where none is given. `figures` holds a figure
+   *  per column for `order`, null where the cell has none to order by. */
+  rows: { cells: ReactNode[]; figures?: SortFigure[]; key: string; label: string; title?: string }[];
   subtitle?: string;
   title: string;
 }) {
+  const ordered = order === undefined ? rows : orderRows(rows, (r) => (order.column === null ? r.label : (r.figures?.[order.column] ?? null)), order.dir, (r) => r.label);
   return (
     <Card title={title} subtitle={subtitle} padded={false} className={className ? `card--table ${className}` : 'card--table'}>
       <div className="table-wrap">
@@ -1286,7 +1315,7 @@ function BreakdownTable({
             {/* A table that reads a second answer beside its rows' own, a dollar side's cells say, draws that answer's
                 failure in place of the rows, so no cell stands without the figure it was read for. */}
             {failure === null &&
-              rows.map((r) => (
+              ordered.map((r) => (
                 <tr key={r.key}>
                   <td className="mono col-fill" title={r.title ?? r.label}>
                     {r.label}
@@ -1584,8 +1613,8 @@ function SavingChart({ axis, billed, failure, loading, points, reading, session,
 /** A raw reason name with a break opportunity after each underscore, so a header holding one wraps at its words. */
 const breakable = (name: string): ReactNode => name.split(/(?<=_)/).flatMap((part, i) => (i === 0 ? [part] : [<wbr key={i} />, part]));
 
-function MissReasonsByGroup({ groupBy, groups, groupLabel, link, loading, plainLinks }: { groupBy: GroupBy; groupLabel: string; groups: AnalyticsGroup[]; link: ReasonLink; loading: boolean; plainLinks: boolean }) {
-  const order = missReasonOrder(groups);
+function MissReasonsByGroup({ groupBy, groups, groupLabel, link, loading, order, plainLinks }: { groupBy: GroupBy; groupLabel: string; groups: AnalyticsGroup[]; link: ReasonLink; loading: boolean; order: TableOrder; plainLinks: boolean }) {
+  const reasons = missReasonOrder(groups);
   const cell = (g: AnalyticsGroup, reason: CacheMissReason) => {
     const count = countOf(g.cacheMissReasons, reason);
     return <CountLink target={plainLinks ? SEVERAL_CLIENTS : requestsLink({ ...link, count, group: { by: groupBy, key: g.key }, reason })}>{fmtInt(count)}</CountLink>;
@@ -1597,18 +1626,21 @@ function MissReasonsByGroup({ groupBy, groups, groupLabel, link, loading, plainL
       loading={loading}
       groupLabel={groupLabel}
       columns={[
-        ...order.map((r) => (
+        ...reasons.map((r) => (
           <span key={r} title={missLabel(r)}>
             {breakable(missShort(r))}
           </span>
         )),
         'Expired between turns',
       ]}
+      order={order}
       rows={groups.map((g) => ({
         key: g.key,
         label: g.label,
         // Expired between turns is no reason the Requests page filters by, so it stays plain.
-        cells: [...order.map((reason) => cell(g, reason)), fmtInt(g.expiredBetweenTurns)],
+        cells: [...reasons.map((reason) => cell(g, reason)), fmtInt(g.expiredBetweenTurns)],
+        // The figures follow the keys, the known reasons alone, so a reason the console does not know shifts no key.
+        figures: [...CACHE_MISS_REASONS.map((reason) => countOf(g.cacheMissReasons, reason)), g.expiredBetweenTurns],
       }))}
     />
   );

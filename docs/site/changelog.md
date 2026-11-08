@@ -395,18 +395,19 @@ session view reads the session's rows through the route's session filter, and ea
 alone ([Analytics](console.md#analytics)). The Analytics view's Burn tab draws one Plan per hour card, the subscription
 traffic per hour in the chosen week, a bucket the cost model could not price staying a gap under a "model unlisted"
 entry ([Analytics](console.md#analytics)). The Analytics view's Cache warming tab spans its last card across the row
-where that card would sit alone, as the Burn tab does ([Analytics](console.md#analytics)). The Analytics view's model
-grouping lists a request refused before it resolved a model under "no model" ([Analytics](console.md#analytics)). The
-Burn section closes on Member budgets, its reconciliation rows listed on the Meter view
-([Analytics](console.md#analytics), [Meter](console.md#meter)). The Cache warming tab shows what the probes saved and
-the net saving after their cost, as tiles, a chart and a Saved column per pool ([Analytics](console.md#analytics)). The
-Client and User agent filters list the range's values and take a typed pattern, each value a chip
-([Analytics](console.md#analytics)). The Cost by chart's note names the unpriced groups it draws as gaps
-([Analytics](console.md#analytics)). The Cost split's subscription ring and the Plan per hour legend read their figures
-in the chosen week ([Analytics](console.md#analytics)). The ledger records a null diagnostics member on a request that
-named a message as `none` and a comparison the upstream was still running as `pending`, which Misses by reason and its
-per-group table read as No divergence and Pending ([Analytics](console.md#analytics)). The Refusals by category card
-narrows under the Client and User agent filters and its links carry the client pattern
+where that card would sit alone, as the Burn tab does ([Analytics](console.md#analytics)). The Analytics view's group
+tables order through the bar's Sort control by Name or the open tab's columns ([Analytics](console.md#analytics)). The
+Analytics view's model grouping lists a request refused before it resolved a model under "no model"
+([Analytics](console.md#analytics)). The Burn section closes on Member budgets, its reconciliation rows listed on the
+Meter view ([Analytics](console.md#analytics), [Meter](console.md#meter)). The Cache warming tab shows what the probes
+saved and the net saving after their cost, as tiles, a chart and a Saved column per pool
+([Analytics](console.md#analytics)). The Client and User agent filters list the range's values and take a typed pattern,
+each value a chip ([Analytics](console.md#analytics)). The Cost by chart's note names the unpriced groups it draws as
+gaps ([Analytics](console.md#analytics)). The Cost split's subscription ring and the Plan per hour legend read their
+figures in the chosen week ([Analytics](console.md#analytics)). The ledger records a null diagnostics member on a
+request that named a message as `none` and a comparison the upstream was still running as `pending`, which Misses by
+reason and its per-group table read as No divergence and Pending ([Analytics](console.md#analytics)). The Refusals by
+category card narrows under the Client and User agent filters and its links carry the client pattern
 ([Analytics](console.md#analytics)). The Traffic section's Refusals by category card counts the answers the upstream
 refused by category, each bar opening the Requests view on them ([Analytics](console.md#analytics)). The Traffic table's
 Error rate reads a dash for a group with no requests ([Analytics](console.md#analytics)). The unused allowance card and
@@ -431,9 +432,9 @@ reads the session's facts in a Session grid and a Routing grid, then the Agents 
 model, account, context, burn, requests, cost, status and cache, the agent linking to the request log and the account to
 its page, and each line's menu opens the analytics session view, the request log and the routing log on the session and
 the agent ([Sessions](console.md#sessions)). The Sessions card's summary line counts the agents of the rows the filters
-keep by lifecycle word, with the client requests of the last 24 hours and their spend, and the bar's count reads
-`{n} sessions · {k} agents` ([Sessions](console.md#sessions)). The Sessions row's "+N" badges count every agent pinned
-on another model in the Model cell and on another account in the Account cell, a pin without a recipe among them
+keep by lifecycle word, with the client requests of the last 24 hours and their spend, and the bar's count reads `{n}
+sessions · {k} agents` ([Sessions](console.md#sessions)). The Sessions row's "+N" badges count every agent pinned on
+another model in the Model cell and on another account in the Account cell, a pin without a recipe among them
 ([Sessions](console.md#sessions)). The Sessions row's Cache reads `warm` or `cold` by the pin's cache TTL with the
 recipe state word under it, from main's recipe or, where main holds none, the newest other agent's, as the row's
 `keepalive` summary on `GET /admin/sessions` carries it ([Sessions](console.md#sessions)). The Sessions row's Cost reads
@@ -457,11 +458,11 @@ rule: a session is listed when it passes every Session filter (Active within, Cl
 Forked sessions, Key, Pool and Slowed) and one of its agent lines passes every Agents filter (Account, Agent type,
 Cache, Effort, Model, Released agents and Status), a finished session staying hidden unless Finished sessions stands
 ([Sessions](console.md#sessions)). While an Agents filter stands on the Sessions view, its chip ends in `(any agent)`,
-the count reads `{k} matching agents`, and an open row lists its matching agents with the others under
-`{k} agents hidden by the filters`, which opens them ([Sessions](console.md#sessions)). The cost reference's Windows by
-tier draws the Interactive regime's rows first under a headline naming its clients and the base rows under Headless, its
-Peak band card says which traffic the band applies to, and Plan rates' Regime control reads Interactive and Headless
-([The cost reference](console.md#the-cost-reference)). The Settings page's About card lists the session expiry and the
+the count reads `{k} matching agents`, and an open row lists its matching agents with the others under `{k} agents
+hidden by the filters`, which opens them ([Sessions](console.md#sessions)). The cost reference's Windows by tier draws
+the Interactive regime's rows first under a headline naming its clients and the base rows under Headless, its Peak band
+card says which traffic the band applies to, and Plan rates' Regime control reads Interactive and Headless ([The cost
+reference](console.md#the-cost-reference)). The Settings page's About card lists the session expiry and the
 non-companion timeout, the two keys of the `sessions` block, each as a duration with its seconds beside it and its hover
 naming the key ([Settings](console.md#settings)). The Settings page's About card names the bootstrap's body capture
 limit beside its two retention lines ([Settings](console.md#settings)). A decision card's cache-map row folds a record

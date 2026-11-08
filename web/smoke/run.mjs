@@ -21759,7 +21759,7 @@ await forView('/analytics', async () => {
   };
   const query = (page) => Object.fromEntries(new URLSearchParams(page.location().search));
   {
-    const name = '/analytics mounts the sticky bar first with the range, Add filter, Group by and the edge, no search and no count';
+    const name = '/analytics mounts the sticky bar first with the range, Add filter, Group by, the Sort control and the edge, no search and no count';
     const page = await mount('/analytics', { now: CLOCK_ORIGIN });
     const bar = page.container.querySelector('.filter-bar');
     const slotOf = (el) =>
@@ -21771,9 +21771,11 @@ await forView('/analytics', async () => {
             ? 'add filter'
             : el.querySelector('select[aria-label="Group by"]')
               ? 'group by'
-              : el.matches('.filter-bar__edge')
-                ? 'edge'
-                : el.className || el.tagName.toLowerCase();
+              : el.matches('button[aria-label="Sort"]')
+                ? 'sort'
+                : el.matches('.filter-bar__edge')
+                  ? 'edge'
+                  : el.className || el.tagName.toLowerCase();
     const read = {
       count: bar === null ? null : bar.querySelector('.filter-bar__count') !== null,
       first: bar !== null && bar.parentElement?.classList.contains('stack') === true && bar.parentElement.firstElementChild === bar,
@@ -21781,7 +21783,7 @@ await forView('/analytics', async () => {
       slots: [...(bar?.querySelector('.filter-bar__row')?.children ?? [])].map(slotOf),
       sticky: bar?.classList.contains('filter-bar--sticky') ?? null,
     };
-    const want = { count: false, first: true, label: 'Group by', slots: ['range', 'add filter', 'group by', 'edge'], sticky: true };
+    const want = { count: false, first: true, label: 'Group by', slots: ['range', 'add filter', 'group by', 'sort', 'edge'], sticky: true };
     results.push({ name, ok: JSON.stringify(read) === JSON.stringify(want), missing: [JSON.stringify(read)] });
     page.unmount();
   }
@@ -22138,6 +22140,87 @@ await forView('/analytics', async () => {
     const read = { inBar: note !== undefined && bar?.contains(note) === true, muted: note?.classList.contains('muted') ?? null, next: note !== undefined && bar?.nextElementSibling === note, tag: note?.tagName.toLowerCase() ?? null, text: note?.textContent?.trim() ?? null };
     results.push({ name, ok: seed !== undefined && JSON.stringify(read) === JSON.stringify({ inBar: false, muted: true, next: true, tag: 'p', text: 'Partial: the first 10,000 requests of the range' }), missing: [seed?.sessionId ?? 'no session in the default range', JSON.stringify(read)] });
     page.unmount();
+  }
+});
+
+// The bar's Sort control over the open tab's group table. The key tables read the story's requests over the default
+// day (`REQUESTS` in `web/src/mock/requests.ts`, folded per key by the mock's breakdown, which answers the groups by
+// label): desktop 113, laptop 58, ci 21, notebook 18, the deleted desktop lifetime 11, fleet 3 and bench 2, no group
+// without requests and no percentile without a sample. The deleted lifetime's label carries its creation in the
+// viewer's zone, UTC where the smoke runs. Under the model grouping the requests refused before they resolved a model
+// form the "no model" group with no requests, so its Error rate reads a dash, and three models answered every request.
+await forView('/analytics', async () => {
+  const DELETED = 'desktop (deleted, created May 19, 2026, 14:30)';
+  const button = (p) => p.container.querySelector('.filter-bar button[aria-label="Sort"]');
+  const box = () => document.querySelector('.popover .sort-popover')?.closest('.popover') ?? null;
+  const ARROWS = { 'rotate(-90 12 12)': 'up', 'rotate(90 12 12)': 'down' };
+  const rowsOf = (p, title) => [...([...p.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title)?.querySelectorAll('tbody tr') ?? [])].map((tr) => tr.children[0]?.textContent?.trim() ?? '');
+  const read = (p, title) => ({
+    arrow: ARROWS[button(p)?.querySelector('svg path')?.getAttribute('transform') ?? ''] ?? 'no arrow',
+    rows: rowsOf(p, title),
+    search: p.location().search,
+    text: button(p)?.textContent ?? null,
+    title: button(p)?.getAttribute('title') ?? null,
+  });
+  const choose = async (p, label) => {
+    button(p)?.click();
+    await p.settle(100);
+    [...(box()?.querySelectorAll('[role="radio"]') ?? [])].find((r) => r.textContent?.trim() === label)?.click();
+    await p.settle(300);
+  };
+  const shown = (arrow, rows, search, label, word) => ({ arrow, rows, search, text: `Sort: ${label}`, title: `Sorted by ${label}, ${word}` });
+  const BY_NAME = ['bench', 'ci', 'desktop', DELETED, 'fleet', 'laptop', 'notebook'];
+  const MOST = ['desktop', 'laptop', 'ci', 'notebook', DELETED, 'fleet', 'bench'];
+  const FEWEST = ['bench', 'fleet', DELETED, 'notebook', 'ci', 'laptop', 'desktop'];
+  {
+    const name = "/analytics the sort control orders Traffic by name at rest, a pick by the column's figure in either direction, the address carries it through a reload, Latency keeps the key, Cache reads Name while the address keeps it, and Burn draws the control disabled";
+    const page = await mount('/analytics', { now: CLOCK_ORIGIN });
+    const bare = read(page, 'Traffic by key');
+    await choose(page, 'Requests');
+    const most = { ...read(page, 'Traffic by key'), open: box() !== null };
+    await choose(page, 'Ascending');
+    const fewest = read(page, 'Traffic by key');
+    const at = page.location();
+    page.unmount();
+    const again = await mount(`${at.pathname}${at.search}`, { now: CLOCK_ORIGIN });
+    const reloaded = read(again, 'Traffic by key');
+    await tab(again, 'Latency');
+    const latency = read(again, 'Latency by key');
+    await tab(again, 'Cache');
+    const cache = read(again, 'Misses by reason by key');
+    await tab(again, 'Burn');
+    const burn = { disabled: button(again)?.disabled ?? null, search: again.location().search, text: button(again)?.textContent ?? null, title: button(again)?.getAttribute('title') ?? null };
+    button(again)?.click();
+    await again.settle(100);
+    const burnOpen = box() !== null;
+    again.unmount();
+    const want = {
+      bare: shown('up', BY_NAME, '', 'Name', 'ascending'),
+      most: { ...shown('down', MOST, '?sort=requests', 'Requests', 'descending'), open: false },
+      fewest: shown('up', FEWEST, '?sort=requests&dir=asc', 'Requests', 'ascending'),
+      reloaded: shown('up', FEWEST, '?sort=requests&dir=asc', 'Requests', 'ascending'),
+      latency: shown('up', FEWEST, '?sort=requests&dir=asc', 'Requests', 'ascending'),
+      cache: shown('up', BY_NAME, '?sort=requests&dir=asc', 'Name', 'ascending'),
+      burn: { disabled: true, search: '?sort=requests&dir=asc', text: 'Sort: Name', title: "This tab's tables keep their own order" },
+      burnOpen: false,
+    };
+    const got = { bare, most, fewest, reloaded, latency, cache, burn, burnOpen };
+    results.push({ name, ok: JSON.stringify(got) === JSON.stringify(want), missing: Object.entries(got).map(([key, value]) => `${key} ${JSON.stringify(value)} against ${JSON.stringify(want[key])}`) });
+  }
+  {
+    const name = '/analytics a direction pick flips the rows with a figure, a tie by name under both, and keeps a group with no figure last';
+    const page = await mount('/analytics?by=model', { now: CLOCK_ORIGIN });
+    await choose(page, 'Error rate');
+    const high = read(page, 'Traffic by model');
+    await choose(page, 'Ascending');
+    const low = read(page, 'Traffic by model');
+    page.unmount();
+    const ZERO = ['claude-opus-5', 'claude-sonnet-4-6', 'claude-sonnet-5'];
+    const want = {
+      high: shown('down', ['claude-fable-5-1', 'claude-haiku-4-5-20251001', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-sonnet-4-5', ...ZERO, 'no model'], '?by=model&sort=error_rate', 'Error rate', 'descending'),
+      low: shown('up', [...ZERO, 'claude-sonnet-4-5', 'claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-4-5-20251001', 'claude-fable-5-1', 'no model'], '?by=model&sort=error_rate&dir=asc', 'Error rate', 'ascending'),
+    };
+    results.push({ name, ok: JSON.stringify({ high, low }) === JSON.stringify(want), missing: [`high ${JSON.stringify(high)}`, `low ${JSON.stringify(low)}`] });
   }
 });
 

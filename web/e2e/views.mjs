@@ -7016,9 +7016,9 @@ const BAR_CHIPS = {
 };
 /** A view whose row draws no search holds its slots under this width at rest, far from a second line. */
 const ROW_BOUND = {
-  // The row measured 730 px with its range and Group by select, past the Routing log's 700, so the bound is that
-  // measure plus margin.
-  '/analytics': 760,
+  // The row measured 850 px with its range, Group by select and Sort control, past the Routing log's 700, so the bound
+  // is that measure plus margin.
+  '/analytics': 880,
   '/routing-log': 700,
 };
 /** The views whose bar draws no range: the bar is first on the page and the view's head or tiles follow it. */
@@ -8446,6 +8446,72 @@ async function quotaSortControl(theme) {
     if (await page.evaluate(() => document.querySelector('.popover .sort-popover') !== null)) say('Escape left the popover open');
   } finally {
     await atRest();
+  }
+}
+
+/**
+ * The Analytics bar's sort control, called beside the bar's measure: on the bare Traffic tab its button reading "Sort:
+ * Name" with the up arrow, titled "Sorted by Name, ascending", in the type size, weight, height, top edge and ink of the
+ * Add filter button beside it, then opened: the popover inside the window under the button, and Escape closing it. On
+ * the Burn tab, which has no group table, the button stands disabled with its title saying why. The measure loads its
+ * addresses itself and leaves the bare view.
+ */
+async function analyticsSortControl(theme) {
+  const say = (what) => failures.push(`${theme} /analytics sort control: ${what}`);
+  const BURN_TITLE = "This tab's tables keep their own order";
+  const button = (name) => {
+    const row = document.querySelector('.filter-bar__row');
+    const box = (el) => {
+      if (!el) return null;
+      const style = getComputedStyle(el);
+      const b = el.getBoundingClientRect();
+      return { fontSize: style.fontSize, fontWeight: style.fontWeight, height: Math.round(b.height), ink: style.color, top: Math.round(b.top) };
+    };
+    const sort = row?.querySelector('button[aria-label="Sort"]') ?? null;
+    return {
+      neighbor: box([...(row?.querySelectorAll(':scope > button') ?? [])].find((b) => b.textContent?.trim() === name)),
+      sort: sort === null ? null : { ...box(sort), arrow: sort.querySelector('svg') !== null, disabled: sort.disabled, text: sort.textContent?.trim() ?? '', title: sort.getAttribute('title') },
+    };
+  };
+  try {
+    await loadAtOrigin('/analytics', '.filter-bar button[aria-label="Sort"]');
+    const rest = await page.evaluate(button, 'Add filter');
+    measurements.push(`${theme} /analytics sort button ${JSON.stringify(rest)}`);
+    if (rest.sort === null) {
+      say('the bar draws no Sort button');
+      return;
+    }
+    for (const what of compare(rest.sort, rest.neighbor, ['fontSize', 'fontWeight', 'height', 'ink', 'top'], 'the Sort button against the Add filter button')) say(what);
+    if (rest.sort.text !== 'Sort: Name' || rest.sort.title !== 'Sorted by Name, ascending' || !rest.sort.arrow) say(`the button reads ${JSON.stringify(rest.sort.text)} titled ${JSON.stringify(rest.sort.title)} with ${rest.sort.arrow ? 'an' : 'no'} arrow on a bare address, not "Sort: Name" titled "Sorted by Name, ascending" with the arrow`);
+    await page.locator('.filter-bar button[aria-label="Sort"]').click();
+    await advance(CLOCK_STEP_MS);
+    const open = await page.evaluate(() => {
+      const sort = document.querySelector('.filter-bar button[aria-label="Sort"]');
+      const popover = document.querySelector('.popover .sort-popover')?.closest('.popover') ?? null;
+      if (!sort || !popover) return null;
+      const b = popover.getBoundingClientRect();
+      return {
+        box: { bottom: Math.round(b.bottom), left: Math.round(b.left), right: Math.round(b.right), top: Math.round(b.top) },
+        button: Math.round(sort.getBoundingClientRect().bottom),
+        window: { height: document.documentElement.clientHeight, width: document.documentElement.clientWidth },
+      };
+    });
+    measurements.push(`${theme} /analytics sort popover ${JSON.stringify(open)}`);
+    if (open === null) say('a click on the button opened no popover');
+    else {
+      if (open.box.left < 0 || open.box.top < 0 || open.box.right > open.window.width || open.box.bottom > open.window.height) say(`the popover stands at ${JSON.stringify(open.box)}, past the ${open.window.width} by ${open.window.height} window`);
+      if (open.box.top <= open.button) say(`the popover's top ${open.box.top}px is not under the button's bottom ${open.button}px`);
+      await page.keyboard.press('Escape');
+      await advance(CLOCK_STEP_MS);
+      if (await page.evaluate(() => document.querySelector('.popover .sort-popover') !== null)) say('Escape left the popover open');
+    }
+    await loadAtOrigin('/analytics#burn', '.filter-bar button[aria-label="Sort"]');
+    const burn = await page.evaluate(button, 'Add filter');
+    measurements.push(`${theme} /analytics#burn sort button ${JSON.stringify(burn)}`);
+    if (burn.sort?.disabled !== true || burn.sort.title !== BURN_TITLE) say(`the Burn tab's button reads ${burn.sort?.disabled ? 'disabled' : 'enabled'} titled ${JSON.stringify(burn.sort?.title ?? null)}, not disabled titled "${BURN_TITLE}"`);
+  } finally {
+    await atRest();
+    await loadAtOrigin('/analytics', '.filter-bar');
   }
 }
 
@@ -13357,6 +13423,7 @@ try {
       // The chip line's dock and the bar's measure load their addresses themselves and leave the bare page.
       if (view.path === '/analytics') await stickyStrip(theme, true);
       if (view.path === '/analytics') await barRow(theme, view.path);
+      if (view.path === '/analytics') await analyticsSortControl(theme);
       if (view.path === '/analytics' && mock) await shellBanner(theme);
       if (view.path === '/requests') await rangePills(theme);
       // The chip measures, the bar's and the split button's each load what they read and leave the bare log at 1280 by

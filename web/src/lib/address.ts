@@ -1,10 +1,13 @@
 import { iso } from '@/api/decode';
 import type { Account, BurnGroup, KeyStatus, RequestKind, RequestOutcome } from '@/api/types';
 import { REQUEST_KIND_VALUES, REQUEST_OUTCOME_VALUES } from '@/api/types';
+import { CACHE_MISS_REASONS, missShort } from './cache';
 import { clock } from './clock';
+import { lookup } from './counts';
 import type { SessionFilters } from './keepalive';
 import { ACCOUNT_STATUSES } from './quota';
 import { DAY, HOUR, MINUTE } from './time';
+import type { UnitPosition } from './unit';
 
 /** One preset of the range control's one table: the name the address carries, the width and the label. */
 export interface RangePreset {
@@ -291,6 +294,8 @@ export interface AnalyticsAddress {
   by: BurnGroup;
   /** The client patterns, any of which a request's client matches. */
   clients: string[];
+  /** `asc`, `desc` or empty for the sort key's own default direction, which the address omits. */
+  dir: '' | SortDir;
   /** The user agent groups, one pattern per line. */
   groups: string;
   /** A session's key lifetime, `<key id>@<generation>`. */
@@ -301,6 +306,9 @@ export interface AnalyticsAddress {
   probes: boolean;
   range: RangeValue;
   session: string;
+  /** The group tables' order: `name`, or the id of a column of some tab's group table, kept while a tab without that
+   *  column draws Name. */
+  sort: string;
   /** A shared link's unit position, which the page reads once into the console-wide setting and drops. */
   unit: string;
   /** The user agent patterns, any of which a request's user agent matches. */
@@ -311,6 +319,64 @@ export interface AnalyticsAddress {
 // burn route's groupings are the breakdown's and its own `session`.
 const GROUP_BY_KEYS = { account: true, classifier: true, client: true, effort: true, key: true, kind: true, model: true, pool: true, request_class: true, session: true, speed: true, user_agent: true } satisfies Record<BurnGroup, true>;
 const GROUP_BYS = Object.keys(GROUP_BY_KEYS) as BurnGroup[];
+
+const NAME_KEY = { defaultDir: 'asc', id: 'name', label: 'Name' } as const satisfies SortKey;
+/** Every group table column holds a count, a rate, a cost or a duration, so each key starts descending. */
+const column = (id: string, label: string): SortKey => ({ defaultDir: 'desc', id, label });
+/** The known reasons alone, since the address's keys are fixed: a reason the console does not know draws its column
+ *  with no key. */
+const MISS_REASON_KEYS: readonly SortKey[] = CACHE_MISS_REASONS.map((reason) => column(reason, missShort(reason)));
+/** The group table's keys per Analytics tab, in the table's column order, the Cost tab's per unit. A tab without a
+ *  group table has none. */
+const ANALYTICS_SORT_KEYS: Readonly<Record<'cache' | 'cost_dollars' | 'cost_native' | 'latency' | 'traffic', readonly SortKey[]>> = {
+  cache: [...MISS_REASON_KEYS, column('expired_between_turns', 'Expired between turns')],
+  cost_dollars: [
+    column('requests', 'Requests'),
+    column('cost', 'Cost'),
+    column('input', 'Input'),
+    column('cache_read', 'Cache read'),
+    column('cache_write', 'Cache write'),
+    column('output', 'Output'),
+    column('per_request', 'Per request'),
+    column('per_1k_output', 'Per 1k output'),
+  ],
+  cost_native: [column('requests', 'Requests'), column('cost', 'Cost'), column('per_request', 'Per request'), column('per_1k_output', 'Per 1k output')],
+  latency: [
+    column('requests', 'Requests'),
+    column('ttfb_p50', 'TTFB p50'),
+    column('ttfb_p99', 'TTFB p99'),
+    column('ttft_p99', 'TTFT p99'),
+    column('duration_p99', 'Duration p99'),
+    column('tps_p50', 'tok/s p50'),
+  ],
+  traffic: [
+    column('requests', 'Requests'),
+    column('ok', 'OK'),
+    column('rate_limited', 'Rate limited'),
+    column('failed', 'Failed'),
+    column('incomplete', 'Incomplete'),
+    column('exhausted', 'Exhausted'),
+    column('rejected', 'Rejected'),
+    column('refused', 'Refused'),
+    column('error_rate', 'Error rate'),
+    column('failovers', 'Failovers'),
+    column('search', 'Search'),
+    column('fetch', 'Fetch'),
+  ],
+};
+/** Every key an address may name, once per id, since the tabs share columns such as Requests. */
+const ANALYTICS_KEY_IDS = [NAME_KEY, ...Object.values(ANALYTICS_SORT_KEYS).flat()].filter((k, i, all) => all.findIndex((o) => o.id === k.id) === i);
+/**
+ * The Sort control's keys on a tab under a unit: Name, then the tab's group table columns (the Cost tab's by the unit),
+ * Name alone where the tab has no group table. A null tab names one whose group table the view leaves out.
+ */
+export const analyticsKeysOf = (tab: string | null, unit: UnitPosition): readonly SortKey[] => {
+  if (tab === null) return [NAME_KEY];
+  const own = lookup(ANALYTICS_SORT_KEYS, tab === 'cost' ? (unit === 'native' ? 'cost_native' : 'cost_dollars') : tab);
+  return [NAME_KEY, ...(own ?? [])];
+};
+/** The group table's column a key orders, null for Name. */
+export const analyticsColumnOf = (keys: readonly SortKey[], id: string): number | null => (id === 'name' ? null : keys.findIndex((k) => k.id === id) - 1);
 
 export const ANALYTICS_CODEC = codecOf<AnalyticsAddress>({
   session: text('session'),
@@ -326,6 +392,7 @@ export const ANALYTICS_CODEC = codecOf<AnalyticsAddress>({
   probes: { kind: 'flag', name: 'probes' },
   unit: text('unit'),
   userAgents: { kind: 'patterns', name: 'user_agents' },
+  ...sortSpecs(ANALYTICS_KEY_IDS, 'name'),
   range: { default: '24h', kind: 'range' },
 });
 

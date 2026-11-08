@@ -141,7 +141,11 @@ button beside it, once opened its popover inside the window under the button and
 sort control after the view's shot (its button reading "Sort: Name" titled "Sorted by Name, ascending" in the height,
 top edge and weight of the Create guardrail button beside it, a primary button whose type size and ink differ by design,
 once opened its popover inside the window under the button and Escape closing it, and under Created the first row's date
-under its name in the type size and ink of the row's blocked count), the Accounts detail's allowance grid at 1280 by
+under its name in the type size and ink of the row's blocked count), the Analytics bar's sort control beside the bar's
+measure (on the Traffic tab its button reading "Sort: Name" with the up arrow, titled "Sorted by Name, ascending", in
+the height, top edge, type size, weight and ink of the Add filter button beside it, once opened its popover inside the
+window under the button and Escape closing it, and on the Burn tab, which has no group table to order, the button
+disabled in its slot, titled "This tab's tables keep their own order"), the Accounts detail's allowance grid at 1280 by
 800, 1440 by 900 and 375 by 800 (mock pass: "Allowance left at reset" and "Meter drift" stacked across the pane's
 content box at 1280 and 375 px, each as wide as the Usage and Requests cards and in their title's type, and at 1440 px
 side by side on one top, as wide as each other and as the Usage card and each under half the pane, the grid inside the

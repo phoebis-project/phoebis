@@ -12,7 +12,7 @@ const write = (codec, filters) => codec.toParams(filters).toString();
 /** Each view's codec over a filled address: every list with two ids, every text set, every flag on, every choice off its default. */
 const FILLED = {
   ACCOUNTS_CODEC: { dir: 'asc', search: 'git', sort: 'usage', status: 'paused' },
-  ANALYTICS_CODEC: { accounts: ['primary', 'secondary'], agentId: 'c21e', by: 'session', clients: ['claude-code/cli', 'claude-code/sdk*'], groups: 'claude-cli/2.1.*\nclaude-cli/2.0.*', key: 'desktop@1000', keys: ['desktop', 'laptop'], models: ['claude-opus-5', 'claude-sonnet-5'], pools: ['all', 'jobs'], probes: true, range: preset('7d'), session: '407dd39b-dd60', unit: 'share', userAgents: ['claude-cli/2.1.3 (external, cli)', 'claude-cli/2.0.*'] },
+  ANALYTICS_CODEC: { accounts: ['primary', 'secondary'], agentId: 'c21e', by: 'session', clients: ['claude-code/cli', 'claude-code/sdk*'], dir: 'asc', groups: 'claude-cli/2.1.*\nclaude-cli/2.0.*', key: 'desktop@1000', keys: ['desktop', 'laptop'], models: ['claude-opus-5', 'claude-sonnet-5'], pools: ['all', 'jobs'], probes: true, range: preset('7d'), session: '407dd39b-dd60', sort: 'error_rate', unit: 'share', userAgents: ['claude-cli/2.1.3 (external, cli)', 'claude-cli/2.0.*'] },
   GUARDRAILS_CODEC: { dir: 'asc', sort: 'updated' },
   KEYS_CODEC: { dir: 'desc', pools: ['all', 'jobs'], search: 'lap', sort: 'expiry', status: 'active' },
   METER_CODEC: { accounts: ['primary', 'secondary'] },
@@ -80,6 +80,11 @@ test("the Accounts codec carries the sort's direction after its key, written onl
 
 test('a pick of Default order writes no direction to the Quota address, whatever direction the pick sends', () => {
   assert.equal(write(d.QUOTA_CODEC, d.sortAddressOf(d.QUOTA_SORT_KEYS, { dir: 'desc', sort: 'default' })), '');
+});
+
+test("the Analytics Cost tab's keys follow the unit, so a key orders the column the unit's table draws", () => {
+  assert.equal(d.analyticsColumnOf(d.analyticsKeysOf('cost', 'native'), 'per_request'), 2);
+  assert.equal(d.analyticsColumnOf(d.analyticsKeysOf('cost', 'usd'), 'per_request'), 6);
 });
 
 test('every filter at its default leaves a bare address', () => {

@@ -901,29 +901,40 @@ A request the ledger does not hold reads "Request not found" with "It may have a
 ![The Analytics view: the Traffic tab](assets/analytics-light.png#only-light)
 ![The Analytics view: the Traffic tab](assets/analytics-dark.png#only-dark)
 
-The sticky filter bar holds one row: the range, Add filter, "Group by" and, while the page groups by user agent, the
-"Groups (N)" button, then at the right edge the split Refresh button. It has no search and no count. The range offers
-Last hour, Last 6 hours, Last 24 hours (the default), Last 7 days, Last 30 days or Custom range with From and To ("End
-must be after start." while the pair is wrong), the pills and the popover as on the Requests view. Add filter opens a
-"Filter by" field over the filters in three groups: Routing (Account, Key, Model, Pool), Request (Client, Include
-probes, User agent) and Subject (Agent, Session). Account, Key, Model and Pool list the values the range holds. Client
-and User agent list the values the range holds, each a checkbox, and take a typed pattern in the Requests view's grammar
-through the field under the rows, added on Enter, several picks matching any, a picked value matching itself in full.
-The User agent list holds the range's product tokens. Include probes applies at once, and Session takes a session id,
-typed or pasted, which matches the session exactly. Each filter in force stands as a chip on a line under the bar, as on
-the Requests view, such as "client: claude-code*" or "include probes", each Client or User agent value a chip of its
-own, cut after 32 characters with the whole on hover. The Requests links of the Misses by reason counts and the refusal
-card carry one client pattern, and read plain under several. The session chip prints the id's first eight characters,
-and its hover names the whole id with the key lifetime a link from the Sessions view carries ("under the key laptop@3"),
-which has no chip of its own and leaves when the session changes. The session view narrows to one agent where the
-address carries `agent_id`, which the Sessions view's agent menu writes, and the agent applies under a session alone and
-leaves with the session as the key lifetime does. "Group by" offers Account, Classifier, Client, Key, Effort, Kind,
-Model, Pool, Request class, Speed, User agent or "Session (Burn only)", the last the Burn section's own grouping. While
-it reads User agent, "Groups (N)" opens the "User agent groups" box with one pattern per line, N the patterns it holds,
-where each pattern names a group and every other agent groups under `other` (`claude-cli/2.1.*` and `claude-cli/2.0.*`
-as two groups). The user agent grouping reads the agent's first product token, `claude-cli/2.1.310` for
-`claude-cli/2.1.310 (external, cli)`. The classifier grouping lists the requests with no classifier call under `none`,
-as the Requests view's Classifier filter names them.
+The sticky filter bar holds one row: the range, Add filter, "Group by", the Sort control and, while the page groups by
+user agent, the "Groups (N)" button, then at the right edge the split Refresh button. It has no search and no count. The
+range offers Last hour, Last 6 hours, Last 24 hours (the default), Last 7 days, Last 30 days or Custom range with From
+and To ("End must be after start." while the pair is wrong), the pills and the popover as on the Requests view. Add
+filter opens a "Filter by" field over the filters in three groups: Routing (Account, Key, Model, Pool), Request (Client,
+Include probes, User agent) and Subject (Agent, Session). Account, Key, Model and Pool list the values the range holds.
+Client and User agent list the values the range holds, each a checkbox, and take a typed pattern in the Requests view's
+grammar through the field under the rows, added on Enter, several picks matching any, a picked value matching itself in
+full. The User agent list holds the range's product tokens. Include probes applies at once, and Session takes a session
+id, typed or pasted, which matches the session exactly. Each filter in force stands as a chip on a line under the bar,
+as on the Requests view, such as "client: claude-code*" or "include probes", each Client or User agent value a chip of
+its own, cut after 32 characters with the whole on hover. The Requests links of the Misses by reason counts and the
+refusal card carry one client pattern, and read plain under several. The session chip prints the id's first eight
+characters, and its hover names the whole id with the key lifetime a link from the Sessions view carries ("under the key
+laptop@3"), which has no chip of its own and leaves when the session changes. The session view narrows to one agent
+where the address carries `agent_id`, which the Sessions view's agent menu writes, and the agent applies under a session
+alone and leaves with the session as the key lifetime does. "Group by" offers Account, Classifier, Client, Key, Effort,
+Kind, Model, Pool, Request class, Speed, User agent or "Session (Burn only)", the last the Burn section's own grouping.
+While it reads User agent, "Groups (N)" opens the "User agent groups" box with one pattern per line, N the patterns it
+holds, where each pattern names a group and every other agent groups under `other` (`claude-cli/2.1.*` and
+`claude-cli/2.0.*` as two groups). The user agent grouping reads the agent's first product token, `claude-cli/2.1.310`
+for `claude-cli/2.1.310 (external, cli)`. The classifier grouping lists the requests with no classifier call under
+`none`, as the Requests view's Classifier filter names them.
+
+The Sort control offers Name (ascending by default) and the open tab's group table columns in the table's order, each
+descending, and Name ascending is the order at rest on every source, the session view's tables included. Under either
+direction a group with no requests files last under Error rate and one with no sample last under a percentile. While the
+top bar's unit is Native, the Cost, Per request and Per 1k output keys order by the subscription requests' figure, with
+a group whose subscription requests priced nothing last under all three and a group of billed requests alone last under
+the two ratios. Under a dollar position they order by the dollars. A tab switch keeps a key the new tab's table has and
+reads Name otherwise, and the address keeps the key for the next tab whose table has it. On Burn, Cache warming and
+Accounts, and on the Cost tab of a session view, which draws no Cost table, the control stands disabled in its slot,
+titled "This tab's tables keep their own order". The tables over a fixed dimension (Cache by model, Cache warming by
+pool, Accounts in range) and every chart and card keep their own order.
 
 Auto reload is at 5 s when the view opens, set on the split Refresh button's dropdown as on the Requests view and kept
 out of the page's address. At each interval, once a new bucket of the range has begun, it moves the window's end to now
@@ -943,10 +954,10 @@ session view.", the Write cost vs read cost legend reads a dash for each cost, a
 figures are not available for a session view." with "not in the request log" under its probe tiles, since a request row
 carries one cost total and no probe or kept-warm fact. Grouped by key, a deleted key's group reads
 `<id> (deleted, created <time>)`, its creation instant in the viewer's zone. The range, the grouping, every filter, the
-client groups and the probes switch live in the page's address. A link that carries `unit` sets the top bar's Unit
-switch to that position and leaves the address, so a shared link opens on its unit. The section bar under it shows one
-section at a time, Traffic, Burn, Latency, Cache, Cost, Cache warming or Accounts, and a range with nothing reads "No
-traffic in this range." What each figure means is on [Statistics](statistics.md).
+client groups, the probes switch and the sort with its direction live in the page's address. A link that carries `unit`
+sets the top bar's Unit switch to that position and leaves the address, so a shared link opens on its unit. The section
+bar under it shows one section at a time, Traffic, Burn, Latency, Cache, Cost, Cache warming or Accounts, and a range
+with nothing reads "No traffic in this range." What each figure means is on [Statistics](statistics.md).
 
 Traffic reads `{n} requests, {pct} errors` and draws Requests by outcome (OK, Rate limited, Failed, Incomplete and
 Exhausted), Errors by code ("Failed and incomplete responses in range, the refused requests left out"), Refusals by code
