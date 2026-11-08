@@ -16,10 +16,9 @@ use jiff::Timestamp;
 use phoebis_relay::is_valid_id as valid_id;
 use phoebis_relay::{authenticated_key, new_request_id, no_store_answer};
 use phoebis_routing::{
-    ceiling, warm, warm_until, AccountProjection, MemberSpend, Obstacle, PinStanding,
-    RegistrySnapshot, RouterGone,
+    ceiling, warm, warm_until, AccountProjection, Obstacle, PinStanding, RegistrySnapshot,
 };
-use phoebis_store::{AccountKind, AccountRow, AccountState, ApiKeyRow, CompanionKey, PoolRow};
+use phoebis_store::{AccountKind, AccountRow, AccountState, CompanionKey, PoolRow};
 use serde::Serialize;
 
 use crate::engine::Engine;
@@ -138,14 +137,10 @@ async fn allowance(
         return refusal(StatusCode::SERVICE_UNAVAILABLE, "router_unavailable");
     };
     let router = &engine.parts.router;
-    let read = async {
-        Ok::<_, RouterGone>((
-            router.projections(&pool.id).await?,
-            router.pins_standing().await?,
-            router.member_spends().await?,
-        ))
-    };
-    let Ok((projections, pins, spends)) = read.await else {
+    let Ok((projections, pins)) = tokio::try_join!(
+        router.projections(&pool.id),
+        router.session_pins_standing(&key.id, key.created_at, session_id),
+    ) else {
         return refusal(StatusCode::SERVICE_UNAVAILABLE, "router_unavailable");
     };
     let companion_key = engine.parts.store.companion_key();
@@ -162,8 +157,8 @@ async fn allowance(
             },
             strategy: pool.strategy.as_str(),
         },
-        accounts: accounts(&companion_key, &snapshot, pool, projections, &spends, now),
-        pins: session_pins(&companion_key, key, session_id, pins, now),
+        accounts: accounts(&companion_key, &snapshot, pool, projections, now),
+        pins: session_pins(&companion_key, pins, now),
     };
     (
         StatusCode::OK,
@@ -197,7 +192,6 @@ fn accounts(
     snapshot: &RegistrySnapshot,
     pool: &PoolRow,
     projections: Vec<AccountProjection>,
-    spends: &[MemberSpend],
     now: i64,
 ) -> Vec<AccountView> {
     let mut accounts: Vec<AccountView> = projections
@@ -205,7 +199,7 @@ fn accounts(
         .filter_map(|projection| {
             let row = snapshot.account(&projection.account_id)?;
             active(row, projection.obstacle.as_ref())
-                .then(|| account_view(companion_key, snapshot, pool, row, projection, spends, now))
+                .then(|| account_view(companion_key, snapshot, pool, row, projection, now))
         })
         .collect();
     accounts.sort_by(|a, b| a.id.cmp(&b.id));
@@ -224,7 +218,6 @@ fn account_view(
     pool: &PoolRow,
     row: &AccountRow,
     projection: AccountProjection,
-    spends: &[MemberSpend],
     now: i64,
 ) -> AccountView {
     let funding = if row.kind == AccountKind::ApiKey {
@@ -250,27 +243,18 @@ fn account_view(
             (window, view)
         })
         .collect();
-    let spend = snapshot
-        .members(&pool.id)
-        .iter()
-        .find(|member| member.account_id == row.id)
-        .map(|member| {
-            member
-                .budgets()
-                .filter_map(|(period, budget_usd)| {
-                    let reported = spends.iter().find(|s| {
-                        s.pool_id == pool.id && s.account_id == row.id && s.period == period
-                    })?;
-                    Some(SpendView {
-                        period: period.as_str(),
-                        spent_usd: reported.spent_usd,
-                        budget_usd,
-                        period_end: stamp(reported.period_end),
-                    })
-                })
-                .collect()
+    let spend = projection
+        .budget
+        .into_iter()
+        .filter_map(|budget| {
+            Some(SpendView {
+                period: budget.period,
+                spent_usd: budget.spent_usd?,
+                budget_usd: budget.budget_usd,
+                period_end: stamp(budget.period_end?),
+            })
         })
-        .unwrap_or_default();
+        .collect();
     AccountView {
         id: companion_key.pseudonym(&row.id),
         funding,
@@ -287,21 +271,10 @@ fn account_view(
     }
 }
 
-/// The pins of the asking session under this key and its generation, ordered by agent, then model.
-fn session_pins(
-    companion_key: &CompanionKey,
-    key: &ApiKeyRow,
-    session_id: &str,
-    pins: Vec<PinStanding>,
-    now: i64,
-) -> Vec<PinView> {
+/// The asking session's pins, ordered by agent, then model.
+fn session_pins(companion_key: &CompanionKey, pins: Vec<PinStanding>, now: i64) -> Vec<PinView> {
     let mut pins: Vec<PinView> = pins
         .into_iter()
-        .filter(|standing| {
-            standing.pin.key_id == key.id
-                && standing.pin.key_generation == key.created_at
-                && standing.pin.session_id == session_id
-        })
         .map(|standing| {
             let pin = &standing.pin;
             PinView {

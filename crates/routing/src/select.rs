@@ -822,6 +822,34 @@ fn budgeted_member<'a>(
         .filter(|m| m.budgeted())
 }
 
+/// Each budget the member carries beside the ledger's spend row for its period, empty for a member without one.
+pub(crate) fn budget_facts(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool_id: &str,
+    account_id: &str,
+) -> Vec<BudgetFacts> {
+    budgeted_member(snapshot, pool_id, account_id)
+        .map(|member| {
+            let spends: Vec<&MemberSpend> = state.member_spends_of(pool_id, account_id).collect();
+            member
+                .budgets()
+                .map(|(period, budget_usd)| {
+                    let spend = spends.iter().find(|s| s.period == period);
+                    BudgetFacts {
+                        period: period.as_str(),
+                        budget_usd,
+                        spent_usd: spend.map(|s| s.spent_usd),
+                        period_start: spend.map(|s| s.period_start),
+                        period_end: spend.map(|s| s.period_end),
+                        observed_at: spend.map(|s| s.observed_at),
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// A budgeted member while the ledger is degraded: its spend rows may lack a batch the writer still holds, so what
 /// they say about the budget is not trusted either way.
 fn budget_unknown(
@@ -7060,25 +7088,7 @@ fn candidate_facts(
             windows.insert(name, window_facts(&reading, None, None, 0.0, now));
         }
     }
-    let budget = budgeted_member(snapshot, &pool.id, id)
-        .map(|member| {
-            let spends: Vec<&MemberSpend> = state.member_spends_of(&pool.id, id).collect();
-            member
-                .budgets()
-                .map(|(period, budget_usd)| {
-                    let spend = spends.iter().find(|s| s.period == period);
-                    BudgetFacts {
-                        period: period.as_str(),
-                        budget_usd,
-                        spent_usd: spend.map(|s| s.spent_usd),
-                        period_start: spend.map(|s| s.period_start),
-                        period_end: spend.map(|s| s.period_end),
-                        observed_at: spend.map(|s| s.observed_at),
-                    }
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let budget = budget_facts(state, snapshot, &pool.id, id);
     let mut cooldowns: Vec<CooldownFacts> = state
         .cooldowns_of(id, now)
         .map(|row| CooldownFacts {

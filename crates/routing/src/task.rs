@@ -21,13 +21,13 @@ use crate::affinity::{
     ConversationQuery, PredecessorQuery, PurgedEntry,
 };
 use crate::record::{
-    CacheMapEntry, DecisionRecord, DecisionSummary, MoveCause, PinEventFacts, RefusalFacts,
-    RefusedRequest, ShedRoundFacts,
+    BudgetFacts, CacheMapEntry, DecisionRecord, DecisionSummary, MoveCause, PinEventFacts,
+    RefusalFacts, RefusedRequest, ShedRoundFacts,
 };
 use crate::select::{
-    burn_unit, decide, obstacle, pace_of, passes_reset, projection_of, projections_of,
-    release_reasons, routed_agent, slow_down_ramp, BurnRead, Decided, FailedOver, Obstacle,
-    Refusal, SelectRequest, SelectResult, MAIN_AGENT, RATE_LIMIT_REASON,
+    budget_facts, burn_unit, decide, obstacle, pace_of, passes_reset, projection_of,
+    projections_of, release_reasons, routed_agent, slow_down_ramp, BurnRead, Decided, FailedOver,
+    Obstacle, Refusal, SelectRequest, SelectResult, MAIN_AGENT, RATE_LIMIT_REASON,
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, burn_folded, ceiling, default_burn_average_ms,
@@ -1130,6 +1130,12 @@ enum Command {
         request: Box<SelectRequest>,
         reply: oneshot::Sender<SelectAnswer>,
     },
+    SessionPinsStanding {
+        key_id: String,
+        key_generation: i64,
+        session_id: String,
+        reply: oneshot::Sender<Vec<PinStanding>>,
+    },
     Shutdown {
         reply: oneshot::Sender<()>,
     },
@@ -1233,6 +1239,8 @@ pub struct AccountProjection {
     /// What the selector holds against the account for a request on no model in particular, with no account tried
     /// and the fast lane off, `None` where it would place on the account at the ask's instant.
     pub obstacle: Option<Obstacle>,
+    /// The member's budgets with the spend the ledger last reported over each, as a selection's facts list them.
+    pub budget: Vec<BudgetFacts>,
 }
 
 /// The slow-down entry an account's last pinned selection wrote, with the pool's hold cap: the figures the holds apply.
@@ -1617,9 +1625,27 @@ impl RouterHandle {
     pub async fn pins_standing(&self) -> Result<Vec<PinStanding>, RouterGone> {
         self.ask(|reply| Command::PinsStanding { reply }).await
     }
-    /// Every member of `pool_id` with its projections, its Pace score, its slow-down entry in force and its obstacle
-    /// under that pool's settings (the pins the pool keeps, its burn average, its ceiling), one ask, one instant, by
-    /// account: an api_key account answers its score alone, and a pool the registry does not hold answers none.
+    /// The standing of one session's pins under a key and its generation, in no order: the companion's read, which
+    /// leaves every other pin's standing uncomputed on the loop that serves selection.
+    pub async fn session_pins_standing(
+        &self,
+        key_id: &str,
+        key_generation: i64,
+        session_id: &str,
+    ) -> Result<Vec<PinStanding>, RouterGone> {
+        let (key_id, session_id) = (key_id.to_string(), session_id.to_string());
+        self.ask(|reply| Command::SessionPinsStanding {
+            key_id,
+            key_generation,
+            session_id,
+            reply,
+        })
+        .await
+    }
+    /// Every member of `pool_id` with its projections, its Pace score, its slow-down entry in force, its obstacle and
+    /// its budgets under that pool's settings (the pins the pool keeps, its burn average, its ceiling), one ask, one
+    /// instant, by account: an api_key account answers its score alone, and a pool the registry does not hold answers
+    /// none.
     pub async fn projections(&self, pool_id: &str) -> Result<Vec<AccountProjection>, RouterGone> {
         let pool_id = pool_id.to_string();
         self.ask(|reply| Command::Projections { pool_id, reply })
@@ -2619,8 +2645,8 @@ fn pin_event_facts(event: &RouterEvent) -> Option<PinEventFacts> {
 /// under that pool's settings: the windows from one `projections_of` read on the achieved burn and one on the demand,
 /// so each window is built once per read, with `pace_of`'s spare rate on each, the score from `pace_of` on
 /// `seven_day`, the window Pace reads for a model without a week of its own, the slow-down entry in force, which
-/// the last pinned selection on the account wrote, and the selector's obstacle on the account. Empty for a pool the
-/// snapshot does not hold.
+/// the last pinned selection on the account wrote, the selector's obstacle on the account and the member's budgets.
+/// Empty for a pool the snapshot does not hold.
 fn projections(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -2715,31 +2741,31 @@ fn projections(
                     fallback_ms,
                     false,
                 ),
+                budget: budget_facts(state, snapshot, pool_id, account_id),
             }
         })
         .collect()
 }
 
-/// Every pin with its burn decayed to `now` by its pool's burn average (the default preset's for a key whose pool left
-/// the registry) and its runway on its own account under that pool, read by `standing_runway` once per pool, account
-/// and set of windows, since the account's projection already holds every pin's burn and every pin drawing those
-/// windows there reads the same runway. Each pin reads its account's factor and realized speed from the slow-down entry
-/// in force under that pool, its cycle from its pace, and its agent's and its session's main agent's first placements.
-/// Its burn unit is the selector's read of its account, an overage whose evidence names no reset standing for
-/// `fallback_ms` past its observation. The unit and the slow-down entry depend on the account and the pool alone, so
-/// each is read once beside the runway.
+/// Each of `pins` with its burn decayed to `now` by its pool's burn average (the default preset's for a key whose pool
+/// left the registry) and its runway on its own account under that pool, read by `standing_runway` once per pool,
+/// account and set of windows, since the account's projection already holds every pin's burn and every pin drawing
+/// those windows there reads the same runway. Each pin reads its account's factor and realized speed from the
+/// slow-down entry in force under that pool, its cycle from its pace, and its agent's and its session's main agent's
+/// first placements. Its burn unit is the selector's read of its account, an overage whose evidence names no reset
+/// standing for `fallback_ms` past its observation. The unit and the slow-down entry depend on the account and the
+/// pool alone, so each is read once beside the runway.
 fn pins_standing(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
+    pins: impl IntoIterator<Item = PinRow>,
     now: i64,
     fallback_ms: i64,
 ) -> Vec<PinStanding> {
     type Runway = Option<(Option<i64>, Option<String>)>;
     type AccountRead = (Runway, BurnUnit, Option<PinSlowDown>);
     let mut runways: HashMap<(String, String, Vec<&'static str>), AccountRead> = HashMap::new();
-    state
-        .pins()
-        .into_iter()
+    pins.into_iter()
         .map(|pin| {
             let pool = snapshot.key_pool(&pin.key_id);
             let average_ms = pool.map_or_else(default_burn_average_ms, burn_average_ms);
@@ -3421,6 +3447,32 @@ impl Task {
                 let _ = reply.send(pins_standing(
                     &self.state,
                     &snapshot,
+                    self.state.pins(),
+                    (self.clock)(),
+                    fallback_ms,
+                ));
+            }
+            Command::SessionPinsStanding {
+                key_id,
+                key_generation,
+                session_id,
+                reply,
+            } => {
+                let snapshot = self.snapshot();
+                let fallback_ms = saturating_ms(self.config.cooldown_fallback);
+                let pins = self
+                    .state
+                    .pin_rows()
+                    .filter(|pin| {
+                        pin.key_id == key_id
+                            && pin.key_generation == key_generation
+                            && pin.session_id == session_id
+                    })
+                    .cloned();
+                let _ = reply.send(pins_standing(
+                    &self.state,
+                    &snapshot,
+                    pins,
                     (self.clock)(),
                     fallback_ms,
                 ));
