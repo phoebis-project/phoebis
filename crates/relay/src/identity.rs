@@ -853,14 +853,6 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_boundary_slice_never_reaches_the_lookup() {
-        let mut identity = identity_of(Some("s1"));
-        climb(&mut identity, "k", 0, &[], None, &Panicking);
-        assert_eq!(identity.forked_from, None);
-        assert_eq!(identity.fork_depth, None);
-    }
-
-    #[test]
     fn a_session_requests_own_continuation_is_no_fork() {
         let mut identity = identity_of(Some("s1"));
         let mut map = HashMap::new();

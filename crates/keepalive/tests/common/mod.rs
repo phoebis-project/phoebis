@@ -135,6 +135,9 @@ pub struct RigSpec {
     /// hands in a pricer of its own.
     pub router: RouterConfig,
     pub session_expiry: Duration,
+    /// The key the registry seals under and the companion's pseudonyms are digested with: drawn per rig by default,
+    /// and a fixed one for a case whose pseudonyms have to sort in a known order.
+    pub storage_key: StorageKey,
     /// The shipped tables by default; a test naming a model the cost model has no weight for (though the price
     /// table prices it) overrides this so the gap is deliberate rather than a coincidence of the shipped tables.
     pub tables: PlanTables,
@@ -160,6 +163,7 @@ impl Default for RigSpec {
             pricing: PriceRevisions::shipped(),
             router: RouterConfig::default(),
             session_expiry: Duration::from_secs(86_400),
+            storage_key: StorageKey::generate(),
             tables: PlanTables::shipped(),
             tier: None,
             // The Go rig's 90 percent deadline: a five-minute entry is probed at 270 s, and no jitter, so the
@@ -195,10 +199,10 @@ pub async fn rig(spec: RigSpec) -> Rig {
     let (store, store_path, scratch) = if spec.on_disk {
         let scratch = Scratch::new();
         let path = scratch.0.join("router.sqlite");
-        let store = Arc::new(Store::open(&path, &StorageKey::generate()).unwrap());
+        let store = Arc::new(Store::open(&path, &spec.storage_key).unwrap());
         (store, Some(path), Some(scratch))
     } else {
-        let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+        let store = Arc::new(Store::open_in_memory(&spec.storage_key).unwrap());
         (store, None, None)
     };
     let h = relay_common::harness_on_with_bus_and_catalog(
@@ -285,6 +289,16 @@ pub async fn rig(spec: RigSpec) -> Rig {
     })
     .unwrap();
     rig
+}
+
+/// The storage key `hex` spells. The store reads a fixed key from a file alone, so it goes through one in a scratch
+/// directory removed on return.
+pub fn storage_key(hex: &str) -> StorageKey {
+    let scratch = Scratch::new();
+    std::fs::create_dir_all(&scratch.0).unwrap();
+    let path = scratch.0.join("storage.key");
+    std::fs::write(&path, hex).unwrap();
+    StorageKey::from_file(&path).unwrap()
 }
 
 /// Stores a profile naming `tier` for `account`, as the profile fetch would.

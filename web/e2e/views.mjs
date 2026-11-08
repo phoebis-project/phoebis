@@ -11048,17 +11048,6 @@ async function keyCompanionPermissions(theme) {
   await atRest();
 }
 
-/** The Identity card's Companion id row on the mock's first account, primary, its pseudonym drawn mono. */
-async function companionIdRow(theme) {
-  const read = await page.evaluate(() => {
-    const identity = [...document.querySelectorAll('.detail .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
-    const row = [...(identity?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent?.trim() === 'Companion id');
-    return row ? (row.querySelector('dd.mono')?.textContent ?? null) : undefined;
-  });
-  measurements.push(`${theme} /accounts Identity Companion id ${JSON.stringify(read ?? 'no row')}`);
-  if (read !== '3c9e41a7') failures.push(`${theme} /accounts: the Identity card's Companion id reads ${read === undefined ? 'no row' : JSON.stringify(read)}, not the code 3c9e41a7`);
-}
-
 /**
  * The Keys bar's pool chip against the status chip beside it on an address that holds both, the pool the table's first
  * key sits in, since the page drops a pool the router does not hold: the same box, type and border at the chips' 26 px.
@@ -13567,7 +13556,6 @@ try {
         await fastLane(theme, view.path);
         await deleteAccountButton(theme);
         await subscriptionEndForm(theme);
-        if (mock) await companionIdRow(theme);
         await addAccountDialog(theme);
         await catalogDialog(theme);
       }

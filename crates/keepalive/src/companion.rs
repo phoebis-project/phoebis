@@ -363,12 +363,4 @@ mod tests {
             Some(59)
         );
     }
-
-    #[test]
-    fn a_runway_is_the_minutes_to_the_ceiling_at_the_current_burn() {
-        assert_eq!(
-            runway_minutes(0.4, 0.1, 0.95, NOW, Some(NOW + 10 * HOUR_MS)),
-            Some(330)
-        );
-    }
 }

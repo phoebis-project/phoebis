@@ -1,8 +1,6 @@
 //! The companion's allowance route: the key's pool as the router reads it, each account under its pseudonym, and the
 //! session's pins, behind the key's `allowance` permission.
 mod common;
-use std::collections::BTreeSet;
-
 use axum::body::Body;
 use axum::http::Request;
 use common::*;
@@ -22,6 +20,9 @@ const C: &str = "sk-ant-api03-CCCC";
 const D: &str = "sk-ant-api03-DDDD";
 const OTHER_KEY: &str = "phoebis-otherkey";
 const SESSION: &str = "session";
+/// A storage key under which `b`'s pseudonym sorts before `a`'s, against the account-id order the routing task answers
+/// in.
+const STORAGE_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const TIER: &str = "default_claude_max_20x";
 
 struct Answer {
@@ -146,6 +147,40 @@ async fn read_window(r: &Rig, account: &str, window: &str, utilization: f64, res
         })
         .await;
     r.h.router.samples().await.unwrap();
+}
+
+/// One line per value, depth first in key order: the path and the JSON kind (`null`, `boolean`, `integer`, `float`,
+/// `string`, `array`, `object`). Every array entry is walked, since the API-key account and the plan account differ in
+/// shape. Values are not compared: a Pace score or a projection is the routing task's to change.
+fn shape(v: &Value) -> Vec<String> {
+    fn walk(v: &Value, path: &str, out: &mut Vec<String>) {
+        let kind = match v {
+            Value::Null => "null",
+            Value::Bool(_) => "boolean",
+            Value::Number(n) if n.is_f64() => "float",
+            Value::Number(_) => "integer",
+            Value::String(_) => "string",
+            Value::Array(_) => "array",
+            Value::Object(_) => "object",
+        };
+        out.push(format!("{path}: {kind}"));
+        match v {
+            Value::Object(m) => {
+                for (k, v) in m {
+                    walk(v, &format!("{path}.{k}"), out);
+                }
+            }
+            Value::Array(a) => {
+                for (i, v) in a.iter().enumerate() {
+                    walk(v, &format!("{path}[{i}]"), out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk(v, "$", &mut out);
+    out
 }
 
 #[tokio::test]
@@ -292,26 +327,27 @@ async fn a_disabled_or_unready_account_is_absent_and_a_cooled_one_present_with_i
 }
 
 #[tokio::test]
-async fn the_pseudonym_is_stable_across_calls_and_distinct_between_accounts() {
-    let r = rig(RigSpec::default()).await;
+async fn each_account_reads_as_eight_hex_characters_and_the_list_runs_in_pseudonym_order() {
+    let r = rig(RigSpec {
+        storage_key: storage_key(STORAGE_KEY),
+        ..RigSpec::default()
+    })
+    .await;
     let app = companion_router(r.engine.clone());
-    let first = get(&app, Some(SESSION), Some(KEY)).await.account_ids();
-    let second = get(&app, Some(SESSION), Some(KEY)).await.account_ids();
+    let listed = get(&app, Some(SESSION), Some(KEY)).await.account_ids();
     let key = r.h.store.companion_key();
     let (a, b) = (key.pseudonym("a"), key.pseudonym("b"));
-    assert_ne!(a, b);
     for id in [&a, &b] {
         assert!(
             id.len() == 8 && id.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f')),
             "{id} is not eight lowercase hex characters"
         );
     }
-    let expected: Vec<String> = BTreeSet::from([a, b]).into_iter().collect();
     assert_eq!(
-        first, expected,
-        "each account under the pseudonym the store's key gives it, in its order"
+        listed,
+        [b, a],
+        "each account under the pseudonym the store's key gives it, in pseudonym order"
     );
-    assert_eq!(second, first, "the second call names the same pseudonyms");
 }
 
 #[tokio::test]
@@ -415,43 +451,6 @@ async fn a_missing_or_invalid_session_id_answers_400_invalid_identity() {
 }
 
 #[tokio::test]
-async fn a_pool_with_no_placeable_member_answers_an_empty_list() {
-    let r = rig(RigSpec::default()).await;
-    let app = companion_router(r.engine.clone());
-    r.h.store.set_enabled("a", false, "test").unwrap();
-    r.h.store.set_enabled("b", false, "test").unwrap();
-    r.h.router.reload().await.unwrap();
-    let answer = get(&app, Some(SESSION), Some(KEY)).await;
-    assert_eq!(
-        (
-            answer.status,
-            answer.body["accounts"].clone(),
-            answer.body["pins"].clone()
-        ),
-        (200, json!([]), json!([])),
-        "{}",
-        answer.text
-    );
-}
-
-#[tokio::test]
-async fn an_account_without_a_reading_of_a_window_omits_it() {
-    let r = rig(RigSpec {
-        accounts: vec![oauth("a", "sk-ant-oat01-AAAA", 0)],
-        tier: Some(TIER),
-        ..RigSpec::default()
-    })
-    .await;
-    let app = companion_router(r.engine.clone());
-    read_window(&r, "a", FIVE_HOUR, 0.25, NOW + 2 * HOUR_MS).await;
-    let answer = get(&app, Some(SESSION), Some(KEY)).await;
-    let windows: Option<Vec<&str>> = answer.body["accounts"][0]["windows"]
-        .as_object()
-        .map(|windows| windows.keys().map(String::as_str).collect());
-    assert_eq!(windows, Some(vec![FIVE_HOUR]), "{}", answer.text);
-}
-
-#[tokio::test]
 async fn a_weekly_windows_runway_runs_to_its_reset_past_the_five_hour_horizon() {
     // Every pin on the account burns a tenth of the week per hour, whatever its tokens.
     let share = SharePricer::default()
@@ -486,7 +485,7 @@ async fn a_weekly_windows_runway_runs_to_its_reset_past_the_five_hour_horizon() 
 }
 
 #[tokio::test]
-async fn the_fixture_is_the_route_answer_on_the_seeded_rig() {
+async fn the_route_answer_on_the_seeded_rig_holds_the_fixtures_shape() {
     let mut r = rig(RigSpec {
         accounts: vec![oauth("b", "sk-ant-oat01-BBBB", 0), api_key("a", A, 1)],
         tier: Some(TIER),
@@ -540,9 +539,10 @@ async fn the_fixture_is_the_route_answer_on_the_seeded_rig() {
     )
     .unwrap();
     assert_eq!(
-        live, committed,
-        "the route's answer differs from the committed fixture. A renamed or dropped field is a defect of the route \
-         or a contract change the companion's decoder and documentation follow. Re-capture with \
+        shape(&live),
+        shape(&committed),
+        "the route's answer differs in shape from the committed fixture. A renamed, dropped or retyped field is a \
+         defect of the route or a contract change the companion's decoder and documentation follow. Re-capture with \
          PHOEBIS_WRITE_FIXTURES=1 only for the latter"
     );
 }

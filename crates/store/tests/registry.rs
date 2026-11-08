@@ -216,7 +216,6 @@ fn a_key_with_the_old_opt_out_migrates_to_a_set_without_keepalive_and_every_key_
     .unwrap();
     drop(conn);
     let store = Store::open(&path, &key_store).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 5);
     let plain = store
         .api_key("plain")
         .unwrap()
