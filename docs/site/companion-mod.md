@@ -204,14 +204,13 @@ client's agent list never names, such as a workflow's agent or one of Claude Cod
 started it, or for main, and is never reported as an agent.
 
 The mod reads `$.session.id()` at session start, at every prompt and at every heartbeat. After a `/clear` or a
-`/resume`, `session.end` ends the registered session at once and no `session.start` follows, so the next prompt or
-heartbeat that reads the new id registers it under the same instance. Nothing the old session had open or scheduled
-carries over. At each heartbeat the mod also releases the subagents the client's agent list reads `completed`, `failed`
-or `killed` or no longer lists, and closes the background commands past their deadline. The agent list describes the
-agents the mod held when it asked for it, so a subagent spawned while the answer was out is judged at the next
-heartbeat, and an answer that arrives after a `/clear` or a `/resume` replaced the session is dropped. A tool result or
-a spawn answer that lands after such a replacement is dropped the same way: the work belongs to the session that started
-it.
+`/resume`, `session.end` ends the registered session at once and no `session.start` follows, so the next prompt that
+reads the new id registers it under the same instance. Nothing the old session had open or scheduled carries over. At
+each heartbeat the mod also releases the subagents the client's agent list reads `completed`, `failed` or `killed` or no
+longer lists, and closes the background commands past their deadline. The agent list describes the agents the mod held
+when it asked for it, so a subagent spawned while the answer was out is judged at the next heartbeat, and an answer that
+arrives after a `/clear` or a `/resume` replaced the session is dropped. A tool result or a spawn answer that lands
+after such a replacement is dropped the same way: the work belongs to the session that started it.
 
 The mod writes its tracked work, each agent's open set, the session's crons, the subagents it released and those the
 router last named released, to the plugin's host state whenever it changes. A hot reload of the module in the same
