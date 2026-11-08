@@ -251,7 +251,7 @@ function AccountRow({ account, active, now }: { account: Account; active: boolea
           <span className="account-row__name">{account.label}</span>
           {account.plan && <Badge tone="neutral">{account.plan}</Badge>}
           {/* The compact 5-hour bar has no room for the speed chip beside its label, so the chip stands by the status. */}
-          {slowed && <SpeedChip factor={slowed.factor} hover={speedHover(slowed, now)} />}
+          {slowed && <SpeedChip factor={slowed.speed} hover={speedHover(slowed, now)} />}
           <Badge tone={STATUS_TONE[account.status]} dot>
             {STATUS_LABEL[account.status]}
           </Badge>

@@ -102,14 +102,12 @@ export const planOverage = (account: Pick<Account, 'overage' | 'usageBased'>): A
 /** A window whose reset has passed with no reading since: the card and the timeline agree on this one test. */
 export const isExpired = (w: RateLimitWindow, now: number) => w.resetsAt !== null && Date.parse(w.resetsAt) < now;
 
-/**
- * The slow-down a page draws the account's speed chip from: its entry while the factor is under 1 and the 5-hour window
- * the entry was read from has not reset since, null otherwise.
- */
+/** The slow-down a page draws the account's speed chip from: its entry while the speed the holds realized is under 1
+ *  and the 5-hour window the entry was read from has not reset since, null otherwise. */
 export function slowedOf(account: Account, now: number): AccountSlowDown | null {
   const slowDown = account.slowDown ?? null;
   const w5 = windowOf(account, '5h');
-  return slowDown !== null && slowDown.factor < 1 && w5 !== null && !isExpired(w5, now) ? slowDown : null;
+  return slowDown !== null && slowDown.speed < 1 && w5 !== null && !isExpired(w5, now) ? slowDown : null;
 }
 
 /**

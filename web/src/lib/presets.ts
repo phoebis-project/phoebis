@@ -351,7 +351,7 @@ export interface SlowDownPreview {
  * the pools route serves on it. The threshold and the hold are the pool's as the dialog holds them.
  */
 export function slowDownPreview(
-  pool: Pick<Pool, 'slowDown' | 'slowDownHoldSeconds' | 'slowDownStretchSeconds'> & { members: { accountId: string; priority: number; speed?: number | null }[] },
+  pool: Pick<Pool, 'slowDown' | 'slowDownHoldSeconds' | 'slowDownStretchSeconds'> & { members: { accountId: string; factor?: number | null; priority: number }[] },
   accounts: Account[],
 ): SlowDownPreview {
   const thresholdMs = pool.slowDownStretchSeconds * 1_000;
@@ -359,7 +359,7 @@ export function slowDownPreview(
   const read = pool.members
     .map((m) => {
       const account = byId.get(m.accountId);
-      if (account === undefined) return { factor: m.speed ?? null, label: m.accountId, priority: m.priority, stretchMs: null };
+      if (account === undefined) return { factor: m.factor ?? null, label: m.accountId, priority: m.priority, stretchMs: null };
       const slowDown = account.slowDown ?? null;
       return { factor: slowDown?.factor ?? null, label: account.label, priority: m.priority, stretchMs: slowDown?.stretchMs ?? null };
     })

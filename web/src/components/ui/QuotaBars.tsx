@@ -18,7 +18,7 @@ export function WindowBar({ window: w, now, soon = false, showLabel = true, comp
     <div className="wbar">
       <div className="wbar__head">
         {showLabel && <span className="wbar__label ellipsis">{w.label}</span>}
-        {slowDown && <SpeedChip factor={slowDown.factor} hover={speedHover(slowDown, now)} />}
+        {slowDown && <SpeedChip factor={slowDown.speed} hover={speedHover(slowDown, now)} />}
         <span className="wbar__pct num">{fmtPct(remaining)}</span>
       </div>
       <Meter value={remaining} tone={meterTone(remaining)} thin label={`${w.label} remaining`} />

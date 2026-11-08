@@ -119,22 +119,22 @@ runway, window_ceiling 95 %, since 14:45` for a pool whose rounds found no desti
 reads `2 moves landed and the 5h window was spent within the hour` where moves onto it were followed by a spent window,
 or `1 wall reached on the 5h window` where it reached its wall, followed by `the last round projected 96 %` where a
 projection round on that window came before, or by `the wall came 25 min before the reset` where a slow-down round came
-before (`the wall came at the reset` for a wall at or after the reset). An account slowed past twice its pool's stretch
-threshold within the day reads, under the label "Slowed past twice the stretch", `studio: slowed 2 h 8 min of the last
-24 h, over 1 h, slowest 0.35x, slow_down_stretch_seconds 1800, since 09:12`, the bar after `over`, the lowest factor of
-its spans and the pool's threshold. Each opens the [routing log](#routing-log) on the pool's shedding rounds, the
-account's moves and spent windows, its spent windows, or its slow-down starts and ends, from the moment the condition
-began. An account whose meter drifted reads `acct-a: 5h charged 2.0x the table, 7d 1.3x, since 14:20`, each off window
-with the ratio the meter charged against the cost model, under the label "Meter drift against the table", and opens the
-[Meter](#meter) view on the account. The keepalive engine's three items open the [Sessions](#sessions) view: `Keepalive
-bus gaps: {n} since the start` in the serious tone while the engine missed bus events in the last 24 hours, `Keepalive
-cap at {pct}: {cap}` in the warning tone while one of its caps (sessions, agent records or retained prompts) stands at
-90 percent of its max or more, and `Expired between turns: {n} in 24h` in the warning tone while prompt caches expired
-between turns and a pool's keepalive policy is on. A parked ledger record adds "Replay parked records", which answers
-`Landed {n}, {n} still parked`. Where the line is too narrow for its lead, the "+N more" badge and that button with its
-answer together, the button and its answer take a second row. The line also reads again when the window regains focus,
-and a tick or a focus that finds its previous read still out is skipped, so a slow read lands and the next tick reads
-again.
+before (`the wall came at the reset` for a wall at or after the reset). An account whose slow-down held its requests
+past twice its pool's stretch threshold within the day reads, under the label "Slowed past twice the stretch", `studio:
+held 2 h 8 min of the last 24 h over 1 h, 72 requests held, slow_down_stretch_seconds 1800, since 09:12`, the bar after
+`over`, the requests held in the day and the pool's threshold. Each opens the [routing log](#routing-log) on the pool's
+shedding rounds, the account's moves and spent windows, its spent windows, or its slow-down starts and ends, from the
+moment the condition began. An account whose meter drifted reads `acct-a: 5h charged 2.0x the table, 7d 1.3x, since
+14:20`, each off window with the ratio the meter charged against the cost model, under the label "Meter drift against
+the table", and opens the [Meter](#meter) view on the account. The keepalive engine's three items open the
+[Sessions](#sessions) view: `Keepalive bus gaps: {n} since the start` in the serious tone while the engine missed bus
+events in the last 24 hours, `Keepalive cap at {pct}: {cap}` in the warning tone while one of its caps (sessions, agent
+records or retained prompts) stands at 90 percent of its max or more, and `Expired between turns: {n} in 24h` in the
+warning tone while prompt caches expired between turns and a pool's keepalive policy is on. A parked ledger record adds
+"Replay parked records", which answers `Landed {n}, {n} still parked`. Where the line is too narrow for its lead, the
+"+N more" badge and that button with its answer together, the button and its answer take a second row. The line also
+reads again when the window regains focus, and a tick or a focus that finds its previous read still out is skipped, so a
+slow read lands and the next tick reads again.
 
 Five tiles follow, each with a sparkline over the last 24 hours: "Requests, 24h" with `{n} per hour`, "Tokens, 24h"
 with `{pct} served from cache`, "Estimated cost, 24h" in the top bar's unit, "Error rate, 24h" with "No requests",
@@ -244,11 +244,13 @@ the window's horizon: `resets in 2h 13m, 19% left at the reset` where the horizo
 forecast with the charges and the reservations the last reading does not hold yet, and `0% left now` once that time has
 passed. The reset and the projection split over two lines where the column does not hold them on one, and the hover adds
 the burn behind the projection, `the sessions on this account burn 8.5% an hour`. On a slowed account the 5-hour
-window's line ends in the speed chip, `0.5x` in the warning tone (the account's slow-down factor to two decimals, a
+window's line ends in the speed chip, `0.5x` in the warning tone (the speed the holds realized, to two decimals with a
 trailing zero dropped, `0.35x`), whose hover reads `slowed since 17:40: the sessions on this account would pass the
-ceiling 42 min before the reset, over the 30 min threshold` (`under` while no round can fire). The chip draws while the
-factor is under 1 and the 5-hour window the read came from has not reset since, and the Dashboard's account cards, the
-Accounts view, the Pools cards and the Sessions view draw the same chip with the same hover
+ceiling 42 min before the reset, over the 30 min threshold` (`under` while no round can fire) followed by the factor the
+pool computed, how far the span has ramped toward it where the entry is inside a span, and the speed the holds realized,
+one sentence each, such as `The pool computed 0.5x. Ramped to 0.5x. The holds realized 0.5x`. The chip draws while the
+realized speed is under 1 and the 5-hour window the read came from has not reset since, and the Dashboard's account
+cards, the Accounts view, the Pools cards and the Sessions view draw the same chip with the same hover
 ([Slow-down](routing.md#slow-down)). The window bars of the Dashboard's account cards and of the Accounts list draw the
 projection alone in the reset's place, in a compact form (`19% left at reset`, `56% left in 5 h`) that splits between
 the share and the horizon where the bar is narrow, with the reset's instant on hover, and keep the reset where the

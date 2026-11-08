@@ -311,12 +311,16 @@ const waitText = (ms) => (ms >= 1000 ? `${(ms / 1000).toFixed(ms >= 10_000 ? 0 :
 const ageText = (ms) => (ms < 60_000 ? `${Math.round(ms / 1000)} s` : ms % 60_000 >= 1000 ? `${Math.floor(ms / 60_000)} min ${Math.floor((ms % 60_000) / 1000)} s` : `${Math.floor(ms / 60_000)} min`);
 /**
  * studio's slow-down and the hover its speed chip reads, the clock as the page writes a time of day in the zone the run
- * pins: the story slows the work pool's subscription member to half its speed, 42 min over its 30 min threshold.
+ * pins: the story slows the work pool's subscription member to half its speed, 42 min over its 30 min threshold, its
+ * span ramped whole and its holds realizing the half (studio's seed in `mock/accounts.ts`).
  */
 const studioSpeed = async () => {
   const slowDown = (await api.listAccounts()).find((a) => a.id === 'studio')?.slowDown ?? null;
   const since = slowDown?.since ? new Date(slowDown.since).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h23', minute: '2-digit' }) : 'no since';
-  return { factor: slowDown?.factor ?? null, hover: `slowed since ${since}: the sessions on this account would pass the ceiling 42 min before the reset, over the 30 min threshold` };
+  return {
+    factor: slowDown?.factor ?? null,
+    hover: `slowed since ${since}: the sessions on this account would pass the ceiling 42 min before the reset, over the 30 min threshold. The pool computed 0.5x. Ramped to 0.5x. The holds realized 0.5x`,
+  };
 };
 /**
  * The speed chips under `root`: where each sits by `whereOf`, what it stands beside (a bar's label by its words where
@@ -765,10 +769,10 @@ await forView('/', async () => {
     // Studio's two slow-down spans in work: the closed one from 09:12 until its factor read 1 at 10:38:20, and the open
     // one from 13:48, with the day's held time and held requests of `HELD_TODAY` (`mock/attention.ts`).
     [
-      'studio: slowed 2 h 8 min of the last 24 h, over 1 h, slowest 0.35x, slow_down_stretch_seconds 1800, since 09:12',
+      'studio: held 2 h 8 min of the last 24 h over 1 h, 72 requests held, slow_down_stretch_seconds 1800, since 09:12',
       'badge--warning',
       '/routing-log',
-      ['bar_ms: 3600000', 'factor_min: 0.35', 'held: 72', 'held_ms: 7700000', 'open: true', 'setting: ["slow_down_stretch_seconds"]', 'setting_values: {"slow_down_stretch_seconds":1800}', 'slowed_ms: 7700000', 'spans: 2'],
+      ['bar_ms: 3600000', 'held: 72', 'held_ms: 7700000', 'open: true', 'setting: ["slow_down_stretch_seconds"]', 'setting_values: {"slow_down_stretch_seconds":1800}', 'spans: 2'],
     ],
     // The engine's retained prompts at 92 percent of their cap, the mock overview's retained bytes, rank last.
     ['Keepalive cap at 92%: retained prompts', 'badge--warning', '/sessions', ['The engine is near its cap and will refuse new records at it. Opens the Sessions view.', 'cap: retained', 'count: 246960620', 'max: 268435456', 'pct: 0.92']],
@@ -1830,8 +1834,9 @@ quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.container.q
   results.push({ name: '/quota every window share on the cards reads N% left', ok: shares.some((t) => /\d+% left/.test(t)) && off.length === 0, missing: [...new Set(off)] });
 }
 {
-  // studio, the work pool's slowed member, closes its 5-hour window's reset cell with the speed chip, its slow-down in
-  // the hover, and no other window or card draws one.
+  // studio, the work pool's slowed member, closes its 5-hour window's reset cell with the speed chip on the speed its
+  // holds realized, its slow-down, the factor the pool computed, the ramp and that speed in the hover, and no other
+  // window or card draws one.
   const want = await studioSpeed();
   const chips = [...m.container.querySelectorAll('.qcard .speed-chip')].map((chip) => {
     const cell = chip.parentElement;
@@ -1846,7 +1851,7 @@ quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.container.q
     ];
   });
   results.push({
-    name: "/quota studio's 5-hour window closes its reset cell with the speed chip, its slow-down in the hover, and no other window draws one",
+    name: "/quota the studio card's 5-hour line carries the chip on the realized speed with the factor, the ramp and the speed on its hover, and no other window draws one",
     ok: want.factor === 0.5 && JSON.stringify(chips) === JSON.stringify([['studio', '5h', true, '0.5x', 'badge--warning', want.hover]]),
     missing: [String(want.factor), ...chips.map((c) => c.join(' | '))],
   });
@@ -5485,7 +5490,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const standingOf = (label) => [...(servingRow(label)?.children[2]?.querySelectorAll('.chips > *') ?? [])].map((c) => c.textContent?.trim());
     // The clock reads as the page writes a time of day, in the zone the run pins.
     const since = studio?.since ? new Date(studio.since).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h23', minute: '2-digit' }) : 'no since';
-    const hover = `slowed since ${since}: the sessions on this account would pass the ceiling 42 min before the reset, over the 30 min threshold`;
+    const hover = `slowed since ${since}: the sessions on this account would pass the ceiling 42 min before the reset, over the 30 min threshold. The pool computed 0.5x. Ramped to 0.5x. The holds realized 0.5x`;
     results.push({
       name: "/pools a slowed member's Standing cell draws its speed chip with the slow-down in its hover, and an unslowed one none",
       ok:
@@ -5700,7 +5705,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
         ]) &&
       JSON.stringify(attentionRows('work')) === JSON.stringify([['Wall reached under the ceiling', 'studio', '/routing-log'], ['Slowed past twice the stretch', 'studio', '/routing-log']]) &&
       JSON.stringify(workDetail) ===
-        JSON.stringify(['1 wall reached on the 5h window, the wall came 1 h 9 min before the reset, shed_cap and window_ceiling, since 14:20', 'slowed 2 h 8 min of the last 24 h, over 1 h, slowest 0.35x, slow_down_stretch_seconds 1800, since 09:12']),
+        JSON.stringify(['1 wall reached on the 5h window, the wall came 1 h 9 min before the reset, shed_cap and window_ceiling, since 14:20', 'held 2 h 8 min of the last 24 h over 1 h, 72 requests held, slow_down_stretch_seconds 1800, since 09:12']),
     missing: [...['jobs', 'all', 'work'].map((name) => `${name}: ${JSON.stringify(attentionRows(name))} ${JSON.stringify(rowAges(name))}`), ...workDetail],
   });
   {
@@ -25031,7 +25036,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     // The row's "+N" badges stand beside the figure they qualify.
     const KINDS = { 'API-key account: billed per token, no quota windows': 'api_key', 'Subscription account: quota windows apply': 'oauth' };
     const accounts = await api.listAccounts();
-    const slowed = new Set(accounts.filter((a) => a.slowDown !== null && a.slowDown.factor < 1).map((a) => a.id));
+    const slowed = new Set(accounts.filter((a) => a.slowDown !== null && a.slowDown.speed < 1).map((a) => a.id));
     [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Expand all')?.click();
     await m.settle(250);
     const links = [...m.container.querySelectorAll('table.agents-table > tbody > tr .agents__account')].map((c) => ({ chip: c.querySelector('.speed-chip') !== null, link: c.querySelector('a') }));

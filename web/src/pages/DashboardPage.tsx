@@ -310,7 +310,7 @@ function AccountMini({ account, now }: { account: Account; now: number }) {
             two kept together at the head's far end. */}
         {slowed ? (
           <span className="account-mini__status">
-            <SpeedChip factor={slowed.factor} hover={speedHover(slowed, now)} />
+            <SpeedChip factor={slowed.speed} hover={speedHover(slowed, now)} />
             {status}
           </span>
         ) : (

@@ -4,7 +4,6 @@ import { accountMeterHref } from './address';
 import { lookup } from './counts';
 import { fmtAbsolute, fmtPct, fmtRelative, instant as clockInstant, listWords, messageOf, noun, percentText, plural } from './format';
 import { WINDOW_WORD, entityHref, formatFact, logHref, sinceCondition, type LogLink } from './routingLog';
-import { speedWord } from './selection';
 
 export const ATTENTION_LABEL: Record<AttentionKind, string> = {
   certificate_expiring: 'Certificate expiring',
@@ -247,18 +246,16 @@ function conditionWords(item: AttentionItem, now: number): string {
 }
 
 /**
- * A slowed account's span, the bar it passed, its slowest factor and the stretch it is held to, without the subject.
- * The setting's value is a whole number of seconds, which `conditionWords` would print as a percent. The factor reads
- * as the speed chips print it.
+ * A slowed account's held time of the day over the bar it passed, the held count and the stretch it is held to,
+ * without the subject. The setting's value is a whole number of seconds, which `conditionWords` would print as a
+ * percent.
  */
 function slowedWords(item: AttentionItem, now: number): string {
   const d = item.detail;
   const settings = settingWords(d, (n) => String(Math.round(n)));
   const barMs = numOrNull(d.bar_ms);
-  const bar = barMs === null ? [] : [`over ${formatFact(barMs, 'ms', now)}`];
-  const factorMin = numOrNull(d.factor_min);
-  const slowest = factorMin === null ? [] : [`slowest ${speedWord(factorMin)}`];
-  return [`slowed ${formatFact(num(d.slowed_ms), 'ms', now)} of the last 24 h`, ...bar, ...slowest, ...(settings ? [settings] : []), sinceWords(item, now)].join(', ');
+  const held = `held ${formatFact(num(d.held_ms), 'ms', now)} of the last 24 h${barMs === null ? '' : ` over ${formatFact(barMs, 'ms', now)}`}`;
+  return [held, `${plural(num(d.held), 'request')} held`, ...(settings ? [settings] : []), sinceWords(item, now)].join(', ');
 }
 
 /** A ratio as the meter drift words print it: two decimals, one trailing zero dropped (`2.0`, `1.25`, `0.8`). */

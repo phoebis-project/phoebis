@@ -242,9 +242,10 @@ answers `body must carry a members list` to an object without one ([API referenc
 create that loses the race for its id to another create answers the route's 409 for a taken id, as the account create
 and the pairing confirm do ([API reference](api-reference.md)). `GET /admin/dashboard` answers the last day's figures
 and the live pin count, and the account list carries each account's quota windows ([API reference](api-reference.md),
-[Dashboard](console.md#dashboard)). The Dashboard, Guardrails, Pools and Settings views fit a 360 px window with no
-horizontal scroll ([Dashboard](console.md#dashboard), [Guardrails](console.md#guardrails), [Pools](console.md#pools),
-[Settings](console.md#settings)). The Dashboard's account cards and the Accounts list read
+[Dashboard](console.md#dashboard)). The attention line's slowed-long badge reads the held time of the last 24 hours and
+the requests held ([Dashboard](console.md#dashboard)). The Dashboard, Guardrails, Pools and Settings views fit a 360 px
+window with no horizontal scroll ([Dashboard](console.md#dashboard), [Guardrails](console.md#guardrails),
+[Pools](console.md#pools), [Settings](console.md#settings)). The Dashboard's account cards and the Accounts list read
 `No window since the plan ended {ago}` on an account whose plan ended ([Dashboard](console.md#dashboard),
 [Accounts](console.md#accounts)). The Dashboard's attention line keeps one row and folds the items past it behind a "+N
 more" badge, and a pool card's attention rows end with their age ([Dashboard](console.md#dashboard),
@@ -281,7 +282,9 @@ marker stands at the instant's place on them and no grid line crosses a lane's s
 screen ([Quota](console.md#quota)). The Quota view leaves out an account that is disconnected or needs
 re-authentication, which keeps its row and its state on the Accounts view ([Quota](console.md#quota)). The Quota view
 leaves out an account whose plan ended while its flag stands, as it leaves out a disconnected one, and the Accounts
-detail's Usage card names the ended plan ([Quota](console.md#quota), [Accounts](console.md#accounts)). Under the 12-hour
+detail's Usage card names the ended plan ([Quota](console.md#quota), [Accounts](console.md#accounts)). The speed chip
+reads the speed the holds realized, and its hover names the factor the pool computed and how far the span has ramped
+([Quota](console.md#quota)). Under the 12-hour
 time setting the Quota timeline's short cells read "6 AM" in a cell wide enough for it, with fewer cells at a given
 width ([Quota](console.md#quota)). A pairing confirm on a slot sealed under another storage key answers 409 and names
 the account, so the dialog can offer Disconnect ([Pairing](pairing.md#with-curl)). A pairing whose confirm meets a

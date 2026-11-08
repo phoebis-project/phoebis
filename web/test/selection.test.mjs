@@ -303,6 +303,7 @@ test('the Standing badges read the time left or the reset time, each with its se
 const slowDown = (factor, stretchMinutes, thresholdMinutes = 30, sinceAgo = 42 * MINUTE) => ({
   factor,
   holdMs: 120_000,
+  ramp: null,
   since: sinceAgo === null ? null : new Date(NOW - sinceAgo).toISOString(),
   speed: factor,
   stretchMs: stretchMinutes * MINUTE,
@@ -314,11 +315,19 @@ test('a speed word and its hover read the factor, the since, the stretch against
   assert.equal(d.speedWord(0.996), '0.99x', 'a factor under 1 never reads 1x, since the chip draws under 1 alone');
   const since = new Date(NOW - 42 * MINUTE).toISOString();
   const tail = 'the sessions on this account would pass the ceiling 42 min before the reset';
-  assert.equal(d.speedHover(slowDown(0.5, 42), NOW), `slowed since ${fmtShortTime(since)}: ${tail}, over the 30 min threshold`);
-  assert.equal(d.speedHover(slowDown(0.7, 12), NOW), `slowed since ${fmtShortTime(since)}: the sessions on this account would pass the ceiling 12 min before the reset, under the 30 min threshold`, 'no round fires under the threshold');
-  assert.equal(d.speedHover(slowDown(0.6, 30), NOW), `slowed since ${fmtShortTime(since)}: the sessions on this account would pass the ceiling 30 min before the reset, under the 30 min threshold`, 'a stretch at the threshold reads under it, since a round fires only above it');
-  assert.equal(d.speedHover(slowDown(0.5, 42, 150), NOW), `slowed since ${fmtShortTime(since)}: ${tail}, under the 2 h 30 min threshold`, 'a threshold past an hour reads its hours');
-  assert.equal(d.speedHover(slowDown(0.5, 42, 30, null), NOW), `${tail}, over the 30 min threshold`, 'without a since the words open at the sessions');
+  assert.equal(d.speedHover(slowDown(0.5, 42), NOW), `slowed since ${fmtShortTime(since)}: ${tail}, over the 30 min threshold. The pool computed 0.5x. The holds realized 0.5x`);
+  assert.equal(
+    d.speedHover(slowDown(0.7, 12), NOW),
+    `slowed since ${fmtShortTime(since)}: the sessions on this account would pass the ceiling 12 min before the reset, under the 30 min threshold. The pool computed 0.7x. The holds realized 0.7x`,
+    'no round fires under the threshold',
+  );
+  assert.equal(
+    d.speedHover(slowDown(0.6, 30), NOW),
+    `slowed since ${fmtShortTime(since)}: the sessions on this account would pass the ceiling 30 min before the reset, under the 30 min threshold. The pool computed 0.6x. The holds realized 0.6x`,
+    'a stretch at the threshold reads under it, since a round fires only above it',
+  );
+  assert.equal(d.speedHover(slowDown(0.5, 42, 150), NOW), `slowed since ${fmtShortTime(since)}: ${tail}, under the 2 h 30 min threshold. The pool computed 0.5x. The holds realized 0.5x`, 'a threshold past an hour reads its hours');
+  assert.equal(d.speedHover(slowDown(0.5, 42, 30, null), NOW), `${tail}, over the 30 min threshold. The pool computed 0.5x. The holds realized 0.5x`, 'without a since the words open at the sessions');
   assert.equal(d.speedHover(slowDown(1, 0), NOW), null, 'an account at full speed has no hover');
   assert.equal(d.speedHover(null, NOW), null, 'nor one the router has not read');
 });
@@ -331,11 +340,10 @@ test('a serving member reads the chip from its account\'s slow-down, from its ow
   const studio = account('studio', { slowDown: read, windows: window5h(hoursFromNow(1)) });
   assert.deepEqual(d.memberSpeed({ speed: 0.5 }, studio, NOW), { factor: 0.5, hover: d.speedHover(read, NOW) }, 'a loaded account reads its own slow-down');
   const unheld = { ...read, speed: 1 };
-  const since = new Date(NOW - 42 * MINUTE).toISOString();
   assert.deepEqual(
     d.memberSpeed({ speed: 0.5 }, account('studio', { slowDown: unheld, windows: window5h(hoursFromNow(1)) }), NOW),
-    { factor: 0.5, hover: `slowed since ${fmtShortTime(since)}: the sessions on this account would pass the ceiling 42 min before the reset, over the 30 min threshold` },
-    'the chip and its hover read the factor, never the speed the holds realized, which reads 1 until a pin there has a cycle',
+    { factor: null, hover: null },
+    'the chip and its hover read the speed the holds realized, which reads 1 until a pin there has a cycle, so an account slowed with no cycle draws none',
   );
   assert.deepEqual(d.memberSpeed({ speed: 0.4 }, studio, NOW), { factor: 0.5, hover: d.speedHover(read, NOW) }, "on a pool with the switch on, the account's entry wins over the member's figure");
   assert.deepEqual(d.memberSpeed({ speed: 0.5 }, account('plain', { slowDown: null }), NOW), { factor: null, hover: null }, 'a loaded account with no slow-down draws none');

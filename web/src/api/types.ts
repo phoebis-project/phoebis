@@ -125,7 +125,7 @@ export interface AccountSlowDown {
   holdMs: number;
   /** The share of one burn average passed since the span opened, 1 once the average has passed, null outside a span. */
   ramp: number | null;
-  /** When the factor first read under 1 since it last read 1, null outside a span. */
+  /** The span's own start: when the factor first read under 1 in it, null outside a span. */
   since: string | null;
   /** The speed the holds realized, which the demand divides the pins' burn by. */
   speed: number;

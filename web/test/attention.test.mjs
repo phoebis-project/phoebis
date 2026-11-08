@@ -201,16 +201,16 @@ test('the four routing conditions read the count, the setting and the start on t
   assert.equal(words('wall_reached', account, { ...early, early_ms: 0 }), `primary: 1 wall reached on the 5h window, the wall came at the reset, shed_cap and window_ceiling, since ${at}`, 'a wall at or after the reset');
   assert.equal(words('wall_reached', account, { ...early, early_ms: null }), `primary: 1 wall reached on the 5h window, shed_cap and window_ceiling, since ${at}`, 'neither figure where both are null');
   const studio = { ...account, link: { id: 'studio', page: 'accounts' }, pools: ['work'], subject: { id: 'studio', label: 'studio', type: 'account' } };
-  const slowed = { bar_ms: 3_600_000, factor_min: 0.35, open: true, setting: ['slow_down_stretch_seconds'], setting_values: { slow_down_stretch_seconds: 1800 }, slowed_ms: 7_700_000, spans: 2 };
-  assert.equal(words('slowed_long', studio, slowed), `studio: slowed 2 h 8 min of the last 24 h, over 1 h, slowest 0.35x, slow_down_stretch_seconds 1800, since ${at}`);
-  assert.equal(words('slowed_long', studio, { ...slowed, factor_min: 0.5, open: false, slowed_ms: 3_720_000, spans: 1 }), `studio: slowed 1 h 2 min of the last 24 h, over 1 h, slowest 0.5x, slow_down_stretch_seconds 1800, since ${at}`, 'the factor drops a trailing zero');
+  const slowed = { bar_ms: 3_600_000, held: 72, held_ms: 7_700_000, open: true, setting: ['slow_down_stretch_seconds'], setting_values: { slow_down_stretch_seconds: 1800 }, spans: 2 };
+  assert.equal(words('slowed_long', studio, slowed), `studio: held 2 h 8 min of the last 24 h over 1 h, 72 requests held, slow_down_stretch_seconds 1800, since ${at}`);
+  assert.equal(words('slowed_long', studio, { ...slowed, held: 1, held_ms: 3_720_000, open: false, spans: 1 }), `studio: held 1 h 2 min of the last 24 h over 1 h, 1 request held, slow_down_stretch_seconds 1800, since ${at}`, 'one request reads singular');
   assert.equal(
-    words('slowed_long', studio, { ...slowed, bar_ms: 18_000_000, setting_values: { slow_down_stretch_seconds: 9000 }, slowed_ms: 19_500_000 }),
-    `studio: slowed 5 h 25 min of the last 24 h, over 5 h, slowest 0.35x, slow_down_stretch_seconds 9000, since ${at}`,
+    words('slowed_long', studio, { ...slowed, bar_ms: 18_000_000, held_ms: 19_500_000, setting_values: { slow_down_stretch_seconds: 9000 } }),
+    `studio: held 5 h 25 min of the last 24 h over 5 h, 72 requests held, slow_down_stretch_seconds 9000, since ${at}`,
     'the bar reads in the same span words as the day',
   );
-  assert.equal(words('slowed_long', studio, { ...slowed, factor_min: null, setting_values: undefined }), `studio: slowed 2 h 8 min of the last 24 h, over 1 h, slow_down_stretch_seconds, since ${at}`, 'a span with no factor read and a pool the registry lost name neither');
-  assert.equal(words('slowed_long', studio, { ...slowed, bar_ms: null }), `studio: slowed 2 h 8 min of the last 24 h, slowest 0.35x, slow_down_stretch_seconds 1800, since ${at}`, 'a detail without a bar names none');
+  assert.equal(words('slowed_long', studio, { ...slowed, setting_values: undefined }), `studio: held 2 h 8 min of the last 24 h over 1 h, 72 requests held, slow_down_stretch_seconds, since ${at}`, 'a pool the registry lost names no setting value');
+  assert.equal(words('slowed_long', studio, { ...slowed, bar_ms: null }), `studio: held 2 h 8 min of the last 24 h, 72 requests held, slow_down_stretch_seconds 1800, since ${at}`, 'a detail without a bar names none');
   assert.equal(attentionWords(item('pool_exhausted', { detail: { pool: 'jobs' } }), NOW), null, 'another kind keeps its label and subject');
   for (const kind of ['wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long']) assert.equal(attentionDetail(item(kind, { ...account, detail: {} }), NOW), attentionWords(item(kind, { ...account, detail: {} }), NOW).replace(/^primary: /, ''), `${kind}'s row reads the words without the subject`);
 });

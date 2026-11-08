@@ -1,5 +1,6 @@
 import type { Account, AccountSlowDown, MemberEligibility, Pool, PoolMember, PoolStrategy } from '@/api/types';
-import { fmtAbsolute, fmtDuration, fmtPeriodEnd, fmtRelative, fmtShortTime, instant, noun, sameLocalDay } from './format';
+import { sentences } from './analytics';
+import { fmtAbsolute, fmtDuration, fmtPct, fmtPeriodEnd, fmtRelative, fmtShortTime, instant, noun, sameLocalDay } from './format';
 import { endOf, isPaidSource, minuteSpan, planExtraUsage, planOverage, slowedOf } from './quota';
 import { MINUTE } from './time';
 
@@ -88,29 +89,34 @@ export function windingDownBadge(end: number, now: number): StandingBadge {
  */
 export const speedWord = (factor: number): string => `${factor < 1 ? Math.min(Number(factor.toFixed(2)), 0.99) : Number(factor.toFixed(2))}x`;
 
+/** The ramp's word: how far the span has ramped toward its factor, or that it has. */
+const rampWords = (ramp: number, factor: number): string => (ramp < 1 ? `Ramping, ${fmtPct(ramp)} of the way to ${speedWord(factor)}` : `Ramped to ${speedWord(factor)}`);
+
 /**
  * `slowed since 17:40: the sessions on this account would pass the ceiling 42 min before the reset, over the 30 min
- * threshold`, or `under the 30 min threshold` while no round can fire. With `since` null the words start at `the
- * sessions on this account`. Null where `slowDown` is null or its factor 1.
+ * threshold`, or `under the 30 min threshold` while no round can fire, then one sentence each for the factor the pool
+ * computed, the ramp where the entry is inside a span, and the speed the holds realized. With `since` null the words
+ * start at `the sessions on this account`. Null where `slowDown` is null or the speed its holds realized is 1 or more.
  */
 export function speedHover(slowDown: AccountSlowDown | null, now: number): string | null {
-  if (slowDown === null || slowDown.factor >= 1) return null;
+  if (slowDown === null || slowDown.speed >= 1) return null;
   // The round fires on a stretch above the threshold, so one at it reads under.
   const side = slowDown.stretchMs > slowDown.thresholdMs ? 'over' : 'under';
   const words = `the sessions on this account would pass the ceiling ${minuteSpan(slowDown.stretchMs)} before the reset, ${side} the ${minuteSpan(slowDown.thresholdMs)} threshold`;
-  return slowDown.since === null ? words : `slowed since ${instant(Date.parse(slowDown.since), now)}: ${words}`;
+  const first = slowDown.since === null ? words : `slowed since ${instant(Date.parse(slowDown.since), now)}: ${words}`;
+  return sentences([first, `The pool computed ${speedWord(slowDown.factor)}`, slowDown.ramp === null ? null : rampWords(slowDown.ramp, slowDown.factor), `The holds realized ${speedWord(slowDown.speed)}`]);
 }
 
 /**
- * A serving member's speed chip: its account's slow-down with the hover where the account is loaded, else the factor
- * the pools route serves on the member with no hover. A loaded account draws none, whatever the member carries, where
- * `slowedOf` reads no slow-down: none in force, a factor of 1, no 5-hour window at all, or a 5-hour window reset since
- * the read.
+ * A serving member's speed chip: its account's slow-down with the hover where the account is loaded, else the speed
+ * the holds realized as the pools route serves it on the member, with no hover. A loaded account draws none, whatever
+ * the member carries, where `slowedOf` reads no slow-down: none in force, a realized speed of 1, no 5-hour window at
+ * all, or a 5-hour window reset since the read.
  */
 export function memberSpeed(member: Pick<PoolMember, 'speed'>, account: Account | null, now: number): { factor: number | null; hover: string | null } {
   if (account === null) return { factor: member.speed, hover: null };
   const slowDown = slowedOf(account, now);
-  return slowDown === null ? { factor: null, hover: null } : { factor: slowDown.factor, hover: speedHover(slowDown, now) };
+  return slowDown === null ? { factor: null, hover: null } : { factor: slowDown.speed, hover: speedHover(slowDown, now) };
 }
 
 /**

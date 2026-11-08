@@ -136,9 +136,12 @@ const slowedAccount = (id, factor, stretchMinutes, speed = factor) => ({
   ...oauth(id, 0.5, 0.5),
   slowDown: { factor, holdMs: 120_000, since: factor < 1 ? at(NOW - 10 * MINUTE) : null, speed, stretchMs: stretchMinutes * MINUTE, thresholdMs: 30 * MINUTE },
 });
-/** A pool with the slow-down on, its members in the given order, each carrying the factor its account serves. */
+/**
+ * A pool with the slow-down on, its members in the given order, each carrying the factor and the speed its account
+ * serves.
+ */
 const slowPool = (accounts, over = {}) => ({
-  members: accounts.map((a, i) => ({ accountId: a.id, priority: i, speed: a.slowDown?.factor ?? null })),
+  members: accounts.map((a, i) => ({ accountId: a.id, factor: a.slowDown?.factor ?? null, priority: i, speed: a.slowDown?.speed ?? null })),
   slowDown: true,
   slowDownHoldSeconds: 120,
   slowDownStretchSeconds: 1_800,
@@ -166,7 +169,7 @@ test('the slow-down preview reads off, no slowed member, or the slowed members a
   assert.equal(slowLine([studio], { slowDownHoldSeconds: 60, slowDownStretchSeconds: 9_000 }), '1 member is slowed: studio at 0.5x (42 min of 2 h 30 min). A session there waits its cycle times 1.0, up to 60 s.', "the threshold and the hold are the pool's");
   assert.equal(slowLine([slowedAccount('full', 0, 70)]), '1 member is slowed: full at 0x (1 h 10 min of 30 min). A session there waits the full 120 s.', 'at the ceiling a session waits the whole hold');
   const alder = slowedAccount('alder', 0.5, 42);
-  const ghost = { ...slowPool([alder]), members: [{ accountId: 'alder', priority: 0, speed: 0.5 }, { accountId: 'ghost', priority: 1, speed: 0.4 }] };
+  const ghost = { ...slowPool([alder]), members: [{ accountId: 'alder', factor: 0.5, priority: 0, speed: 0.5 }, { accountId: 'ghost', factor: 0.4, priority: 1, speed: 1 }] };
   assert.equal(d.slowDownPreviewLine(d.slowDownPreview(ghost, [alder])), '2 members are slowed: alder at 0.5x (42 min of 30 min), ghost at 0.4x. A session on ghost waits its cycle times 1.5, up to 120 s.', 'a member whose account did not load counts by its own factor, its stretch unknown');
 });
 

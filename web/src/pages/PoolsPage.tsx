@@ -1415,8 +1415,8 @@ export function PoolDialog({
     const verdict = new Map((pool?.members ?? []).map((m) => [m.accountId, m.eligible]));
     const preview = shedPreview({ ...input, members: input.members.map((m) => ({ ...m, eligible: verdict.get(m.accountId) })) }, accounts, sessions, now);
     // The route's factor per stored member, which a member whose account did not load is read by.
-    const speedOf = new Map((pool?.members ?? []).map((m) => [m.accountId, m.speed]));
-    const slowPreview = slowDownPreview({ ...input, members: input.members.map((m) => ({ ...m, speed: speedOf.get(m.accountId) ?? null })) }, accounts);
+    const factorOf = new Map((pool?.members ?? []).map((m) => [m.accountId, m.factor]));
+    const slowPreview = slowDownPreview({ ...input, members: input.members.map((m) => ({ ...m, factor: factorOf.get(m.accountId) ?? null })) }, accounts);
     return {
       identity: (
         <div className="cells">

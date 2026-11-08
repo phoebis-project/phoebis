@@ -251,13 +251,13 @@ test("the mock's slowed-account fold reads its bar from the start rows, its span
     ended(now - HOUR + 2 * MINUTE, now - 2 * HOUR, HOUR, 0.4),
   ];
   assert.deepEqual(slowedLongOf(rows, 'studio', now), {
-    detail: { bar_ms: 80 * MINUTE, factor_min: 0.4, held: 72, held_ms: 7_700_000, open: false, setting: ['slow_down_stretch_seconds'], slowed_ms: 110 * MINUTE, spans: 2 },
+    detail: { bar_ms: 80 * MINUTE, held: 72, held_ms: 7_700_000, open: false, setting: ['slow_down_stretch_seconds'], spans: 2 },
     since: iso(cutoff - 30 * MINUTE),
   });
   // The hour's span alone runs 60 minutes, under the bar of twice 40, and studio's seeded held time of the day, past
   // the bar, holds the item.
   assert.deepEqual(slowedLongOf(rows.slice(2), 'studio', now), {
-    detail: { bar_ms: 80 * MINUTE, factor_min: 0.4, held: 72, held_ms: 7_700_000, open: false, setting: ['slow_down_stretch_seconds'], slowed_ms: HOUR, spans: 1 },
+    detail: { bar_ms: 80 * MINUTE, held: 72, held_ms: 7_700_000, open: false, setting: ['slow_down_stretch_seconds'], spans: 1 },
     since: iso(now - 2 * HOUR),
   });
 });
@@ -2853,7 +2853,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       [2, true, ['slow_down_stretch_seconds'], { slow_down_stretch_seconds: s.pools.find((p) => p.id === 'work').slowDownStretchSeconds }],
       "studio's two spans in work, the open one standing, and the pool's stretch",
     );
-    assert.deepEqual([item.detail.slowed_ms, item.detail.bar_ms, item.detail.factor_min], [7_700_000, 3_600_000, 0.35], "the closed span of 86 min 20 s and the open one since 13:48, past twice work's 30 minutes");
+    assert.deepEqual([item.detail.held_ms, item.detail.bar_ms, item.detail.held], [7_700_000, 3_600_000, 72], "the closed span of 86 min 20 s and the open one since 13:48, past twice work's 30 minutes");
   });
 
   test(`the mock's reconciliations name the story's accounts, and of each account's newest windows nightly's 5-hour one alone reads off, at ${at}`, async () => {

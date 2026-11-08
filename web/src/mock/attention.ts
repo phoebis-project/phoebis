@@ -120,17 +120,16 @@ const HELD_TODAY: Readonly<Record<string, { held: number; heldMs: number }>> = {
  * start with the next end of its account and pool or the next restart, whichever comes first, a start with neither open
  * to now, each span clamped to the day and one with no part inside it not counted. It holds once the account's held
  * time of the day passes the bar, twice the stretch threshold the newest span's start row read and at least an hour,
- * from the own start of the oldest span, with the day's held time and held requests, the lowest factor any span read
- * and the stretch threshold of the newest span's pool. Null where no span falls inside the day or it does not hold.
+ * from the own start of the oldest span, with the day's held time, the held count and the stretch threshold of the
+ * newest span's pool. Null where no span falls inside the day or it does not hold.
  */
 export function slowedLongOf(rows: readonly SpanRow[], accountId: string, now: number): Pick<AttentionItem, 'detail' | 'since'> | null {
   const from = now - DAY;
-  const spans: { factor: number | null; open: boolean; pool: string; since: number; slowedMs: number; thresholdMs: number | null }[] = [];
-  const count = (pool: string, since: number, end: number, open: boolean, factor: number | null, thresholdMs: number | null) => {
+  const spans: { open: boolean; pool: string; since: number; thresholdMs: number | null }[] = [];
+  const count = (pool: string, since: number, end: number, open: boolean, thresholdMs: number | null) => {
     const slowedMs = Math.min(end, now) - Math.max(since, from);
-    if (slowedMs > 0) spans.push({ factor, open, pool, since, slowedMs, thresholdMs });
+    if (slowedMs > 0) spans.push({ open, pool, since, thresholdMs });
   };
-  const lowest = (a: number | null, b: unknown) => (typeof b !== 'number' ? a : a === null ? b : Math.min(a, b));
   const thresholdOf = (e: SpanRow) => (typeof e.detail.threshold_ms === 'number' ? e.detail.threshold_ms : null);
   const own = rows.filter((e) => e.kind === 'router_started' || (e.accountId === accountId && e.poolId !== null)).sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
   // A span that started before the cutoff and ends inside the day names no start the day holds, so the state at the
@@ -140,28 +139,26 @@ export function slowedLongOf(rows: readonly SpanRow[], accountId: string, now: n
   const restart = Math.max(Number.NEGATIVE_INFINITY, ...before.filter((e) => e.kind === 'router_started').map((e) => Date.parse(e.at)));
   const lastBefore = new Map<string, SpanRow>();
   for (const e of before) if (e.kind === 'slow_down_started' || e.kind === 'slow_down_ended') lastBefore.set(e.poolId ?? '', e);
-  const standing = new Map<string, { factor: number | null; since: number; thresholdMs: number | null }>();
-  for (const [pool, e] of lastBefore) if (e.kind === 'slow_down_started' && Date.parse(e.at) > restart) standing.set(pool, { factor: lowest(null, e.detail.factor), since: Date.parse(e.at), thresholdMs: thresholdOf(e) });
+  const standing = new Map<string, { since: number; thresholdMs: number | null }>();
+  for (const [pool, e] of lastBefore) if (e.kind === 'slow_down_started' && Date.parse(e.at) > restart) standing.set(pool, { since: Date.parse(e.at), thresholdMs: thresholdOf(e) });
   for (const e of own.filter((x) => Date.parse(x.at) >= from && Date.parse(x.at) <= now)) {
     const pool = e.poolId ?? '';
     if (e.kind === 'router_started') {
-      for (const [open, span] of standing) count(open, span.since, Date.parse(e.at), false, span.factor, span.thresholdMs);
+      for (const [open, span] of standing) count(open, span.since, Date.parse(e.at), false, span.thresholdMs);
       standing.clear();
     } else if (e.kind === 'slow_down_started') {
-      const span = standing.get(pool);
-      standing.set(pool, span ? { ...span, factor: lowest(span.factor, e.detail.factor) } : { factor: lowest(null, e.detail.factor), since: Date.parse(e.at), thresholdMs: thresholdOf(e) });
+      if (!standing.has(pool)) standing.set(pool, { since: Date.parse(e.at), thresholdMs: thresholdOf(e) });
     } else if (e.kind === 'slow_down_ended') {
       const span = standing.get(pool);
       if (!span) continue;
       standing.delete(pool);
       const since = typeof e.detail.since === 'number' ? e.detail.since : span.since;
       const end = typeof e.detail.duration_ms === 'number' ? since + e.detail.duration_ms : Date.parse(e.at);
-      count(pool, since, end, false, typeof e.detail.factor_min === 'number' ? e.detail.factor_min : span.factor, span.thresholdMs);
+      count(pool, since, end, false, span.thresholdMs);
     }
   }
-  for (const [pool, span] of standing) count(pool, span.since, now, true, span.factor, span.thresholdMs);
+  for (const [pool, span] of standing) count(pool, span.since, now, true, span.thresholdMs);
   if (spans.length === 0) return null;
-  const slowedMs = spans.reduce((n, x) => n + x.slowedMs, 0);
   const newest = spans.reduce((a, b) => (b.since > a.since ? b : a));
   const barMs = Math.max(SLOWED_LONG_STRETCHES * (newest.thresholdMs ?? 0), SLOWED_LONG_FLOOR_MS);
   const held = HELD_TODAY[accountId] ?? { held: 0, heldMs: 0 };
@@ -170,13 +167,11 @@ export function slowedLongOf(rows: readonly SpanRow[], accountId: string, now: n
   return {
     detail: {
       bar_ms: barMs,
-      factor_min: spans.reduce<number | null>((n, x) => lowest(n, x.factor), null),
       held: held.held,
       held_ms: held.heldMs,
       open: spans.some((x) => x.open),
       setting: ['slow_down_stretch_seconds'],
       ...(stretch === undefined ? {} : { setting_values: { slow_down_stretch_seconds: stretch } }),
-      slowed_ms: slowedMs,
       spans: spans.length,
     },
     since: iso(Math.min(...spans.map((x) => x.since))),

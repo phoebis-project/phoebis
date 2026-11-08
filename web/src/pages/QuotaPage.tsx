@@ -334,7 +334,7 @@ function QuotaWindow({ absent, end, name, window: w, now, slowDown = null, soon 
           {slowDown && (
             <>
               {' '}
-              <SpeedChip factor={slowDown.factor} hover={speedHover(slowDown, now)} />
+              <SpeedChip factor={slowDown.speed} hover={speedHover(slowDown, now)} />
             </>
           )}
         </span>
