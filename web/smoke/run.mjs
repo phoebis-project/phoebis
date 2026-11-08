@@ -571,7 +571,7 @@ await forView('/pools', async () => {
   await p.settle(300);
   results.push({
     name: '/pools a first attention read that fails draws the unavailable line above the grid, while the pools load and over cards without a badge',
-    ok: loading[0] === true && loading[1] === 0 && unavailable() && rows() === '[0,0,0,0,0]',
+    ok: loading[0] === true && loading[1] === 0 && unavailable() && rows() === '[0,0,0,0,0,0]',
     missing: [JSON.stringify(loading), line()?.outerHTML.slice(0, 200) ?? 'no line', rows()],
   });
   api.getAttention = getAttention;
@@ -1127,12 +1127,13 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   const named = (id) => [...(rings[id]?.querySelectorAll('.remaining__left-out li') ?? [])].map((li) => li.textContent ?? '');
   const onRing = (id) => [...(rings[id]?.querySelectorAll('.remaining__list a, .remaining__left-out li') ?? [])].map((e) => (e.textContent ?? '').split(':')[0]);
   const strays = ['7d', '7d_fable'].flatMap((id) => onRing(id).filter((n) => n === 'legacy' || n === 'spare' || n === 'sunset').map((n) => `${n} on the ${id} ring`));
-  // The contract seed is a usage-based seat, which the router prices no tier for and which reports no plan window, so
-  // both rings name it with the gate's word. The Pro seeds carry no Fable week, so the Fable ring names them too.
-  const seat = ['contract: a usage-based seat'];
+  // The contract and zenith seeds are usage-based seats, which the router prices no tier for and which report no plan
+  // window, so both rings name them with the gate's word. The Pro seeds carry no Fable week, so the Fable ring names
+  // them too.
+  const seat = ['contract: a usage-based seat', 'zenith: a usage-based seat'];
   const fableNamed = ['secondary: no Fable week', 'reserve: no Fable week', ...seat];
   results.push({
-    name: '/ every listed tier is sized on both rings, so the 7-day ring names the usage-based seat alone and the Fable ring the Pro seeds without a Fable week beside it',
+    name: '/ every listed tier is sized on both rings, so the 7-day ring names the usage-based seats alone and the Fable ring the Pro seeds without a Fable week beside them',
     ok: lineOf('7d') !== '' && lineOf('7d_fable') !== '' && JSON.stringify(named('7d')) === JSON.stringify(seat) && JSON.stringify(named('7d_fable')) === JSON.stringify(fableNamed) && JSON.stringify(fF.leftOut.map((o) => `${o.label}: ${o.reason}`)) === JSON.stringify(fableNamed) && strays.length === 0,
     missing: [`7-day ${JSON.stringify(named('7d'))}`, `Fable ${JSON.stringify(named('7d_fable'))}`, ...strays],
   });
@@ -1686,9 +1687,9 @@ quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.container.q
 {
   // The bar's sort control on a bare /quota. The recovery orders are written from the story's accounts (`SEEDS` in
   // `web/src/mock/accounts.ts`) at the mount's frozen clock: their resets still ahead of it, reserve's 5-hour window
-  // run out, no Fable window on secondary or reserve, no 5-hour window on workshop, and contract a usage-based seat
-  // with no plan window. An account without the key's reset reads after every one with it under either direction, by
-  // label, the seat among them. Default order has no direction, so its button draws no arrow and both direction rows
+  // run out, no Fable window on secondary or reserve, no 5-hour window on workshop, and contract and zenith
+  // usage-based seats with no plan window. An account without the key's reset reads after every one with it under
+  // either direction, by label, the seats among them. Default order has no direction, so its button draws no arrow and both direction rows
   // stand disabled and unchecked.
   const name = "/quota the sort control reads Default order with no direction, and each recovery order files the cards by that window's reset, the soonest first, its address read back on a reload";
   const page = await mount('/quota', { now: CLOCK_ORIGIN });
@@ -1729,11 +1730,11 @@ quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.container.q
   const reloaded = read(again);
   again.unmount();
   const shown = (arrow, cards, search, label, word) => ({ arrow, cards, search, text: `Sort: ${label}`, title: word === null ? `Sorted by ${label}` : `Sorted by ${label}, ${word}` });
-  const descending = shown('down', ['nightly', 'primary', 'studio', 'secondary', 'contract', 'reserve', 'workshop'], '?sort=reset5h&dir=desc', '5-hour recovery', 'descending');
+  const descending = shown('down', ['nightly', 'primary', 'studio', 'secondary', 'contract', 'reserve', 'workshop', 'zenith'], '?sort=reset5h&dir=desc', '5-hour recovery', 'descending');
   const wantPicks = {
-    reset7d: { ...shown('up', ['nightly', 'reserve', 'primary', 'workshop', 'studio', 'secondary', 'contract'], '?sort=reset7d', '7-day recovery', 'ascending'), open: false },
-    resetFable: { ...shown('up', ['nightly', 'primary', 'workshop', 'studio', 'contract', 'reserve', 'secondary'], '?sort=resetFable', '7-day Fable recovery', 'ascending'), open: false },
-    reset5h: { ...shown('up', ['secondary', 'studio', 'primary', 'nightly', 'contract', 'reserve', 'workshop'], '?sort=reset5h', '5-hour recovery', 'ascending'), open: false },
+    reset7d: { ...shown('up', ['nightly', 'reserve', 'primary', 'workshop', 'studio', 'secondary', 'contract', 'zenith'], '?sort=reset7d', '7-day recovery', 'ascending'), open: false },
+    resetFable: { ...shown('up', ['nightly', 'primary', 'workshop', 'studio', 'contract', 'reserve', 'secondary', 'zenith'], '?sort=resetFable', '7-day Fable recovery', 'ascending'), open: false },
+    reset5h: { ...shown('up', ['secondary', 'studio', 'primary', 'nightly', 'contract', 'reserve', 'workshop', 'zenith'], '?sort=reset5h', '5-hour recovery', 'ascending'), open: false },
     reset5hDesc: { ...descending, open: false },
   };
   const wantRadios = [
@@ -1743,7 +1744,7 @@ quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.container.q
   results.push({
     name,
     ok:
-      JSON.stringify(bare) === JSON.stringify(shown('no arrow', ['primary', 'secondary', 'nightly', 'studio', 'reserve', 'contract', 'workshop'], '', 'Default order', null)) &&
+      JSON.stringify(bare) === JSON.stringify(shown('no arrow', ['primary', 'secondary', 'nightly', 'studio', 'reserve', 'contract', 'workshop', 'zenith'], '', 'Default order', null)) &&
       JSON.stringify(radios) === JSON.stringify(wantRadios) &&
       JSON.stringify(picks) === JSON.stringify(wantPicks) &&
       JSON.stringify(reloaded) === JSON.stringify(descending),
@@ -1990,8 +1991,8 @@ quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.container.q
   {
     // The story draws the line in use on nightly, enabled and not in use on primary, and with no extra usage reported
     // on secondary, and studio's block under the override is off. Nightly's reading a head wrote carries no amounts
-    // (the seed's extraUsage), so its line names its state alone. The contract seat's Spend row is that reading, so its
-    // card draws no line.
+    // (the seed's extraUsage), so its line names its state alone. A usage-based seat's Spend row is that reading, so
+    // the contract and zenith cards draw no line.
     const read = (label) => {
       const chip = cardOf(label)?.querySelector('.qcard__extra .chip');
       return [chip?.textContent?.trim() ?? 'no line', chip?.classList.contains('chip--serious') ? 'serious' : chip?.classList.contains('qcard__extra-quiet') ? 'quiet' : 'neither'];
@@ -2003,14 +2004,15 @@ quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.container.q
       secondary: ['Extra usagenot reported', 'quiet'],
       studio: ['Extra usageoff', 'quiet'],
     };
-    const plans = cards.filter((c) => c !== cardOf('contract'));
+    const seats = [cardOf('contract'), cardOf('zenith')];
+    const plans = cards.filter((c) => !seats.includes(c));
     const placed = plans.filter((c) => !(c.querySelectorAll('.qcard__extra').length === 1 && c.querySelector('.qcard__body')?.nextElementSibling?.classList.contains('qcard__extra')));
     const fableLast = plans.filter((c) => c.querySelector('.qcard__windows')).every((c) => [...c.querySelectorAll('.qcard__windows .qchip__name')].pop()?.textContent === 'Fable');
-    const seatLines = cardOf('contract')?.querySelectorAll('.qcard__extra').length ?? -1;
+    const seatLines = seats.map((c) => c?.querySelectorAll('.qcard__extra').length ?? -1);
     results.push({
-      name: "/quota every plan account's card draws one Extra usage line directly after the Fable row, in use in the serious tone and each quiet state in the muted ink, and the usage-based seat's none",
-      ok: plans.length > 0 && placed.length === 0 && fableLast && seatLines === 0 && JSON.stringify(drawn) === JSON.stringify(wanted) && cardOf('nightly')?.querySelector('.qcard__extra .chip__flag')?.textContent === 'in use',
-      missing: [JSON.stringify(drawn), ...placed.map((c) => `misplaced on ${c.querySelector('.qcard__name')?.textContent?.trim()}`), fableLast ? 'Fable last' : 'a row after Fable', `${seatLines} lines on contract`],
+      name: "/quota every plan account's card draws one Extra usage line directly after the Fable row, in use in the serious tone and each quiet state in the muted ink, and each usage-based seat's none",
+      ok: plans.length > 0 && placed.length === 0 && fableLast && JSON.stringify(seatLines) === '[0,0]' && JSON.stringify(drawn) === JSON.stringify(wanted) && cardOf('nightly')?.querySelector('.qcard__extra .chip__flag')?.textContent === 'in use',
+      missing: [JSON.stringify(drawn), ...placed.map((c) => `misplaced on ${c.querySelector('.qcard__name')?.textContent?.trim()}`), fableLast ? 'Fable last' : 'a row after Fable', `${seatLines.join(' and ')} lines on contract and zenith`],
     });
     // studio's block under the override carries the provider's reason, drawn inside the line and whole in its title.
     const line = cardOf('studio')?.querySelector('.qcard__extra');
@@ -4534,7 +4536,7 @@ await forView('/accounts', async () => {
   // Each editor fences on the revision it opened with. A write through the API while one is open moves the mock's
   // revision past it, so its save is refused as stale with a Reload of its own, and nothing reloads until it is
   // pressed.
-  const sentence = 'the account changed while the edit was being saved';
+  const sentence = 'the account changed while it was being edited, so reload and try again';
   const primary = async () => (await api.listAccounts()).find((a) => a.id === 'primary');
   const accountReads = async (click) => {
     const reads = countCalls('listAccounts');
@@ -4720,7 +4722,7 @@ await forView('/accounts', async () => {
   // write by another operator in between still meets the fence. Both directions run, a label save under the other
   // account's end editor and an end save under its label editor.
   const [first, second] = ['nightly', 'studio'];
-  const sentence = 'the account changed while the edit was being saved';
+  const sentence = 'the account changed while it was being edited, so reload and try again';
   const stored = async (id) => (await api.listAccounts()).find((a) => a.id === id);
   // The rule needs both rows on one token, so the row behind takes unfenced writes of the label it holds until the two
   // match. Null when they never do, as across two incarnations of an id.
@@ -4897,7 +4899,7 @@ await forView('/accounts', async () => {
   const read = { path: left, stored: (await api.listAccounts()).find((a) => a.id === 'primary')?.canceled, toast: page.container.querySelector('.toast')?.textContent ?? '' };
   results.push({
     name: '/accounts a save refused after the operator left the account raises the toast',
-    ok: read.path === '/accounts/secondary' && read.toast === 'Save on primary refused: the account changed while the edit was being saved' && read.stored === false,
+    ok: read.path === '/accounts/secondary' && read.toast === 'Save on primary refused: the account changed while it was being edited, so reload and try again' && read.stored === false,
     missing: [`path ${read.path}`, read.toast || 'no toast', `stored canceled ${read.stored}`],
   });
   page.unmount();
@@ -5523,7 +5525,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const none = [...cards.entries()].filter(([, c]) => c.querySelector('.pool__keys--none')).map(([name]) => name);
   results.push({
     name: '/pools each card links its key count to the Keys page filtered to the pool',
-    ok: JSON.stringify(links) === JSON.stringify(wanted) && JSON.stringify(none) === JSON.stringify(['all', 'jobs', 'work'].filter((id) => !keyCount.get(id))),
+    ok: JSON.stringify(links) === JSON.stringify(wanted) && JSON.stringify(none) === JSON.stringify([...cards.keys()].filter((id) => !keyCount.get(id))),
     missing: [...links.flat().map(String), ...wanted.flat(), ...none],
   });
   {
@@ -5897,6 +5899,24 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       missing: [JSON.stringify(cooled), JSON.stringify(over)],
     });
     never.unmount();
+  }
+  {
+    // The pool of the seats the router cannot place: the plan that ended, the key it has not loaded and the seat at its
+    // spend cap, whose reset is the month's estimate the zenith seed carries.
+    const reset = (await api.listAccounts()).find((a) => a.id === 'zenith')?.spend?.resetsAt ?? '';
+    const sidelined = ['sunset', 'New workspace', 'zenith'].map((label) => standing('sidelined', label).badges);
+    results.push({
+      name: '/pools the members the router cannot place read subscription ended, unknown and the spend cap until its reset',
+      ok:
+        reset !== '' &&
+        JSON.stringify(sidelined) ===
+          JSON.stringify([
+            [['subscription ended', 'badge--neutral', '']],
+            [['unknown', 'badge--neutral', 'The router has not loaded this member, or does not answer']],
+            [[`spend cap until ${fmtPeriodEnd(reset)}`, 'badge--serious', `At the spend cap until ${fmtAbsolute(reset)}`]],
+          ]),
+      missing: sidelined.map((b) => JSON.stringify(b)),
+    });
   }
   const spend = (name, label) =>
     [...(rows(name).find((r) => cell(r, 1).querySelector('a')?.textContent?.trim() === label)?.querySelectorAll('td:nth-child(2) .num') ?? [])].map((s) => s.textContent?.replace(/\s+/g, ' ').trim());
@@ -7099,8 +7119,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       const byLabel = new Map((await api.listAccounts()).map((a) => [a.label, a.id]));
       await emailLines('/pools dialog reads each member\'s email beside its label, and nothing beside one without', memberRows().map((tr) => [byLabel.get(tr.querySelector('td:first-child span')?.textContent ?? '') ?? '', tr.querySelector('td:first-child span.mono')?.textContent ?? null]));
     }
-    // The pool's members by priority, then every other account by label, the workshop seed last by its label.
-    const listed = ['nightly', 'primary', 'secondary', 'Overflow workspace', 'contract', 'legacy', 'Research workspace', 'reserve', 'studio', 'Studio annex', 'sunset', 'workshop'];
+    // The pool's members by priority, then every other account by label, the zenith seed last by its label.
+    const listed = ['nightly', 'primary', 'secondary', 'Overflow workspace', 'contract', 'legacy', 'New workspace', 'Research workspace', 'reserve', 'studio', 'Studio annex', 'sunset', 'workshop', 'zenith'];
     results.push({ name: '/pools dialog lists members by priority then label', ok: JSON.stringify(memberLabels()) === JSON.stringify(listed), missing: memberLabels() });
     const prio = dlg?.querySelector('input[aria-label="Priority for primary"]');
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
@@ -7110,7 +7130,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     results.push({ name: '/pools priority keystrokes leave the row where it is', ok: JSON.stringify(memberLabels()) === JSON.stringify(listed), missing: memberLabels() });
     prio?.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     await m.settle(150);
-    results.push({ name: '/pools committing a priority re-sorts the list', ok: JSON.stringify(memberLabels()) === JSON.stringify(['nightly', 'secondary', 'Overflow workspace', 'primary', 'contract', 'legacy', 'Research workspace', 'reserve', 'studio', 'Studio annex', 'sunset', 'workshop']), missing: memberLabels() });
+    results.push({ name: '/pools committing a priority re-sorts the list', ok: JSON.stringify(memberLabels()) === JSON.stringify(['nightly', 'secondary', 'Overflow workspace', 'primary', 'contract', 'legacy', 'New workspace', 'Research workspace', 'reserve', 'studio', 'Studio annex', 'sunset', 'workshop', 'zenith']), missing: memberLabels() });
     setter.call(prio, '0');
     dlg?.querySelector('input[aria-label="Priority for primary"]')?.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(150);
@@ -7370,7 +7390,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const moveDlg = [...m.container.querySelectorAll('dialog[open]')].pop();
   const moveSelect = moveDlg?.querySelector('select[aria-label="Destination pool"]');
   expect('/pools move dialog', moveDlg?.textContent ?? '', ['Move key laptop', 'ends its current session pins', 'Move key']);
-  results.push({ name: '/pools move dialog lists the other pools only', ok: [...(moveSelect?.options ?? [])].map((o) => o.value).join(',') === 'jobs,work,contract,workshop', missing: [...(moveSelect?.options ?? [])].map((o) => o.value) });
+  results.push({ name: '/pools move dialog lists the other pools only', ok: [...(moveSelect?.options ?? [])].map((o) => o.value).join(',') === 'jobs,work,contract,workshop,sidelined', missing: [...(moveSelect?.options ?? [])].map((o) => o.value) });
   [...(moveDlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Move key')?.click();
   await m.settle(600);
   results.push({ name: '/pools moved key leaves the list', ok: keyRows().length > 0 && !keyRows().some((tr) => tr.children[0]?.textContent?.trim() === 'laptop'), missing: keyRows().map((tr) => tr.children[0]?.textContent?.trim()) });
@@ -8464,7 +8484,7 @@ m.unmount();
   const unchecked = !(dlg?.textContent ?? '').includes('is not an account') && members?.querySelector('.members-table') === null;
   retry?.click();
   await m.settle(600);
-  // The pool's members by priority, then every other account by label, the workshop seed last by its label.
+  // The pool's members by priority, then every other account by label, the zenith seed last by its label.
   const labels = [...(members?.querySelectorAll('.members-table tbody tr') ?? [])].map((tr) => tr.querySelector('td:first-child span')?.textContent);
   results.push({
     name: "/pools a failed accounts read holds the dialog's save without naming a member",
@@ -8474,7 +8494,7 @@ m.unmount();
       held.startsWith('Save is held: the account list did not load, so the members cannot be checked.') &&
       held.includes('Go to Members') &&
       unchecked &&
-      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'contract', 'legacy', 'Research workspace', 'reserve', 'studio', 'Studio annex', 'sunset', 'workshop']) &&
+      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'contract', 'legacy', 'New workspace', 'Research workspace', 'reserve', 'studio', 'Studio annex', 'sunset', 'workshop', 'zenith']) &&
       status() === 'Every group saves together.',
     missing: [...failed.map(String), retry ? 'Try again' : 'no Try again', held, unchecked ? '' : 'a member refusal or a table while the read failed', ...labels.map(String), status()],
   });
@@ -8497,14 +8517,14 @@ m.unmount();
   read.release();
   await m.settle(600);
   read.restore();
-  // The pool's members by priority, then every other account by label, the workshop seed last by its label.
+  // The pool's members by priority, then every other account by label, the zenith seed last by its label.
   const labels = rows().map((tr) => tr.querySelector('td:first-child span')?.textContent);
   results.push({
     name: '/pools while the accounts read is out the stored members draw unmarked and hold nothing',
     ok:
       JSON.stringify(early) === JSON.stringify([['nightly', true, true], ['overflow', true, true], ['primary', true, true], ['secondary', true, true]]) &&
       before === 'Every group saves together.' &&
-      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'contract', 'legacy', 'Research workspace', 'reserve', 'studio', 'Studio annex', 'sunset', 'workshop']) &&
+      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'contract', 'legacy', 'New workspace', 'Research workspace', 'reserve', 'studio', 'Studio annex', 'sunset', 'workshop', 'zenith']) &&
       status() === 'Every group saves together.',
     missing: [JSON.stringify(early), before, ...labels.map(String), status()],
   });
@@ -16639,8 +16659,8 @@ await forView('/routing-log', async () => {
   }
   {
     // The Fable-week round on nightly at 08:30: the 5-hour window opened 19 minutes before, under all's hold of an
-    // hour, so the shed rule's Round group reads the window's age and hold, and the 7-day Fable window fires in its
-    // place. The round walks the Fable pin with its burn on the 7-day Fable window, the one pin walked and so the last
+    // hour, so the shed rule's Round group reads the window's age and hold with each burning window's wall, and the
+    // 7-day Fable window fires in its place. The round walks the Fable pin with its burn on the 7-day Fable window, the one pin walked and so the last
     // pin, and lists the Opus pin off the window, left out before the walk, so it marks nothing for the last pin.
     const name = "/routing-log the Fable-week round's card walks the Fable pin as the last pin, lists the Opus pin off the window and marks nothing for the last pin";
     const id = 'req_3e7a5c19-f84';
@@ -16662,7 +16682,7 @@ await forView('/routing-log', async () => {
       results.push({
         name,
         ok:
-          JSON.stringify(labels) === JSON.stringify(['trigger', 'excess', 'fired by', 'age 5h', 'age hold 5h', 'target', 'round', 'marked', 'marks', 'skipped']) &&
+          JSON.stringify(labels) === JSON.stringify(['trigger', 'excess', 'fired by', 'age 5h', 'age hold 5h', 'wall 5h', 'wall Fable', 'target', 'round', 'marked', 'marks', 'skipped']) &&
           (popoverRowOf(round, 'age 5h') ?? []).includes('age 5h 19 min') && (popoverRowOf(round, 'age hold 5h') ?? []).includes('age hold 5h 1 h') && (popoverRowOf(round, 'round') ?? []).includes('round ran') &&
           JSON.stringify(facts) === JSON.stringify(['pins 0 of 2']) &&
           JSON.stringify(pins.map((cells) => [cells[3], cells[5], cells[7]])) === JSON.stringify([['3.0 %/h', '-', 'last pin'], ['-', '-', 'off window']]) &&
@@ -17643,7 +17663,7 @@ await forView('/routing-log', async () => {
       ],
       reservation_expired: ['Request', 'Attempt', 'Cause', 'Reserved', 'Held for', 'Effect'],
       router_started: ['Version', 'Pins loaded', 'Shedding marks loaded', 'Window readings loaded', 'Affinity entries loaded', 'Down from', 'Held requests'],
-      shedding_round: ['Started by', 'Trigger', 'Fired by', 'Excess', 'Cap', 'Unit', 'Burn average', 'Warm sessions', 'Pins', 'Skipped', 'Outcome', 'Next round after', 'Dwell', 'Survive a restart'],
+      shedding_round: ['Started by', 'Trigger', 'Fired by', 'Excess', 'Cap', 'Mark share', 'Unit', 'Burn average', 'Warm sessions', 'Pins', 'Skipped', 'Outcome', 'Next round after', 'Dwell', 'Survive a restart'],
       slow_down_ended: ['Lasted', 'Slowest', 'Held', 'Effect'],
       slow_down_started: ['Speed', 'Stretch', 'Demand', 'Reset', 'Effect'],
       stream_interrupted: ['Request', 'Code', 'Text', 'Bytes relayed', 'Upstream request', 'Attempt'],
@@ -23487,13 +23507,13 @@ await forView('/accounts', async () => {
   const ordered = (rows, compare) => [...rows].sort((a, b) => compare(a, b) || byLabel(a, b)).map((a) => a.id);
   const want = {
     name: ordered(accounts, () => 0),
-    usage: ['secondary', 'nightly', 'studio', 'reserve', 'primary', 'legacy', 'workshop', 'contract', 'overflow', 'research', 'annex', 'sunset'],
-    usageAsc: ['workshop', 'legacy', 'primary', 'reserve', 'studio', 'nightly', 'secondary', 'contract', 'overflow', 'research', 'annex', 'sunset'],
+    usage: ['secondary', 'nightly', 'studio', 'reserve', 'primary', 'legacy', 'workshop', 'contract', 'youngest', 'overflow', 'research', 'annex', 'sunset', 'zenith'],
+    usageAsc: ['workshop', 'legacy', 'primary', 'reserve', 'studio', 'nightly', 'secondary', 'contract', 'youngest', 'overflow', 'research', 'annex', 'sunset', 'zenith'],
     status: ordered(accounts, (a, b) => a.status.localeCompare(b.status)),
-    reset5h: ['secondary', 'studio', 'primary', 'nightly', 'contract', 'legacy', 'overflow', 'research', 'reserve', 'annex', 'sunset', 'workshop'],
-    reset7d: ['nightly', 'legacy', 'reserve', 'primary', 'workshop', 'studio', 'secondary', 'contract', 'overflow', 'research', 'annex', 'sunset'],
-    resetFable: ['nightly', 'primary', 'workshop', 'studio', 'contract', 'legacy', 'overflow', 'research', 'reserve', 'secondary', 'annex', 'sunset'],
-    resetFableDesc: ['studio', 'workshop', 'primary', 'nightly', 'contract', 'legacy', 'overflow', 'research', 'reserve', 'secondary', 'annex', 'sunset'],
+    reset5h: ['secondary', 'studio', 'primary', 'nightly', 'contract', 'legacy', 'youngest', 'overflow', 'research', 'reserve', 'annex', 'sunset', 'workshop', 'zenith'],
+    reset7d: ['nightly', 'legacy', 'reserve', 'primary', 'workshop', 'studio', 'secondary', 'contract', 'youngest', 'overflow', 'research', 'annex', 'sunset', 'zenith'],
+    resetFable: ['nightly', 'primary', 'workshop', 'studio', 'contract', 'legacy', 'youngest', 'overflow', 'research', 'reserve', 'secondary', 'annex', 'sunset', 'zenith'],
+    resetFableDesc: ['studio', 'workshop', 'primary', 'nightly', 'contract', 'legacy', 'youngest', 'overflow', 'research', 'reserve', 'secondary', 'annex', 'sunset', 'zenith'],
   };
   // Each order moves rows past the label order, and ties stand on usage and on status, so a sort left out or a tie
   // broken any other way than by label fails.
@@ -23693,8 +23713,8 @@ await forView('/pools', async () => {
   // The bar's Sort control on a bare /pools, which orders the cards by name at rest. Cost, 24h reads the story's pools
   // (`web/src/mock/pools.ts`, each day folded from its requests in `web/src/mock/requests.ts`) under native, the stored
   // default: the all pool's day holds requests the cost model has no weight for, so it prices nothing and files last
-  // in either direction, and contract's and jobs' days hold billed rows alone, a tie at zero read by name. A card's
-  // strip links open the dialog on the view's own address, so its close lands on the same order.
+  // in either direction, contract's and jobs' days hold billed rows alone and sidelined's none, a tie at zero read by
+  // name. A card's strip links open the dialog on the view's own address, so its close lands on the same order.
   const name = "/pools the sort control orders the cards by name at rest, a pick orders them by the pool's figure with a pool whose day priced nothing last under either direction, the strip links carry the order, the address carries the pick and a reload reads it back";
   const page = await mount('/pools', { now: CLOCK_ORIGIN });
   const button = (p) => p.container.querySelector('.filter-bar button[aria-label="Sort"]');
@@ -23727,15 +23747,15 @@ await forView('/pools', async () => {
   const reloaded = read(again);
   again.unmount();
   const shown = (arrow, cards, link, search, label, word) => ({ arrow, cards, link, search, text: `Sort: ${label}`, title: `Sorted by ${label}, ${word}`, unit: 'native' });
-  const ascending = shown('up', ['contract', 'jobs', 'workshop', 'work', 'all'], '/pools?sort=cost&dir=asc&edit=contract&group=shedding', '?sort=cost&dir=asc', 'Cost, 24h', 'ascending');
+  const ascending = shown('up', ['contract', 'jobs', 'sidelined', 'workshop', 'work', 'all'], '/pools?sort=cost&dir=asc&edit=contract&group=shedding', '?sort=cost&dir=asc', 'Cost, 24h', 'ascending');
   const wantPicks = {
-    cost: { ...shown('down', ['work', 'workshop', 'contract', 'jobs', 'all'], '/pools?sort=cost&edit=work&group=autoMode', '?sort=cost', 'Cost, 24h', 'descending'), open: false },
+    cost: { ...shown('down', ['work', 'workshop', 'contract', 'jobs', 'sidelined', 'all'], '/pools?sort=cost&edit=work&group=autoMode', '?sort=cost', 'Cost, 24h', 'descending'), open: false },
     costAsc: { ...ascending, open: false },
   };
   results.push({
     name,
     ok:
-      JSON.stringify(bare) === JSON.stringify(shown('up', ['all', 'contract', 'jobs', 'work', 'workshop'], '/pools?edit=all&group=guardrails', '', 'Name', 'ascending')) &&
+      JSON.stringify(bare) === JSON.stringify(shown('up', ['all', 'contract', 'jobs', 'sidelined', 'work', 'workshop'], '/pools?edit=all&group=guardrails', '', 'Name', 'ascending')) &&
       JSON.stringify(picks) === JSON.stringify(wantPicks) &&
       JSON.stringify(reloaded) === JSON.stringify(ascending),
     missing: [`bare ${JSON.stringify(bare)}`, ...Object.entries(picks).map(([key, got]) => `${key} ${JSON.stringify(got)} against ${JSON.stringify(wantPicks[key])}`), `reloaded ${JSON.stringify(reloaded)}`],
@@ -29280,14 +29300,14 @@ await forView('/', async () => {
       JSON.stringify(drawn.week) ===
         JSON.stringify({
           listAfter: true,
-          names: ['primary: Ultra 7-day capacity not measured', 'secondary: Pro 7-day capacity not measured', 'nightly: Max 7-day capacity not measured', 'studio: Max 7-day capacity not measured', 'reserve: Pro 7-day capacity not measured', 'contract: a usage-based seat', 'workshop: Ultra 7-day capacity not measured'],
+          names: ['primary: Ultra 7-day capacity not measured', 'secondary: Pro 7-day capacity not measured', 'nightly: Max 7-day capacity not measured', 'studio: Max 7-day capacity not measured', 'reserve: Pro 7-day capacity not measured', 'contract: a usage-based seat', 'workshop: Ultra 7-day capacity not measured', 'zenith: a usage-based seat'],
           ring: false,
           sentence: 'Unpriced: the cost model holds no 7-day capacity for the Ultra week',
         }) &&
       JSON.stringify(drawn.fable) ===
         JSON.stringify({
           listAfter: true,
-          names: ['primary: Ultra Fable week capacity not measured', 'secondary: no Fable week', 'nightly: Max Fable week capacity not measured', 'studio: Max Fable week capacity not measured', 'reserve: no Fable week', 'contract: a usage-based seat', 'workshop: Ultra Fable week capacity not measured'],
+          names: ['primary: Ultra Fable week capacity not measured', 'secondary: no Fable week', 'nightly: Max Fable week capacity not measured', 'studio: Max Fable week capacity not measured', 'reserve: no Fable week', 'contract: a usage-based seat', 'workshop: Ultra Fable week capacity not measured', 'zenith: a usage-based seat'],
           ring: false,
           sentence: 'Unpriced: the cost model holds no 7-day capacity for the Ultra week',
         }),
@@ -29326,7 +29346,7 @@ await forView('/', async () => {
       JSON.stringify({
         fable: {
           listAfter: true,
-          names: ['primary: Ultra Fable week capacity not measured', 'secondary: no Fable week', 'nightly: Max Fable week capacity not measured', 'studio: Max Fable week capacity not measured', 'reserve: no Fable week', 'contract: a usage-based seat', 'workshop: Ultra Fable week capacity not measured'],
+          names: ['primary: Ultra Fable week capacity not measured', 'secondary: no Fable week', 'nightly: Max Fable week capacity not measured', 'studio: Max Fable week capacity not measured', 'reserve: no Fable week', 'contract: a usage-based seat', 'workshop: Ultra Fable week capacity not measured', 'zenith: a usage-based seat'],
           ring: false,
           sentence: "No listed account's tier is sized for the Fable week.",
         },
@@ -29368,11 +29388,11 @@ await forView('/', async () => {
         key: 'No quota windows',
         fable: {
           listAfter: true,
-          names: ['primary: no Fable week', 'secondary: no Fable week', 'nightly: no Fable week', 'studio: no Fable week', 'reserve: not read yet', 'contract: a usage-based seat', 'workshop: no Fable week'],
+          names: ['primary: no Fable week', 'secondary: no Fable week', 'nightly: no Fable week', 'studio: no Fable week', 'reserve: not read yet', 'contract: a usage-based seat', 'workshop: no Fable week', 'zenith: a usage-based seat'],
           ring: false,
           sentence: 'No account with a Fable week.',
         },
-        week: { names: ['reserve: not read yet', 'contract: a usage-based seat'], ring: true },
+        week: { names: ['reserve: not read yet', 'contract: a usage-based seat', 'zenith: a usage-based seat'], ring: true },
       }),
     missing: [JSON.stringify(drawn)],
   });

@@ -2,21 +2,11 @@ import { type ReactNode, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Button, Card } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtRelative, plural } from '@/lib/format';
-import { scopeModel } from '@/lib/quota';
+import { scopeLabel } from '@/lib/quota';
 import { entityHref } from '@/lib/routingLog';
 
 /** One scope an account cools under: an account's own cooldown row with its id. */
 export type CoolingRow = { accountId: string; reason: string; scope: string; until: string };
-
-/** `Whole account` for the account scope, `Fast mode` and `Fast mode credits` for the fast lane's rate limit and
- *  usage-credits refusal, the model id for `model:<id>`. An identifier, the model id or a scope this build does not
- *  know shown as sent, draws in the mono face, and the worded scopes do not. */
-function scopeLabel(scope: string): { label: string; mono: boolean } {
-  if (scope === 'account') return { label: 'Whole account', mono: false };
-  if (scope === 'fast') return { label: 'Fast mode', mono: false };
-  if (scope === 'fast_credits') return { label: 'Fast mode credits', mono: false };
-  return { label: scopeModel(scope) ?? scope, mono: true };
-}
 
 /**
  * The rows an account is cooling under, with a clear button per row when `onClear` is given. `showAccount` names the

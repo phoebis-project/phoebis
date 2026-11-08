@@ -225,6 +225,15 @@ export const isFastScope = (scope: string) => scope === 'fast' || scope === 'fas
 export const MODEL_SCOPE_PREFIX = 'model:';
 /** The model id a `model:<id>` cooldown scope names, null for a scope of any other kind. */
 export const scopeModel = (scope: string): string | null => (scope.startsWith(MODEL_SCOPE_PREFIX) ? scope.slice(MODEL_SCOPE_PREFIX.length) : null);
+/** `Whole account` for the account scope, `Fast mode` and `Fast mode credits` for the fast lane's rate limit and
+ *  usage-credits refusal, the model id for `model:<id>`. An identifier, the model id or a scope this build does not
+ *  know shown as sent, draws in the mono face, and the worded scopes do not. */
+export function scopeLabel(scope: string): { label: string; mono: boolean } {
+  if (scope === 'account') return { label: 'Whole account', mono: false };
+  if (scope === 'fast') return { label: 'Fast mode', mono: false };
+  if (scope === 'fast_credits') return { label: 'Fast mode credits', mono: false };
+  return { label: scopeModel(scope) ?? scope, mono: true };
+}
 
 /** The row that cools the account: the first on a scope beyond the fast lane's, null where none does. */
 export const accountCooldown = (cooldowns: Cooldown[]): Cooldown | null => cooldowns.find((c) => !isFastScope(c.scope)) ?? null;

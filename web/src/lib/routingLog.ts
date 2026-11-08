@@ -7,7 +7,7 @@ import { tierOrder } from './costs';
 import { has, lookup } from './counts';
 import type { ChipText } from './filterBar';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtShare, fmtTime, fmtUsd, instant, listed, plural, shortModel, weekShort } from './format';
-import { MODEL_SCOPE_PREFIX, PLAN_WORD_LABEL, planLabel, POLL_OUTCOME_LABEL, scopeModel } from './quota';
+import { MODEL_SCOPE_PREFIX, PLAN_WORD_LABEL, planLabel, POLL_OUTCOME_LABEL, scopeLabel, scopeModel } from './quota';
 import { speedWord } from './selection';
 import { ageWord, HOUR, MINUTE, span } from './time';
 import { knownWindowsFirst, WINDOW_KEYS, WINDOW_LABEL, windowKeyId, windowLabelOf, windowTag, windowTagOf } from './windows';
@@ -1019,6 +1019,9 @@ export const WALK_KEY: Record<string, string> = {
   wait_ms: 'wait',
   wait_seven_day: 'wait 7d',
   wait_seven_day_fable: 'wait Fable',
+  wall_five_hour: 'wall 5h',
+  wall_seven_day: 'wall 7d',
+  wall_seven_day_fable: 'wall Fable',
   warmth: 'warmth',
   winding_down: 'winding down',
   window: 'window',
@@ -1090,14 +1093,19 @@ export function laneChips(lane: string): Chip[] {
 
 /**
  * An exhausted line's obstacle, `account:name` as the engine weighs it, the account as the key. An operator obstacle
- * reads the member's own pause or state, as its candidate row does.
+ * reads the member's own pause or state and a spent one the member's own window and reset, as its candidate row does.
  */
-function obstacleChip(text: string, record: DecisionRecord): Chip {
+function obstacleChip(text: string, record: DecisionRecord, now: number): Chip {
   const at = text.lastIndexOf(':');
   const name = at < 0 ? text : text.slice(at + 1);
   const id = at < 0 ? '' : text.slice(0, at);
-  const member = name === 'operator' ? memberOf(record, id) : undefined;
-  const { title, value } = member ? operatorWords(member) : { title: hintOf(name), value: wordOf(OBSTACLE_WORD, name) };
+  const member = name === 'operator' || name === 'spent' ? memberOf(record, id) : undefined;
+  const { title, value } =
+    member !== undefined && name === 'operator'
+      ? operatorWords(member)
+      : member?.obstacle?.name === 'spent'
+        ? { title: spentHint(member.obstacle, now), value: obstacleWords(member, now) }
+        : { title: hintOf(name), value: wordOf(OBSTACLE_WORD, name) };
   return id === '' ? { label: 'obstacle', title, value } : { label: id, labelEntity: accountEntity(id), title, value };
 }
 
@@ -1166,7 +1174,7 @@ export function factChips(f: WalkFact, record: DecisionRecord, now: number): Chi
       }
       break;
     case 'obstacles':
-      if (Array.isArray(v)) return v.map((o) => obstacleChip(String(o), record));
+      if (Array.isArray(v)) return v.map((o) => obstacleChip(String(o), record, now));
       break;
     case 'tier': {
       const tier = tierOf(v);
@@ -1355,9 +1363,24 @@ function cooledWords(reason: string | null, window: string | null): string {
 
 const untilWords = (o: NonNullable<RecordCandidate['obstacle']>, now: number): string => (o.until === null ? '' : ` until ${formatFact(o.until, 'time', now)}`);
 
-function cooldownWords(o: NonNullable<RecordCandidate['obstacle']>, now: number): string {
-  return `${cooledWords(o.reason, o.window)}${untilWords(o, now)}`;
+/**
+ * The scope a cooldown's words leave out, as the account page spells it: the model a 404 cools and the fast lane's
+ * credits. It follows `for`, since a chip holds one value and a comma would join two. The account scope is the default,
+ * and the fast lane's 429 already names its lane.
+ */
+function scopeWords(o: NonNullable<RecordCandidate['obstacle']>): string {
+  if (o.scope === null || o.scope === 'account' || (o.scope === 'fast' && o.window === 'fast')) return '';
+  const { label, mono } = scopeLabel(o.scope);
+  return ` for ${mono ? label : label.toLowerCase()}`;
 }
+
+function cooldownWords(o: NonNullable<RecordCandidate['obstacle']>, now: number): string {
+  return `${cooledWords(o.reason, o.window)}${untilWords(o, now)}${scopeWords(o)}`;
+}
+
+/** A spent member's hover: the spend cap's reset, or the plan window's own where the obstacle names one. */
+const spentHint = (o: NonNullable<RecordCandidate['obstacle']>, now: number): string | undefined =>
+  o.window === SPEND_WINDOW ? `at its spend cap${untilWords(o, now)}` : o.window === null ? hintOf('spent') : `its ${windowTagWord(o.window)} window spent${untilWords(o, now)}`;
 
 /**
  * A failover's cause in one spelling for the event card and the record card: a cooldown's reason and window as
@@ -1402,7 +1425,7 @@ function obstacleWords(c: RecordCandidate, now: number): string {
       return operatorWords(c).value;
     case 'spent':
       if (o.window === SPEND_WINDOW) return `spend cap reached${untilWords(o, now)}`;
-      return `${o.window !== null ? windowTagWord(o.window) : 'window'} spent`;
+      return `${o.window !== null ? windowTagWord(o.window) : 'window'} spent${untilWords(o, now)}`;
     default:
       return lookup(PARTITION_WORD, o.name) ?? wordOf(OBSTACLE_WORD, o.name);
   }
@@ -1414,7 +1437,7 @@ const FIT_CHIP: Record<string, { tone: VerdictTone; word: string }> = { ending: 
 /** The verdict cell's one chip, and the tone it carries where it names the destination's fit. */
 function verdictChipOf(c: RecordCandidate, now: number): { chip: Chip | null; tone: VerdictTone | null } {
   const untoned = (chip: Chip | null) => ({ chip, tone: null });
-  if (c.obstacle !== null) return untoned(c.obstacle.name === 'operator' ? operatorWords(c) : { title: hintOf(c.obstacle.name), value: obstacleWords(c, now) });
+  if (c.obstacle !== null) return untoned(c.obstacle.name === 'operator' ? operatorWords(c) : { title: c.obstacle.name === 'spent' ? spentHint(c.obstacle, now) : hintOf(c.obstacle.name), value: obstacleWords(c, now) });
   if (c.partition !== null) return untoned({ title: hintOf(c.partition), value: wordOf(PARTITION_WORD, c.partition) });
   // The cap held the request on its member whatever that member's fit, so the cap explains the hold.
   if (c.verdict === 'held_on' && c.inFlight >= c.inFlightCap) return untoned(plain('at its cap'));
@@ -2134,11 +2157,13 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
         const demand = num(d.burn_sum);
         add('Demand', demand === null ? null : plain(`${hourlyShare(demand)}${horizon === null ? '' : ` to the reset at ${formatFact(horizon + threshold, 'time', now)}`}`));
       } else {
-        add('Trigger', projection === null || ceiling === null ? null : plain(`${w} projection ${fmtPct(projection)}${when} over the ceiling ${fmtPct(ceiling)}`));
+        // A round that tested the wall records a ceiling of 1, the window's whole share.
+        add('Trigger', projection === null || ceiling === null ? null : plain(`${w} projection ${fmtPct(projection)}${when} over ${ceiling === 1 ? 'the wall' : `the ceiling ${fmtPct(ceiling)}`}`));
       }
       add('Fired by', trigger === null ? null : plain(`the ${wordOf(LABELS, trigger)}`));
       add('Excess', rate(d.excess));
       add('Cap', pct(d.shed_cap), rate(d.target, 'target'), rate(d.removed, 'removed'));
+      add('Mark share', pct(d.mark_share));
       add('Unit', text(d.unit));
       add('Burn average', seconds(d.burn_average_seconds));
       add('Warm sessions', text(d.warm_sessions));
@@ -2192,12 +2217,12 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       pin();
       // A mark heals when the account's projection reads under the ceiling again on the window that fired, or under the
       // slow-down when its stretch reads under the threshold. The threshold is the detail's own, since the pool's
-      // setting may have moved since.
+      // setting may have moved since, and a ceiling of 1 is the wall the round tested.
       const healed =
         stretch !== null && threshold !== null
           ? `healed: the stretch read ${span(stretch)} under the threshold ${span(threshold)}`
           : projection !== null
-            ? `healed: the ${markedWindow === null ? 'window' : windowTagWord(markedWindow)} projection read ${fmtPct(projection)} under the ceiling`
+            ? `healed: the ${markedWindow === null ? 'window' : windowTagWord(markedWindow)} projection read ${fmtPct(projection)} under the ${num(d.ceiling) === 1 ? 'wall' : 'ceiling'}`
             : null;
       add('Reason', plain(reason === 'healed' && healed !== null ? healed : words(reason)));
       add('Marked', time(marked), str(d.marked_on) === null ? null : accountChip(str(d.marked_on) ?? '', 'on'));

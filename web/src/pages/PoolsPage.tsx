@@ -939,6 +939,8 @@ function Eligibility({ verdict, account, now, periodEnd }: { account: Account | 
   if (verdict === 'overage') return <WordedBadge tone="serious" badge={overageBadge(account?.overage?.reset ?? null, now)} />;
   if (verdict === 'spent') return <WordedBadge tone="serious" badge={spentBadge(account?.spend?.resetsAt ?? null, now)} />;
   if (verdict === 'unavailable') return <Badge tone="critical" title={account ? words(account.status) : 'not a known account'}>unavailable</Badge>;
+  if (verdict === 'unknown') return <Badge tone="neutral" title="The router has not loaded this member, or does not answer">unknown</Badge>;
+  if (verdict === 'subscription_ended') return <Badge tone="neutral">subscription ended</Badge>;
   return <WordedBadge tone="warning" badge={cooldownBadge(account?.cooldowns.find((c) => c.scope === 'account')?.until, now)} />;
 }
 

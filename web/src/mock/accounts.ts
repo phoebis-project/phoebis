@@ -460,9 +460,9 @@ const SEEDS = [
     cooldowns: [],
   },
   // The Ultra the upstream approved: its poll stopped carrying the 5-hour window, so the clean poll of 40 s ago reads
-  // the 7-day window, the Opus week and the Fable week alone. Last, so every seed above keeps its history's draws, and
-  // its id sorts after every other, since a color slot is the id's sorted place: it takes the API-key overflow's slot,
-  // which no ring and no Quota lane draws, and every other account keeps its color.
+  // the 7-day window, the Opus week and the Fable week alone. After the older seeds, so every seed above keeps its
+  // history's draws, and its id sorts after each of theirs, since a color slot is the id's sorted place: it takes the
+  // API-key overflow's slot, which no ring and no Quota lane draws, and every older account keeps its color.
   {
     ...ACCOUNT_SAMPLE,
     id: 'workshop',
@@ -484,6 +484,61 @@ const SEEDS = [
     },
     subscription: { billingType: 'annual', organizationType: 'claude_max', planDisplayName: 'Ultra', rateLimitTier: 'default_claude_max_20x', since: ago(60 * DAY), trialEndsAt: null, endsAt: null },
     requests: { last24h: 0, last7d: 0, lifetime: 640 },
+    cooldowns: [],
+  },
+  // An API-key account created six minutes ago, which the router's registry snapshot predates. Its id sorts after
+  // workshop's, so every account above keeps its color, and it takes primary's slot, which an API-key account draws on
+  // no ring and no Quota lane.
+  {
+    ...ACCOUNT_SAMPLE,
+    id: 'youngest',
+    kind: 'api_key',
+    label: 'New workspace',
+    email: null,
+    status: 'ready',
+    routingEnabled: true,
+    windows: [],
+    fableWindow: null,
+    extraUsage: null,
+    fastLane: null,
+    credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null },
+    subscription: null,
+    requests: { last24h: 0, last7d: 0, lifetime: 0 },
+    cooldowns: [],
+  },
+  // A second Enterprise contract seat, at its spend cap: the poll read its amounts at the limit ten minutes ago, and with
+  // no head naming the reset the router estimates it. Its id sorts last, so it takes the API-key research's slot, which
+  // no ring and no Quota lane draws, for the spend lane it draws.
+  {
+    ...ACCOUNT_SAMPLE,
+    id: 'zenith',
+    kind: 'oauth',
+    label: 'zenith',
+    email: 'operator+zenith@example.com',
+    status: 'ready',
+    routingEnabled: true,
+    usageBased: true,
+    windows: [],
+    fableWindow: null,
+    spend: {
+      amounts: { currency: 'USD', exponent: 2, limitMinor: 100_000, polledAt: ago(10 * MINUTE), usedMinor: 100_000 },
+      observedAt: ago(10 * MINUTE),
+      resetSource: 'estimated',
+      resetsAt: iso(SPEND_RESET_ESTIMATE),
+      utilization: 1,
+    },
+    extraUsage: { disabledReason: null, enabled: true, inUse: false, monthlyLimitCredits: 100_000, usedCredits: 100_000 },
+    overage: null,
+    fastLane: null,
+    credential: {
+      accessTokenExpiresAt: ahead(7 * HOUR + 5 * MINUTE),
+      lastError: null,
+      lastRefreshAt: ago(55 * MINUTE),
+      quarantined: false,
+      refreshTokenExpiresAt: ahead(72 * DAY),
+    },
+    subscription: { billingType: 'stripe_subscription_contracted', organizationType: 'claude_enterprise', planDisplayName: null, rateLimitTier: 'default_claude_zero', since: ago(45 * DAY), trialEndsAt: null, endsAt: null },
+    requests: { last24h: 0, last7d: 0, lifetime: 0 },
     cooldowns: [],
   },
 ] satisfies Seed[];

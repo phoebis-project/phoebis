@@ -24,7 +24,7 @@ import { ATTENTION } from './attention';
 import { CATALOG } from './catalog';
 import { GUARDRAIL_RESERVED_IDS, GUARDRAIL_STALE, GUARDRAIL_TAKEN, GUARDRAILS, PRESETS, boundRefusal, conditionsRefusal, dryRunVerdict, repeatedId, sameConditions, withAttachments } from './guardrails';
 import { KEEPALIVE_OVERVIEW, KEEPALIVE_OVERVIEW_30D, RECIPES, SESSIONS, SETTINGS_WIRE, largestCohort, memberPins, pinsUnderPool, sessionsListedAt } from './operations';
-import { KEYS, POOLS, composedFor, resolvedFor, servedFigures, type KeyRow, type PoolRow } from './pools';
+import { KEYS, POOLS, UNLOADED_MEMBERS, composedFor, resolvedFor, servedFigures, type KeyRow, type PoolRow } from './pools';
 import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, UNPRICED_REQUEST, UNPRICED_ROLLUPS, capturedBodiesFor, landedAt, requestById, requestSidesOf } from './requests';
 import { GUARDRAIL_STORY_IDS } from './requests';
 import { createRng } from './rng';
@@ -399,14 +399,20 @@ const termEnded = (a: Account, now: number): boolean => {
 };
 
 /**
- * The pool route's reading of a member, in its order: paused, not ready or past its term is unavailable, then an
- * account-wide cooldown, then a spend at or past either of the member's budgets inside the period it was reported for,
- * then overage the router observed under a policy that admits none.
+ * The pool route's reading of a member, in the selector's order: an account the registry lacks is unavailable, a member
+ * the router has not loaded is unknown, since it answers no projection before it reads any obstacle, then paused or not
+ * ready is unavailable, then past its term is subscription ended, then an account-wide cooldown, then a spend at or past
+ * either of the member's budgets inside the period it was reported for, then a usage-based seat whose spend window reads
+ * at or past its limit, then overage the router observed under a policy that admits none.
  */
 const eligibilityOf = (a: Account | undefined, policy: PoolInput['overagePolicy'], member: BudgetedSeed): MemberEligibility => {
-  if (!a || !a.routingEnabled || flagOf(a.status) !== null || termEnded(a, Date.now())) return 'unavailable';
+  if (!a) return 'unavailable';
+  if (UNLOADED_MEMBERS.has(a.id)) return 'unknown';
+  if (!a.routingEnabled || flagOf(a.status) !== null) return 'unavailable';
+  if (termEnded(a, Date.now())) return 'subscription_ended';
   if (a.cooldowns.some((c) => c.scope === 'account' && Date.parse(c.until) > Date.now())) return 'cooldown';
   if (budgetUntilOf(member, Date.now()) !== null) return 'budget';
+  if (a.spend !== null && (a.spend.utilization ?? 0) >= 1) return 'spent';
   if (policy === 'never' && a.overage?.inUse) return 'overage';
   return 'eligible';
 };
@@ -1376,7 +1382,7 @@ export class MockApi implements Api {
   async renameAccount(accountId: string, label: string, revision?: number) {
     const a = this.account(accountId);
     if (revision !== undefined && revision !== a.revision) {
-      return Promise.reject(new ApiError(409, 'the account changed while the edit was being saved', 'stale_edit'));
+      return Promise.reject(new ApiError(409, 'the account changed while it was being edited, so reload and try again', 'stale_edit'));
     }
     return latency(this.withPool(this.putAccount(revised({ ...a, label }))), 250);
   }
@@ -1469,7 +1475,7 @@ export class MockApi implements Api {
     const a = this.account(accountId);
     if (patch.canceled && a.kind === 'api_key') throw new ApiError(400, 'only an oauth account is canceled', null);
     if (revision !== undefined && revision !== a.revision) {
-      return Promise.reject(new ApiError(409, 'the account changed while the edit was being saved', 'stale_edit'));
+      return Promise.reject(new ApiError(409, 'the account changed while it was being edited, so reload and try again', 'stale_edit'));
     }
     // The route answers a subscription block for a canceled OAuth row even before it pairs, so its end has a place.
     const blank: Subscription = { billingType: '', endsAt: null, organizationType: '', plan: null, planDisplayName: null, rateLimitTier: '', since: null, trialEndsAt: null };

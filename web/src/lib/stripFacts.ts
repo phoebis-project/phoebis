@@ -53,7 +53,7 @@ const PIN_GROUPS: GroupKeys[] = [
 /**
  * A key no group names falls to an unlabeled group, so every key the shed line writes has one. A projection's stamp and
  * wait, and the 5-hour window's age with its hold, name their window but join the round, since they say why the round
- * has not run yet.
+ * has not run yet. Each window's wall joins them, since a window's wait is a share of the time to its wall.
  */
 const SHED_GROUPS: GroupKeys[] = [
   {
@@ -63,7 +63,7 @@ const SHED_GROUPS: GroupKeys[] = [
   {
     keys: [
       'trigger', 'excess', 'fired_by', 'over_ms', 'over_since', 'over_since_five_hour', 'wait_five_hour', 'age_five_hour', 'hold_five_hour', 'over_since_seven_day', 'wait_seven_day', 'over_since_seven_day_fable',
-      'wait_seven_day_fable', 'stretch_ms', 'threshold_ms', 'target', 'round', 'marked', 'marks', 'skipped',
+      'wait_seven_day_fable', 'stretch_ms', 'threshold_ms', 'wall_five_hour', 'wall_seven_day', 'wall_seven_day_fable', 'target', 'round', 'marked', 'marks', 'skipped',
     ],
     label: 'Round',
   },

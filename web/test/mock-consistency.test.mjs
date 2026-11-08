@@ -475,7 +475,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const oauth = s.accounts.filter((a) => a.kind === 'oauth');
     // Each stored profile's word: the usage-based class first, then the organization type, a Max organization read by
     // its tier's size, and none without a profile.
-    const resolved = { contract: 'usage_based', legacy: 'pro', nightly: 'max_5x', primary: 'max_20x', reserve: 'pro', secondary: 'pro', spare: null, studio: 'max_5x', sunset: 'free', workshop: 'max_20x' };
+    const resolved = { contract: 'usage_based', legacy: 'pro', nightly: 'max_5x', primary: 'max_20x', reserve: 'pro', secondary: 'pro', spare: null, studio: 'max_5x', sunset: 'free', workshop: 'max_20x', zenith: 'usage_based' };
     for (const a of oauth) {
       const plan = a.subscription?.plan ?? null;
       assert.equal(plan, resolved[a.id], `${a.id}'s plan`);
@@ -494,10 +494,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual(wrong, [], "a candidate's plan word is its account's");
   });
 
-  test(`the story's usage-based seat reads its class and its spend window with no plan window, the one member of its pool behind the key fleet, at ${at}`, async () => {
+  test(`the story's serving usage-based seat reads its class and its spend window with no plan window, the one member of its pool behind the key fleet, at ${at}`, async () => {
     const s = await story;
     const seats = s.accounts.filter((a) => a.usageBased);
-    assert.deepEqual(seats.map((a) => a.id), ['contract'], 'one usage-based account');
+    assert.deepEqual(seats.map((a) => a.id), ['contract', 'zenith'], 'the serving seat and the one at its spend cap');
     const [seat] = seats;
     const firstOfNextMonth = (ms) => Date.UTC(new Date(ms).getUTCFullYear(), new Date(ms).getUTCMonth() + 1, 1);
     assert.deepEqual([seat.kind, seat.status, seat.windows, seat.fableWindow, seat.overage, seat.plan], ['oauth', 'ready', [], null, null, 'Usage-based']);
@@ -528,7 +528,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const unread = 'req_c94d1e07-b35';
     const filed = records.filter((r) => r.requestId !== unread).map((r) => r.candidates.find((c) => c.accountId === 'contract')).map((c) => [c?.tier[0], c?.windows.spend?.utilization, c?.windows.spend?.source]);
     assert.ok(filed.length > 0 && filed.every(([tier, utilization, source]) => tier === 2 && utilization === 0.41 && source === 'estimated'), `the records file the seat in the metered tier with its spend window: ${JSON.stringify(filed)}`);
-    assert.ok(s.accounts.filter((a) => a.id !== 'contract').every((a) => !a.usageBased && a.spend === null), 'no other account reads the class');
+    assert.ok(s.accounts.filter((a) => !['contract', 'zenith'].includes(a.id)).every((a) => !a.usageBased && a.spend === null), 'no other account reads the class');
     const headed = s.accounts.filter((a) => a.extraUsage?.enabled && a.extraUsage.usedCredits === null);
     assert.deepEqual(headed.map((a) => [a.id, a.extraUsage.monthlyLimitCredits, a.extraUsage.inUse]), [['nightly', null, true]], "the plan account whose newest reading a head wrote carries no amounts");
   });
@@ -972,7 +972,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       assert.equal(sum(p.members, (m) => m.activePins) + outside, p.activePins, `${p.id}'s members' sum and the ${outside} pins on accounts outside them make its figure`);
       above[p.id] = p.activePins - sum(p.members, (m) => m.activePins);
     }
-    assert.deepEqual(above, { all: 0, contract: 0, jobs: 0, work: 1, workshop: 0 }, 'work holds one pin on a former member and the other pools none');
+    assert.deepEqual(above, { all: 0, contract: 0, jobs: 0, sidelined: 0, work: 1, workshop: 0 }, 'work holds one pin on a former member and the other pools none');
     assert.ok(s.pools.some((p) => p.activePins > s.sessions.filter((x) => x.pinned && poolOf.get(x.keyId) === p.id).length), 'a pool holds more pins than pinned sessions');
     assert.equal(s.overview.activePins, sum(s.pools, (p) => p.activePins), "the dashboard's active pins");
   });
@@ -2734,12 +2734,12 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual(there.map((row) => `${row.type} ${row.kind} ${row.at}`), []);
   });
 
-  test(`the story holds one plan-ended account, ready in no pool, whose saved end passed before a profile read set the flag, with no window, a paused poll and its trend up to its last clean poll, at ${at}`, async () => {
+  test(`the story holds one plan-ended account, ready in the pool of seats the router cannot place, whose saved end passed before a profile read set the flag, with no window, a paused poll and its trend up to its last clean poll, at ${at}`, async () => {
     const s = await story;
     const flagged = s.accounts.filter((a) => a.planEndedAt !== null);
     assert.deepEqual(flagged.map((a) => [a.id, a.kind]), [['sunset', 'oauth']], 'one subscription account carries the flag');
     const [a] = flagged;
-    assert.deepEqual([a.pool, a.status, a.canceled], [null, 'ready', true], 'ready and canceled in no pool');
+    assert.deepEqual([a.pool, a.status, a.canceled], [{ poolId: 'sidelined', priority: 0 }, 'ready', true], 'ready and canceled in the sidelined pool');
     const end = Date.parse(a.subscription.endsAt);
     const flag = Date.parse(a.planEndedAt);
     assert.equal(end, s.now - 3 * DAY, 'the saved end three days back');

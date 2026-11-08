@@ -45,6 +45,12 @@ export type PoolSeed = PoolRow<MemberSeed>;
 
 const unbudgeted = (accountId: string, priority: number): MemberSeed => ({ accountId, budgetDailyUsd: null, budgetMonthlyUsd: null, priority, spends: [] });
 
+/**
+ * The story members the router has not loaded, which read `unknown` on the card: its registry snapshot predates the
+ * key's creation, so the pool route answers no reading of it yet.
+ */
+export const UNLOADED_MEMBERS: ReadonlySet<string> = new Set(['youngest']);
+
 /** The next UTC calendar boundary after `now`, which is where the ledger's spend period ends. */
 function periodEndAfter(period: BudgetPeriod, now: number): string {
   return iso(period === 'day' ? startOfDay(now) + DAY : endOfMonth(now));
@@ -341,6 +347,30 @@ const POOL_ROWS: PoolSeed[] = [
     members: [unbudgeted('workshop', 0)],
     ...UNTIL_DRAWN,
     updatedAt: daysAgo(20),
+  },
+  {
+    ...POOL_SAMPLE,
+    // The seats the router cannot place today: one whose plan ended, a key it has not loaded yet and one at its spend
+    // cap. With no member eligible the route reads it exhausted, and no key routes to it, so no request is answered
+    // exhausted and the attention list names it nowhere.
+    id: 'sidelined',
+    name: 'sidelined',
+    status: 'exhausted',
+    strategy: 'pace',
+    preferSubscription: true,
+    overagePolicy: 'prefer_plan',
+    loadShedding: false,
+    slowDown: false,
+    movesPerHour: {},
+    // Off, with nothing to warm. An OAuth and an API-key member bring the plan's and the dollar rows' figures on both
+    // TTLs, as a policy that leaves the markers as sent brings them.
+    keepalive: { ...KEEPALIVE_DEFAULTS, enabled: false },
+    keepaliveResolved: merged(merged(FIGURES.plan['5m'], FIGURES.plan['1h']), merged(FIGURES.dollars['5m'], FIGURES.dollars['1h'])),
+    bodyCaptureHours: 0,
+    modelRules: [],
+    members: [unbudgeted('sunset', 0), unbudgeted('youngest', 0), unbudgeted('zenith', 0)],
+    ...UNTIL_DRAWN,
+    updatedAt: ago(5 * MINUTE),
   },
 ];
 

@@ -703,30 +703,39 @@ test('the candidate cells word every verdict and its chip', () => {
   assert.equal(cell({ inOverage: true, tier: [1, 0, 1] }).tier, 'overage P0');
   assert.equal(cell({ pace: null }).pace, '-');
   const until = (h, m) => iso(ms(h, m));
-  assert.deepEqual(verdict({ obstacle: { name: 'cooldown', reason: 'rate_limit', until: until(15, 42), window: 'five_hour' }, verdict: 'out' }), ['out', '429 on 5h until 15:42', 'in a cooldown']);
-  assert.deepEqual(verdict({ obstacle: { name: 'cooldown', reason: 'rate_limited', until: until(15, 42), window: 'five_hour' }, verdict: 'out' }), ['out', 'rate limited until 15:42', 'in a cooldown'], 'the router spells its rate limit rate_limit alone');
-  assert.deepEqual(verdict({ obstacle: { name: 'cooldown', reason: 'model_rejected', until: until(15, 24), window: 'model_rejection' }, verdict: 'out' }), ['out', 'model 404 until 15:24', 'in a cooldown']);
-  assert.deepEqual(verdict({ obstacle: { name: 'cooldown', reason: 'fast_rate_limit', until: until(14, 42), window: 'fast' }, verdict: 'out' }), ['out', 'fast lane 429 until 14:42', 'in a cooldown']);
+  assert.deepEqual(verdict({ obstacle: { name: 'cooldown', reason: 'rate_limit', scope: 'account', until: until(15, 42), window: 'five_hour' }, verdict: 'out' }), ['out', '429 on 5h until 15:42', 'in a cooldown']);
+  assert.deepEqual(verdict({ obstacle: { name: 'cooldown', reason: 'rate_limited', scope: 'account', until: until(15, 42), window: 'five_hour' }, verdict: 'out' }), ['out', 'rate limited until 15:42', 'in a cooldown'], 'the router spells its rate limit rate_limit alone');
+  // The scope names what the cooled words leave out: the model a 404 cools, and nothing the fast lane's words already say.
+  assert.deepEqual(verdict({ obstacle: { name: 'cooldown', reason: 'model_rejected', scope: 'model:claude-opus-5', until: until(15, 24), window: 'model_rejection' }, verdict: 'out' }), ['out', 'model 404 until 15:24 for claude-opus-5', 'in a cooldown']);
+  assert.deepEqual(verdict({ obstacle: { name: 'cooldown', reason: 'fast_rate_limit', scope: 'fast', until: until(14, 42), window: 'fast' }, verdict: 'out' }), ['out', 'fast lane 429 until 14:42', 'in a cooldown']);
   const operator = { name: 'operator', reason: null, until: null, window: null };
   assert.deepEqual(verdict({ enabled: false, obstacle: operator, verdict: 'out' }), ['out', 'held by hand', 'held by an operator']);
   assert.deepEqual(verdict({ obstacle: operator, state: 'funding_required', verdict: 'out' }), ['out', 'needs funding', 'the account leaves every eligible set until funded']);
   assert.deepEqual(verdict({ obstacle: operator, state: 'reauth_required', verdict: 'out' }), ['out', 'needs re-auth', 'the account leaves every eligible set until it is paired again']);
   assert.deepEqual(verdict({ enabled: false, obstacle: operator, state: 'deleted', verdict: 'out' }), ['out', 'deleted', 'the account left the registry']);
-  // The exhausted line reads each operator obstacle as the member's own row does.
+  // The exhausted line reads each operator and spent obstacle as the member's own row does.
+  const capped = { name: 'spent', reason: 'spent', scope: null, until: until(15, 42), window: 'spend' };
   const held = record({
-    candidates: [candidate({ accountId: 'overflow', obstacle: operator, state: 'funding_required', verdict: 'out' }), candidate({ accountId: 'nightly', enabled: false, obstacle: operator, verdict: 'out' })],
+    candidates: [
+      candidate({ accountId: 'overflow', obstacle: operator, state: 'funding_required', verdict: 'out' }),
+      candidate({ accountId: 'nightly', enabled: false, obstacle: operator, verdict: 'out' }),
+      candidate({ accountId: 'contract', obstacle: capped, verdict: 'out' }),
+    ],
     outcome: { accountId: null, exhaustion: { deadline: null, kind: 'untimed', obstacle: null, reason: null, window: null }, kind: 'exhausted', upstreamModel: null },
-    walk: [wstep('exhausted', 'exhausted', [wfact('obstacles', ['overflow:operator', 'nightly:operator'])])],
+    walk: [wstep('exhausted', 'exhausted', [wfact('obstacles', ['overflow:operator', 'nightly:operator', 'contract:spent'])])],
   });
-  assert.deepEqual(texts(d.walkLines(held)[0].chips), ['overflow needs funding', 'nightly held by hand']);
+  const exhausted = d.walkLines(held)[0].chips;
+  assert.deepEqual(texts(exhausted), ['overflow needs funding', 'nightly held by hand', 'contract spend cap reached until 15:42']);
+  assert.equal(exhausted[2].title, 'at its spend cap until 15:42');
   assert.deepEqual(verdict({ budget: [{ budgetUsd: 5, observedAt: iso(NOW), period: 'day', periodEnd: iso(MIDNIGHT), periodStart: iso(ms(0, 0)), spentUsd: 1.1 }], obstacle: { name: 'budget', reason: 'day', until: iso(MIDNIGHT), window: null }, verdict: 'out' }), ['out', 'budget $1.10 of $5.00', 'at its spend budget for the period']);
   const daily = { budgetUsd: 5, observedAt: iso(NOW), period: 'day', periodEnd: iso(MIDNIGHT), periodStart: iso(ms(0, 0)), spentUsd: 1 };
   const monthly = { budgetUsd: 10, observedAt: iso(NOW), period: 'month', periodEnd: iso(Date.UTC(2026, 9, 1)), periodStart: iso(Date.UTC(2026, 8, 1)), spentUsd: 12 };
   const month = { name: 'budget', reason: 'month', until: iso(Date.UTC(2026, 9, 1)), window: null };
   assert.deepEqual(verdict({ budget: [daily, monthly], obstacle: month, verdict: 'out' }), ['out', 'budget $12.00 of $10.00', 'at its spend budget for the period']);
   assert.deepEqual(verdict({ budget: [daily, monthly], obstacle: { ...month, reason: null }, verdict: 'out' }), ['out', 'budget', 'at its spend budget for the period'], 'an obstacle that names no period draws no budget detail');
-  assert.deepEqual(verdict({ obstacle: { name: 'spent', reason: null, until: until(15, 42), window: 'five_hour' }, verdict: 'out' }), ['out', '5h spent', 'its window spent']);
-  assert.equal(cell({ obstacle: { name: 'spent', reason: 'spent', until: until(15, 42), window: 'spend' }, verdict: 'out' }).verdict.chip.value, 'spend cap reached until 15:42', 'a seat at its spend cap names the reset it waits for');
+  // A spent member names the reset it waits for, on its chip and on its hover.
+  assert.deepEqual(verdict({ obstacle: { name: 'spent', reason: null, scope: null, until: until(15, 42), window: 'five_hour' }, verdict: 'out' }), ['out', '5h spent until 15:42', 'its 5h window spent until 15:42']);
+  assert.deepEqual(verdict({ obstacle: capped, verdict: 'out' }), ['out', 'spend cap reached until 15:42', 'at its spend cap until 15:42'], 'the spend window reads the cap, not the plan window');
   assert.deepEqual(verdict({ obstacle: { name: 'credits', reason: 'org_spend_cap_reached', until: null, window: null }, verdict: 'out' }), ['out', 'credits spend cap reached', 'its usage credits unavailable for fast mode']);
   assert.deepEqual(verdict({ obstacle: { name: 'budget_unknown', reason: null, until: null, window: null }, verdict: 'out' }), ['out', 'budget unknown', 'its spend unknown while the ledger is degraded']);
   assert.deepEqual(verdict({ inFlight: 16, partition: 'at_cap', verdict: 'out' }), ['at cap', 'at its cap', 'at its in-flight cap']);
@@ -1338,6 +1347,8 @@ test('the pin moved, shedding round, cleared mark and expired reservation detail
   const weekly = round({ horizon: ms(14, 0) + 5 * HOUR, outcome: 'marked 2', pins: [pin({ marked: true, planned: 'nightly', rewrite: 0.004 }), pin({ marked: true, planned: 'secondary', rewrite: 0.003, session_id: 'e2f0a1b3-0000' })], projection: 0.96, reason: null, window: 'seven_day' });
   assert.deepEqual([weekly.Trigger, weekly['Planned destinations'], weekly.Outcome, weekly.Skipped], [['7d projection 96% in 5 h over the ceiling 95%'], ['nightly', 'secondary'], ['marked 2'], undefined]);
   assert.deepEqual(weekly.Pins.rows.map((r) => r.slice(5).map(chipText)), [['0.4%', 'nightly', 'marked'], ['0.3%', 'secondary', 'marked']]);
+  // The share floor a sliver is weighed against reads beside the cap.
+  assert.deepEqual(round({ mark_share: 0.1 })['Mark share'], ['10%']);
 
   // A round written before the projection trigger carries per-second rates in its own unit and a threshold in place of
   // a ceiling: it keeps its conversion and its reading, so a burn of 0.0001 a second reads 36 %/h or $0.36/h.
@@ -1368,6 +1379,9 @@ test('the pin moved, shedding round, cleared mark and expired reservation detail
   const cleared = (more) => pairs('mark_cleared', { agent_id: 'main', marked_at: ms(13, 0), marked_on: 'primary', marked_window: 'five_hour', projection: null, ...more }, { keyId: 'desktop', model: 'claude-sonnet-5' });
   const healed = cleared({ projection: 0.91, reason: 'healed' });
   assert.deepEqual([healed.Reason, healed.Marked, healed['Standing for']], [['healed: the 5h projection read 91% under the ceiling'], ['13:00', 'on primary'], ['1 h']]);
+  // A round that tested the wall records a ceiling of 1, the window's whole share, and so does the mark it cleared.
+  assert.deepEqual(round({ ceiling: 1, projection: 1.04 }).Trigger, ['5h projection 104% at 18:20 over the wall']);
+  assert.deepEqual(cleared({ ceiling: 1, projection: 0.91, reason: 'healed' }).Reason, ['healed: the 5h projection read 91% under the wall']);
   assert.deepEqual([cleared({ reason: 'moved' }).Reason, cleared({ reason: 'released' }).Reason], [['moved'], ['released']]);
 
   const expired = pairs('reservation_expired', { age_ms: 42_000, attempt: 1, cause: 'transport_error', shares: { five_hour: 0.104, seven_day: 0.012 } });

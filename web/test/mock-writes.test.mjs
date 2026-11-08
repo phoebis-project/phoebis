@@ -98,15 +98,18 @@ test('a new pool reads each member the way the pool route does', async () => {
     spare: 'unavailable',
     studio: 'eligible',
     // The sunset seed's plan ended, which the route reads as a term past its end.
-    sunset: 'unavailable',
+    sunset: 'subscription_ended',
     workshop: 'eligible',
+    // The router has not loaded the key, so it answers no projection of it.
+    youngest: 'unknown',
+    zenith: 'spent',
   });
   // Two members, one half of the ended term each, since the sunset seed holds both halves at once.
   await api.updateAccount('sunset', { canceled: false, subscriptionEndsAt: null });
   await api.updateAccount('reserve', { canceled: true, subscriptionEndsAt: new Date(Date.now() - 60_000).toISOString() });
   const ended = await verdicts('ended', 'never');
-  assert.equal(ended.sunset, 'unavailable', 'the flagged half alone: a plan-ended account with its cancel cleared is unavailable');
-  assert.equal(ended.reserve, 'unavailable', 'the canceled half alone: an unflagged account canceled past its saved end is unavailable');
+  assert.equal(ended.sunset, 'subscription_ended', 'the flagged half alone: a plan-ended account with its cancel cleared reads its subscription ended');
+  assert.equal(ended.reserve, 'subscription_ended', 'the canceled half alone: an unflagged account canceled past its saved end reads its subscription ended');
   // Funded again, overflow serves. The account the router reads in overage is an obstacle only under a policy that
   // admits none.
   await api.clearFunding('overflow');
@@ -552,7 +555,7 @@ test('an account patch is refused where the account route refuses it, and a canc
   assert.equal(unpaired.subscription?.endsAt, end, 'a disconnected OAuth account still reports the end it was canceled with');
 });
 
-const ACCOUNT_STALE = 'the account changed while the edit was being saved';
+const ACCOUNT_STALE = 'the account changed while it was being edited, so reload and try again';
 const storyAccount = async (api, id) => (await api.listAccounts()).find((a) => a.id === id);
 
 test('an account save over a revision the row no longer carries is refused as stale and stores nothing, and one over its own revision moves it', async () => {
