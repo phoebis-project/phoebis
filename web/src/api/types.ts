@@ -476,7 +476,7 @@ export interface FundedSum {
   /** The rows no subscription window paid, in dollars. */
   billedUsd: number;
   cost: number;
-  /** The plan rows as the Pro-week figure, null where a plan row priced nothing. */
+  /** The plan rows as the Pro-week figure, whatever tier served them, null where a plan row priced nothing. */
   equivalent: number | null;
 }
 
@@ -496,7 +496,8 @@ export interface Pool {
   cacheDiagnostics: boolean;
   /** Always answered; `enabled` off is how a pool that rewrites no breakpoint reads. */
   cacheTtl: PoolCacheTtl;
-  /** The day's sum: the billed rows' dollars, every row's cost and the plan rows as the Pro-week figure. */
+  /** The day's sum: the billed rows' dollars, every row's cost and the plan rows as the Pro-week figure, 0 with no
+   *  plan-funded request. */
   day24h: FundedSum;
   /** The pool's own guardrails, which run before a key's, ordered by `position`. */
   guardrails: GuardrailRef[];

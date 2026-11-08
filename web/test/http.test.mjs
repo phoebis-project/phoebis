@@ -491,7 +491,7 @@ test('a session read with no answer within the deadline fails as a read that nev
   }
 });
 
-test('a session body that is not JSON raises the decoder\'s error rather than reading as no answer', async () => {
+test("a session body that is not JSON raises the decoder's error rather than reading as no answer", async () => {
   stub(() => ({ headers: { get: () => null }, ok: true, status: 200, text: async () => '<html>' }));
   await assert.rejects(new HttpApi().getSession(), (e) => e instanceof Error && !(e instanceof ApiError) && /session_id must be a string/.test(e.message));
 });
