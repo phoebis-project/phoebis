@@ -62,7 +62,7 @@ export function QuotaPage() {
     setRefreshing(false);
   };
 
-  const failure = accounts.error && !accounts.data ? <ErrorState title="Could not load the accounts" body={accounts.error} action={<Pill onClick={reload}>Try again</Pill>} /> : null;
+  const failure = accounts.error && !accounts.data ? <ErrorState title="Could not load the accounts" body={accounts.error} retry={reload} /> : null;
 
   return (
     <PopoverHost.Provider value={host}>

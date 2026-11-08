@@ -180,7 +180,7 @@ function GroupsCard({ accounts, error, first, groups, newest, now, onExpand, onM
             {error !== null ? (
               <tr>
                 <td colSpan={COLUMNS}>
-                  <ErrorState title="Could not load the meter reconciliation" body={error} action={<Button onClick={onRetry}>Try again</Button>} />
+                  <ErrorState title="Could not load the meter reconciliation" body={error} retry={onRetry} />
                 </td>
               </tr>
             ) : (

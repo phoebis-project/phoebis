@@ -537,6 +537,7 @@ function useModalDialog(open: boolean, onClose: () => void, unsaved: boolean) {
   const lastFocused = useRef<HTMLElement | null>(null);
   // The control that held the focus as the question opened, so Keep editing can hand it back.
   const held = useRef<HTMLElement | null>(null);
+  useHold(open, 'dialog');
   const request = useCallback(() => {
     if (!latest.current.unsaved) {
       latest.current.onClose();
@@ -1167,21 +1168,18 @@ export function Menu({ align = 'right', items, label = 'Actions' }: { align?: Me
 }
 
 export function KeyValue({ rows, className = '' }: { className?: string; rows: { label: string; mono?: boolean; title?: string; value: ReactNode }[] }) {
-  const base = useId();
-  // The node follows the dd inside the row, so the dd's own text stays the value alone.
   return (
     <dl className={`kv ${className}`}>
-      {rows.map((r, i) => (
+      {rows.map((r) => (
         <div key={r.label} className="kv__row">
           <dt>{r.label}</dt>
-          <dd className={r.mono ? 'mono' : ''} title={r.title} aria-describedby={r.title ? `${base}-${i}` : undefined}>
-            {r.value}
-          </dd>
-          {r.title && (
-            <span id={`${base}-${i}`} hidden data-descriptions="">
-              {r.title}
-            </span>
-          )}
+          <Described text={r.title}>
+            {(describedBy) => (
+              <dd className={r.mono ? 'mono' : ''} title={r.title} aria-describedby={describedBy}>
+                {r.value}
+              </dd>
+            )}
+          </Described>
         </div>
       ))}
     </dl>

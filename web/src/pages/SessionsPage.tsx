@@ -349,8 +349,7 @@ export function SessionsPage() {
   const [pending, setPending] = useState<Row | null>(null);
   // The Cost reference dialog and the bar's and the rows' menus hold the reads through the page's host, since an answer
   // landing under a row's open menu could add or drop rows beneath it.
-  const { cause: holdCause, host } = useHoldHost();
-  const pauseCause = pending !== null ? 'dialog' : holdCause;
+  const { cause: pauseCause, host } = useHoldHost();
   const reread = { paused: pauseCause !== null, refreshMs: intervalMs };
   // The router keeps a session while it is used, so the list is read again rather than aged on this clock alone: a
   // session still sending requests would otherwise drop off once its first-read activity crossed the expiry. The

@@ -63,8 +63,7 @@ export function AccountsPage() {
   // Counts the bar's Refresh presses, so a detail read that skips the list's cadence still reads again on one.
   const [generation, setGeneration] = useState(0);
   // A save in flight or an editor open in the detail holds the list as a dialog does, through the page's host.
-  const { cause: holdCause, host } = useHoldHost();
-  const pauseCause = addOpen || pairing !== null ? 'dialog' : holdCause;
+  const { cause: pauseCause, host } = useHoldHost();
   const accounts = useAsync(() => api.listAccounts(), [], { paused: pauseCause !== null, refreshMs: intervalMs });
   // The cost model the allowance block's figures price through, read once per visit: nothing in it depends on the
   // account a detail opens, and the block's Try again reads it again.
@@ -304,7 +303,7 @@ function AccountDetail({ account, awaitingReading, generation, now, onToast, onP
   const current = answered ?? account;
   // The list holds its refresh while anything here is open or running, and the hold leaves with the detail: Delete
   // account navigates away inside its action, so the detail can unmount before `busy` clears.
-  useHold(busy || catalogOpen || confirm !== null || editing || endForm !== null, 'dialog');
+  useHold(busy || editing || endForm !== null, 'dialog');
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;

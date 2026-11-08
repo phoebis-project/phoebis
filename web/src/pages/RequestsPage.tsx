@@ -510,7 +510,7 @@ export function RequestsPage() {
                     <tr className="table__detail">
                       <td colSpan={shown.size + 1}>
                         {error ? (
-                          <ErrorState title="Could not load the request log" body={error} action={<Button onClick={requests.reload}>Try again</Button>} />
+                          <ErrorState title="Could not load the request log" body={error} retry={requests.reload} />
                         ) : (
                           <EmptyState title="No requests match" body="Widen the range or clear a filter." action={<Button onClick={reset}>Reset filters</Button>} />
                         )}
@@ -770,7 +770,7 @@ function RequestDrawer({ context, guardrails, request, requestId, now, onClose, 
             {!r.capturedBodies ? (
               <p className="muted">Not captured for this key. Enable body capture on the key to record the exchange.</p>
             ) : bodies.error ? (
-              <ErrorState title="Could not load the captured bodies" body={bodies.error} action={<Button onClick={bodies.reload}>Try again</Button>} />
+              <ErrorState title="Could not load the captured bodies" body={bodies.error} retry={bodies.reload} />
             ) : bodies.loading || otherRequestsBodies ? (
               <Skeleton height={120} />
             ) : bodies.data ? (

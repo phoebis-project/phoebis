@@ -19,7 +19,6 @@ import { EDIT_PARAM, EDIT_PARAMS, KEY_SORT_KEYS, KEYS_CODEC, sortAddressOf, sort
 import { dollarsUnder, fundedRankOf, nativeSidesOf, sidesLine, sumFunded, UNPRICED_TITLE, type WeekReading } from '@/lib/analytics';
 import { effectiveCaptureHours } from '@/lib/capture';
 import { KEYS_DIMENSIONS, notLoadedReason } from '@/lib/filterBar';
-import type { PauseCause } from '@/lib/follow';
 import { fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd, noun, plural } from '@/lib/format';
 import { KEY_GROUPS, type KeyGroup } from '@/lib/forms';
 import { useAsync, useNow, useQueryFilters, useWeekReading } from '@/lib/hooks';
@@ -95,8 +94,7 @@ export function KeysPage() {
   // The key dialog resets its fields whenever the pool list changes, so a refresh landing under it would wipe them. A
   // row's open menu holds the page through its host, since an answer landing under it could add or drop rows beneath
   // it.
-  const { cause: holdCause, host } = useHoldHost();
-  const pauseCause: PauseCause | null = dialog !== null || created !== null || confirm !== null ? 'dialog' : holdCause;
+  const { cause: pauseCause, host } = useHoldHost();
   const paused = pauseCause !== null;
   const keys = useAsync(() => api.listKeys(), [], { paused, refreshMs: intervalMs });
   const pools = useAsync(() => api.listPools(), [], { paused, refreshMs: intervalMs });

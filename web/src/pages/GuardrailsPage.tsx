@@ -13,7 +13,6 @@ import { IconChevron, IconInfo, IconPlus } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, Field, GroupedDialog, Input, Menu, PageLink, Refusal, Segmented, Select, Skeleton, StaleRefusal, StateRow, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { GUARDRAIL_SORT_KEYS, GUARDRAILS_CODEC, poolKeysHref, requestHref, sortAddressOf, sortDirOf, type GuardrailsAddress } from '@/lib/address';
 import { effectiveCaptureHours } from '@/lib/capture';
-import type { PauseCause } from '@/lib/follow';
 import { fmtAbsolute, fmtDate, fmtInt, messageOf, plural } from '@/lib/format';
 import { derivedId, refusalsView, sameMembers, sameValues, saveStatus } from '@/lib/forms';
 import { guardrailRefusals, MODE_TONE, presetBadges, verdictWords } from '@/lib/guardrails';
@@ -108,8 +107,7 @@ export function GuardrailsPage(): JSX.Element {
   const [intervalMs, setIntervalMs] = useState(5_000);
   // The dialog resets its fields when it opens, so a refresh landing under it would move the lists it picks from. A
   // row's open menu holds the page through its host, since an answer landing under it could move the rows beneath it.
-  const { cause: holdCause, host } = useHoldHost();
-  const pauseCause: PauseCause | null = dialog !== null || deleting !== null ? 'dialog' : holdCause;
+  const { cause: pauseCause, host } = useHoldHost();
   const paused = pauseCause !== null;
   const guardrails = useAsync(() => api.listGuardrails(), [], { paused, refreshMs: intervalMs });
   const counts = useAsync(() => api.getAnalyticsGuardrails('24h'), [], { paused, refreshMs: intervalMs });

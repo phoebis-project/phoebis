@@ -12,8 +12,8 @@ export interface HoldHost {
 }
 
 /**
- * The context a page provides: every popover, menu and cost reference dialog under it holds the page's auto reload
- * while it is open. A component under no provider holds nothing.
+ * The context a page provides: every popover, menu and dialog under it holds the page's auto reload while it is open.
+ * A component under no provider holds nothing.
  */
 export const PopoverHost = createContext<HoldHost | null>(null);
 

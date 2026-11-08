@@ -5,7 +5,7 @@ import type { DecisionRecord, DecisionSummary } from '@/api/types';
 import { ChipView, Chips, chipValue, rowValue } from '@/components/ChipView';
 import { DecisionStrip } from '@/components/DecisionStrip';
 import { EntryChips } from '@/components/EntryChips';
-import { Badge, Button, CopyButton, DescribedCell, ErrorState, KeyValue } from '@/components/ui/primitives';
+import { Badge, CopyButton, DescribedCell, ErrorState, KeyValue } from '@/components/ui/primitives';
 import { failedFirst, useAsync } from '@/lib/hooks';
 import {
   aroundRequest,
@@ -59,7 +59,7 @@ export function DecisionCard({ now, onWiden, row }: { now: number; onWiden: (lin
   if (failedFirst(loaded)) {
     return (
       <div className="decision-card">
-        <ErrorState title="Could not load the record" body={loaded.error} action={<Button onClick={loaded.reload}>Try again</Button>} />
+        <ErrorState title="Could not load the record" body={loaded.error} retry={loaded.reload} />
       </div>
     );
   }

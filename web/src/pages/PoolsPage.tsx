@@ -244,8 +244,7 @@ export function PoolsPage() {
   const [intervalMs, setIntervalMs] = useState(5_000);
   // The pool dialog draws these lists, so auto reload waits while it is open rather than change them under an edit, and
   // while the Delete pool confirm is open, as every read waits under a dialog.
-  const { cause: holdCause, host } = useHoldHost();
-  const pauseCause = dialog !== null || deleting !== null ? 'dialog' : holdCause;
+  const { cause: pauseCause, host } = useHoldHost();
   const reread = { paused: pauseCause !== null, refreshMs: intervalMs };
   const pools = useAsync(() => api.listPools(), [], reread);
   const accounts = useAsync(() => api.listAccounts(), [], reread);

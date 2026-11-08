@@ -11,7 +11,6 @@ import { clock } from '@/lib/clock';
 import { revisionAt } from '@/lib/costs';
 import { useAsync, useNow } from '@/lib/hooks';
 import { MINUTE } from '@/lib/time';
-import { useHold } from './overlay';
 import { Button, Dialog, ErrorState, Select, Skeleton, Tabs } from './primitives';
 
 export type CostTab = 'api-prices' | 'plan-rates' | 'tiers';
@@ -44,7 +43,6 @@ export function CostReferenceLink({ tab }: { tab: CostTab }) {
   // The chosen revision date, null for the entries in force at the opening.
   const [revision, setRevision] = useState<string | null>(null);
   const [openedAt, setOpenedAt] = useState(0);
-  useHold(open, 'dialog');
   // Read on every opening, so the dialog shows the tables in force, and never while it is closed.
   const settings = useAsync(() => (open ? api.getSettings() : Promise.resolve(null)), [open]);
   const close = () => setOpen(false);
