@@ -231,6 +231,35 @@ fn a_key_with_the_old_opt_out_migrates_to_a_set_without_keepalive_and_every_key_
 }
 
 #[test]
+fn a_pseudonym_holds_across_a_reopen_and_differs_under_another_storage_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("registry.sqlite");
+    let storage_key = StorageKey::generate();
+    let first = Store::open(&path, &storage_key)
+        .unwrap()
+        .companion_key()
+        .pseudonym("a");
+    let reopened = Store::open(&path, &storage_key)
+        .unwrap()
+        .companion_key()
+        .pseudonym("a");
+    let elsewhere = Store::open(
+        &dir.path().join("elsewhere.sqlite"),
+        &StorageKey::generate(),
+    )
+    .unwrap()
+    .companion_key()
+    .pseudonym("a");
+    assert_eq!(reopened, first, "a restart names the account alike");
+    // A pseudonym digested without the storage key would be a hash of the id alone, which a key holder reverses by
+    // hashing guessed ids.
+    assert_ne!(
+        elsewhere, first,
+        "another installation names the account apart"
+    );
+}
+
+#[test]
 fn a_pool_inserted_without_a_placement_reads_by_strategy() {
     let dir = tempfile::tempdir().unwrap();
     let key = StorageKey::generate();

@@ -208,6 +208,19 @@ async fn a_key_without_the_allowance_permission_gets_403_and_no_figures() {
 }
 
 #[tokio::test]
+async fn a_request_without_a_key_answers_the_relays_401() {
+    let r = rig(RigSpec::default()).await;
+    let app = companion_router(r.engine.clone());
+    let refused = get(&app, Some(SESSION), None).await;
+    assert_eq!(
+        (refused.status, refused.header("x-phoebis-error-code")),
+        (401, Some("auth_missing")),
+        "{}",
+        refused.text
+    );
+}
+
+#[tokio::test]
 async fn the_body_names_no_label_email_or_id_of_the_registry() {
     let mut r = rig(RigSpec {
         accounts: vec![oauth("a", "sk-ant-oat01-AAAA", 0), api_key("b", B, 1)],
@@ -479,6 +492,35 @@ async fn a_weekly_windows_runway_runs_to_its_reset_past_the_five_hour_horizon() 
             week["horizon_at"].clone()
         ),
         (json!(0.1), json!(330), json!("1970-01-02T00:16:40Z")),
+        "{}",
+        answer.text
+    );
+}
+
+#[tokio::test]
+async fn a_pins_runway_reads_the_routers_milliseconds_as_whole_minutes() {
+    // Every pin on the account burns a tenth of the week per hour, whatever its tokens.
+    let share = SharePricer::default()
+        .with_rate(|window, _, _, _, _, _| (window == SEVEN_DAY).then_some(0.1 / 3_600.0));
+    let mut r = rig(RigSpec {
+        accounts: vec![oauth("a", "sk-ant-oat01-AAAA", 0)],
+        router: RouterConfig {
+            share,
+            ..RouterConfig::default()
+        },
+        tier: Some(TIER),
+        ..RigSpec::default()
+    })
+    .await;
+    let app = companion_router(r.engine.clone());
+    r.observe("main").await;
+    read_window(&r, "a", SEVEN_DAY, 0.4, NOW + 24 * HOUR_MS).await;
+    let answer = get(&app, Some(SESSION), Some(KEY)).await;
+    // The router's runway on the week is 0.55 to the 0.95 ceiling at 0.1 an hour, 19,800,000 ms inside the reset a day
+    // out: 330 minutes.
+    assert_eq!(
+        answer.body["pins"][0]["runway_minutes"],
+        json!(330),
         "{}",
         answer.text
     );
