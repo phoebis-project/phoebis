@@ -463,8 +463,9 @@ A `200` carries an acknowledgment with `session_id`, `instance_id`, `sequence`, 
 `request_generation`: for an agent event the named agent's generation beside its `agent_id`, and for a session-level
 event, a `session_start`, a `heartbeat` or a `session_end`, main's generation, which the mod adopts for main. The
 acknowledgment of a `session_start` adds `agents`, a list of `{agent_id, request_generation, state}` for every agent the
-router holds for the session, main included. The mod adopts every generation the answer names and reconciles that list
-with its own agents. An agent only the router holds is adopted when the client's own agent list reads it live, and
+router holds for the session, main included. A parked agent's entry carries the park the router holds: `park_kind`, and
+`wake_at` and `deadline` where the park has them. The mod adopts every generation the answer names and reconciles that
+list with its own agents. An agent only the router holds is adopted when the client's own agent list reads it live, and
 released otherwise, and without that list the router's entry stays as it is. An agent the mod released in this session,
 which the client has not spawned or given a turn since, is not adopted again whatever the list reads, since that release
 ends the run the router holds, and the mod sends the release once more when none is still queued, so a router restored

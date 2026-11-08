@@ -39,11 +39,19 @@ pub struct Event {
     pub wake_at: Option<i64>,
 }
 
+/// A parked agent's entry carries its park as well as its state, so the mod can see that a router restored from an
+/// older save holds an older park.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct AckAgent {
     pub agent_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deadline: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub park_kind: Option<ParkKind>,
     pub request_generation: u64,
     pub state: AgentState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wake_at: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -356,8 +364,11 @@ fn agents_of(session: &Session) -> Vec<AckAgent> {
         .values()
         .map(|a| AckAgent {
             agent_id: a.id.clone(),
+            deadline: a.deadline,
+            park_kind: a.park_kind,
             request_generation: a.generation,
             state: a.state,
+            wake_at: a.wake_at,
         })
         .collect()
 }

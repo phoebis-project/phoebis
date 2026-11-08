@@ -1018,6 +1018,65 @@ async fn a_registration_acknowledgment_carries_the_sessions_agents_and_nothing_e
     }
 }
 
+#[tokio::test]
+async fn a_registration_answer_carries_a_parked_agents_park() {
+    let r = rig(RigSpec::default()).await;
+    let app = keepalive_router(r.engine.clone());
+    let owner = json!({"owner_id": "owner-1"});
+    let wake = r.now() + 300_000;
+    let deadline = r.now() + 600_000;
+    for body in [
+        report("session_start", "fresh", "i", 1, owner.clone()),
+        report(
+            "agent_start",
+            "fresh",
+            "i",
+            2,
+            json!({"agent_id": "worker"}),
+        ),
+        report(
+            "state",
+            "fresh",
+            "i",
+            3,
+            json!({
+                "agent_id": "worker",
+                "state": "parked",
+                "park_kind": "both",
+                "wake_at": wake,
+                "deadline": deadline,
+                "request_generation": 0
+            }),
+        ),
+    ] {
+        assert_eq!(post(&app, body, Some(KEY)).await.status, 200);
+    }
+    let again = post(
+        &app,
+        report("session_start", "fresh", "i", 4, owner),
+        Some(KEY),
+    )
+    .await;
+    assert_eq!(
+        (again.status, again.body["agents"].clone()),
+        (
+            200,
+            json!([
+                {"agent_id": "main", "request_generation": 0, "state": "busy"},
+                {
+                    "agent_id": "worker",
+                    "request_generation": 0,
+                    "state": "parked",
+                    "park_kind": "both",
+                    "wake_at": wake,
+                    "deadline": deadline
+                }
+            ])
+        ),
+        "the parked worker carries its park and the busy main carries no park key"
+    );
+}
+
 /// Under the default policy, whose longest TTL is the hour, a released record answers `agent_released` for an hour
 /// after the release and then leaves: a report under its id answers `unknown_agent`, and the mod's start registers the
 /// agent anew under the cap.
