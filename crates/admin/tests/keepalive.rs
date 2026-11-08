@@ -2279,3 +2279,52 @@ async fn a_release_after_the_engines_quiesce_answers_503() {
     .await;
     assert_eq!(released.status(), 503);
 }
+
+#[tokio::test]
+async fn the_accounts_companion_id_is_the_allowance_routes_pseudonym() {
+    use tower::ServiceExt;
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    // A label apart from the id, so a pseudonym drawn from the label reads another id.
+    let created = post(
+        &parts.app,
+        "/admin/accounts",
+        r#"{"id":"console","kind":"api_key","label":"Console","secret":"sk-ant-api03-NEW"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"console","priority":0}]}"#, Some(&cookie)).await;
+    let key = json(
+        post(
+            &parts.app,
+            "/admin/keys",
+            r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let request = axum::http::Request::get("/v0/companion/allowance?session_id=s1")
+        .header(
+            "authorization",
+            format!("Bearer {}", key["secret"].as_str().unwrap()),
+        )
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let allowance = json(
+        phoebis_keepalive::companion_router(parts.keepalive.clone())
+            .oneshot(request)
+            .await
+            .unwrap(),
+    )
+    .await;
+    let account = json(get(&parts.app, "/admin/accounts/console", Some(&cookie)).await).await;
+    assert_eq!(
+        allowance["accounts"]
+            .as_array()
+            .map(|accounts| accounts.iter().map(|a| a["id"].clone()).collect::<Vec<_>>()),
+        Some(vec![account["companion_id"].clone()]),
+        "{allowance}"
+    );
+}

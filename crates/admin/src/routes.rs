@@ -16,6 +16,7 @@ use axum::middleware::{from_fn_with_state, map_response, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
 use axum::{Extension, Json, Router};
+use phoebis_keepalive::pseudonym;
 use phoebis_ledger::{lead_over_pace, QuotaPoll};
 use phoebis_oauth::{
     authorization_url, control_request, ephemeral_port, exchange_body, loopback_redirect_uri,
@@ -1929,6 +1930,7 @@ pub(crate) fn pool(state: &AdminState, id: &str) -> Result<PoolRow, Response> {
 
 /// What every account row reads from the ledger and the registry, fetched once per list call.
 pub(crate) struct AccountContext {
+    pub companion_key: [u8; 32],
     pub cooldowns: Vec<CooldownRow>,
     /// Each viewed row's credential standing, read for every row under one store take.
     pub credentials: BTreeMap<String, CredentialStanding>,
@@ -2121,6 +2123,7 @@ pub(crate) async fn account_context(state: &AdminState, rows: &[AccountRow]) -> 
     let week = crate::lifetime::lifetime_of(six_days, &day);
     let lifetime = crate::lifetime::lifetime_of(old, &week);
     AccountContext {
+        companion_key: state.store.companion_digest_key(),
         cooldowns: cooldowns.unwrap_or_default(),
         credentials,
         day,
@@ -2154,6 +2157,8 @@ pub(crate) struct AccountList {
 #[serde(deny_unknown_fields)]
 pub(crate) struct Account {
     pub id: String,
+    /// The pseudonym the companion's allowance route lists this account under.
+    pub companion_id: String,
     /// `api_key` or `oauth`.
     #[schema(value_type = String, example = "api_key")]
     pub kind: AccountKind,
@@ -2666,6 +2671,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
     });
     Account {
         id: row.id.clone(),
+        companion_id: pseudonym(&ctx.companion_key, &row.id),
         kind: row.kind,
         label: row.label.clone(),
         enabled: row.enabled,

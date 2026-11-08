@@ -2,6 +2,7 @@
   "route": "GET /admin/accounts/business",
   "body": {
     "id": "business",
+    "companion_id": "fd05ae18",
     "kind": "oauth",
     "label": "Business",
     "enabled": true,
