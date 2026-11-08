@@ -58,8 +58,8 @@ export type AccountPatch = { canceled: false; subscriptionEndsAt: null } | { can
 export interface KeyInput {
   autoModeServer: boolean | null;
   bodyCaptureHours: number | null;
-  /** The words that are on, replacing the stored set. Undefined leaves it alone, and a create then permits both. */
-  companionPermissions?: CompanionPermission[];
+  /** The words that are on, replacing the stored set. */
+  companionPermissions: CompanionPermission[];
   enabled: boolean;
   /** An ISO instant, or null for no expiry; undefined leaves the stored expiry alone. */
   expiresAt?: string | null;

@@ -1075,7 +1075,7 @@ const encodeTtlRules = (r: TtlRules) => ({ main: r.main, models: r.models.map((m
 export const encodeAccountPatch = (p: AccountPatch) => ({ canceled: p.canceled, subscription_ends_at: p.subscriptionEndsAt === null ? null : Date.parse(p.subscriptionEndsAt) });
 export const encodeKey = (i: KeyInput) => ({
   auto_mode_server: i.autoModeServer, body_capture_hours: i.bodyCaptureHours,
-  ...(i.companionPermissions === undefined ? {} : { companion_permissions: i.companionPermissions }),
+  companion_permissions: i.companionPermissions,
   enabled: i.enabled,
   ...(i.expiresAt === undefined ? {} : { expires_at: i.expiresAt === null ? null : Date.parse(i.expiresAt) }),
   label: i.name, long_context_twins: i.longContextTwins,

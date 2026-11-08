@@ -9,7 +9,7 @@ import type {
   Subscription,
 } from '@/api/types';
 import type { Guardrail, GuardrailAttachment, GuardrailCounts, GuardrailRef, GuardrailTestResult } from '@/api/types';
-import { AFFINITY_MODE_VALUES, GUARDRAIL_MODE_VALUES, REQUEST_ORDER_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/types';
+import { AFFINITY_MODE_VALUES, COMPANION_PERMISSION_VALUES, GUARDRAIL_MODE_VALUES, REQUEST_ORDER_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/types';
 import { type Clock, wallClock } from '@/lib/clock';
 import { foldClassifier, foldEffort, foldRequestClass, foldSpeed, servedMissReason, servingAttempt, servingResponse } from '@/lib/dimensions';
 import { tokensTotal } from '@/lib/format';
@@ -947,7 +947,7 @@ export class MockApi implements Api {
       poolId: input.poolId,
       // The route's defaults for a body that leaves these fields out, which a caller outside the console may.
       autoModeServer: input.autoModeServer ?? null,
-      companionPermissions: input.companionPermissions ?? ['allowance', 'keepalive'],
+      companionPermissions: input.companionPermissions ?? [...COMPANION_PERMISSION_VALUES],
       longContextTwins: input.longContextTwins ?? true,
       modelRules: input.modelRules ?? [],
       modelRulesMode: input.modelRulesMode ?? 'extend',

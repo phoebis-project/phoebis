@@ -490,7 +490,6 @@ test('decodeKey reads the companion permissions and encodeKey writes the words t
   const input = { autoModeServer: null, bodyCaptureHours: null, enabled: true, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'Laptop', notes: null, poolId: 'main' };
   const both = d.encodeKey({ ...input, companionPermissions: ['allowance', 'keepalive'] });
   assert.deepEqual(both.companion_permissions, ['allowance', 'keepalive']);
-  assert.equal('companion_permissions' in d.encodeKey(input), false);
 });
 
 test('a key\'s processed rule list decodes with the level, the rule, and the cooldowns each entry covers', () => {
