@@ -96,8 +96,8 @@ To run the router as a service on the host, follow [Install as a service](instal
 
 ## Other clients
 
-The Desktop app reads the same settings file as the terminal, so the client block in that file's `env` block reaches
-it on macOS and Windows, which is untested. The keepalive mod runs wherever Claude Code loads the plugin: the Agent
-SDK, `claude -p`, a cloud session that carries the plugin, the Desktop app, the terminal and the VS Code extension's
-chat panel. With its options unset it reports to `ANTHROPIC_BASE_URL` under the block's key, so the block needs no
-line of its own for it, and its install lines are on [The keepalive mod](keepalive-mod.md).
+The Desktop app reads the same settings file as the terminal, so the client block in that file's `env` block reaches it
+on macOS and Windows, which is untested. The companion mod runs wherever Claude Code loads the plugin: the Agent SDK,
+`claude -p`, a cloud session that carries the plugin, the Desktop app, the terminal and the VS Code extension's chat
+panel. With its settings unset it reports to `ANTHROPIC_BASE_URL` under the block's key, so the block needs no line of
+its own for it, and its install lines are on [The companion mod](companion-mod.md).

@@ -1,10 +1,10 @@
 # The relay
 
 What the router changes on the wire between Claude Code and Anthropic, what it sends on its own, its contract with the
-keepalive mod and how long it waits on an upstream. The client's environment block, the refusal table and the models
+companion mod and how long it waits on an upstream. The client's environment block, the refusal table and the models
 listing are on [The client](client.md), the cooldown tables on [Pools, keys and
-routing](routing.md#cooldowns-and-failover), and the mod's install and settings on [The keepalive
-mod](keepalive-mod.md).
+routing](routing.md#cooldowns-and-failover), and the mod's install and settings on [The companion
+mod](companion-mod.md).
 
 ## The frame
 
@@ -121,10 +121,9 @@ the registry, and is kept for `sessions.memory_retention_days` ([sessions](insta
 
 The never-copied set has its reasons: the hop-by-hop headers describe the client's connection rather than the payload,
 cookies and proxy credentials are the client's own secrets, the forwarding headers would disclose the client's network,
-and `x-keepalive-owner-id` is the router's own ownership marker, which the keepalive mod writes and the router reads. A
+and `x-keepalive-owner-id` is the router's own ownership marker, which the companion mod writes and the router reads. A
 client's `Expect: 100-continue` goes for the reason [Headers and transport](#headers-and-transport) gives. `connection`
-is the router's own because its upstream connection is pooled and independent of the client's, which ends at the
-router.
+is the router's own because its upstream connection is pooled and independent of the client's, which ends at the router.
 
 ## The betas
 
@@ -431,16 +430,16 @@ a switch.
 
 ## The keepalive protocol
 
-The keepalive mod reports to one route, `POST /v0/keepalive/events` on the proxy listener, with
-`Authorization: Bearer <router key>`, `Content-Type: application/json` and a JSON body of at most 16 KiB. The key is
-resolved exactly as `/v1/messages` resolves it, with the generation it was created under, so a key id created again
-reaches none of the previous holder's sessions. Every body carries five fields, `protocol` (the integer `1`), `event`,
-`session_id`, `instance_id` and `sequence`, then the fields of its event, and a field an event does not take is refused
-rather than ignored, so a report the mod got wrong never reads as one it got right. `sequence` rises with every report
-of a session: the mod sends the clock in epoch milliseconds, or one more than the previous report's when that is
-higher, so a session the mod registers again after a reload or a return to an earlier id never falls behind the
-sequence the router took last. An agent's reports carry `request_generation` once the router has named a generation
-for that agent. Main's agent id is `main`.
+The companion mod reports to one route, `POST /v0/keepalive/events` on the proxy listener, with `Authorization: Bearer
+<router key>`, `Content-Type: application/json` and a JSON body of at most 16 KiB. The key is resolved exactly as
+`/v1/messages` resolves it, with the generation it was created under, so a key id created again reaches none of the
+previous holder's sessions. Every body carries five fields, `protocol` (the integer `1`), `event`, `session_id`,
+`instance_id` and `sequence`, then the fields of its event, and a field an event does not take is refused rather than
+ignored, so a report the mod got wrong never reads as one it got right. `sequence` rises with every report of a session:
+the mod sends the clock in epoch milliseconds, or one more than the previous report's when that is higher, so a session
+the mod registers again after a reload or a return to an earlier id never falls behind the sequence the router took
+last. An agent's reports carry `request_generation` once the router has named a generation for that agent. Main's agent
+id is `main`.
 
 | Event | Fields | What the router does |
 | --- | --- | --- |
@@ -541,6 +540,139 @@ out before a registration has been acknowledged. What each answer makes the mod 
 At the end of a session the mod sends one `session_end` at once, ahead of the queue and past a request in flight, and
 drops what is still queued. Every `session.end` hook shares one short budget, so the end is a single request that is
 never retried. The router's lease covers whatever it misses, a crash or a killed process included.
+
+## The companion routes
+
+The companion mod reads one route beside the keepalive route, `GET /v0/companion/allowance?session_id=<id>` on the
+proxy listener, with `Authorization: Bearer <router key>`. The key is resolved exactly as `/v1/messages` and the
+keepalive route resolve it, with the generation it was created under. `session_id` is the route's one query parameter,
+the session's id as the client's session header carries it, taken as sent and never percent-decoded, and it has to be a
+valid id. The answer is the key's pool as the router reads it at that instant, each active account under a pseudonym
+and the asking session's pins, as JSON under `Cache-Control: no-store`, which every answer of the route carries. The
+route writes no ledger row and counts in no request figure, so a read shows in no statistic and no view. The mod reads
+it once at session start and then at the model's call, from a cache of ten seconds ([The allowance
+tool](companion-mod.md#the-allowance-tool)), and the router holds no limiter of its own on the route.
+
+A refusal takes the two shapes of the keepalive route. A missing, malformed, ambiguous or refused key is answered the
+relay's way, the same `401` in Anthropic's error shape that `/v1/messages` answers, with `x-phoebis-error-code` naming
+an `auth_*` code ([refusal codes](client.md#refusal-codes)). Every other refusal is the route's own JSON,
+`{"code": "<code>"}`, without the `x-phoebis-error-code` header. The checks run in the table's order, so a `400` says
+the key was accepted and a `403` that the session id was too:
+
+| Code | Status | When |
+| --- | --- | --- |
+| `invalid_identity` | 400 | `session_id` is missing or is not a valid id |
+| `companion_not_permitted` | 403 | The key's permission set lacks `allowance` ([Keys](routing.md#keys)) |
+| `router_unavailable` | 503 | The router is not ready: it holds no pool for the key yet, or its loop has stopped answering |
+
+The body carries `protocol`, the integer `1`, which the mod checks before it reads any other field, `now`, the instant
+of the read, and the three objects below. Every instant in the body is RFC 3339 at UTC, every share runs from 0 to 1 of
+its window, and every figure is the one the router computes for the shedding round and the console's pool view, read at
+one instant.
+
+`pool` describes the key's pool:
+
+| Field | Value |
+| --- | --- |
+| `ceiling` | The pool's `window_ceiling`, the share of a window the router fills an account to ([Pools](routing.md#pools)) |
+| `pinning` | The pool's affinity mode, `always` or `when_cached`, or `off` when the pool's affinity TTL is zero, which keeps no pin past its request |
+| `strategy` | `pace`, `priority` or `round_robin` ([Pools](routing.md#pools)) |
+
+`accounts` holds one entry per active member of the pool, ordered by pseudonym. Active means the account is enabled, its
+state is `ready`, so a `disconnected`, `funding_required`, `reauth_required` or `unpaired` account is out ([Account
+states](pairing.md#account-states)), and its plan has not ended. A cooling account, one held on a budget and one in
+overage stay in, with the hold as their obstacle. Each entry:
+
+| Field | Value |
+| --- | --- |
+| `id` | The account's pseudonym |
+| `funding` | `plan`, `usage_based` or `api_key` |
+| `tier` | The rate-limit tier the router prices the account under, `null` where it has none |
+| `obstacle` | What the selector holds against the account for a request on no model in particular: `attempted`, `budget`, `budget_unknown`, `cooldown`, `credits`, `operator`, `overage`, `spent` or `subscription_ended`, or `null` where it would place on the account |
+| `pace_score` | The score Pace ranks the account by, its spare rate on the 7-day window, or the room left in its worst bucket for an API-key account ([Pools](routing.md#pools)) |
+| `slow_down` | `null` without an entry in force, else `factor`, the target, `speed`, the realized speed the holds reached, and `since`, when the span the factor reads under 1 for began, or `null` outside a span ([Slow-down](routing.md#slow-down)) |
+| `windows` | A map from the window id (`five_hour`, `seven_day`, a model's own week) to the window's figures, one entry per plan window the account has a reading of, empty for an account with no plan window |
+| `spend` | One row per spend budget the member carries in the pool, empty without one ([Pools](routing.md#pools)) |
+
+Each window:
+
+| Field | Value |
+| --- | --- |
+| `utilization` | The share of the window used now |
+| `horizon_at` | The window's reset, or the account's subscription end when that comes first, the instant the quota left is lost, and `null` with neither |
+| `burn_per_hour` | The share the account's sessions burn an hour on the window |
+| `demand_per_hour` | The share they would burn an hour with no slow-down holding them |
+| `projected_at_horizon` | The predicted share at the earlier of `horizon_at` and five hours from now |
+| `runway_minutes` | The whole minutes until the share reaches the pool's ceiling at `burn_per_hour`: `0` at or above the ceiling, and `null` where nothing burns or where the window resets before the ceiling is reached |
+
+Each spend row:
+
+| Field | Value |
+| --- | --- |
+| `period` | `day` or `month`, the period the budget resets over |
+| `spent_usd` | The dollars spent in the period so far |
+| `budget_usd` | The budget |
+| `period_end` | When the period ends |
+
+`pins` holds one entry per pin of the asking session under the key and its generation, ordered by agent, then model:
+
+| Field | Value |
+| --- | --- |
+| `agent` | `main` or the subagent's id |
+| `model` | The model the pin is for |
+| `account` | The pseudonym of the account the pin names |
+| `placed_at` | When the pin was placed |
+| `last_used_at` | When a request last used it |
+| `warm` | Whether the pin's cache entry is alive at `now`, by the selector's own reading |
+| `warm_until` | The first instant `warm` reads false: the last refresh plus the cache TTL, or the last use for a pin only auxiliary requests have used since its placement |
+| `runway_minutes` | The whole minutes until the account's projection reaches the ceiling on the window that binds among those the pin's model draws, `null` where no window bounds it |
+| `binding_window` | The window the runway reads, `null` unless the runway is bounded |
+| `slow_down` | `null` without an entry in force on the account, else `factor` and `speed` |
+
+A pin's own burn is inside its account's `burn_per_hour`, so the pin carries none.
+
+The pseudonym is eight lowercase hexadecimal characters, the head of a keyed digest of the account's id under a key the
+router derives from the registry's storage key with a label of its own. It is the same across sessions and restarts on
+one installation, differs between two installations, and reverses to nothing. The console shows it as the account's
+Companion id ([Accounts](console.md#accounts)), and the admin API's account resource carries it as `companion_id`. No
+label, email, account id, key id or notes field appears anywhere in the body.
+
+The route's answer on the test rig, for a pool of one API-key account with a daily budget and one idle plan account the
+session's main agent is pinned to:
+
+```json
+{
+  "protocol": 1,
+  "now": "1970-01-01T00:16:40Z",
+  "pool": { "ceiling": 0.95, "pinning": "always", "strategy": "priority" },
+  "accounts": [
+    {
+      "id": "aaaaaaaa", "funding": "api_key", "tier": null, "obstacle": null, "pace_score": 1.0,
+      "slow_down": null, "windows": {},
+      "spend": [{ "period": "day", "spent_usd": 2.5, "budget_usd": 10.0, "period_end": "1970-01-02T00:00:00Z" }]
+    },
+    {
+      "id": "bbbbbbbb", "funding": "plan", "tier": "default_claude_max_20x", "obstacle": null,
+      "pace_score": 0.008333333333333333, "slow_down": null,
+      "windows": {
+        "five_hour": { "utilization": 0.25, "horizon_at": "1970-01-01T02:16:40Z", "burn_per_hour": 0.0,
+                       "demand_per_hour": 0.0, "projected_at_horizon": 0.25, "runway_minutes": null },
+        "seven_day": { "utilization": 0.4, "horizon_at": "1970-01-04T00:16:40Z", "burn_per_hour": 0.0,
+                       "demand_per_hour": 0.0, "projected_at_horizon": 0.4, "runway_minutes": null }
+      },
+      "spend": []
+    }
+  ],
+  "pins": [
+    {
+      "agent": "main", "model": "claude-sonnet-4-5", "account": "bbbbbbbb",
+      "placed_at": "1970-01-01T00:16:40Z", "last_used_at": "1970-01-01T00:16:40Z",
+      "warm": true, "warm_until": "1970-01-01T00:21:40Z",
+      "runway_minutes": null, "binding_window": null, "slow_down": null
+    }
+  ]
+}
+```
 
 ## The relay's waits
 

@@ -213,7 +213,7 @@ Every field, in the order the key's JSON body lists them, with the answer a valu
 | `model_rules` | empty | an ordered list of `{pattern, not}`, at most 256: `model_rules holds at most 256 entries`. See Model rules |
 | `model_rules_mode` | `extend` | `extend` or `replace`: `model_rules_mode is extend or replace`. See Model rules |
 | `long_context_twins` | `true` | `true` or `false`, whether the [models listing](client.md#the-models-listing) carries the `[1m]` twins |
-| `keepalive_opt_out` | `false` | `true` or `false` |
+| `companion_permissions` | `["allowance", "keepalive"]` | the words that are on, from `allowance` (the companion may read the pool's allowance) and `keepalive` (the router warms the key's sessions' caches): `companion_permissions holds allowance and keepalive, not {word}` for any other word. A repeated word is read once, and the answer lists the words that are on in that order ([The key's permissions](companion-mod.md#the-keys-permissions)) |
 | `body_capture_hours` | unset, inheriting the pool's | `0` turns capture off, else at most `stats.body_capture_max_hours`: `body_capture_hours exceeds stats.body_capture_max_hours`. `null` inherits again |
 | `auto_mode_server` | unset, inheriting the pool's | `true`, `false` or `null`: `auto_mode_server must be true, false, or null`. `null` inherits again |
 | `guardrails` | unchanged when absent | an ordered list of at most 64 ids, refused on a create, the refusals in the paragraph below |
@@ -654,7 +654,7 @@ window, so the pin has no share to shed. In dollars, on an API-key account or on
 session that returns to standard requests brings its pin back with the plan burn it still carries. A pin whose model
 does not draw the window that fired is out of the round too (`off_window`), so a 7-day Fable round walks the account's
 Fable sessions alone and an Opus session on the account is neither counted nor moved by it. A pin whose agent ended is
-out of the round as well (`ended`): a subagent whose last answer stopped with `end_turn`, or an agent the keepalive mod
+out of the round as well (`ended`): a subagent whose last answer stopped with `end_turn`, or an agent the companion mod
 released. Its pin, its account and its cache stay, since the main session can respawn the agent with its whole context,
 and the agent's next request brings the pin back into the walk and its burn back into the projection that fires a round
 (see **The projection**, above). The mark is kept in memory, so after a restart the walk and the projection read such a

@@ -362,17 +362,19 @@ and "Reload" where the row changed under the editor. Beside the saved end the ro
 profile read found the account's organization holding no plan, which the router reads as an end that has passed until a
 profile read or a pairing finds a plan again, and the Quota view leaves the account out while the flag stands ([Account
 states](pairing.md#account-states)). The card closes on "Renewal date is not reported by the provider." For an API-key
-account it lists Type ("API key") and Windows ("None reported, billed per token"). "Usage" ("Remaining share of each
-window") draws the three windows as the Quota view does, or a usage-based seat's spend bar, "Spend limit" with `{used}
-of {limit}` over its meter and its reset line, the speed chip beside the 5-hour bar's label on a slowed account, "Extra
-usage this month" on every account but a usage-based seat, with an "in use" badge and its amounts and spend meter where
-the reading carries them, the reason the provider gave for disabling extra usage, and a "Fast mode" line with the share
-of the fast lane's input and output buckets used and a chip while the fast lane cools, or reads "This account does not
-report quota windows." ("No spend reading yet" on a usage-based seat, or "No quota window is read since the plan ended
-{ago}." on an account whose plan ended), or "The first quota reading is in flight." from a pairing's confirm until the
-account's first reading lands, where a usage-based seat reads "No spend reading yet". "7-day trend" ("Utilization of
-each window, sampled every 5 minutes") draws the 5-hour, 7-day and Fable 7-day windows of a subscription account, or "No
-samples yet" with "Quota samples appear after the first successful quota fetch."
+account it lists Type ("API key") and Windows ("None reported, billed per token"). On either kind the card ends on
+Companion id, the pseudonym the companion mod's `allowance` tool names the account by ([The companion
+routes](relay.md#the-companion-routes)). "Usage" ("Remaining share of each window") draws the three windows as the Quota
+view does, or a usage-based seat's spend bar, "Spend limit" with `{used} of {limit}` over its meter and its reset line,
+the speed chip beside the 5-hour bar's label on a slowed account, "Extra usage this month" on every account but a
+usage-based seat, with an "in use" badge and its amounts and spend meter where the reading carries them, the reason the
+provider gave for disabling extra usage, and a "Fast mode" line with the share of the fast lane's input and output
+buckets used and a chip while the fast lane cools, or reads "This account does not report quota windows." ("No spend
+reading yet" on a usage-based seat, or "No quota window is read since the plan ended {ago}." on an account whose plan
+ended), or "The first quota reading is in flight." from a pairing's confirm until the account's first reading lands,
+where a usage-based seat reads "No spend reading yet". "7-day trend" ("Utilization of each window, sampled every 5
+minutes") draws the 5-hour, 7-day and Fable 7-day windows of a subscription account, or "No samples yet" with "Quota
+samples appear after the first successful quota fetch."
 
 "Allowance left at reset" draws, for a subscription account that is not a usage-based seat, one column per weekly window
 (the 7-day window, then each model week): the share left unused at the latest reset with "left at the reset of {date}"
@@ -661,13 +663,14 @@ dollars, a side with no traffic left out, the tile, the bar's figure and the cos
 side as a dash with the Dashboard's hover where a request priced nothing, and its bar draws no fill and sorts last. A
 key spans its pool's accounts, so its figures carry no hint. The columns are Name, Prefix, Pool, Models, "Usage, 7d",
 Expiry and Status, and each row ends in its menu. Under the name a row notes the capture setting, `bodies captured,
-{h}h` or `bodies not captured`, with "inherited" where the key follows its pool and "keepalive off" for a key opted out
-of cache warming. Models reads `{n} rules`, with "(replace)" where they replace the pool's, or "Pool rules" or "No
-rules". Expiry reads the date or "Never". Status carries the key's state with `used {ago}` and, after a rotation, `{n}
-sessions still on the previous secret`. The menu offers Edit, Rotate (`Rotate {name}`), Revoke (`Revoke {name}`:
-"Requests with this key are rejected immediately. Its history stays in the ledger.") and Delete (`Delete {name}`:
-"Removes the key and detaches its request history from the key name. This cannot be undone."). Before the first key the
-table reads "No keys yet" with "Create key". What a key's settings mean is on [Keys](routing.md#keys).
+{h}h` or `bodies not captured`, with "inherited" where the key follows its pool, and `allowance off` or `cache warming
+off` for each companion permission the key lacks ([The key's permissions](companion-mod.md#the-keys-permissions)).
+Models reads `{n} rules`, with "(replace)" where they replace the pool's, or "Pool rules" or "No rules". Expiry reads
+the date or "Never". Status carries the key's state with `used {ago}` and, after a rotation, `{n} sessions still on the
+previous secret`. The menu offers Edit, Rotate (`Rotate {name}`), Revoke (`Revoke {name}`: "Requests with this key are
+rejected immediately. Its history stays in the ledger.") and Delete (`Delete {name}`: "Removes the key and detaches its
+request history from the key name. This cannot be undone."). Before the first key the table reads "No keys yet" with
+"Create key". What a key's settings mean is on [Keys](routing.md#keys).
 
 "Create key" and Rotate end on the dialog "Key created" or "Key rotated", which shows the secret once with a copy
 button under "Copy the secret now. The router stores only a hash, so it cannot be shown again." and "Set it as
@@ -683,10 +686,12 @@ end of the list at once and an uncheck removes it, "Select all" adds every guard
 removes them all, and Escape or a click outside closes the box, the save writing the list as it stands, the control
 disabled with "No other guardrail is left to attach" on hover while the registry holds nothing beyond the pool's, under
 the hint "The pool's guardrails run first and cannot be dropped here. This key's own run after them." and the link
-"Manage guardrails", reading "Guardrails can be attached once the key is saved." on create), Sessions (Cache warming
-opt-out) and Capture (Capture request and response bodies as Inherit from pool, an override in hours or off for this
-key). Server-side auto mode, Pool rules and List [1m] twins show in the expert view. While the key captures, the Capture
-group warns what the bodies hold, the warning [Keys](routing.md#keys) quotes.
+"Manage guardrails", reading "Guardrails can be attached once the key is saved." on create), Sessions (the key's two
+companion permissions as toggles, Allowance tool with the hint "The model may read the pool's allowance through the
+companion." and Cache warming with "The router warms this key's sessions' caches.", both on for a new key) and Capture
+(Capture request and response bodies as Inherit from pool, an override in hours or off for this key). Server-side auto
+mode, Pool rules and List [1m] twins show in the expert view. While the key captures, the Capture group warns what the
+bodies hold, the warning [Keys](routing.md#keys) quotes.
 
 A saved key's dialog shows its Effective list under the Models group: the list the key is judged by, top to bottom, with
 the level each entry comes from and, where accounts cool for a model the entry names, a cooling count whose hover names

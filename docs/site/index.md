@@ -51,7 +51,7 @@ kind value is `api_key`. "Upstream" names the provider's host and the party that
 file's `upstream` block, the `upstream_error` outcome and the `upstream_unreachable` code, the `upstream_message_id`,
 `upstream_request_id` and `upstream_status` fields, the `phoebis_upstream_ttfb_seconds` metric). The bootstrap file, the
 one `init` writes, names two database files: the registry at `storage.path` and the ledger at `stats.ledger_path`. On
-this site the client is Claude Code, and the plugin that reports to the router is the keepalive mod.
+this site the client is Claude Code, and the plugin that reports to the router is the companion mod.
 
 ## What the router does not do
 
@@ -68,8 +68,8 @@ a loopback router works, [A second machine](second-machine.md) covers a LAN host
 [Installation](installation.md) is for the operator installing on a host or in the container and for the one who needs
 every setting. [Pairing an account](pairing.md) is for the operator adding an account in the console or by `curl`. An
 operator tuning pools and keys, or reading why a request landed where it did, reads [Pools, keys and
-routing](routing.md). [Keepalive](keepalive.md) is for the operator turning cache warming on, and [The keepalive
-mod](keepalive-mod.md) for the one installing and configuring the mod on a client machine. [The relay](relay.md) says
+routing](routing.md). [Keepalive](keepalive.md) is for the operator turning cache warming on, and [The companion
+mod](companion-mod.md) for the one installing and configuring the mod on a client machine. [The relay](relay.md) says
 what the router changes on the wire and sends on its own. [The console](console.md) is for the operator reading or using
 a view. [Statistics](statistics.md) is for the operator reading a figure's meaning or alerting on a gauge.
 [Operations](operations.md) is for the operator running the router for months. [Development](development.md) is for the

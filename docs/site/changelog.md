@@ -153,8 +153,8 @@ With `keepalive.enabled` on a pool the router keeps a replayable copy of every e
 shortly before the cache entry would expire, sends a probe that reads it ([Keepalive](keepalive.md)). The policy's
 ceilings, `max_idle_seconds`, `max_parked_seconds` and `scheduled_horizon_seconds`, bound how long a recipe is probed,
 the parked and horizon ceilings capped at their break-even and the idle ceiling taken as set ([The four
-fields](keepalive.md#the-four-fields)). The router reads session liveness and agent state from the keepalive mod, a
-Claude Code plugin inside the client's process that holds no policy ([The keepalive mod](keepalive-mod.md)), over [The
+fields](keepalive.md#the-four-fields)). The router reads session liveness and agent state from the companion mod, a
+Claude Code plugin inside the client's process that holds no policy ([The companion mod](companion-mod.md)), over [The
 keepalive protocol](relay.md#the-keepalive-protocol). A probe kept past its recipe's end follows a model's resolution to
 its dated id, the kept-warm credit goes to the newest probe that covered the entry over a later one that did not cover
 it, and a failed turn decides no probe, so the retry after it earns the credit ([Which requests re-arm a
@@ -164,14 +164,13 @@ cache inside that entry answers every probe of the chain, and a completed compac
 main turn ([Which requests re-arm a recipe](keepalive.md#which-requests-re-arm-a-recipe)). A pool's idle ceiling above
 the break-even is taken as set, and the resolved share can read above one for it ([The
 ceilings](keepalive.md#the-ceilings)). A kept-warm credit's saving prices under the regime of its request's client
-([What the ledger records](keepalive.md#what-the-ledger-records)). The keepalive mod refuses a key file whose content is
-blank as it refuses one it cannot read ([Configure](keepalive-mod.md#configure)). An arrival after a completion the
-keepalive missed measures the kept-warm gap from the turn that answered, and a probe under a twin spelling of a dated
-model id is dated ([Which requests re-arm a recipe](keepalive.md#which-requests-re-arm-a-recipe)). The keepalive mod
-keeps its owner and instance across a `/clear` and retries a start the router refused for a live holder once that
-holder's lease lapses, and the router warns once per session at the first request that names another owner while the
-holder's lease is live and lets such a request take the session over once the lease has lapsed ([The owner
-header](keepalive-mod.md#the-owner-header)). A released agent's record leaves the engine one pool cache TTL after its
+([What the ledger records](keepalive.md#what-the-ledger-records)). An arrival after a completion the keepalive missed
+measures the kept-warm gap from the turn that answered, and a probe under a twin spelling of a dated model id is dated
+([Which requests re-arm a recipe](keepalive.md#which-requests-re-arm-a-recipe)). The companion mod keeps its owner and
+instance across a `/clear` and retries a start the router refused for a live holder once that holder's lease lapses, and
+the router warns once per session at the first request that names another owner while the holder's lease is live and
+lets such a request take the session over once the lease has lapsed ([The owner
+header](companion-mod.md#the-owner-header)). A released agent's record leaves the engine one pool cache TTL after its
 release, freeing its slot of the agent cap ([The five states](keepalive.md#the-five-states)). A failed or canceled
 request leaves the last answered recipe armed, and a probe's transient failure retries on a ladder bounded by the
 entry's expiry ([The five states](keepalive.md#the-five-states)). A message's text-only content array hashes as its
@@ -181,7 +180,7 @@ boundary while its answer read the cache is logged and counted per client versio
 moving once at the deploy, so the cache map and the anchors of running sessions start cold
 ([Keepalive](keepalive.md#the-return-rate-by-idle-age), [Relay](relay.md#the-boundary-chains)). The idle-return counters
 are kept by pool and UTC day, so the keepalive overview answers the return rate over the last 7 or 30 days, the counters
-starting afresh at the deploy ([Keepalive](keepalive.md#the-return-rate-by-idle-age)). The keepalive mod keeps a
+starting afresh at the deploy ([Keepalive](keepalive.md#the-return-rate-by-idle-age)). The companion mod keeps a
 subagent the router named released unannounced when a later answer omits it, until its next report, so a released
 record's departure frees its slot ([The keepalive protocol](relay.md#the-keepalive-protocol)). The keepalive prices its
 probes, the savings and the break-even in the 7-day window of the account's tier, the window every plan keeps, and the
@@ -193,14 +192,14 @@ states](keepalive.md#the-five-states)). A session the mod registered holds no sl
 until its first request, and a first request over either cap is not kept and reads `session_limit` or `agent_limit`
 ([Turning it on](keepalive.md#turning-it-on)). No probe goes out past an account's subscription end, and the wind-down
 holds a probe due within its interval of the end ([How a probe works](keepalive.md#how-a-probe-works)). A request on a
-pool with the keepalive off or from an opted-out key is recorded at its arrival with no body kept ([The five
-states](keepalive.md#the-five-states)), and a kept-warm credit files under the tier its request row files under ([What
-the ledger records](keepalive.md#what-the-ledger-records)). An idle return also counts where the request carries the
-deepest boundary the earlier request marked for the cache, so an interrupted turn's next request reads as a return and
-the chain watch stays quiet ([The return rate by idle age](keepalive.md#the-return-rate-by-idle-age)). A request whose
-billing line holds a `cch=` the replay cannot read or reach is not retained ([The five
-states](keepalive.md#the-five-states)). The keepalive mod records a release the router named for a subagent and does not
-send it again ([The keepalive protocol](relay.md#the-keepalive-protocol)).
+pool with the keepalive off or from a key without the `keepalive` permission is recorded at its arrival with no body
+kept ([The five states](keepalive.md#the-five-states)), and a kept-warm credit files under the tier its request row
+files under ([What the ledger records](keepalive.md#what-the-ledger-records)). An idle return also counts where the
+request carries the deepest boundary the earlier request marked for the cache, so an interrupted turn's next request
+reads as a return and the chain watch stays quiet ([The return rate by idle
+age](keepalive.md#the-return-rate-by-idle-age)). A request whose billing line holds a `cch=` the replay cannot read or
+reach is not retained ([The five states](keepalive.md#the-five-states)). The companion mod records a release the router
+named for a subagent and does not send it again ([The keepalive protocol](relay.md#the-keepalive-protocol)).
 
 The admin listener serves the web console behind a login with the admin secret, with the views in the sidebar's order,
 Dashboard, Quota, Accounts, Pools, Keys, Guardrails, Requests, Analytics, Sessions and Settings, and under them the
@@ -731,3 +730,20 @@ version item, which refuses a `claude-cli/` version spelled any other way than t
 holds its version and session items on a token count and a keepalive probe ([The required
 set](client.md#the-required-set)). A request is identified by its session header alone, and the session views key every
 row by the client's own session id ([How a request is identified](client.md#how-a-request-is-identified)).
+
+Each key carries a companion permission set, `companion_permissions`, two words in this version: `allowance`, whether
+the key's companion may read the pool's allowance, and `keepalive`, whether the router warms the key's sessions' caches
+from the companion's reports. A new key starts with both, the key dialog edits them as the Allowance tool and Cache
+warming toggles, and the Keys table notes each word a key lacks ([The key's
+permissions](companion-mod.md#the-keys-permissions), [Keys](routing.md#keys)). The set replaces the key's
+`keepalive_opt_out` flag: the first start after the upgrade gives each existing key `allowance`, and `keepalive` to each
+key whose flag was clear, so a key that had opted out holds `allowance` alone. The proxy listener answers `GET
+/v0/companion/allowance` under the router key with the key's pool as the router reads it: each active account under a
+pseudonym that is stable on one installation and reverses to nothing, its windows with their burn, projection and
+runway, its spend against its budgets, and the asking session's pins, and the read writes no ledger row ([The companion
+routes](relay.md#the-companion-routes)). The account's details and the admin API's account resource carry the pseudonym
+as the Companion id ([Accounts](console.md#accounts)). The companion mod, a Claude Code plugin, replaces the keepalive
+mod of the pre-release builds: it carries the lifecycle reports over unchanged on the keepalive protocol, adds four
+settings, checks the router at session start and names a missing setting, a refused key or a silent router in the
+transcript, and gives the model the `allowance` tool, which answers the route's body from a cache of ten seconds ([The
+companion mod](companion-mod.md)).

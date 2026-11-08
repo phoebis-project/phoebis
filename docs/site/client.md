@@ -45,10 +45,10 @@ managed entry over a user or project entry.
 ### ANTHROPIC_BASE_URL
 
 Points Claude Code at the router's proxy listener, at the URL that reaches it from the client's machine. Every model
-request and the keepalive mod's reports go here. The scheme has to match the listener: the router accepts plain HTTP
-on any address, and a listener with a certificate pair speaks TLS alone
-([TLS on the listeners](installation.md#tls-on-the-listeners)). Without this line the client sends everything to
-`api.anthropic.com` and the router sees nothing.
+request and the companion mod's reports go here. The scheme has to match the listener: the router accepts plain HTTP on
+any address, and a listener with a certificate pair speaks TLS alone ([TLS on the
+listeners](installation.md#tls-on-the-listeners)). Without this line the client sends everything to `api.anthropic.com`
+and the router sees nothing.
 
 ### CLAUDE_CODE_OAUTH_TOKEN
 
@@ -61,22 +61,22 @@ one with `401` `auth_missing`.
 
 ### CLAUDE_CODE_SUBSCRIPTION_TYPE
 
-Optional, and needed for the keepalive mod's reports under `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`. Set it to `max`
+Optional, and needed for the companion mod's reports under `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`. Set it to `max`
 beside the token. The client builds the credential it uses from `CLAUDE_CODE_OAUTH_TOKEN` with the subscription type
 this variable names, null when it is unset, and reads the type for its policy eligibility check, which fetches the
 organization's policy limits from `api.anthropic.com` for a null, `team` or `enterprise` type and skips the fetch for
 `pro` or `max`, a consumer subscription no organization policy governs. Under the first-party flag the fetch goes to
 `api.anthropic.com` with the router key, answers `401`, and the client then refuses every fetch a plugin makes, so the
-keepalive mod reports nothing and the Sessions view reads `none` under Companion. Without the flag the client skips
-the fetch for a base URL that is not its own. With or without the flag, a null type's settings lookup at start goes to
+companion mod reports nothing and the Sessions view reads `none` under Companion. Without the flag the client skips the
+fetch for a base URL that is not its own. With or without the flag, a null type's settings lookup at start goes to
 `api.anthropic.com` with the key's secret, under either telemetry switch, fails there, and the client tolerates that.
 Under the flag that lookup and the policy fetch run before the first request, each retried five times, so a host it
 cannot reach holds that request back 17 to 18 seconds and the client warns `Remote managed settings failed to load`.
 Under `max` it fetches neither. The type also sets the welcome header's plan label, `Claude API` against `Claude Max`,
 and the tools and skills the client announces: `DesignSync`, `RemoteTrigger` and `WebFetch` among the deferred tools,
 the `schedule` skill and, in the terminal only, the `artifact-capabilities` skill appear under `max` and not under a
-null type. The client documents the variable nowhere, sets it itself from its own auth state when the token is its
-own, and a future build may drop it.
+null type. The client documents the variable nowhere, sets it itself from its own auth state when the token is its own,
+and a future build may drop it.
 
 ### `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`
 
@@ -134,15 +134,16 @@ mode on. The router reads the speed from the request and the answer: a fast requ
 lane is open, priced in dollars from usage credits, and moved to a sibling when an account's fast lane cools
 ([Cooldowns and failover](routing.md#cooldowns-and-failover)). It draws no plan window.
 
-### For the keepalive mod
+### For the companion mod
 
-The keepalive mod needs Claude Code 2.1.287 or later. With its options unset it reports to `ANTHROPIC_BASE_URL` under
-the key it finds in the client's variables, in the order [The keepalive mod](keepalive-mod.md) states, so the block
-above needs no line of its own for it beyond [`CLAUDE_CODE_SUBSCRIPTION_TYPE`](#claude_code_subscription_type), which
-lets its reports leave the process. At session start the mod writes its owner header, `X-Keepalive-Owner-Id`, into
-`ANTHROPIC_CUSTOM_HEADERS` beside the variable's other lines, and the client sends it on every model request of the
-process. The router reads it to tell that process's requests from those of another process on the same session id, so
-binding a session to its process needs no wrapper script. Installing and configuring the mod is that page's.
+The companion mod needs Claude Code 2.1.287 or later, and its `allowance` tool 2.1.293 or later. With its settings unset
+it reports to `ANTHROPIC_BASE_URL` under the key it finds in the client's variables, in the order [The companion
+mod](companion-mod.md) states, so the block above needs no line of its own for it beyond
+[`CLAUDE_CODE_SUBSCRIPTION_TYPE`](#claude_code_subscription_type), which lets its requests leave the process. At session
+start the mod writes its owner header, `X-Keepalive-Owner-Id`, into `ANTHROPIC_CUSTOM_HEADERS` beside the variable's
+other lines, and the client sends it on every model request of the process. The router reads it to tell that process's
+requests from those of another process on the same session id, so binding a session to its process needs no wrapper
+script. Installing and configuring the mod is that page's.
 
 `CLAUDE_CODE_PROMPT_CACHE_TTL=5m` is an optional line the block does not carry, worth setting for Fable 5.1 sessions in
 a pool of API-key accounts with cache warming on: at a 0.025x read price, a five-minute entry kept warm by probes stays
@@ -205,7 +206,8 @@ figures from the proxy listener with the `curl` of [Your key's usage](#your-keys
 | GET | `/v1/usage` | router key | that key's own usage for the last 24 hours and 7 days, JSON or HTML by `Accept` |
 | GET | `/v1/models` | router key | the models the key may route to, with a `[1m]` twin per long-context model |
 | GET | `/v1/models/{*id}` | router key | one row of that listing, or `404` |
-| POST | `/v0/keepalive/events` | router key | the keepalive mod's event report |
+| POST | `/v0/keepalive/events` | router key | the companion mod's event report |
+| GET | `/v0/companion/allowance` | router key | the key's pool under pseudonyms, for the companion mod's `allowance` tool |
 | any other method on a known path | | none | `405` |
 | any unmatched path | | none | `404` |
 
@@ -254,8 +256,8 @@ as JSON, or as one HTML page when `Accept` prefers `text/html`. The JSON carries
 ## Refusal codes
 
 Every refusal the relay answers on the proxy listener is in Anthropic's error shape, `{"type": "error", "error":
-{"type", "message"}, "request_id"}`, with the header `x-phoebis-error-code` naming the code and `Retry-After` where
-the row says so. The keepalive mod's route answers a refused key the same way and its other refusals in its own shape,
+{"type", "message"}, "request_id"}`, with the header `x-phoebis-error-code` naming the code and `Retry-After` where the
+row says so. The companion mod's routes answer a refused key the same way and their other refusals in their own shape,
 described on [The relay](relay.md#the-keepalive-protocol). One row per code, with every message the code is answered
 with.
 

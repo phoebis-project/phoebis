@@ -3,7 +3,7 @@
 This page is for the operator turning cache warming on for a pool and reading the words the Sessions view uses for it. A
 prompt cache entry expires five minutes, or one hour, after its last use, and with keepalive enabled on a pool the
 router keeps a replayable copy of every eligible request a session sends and, shortly before the entry would expire,
-sends a probe that reads it. The page covers how a probe works, what the keepalive mod tells the engine, how to turn
+sends a probe that reads it. The page covers how a probe works, what the companion mod tells the engine, how to turn
 probing on, which requests re-arm a recipe, the policy's four fields and the ceilings they set, the five states a recipe
 reads, what the ledger records for every probe, where the console shows all of it and what a router restart keeps.
 
@@ -66,12 +66,12 @@ latches.
 
 ## The mod
 
-The engine learns which sessions are alive, which agents they run and what each agent is doing from the keepalive mod, a
+The engine learns which sessions are alive, which agents they run and what each agent is doing from the companion mod, a
 Claude Code plugin that runs inside the client's own process, reports session liveness and agent state to the router and
 holds no policy: every ceiling and switch is a pool field or a constant of the router. Installing the mod, its settings,
-the order it reads its credential in and what it reports are on [The keepalive mod](keepalive-mod.md), and the route it
+the order it reads its credential in and what it reports are on [The companion mod](companion-mod.md), and the route it
 reports to, its six events, the acknowledgment and the refusal codes are on [The
-relay](relay.md#the-keepalive-protocol). With its options unset the mod reports under the URL and the key of [the
+relay](relay.md#the-keepalive-protocol). With its settings unset the mod reports under the URL and the key of [the
 environment block](client.md#the-environment-block). On the router's side, a registration holds a lease over the
 session, 90 seconds long, which each heartbeat renews, and the Sessions view names the mod's state for each session:
 `reporting` while the mod reports the session's agents, their parks and the person's presence, `silent` once the lease
@@ -88,9 +88,11 @@ its first request.
 Enabling `keepalive.enabled` on a pool needs `affinity_ttl_seconds` of at least 300 seconds, refused otherwise with
 `keepalive.enabled requires affinity_ttl_seconds of at least 300: a probe follows the session pin, and a pin shorter
 than the shortest cache TTL cannot keep the session on the account it warmed`. A probe follows the session's pin to a
-subscription account as to an API-key one. A key with `keepalive_opt_out` is never retained, and the opt-out reaches a
-session that is already idle: its held prompt is dropped under `key_opted_out` rather than kept, since nothing on that
-key may be probed again until the flag is cleared.
+subscription account as to an API-key one. A key without the `keepalive` companion permission is never retained, and
+taking the permission away reaches a session that is already idle: its held prompt is dropped under `key_opted_out`
+rather than kept, since nothing on that key may be probed again until the permission is back. A new key holds the
+permission, and the key dialog edits it as "Cache warming" ([The key's
+permissions](companion-mod.md#the-keys-permissions)).
 
 In the console the switch is in the pool dialog: Pools, Edit, the Keepalive group under Caching, "Keep prompt caches
 warm", with the policy's three numbers under it (see [Pools](console.md#pools)).
@@ -256,21 +258,21 @@ that request's prompt from the cache contradicts the router's chain model. The r
 version per hour, naming the version, the session and the two token counts, counts each one in
 `phoebis_keepalive_chain_contradictions_total` by client version, and changes no return counter and no recipe for it.
 The watch compares against the prompt of main's last turn that it marked or the keepalive followed, so a request refused
-at its arrival on a keepalive-off pool or from an opted-out key leaves that prompt in place unless the watch marked it,
-and a session whose requests were all refused that way has no prompt and marks nothing.
+at its arrival on a keepalive-off pool or from a key without the `keepalive` permission leaves that prompt in place
+unless the watch marked it, and a session whose requests were all refused that way has no prompt and marks nothing.
 
 The ten buckets run 0 to 5, 5 to 15, 15 to 30 and 30 to 60 minutes, then 1 to 2, 2 to 4, 4 to 8, 8 to 16 and 16 to 32
 hours, and above. Windows are counted whether or not a recipe is retained, so one that outlives the idle window still
-records when the user came back, and a pool with keepalive off or a key that opted out records its returns too. A window
-that opens before the session's first request has no conversation to compare against and counts no return. A window
-counts under the pool its key was in when it opened. A return's age is read at the prompt that announced it, however
-long the request takes to follow. A lapsed lease, a park that ends without a request, a presence report, a release of
-the main conversation, a request on a new conversation and the session's end close a window with no return. After a
-request that continued or restarted the conversation, the next window starts at the request's own instant, except on a
-main conversation reported `unknown`, where the request moves no start. After any other close, the next window opens
-only once its start moves past the one in force at that close, at a park's end, a presence report, a prompt, a request
-or the session's revival. A busy report pauses the count without closing the window, and a subagent or a silent session
-opens none.
+records when the user came back, and a pool with keepalive off or a key without the `keepalive` permission records its
+returns too. A window that opens before the session's first request has no conversation to compare against and counts no
+return. A window counts under the pool its key was in when it opened. A return's age is read at the prompt that
+announced it, however long the request takes to follow. A lapsed lease, a park that ends without a request, a presence
+report, a release of the main conversation, a request on a new conversation and the session's end close a window with no
+return. After a request that continued or restarted the conversation, the next window starts at the request's own
+instant, except on a main conversation reported `unknown`, where the request moves no start. After any other close, the
+next window opens only once its start moves past the one in force at that close, at a park's end, a presence report, a
+prompt, a request or the session's revival. A busy report pauses the count without closing the window, and a subagent or
+a silent session opens none.
 
 No rule reads the counters: the idle window is the pool's `max_idle_seconds`, taken as set. The pool dialog shows them
 by bucket.
@@ -334,8 +336,8 @@ on a disabled pool reads `retained` again at the first tick after the pool is en
 reads `not_retained` when the agent holds no prompt, as a request refused at its account selection does. `keepalive_off`
 and `opted_out` are recorded when the request arrives and no body is kept, while `ineligible_credential` is read at the
 account selection. A request refused at its arrival credits no probe, so a probe outstanding when the pool's keepalive
-is turned off or the key opts out is judged at the agent's next followed turn or completed compaction, or settles as
-wasted.
+is turned off or the key's `keepalive` permission is taken away is judged at the agent's next followed turn or completed
+compaction, or settles as wasted.
 
 A session's recipes end together when the session does. A `session_end` report, a registration that replaces the
 instance, the session's own expiry and an operator's release each discard every recipe of the session at once, and the
@@ -415,7 +417,7 @@ request), or when the next request after the probe reads nothing from the entry 
 | `horizon` | The recipe was held under `horizon` before a real request answered the probe. |
 | `idle_limit` | The idle window ran out and the last entry of the probe's chain lapsed before a real request read it. |
 | `parked_limit` | The parked ceiling ran out before a real request answered the probe. |
-| `released` | By an operator's release, a key's opt-out, or the mod reporting the agent released. |
+| `released` | By an operator's release, the key's `keepalive` permission taken away, or the mod reporting the agent released. |
 | `replaced` | A replacement registration arrived for the same agent. |
 | `session_ended` | By an explicit `session_end` report or the session's own expiry with no report. |
 
