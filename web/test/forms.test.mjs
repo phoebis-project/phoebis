@@ -147,7 +147,7 @@ test('a pool input takes each listed spelling of the pin and placement fields, a
     assert.notEqual(d.poolRefusals({ ...input, [field]: unknown }, accounts).length, 0, `${field} ${unknown} is refused`);
   }
   for (const tokens of [0, 20_000, 1_000_000]) assert.deepEqual(d.poolRefusals({ ...input, minSharedPrefixTokens: tokens }, accounts), [], `${tokens} tokens is taken`);
-  for (const tokens of [-1, 1.5, Number.NaN]) assert.notEqual(d.poolRefusals({ ...input, minSharedPrefixTokens: tokens }, accounts).length, 0, `${tokens} tokens is refused`);
+  for (const tokens of [-1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1]) assert.notEqual(d.poolRefusals({ ...input, minSharedPrefixTokens: tokens }, accounts).length, 0, `${tokens} tokens is refused`);
 });
 
 test('a member budget is a dollar amount above 0 or none, a daily and a monthly side by side', () => {
@@ -159,6 +159,7 @@ test('a member budget is a dollar amount above 0 or none, a daily and a monthly 
   assert.notEqual(withBudget({ budgetDailyUsd: 0, budgetMonthlyUsd: null }).length, 0, 'the member write refuses a daily budget of 0');
   assert.notEqual(withBudget({ budgetDailyUsd: null, budgetMonthlyUsd: 0 }).length, 0, 'the member write refuses a monthly budget of 0');
   assert.notEqual(withBudget({ budgetDailyUsd: 5, budgetMonthlyUsd: Number.NaN }).length, 0, 'a field that read no number');
+  assert.notEqual(withBudget({ budgetDailyUsd: Number.POSITIVE_INFINITY, budgetMonthlyUsd: null }).length, 0, 'a budget without a bound');
 });
 
 test('a number field reads empty as none and a field the browser could not parse as NaN', () => {

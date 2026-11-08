@@ -973,7 +973,8 @@ interface PoolForm {
   autoModeServer: boolean;
   /**
    * Each member's daily and monthly budget fields as typed, empty for none, and kept for an unticked member too. A
-   * field the browser could not parse reads empty as well, so each carries its flag beside it.
+   * field the browser could not parse reads empty as well, so each carries its flag beside it. The flags are written
+   * from `onInput`, since `onChange` stays silent while a number field's value reads empty for text it cannot parse.
    */
   budgets: Record<string, { daily: string; dailyBad: boolean; monthly: string; monthlyBad: boolean }>;
   cacheDiagnostics: boolean;
@@ -1001,7 +1002,11 @@ interface PoolForm {
   overage: OveragePolicy;
   preferSubscription: boolean;
   prefixBad: boolean;
-  /** The threshold field as typed, with `prefixBad` telling a field the browser could not parse from an emptied one. */
+  /**
+   * The threshold field as typed, with `prefixBad` telling a field the browser could not parse from an emptied one. The
+   * flag is written from `onInput`, since `onChange` stays silent while a number field's value reads empty for text it
+   * cannot parse.
+   */
   prefixTokens: string;
   sessionPlacement: SessionPlacement;
   sheddingCustom: boolean;
@@ -1527,7 +1532,7 @@ export function PoolDialog({
                             value={budgetOf(a.id).daily}
                             disabled={!on}
                             placeholder="none"
-                            onChange={(e) => setBudget(a.id, { daily: e.target.value, dailyBad: e.target.validity.badInput })}
+                            onInput={(e) => setBudget(a.id, { daily: e.currentTarget.value, dailyBad: e.currentTarget.validity.badInput })}
                             aria-label={`Daily budget for ${a.label}, USD`}
                             aria-invalid={invalid(memberField('budget_daily', a.id))}
                           />
@@ -1540,7 +1545,7 @@ export function PoolDialog({
                             value={budgetOf(a.id).monthly}
                             disabled={!on}
                             placeholder="none"
-                            onChange={(e) => setBudget(a.id, { monthly: e.target.value, monthlyBad: e.target.validity.badInput })}
+                            onInput={(e) => setBudget(a.id, { monthly: e.currentTarget.value, monthlyBad: e.currentTarget.validity.badInput })}
                             aria-label={`Monthly budget for ${a.label}, USD`}
                             aria-invalid={invalid(memberField('budget_monthly', a.id))}
                           />
@@ -1765,9 +1770,9 @@ export function PoolDialog({
                 min={0}
                 step={1_000}
                 value={form.prefixTokens}
-                onChange={(e) => {
-                  set('prefixBad', e.target.validity.badInput);
-                  set('prefixTokens', e.target.value);
+                onInput={(e) => {
+                  set('prefixBad', e.currentTarget.validity.badInput);
+                  set('prefixTokens', e.currentTarget.value);
                 }}
                 disabled={!prefixEnabled}
                 aria-label="Minimum shared prefix, tokens"
