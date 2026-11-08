@@ -128,7 +128,10 @@ window" muted in the share's place, the words on its title, read as the triples'
 words on the seat's row and the plan-ended account's row against the first other row's, the Accounts bar's sort control
 (its button in the height, top edge, type size, weight and ink of the Add filter button beside it, and once opened its
 popover inside the window under the button, its eight radio rows one height, a mark on the checked key and direction
-alone, and Escape closing it with the focus back on the button), the Accounts detail's allowance grid at 1280 by 800,
+alone, and Escape closing it with the focus back on the button), the Quota bar's sort control at rest on Default order
+(its button on the top edge and in the height of the Refresh all pill beside it, reading "Sort: Default order" titled
+"Sorted by Default order" with no arrow, and once opened its two direction rows disabled and unchecked, both in the Add
+filter list's disabled row ink, and Escape closing the popover), the Accounts detail's allowance grid at 1280 by 800,
 1440 by 900 and 375 by 800 (mock pass: "Allowance left at reset" and "Meter drift" stacked across the pane's content box
 at 1280 and 375 px, each as wide as the Usage and Requests cards and in their title's type, and at 1440 px side by side
 on one top, as wide as each other and as the Usage card and each under half the pane, the grid inside the pane with

@@ -1656,7 +1656,6 @@ quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.container.q
       JSON.stringify(lists) === JSON.stringify(['Sections']) &&
       panel?.getAttribute('role') === 'tabpanel' &&
       panel.getAttribute('aria-labelledby') === 'tab-accounts' &&
-      panel.querySelector('select[aria-label="Sort"]') !== null &&
       names.length > 0 &&
       apiKeys.length > 0 &&
       !names.some((n) => apiKeys.includes(n)) &&
@@ -1685,6 +1684,73 @@ quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.container.q
   });
 }
 {
+  // The bar's sort control on a bare /quota. The recovery orders are written from the story's accounts (`SEEDS` in
+  // `web/src/mock/accounts.ts`) at the mount's frozen clock: their resets still ahead of it, reserve's 5-hour window
+  // run out, no Fable window on secondary or reserve, no 5-hour window on workshop, and contract a usage-based seat
+  // with no plan window. An account without the key's reset reads after every one with it under either direction, by
+  // label, the seat among them. Default order has no direction, so its button draws no arrow and both direction rows
+  // stand disabled and unchecked.
+  const name = "/quota the sort control reads Default order with no direction, and each recovery order files the cards by that window's reset, the soonest first, its address read back on a reload";
+  const page = await mount('/quota', { now: CLOCK_ORIGIN });
+  const button = () => page.container.querySelector('.filter-bar button[aria-label="Sort"]');
+  const box = () => document.querySelector('.popover .sort-popover')?.closest('.popover') ?? null;
+  const ARROWS = { 'rotate(-90 12 12)': 'up', 'rotate(90 12 12)': 'down' };
+  const read = (p) => {
+    const sort = p.container.querySelector('.filter-bar button[aria-label="Sort"]');
+    return {
+      arrow: sort?.querySelector('svg') ? (ARROWS[sort.querySelector('svg path')?.getAttribute('transform') ?? ''] ?? 'another arrow') : 'no arrow',
+      cards: [...p.container.querySelectorAll('.qcard__name')].map((n) => n.textContent?.trim() ?? ''),
+      search: p.location().search,
+      text: sort?.textContent ?? null,
+      title: sort?.getAttribute('title') ?? null,
+    };
+  };
+  const bare = read(page);
+  button()?.click();
+  await page.settle(100);
+  const radios = [...(box()?.querySelectorAll('[role="radiogroup"]') ?? [])].map((g) => [...g.querySelectorAll('[role="radio"]')].map((r) => `${r.textContent?.trim()} ${r.getAttribute('aria-checked')}${r.getAttribute('aria-disabled') === 'true' ? ' disabled' : ''}`));
+  await closeBoxes(page);
+  const picks = {};
+  for (const [key, label] of [
+    ['reset7d', '7-day recovery'],
+    ['resetFable', '7-day Fable recovery'],
+    ['reset5h', '5-hour recovery'],
+    ['reset5hDesc', 'Descending'],
+  ]) {
+    button()?.click();
+    await page.settle(100);
+    [...(box()?.querySelectorAll('[role="radio"]') ?? [])].find((r) => r.textContent?.trim() === label)?.click();
+    await page.settle(300);
+    picks[key] = { ...read(page), open: box() !== null };
+  }
+  const at = page.location();
+  page.unmount();
+  const again = await mount(`${at.pathname}${at.search}`, { now: CLOCK_ORIGIN });
+  const reloaded = read(again);
+  again.unmount();
+  const shown = (arrow, cards, search, label, word) => ({ arrow, cards, search, text: `Sort: ${label}`, title: word === null ? `Sorted by ${label}` : `Sorted by ${label}, ${word}` });
+  const descending = shown('down', ['nightly', 'primary', 'studio', 'secondary', 'contract', 'reserve', 'workshop'], '?sort=reset5h&dir=desc', '5-hour recovery', 'descending');
+  const wantPicks = {
+    reset7d: { ...shown('up', ['nightly', 'reserve', 'primary', 'workshop', 'studio', 'secondary', 'contract'], '?sort=reset7d', '7-day recovery', 'ascending'), open: false },
+    resetFable: { ...shown('up', ['nightly', 'primary', 'workshop', 'studio', 'contract', 'reserve', 'secondary'], '?sort=resetFable', '7-day Fable recovery', 'ascending'), open: false },
+    reset5h: { ...shown('up', ['secondary', 'studio', 'primary', 'nightly', 'contract', 'reserve', 'workshop'], '?sort=reset5h', '5-hour recovery', 'ascending'), open: false },
+    reset5hDesc: { ...descending, open: false },
+  };
+  const wantRadios = [
+    ['Default order true', '5-hour pace false', '7-day pace false', '7-day Fable pace false', '5-hour recovery false', '7-day recovery false', '7-day Fable recovery false'],
+    ['Ascending false disabled', 'Descending false disabled'],
+  ];
+  results.push({
+    name,
+    ok:
+      JSON.stringify(bare) === JSON.stringify(shown('no arrow', ['primary', 'secondary', 'nightly', 'studio', 'reserve', 'contract', 'workshop'], '', 'Default order', null)) &&
+      JSON.stringify(radios) === JSON.stringify(wantRadios) &&
+      JSON.stringify(picks) === JSON.stringify(wantPicks) &&
+      JSON.stringify(reloaded) === JSON.stringify(descending),
+    missing: [`bare ${JSON.stringify(bare)}`, `radios ${JSON.stringify(radios)}`, ...Object.entries(picks).map(([key, got]) => `${key} ${JSON.stringify(got)} against ${JSON.stringify(wantPicks[key])}`), `reloaded ${JSON.stringify(reloaded)}`],
+  });
+}
+{
   // Each pace order reads that window's lead off the account answer, the account furthest ahead first, and an account
   // whose window is absent, expired or without a lead after every one with a lead, ties by label. The story's 7-day
   // leads lie on both sides of zero, so that order is read across it, and its 5-hour leads all sit above zero, so that
@@ -1694,8 +1760,7 @@ quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.container.q
   const at = Date.now();
   const q = await mount('/quota', { now: at });
   const accounts = (await api.listAccounts()).filter(quotaListed);
-  const select = q.container.querySelector('#accounts select[aria-label="Sort"]');
-  const options = [...(select?.options ?? [])].map((o) => `${o.value}: ${o.textContent}`);
+  const box = () => document.querySelector('.popover .sort-popover')?.closest('.popover') ?? null;
   const drawn = () => [...q.container.querySelectorAll('.qcard__name')].map((n) => n.textContent?.trim() ?? '');
   const leadOn = (a, id) => {
     const w = id === '7d_fable' ? a.fableWindow : (a.windows.find((x) => x.id === id) ?? null);
@@ -1709,34 +1774,52 @@ quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.container.q
         return lb - la || a.label.localeCompare(b.label);
       })
       .map((a) => a.label);
-  const sortBy = async (value) => {
-    if (select) setSelect.call(select, value);
-    select?.dispatchEvent(new window.Event('change', { bubbles: true }));
+  // A key's pick through the bar's Sort control starts in its own direction, which the address leaves out.
+  const sortBy = async (label) => {
+    q.container.querySelector('.filter-bar button[aria-label="Sort"]')?.click();
+    await q.settle(100);
+    [...(box()?.querySelectorAll('[role="radio"]') ?? [])].find((r) => r.textContent?.trim() === label)?.click();
     await q.settle();
   };
   const orders = [];
-  for (const [value, id] of [
-    ['pace5h', '5h'],
-    ['pace7d', '7d'],
-    ['paceWeek', '7d_fable'],
+  for (const [value, label, id] of [
+    ['pace5h', '5-hour pace', '5h'],
+    ['pace7d', '7-day pace', '7d'],
+    ['paceFable', '7-day Fable pace', '7d_fable'],
   ]) {
-    await sortBy(value);
-    orders.push({ drawn: drawn(), value, want: wanted(id) });
+    await sortBy(label);
+    orders.push({ drawn: drawn(), search: q.location().search, value, want: wanted(id) });
   }
   const sides = ['7d'].map((id) => accounts.map((a) => leadOn(a, id)).filter((l) => l !== null)).map((leads) => leads.some((l) => l > 0) && leads.some((l) => l < 0));
-  await sortBy('default');
-  const back = drawn();
+  await sortBy('Default order');
+  const back = { drawn: drawn(), search: q.location().search };
   q.unmount();
   const listed = JSON.stringify(accounts.map((a) => a.label));
   results.push({
-    name: '/quota sorts its cards five ways, and each pace order reads the account furthest ahead of that window first and the ones without a lead on it last',
+    name: '/quota each pace order reads the account furthest ahead of that window first and the ones without a lead on it last',
     ok:
-      JSON.stringify(options) === JSON.stringify(['default: Default order', 'soonest: Soonest recovery', 'pace5h: 5-hour pace', 'pace7d: 7-day pace', 'paceWeek: 7-day Fable pace']) &&
-      orders.every((o) => o.want.length > 0 && JSON.stringify(o.drawn) === JSON.stringify(o.want)) &&
+      orders.every((o) => o.want.length > 0 && JSON.stringify(o.drawn) === JSON.stringify(o.want) && o.search === `?sort=${o.value}`) &&
       orders.every((o) => JSON.stringify(o.want) !== listed) &&
       sides.every(Boolean) &&
-      JSON.stringify(back) === listed,
-    missing: [JSON.stringify(options), ...orders.map((o) => `${o.value}: ${JSON.stringify(o.drawn)} against ${JSON.stringify(o.want)}`), `the list order ${listed}`, `leads on both sides of zero on 7d: ${JSON.stringify(sides)}`, `default: ${JSON.stringify(back)}`],
+      JSON.stringify(back.drawn) === listed &&
+      back.search === '',
+    missing: [...orders.map((o) => `${o.value} at ${JSON.stringify(o.search)}: ${JSON.stringify(o.drawn)} against ${JSON.stringify(o.want)}`), `the list order ${listed}`, `leads on both sides of zero on 7d: ${JSON.stringify(sides)}`, `default at ${JSON.stringify(back.search)}: ${JSON.stringify(back.drawn)}`],
+  });
+}
+{
+  // The accent mark stands on every row whose reset is the card's soonest. workshop's 7-day and Fable windows reset at
+  // one instant and it carries no 5-hour window (`SEEDS` in `web/src/mock/accounts.ts`), so both its rows carry the
+  // mark, and primary's 5-hour reset comes before its tied 7-day and Fable resets, so its 5-hour row alone does. Each
+  // row is found by its chip's name.
+  const marks = (label) => {
+    const card = [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === label);
+    return [...(card?.querySelectorAll('.qcard__windows .qwin__chip') ?? [])].map((chip) => `${chip.querySelector('.qchip__name')?.textContent ?? ''} ${chip.nextElementSibling?.nextElementSibling?.classList.contains('is-soon') === true}`);
+  };
+  const read = { primary: marks('primary'), workshop: marks('workshop') };
+  results.push({
+    name: '/quota a card marks every row whose reset is its soonest, two windows at one instant both, the Fable row among them',
+    ok: JSON.stringify(read) === JSON.stringify({ primary: ['5h true', '7d false', 'Fable false'], workshop: ['5h false', '7d true', 'Fable true'] }),
+    missing: [JSON.stringify(read)],
   });
 }
 {
@@ -2817,19 +2900,6 @@ expect('/accounts (lands on the first)', m.text(), ['operator@example.com', 'Ide
         JSON.stringify(chips) === JSON.stringify(['Spend59% left']) && line?.textContent === estimatedLine && line.querySelector('.muted')?.textContent === 'estimated' && line.getAttribute('title')?.startsWith(hover) === true &&
         meter?.getAttribute('aria-valuenow') === '59' && meter.getAttribute('title') === 'Spend limit: 59% left, $1,025.00 of $2,500.00' && card?.querySelector('.qcard__extra') === null && !/pace/.test(card?.textContent ?? ''),
       missing: [JSON.stringify(chips), line?.textContent ?? 'no line', line?.getAttribute('title') ?? '', meter?.getAttribute('title') ?? 'no meter', card?.querySelector('.qcard__extra') ? 'an Extra usage line' : 'no Extra usage line'],
-    });
-    // Soonest recovery reads each card's earliest reset ahead, the seat's its spend window's. The page lists no card for
-    // the sunset seed, whose plan ended.
-    const ahead = (a) => [...a.windows.map((w) => w.resetsAt), ...(a.spend ? [a.spend.resetsAt] : [])].flatMap((at) => (at === null ? [] : [Date.parse(at)])).filter((t) => t > CLOCK_ORIGIN);
-    const soonest = (a) => (ahead(a).length ? Math.min(...ahead(a)) : Number.POSITIVE_INFINITY);
-    const listed = (await api.listAccounts()).filter(quotaListed);
-    const want = [...listed].sort((a, b) => soonest(a) - soonest(b)).map((a) => a.label);
-    await changeSelect(page, page.container.querySelector('.quota-sort select'), 'soonest');
-    const order = [...page.container.querySelectorAll('.qcard__name')].map((n) => n.textContent?.trim());
-    results.push({
-      name: '/quota Soonest recovery places the usage-based seat by its spend window\'s reset',
-      ok: want.includes('contract') && JSON.stringify(order) === JSON.stringify(want),
-      missing: [JSON.stringify(order), JSON.stringify(want)],
     });
     page.unmount();
   }
@@ -22993,7 +23063,7 @@ await forView(CARD_VIEWS.map(([path]) => path), async () => {
     '/accounts': ['search: Search accounts', 'Add filter', 'Sort', 'Add account', 'edge: Refresh, count'],
     '/keys': ['search: Search keys', 'Add filter', 'Create key', 'edge: Refresh, count'],
     '/pools': ['Create pool', 'edge: Refresh, count'],
-    '/quota': ['Refresh all', 'edge: Refresh, count'],
+    '/quota': ['Sort', 'Refresh all', 'edge: Refresh, count'],
     '/sessions': ['search: Session id', 'Add filter', 'Columns', 'Sort', 'edge: Refresh, count'],
   };
   const read = {};

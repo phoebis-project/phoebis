@@ -278,12 +278,6 @@
   gap: 12px;
 }
 
-/* The Sort select orders the cards alone, so it sits inside their section at the grid's right edge. */
-.quota-sort {
-  display: flex;
-  justify-content: flex-end;
-}
-
 /* A card always holds a 120 px meter beside the widest chip and reset label the console draws: 2 px of border and
    28 px of body padding, the chip "Fable 100% left" (121 px in DejaVu Sans, against the story's 112 px), two 6 px
    gaps, the 120 px meter and the reset column's 150 px bound (--qwin-reset on .qcard__windows), so the grid reflows

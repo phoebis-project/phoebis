@@ -216,29 +216,31 @@ overview: {error}` and a "Try again" button. What each figure means is on [Stati
 ![The Quota view: the Quota windows section](assets/quota-windows-dark.png#only-dark)
 
 The Quota view covers the subscription accounts that are paired, not awaiting re-authentication and whose plan has not
-ended, since an API-key account has no quota window. Its bar offers "Refresh all", which reads the endpoint of each of
-those accounts and whose hover reads "reads the endpoint now unless the account is backing off, and records the reading
-as the scheduled poll does", and at the right edge the split Refresh button, whose body reads the account list again
-("Reads the list again now"), and the count of those accounts, `{n} accounts`, followed in the critical ink by those
-needing attention, `, {n} need attention`. Auto reload starts at 5 s. A section bar shows one of two sections at a time:
-Accounts, where the view opens, and Quota windows, which a link or a reload with `#quota-windows` lands on. A card's
-reading is the router's reported sample where the router holds one for the window and the ledger's [quota
-sample](statistics.md#quota-samples) otherwise. The router answers no quota window for an account in the `disconnected`
-or `reauth_required` state or whose plan ended (its `plan_ended_at` set), whatever reading it held before, so no view
-draws one for it.
+ended, since an API-key account has no quota window. Its bar offers the Sort control, which orders the Accounts
+section's cards, and "Refresh all", which reads the endpoint of each of those accounts and whose hover reads "reads the
+endpoint now unless the account is backing off, and records the reading as the scheduled poll does", and at the right
+edge the split Refresh button, whose body reads the account list again ("Reads the list again now"), and the count of
+those accounts, `{n} accounts`, followed in the critical ink by those needing attention, `, {n} need attention`. Auto
+reload starts at 5 s. A section bar shows one of two sections at a time: Accounts, where the view opens, and Quota
+windows, which a link or a reload with `#quota-windows` lands on. A card's reading is the router's reported sample where
+the router holds one for the window and the ledger's [quota sample](statistics.md#quota-samples) otherwise. The router
+answers no quota window for an account in the `disconnected` or `reauth_required` state or whose plan ended (its
+`plan_ended_at` set), whatever reading it held before, so no view draws one for it.
 
-Accounts draws a card per account, sorted "Default order", "Soonest recovery", "5-hour pace", "7-day pace" or "7-day
-Fable pace", every card with the same slots in the same order: the header with the label (the email on hover) and the
-status badge, one row per window ("5h", "7d" and "Fable"), the Extra usage line, the chips and the poll reading. A
-usage-based seat's card draws one Spend row in the windows' place and no Extra usage line, and "Soonest recovery" reads
-its spend window's reset. The three pace orders put the account furthest ahead of that window's pace first, the one
-whose used share runs furthest past the share of the window elapsed (the lead the router answers for each window), and
-the accounts without the window, with the window expired or without a lead on it last. Each live window's meter reads
-the share left and its pace, `{window}: {pct} left, {n}% ahead of pace`, `{n}% behind pace` or `on pace`, with ` to its
-end at {time}` where the pace runs to the subscription's end rather than the reset, and a mark at the share of the
-window still to come. On a screen under 900 px wide the reset label takes a line of its own under the meter. Under the
-meter the window reads `resets {ago}`, followed on a window the router projects by the share the projection leaves at
-the window's horizon: `resets in 2h 13m, 19% left at the reset` where the horizon is the reset (within a minute),
+Accounts draws a card per account. The Accounts section's cards sort by the bar's Sort control: Default order (the
+route's order, no direction), 5-hour pace, 7-day pace and 7-day Fable pace (each descending, an account without that
+window last), or 5-hour recovery, 7-day recovery and 7-day Fable recovery (each ascending, the soonest reset first, an
+account without that window's reset ahead and a usage-based seat among them by name under either direction). Every card
+holds the same slots in the same order: the header with the label (the email on hover) and the status badge, one row per
+window ("5h", "7d" and "Fable"), the Extra usage line, the chips and the poll reading. A usage-based seat's card draws
+one Spend row in the windows' place and no Extra usage line. The pace orders read the lead the router answers for each
+window, how far its used share runs past the share of the window elapsed, the account furthest ahead of pace first, and
+an account whose window expired or carries no lead files with the accounts without that window. Each live window's meter
+reads the share left and its pace, `{window}: {pct} left, {n}% ahead of pace`, `{n}% behind pace` or `on pace`, with `
+to its end at {time}` where the pace runs to the subscription's end rather than the reset, and a mark at the share of
+the window still to come. On a screen under 900 px wide the reset label takes a line of its own under the meter. Under
+the meter the window reads `resets {ago}`, followed on a window the router projects by the share the projection leaves
+at the window's horizon: `resets in 2h 13m, 19% left at the reset` where the horizon is the reset (within a minute),
 `resets in 3d 5h, 56% left in 5 h` where it comes earlier (five hours out on a weekly window, or the account's end), and
 `{pct} left now` once it has come. A window the sessions spend before its horizon reads the time until it runs out,
 `spent in 2 h 10 min`, counted back from the projection at the horizon along the burn, so the span follows the router's
@@ -274,15 +276,16 @@ projects no burn on the seat. With no limit set its chip reads the amount spent,
 and a seat with no reading yet reads "No spend reading yet." in the windows' place. Until a reset header names the spend
 window's reset, the router estimates it as 00:00 UTC on the first of the next month, and the line reads `resets {ago},
 estimated`, the word in the muted ink, with `resets {time} (estimated: no reset header has been seen for this window
-yet)` on hover. The "Extra usage" chip reads `off`, `not in use`, `in use` or `not reported`, with the month's spend
-against its limit while extra usage is enabled and the reading carries the amounts, in the serious tone while requests
-bill as extra usage, and the provider's reason inside the line with the whole message on hover. The chips name the plan
-the router resolved from the organization type and the tier ("Plan", reading "Free", "Pro", "Max", "Ultra" or
-"Usage-based", the display name claude.ai sends where the account carries one, the tier on hover), when the plan of an
-account marked canceled ends (in the serious tone inside a week), and when a trial ends ("Trial"). The poll reading says
-when the poll last asked the endpoint and how it answered, with the whole message and the backoff on hover, and
-"Refresh" reads this account's endpoint now. A card that shows an error, whose last poll failed, or that is backing off
-counts as needing attention.
+yet)` on hover. The reset label of every row whose reset is the card's soonest, a seat's Spend row among them, reads in
+the accent ink, its hover adding "the first of this account to recover". The "Extra usage" chip reads `off`, `not in
+use`, `in use` or `not reported`, with the month's spend against its limit while extra usage is enabled and the reading
+carries the amounts, in the serious tone while requests bill as extra usage, and the provider's reason inside the line
+with the whole message on hover. The chips name the plan the router resolved from the organization type and the tier
+("Plan", reading "Free", "Pro", "Max", "Ultra" or "Usage-based", the display name claude.ai sends where the account
+carries one, the tier on hover), when the plan of an account marked canceled ends (in the serious tone inside a week),
+and when a trial ends ("Trial"). The poll reading says when the poll last asked the endpoint and how it answered, with
+the whole message and the backoff on hover, and "Refresh" reads this account's endpoint now. A card that shows an error,
+whose last poll failed, or that is backing off counts as needing attention.
 
 Quota windows lays the same windows across a calendar titled "Quota windows", with its span and length (`two weeks` in
 the Weekly mode, `three days` in the 5-hour mode), "Previous period", "Today" and "Next period" buttons, the mode switch

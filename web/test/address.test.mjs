@@ -15,6 +15,7 @@ const FILLED = {
   ANALYTICS_CODEC: { accounts: ['primary', 'secondary'], agentId: 'c21e', by: 'session', clients: ['claude-code/cli', 'claude-code/sdk*'], groups: 'claude-cli/2.1.*\nclaude-cli/2.0.*', key: 'desktop@1000', keys: ['desktop', 'laptop'], models: ['claude-opus-5', 'claude-sonnet-5'], pools: ['all', 'jobs'], probes: true, range: preset('7d'), session: '407dd39b-dd60', unit: 'share', userAgents: ['claude-cli/2.1.3 (external, cli)', 'claude-cli/2.0.*'] },
   KEYS_CODEC: { pools: ['all', 'jobs'], search: 'lap', status: 'active' },
   METER_CODEC: { accounts: ['primary', 'secondary'] },
+  QUOTA_CODEC: { dir: 'asc', sort: 'pace7d' },
   REQUESTS_CODEC: { accounts: ['primary', 'secondary'], agent: 'claude-cli/*', agentId: 'main', agentTypes: ['main', 'subagent'], cacheMissReasons: ['messages_changed', 'ttl_expired'], classifiers: ['client', '-'], client: 'claude-code/*', efforts: ['high', 'low'], guardrails: ['large-auxiliary', '-'], held: true, keys: ['desktop', 'laptop'], kind: 'probe', models: ['claude-opus-5', 'claude-sonnet-5'], outcomes: ['failed', 'succeeded'], pools: ['all', 'jobs'], range: preset('6h'), refusalCategories: ['cyber', '-'], request: 'req_f8085653', requestClasses: ['conversation', 'title'], rows: 50, search: 'req_1d9c3e55', session: '407dd39b-dd60', speeds: ['fast', 'standard'], statuses: ['200', '429'], stopReasons: ['refusal', '-'], turnOrigins: ['agent', 'user'] },
   ROUTING_LOG_CODEC: { accounts: ['primary', 'secondary'], agentId: 'main', keys: ['desktop', 'laptop'], kinds: ['exhausted', 'moved'], models: ['claude-opus-5', 'claude-sonnet-5'], pools: ['all', 'jobs'], range: preset('6h'), request: 'req_1d9c3e55', session: '407dd39b-dd60' },
   SESSIONS_CODEC: { account: ['primary', 'studio'], active: '1h', agentType: ['Explore', 'main'], cache: ['cold', 'no recipe'], client: ['Claude Code 2.1.310', 'claude-desktop/1.4'], companion: ['reporting', 'silent'], dir: 'asc', effort: ['high', 'low'], finished: true, forked: true, key: ['desktop', 'laptop@3'], model: ['claude-opus-5', 'claude-sonnet-5'], pool: ['all', 'jobs'], released: true, search: '407dd39b', slowed: true, sort: 'cost', status: ['busy', 'unreported'] },
@@ -73,6 +74,10 @@ test("the Accounts codec carries the sort's direction after its key, written onl
   assert.equal(d.sortDirOf(d.ACCOUNT_SORT_KEYS, { dir: 'asc', sort: 'usage' }), 'asc');
   assert.deepEqual(d.sortAddressOf(d.ACCOUNT_SORT_KEYS, { dir: 'desc', sort: 'usage' }), { dir: '', sort: 'usage' });
   assert.deepEqual(d.sortAddressOf(d.ACCOUNT_SORT_KEYS, { dir: 'asc', sort: 'usage' }), { dir: 'asc', sort: 'usage' });
+});
+
+test('a pick of Default order writes no direction to the Quota address, whatever direction the pick sends', () => {
+  assert.equal(write(d.QUOTA_CODEC, d.sortAddressOf(d.QUOTA_SORT_KEYS, { dir: 'desc', sort: 'default' })), '');
 });
 
 test('every filter at its default leaves a bare address', () => {

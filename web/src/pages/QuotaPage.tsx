@@ -4,30 +4,33 @@ import type { Account, AccountSlowDown, ExtraUsage, QuotaPoll, QuotaSnapshot, Ra
 import { accountColor, accountSlots } from '@/components/charts/theme';
 import { FilterBar } from '@/components/FilterBar';
 import { SectionBar } from '@/components/SectionBar';
+import { SortControl } from '@/components/SortControl';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { IconChevronLeft, IconChevronRight, IconRefresh, IconUser } from '@/components/ui/icons';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
-import { Badge, ErrorState, Meter, MeterAbsent, Pill, Segmented, Select, Skeleton } from '@/components/ui/primitives';
+import { Badge, ErrorState, Meter, MeterAbsent, Pill, Segmented, Skeleton } from '@/components/ui/primitives';
+import { QUOTA_CODEC, QUOTA_SORT_KEYS, sortAddressOf, sortDirOf } from '@/lib/address';
 import { CELL_MIN_PX, cellsFit, fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinor, fmtMinute, fmtPct, fmtRelative, fmtShortHour, fmtShortTime, formatIn, getTimeFormat, noun, plural, upperFirst } from '@/lib/format';
-import { useAsync, useHashSection, useNow, useResizeObserver } from '@/lib/hooks';
-import { STATUS_LABEL, STATUS_TONE, burnWords, canceledEndOf, endOf, extraUsageState, hasSpendReading, isExpired, isQuotaListed, meterTone, onTimeline, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, slowedOf, soonestReset, soonestResetAt, sortByPace, spendLeftOf, spendResetTitle, timelineLanes, windowOf, type ExtraUsageState } from '@/lib/quota';
+import { useAsync, useHashSection, useNow, useQueryFilters, useResizeObserver } from '@/lib/hooks';
+import { STATUS_LABEL, STATUS_TONE, burnWords, canceledEndOf, endOf, extraUsageState, hasSpendReading, isExpired, isQuotaListed, meterTone, onTimeline, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, slowedOf, soonestResetAt, sortByPace, sortByReset, spendLeftOf, spendResetTitle, timelineLanes, windowOf, type ExtraUsageState } from '@/lib/quota';
 import { speedHover } from '@/lib/selection';
 import { DAY, HOUR } from '@/lib/time';
-
-type Sort = 'default' | 'pace5h' | 'pace7d' | 'paceWeek' | 'soonest';
 
 const QUOTA_SECTIONS = [
   { id: 'accounts', label: 'Accounts' },
   { id: 'quota-windows', label: 'Quota windows' },
 ] as const;
 
+const WINDOW_OF = { pace5h: '5h', pace7d: '7d', paceFable: '7d_fable', reset5h: '5h', reset7d: '7d', resetFable: '7d_fable' } as const;
+
 export function QuotaPage() {
   const [intervalMs, setIntervalMs] = useState(5_000);
   const { cause: pauseCause, host } = useHoldHost();
   const accounts = useAsync(() => api.listAccounts(), [], { paused: pauseCause !== null, refreshMs: intervalMs });
   const now = useNow();
-  const [sort, setSort] = useState<Sort>('default');
+  const { address, filters, update } = useQueryFilters(QUOTA_CODEC);
+  const dir = sortDirOf(QUOTA_SORT_KEYS, filters);
   const [refreshing, setRefreshing] = useState(false);
   const [shown, choose] = useHashSection(QUOTA_SECTIONS, 'accounts');
 
@@ -40,15 +43,10 @@ export function QuotaPage() {
   const snapById = useMemo(() => new Map(subscriptions.flatMap((a) => (a.usage ? [[a.id, a.usage] as const] : []))), [subscriptions]);
 
   const visible = useMemo(() => {
-    if (sort === 'pace5h') return sortByPace(subscriptions, '5h', now);
-    if (sort === 'pace7d') return sortByPace(subscriptions, '7d', now);
-    if (sort === 'paceWeek') return sortByPace(subscriptions, '7d_fable', now);
-    if (sort === 'soonest') {
-      const nextReset = (a: Account) => soonestResetAt(a, now)?.at ?? Number.POSITIVE_INFINITY;
-      return [...subscriptions].sort((a, b) => nextReset(a) - nextReset(b));
-    }
-    return subscriptions;
-  }, [subscriptions, sort, now]);
+    const { sort } = filters;
+    if (sort === 'default') return subscriptions;
+    return sort.startsWith('pace') ? sortByPace(subscriptions, WINDOW_OF[sort], now, dir) : sortByReset(subscriptions, WINDOW_OF[sort], now, dir);
+  }, [subscriptions, filters, dir, now]);
 
   const total = subscriptions.length;
   const attention = [...snapById.values()].filter((s) => Boolean(s.error) || needsAttention(s.poll)).length;
@@ -70,7 +68,7 @@ export function QuotaPage() {
     <PopoverHost.Provider value={host}>
       <div className="stack">
         <FilterBar
-          address="/quota"
+          address={address}
           count={
             accounts.data === null ? (
               ''
@@ -81,10 +79,11 @@ export function QuotaPage() {
               </>
             )
           }
-          filters={{}}
+          filters={filters}
           refresh={{ intervalMs, onIntervalChange: setIntervalMs, onRefresh: reload, paused: pauseCause, refreshTitle: 'Reads the list again now' }}
-          update={() => undefined}
+          update={update}
         >
+          <SortControl keys={QUOTA_SORT_KEYS} onChange={(next) => update(sortAddressOf(QUOTA_SORT_KEYS, next))} value={{ dir, sort: filters.sort }} />
           <Pill onClick={() => void refreshAll()} disabled={refreshing} title={refreshHint} icon={<IconRefresh size={13} className={refreshing ? 'spin' : ''} />}>
             Refresh all
           </Pill>
@@ -94,15 +93,6 @@ export function QuotaPage() {
 
         {shown === 'accounts' ? (
           <section className="quota-section" id="accounts" role="tabpanel" aria-labelledby="tab-accounts">
-            <div className="quota-sort">
-              <Select value={sort} onChange={(e) => setSort(e.target.value as Sort)} aria-label="Sort">
-                <option value="default">Default order</option>
-                <option value="soonest">Soonest recovery</option>
-                <option value="pace5h">5-hour pace</option>
-                <option value="pace7d">7-day pace</option>
-                <option value="paceWeek">7-day Fable pace</option>
-              </Select>
-            </div>
             {failure ?? (
               <div className="quota-grid">
                 {!accounts.data
@@ -170,7 +160,7 @@ function ExtraUsageLine({ extra }: { extra: ExtraUsage | null }) {
 }
 
 function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshed }: { account: Account; now: number; onRefreshed: () => void; refreshHint?: string; refreshing: boolean; snapshot?: QuotaSnapshot }) {
-  const soonest = soonestReset(account, now);
+  const soonest = soonestResetAt(account, now)?.ids ?? [];
   const [localRefreshing, setLocalRefreshing] = useState(false);
   const busy = refreshing || localRefreshing;
   const onRefresh = async () => {
@@ -221,16 +211,16 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
             <p className="qcard__note muted">No spend reading yet.</p>
           ) : (
             <div className="qcard__windows">
-              <SpendWindow spend={account.spend} now={now} soon={soonest === 'spend'} />
+              <SpendWindow spend={account.spend} now={now} soon={soonest.includes('spend')} />
             </div>
           )
         ) : !w5 && !w7 && !account.fableWindow ? (
           <p className="qcard__note muted">No quota windows reported yet.</p>
         ) : (
           <div className="qcard__windows">
-            <QuotaWindow name="5h" absent="no 5-hour window" window={w5} end={end} now={now} soon={soonest === '5h'} slowDown={slowedOf(account, now)} />
-            <QuotaWindow name="7d" absent="no 7-day window" window={w7} end={end} now={now} soon={soonest === '7d'} />
-            <QuotaWindow name="Fable" absent="no Fable window" window={account.fableWindow} end={end} now={now} soon={soonest === '7d_fable'} />
+            <QuotaWindow name="5h" absent="no 5-hour window" window={w5} end={end} now={now} soon={soonest.includes('5h')} slowDown={slowedOf(account, now)} />
+            <QuotaWindow name="7d" absent="no 7-day window" window={w7} end={end} now={now} soon={soonest.includes('7d')} />
+            <QuotaWindow name="Fable" absent="no Fable window" window={account.fableWindow} end={end} now={now} soon={soonest.includes('7d_fable')} />
           </div>
         )}
       </div>

@@ -383,6 +383,25 @@ export const KEYS_CODEC = codecOf<KeysAddress>({
 /** The Keys view on one pool's keys, every other filter at its default. */
 export const poolKeysHref = (poolId: string): string => `/keys?${KEYS_CODEC.toParams({ ...KEYS_CODEC.defaults, pools: [poolId] })}`;
 
+export interface QuotaAddress {
+  /** `asc`, `desc` or empty for the key's own direction. Default order has none, so its address carries no
+   *  `dir`. */
+  dir: '' | SortDir;
+  sort: (typeof QUOTA_SORT_KEYS)[number]['id'];
+}
+
+export const QUOTA_SORT_KEYS = [
+  { defaultDir: 'none', id: 'default', label: 'Default order' },
+  { defaultDir: 'desc', id: 'pace5h', label: '5-hour pace' },
+  { defaultDir: 'desc', id: 'pace7d', label: '7-day pace' },
+  { defaultDir: 'desc', id: 'paceFable', label: '7-day Fable pace' },
+  { defaultDir: 'asc', id: 'reset5h', label: '5-hour recovery' },
+  { defaultDir: 'asc', id: 'reset7d', label: '7-day recovery' },
+  { defaultDir: 'asc', id: 'resetFable', label: '7-day Fable recovery' },
+] as const satisfies readonly SortKey[];
+
+export const QUOTA_CODEC = codecOf<QuotaAddress>(sortSpecs(QUOTA_SORT_KEYS, 'default'));
+
 export const EDIT_PARAM = 'edit';
 export const GROUP_PARAM = 'group';
 export const EDIT_PARAMS = [EDIT_PARAM, GROUP_PARAM] as const;

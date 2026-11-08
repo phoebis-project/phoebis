@@ -261,8 +261,6 @@ export function soonestResetAt(account: Account, now: number): { at: number; ids
   return ids.length === 0 ? null : { at, ids };
 }
 
-export const soonestReset = (account: Account, now: number): WindowId | null => soonestResetAt(account, now)?.ids[0] ?? null;
-
 /** One window's future reset, or null where the window is absent, expired or carries none. `'7d_fable'` reads
  *  `fableWindow`. */
 const resetOf = (account: Account, windowId: KnownWindowId, now: number): number | null => {

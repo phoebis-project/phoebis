@@ -8386,6 +8386,70 @@ async function accountsSortControl(theme) {
 }
 
 /**
+ * The Quota bar's sort control on Default order, the key with no direction: its button on the top edge and in the
+ * height of the Refresh all pill beside it, reading "Sort: Default order" titled "Sorted by Default order" with no
+ * arrow, then opened: its two direction rows disabled and unchecked, both in the Add filter list's disabled row ink,
+ * and Escape closing it.
+ */
+async function quotaSortControl(theme) {
+  const say = (what) => failures.push(`${theme} /quota sort control: ${what}`);
+  const sort = page.locator('.filter-bar button[aria-label="Sort"]');
+  if ((await sort.count()) === 0) {
+    say('the bar draws no Sort button');
+    return;
+  }
+  try {
+    const rest = await page.evaluate(() => {
+      const row = document.querySelector('.filter-bar__row');
+      const box = (el) => {
+        if (!el) return null;
+        const b = el.getBoundingClientRect();
+        return { height: Math.round(b.height), top: Math.round(b.top) };
+      };
+      const button = row?.querySelector('button[aria-label="Sort"]') ?? null;
+      return {
+        refreshAll: box([...(row?.querySelectorAll(':scope > button') ?? [])].find((b) => b.textContent?.trim() === 'Refresh all')),
+        sort: button === null ? null : { ...box(button), arrow: button.querySelector('svg') !== null, text: button.textContent?.trim() ?? '', title: button.getAttribute('title') },
+      };
+    });
+    measurements.push(`${theme} /quota sort button ${JSON.stringify(rest)}`);
+    for (const what of compare(rest.sort, rest.refreshAll, ['height', 'top'], 'the Sort button against the Refresh all pill')) say(what);
+    if (rest.sort?.text !== 'Sort: Default order' || rest.sort?.title !== 'Sorted by Default order') say(`the button reads ${JSON.stringify(rest.sort?.text ?? null)} titled ${JSON.stringify(rest.sort?.title ?? null)} on a bare address, not "Sort: Default order" titled "Sorted by Default order"`);
+    if (rest.sort?.arrow !== false) say('the button draws an arrow on Default order, which has no direction');
+    await sort.click();
+    await advance(CLOCK_STEP_MS);
+    const open = await page.evaluate(() => {
+      const popover = document.querySelector('.popover .sort-popover')?.closest('.popover') ?? null;
+      if (!popover) return null;
+      // A computed color holds the value, never the token's name, so the token is resolved on a probe of its own.
+      const probe = popover.appendChild(document.createElement('span'));
+      probe.style.color = 'var(--ink-3)';
+      const disabledInk = getComputedStyle(probe).color;
+      probe.remove();
+      return {
+        directions: [...popover.querySelectorAll('[role="radiogroup"][aria-label="Direction"] [role="radio"]')].map((r) => ({ checked: r.getAttribute('aria-checked'), disabled: r.getAttribute('aria-disabled'), ink: getComputedStyle(r).color, text: r.textContent?.trim() ?? '' })),
+        disabledInk,
+      };
+    });
+    measurements.push(`${theme} /quota sort popover ${JSON.stringify(open)}`);
+    if (open === null) {
+      say('a click on the button opened no popover');
+      return;
+    }
+    if (JSON.stringify(open.directions.map((d) => d.text)) !== JSON.stringify(['Ascending', 'Descending'])) say(`the direction rows read ${JSON.stringify(open.directions.map((d) => d.text))}`);
+    for (const d of open.directions) {
+      if (d.disabled !== 'true' || d.checked !== 'false') say(`the ${d.text} row reads aria-disabled ${JSON.stringify(d.disabled)} and aria-checked ${JSON.stringify(d.checked)} on Default order, not a disabled and unchecked row`);
+      if (d.ink !== open.disabledInk) say(`the ${d.text} row reads in ${d.ink}, not the disabled row ink ${open.disabledInk}`);
+    }
+    await page.keyboard.press('Escape');
+    await advance(CLOCK_STEP_MS);
+    if (await page.evaluate(() => document.querySelector('.popover .sort-popover') !== null)) say('Escape left the popover open');
+  } finally {
+    await atRest();
+  }
+}
+
+/**
  * An account's fast lane against the card it sits in: on the account page the lane is a section of the Usage card as
  * extra usage is, with the same rule and spacing. Only an account with extra usage draws its section, so the check
  * compares where both are drawn and stands down where the neighbor is missing, as it does against the router's seed,
@@ -13139,6 +13203,7 @@ try {
       if (view.path === '/quota') {
         // First, since it loads the view again, which the measures after it and the shot then read as it first drew.
         if (mock) await quotaCards(theme);
+        await quotaSortControl(theme);
         await quotaChips(theme);
         await quotaPollLines(theme);
         await quotaCardHeights(theme);
