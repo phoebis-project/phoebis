@@ -11,7 +11,8 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_routing::RegistrySnapshot;
 use phoebis_store::{
-    stamp_token, ApiKeyRow, AttachmentSubject, CompanionPermissions, StoreError, ROTATION_GRACE_MS,
+    stamp_token, ApiKeyRow, AttachmentSubject, CompanionPermission, CompanionPermissions,
+    StoreError, ROTATION_GRACE_MS,
 };
 use serde_json::{json, Value};
 use utoipa::ToSchema;
@@ -260,7 +261,10 @@ fn apply(state: &AdminState, row: &mut ApiKeyRow, input: &KeyInput) -> Result<()
         row.companion_permissions = CompanionPermissions::from_words(words).map_err(|word| {
             failure(
                 StatusCode::BAD_REQUEST,
-                &format!("companion_permissions holds allowance and keepalive, not {word}"),
+                &format!(
+                    "companion_permissions holds {}, not {word}",
+                    CompanionPermission::WORDS.join(" and ")
+                ),
             )
         })?;
     }

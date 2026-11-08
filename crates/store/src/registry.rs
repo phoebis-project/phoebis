@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
 use phoebis_guardrails::{Condition, GuardrailAction, GuardrailMode};
+use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
 use rusqlite::{params, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 
@@ -368,32 +369,60 @@ impl Default for CompanionPermissions {
     }
 }
 
-impl CompanionPermissions {
-    pub const WORDS: [&'static str; 2] = ["allowance", "keepalive"];
+text_enum! {
+    plain
+    /// The word that names one of `CompanionPermissions` in the stored list and in the admin API.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum CompanionPermission {
+        Allowance => "allowance",
+        Keepalive => "keepalive",
+    }
+}
 
-    /// The set the words name. `Err` carries the first word outside `WORDS`, and a repeated word is read once.
+impl CompanionPermissions {
+    /// The set the words name. `Err` carries the first word outside `CompanionPermission::WORDS`, and a repeated
+    /// word is read once.
     pub fn from_words(words: &[String]) -> Result<CompanionPermissions, String> {
         let mut set = CompanionPermissions {
             allowance: false,
             keepalive: false,
         };
         for word in words {
-            match word.as_str() {
-                "allowance" => set.allowance = true,
-                "keepalive" => set.keepalive = true,
-                other => return Err(other.to_string()),
+            match CompanionPermission::parse(word) {
+                Some(CompanionPermission::Allowance) => set.allowance = true,
+                Some(CompanionPermission::Keepalive) => set.keepalive = true,
+                None => return Err(word.clone()),
             }
         }
         Ok(set)
     }
 
-    /// The words of the permissions that are on, in `WORDS` order.
+    /// The words of the permissions that are on, in `CompanionPermission::WORDS` order.
     pub fn words(self) -> Vec<&'static str> {
-        Self::WORDS
-            .into_iter()
-            .zip([self.allowance, self.keepalive])
-            .filter_map(|(word, on)| on.then_some(word))
-            .collect()
+        [
+            (CompanionPermission::Allowance, self.allowance),
+            (CompanionPermission::Keepalive, self.keepalive),
+        ]
+        .into_iter()
+        .filter_map(|(permission, on)| on.then_some(permission.as_str()))
+        .collect()
+    }
+}
+
+impl FromSql for CompanionPermissions {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        let words: Vec<String> =
+            serde_json::from_str(value.as_str()?).map_err(|e| FromSqlError::Other(Box::new(e)))?;
+        CompanionPermissions::from_words(&words)
+            .map_err(|word| FromSqlError::Other(format!("unknown word {word:?}").into()))
+    }
+}
+
+impl ToSql for CompanionPermissions {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        serde_json::to_string(&self.words())
+            .map(ToSqlOutput::from)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
     }
 }
 
@@ -1217,7 +1246,7 @@ impl Store {
                 serde_json::to_string(&row.model_rules)?,
                 row.model_rules_mode,
                 row.long_context_twins,
-                serde_json::to_string(&row.companion_permissions.words())?,
+                row.companion_permissions,
                 row.body_capture_hours,
                 row.secret_digest,
                 row.prefix,
@@ -1292,7 +1321,7 @@ impl Store {
                 serde_json::to_string(&row.model_rules)?,
                 row.model_rules_mode,
                 row.long_context_twins,
-                serde_json::to_string(&row.companion_permissions.words())?,
+                row.companion_permissions,
                 row.body_capture_hours,
                 row.auto_mode_server,
                 at,
@@ -2137,7 +2166,6 @@ fn row_to_member(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolMember> {
 }
 
 fn row_to_key(r: &rusqlite::Row<'_>) -> rusqlite::Result<ApiKeyRow> {
-    let permissions: Vec<String> = json_column(r, 7)?;
     Ok(ApiKeyRow {
         id: r.get(0)?,
         label: r.get(1)?,
@@ -2149,8 +2177,7 @@ fn row_to_key(r: &rusqlite::Row<'_>) -> rusqlite::Result<ApiKeyRow> {
         model_rules: json_column(r, 15)?,
         model_rules_mode: r.get(16)?,
         long_context_twins: r.get(17)?,
-        companion_permissions: CompanionPermissions::from_words(&permissions)
-            .map_err(|word| unknown_word(7, &word))?,
+        companion_permissions: r.get(7)?,
         body_capture_hours: r.get::<_, Option<u32>>(8)?,
         secret_digest: r.get(9)?,
         prefix: r.get(10)?,
