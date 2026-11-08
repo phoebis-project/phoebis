@@ -463,22 +463,23 @@ A `200` carries an acknowledgment with `session_id`, `instance_id`, `sequence`, 
 `request_generation`: for an agent event the named agent's generation beside its `agent_id`, and for a session-level
 event, a `session_start`, a `heartbeat` or a `session_end`, main's generation, which the mod adopts for main. The
 acknowledgment of a `session_start` adds `agents`, a list of `{agent_id, request_generation, state}` for every agent the
-router holds for the session, main included. A parked agent's entry carries the park the router holds: `park_kind`, and
-`wake_at` and `deadline` where the park has them. The mod adopts every generation the answer names and reconciles that
-list with its own agents. An agent only the router holds is adopted when the client's own agent list reads it live, and
-released otherwise, and without that list the router's entry stays as it is. An agent the mod released in this session,
-which the client has not spawned or given a turn since, is not adopted again whatever the list reads, since that release
-ends the run the router holds, and the mod sends the release once more when none is still queued, so a router restored
-from a save older than the release learns of it. A state the router holds wrongly is sent again. An agent only the mod
-holds is announced with `agent_start` and its state. An entry the router holds as `released` is skipped both ways, so a
-subagent the mod holds as parked stays released on the router until its next report starts it again with `agent_start`,
-which registers it anew where the record left one pool cache TTL after the release ([The five
-states](keepalive.md#the-five-states)). When a later answer omits an entry the router named `released` for a subagent
-the mod still holds, the subagent stays unannounced until its next report, so the record's departure frees its slot. If
-the mod releases it before then, it sends no report, since the router released it already. An `agent_released` answer
-marks the subagent as released by the router where no report for it waits, so the mod does not send that release again,
-and the agent's next report starts it with `agent_start`. An agent the acknowledgment names while the mod's release of
-it still waits in the queue stays unannounced, so the agent's next run starts it again with `agent_start`.
+router holds for the session, main included. A parked agent's entry carries what the router still holds of its park:
+`park_kind`, `wake_at` and `deadline`, each where the router has it. The mod adopts every generation the answer names
+and reconciles that list with its own agents. An agent only the router holds is adopted when the client's own agent list
+reads it live, and released otherwise, and without that list the router's entry stays as it is. An agent the mod
+released in this session, which the client has not spawned or given a turn since, is not adopted again whatever the list
+reads, since that release ends the run the router holds, and the mod sends the release once more when none is still
+queued, so a router restored from a save older than the release learns of it. A state the router holds wrongly is sent
+again. An agent only the mod holds is announced with `agent_start` and its state. An entry the router holds as
+`released` is skipped both ways, so a subagent the mod holds as parked stays released on the router until its next
+report starts it again with `agent_start`, which registers it anew where the record left one pool cache TTL after the
+release ([The five states](keepalive.md#the-five-states)). When a later answer omits an entry the router named
+`released` for a subagent the mod still holds, the subagent stays unannounced until its next report, so the record's
+departure frees its slot. If the mod releases it before then, it sends no report, since the router released it already.
+An `agent_released` answer marks the subagent as released by the router where no report for it waits, so the mod does
+not send that release again, and the agent's next report starts it with `agent_start`. An agent the acknowledgment names
+while the mod's release of it still waits in the queue stays unannounced, so the agent's next run starts it again with
+`agent_start`.
 
 A refusal takes one of two shapes. A missing, malformed, ambiguous or refused key is answered the relay's way, the same
 `401` in Anthropic's error shape that `/v1/messages` answers, with `x-phoebis-error-code` naming an `auth_*` code
