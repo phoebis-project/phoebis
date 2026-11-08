@@ -4,7 +4,7 @@
     "accounts": [
       {
         "id": "business",
-        "companion_id": "fd05ae18",
+        "companion_id": "1fa58bef",
         "kind": "oauth",
         "label": "Business",
         "enabled": true,
@@ -150,7 +150,7 @@
       },
       {
         "id": "direct",
-        "companion_id": "2bd83c8e",
+        "companion_id": "218d65f9",
         "kind": "api_key",
         "label": "Direct",
         "enabled": true,
@@ -185,7 +185,7 @@
       },
       {
         "id": "free-org",
-        "companion_id": "1d05f046",
+        "companion_id": "987c459d",
         "kind": "oauth",
         "label": "Free",
         "enabled": true,
@@ -250,7 +250,7 @@
       },
       {
         "id": "usage-seat",
-        "companion_id": "8ae23cfe",
+        "companion_id": "4d142e3b",
         "kind": "oauth",
         "label": "Seat",
         "enabled": true,

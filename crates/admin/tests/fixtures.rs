@@ -1,6 +1,7 @@
 //! Captures every GET route's answer over a seeded harness into `web/test/fixtures/`, and holds the committed
 //! files to the live key shape so a route and its decoder cannot drift apart unnoticed.
 mod common;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,7 +19,7 @@ use phoebis_ledger::{
 use phoebis_routing::{lane_key, ClientClass, HoldReason};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, CooldownScope, Identity, NewBundle, PinKey, Secret,
-    StateCause, SubscriptionRow,
+    StateCause, StorageKey, Store, SubscriptionRow,
 };
 use serde_json::{json as j, Value};
 
@@ -392,9 +393,21 @@ fn attempt(id: &str, n: u32, account: &str, status: u16, outcome: &str, at: i64)
 /// Seeds every id and secret the capture mints, so two captures at one head write the same bytes.
 const FIXTURE_SEED: u64 = 0x0123_4567_89ab_cdef;
 
+/// The capture's storage key. The account rows' companion ids are digested under it, so a key drawn per run would
+/// rewrite them on every capture.
+const FIXTURE_STORAGE_KEY: &str =
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
 #[tokio::test]
 async fn every_route_is_captured_and_holds_its_shape() {
-    let parts = common::admin_parts_full().await;
+    // `StorageKey` reads a fixed key from a file alone.
+    let key_dir = tempfile::tempdir().unwrap();
+    let key_file = key_dir.path().join("storage.key");
+    std::fs::write(&key_file, FIXTURE_STORAGE_KEY).unwrap();
+    // The private mode the key reader expects, so the read warns nothing.
+    std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let key = StorageKey::from_file(&key_file).unwrap();
+    let parts = common::admin_parts_full_on(Arc::new(Store::open_in_memory(&key).unwrap())).await;
     // Ahead of the login, since the login mints the session id `session.json` reads. The seeded source is
     // process-wide, so the repeat holds while this case is the binary's one minting test: a second one running beside
     // it would draw from the same generator and move every id after its first mint.
